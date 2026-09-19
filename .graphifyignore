@@ -1,0 +1,14 @@
+# 평문 자격증명 - 그래프에 절대 넣지 않는다
+WebManageConfig.json
+login_manager_config.json
+ERPIA_AI.txt
+
+# 잡음
+.claude/
+backup/
+dist/
+build/
+tests/shots/
+tests/status_sim/
+*_result*.txt
+stderr_*.txt

@@ -1,0 +1,18 @@
+# 실행에 필요한 것 (playwright, pywinauto, pywin32 와 그 의존성)
+comtypes==1.4.16
+greenlet==3.5.5
+playwright==1.62.0
+pyee==13.0.1
+pywin32==312
+pywinauto==0.6.9
+six==1.17.0
+typing_extensions==4.16.0
+
+# exe 빌드에 필요한 것 (pyinstaller 와 그 의존성)
+altgraph==0.17.5
+packaging==26.3
+pefile==2024.8.26
+pyinstaller==6.22.2
+pyinstaller-hooks-contrib==2026.7
+pywin32-ctypes==0.2.3
+setuptools==84.0.0
