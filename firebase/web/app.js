@@ -7,6 +7,7 @@ import {
   getDatabase, ref, get, connectDatabaseEmulator,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import { firebaseConfig } from "./firebase-config.js";
+import { applyTheme, getTheme, isDark, applyAccent, getAccent } from "./theme.js";
 import * as rpa from "./rpa.js";
 import * as account from "./account.js";
 
@@ -31,20 +32,12 @@ let company = null;
 let pcId = null;
 let current = null;     // 떠 있는 모듈
 
-// --- 테마: 고른 값은 이 브라우저에만 남는다 ---------------------------
-function applyTheme(t) {
-  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
-  const dark = t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches);
-  $("theme").textContent = dark ? "☀ 밝게" : "☾ 어둡게";
-  try { if (t) localStorage.setItem("theme", t); else localStorage.removeItem("theme"); } catch {}
-}
-$("theme").onclick = () => {
-  const dark = document.documentElement.dataset.theme === "dark"
-    || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
-  applyTheme(dark ? "light" : "dark");
-};
-let savedTheme = null; try { savedTheme = localStorage.getItem("theme"); } catch {}
-applyTheme(savedTheme);
+// --- 테마·강조색: 고른 값은 이 브라우저에만 남는다 ----------------------
+function paintThemeButton() { $("theme").textContent = isDark() ? "☀ 밝게" : "☾ 어둡게"; }
+$("theme").onclick = () => { applyTheme(isDark() ? "light" : "dark"); paintThemeButton(); };
+applyTheme(getTheme());
+paintThemeButton();
+applyAccent(getAccent());
 
 // --- 로그인 ---------------------------------------------------------
 $("login-btn").addEventListener("click", async () => {

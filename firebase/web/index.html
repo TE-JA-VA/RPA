@@ -72,37 +72,42 @@
     .main { padding:16px; }
   }
 
-  /* 상태 헤더 */
-  .hero { display:grid; grid-template-columns:8px 1fr auto; border:1px solid var(--line); border-radius:14px; background:var(--card); overflow:hidden; }
-  .hero .stripe { background:var(--soft); }
-  .hero[data-state="success"] .stripe { background:var(--good); }
-  .hero[data-state="stopped"] .stripe, .hero[data-state="failed"] .stripe, .hero[data-state="crashed"] .stripe { background:var(--bad); }
-  .hero[data-state="offline"] .stripe { background:var(--warn); }
-  .hero[data-state="running"] .stripe { background:var(--run); }
-  .hero .body { padding:18px 20px; display:grid; gap:4px; min-width:0; }
-  .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:22px; color:var(--strong); }
-  .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--muted); flex:none; }
-  .hero[data-state="success"] .dot { background:var(--good); }
-  .hero[data-state="stopped"] .dot, .hero[data-state="failed"] .dot, .hero[data-state="crashed"] .dot { background:var(--bad); }
-  .hero[data-state="offline"] .dot { background:var(--warn); }
-  .hero[data-state="running"] .dot { background:var(--run); }
+  /* 상태 헤더: 상태 색으로 통째로 채운 카드 하나. 나머지 카드는 비운다 */
+  .hero { display:grid; grid-template-columns:1fr auto; border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong); --on-soft:var(--muted); }
+  .hero[data-state="success"] { background:var(--good); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
+  .hero[data-state="stopped"], .hero[data-state="failed"], .hero[data-state="crashed"] { background:var(--bad); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
+  .hero[data-state="offline"] { background:var(--warn); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
+  .hero[data-state="running"] { background:var(--run); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
+  .hero .stripe { display:none; }
+  .hero .body { padding:22px 24px; display:grid; gap:4px; min-width:0; color:var(--on); }
+  .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:24px; color:var(--on); }
+  .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--on); flex:none; opacity:.9; }
   .hero .line1 { font-size:15px; }
-  .hero .line2 { color:var(--muted); font-size:14px; overflow-wrap:anywhere; }
-  .hero .act { display:flex; flex-direction:column; gap:8px; padding:18px 20px; border-left:1px solid var(--line); justify-content:center; min-width:180px; }
+  .hero .line2 { color:var(--on-soft); font-size:14px; overflow-wrap:anywhere; }
+  .hero .act { display:flex; flex-direction:column; gap:8px; padding:22px 24px; justify-content:center; min-width:190px; }
+  .hero .act button { background:rgba(253,246,227,.16); border-color:rgba(253,246,227,.45); color:var(--on); font-weight:500; }
+  .hero .act button:hover:not([disabled]) { background:rgba(253,246,227,.28); }
+  .hero[data-state=""] .act button { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
   .primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:500; }
-  @media (max-width:640px) { .hero { grid-template-columns:8px 1fr; } .hero .act { grid-column:2; border-left:0; border-top:1px solid var(--line); } }
+  @media (max-width:640px) { .hero { grid-template-columns:1fr; } .hero .act { padding-top:0; } }
 
-  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; margin-block:12px; }
-  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; display:grid; gap:2px; }
+  /* 강조색 고르기 */
+  .swatches { display:flex; gap:8px; flex-wrap:wrap; }
+  .swatch { width:34px; height:34px; border-radius:50%; border:2px solid transparent; padding:0; }
+  .swatch[aria-pressed="true"] { border-color:var(--strong); box-shadow:0 0 0 2px var(--card) inset; }
+  input[type=color] { width:44px; height:34px; padding:2px; }
+
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:14px; margin-block:14px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 16px; display:grid; gap:2px; }
   .tile .k { font-size:12px; color:var(--muted); letter-spacing:.04em; }
   .tile .v { font-size:22px; font-weight:500; color:var(--strong); }
   .tile .v small { font-size:13px; color:var(--muted); font-weight:400; margin-left:3px; }
   .tile .v .approx { color:var(--muted); font-weight:400; }
 
-  .cols { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:12px; align-items:start; }
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:14px; align-items:start; }
   @media (max-width:1000px) { .cols { grid-template-columns:1fr; } }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
-  .card + .card { margin-top:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; }
+  .card + .card { margin-top:14px; }
   .card h2 { margin:0 0 10px; font-size:14px; font-weight:700; display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .card h2 .muted { font-weight:400; font-size:13px; }
   .alert { border-radius:8px; padding:10px; margin-top:10px; border:1px solid var(--line); font-size:14px; }
@@ -193,6 +198,14 @@
 </style>
 </head>
 <body>
+<!-- 빗금 무늬: 실행 없는 날의 도넛이 쓴다 (url(#hatch)) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <pattern id="hatch" patternUnits="userSpaceOnUse" width="3" height="3" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="3" stroke="var(--muted)" stroke-width="1"></line>
+    </pattern>
+  </defs>
+</svg>
 
 <section id="login" class="hide">
   <h1>AFTER MARKET</h1>

@@ -256,18 +256,31 @@ function paintTiles() {
 function donutSvg(ok, bad, size) {
   const total = ok + bad;
   const goodLen = total ? ok / total * 100 : 0;
-  return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="성공 ${ok}건, 실패 ${bad}건">
-    <circle cx="21" cy="21" r="15.915" fill="none" stroke="${total ? "var(--bad)" : "var(--soft)"}" stroke-width="6"></circle>
+  // 실행이 없으면 빗금 고리 (index.html 의 #hatch 무늬)
+  return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="${total ? `성공 ${ok}건, 실패 ${bad}건` : "실행 없음"}">
+    <circle cx="21" cy="21" r="15.915" fill="none" stroke="${total ? "var(--bad)" : "url(#hatch)"}" stroke-width="6"></circle>
     ${total ? `<circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--good)" stroke-width="6"
       stroke-dasharray="${goodLen} ${100 - goodLen}" stroke-dashoffset="25"></circle>` : ""}
   </svg>`;
 }
 
 function paintRecent() {
-  const days = live?.recent || [];
-  const ok = days.reduce((n, d) => n + (d.success || 0), 0);
-  const bad = days.reduce((n, d) => n + (d.failed || 0), 0);
-  $("recent-meta").textContent = days.length ? `성공 ${ok} · 실패 ${bad}` : "";
+  // 에이전트는 20일을 올린다: 뒤 10일을 보여 주고 앞 10일과 비교한다
+  const all = live?.recent || [];
+  const days = all.slice(-10);
+  const prev = all.slice(0, -10);
+  const sum = (xs, k) => xs.reduce((n, d) => n + (d[k] || 0), 0);
+  const ok = sum(days, "success"), bad = sum(days, "failed");
+  const pok = sum(prev, "success"), pbad = sum(prev, "failed");
+  let cmp = "";
+  if (days.length) {
+    if (!prev.length || pok + pbad === 0) cmp = " · 이전 10일 실행 없음";
+    else {
+      const diff = ok - pok;
+      cmp = ` · 이전 10일보다 성공 ${diff > 0 ? "+" : ""}${diff}`;
+    }
+  }
+  $("recent-meta").textContent = days.length ? `성공 ${ok} · 실패 ${bad}${cmp}` : "";
   $("recent-strip").replaceChildren(...days.map((d) => {
     const cell = document.createElement("button");
     cell.className = "day" + (d.success || d.failed ? "" : " empty");

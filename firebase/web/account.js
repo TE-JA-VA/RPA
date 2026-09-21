@@ -2,6 +2,7 @@
 import {
   EmailAuthProvider, reauthenticateWithCredential, updatePassword,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { ACCENTS, DEFAULT_ACCENT, applyAccent, getAccent } from "./theme.js";
 
 export const key = "account";
 export const label = "계정";
@@ -16,6 +17,14 @@ const HTML = `
     <label>다시 입력 <input id="pw-new2" type="password" autocomplete="new-password" minlength="8"></label>
     <button id="pw-btn" class="primary">바꾸기</button>
     <div class="msg" id="pw-msg"></div>
+  </div>
+  <div class="card narrow">
+    <h2>강조색 <span class="muted" id="accent-now"></span></h2>
+    <div class="swatches" id="accent-swatches"></div>
+    <div class="row" style="justify-content:flex-start;gap:10px;margin-top:10px">
+      <input type="color" id="accent-pick" aria-label="강조색 직접 고르기">
+      <button id="accent-reset">기본값</button>
+    </div>
   </div>
   <div class="card narrow">
     <h2>로그인 정보</h2>
@@ -34,6 +43,25 @@ export function mount(el, context) {
   $("acct-role").textContent = { admin: "관리자", super: "총괄", viewer: "열람" }[c.me.role] || c.me.role || "";
   $("pw-btn").onclick = change;
   $("pw-new2").addEventListener("keydown", (e) => { if (e.key === "Enter") change(); });
+  $("accent-pick").oninput = (e) => setAccent(e.target.value);
+  $("accent-reset").onclick = () => setAccent(DEFAULT_ACCENT);
+  paintAccent();
+}
+
+function setAccent(hex) { applyAccent(hex); paintAccent(); }
+
+function paintAccent() {
+  const now = getAccent();
+  $("accent-now").textContent = now === DEFAULT_ACCENT ? "기본" : now;
+  $("accent-pick").value = now;
+  $("accent-swatches").replaceChildren(...ACCENTS.map(([name, hex]) => {
+    const b = document.createElement("button");
+    b.className = "swatch"; b.style.background = hex; b.title = name;
+    b.setAttribute("aria-label", `강조색 ${name}`);
+    b.setAttribute("aria-pressed", hex === now);
+    b.onclick = () => setAccent(hex);
+    return b;
+  }));
 }
 
 export function unmount() { root = null; c = null; }
