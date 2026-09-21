@@ -9,7 +9,7 @@
 // FIREBASE_AUTH_EMULATOR_HOST / FIREBASE_DATABASE_EMULATOR_HOST 는 emulators:exec 가 자식 프로세스에
 // 직접 넣어 준다. 여기서 process.env 에 넣으면 늦다 - ES 모듈은 본문보다 import 가 먼저 평가된다.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +41,9 @@ console.log("시험 계정 생성");
 const work = mkdtempSync(join(tmpdir(), "rpa-agent-it-"));
 const cfgPath = join(work, "agent_config.json");
 const queuePath = join(work, "queue.jsonl");
+// launch() 가 settings.json 에 마지막 실행 시각을 쓰므로, 저장소의 status_sim 을 직접 쓰지 않고 복사본을 쓴다
+const statusDir = join(work, "status_sim");
+cpSync(STATUS_SIM, statusDir, { recursive: true });
 const py = `import secret; secret.write_config(r"${cfgPath}", {"project_id": "${PROJECT}", "api_key": "emulator",
   "database_url": "${DB_URL}", "cid": "c_demo", "pc_id": "pc_office", "email": "agent@t.local"}, "pw123456")`;
 const wrote = spawnSync("python", ["-c", py], { cwd: AGENT_DIR, encoding: "utf8" });
@@ -62,7 +65,7 @@ const expiredRef = await db.ref("commands/c_demo/pc_office").push({
 const env = {
   ...process.env,
   RPA_DASHBOARD_DRY_RUN: "1",
-  RPA_STATUS_DIR: STATUS_SIM,
+  RPA_STATUS_DIR: statusDir,
   RPA_AGENT_CONFIG: cfgPath,
   RPA_AGENT_QUEUE: queuePath,
   PYTHONIOENCODING: "utf-8",
