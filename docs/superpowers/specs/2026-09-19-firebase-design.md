@@ -82,7 +82,7 @@ users/{uid}                   ← { cid, role: admin|viewer|super, name, must_ch
   2. `launch`: `any_rpa_running()` 이면 `rejected("이미 실행 중")`, 아니면 지금 `launch()` 호출 → `running` → 프로세스 종료 시 `done|failed`(종료 코드).
   3. `stop_erpia`: 지금 대시보드의 ERPia 종료 함수 → `done|failed`.
   4. `set_modules`: `write_routine_modules(args)` → `done`, 실패 사유는 `result`. 전부 끔은 지금처럼 거부.
-  5. `set_schedule`: `settings.schedule` 은 화면이 직접 쓰고, 에이전트는 `settings` 를 구독해 예약기(지금 `Scheduler`)에 반영.
+  5. `set_schedule` (2026-09-21 개정): 화면이 `settings.schedule` 에 요청값을 쓰고 같은 값으로 명령을 보낸다 → 에이전트가 기존 `apply_schedule()` 로 검증·저장(settings.json)하고 결과 문장을 돌려준다. 예약기는 **에이전트가 띄운다** (`SCHEDULER.resync()/start()`, 8765 대시보드와 같이 띄우지 않는다). PC 의 실제 예약(`schedule` 절만, accounts 제외)은 `live.schedule` 로 올라와 화면의 기준값이 된다.
 - **1PC 1프로그램**: 지금 `launch()` 의 잠금·중복 방지를 그대로 쓴다.
 - **배포**: 소스 + `python\` 폴더 (exe 는 SentinelOne 문제로 안 만든다). `에이전트_시작.bat` 은 `대시보드_시작.bat` 과 같은 관리자 확인·기록 방식.
 
