@@ -123,6 +123,65 @@ check(fb.parse_sse(["event: put", 'data: {"path":"/","data":{"a":1}}', ""]) ==
       [("put", {"path": "/", "data": {"a": 1}})], "SSE 한 덩이를 읽는다")
 check(fb.parse_sse(["event: keep-alive", "data: null", ""]) == [("keep-alive", None)], "keep-alive 를 읽는다")
 
+print("\n3절 상태 올리기와 오프라인 큐")
+import agent as ag
+
+check(ag.clean_for_rtdb({"a.b": 1, "ok": 2}) == {"ok": 2}, "점이 든 키를 버린다")
+check(ag.clean_for_rtdb({"a": {"b$": 1, "c": 2}}) == {"a": {"c": 2}}, "깊은 곳의 키도 버린다")
+check(ag.clean_for_rtdb({"a": []}) == {"a": None}, "빈 목록은 None (RTDB 는 빈 값을 못 담는다)")
+check(ag.clean_for_rtdb({"a": [1, 2]}) == {"a": [1, 2]}, "값이 있는 목록은 그대로")
+
+snap = {"programs": {"routine": {"log": [f"줄{i}" for i in range(200)], "state": "running"},
+                     "prepare": None}}
+out = ag.trim_logs(snap, lines=80)
+check(len(out["programs"]["routine"]["log"]) == 80, "로그는 80줄만 남는다")
+check(out["programs"]["routine"]["log"][0] == "줄120", "뒤에서 80줄")
+check(out["programs"]["prepare"] is None, "없는 프로그램은 그대로 None")
+check(len(snap["programs"]["routine"]["log"]) == 200, "원본은 건드리지 않는다")
+
+
+class FlakyClient:
+    def __init__(self):
+        self.ok = True
+        self.puts = []
+
+    def put(self, path, value):
+        if not self.ok:
+            raise fb.HttpError(503, "끊김")
+        self.puts.append((path, value))
+
+
+with tempfile.TemporaryDirectory() as d:
+    q = os.path.join(d, "queue.jsonl")
+    cl = FlakyClient()
+    up = ag.Uploader(cl, "c_demo", "pc_office", q)
+
+    up.push_live({"host": "PC1"})
+    check(cl.puts[-1][0] == "live/c_demo/pc_office", "현황은 live/회사/PC 로 간다")
+
+    cl.ok = False
+    up.push_live({"host": "PC2"})
+    up.push_heartbeat({"at": 1})
+    check(up.pending() == 2, "끊기면 큐에 쌓는다")
+    check(os.path.exists(q), "큐는 파일로 남는다")
+
+    cl.ok = True
+    up.flush()
+    check(up.pending() == 0, "연결되면 큐를 비운다")
+    check([p for p, _ in cl.puts][-2:] == ["live/c_demo/pc_office", "live/c_demo/pc_office/heartbeat"],
+          "쌓인 순서대로 보낸다")
+
+    cl.ok = False
+    up.push_live({"host": "PC3"})
+    up2 = ag.Uploader(cl, "c_demo", "pc_office", q)
+    check(up2.pending() == 1, "에이전트를 다시 켜도 큐가 남아 있다")
+
+    cl2 = FlakyClient()
+    cl2.ok = True
+    up3 = ag.Uploader(cl2, "c_demo", "pc_office", q)
+    up3.flush()
+    check(up3.pending() == 0 and len(cl2.puts) == 1, "다시 켠 뒤 밀린 것을 보낸다")
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))
