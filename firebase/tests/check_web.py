@@ -162,7 +162,8 @@ with sync_playwright() as pw:
     login(page, "viewer@t.local")
     check("(열람)" in page.text_content("#who"), "열람자로 표시")
     page.wait_for_function("document.getElementById('conn').textContent === '연결됨'", timeout=10000)
-    check(page.is_disabled("#run-routine") and page.is_disabled("#stop-erpia"), "열람자는 버튼 비활성")
+    check(page.is_disabled("#run-prepare") and page.is_disabled("#run-routine") and page.is_disabled("#stop-erpia"),
+          "열람자는 버튼 비활성")
     page.wait_for_selector("#mod-list input")
     check(page.is_disabled("#mod-list input[aria-label='로그인']"), "열람자는 스위치 비활성")
     # 규칙이 막는지: 화면을 우회해 직접 쓴다

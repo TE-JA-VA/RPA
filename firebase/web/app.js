@@ -176,6 +176,7 @@ function watchCommand(key, label) {
   });
 }
 
+$("run-prepare").addEventListener("click", () => sendCommand("launch", { target: "prepare" }, "프리페어 RPA"));
 $("run-routine").addEventListener("click", () => sendCommand("launch", { target: "routine" }, "루틴 RPA"));
 $("run-all").addEventListener("click", () => sendCommand("launch", { target: "all" }, "전체 실행"));
 $("stop-erpia").addEventListener("click", () => {
@@ -183,7 +184,7 @@ $("stop-erpia").addEventListener("click", () => {
 });
 
 function paintButtons() {
-  for (const id of ["run-routine", "run-all", "stop-erpia"]) $(id).disabled = !isAdmin() || busy || !pcId;
+  for (const id of ["run-prepare", "run-routine", "run-all", "stop-erpia"]) $(id).disabled = !isAdmin() || busy || !pcId;
   paintModuleMeta();
 }
 
