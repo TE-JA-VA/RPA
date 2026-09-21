@@ -1,7 +1,7 @@
 // 에뮬레이터 통합 시험: 진짜 HTTP·진짜 규칙에 에이전트를 붙여 한 바퀴 돌린다.
 //
 //   실행 (firebase/tests 에서, emu_env.ps1 을 읽은 창):
-//   firebase emulators:exec --config ../firebase.json --only auth,database --project rpa-test-f02e0 "node integration.js"
+//   firebase emulators:exec --config ../firebase.json --only auth,database,firestore --project rpa-test-f02e0 "node integration.js"
 //
 // 하는 일: 시험 계정·claim 만들기 → 명령 하나 넣기 → 에이전트(DRY_RUN) 띄우기 → 결과 확인 → 에이전트 끄기.
 // 실제 RPA 는 띄우지 않는다 (RPA_DASHBOARD_DRY_RUN=1). 실제 프로젝트도 건드리지 않는다.
@@ -138,6 +138,15 @@ check(!("accounts" in ((await db.ref("apps/rpa/live/c_demo/pc_office").get()).va
 const recent = (await db.ref("apps/rpa/live/c_demo/pc_office/recent").get()).val() || [];
 check(recent.length === 10 && recent.every((d) => /^\d{4}-\d\d-\d\d$/.test(d.date) && "success" in d && "failed" in d),
   `최근 10일 요약이 올라온다 (${recent.length}일)`);
+
+// 이력: status_sim 의 history.jsonl (26건) 이 Firestore runs/c_demo/items 로 올라간다
+const { getFirestore } = await import("firebase-admin/firestore");
+const store = getFirestore(app);
+await waitFor("이력이 Firestore 에 올라온다 (26건)", async () =>
+  (await store.collection("runs/c_demo/items").count().get()).data().count >= 26, 30000);
+const one = (await store.collection("runs/c_demo/items").where("state", "==", "stopped").limit(1).get()).docs[0]?.data();
+check(one && one.pcId === "pc_office" && one.cid === "c_demo" && typeof one.date === "string", "문서에 cid·pcId·date");
+check(one && Array.isArray(JSON.parse(one.payload).steps), "payload 에 단계 목록");
 
 // --- 6. 정리 -------------------------------------------------------------
 agent.kill();

@@ -99,6 +99,39 @@ db_put(LIVE, {
     "recent": [{"date": f"2026-09-{d:02d}", "success": s, "failed": f}
                for d, s, f in [(5, 0, 0), (6, 0, 0), (7, 0, 0), (8, 0, 0), (9, 0, 0), (10, 1, 0), (11, 1, 0), (12, 1, 0), (13, 1, 1), (14, 1, 2)]],
 })
+# 이력 (Firestore 에뮬레이터 REST, Bearer owner). 에이전트가 올리는 문서와 같은 모양
+FS = f"http://127.0.0.1:8080/v1/projects/{PROJECT}/databases/(default)/documents"
+
+
+def fs_fields(d):
+    out = {}
+    for k, v in d.items():
+        if v is None: out[k] = {"nullValue": None}
+        elif isinstance(v, bool): out[k] = {"booleanValue": v}
+        elif isinstance(v, int): out[k] = {"integerValue": str(v)}
+        else: out[k] = {"stringValue": v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)}
+    return out
+
+
+def seed_run(run_id, program, state, started, dur_sec, reason=None, steps=None, log=None, metrics=None):
+    payload = {"run_id": run_id, "program": program, "state": state, "started_at": started, "duration_sec": dur_sec,
+               "reason": reason, "steps": steps or [], "log": log or [], "metrics": metrics or []}
+    doc = {"cid": "c_demo", "pcId": "pc_office", "run_id": run_id, "program": program,
+           "program_label": "루틴 RPA" if program == "routine" else "프리페어 RPA", "state": state, "reason": reason,
+           "started_at": started, "finished_at": None, "duration_sec": dur_sec, "date": started[:10], "payload": json.dumps(payload, ensure_ascii=False)}
+    call("POST", f"{FS}/runs/c_demo/items?documentId={run_id}", {"fields": fs_fields(doc)}, OWNER)
+
+
+seed_run("r_0914_1355", "routine", "success", "2026-09-14T13:55:49", 153,
+         steps=[{"key": "login", "label": "ERPia 로그인", "state": "done"}], log=["[13:55:49] 시작", "[13:58:22] 결과: 성공"],
+         metrics=[{"key": "bottom_selected", "label": "하단 선택", "value": 30}])
+seed_run("r_0914_1339", "routine", "stopped", "2026-09-14T13:39:05", 2, reason="물류 관리 저장 실패 - 주소를 입력하세요",
+         steps=[{"key": "save", "label": "물류 관리 저장", "state": "stopped", "note": "주소를 입력하세요"}], log=["[13:39:05] 주소를 입력하세요"])
+seed_run("r_0914_1338", "prepare", "success", "2026-09-14T13:38:41", 2, log=["[13:38:43] 완료"])
+seed_run("r_0913_0906", "routine", "stopped", "2026-09-13T09:06:00", 547, reason="물류 관리 저장 실패 - 주소를 입력하세요")
+seed_run("r_0912_0906", "routine", "success", "2026-09-12T09:06:00", 580)
+seed_run("r_other_pc", "routine", "success", "2026-09-14T10:00:00", 10)
+call("PATCH", f"{FS}/runs/c_demo/items/r_other_pc?updateMask.fieldPaths=pcId", {"fields": {"pcId": {"stringValue": "pc_other"}}}, OWNER)
 print("시드 완료")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
@@ -165,13 +198,16 @@ with sync_playwright() as pw:
       return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
     check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"프리페어가 왼쪽, 루틴이 오른쪽에 나란히 ({pair})")
     check("2줄" in page.text_content("#log-meta"), "로그 줄 수")
-    check(page.locator("#recent-strip .day").count() == 10, "최근 10일 격자 10칸")
-    check(page.locator("#recent-strip .c.good").count() == 3 and page.locator("#recent-strip .c.mix").count() == 2, "격자 색: 성공 3칸, 섞임 2칸")
+    check(page.locator("#recent-strip .day").count() == 10 and page.locator("#recent-strip .day svg").count() == 10, "최근 10일: 날짜별 도넛 10개")
+    check(page.locator("#recent-strip .day.empty").count() == 5, "실행 없는 날은 빈 도넛")
+    d14 = page.get_attribute("#recent-strip .day[data-date='2026-09-14'] svg circle:nth-child(2)", "stroke-dasharray")
+    check(d14 and abs(float(d14.split()[0]) - 33.33) < 0.1, f"9/14 도넛은 성공 1/3 ({d14})")
     check("09/14" in page.text_content("#recent-strip"), "날짜 표시")
     check("성공 5 · 실패 3" in page.text_content("#recent-meta"), "10일 합계")
-    check("63%" in page.text_content("#recent-donut svg text"), "도넛 가운데 성공률 (5/8)")
+    check(page.locator("#recent-donut svg text").count() == 0, "합계 도넛에 퍼센트 글자 없음")
     dash = page.get_attribute("#recent-donut svg circle:nth-child(2)", "stroke-dasharray")
-    check(dash and abs(float(dash.split()[0]) - 62.5) < 0.1, f"도넛 호 길이 ({dash})")
+    check(dash and abs(float(dash.split()[0]) - 62.5) < 0.1, f"합계 도넛 호 길이 ({dash})")
+    check("성공 5" in page.text_content("#recent-donut .legend"), "합계 도넛 범례")
 
     print("3절 실패·끊김 표시")
     db_patch(f"{LIVE}/programs/routine", {"state": "stopped", "reason": "물류 관리 저장 실패 - 주소를 입력하세요",
@@ -281,6 +317,33 @@ with sync_playwright() as pw:
     page.click("#app-nav a[data-key='rpa']")
     page.wait_for_selector("#hero")
     check(page.text_content("#page-title") == "RPA", "RPA 로 돌아온다")
+
+    print("7-2절 기록 탭")
+    page.click("#tab-history")
+    page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
+    rows = page.locator("#hist-rows tr.hist")
+    check(rows.count() == 5, f"이 PC 기록 5건 (다른 PC 1건 제외) ({rows.count()})")
+    check("09/14 13:55" in rows.nth(0).text_content() and "09/12" in rows.nth(4).text_content(), "최신순")
+    check("주소를 입력하세요" in rows.nth(1).text_content(), "중단 사유가 처리 칸에")
+    check(page.is_hidden("#hist-rows tr.hist-detail"), "상세는 접혀 있다")
+    rows.nth(1).click()
+    check(page.is_visible("#hist-rows tr.hist-detail:nth-child(4)"), "행을 누르면 상세가 펼쳐진다")
+    detail = page.text_content("#hist-rows tr.hist-detail:nth-child(4)")
+    check("물류 관리 저장" in detail and "[13:39:05] 주소를 입력하세요" in detail, "상세에 단계와 로그")
+    page.fill("#hist-date", "2026-09-13"); page.dispatch_event("#hist-date", "change")
+    page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-13'", timeout=15000)
+    page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
+    check(page.locator("#hist-rows tr.hist").count() == 1 and "09/13" in page.text_content("#hist-rows"), "날짜로 거르기")
+    page.click("#hist-all")
+    page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록'", timeout=15000)
+    page.click("#tab-status")
+    check(page.is_visible("#hero") and page.is_hidden("#view-history"), "현황으로 돌아온다")
+    page.click("#recent-strip .day[data-date='2026-09-14']")
+    page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-14'", timeout=15000)
+    page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
+    check(page.is_visible("#view-history") and page.locator("#hist-rows tr.hist").count() == 3, "날짜 도넛을 누르면 그 날 기록 3건")
+    check(page.input_value("#hist-date") == "2026-09-14", "날짜 칸에 그 날짜")
+    page.click("#tab-status")
 
     print("8절 열람자")
     page.click("#logout-btn")

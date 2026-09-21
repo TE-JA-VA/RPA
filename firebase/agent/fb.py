@@ -28,6 +28,25 @@ def _token_host():
     return f"http://{host}/securetoken.googleapis.com" if host else "https://securetoken.googleapis.com"
 
 
+def fs_fields(data):
+    """dict → Firestore REST 의 형 붙은 fields. 값은 문자열·불·정수·실수·None 만 (나머지는 JSON 문자열로)."""
+    out = {}
+    for k, v in data.items():
+        if v is None:
+            out[k] = {"nullValue": None}
+        elif isinstance(v, bool):
+            out[k] = {"booleanValue": v}
+        elif isinstance(v, int):
+            out[k] = {"integerValue": str(v)}
+        elif isinstance(v, float):
+            out[k] = {"doubleValue": v}
+        elif isinstance(v, str):
+            out[k] = {"stringValue": v}
+        else:
+            out[k] = {"stringValue": json.dumps(v, ensure_ascii=False, default=str)}
+    return out
+
+
 class HttpError(Exception):
     def __init__(self, status, body):
         super().__init__(f"HTTP {status}")
@@ -138,6 +157,29 @@ class Client:
 
     def delete(self, path):
         return self._send("DELETE", path, None)
+
+    # --- Firestore (이력) ----------------------------------------------
+    def _fs_base(self):
+        host = os.environ.get("FIRESTORE_EMULATOR_HOST")
+        root = f"http://{host}/v1" if host else "https://firestore.googleapis.com/v1"
+        return f"{root}/projects/{self._cfg['project_id']}/databases/(default)/documents"
+
+    def fs_create(self, path, fields, doc_id, retried=False):
+        """문서를 만든다 (같은 id 가 이미 있으면 그대로 둔다 - 409 는 성공으로 본다)."""
+        url = f"{self._fs_base()}/{path.strip('/')}?documentId={urllib.parse.quote(doc_id, safe='')}"
+        body = json.dumps({"fields": fields}, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "Content-Type": "application/json", "Authorization": f"Bearer {self.token()}"})
+        try:
+            self._open(req, timeout=30).read()
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                return False
+            if e.code == 401 and not retried:
+                self.renew()
+                return self.fs_create(path, fields, doc_id, retried=True)
+            raise HttpError(e.code, e.read().decode("utf-8", "replace")) from None
+        return True
 
     # --- 구독 ---------------------------------------------------------
     def stream(self, path, params=None):

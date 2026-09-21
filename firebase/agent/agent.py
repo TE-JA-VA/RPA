@@ -62,6 +62,22 @@ def recent_summary(rows, today, days=RECENT_DAYS):
     return [{"date": d, **v} for d, v in per.items()]
 
 
+def run_doc(rec, cid, pc_id):
+    """history_record 한 건 → Firestore 문서 (조회용 필드 + payload JSON). 규칙이 cid·pcId 를 claim 과 대조한다."""
+    rec = dict(rec)
+    rec["log"] = (rec.get("log") or rec.get("log_tail") or [])[-LOG_LINES:]
+    rec.pop("log_tail", None)
+    doc = {
+        "cid": cid, "pcId": pc_id,
+        "run_id": rec.get("run_id"), "program": rec.get("program"), "program_label": rec.get("program_label"),
+        "state": rec.get("state"), "reason": rec.get("reason"),
+        "started_at": rec.get("started_at"), "finished_at": rec.get("finished_at"),
+        "duration_sec": rec.get("duration_sec"), "date": (rec.get("started_at") or "")[:10],
+        "payload": json.dumps(rec, ensure_ascii=False, default=str),
+    }
+    return doc
+
+
 def trim_logs(snapshot, lines=LOG_LINES):
     """로그 꼬리만 남긴 사본을 돌려준다 (원본은 건드리지 않는다)."""
     out = json.loads(json.dumps(snapshot, ensure_ascii=False, default=str))
@@ -69,6 +85,53 @@ def trim_logs(snapshot, lines=LOG_LINES):
         if isinstance(view, dict) and isinstance(view.get("log"), list):
             view["log"] = view["log"][-lines:]
     return out
+
+
+HISTORY_POS_PATH = os.path.join(os.path.dirname(QUEUE_PATH), "history_pos.txt")
+
+
+def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH):
+    """history.jsonl 에서 아직 안 올린 줄을 Firestore 로. 읽은 바이트 위치를 파일에 남긴다.
+
+    파일이 줄었으면(회전) 처음부터 다시 본다 - 같은 run_id 는 Firestore 가 409 로 거절하니 겹쳐도 안전하다.
+    """
+    try:
+        size = os.path.getsize(hist_path)
+    except OSError:
+        return 0
+    try:
+        with open(pos_path, encoding="utf-8") as f:
+            pos = int(f.read().strip() or 0)
+    except Exception:
+        pos = 0
+    if pos > size:
+        pos = 0
+    if pos == size:
+        return 0
+    sent = 0
+    with open(hist_path, "rb") as f:
+        f.seek(pos)
+        chunk = f.read()
+    lines = chunk.split(b"\n")
+    tail = lines.pop()               # 마지막 조각은 아직 쓰는 중일 수 있다
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            rec = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("run_id"):
+            up.push_run(run_doc(rec, cfg["cid"], cfg["pc_id"]))
+            sent += 1
+    new_pos = size - len(tail)
+    try:
+        with open(pos_path, "w", encoding="utf-8") as f:
+            f.write(str(new_pos))
+    except Exception:
+        pass
+    return sent
 
 
 class Uploader:
@@ -79,6 +142,7 @@ class Uploader:
 
     def __init__(self, client, cid, pc_id, queue_path=QUEUE_PATH):
         self._client = client
+        self._cid = cid
         self._base = app_path("live", cid, pc_id)
         self._queue_path = queue_path
         self._queue = self._read_queue()
@@ -120,8 +184,14 @@ class Uploader:
     def _call(self, method, path, value):
         if method == "patch":
             self._client.patch(path, value)
+        elif method == "fs":
+            self._client.fs_create(path, fb.fs_fields(value), value["run_id"])
         else:
             self._client.put(path, value)
+
+    def push_run(self, doc):
+        """실행 이력 한 건을 Firestore runs/{cid}/items 에. 실패하면 큐에 쌓인다."""
+        return self._send(f"runs/{self._cid}/items", doc, method="fs")
 
     def _send(self, path, value, method="put"):
         try:
@@ -325,6 +395,8 @@ def main():
                     recent_key[0] = hist_key
                     recent_key[1] = recent_summary(st.read_history(), datetime.date.today())
                 snap["recent"] = recent_key[1]
+                # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
+                upload_new_history(hist_path, up, cfg)
                 body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule"), snap.get("recent")],
                                   ensure_ascii=False, default=str)
                 if body != last:

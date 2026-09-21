@@ -1,8 +1,11 @@
 // RPA 앱 화면. 껍데기(app.js)가 mount(root, ctx) 로 띄우고 unmount() 로 걷는다.
-// 데이터는 apps/rpa/{live|commands|settings}/{cid}/{pcId}. 기준값은 PC 가 올린 live 다.
+// 현황은 apps/rpa/live/{cid}/{pcId} (RTDB), 기록은 runs/{cid}/items (Firestore). 기준값은 PC 가 올린 live 다.
 import {
   ref, onValue, push, set,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+import {
+  getFirestore, collection, query, where, orderBy, limit, getDocs, connectFirestoreEmulator,
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { HEARTBEAT_STALE_SEC, COMMAND_TTL_SEC } from "./firebase-config.js";
 
 export const key = "rpa";
@@ -19,63 +22,82 @@ const MODULES = [
 ];
 const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]], ["주말", [5, 6]]];
+const HISTORY_LIMIT = 100;
 
 const HTML = `
-  <section class="hero" id="hero" data-state="">
-    <div class="stripe"></div>
-    <div class="body">
-      <div class="state"><span class="dot"></span><span id="h-state">확인 중</span></div>
-      <div class="line1" id="h-line1"></div>
-      <div class="line2" id="h-line2"></div>
+  <div class="subnav" role="tablist">
+    <button id="tab-status" role="tab" aria-selected="true">현황</button>
+    <button id="tab-history" role="tab" aria-selected="false">기록</button>
+  </div>
+
+  <div id="view-status">
+    <section class="hero" id="hero" data-state="">
+      <div class="stripe"></div>
+      <div class="body">
+        <div class="state"><span class="dot"></span><span id="h-state">확인 중</span></div>
+        <div class="line1" id="h-line1"></div>
+        <div class="line2" id="h-line2"></div>
+      </div>
+      <div class="act" id="h-act"></div>
+    </section>
+    <div class="tiles" id="tiles"></div>
+    <div class="cols">
+      <div>
+        <div class="card recent">
+          <h2>최근 10일 <span class="muted" id="recent-meta"></span></h2>
+          <div class="recent-body">
+            <div class="strip" id="recent-strip"></div>
+            <div class="donut" id="recent-donut"></div>
+          </div>
+        </div>
+        <div class="pair">
+          <div class="card" id="steps-prepare"><h2>프리페어 RPA <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
+          <div class="card" id="steps-routine"><h2>루틴 RPA <span class="muted" id="meta-routine"></span></h2><ul class="steps" id="list-routine"></ul></div>
+        </div>
+        <div class="card"><details id="log-box"><summary>로그 <span><span class="muted" id="log-meta"></span> &nbsp;<span class="chev">▶</span></span></summary><pre class="num" id="log" style="font-size:12px;white-space:pre-wrap;margin:10px 0 0;color:var(--muted)"></pre></details></div>
+      </div>
+      <div id="sidecol">
+        <div class="card" id="act-card">
+          <h2>실행</h2>
+          <div class="actions">
+            <button id="run-routine" class="primary">루틴 RPA <span>▶</span></button>
+            <button id="run-prepare">프리페어 RPA <span>▶</span></button>
+            <button id="run-all">전체 실행 <span>▶▶</span></button>
+            <button id="stop-erpia" class="danger">ERPia 종료</button>
+          </div>
+          <div id="act-alert" class="alert hide"></div>
+        </div>
+        <div class="card" id="mod-card">
+          <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
+          <div id="mod-list"></div>
+          <button class="apply" id="mod-apply" disabled>적용</button>
+        </div>
+        <div class="card" id="sch-card">
+          <h2>자동 실행 <span class="muted" id="sch-meta"></span></h2>
+          <label class="switch first"><span>켬</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
+          <div id="sch-form">
+            <div class="lbl">요일</div>
+            <div class="seg" id="sch-presets"></div>
+            <div class="seg" id="sch-days"></div>
+            <div class="lbl">시간</div>
+            <div class="times" id="sch-times"></div>
+            <div class="seg"><button id="sch-add">+ 시간</button></div>
+          </div>
+          <div class="msg" id="sch-info"></div>
+          <button class="apply" id="sch-apply" disabled>적용</button>
+        </div>
+      </div>
     </div>
-    <div class="act" id="h-act"></div>
-  </section>
-  <div class="tiles" id="tiles"></div>
-  <div class="cols">
-    <div>
-      <div class="card recent">
-        <h2>최근 10일 <span class="muted" id="recent-meta"></span></h2>
-        <div class="recent-body">
-          <div class="strip" id="recent-strip"></div>
-          <div class="donut" id="recent-donut"></div>
-        </div>
-      </div>
-      <div class="pair">
-        <div class="card" id="steps-prepare"><h2>프리페어 RPA <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
-        <div class="card" id="steps-routine"><h2>루틴 RPA <span class="muted" id="meta-routine"></span></h2><ul class="steps" id="list-routine"></ul></div>
-      </div>
-      <div class="card"><details id="log-box"><summary>로그 <span><span class="muted" id="log-meta"></span> &nbsp;<span class="chev">▶</span></span></summary><pre class="num" id="log" style="font-size:12px;white-space:pre-wrap;margin:10px 0 0;color:var(--muted)"></pre></details></div>
-    </div>
-    <div id="sidecol">
-      <div class="card" id="act-card">
-        <h2>실행</h2>
-        <div class="actions">
-          <button id="run-routine" class="primary">루틴 RPA <span>▶</span></button>
-          <button id="run-prepare">프리페어 RPA <span>▶</span></button>
-          <button id="run-all">전체 실행 <span>▶▶</span></button>
-          <button id="stop-erpia" class="danger">ERPia 종료</button>
-        </div>
-        <div id="act-alert" class="alert hide"></div>
-      </div>
-      <div class="card" id="mod-card">
-        <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
-        <div id="mod-list"></div>
-        <button class="apply" id="mod-apply" disabled>적용</button>
-      </div>
-      <div class="card" id="sch-card">
-        <h2>자동 실행 <span class="muted" id="sch-meta"></span></h2>
-        <label class="switch first"><span>켬</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
-        <div id="sch-form">
-          <div class="lbl">요일</div>
-          <div class="seg" id="sch-presets"></div>
-          <div class="seg" id="sch-days"></div>
-          <div class="lbl">시간</div>
-          <div class="times" id="sch-times"></div>
-          <div class="seg"><button id="sch-add">+ 시간</button></div>
-        </div>
-        <div class="msg" id="sch-info"></div>
-        <button class="apply" id="sch-apply" disabled>적용</button>
-      </div>
+  </div>
+
+  <div id="view-history" class="hide">
+    <div class="card">
+      <h2><span id="hist-title">기록</span> <span class="row" style="gap:6px"><input type="date" id="hist-date" class="num" style="width:auto"><button id="hist-all">전체</button></span></h2>
+      <div class="msg" id="hist-msg"></div>
+      <div class="tbl"><table>
+        <thead><tr><th>시각</th><th>프로그램</th><th>결과</th><th>소요</th><th>처리</th></tr></thead>
+        <tbody id="hist-rows"></tbody>
+      </table></div>
     </div>
   </div>
 `;
@@ -85,6 +107,7 @@ let stopLive = null;
 let busy = false;
 let live = null;
 let form = { modules: {}, sch: { enabled: false, days: [], times: [] } };
+let fs = null;
 
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
@@ -95,11 +118,20 @@ const when = (iso) => {
   const d = new Date(iso);
   return `${d.getMonth() + 1}월 ${d.getDate()}일 (${DAYS[(d.getDay() + 6) % 7]}) ${hhmm(iso)}`;
 };
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 export function mount(el, context) {
   root = el; c = context;
   root.innerHTML = HTML;
   busy = false; live = null;
+  fs = getFirestore(c.db.app);
+  if (location.hostname === "127.0.0.1" && new URLSearchParams(location.search).get("emu") === "1") {
+    try { connectFirestoreEmulator(fs, "127.0.0.1", 8080); } catch {}   // 두 번째 mount 부터는 이미 붙어 있다
+  }
+  $("tab-status").onclick = () => showView("status");
+  $("tab-history").onclick = () => showView("history");
+  $("hist-date").onchange = () => loadHistory($("hist-date").value || null);
+  $("hist-all").onclick = () => { $("hist-date").value = ""; loadHistory(null); };
   $("run-routine").onclick = () => sendCommand("launch", { target: "routine" }, "루틴 RPA");
   $("run-prepare").onclick = () => sendCommand("launch", { target: "prepare" }, "프리페어 RPA");
   $("run-all").onclick = () => sendCommand("launch", { target: "all" }, "전체 실행");
@@ -132,6 +164,14 @@ export function unmount() {
   root = null; c = null;
 }
 
+function showView(name) {
+  show($("view-status"), name === "status");
+  show($("view-history"), name === "history");
+  $("tab-status").setAttribute("aria-selected", name === "status");
+  $("tab-history").setAttribute("aria-selected", name === "history");
+  if (name === "history" && !$("hist-rows").children.length) loadHistory($("hist-date").value || null);
+}
+
 // --- 현황 -----------------------------------------------------------
 function latest() {
   const ps = live?.programs || {};
@@ -143,8 +183,8 @@ function offlineSec() {
   const at = live?.heartbeat?.at;
   return at ? Math.floor(Date.now() / 1000) - at : null;
 }
-function metric(view, key) {
-  return (view?.metrics || []).find((m) => m.key === key);
+function metric(view, k) {
+  return (view?.metrics || []).find((m) => m.key === k);
 }
 function metricText(view) {
   const ms = view?.metrics || [];
@@ -165,7 +205,7 @@ function paintHero() {
     state = ""; title = "기록 없음"; l1 = "PC 연결됨"; l2 = "";
   } else {
     state = v.state;
-    const today = (v.started_at || "").slice(0, 10) === new Date().toISOString().slice(0, 10);
+    const today = (v.started_at || "").slice(0, 10) === isoDay(new Date());
     title = (today && v.state === "success" ? "오늘 " : "") + (HERO_TITLE[v.state] || v.state);
     if (v.state === "running") {
       l1 = `${hhmm(v.started_at)} ${v.program_label} · ${v.steps_done ?? 0}/${v.steps_total ?? 0} 단계` + (v.current_label ? ` · ${v.current_label}` : "");
@@ -200,16 +240,27 @@ function paintTiles() {
   if (m2) tiles.push(["재고검토 보류", String(m2.value), m2.total != null ? `/ ${m2.total}` : (m2.unit || ""), false]);
   if (m3) tiles.push(["비정상 보류", String(m3.value), m3.unit || "건", !!m3.approx]);
   const conn = off != null && off <= HEARTBEAT_STALE_SEC;
-  tiles.push(["연결", conn ? "정상" : (off == null ? "없음" : `끊김 ${Math.floor(off / 60)}분`), "", false, conn ? "var(--good)" : "var(--warn)"]);
+  tiles.push(["연결", conn ? "정상" : (off == null ? "없음" : `끊김 ${Math.floor(off / 60)}분`), "", false, conn ? "var(--good)" : "var(--warn)", "conn"]);
   const sch = live?.schedule;
   tiles.push(["다음 자동 실행", sch?.enabled && sch.next_run_at ? when(sch.next_run_at) : "꺼짐", "", false]);
-  $("tiles").replaceChildren(...tiles.map(([k, v, u, approx, color]) => {
+  $("tiles").replaceChildren(...tiles.map(([k, v, u, approx, color, id]) => {
     const d = document.createElement("div"); d.className = "tile";
     d.innerHTML = `<span class="k">${k}</span><span class="v num">${approx ? '<span class="approx">≈</span>' : ""}${v}<small>${u}</small></span>`;
     if (color) d.querySelector(".v").style.color = color;
+    if (id) d.querySelector(".v").id = id;
     return d;
   }));
-  $("tiles").querySelector(".tile:nth-last-child(2) .v").id = "conn";
+}
+
+// 도넛 SVG. 둘레 100 으로 맞춘 stroke-dasharray. 가운데 글자는 없다 (수치는 옆 범례에)
+function donutSvg(ok, bad, size) {
+  const total = ok + bad;
+  const goodLen = total ? ok / total * 100 : 0;
+  return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="성공 ${ok}건, 실패 ${bad}건">
+    <circle cx="21" cy="21" r="15.915" fill="none" stroke="${total ? "var(--bad)" : "var(--soft)"}" stroke-width="6"></circle>
+    ${total ? `<circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--good)" stroke-width="6"
+      stroke-dasharray="${goodLen} ${100 - goodLen}" stroke-dashoffset="25"></circle>` : ""}
+  </svg>`;
 }
 
 function paintRecent() {
@@ -218,43 +269,42 @@ function paintRecent() {
   const bad = days.reduce((n, d) => n + (d.failed || 0), 0);
   $("recent-meta").textContent = days.length ? `성공 ${ok} · 실패 ${bad}` : "";
   $("recent-strip").replaceChildren(...days.map((d) => {
-    const cls = d.failed && d.success ? "mix" : d.failed ? "bad" : d.success ? "good" : "";
-    const cell = document.createElement("div");
-    cell.className = "day";
-    const title = cls ? `${d.date} · 성공 ${d.success} 실패 ${d.failed}` : `${d.date} · 실행 없음`;
-    cell.innerHTML = `<div class="c ${cls}" title="${title}"></div><div class="d">${d.date.slice(5).replace("-", "/")}</div>`;
+    const cell = document.createElement("button");
+    cell.className = "day" + (d.success || d.failed ? "" : " empty");
+    cell.dataset.date = d.date;
+    cell.title = d.success || d.failed ? `${d.date} · 성공 ${d.success} 실패 ${d.failed} · 기록 보기` : `${d.date} · 실행 없음`;
+    cell.innerHTML = `${donutSvg(d.success || 0, d.failed || 0, 44)}<div class="d">${d.date.slice(5).replace("-", "/")}</div>`;
+    cell.onclick = () => { $("hist-date").value = d.date; showView("history"); loadHistory(d.date); };
     return cell;
   }));
-  // 도넛: 성공/실패 비율. 원 둘레 100 으로 맞춘 stroke-dasharray
   const total = ok + bad;
-  const pct = total ? Math.round(ok / total * 100) : 0;
-  const goodLen = total ? ok / total * 100 : 0;
-  $("recent-donut").innerHTML = total ? `
-    <svg viewBox="0 0 42 42" width="96" height="96" role="img" aria-label="성공 ${ok}건, 실패 ${bad}건">
-      <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--bad)" stroke-width="5"></circle>
-      <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--good)" stroke-width="5"
-              stroke-dasharray="${goodLen} ${100 - goodLen}" stroke-dashoffset="25"></circle>
-      <text x="21" y="21" text-anchor="middle" dominant-baseline="central" font-size="8" font-weight="700" fill="var(--strong)">${pct}%</text>
-    </svg>
-    <div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span></div>`
+  $("recent-donut").innerHTML = total
+    ? `${donutSvg(ok, bad, 104)}<div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span></div>`
     : `<div class="muted" style="font-size:13px">실행 없음</div>`;
 }
 
+function stepList(steps) {
+  const ul = document.createElement("ul");
+  ul.className = "steps";
+  ul.replaceChildren(...(steps || []).map((s) => {
+    const li = document.createElement("li");
+    const off = s.state === "skipped" && s.note === "설정에서 끔";
+    li.className = off ? "skipped" : (s.state || "pending");
+    const note = off ? "설정에서 끔" : (s.note || (s.state === "running" ? "진행 중" : ""));
+    li.innerHTML = `<span class="mark"></span><span>${s.label || s.key}</span><span class="note">${note}</span>`;
+    return li;
+  }));
+  return ul;
+}
+
 function paintSteps() {
-  for (const key of ["routine", "prepare"]) {
-    const v = live?.programs?.[key];
-    const ul = $(`list-${key}`), meta = $(`meta-${key}`);
+  for (const k of ["routine", "prepare"]) {
+    const v = live?.programs?.[k];
+    const ul = $(`list-${k}`), meta = $(`meta-${k}`);
     if (!v) { ul.replaceChildren(); meta.textContent = "기록 없음"; continue; }
     const steps = v.steps || [];
     meta.textContent = `${STATE_LABEL[v.state] || v.state} · ${v.steps_done ?? 0}/${v.steps_total ?? steps.length}` + (v.duration_sec != null ? ` · ${dur(v.duration_sec)}` : "");
-    ul.replaceChildren(...steps.map((s) => {
-      const li = document.createElement("li");
-      const off = s.state === "skipped" && s.note === "설정에서 끔";
-      li.className = off ? "skipped" : (s.state || "pending");
-      const note = off ? "설정에서 끔" : (s.note || (s.state === "running" ? "진행 중" : ""));
-      li.innerHTML = `<span class="mark"></span><span>${s.label || s.key}</span><span class="note">${note}</span>`;
-      return li;
-    }));
+    ul.replaceChildren(...stepList(steps).children);
   }
 }
 
@@ -263,6 +313,47 @@ function paintLog() {
   const lines = v?.log_tail || v?.log || [];
   $("log").textContent = lines.join("\n");
   $("log-meta").textContent = lines.length ? `${v.program_label} · ${lines.length}줄` : "없음";
+}
+
+// --- 기록 (Firestore) ------------------------------------------------
+async function loadHistory(date) {
+  const rows = $("hist-rows"), msg = $("hist-msg");
+  $("hist-title").textContent = date ? `기록 · ${date}` : "기록";
+  msg.textContent = "불러오는 중"; msg.className = "msg";
+  rows.replaceChildren();
+  try {
+    const col = collection(fs, "runs", c.me.cid, "items");
+    const q = date
+      ? query(col, where("pcId", "==", c.pcId), where("date", "==", date), orderBy("started_at", "desc"), limit(HISTORY_LIMIT))
+      : query(col, where("pcId", "==", c.pcId), orderBy("started_at", "desc"), limit(HISTORY_LIMIT));
+    const snap = await getDocs(q);
+    const items = snap.docs.map((d) => d.data());
+    msg.textContent = items.length ? `${items.length}건` + (items.length >= HISTORY_LIMIT ? " (최근 것만)" : "") : "기록이 없습니다";
+    rows.replaceChildren(...items.flatMap(histRow));
+  } catch (e) {
+    msg.className = "msg bad";
+    msg.textContent = e.code === "permission-denied" ? "권한이 없습니다" : `불러오지 못했습니다 (${e.code || e})`;
+  }
+}
+
+function histRow(r) {
+  let payload = {};
+  try { payload = JSON.parse(r.payload || "{}"); } catch {}
+  const ms = (payload.metrics || []).slice(0, 3).map((m) => `${m.label} ${m.approx ? "≈" : ""}${m.value}${m.total != null ? "/" + m.total : ""}`).join(" · ");
+  const tr = document.createElement("tr");
+  tr.className = "hist";
+  const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : "bad";
+  const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
+  tr.innerHTML = `<td class="num">${t}</td><td>${r.program_label || r.program || ""}</td><td><span class="pill ${cls}">${STATE_LABEL[r.state] || r.state || ""}</span></td><td class="num">${dur(r.duration_sec)}</td><td class="muted">${r.reason || ms}</td>`;
+  const detail = document.createElement("tr");
+  detail.className = "hist-detail hide";
+  const td = document.createElement("td"); td.colSpan = 5;
+  td.append(stepList(payload.steps));
+  const pre = document.createElement("pre"); pre.className = "num"; pre.textContent = (payload.log || []).join("\n");
+  td.append(pre);
+  detail.append(td);
+  tr.onclick = () => detail.classList.toggle("hide");
+  return [tr, detail];
 }
 
 // --- 명령 -----------------------------------------------------------

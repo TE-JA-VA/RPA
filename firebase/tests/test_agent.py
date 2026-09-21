@@ -150,6 +150,61 @@ check(len(rs) == 10 and rs[0]["date"] == "2026-09-05" and rs[-1]["date"] == "202
 check(rs[-1] == {"date": "2026-09-14", "success": 1, "failed": 1}, "하루에 성공·실패를 센다")
 check(rs[-2]["failed"] == 1 and rs[0]["success"] == 0, "중단·비정상 종료는 실패, 10일 밖은 뺀다")
 
+ff = fb.fs_fields({"a": "x", "b": 3, "c": True, "d": None, "e": 1.5, "f": {"k": [1]}})
+check(ff["a"] == {"stringValue": "x"} and ff["b"] == {"integerValue": "3"} and ff["c"] == {"booleanValue": True}
+      and ff["d"] == {"nullValue": None} and ff["e"] == {"doubleValue": 1.5}, "Firestore 형 붙이기")
+check(json.loads(ff["f"]["stringValue"]) == {"k": [1]}, "복합 값은 JSON 문자열")
+
+rec = {"run_id": "r1", "program": "routine", "program_label": "루틴 RPA", "state": "stopped", "reason": "주소",
+       "started_at": "2026-09-14T13:39:00", "finished_at": "2026-09-14T13:39:02", "duration_sec": 2,
+       "steps": [{"key": "a"}], "log_tail": [f"줄{i}" for i in range(100)]}
+doc = ag.run_doc(rec, "c_demo", "pc_office")
+check(doc["cid"] == "c_demo" and doc["pcId"] == "pc_office" and doc["date"] == "2026-09-14" and doc["duration_sec"] == 2, "문서 조회 필드")
+pl = json.loads(doc["payload"])
+check(pl["steps"] == [{"key": "a"}] and len(pl["log"]) == 80 and "log_tail" not in pl, "payload 에 단계·로그 80줄")
+
+
+class FsClient:
+    def __init__(self):
+        self.ok = True; self.puts = []; self.docs = []
+
+    def put(self, path, value):
+        self.puts.append((path, value))
+
+    patch = put
+
+    def fs_create(self, path, fields, doc_id):
+        if not self.ok:
+            raise fb.HttpError(503, "끊김")
+        self.docs.append((path, doc_id, fields))
+        return True
+
+
+with tempfile.TemporaryDirectory() as d:
+    fcl = FsClient()
+    upl = ag.Uploader(fcl, "c_demo", "pc_office", os.path.join(d, "q.jsonl"))
+    upl.push_run(doc)
+    check(fcl.docs[-1][0] == "runs/c_demo/items" and fcl.docs[-1][1] == "r1", "runs/회사/items 에 run_id 로")
+    check(fcl.docs[-1][2]["state"] == {"stringValue": "stopped"}, "형 붙여서 보낸다")
+    fcl.ok = False
+    upl.push_run(dict(doc, run_id="r2"))
+    check(upl.pending() == 1, "끊기면 이력도 큐에")
+    fcl.ok = True
+    upl.flush()
+    check(upl.pending() == 0 and fcl.docs[-1][1] == "r2", "다시 보낸다")
+
+    hist = os.path.join(d, "history.jsonl")
+    pos = os.path.join(d, "history_pos.txt")
+    with open(hist, "w", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="h1")) + "\n" + json.dumps(dict(rec, run_id="h2")) + "\n" + '{"run_id": "h3", "st')
+    n = ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
+    check(n == 2 and [x[1] for x in fcl.docs[-2:]] == ["h1", "h2"], "새 줄만 올린다, 쓰다 만 줄은 남긴다")
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write('ate": "success", "started_at": "2026-09-15T09:00:00"}\n')
+    n = ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
+    check(n == 1 and fcl.docs[-1][1] == "h3", "이어서 쓴 줄을 다음에 올린다")
+    check(ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos) == 0, "바뀐 게 없으면 안 올린다")
+
 
 class FlakyClient:
     def __init__(self):
