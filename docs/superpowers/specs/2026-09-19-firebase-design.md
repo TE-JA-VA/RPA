@@ -17,6 +17,7 @@
 | PC 에이전트 인증 | PC 마다 기계 계정(이메일+비밀번호) 하나. custom claim `{cid, pcId, role:"agent"}`. **서비스 계정 키는 고객 PC 에 두지 않는다** |
 | 명령 만료 | 기본 10분 (`expires_at`). 화면에서 명령별로 바꿀 수 있다 |
 | 요금 | Spark(무료). Cloud Functions 없음 |
+| 플랫폼 이름 | **AFTER MARKET** (2026-09-21, 바뀔 수 있음). RPA 는 그 안의 앱 하나. 데이터는 `apps/rpa/…` |
 | 파일 위치 | `D:\AX\RPA\firebase\` 하위에 새 파일만. **`firebase\` 밖 기존 파일은 수정하지 않는다** (시연 보호) |
 
 ## 1. 구성요소
