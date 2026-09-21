@@ -231,7 +231,8 @@ def real_actions():
 def log(text):
     line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}"
     print(line, flush=True)
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "에이전트_기록.txt")
+    # 큐와 같은 폴더에 둔다 - 통합 시험(RPA_AGENT_QUEUE 가 임시 폴더)이 실제 기록을 어지럽히지 않게
+    path = os.path.join(os.path.dirname(QUEUE_PATH), "에이전트_기록.txt")
     try:
         if os.path.exists(path) and os.path.getsize(path) > 1024 * 1024:
             os.replace(path, path + ".1")
