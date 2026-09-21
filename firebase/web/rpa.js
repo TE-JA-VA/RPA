@@ -107,6 +107,7 @@ let busy = false;
 let live = null;
 let form = { modules: {}, sch: { enabled: false, days: [], times: [] } };
 let fs = null;
+let resizeObs = null;
 
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
@@ -145,6 +146,9 @@ export function mount(el, context) {
     return b;
   }));
   show($("act-card"), c.isAdmin); show($("mod-card"), c.isAdmin); show($("sch-card"), c.isAdmin);
+  // 창 폭이 바뀌면 띠의 날짜 수를 다시 센다
+  resizeObs = new ResizeObserver(() => { if (root && live) paintRecent(); });
+  resizeObs.observe($("recent-strip").parentElement);
   if (!c.pcId) { $("h-state").textContent = "등록된 PC 가 없습니다"; return; }
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const v = snap.val();
@@ -160,6 +164,7 @@ export function mount(el, context) {
 
 export function unmount() {
   if (stopLive) { stopLive(); stopLive = null; }
+  if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   root = null; c = null;
 }
 
@@ -274,9 +279,19 @@ function donutSvg(ok, bad, size) {
   </svg>`;
 }
 
+const DAY_CELL = 44, DAY_GAP = 6, DAYS_MIN = 5, DAYS_MAX = 20;
+function visibleDays() {
+  // 카드 안쪽 폭에서 (같은 줄에 있으면) 오늘 도넛 폭을 뺀 만큼 (5~20일). 띠 자신의 폭은 내용에 따라 변해 기준으로 못 쓴다
+  const strip = $("recent-strip"), donut = $("recent-donut");
+  let w = strip.parentElement.clientWidth || 0;
+  const sameRow = donut.getBoundingClientRect().left > strip.getBoundingClientRect().left + 10;
+  if (sameRow) w -= donut.offsetWidth + 20;
+  return Math.max(DAYS_MIN, Math.min(DAYS_MAX, Math.floor((w + DAY_GAP) / (DAY_CELL + DAY_GAP))));
+}
+
 function paintRecent() {
-  // 격자는 최근 10일, 큰 도넛은 오늘(마지막 날)만
-  const days = (live?.recent || []).slice(-10);   // 옛 에이전트가 20일을 올려도 10칸만
+  // 띠는 폭에 맞춘 최근 N일, 큰 도넛은 오늘(마지막 날)만
+  const days = (live?.recent || []).slice(-visibleDays());
   const today = days[days.length - 1] || { success: 0, failed: 0 };
   const ok = today.success || 0, bad = today.failed || 0;
   $("recent-meta").textContent = days.length ? (ok + bad ? `오늘 성공 ${ok} · 실패 ${bad}` : "오늘 실행 없음") : "";
@@ -416,9 +431,10 @@ function paintButtons() {
 }
 
 // --- 실행 모듈 ------------------------------------------------------
+const LOCKED = new Set(["Login"]);   // 항상 켬. 관리자도 못 끈다 (에이전트도 파일에 Y 로 고정)
 const savedModules = () => live?.modules || {};
 function resetModules() {
-  form.modules = Object.fromEntries(MODULES.map(([k]) => [k, savedModules()[k] !== false]));
+  form.modules = Object.fromEntries(MODULES.map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false]));
   paintModules();
 }
 function modulesDirty() {
@@ -428,7 +444,7 @@ function paintModules() {
   $("mod-list").replaceChildren(...MODULES.map(([k, text], i) => {
     const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
     const cb = document.createElement("input");
-    cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy;
+    cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k);
     cb.setAttribute("aria-label", text);
     cb.onchange = () => { form.modules[k] = cb.checked; paintModuleMeta(); };
     row.append(Object.assign(document.createElement("span"), { textContent: text }), cb, Object.assign(document.createElement("span"), { className: "knob" }));

@@ -143,12 +143,12 @@ import datetime as _dt
 rows = [{"started_at": "2026-09-14T13:55:00", "state": "success"},
         {"started_at": "2026-09-14T13:39:00", "state": "stopped"},
         {"started_at": "2026-09-13T09:06:00", "state": "crashed"},
-        {"started_at": "2026-09-01T09:06:00", "state": "success"},    # 10일 밖
+        {"started_at": "2026-08-20T09:06:00", "state": "success"},    # 20일 밖
         {"started_at": "", "state": "success"}]
 rs = ag.recent_summary(rows, _dt.date(2026, 9, 14))
-check(len(rs) == 10 and rs[0]["date"] == "2026-09-05" and rs[-1]["date"] == "2026-09-14", "최근 10일, 오래된 날부터")
+check(len(rs) == 20 and rs[0]["date"] == "2026-08-26" and rs[-1]["date"] == "2026-09-14", "최근 20일, 오래된 날부터")
 check(rs[-1] == {"date": "2026-09-14", "success": 1, "failed": 1}, "하루에 성공·실패를 센다")
-check(rs[-2]["failed"] == 1 and sum(d["success"] for d in rs) == 1, "중단·비정상 종료는 실패, 10일 밖은 뺀다")
+check(rs[-2]["failed"] == 1 and sum(d["success"] for d in rs) == 1, "중단·비정상 종료는 실패, 20일 밖은 뺀다")
 
 ff = fb.fs_fields({"a": "x", "b": 3, "c": True, "d": None, "e": 1.5, "f": {"k": [1]}})
 check(ff["a"] == {"stringValue": "x"} and ff["b"] == {"integerValue": "3"} and ff["c"] == {"booleanValue": True}
@@ -310,6 +310,30 @@ cl, cmds = make_cmds({"launch": lambda args: "ok"})
 cmds.handle("k6", dict(ok_cmd, type="stop_erpia"), NOW)
 check(cl.patches[-1][1]["state"] == "failed" and "할 수 없" in cl.patches[-1][1]["result"],
       "할 줄 모르는 종류는 failed 로 닫는다 (명령이 영원히 남지 않게)")
+
+print("\n5절 실제 동작 - 실행 모듈 (가짜 자격증명 파일)")
+with tempfile.TemporaryDirectory() as d:
+    cred = os.path.join(d, "ERPIA_AI.txt")
+    with open(cred, "w", encoding="utf-8") as f:
+        json.dump([{"LogIn": [{"AdminCode": "x"}, {"ID": "a"}, {"PW": "비밀-시험"}]},
+                   {"Routine": [{"Login": "Y"}, {"Sales": "Y"}]}], f, ensure_ascii=False)
+    os.environ["RPA_CRED_FILE"] = cred
+    os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
+    try:
+        acts = ag.real_actions()
+        msg = acts["set_modules"]({"Login": False, "Sales": False, "Hold": True})
+        import rpa_status as st
+        sel = st.read_routine_modules(cred)[0]
+        check(sel["Login"] is True and sel["Sales"] is False and sel["Hold"] is True, f"로그인은 꺼 달라고 해도 켜진 채 저장 ({sel})")
+        check("Login" in msg, "결과 문장에 로그인 포함")
+        raw = open(cred, encoding="utf-8").read()
+        check("비밀-시험" in raw, "자격증명은 그대로 남는다")
+        try:
+            acts["set_modules"]({"Nope": True}); check(False, "모르는 모듈만 있으면 거부")
+        except RuntimeError as e:
+            check("아는 모듈" in str(e), "모르는 모듈만 있으면 거부")
+    finally:
+        os.environ.pop("RPA_CRED_FILE", None)
 
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:

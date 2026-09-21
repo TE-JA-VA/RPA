@@ -47,7 +47,7 @@ def clean_for_rtdb(value):
     return value
 
 
-RECENT_DAYS = 10
+RECENT_DAYS = 20      # 화면은 폭에 맞춰 5~20일을 보여 준다
 
 
 def recent_summary(rows, today, days=RECENT_DAYS):
@@ -311,8 +311,7 @@ def real_actions():
                   if k in dict(st.ROUTINE_CONFIG_MODULES)}
         if not wanted:
             raise RuntimeError("아는 모듈이 없습니다")
-        if not any(wanted.values()):
-            raise RuntimeError("최소 한 모듈은 켜야 합니다")
+        wanted["Login"] = True           # 로그인은 항상 켬 (관리자도 못 끈다)
         st.write_routine_modules(wanted)
         on = [k for k, v in wanted.items() if v]
         return f"실행 모듈을 바꿨습니다 (켬: {', '.join(on)})"

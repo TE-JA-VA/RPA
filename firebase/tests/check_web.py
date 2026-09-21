@@ -95,9 +95,11 @@ db_put(LIVE, {
     "modules": {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True},
     "schedule": {"enabled": True, "days": [0, 1, 2, 3, 4], "times": ["09:05"], "next_run_at": "2026-09-22T09:05:00",
                  "last_launch_at": f"{TODAY}T13:55:40", "last_launch_by": "cloud", "last_error": None},
-    # 최근 10일 (에이전트가 history.jsonl 에서 센다): 성공 5 · 실패 3
-    "recent": [{"date": f"2026-09-{d:02d}", "success": s, "failed": f}
-               for d, s, f in [(5, 0, 0), (6, 0, 0), (7, 0, 0), (8, 0, 0), (9, 0, 0), (10, 1, 0), (11, 1, 0), (12, 1, 0), (13, 1, 1), (14, 1, 2)]],
+    # 최근 20일 (에이전트가 history.jsonl 에서 센다). 8/26~9/4 는 실행 없음, 9/10~9/14 성공 5 · 실패 3
+    "recent": [{"date": f"2026-08-{d:02d}", "success": 0, "failed": 0} for d in range(26, 32)]
+              + [{"date": f"2026-09-{d:02d}", "success": s, "failed": f}
+                 for d, s, f in [(1, 0, 0), (2, 0, 0), (3, 0, 0), (4, 0, 0), (5, 0, 0), (6, 0, 0), (7, 0, 0), (8, 0, 0), (9, 0, 0),
+                                 (10, 1, 0), (11, 1, 0), (12, 1, 0), (13, 1, 1), (14, 1, 2)]],
 })
 # 이력 (Firestore 에뮬레이터 REST, Bearer owner). 에이전트가 올리는 문서와 같은 모양
 FS = f"http://127.0.0.1:8080/v1/projects/{PROJECT}/databases/(default)/documents"
@@ -224,8 +226,30 @@ with sync_playwright() as pw:
       return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
     check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"프리페어가 왼쪽, 루틴이 오른쪽에 나란히 ({pair})")
     check("2줄" in page.text_content("#log-meta"), "로그 줄 수")
-    check(page.locator("#recent-strip .day").count() == 10 and page.locator("#recent-strip .day svg").count() == 10, "최근 10일: 날짜별 도넛 10개")
-    check(page.locator("#recent-strip .day.empty").count() == 5, "실행 없는 날은 빈 도넛")
+    # 띠는 폭에 맞춰 5~20일. 셀 44px + 간격 6px
+    def expected_days():
+        w = page.evaluate("""() => { const s = document.getElementById('recent-strip'), d = document.getElementById('recent-donut');
+          let w = s.parentElement.clientWidth;
+          if (d.getBoundingClientRect().left > s.getBoundingClientRect().left + 10) w -= d.offsetWidth + 20;
+          return w; }""")
+        return max(5, min(20, (w + 6) // 50))
+    n = page.locator("#recent-strip .day").count()
+    check(5 <= n <= 20 and n == expected_days(), f"띠는 폭에 맞춘 날짜 수 ({n}일, 기본 창)")
+    check(page.locator("#recent-strip .day:last-child").get_attribute("data-date") == "2026-09-14", "마지막 칸은 오늘")
+    strip_right = page.evaluate("document.getElementById('recent-strip').getBoundingClientRect().right")
+    donut_left = page.evaluate("document.getElementById('recent-donut').getBoundingClientRect().left")
+    card_right = page.evaluate("document.querySelector('.card.recent').getBoundingClientRect().right")
+    check(donut_left > strip_right and card_right - page.evaluate("document.getElementById('recent-donut').getBoundingClientRect().right") < 40, "오늘 도넛은 오른쪽에 고정")
+    page.set_viewport_size({"width": 2200, "height": 900}); page.wait_for_timeout(300)
+    n_wide = page.locator("#recent-strip .day").count()
+    check(n_wide == 20 and n_wide == expected_days(), f"넓은 창에서는 최대 20일 ({n_wide})")
+    check(page.locator("#recent-strip .day:first-child").get_attribute("data-date") == "2026-08-26", "20일이면 8/26 부터")
+    page.set_viewport_size({"width": 400, "height": 900}); page.wait_for_timeout(300)
+    n_narrow = page.locator("#recent-strip .day").count()
+    check(5 <= n_narrow <= 8 and n_narrow == expected_days(), f"좁은 창에서는 최소 5일 ({n_narrow})")
+    page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
+    check(page.locator("#recent-strip .day").count() == n, "원래 폭으로 돌아오면 원래 개수")
+    check(page.locator("#recent-strip .day.empty").count() == n - 5, "실행 없는 날은 빈 도넛")
     check(page.get_attribute("#recent-strip .day.empty svg circle", "stroke") == "url(#hatch)", "빈 도넛은 빗금")
     bg = page.evaluate("getComputedStyle(document.getElementById('hero')).backgroundColor")
     good = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--good-fill').trim()")
@@ -287,6 +311,10 @@ with sync_playwright() as pw:
     print("5절 실행 모듈")
     page.wait_for_function("document.getElementById('mod-meta')?.textContent === '4/5 켬'", timeout=10000)
     check(page.is_disabled("#mod-apply"), "바뀐 게 없으면 적용 비활성")
+    login_cb = page.locator("#mod-list input[aria-label='로그인']")
+    check(login_cb.is_checked() and login_cb.is_disabled(), "로그인 모듈은 켜진 채 잠김 (관리자도 못 끔)")
+    page.locator("#mod-list label:nth-child(1)").click(force=True)   # 잠긴 스위치라 Playwright 가 '비활성' 으로 본다
+    check(login_cb.is_checked() and "4/5 켬" in page.text_content("#mod-meta"), "눌러도 안 꺼진다")
     page.click("#mod-list label:nth-child(2)")     # 스위치의 input 은 숨겨져 있어 label 을 누른다
     check("5/5 켬" in page.text_content("#mod-meta") and not page.is_disabled("#mod-apply"), "켜면 요약·적용 활성")
     page.click("#mod-apply")
