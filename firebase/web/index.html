@@ -14,21 +14,21 @@
     --bg:#fdf6e3; --card:#fffdf6; --soft:#eee8d5; --ink:#4a5f66; --strong:#073642; --muted:#62767c; --line:#e6dfc8;
     --accent:#2aa198; --accent-ink:#fdf6e3;
     --good:#859900; --warn:#b58900; --bad:#dc322f; --run:#268bd2;
-    --on-good:#14200a; --on-warn:#1f1700; --on-bad:#ffffff; --on-run:#04182a;
+    --good-fill:#667600; --warn-fill:#8a6600; --bad-fill:#c92b22; --run-fill:#1f6fa8; --on-fill:#ffffff;
     --good-bg:#eef0d6; --warn-bg:#f7edc9; --bad-bg:#fadcd9; --run-bg:#d8e9f5;
   }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
     --bg:#12161a; --card:#1b2127; --soft:#262e36; --ink:#d3dae0; --strong:#f5f7f9; --muted:#97a3ae; --line:#323c45;
     --accent:#2aa198; --accent-ink:#0b1416;
     --good:#a6c522; --warn:#e6b73e; --bad:#f26b64; --run:#5db0f0;
-    --on-good:#101a02; --on-warn:#1e1600; --on-bad:#1c0807; --on-run:#04182a;
+    --good-fill:#667600; --warn-fill:#8a6600; --bad-fill:#c92b22; --run-fill:#1f6fa8; --on-fill:#ffffff;
     --good-bg:#26361a; --warn-bg:#3d3212; --bad-bg:#432220; --run-bg:#193348;
   } }
   :root[data-theme="dark"] {
     --bg:#12161a; --card:#1b2127; --soft:#262e36; --ink:#d3dae0; --strong:#f5f7f9; --muted:#97a3ae; --line:#323c45;
     --accent:#2aa198; --accent-ink:#0b1416;
     --good:#a6c522; --warn:#e6b73e; --bad:#f26b64; --run:#5db0f0;
-    --on-good:#101a02; --on-warn:#1e1600; --on-bad:#1c0807; --on-run:#04182a;
+    --good-fill:#667600; --warn-fill:#8a6600; --bad-fill:#c92b22; --run-fill:#1f6fa8; --on-fill:#ffffff;
     --good-bg:#26361a; --warn-bg:#3d3212; --bad-bg:#432220; --run-bg:#193348;
   }
   * { box-sizing:border-box; }
@@ -81,11 +81,12 @@
 
   /* 상태 헤더: 상태 색으로 통째로 채운 카드 하나. 나머지 카드는 비운다 */
   /* 성공 초록 / 진행 중 파랑 / 실패(중단) 빨강 / 오류(비정상 종료·연결 끊김) 노랑 */
+  /* 채움은 상태 색보다 한 단계 진한 --*-fill (흰 글자로 4.5:1 이상) */
   .hero { border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong); }
-  .hero[data-state="success"] { background:var(--good); --on:var(--on-good); }
-  .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad); --on:var(--on-bad); }
-  .hero[data-state="crashed"], .hero[data-state="offline"] { background:var(--warn); --on:var(--on-warn); }
-  .hero[data-state="running"] { background:var(--run); --on:var(--on-run); }
+  .hero[data-state="success"] { background:var(--good-fill); --on:var(--on-fill); }
+  .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad-fill); --on:var(--on-fill); }
+  .hero[data-state="crashed"], .hero[data-state="offline"] { background:var(--warn-fill); --on:var(--on-fill); }
+  .hero[data-state="running"] { background:var(--run-fill); --on:var(--on-fill); }
   .hero .body { padding:22px 24px; display:grid; gap:4px; min-width:0; color:var(--on); }
   .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:24px; color:var(--on); }
   .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--on); flex:none; opacity:.9; }
@@ -151,8 +152,10 @@
   .subnav button[aria-selected="true"] { border-color:var(--accent); color:var(--accent); font-weight:700; }
 
   /* 최근 10일: 날짜별 도넛 + 합계 도넛 */
-  .recent-body { display:flex; gap:24px; align-items:center; flex-wrap:wrap; }
-  .strip { display:flex; gap:6px; flex:1; min-width:0; flex-wrap:wrap; justify-content:flex-start; }
+  /* 띠는 내용 폭만 쓰고 오늘 도넛이 바로 옆에 붙는다 (넓은 화면에서 양끝으로 벌어지지 않게) */
+  .recent-body { display:flex; gap:20px; align-items:center; flex-wrap:wrap; }
+  .strip { display:flex; gap:6px; flex:0 1 auto; min-width:0; flex-wrap:wrap; justify-content:flex-start; }
+  .donut { padding-left:20px; border-left:1px solid var(--line); }
   .strip .day { display:grid; gap:2px; justify-items:center; font-size:11px; color:var(--muted); padding:4px 2px; border:0; background:none; border-radius:8px; }
   .strip .day:hover:not(.empty) { background:var(--soft); }
   .strip .day.empty { cursor:default; opacity:.6; }
@@ -165,7 +168,7 @@
   @media (max-width:640px) {
     .recent-body { flex-direction:column; align-items:stretch; }
     .strip { justify-content:center; }
-    .donut { justify-content:center; }
+    .donut { justify-content:center; border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:12px; }
   }
 
   /* 기록 표 */

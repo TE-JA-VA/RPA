@@ -186,8 +186,8 @@ with sync_playwright() as pw:
     def contrast_ok(theme):
         card = tok("--card")
         pairs = {"글자": contrast(tok("--ink"), card), "회색 글자": contrast(tok("--muted"), card), "제목": contrast(tok("--strong"), card)}
-        for st_, on in [("good", "--on-good"), ("warn", "--on-warn"), ("bad", "--on-bad"), ("run", "--on-run")]:
-            pairs[f"채운 카드 {st_}"] = contrast(tok(on), tok(f"--{st_}"))
+        for st_ in ["good", "warn", "bad", "run"]:
+            pairs[f"채운 카드 {st_}"] = contrast(tok("--on-fill"), tok(f"--{st_}-fill"))
         low = {k: round(v, 2) for k, v in pairs.items() if v < 4.5}
         check(not low, f"{theme} 대비 4.5:1 이상 {low or ''}")
     check(page.evaluate("getComputedStyle(document.body).fontFamily").startswith('"Pretendard Variable"'), "본문 서체 Pretendard")
@@ -228,9 +228,10 @@ with sync_playwright() as pw:
     check(page.locator("#recent-strip .day.empty").count() == 5, "실행 없는 날은 빈 도넛")
     check(page.get_attribute("#recent-strip .day.empty svg circle", "stroke") == "url(#hatch)", "빈 도넛은 빗금")
     bg = page.evaluate("getComputedStyle(document.getElementById('hero')).backgroundColor")
-    good = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--good').trim()")
+    good = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--good-fill').trim()")
     hexbg = "#%02x%02x%02x" % tuple(int(x) for x in bg[4:-1].split(",")[:3])
-    check(hexbg == good, f"성공이면 상태 카드가 초록으로 채워진다 ({hexbg} = {good})")
+    check(hexbg == good, f"성공이면 상태 카드가 진한 초록으로 채워진다 ({hexbg} = {good})")
+    check(page.evaluate("getComputedStyle(document.getElementById('h-state')).color") == "rgb(255, 255, 255)", "채운 카드 글자는 흰색")
     d14 = page.get_attribute("#recent-strip .day[data-date='2026-09-14'] svg circle:nth-child(2)", "stroke-dasharray")
     check(d14 and abs(float(d14.split()[0]) - 33.33) < 0.1, f"9/14 도넛은 성공 1/3 ({d14})")
     check("09/14" in page.text_content("#recent-strip"), "날짜 표시")
@@ -253,13 +254,13 @@ with sync_playwright() as pw:
     check("주소를 입력하세요" in page.text_content("#list-routine li.stopped .note"), "멈춘 단계가 목록에서 빨갛게")
     hero_hex = lambda: "#%02x%02x%02x" % tuple(int(x) for x in page.evaluate("getComputedStyle(document.getElementById('hero')).backgroundColor")[4:-1].split(",")[:3])
     token = lambda name: page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('{name}').trim()")
-    check(hero_hex() == token("--bad"), "실패는 빨강으로 채움")
+    check(hero_hex() == token("--bad-fill"), "실패는 빨강으로 채움")
     db_patch(f"{LIVE}/programs/routine", {"state": "crashed", "reason": "프로그램이 중간에 사라졌습니다"})
     page.wait_for_function("document.getElementById('hero')?.dataset.state === 'crashed'", timeout=10000)
-    check(hero_hex() == token("--warn"), "비정상 종료(오류)는 노랑으로 채움")
+    check(hero_hex() == token("--warn-fill"), "비정상 종료(오류)는 노랑으로 채움")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW - 900})
     page.wait_for_function("document.getElementById('h-state')?.textContent === 'PC 연결 끊김'", timeout=10000)
-    check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--warn"), "연결 끊김도 노랑")
+    check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--warn-fill"), "연결 끊김도 노랑")
     check("15분 전부터" in page.text_content("#h-line1"), "끊긴 시간")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW})
     db_patch(f"{LIVE}/programs/routine", routine)
