@@ -138,6 +138,26 @@
   .switch input:disabled + .knob { opacity:.4; }
   .apply { margin-top:10px; width:100%; }
 
+  /* 최근 10일: 격자 + 도넛 */
+  .recent-body { display:flex; gap:20px; align-items:center; flex-wrap:wrap; }
+  .strip { display:flex; gap:5px; flex:1; min-width:0; }
+  .strip .day { display:grid; gap:4px; text-align:center; font-size:11px; color:var(--muted); flex:1; max-width:34px; }
+  .strip .c { aspect-ratio:1; border-radius:5px; background:var(--soft); border:1px solid var(--line); }
+  .strip .c.good { background:var(--good); border-color:transparent; }
+  .strip .c.bad { background:var(--bad); border-color:transparent; }
+  .strip .c.mix { background:linear-gradient(135deg, var(--bad) 50%, var(--good) 50%); border-color:transparent; }
+  .strip .day:last-child .c { box-shadow:0 0 0 2px var(--accent); }
+  .donut { display:flex; align-items:center; gap:12px; }
+  .donut svg { flex:none; }
+  .donut svg text { font-family:"IBM Plex Mono",monospace; }
+  .legend { display:grid; gap:4px; font-size:13px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+  /* 프리페어·루틴 나란히 */
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
+  .pair .card { margin-top:0; }
+  @media (max-width:640px) { .pair { grid-template-columns:1fr; } }
+  .pair + .card { margin-top:12px; }
+
   /* 자동 실행 편집 */
   .seg { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
   .seg button { padding:5px 9px; font-size:13px; border-radius:999px; }

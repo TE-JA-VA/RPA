@@ -135,6 +135,9 @@ await waitFor("잘못된 요일은 failed + 사유", async () => {
   return v.state === "failed" && /요일/.test(v.result || "");
 });
 check(!("accounts" in ((await db.ref("apps/rpa/live/c_demo/pc_office").get()).val() || {})), "계정 해시는 클라우드에 안 올라간다");
+const recent = (await db.ref("apps/rpa/live/c_demo/pc_office/recent").get()).val() || [];
+check(recent.length === 10 && recent.every((d) => /^\d{4}-\d\d-\d\d$/.test(d.date) && "success" in d && "failed" in d),
+  `최근 10일 요약이 올라온다 (${recent.length}일)`);
 
 // --- 6. 정리 -------------------------------------------------------------
 agent.kill();

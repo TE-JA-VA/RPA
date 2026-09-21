@@ -33,8 +33,17 @@ const HTML = `
   <div class="tiles" id="tiles"></div>
   <div class="cols">
     <div>
-      <div class="card"><details id="steps-routine"><summary>루틴 RPA <span><span class="muted" id="meta-routine"></span> &nbsp;<span class="chev">▶</span></span></summary><ul class="steps" id="list-routine"></ul></details></div>
-      <div class="card"><details id="steps-prepare"><summary>프리페어 RPA <span><span class="muted" id="meta-prepare"></span> &nbsp;<span class="chev">▶</span></span></summary><ul class="steps" id="list-prepare"></ul></details></div>
+      <div class="card recent">
+        <h2>최근 10일 <span class="muted" id="recent-meta"></span></h2>
+        <div class="recent-body">
+          <div class="strip" id="recent-strip"></div>
+          <div class="donut" id="recent-donut"></div>
+        </div>
+      </div>
+      <div class="pair">
+        <div class="card" id="steps-prepare"><h2>프리페어 RPA <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
+        <div class="card" id="steps-routine"><h2>루틴 RPA <span class="muted" id="meta-routine"></span></h2><ul class="steps" id="list-routine"></ul></div>
+      </div>
       <div class="card"><details id="log-box"><summary>로그 <span><span class="muted" id="log-meta"></span> &nbsp;<span class="chev">▶</span></span></summary><pre class="num" id="log" style="font-size:12px;white-space:pre-wrap;margin:10px 0 0;color:var(--muted)"></pre></details></div>
     </div>
     <div id="sidecol">
@@ -110,7 +119,7 @@ export function mount(el, context) {
     const v = snap.val();
     const first = live == null;
     live = v || {};
-    paintHero(); paintTiles(); paintSteps(); paintLog();
+    paintHero(); paintTiles(); paintRecent(); paintSteps(); paintLog();
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신)
     if (first || !modulesDirty()) resetModules();
     if (first || !scheduleDirty()) resetSchedule();
@@ -203,10 +212,38 @@ function paintTiles() {
   $("tiles").querySelector(".tile:nth-last-child(2) .v").id = "conn";
 }
 
+function paintRecent() {
+  const days = live?.recent || [];
+  const ok = days.reduce((n, d) => n + (d.success || 0), 0);
+  const bad = days.reduce((n, d) => n + (d.failed || 0), 0);
+  $("recent-meta").textContent = days.length ? `성공 ${ok} · 실패 ${bad}` : "";
+  $("recent-strip").replaceChildren(...days.map((d) => {
+    const cls = d.failed && d.success ? "mix" : d.failed ? "bad" : d.success ? "good" : "";
+    const cell = document.createElement("div");
+    cell.className = "day";
+    const title = cls ? `${d.date} · 성공 ${d.success} 실패 ${d.failed}` : `${d.date} · 실행 없음`;
+    cell.innerHTML = `<div class="c ${cls}" title="${title}"></div><div class="d">${d.date.slice(5).replace("-", "/")}</div>`;
+    return cell;
+  }));
+  // 도넛: 성공/실패 비율. 원 둘레 100 으로 맞춘 stroke-dasharray
+  const total = ok + bad;
+  const pct = total ? Math.round(ok / total * 100) : 0;
+  const goodLen = total ? ok / total * 100 : 0;
+  $("recent-donut").innerHTML = total ? `
+    <svg viewBox="0 0 42 42" width="96" height="96" role="img" aria-label="성공 ${ok}건, 실패 ${bad}건">
+      <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--bad)" stroke-width="5"></circle>
+      <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--good)" stroke-width="5"
+              stroke-dasharray="${goodLen} ${100 - goodLen}" stroke-dashoffset="25"></circle>
+      <text x="21" y="21" text-anchor="middle" dominant-baseline="central" font-size="8" font-weight="700" fill="var(--strong)">${pct}%</text>
+    </svg>
+    <div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span></div>`
+    : `<div class="muted" style="font-size:13px">실행 없음</div>`;
+}
+
 function paintSteps() {
   for (const key of ["routine", "prepare"]) {
     const v = live?.programs?.[key];
-    const ul = $(`list-${key}`), meta = $(`meta-${key}`), box = $(`steps-${key}`);
+    const ul = $(`list-${key}`), meta = $(`meta-${key}`);
     if (!v) { ul.replaceChildren(); meta.textContent = "기록 없음"; continue; }
     const steps = v.steps || [];
     meta.textContent = `${STATE_LABEL[v.state] || v.state} · ${v.steps_done ?? 0}/${v.steps_total ?? steps.length}` + (v.duration_sec != null ? ` · ${dur(v.duration_sec)}` : "");
@@ -218,7 +255,6 @@ function paintSteps() {
       li.innerHTML = `<span class="mark"></span><span>${s.label || s.key}</span><span class="note">${note}</span>`;
       return li;
     }));
-    if (v.state === "running" || v.state === "stopped" || v.state === "failed" || v.state === "crashed") box.open = true;
   }
 }
 

@@ -95,6 +95,9 @@ db_put(LIVE, {
     "modules": {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True},
     "schedule": {"enabled": True, "days": [0, 1, 2, 3, 4], "times": ["09:05"], "next_run_at": "2026-09-22T09:05:00",
                  "last_launch_at": f"{TODAY}T13:55:40", "last_launch_by": "cloud", "last_error": None},
+    # 최근 10일 (에이전트가 history.jsonl 에서 센다): 성공 5 · 실패 3
+    "recent": [{"date": f"2026-09-{d:02d}", "success": s, "failed": f}
+               for d, s, f in [(5, 0, 0), (6, 0, 0), (7, 0, 0), (8, 0, 0), (9, 0, 0), (10, 1, 0), (11, 1, 0), (12, 1, 0), (13, 1, 1), (14, 1, 2)]],
 })
 print("시드 완료")
 
@@ -155,10 +158,20 @@ with sync_playwright() as pw:
     check("≈376" in tiles.replace(" ", ""), "추정치는 ≈")
     check("정상" in page.text_content("#conn"), "연결 정상")
     check("9월 22일" in tiles and "09:05" in tiles, "다음 자동 실행")
-    check(not page.evaluate("document.getElementById('steps-routine').open"), "성공이면 단계는 접힘")
+    check(page.is_visible("#list-routine li"), "단계 목록은 항상 펼쳐져 있다")
     check("성공 · 3/3 · 2분 33초" in page.text_content("#meta-routine"), "단계 요약")
     check("기록 없음" in page.text_content("#meta-prepare"), "프리페어 없음")
+    pair = page.evaluate("""() => { const p = document.querySelector('.pair'); const [a, b] = p.children;
+      return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
+    check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"프리페어가 왼쪽, 루틴이 오른쪽에 나란히 ({pair})")
     check("2줄" in page.text_content("#log-meta"), "로그 줄 수")
+    check(page.locator("#recent-strip .day").count() == 10, "최근 10일 격자 10칸")
+    check(page.locator("#recent-strip .c.good").count() == 3 and page.locator("#recent-strip .c.mix").count() == 2, "격자 색: 성공 3칸, 섞임 2칸")
+    check("09/14" in page.text_content("#recent-strip"), "날짜 표시")
+    check("성공 5 · 실패 3" in page.text_content("#recent-meta"), "10일 합계")
+    check("63%" in page.text_content("#recent-donut svg text"), "도넛 가운데 성공률 (5/8)")
+    dash = page.get_attribute("#recent-donut svg circle:nth-child(2)", "stroke-dasharray")
+    check(dash and abs(float(dash.split()[0]) - 62.5) < 0.1, f"도넛 호 길이 ({dash})")
 
     print("3절 실패·끊김 표시")
     db_patch(f"{LIVE}/programs/routine", {"state": "stopped", "reason": "물류 관리 저장 실패 - 주소를 입력하세요",
@@ -170,7 +183,7 @@ with sync_playwright() as pw:
     check(page.get_attribute("#hero", "data-state") == "stopped", "실패는 빨강 상태")
     check("물류 관리 저장에서 멈춤" in page.text_content("#h-line1"), "멈춘 단계를 한 줄에")
     check("주소를 입력하세요" in page.text_content("#h-line2"), "사유")
-    check(page.evaluate("document.getElementById('steps-routine').open"), "실패면 단계 자동 펼침")
+    check("주소를 입력하세요" in page.text_content("#list-routine li.stopped .note"), "멈춘 단계가 목록에서 빨갛게")
     check("다시 실행" in page.text_content("#h-act"), "헤더 버튼은 다시 실행")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW - 900})
     page.wait_for_function("document.getElementById('h-state')?.textContent === 'PC 연결 끊김'", timeout=10000)

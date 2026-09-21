@@ -8,6 +8,7 @@ PC 에서만 할 수 있는 일을 맡는다: 상태 올리기, heartbeat, 클�
   rpa_dashboard.launch()/stop_erpia()  실행·종료 (1PC 1프로그램 잠금 포함)
   rpa_status.write_routine_modules()  실행 모듈
 """
+import datetime
 import json
 import os
 import sys
@@ -44,6 +45,21 @@ def clean_for_rtdb(value):
     if isinstance(value, (list, tuple)):
         return [clean_for_rtdb(v) for v in value] or None
     return value
+
+
+RECENT_DAYS = 10
+
+
+def recent_summary(rows, today, days=RECENT_DAYS):
+    """이력에서 최근 N일 요약: [{date, success, failed}] (오래된 날부터). 화면의 10일 격자·도넛용."""
+    import datetime as dt
+    first = today - dt.timedelta(days=days - 1)
+    per = {(first + dt.timedelta(days=i)).isoformat(): {"success": 0, "failed": 0} for i in range(days)}
+    for r in rows or []:
+        d = (r.get("started_at") or "")[:10]
+        if d in per:
+            per[d]["success" if r.get("state") == "success" else "failed"] += 1
+    return [{"date": d, **v} for d, v in per.items()]
 
 
 def trim_logs(snapshot, lines=LOG_LINES):
@@ -289,6 +305,7 @@ def main():
         """상태와 heartbeat. 1초마다 상태 파일을 보고 바뀌었을 때만 올린다."""
         last = None
         last_beat = 0.0
+        recent_key = [None, []]   # (이력 파일 mtime, 오늘) 과 그때 센 요약
         while not stop.is_set():
             try:
                 snap = st.dashboard_snapshot()
@@ -298,7 +315,17 @@ def main():
                     snap["modules"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
                 snap["schedule"] = st.read_settings().get("schedule")
-                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule")],
+                # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
+                hist_path = os.path.join(st.status_dir(create=False), st.HISTORY_NAME)
+                try:
+                    hist_key = (os.path.getmtime(hist_path), datetime.date.today())
+                except OSError:
+                    hist_key = (None, datetime.date.today())
+                if hist_key != recent_key[0]:
+                    recent_key[0] = hist_key
+                    recent_key[1] = recent_summary(st.read_history(), datetime.date.today())
+                snap["recent"] = recent_key[1]
+                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule"), snap.get("recent")],
                                   ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)
