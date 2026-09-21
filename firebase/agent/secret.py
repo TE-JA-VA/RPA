@@ -10,7 +10,9 @@ import json
 import os
 from ctypes import wintypes
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_config.json")
+# RPA_AGENT_CONFIG 는 시험용 - 통합 시험이 실제 설정을 덮어쓰지 않게 다른 파일을 가리킨다
+CONFIG_PATH = os.environ.get("RPA_AGENT_CONFIG") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "agent_config.json")
 REQUIRED = ("project_id", "api_key", "database_url", "cid", "pc_id", "email")
 
 

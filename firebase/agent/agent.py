@@ -21,7 +21,8 @@ import fb   # noqa: E402
 
 BAD_KEY_CHARS = ".$#[]/"
 LOG_LINES = 80
-QUEUE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "queue.jsonl")
+QUEUE_PATH = os.environ.get("RPA_AGENT_QUEUE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "queue.jsonl")
 QUEUE_MAX = 500
 
 
