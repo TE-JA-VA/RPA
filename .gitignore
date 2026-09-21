@@ -27,7 +27,7 @@ backup/
 .claude/.headroom_wrap_settings.lock
 
 # ---- Firebase: 서비스 계정 키·에이전트 자격증명 (절대 커밋 금지) ----
-firebase/admin/*.json
+firebase/admin/serviceAccountKey.json
 firebase/agent/agent_config.json
 firebase/agent/queue.jsonl
 firebase/**/*serviceAccount*.json

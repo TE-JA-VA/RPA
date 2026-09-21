@@ -1,0 +1,8 @@
+{
+  "name": "rpa-firebase-admin",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}
