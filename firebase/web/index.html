@@ -2,68 +2,193 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AFTER MARKET</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --ink:#1c2024; --muted:#6b7280; --line:#e5e7eb; --ok:#15803d; --bad:#b91c1c; --run:#1d4ed8; --accent:#1d4ed8; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa2ad; --line:#2c3238; --accent:#60a5fa; } }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:16px; background:var(--bg); color:var(--ink); font:15px/1.5 "Malgun Gothic",system-ui,sans-serif; }
-  .wrap { max-width: 880px; margin: 0 auto; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:12px; }
-  .row { display:flex; align-items:center; gap:8px; justify-content:space-between; flex-wrap:wrap; }
-  h1 { font-size:18px; margin:0; letter-spacing:.04em; }
-  h2 { font-size:15px; margin:0 0 10px; }
-  label { display:block; margin-bottom:8px; }
-  input, select, button { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
-  input, select { width:100%; }
+  /* Solarized. 밝음: base3 바탕 / base2 면 / base01 글자. 어두움: base03 바탕 / base02 면 / base0 글자.
+     강조는 cyan 하나. 상태 색(green·red·orange·blue)은 강조와 분리한다. */
+  :root {
+    --bg:#fdf6e3; --card:#fffdf6; --soft:#eee8d5; --ink:#586e75; --strong:#073642; --muted:#93a1a1; --line:#e6dfc8;
+    --accent:#2aa198; --accent-ink:#fdf6e3;
+    --good:#859900; --warn:#cb4b16; --bad:#dc322f; --run:#268bd2;
+    --good-bg:#eef0d6; --warn-bg:#f9e3d5; --bad-bg:#fadcd9; --run-bg:#d8e9f5;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
+    --accent:#2aa198; --accent-ink:#002b36;
+    --good:#a3b800; --warn:#e0653a; --bad:#ec5a55; --run:#4aa3e0;
+    --good-bg:#1d3a2c; --warn-bg:#3d2a22; --bad-bg:#3f2528; --run-bg:#0f3a55;
+  } }
+  :root[data-theme="dark"] {
+    --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
+    --accent:#2aa198; --accent-ink:#002b36;
+    --good:#a3b800; --warn:#e0653a; --bad:#ec5a55; --run:#4aa3e0;
+    --good-bg:#1d3a2c; --warn-bg:#3d2a22; --bad-bg:#3f2528; --run-bg:#0f3a55;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 "IBM Plex Sans KR","Malgun Gothic",system-ui,sans-serif; }
+  .num { font-family:"IBM Plex Mono",Consolas,monospace; font-variant-numeric:tabular-nums; }
+  h1, h2, .strong { color:var(--strong); }
+  button { font:inherit; cursor:pointer; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); padding:9px 14px; }
+  button[disabled] { opacity:.45; cursor:default; }
+  input, select { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); width:100%; }
   input[type=checkbox] { width:auto; }
-  button { cursor:pointer; }
-  button[disabled] { opacity:.5; cursor:default; }
+  button:focus-visible, input:focus-visible, .switch input:focus-visible + span, .nav a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .muted { color:var(--muted); }
-  .hide { display:none !important; }   /* #app-nav 처럼 id 로 display 를 준 요소도 숨긴다 */
-  .st-running { color:var(--run); } .st-success, .st-done { color:var(--ok); } .st-failed, .st-stopped { color:var(--bad); }
-  .alert { border-radius:8px; padding:10px; margin-top:10px; border:1px solid var(--line); }
-  .alert.bad { color:var(--bad); }
-  ul.steps { list-style:none; padding:0; margin:8px 0 0; }
-  ul.steps li { display:flex; justify-content:space-between; padding:4px 0; border-top:1px solid var(--line); }
-  #mod-list label { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-top:1px solid var(--line); margin:0; }
-  /* 앱 고르기 (앱이 둘 이상일 때만 보인다) */
-  #app-nav { display:flex; gap:6px; margin-bottom:12px; }
-  #app-nav button { border-radius:999px; padding:6px 14px; }
-  #app-nav button[aria-current="page"] { border-color:var(--accent); color:var(--accent); font-weight:bold; }
+  .hide { display:none !important; }
+  label { display:block; margin-bottom:8px; }
+
+  /* 로그인 */
+  #login { max-width:380px; margin:10vh auto 0; padding-inline:16px; }
+  #login h1 { font-size:16px; letter-spacing:.14em; margin:0 0 14px; }
+
+  /* 뼈대: 사이드바 + 본문 */
+  .shell { display:flex; min-height:100%; }
+  .side { width:220px; flex:none; border-right:1px solid var(--line); background:var(--card); padding:18px 12px; display:flex; flex-direction:column; gap:18px;
+          position:sticky; top:0; height:100vh; align-self:flex-start; }
+  .brand { padding:4px 8px; }
+  .brand h1 { margin:0; font-size:15px; letter-spacing:.14em; }
+  .brand .co { font-size:13px; color:var(--muted); }
+  .nav { display:grid; gap:2px; }
+  .nav .sec { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); padding:8px 8px 4px; }
+  .nav a { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; color:var(--ink); text-decoration:none; cursor:pointer; }
+  .nav a[aria-current="page"] { background:var(--accent); color:var(--accent-ink); font-weight:500; }
+  .nav a .ic { width:18px; text-align:center; font-family:"IBM Plex Mono",monospace; }
+  .side .foot { margin-top:auto; display:grid; gap:8px; padding:0 4px; font-size:13px; }
+  .side .foot .who { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .side .foot .row { display:flex; gap:8px; }
+  .side .foot button { flex:1; padding:7px 10px; font-size:13px; }
+  .main { flex:1; min-width:0; padding:20px 24px 32px; }
+  .main .top { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .main .top h2 { margin:0; font-size:20px; }
+  .pc { border:1px solid var(--line); border-radius:999px; padding:3px 10px; background:var(--card); font-size:13px; width:auto; }
+  @media (max-width:760px) {
+    .shell { display:block; }
+    .side { width:auto; border-right:0; border-bottom:1px solid var(--line); flex-direction:row; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 12px; position:static; height:auto; }
+    .nav { display:flex; gap:4px; } .nav .sec { display:none; }
+    .side .foot { margin:0 0 0 auto; }
+    .main { padding:16px; }
+  }
+
+  /* 상태 헤더 */
+  .hero { display:grid; grid-template-columns:8px 1fr auto; border:1px solid var(--line); border-radius:14px; background:var(--card); overflow:hidden; }
+  .hero .stripe { background:var(--soft); }
+  .hero[data-state="success"] .stripe { background:var(--good); }
+  .hero[data-state="stopped"] .stripe, .hero[data-state="failed"] .stripe, .hero[data-state="crashed"] .stripe { background:var(--bad); }
+  .hero[data-state="offline"] .stripe { background:var(--warn); }
+  .hero[data-state="running"] .stripe { background:var(--run); }
+  .hero .body { padding:18px 20px; display:grid; gap:4px; min-width:0; }
+  .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:22px; color:var(--strong); }
+  .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--muted); flex:none; }
+  .hero[data-state="success"] .dot { background:var(--good); }
+  .hero[data-state="stopped"] .dot, .hero[data-state="failed"] .dot, .hero[data-state="crashed"] .dot { background:var(--bad); }
+  .hero[data-state="offline"] .dot { background:var(--warn); }
+  .hero[data-state="running"] .dot { background:var(--run); }
+  .hero .line1 { font-size:15px; }
+  .hero .line2 { color:var(--muted); font-size:14px; overflow-wrap:anywhere; }
+  .hero .act { display:flex; flex-direction:column; gap:8px; padding:18px 20px; border-left:1px solid var(--line); justify-content:center; min-width:180px; }
+  .primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:500; }
+  @media (max-width:640px) { .hero { grid-template-columns:8px 1fr; } .hero .act { grid-column:2; border-left:0; border-top:1px solid var(--line); } }
+
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; margin-block:12px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; display:grid; gap:2px; }
+  .tile .k { font-size:12px; color:var(--muted); letter-spacing:.04em; }
+  .tile .v { font-size:22px; font-weight:500; color:var(--strong); }
+  .tile .v small { font-size:13px; color:var(--muted); font-weight:400; margin-left:3px; }
+  .tile .v .approx { color:var(--muted); font-weight:400; }
+
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:12px; align-items:start; }
+  @media (max-width:1000px) { .cols { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .card + .card { margin-top:12px; }
+  .card h2 { margin:0 0 10px; font-size:14px; font-weight:700; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .card h2 .muted { font-weight:400; font-size:13px; }
+  .alert { border-radius:8px; padding:10px; margin-top:10px; border:1px solid var(--line); font-size:14px; }
+  .alert.bad { color:var(--bad); border-color:var(--bad); }
+  .msg { font-size:13px; color:var(--muted); margin-top:8px; min-height:1.2em; }
+  .msg.bad { color:var(--bad); }
+
+  details summary { cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:14px; color:var(--strong); }
+  details summary::-webkit-details-marker { display:none; }
+  details summary .chev { color:var(--muted); font-size:12px; transition:transform .15s; }
+  details[open] summary .chev { transform:rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { details summary .chev, .switch span.knob, .switch span.knob::after { transition:none; } }
+  ul.steps { list-style:none; margin:10px 0 0; padding:0; }
+  ul.steps li { display:grid; grid-template-columns:18px 1fr auto; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:14px; }
+  ul.steps li .mark { width:10px; height:10px; border-radius:50%; background:var(--line); justify-self:center; }
+  ul.steps li.done .mark { background:var(--good); }
+  ul.steps li.stopped .mark, ul.steps li.failed .mark { background:var(--bad); }
+  ul.steps li.running .mark { background:var(--run); box-shadow:0 0 0 3px var(--run-bg); }
+  ul.steps li.skipped, ul.steps li.pending { color:var(--muted); }
+  ul.steps li .note { color:var(--muted); font-size:13px; text-align:right; }
+  ul.steps li.stopped .note, ul.steps li.failed .note { color:var(--bad); }
+
+  .actions { display:grid; gap:8px; }
+  .actions button { width:100%; text-align:left; display:flex; justify-content:space-between; }
+  .actions button.danger { color:var(--bad); }
+  .switch { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--line); gap:10px; margin:0; }
+  .switch.first { border-top:0; }
+  .switch input { position:absolute; opacity:0; width:0; height:0; }
+  .switch span.knob { width:40px; height:22px; border-radius:999px; background:var(--line); position:relative; flex:none; transition:background .15s; }
+  .switch span.knob::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:var(--card); transition:transform .15s; }
+  .switch input:checked + .knob { background:var(--accent); }
+  .switch input:checked + .knob::after { transform:translateX(18px); }
+  .switch input:disabled + .knob { opacity:.4; }
+  .apply { margin-top:10px; width:100%; }
+
+  /* 자동 실행 편집 */
+  .seg { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
+  .seg button { padding:5px 9px; font-size:13px; border-radius:999px; }
+  .seg button[aria-pressed="true"] { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  .times { display:grid; gap:6px; margin-top:6px; }
+  .times .t { display:flex; gap:6px; align-items:center; }
+  .times input[type=time] { width:auto; }
+  .times .t button { padding:5px 9px; font-size:13px; }
+  .lbl { font-size:12px; color:var(--muted); margin-top:10px; letter-spacing:.04em; }
+
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-weight:500; color:var(--muted); font-size:12px; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--line); }
+  td { padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:500; }
+  .pill.good { background:var(--good-bg); color:var(--good); }
+  .pill.bad { background:var(--bad-bg); color:var(--bad); }
+  .pill.run { background:var(--run-bg); color:var(--run); }
+  .narrow { max-width:420px; }
 </style>
 </head>
 <body>
-<div class="wrap">
 
-  <section id="login" class="card hide">
-    <h1 style="margin-bottom:12px">AFTER MARKET</h1>
-    <label>이메일 <input id="email" type="email" autocomplete="username"></label>
-    <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
-    <button id="login-btn">로그인</button>
-    <div id="login-alert" class="alert bad hide"></div>
-  </section>
+<section id="login" class="hide">
+  <h1>AFTER MARKET</h1>
+  <label>이메일 <input id="email" type="email" autocomplete="username"></label>
+  <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
+  <button id="login-btn" class="primary">로그인</button>
+  <div id="login-alert" class="alert bad hide"></div>
+</section>
 
-  <section id="main" class="hide">
-    <div class="card row">
-      <div class="row" style="gap:12px">
-        <h1>AFTER MARKET</h1>
-        <span id="company" class="muted"></span>
-      </div>
-      <div class="row">
-        <select id="pc-pick" class="hide" style="width:auto"></select>
-        <span id="who" class="muted"></span>
-        <button id="logout-btn">로그아웃</button>
-      </div>
+<div id="main" class="shell hide">
+  <aside class="side">
+    <div class="brand"><h1>AFTER MARKET</h1><div class="co" id="company"></div></div>
+    <nav class="nav" aria-label="메뉴">
+      <div class="sec">앱</div>
+      <div id="app-nav"></div>
+      <div class="sec">관리</div>
+      <div id="admin-nav"></div>
+    </nav>
+    <div class="foot">
+      <div class="who" id="who"></div>
+      <div class="row"><button id="theme">☾ 어둡게</button><button id="logout-btn">로그아웃</button></div>
     </div>
+  </aside>
 
-    <nav id="app-nav" class="hide" aria-label="앱"></nav>
-
+  <main class="main">
+    <div class="top"><h2 id="page-title"></h2><select id="pc-pick" class="pc hide"></select></div>
     <div id="app-root"></div>
-  </section>
-
+  </main>
 </div>
+
 <script type="module" src="./app.js"></script>
 </body>
 </html>

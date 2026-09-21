@@ -1,4 +1,4 @@
-// AFTER MARKET 껍데기: 로그인, 회사·PC 고르기, 앱 고르기. 앱 화면은 각 앱 모듈이 그린다.
+// AFTER MARKET 껍데기: 로그인, 회사·PC, 사이드바(앱·관리), 테마. 페이지 내용은 각 모듈이 mount/unmount 한다.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator,
@@ -8,9 +8,11 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import { firebaseConfig } from "./firebase-config.js";
 import * as rpa from "./rpa.js";
+import * as account from "./account.js";
 
-// 앱 목록. 새 앱은 여기 한 줄과 모듈 파일 하나로 붙는다.
+// 앱 목록과 관리 페이지. 새 앱은 여기 한 줄과 모듈 파일 하나로 붙는다.
 const APPS = [rpa];
+const PAGES = [account];
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -25,9 +27,24 @@ const $ = (id) => document.getElementById(id);
 const show = (el, on) => el.classList.toggle("hide", !on);
 
 let me = null;          // { uid, email, cid, role }
-let company = null;     // { name, pcs }
+let company = null;
 let pcId = null;
-let current = null;     // 떠 있는 앱 모듈
+let current = null;     // 떠 있는 모듈
+
+// --- 테마: 고른 값은 이 브라우저에만 남는다 ---------------------------
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  const dark = t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches);
+  $("theme").textContent = dark ? "☀ 밝게" : "☾ 어둡게";
+  try { if (t) localStorage.setItem("theme", t); else localStorage.removeItem("theme"); } catch {}
+}
+$("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme === "dark"
+    || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  applyTheme(dark ? "light" : "dark");
+};
+let savedTheme = null; try { savedTheme = localStorage.getItem("theme"); } catch {}
+applyTheme(savedTheme);
 
 // --- 로그인 ---------------------------------------------------------
 $("login-btn").addEventListener("click", async () => {
@@ -38,7 +55,6 @@ $("login-btn").addEventListener("click", async () => {
     await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value);
     $("password").value = "";
   } catch (e) {
-    // 실서비스는 invalid-credential 하나로 뭉뚱그리고, 에뮬레이터·옛 SDK 는 wrong-password 등으로 나눈다
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password",
       "auth/user-not-found", "auth/invalid-email", "auth/missing-password"];
     alert.textContent = wrong.includes(e.code)
@@ -52,7 +68,7 @@ $("password").addEventListener("keydown", (e) => { if (e.key === "Enter") $("log
 $("logout-btn").addEventListener("click", () => signOut(auth));
 
 onAuthStateChanged(auth, async (user) => {
-  unmountApp();
+  unmount();
   if (!user) {
     me = null; company = null; pcId = null;
     show($("login"), true); show($("main"), false);
@@ -64,7 +80,7 @@ onAuthStateChanged(auth, async (user) => {
   show($("login"), false); show($("main"), true);
   await loadCompany();
   paintNav();
-  mountApp(APPS[0]);
+  mount(APPS[0]);
 });
 
 // --- 회사·PC --------------------------------------------------------
@@ -84,40 +100,41 @@ async function loadCompany() {
   }));
   show(sel, keys.length > 1);
   pcId = keys[0] || null;
-  sel.onchange = () => { pcId = sel.value; remountApp(); };
+  sel.onchange = () => { pcId = sel.value; if (current) mount(current); };
 }
 
-// --- 앱 -------------------------------------------------------------
+// --- 모듈 -----------------------------------------------------------
 function ctx() {
-  return { db, me, pcId, isAdmin: !!me && (me.role === "admin" || me.role === "super") };
+  return { db, auth, me, pcId, pcLabel: company?.pcs?.[pcId]?.label || pcId || "",
+           isAdmin: !!me && (me.role === "admin" || me.role === "super") };
+}
+
+function navLink(mod) {
+  const a = document.createElement("a");
+  a.href = "#"; a.dataset.key = mod.key;
+  a.innerHTML = `<span class="ic">${mod.icon || "▣"}</span>`;
+  a.append(mod.label);
+  a.onclick = (e) => { e.preventDefault(); mount(mod); };
+  return a;
 }
 
 function paintNav() {
-  const nav = $("app-nav");
-  nav.replaceChildren(...APPS.map((a) => {
-    const b = document.createElement("button");
-    b.textContent = a.label;
-    b.dataset.app = a.key;
-    b.onclick = () => mountApp(a);
-    return b;
-  }));
-  show(nav, APPS.length > 1);
+  $("app-nav").replaceChildren(...APPS.map(navLink));
+  $("admin-nav").replaceChildren(...PAGES.map(navLink));
 }
 
-function mountApp(mod) {
-  unmountApp();
+function mount(mod) {
+  unmount();
   current = mod;
-  for (const b of $("app-nav").querySelectorAll("button")) {
-    if (b.dataset.app === mod.key) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  for (const a of document.querySelectorAll(".nav a")) {
+    if (a.dataset.key === mod.key) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
+  $("page-title").textContent = mod.label;
+  show($("pc-pick"), !!mod.perPc && Object.keys(company?.pcs || {}).length > 1);
   mod.mount($("app-root"), ctx());
 }
 
-function unmountApp() {
+function unmount() {
   if (current) { current.unmount(); current = null; }
   $("app-root").replaceChildren();
-}
-
-function remountApp() {
-  if (current) mountApp(current);
 }
