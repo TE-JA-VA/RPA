@@ -8,8 +8,8 @@
 | 항목 | 결정 |
 |---|---|
 | 방식 | **A안. 서버 코드 없음.** 화면(정적, Hosting) ↔ Firebase ↔ PC 에이전트. 보안은 DB 규칙이 전담 |
-| 프로젝트 소유 | erpiaconsulting@gmail.com (개인). 나중에 회사 계정을 소유자로 추가해 이관 |
-| 리전 | asia-northeast3 (서울) |
+| 프로젝트 소유 | **hjjang96@gmail.com**. 프로젝트 ID `rpa-test-f02e0`. 나중에 회사 계정을 소유자로 추가해 이관 |
+| 리전 | Firestore = asia-northeast3(서울). **RTDB = asia-southeast1(싱가포르)** - RTDB 는 서울 리전이 없다 |
 | 올리는 데이터 | 지금 대시보드가 보여 주는 것 그대로: 단계·결과·건수·중단 사유·로그 꼬리 80줄. **ERPia 비밀번호·`ERPIA_AI.txt`·`WebManageConfig.json` 은 절대 안 올린다** |
 | 살아 있는 상태·명령·설정 | Realtime DB (RTDB) |
 | 실행 이력 | **Firestore** (`runs`). PC 의 `history.jsonl` 도 그대로 남긴다(이중) |
@@ -117,11 +117,30 @@ users/{uid}                   ← { cid, role: admin|viewer|super, name, must_ch
 
 **그 뒤:** 알림(실패 시 이메일, 여기서 Functions 가 필요해질 수 있음), 옛 `rpa_dashboard.py` 정리 시점 결정.
 
-## 9. 사용자가 직접 해야 하는 것
+## 9. 콘솔 준비 (2026-09-21 완료)
 
-1. Firebase 콘솔에서 프로젝트 생성(erpiaconsulting@gmail.com), Google Analytics 끔.
-2. Authentication → 로그인 방법 → 이메일/비밀번호 켜기.
-3. Realtime Database 생성(서울, 잠금 모드), Firestore 생성(서울, 프로덕션 모드).
-4. 프로젝트 설정 → 웹 앱 추가 → 설정값(apiKey 등)을 저에게 전달.
-5. 서비스 계정 키 1개 발급(관리 스크립트용) → `firebase/admin/` 에 두고 `.gitignore` 에 추가. 고객 PC 에는 절대 복사하지 않는다.
-6. `firebase login`(브라우저 인증).
+| 항목 | 값 |
+|---|---|
+| 소유 계정 | hjjang96@gmail.com |
+| 프로젝트 ID | `rpa-test-f02e0` |
+| RTDB | `https://rpa-test-f02e0-default-rtdb.asia-southeast1.firebasedatabase.app` (싱가포르, 잠금 모드) |
+| Firestore | asia-northeast3(서울), 프로덕션 모드 |
+| Auth | 이메일/비밀번호 켬 |
+| 웹 앱 | 닉네임 `dashboard` |
+| 서비스 계정 키 | `firebase/admin/serviceAccountKey.json` (gitignore 됨, 고객 PC 에 절대 복사 금지) |
+
+화면이 쓸 설정값(공개돼도 되는 값 - 보안은 규칙이 한다):
+
+```js
+const firebaseConfig = {
+  apiKey: "AIzaSyCFbHQjWVxzi38IAYIhQX9wyiGIs1VcZuA",
+  authDomain: "rpa-test-f02e0.firebaseapp.com",
+  databaseURL: "https://rpa-test-f02e0-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "rpa-test-f02e0",
+  storageBucket: "rpa-test-f02e0.firebasestorage.app",
+  messagingSenderId: "420865367421",
+  appId: "1:420865367421:web:14b9e1e10c5fadc7e04014"
+};
+```
+
+남은 사용자 작업: `firebase login` (브라우저 인증, CLI 설치 뒤).
