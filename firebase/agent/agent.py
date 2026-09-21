@@ -122,3 +122,192 @@ class Uploader:
             self._queue.pop(0)
         self._write_queue()
         return True
+
+
+# ---------------------------------------------------------------------------
+# 명령
+# ---------------------------------------------------------------------------
+KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule")
+
+
+def decide(cmd, now):
+    """명령을 실행할지 정한다. ('run'|'expired'|'bad', 사유)"""
+    if not isinstance(cmd, dict):
+        return "bad", "명령 모양이 아닙니다"
+    if cmd.get("state") != "queued":
+        return "bad", f"queued 가 아닙니다 ({cmd.get('state')})"
+    if cmd.get("type") not in KNOWN_TYPES:
+        return "bad", f"모르는 종류입니다 ({cmd.get('type')})"
+    expires = cmd.get("expires_at")
+    if not isinstance(expires, (int, float)):
+        return "bad", "만료 시각이 없습니다"
+    if expires < now:
+        return "expired", "만료된 명령입니다 (PC 가 꺼져 있었을 수 있습니다)"
+    return "run", None
+
+
+class Commands:
+    """명령 하나를 받아 상태를 옮긴다. 한 번에 하나씩만 부른다."""
+
+    def __init__(self, client, cid, pc_id, actions):
+        self._client = client
+        self._base = f"commands/{cid}/{pc_id}"
+        self._actions = actions
+
+    def _mark(self, cmd_id, **fields):
+        try:
+            self._client.patch(f"{self._base}/{cmd_id}", fields)
+        except Exception:
+            pass      # 상태를 못 써도 에이전트는 계속 돈다
+
+    def handle(self, cmd_id, cmd, now=None):
+        now = time.time() if now is None else now
+        verdict, reason = decide(cmd, now)
+        if verdict == "bad":
+            return verdict
+        if verdict == "expired":
+            self._mark(cmd_id, state="expired", result=reason, ended_at=int(now))
+            return verdict
+
+        self._mark(cmd_id, state="running", started_at=int(now))
+        kind = cmd.get("type")
+        action = self._actions.get(kind)
+        try:
+            if action is None:
+                raise RuntimeError(f"이 에이전트는 '{kind}' 를 할 수 없습니다")
+            message = action(cmd.get("args")) or "완료"
+            self._mark(cmd_id, state="done", result=str(message)[:500], ended_at=int(time.time()))
+            return "done"
+        except Exception as e:
+            self._mark(cmd_id, state="failed", result=f"{e}"[:500], ended_at=int(time.time()))
+            return "failed"
+
+
+# ---------------------------------------------------------------------------
+# 실제 동작 (기존 코드를 그대로 쓴다)
+# ---------------------------------------------------------------------------
+def real_actions():
+    import rpa_dashboard as dash
+    import rpa_status as st
+
+    def do_launch(args):
+        target = (args or {}).get("target") if isinstance(args, dict) else None
+        target = target or "routine"
+        if target not in dash.TARGETS:
+            raise RuntimeError(f"실행 대상이 잘못되었습니다 ({target})")
+        dash.launch(target, "cloud")         # 1PC 1프로그램 잠금·중복 방지는 launch 안에 있다
+        return f"{dash.TARGETS[target][0]} 을(를) 띄웠습니다"
+
+    def do_stop(args):
+        status, body = dash.stop_erpia()
+        if status != 200:
+            raise RuntimeError(body.get("error") or "ERPia 를 종료하지 못했습니다")
+        return body.get("message") or "ERPia 를 종료했습니다"
+
+    def do_modules(args):
+        if not isinstance(args, dict) or not args:
+            raise RuntimeError("모듈 값이 없습니다")
+        wanted = {k: bool(v) for k, v in args.items()
+                  if k in dict(st.ROUTINE_CONFIG_MODULES)}
+        if not wanted:
+            raise RuntimeError("아는 모듈이 없습니다")
+        if not any(wanted.values()):
+            raise RuntimeError("최소 한 모듈은 켜야 합니다")
+        st.write_routine_modules(wanted)
+        on = [k for k, v in wanted.items() if v]
+        return f"실행 모듈을 바꿨습니다 (켬: {', '.join(on)})"
+
+    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules}
+
+
+def log(text):
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}"
+    print(line, flush=True)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "에이전트_기록.txt")
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 1024 * 1024:
+            os.replace(path, path + ".1")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def main():
+    import threading
+    import rpa_status as st
+    import secret
+
+    try:
+        cfg = secret.load_config()
+    except FileNotFoundError:
+        log(f"설정 파일이 없습니다: {secret.CONFIG_PATH}")
+        log("secret.write_config() 로 만든 뒤 다시 시작하세요 (계획서 Task 12 Step 2).")
+        return 2
+    except (ValueError, OSError) as e:
+        log(f"설정을 읽지 못했습니다: {e}")
+        return 2
+    client = fb.Client(cfg)
+    up = Uploader(client, cfg["cid"], cfg["pc_id"])
+    cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions())
+    log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
+
+    stop = threading.Event()
+
+    def pump():
+        """상태와 heartbeat. 1초마다 상태 파일을 보고 바뀌었을 때만 올린다."""
+        last = None
+        last_beat = 0.0
+        while not stop.is_set():
+            try:
+                snap = st.dashboard_snapshot()
+                body = json.dumps(snap.get("programs"), ensure_ascii=False, default=str)
+                if body != last:
+                    up.push_live(snap)
+                    last = body
+                if time.time() - last_beat >= 30:
+                    up.push_heartbeat({
+                        "at": int(time.time()),
+                        "host": snap.get("host"),
+                        "rpa_running": bool([p for p, v in (snap.get("programs") or {}).items()
+                                             if v and v.get("state") == "running"]),
+                    })
+                    last_beat = time.time()
+                up.flush()
+            except Exception as e:
+                log(f"상태 올리기 실패: {type(e).__name__}")
+            stop.wait(1.0)
+
+    threading.Thread(target=pump, daemon=True).start()
+
+    backoff = 1
+    while not stop.is_set():
+        try:
+            for event, data in client.stream(f"commands/{cfg['cid']}/{cfg['pc_id']}"):
+                backoff = 1
+                if event not in ("put", "patch") or not isinstance(data, dict):
+                    continue
+                path, payload = data.get("path") or "/", data.get("data")
+                items = {}
+                if path == "/" and isinstance(payload, dict):
+                    items = payload
+                elif path.count("/") == 1 and isinstance(payload, dict):
+                    items = {path.strip("/"): payload}
+                for cmd_id, cmd in items.items():
+                    verdict = decide(cmd, time.time())[0]
+                    if verdict == "bad":
+                        continue
+                    log(f"명령 {cmd.get('type')} ({cmd_id[:8]}) 처리")
+                    log(f"  → {cmds.handle(cmd_id, cmd)}")
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            log(f"구독이 끊겼습니다 ({type(e).__name__}). {backoff}초 뒤 다시 붙습니다")
+            stop.wait(backoff)
+            backoff = min(backoff * 2, 60)
+    stop.set()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -182,6 +182,67 @@ with tempfile.TemporaryDirectory() as d:
     up3.flush()
     check(up3.pending() == 0 and len(cl2.puts) == 1, "다시 켠 뒤 밀린 것을 보낸다")
 
+print("\n4절 명령 처리")
+
+NOW = 2000.0
+ok_cmd = {"type": "launch", "by": "u1", "created_at": 1900, "expires_at": 2500, "state": "queued"}
+
+check(ag.decide(ok_cmd, NOW)[0] == "run", "아직 안 지난 명령은 실행한다")
+check(ag.decide(dict(ok_cmd, expires_at=1999), NOW)[0] == "expired", "만료된 명령은 실행하지 않는다")
+check(ag.decide(dict(ok_cmd, state="done"), NOW)[0] == "bad", "queued 가 아니면 건너뛴다")
+check(ag.decide(dict(ok_cmd, type="rm_rf"), NOW)[0] == "bad", "모르는 종류는 건너뛴다")
+check(ag.decide({}, NOW)[0] == "bad", "빈 명령은 건너뛴다")
+
+
+class RecClient:
+    def __init__(self):
+        self.patches = []
+
+    def patch(self, path, value):
+        self.patches.append((path, value))
+
+
+def make_cmds(actions):
+    cl = RecClient()
+    return cl, ag.Commands(cl, "c_demo", "pc_office", actions)
+
+
+cl, cmds = make_cmds({"launch": lambda args: "띄웠습니다"})
+cmds.handle("k1", dict(ok_cmd), NOW)
+paths = [p for p, _ in cl.patches]
+check(paths == ["commands/c_demo/pc_office/k1"] * 2, "명령 자리에만 쓴다")
+check(cl.patches[0][1]["state"] == "running", "먼저 running 으로 바꾼다")
+check(cl.patches[1][1]["state"] == "done" and cl.patches[1][1]["result"] == "띄웠습니다", "끝나면 done")
+check("started_at" in cl.patches[0][1] and "ended_at" in cl.patches[1][1], "시각을 남긴다")
+
+
+def boom(args):
+    raise RuntimeError("루틴 RPA 가 이미 돌고 있습니다")
+
+
+cl, cmds = make_cmds({"launch": boom})
+cmds.handle("k2", dict(ok_cmd), NOW)
+check(cl.patches[-1][1]["state"] == "failed", "동작이 실패하면 failed")
+check("이미 돌고" in cl.patches[-1][1]["result"], "실패 사유를 남긴다")
+
+cl, cmds = make_cmds({})
+cmds.handle("k3", dict(ok_cmd, expires_at=1999), NOW)
+check(cl.patches[-1][1]["state"] == "expired", "만료는 expired 로 닫는다")
+check(len(cl.patches) == 1, "만료는 running 을 거치지 않는다")
+
+cl, cmds = make_cmds({})
+cmds.handle("k4", dict(ok_cmd, state="running"), NOW)
+check(cl.patches == [], "이미 running 인 명령은 건드리지 않는다")
+
+cl, cmds = make_cmds({"set_modules": lambda args: f"모듈 {sorted(args)} 적용"})
+cmds.handle("k5", dict(ok_cmd, type="set_modules", args={"Login": True, "Sales": False}), NOW)
+check(cl.patches[-1][1]["state"] == "done" and "Login" in cl.patches[-1][1]["result"], "set_modules 에 args 를 넘긴다")
+
+cl, cmds = make_cmds({"launch": lambda args: "ok"})
+cmds.handle("k6", dict(ok_cmd, type="stop_erpia"), NOW)
+check(cl.patches[-1][1]["state"] == "failed" and "할 수 없" in cl.patches[-1][1]["result"],
+      "할 줄 모르는 종류는 failed 로 닫는다 (명령이 영원히 남지 않게)")
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

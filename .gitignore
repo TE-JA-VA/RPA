@@ -38,4 +38,5 @@ firebase-debug.log
 # ---- Firebase: Node 의존성 ----
 firebase/tests/node_modules/
 firebase/admin/node_modules/
-firebase/*-debug.log
+firebase/**/*-debug.log
+firebase/agent/*_기록.txt*
