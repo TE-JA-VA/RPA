@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AFTER MARKET 시안 B</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Solarized. 밝음: base3 바탕 / base2 면 / base01 글자. 어두움: base03 바탕 / base02 면 / base0 글자.
+     강조는 cyan 하나. 상태 색은 green·red·orange·blue 로 강조와 분리한다. */
+  :root {
+    --bg:#fdf6e3; --card:#fffdf6; --soft:#eee8d5; --ink:#586e75; --strong:#073642; --muted:#93a1a1; --line:#e6dfc8;
+    --accent:#2aa198; --accent-ink:#fdf6e3;
+    --good:#859900; --warn:#cb4b16; --bad:#dc322f; --run:#268bd2;
+    --good-bg:#eef0d6; --warn-bg:#f9e3d5; --bad-bg:#fadcd9; --run-bg:#d8e9f5;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
+    --accent:#2aa198; --accent-ink:#002b36;
+    --good:#a3b800; --warn:#e0653a; --bad:#ec5a55; --run:#4aa3e0;
+    --good-bg:#1d3a2c; --warn-bg:#3d2a22; --bad-bg:#3f2528; --run-bg:#0f3a55;
+  } }
+  :root[data-theme="dark"] {
+    --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
+    --accent:#2aa198; --accent-ink:#002b36;
+    --good:#a3b800; --warn:#e0653a; --bad:#ec5a55; --run:#4aa3e0;
+    --good-bg:#1d3a2c; --warn-bg:#3d2a22; --bad-bg:#3f2528; --run-bg:#0f3a55;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 "IBM Plex Sans KR","Malgun Gothic",system-ui,sans-serif; }
+  .num { font-family:"IBM Plex Mono",Consolas,monospace; font-variant-numeric:tabular-nums; }
+  h1, h2, .strong { color:var(--strong); }
+  button { font:inherit; cursor:pointer; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); padding:9px 14px; }
+  button[disabled] { opacity:.45; cursor:default; }
+  button:focus-visible, .switch input:focus-visible + span, .nav a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .muted { color:var(--muted); }
+  .hide { display:none !important; }
+
+  /* 시안 전용 띠 */
+  .demo { background:var(--soft); border-bottom:1px solid var(--line); padding-block:8px; font-size:13px; }
+  .demo .in { display:flex; gap:16px; flex-wrap:wrap; align-items:center; padding-inline:16px; }
+  .demo b { letter-spacing:.06em; text-transform:uppercase; font-size:11px; color:var(--muted); }
+  .demo button { padding:4px 10px; font-size:13px; border-radius:999px; }
+  .demo button[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); font-weight:500; }
+
+  /* 뼈대: 사이드바 + 본문 */
+  .shell { display:flex; min-height:calc(100% - 41px); }
+  .side { width:220px; flex:none; border-right:1px solid var(--line); background:var(--card); padding:18px 12px; display:flex; flex-direction:column; gap:18px;
+          position:sticky; top:0; height:100vh; align-self:flex-start; }
+  .brand { padding:4px 8px; }
+  .brand h1 { margin:0; font-size:15px; letter-spacing:.14em; }
+  .brand .co { font-size:13px; color:var(--muted); }
+  .nav { display:grid; gap:2px; }
+  .nav .sec { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); padding:8px 8px 4px; }
+  .nav a { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; color:var(--ink); text-decoration:none; }
+  .nav a[aria-current="page"] { background:var(--accent); color:var(--accent-ink); font-weight:500; }
+  .nav a .ic { width:18px; text-align:center; font-family:"IBM Plex Mono",monospace; }
+  .side .foot { margin-top:auto; display:grid; gap:8px; padding:0 4px; font-size:13px; }
+  .side .foot .who { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .side .foot .row { display:flex; gap:8px; }
+  .side .foot button { flex:1; padding:7px 10px; font-size:13px; }
+  .main { flex:1; min-width:0; padding:20px 24px 32px; }
+  .main .top { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .main .top h2 { margin:0; font-size:20px; }
+  .pc { border:1px solid var(--line); border-radius:999px; padding:3px 10px; background:var(--card); font-size:13px; }
+  @media (max-width:760px) {
+    .shell { display:block; }
+    .side { width:auto; border-right:0; border-bottom:1px solid var(--line); flex-direction:row; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 12px; position:static; height:auto; }
+    .nav { display:flex; gap:4px; } .nav .sec { display:none; }
+    .side .foot { margin:0 0 0 auto; }
+    .main { padding:16px; }
+  }
+
+  /* 상태 헤더 */
+  .hero { display:grid; grid-template-columns:8px 1fr auto; border:1px solid var(--line); border-radius:14px; background:var(--card); overflow:hidden; }
+  .hero .stripe { background:var(--good); }
+  .hero[data-state="stopped"] .stripe, .hero[data-state="failed"] .stripe, .hero[data-state="crashed"] .stripe { background:var(--bad); }
+  .hero[data-state="offline"] .stripe { background:var(--warn); }
+  .hero[data-state="running"] .stripe { background:var(--run); }
+  .hero .body { padding:18px 20px; display:grid; gap:4px; }
+  .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:22px; color:var(--strong); }
+  .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--good); }
+  .hero[data-state="stopped"] .dot, .hero[data-state="failed"] .dot, .hero[data-state="crashed"] .dot { background:var(--bad); }
+  .hero[data-state="offline"] .dot { background:var(--warn); }
+  .hero .line1 { font-size:15px; }
+  .hero .line2 { color:var(--muted); font-size:14px; }
+  .hero .act { display:flex; flex-direction:column; gap:8px; padding:18px 20px; border-left:1px solid var(--line); justify-content:center; min-width:180px; }
+  .primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:500; }
+  @media (max-width:640px) { .hero { grid-template-columns:8px 1fr; } .hero .act { grid-column:2; border-left:0; border-top:1px solid var(--line); } }
+
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; margin-block:12px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; display:grid; gap:2px; }
+  .tile .k { font-size:12px; color:var(--muted); letter-spacing:.04em; }
+  .tile .v { font-size:22px; font-weight:500; color:var(--strong); }
+  .tile .v small { font-size:13px; color:var(--muted); font-weight:400; margin-left:3px; }
+  .tile .v .approx { color:var(--muted); font-weight:400; }
+
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:12px; align-items:start; }
+  @media (max-width:1000px) { .cols { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .card + .card { margin-top:12px; }
+  .card h2 { margin:0 0 10px; font-size:14px; font-weight:700; display:flex; justify-content:space-between; align-items:center; }
+  .card h2 .muted { font-weight:400; font-size:13px; }
+
+  /* 4주 격자 */
+  .grid4 { display:grid; grid-template-columns:auto repeat(7, 26px); gap:5px; align-items:center; font-size:12px; color:var(--muted); justify-content:start; }
+  .grid4 .w { padding-right:8px; }
+  .grid4 .c { width:26px; height:26px; border-radius:5px; background:var(--soft); border:1px solid var(--line); }
+  .grid4 .c.good { background:var(--good); border-color:transparent; }
+  .grid4 .c.bad { background:var(--bad); border-color:transparent; }
+  .grid4 .c.mix { background:linear-gradient(135deg, var(--bad) 50%, var(--good) 50%); border-color:transparent; }
+  .grid4 .c.today { box-shadow:0 0 0 2px var(--accent); }
+  .grid4 .h { text-align:center; }
+  .legend { display:flex; gap:12px; margin-top:8px; font-size:12px; color:var(--muted); }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:4px; vertical-align:-1px; }
+
+  details summary { cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:14px; color:var(--strong); }
+  details summary::-webkit-details-marker { display:none; }
+  details summary .chev { color:var(--muted); font-size:12px; transition:transform .15s; }
+  details[open] summary .chev { transform:rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { details summary .chev, .switch span.knob, .switch span.knob::after { transition:none; } }
+  ul.steps { list-style:none; margin:10px 0 0; padding:0; }
+  ul.steps li { display:grid; grid-template-columns:18px 1fr auto; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:14px; }
+  ul.steps li .mark { width:10px; height:10px; border-radius:50%; background:var(--line); justify-self:center; }
+  ul.steps li.done .mark { background:var(--good); }
+  ul.steps li.stopped .mark, ul.steps li.failed .mark { background:var(--bad); }
+  ul.steps li.running .mark { background:var(--run); box-shadow:0 0 0 3px var(--run-bg); }
+  ul.steps li.skipped, ul.steps li.pending { color:var(--muted); }
+  ul.steps li .note { color:var(--muted); font-size:13px; }
+  ul.steps li.stopped .note { color:var(--bad); }
+
+  .actions { display:grid; gap:8px; }
+  .actions button { width:100%; text-align:left; display:flex; justify-content:space-between; }
+  .actions button.danger { color:var(--bad); }
+  .switch { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--line); gap:10px; }
+  .switch:first-of-type { border-top:0; }
+  .switch input { position:absolute; opacity:0; width:0; height:0; }
+  .switch span.knob { width:40px; height:22px; border-radius:999px; background:var(--line); position:relative; flex:none; transition:background .15s; }
+  .switch span.knob::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:var(--card); transition:transform .15s; }
+  .switch input:checked + .knob { background:var(--accent); }
+  .switch input:checked + .knob::after { transform:translateX(18px); }
+  .apply { margin-top:10px; width:100%; }
+
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-weight:500; color:var(--muted); font-size:12px; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--line); }
+  td { padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tr:last-child td { border-bottom:0; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:500; }
+  .pill.good { background:var(--good-bg); color:var(--good); }
+  .pill.bad { background:var(--bad-bg); color:var(--bad); }
+  .tbl { overflow-x:auto; }
+</style>
+</head>
+<body>
+
+<div class="demo">
+  <div class="in">
+    <span><b>장면</b> &nbsp;
+      <button data-scene="success" aria-pressed="true">성공</button>
+      <button data-scene="stopped">실패</button>
+      <button data-scene="offline">연결 끊김</button>
+      <button data-scene="running">진행 중</button>
+    </span>
+    <span><b>역할</b> &nbsp;
+      <button data-role="admin" aria-pressed="true">관리자</button>
+      <button data-role="viewer">열람자</button>
+    </span>
+    <span class="muted">시안 B · Solarized · 9월 10~14일 시뮬레이션 데이터</span>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><h1>AFTER MARKET</h1><div class="co">테스트업체</div></div>
+    <nav class="nav" aria-label="앱">
+      <div class="sec">앱</div>
+      <a href="#" aria-current="page"><span class="ic">▣</span>RPA</a>
+      <div class="sec">관리</div>
+      <a href="#"><span class="ic">◎</span>계정</a>
+    </nav>
+    <div class="foot">
+      <div class="who" id="who">admin@c-demo… (관리자)</div>
+      <div class="row"><button id="theme">☾ 어둡게</button><button>로그아웃</button></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="top"><h2>RPA</h2><span class="pc">사무실 PC</span></div>
+
+    <section class="hero" id="hero" data-state="success">
+      <div class="stripe"></div>
+      <div class="body">
+        <div class="state"><span class="dot"></span><span id="h-state"></span></div>
+        <div class="line1" id="h-line1"></div>
+        <div class="line2" id="h-line2"></div>
+      </div>
+      <div class="act" id="h-act"></div>
+    </section>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="cols">
+      <div>
+        <div class="card">
+          <h2>최근 4주 <span class="muted">성공 3 · 실패 1 · 오늘 3회</span></h2>
+          <div class="grid4" id="grid4"></div>
+          <div class="legend"><span><i style="background:var(--good)"></i>성공</span><span><i style="background:var(--bad)"></i>실패</span><span><i style="background:var(--soft);border:1px solid var(--line)"></i>실행 없음</span></div>
+        </div>
+
+        <div class="card">
+          <details id="steps-box">
+            <summary>루틴 RPA 단계 <span><span class="muted" id="steps-meta"></span> &nbsp;<span class="chev">▶</span></span></summary>
+            <ul class="steps" id="steps"></ul>
+          </details>
+        </div>
+
+        <div class="card">
+          <details>
+            <summary>프리페어 RPA 단계 <span><span class="muted">4/4 · 2초</span> &nbsp;<span class="chev">▶</span></span></summary>
+            <ul class="steps">
+              <li class="done"><span class="mark"></span>로그인<span class="note num">13:38:41</span></li>
+              <li class="done"><span class="mark"></span>문자 2차인증<span class="note">8초 만에 도착</span></li>
+              <li class="done"><span class="mark"></span>메일 확인<span class="note">2건</span></li>
+              <li class="done"><span class="mark"></span>첨부 내려받기<span class="note">2/2</span></li>
+            </ul>
+          </details>
+        </div>
+
+        <div class="card">
+          <h2>이력 <span class="muted">최근 8건</span></h2>
+          <div class="tbl"><table>
+            <thead><tr><th>시각</th><th>프로그램</th><th>결과</th><th>소요</th><th>처리</th></tr></thead>
+            <tbody id="hist"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <div id="sidecol">
+        <div class="card" id="act-card">
+          <h2>실행</h2>
+          <div class="actions">
+            <button class="primary">루틴 RPA <span>▶</span></button>
+            <button>프리페어 RPA <span>▶</span></button>
+            <button>전체 실행 <span>▶▶</span></button>
+            <button class="danger">ERPia 종료</button>
+          </div>
+        </div>
+
+        <div class="card" id="mod-card">
+          <h2>실행 모듈 <span class="muted">4/5 켬</span></h2>
+          <label class="switch"><span>로그인</span><input type="checkbox" checked><span class="knob"></span></label>
+          <label class="switch"><span>주문매핑 매출처리</span><input type="checkbox"><span class="knob"></span></label>
+          <label class="switch"><span>물류대기 관리</span><input type="checkbox" checked><span class="knob"></span></label>
+          <label class="switch"><span>물류관리</span><input type="checkbox" checked><span class="knob"></span></label>
+          <label class="switch"><span>운송장 출력 / 엑셀 생성</span><input type="checkbox" checked><span class="knob"></span></label>
+          <button class="apply" disabled>적용</button>
+        </div>
+
+        <div class="card">
+          <h2>자동 실행</h2>
+          <div class="strong">평일 09:05</div>
+          <div class="muted">다음 9월 15일 (월) 09:05</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// 9월 10~14일 시뮬레이션 데이터 (tests/status_sim). 숫자는 실제 기록값.
+const STEPS = [
+  ["ERPia 로그인", ""], ["주문매핑 화면 이동", ""], ["상단 선택 · 주문 가져오기", "12건"], ["엑셀 업로드", "2/2"],
+  ["하단 주문 선택", "30건"], ["정상매출 처리", ""], ["물류대기 화면 이동", ""], ["재고검토 배송보류", "8/8"],
+  ["비정상 상품 배송보류", "약 376건"], ["물류대기 저장", ""], ["물류 관리 화면 이동", ""], ["배송 생성", ""],
+  ["배송정보 설정", ""], ["물류 관리 저장", ""], ["운송장 출력 / 엑셀 생성", ""],
+];
+const SCENES = {
+  success: { state:"success", title:"오늘 성공", line1:"13:55 루틴 RPA · 2분 33초 · 주문 30건 처리",
+    line2:"재고검토 보류 8건, 비정상 상품 보류 약 376건 · PC 연결됨",
+    act:[["루틴 RPA 다시 실행","primary"]], done:15,
+    tiles:[["처리 주문","30","건"],["재고검토 보류","8","/ 8"],["비정상 보류","≈376","건"],["연결","정상",""],["다음 자동 실행","월 09:05",""]] },
+  stopped: { state:"stopped", title:"실패", line1:"09:06 루틴 RPA · 물류 관리 저장에서 멈춤 (9분 7초)",
+    line2:"ERPia: \"주소를 입력하세요\" — 주문 1건에 배송 주소가 없습니다. ERPia 에서 주소를 넣은 뒤 다시 실행하세요.",
+    act:[["루틴 RPA 다시 실행","primary"],["ERPia 종료","danger"]], done:13, stoppedAt:13,
+    tiles:[["처리 주문","30","건"],["재고검토 보류","8","/ 8"],["멈춘 단계","13","/ 15"],["연결","정상",""],["다음 자동 실행","월 09:05",""]] },
+  offline: { state:"offline", title:"PC 연결 끊김", line1:"14분 전부터 응답 없음 · 마지막 성공 13:55",
+    line2:"PC 가 꺼졌거나 에이전트가 닫혔습니다. PC 에서 에이전트_시작.bat 을 다시 실행하세요.",
+    act:[["루틴 RPA 실행","primary disabled"]], done:15,
+    tiles:[["처리 주문","30","건"],["재고검토 보류","8","/ 8"],["비정상 보류","≈376","건"],["연결","끊김 14분",""],["다음 자동 실행","월 09:05",""]] },
+  running: { state:"running", title:"진행 중", line1:"13:56 루틴 RPA · 8/15 단계 · 재고검토 배송보류 5/8",
+    line2:"예상 남은 시간 약 1분 · 시작 1분 22초 전",
+    act:[["루틴 RPA 실행","primary disabled"]], done:7, runningAt:7,
+    tiles:[["처리 주문","30","건"],["재고검토 보류","5","/ 8"],["단계","8","/ 15"],["연결","정상",""],["다음 자동 실행","월 09:05",""]] },
+};
+// 8/18 (월) 부터 4주. 9/10~9/14 만 기록이 있다.
+const DAYS = { "9/10":"good", "9/11":"good", "9/12":"good", "9/13":"bad", "9/14":"mix" };
+const HIST = [
+  ["9/14 13:55","루틴","good","성공","2분 33초","주문 30 · 보류 8"],
+  ["9/14 13:39","루틴","bad","중단","2초","물류 관리 저장 · 주소 없음"],
+  ["9/14 13:38","루틴","bad","비정상 종료","12초","프로그램이 중간에 사라짐"],
+  ["9/14 13:38","프리페어","good","성공","2초","메일 2 · 첨부 2"],
+  ["9/13 09:06","루틴","bad","중단","9분 7초","물류 관리 저장 · 주소 없음"],
+  ["9/13 09:05","프리페어","good","성공","29초","메일 2 · 첨부 2"],
+  ["9/12 09:06","루틴","good","성공","9분 40초","주문 30 · 보류 8 · 비정상 ≈418"],
+  ["9/12 09:05","프리페어","good","성공","36초","메일 2 · 첨부 2"],
+];
+
+const $ = (id) => document.getElementById(id);
+let role = "admin";
+
+function render(name) {
+  const s = SCENES[name];
+  $("hero").dataset.state = s.state;
+  $("h-state").textContent = s.title;
+  $("h-line1").textContent = s.line1;
+  $("h-line2").textContent = s.line2;
+  $("h-act").replaceChildren(...s.act.map(([t, cls]) => {
+    const b = document.createElement("button");
+    b.textContent = t; b.className = cls.replace("disabled", "");
+    b.disabled = cls.includes("disabled") || role !== "admin";
+    return b;
+  }));
+  $("h-act").classList.toggle("hide", role !== "admin");
+  $("tiles").replaceChildren(...s.tiles.map(([k, v, u]) => {
+    const d = document.createElement("div"); d.className = "tile";
+    const approx = v.startsWith("≈");
+    d.innerHTML = `<span class="k">${k}</span><span class="v num">${approx ? '<span class="approx">≈</span>' + v.slice(1) : v}<small>${u}</small></span>`;
+    if (k === "연결") d.querySelector(".v").style.color = s.state === "offline" ? "var(--warn)" : "var(--good)";
+    return d;
+  }));
+  $("steps").replaceChildren(...STEPS.map(([label, note], i) => {
+    const li = document.createElement("li");
+    let cls = i < s.done ? "done" : "pending";
+    if (s.stoppedAt === i) cls = "stopped";
+    if (s.runningAt === i) cls = "running";
+    li.className = cls;
+    const n = cls === "stopped" ? "멈춤 · 주소를 입력하세요" : cls === "running" ? "진행 중 5/8" : (cls === "pending" ? "" : note);
+    li.innerHTML = `<span class="mark"></span><span>${label}</span><span class="note num">${n}</span>`;
+    return li;
+  }));
+  $("steps-box").open = s.state === "stopped" || s.state === "running";
+  $("steps-meta").textContent = `${s.done}/15${s.state === "success" ? " · 2분 33초" : ""}`;
+  document.querySelectorAll("[data-scene]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.scene === name));
+}
+
+function setRole(r) {
+  role = r;
+  $("who").textContent = r === "admin" ? "admin@c-demo… (관리자)" : "viewer@c-demo… (열람)";
+  $("act-card").classList.toggle("hide", r !== "admin");
+  $("mod-card").classList.toggle("hide", r !== "admin");
+  document.querySelectorAll("[data-role]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.role === r));
+  render(document.querySelector("[data-scene][aria-pressed='true']").dataset.scene);
+}
+
+// 4주 격자: 8/18(월) ~ 9/14(일)
+{
+  const cells = [];
+  ["월","화","수","목","금","토","일"].forEach((h) => cells.push(`<div class="h">${h}</div>`));
+  const start = new Date(2026, 7, 18);
+  const rows = [];
+  for (let w = 0; w < 4; w++) {
+    rows.push(`<div class="w">${w === 3 ? "이번 주" : `${3 - w}주 전`}</div>`);
+    for (let d = 0; d < 7; d++) {
+      const dt = new Date(start); dt.setDate(start.getDate() + w * 7 + d);
+      const key = `${dt.getMonth() + 1}/${dt.getDate()}`;
+      const cls = DAYS[key] || "";
+      rows.push(`<div class="c ${cls}${key === "9/14" ? " today" : ""}" title="${key}${cls ? " · " + {good:"성공",bad:"실패",mix:"실패 뒤 성공"}[cls] : ""}"></div>`);
+    }
+  }
+  $("grid4").innerHTML = `<div></div>${cells.join("")}${rows.join("")}`;
+}
+$("hist").replaceChildren(...HIST.map(([t, p, cls, r, dur, note]) => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td class="num">${t}</td><td>${p}</td><td><span class="pill ${cls}">${r}</span></td><td class="num">${dur}</td><td class="muted">${note}</td>`;
+  return tr;
+}));
+
+// 테마 토글: 고른 값은 이 브라우저에만 남는다
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  const dark = t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches);
+  $("theme").textContent = dark ? "☀ 밝게" : "☾ 어둡게";
+  try { if (t) localStorage.setItem("theme", t); else localStorage.removeItem("theme"); } catch {}
+}
+$("theme").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+let saved = null; try { saved = localStorage.getItem("theme"); } catch {}
+applyTheme(saved);
+
+document.querySelectorAll("[data-scene]").forEach((b) => b.onclick = () => render(b.dataset.scene));
+document.querySelectorAll("[data-role]").forEach((b) => b.onclick = () => setRole(b.dataset.role));
+render("success");
+</script>
+</body>
+</html>
