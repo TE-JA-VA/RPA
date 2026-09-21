@@ -231,7 +231,15 @@ def real_actions():
         on = [k for k, v in wanted.items() if v]
         return f"실행 모듈을 바꿨습니다 (켬: {', '.join(on)})"
 
-    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules}
+    def do_schedule(args):
+        # 검증·저장·다음 시각 계산은 기존 apply_schedule 이 다 한다 (요일 0~6, 5분 단위, 최대 개수)
+        changed = dash.apply_schedule(args)
+        sch = st.read_settings()["schedule"]
+        if not sch.get("enabled"):
+            return "자동 실행을 껐습니다"
+        return f"자동 실행: {dash.schedule_label(sch)}" + ("" if changed else " (변경 없음)")
+
+    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule}
 
 
 def log(text):
@@ -267,6 +275,14 @@ def main():
     cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions())
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
 
+    # 자동 실행 예약은 PC 에서 돈다. 기존 대시보드의 Scheduler 그대로 (꺼져 있던 동안 지난 예약은 건너뛴다).
+    # 8765 대시보드와 같이 띄우면 예약이 둘이 되어 두 번 실행될 수 있다 - 하나만 띄운다.
+    import rpa_dashboard as dash
+    dash.SCHEDULER.resync()
+    dash.SCHEDULER.start()
+    sch = st.read_settings()["schedule"]
+    log("자동 실행: " + (dash.schedule_label(sch) + f"  다음 {sch.get('next_run_at') or '(곧 계산)'}" if sch.get("enabled") else "꺼짐"))
+
     stop = threading.Event()
 
     def pump():
@@ -280,7 +296,10 @@ def main():
                     snap["modules"] = st.read_routine_modules()[0]   # PC 의 실제 실행 모듈 (ERPIA_AI.txt)
                 except Exception:
                     snap["modules"] = None
-                body = json.dumps([snap.get("programs"), snap.get("modules")], ensure_ascii=False, default=str)
+                # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
+                snap["schedule"] = st.read_settings().get("schedule")
+                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule")],
+                                  ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)
                     last = body
@@ -325,6 +344,7 @@ def main():
             stop.wait(backoff)
             backoff = min(backoff * 2, 60)
     stop.set()
+    dash.SCHEDULER.stop.set()
     return 0
 
 

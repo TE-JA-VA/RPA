@@ -9,7 +9,7 @@
 // FIREBASE_AUTH_EMULATOR_HOST / FIREBASE_DATABASE_EMULATOR_HOST 는 emulators:exec 가 자식 프로세스에
 // 직접 넣어 준다. 여기서 process.env 에 넣으면 늦다 - ES 모듈은 본문보다 import 가 먼저 평가된다.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, cpSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, cpSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -111,15 +111,30 @@ await waitFor("연달아 실행하면 잠금이 거절한다 (failed + 사유)",
   return v.state === "failed" && /진행 중|돌고/.test(v.result || "");
 });
 
-// 모듈 명령: 상태 시뮬 폴더의 가짜 자격증명 파일로
-const credPath = join(work, "ERPIA_AI.txt");
-spawnSync("python", ["-c", `import json; json.dump([{"LogIn": [{"AdminCode": "x"}, {"ID": "a"}, {"PW": "시험"}]}], open(r"${credPath}", "w", encoding="utf-8"))`], { encoding: "utf8" });
-// 에이전트는 이미 떠 있어 환경변수를 못 바꾼다 - set_modules 는 실기(Task 12)에서 본다. 여기서는 모르는 종류만.
-const badRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
-  type: "set_schedule", args: null, by: adminUser.uid,
+// set_modules 는 실제 ERPIA_AI.txt 를 써야 해서 실기에서 본다.
+
+// 자동 실행 설정: 복사한 status_sim 의 settings.json 에 쓰이고 live.schedule 로 돌아온다
+const schedRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
+  type: "set_schedule", args: { enabled: true, days: [0, 2, 4], times: ["09:05", "13:30"] }, by: adminUser.uid,
   created_at: now, expires_at: now + 600, state: "queued",
 });
-await waitFor("못 하는 종류는 failed 로 닫힌다", async () => (await badRef.child("state").get()).val() === "failed");
+await waitFor("set_schedule 가 done 이 된다", async () => (await schedRef.child("state").get()).val() === "done");
+const sres = (await schedRef.get()).val();
+check(/월·수·금 09:05, 13:30/.test(sres.result || ""), `결과에 요일·시간 (${sres.result})`);
+const saved = JSON.parse(readFileSync(join(statusDir, "settings.json"), "utf8")).schedule;
+check(saved.enabled === true && saved.days.join() === "0,2,4" && saved.times.join() === "09:05,13:30", "PC 의 settings.json 에 저장");
+check(typeof saved.next_run_at === "string", "다음 실행 시각을 잡는다");
+await waitFor("live.schedule 로 올라온다", async () =>
+  (await db.ref("apps/rpa/live/c_demo/pc_office/schedule/times").get()).val()?.join() === "09:05,13:30");
+const badSched = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
+  type: "set_schedule", args: { enabled: true, days: [9], times: ["09:00"] }, by: adminUser.uid,
+  created_at: now, expires_at: now + 600, state: "queued",
+});
+await waitFor("잘못된 요일은 failed + 사유", async () => {
+  const v = (await badSched.get()).val();
+  return v.state === "failed" && /요일/.test(v.result || "");
+});
+check(!("accounts" in ((await db.ref("apps/rpa/live/c_demo/pc_office").get()).val() || {})), "계정 해시는 클라우드에 안 올라간다");
 
 // --- 6. 정리 -------------------------------------------------------------
 agent.kill();
