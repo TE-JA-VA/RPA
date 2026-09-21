@@ -47,7 +47,7 @@ def clean_for_rtdb(value):
     return value
 
 
-RECENT_DAYS = 20      # 화면은 뒤 10일을 보여 주고 앞 10일과 비교한다
+RECENT_DAYS = 10
 
 
 def recent_summary(rows, today, days=RECENT_DAYS):

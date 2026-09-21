@@ -136,8 +136,8 @@ await waitFor("잘못된 요일은 failed + 사유", async () => {
 });
 check(!("accounts" in ((await db.ref("apps/rpa/live/c_demo/pc_office").get()).val() || {})), "계정 해시는 클라우드에 안 올라간다");
 const recent = (await db.ref("apps/rpa/live/c_demo/pc_office/recent").get()).val() || [];
-check(recent.length === 20 && recent.every((d) => /^\d{4}-\d\d-\d\d$/.test(d.date) && "success" in d && "failed" in d),
-  `최근 20일 요약이 올라온다 (${recent.length}일)`);
+check(recent.length === 10 && recent.every((d) => /^\d{4}-\d\d-\d\d$/.test(d.date) && "success" in d && "failed" in d),
+  `최근 10일 요약이 올라온다 (${recent.length}일)`);
 
 // 이력: status_sim 의 history.jsonl (26건) 이 Firestore runs/c_demo/items 로 올라간다
 const { getFirestore } = await import("firebase-admin/firestore");

@@ -23,6 +23,7 @@ const MODULES = [
 const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]], ["주말", [5, 6]]];
 const HISTORY_LIMIT = 100;
+const MAX_TIMES = 2;      // 하루 실행 시각 개수 (추가는 유료 옵션으로 열 예정)
 
 const HTML = `
   <div class="subnav" role="tablist">
@@ -32,13 +33,11 @@ const HTML = `
 
   <div id="view-status">
     <section class="hero" id="hero" data-state="">
-      <div class="stripe"></div>
       <div class="body">
         <div class="state"><span class="dot"></span><span id="h-state">확인 중</span></div>
         <div class="line1" id="h-line1"></div>
         <div class="line2" id="h-line2"></div>
       </div>
-      <div class="act" id="h-act"></div>
     </section>
     <div class="tiles" id="tiles"></div>
     <div class="cols">
@@ -60,9 +59,9 @@ const HTML = `
         <div class="card" id="act-card">
           <h2>실행</h2>
           <div class="actions">
-            <button id="run-routine" class="primary">루틴 RPA <span>▶</span></button>
+            <button id="run-all" class="primary">전체 실행 <span>▶</span></button>
             <button id="run-prepare">프리페어 RPA <span>▶</span></button>
-            <button id="run-all">전체 실행 <span>▶▶</span></button>
+            <button id="run-routine">루틴 RPA <span>▶</span></button>
             <button id="stop-erpia" class="danger">ERPia 종료</button>
           </div>
           <div id="act-alert" class="alert hide"></div>
@@ -139,7 +138,7 @@ export function mount(el, context) {
   $("mod-apply").onclick = applyModules;
   $("sch-apply").onclick = applySchedule;
   $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
-  $("sch-add").onclick = () => { form.sch.times.push("09:00"); paintTimes(); paintScheduleMeta(); };
+  $("sch-add").onclick = () => { if (form.sch.times.length >= MAX_TIMES) return; form.sch.times.push("09:00"); paintTimes(); paintScheduleMeta(); };
   $("sch-presets").replaceChildren(...PRESETS.map(([t, days]) => {
     const b = document.createElement("button"); b.textContent = t;
     b.onclick = () => { form.sch.days = [...days]; paintDays(); paintScheduleMeta(); };
@@ -205,30 +204,40 @@ function paintHero() {
     state = ""; title = "기록 없음"; l1 = "PC 연결됨"; l2 = "";
   } else {
     state = v.state;
-    const today = (v.started_at || "").slice(0, 10) === isoDay(new Date());
-    title = (today && v.state === "success" ? "오늘 " : "") + (HERO_TITLE[v.state] || v.state);
+    title = HERO_TITLE[v.state] || v.state;
     if (v.state === "running") {
       l1 = `${hhmm(v.started_at)} ${v.program_label} · ${v.steps_done ?? 0}/${v.steps_total ?? 0} 단계` + (v.current_label ? ` · ${v.current_label}` : "");
-      l2 = `시작 ${dur(v.elapsed_sec)} 전 · PC 연결됨`;
+      l2 = `시작 ${dur(v.elapsed_sec)} 전`;
     } else {
       const stopped = (v.steps || []).find((s) => s.state === "stopped" || s.state === "failed");
-      l1 = `${hhmm(v.started_at)} ${v.program_label} · ${dur(v.duration_sec)}` + (stopped ? ` · ${stopped.label}에서 멈춤` : (metricText(v) ? " · " + metricText(v) : ""));
-      l2 = v.reason ? v.reason : "PC 연결됨";
+      l1 = `${hhmm(v.started_at)} ${v.program_label} · ${dur(v.duration_sec)}` + (stopped ? ` · ${stopped.label}에서 멈춤` : "");
+      l2 = v.reason ? v.reason : summaryText(v);
     }
   }
   hero.dataset.state = state;
   $("h-state").textContent = title;
   $("h-line1").textContent = l1;
   $("h-line2").textContent = l2;
-  const act = $("h-act");
-  act.replaceChildren();
-  if (c.isAdmin && state !== "running") {
-    const b = document.createElement("button");
-    b.className = "primary"; b.textContent = state === "success" || !v ? "루틴 RPA 실행" : "루틴 RPA 다시 실행";
-    b.disabled = busy || state === "offline";
-    b.onclick = () => sendCommand("launch", { target: "routine" }, "루틴 RPA");
-    act.append(b);
+}
+
+// 한 줄 요약. 루틴: "수집 30건 (자동 12건, 엑셀 2개) · 재고검토 보류 8/8 · 비정상 보류 ≈376건". 프리페어: 메일·첨부.
+function summaryText(v) {
+  const m = (k) => metric(v, k);
+  const parts = [];
+  if (v.program === "routine") {
+    const got = m("bottom_selected"), auto = m("top_selected"), xl = m("excel_upload");
+    if (got) {
+      const inner = [auto ? `자동 ${auto.value}건` : "", xl ? `엑셀 ${xl.value}개` : ""].filter(Boolean).join(", ");
+      parts.push(`수집 ${got.value}건` + (inner ? ` (${inner})` : ""));
+    }
+    for (const k of ["stock_hold", "abnormal_hold"]) {
+      const x = m(k);
+      if (x) parts.push(`${x.label} ${x.approx ? "≈" : ""}${x.value}${x.total != null ? "/" + x.total : ""}${x.unit || "건"}`);
+    }
+  } else {
+    for (const x of (v.metrics || []).filter((x) => /mail_hits|files/.test(x.key || ""))) parts.push(`${x.label} ${x.value}${x.unit || "건"}`);
   }
+  return parts.length ? parts.join(" · ") : metricText(v);
 }
 
 function paintTiles() {
@@ -265,22 +274,11 @@ function donutSvg(ok, bad, size) {
 }
 
 function paintRecent() {
-  // 에이전트는 20일을 올린다: 뒤 10일을 보여 주고 앞 10일과 비교한다
-  const all = live?.recent || [];
-  const days = all.slice(-10);
-  const prev = all.slice(0, -10);
-  const sum = (xs, k) => xs.reduce((n, d) => n + (d[k] || 0), 0);
-  const ok = sum(days, "success"), bad = sum(days, "failed");
-  const pok = sum(prev, "success"), pbad = sum(prev, "failed");
-  let cmp = "";
-  if (days.length) {
-    if (!prev.length || pok + pbad === 0) cmp = " · 이전 10일 실행 없음";
-    else {
-      const diff = ok - pok;
-      cmp = ` · 이전 10일보다 성공 ${diff > 0 ? "+" : ""}${diff}`;
-    }
-  }
-  $("recent-meta").textContent = days.length ? `성공 ${ok} · 실패 ${bad}${cmp}` : "";
+  // 격자는 최근 10일, 큰 도넛은 오늘(마지막 날)만
+  const days = (live?.recent || []).slice(-10);   // 옛 에이전트가 20일을 올려도 10칸만
+  const today = days[days.length - 1] || { success: 0, failed: 0 };
+  const ok = today.success || 0, bad = today.failed || 0;
+  $("recent-meta").textContent = days.length ? (ok + bad ? `오늘 성공 ${ok} · 실패 ${bad}` : "오늘 실행 없음") : "";
   $("recent-strip").replaceChildren(...days.map((d) => {
     const cell = document.createElement("button");
     cell.className = "day" + (d.success || d.failed ? "" : " empty");
@@ -413,7 +411,6 @@ function watchCommand(cmdKey, label) {
 
 function paintButtons() {
   for (const id of ["run-prepare", "run-routine", "run-all", "stop-erpia"]) $(id).disabled = !c.isAdmin || busy || !c.pcId;
-  const hb = $("h-act").querySelector("button"); if (hb) hb.disabled = busy || $("hero").dataset.state === "offline";
   paintModuleMeta(); paintScheduleMeta();
 }
 
@@ -493,6 +490,7 @@ function paintScheduleMeta() {
   const dis = !c.isAdmin || busy;
   $("sch-enabled").disabled = dis;
   for (const b of $("sch-form").querySelectorAll("button, input")) b.disabled = dis;
+  $("sch-add").disabled = dis || form.sch.times.length >= MAX_TIMES;
   $("sch-meta").textContent = !live ? "" : s.enabled ? `${labelDays(s.days)} ${(s.times || []).join(", ")}` : "꺼짐";
   const info = [];
   if (s.enabled && s.next_run_at) info.push(`다음 ${when(s.next_run_at)}`);
@@ -500,7 +498,8 @@ function paintScheduleMeta() {
   if (s.last_error) info.push(`오류: ${s.last_error}`);
   $("sch-info").textContent = info.join(" · ");
   $("sch-info").className = "msg" + (s.last_error ? " bad" : "");
-  const ok = !form.sch.enabled || (form.sch.days.length > 0 && form.sch.times.length > 0 && form.sch.times.every((t) => /^\d\d:\d\d$/.test(t)));
+  const ok = !form.sch.enabled || (form.sch.days.length > 0 && form.sch.times.length > 0 && form.sch.times.length <= MAX_TIMES
+    && form.sch.times.every((t) => /^\d\d:\d\d$/.test(t)));
   $("sch-apply").disabled = dis || !scheduleDirty() || !ok;
 }
 function labelDays(days) {

@@ -143,12 +143,12 @@ import datetime as _dt
 rows = [{"started_at": "2026-09-14T13:55:00", "state": "success"},
         {"started_at": "2026-09-14T13:39:00", "state": "stopped"},
         {"started_at": "2026-09-13T09:06:00", "state": "crashed"},
-        {"started_at": "2026-08-20T09:06:00", "state": "success"},    # 20일 밖
+        {"started_at": "2026-09-01T09:06:00", "state": "success"},    # 10일 밖
         {"started_at": "", "state": "success"}]
 rs = ag.recent_summary(rows, _dt.date(2026, 9, 14))
-check(len(rs) == 20 and rs[0]["date"] == "2026-08-26" and rs[-1]["date"] == "2026-09-14", "최근 20일, 오래된 날부터")
+check(len(rs) == 10 and rs[0]["date"] == "2026-09-05" and rs[-1]["date"] == "2026-09-14", "최근 10일, 오래된 날부터")
 check(rs[-1] == {"date": "2026-09-14", "success": 1, "failed": 1}, "하루에 성공·실패를 센다")
-check(rs[-2]["failed"] == 1 and sum(d["success"] for d in rs) == 1, "중단·비정상 종료는 실패, 20일 밖은 뺀다")
+check(rs[-2]["failed"] == 1 and sum(d["success"] for d in rs) == 1, "중단·비정상 종료는 실패, 10일 밖은 뺀다")
 
 ff = fb.fs_fields({"a": "x", "b": 3, "c": True, "d": None, "e": 1.5, "f": {"k": [1]}})
 check(ff["a"] == {"stringValue": "x"} and ff["b"] == {"integerValue": "3"} and ff["c"] == {"booleanValue": True}

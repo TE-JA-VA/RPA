@@ -4,31 +4,33 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AFTER MARKET</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
   /* Solarized. 밝음: base3 바탕 / base2 면 / base01 글자. 어두움: base03 바탕 / base02 면 / base0 글자.
      강조는 cyan 하나. 상태 색(green·red·orange·blue)은 강조와 분리한다. */
   :root {
     --bg:#fdf6e3; --card:#fffdf6; --soft:#eee8d5; --ink:#586e75; --strong:#073642; --muted:#93a1a1; --line:#e6dfc8;
     --accent:#2aa198; --accent-ink:#fdf6e3;
-    --good:#859900; --warn:#cb4b16; --bad:#dc322f; --run:#268bd2;
-    --good-bg:#eef0d6; --warn-bg:#f9e3d5; --bad-bg:#fadcd9; --run-bg:#d8e9f5;
+    --good:#859900; --warn:#b58900; --bad:#dc322f; --run:#268bd2;
+    --good-bg:#eef0d6; --warn-bg:#f7edc9; --bad-bg:#fadcd9; --run-bg:#d8e9f5;
   }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
     --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
     --accent:#2aa198; --accent-ink:#002b36;
-    --good:#a3b800; --warn:#e0653a; --bad:#ec5a55; --run:#4aa3e0;
-    --good-bg:#1d3a2c; --warn-bg:#3d2a22; --bad-bg:#3f2528; --run-bg:#0f3a55;
+    --good:#a3b800; --warn:#d4a017; --bad:#ec5a55; --run:#4aa3e0;
+    --good-bg:#1d3a2c; --warn-bg:#3a3210; --bad-bg:#3f2528; --run-bg:#0f3a55;
   } }
   :root[data-theme="dark"] {
     --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
     --accent:#2aa198; --accent-ink:#002b36;
-    --good:#a3b800; --warn:#e0653a; --bad:#ec5a55; --run:#4aa3e0;
-    --good-bg:#1d3a2c; --warn-bg:#3d2a22; --bad-bg:#3f2528; --run-bg:#0f3a55;
+    --good:#a3b800; --warn:#d4a017; --bad:#ec5a55; --run:#4aa3e0;
+    --good-bg:#1d3a2c; --warn-bg:#3a3210; --bad-bg:#3f2528; --run-bg:#0f3a55;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 "IBM Plex Sans KR","Malgun Gothic",system-ui,sans-serif; }
+  :root { --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 var(--font); }
   .num { font-family:"IBM Plex Mono",Consolas,monospace; font-variant-numeric:tabular-nums; }
   h1, h2, .strong { color:var(--strong); }
   button { font:inherit; cursor:pointer; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); padding:9px 14px; }
@@ -73,23 +75,18 @@
   }
 
   /* 상태 헤더: 상태 색으로 통째로 채운 카드 하나. 나머지 카드는 비운다 */
-  .hero { display:grid; grid-template-columns:1fr auto; border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong); --on-soft:var(--muted); }
+  /* 성공 초록 / 진행 중 파랑 / 실패(중단) 빨강 / 오류(비정상 종료·연결 끊김) 노랑 */
+  .hero { border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong); --on-soft:var(--muted); }
   .hero[data-state="success"] { background:var(--good); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
-  .hero[data-state="stopped"], .hero[data-state="failed"], .hero[data-state="crashed"] { background:var(--bad); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
-  .hero[data-state="offline"] { background:var(--warn); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
+  .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
+  .hero[data-state="crashed"], .hero[data-state="offline"] { background:var(--warn); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
   .hero[data-state="running"] { background:var(--run); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
-  .hero .stripe { display:none; }
   .hero .body { padding:22px 24px; display:grid; gap:4px; min-width:0; color:var(--on); }
   .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:24px; color:var(--on); }
   .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--on); flex:none; opacity:.9; }
   .hero .line1 { font-size:15px; }
   .hero .line2 { color:var(--on-soft); font-size:14px; overflow-wrap:anywhere; }
-  .hero .act { display:flex; flex-direction:column; gap:8px; padding:22px 24px; justify-content:center; min-width:190px; }
-  .hero .act button { background:rgba(253,246,227,.16); border-color:rgba(253,246,227,.45); color:var(--on); font-weight:500; }
-  .hero .act button:hover:not([disabled]) { background:rgba(253,246,227,.28); }
-  .hero[data-state=""] .act button { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
   .primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:500; }
-  @media (max-width:640px) { .hero { grid-template-columns:1fr; } .hero .act { padding-top:0; } }
 
   /* 강조색 고르기 */
   .swatches { display:flex; gap:8px; flex-wrap:wrap; }

@@ -1,7 +1,7 @@
 // 테마(밝음/어두움)와 강조색. 고른 값은 이 브라우저에만 남는다 (localStorage).
 export const DEFAULT_ACCENT = "#2aa198";
-// Solarized 강조 후보. green·orange·red 는 상태 색이라 뺐다
-export const ACCENTS = [["cyan", "#2aa198"], ["blue", "#268bd2"], ["violet", "#6c71c4"], ["magenta", "#d33682"], ["yellow", "#b58900"]];
+// Solarized 강조 후보. green·yellow·red·blue 는 상태 색(성공·오류·실패·진행)이라 뺐다
+export const ACCENTS = [["cyan", "#2aa198"], ["violet", "#6c71c4"], ["magenta", "#d33682"], ["orange", "#cb4b16"]];
 
 function luminance(hex) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
