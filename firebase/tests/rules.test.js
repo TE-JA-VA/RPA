@@ -6,6 +6,7 @@ import {
   initializeTestEnvironment, assertFails, assertSucceeds,
 } from "@firebase/rules-unit-testing";
 import { ref, set, update, get } from "firebase/database";
+import { doc, setDoc, getDoc, updateDoc, deleteDoc } from "firebase/firestore";
 
 const rulesPath = fileURLToPath(new URL("../rules/database.rules.json", import.meta.url));
 let env;
@@ -18,11 +19,16 @@ before(async () => {
       port: 9000,
       rules: readFileSync(rulesPath, "utf8"),
     },
+    firestore: {
+      host: "127.0.0.1",
+      port: 8080,
+      rules: readFileSync(fileURLToPath(new URL("../rules/firestore.rules", import.meta.url)), "utf8"),
+    },
   });
 });
 
 after(async () => { await env.cleanup(); });
-beforeEach(async () => { await env.clearDatabase(); });
+beforeEach(async () => { await env.clearDatabase(); await env.clearFirestore(); });
 
 // 등장인물
 const asAdminA = () => env.authenticatedContext("u_admin_a", { cid: "ca", role: "admin" }).database();
@@ -122,4 +128,57 @@ test("settings: 관리자는 쓰고, 열람자는 못 쓰고, 그 PC 의 에이�
 test("meta: super 만 쓴다", async () => {
   await assertFails(set(ref(asAdminA(), "meta/companies/ca"), { name: "위조" }));
   await assertSucceeds(set(ref(asSuper(), "meta/companies/ca"), { name: "테스트 회사" }));
+});
+
+// ---------------------------------------------------------------------------
+// Firestore
+// ---------------------------------------------------------------------------
+const fsAdminA = () => env.authenticatedContext("u_admin_a", { cid: "ca", role: "admin" }).firestore();
+const fsAdminB = () => env.authenticatedContext("u_admin_b", { cid: "cb", role: "admin" }).firestore();
+const fsSuper = () => env.authenticatedContext("u_super", { role: "super" }).firestore();
+const fsAgentA1 = () => env.authenticatedContext("u_agent_a1", { cid: "ca", pcId: "pc1", role: "agent" }).firestore();
+const fsAgentA2 = () => env.authenticatedContext("u_agent_a2", { cid: "ca", pcId: "pc2", role: "agent" }).firestore();
+
+const run = (over = {}) => ({
+  cid: "ca", pcId: "pc1", run_id: "r1", program: "routine",
+  state: "success", started_at: "2026-09-21T09:00:00", duration_sec: 120,
+  payload: "{}", ...over,
+});
+
+test("runs: 에이전트는 자기 PC 의 이력을 만들 수 있다", async () => {
+  await assertSucceeds(setDoc(doc(fsAgentA1(), "runs/ca/items/r1"), run()));
+});
+
+test("runs: 에이전트가 남의 PC 이름으로 만들면 거부", async () => {
+  await assertFails(setDoc(doc(fsAgentA2(), "runs/ca/items/r1"), run()));
+});
+
+test("runs: 관리자는 만들 수 없다", async () => {
+  await assertFails(setDoc(doc(fsAdminA(), "runs/ca/items/r1"), run()));
+});
+
+test("runs: 같은 회사와 super 는 읽고 다른 회사는 거부", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "runs/ca/items/r1"), run());
+  });
+  await assertSucceeds(getDoc(doc(fsAdminA(), "runs/ca/items/r1")));
+  await assertSucceeds(getDoc(doc(fsSuper(), "runs/ca/items/r1")));
+  await assertFails(getDoc(doc(fsAdminB(), "runs/ca/items/r1")));
+});
+
+test("runs: 만든 이력은 고치거나 지울 수 없다", async () => {
+  await assertSucceeds(setDoc(doc(fsAgentA1(), "runs/ca/items/r1"), run()));
+  await assertFails(updateDoc(doc(fsAgentA1(), "runs/ca/items/r1"), { state: "조작" }));
+  await assertFails(deleteDoc(doc(fsAgentA1(), "runs/ca/items/r1")));
+  await assertFails(deleteDoc(doc(fsSuper(), "runs/ca/items/r1")));
+});
+
+test("users: 본인과 super 만 읽고 아무도 못 쓴다", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "users/u_admin_a"), { cid: "ca", role: "admin", name: "가나" });
+  });
+  await assertSucceeds(getDoc(doc(fsAdminA(), "users/u_admin_a")));
+  await assertSucceeds(getDoc(doc(fsSuper(), "users/u_admin_a")));
+  await assertFails(getDoc(doc(fsAdminB(), "users/u_admin_a")));
+  await assertFails(setDoc(doc(fsAdminA(), "users/u_admin_a"), { role: "super" }));
 });

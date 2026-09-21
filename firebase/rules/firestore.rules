@@ -1,6 +1,30 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function claims() { return request.auth.token; }
+    function signedIn() { return request.auth != null; }
+    function sameCompany(cid) { return signedIn() && (claims().cid == cid || claims().role == 'super'); }
+
+    // 실행 이력. 에이전트가 만들고 아무도 고치지 않는다.
+    match /runs/{cid}/items/{runId} {
+      allow read: if sameCompany(cid);
+      allow create: if signedIn()
+                    && claims().role == 'agent'
+                    && claims().cid == cid
+                    && request.resource.data.pcId == claims().pcId
+                    && request.resource.data.cid == cid;
+      allow update, delete: if false;
+    }
+
+    // 사용자 표시용. 권한 근거는 custom claim 이고 이 문서가 아니다.
+    // 쓰기는 Admin SDK(관리 스크립트)만 - Admin SDK 는 규칙을 우회한다.
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || claims().role == 'super');
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
