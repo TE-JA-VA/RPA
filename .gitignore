@@ -40,3 +40,4 @@ firebase/tests/node_modules/
 firebase/admin/node_modules/
 firebase/**/*-debug.log
 firebase/agent/*_기록.txt*
+firebase/agent/history_pos.txt
