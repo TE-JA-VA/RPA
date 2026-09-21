@@ -1,5 +1,7 @@
 # Firebase 다회사 대시보드 1차 구현 계획
 
+> **실기 (2026-09-21 10:48):** Task 12 완료. 클라우드 화면 → 에이전트 → ERPia_RPA.exe 로그인만 켠 실행 성공(31초, 모듈 비트 1), 화면에서 실행 모듈 변경 → ERPIA_AI.txt 반영 확인, ERPia 종료 확인. 실기 중 고친 것: 현황을 PATCH 로(heartbeat 보존), PC 의 실제 모듈을 live.modules 로 올려 화면 기준값으로, Hosting js/html 캐시 끔, 프리페어 버튼 추가. 실행 모듈은 원래 값으로 복원.
+>
 > **진행 (2026-09-21):** Task 1~11 완료, 브랜치 `firebase-phase1`. JDK 는 21 (firebase-tools 15 요구). 규칙 22 · 에이전트 단위 54 · 통합 10 · 화면 28 전부 통과. Task 9 는 `integration.js` 가 자동으로 돌리고, Task 10·11 은 `check_web.py`(Playwright, `?emu=1`) 가 검사한다. Task 12 는 콘솔 Authentication 켜기·계정 등록·`firebase login` 뒤에.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

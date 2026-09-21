@@ -180,7 +180,7 @@ $("run-prepare").addEventListener("click", () => sendCommand("launch", { target:
 $("run-routine").addEventListener("click", () => sendCommand("launch", { target: "routine" }, "루틴 RPA"));
 $("run-all").addEventListener("click", () => sendCommand("launch", { target: "all" }, "전체 실행"));
 $("stop-erpia").addEventListener("click", () => {
-  if (confirm("ERPia 를 종료할까요? (종료가 곧 로그아웃입니다)")) sendCommand("stop_erpia", null, "ERPia 종료");
+  if (confirm("ERPia 를 종료할까요?")) sendCommand("stop_erpia", null, "ERPia 종료");
 });
 
 function paintButtons() {
