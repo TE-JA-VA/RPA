@@ -69,7 +69,7 @@ onAuthStateChanged(auth, async (user) => {
   }
   const t = await user.getIdTokenResult(true);
   me = { uid: user.uid, email: user.email, cid: t.claims.cid || null, role: t.claims.role || null };
-  $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "열람"})`;
+  $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : me.role === "agent" ? "기계" : "열람"})`;
   show($("login"), false); show($("main"), true);
   await loadCompany();
   paintNav();

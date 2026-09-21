@@ -108,6 +108,7 @@
   .tile .v .approx { color:var(--muted); font-weight:400; }
 
   .cols { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:14px; align-items:start; }
+  .cols:has(> #sidecol.hide) { grid-template-columns:minmax(0,1fr); }   /* 오른쪽 열이 숨으면 자리도 안 남긴다 */
   @media (max-width:1000px) { .cols { grid-template-columns:minmax(0,1fr); } }   /* 1fr 이면 띠 내용 폭에 카드가 늘어난다 */
   .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; }
   .card + .card { margin-top:14px; }
@@ -151,12 +152,15 @@
   .subnav button { border-radius:999px; padding:6px 16px; }
   .subnav button[aria-selected="true"] { border-color:var(--accent); color:var(--accent); font-weight:700; }
 
-  /* 최근 10일: 날짜별 도넛 + 합계 도넛 */
-  /* 오늘 도넛은 오른쪽 고정. 띠는 남는 폭에 들어가는 만큼(5~20일)만 그린다 - 개수는 rpa.js 가 폭을 재서 정한다 */
+  /* 최근 20일: 날짜별 도넛 + 오늘 도넛 */
+  /* 띠는 20일을 다 그리고 15칸까지만 보인다 - 나머지는 가로 스크롤. 칸 크기(--cell 48~72px)와 간격(--sgap)은 rpa.js 가
+     남는 폭에 15칸이 꼭 맞게 정한다. 오늘 도넛은 오른쪽 고정, 띠는 왼쪽 끝부터 도넛까지 채운다 */
   .recent-body { display:flex; gap:20px; align-items:center; }
-  .strip { display:flex; gap:6px; flex:1 1 auto; min-width:0; flex-wrap:nowrap; overflow:hidden; justify-content:flex-start; }
-  .donut { flex:none; margin-left:auto; padding-left:20px; border-left:1px solid var(--line); }
-  .strip .day { display:grid; gap:2px; justify-items:center; font-size:11px; color:var(--muted); padding:4px 2px; border:0; background:none; border-radius:8px; }
+  .strip { display:flex; gap:var(--sgap, 6px); flex:1 1 auto; min-width:0; flex-wrap:nowrap;
+    overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; scrollbar-color:var(--line) transparent; overscroll-behavior-x:contain; }
+  .donut { flex:none; padding-left:20px; border-left:1px solid var(--line); }
+  .strip .day { flex:none; width:var(--cell, 48px); display:grid; gap:2px; justify-items:center; font-size:11px; color:var(--muted); padding:4px 2px; border:0; background:none; border-radius:8px; }
+  .strip .day svg { width:calc(var(--cell, 48px) - 4px); height:auto; }
   .strip .day:hover:not(.empty) { background:var(--soft); }
   .strip .day.empty { cursor:default; opacity:.6; }
   .strip .day:last-child svg { border-radius:50%; box-shadow:0 0 0 2px var(--accent); }
@@ -167,7 +171,7 @@
   .legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
   @media (max-width:640px) {
     .recent-body { flex-direction:column; align-items:stretch; }
-    .strip { justify-content:center; }
+    .strip { flex:none; }
     .donut { justify-content:center; margin-left:0; border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:12px; }
   }
 

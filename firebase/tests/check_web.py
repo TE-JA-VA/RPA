@@ -6,6 +6,7 @@
 에뮬레이터 REST 는 'Authorization: Bearer owner' 로 규칙을 우회한다 (시드용).
 """
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -90,7 +91,7 @@ routine = {
 }
 db_put(LIVE, {
     "host": "OFFICE-PC",
-    "heartbeat": {"at": NOW, "host": "OFFICE-PC", "rpa_running": False},
+    "heartbeat": {"at": NOW + 3600, "host": "OFFICE-PC", "rpa_running": False},   # 시험 내내 '정상' 이도록 미래 시각 (20초면 끊김)
     "programs": {"routine": routine, "prepare": None},
     "modules": {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True},
     "schedule": {"enabled": True, "days": [0, 1, 2, 3, 4], "times": ["09:05"], "next_run_at": "2026-09-22T09:05:00",
@@ -226,30 +227,41 @@ with sync_playwright() as pw:
       return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
     check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"프리페어가 왼쪽, 루틴이 오른쪽에 나란히 ({pair})")
     check("2줄" in page.text_content("#log-meta"), "로그 줄 수")
-    # 띠는 폭에 맞춰 5~20일. 셀 44px + 간격 6px
-    def expected_days():
-        w = page.evaluate("""() => { const s = document.getElementById('recent-strip'), d = document.getElementById('recent-donut');
-          let w = s.parentElement.clientWidth;
-          if (d.getBoundingClientRect().left > s.getBoundingClientRect().left + 10) w -= d.offsetWidth + 20;
-          return w; }""")
-        return max(5, min(20, (w + 6) // 50))
-    n = page.locator("#recent-strip .day").count()
-    check(5 <= n <= 20 and n == expected_days(), f"띠는 폭에 맞춘 날짜 수 ({n}일, 기본 창)")
+    # 띠는 최근 20일 전부. 왼쪽 끝부터 오늘 도넛까지 채우되 15칸까지만 보이고(칸 48~72px, 남으면 간격), 나머지는 가로 스크롤
+    def strip_geo():
+        return page.evaluate("""() => { const s = document.getElementById('recent-strip'), d = document.getElementById('recent-donut');
+          const cell = s.querySelector('.day').offsetWidth, gap = parseFloat(getComputedStyle(s).columnGap) || 0;
+          const sr = s.getBoundingClientRect(), dr = d.getBoundingClientRect(), pr = s.parentElement.getBoundingClientRect();
+          return { n: s.children.length, cell, visible: Math.floor((s.clientWidth + gap + 0.5) / (cell + gap)),
+                   overflow: s.scrollWidth > s.clientWidth + 1, atEnd: s.scrollLeft + s.clientWidth >= s.scrollWidth - 1,
+                   gap: dr.left - sr.right, leftGap: sr.left - pr.left, sameRow: Math.abs(dr.top - sr.top) < 80 }; }""")
+    g = strip_geo()
+    check(g["n"] == 20, f"띠는 20일을 다 그린다 ({g['n']})")
     check(page.locator("#recent-strip .day:last-child").get_attribute("data-date") == "2026-09-14", "마지막 칸은 오늘")
-    strip_right = page.evaluate("document.getElementById('recent-strip').getBoundingClientRect().right")
-    donut_left = page.evaluate("document.getElementById('recent-donut').getBoundingClientRect().left")
+    check(page.locator("#recent-strip .day:first-child").get_attribute("data-date") == "2026-08-26", "첫 칸은 8/26")
+    check(g["visible"] <= 15 and g["overflow"] and g["atEnd"], f"기본 창: {g['visible']}칸 보이고 오늘이 오른쪽 끝")
+    check(g["sameRow"] and 0 <= g["gap"] <= 21 and g["leftGap"] < 2, f"띠가 왼쪽 끝부터 오늘 도넛까지 (틈 {g['gap']:.0f}px)")
     card_right = page.evaluate("document.querySelector('.card.recent').getBoundingClientRect().right")
-    check(donut_left > strip_right and card_right - page.evaluate("document.getElementById('recent-donut').getBoundingClientRect().right") < 40, "오늘 도넛은 오른쪽에 고정")
+    check(card_right - page.evaluate("document.getElementById('recent-donut').getBoundingClientRect().right") < 40, "오늘 도넛은 오른쪽에 고정")
     page.set_viewport_size({"width": 2200, "height": 900}); page.wait_for_timeout(300)
-    n_wide = page.locator("#recent-strip .day").count()
-    check(n_wide == 20 and n_wide == expected_days(), f"넓은 창에서는 최대 20일 ({n_wide})")
-    check(page.locator("#recent-strip .day:first-child").get_attribute("data-date") == "2026-08-26", "20일이면 8/26 부터")
+    g = strip_geo()
+    check(g["visible"] == 15 and g["overflow"] and g["atEnd"] and 0 <= g["gap"] <= 21 and g["leftGap"] < 2 and 48 <= g["cell"] <= 72,
+          f"넓은 창: 칸을 키워 15칸이 꼭 맞고 도넛에 붙는다 ({g['visible']}칸, 칸 {g['cell']:.0f}px)")
+    if os.environ.get("SHOT_DIR"):   # 눈으로 볼 때: SHOT_DIR 에 최근 카드 사진을 남긴다
+        for w in (2560, 1920, 1280, 400):
+            page.set_viewport_size({"width": w, "height": 900}); page.wait_for_timeout(300)
+            page.locator(".card.recent").screenshot(path=os.path.join(os.environ["SHOT_DIR"], f"recent_{w}.png"))
+        page.set_viewport_size({"width": 2200, "height": 900}); page.wait_for_timeout(300)
+    before = page.evaluate("document.getElementById('recent-strip').scrollLeft")
+    page.hover("#recent-strip .day:last-child"); page.mouse.wheel(0, -200); page.wait_for_timeout(200)
+    after = page.evaluate("document.getElementById('recent-strip').scrollLeft")
+    check(after < before, f"띠 위에서 휠을 굴리면 옆으로 민다 ({before:.0f} → {after:.0f})")
     page.set_viewport_size({"width": 400, "height": 900}); page.wait_for_timeout(300)
-    n_narrow = page.locator("#recent-strip .day").count()
-    check(5 <= n_narrow <= 8 and n_narrow == expected_days(), f"좁은 창에서는 최소 5일 ({n_narrow})")
+    g = strip_geo()
+    check(g["n"] == 20 and g["overflow"] and g["visible"] <= 8 and g["atEnd"] and g["cell"] == 48,
+          f"좁은 창: 20일 그대로, 48px {g['visible']}칸 보이고 오늘이 끝에")
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
-    check(page.locator("#recent-strip .day").count() == n, "원래 폭으로 돌아오면 원래 개수")
-    check(page.locator("#recent-strip .day.empty").count() == n - 5, "실행 없는 날은 빈 도넛")
+    check(page.locator("#recent-strip .day.empty").count() == 15, "실행 없는 날은 빈 도넛")
     check(page.get_attribute("#recent-strip .day.empty svg circle", "stroke") == "url(#hatch)", "빈 도넛은 빗금")
     bg = page.evaluate("getComputedStyle(document.getElementById('hero')).backgroundColor")
     good = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--good-fill').trim()")
@@ -286,8 +298,16 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('h-state')?.textContent === 'PC 연결 끊김'", timeout=10000)
     check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--warn-fill"), "연결 끊김도 노랑")
     check("15분 전부터" in page.text_content("#h-line1"), "끊긴 시간")
-    db_patch(f"{LIVE}/heartbeat", {"at": NOW})
+    db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600})
     db_patch(f"{LIVE}/programs/routine", routine)
+    page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
+    # 에이전트가 죽으면 값이 안 바뀐다. 화면이 5초마다 스스로 다시 봐야 끊김이 보인다
+    db_patch(f"{LIVE}/heartbeat", {"at": int(time.time()) - 17})   # 아직 20초 안 → 정상, 몇 초 뒤 끊김
+    page.wait_for_function("document.getElementById('conn')?.textContent.includes('정상')", timeout=10000)
+    page.wait_for_function("document.getElementById('conn')?.textContent.includes('끊김')", timeout=15000)
+    check("초" in page.text_content("#conn") and page.get_attribute("#hero", "data-state") == "offline",
+          f"값이 안 바뀌어도 5초 안에 끊김으로 바뀐다 ({page.text_content('#conn').strip()})")
+    db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600})
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
 
     print("4절 명령 투입")
@@ -432,6 +452,9 @@ with sync_playwright() as pw:
     check("(열람)" in page.text_content("#who"), "열람자로 표시")
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
     check(page.is_hidden("#act-card") and page.is_hidden("#mod-card") and page.is_hidden("#sch-card"), "열람자는 실행·모듈·자동 실행 카드가 없다")
+    cols_w = page.evaluate("document.querySelector('.cols').getBoundingClientRect().width")
+    main_w = page.evaluate("document.querySelector('.cols > div').getBoundingClientRect().width")
+    check(abs(cols_w - main_w) < 2, f"오른쪽 열 자리를 남기지 않는다 (본문 {main_w:.0f} / 전체 {cols_w:.0f})")
     denied = page.evaluate("""async () => {
       const m = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js');
       const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js');

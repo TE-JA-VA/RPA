@@ -8,6 +8,7 @@
 비밀번호는 첫 로그인 요청에만 실린다. 기록에는 어떤 경우에도 남기지 않는다.
 FIREBASE_AUTH_EMULATOR_HOST 가 있으면 로그인·갱신을 에뮬레이터로 보낸다 (통합 시험용).
 """
+import base64
 import json
 import os
 import time
@@ -52,6 +53,12 @@ class HttpError(Exception):
         super().__init__(f"HTTP {status}")
         self.status = status
         self.body = body
+
+
+def claims(id_token):
+    """ID 토큰 가운데 조각(JSON)을 읽는다. 서명은 확인하지 않는다 - 값을 믿는 쪽은 어차피 규칙이 지킨다."""
+    part = id_token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
 
 
 def parse_sse(lines):

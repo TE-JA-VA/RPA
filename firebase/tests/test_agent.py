@@ -250,6 +250,33 @@ with tempfile.TemporaryDirectory() as d:
     up3.flush()
     check(up3.pending() == 0 and len(cl2.puts) == 1, "다시 켠 뒤 밀린 것을 보낸다")
 
+
+class DenyClient:
+    """옛 경로(live/…)는 규칙이 403 으로 거부한다. 2026-09-21 실기에서 49건이 큐 머리를 영원히 막았다."""
+    def __init__(self):
+        self.puts = []
+
+    def put(self, path, value):
+        if not path.startswith("apps/"):
+            raise fb.HttpError(403, "Permission denied")
+        self.puts.append((path, value))
+
+    patch = put
+
+
+with tempfile.TemporaryDirectory() as d:
+    q = os.path.join(d, "queue.jsonl")
+    with open(q, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"path": "live/c_demo/pc_office/heartbeat", "value": {"at": 1}, "method": "put"}) + "\n")
+        f.write(json.dumps({"path": "apps/rpa/live/c_demo/pc_office/heartbeat", "value": {"at": 2}, "method": "put"}) + "\n")
+    dc = DenyClient()
+    up4 = ag.Uploader(dc, "c_demo", "pc_office", q)
+    check(up4.flush() and up4.pending() == 0, "거부된 항목은 버리고 뒤 항목을 보낸다")
+    check(dc.puts == [("apps/rpa/live/c_demo/pc_office/heartbeat", {"at": 2})], "거부된 것은 다시 보내지 않는다")
+    check(not os.path.exists(q), "큐 파일도 비운다")
+    up4._send("live/x", {"a": 1})
+    check(up4.pending() == 0, "거부된 것은 애초에 큐에 넣지 않는다")
+
 print("\n4절 명령 처리")
 
 NOW = 2000.0
@@ -334,6 +361,41 @@ with tempfile.TemporaryDirectory() as d:
             check("아는 모듈" in str(e), "모르는 모듈만 있으면 거부")
     finally:
         os.environ.pop("RPA_CRED_FILE", None)
+
+print("\n8절 첫 실행 설정 (새 PC)")
+import base64
+
+
+def jwt(payload):
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    return f"eyJhbGciOiJSUzI1NiJ9.{body}.sig"
+
+
+class TokenClient:
+    def __init__(self, tok):
+        self.tok = tok
+
+    def token(self):
+        return self.tok
+
+
+check(fb.claims(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"}))["pcId"] == "pc_y", "토큰에서 클레임을 읽는다")
+with tempfile.TemporaryDirectory() as d:
+    p = os.path.join(d, "agent_config.json")
+    cfg = ag.first_run(p, " agent-pc-y@c-x.example.com ", "pw-1234",
+                       TokenClient(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"})))
+    check(cfg["cid"] == "c_x" and cfg["pc_id"] == "pc_y" and cfg["email"] == "agent-pc-y@c-x.example.com"
+          and cfg["password"] == "pw-1234", "회사·PC 는 토큰에서, 이메일은 다듬어서 저장한다")
+    check(cfg["project_id"] == secret.PUBLIC["project_id"] and cfg["database_url"] == secret.PUBLIC["database_url"],
+          "프로젝트 값은 공개 설정에서")
+    with open(p, encoding="utf-8") as f:
+        check("pw-1234" not in f.read(), "파일에 평문 비밀번호가 없다")
+    bad = os.path.join(d, "x.json")
+    try:
+        ag.first_run(bad, "admin@c-x.example.com", "pw", TokenClient(jwt({"cid": "c_x", "role": "admin"})))
+        check(False, "사람 계정은 거부한다")
+    except ValueError:
+        check(not os.path.exists(bad), "사람 계정은 거부한다")
 
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:

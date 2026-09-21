@@ -43,7 +43,7 @@ const HTML = `
     <div class="cols">
       <div>
         <div class="card recent">
-          <h2>최근 10일 <span class="muted" id="recent-meta"></span></h2>
+          <h2>최근 20일 <span class="muted" id="recent-meta"></span></h2>
           <div class="recent-body">
             <div class="strip" id="recent-strip"></div>
             <div class="donut" id="recent-donut"></div>
@@ -108,6 +108,8 @@ let live = null;
 let form = { modules: {}, sch: { enabled: false, days: [], times: [] } };
 let fs = null;
 let resizeObs = null;
+let tick = null;   // 5초마다 연결 상태를 다시 본다 - 에이전트가 죽으면 값이 안 바뀌어서 구독만으로는 화면이 안 바뀐다
+let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 다시 안 그린다 - 스크롤이 튀지 않게)
 
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
@@ -145,10 +147,17 @@ export function mount(el, context) {
     b.onclick = () => { form.sch.days = [...days]; paintDays(); paintScheduleMeta(); };
     return b;
   }));
-  show($("act-card"), c.isAdmin); show($("mod-card"), c.isAdmin); show($("sch-card"), c.isAdmin);
-  // 창 폭이 바뀌면 띠의 날짜 수를 다시 센다
-  resizeObs = new ResizeObserver(() => { if (root && live) paintRecent(); });
-  resizeObs.observe($("recent-strip").parentElement);
+  show($("sidecol"), c.isAdmin);   // 열람·기계 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
+  paintedRecent = null;
+  const strip = $("recent-strip");
+  // 폭이 바뀌거나 다시 보이면 칸 크기를 다시 맞추고 오늘(오른쪽 끝)로. 띠 위에서 세로 휠은 가로 스크롤로 (넘칠 때만)
+  resizeObs = new ResizeObserver(fitStrip);
+  resizeObs.observe(strip);
+  strip.addEventListener("wheel", (e) => {
+    if (strip.scrollWidth <= strip.clientWidth || e.deltaX) return;
+    strip.scrollLeft += e.deltaY; e.preventDefault();
+  }, { passive: false });
+  tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); } }, 5000);
   if (!c.pcId) { $("h-state").textContent = "등록된 PC 가 없습니다"; return; }
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const v = snap.val();
@@ -165,6 +174,7 @@ export function mount(el, context) {
 export function unmount() {
   if (stopLive) { stopLive(); stopLive = null; }
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+  if (tick) { clearInterval(tick); tick = null; }
   root = null; c = null;
 }
 
@@ -255,7 +265,8 @@ function paintTiles() {
   if (m2) tiles.push(["재고검토 보류", String(m2.value), m2.total != null ? `/ ${m2.total}` : (m2.unit || ""), false]);
   if (m3) tiles.push(["비정상 보류", String(m3.value), m3.unit || "건", !!m3.approx]);
   const conn = off != null && off <= HEARTBEAT_STALE_SEC;
-  tiles.push(["연결", conn ? "정상" : (off == null ? "없음" : `끊김 ${Math.floor(off / 60)}분`), "", false, conn ? "var(--good)" : "var(--warn)", "conn"]);
+  const offText = off == null ? "없음" : off < 60 ? `끊김 ${off}초` : `끊김 ${Math.floor(off / 60)}분`;
+  tiles.push(["연결", conn ? "정상" : offText, "", false, conn ? "var(--good)" : "var(--warn)", "conn"]);
   const sch = live?.schedule;
   tiles.push(["다음 자동 실행", sch?.enabled && sch.next_run_at ? when(sch.next_run_at) : "꺼짐", "", false]);
   $("tiles").replaceChildren(...tiles.map(([k, v, u, approx, color, id]) => {
@@ -279,23 +290,32 @@ function donutSvg(ok, bad, size) {
   </svg>`;
 }
 
-const DAY_CELL = 44, DAY_GAP = 6, DAYS_MIN = 5, DAYS_MAX = 20;
-function visibleDays() {
-  // 카드 안쪽 폭에서 (같은 줄에 있으면) 오늘 도넛 폭을 뺀 만큼 (5~20일). 띠 자신의 폭은 내용에 따라 변해 기준으로 못 쓴다
-  const strip = $("recent-strip"), donut = $("recent-donut");
-  let w = strip.parentElement.clientWidth || 0;
-  const sameRow = donut.getBoundingClientRect().left > strip.getBoundingClientRect().left + 10;
-  if (sameRow) w -= donut.offsetWidth + 20;
-  return Math.max(DAYS_MIN, Math.min(DAYS_MAX, Math.floor((w + DAY_GAP) / (DAY_CELL + DAY_GAP))));
+const RECENT_MAX = 20;   // 에이전트가 올리는 만큼 다 그린다. 보이는 건 15칸까지, 나머지는 옆으로 민다
+const VISIBLE_MAX = 15, CELL_MIN = 48, CELL_MAX = 72, GAP_MIN = 6;
+
+function fitStrip() {
+  // 남는 폭에 15칸이 꼭 맞게 칸 크기(48~72px)를 정하고, 그래도 남으면 간격을 벌린다. 좁으면 48px 로 두고 옆으로 민다
+  const s = root && $("recent-strip");
+  const w = s ? s.clientWidth : 0;
+  if (!w) return;
+  const cell = Math.max(CELL_MIN, Math.min(CELL_MAX, Math.floor((w + GAP_MIN) / VISIBLE_MAX) - GAP_MIN));
+  const gap = Math.max(GAP_MIN, (w - cell * VISIBLE_MAX) / (VISIBLE_MAX - 1));
+  s.style.setProperty("--cell", `${cell}px`);
+  s.style.setProperty("--sgap", `${gap}px`);
+  s.scrollLeft = s.scrollWidth;   // 오늘이 오른쪽 끝, 도넛 옆에
 }
 
 function paintRecent() {
-  // 띠는 폭에 맞춘 최근 N일, 큰 도넛은 오늘(마지막 날)만
-  const days = (live?.recent || []).slice(-visibleDays());
+  // 띠는 최근 20일 전부, 큰 도넛은 오늘(마지막 날)만. 내용이 같으면 다시 그리지 않는다
+  const days = (live?.recent || []).slice(-RECENT_MAX);
+  const key = JSON.stringify(days);
+  if (key === paintedRecent) return;
+  paintedRecent = key;
   const today = days[days.length - 1] || { success: 0, failed: 0 };
   const ok = today.success || 0, bad = today.failed || 0;
   $("recent-meta").textContent = days.length ? (ok + bad ? `오늘 성공 ${ok} · 실패 ${bad}` : "오늘 실행 없음") : "";
-  $("recent-strip").replaceChildren(...days.map((d) => {
+  const strip = $("recent-strip");
+  strip.replaceChildren(...days.map((d) => {
     const cell = document.createElement("button");
     cell.className = "day" + (d.success || d.failed ? "" : " empty");
     cell.dataset.date = d.date;
@@ -304,6 +324,7 @@ function paintRecent() {
     cell.onclick = () => { $("hist-date").value = d.date; showView("history"); loadHistory(d.date); };
     return cell;
   }));
+  fitStrip();
   const total = ok + bad;
   $("recent-donut").innerHTML = total
     ? `${donutSvg(ok, bad, 104)}<div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span></div>`

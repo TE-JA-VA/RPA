@@ -10,13 +10,18 @@ if errorlevel 1 (
     exit /b
 )
 
+rem 배포 폴더의 내장 python 을 먼저 쓴다 (두 단계 위 python\). 없으면 PATH 의 python.
+set "PY=%~dp0..\..\python\python.exe"
+if not exist "%PY%" set "PY=python"
+
 echo ================================================
 echo   ERPia RPA 클라우드 에이전트
-echo   이 창을 닫으면 에이전트만 꺼집니다.
+echo   이 창을 닫으면 에이전트가 멈춥니다.
+echo   처음 실행이면 기계 계정 이메일과 비밀번호를 묻습니다.
 echo ================================================
 echo.
 
-python agent.py
+"%PY%" agent.py
 echo.
-echo 에이전트가 끝났습니다. 위 내용을 확인하세요.
+echo 에이전트가 멈췄습니다. 위 내용을 확인하세요.
 pause

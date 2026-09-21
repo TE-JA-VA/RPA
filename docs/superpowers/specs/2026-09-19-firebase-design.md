@@ -74,7 +74,7 @@ users/{uid}                   ← { cid, role: admin|viewer|super, name, must_ch
 ## 4. 에이전트 동작
 
 - **시작**: `agent_config.json` 에서 `{cid, pcId, email, password_dpapi, project}` 읽기. 비밀번호는 DPAPI(`CryptProtectData`, 현재 사용자)로 암호화 저장. Auth REST 로 ID 토큰 받기, refresh token 으로 만료 전 갱신. 관리자 권한으로 실행(지금 대시보드와 같음).
-- **상태 올리기**: `rpa_status` 상태 파일을 1초 간격으로 mtime 확인 → 바뀌면 `live/.../routine|prepare` PUT. heartbeat 30초. 실행이 끝난 것을 감지하면(`history.jsonl` 새 줄) Firestore `runs` 에 문서 추가.
+- **상태 올리기**: `rpa_status` 상태 파일을 1초 간격으로 mtime 확인 → 바뀌면 `live/.../routine|prepare` PUT. heartbeat 5초 (2026-09-21 개정, 처음엔 30초). 실행이 끝난 것을 감지하면(`history.jsonl` 새 줄) Firestore `runs` 에 문서 추가.
 - **오프라인**: 올리기 실패분은 로컬 큐(`firebase/agent/queue.jsonl`)에 쌓고 연결되면 순서대로 재전송. RPA 는 절대 막지 않는다(기록 실패는 조용히 큐로).
 - **명령 구독**: RTDB SSE(`commands/{cid}/{pcId}.json?orderBy="state"&equalTo="queued"`) 로 대기. 끊기면 지수 백오프(1→2→4→…→60초) 재접속.
 - **명령 처리** (한 번에 하나, 순서대로)
@@ -91,7 +91,7 @@ users/{uid}                   ← { cid, role: admin|viewer|super, name, must_ch
 - 로그인 화면(이메일/비밀번호). `must_change_password` 면 비밀번호 변경 화면으로.
 - super: 회사 선택 → PC 선택. admin/viewer: 자기 회사, PC 가 둘 이상이면 선택.
 - 탭은 지금과 같이 현황 / 이력 / 환경설정. 데이터 층만 바뀐다:
-  - 현황: `live/{cid}/{pcId}` 구독. heartbeat 가 2분 넘게 없으면 "PC 연결 끊김".
+  - 현황: `live/{cid}/{pcId}` 구독. heartbeat 가 20초 넘게 없으면 "PC 연결 끊김" (2026-09-21 개정, 처음엔 2분). 값이 안 바뀌어도 화면이 5초마다 다시 계산한다.
   - 실행·종료 버튼(admin): `commands` 에 push. 그 명령의 `state` 를 구독해 결과 표시. 만료 기본 10분.
   - 환경설정(admin): 모듈 스위치 = `settings.modules` 쓰기 + `set_modules` 명령 push(에이전트가 파일에 반영). 자동 예약 = `settings.schedule` 쓰기.
   - 이력: Firestore `runs/{cid}/items` 를 최근순으로 읽기. (2차)

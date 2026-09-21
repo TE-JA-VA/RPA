@@ -193,11 +193,18 @@ class Uploader:
         """실행 이력 한 건을 Firestore runs/{cid}/items 에. 실패하면 큐에 쌓인다."""
         return self._send(f"runs/{self._cid}/items", doc, method="fs")
 
+    @staticmethod
+    def _rejected(e):
+        """서버가 내용을 거부한 것(권한 없음 등). 다시 보내도 똑같으니 큐에 두면 뒤 항목까지 영원히 막는다."""
+        return isinstance(e, fb.HttpError) and 400 <= e.status < 500 and e.status not in (401, 429)
+
     def _send(self, path, value, method="put"):
         try:
             self._call(method, path, value)
             return True
-        except Exception:
+        except Exception as e:
+            if self._rejected(e):
+                return False
             self._queue.append({"path": path, "value": value, "method": method})
             del self._queue[:-QUEUE_MAX]
             self._write_queue()
@@ -211,14 +218,15 @@ class Uploader:
         return self._send(f"{self._base}/heartbeat", clean_for_rtdb(info))
 
     def flush(self):
-        """쌓인 것을 순서대로 보낸다. 하나라도 실패하면 거기서 멈춘다."""
+        """쌓인 것을 순서대로 보낸다. 끊겨서 실패하면 거기서 멈추고, 거부된 것은 버리고 계속 간다."""
         while self._queue:
             row = self._queue[0]
             try:
                 self._call(row.get("method", "put"), row["path"], row["value"])
-            except Exception:
-                self._write_queue()
-                return False
+            except Exception as e:
+                if not self._rejected(e):
+                    self._write_queue()
+                    return False
             self._queue.pop(0)
         self._write_queue()
         return True
@@ -228,6 +236,7 @@ class Uploader:
 # 명령
 # ---------------------------------------------------------------------------
 KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule")
+HEARTBEAT_SEC = 5   # 화면은 HEARTBEAT_STALE_SEC(20초) 넘게 없으면 '끊김' - 네 번 놓쳐야 끊김이다
 
 
 def decide(cmd, now):
@@ -341,6 +350,18 @@ def log(text):
         pass
 
 
+def first_run(path, email, password, client=None):
+    """설정 파일이 없을 때 한 번. 기계 계정으로 로그인해 보고 회사·PC 를 토큰에서 읽어 저장한다."""
+    import secret
+    cfg = dict(secret.PUBLIC, email=email.strip(), password=password, cid="", pc_id="")
+    c = fb.claims((client or fb.Client(cfg)).token())
+    if c.get("role") != "agent" or not c.get("cid") or not c.get("pcId"):
+        raise ValueError("기계 계정(agent-…)이 아닙니다. 사람 계정으로는 에이전트를 띄울 수 없습니다")
+    cfg.update(cid=c["cid"], pc_id=c["pcId"])
+    secret.write_config(path, cfg, password)
+    return secret.load_config(path)
+
+
 def main():
     import threading
     import rpa_status as st
@@ -349,9 +370,23 @@ def main():
     try:
         cfg = secret.load_config()
     except FileNotFoundError:
-        log(f"설정 파일이 없습니다: {secret.CONFIG_PATH}")
-        log("secret.write_config() 로 만든 뒤 다시 시작하세요 (계획서 Task 12 Step 2).")
-        return 2
+        if not sys.stdin.isatty():
+            log(f"설정 파일이 없습니다: {secret.CONFIG_PATH}")
+            return 2
+        import getpass
+        print("처음 실행입니다. 이 PC 의 기계 계정(agent-…@…)을 넣으세요. 비밀번호는 이 PC 에만 잠가서 저장합니다.")
+        try:
+            cfg = first_run(secret.CONFIG_PATH, input("이메일: "), getpass.getpass("비밀번호 (화면에 안 보임): "))
+        except (EOFError, KeyboardInterrupt):
+            log("입력을 취소했습니다")
+            return 2
+        except Exception as e:
+            if getattr(e, "code", None) == 400:
+                log("로그인 실패: 이메일 또는 비밀번호가 맞지 않습니다")
+            else:
+                log(f"설정을 만들지 못했습니다: {type(e).__name__}: {e}")
+            return 2
+        log(f"설정을 저장했습니다: {secret.CONFIG_PATH}")
     except (ValueError, OSError) as e:
         log(f"설정을 읽지 못했습니다: {e}")
         return 2
@@ -401,7 +436,7 @@ def main():
                 if body != last:
                     up.push_live(snap)
                     last = body
-                if time.time() - last_beat >= 30:
+                if time.time() - last_beat >= HEARTBEAT_SEC:
                     up.push_heartbeat({
                         "at": int(time.time()),
                         "host": snap.get("host"),

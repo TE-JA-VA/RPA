@@ -14,6 +14,12 @@ from ctypes import wintypes
 CONFIG_PATH = os.environ.get("RPA_AGENT_CONFIG") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "agent_config.json")
 REQUIRED = ("project_id", "api_key", "database_url", "cid", "pc_id", "email")
+# 공개 값 (web/firebase-config.js 와 같다). 첫 실행 때 이메일·비밀번호만 물으면 되게 여기 둔다
+PUBLIC = {
+    "project_id": "rpa-test-f02e0",
+    "api_key": "AIzaSyCFbHQjWVxzi38IAYIhQX9wyiGIs1VcZuA",
+    "database_url": "https://rpa-test-f02e0-default-rtdb.asia-southeast1.firebasedatabase.app",
+}
 
 
 class _Blob(ctypes.Structure):
