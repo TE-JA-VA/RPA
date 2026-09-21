@@ -171,11 +171,33 @@ with sync_playwright() as pw:
     check(page.text_content("#app-nav a[aria-current='page']").strip().endswith("RPA"), "사이드바에서 RPA 가 현재 페이지")
     check(page.text_content("#page-title") == "RPA", "페이지 제목")
     check(page.is_hidden("#pc-pick"), "PC 가 하나면 고르기 숨김")
+    def lum(hex6):
+        ch = [int(hex6[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        ch = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+        return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+    def contrast(a, b):
+        la, lb = lum(a), lum(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+    def tok(name):
+        return page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('{name}').trim()")
+
+    def contrast_ok(theme):
+        card = tok("--card")
+        pairs = {"글자": contrast(tok("--ink"), card), "회색 글자": contrast(tok("--muted"), card), "제목": contrast(tok("--strong"), card)}
+        for st_, on in [("good", "--on-good"), ("warn", "--on-warn"), ("bad", "--on-bad"), ("run", "--on-run")]:
+            pairs[f"채운 카드 {st_}"] = contrast(tok(on), tok(f"--{st_}"))
+        low = {k: round(v, 2) for k, v in pairs.items() if v < 4.5}
+        check(not low, f"{theme} 대비 4.5:1 이상 {low or ''}")
+    check(page.evaluate("getComputedStyle(document.body).fontFamily").startswith('"Pretendard Variable"'), "본문 서체 Pretendard")
+    contrast_ok("밝음")
     before = page.evaluate("getComputedStyle(document.body).backgroundColor")
     page.click("#theme")
     after = page.evaluate("getComputedStyle(document.body).backgroundColor")
     check(before != after and page.evaluate("document.documentElement.dataset.theme") == "dark", "어둡게 토글이 바탕색을 바꾼다")
     check("밝게" in page.text_content("#theme"), "버튼 글자가 바뀐다")
+    contrast_ok("어두움")
     page.click("#theme")
     check(page.evaluate("document.documentElement.dataset.theme") == "light", "다시 밝게")
 
@@ -192,6 +214,7 @@ with sync_playwright() as pw:
     flat = tiles.replace(" ", "").replace("\n", "")
     check("처리주문30건" in flat and "재고검토보류8/8" in flat, f"숫자 타일 ({flat[:60]})")
     check("≈376" in tiles.replace(" ", ""), "추정치는 ≈")
+    check(page.evaluate("getComputedStyle(document.querySelector('.tile .v')).fontFamily").startswith('"Pretendard Variable"'), "숫자 칸도 같은 서체")
     check("정상" in page.text_content("#conn"), "연결 정상")
     check("9월 22일" in tiles and "09:05" in tiles, "다음 자동 실행")
     check(page.is_visible("#list-routine li"), "단계 목록은 항상 펼쳐져 있다")

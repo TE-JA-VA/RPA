@@ -5,33 +5,38 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AFTER MARKET</title>
 <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-  /* Solarized. 밝음: base3 바탕 / base2 면 / base01 글자. 어두움: base03 바탕 / base02 면 / base0 글자.
-     강조는 cyan 하나. 상태 색(green·red·orange·blue)은 강조와 분리한다. */
+  /* 밝음: Solarized light (base3 바탕 / base2 면). 회색 글자는 대비 4.5:1 이 되게 Solarized 보다 진하게.
+     어두움: Solarized 대신 중립 어두운 색 (Solarized dark 는 글자 대비가 2.5:1 로 낮다).
+     강조는 cyan 하나(사용자가 바꿀 수 있다). 상태 색(green·yellow·red·blue)은 강조와 분리한다.
+     --on-*: 상태 색으로 채운 카드 위 글자색. 밝은 채움(초록·노랑)엔 어두운 글자, 진한 채움(빨강·파랑)엔 밝은 글자. */
   :root {
-    --bg:#fdf6e3; --card:#fffdf6; --soft:#eee8d5; --ink:#586e75; --strong:#073642; --muted:#93a1a1; --line:#e6dfc8;
+    --bg:#fdf6e3; --card:#fffdf6; --soft:#eee8d5; --ink:#4a5f66; --strong:#073642; --muted:#62767c; --line:#e6dfc8;
     --accent:#2aa198; --accent-ink:#fdf6e3;
     --good:#859900; --warn:#b58900; --bad:#dc322f; --run:#268bd2;
+    --on-good:#14200a; --on-warn:#1f1700; --on-bad:#ffffff; --on-run:#04182a;
     --good-bg:#eef0d6; --warn-bg:#f7edc9; --bad-bg:#fadcd9; --run-bg:#d8e9f5;
   }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-    --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
-    --accent:#2aa198; --accent-ink:#002b36;
-    --good:#a3b800; --warn:#d4a017; --bad:#ec5a55; --run:#4aa3e0;
-    --good-bg:#1d3a2c; --warn-bg:#3a3210; --bad-bg:#3f2528; --run-bg:#0f3a55;
+    --bg:#12161a; --card:#1b2127; --soft:#262e36; --ink:#d3dae0; --strong:#f5f7f9; --muted:#97a3ae; --line:#323c45;
+    --accent:#2aa198; --accent-ink:#0b1416;
+    --good:#a6c522; --warn:#e6b73e; --bad:#f26b64; --run:#5db0f0;
+    --on-good:#101a02; --on-warn:#1e1600; --on-bad:#1c0807; --on-run:#04182a;
+    --good-bg:#26361a; --warn-bg:#3d3212; --bad-bg:#432220; --run-bg:#193348;
   } }
   :root[data-theme="dark"] {
-    --bg:#002b36; --card:#073642; --soft:#0b3d4a; --ink:#93a1a1; --strong:#eee8d5; --muted:#657b83; --line:#134653;
-    --accent:#2aa198; --accent-ink:#002b36;
-    --good:#a3b800; --warn:#d4a017; --bad:#ec5a55; --run:#4aa3e0;
-    --good-bg:#1d3a2c; --warn-bg:#3a3210; --bad-bg:#3f2528; --run-bg:#0f3a55;
+    --bg:#12161a; --card:#1b2127; --soft:#262e36; --ink:#d3dae0; --strong:#f5f7f9; --muted:#97a3ae; --line:#323c45;
+    --accent:#2aa198; --accent-ink:#0b1416;
+    --good:#a6c522; --warn:#e6b73e; --bad:#f26b64; --run:#5db0f0;
+    --on-good:#101a02; --on-warn:#1e1600; --on-bad:#1c0807; --on-run:#04182a;
+    --good-bg:#26361a; --warn-bg:#3d3212; --bad-bg:#432220; --run-bg:#193348;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
   :root { --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif; }
   body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 var(--font); }
-  .num { font-family:"IBM Plex Mono",Consolas,monospace; font-variant-numeric:tabular-nums; }
+  .num { font-variant-numeric:tabular-nums; }   /* 서체는 하나(Pretendard). 숫자만 고정폭으로 */
+  pre { font-family:var(--font); font-variant-numeric:tabular-nums; }
   h1, h2, .strong { color:var(--strong); }
   button { font:inherit; cursor:pointer; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); padding:9px 14px; }
   button[disabled] { opacity:.45; cursor:default; }
@@ -57,7 +62,7 @@
   .nav .sec { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); padding:8px 8px 4px; }
   .nav a { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; color:var(--ink); text-decoration:none; cursor:pointer; }
   .nav a[aria-current="page"] { background:var(--accent); color:var(--accent-ink); font-weight:500; }
-  .nav a .ic { width:18px; text-align:center; font-family:"IBM Plex Mono",monospace; }
+  .nav a .ic { width:18px; text-align:center; }
   .side .foot { margin-top:auto; display:grid; gap:8px; padding:0 4px; font-size:13px; }
   .side .foot .who { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .side .foot .row { display:flex; gap:8px; }
@@ -76,16 +81,16 @@
 
   /* 상태 헤더: 상태 색으로 통째로 채운 카드 하나. 나머지 카드는 비운다 */
   /* 성공 초록 / 진행 중 파랑 / 실패(중단) 빨강 / 오류(비정상 종료·연결 끊김) 노랑 */
-  .hero { border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong); --on-soft:var(--muted); }
-  .hero[data-state="success"] { background:var(--good); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
-  .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
-  .hero[data-state="crashed"], .hero[data-state="offline"] { background:var(--warn); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
-  .hero[data-state="running"] { background:var(--run); --on:#fdf6e3; --on-soft:rgba(253,246,227,.8); }
+  .hero { border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong); }
+  .hero[data-state="success"] { background:var(--good); --on:var(--on-good); }
+  .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad); --on:var(--on-bad); }
+  .hero[data-state="crashed"], .hero[data-state="offline"] { background:var(--warn); --on:var(--on-warn); }
+  .hero[data-state="running"] { background:var(--run); --on:var(--on-run); }
   .hero .body { padding:22px 24px; display:grid; gap:4px; min-width:0; color:var(--on); }
   .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:24px; color:var(--on); }
   .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--on); flex:none; opacity:.9; }
   .hero .line1 { font-size:15px; }
-  .hero .line2 { color:var(--on-soft); font-size:14px; overflow-wrap:anywhere; }
+  .hero .line2 { font-size:14px; overflow-wrap:anywhere; opacity:.85; }
   .primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:500; }
 
   /* 강조색 고르기 */
@@ -152,7 +157,7 @@
   .strip .day:hover:not(.empty) { background:var(--soft); }
   .strip .day.empty { cursor:default; opacity:.6; }
   .strip .day:last-child svg { border-radius:50%; box-shadow:0 0 0 2px var(--accent); }
-  .strip .day .d { font-family:"IBM Plex Mono",monospace; }
+  .strip .day .d { font-variant-numeric:tabular-nums; }
   .donut { display:flex; align-items:center; gap:14px; }
   .donut svg { flex:none; }
   .legend { display:grid; gap:4px; font-size:13px; }

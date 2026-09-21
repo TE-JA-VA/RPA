@@ -210,7 +210,8 @@ function paintHero() {
       l2 = `시작 ${dur(v.elapsed_sec)} 전`;
     } else {
       const stopped = (v.steps || []).find((s) => s.state === "stopped" || s.state === "failed");
-      l1 = `${hhmm(v.started_at)} ${v.program_label} · ${dur(v.duration_sec)}` + (stopped ? ` · ${stopped.label}에서 멈춤` : "");
+      l1 = [`${hhmm(v.started_at)} ${v.program_label}`, dur(v.duration_sec), stopped ? `${stopped.label}에서 멈춤` : ""]
+        .filter(Boolean).join(" · ");
       l2 = v.reason ? v.reason : summaryText(v);
     }
   }
