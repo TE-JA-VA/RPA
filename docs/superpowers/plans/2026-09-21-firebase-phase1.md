@@ -1,5 +1,7 @@
 # Firebase 다회사 대시보드 1차 구현 계획
 
+> **진행 (2026-09-21):** Task 1~11 완료, 브랜치 `firebase-phase1`. JDK 는 21 (firebase-tools 15 요구). 규칙 22 · 에이전트 단위 54 · 통합 10 · 화면 28 전부 통과. Task 9 는 `integration.js` 가 자동으로 돌리고, Task 10·11 은 `check_web.py`(Playwright, `?emu=1`) 가 검사한다. Task 12 는 콘솔 Authentication 켜기·계정 등록·`firebase login` 뒤에.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 사내 PC 1대의 RPA 상태를 클라우드 화면에서 보고, 그 화면에서 실행·ERPia 종료·실행 모듈 변경을 시킬 수 있게 한다.
