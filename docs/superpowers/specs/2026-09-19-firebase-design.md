@@ -36,17 +36,17 @@ firebase/
 
 ## 2. 데이터 구조
 
-### Realtime DB
+### Realtime DB (2026-09-21 개정: 플랫폼 **AFTER MARKET** 은 여러 앱을 담는다. 앱 데이터는 `apps/<앱>/` 아래, 회사·PC 는 앱 밖)
 ```
-live/{cid}/{pcId}/routine     ← status_routine.json 내용 그대로 (log 는 80줄)
-live/{cid}/{pcId}/prepare     ← status_prepare.json 내용 그대로
-live/{cid}/{pcId}/heartbeat   ← { at, agent_version, erpia_running, rpa_running, host }
-commands/{cid}/{pcId}/{cmdId} ← { type, args, by, created_at, expires_at,
-                                  state: queued|running|done|failed|rejected|expired,
-                                  result, started_at, ended_at }
-settings/{cid}/{pcId}         ← { modules: {Login:true,...}, schedule: {enabled, days, times}, updated_by, updated_at }
-meta/companies/{cid}          ← { name, pcs: { pcId: { label } } }
+meta/companies/{cid}                    ← { name, pcs: { pcId: { label } } }        (앱 공통)
+apps/rpa/live/{cid}/{pcId}              ← { programs: {routine, prepare}, modules, heartbeat: {at, host, rpa_running}, host, server_time }
+                                           (rpa_status.dashboard_snapshot() 통째 + PC 의 실제 실행 모듈. 로그는 80줄. PATCH 로 올린다)
+apps/rpa/commands/{cid}/{pcId}/{cmdId}  ← { type, args, by, created_at, expires_at,
+                                            state: queued|running|done|failed|expired, result, started_at, ended_at }
+apps/rpa/settings/{cid}/{pcId}          ← { modules: {Login:true,...}, updated_by, updated_at }   (화면이 요청한 값. 기준값은 live.modules)
 ```
+새 앱은 `apps/<앱>/` 아래에 같은 모양(live·commands·settings)을 만들고, 규칙 파일의 `apps.rpa` 블록을 복사해 이름만 바꾼다.
+화면은 껍데기(`app.js`: 로그인·회사·PC·앱 고르기)와 앱 모듈(`rpa.js`: `mount(root, ctx)` / `unmount()`)로 나뉜다. 앱이 하나면 앱 고르기는 숨긴다.
 - `type` ∈ `launch` | `stop_erpia` | `set_modules` | `set_schedule`. `launch` 는 인자 없음(모듈은 `settings` 기준). `set_modules.args = {Login:bool,...}`.
 - `cmdId` 는 push key(시간순 정렬).
 

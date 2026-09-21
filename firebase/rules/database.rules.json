@@ -3,24 +3,6 @@
     ".read": false,
     ".write": false,
 
-    "live": {
-      "$cid": {
-        "$pcId": {
-          ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
-          ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId"
-        }
-      }
-    },
-
-    "settings": {
-      "$cid": {
-        "$pcId": {
-          ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
-          ".write": "auth != null && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')"
-        }
-      }
-    },
-
     "meta": {
       "companies": {
         "$cid": {
@@ -30,36 +12,58 @@
       }
     },
 
-    "commands": {
-      "$cid": {
-        "$pcId": {
-          ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
-          ".indexOn": ["state"],
+    "apps": {
+      "rpa": {
+        "live": {
+          "$cid": {
+            "$pcId": {
+              ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
+              ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId"
+            }
+          }
+        },
 
-          "$cmdId": {
-            ".write": "auth != null && ((!data.exists() && newData.exists() && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')) || (data.exists() && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId))",
-            ".validate": "newData.hasChildren(['type', 'by', 'created_at', 'expires_at', 'state'])",
+        "settings": {
+          "$cid": {
+            "$pcId": {
+              ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
+              ".write": "auth != null && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')"
+            }
+          }
+        },
 
-            "type": {
-              ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'set_modules' || newData.val() === 'set_schedule') && (!data.exists() || data.val() === newData.val())"
-            },
-            "by": {
-              ".validate": "newData.isString() && (data.exists() ? data.val() === newData.val() : newData.val() === auth.uid)"
-            },
-            "created_at": {
-              ".validate": "newData.isNumber() && (!data.exists() || data.val() === newData.val())"
-            },
-            "expires_at": {
-              ".validate": "newData.isNumber() && (!data.exists() || data.val() === newData.val())"
-            },
-            "state": {
-              ".validate": "newData.isString() && (!data.exists() ? newData.val() === 'queued' : (auth.token.role === 'agent' && (newData.val() === 'running' || newData.val() === 'done' || newData.val() === 'failed' || newData.val() === 'expired')))"
-            },
-            "args": { ".validate": "!data.exists() || data.val() === newData.val()" },
-            "result": { ".validate": "newData.isString() && auth.token.role === 'agent'" },
-            "started_at": { ".validate": "newData.isNumber() && auth.token.role === 'agent'" },
-            "ended_at": { ".validate": "newData.isNumber() && auth.token.role === 'agent'" },
-            "$other": { ".validate": false }
+        "commands": {
+          "$cid": {
+            "$pcId": {
+              ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
+              ".indexOn": ["state"],
+
+              "$cmdId": {
+                ".write": "auth != null && ((!data.exists() && newData.exists() && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')) || (data.exists() && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId))",
+                ".validate": "newData.hasChildren(['type', 'by', 'created_at', 'expires_at', 'state'])",
+
+                "type": {
+                  ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'set_modules' || newData.val() === 'set_schedule') && (!data.exists() || data.val() === newData.val())"
+                },
+                "by": {
+                  ".validate": "newData.isString() && (data.exists() ? data.val() === newData.val() : newData.val() === auth.uid)"
+                },
+                "created_at": {
+                  ".validate": "newData.isNumber() && (!data.exists() || data.val() === newData.val())"
+                },
+                "expires_at": {
+                  ".validate": "newData.isNumber() && (!data.exists() || data.val() === newData.val())"
+                },
+                "state": {
+                  ".validate": "newData.isString() && (!data.exists() ? newData.val() === 'queued' : (auth.token.role === 'agent' && (newData.val() === 'running' || newData.val() === 'done' || newData.val() === 'failed' || newData.val() === 'expired')))"
+                },
+                "args": { ".validate": "!data.exists() || data.val() === newData.val()" },
+                "result": { ".validate": "newData.isString() && auth.token.role === 'agent'" },
+                "started_at": { ".validate": "newData.isNumber() && auth.token.role === 'agent'" },
+                "ended_at": { ".validate": "newData.isNumber() && auth.token.role === 'agent'" },
+                "$other": { ".validate": false }
+              }
+            }
           }
         }
       }

@@ -52,11 +52,11 @@ check(existsSync(cfgPath), "에이전트 설정 파일을 만들었다");
 
 // --- 3. 명령 하나를 관리자 이름으로 넣는다 ----------------------------------
 const now = Math.floor(Date.now() / 1000);
-const cmdRef = await db.ref("commands/c_demo/pc_office").push({
+const cmdRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
   type: "launch", args: { target: "routine" }, by: adminUser.uid,
   created_at: now, expires_at: now + 600, state: "queued",
 });
-const expiredRef = await db.ref("commands/c_demo/pc_office").push({
+const expiredRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
   type: "launch", args: null, by: adminUser.uid,
   created_at: now - 1000, expires_at: now - 400, state: "queued",
 });
@@ -92,17 +92,17 @@ check(typeof done.result === "string" && done.result.includes("띄웠"), "결과
 check(typeof done.started_at === "number" && typeof done.ended_at === "number", "시작·종료 시각이 남는다");
 await waitFor("만료된 명령은 expired 로 닫힌다", async () => (await expiredRef.child("state").get()).val() === "expired");
 await waitFor("live 에 현황이 올라온다", async () => {
-  const v = (await db.ref("live/c_demo/pc_office/programs").get()).val();
+  const v = (await db.ref("apps/rpa/live/c_demo/pc_office/programs").get()).val();
   return v && (v.routine || v.prepare);
 });
 await waitFor("heartbeat 가 올라온다", async () =>
-  typeof (await db.ref("live/c_demo/pc_office/heartbeat/at").get()).val() === "number");
-const live = (await db.ref("live/c_demo/pc_office").get()).val();
+  typeof (await db.ref("apps/rpa/live/c_demo/pc_office/heartbeat/at").get()).val() === "number");
+const live = (await db.ref("apps/rpa/live/c_demo/pc_office").get()).val();
 const logLen = live?.programs?.routine?.log?.length ?? 0;
 check(logLen <= 80, `로그는 80줄 이하 (${logLen})`);
 
 // 두 번째 명령: 실행 중 다시 실행 → launch 의 잠금이 거절 (DRY_RUN 은 3초 유예)
-const secondRef = await db.ref("commands/c_demo/pc_office").push({
+const secondRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
   type: "launch", args: { target: "routine" }, by: adminUser.uid,
   created_at: now, expires_at: now + 600, state: "queued",
 });
@@ -115,7 +115,7 @@ await waitFor("연달아 실행하면 잠금이 거절한다 (failed + 사유)",
 const credPath = join(work, "ERPIA_AI.txt");
 spawnSync("python", ["-c", `import json; json.dump([{"LogIn": [{"AdminCode": "x"}, {"ID": "a"}, {"PW": "시험"}]}], open(r"${credPath}", "w", encoding="utf-8"))`], { encoding: "utf8" });
 // 에이전트는 이미 떠 있어 환경변수를 못 바꾼다 - set_modules 는 실기(Task 12)에서 본다. 여기서는 모르는 종류만.
-const badRef = await db.ref("commands/c_demo/pc_office").push({
+const badRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
   type: "set_schedule", args: null, by: adminUser.uid,
   created_at: now, expires_at: now + 600, state: "queued",
 });

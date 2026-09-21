@@ -19,7 +19,13 @@ if RPA_DIR not in sys.path:
 
 import fb   # noqa: E402
 
+APP = "rpa"                      # 이 에이전트가 맡는 앱. 경로는 apps/<앱>/... (플랫폼 AFTER MARKET 은 여러 앱을 담는다)
 BAD_KEY_CHARS = ".$#[]/"
+
+
+def app_path(kind, cid, pc_id, app=APP):
+    """apps/<앱>/<live|commands|settings>/<회사>/<PC>"""
+    return f"apps/{app}/{kind}/{cid}/{pc_id}"
 LOG_LINES = 80
 QUEUE_PATH = os.environ.get("RPA_AGENT_QUEUE") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "queue.jsonl")
@@ -57,7 +63,7 @@ class Uploader:
 
     def __init__(self, client, cid, pc_id, queue_path=QUEUE_PATH):
         self._client = client
-        self._base = f"live/{cid}/{pc_id}"
+        self._base = app_path("live", cid, pc_id)
         self._queue_path = queue_path
         self._queue = self._read_queue()
 
@@ -159,7 +165,7 @@ class Commands:
 
     def __init__(self, client, cid, pc_id, actions):
         self._client = client
-        self._base = f"commands/{cid}/{pc_id}"
+        self._base = app_path("commands", cid, pc_id)
         self._actions = actions
 
     def _mark(self, cmd_id, **fields):
@@ -296,7 +302,7 @@ def main():
     backoff = 1
     while not stop.is_set():
         try:
-            for event, data in client.stream(f"commands/{cfg['cid']}/{cfg['pc_id']}"):
+            for event, data in client.stream(app_path("commands", cfg["cid"], cfg["pc_id"])):
                 backoff = 1
                 if event not in ("put", "patch") or not isinstance(data, dict):
                     continue

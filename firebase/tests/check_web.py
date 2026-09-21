@@ -58,7 +58,7 @@ def make_user(email, password, claims):
 admin_uid = make_user("admin@t.local", "pw123456", {"cid": "c_demo", "role": "admin"})
 viewer_uid = make_user("viewer@t.local", "pw123456", {"cid": "c_demo", "role": "viewer"})
 db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}}})
-db_put("live/c_demo/pc_office", {
+db_put("apps/rpa/live/c_demo/pc_office", {
     "host": "OFFICE-PC",
     "heartbeat": {"at": int(time.time()), "host": "OFFICE-PC", "rpa_running": False},
     "programs": {
@@ -71,7 +71,7 @@ db_put("live/c_demo/pc_office", {
     # PC 가 올리는 실제 실행 모듈 - 화면의 기준값
     "modules": {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True},
 })
-db_put("settings/c_demo/pc_office", {"modules": {"Login": True, "Sales": False, "Hold": True,
+db_put("apps/rpa/settings/c_demo/pc_office", {"modules": {"Login": True, "Sales": False, "Hold": True,
                                                  "Logistics": True, "Output": True},
                                      "updated_by": admin_uid, "updated_at": int(time.time())})
 print("시드 완료")
@@ -108,15 +108,21 @@ with sync_playwright() as pw:
     page.wait_for_selector("#main:not(.hide)", timeout=15000)
     check("(관리자)" in page.text_content("#who"), "관리자로 표시")
     check(page.input_value("#password") == "", "비밀번호 칸을 비운다")
+    check(page.title() == "AFTER MARKET", "플랫폼 이름")
+    page.wait_for_function("document.getElementById('company')?.textContent === '시연 회사'", timeout=10000)
+    check(True, "회사 이름 표시")
+    check(page.is_hidden("#app-nav"), "앱이 하나면 앱 고르기 숨김")
+    page.wait_for_selector("#app-root #conn")
+    check(True, "RPA 앱이 껍데기 안에 뜬다")
 
     print("2절 현황")
-    page.wait_for_function("document.getElementById('conn').textContent === '연결됨'", timeout=10000)
+    page.wait_for_function("document.getElementById('conn')?.textContent === '연결됨'", timeout=10000)
     check(True, "heartbeat 가 최근이면 연결됨")
     check("3/3 단계" in page.text_content("#routine"), "루틴 단계 수")
     check("성공" in page.text_content("#routine"), "루틴 상태")
     check("기록 없음" in page.text_content("#prepare"), "프리페어 없음")
     check(page.is_hidden("#pc-pick"), "PC 가 하나면 고르기 숨김")
-    page.wait_for_function("document.getElementById('mod-meta').textContent === '4/5 켬'", timeout=10000)
+    page.wait_for_function("document.getElementById('mod-meta')?.textContent === '4/5 켬'", timeout=10000)
     check(True, "실행 모듈 요약 4/5")
     check(page.is_disabled("#mod-apply"), "바뀐 게 없으면 적용 비활성")
     check(not page.is_disabled("#run-routine"), "관리자는 실행 버튼 활성")
@@ -126,7 +132,7 @@ with sync_playwright() as pw:
     page.wait_for_selector("#act-alert:not(.hide)")
     check("보냈습니다" in page.text_content("#act-alert"), "보냈다는 안내")
     time.sleep(1.0)
-    cmds = db_get("commands/c_demo/pc_office") or {}
+    cmds = db_get("apps/rpa/commands/c_demo/pc_office") or {}
     check(len(cmds) == 1, "명령이 하나 만들어졌다")
     c = next(iter(cmds.values())) if cmds else {}
     check(c.get("type") == "launch" and c.get("state") == "queued" and c.get("by") == admin_uid,
@@ -137,11 +143,11 @@ with sync_playwright() as pw:
 
     # 에이전트 역할을 대신해 done 으로 옮긴다
     key = next(iter(cmds))
-    call("PATCH", f"{DB}/commands/c_demo/pc_office/{key}.json?ns={NS}",
+    call("PATCH", f"{DB}/apps/rpa/commands/c_demo/pc_office/{key}.json?ns={NS}",
          {"state": "done", "result": "루틴 RPA 을(를) 띄웠습니다", "started_at": 1, "ended_at": 2}, OWNER)
-    page.wait_for_function("document.getElementById('act-alert').textContent.includes('띄웠습니다')", timeout=10000)
+    page.wait_for_function("document.getElementById('act-alert')?.textContent?.includes('띄웠습니다')", timeout=10000)
     check(True, "done 이 되면 결과 문장이 보인다")
-    page.wait_for_function("!document.getElementById('run-routine').disabled", timeout=5000)
+    page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=5000)
     check(True, "끝나면 버튼이 풀린다")
 
     print("4절 실행 모듈")
@@ -150,9 +156,9 @@ with sync_playwright() as pw:
     check(not page.is_disabled("#mod-apply"), "바뀌면 적용 활성")
     page.click("#mod-apply")
     time.sleep(1.5)
-    s = db_get("settings/c_demo/pc_office")
+    s = db_get("apps/rpa/settings/c_demo/pc_office")
     check(s and s["modules"]["Sales"] is True and s["updated_by"] == admin_uid, "settings 에 저장")
-    cmds = db_get("commands/c_demo/pc_office") or {}
+    cmds = db_get("apps/rpa/commands/c_demo/pc_office") or {}
     mods = [v for v in cmds.values() if v.get("type") == "set_modules"]
     check(len(mods) == 1 and mods[0]["args"]["Sales"] is True, "set_modules 명령을 보낸다")
 
@@ -161,7 +167,7 @@ with sync_playwright() as pw:
     page.wait_for_selector("#login:not(.hide)")
     login(page, "viewer@t.local")
     check("(열람)" in page.text_content("#who"), "열람자로 표시")
-    page.wait_for_function("document.getElementById('conn').textContent === '연결됨'", timeout=10000)
+    page.wait_for_function("document.getElementById('conn')?.textContent === '연결됨'", timeout=10000)
     check(page.is_disabled("#run-prepare") and page.is_disabled("#run-routine") and page.is_disabled("#stop-erpia"),
           "열람자는 버튼 비활성")
     page.wait_for_selector("#mod-list input")
@@ -171,7 +177,7 @@ with sync_playwright() as pw:
       const m = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js');
       const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js');
       const db = m.getDatabase(a.getApp());
-      try { await m.push(m.ref(db, 'commands/c_demo/pc_office'), {type:'launch', by:'x', created_at:1, expires_at:2, state:'queued'}); return 'ok'; }
+      try { await m.push(m.ref(db, 'apps/rpa/commands/c_demo/pc_office'), {type:'launch', by:'x', created_at:1, expires_at:2, state:'queued'}); return 'ok'; }
       catch (e) { return e.code || String(e); }
     }""")
     check(denied == "PERMISSION_DENIED", f"열람자가 우회해 써도 규칙이 거부 ({denied})")

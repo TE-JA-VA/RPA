@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RPA 현황</title>
+<title>AFTER MARKET</title>
 <style>
-  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --ink:#1c2024; --muted:#6b7280; --line:#e5e7eb; --ok:#15803d; --bad:#b91c1c; --run:#1d4ed8; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa2ad; --line:#2c3238; } }
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --ink:#1c2024; --muted:#6b7280; --line:#e5e7eb; --ok:#15803d; --bad:#b91c1c; --run:#1d4ed8; --accent:#1d4ed8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa2ad; --line:#2c3238; --accent:#60a5fa; } }
   * { box-sizing: border-box; }
   body { margin:0; padding:16px; background:var(--bg); color:var(--ink); font:15px/1.5 "Malgun Gothic",system-ui,sans-serif; }
   .wrap { max-width: 880px; margin: 0 auto; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:12px; }
   .row { display:flex; align-items:center; gap:8px; justify-content:space-between; flex-wrap:wrap; }
-  h1 { font-size:18px; margin:0 0 12px; }
+  h1 { font-size:18px; margin:0; letter-spacing:.04em; }
   h2 { font-size:15px; margin:0 0 10px; }
   label { display:block; margin-bottom:8px; }
   input, select, button { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
@@ -21,20 +21,24 @@
   button { cursor:pointer; }
   button[disabled] { opacity:.5; cursor:default; }
   .muted { color:var(--muted); }
-  .hide { display:none; }
+  .hide { display:none !important; }   /* #app-nav 처럼 id 로 display 를 준 요소도 숨긴다 */
   .st-running { color:var(--run); } .st-success, .st-done { color:var(--ok); } .st-failed, .st-stopped { color:var(--bad); }
   .alert { border-radius:8px; padding:10px; margin-top:10px; border:1px solid var(--line); }
   .alert.bad { color:var(--bad); }
   ul.steps { list-style:none; padding:0; margin:8px 0 0; }
   ul.steps li { display:flex; justify-content:space-between; padding:4px 0; border-top:1px solid var(--line); }
   #mod-list label { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-top:1px solid var(--line); margin:0; }
+  /* 앱 고르기 (앱이 둘 이상일 때만 보인다) */
+  #app-nav { display:flex; gap:6px; margin-bottom:12px; }
+  #app-nav button { border-radius:999px; padding:6px 14px; }
+  #app-nav button[aria-current="page"] { border-color:var(--accent); color:var(--accent); font-weight:bold; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <section id="login" class="card hide">
-    <h1>RPA 현황</h1>
+    <h1 style="margin-bottom:12px">AFTER MARKET</h1>
     <label>이메일 <input id="email" type="email" autocomplete="username"></label>
     <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
     <button id="login-btn">로그인</button>
@@ -43,7 +47,10 @@
 
   <section id="main" class="hide">
     <div class="card row">
-      <h1 style="margin:0">RPA 현황</h1>
+      <div class="row" style="gap:12px">
+        <h1>AFTER MARKET</h1>
+        <span id="company" class="muted"></span>
+      </div>
       <div class="row">
         <select id="pc-pick" class="hide" style="width:auto"></select>
         <span id="who" class="muted"></span>
@@ -51,38 +58,9 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="row"><h2 style="margin:0">연결</h2><span id="conn" class="muted">확인 중</span></div>
-    </div>
+    <nav id="app-nav" class="hide" aria-label="앱"></nav>
 
-    <div class="card" id="act-card">
-      <div class="row">
-        <h2 style="margin:0">실행</h2>
-        <div class="row">
-          <button id="run-prepare">프리페어 RPA</button>
-          <button id="run-routine">루틴 RPA</button>
-          <button id="run-all">전체 실행</button>
-          <button id="stop-erpia">ERPia 종료</button>
-        </div>
-      </div>
-      <div id="act-alert" class="alert hide"></div>
-    </div>
-
-    <div class="card">
-      <h2>루틴 RPA</h2>
-      <div id="routine" class="muted">기록 없음</div>
-    </div>
-
-    <div class="card">
-      <h2>프리페어 RPA</h2>
-      <div id="prepare" class="muted">기록 없음</div>
-    </div>
-
-    <div class="card" id="mod-card">
-      <div class="row"><h2 style="margin:0">실행 모듈</h2><span id="mod-meta" class="muted"></span></div>
-      <div id="mod-list"></div>
-      <button id="mod-apply" disabled style="margin-top:10px">적용</button>
-    </div>
+    <div id="app-root"></div>
   </section>
 
 </div>

@@ -96,20 +96,20 @@ check("securetoken" in http.calls[1][1] and "R1" in http.calls[1][2], "갱신은
 check("pw" not in http.calls[1][2], "갱신 요청에는 비밀번호가 없다")
 
 http.add({"ok": True})
-c.put("live/c_demo/pc_office", {"host": "PC1"})
+c.put("apps/rpa/live/c_demo/pc_office", {"host": "PC1"})
 method, url, body, _ = http.calls[-1]
-check(method == "PUT" and url.startswith("https://db.example.com/live/c_demo/pc_office.json"), "PUT 주소")
+check(method == "PUT" and url.startswith("https://db.example.com/apps/rpa/live/c_demo/pc_office.json"), "PUT 주소")
 check("auth=T2" in url, "요청에 토큰을 싣는다")
 check(json.loads(body) == {"host": "PC1"}, "보낸 몸통")
 
 http.add({"ok": True})
-c.patch("commands/c_demo/pc_office/x", {"state": "running"})
+c.patch("apps/rpa/commands/c_demo/pc_office/x", {"state": "running"})
 check(http.calls[-1][0] == "PATCH", "PATCH 로 일부만 고친다")
 
 http.add({"error": "Permission denied"}, status=401)
 http.add({"id_token": "T3", "refresh_token": "R3", "expires_in": "3600"})
 http.add({"ok": True})
-c.put("live/c_demo/pc_office", {"host": "PC1"})
+c.put("apps/rpa/live/c_demo/pc_office", {"host": "PC1"})
 check(c.token() == "T3", "401 이면 토큰을 새로 받고 한 번 더 시도한다")
 
 http.add({"error": "Permission denied"}, status=403)
@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory() as d:
     up = ag.Uploader(cl, "c_demo", "pc_office", q)
 
     up.push_live({"host": "PC1"})
-    check(cl.puts[-1][0] == "live/c_demo/pc_office", "현황은 live/회사/PC 로 간다")
+    check(cl.puts[-1][0] == "apps/rpa/live/c_demo/pc_office", "현황은 live/회사/PC 로 간다")
 
     cl.ok = False
     up.push_live({"host": "PC2"})
@@ -170,7 +170,7 @@ with tempfile.TemporaryDirectory() as d:
     cl.ok = True
     up.flush()
     check(up.pending() == 0, "연결되면 큐를 비운다")
-    check([p for p, _ in cl.puts][-2:] == ["live/c_demo/pc_office", "live/c_demo/pc_office/heartbeat"],
+    check([p for p, _ in cl.puts][-2:] == ["apps/rpa/live/c_demo/pc_office", "apps/rpa/live/c_demo/pc_office/heartbeat"],
           "쌓인 순서대로 보낸다")
 
     cl.ok = False
@@ -212,7 +212,7 @@ def make_cmds(actions):
 cl, cmds = make_cmds({"launch": lambda args: "띄웠습니다"})
 cmds.handle("k1", dict(ok_cmd), NOW)
 paths = [p for p, _ in cl.patches]
-check(paths == ["commands/c_demo/pc_office/k1"] * 2, "명령 자리에만 쓴다")
+check(paths == ["apps/rpa/commands/c_demo/pc_office/k1"] * 2, "명령 자리에만 쓴다")
 check(cl.patches[0][1]["state"] == "running", "먼저 running 으로 바꾼다")
 check(cl.patches[1][1]["state"] == "done" and cl.patches[1][1]["result"] == "띄웠습니다", "끝나면 done")
 check("started_at" in cl.patches[0][1] and "ended_at" in cl.patches[1][1], "시각을 남긴다")
