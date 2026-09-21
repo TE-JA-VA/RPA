@@ -52,7 +52,7 @@
 
 ### Task 1: 프로젝트 배선과 에뮬레이터
 
-에뮬레이터가 뜨지 않으면 뒤의 모든 규칙 시험이 불가능하다. 이 PC 의 Java 는 1.8 이라 Firebase 에뮬레이터(11 이상 필요)가 돌지 않는다. 먼저 고친다.
+에뮬레이터가 뜨지 않으면 뒤의 모든 규칙 시험이 불가능하다. 이 PC 의 Java 는 1.8 이라 Firebase 에뮬레이터(firebase-tools 15 는 Java 21 이상 필요)가 돌지 않는다. 먼저 고친다.
 
 **Files:**
 - Create: `firebase/.firebaserc`, `firebase/firebase.json`, `firebase/rules/database.rules.json`, `firebase/rules/firestore.rules`, `firebase/rules/firestore.indexes.json`
@@ -61,21 +61,35 @@
 - Consumes: 없음
 - Produces: `firebase/` 에서 `firebase emulators:exec` 가 도는 상태. 뒤의 Task 들은 `--only database,firestore,auth` 로 이 설정을 쓴다.
 
-- [ ] **Step 1: JDK 17 설치**
+- [ ] **Step 1: JDK 21 압축본을 개발 도구 폴더에 풀기**
+
+설치 프로그램은 PATH 와 JAVA_HOME 을 17 로 바꿔 놓아 Java 8 을 쓰는 다른 프로그램을 깨뜨릴 수 있다. 압축본을 `.devtools` 에 풀고 **에뮬레이터를 띄우는 창에서만** PATH 앞에 붙인다. 시스템 기본 Java 는 8 그대로다.
 
 ```powershell
-winget install -e --id Microsoft.OpenJDK.17 --accept-source-agreements --accept-package-agreements --disable-interactivity
+$zip = "$env:TEMP\jdk21.zip"
+Invoke-WebRequest -Uri "https://aka.ms/download-jdk/microsoft-jdk-21-windows-x64.zip" -OutFile $zip
+Expand-Archive -Path $zip -DestinationPath "$env:USERPROFILE\.devtools\jdk-21-tmp" -Force
+Move-Item "$env:USERPROFILE\.devtools\jdk-21-tmp\jdk-21*" "$env:USERPROFILE\.devtools\jdk-21"
+Remove-Item "$env:USERPROFILE\.devtools\jdk-21-tmp", $zip -Recurse -Force
 ```
 
-- [ ] **Step 2: Java 버전 확인**
+- [ ] **Step 2: 에뮬레이터용 PATH 도우미와 버전 확인**
 
-새 PowerShell 에서 (PATH 갱신을 반영해야 한다):
+`firebase/emu_env.ps1` (에뮬레이터를 쓰는 모든 명령 앞에 `. .\emu_env.ps1` 로 읽는다):
 
 ```powershell
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User"); java -version
+# 이 창에서만 JDK 21 을 앞세운다. 시스템 PATH 는 건드리지 않는다.
+$env:JAVA_HOME = "$env:USERPROFILE\.devtools\jdk-21"
+$env:Path = "$env:JAVA_HOME\bin;" + $env:Path
 ```
 
-Expected: `openjdk version "17.` 로 시작하는 줄. 1.8 이 나오면 PATH 에서 옛 Java 가 앞서 있는 것이니 `Get-Command java -All` 로 확인하고 JDK 17 의 `bin` 을 사용자 PATH 앞에 둔다.
+확인:
+
+```powershell
+cd D:\AX\RPAirebase; . .\emu_env.ps1; java -version
+```
+
+Expected: `openjdk version "21.` 로 시작. 새 창에서 그냥 `java -version` 을 치면 여전히 `1.8` 이어야 한다 (전역이 안 바뀐 것).
 
 - [ ] **Step 3: 배선 파일 작성**
 
@@ -161,7 +175,7 @@ Expected: `에뮬레이터 정상` 이 찍히고 종료 코드 0. `Could not sta
 - [ ] **Step 5: 커밋**
 
 ```bash
-git add .gitignore firebase/.firebaserc firebase/firebase.json firebase/rules
+git add .gitignore firebase/.firebaserc firebase/firebase.json firebase/rules firebase/emu_env.ps1
 git commit -m "firebase: 프로젝트 배선과 에뮬레이터 설정"
 ```
 

@@ -34,3 +34,8 @@ firebase/**/*serviceAccount*.json
 firebase/**/*adminsdk*.json
 .firebase/
 firebase-debug.log
+
+# ---- Firebase: Node 의존성 ----
+firebase/tests/node_modules/
+firebase/admin/node_modules/
+firebase/*-debug.log
