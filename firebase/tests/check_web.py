@@ -68,6 +68,8 @@ db_put("live/c_demo/pc_office", {
                               {"key": "output", "label": "운송장 출력", "state": "done"}]},
         "prepare": None,
     },
+    # PC 가 올리는 실제 실행 모듈 - 화면의 기준값
+    "modules": {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True},
 })
 db_put("settings/c_demo/pc_office", {"modules": {"Login": True, "Sales": False, "Hold": True,
                                                  "Logistics": True, "Output": True},

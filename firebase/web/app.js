@@ -119,7 +119,7 @@ function paintProgram(box, view) {
     { className: "muted", textContent: `${done}/${total} 단계` }));
   const list = document.createElement("ul");
   list.className = "steps";
-  for (const s of steps.slice(-8)) {
+  for (const s of steps) {
     const li = document.createElement("li");
     li.append(Object.assign(document.createElement("span"), { textContent: s.label || s.key }),
       Object.assign(document.createElement("span"),
@@ -196,9 +196,10 @@ let savedModules = {};
 let formModules = {};
 
 function watchSettings() {
+  // 기준값은 PC 가 올린 실제 값(live.modules)이다. settings 는 화면이 요청한 값이고, 반영은 에이전트가 파일에 쓴 뒤 live 로 돌아온다.
   if (stopSettings) { stopSettings(); stopSettings = null; }
   if (!pcId) return;
-  stopSettings = onValue(ref(db, `settings/${me.cid}/${pcId}/modules`), (snap) => {
+  stopSettings = onValue(ref(db, `live/${me.cid}/${pcId}/modules`), (snap) => {
     savedModules = snap.val() || {};
     formModules = Object.fromEntries(MODULES.map(([k]) => [k, savedModules[k] !== false]));
     paintModules();

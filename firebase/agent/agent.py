@@ -95,18 +95,25 @@ class Uploader:
     def pending(self):
         return len(self._queue)
 
-    def _send(self, path, value):
-        try:
+    def _call(self, method, path, value):
+        if method == "patch":
+            self._client.patch(path, value)
+        else:
             self._client.put(path, value)
+
+    def _send(self, path, value, method="put"):
+        try:
+            self._call(method, path, value)
             return True
         except Exception:
-            self._queue.append({"path": path, "value": value})
+            self._queue.append({"path": path, "value": value, "method": method})
             del self._queue[:-QUEUE_MAX]
             self._write_queue()
             return False
 
     def push_live(self, snapshot):
-        return self._send(self._base, clean_for_rtdb(trim_logs(snapshot)))
+        # PATCH 로 최상위 키만 갈아끼운다. PUT 이면 heartbeat 까지 지워진다.
+        return self._send(self._base, clean_for_rtdb(trim_logs(snapshot)) or {}, method="patch")
 
     def push_heartbeat(self, info):
         return self._send(f"{self._base}/heartbeat", clean_for_rtdb(info))
@@ -116,7 +123,7 @@ class Uploader:
         while self._queue:
             row = self._queue[0]
             try:
-                self._client.put(row["path"], row["value"])
+                self._call(row.get("method", "put"), row["path"], row["value"])
             except Exception:
                 self._write_queue()
                 return False
@@ -262,7 +269,11 @@ def main():
         while not stop.is_set():
             try:
                 snap = st.dashboard_snapshot()
-                body = json.dumps(snap.get("programs"), ensure_ascii=False, default=str)
+                try:
+                    snap["modules"] = st.read_routine_modules()[0]   # PC 의 실제 실행 모듈 (ERPIA_AI.txt)
+                except Exception:
+                    snap["modules"] = None
+                body = json.dumps([snap.get("programs"), snap.get("modules")], ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)
                     last = body

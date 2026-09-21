@@ -150,6 +150,8 @@ class FlakyClient:
             raise fb.HttpError(503, "끊김")
         self.puts.append((path, value))
 
+    patch = put   # 현황은 PATCH 로 간다 (heartbeat 를 지우지 않으려고). 기록만 하면 된다
+
 
 with tempfile.TemporaryDirectory() as d:
     q = os.path.join(d, "queue.jsonl")
