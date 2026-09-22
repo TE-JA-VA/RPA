@@ -51,14 +51,16 @@ RECENT_DAYS = 20      # 화면은 20일을 다 그리고 15칸까지만 보여 �
 
 
 def recent_summary(rows, today, days=RECENT_DAYS):
-    """이력에서 최근 N일 요약: [{date, success, failed}] (오래된 날부터). 화면의 10일 격자·도넛용."""
+    """이력에서 최근 N일 요약: [{date, success, failed, crashed}] (오래된 날부터). 화면의 날짜별 도넛용.
+    failed = 중단·실패(업무 데이터 문제, 빨강), crashed = 비정상 종료(PC·ERPia 환경 문제, 노랑)."""
     import datetime as dt
     first = today - dt.timedelta(days=days - 1)
-    per = {(first + dt.timedelta(days=i)).isoformat(): {"success": 0, "failed": 0} for i in range(days)}
+    per = {(first + dt.timedelta(days=i)).isoformat(): {"success": 0, "failed": 0, "crashed": 0} for i in range(days)}
     for r in rows or []:
         d = (r.get("started_at") or "")[:10]
         if d in per:
-            per[d]["success" if r.get("state") == "success" else "failed"] += 1
+            st = r.get("state")
+            per[d]["success" if st == "success" else "crashed" if st == "crashed" else "failed"] += 1
     return [{"date": d, **v} for d, v in per.items()]
 
 
@@ -195,8 +197,10 @@ class Uploader:
 
     @staticmethod
     def _rejected(e):
-        """서버가 내용을 거부한 것(권한 없음 등). 다시 보내도 똑같으니 큐에 두면 뒤 항목까지 영원히 막는다."""
-        return isinstance(e, fb.HttpError) and 400 <= e.status < 500 and e.status not in (401, 429)
+        """서버가 내용을 거부한 것. 다시 보내도 똑같으니 큐에 두면 뒤 항목까지 영원히 막는다.
+        RTDB 는 규칙 거부를 401 로 돌려준다 (403 이 아니다). 클라이언트가 401 이면 토큰을 새로 받아 한 번 더 보낸 뒤에야
+        HttpError 를 올리므로, 여기 오는 401 은 토큰 만료가 아니라 규칙 거부다. 429(너무 잦음)만 다시 보낸다."""
+        return isinstance(e, fb.HttpError) and 400 <= e.status < 500 and e.status != 429
 
     def _send(self, path, value, method="put"):
         try:
@@ -295,7 +299,17 @@ class Commands:
 # ---------------------------------------------------------------------------
 # 실제 동작 (기존 코드를 그대로 쓴다)
 # ---------------------------------------------------------------------------
-def real_actions():
+def company_modules(client, cid, app=APP):
+    """업체가 안 쓰는 모듈 정책 {키: False}. 총괄만 쓸 수 있는 자리라 화면을 우회한 명령도 여기서 막힌다.
+    못 읽으면 빈 값 - 정책 조회 실패가 실행을 막지는 않는다."""
+    try:
+        return {k: v for k, v in (client.get(f"meta/companies/{cid}/apps/{app}/modules") or {}).items() if v is False}
+    except Exception:
+        return {}
+
+
+def real_actions(policy=None):
+    """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)"""
     import rpa_dashboard as dash
     import rpa_status as st
 
@@ -320,7 +334,12 @@ def real_actions():
                   if k in dict(st.ROUTINE_CONFIG_MODULES)}
         if not wanted:
             raise RuntimeError("아는 모듈이 없습니다")
+        for k in (policy() if policy else {}):
+            if k in dict(st.ROUTINE_CONFIG_MODULES):
+                wanted[k] = False        # 이 업체가 안 쓰는 모듈 (총괄이 정한다)
         wanted["Login"] = True           # 로그인은 항상 켬 (관리자도 못 끈다)
+        if wanted.get("Logistics") is False:
+            wanted["Output"] = False     # 운송장 출력은 물류관리가 꺼져 있으면 돌 수 없다 (빠진 키는 Y 로 쓰이므로 여기서 못 박는다)
         st.write_routine_modules(wanted)
         on = [k for k, v in wanted.items() if v]
         return f"실행 모듈을 바꿨습니다 (켬: {', '.join(on)})"
@@ -334,6 +353,33 @@ def real_actions():
         return f"자동 실행: {dash.schedule_label(sch)}" + ("" if changed else " (변경 없음)")
 
     return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule}
+
+
+def watch_commands(client, path, on_command):
+    """명령함을 한 번 구독한다. 서버가 스트림을 닫으면 'ended', 토큰이 죽었다는 알림이면 'auth_revoked' 를 돌려준다.
+    호출자가 곧바로 다시 붙인다.
+
+    로그인 토큰은 1시간마다 만료되고 그때 Firebase 가 auth_revoked 를 보낸다. 이걸 무시하면 heartbeat 는 계속
+    올라가는데(다른 요청이라 토큰이 갱신된다) 명령만 영원히 못 받는 귀머거리가 된다. 2026-09-22 실기에서 두 번 겪었다."""
+    gen = client.stream(path)
+    try:
+        for event, data in gen:
+            if event in ("auth_revoked", "cancel"):
+                client.renew()          # 다음 요청이 토큰을 새로 받게
+                return event
+            if event not in ("put", "patch") or not isinstance(data, dict):
+                continue
+            sub, payload = data.get("path") or "/", data.get("data")
+            items = {}
+            if sub == "/" and isinstance(payload, dict):
+                items = payload                       # 처음 붙을 때: 대기 중인 명령 전부
+            elif sub.count("/") == 1 and isinstance(payload, dict):
+                items = {sub.strip("/"): payload}     # 새 명령 하나
+            for cmd_id, cmd in items.items():
+                on_command(cmd_id, cmd)
+    finally:
+        gen.close()
+    return "ended"
 
 
 def log(text):
@@ -392,7 +438,7 @@ def main():
         return 2
     client = fb.Client(cfg)
     up = Uploader(client, cfg["cid"], cfg["pc_id"])
-    cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions())
+    cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"])))
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
 
     # 자동 실행 예약은 PC 에서 돈다. 기존 대시보드의 Scheduler 그대로 (꺼져 있던 동안 지난 예약은 건너뛴다).
@@ -429,10 +475,13 @@ def main():
                     recent_key[0] = hist_key
                     recent_key[1] = recent_summary(st.read_history(), datetime.date.today())
                 snap["recent"] = recent_key[1]
+                # 띄워 놓은 프로세스가 아직 살아 있나. 명령이 done 이 된 뒤 상태 파일에 'running' 이 찍히기까지의
+                # 몇 초를 이 값이 메운다 (그 틈에 화면의 실행 버튼이 풀리면 두 번 실행될 수 있다)
+                snap["launching"] = bool(dash.launch_state())
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
                 upload_new_history(hist_path, up, cfg)
-                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule"), snap.get("recent")],
-                                  ensure_ascii=False, default=str)
+                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule"), snap.get("recent"),
+                                   snap.get("launching")], ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)
                     last = body
@@ -452,25 +501,18 @@ def main():
 
     threading.Thread(target=pump, daemon=True).start()
 
+    def on_command(cmd_id, cmd):
+        if decide(cmd, time.time())[0] == "bad":
+            return
+        log(f"명령 {cmd.get('type')} ({cmd_id[:8]}) 처리")
+        log(f"  → {cmds.handle(cmd_id, cmd)}")
+
     backoff = 1
     while not stop.is_set():
         try:
-            for event, data in client.stream(app_path("commands", cfg["cid"], cfg["pc_id"])):
-                backoff = 1
-                if event not in ("put", "patch") or not isinstance(data, dict):
-                    continue
-                path, payload = data.get("path") or "/", data.get("data")
-                items = {}
-                if path == "/" and isinstance(payload, dict):
-                    items = payload
-                elif path.count("/") == 1 and isinstance(payload, dict):
-                    items = {path.strip("/"): payload}
-                for cmd_id, cmd in items.items():
-                    verdict = decide(cmd, time.time())[0]
-                    if verdict == "bad":
-                        continue
-                    log(f"명령 {cmd.get('type')} ({cmd_id[:8]}) 처리")
-                    log(f"  → {cmds.handle(cmd_id, cmd)}")
+            why = watch_commands(client, app_path("commands", cfg["cid"], cfg["pc_id"]), on_command)
+            log(f"구독이 끝났습니다 ({why}). 바로 다시 붙습니다")   # auth_revoked 는 1시간마다 오는 정상 절차
+            backoff = 1
         except KeyboardInterrupt:
             break
         except Exception as e:

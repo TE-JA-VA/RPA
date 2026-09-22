@@ -5,6 +5,7 @@
 //   node setup.js user     <이메일> <초기 비밀번호> <cid|-> <super|admin|viewer> <이름>
 //   node setup.js agent    <이메일> <초기 비밀번호> <cid> <pcId>
 //   node setup.js show     <이메일>
+//   node setup.js modules  <cid> Hold=off Output=on   (업체가 안 쓰는 모듈. off 면 화면에서 숨고 에이전트가 강제로 끈다)
 //
 // 비밀번호는 화면에 다시 찍지 않는다. 초기 비밀번호는 발급 직후 사용자가 바꾼다.
 import { readFileSync } from "node:fs";
@@ -48,6 +49,7 @@ if (cmdName === "company") {
   checkKey("cid", cid);
   await rtdb.ref(`meta/companies/${cid}`).update({ name: nameParts.join(" ") });
   console.log(`회사 등록: ${cid}`);
+  console.log(`  이 업체가 안 쓰는 모듈이 있으면: node setup.js modules ${cid} Hold=off`);
 
 } else if (cmdName === "pc") {
   const [cid, pcId, ...labelParts] = rest;
@@ -75,12 +77,29 @@ if (cmdName === "company") {
   await auth.setCustomUserClaims(user.uid, { cid, pcId, role: "agent" });
   console.log(`에이전트 등록: ${email}  uid=${user.uid}  cid=${cid}  pcId=${pcId}`);
 
+} else if (cmdName === "modules") {
+  // 업체 단위로 안 쓰는 모듈을 정한다. off = 화면에서 숨기고 에이전트가 강제로 끔, on = 정책을 지움(그 업체가 쓴다)
+  const [cid, ...pairs] = rest;
+  checkKey("cid", cid);
+  const KEYS = ["Sales", "Hold", "Logistics", "Output"];   // Login 은 언제나 켬이라 정책 대상이 아니다
+  if (!pairs.length) throw new Error(`쓰는 법: node setup.js modules ${cid} Hold=off  (${KEYS.join(", ")})`);
+  const patch = {};
+  for (const p of pairs) {
+    const [k, v] = p.split("=");
+    if (!KEYS.includes(k)) throw new Error(`모듈 키는 ${KEYS.join(", ")} 중 하나 (받은 값: ${k})`);
+    if (v !== "on" && v !== "off") throw new Error(`${k} 의 값은 on 또는 off (받은 값: ${v})`);
+    patch[k] = v === "off" ? false : null;
+  }
+  const at = rtdb.ref(`meta/companies/${cid}/apps/rpa/modules`);
+  await at.update(patch);
+  console.log(`모듈 정책: ${cid}`, (await at.get()).val() ?? "(없음 - 전부 사용)");
+
 } else if (cmdName === "show") {
   const user = await auth.getUserByEmail(rest[0]);
   console.log({ uid: user.uid, email: user.email, claims: user.customClaims ?? {} });
 
 } else {
-  console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 10).join("\n"));
+  console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 11).join("\n"));
   process.exit(1);
 }
 

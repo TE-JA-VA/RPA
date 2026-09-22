@@ -99,6 +99,7 @@ await waitFor("heartbeat 가 올라온다", async () =>
   typeof (await db.ref("apps/rpa/live/c_demo/pc_office/heartbeat/at").get()).val() === "number");
 const live = (await db.ref("apps/rpa/live/c_demo/pc_office").get()).val();
 check(live?.heartbeat?.every === 5, `heartbeat 에 신호 주기 (${live?.heartbeat?.every})`);
+check(typeof live?.launching === "boolean", `띄우는 중인지도 올린다 (${live?.launching})`);
 const logLen = live?.programs?.routine?.log?.length ?? 0;
 check(logLen <= 80, `로그는 80줄 이하 (${logLen})`);
 

@@ -189,16 +189,24 @@ class Client:
         return True
 
     # --- 구독 ---------------------------------------------------------
-    def stream(self, path, params=None):
-        """SSE 로 구독한다. (event, data) 를 내놓는 제너레이터. 끊기면 그냥 끝난다."""
+    def stream(self, path, params=None, timeout=90):
+        """SSE 로 구독한다. (event, data) 를 내놓는 제너레이터. 서버가 닫으면 그냥 끝난다.
+
+        Firebase 는 30초마다 keep-alive 를 보낸다. timeout 초 동안 아무것도 안 오면 끊긴 연결로 보고 예외를 낸다 -
+        PC 절전이나 망 끊김 뒤 TCP 가 소리 없이 죽으면 read 가 영원히 막히는 것을 막는다."""
         req = urllib.request.Request(self._url(path, params),
                                      headers={"Accept": "text/event-stream"})
-        resp = self._open(req, timeout=None)
+        resp = self._open(req, timeout=timeout)
         buf = []
-        for raw in resp:
-            line = raw.decode("utf-8", "replace").rstrip("\n")
-            buf.append(line)
-            if line == "":
-                for item in parse_sse(buf):
-                    yield item
-                buf = []
+        try:
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").rstrip("\n")
+                buf.append(line)
+                if line == "":
+                    for item in parse_sse(buf):
+                        yield item
+                    buf = []
+        finally:
+            close = getattr(resp, "close", None)
+            if close:
+                close()

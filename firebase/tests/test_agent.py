@@ -73,6 +73,7 @@ class FakeHTTP:
     def __call__(self, req, timeout=None):
         body = req.data.decode("utf-8") if req.data else None
         self.calls.append((req.get_method(), req.full_url, body, dict(req.headers)))
+        self.last_timeout = timeout
         status, data = self.replies.pop(0)
         if status >= 400:
             import urllib.error
@@ -147,8 +148,8 @@ rows = [{"started_at": "2026-09-14T13:55:00", "state": "success"},
         {"started_at": "", "state": "success"}]
 rs = ag.recent_summary(rows, _dt.date(2026, 9, 14))
 check(len(rs) == 20 and rs[0]["date"] == "2026-08-26" and rs[-1]["date"] == "2026-09-14", "최근 20일, 오래된 날부터")
-check(rs[-1] == {"date": "2026-09-14", "success": 1, "failed": 1}, "하루에 성공·실패를 센다")
-check(rs[-2]["failed"] == 1 and sum(d["success"] for d in rs) == 1, "중단·비정상 종료는 실패, 20일 밖은 뺀다")
+check(rs[-1] == {"date": "2026-09-14", "success": 1, "failed": 1, "crashed": 0}, "하루에 성공·실패·비정상을 센다")
+check(rs[-2]["crashed"] == 1 and rs[-2]["failed"] == 0 and sum(d["success"] for d in rs) == 1, "중단은 실패, 비정상 종료는 따로, 20일 밖은 뺀다")
 
 ff = fb.fs_fields({"a": "x", "b": 3, "c": True, "d": None, "e": 1.5, "f": {"k": [1]}})
 check(ff["a"] == {"stringValue": "x"} and ff["b"] == {"integerValue": "3"} and ff["c"] == {"booleanValue": True}
@@ -258,7 +259,7 @@ class DenyClient:
 
     def put(self, path, value):
         if not path.startswith("apps/"):
-            raise fb.HttpError(403, "Permission denied")
+            raise fb.HttpError(401, "Permission denied")   # RTDB 는 규칙 거부를 401 로 준다 (실기에서 확인)
         self.puts.append((path, value))
 
     patch = put
@@ -355,12 +356,48 @@ with tempfile.TemporaryDirectory() as d:
         check("Login" in msg, "결과 문장에 로그인 포함")
         raw = open(cred, encoding="utf-8").read()
         check("비밀-시험" in raw, "자격증명은 그대로 남는다")
+        acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": False, "Output": True})
+        sel = st.read_routine_modules(cred)[0]
+        check(sel["Output"] is False, f"물류관리가 꺼지면 운송장 출력도 꺼진다 ({sel})")
+        acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": False})   # Output 을 안 보내면 Y 로 쓰이던 자리
+        check(st.read_routine_modules(cred)[0]["Output"] is False, "값을 안 보내도 물류관리가 꺼져 있으면 출력은 꺼짐")
+        acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True})
+        check(st.read_routine_modules(cred)[0]["Output"] is True, "물류관리가 켜져 있으면 출력을 켤 수 있다")
+        acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": False})
+        check(st.read_routine_modules(cred)[0]["Output"] is False, "물류관리가 켜져 있어도 출력만 끌 수 있다")
+        # 업체 정책 (총괄이 정한 '이 업체는 안 씀'). 화면을 우회한 명령도 여기서 막힌다
+        strict = ag.real_actions(lambda: {"Hold": False})
+        strict["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True})
+        sel = st.read_routine_modules(cred)[0]
+        check(sel["Hold"] is False and sel["Sales"] is True, f"업체가 안 쓰는 모듈은 켜 달라고 해도 꺼진다 ({sel})")
+        check(ag.real_actions(lambda: {"Nope": False})["set_modules"]({"Sales": True}) and st.read_routine_modules(cred)[0]["Sales"] is True,
+              "정책에 모르는 키가 있어도 넘어간다")
         try:
             acts["set_modules"]({"Nope": True}); check(False, "모르는 모듈만 있으면 거부")
         except RuntimeError as e:
             check("아는 모듈" in str(e), "모르는 모듈만 있으면 거부")
     finally:
         os.environ.pop("RPA_CRED_FILE", None)
+
+print("\n5-2절 업체 모듈 정책 읽기")
+
+
+class PolicyClient:
+    def __init__(self, value):
+        self.value, self.asked = value, []
+
+    def get(self, path):
+        self.asked.append(path)
+        if isinstance(self.value, Exception):
+            raise self.value
+        return self.value
+
+
+pc = PolicyClient({"Hold": False, "Output": True})
+check(ag.company_modules(pc, "c_x") == {"Hold": False}, "false 인 것만 정책으로 본다")
+check(pc.asked == ["meta/companies/c_x/apps/rpa/modules"], f"회사 메타에서 읽는다 ({pc.asked})")
+check(ag.company_modules(PolicyClient(None), "c_x") == {}, "정책이 없으면 빈 값")
+check(ag.company_modules(PolicyClient(fb.HttpError(401, "denied")), "c_x") == {}, "못 읽어도 실행을 막지 않는다")
 
 print("\n8절 첫 실행 설정 (새 PC)")
 import base64
@@ -396,6 +433,44 @@ with tempfile.TemporaryDirectory() as d:
         check(False, "사람 계정은 거부한다")
     except ValueError:
         check(not os.path.exists(bad), "사람 계정은 거부한다")
+
+print("\n9절 명령 구독 (토큰 만료·끊김)")
+
+
+class StreamClient:
+    """stream() 이 미리 정한 이벤트를 내놓는 가짜 클라이언트"""
+    def __init__(self, events):
+        self.events, self.renewed, self.closed = events, 0, False
+
+    def stream(self, path):
+        try:
+            for ev in self.events:
+                yield ev
+        finally:
+            self.closed = True
+
+    def renew(self):
+        self.renewed += 1
+
+
+got = []
+sc = StreamClient([("keep-alive", None),
+                   ("put", {"path": "/", "data": {"c1": {"type": "launch"}, "c2": {"type": "stop_erpia"}}}),
+                   ("patch", {"path": "/c3", "data": {"type": "launch"}}),
+                   ("put", {"path": "/c1/state", "data": "done"}),
+                   ("auth_revoked", None),
+                   ("put", {"path": "/c9", "data": {"type": "launch"}})])
+why = ag.watch_commands(sc, "apps/rpa/commands/c_demo/pc_office", lambda i, c: got.append(i))
+check(got == ["c1", "c2", "c3"], "처음 덩어리와 낱개 명령을 건네주고, 하위 값 변경은 건너뛴다")
+check(why == "auth_revoked" and sc.renewed == 1 and sc.closed, "토큰 만료 알림이 오면 토큰을 버리고 돌아온다 (다시 붙게)")
+check(ag.watch_commands(StreamClient([("keep-alive", None)]), "p", lambda i, c: None) == "ended", "서버가 닫으면 ended")
+
+h2 = FakeHTTP()
+h2.add({"idToken": "T", "refreshToken": "R", "expiresIn": "3600"})
+h2.replies.append((200, b"event: keep-alive\ndata: null\n\n"))
+c2 = fb.Client(CFG, opener=h2, clock=lambda: h2.now)
+check(list(c2.stream("apps/rpa/commands/c_demo/pc_office")) == [("keep-alive", None)] and h2.last_timeout == 90,
+      "구독 연결에 90초 읽기 시한 (30초 keep-alive 가 세 번 안 오면 끊긴 것)")
 
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
