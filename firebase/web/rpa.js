@@ -6,7 +6,7 @@ import {
 import {
   getFirestore, collection, query, where, orderBy, limit, getDocs, connectFirestoreEmulator,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { HEARTBEAT_STALE_SEC, COMMAND_TTL_SEC } from "./firebase-config.js";
+import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS, COMMAND_TTL_SEC } from "./firebase-config.js";
 
 export const key = "rpa";
 export const label = "RPA";
@@ -197,6 +197,10 @@ function offlineSec() {
   const at = live?.heartbeat?.at;
   return at ? Math.floor(Date.now() / 1000) - at : null;
 }
+function staleSec() {
+  // 그 PC 의 신호 주기에 맞춘다. every 가 없으면 옛 에이전트(30초)로 본다
+  return (live?.heartbeat?.every || HEARTBEAT_EVERY_DEFAULT) * HEARTBEAT_MISS + 5;
+}
 function metric(view, k) {
   return (view?.metrics || []).find((m) => m.key === k);
 }
@@ -210,7 +214,7 @@ function paintHero() {
   const off = offlineSec();
   const hero = $("hero");
   let state, title, l1 = "", l2 = "";
-  if (off == null || off > HEARTBEAT_STALE_SEC) {
+  if (off == null || off > staleSec()) {
     state = "offline";
     title = "PC 연결 끊김";
     l1 = off == null ? "에이전트 기록 없음" : `${Math.floor(off / 60)}분 전부터 응답 없음` + (v ? ` · 마지막 ${STATE_LABEL[v.state] || v.state} ${hhmm(v.finished_at || v.updated_at)}` : "");
@@ -264,7 +268,7 @@ function paintTiles() {
   if (m1) tiles.push(["처리 주문", String(m1.value), m1.unit || "건", false]);
   if (m2) tiles.push(["재고검토 보류", String(m2.value), m2.total != null ? `/ ${m2.total}` : (m2.unit || ""), false]);
   if (m3) tiles.push(["비정상 보류", String(m3.value), m3.unit || "건", !!m3.approx]);
-  const conn = off != null && off <= HEARTBEAT_STALE_SEC;
+  const conn = off != null && off <= staleSec();
   const offText = off == null ? "없음" : off < 60 ? `끊김 ${off}초` : `끊김 ${Math.floor(off / 60)}분`;
   tiles.push(["연결", conn ? "정상" : offText, "", false, conn ? "var(--good)" : "var(--warn)", "conn"]);
   const sch = live?.schedule;

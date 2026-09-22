@@ -98,6 +98,7 @@ await waitFor("live 에 현황이 올라온다", async () => {
 await waitFor("heartbeat 가 올라온다", async () =>
   typeof (await db.ref("apps/rpa/live/c_demo/pc_office/heartbeat/at").get()).val() === "number");
 const live = (await db.ref("apps/rpa/live/c_demo/pc_office").get()).val();
+check(live?.heartbeat?.every === 5, `heartbeat 에 신호 주기 (${live?.heartbeat?.every})`);
 const logLen = live?.programs?.routine?.log?.length ?? 0;
 check(logLen <= 80, `로그는 80줄 이하 (${logLen})`);
 

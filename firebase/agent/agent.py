@@ -439,6 +439,7 @@ def main():
                 if time.time() - last_beat >= HEARTBEAT_SEC:
                     up.push_heartbeat({
                         "at": int(time.time()),
+                        "every": HEARTBEAT_SEC,   # 화면이 이 값으로 끊김 기준을 잡는다 (옛 에이전트는 없어서 30초로 본다)
                         "host": snap.get("host"),
                         "rpa_running": bool([p for p, v in (snap.get("programs") or {}).items()
                                              if v and v.get("state") == "running"]),

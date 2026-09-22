@@ -93,7 +93,7 @@ users/{uid}                   ← { cid, role: admin|viewer|super, name, must_ch
 - 로그인 화면(이메일/비밀번호). `must_change_password` 면 비밀번호 변경 화면으로.
 - super: 회사 선택 → PC 선택. admin/viewer: 자기 회사, PC 가 둘 이상이면 선택.
 - 탭은 지금과 같이 현황 / 이력 / 환경설정. 데이터 층만 바뀐다:
-  - 현황: `live/{cid}/{pcId}` 구독. heartbeat 가 20초 넘게 없으면 "PC 연결 끊김" (2026-09-21 개정, 처음엔 2분). 값이 안 바뀌어도 화면이 5초마다 다시 계산한다.
+  - 현황: `live/{cid}/{pcId}` 구독. heartbeat 가 **신호 주기(`heartbeat.every`)의 3배 + 5초** 넘게 없으면 "PC 연결 끊김" (2026-09-22 개정. 처음엔 2분, 2026-09-21 엔 20초 고정이었는데 아직 안 고친 30초 주기 에이전트가 깜빡여서 주기 기준으로 바꿨다. `every` 가 없으면 30초로 본다). 값이 안 바뀌어도 화면이 5초마다 다시 계산한다.
   - 실행·종료 버튼(admin): `commands` 에 push. 그 명령의 `state` 를 구독해 결과 표시. 만료 기본 10분.
   - 환경설정(admin): 모듈 스위치 = `settings.modules` 쓰기 + `set_modules` 명령 push(에이전트가 파일에 반영). 자동 예약 = `settings.schedule` 쓰기.
   - 이력: Firestore `runs/{cid}/items` 를 최근순으로 읽기. (2차)

@@ -91,7 +91,8 @@ routine = {
 }
 db_put(LIVE, {
     "host": "OFFICE-PC",
-    "heartbeat": {"at": NOW + 3600, "host": "OFFICE-PC", "rpa_running": False},   # 시험 내내 '정상' 이도록 미래 시각 (20초면 끊김)
+    # 시험 내내 '정상' 이도록 미래 시각. every=5 는 새 에이전트 (끊김 기준 5*3+5 = 20초)
+    "heartbeat": {"at": NOW + 3600, "every": 5, "host": "OFFICE-PC", "rpa_running": False},
     "programs": {"routine": routine, "prepare": None},
     "modules": {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True},
     "schedule": {"enabled": True, "days": [0, 1, 2, 3, 4], "times": ["09:05"], "next_run_at": "2026-09-22T09:05:00",
@@ -307,7 +308,14 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('conn')?.textContent.includes('끊김')", timeout=15000)
     check("초" in page.text_content("#conn") and page.get_attribute("#hero", "data-state") == "offline",
           f"값이 안 바뀌어도 5초 안에 끊김으로 바뀐다 ({page.text_content('#conn').strip()})")
-    db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600})
+    # 아직 안 고친 옛 에이전트(30초 주기, every 없음)는 25초 된 신호로도 끊김이 아니어야 한다
+    db_patch(f"{LIVE}/heartbeat", {"at": int(time.time()) - 25, "every": None})
+    page.wait_for_function("document.getElementById('conn')?.textContent.includes('정상')", timeout=10000)
+    check(page.get_attribute("#hero", "data-state") != "offline", "every 없는 옛 에이전트는 25초 지나도 정상")
+    db_patch(f"{LIVE}/heartbeat", {"at": int(time.time()) - 100})
+    page.wait_for_function("document.getElementById('conn')?.textContent.includes('끊김')", timeout=15000)
+    check(page.get_attribute("#hero", "data-state") == "offline", "옛 에이전트도 100초 넘게 없으면 끊김")
+    db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600, "every": 5})
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
 
     print("4절 명령 투입")
