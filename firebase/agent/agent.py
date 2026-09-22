@@ -47,7 +47,7 @@ def clean_for_rtdb(value):
     return value
 
 
-RECENT_DAYS = 20      # 화면은 폭에 맞춰 5~20일을 보여 준다
+RECENT_DAYS = 20      # 화면은 20일을 다 그리고 15칸까지만 보여 준다 (나머지는 가로 스크롤)
 
 
 def recent_summary(rows, today, days=RECENT_DAYS):
