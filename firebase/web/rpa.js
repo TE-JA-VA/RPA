@@ -15,6 +15,7 @@ export const perPc = true;
 
 const P = (kind, cid, pcId) => `apps/rpa/${kind}/${cid}/${pcId}`;
 const STATE_LABEL = { running: "진행 중", success: "성공", failed: "실패", stopped: "중단", crashed: "비정상 종료", done: "완료", skipped: "건너뜀" };
+const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어" };   // 기록 표의 프로그램 칸. RPA 인 건 아니까 뗀다
 const HERO_TITLE = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "실패" };
 const MODULES = [
   ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
@@ -24,6 +25,11 @@ const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]], ["주말", [5, 6]]];
 const HISTORY_LIMIT = 100;
 const MAX_TIMES = 2;      // 하루 실행 시각 개수 (추가는 유료 옵션으로 열 예정)
+
+// 실행 버튼 아이콘 (heroicons 선 아이콘, 글자색을 따라간다)
+const ARROW = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75"/></svg>`;
+// 전원은 유니코드 ⏼ (U+23FC POWER ON-OFF SYMBOL) 글자 그대로. 글꼴 대체 목록은 index.html 의 .ic 에 있다
+const POWER = `<span class="ic" aria-hidden="true">&#x23FC;</span>`;
 
 const HTML = `
   <div class="subnav" role="tablist">
@@ -59,10 +65,10 @@ const HTML = `
         <div class="card" id="act-card">
           <h2>실행</h2>
           <div class="actions">
-            <button id="run-all" class="primary">전체 실행 <span>▶</span></button>
-            <button id="run-prepare">프리페어 RPA <span>▶</span></button>
-            <button id="run-routine">루틴 RPA <span>▶</span></button>
-            <button id="stop-erpia" class="danger">ERPia 종료</button>
+            <button id="run-all" class="primary">${ARROW}<span>전체 실행</span></button>
+            <button id="run-prepare">${ARROW}<span>프리페어 RPA</span></button>
+            <button id="run-routine">${ARROW}<span>루틴 RPA</span></button>
+            <button id="stop-erpia" class="danger">${POWER}<span>ERPia 종료</span></button>
           </div>
           <div id="act-alert" class="alert hide"></div>
         </div>
@@ -394,9 +400,11 @@ function histRow(r) {
   const ms = (payload.metrics || []).slice(0, 3).map((m) => `${m.label} ${m.approx ? "≈" : ""}${m.value}${m.total != null ? "/" + m.total : ""}`).join(" · ");
   const tr = document.createElement("tr");
   tr.className = "hist";
-  const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : "bad";
+  // 비정상 종료는 중단보다 심각하니 진한 빨강에 흰 글자 (crash), 실패·중단은 옅은 빨강 (bad)
+  const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : r.state === "crashed" ? "crash" : "bad";
   const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
-  tr.innerHTML = `<td class="num">${t}</td><td>${r.program_label || r.program || ""}</td><td><span class="pill ${cls}">${STATE_LABEL[r.state] || r.state || ""}</span></td><td class="num">${dur(r.duration_sec)}</td><td class="muted">${r.reason || ms}</td>`;
+  const prog = PROGRAM_SHORT[r.program] || r.program_label || r.program || "";   // 표에선 'RPA' 를 뗀다
+  tr.innerHTML = `<td class="num">${t}</td><td>${prog}</td><td><span class="pill ${cls}">${STATE_LABEL[r.state] || r.state || ""}</span></td><td class="num">${dur(r.duration_sec)}</td><td class="muted">${r.reason || ms}</td>`;
   const detail = document.createElement("tr");
   detail.className = "hist-detail hide";
   const td = document.createElement("td"); td.colSpan = 5;

@@ -2,7 +2,7 @@
 import {
   EmailAuthProvider, reauthenticateWithCredential, updatePassword,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import { ACCENTS, DEFAULT_ACCENT, applyAccent, getAccent } from "./theme.js";
+import { ACCENTS, DEFAULT_ACCENT, applyAccent, getAccent, accentFor } from "./theme.js";
 
 export const key = "account";
 export const label = "계정";
@@ -56,7 +56,7 @@ function paintAccent() {
   $("accent-pick").value = now;
   $("accent-swatches").replaceChildren(...ACCENTS.map(([name, hex]) => {
     const b = document.createElement("button");
-    b.className = "swatch"; b.style.background = hex; b.title = name;
+    b.className = "swatch"; b.style.background = accentFor(hex); b.title = name;   // 어두운 모드면 그 모드용 색을 보여 준다
     b.setAttribute("aria-label", `강조색 ${name}`);
     b.setAttribute("aria-pressed", hex === now);
     b.onclick = () => setAccent(hex);
