@@ -83,22 +83,41 @@ async function loadCompany() {
     company = snap.val() || {};
   } catch { company = {}; }
   $("company").textContent = company.name || "";
-  const pcs = company.pcs || {};
-  const keys = Object.keys(pcs);
-  const sel = $("pc-pick");
-  sel.replaceChildren(...keys.map((k) => {
-    const o = document.createElement("option");
-    o.value = k; o.textContent = pcs[k]?.label || k;
-    return o;
-  }));
-  show(sel, keys.length > 1);
-  pcId = keys[0] || null;
-  sel.onchange = () => { pcId = sel.value; if (current) mount(current); };
+  const keys = Object.keys(company.pcs || {});
+  // 마지막에 고른 PC 를 기억한다. 없으면 첫 PC (Firebase 는 키 이름순이라 pc_a 가 pc_office 앞에 온다)
+  let saved = null;
+  try { saved = localStorage.getItem(`pc:${me.cid}`); } catch {}
+  pcId = keys.includes(saved) ? saved : (keys[0] || null);
+  paintPcPick();
+  show($("pc-pick"), keys.length > 1);
 }
+
+const CHEV = `<svg class="chev" viewBox="0 0 512 512" aria-hidden="true"><path d="M233.4 406.6c12.5 12.5 32.8 12.5 45.3 0l192-192c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L256 338.7 86.6 169.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l192 192z"/></svg>`;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// PC 고르기: 알약에 지금 PC, 아래 목록엔 나머지 PC. 올리거나(마우스) 누르면(터치·키보드) 펼쳐진다
+function paintPcPick() {
+  const box = $("pc-pick"), pcs = company?.pcs || {};
+  const label = (k) => pcs[k]?.label || k;
+  box.classList.remove("open");
+  box.innerHTML = `<button type="button" class="selected" aria-haspopup="listbox"><span>${esc(label(pcId))}</span>${CHEV}</button>
+    <div class="options" role="listbox">${Object.keys(pcs).filter((k) => k !== pcId)
+      .map((k) => `<button type="button" class="option" role="option" data-pc="${esc(k)}">${esc(label(k))}</button>`).join("")}</div>`;
+  box.querySelector(".selected").onclick = () => box.classList.toggle("open");
+  for (const b of box.querySelectorAll(".option")) {
+    b.onclick = () => {
+      pcId = b.dataset.pc; b.blur();
+      try { localStorage.setItem(`pc:${me.cid}`, pcId); } catch {}
+      paintPcPick(); if (current) mount(current);
+    };
+  }
+}
+document.addEventListener("click", (e) => { if (!$("pc-pick").contains(e.target)) $("pc-pick").classList.remove("open"); });
 
 // --- 모듈 -----------------------------------------------------------
 function ctx() {
   return { db, auth, me, pcId, pcLabel: company?.pcs?.[pcId]?.label || pcId || "",
+           policy: company?.apps || {},   // 업체가 안 쓰는 기능 (총괄이 정한다). 예: apps.rpa.modules.Hold === false
            isAdmin: !!me && (me.role === "admin" || me.role === "super") };
 }
 

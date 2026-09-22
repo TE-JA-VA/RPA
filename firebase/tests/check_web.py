@@ -97,11 +97,11 @@ db_put(LIVE, {
     "modules": {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True},
     "schedule": {"enabled": True, "days": [0, 1, 2, 3, 4], "times": ["09:05"], "next_run_at": "2026-09-22T09:05:00",
                  "last_launch_at": f"{TODAY}T13:55:40", "last_launch_by": "cloud", "last_error": None},
-    # 최근 20일 (에이전트가 history.jsonl 에서 센다). 8/26~9/4 는 실행 없음, 9/10~9/14 성공 5 · 실패 3
-    "recent": [{"date": f"2026-08-{d:02d}", "success": 0, "failed": 0} for d in range(26, 32)]
-              + [{"date": f"2026-09-{d:02d}", "success": s, "failed": f}
-                 for d, s, f in [(1, 0, 0), (2, 0, 0), (3, 0, 0), (4, 0, 0), (5, 0, 0), (6, 0, 0), (7, 0, 0), (8, 0, 0), (9, 0, 0),
-                                 (10, 1, 0), (11, 1, 0), (12, 1, 0), (13, 1, 1), (14, 1, 2)]],
+    # 최근 20일 (에이전트가 history.jsonl 에서 센다). 8/26~9/4 는 실행 없음, 9/10~9/14 성공 5 · 실패 3 · 비정상 1(9/13)
+    "recent": [{"date": f"2026-08-{d:02d}", "success": 0, "failed": 0, "crashed": 0} for d in range(26, 32)]
+              + [{"date": f"2026-09-{d:02d}", "success": s, "failed": f, "crashed": c}
+                 for d, s, f, c in [(1, 0, 0, 0), (2, 0, 0, 0), (3, 0, 0, 0), (4, 0, 0, 0), (5, 0, 0, 0), (6, 0, 0, 0), (7, 0, 0, 0),
+                                    (8, 0, 0, 0), (9, 0, 0, 0), (10, 1, 0, 0), (11, 1, 0, 0), (12, 1, 0, 0), (13, 1, 1, 1), (14, 1, 2, 0)]],
 })
 # 이력 (Firestore 에뮬레이터 REST, Bearer owner). 에이전트가 올리는 문서와 같은 모양
 FS = f"http://127.0.0.1:8080/v1/projects/{PROJECT}/databases/(default)/documents"
@@ -188,6 +188,8 @@ with sync_playwright() as pw:
 
     def tok(name):
         return page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('{name}').trim()")
+
+    rgb2hex = lambda s: "#%02x%02x%02x" % tuple(int(x) for x in s[4:-1].split(",")[:3])
 
     def contrast_ok(theme):
         card = tok("--card")
@@ -285,7 +287,19 @@ with sync_playwright() as pw:
     check(page.locator("#recent-donut svg text").count() == 0, "도넛에 퍼센트 글자 없음")
     dash = page.get_attribute("#recent-donut svg circle:nth-child(2)", "stroke-dasharray")
     check(dash and abs(float(dash.split()[0]) - 33.33) < 0.1, f"오늘 도넛 호 길이 1/3 ({dash})")
-    check("성공 1" in page.text_content("#recent-donut .legend") and "실패 2" in page.text_content("#recent-donut .legend"), "오늘 도넛 범례")
+    legend = page.text_content("#recent-donut .legend")
+    check("성공 1" in legend and "실패 2" in legend and "오류 0" in legend, f"오늘 도넛 범례 세 가지 ({legend.strip()})")
+    # 9/13 = 성공 1 · 실패 1 · 오류 1 → 초록 1/3 (12시부터), 노랑 1/3 (초록 다음부터), 나머지 빨강
+    c13 = page.evaluate("""(() => { const cs = document.querySelectorAll("#recent-strip .day[data-date='2026-09-13'] svg circle");
+      return [...cs].map((c) => [c.getAttribute('stroke'), c.getAttribute('stroke-dasharray'), c.getAttribute('stroke-dashoffset')]); })()""")
+    check(len(c13) == 3 and c13[0][0] == "var(--bad)" and c13[1][0] == "var(--good)" and c13[2][0] == "var(--warn-mark)", f"도넛은 빨강 바탕 + 초록 + 노랑 호 ({[x[0] for x in c13]})")
+    check(abs(float(c13[2][1].split()[0]) - 33.33) < 0.1 and abs(float(c13[2][2]) - (25 - 33.33)) < 0.1,
+          f"오류 호는 초록 다음부터 1/3 (dasharray {c13[2][1]}, offset {c13[2][2]})")
+    # 도넛·범례의 노랑은 글자용 --warn(대비 4.5:1 맞추느라 올리브색)이 아니라 밝은 표시용 --warn-mark
+    arc_hex = lambda: rgb2hex(page.evaluate("getComputedStyle(document.querySelector(\"#recent-strip .day[data-date='2026-09-13'] svg circle:nth-child(3)\")).stroke"))
+    check(arc_hex() == tok("--warn-mark") == "#e0b50f" and tok("--warn") != tok("--warn-mark"),
+          f"밝은 모드 오류 호는 밝은 노랑 (호 {arc_hex()}, 글자용 {tok('--warn')})")
+    check(rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#recent-donut .legend span:nth-child(3) i')).backgroundColor")) == "#e0b50f", "범례 표식도 같은 노랑")
 
     print("3절 실패·끊김 표시")
     db_patch(f"{LIVE}/programs/routine", {"state": "stopped", "reason": "물류 관리 저장 실패 - 주소를 입력하세요",
@@ -304,6 +318,7 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/programs/routine", {"state": "crashed", "reason": "프로그램이 중간에 사라졌습니다"})
     page.wait_for_function("document.getElementById('hero')?.dataset.state === 'crashed'", timeout=10000)
     check(hero_hex() == token("--warn-fill"), "비정상 종료(오류)는 노랑으로 채움")
+    check(page.text_content("#h-state") == "오류", "상태 카드 제목도 '오류' (도넛·기록 표와 같은 말)")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW - 900})
     page.wait_for_function("document.getElementById('h-state')?.textContent === 'PC 연결 끊김'", timeout=10000)
     check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--warn-fill"), "연결 끊김도 노랑")
@@ -311,7 +326,32 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600})
     db_patch(f"{LIVE}/programs/routine", routine)
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
-    # 에이전트가 죽으면 값이 안 바뀐다. 화면이 5초마다 스스로 다시 봐야 끊김이 보인다
+    # 진행 중엔 시작 시각부터 흐른 시간이 1초마다 올라간다 (mm:ss, 1시간 넘으면 HH:mm:ss)
+    iso = lambda ago_s: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - ago_s))
+    db_patch(f"{LIVE}/programs/routine", {"state": "running", "started_at": iso(65), "updated_at": iso(0),
+                                          "steps_done": 0, "steps_total": 15, "current_label": "ERPia 로그인", "reason": None})
+    page.wait_for_function("document.getElementById('h-state')?.textContent === '진행 중'", timeout=10000)
+    t1 = page.text_content("#h-line2")
+    check(page.evaluate("/^01:0[5-7] \\| ERPia 로그인$/.test(document.getElementById('h-line2').textContent)"), f"둘째 줄은 '흐른 시간 | 지금 단계' ({t1})")
+    check("ERPia 로그인" not in page.text_content("#h-line1"), "첫째 줄엔 단계 이름이 없다")
+    page.wait_for_timeout(2100)
+    t2 = page.text_content("#h-line2")
+    check(t2 != t1 and page.evaluate("/^01:(0[6-9]|1\\d) \\|/.test(document.getElementById('h-line2').textContent)"), f"1초마다 올라간다 ({t1} → {t2})")
+    db_patch(f"{LIVE}/programs/routine", {"started_at": iso(3725), "current_label": "물류 관리 화면 이동 " * 12})
+    page.wait_for_function("/^01:02:0\\d \\|/.test(document.getElementById('h-line2')?.textContent || '')", timeout=10000)
+    check(True, f"1시간 넘으면 HH:mm:ss ({page.text_content('#h-line2')[:14]}…)")
+    l2css = page.evaluate("(() => { const s = getComputedStyle(document.getElementById('h-line2')); const e = document.getElementById('h-line2'); return [s.textOverflow, s.whiteSpace, e.scrollWidth > e.clientWidth]; })()")
+    check(l2css == ["ellipsis", "nowrap", True], f"긴 단계 이름은 한 줄로 … 처리 ({l2css})")
+    # 끊긴 시간은 초·분·시간·일 한 단위로 (상태 카드와 연결 칸 둘 다)
+    for age, want in ((30, "초"), (7200, "2시간"), (2 * 86400, "2일")):
+        db_patch(f"{LIVE}/heartbeat", {"at": int(time.time()) - age})
+        page.wait_for_function(f"(document.getElementById('h-line1')?.textContent || '').includes('{want} 전부터 응답 없음')", timeout=10000)
+        conn_t = page.text_content("#conn")
+        check("끊김 " in conn_t and want in conn_t, f"{age}초 전 끊김 → '{want} 전부터 응답 없음', 연결 칸 '끊김 …{want}' ({conn_t.strip()})")
+    db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600})
+    db_patch(f"{LIVE}/programs/routine", routine)
+    page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
+    # 에이전트가 죽으면 값이 안 바뀐다. 화면이 1초마다 스스로 다시 봐야 끊김이 보인다
     db_patch(f"{LIVE}/heartbeat", {"at": int(time.time()) - 17})   # 아직 20초 안 → 정상, 몇 초 뒤 끊김
     page.wait_for_function("document.getElementById('conn')?.textContent.includes('정상')", timeout=10000)
     page.wait_for_function("document.getElementById('conn')?.textContent.includes('끊김')", timeout=15000)
@@ -341,6 +381,8 @@ with sync_playwright() as pw:
     key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "launch")
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "루틴 RPA 을(를) 띄웠습니다", "started_at": 1, "ended_at": 2})
     page.wait_for_function("document.getElementById('act-alert')?.textContent?.includes('띄웠습니다')", timeout=10000)
+    page.wait_for_selector("#act-alert.hide", state="attached", timeout=8000)
+    check(page.is_hidden("#act-alert"), "성공 결과 안내는 몇 초 뒤 스스로 사라진다 (상태 카드가 보여 주니까)")
     check(True, "done 이 되면 결과 문장")
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=5000)
     check(True, "끝나면 버튼이 풀린다")
@@ -354,6 +396,23 @@ with sync_playwright() as pw:
     check(login_cb.is_checked() and "4/5 켬" in page.text_content("#mod-meta"), "눌러도 안 꺼진다")
     page.click("#mod-list label:nth-child(2)")     # 스위치의 input 은 숨겨져 있어 label 을 누른다
     check("5/5 켬" in page.text_content("#mod-meta") and not page.is_disabled("#mod-apply"), "켜면 요약·적용 활성")
+    # 운송장 출력은 물류관리가 켜져 있어야 쓸 수 있다 (켜져 있어도 끄는 건 자유)
+    out_cb = page.locator("#mod-list input[aria-label='운송장 출력 / 엑셀 생성']")
+    logi_row, out_row = "#mod-list label:nth-child(4)", "#mod-list label:nth-child(5)"
+    check(out_cb.is_checked() and not out_cb.is_disabled(), "물류관리가 켜져 있으면 출력 스위치는 자유")
+    page.click(out_row)
+    check(not out_cb.is_checked() and not out_cb.is_disabled(), "물류관리가 켜져 있어도 출력만 끌 수 있다")
+    page.click(out_row)
+    page.click(logi_row)                                   # 물류관리 끄기 → 출력도 따라 꺼지고 잠긴다
+    check(not out_cb.is_checked() and out_cb.is_disabled(), "물류관리를 끄면 출력도 꺼지고 잠긴다")
+    check("3/5 켬" in page.text_content("#mod-meta"), f"둘 다 꺼진 개수 ({page.text_content('#mod-meta')})")
+    check(page.get_attribute(out_row, "title") == "물류관리를 켜야 쓸 수 있습니다", f"잠긴 이유를 알려 준다 ({page.get_attribute(out_row, 'title')})")
+    page.click(out_row, force=True)   # 잠긴 스위치라 Playwright 가 '비활성' 으로 본다
+    check(not out_cb.is_checked(), "잠긴 동안은 눌러도 안 켜진다")
+    page.click(logi_row)                                   # 물류관리 다시 켜기
+    check(not out_cb.is_checked() and not out_cb.is_disabled(), "물류관리를 켜도 출력은 꺼진 채, 잠금만 풀린다")
+    page.click(out_row)
+    check(out_cb.is_checked() and "5/5 켬" in page.text_content("#mod-meta"), "그 뒤에 출력을 켤 수 있다")
     page.click("#mod-apply")
     time.sleep(1.5)
     check((db_get(f"{SETTINGS}/modules") or {}).get("Sales") is True, "settings.modules 에 저장")
@@ -364,6 +423,55 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/modules", {"Sales": True})
     page.wait_for_function("document.getElementById('mod-apply')?.disabled === true", timeout=10000)
     check("5/5 켬" in page.text_content("#mod-meta"), "PC 값이 돌아오면 기준값 갱신")
+    # 업체가 안 쓰는 모듈 (총괄이 meta 에 false 로 적는다) 은 목록에서 숨는다
+    db_patch("meta/companies/c_demo/apps/rpa/modules", {"Hold": False})
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#mod-list label")
+    check(page.locator("#mod-list input[aria-label='물류대기 관리']").count() == 0, "안 쓰는 업체면 그 스위치가 아예 없다")
+    check(page.locator("#mod-list label").count() == 4 and "4 켬" in page.text_content("#mod-meta"), f"개수도 빼고 센다 ({page.text_content('#mod-meta')})")
+    check(page.is_disabled("#mod-apply"), "숨긴 것 때문에 '바뀜' 으로 보이지 않는다")
+    page.click("#mod-list label:nth-child(2)"); page.click("#mod-apply"); time.sleep(1.5)
+    sent = cmds_of("set_modules")[-1]["args"]
+    check(sent["Hold"] is False, f"명령에도 꺼진 값으로 나간다 ({sent})")
+    db_patch("meta/companies/c_demo/apps/rpa", {"modules": None})   # null 로 PATCH = 그 자리 지우기 (PUT 은 본문이 비면 400)
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#mod-list label")
+    check(page.locator("#mod-list label").count() == 5, "정책을 지우면 다시 보인다")
+
+    # RPA 가 도는 동안에는 실행 버튼을 잠근다 (다른 사람이 겹쳐 실행하지 않게). 종료 버튼만 열어 둔다
+    db_patch(f"{LIVE}/programs/routine", {"state": "running", "started_at": f"{TODAY}T16:20:00", "updated_at": f"{TODAY}T16:20:28",
+                                          "steps_done": 1, "steps_total": 15, "current_label": "주문매핑 화면 이동", "reason": None,
+                                          "steps": [{"key": "login", "label": "ERPia 로그인", "state": "done"},
+                                                    {"key": "sales", "label": "주문매핑 화면 이동", "state": "running"},
+                                                    {"key": "top", "label": "상단 선택", "state": "pending"}]})
+    page.wait_for_function("document.getElementById('run-routine')?.disabled === true", timeout=10000)
+    check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
+    check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
+    check("돌고 있어" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
+    # 진행 중 단계 점만 숨쉬고, 로그가 늘어도 애니메이션이 처음부터 다시 돌지 않는다 (목록을 제자리에서 고친다)
+    anim = lambda sel: page.evaluate(f"getComputedStyle(document.querySelector({sel!r})).animationName")
+    check(anim("#list-routine li.running .mark") == "step-glow", "진행 중 점이 숨쉰다")
+    check(anim("#hero .dot") == "hero-glow", "상태 카드 점도 같이 숨쉰다")
+    check(anim("#list-routine li.done .mark") == "none" and anim("#list-routine li.pending .mark") == "none", "끝난·대기 단계는 안 움직인다")
+    mark_id = "document.querySelector('#list-routine li.running .mark')"
+    page.evaluate(f"window.__mark = {mark_id}")
+    db_patch(f"{LIVE}/programs/routine", {"log_tail": ["[16:20:30] 새 줄"], "updated_at": f"{TODAY}T16:20:30"})
+    page.wait_for_function("(document.getElementById('log')?.textContent || '').includes('새 줄')", timeout=10000)
+    check(page.evaluate(f"window.__mark === {mark_id}"), "로그가 늘어도 진행 중 점은 그대로 (애니메이션이 안 끊긴다)")
+    db_patch(f"{LIVE}/programs/routine", {"steps": [{"key": "login", "label": "ERPia 로그인", "state": "done"},
+                                                    {"key": "sales", "label": "주문매핑 화면 이동", "state": "done"},
+                                                    {"key": "top", "label": "상단 선택", "state": "running"}]})
+    page.wait_for_function("document.querySelectorAll('#list-routine li.done').length === 2", timeout=10000)
+    check(anim("#list-routine li.running .mark") == "step-glow" and page.text_content("#list-routine li:nth-child(3) .note") == "진행 중",
+          "단계가 넘어가면 다음 줄로 옮겨 간다")
+    db_patch(f"{LIVE}/programs/routine", routine)
+    page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=10000)
+    check(True, "끝나면 다시 눌린다")
+    # 띄우자마자 상태 파일에 아직 running 이 안 찍힌 몇 초 (에이전트가 launching 으로 알려 준다)
+    db_patch(LIVE, {"launching": True})
+    page.wait_for_function("document.getElementById('run-routine')?.disabled === true", timeout=10000)
+    check(page.is_disabled("#run-all") and not page.is_disabled("#stop-erpia"), "띄우는 중에도 실행 버튼은 잠긴다")
+    db_patch(LIVE, {"launching": False})
+    page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=10000)
+    check(True, "띄우기가 끝나면 풀린다")
 
     print("6절 자동 실행")
     check("평일 09:05" in page.text_content("#sch-meta"), "현재 예약 요약")
@@ -381,7 +489,6 @@ with sync_playwright() as pw:
     check(page.text_content("#stop-erpia .ic") == "⏼" and page.locator("#stop-erpia svg").count() == 0, "ERPia 종료는 전원 글자 ⏼ (U+23FC)")
     ic_w = page.evaluate("document.querySelector('#stop-erpia .ic').getBoundingClientRect().width")
     check(ic_w > 10, f"전원 글자가 실제로 그려진다 (폭 {ic_w:.0f}px)")
-    rgb2hex = lambda s: "#%02x%02x%02x" % tuple(int(x) for x in s[4:-1].split(",")[:3])
     check(not page.is_disabled("#stop-erpia"), "종료 버튼 활성")
     page.hover("#stop-erpia"); page.wait_for_timeout(800)
     stop_bg = page.evaluate("getComputedStyle(document.getElementById('stop-erpia')).backgroundColor")
@@ -477,7 +584,8 @@ with sync_playwright() as pw:
     check(rows.nth(0).locator("td").nth(1).text_content() == "루틴" and rows.nth(2).locator("td").nth(1).text_content() == "프리페어", "프로그램 칸은 루틴/프리페어")
     check(one_line("#view-history thead th:nth-child(2)") and one_line("#hist-rows tr.hist td:nth-child(1)"), "시각·프로그램 칸이 한 줄")
     crash = rows.nth(5).locator(".pill")
-    check("crash" in (crash.get_attribute("class") or "") and crash.text_content() == "비정상 종료", "비정상 종료 알약")
+    check("crash" in (crash.get_attribute("class") or "") and crash.text_content() == "오류", "죽은 실행은 '오류' 알약")
+    check(rows.nth(1).locator(".pill").text_content() == "실패", "단계에서 멈춘 실행은 '실패' 알약 (중단이라 안 쓴다)")
     crash_css = lambda p: rgb2hex(page.evaluate(f"getComputedStyle(document.querySelector('#hist-rows .pill.crash')).{p}"))
     check(crash_css("backgroundColor") == "#e0b50f" and crash_css("color") == "#1e1e2c", "비정상 종료는 노랑 채움 (밝음: 밝은 노랑 + 남색 글자)")
     page.click("#theme"); page.wait_for_timeout(600)
@@ -514,6 +622,35 @@ with sync_playwright() as pw:
     check(page.is_visible("#view-history") and page.locator("#hist-rows tr.hist").count() == 3, "날짜 도넛을 누르면 그 날 기록 3건")
     check(page.input_value("#hist-date") == "2026-09-14", "날짜 칸에 그 날짜")
     page.click("#tab-status")
+
+    print("7-3절 PC 고르기")
+    # 키 이름순으로 오므로 pc_z 가 pc_office 뒤에 온다 (기억한 PC 가 없으면 첫 PC)
+    db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}, "pc_z": {"label": "창고 PC"}}})
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#hero")
+    check(page.is_visible("#pc-pick") and page.text_content("#pc-pick .selected").strip() == "사무실 PC", "PC 가 둘이면 고르기가 보이고 지금 PC 가 적혀 있다")
+    check(page.locator("#pc-pick .option").count() == 1 and page.text_content("#pc-pick .option") == "창고 PC", "목록엔 다른 PC 만")
+    opts_opacity = lambda: page.evaluate("getComputedStyle(document.querySelector('#pc-pick .options')).opacity")
+    check(opts_opacity() == "0", "목록은 접혀 있다")
+    page.hover("#pc-pick .selected"); page.wait_for_timeout(450)
+    check(opts_opacity() == "1", "올리면 펼쳐진다")
+    if os.environ.get("SHOT_DIR"):
+        clip = lambda: page.evaluate("(() => { const b = document.getElementById('pc-pick').getBoundingClientRect(); return {x: b.left - 40, y: b.top - 12, width: b.width + 80, height: b.height + 110}; })()")
+        page.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "pcpick_light.png"), clip=clip())
+        page.click("#theme"); page.hover("#pc-pick .selected"); page.wait_for_timeout(700)
+        page.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "pcpick_dark.png"), clip=clip())
+        page.click("#theme"); page.hover("#pc-pick .selected"); page.wait_for_timeout(450)
+    page.click("#pc-pick .option")
+    page.wait_for_function("document.querySelector('#pc-pick .selected')?.textContent.trim() === '창고 PC'", timeout=5000)
+    check(page.text_content("#pc-pick .option") == "사무실 PC", "고르면 알약이 바뀌고 목록엔 이전 PC")
+    page.wait_for_function("document.getElementById('h-state')?.textContent === 'PC 연결 끊김'", timeout=10000)
+    check("기록 없음" in page.text_content("#h-line1"), "고른 PC 의 현황으로 바뀐다 (창고 PC 는 기록 없음)")
+    page.mouse.move(0, 0); page.wait_for_timeout(450)
+    check(opts_opacity() == "0", "마우스가 떠나면 접힌다")
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#hero")
+    check(page.text_content("#pc-pick .selected").strip() == "창고 PC", "새로고침해도 마지막에 고른 PC 를 기억한다")
+    db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}}})
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#hero")
+    check(page.is_hidden("#pc-pick"), "PC 를 하나로 되돌리면 다시 숨는다")
 
     print("8절 열람자")
     page.click("#logout-btn")

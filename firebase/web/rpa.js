@@ -14,9 +14,11 @@ export const icon = "▣";
 export const perPc = true;
 
 const P = (kind, cid, pcId) => `apps/rpa/${kind}/${cid}/${pcId}`;
-const STATE_LABEL = { running: "진행 중", success: "성공", failed: "실패", stopped: "중단", crashed: "비정상 종료", done: "완료", skipped: "건너뜀" };
+// 상태 이름은 세 가지로 통일 (2026-09-22): 성공 / 실패(단계 검사에서 스스로 멈춤, 사용자 중지 포함) / 오류(프로그램이 죽음).
+// 상태 카드·도넛 범례·기록 표 알약이 모두 같은 말을 쓴다. done·skipped 는 단계 상태
+const STATE_LABEL = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류", done: "완료", skipped: "건너뜀" };
 const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어" };   // 기록 표의 프로그램 칸. RPA 인 건 아니까 뗀다
-const HERO_TITLE = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "실패" };
+const HERO_TITLE = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류" };
 const MODULES = [
   ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
   ["Logistics", "물류관리"], ["Output", "운송장 출력 / 엑셀 생성"],
@@ -114,7 +116,7 @@ let live = null;
 let form = { modules: {}, sch: { enabled: false, days: [], times: [] } };
 let fs = null;
 let resizeObs = null;
-let tick = null;   // 5초마다 연결 상태를 다시 본다 - 에이전트가 죽으면 값이 안 바뀌어서 구독만으로는 화면이 안 바뀐다
+let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 - 진행 시간이 올라가고, 에이전트가 죽어도(값이 안 바뀜) 끊김이 보이게
 let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 다시 안 그린다 - 스크롤이 튀지 않게)
 
 const $ = (id) => root.querySelector(`#${id}`);
@@ -163,7 +165,7 @@ export function mount(el, context) {
     if (strip.scrollWidth <= strip.clientWidth || e.deltaX) return;
     strip.scrollLeft += e.deltaY; e.preventDefault();
   }, { passive: false });
-  tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); } }, 5000);
+  tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); } }, 1000);
   if (!c.pcId) { $("h-state").textContent = "등록된 PC 가 없습니다"; return; }
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const v = snap.val();
@@ -223,7 +225,7 @@ function paintHero() {
   if (off == null || off > staleSec()) {
     state = "offline";
     title = "PC 연결 끊김";
-    l1 = off == null ? "에이전트 기록 없음" : `${Math.floor(off / 60)}분 전부터 응답 없음` + (v ? ` · 마지막 ${STATE_LABEL[v.state] || v.state} ${hhmm(v.finished_at || v.updated_at)}` : "");
+    l1 = off == null ? "에이전트 기록 없음" : `${ago(off)} 전부터 응답 없음` + (v ? ` · 마지막 ${STATE_LABEL[v.state] || v.state} ${hhmm(v.finished_at || v.updated_at)}` : "");
     l2 = "PC 가 꺼졌거나 에이전트가 닫혔습니다. PC 에서 에이전트_시작.bat 을 다시 실행하세요.";
   } else if (!v) {
     state = ""; title = "기록 없음"; l1 = "PC 연결됨"; l2 = "";
@@ -231,8 +233,9 @@ function paintHero() {
     state = v.state;
     title = HERO_TITLE[v.state] || v.state;
     if (v.state === "running") {
-      l1 = `${hhmm(v.started_at)} ${v.program_label} · ${v.steps_done ?? 0}/${v.steps_total ?? 0} 단계` + (v.current_label ? ` · ${v.current_label}` : "");
-      l2 = `시작 ${dur(v.elapsed_sec)} 전`;
+      l1 = `${hhmm(v.started_at)} ${v.program_label} · ${v.steps_done ?? 0}/${v.steps_total ?? 0} 단계`;
+      // 흐른 시간 | 지금 단계. 시간은 1초마다 올라간다 (mm:ss, 1시간 넘으면 HH:mm:ss). 긴 단계 이름은 CSS 가 … 로 자른다
+      l2 = clock(elapsedSec(v)) + (v.current_label ? ` | ${v.current_label}` : "");
     } else {
       const stopped = (v.steps || []).find((s) => s.state === "stopped" || s.state === "failed");
       l1 = [`${hhmm(v.started_at)} ${v.program_label}`, dur(v.duration_sec), stopped ? `${stopped.label}에서 멈춤` : ""]
@@ -244,6 +247,25 @@ function paintHero() {
   $("h-state").textContent = title;
   $("h-line1").textContent = l1;
   $("h-line2").textContent = l2;
+}
+
+// 진행 시간. started_at(PC 시각, 시간대 없음)은 이 브라우저의 지역 시각으로 읽는다. 없으면 PC 가 올린 elapsed_sec
+function elapsedSec(v) {
+  const t = v.started_at ? Date.parse(v.started_at) : NaN;
+  return Number.isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 1000)) : (v.elapsed_sec || 0);
+}
+// mm:ss, 1시간을 넘으면 HH:mm:ss
+function clock(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const mmss = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return h ? `${String(h).padStart(2, "0")}:${mmss}` : mmss;
+}
+// 얼마나 지났는지 한 단위로: 59초까지 초, 59분까지 분, 23시간까지 시간, 그 뒤는 일
+function ago(sec) {
+  if (sec < 60) return `${sec}초`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}분`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}시간`;
+  return `${Math.floor(sec / 86400)}일`;
 }
 
 // 한 줄 요약. 루틴: "수집 30건 (자동 12건, 엑셀 2개) · 재고검토 보류 8/8 · 비정상 보류 ≈376건". 프리페어: 메일·첨부.
@@ -275,7 +297,7 @@ function paintTiles() {
   if (m2) tiles.push(["재고검토 보류", String(m2.value), m2.total != null ? `/ ${m2.total}` : (m2.unit || ""), false]);
   if (m3) tiles.push(["비정상 보류", String(m3.value), m3.unit || "건", !!m3.approx]);
   const conn = off != null && off <= staleSec();
-  const offText = off == null ? "없음" : off < 60 ? `끊김 ${off}초` : `끊김 ${Math.floor(off / 60)}분`;
+  const offText = off == null ? "없음" : `끊김 ${ago(off)}`;
   tiles.push(["연결", conn ? "정상" : offText, "", false, conn ? "var(--good)" : "var(--warn)", "conn"]);
   const sch = live?.schedule;
   tiles.push(["다음 자동 실행", sch?.enabled && sch.next_run_at ? when(sch.next_run_at) : "꺼짐", "", false]);
@@ -289,14 +311,16 @@ function paintTiles() {
 }
 
 // 도넛 SVG. 둘레 100 으로 맞춘 stroke-dasharray. 가운데 글자는 없다 (수치는 옆 범례에)
-function donutSvg(ok, bad, size) {
-  const total = ok + bad;
-  const goodLen = total ? ok / total * 100 : 0;
-  // 실행이 없으면 빗금 고리 (index.html 의 #hatch 무늬)
-  return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="${total ? `성공 ${ok}건, 실패 ${bad}건` : "실행 없음"}">
+function donutSvg(ok, bad, crash, size) {
+  // 세 색: 성공 초록 → 오류 노랑 → 실패 빨강. 바탕 고리를 빨강으로 다 칠하고 초록·노랑 호를 12시부터 차례로 얹는다
+  // (둘레 100 이라 dasharray 가 곧 %). 실행이 없으면 빗금 고리 (index.html 의 #hatch 무늬)
+  const total = ok + bad + crash;
+  const goodLen = total ? ok / total * 100 : 0, crashLen = total ? crash / total * 100 : 0;
+  const arc = (len, start, color) => `<circle cx="21" cy="21" r="15.915" fill="none" stroke="${color}" stroke-width="6"
+      stroke-dasharray="${len} ${100 - len}" stroke-dashoffset="${25 - start}"></circle>`;
+  return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="${total ? `성공 ${ok}건, 실패 ${bad}건, 오류 ${crash}건` : "실행 없음"}">
     <circle cx="21" cy="21" r="15.915" fill="none" stroke="${total ? "var(--bad)" : "url(#hatch)"}" stroke-width="6"></circle>
-    ${total ? `<circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--good)" stroke-width="6"
-      stroke-dasharray="${goodLen} ${100 - goodLen}" stroke-dashoffset="25"></circle>` : ""}
+    ${total ? arc(goodLen, 0, "var(--good)") + arc(crashLen, goodLen, "var(--warn-mark)") : ""}
   </svg>`;
 }
 
@@ -321,35 +345,53 @@ function paintRecent() {
   const key = JSON.stringify(days);
   if (key === paintedRecent) return;
   paintedRecent = key;
-  const today = days[days.length - 1] || { success: 0, failed: 0 };
-  const ok = today.success || 0, bad = today.failed || 0;
-  $("recent-meta").textContent = days.length ? (ok + bad ? `오늘 성공 ${ok} · 실패 ${bad}` : "오늘 실행 없음") : "";
+  const today = days[days.length - 1] || {};
+  const ok = today.success || 0, bad = today.failed || 0, crash = today.crashed || 0;   // 옛 에이전트는 crashed 를 안 올린다 (실패에 합산)
+  $("recent-meta").textContent = days.length
+    ? (ok + bad + crash ? `오늘 성공 ${ok} · 실패 ${bad}` + (crash ? ` · 오류 ${crash}` : "") : "오늘 실행 없음") : "";
   const strip = $("recent-strip");
   strip.replaceChildren(...days.map((d) => {
     const cell = document.createElement("button");
-    cell.className = "day" + (d.success || d.failed ? "" : " empty");
+    const n = (d.success || 0) + (d.failed || 0) + (d.crashed || 0);
+    cell.className = "day" + (n ? "" : " empty");
     cell.dataset.date = d.date;
-    cell.title = d.success || d.failed ? `${d.date} · 성공 ${d.success} 실패 ${d.failed} · 기록 보기` : `${d.date} · 실행 없음`;
-    cell.innerHTML = `${donutSvg(d.success || 0, d.failed || 0, 44)}<div class="d">${d.date.slice(5).replace("-", "/")}</div>`;
+    cell.title = n ? `${d.date} · 성공 ${d.success || 0} 실패 ${d.failed || 0} 오류 ${d.crashed || 0} · 기록 보기` : `${d.date} · 실행 없음`;
+    cell.innerHTML = `${donutSvg(d.success || 0, d.failed || 0, d.crashed || 0, 44)}<div class="d">${d.date.slice(5).replace("-", "/")}</div>`;
     cell.onclick = () => { $("hist-date").value = d.date; showView("history"); loadHistory(d.date); };
     return cell;
   }));
   fitStrip();
-  const total = ok + bad;
+  const total = ok + bad + crash;
   $("recent-donut").innerHTML = total
-    ? `${donutSvg(ok, bad, 104)}<div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span></div>`
+    ? `${donutSvg(ok, bad, crash, 104)}<div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span><span><i style="background:var(--warn-mark)"></i>오류 ${crash}</span></div>`
     : `<div class="muted" style="font-size:13px">실행 없음</div>`;
 }
+
+/** 이미 있는 목록은 제자리에서 고친다. 통째로 새로 그리면 진행 중 점의 애니메이션이 매번 처음부터 다시 돈다 */
+function paintStepsInto(ul, steps) {
+  const list = steps || [], rows = ul.children;
+  const same = rows.length === list.length
+    && list.every((s, i) => rows[i].children[1].textContent === (s.label || s.key));
+  if (!same) { ul.replaceChildren(...stepList(list).children); return; }
+  list.forEach((s, i) => {
+    const li = rows[i], note = li.children[2];
+    if (li.className !== stepClass(s)) li.className = stepClass(s);
+    if (note.textContent !== stepNote(s)) note.textContent = stepNote(s);
+  });
+}
+const stepClass = (s) => (s.state === "skipped" && s.note === "설정에서 끔") ? "skipped" : (s.state || "pending");
+const stepNote = (s) => (s.state === "skipped" && s.note === "설정에서 끔") ? "설정에서 끔"
+  : (s.note || (s.state === "running" ? "진행 중" : ""));
 
 function stepList(steps) {
   const ul = document.createElement("ul");
   ul.className = "steps";
   ul.replaceChildren(...(steps || []).map((s) => {
     const li = document.createElement("li");
-    const off = s.state === "skipped" && s.note === "설정에서 끔";
-    li.className = off ? "skipped" : (s.state || "pending");
-    const note = off ? "설정에서 끔" : (s.note || (s.state === "running" ? "진행 중" : ""));
-    li.innerHTML = `<span class="mark"></span><span>${s.label || s.key}</span><span class="note">${note}</span>`;
+    li.className = stepClass(s);
+    li.append(Object.assign(document.createElement("span"), { className: "mark" }),
+              Object.assign(document.createElement("span"), { textContent: s.label || s.key }),
+              Object.assign(document.createElement("span"), { className: "note", textContent: stepNote(s) }));
     return li;
   }));
   return ul;
@@ -362,7 +404,7 @@ function paintSteps() {
     if (!v) { ul.replaceChildren(); meta.textContent = "기록 없음"; continue; }
     const steps = v.steps || [];
     meta.textContent = `${STATE_LABEL[v.state] || v.state} · ${v.steps_done ?? 0}/${v.steps_total ?? steps.length}` + (v.duration_sec != null ? ` · ${dur(v.duration_sec)}` : "");
-    ul.replaceChildren(...stepList(steps).children);
+    paintStepsInto(ul, steps);
   }
 }
 
@@ -400,7 +442,7 @@ function histRow(r) {
   const ms = (payload.metrics || []).slice(0, 3).map((m) => `${m.label} ${m.approx ? "≈" : ""}${m.value}${m.total != null ? "/" + m.total : ""}`).join(" · ");
   const tr = document.createElement("tr");
   tr.className = "hist";
-  // 비정상 종료는 중단보다 심각하니 진한 빨강에 흰 글자 (crash), 실패·중단은 옅은 빨강 (bad)
+  // 오류(crashed)는 노랑 채움 알약, 실패(stopped·failed)는 옅은 빨강 알약
   const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : r.state === "crashed" ? "crash" : "bad";
   const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
   const prog = PROGRAM_SHORT[r.program] || r.program_label || r.program || "";   // 표에선 'RPA' 를 뗀다
@@ -417,11 +459,15 @@ function histRow(r) {
 }
 
 // --- 명령 -----------------------------------------------------------
-function setAlert(kind, text) {
+let alertTimer = null;
+function setAlert(kind, text, ttlMs = 0) {
+  // ttlMs 가 있으면 그 뒤에 스스로 사라진다. 실행 결과는 상태 카드가 보여 주니 안내 상자는 잠깐만 띄운다
   const box = $("act-alert");
   box.textContent = text;
   box.className = `alert ${kind === "bad" ? "bad" : ""}`;
   show(box, !!text);
+  if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
+  if (text && ttlMs) alertTimer = setTimeout(() => { if (root) show(box, false); }, ttlMs);
 }
 
 async function sendCommand(type, args, label) {
@@ -448,50 +494,88 @@ function watchCommand(cmdKey, label) {
     const off = onValue(ref(c.db, `${P("commands", c.me.cid, c.pcId)}/${cmdKey}`), (snap) => {
       const v = snap.val();
       if (!v || !root) return;
-      if (v.state === "running") setAlert("", `${label} 진행 중`);
+      if (v.state === "running") setAlert("", `${label} 진행 중`, 4000);
       if (["done", "failed", "expired"].includes(v.state)) {
         clearTimeout(timer); off();
-        setAlert(v.state === "done" ? "" : "bad", v.result || v.state);
+        setAlert(v.state === "done" ? "" : "bad", v.result || v.state, v.state === "done" ? 4000 : 0);   // 실패는 남겨 둔다
         resolve();
       }
     });
   });
 }
 
+/** 이 PC 에서 RPA 가 돌고 있나 (누가 실행했든). 1PC 1프로그램이라 그 동안에는 다시 못 띄운다.
+ *  launching 은 띄운 프로세스가 살아 있다는 뜻 - 명령이 done 이 된 뒤 상태 파일에 running 이 찍히기까지의 틈을 메운다 */
+function rpaRunning() {
+  return live?.launching === true || Object.values(live?.programs || {}).some((p) => p && p.state === "running");
+}
 function paintButtons() {
-  for (const id of ["run-prepare", "run-routine", "run-all", "stop-erpia"]) $(id).disabled = !c.isAdmin || busy || !c.pcId;
+  const off = !c.isAdmin || busy || !c.pcId;
+  const running = rpaRunning();
+  for (const id of ["run-prepare", "run-routine", "run-all"]) {
+    $(id).disabled = off || running;                     // 다른 사람이 이미 돌리는 중이면 못 누른다
+    $(id).title = running && !off ? "RPA 가 돌고 있어 실행할 수 없습니다" : "";
+  }
+  $("stop-erpia").disabled = off;                        // 종료는 도는 중에도 눌러야 한다
   paintModuleMeta(); paintScheduleMeta();
 }
 
 // --- 실행 모듈 ------------------------------------------------------
 const LOCKED = new Set(["Login"]);   // 항상 켬. 관리자도 못 끈다 (에이전트도 파일에 Y 로 고정)
+// 앞 모듈이 꺼지면 따라 꺼지는 모듈. 운송장 출력은 물류관리가 만든 화면에서 돌기 때문에 혼자 돌 수 없다 (에이전트도 못 박는다)
+const NEEDS = { Output: "Logistics" };
+
+/** 이 업체가 안 쓰는 모듈 (총괄이 meta/companies/{cid}/apps/rpa/modules 에 false 로 정한다). 화면에서 아예 숨긴다 */
+const offByCompany = (k) => c?.policy?.rpa?.modules?.[k] === false;
+const shownModules = () => MODULES.filter(([k]) => !offByCompany(k));
+
+/** 딸린 모듈과 업체 정책을 규칙대로 끈다. 켜는 것은 사람이 직접 한다 (물류관리를 켜도 출력은 꺼진 채로 둘 수 있다) */
+function applyNeeds(mods) {
+  for (const k of Object.keys(mods)) if (offByCompany(k)) mods[k] = false;
+  for (const [k, need] of Object.entries(NEEDS)) if (!mods[need]) mods[k] = false;
+  return mods;
+}
 const savedModules = () => live?.modules || {};
 function resetModules() {
-  form.modules = Object.fromEntries(MODULES.map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false]));
+  form.modules = applyNeeds(Object.fromEntries(MODULES.map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false])));
   paintModules();
 }
 function modulesDirty() {
-  return MODULES.some(([k]) => !!form.modules[k] !== (savedModules()[k] !== false));
+  return MODULES.some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
 }
+const dict = (pairs) => Object.fromEntries(pairs);
+// 받침이 있으면 '을', 없으면 '를' (한글이 아니면 '를')
+const josa = (w) => {
+  const code = (w || "").charCodeAt((w || "").length - 1) - 0xac00;
+  return code >= 0 && code < 11172 && code % 28 ? "을" : "를";
+};
 function paintModules() {
-  $("mod-list").replaceChildren(...MODULES.map(([k, text], i) => {
+  $("mod-list").replaceChildren(...shownModules().map(([k, text], i) => {
     const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
     const cb = document.createElement("input");
-    cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k);
+    const needOff = NEEDS[k] && !form.modules[NEEDS[k]];   // 앞 모듈이 꺼져 있으면 이 스위치는 잠근다
+    cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k) || needOff;
     cb.setAttribute("aria-label", text);
-    cb.onchange = () => { form.modules[k] = cb.checked; paintModuleMeta(); };
+    if (needOff) { const need = dict(MODULES)[NEEDS[k]]; row.title = `${need}${josa(need)} 켜야 쓸 수 있습니다`; }
+    cb.onchange = () => {
+      form.modules[k] = cb.checked;
+      // 딸린 모듈이 있는 스위치면 다시 그린다 (끄면 딸린 것도 꺼지고 잠기고, 켜면 잠금만 풀린다)
+      if (Object.values(NEEDS).includes(k)) { applyNeeds(form.modules); paintModules(); return; }
+      paintModuleMeta();
+    };
     row.append(Object.assign(document.createElement("span"), { textContent: text }), cb, Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
   paintModuleMeta();
 }
 function paintModuleMeta() {
-  const on = MODULES.filter(([k]) => form.modules[k]).length;
-  $("mod-meta").textContent = live ? `${on}/${MODULES.length} 켬` : "";
+  const shown = shownModules();
+  const on = shown.filter(([k]) => form.modules[k]).length;
+  $("mod-meta").textContent = live ? `${on}/${shown.length} 켬` : "";
   $("mod-apply").disabled = !c.isAdmin || busy || !modulesDirty() || on === 0;
 }
 async function applyModules() {
-  const wanted = Object.fromEntries(MODULES.map(([k]) => [k, !!form.modules[k]]));
+  const wanted = applyNeeds(Object.fromEntries(MODULES.map(([k]) => [k, !!form.modules[k]])));
   if (!Object.values(wanted).some(Boolean)) { setAlert("bad", "최소 한 모듈은 켜야 합니다"); return; }
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
