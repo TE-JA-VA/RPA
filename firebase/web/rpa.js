@@ -7,6 +7,7 @@ import {
   getFirestore, collection, query, where, orderBy, limit, getDocs, connectFirestoreEmulator,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS, COMMAND_TTL_SEC } from "./firebase-config.js";
+import { toast } from "./toast.js";
 
 export const key = "rpa";
 export const label = "RPA";
@@ -46,6 +47,7 @@ const HTML = `
         <div class="line1" id="h-line1"></div>
         <div class="line2" id="h-line2"></div>
       </div>
+      <div class="stats" id="hero-side"></div>
     </section>
     <div class="tiles" id="tiles"></div>
     <div class="cols">
@@ -72,7 +74,6 @@ const HTML = `
             <button id="run-routine">${ARROW}<span>루틴 RPA</span></button>
             <button id="stop-erpia" class="danger">${POWER}<span>ERPia 종료</span></button>
           </div>
-          <div id="act-alert" class="alert hide"></div>
         </div>
         <div class="card" id="mod-card">
           <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
@@ -117,6 +118,7 @@ let form = { modules: {}, sch: { enabled: false, days: [], times: [] } };
 let fs = null;
 let resizeObs = null;
 let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 - 진행 시간이 올라가고, 에이전트가 죽어도(값이 안 바뀜) 끊김이 보이게
+let seenRun = {};  // 프로그램별로 마지막에 본 "run_id:상태" (토스트를 두 번 울리지 않게)
 let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 다시 안 그린다 - 스크롤이 튀지 않게)
 
 const $ = (id) => root.querySelector(`#${id}`);
@@ -133,7 +135,7 @@ const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,
 export function mount(el, context) {
   root = el; c = context;
   root.innerHTML = HTML;
-  busy = false; live = null;
+  busy = false; live = null; seenRun = {};
   fs = getFirestore(c.db.app);
   if (location.hostname === "127.0.0.1" && new URLSearchParams(location.search).get("emu") === "1") {
     try { connectFirestoreEmulator(fs, "127.0.0.1", 8080); } catch {}   // 두 번째 mount 부터는 이미 붙어 있다
@@ -171,6 +173,7 @@ export function mount(el, context) {
     const v = snap.val();
     const first = live == null;
     live = v || {};
+    runToasts(first);
     paintHero(); paintTiles(); paintRecent(); paintSteps(); paintLog();
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신)
     if (first || !modulesDirty()) resetModules();
@@ -195,6 +198,26 @@ function showView(name) {
 }
 
 // --- 현황 -----------------------------------------------------------
+/** 실행이 시작·끝날 때만 알린다. 처음 열 때(첫 snapshot)와 PC 를 바꿀 때는 옛 결과로 울리지 않는다 */
+function runToasts(first) {
+  for (const k of ["routine", "prepare"]) {
+    const v = live?.programs?.[k];
+    if (!v) continue;
+    const mark = `${v.run_id || ""}:${v.state}`;
+    const was = seenRun[k];
+    seenRun[k] = mark;
+    if (first || was === undefined || was === mark) continue;
+    const label = v.program_label || PROGRAM_SHORT[k] || k;
+    if (v.state === "running") toast("info", `${label} 를 시작했습니다`);
+    else if (v.state === "success") toast("ok", [`${label} 성공`, dur(v.duration_sec)].filter(Boolean).join(" · "));
+    else if (v.state === "crashed") toast("warn", `${label} 오류 · ${v.reason || "프로그램이 도중에 멈췄습니다"}`);
+    else if (["failed", "stopped"].includes(v.state)) {
+      const at = (v.steps || []).find((s) => s.state === "stopped" || s.state === "failed");
+      toast("bad", `${label} 실패` + (at ? ` · ${at.label}에서 멈춤` : v.reason ? ` · ${v.reason}` : ""));
+    }
+  }
+}
+
 function latest() {
   const ps = live?.programs || {};
   const list = ["routine", "prepare"].map((k) => ps[k]).filter(Boolean);
@@ -296,16 +319,21 @@ function paintTiles() {
   if (m1) tiles.push(["처리 주문", String(m1.value), m1.unit || "건", false]);
   if (m2) tiles.push(["재고검토 보류", String(m2.value), m2.total != null ? `/ ${m2.total}` : (m2.unit || ""), false]);
   if (m3) tiles.push(["비정상 보류", String(m3.value), m3.unit || "건", !!m3.approx]);
-  const conn = off != null && off <= staleSec();
-  const offText = off == null ? "없음" : `끊김 ${ago(off)}`;
-  tiles.push(["연결", conn ? "정상" : offText, "", false, conn ? "var(--good)" : "var(--warn)", "conn"]);
-  const sch = live?.schedule;
-  tiles.push(["다음 자동 실행", sch?.enabled && sch.next_run_at ? when(sch.next_run_at) : "꺼짐", "", false]);
-  $("tiles").replaceChildren(...tiles.map(([k, v, u, approx, color, id]) => {
+  $("tiles").classList.toggle("hide", !tiles.length);
+  $("tiles").replaceChildren(...tiles.map(([k, v, u, approx]) => {
     const d = document.createElement("div"); d.className = "tile";
     d.innerHTML = `<span class="k">${k}</span><span class="v num">${approx ? '<span class="approx">≈</span>' : ""}${v}<small>${u}</small></span>`;
-    if (color) d.querySelector(".v").style.color = color;
-    if (id) d.querySelector(".v").id = id;
+    return d;
+  }));
+  // 연결·다음 자동 실행은 처리 건수와 성격이 달라 상태 띠 오른쪽에 붙인다 (띠 색을 따라가므로 글자색은 안 준다)
+  const conn = off != null && off <= staleSec();
+  const sch = live?.schedule;
+  $("hero-side").replaceChildren(...[
+    ["연결", conn ? "정상" : (off == null ? "없음" : `끊김 ${ago(off)}`), "conn"],
+    ["다음 자동 실행", sch?.enabled && sch.next_run_at ? when(sch.next_run_at) : "꺼짐", ""],
+  ].map(([k, v, id]) => {
+    const d = document.createElement("div"); d.className = "stat";
+    d.innerHTML = `<span class="k">${k}</span><span class="v num"${id ? ` id="${id}"` : ""}>${v}</span>`;
     return d;
   }));
 }
@@ -376,7 +404,7 @@ function paintStepsInto(ul, steps) {
   list.forEach((s, i) => {
     const li = rows[i], note = li.children[2];
     if (li.className !== stepClass(s)) li.className = stepClass(s);
-    if (note.textContent !== stepNote(s)) note.textContent = stepNote(s);
+    if (note.textContent !== stepNote(s)) { note.textContent = stepNote(s); note.title = stepNote(s); }
   });
 }
 const stepClass = (s) => (s.state === "skipped" && s.note === "설정에서 끔") ? "skipped" : (s.state || "pending");
@@ -391,7 +419,7 @@ function stepList(steps) {
     li.className = stepClass(s);
     li.append(Object.assign(document.createElement("span"), { className: "mark" }),
               Object.assign(document.createElement("span"), { textContent: s.label || s.key }),
-              Object.assign(document.createElement("span"), { className: "note", textContent: stepNote(s) }));
+              Object.assign(document.createElement("span"), { className: "note", textContent: stepNote(s), title: stepNote(s) }));
     return li;
   }));
   return ul;
@@ -408,9 +436,20 @@ function paintSteps() {
   }
 }
 
+/** 로그는 단계별 한 줄로만 보여준다. RPA 원본 로그(log_tail)는 화면에 담기엔 너무 길다 - PC 의 로그 파일에 그대로 남는다 */
+function logLines(v) {
+  return (v?.steps || []).filter((s) => ["running", "done", "failed", "stopped"].includes(s.state)).map((s) => {
+    const label = s.label || s.key;
+    const at = (s.finished_at || s.started_at || "").slice(11, 19) || "--:--:--";
+    if (s.state === "running") return `[${at}] ${label} 진행 중`;
+    if (s.state === "done") return `[${at}] ${label} 성공`;
+    return `[${at}] ${label} ${STATE_LABEL[s.state] || s.state} : ${s.note || `${label} 단계에서 오류가 발생했습니다.`}`;
+  });
+}
+
 function paintLog() {
   const v = latest();
-  const lines = v?.log_tail || v?.log || [];
+  const lines = logLines(v);
   $("log").textContent = lines.join("\n");
   $("log-meta").textContent = lines.length ? `${v.program_label} · ${lines.length}줄` : "없음";
 }
@@ -459,21 +498,13 @@ function histRow(r) {
 }
 
 // --- 명령 -----------------------------------------------------------
-let alertTimer = null;
-function setAlert(kind, text, ttlMs = 0) {
-  // ttlMs 가 있으면 그 뒤에 스스로 사라진다. 실행 결과는 상태 카드가 보여 주니 안내 상자는 잠깐만 띄운다
-  const box = $("act-alert");
-  box.textContent = text;
-  box.className = `alert ${kind === "bad" ? "bad" : ""}`;
-  show(box, !!text);
-  if (alertTimer) { clearTimeout(alertTimer); alertTimer = null; }
-  if (text && ttlMs) alertTimer = setTimeout(() => { if (root) show(box, false); }, ttlMs);
-}
+/** 명령·설정 안내는 토스트 하나를 이어서 고쳐 쓴다 (보냄 → 진행 중 → 결과) */
+const notify = (kind, text, ttlMs) => toast(kind, text, ttlMs, "act");
 
 async function sendCommand(type, args, label) {
   if (busy || !c.pcId) return;
   busy = true; paintButtons();
-  setAlert("", `${label} 명령을 보냈습니다. PC 응답을 기다립니다.`);
+  notify("info", `${label} 명령을 보냈습니다. PC 응답을 기다립니다.`);
   try {
     const now = Math.floor(Date.now() / 1000);
     const node = await push(ref(c.db, P("commands", c.me.cid, c.pcId)), {
@@ -481,7 +512,7 @@ async function sendCommand(type, args, label) {
     });
     await watchCommand(node.key, label);
   } catch (e) {
-    setAlert("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `보내지 못했습니다 (${e.code || e})`);
+    notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `보내지 못했습니다 (${e.code || e})`);
   } finally {
     busy = false;
     if (root) paintButtons();
@@ -490,14 +521,14 @@ async function sendCommand(type, args, label) {
 
 function watchCommand(cmdKey, label) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => { off(); if (root) setAlert("bad", "PC 가 응답하지 않습니다"); resolve(); }, 60000);
+    const timer = setTimeout(() => { off(); if (root) notify("bad", "PC 가 응답하지 않습니다"); resolve(); }, 60000);
     const off = onValue(ref(c.db, `${P("commands", c.me.cid, c.pcId)}/${cmdKey}`), (snap) => {
       const v = snap.val();
       if (!v || !root) return;
-      if (v.state === "running") setAlert("", `${label} 진행 중`, 4000);
+      if (v.state === "running") notify("info", `${label} 진행 중`);
       if (["done", "failed", "expired"].includes(v.state)) {
         clearTimeout(timer); off();
-        setAlert(v.state === "done" ? "" : "bad", v.result || v.state, v.state === "done" ? 4000 : 0);   // 실패는 남겨 둔다
+        notify(v.state === "done" ? "ok" : "bad", v.result || v.state);
         resolve();
       }
     });
@@ -576,10 +607,10 @@ function paintModuleMeta() {
 }
 async function applyModules() {
   const wanted = applyNeeds(Object.fromEntries(MODULES.map(([k]) => [k, !!form.modules[k]])));
-  if (!Object.values(wanted).some(Boolean)) { setAlert("bad", "최소 한 모듈은 켜야 합니다"); return; }
+  if (!Object.values(wanted).some(Boolean)) { notify("warn", "최소 한 모듈은 켜야 합니다"); return; }
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
-  } catch (e) { setAlert("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
   await sendCommand("set_modules", wanted, "실행 모듈");
 }
 
@@ -647,6 +678,6 @@ async function applySchedule() {
   const payload = { enabled: form.sch.enabled, days: [...new Set(form.sch.days)].sort(), times: [...new Set(form.sch.times)].sort() };
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/schedule`), payload);
-  } catch (e) { setAlert("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
   await sendCommand("set_schedule", payload, "자동 실행");
 }

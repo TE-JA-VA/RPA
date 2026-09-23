@@ -106,12 +106,18 @@
   /* 상태 헤더: 상태 색으로 통째로 채운 카드 하나. 나머지 카드는 비운다 */
   /* 성공 초록 / 진행 중 파랑 / 실패(중단) 빨강 / 오류(비정상 종료·연결 끊김) 노랑 */
   /* 채움은 상태 색보다 한 단계 진한 --*-fill (흰 글자로 4.5:1 이상) */
-  .hero { border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong); }
+  .hero { border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong);
+          display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
   .hero[data-state="success"] { background:var(--good-fill); --on:var(--on-fill); }
   .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad-fill); --on:var(--on-fill); }
   .hero[data-state="crashed"], .hero[data-state="offline"] { background:var(--warn-fill); --on:var(--on-fill); }
   .hero[data-state="running"] { background:var(--run-fill); --on:var(--on-fill); }
-  .hero .body { padding:22px 24px; display:grid; gap:4px; min-width:0; color:var(--on); }
+  .hero .body { padding:22px 24px; display:grid; gap:4px; min-width:0; flex:1 1 320px; color:var(--on); }
+  /* 연결·다음 자동 실행은 상태 띠 오른쪽에. 띠 색 위라 글자색은 --on 을 따른다 */
+  .hero .stats { display:grid; gap:12px; padding:18px 24px; color:var(--on); flex:none; }
+  .hero .stats .stat { display:grid; gap:2px; text-align:right; }
+  .hero .stats .k { font-size:12px; letter-spacing:.04em; opacity:.8; }
+  .hero .stats .v { font-size:18px; font-weight:600; white-space:nowrap; }
   .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:24px; color:var(--on); }
   .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--on); flex:none; opacity:.9; }
   /* 진행 중이면 상태 카드 점도 같이 숨쉰다 (카드는 색으로 채워져 있어 흰 빛무리로) */
@@ -145,8 +151,28 @@
   .card + .card { margin-top:14px; }
   .card h2 { margin:0 0 10px; font-size:14px; font-weight:700; display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .card h2 .muted { font-weight:400; font-size:13px; }
-  .alert { border-radius:8px; padding:10px; margin-top:10px; border:1px solid var(--line); font-size:14px; }
-  .alert.bad { color:var(--bad); border-color:var(--bad); }
+  /* --- 토스트 알림: 카드 안에 상자를 남기지 않고 오른쪽 아래에 잠깐 뜬다 ---- */
+  .toasts { position:fixed; right:18px; bottom:18px; z-index:60; display:grid; gap:8px;
+            width:min(360px, calc(100vw - 36px)); }
+  .toast { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:10px;
+           border:1px solid var(--line); border-left:4px solid var(--tone); background:var(--tone-bg);
+           color:var(--strong); font-size:13px; font-weight:600; line-height:1.45; cursor:pointer;
+           box-shadow:0 6px 20px rgb(0 0 0 / .12); animation:toast-in .25s ease-out; }
+  .toast:hover { transform:translateY(-1px); }
+  .toast.out { animation:toast-out .2s ease-in forwards; }
+  .toast svg { width:18px; height:18px; flex:none; color:var(--tone); }
+  .toast .x { margin-left:auto; color:var(--muted); font-size:14px; }
+  /* 알약·상태 칸이 쓰는 바탕색 토큰을 그대로 쓴다 (밝음·어두움이 이미 맞춰져 있다) */
+  .toast.ok   { --tone:var(--good); --tone-bg:var(--good-bg); }
+  .toast.info { --tone:var(--run);  --tone-bg:var(--run-bg); }
+  .toast.warn { --tone:var(--warn); --tone-bg:var(--warn-bg); }
+  .toast.bad  { --tone:var(--bad);  --tone-bg:var(--bad-bg); }
+  @keyframes toast-in  { from { opacity:0; transform:translateX(16px); } to { opacity:1; transform:none; } }
+  @keyframes toast-out { to { opacity:0; transform:translateX(16px); } }
+  @media (prefers-reduced-motion: reduce) { .toast, .toast.out { animation:none; } .toast:hover { transform:none; } }
+  /* 아이폰: 홈 표시줄·아래 주소창에 가리지 않게 안전 영역만큼 띄운다 */
+  @media (max-width: 720px) { .toasts { right:12px; left:12px; width:auto;
+    bottom:calc(12px + env(safe-area-inset-bottom, 0px)); } }
   .msg { font-size:13px; color:var(--muted); margin-top:8px; min-height:1.2em; }
   .msg.bad { color:var(--bad); }
 
@@ -156,7 +182,7 @@
   details[open] summary .chev { transform:rotate(90deg); }
   @media (prefers-reduced-motion: reduce) { details summary .chev, .switch span.knob, .switch span.knob::after { transition:none; } }
   ul.steps { list-style:none; margin:10px 0 0; padding:0; }
-  ul.steps li { display:grid; grid-template-columns:18px 1fr auto; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:14px; }
+  ul.steps li { display:grid; grid-template-columns:18px auto minmax(0, 1fr); gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:14px; }
   ul.steps li .mark { width:10px; height:10px; border-radius:50%; background:var(--line); justify-self:center; }
   ul.steps li.done .mark { background:var(--good); }
   ul.steps li.stopped .mark, ul.steps li.failed .mark { background:var(--bad); }
@@ -168,7 +194,7 @@
     50% { box-shadow:0 0 0 3px var(--run-bg), 0 0 8px 3px color-mix(in srgb, var(--run) 55%, transparent); } }
   @media (prefers-reduced-motion: reduce) { ul.steps li.running .mark { animation:none; } }   /* 움직임 줄이기 설정이면 멈춘다 */
   ul.steps li.skipped, ul.steps li.pending { color:var(--muted); }
-  ul.steps li .note { color:var(--muted); font-size:13px; text-align:right; }
+  ul.steps li .note { color:var(--muted); font-size:13px; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   ul.steps li.stopped .note, ul.steps li.failed .note { color:var(--bad); }
 
   /* 실행 버튼: 테두리만 있다가 올리면 강조색으로 채워진다. 아이콘은 왼쪽에 고정, 글자는 오른쪽.
@@ -304,6 +330,8 @@
     <div id="app-root"></div>
   </main>
 </div>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <script type="module" src="./app.js"></script>
 </body>

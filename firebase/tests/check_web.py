@@ -81,9 +81,12 @@ routine = {
     "program": "routine", "program_label": "루틴 RPA", "state": "success",
     "started_at": f"{TODAY}T13:55:49", "updated_at": f"{TODAY}T13:58:22", "finished_at": f"{TODAY}T13:58:22",
     "duration_sec": 153, "steps_done": 3, "steps_total": 3,
-    "steps": [{"key": "login", "label": "ERPia 로그인", "state": "done"},
-              {"key": "hold", "label": "물류대기 저장", "state": "done"},
-              {"key": "output", "label": "운송장 출력", "state": "done"}],
+    "steps": [{"key": "login", "label": "ERPia 로그인", "state": "done",
+               "started_at": f"{TODAY}T13:55:49", "finished_at": f"{TODAY}T13:56:30"},
+              {"key": "hold", "label": "물류대기 저장", "state": "done",
+               "started_at": f"{TODAY}T13:56:30", "finished_at": f"{TODAY}T13:57:40"},
+              {"key": "output", "label": "운송장 출력", "state": "done",
+               "started_at": f"{TODAY}T13:57:40", "finished_at": f"{TODAY}T13:58:22"}],
     "metrics": [{"key": "bottom_selected", "label": "하단 선택", "value": 30, "unit": "건"},
                 {"key": "stock_hold", "label": "재고검토 보류", "value": 8, "total": 8, "unit": "건"},
                 {"key": "abnormal_hold", "label": "비정상 보류", "value": 376, "unit": "건", "approx": True}],
@@ -225,20 +228,29 @@ with sync_playwright() as pw:
     l2 = page.text_content("#h-line2")
     check(l2 == "수집 30건 · 재고검토 보류 8/8건 · 비정상 보류 ≈376건", f"요약 한 줄 ({l2})")
     check(page.query_selector("#hero button") is None, "상태 카드에 버튼 없음 (실행 카드와 중복)")
+    check(page.locator("#toasts .toast").count() == 0, "처음 열 때는 옛 결과로 토스트가 울리지 않는다")
     tiles = page.text_content("#tiles")
     flat = tiles.replace(" ", "").replace("\n", "")
     check("처리주문30건" in flat and "재고검토보류8/8" in flat, f"숫자 타일 ({flat[:60]})")
     check("≈376" in tiles.replace(" ", ""), "추정치는 ≈")
     check(page.evaluate("getComputedStyle(document.querySelector('.tile .v')).fontFamily").startswith('"Pretendard Variable"'), "숫자 칸도 같은 서체")
-    check("정상" in page.text_content("#conn"), "연결 정상")
-    check("9월 22일" in tiles and "09:05" in tiles, "다음 자동 실행")
+    side = page.text_content("#hero .stats")
+    check("정상" in page.text_content("#conn") and page.query_selector("#hero .stats #conn") is not None, "연결은 상태 띠 오른쪽에")
+    check("9월 22일" in side and "09:05" in side and "다음 자동 실행" not in tiles, "다음 자동 실행도 상태 띠 오른쪽에")
+    geo = page.evaluate("""() => { const b = document.querySelector('#hero .body').getBoundingClientRect(),
+        d = document.querySelector('#hero .stats').getBoundingClientRect(), h = document.getElementById('hero').getBoundingClientRect();
+      return [d.left > b.right - 1, h.right - d.right < 40]; }""")
+    check(geo[0] and geo[1], f"본문 오른쪽에 붙어 있다 ({geo})")
     check(page.is_visible("#list-routine li"), "단계 목록은 항상 펼쳐져 있다")
     check("성공 · 3/3 · 2분 33초" in page.text_content("#meta-routine"), "단계 요약")
     check("기록 없음" in page.text_content("#meta-prepare"), "프리페어 없음")
     pair = page.evaluate("""() => { const p = document.querySelector('.pair'); const [a, b] = p.children;
       return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
     check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"프리페어가 왼쪽, 루틴이 오른쪽에 나란히 ({pair})")
-    check("2줄" in page.text_content("#log-meta"), "로그 줄 수")
+    log = page.text_content("#log")
+    check("3줄" in page.text_content("#log-meta"), f"로그 줄 수는 단계 수 ({page.text_content('#log-meta')})")
+    check(log.splitlines()[0] == "[13:56:30] ERPia 로그인 성공", f"단계마다 한 줄 ({log.splitlines()[0]})")
+    check("===" not in log, "RPA 원본 로그는 안 싣는다")
     # 띠는 최근 20일 전부. 왼쪽 끝부터 오늘 도넛까지 채우되 15칸까지만 보이고(칸 48~72px, 남으면 간격), 나머지는 가로 스크롤
     def strip_geo():
         return page.evaluate("""() => { const s = document.getElementById('recent-strip'), d = document.getElementById('recent-donut');
@@ -369,8 +381,10 @@ with sync_playwright() as pw:
 
     print("4절 명령 투입")
     page.click("#run-routine")
-    page.wait_for_selector("#act-alert:not(.hide)")
-    check("보냈습니다" in page.text_content("#act-alert"), "보냈다는 안내")
+    page.wait_for_selector("#toasts .toast")
+    check("보냈습니다" in page.text_content("#toasts") and page.locator('#toasts [data-id="act"].info').count() == 1,
+          "보냈다는 안내가 토스트로")
+    check(page.locator("#act-alert").count() == 0, "카드 안 안내 상자는 없앴다")
     time.sleep(1.0)
     launched = cmds_of("launch")
     check(len(launched) == 1, "명령이 하나 만들어졌다")
@@ -380,10 +394,11 @@ with sync_playwright() as pw:
     check(page.is_disabled("#run-routine") and page.is_disabled("#run-all"), "응답 대기 중 버튼 잠금")
     key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "launch")
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "루틴 RPA 을(를) 띄웠습니다", "started_at": 1, "ended_at": 2})
-    page.wait_for_function("document.getElementById('act-alert')?.textContent?.includes('띄웠습니다')", timeout=10000)
-    page.wait_for_selector("#act-alert.hide", state="attached", timeout=8000)
-    check(page.is_hidden("#act-alert"), "성공 결과 안내는 몇 초 뒤 스스로 사라진다 (상태 카드가 보여 주니까)")
-    check(True, "done 이 되면 결과 문장")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('띄웠습니다')", timeout=10000)
+    check(page.locator('#toasts [data-id="act"]').count() == 1, "명령 안내는 쌓이지 않고 그 자리에서 바뀐다")
+    check(page.locator('#toasts [data-id="act"].ok').count() == 1, "done 이면 초록 토스트")
+    page.wait_for_function("document.querySelectorAll('#toasts .toast').length === 0", timeout=10000)
+    check(True, "몇 초 뒤 스스로 사라진다 (상태 카드가 보여 주니까)")
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=5000)
     check(True, "끝나면 버튼이 풀린다")
 
@@ -443,6 +458,8 @@ with sync_playwright() as pw:
                                                     {"key": "sales", "label": "주문매핑 화면 이동", "state": "running"},
                                                     {"key": "top", "label": "상단 선택", "state": "pending"}]})
     page.wait_for_function("document.getElementById('run-routine')?.disabled === true", timeout=10000)
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('시작했습니다')", timeout=10000)
+    check(page.locator("#toasts .toast.info", has_text="시작했습니다").count() == 1, "RPA 가 시작되면 파란 토스트")
     check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
     check("돌고 있어" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
@@ -453,16 +470,26 @@ with sync_playwright() as pw:
     check(anim("#list-routine li.done .mark") == "none" and anim("#list-routine li.pending .mark") == "none", "끝난·대기 단계는 안 움직인다")
     mark_id = "document.querySelector('#list-routine li.running .mark')"
     page.evaluate(f"window.__mark = {mark_id}")
-    db_patch(f"{LIVE}/programs/routine", {"log_tail": ["[16:20:30] 새 줄"], "updated_at": f"{TODAY}T16:20:30"})
-    page.wait_for_function("(document.getElementById('log')?.textContent || '').includes('새 줄')", timeout=10000)
-    check(page.evaluate(f"window.__mark === {mark_id}"), "로그가 늘어도 진행 중 점은 그대로 (애니메이션이 안 끊긴다)")
+    db_patch(f"{LIVE}/programs/routine", {"updated_at": f"{TODAY}T16:20:30",
+                                          "steps": [{"key": "login", "label": "ERPia 로그인", "state": "done"},
+                                                    {"key": "sales", "label": "주문매핑 화면 이동", "state": "running", "note": "주문 가져오는 중"},
+                                                    {"key": "top", "label": "상단 선택", "state": "pending"}]})
+    page.wait_for_function("(document.getElementById('log')?.textContent || '').includes('주문매핑 화면 이동 진행 중')", timeout=10000)
+    check(page.evaluate(f"window.__mark === {mark_id}"), "메모가 바뀌어도 진행 중 점은 그대로 (애니메이션이 안 끊긴다)")
+    check(page.evaluate("""() => { const n = document.querySelector('#list-routine li.running .note');
+      return getComputedStyle(n).textOverflow === 'ellipsis' && n.title === '주문 가져오는 중'; }"""), "긴 메모는 … 로 자르고 제목으로 전체를 보여 준다")
     db_patch(f"{LIVE}/programs/routine", {"steps": [{"key": "login", "label": "ERPia 로그인", "state": "done"},
                                                     {"key": "sales", "label": "주문매핑 화면 이동", "state": "done"},
                                                     {"key": "top", "label": "상단 선택", "state": "running"}]})
     page.wait_for_function("document.querySelectorAll('#list-routine li.done').length === 2", timeout=10000)
     check(anim("#list-routine li.running .mark") == "step-glow" and page.text_content("#list-routine li:nth-child(3) .note") == "진행 중",
           "단계가 넘어가면 다음 줄로 옮겨 간다")
+    db_patch(f"{LIVE}/programs/routine", {"state": "crashed", "reason": "프로그램이 사라졌습니다", "finished_at": f"{TODAY}T16:22:00"})
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('오류')", timeout=10000)
+    check(page.locator("#toasts .toast.warn", has_text="오류").count() == 1, "죽으면 노란 토스트 (오류)")
     db_patch(f"{LIVE}/programs/routine", routine)
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('루틴 RPA 성공')", timeout=10000)
+    check(page.locator("#toasts .toast.ok", has_text="루틴 RPA 성공").count() == 1, "끝나면 초록 토스트 (성공 · 소요)")
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=10000)
     check(True, "끝나면 다시 눌린다")
     # 띄우자마자 상태 파일에 아직 running 이 안 찍힌 몇 초 (에이전트가 launching 으로 알려 준다)
