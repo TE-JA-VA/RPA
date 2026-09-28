@@ -106,7 +106,7 @@
   /* 상태 헤더: 상태 색으로 통째로 채운 카드 하나. 나머지 카드는 비운다 */
   /* 성공 초록 / 진행 중 파랑 / 실패(중단) 빨강 / 오류(비정상 종료·연결 끊김) 노랑 */
   /* 채움은 상태 색보다 한 단계 진한 --*-fill (흰 글자로 4.5:1 이상) */
-  .hero { border-radius:18px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong);
+  .hero { border-radius:18px; margin-bottom:14px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong);
           display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
   .hero[data-state="success"] { background:var(--good-fill); --on:var(--on-fill); }
   .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad-fill); --on:var(--on-fill); }
@@ -197,27 +197,35 @@
   ul.steps li .note { color:var(--muted); font-size:13px; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   ul.steps li.stopped .note, ul.steps li.failed .note { color:var(--bad); }
 
-  /* 실행 버튼: 테두리만 있다가 올리면 강조색으로 채워진다. 아이콘은 왼쪽에 고정, 글자는 오른쪽.
-     화살표는 올리면 오른쪽으로 살짝 민다. 전체 실행은 처음부터 채움, ERPia 종료는 빨강 */
+  /* 실행 버튼: 초록으로 채운 네모. 마우스를 올리면 글자는 오른쪽으로 밀려 사라지고
+     표시가 버튼 한가운데로 옮겨 간다 (Uiverse 'Send' 꼴에서 흔들림·회전은 뺐다).
+     표시는 자리로 잡아 두어 네 버튼(화살표·전원 ⏼) 모두 같은 자리에 선다 */
   .actions { display:grid; gap:8px; }
-  .actions button { position:relative; width:100%; height:2.9em; padding:0 1.5em 0 3.2em; text-align:right; font-weight:500;
-    border:0.2em solid var(--accent); border-radius:11px; background:transparent; color:var(--strong);
-    transition:background-color .5s ease, color .5s ease, filter .3s ease, transform .25s ease, box-shadow .25s ease; }
-  .actions button > svg, .actions button > .ic { position:absolute; left:.8em; top:50%; width:1.6em; height:1.6em; margin-top:-.8em; transition:transform .5s ease; }
+  .actions button { --fill:var(--good-fill); --ink:var(--on-fill);
+    position:relative; display:flex; align-items:center; width:100%;
+    padding:.7em 1em .7em 2.6em; border:0; border-radius:12px;
+    background:var(--fill); color:var(--ink); font:inherit; font-size:14px; font-weight:700;
+    text-align:left; overflow:hidden; transition:background-color .2s, transform .1s; }
+  .actions button .fly { position:absolute; left:.9em; top:50%; translate:0 -50%;
+    transition:left .3s ease-in-out, translate .3s ease-in-out; }
   /* 전원 글자(⏼ U+23FC)는 본문 글꼴에 없어서 기호 글꼴이 그린다. 윈도우 Segoe UI Symbol, 안드로이드 Noto, 애플 Apple Symbols */
-  .actions button > .ic { display:flex; align-items:center; justify-content:center; font-size:1.3em; line-height:1;
-    font-family:"Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",sans-serif; }
-  .actions button:hover:not(:disabled) { background:var(--accent); color:var(--accent-ink); }
-  .actions button:hover:not(:disabled) > svg { transform:translateX(5px); }
-  /* 전체 실행은 항상 채워져 있으니 올리면 색이 조금 짙어지고 살짝 떠오른다 (눌리는 느낌) */
-  .actions button.primary { background:var(--accent); color:var(--accent-ink); }
-  .actions button.primary:hover:not(:disabled) { filter:brightness(.9); transform:translateY(-1px);
-    box-shadow:0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent); }
-  /* 종료는 실행 무리와 떨어뜨려 색이 비슷해도 다른 묶음으로 읽히게 */
-  .actions button.danger { border-color:var(--bad); color:var(--bad); margin-top:6px; }
-  .actions button.danger:hover:not(:disabled) { background:var(--bad-fill); color:var(--on-fill); }
-  .actions button.danger:hover:not(:disabled) > .ic { transform:scale(1.15); }
+  .actions button svg, .actions button .ic { display:block; width:18px; height:18px;
+    font-size:16px; line-height:18px; text-align:center;
+    font-family:"Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",sans-serif;
+    transform-origin:center; transition:transform .3s ease-in-out; }
+  .actions button .t { display:block; color:inherit; line-height:1.5;
+    transition:transform .3s ease-in-out, opacity .3s ease-in-out; }
+  .actions button:hover:not(:disabled) { background:color-mix(in srgb, var(--fill) 85%, #000); }
+  .actions button:hover:not(:disabled) .fly { left:50%; translate:-50% -50%; }
+  .actions button:hover:not(:disabled) svg, .actions button:hover:not(:disabled) .ic { transform:scale(1.12); }
+  .actions button:hover:not(:disabled) .t { transform:translateX(9em); opacity:0; }
+  .actions button:active:not(:disabled) { transform:scale(.97); }
   .actions button:disabled { opacity:.45; cursor:default; }
+  /* 전체 실행은 더 진한 초록, 종료는 빨강으로 떨어뜨려 다른 묶음으로 읽히게 */
+  .actions button.primary { --fill:color-mix(in srgb, var(--good-fill) 62%, #06231f); }
+  .actions button.danger { --fill:var(--bad-fill); margin-top:6px; }
+  @media (prefers-reduced-motion: reduce) {
+    .actions button .fly, .actions button svg, .actions button .ic, .actions button .t { transition:none; } }
   .switch { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--line); gap:10px; margin:0; }
   .switch.first { border-top:0; }
   .switch input { position:absolute; opacity:0; width:0; height:0; }

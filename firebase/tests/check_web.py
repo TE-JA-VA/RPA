@@ -5,6 +5,7 @@
 
 에뮬레이터 REST 는 'Authorization: Bearer owner' 로 규칙을 우회한다 (시드용).
 """
+import datetime
 import json
 import os
 import sys
@@ -215,7 +216,7 @@ with sync_playwright() as pw:
         page.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "theme_dark.png"), full_page=True)
     page.wait_for_timeout(700)
     card_bg = page.evaluate("getComputedStyle(document.getElementById('act-card')).backgroundColor")
-    check(page.evaluate("getComputedStyle(document.getElementById('run-routine')).color") != card_bg, "어두운 모드에서 테두리 버튼 글자가 카드색과 다르다")
+    check(page.evaluate("getComputedStyle(document.querySelector('#run-routine .t')).color") != card_bg, "어두운 모드에서 테두리 버튼 글자가 카드색과 다르다")
     page.click("#theme")
     check(page.evaluate("document.documentElement.dataset.theme") == "light", "다시 밝게")
 
@@ -241,6 +242,13 @@ with sync_playwright() as pw:
         d = document.querySelector('#hero .stats').getBoundingClientRect(), h = document.getElementById('hero').getBoundingClientRect();
       return [d.left > b.right - 1, h.right - d.right < 40]; }""")
     check(geo[0] and geo[1], f"본문 오른쪽에 붙어 있다 ({geo})")
+    db_patch(f"{LIVE}/programs/routine", {"metrics": None})   # 숫자 칸이 하나도 없는 업체 (모듈을 거의 끈 경우)
+    page.wait_for_function("document.getElementById('tiles')?.classList.contains('hide')", timeout=10000)
+    gap = page.evaluate("""() => Math.round(document.querySelector('#view-status .cols').getBoundingClientRect().top
+      - document.getElementById('hero').getBoundingClientRect().bottom)""")
+    check(12 <= gap <= 20, f"숫자 칸이 없어도 상태 띠와 아래 카드가 붙지 않는다 ({gap}px)")
+    db_patch(f"{LIVE}/programs/routine", {"metrics": routine["metrics"]})
+    page.wait_for_function("!document.getElementById('tiles')?.classList.contains('hide')", timeout=10000)
     check(page.is_visible("#list-routine li"), "단계 목록은 항상 펼쳐져 있다")
     check("성공 · 3/3 · 2분 33초" in page.text_content("#meta-routine"), "단계 요약")
     check("기록 없음" in page.text_content("#meta-prepare"), "프리페어 없음")
@@ -292,6 +300,17 @@ with sync_playwright() as pw:
     hexbg = "#%02x%02x%02x" % tuple(int(x) for x in bg[4:-1].split(",")[:3])
     check(hexbg == good, f"성공이면 상태 카드가 진한 초록으로 채워진다 ({hexbg} = {good})")
     check(page.evaluate("getComputedStyle(document.getElementById('h-state')).color") == "rgb(255, 255, 255)", "채운 카드 글자는 흰색")
+    yday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    db_patch(f"{LIVE}/programs/routine", {"started_at": f"{yday}T13:55:49", "finished_at": f"{yday}T13:58:22"})
+    page.wait_for_function("document.getElementById('h-state')?.textContent === '대기중'", timeout=10000)
+    check(page.get_attribute("#hero", "data-state") == "" and "마지막 실행" in page.text_content("#h-line1"),
+          f"오늘 실행이 없으면 지난 결과 대신 대기중 ({page.text_content('#h-line1')})")
+    check(page.locator("#list-routine li").count() == 0 and "오늘 실행 없음" in page.text_content("#meta-routine"),
+          f"단계 목록도 어제 것을 안 보여 준다 ({page.text_content('#meta-routine')})")
+    check("마지막" in page.text_content("#meta-routine"), "대신 마지막이 언제였는지 적는다")
+    check(page.text_content("#log") == "" and page.text_content("#log-meta") == "없음", "로그도 어제 것을 안 보여 준다")
+    db_patch(f"{LIVE}/programs/routine", {"started_at": f"{TODAY}T13:55:49", "finished_at": f"{TODAY}T13:58:22"})
+    page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
     d14 = page.get_attribute("#recent-strip .day[data-date='2026-09-14'] svg circle:nth-child(2)", "stroke-dasharray")
     check(d14 and abs(float(d14.split()[0]) - 33.33) < 0.1, f"9/14 도넛은 성공 1/3 ({d14})")
     check("09/14" in page.text_content("#recent-strip"), "날짜 표시")
@@ -301,6 +320,12 @@ with sync_playwright() as pw:
     check(dash and abs(float(dash.split()[0]) - 33.33) < 0.1, f"오늘 도넛 호 길이 1/3 ({dash})")
     legend = page.text_content("#recent-donut .legend")
     check("성공 1" in legend and "실패 2" in legend and "오류 0" in legend, f"오늘 도넛 범례 세 가지 ({legend.strip()})")
+    db_patch(f"{LIVE}/recent/19", {"success": 0, "failed": 0, "crashed": 0})   # 마지막 날 = 큰 도넛
+    page.wait_for_function("document.getElementById('recent-meta')?.textContent === '오늘 실행 없음'", timeout=10000)
+    check(page.get_attribute("#recent-donut svg circle", "stroke") == "url(#hatch)" and page.locator("#recent-donut .legend").count() == 0,
+          "실행 없는 날은 큰 자리에도 빗금 도넛 (글자 대신)")
+    db_patch(f"{LIVE}/recent/19", {"success": 1, "failed": 2, "crashed": 0})
+    page.wait_for_function("document.getElementById('recent-meta')?.textContent !== '오늘 실행 없음'", timeout=10000)
     # 9/13 = 성공 1 · 실패 1 · 오류 1 → 초록 1/3 (12시부터), 노랑 1/3 (초록 다음부터), 나머지 빨강
     c13 = page.evaluate("""(() => { const cs = document.querySelectorAll("#recent-strip .day[data-date='2026-09-13'] svg circle");
       return [...cs].map((c) => [c.getAttribute('stroke'), c.getAttribute('stroke-dasharray'), c.getAttribute('stroke-dashoffset')]); })()""")
@@ -514,15 +539,31 @@ with sync_playwright() as pw:
     check("primary" in (page.get_attribute("#run-all", "class") or "") and "primary" not in (page.get_attribute("#run-routine", "class") or ""), "강조는 전체 실행에")
     check(all(page.locator(f"#{i} svg").count() == 1 for i in ("run-all", "run-prepare", "run-routine")), "실행 버튼은 화살표 아이콘 하나")
     check(page.text_content("#stop-erpia .ic") == "⏼" and page.locator("#stop-erpia svg").count() == 0, "ERPia 종료는 전원 글자 ⏼ (U+23FC)")
+    # 표시는 넷 다 동그라미 안 같은 자리 (전원이 화살표보다 오른쪽으로 밀리던 것을 고쳤다)
+    spots = page.evaluate("""() => ['run-all', 'run-prepare', 'run-routine', 'stop-erpia'].map((id) => {
+      const b = document.getElementById(id), r = b.getBoundingClientRect();
+      const i = b.querySelector('.fly').getBoundingClientRect();
+      return [Math.round(i.left - r.left), Math.round(i.top - r.top)]; })""")
+    check(len({tuple(x) for x in spots}) == 1, f"표시 넷이 같은 자리 ({spots})")
+    radius = page.evaluate("""() => [getComputedStyle(document.getElementById('run-routine')).borderRadius,
+      getComputedStyle(document.getElementById('act-card')).borderRadius]""")
+    check(radius[0] == "12px", f"버튼 모서리는 카드처럼 둥근 네모 ({radius})")
     ic_w = page.evaluate("document.querySelector('#stop-erpia .ic').getBoundingClientRect().width")
     check(ic_w > 10, f"전원 글자가 실제로 그려진다 (폭 {ic_w:.0f}px)")
     check(not page.is_disabled("#stop-erpia"), "종료 버튼 활성")
-    page.hover("#stop-erpia"); page.wait_for_timeout(800)
     stop_bg = page.evaluate("getComputedStyle(document.getElementById('stop-erpia')).backgroundColor")
-    check(rgb2hex(stop_bg) == token("--bad-fill"), f"종료 버튼은 올리면 빨강 ({stop_bg})")
-    page.hover("#run-routine"); page.wait_for_timeout(800)
-    run_bg = page.evaluate("getComputedStyle(document.getElementById('run-routine')).backgroundColor")
-    check(rgb2hex(run_bg) == token("--accent"), f"실행 버튼은 올리면 강조색 ({run_bg})")
+    check(rgb2hex(stop_bg) == token("--bad-fill"), f"종료 버튼은 빨강 ({stop_bg})")
+    check(rgb2hex(page.evaluate("getComputedStyle(document.getElementById('run-routine')).backgroundColor")) == token("--good-fill"),
+          "실행 버튼은 초록으로 채워져 있다")
+    check(rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#run-routine .t')).color")) == token("--on-fill"),
+          "글자는 흰색")
+    page.hover("#run-routine"); page.wait_for_timeout(900)
+    fly = page.evaluate("""() => { const b = document.getElementById('run-routine'), r = b.getBoundingClientRect();
+      const f = b.querySelector('.fly').getBoundingClientRect(), t = b.querySelector('.t');
+      return [Math.round(f.left + f.width / 2 - r.left), Math.round(r.width / 2),
+              Number(getComputedStyle(t).opacity), getComputedStyle(b.querySelector('.fly')).animationName]; }""")
+    check(abs(fly[0] - fly[1]) <= 2 and fly[2] < 0.2, f"올리면 표시가 버튼 한가운데로 가고 글자는 사라진다 ({fly})")
+    check(fly[3] == "none", "표시는 떠다니지 않는다 (흔들림 없음)")
     if os.environ.get("SHOT_DIR"):   # 눈으로 볼 때: 실행 카드 (루틴에 올린 상태 / 종료에 올린 상태)
         page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_hover_run.png"))
         page.hover("#stop-erpia"); page.wait_for_timeout(800)
@@ -581,7 +622,7 @@ with sync_playwright() as pw:
     check(accent() == "#6c71c4", "다시 밝게 하면 밝음용 값")
     ink = lambda: page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--accent-ink').trim()")
     page.click("#accent-swatches .swatch[title='navy']")
-    check(accent() == "#1e1e2c" and ink() == "#fdf6e3", "진한 강조색엔 밝은 글자")
+    check(accent() == "#21263a" and ink() == "#fdf6e3", "진한 강조색엔 밝은 글자")
     page.click("#accent-swatches .swatch[title='orange']")
     check(accent() == "#f29f67" and ink() == "#1e1e2c", "주황엔 어두운 글자 (흰 글자는 2:1 도 안 됨)")
     check(page.locator("#accent-swatches .swatch").count() == 3 and page.query_selector("#accent-swatches .swatch[title='yellow']") is None

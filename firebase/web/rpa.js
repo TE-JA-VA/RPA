@@ -34,6 +34,10 @@ const ARROW = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 
 // 전원은 유니코드 ⏼ (U+23FC POWER ON-OFF SYMBOL) 글자 그대로. 글꼴 대체 목록은 index.html 의 .ic 에 있다
 const POWER = `<span class="ic" aria-hidden="true">&#x23FC;</span>`;
 
+// 실행 버튼: 표시(.fly)는 왼쪽에 떠 있고 글자는 그 오른쪽. 마우스를 올리면 표시가 가운데로 간다
+const runBtn = (id, icon, text, cls = "") =>
+  `<button id="${id}"${cls ? ` class="${cls}"` : ""}><span class="fly" aria-hidden="true">${icon}</span><span class="t">${text}</span></button>`;
+
 const HTML = `
   <div class="subnav" role="tablist">
     <button id="tab-status" role="tab" aria-selected="true">현황</button>
@@ -69,10 +73,10 @@ const HTML = `
         <div class="card" id="act-card">
           <h2>실행</h2>
           <div class="actions">
-            <button id="run-all" class="primary">${ARROW}<span>전체 실행</span></button>
-            <button id="run-prepare">${ARROW}<span>프리페어 RPA</span></button>
-            <button id="run-routine">${ARROW}<span>루틴 RPA</span></button>
-            <button id="stop-erpia" class="danger">${POWER}<span>ERPia 종료</span></button>
+            ${runBtn("run-all", ARROW, "전체 실행", "primary")}
+            ${runBtn("run-prepare", ARROW, "프리페어 RPA")}
+            ${runBtn("run-routine", ARROW, "루틴 RPA")}
+            ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
         </div>
         <div class="card" id="mod-card">
@@ -131,6 +135,8 @@ const when = (iso) => {
   return `${d.getMonth() + 1}월 ${d.getDate()}일 (${DAYS[(d.getDay() + 6) % 7]}) ${hhmm(iso)}`;
 };
 const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// 현황은 하루 단위다. 어제 실행을 오늘 것처럼 띄우지 않는다 (상태 띠·단계·로그 모두)
+const isToday = (v) => ((v?.started_at || v?.finished_at || "").slice(0, 10)) === isoDay(new Date());
 
 export function mount(el, context) {
   root = el; c = context;
@@ -252,6 +258,11 @@ function paintHero() {
     l2 = "PC 가 꺼졌거나 에이전트가 닫혔습니다. PC 에서 에이전트_시작.bat 을 다시 실행하세요.";
   } else if (!v) {
     state = ""; title = "기록 없음"; l1 = "PC 연결됨"; l2 = "";
+  } else if (v.state !== "running" && !isToday(v)) {
+    // 오늘 실행이 아직 없으면 어제 결과를 그대로 띄우지 않는다 (지금 상태는 '대기중')
+    state = ""; title = "대기중";
+    l1 = `마지막 실행 ${when(v.finished_at || v.started_at)} · ${STATE_LABEL[v.state] || v.state}`;
+    l2 = v.reason || summaryText(v);
   } else {
     state = v.state;
     title = HERO_TITLE[v.state] || v.state;
@@ -392,7 +403,7 @@ function paintRecent() {
   const total = ok + bad + crash;
   $("recent-donut").innerHTML = total
     ? `${donutSvg(ok, bad, crash, 104)}<div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span><span><i style="background:var(--warn-mark)"></i>오류 ${crash}</span></div>`
-    : `<div class="muted" style="font-size:13px">실행 없음</div>`;
+    : donutSvg(0, 0, 0, 104);   // 실행이 없는 날도 같은 자리에 빗금 도넛 (칸과 같은 모양)
 }
 
 /** 이미 있는 목록은 제자리에서 고친다. 통째로 새로 그리면 진행 중 점의 애니메이션이 매번 처음부터 다시 돈다 */
@@ -430,6 +441,11 @@ function paintSteps() {
     const v = live?.programs?.[k];
     const ul = $(`list-${k}`), meta = $(`meta-${k}`);
     if (!v) { ul.replaceChildren(); meta.textContent = "기록 없음"; continue; }
+    if (v.state !== "running" && !isToday(v)) {   // 어제 것은 지우고 언제가 마지막이었는지만 남긴다
+      ul.replaceChildren();
+      meta.textContent = `오늘 실행 없음 · 마지막 ${when(v.finished_at || v.started_at)}`;
+      continue;
+    }
     const steps = v.steps || [];
     meta.textContent = `${STATE_LABEL[v.state] || v.state} · ${v.steps_done ?? 0}/${v.steps_total ?? steps.length}` + (v.duration_sec != null ? ` · ${dur(v.duration_sec)}` : "");
     paintStepsInto(ul, steps);
@@ -449,7 +465,7 @@ function logLines(v) {
 
 function paintLog() {
   const v = latest();
-  const lines = logLines(v);
+  const lines = (v && (v.state === "running" || isToday(v))) ? logLines(v) : [];
   $("log").textContent = lines.join("\n");
   $("log-meta").textContent = lines.length ? `${v.program_label} · ${lines.length}줄` : "없음";
 }

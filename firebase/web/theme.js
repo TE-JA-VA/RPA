@@ -6,7 +6,7 @@
 export const DEFAULT_ACCENT = "#f29f67";   // StarAdmin 팔레트의 주황. 크림 바탕과 짙은 청록 바탕 양쪽에서 같은 값
 export const ACCENTS = [
   ["orange", "#f29f67", "#f29f67"],
-  ["navy", "#1e1e2c", "#fdf6e3"],     // 어두운 모드에선 크림
+  ["navy", "#21263a", "#fdf6e3"],     // 어두운 모드에선 크림
   ["violet", "#6c71c4", "#9a9fe0"],
 ];
 // 파랑·청록·노랑은 팔레트에 있지만 진행·성공·오류 색이라 강조 후보에서 뺀다
