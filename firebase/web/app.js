@@ -56,8 +56,9 @@ $("login-form").addEventListener("submit", async (ev) => {
   } catch (e) {
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password",
       "auth/user-not-found", "auth/invalid-email", "auth/missing-password"];
-    alert.textContent = wrong.includes(e.code)
-      ? "업체코드, 아이디 또는 비밀번호가 맞지 않습니다" : `로그인하지 못했습니다 (${e.code})`;
+    alert.textContent = wrong.includes(e.code) ? "업체코드, 아이디 또는 비밀번호가 맞지 않습니다"
+      : e.code === "auth/user-disabled" ? "사용이 중지된 계정입니다"   // setup.js disable, 또는 remove 로 업체째 막힘
+      : `로그인하지 못했습니다 (${e.code})`;
     show(alert, true);
   } finally {
     $("login-btn").disabled = false;

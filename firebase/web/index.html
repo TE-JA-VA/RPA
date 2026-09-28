@@ -60,6 +60,8 @@
   /* 로그인 */
   #login { max-width:380px; margin:10vh auto 0; padding-inline:16px; }
   #login h1 { font-size:16px; letter-spacing:.14em; margin:0 0 14px; }
+  #login .login-row { display:flex; align-items:center; gap:12px; }
+  #login-alert { color:var(--bad); font-weight:600; }   /* 로그인 버튼 오른쪽, 빨간 글씨 */
 
   /* 뼈대: 사이드바 + 본문 */
   .shell { display:flex; min-height:100%; }
@@ -317,9 +319,11 @@
     <label>업체코드 <input id="cid" autocomplete="off"></label>
     <label>아이디 <input id="login-id" autocomplete="username"></label>
     <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
-    <button id="login-btn" class="primary">로그인</button>
+    <div class="login-row">
+      <button id="login-btn" class="primary">로그인</button>
+      <div id="login-alert" class="hide" role="alert"></div>
+    </div>
   </form>
-  <div id="login-alert" class="alert bad hide"></div>
 </section>
 
 <div id="main" class="shell hide">

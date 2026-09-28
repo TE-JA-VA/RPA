@@ -92,6 +92,7 @@ for args in (("pc", CID, "pc_2", "둘"), ("user", CID, "u2", "admin", "둘"), ("
 check(db_get(f"meta/companies/{CID}/pcs/pc_2") is None and db_get(f"meta/companies/{CID}/name") == "시험 업체", "막힌 명령은 아무것도 안 쓴다")
 rc, out = setup("remove", CID)
 check(rc == 0 and db_get(f"meta/companies/{CID}/stts") == 9, "remove 를 다시 돌려도 된다 (중간에 실패했을 때)", out[-200:])
+check(out.startswith("이미 삭제된 업체입니다.") and "계정 2개 막음" in out, "다시 remove 하면 이미 삭제됐다고 알리고 그래도 막는다", out[-200:])
 rc, out = setup("remove", "t_none")
 check(rc != 0 and "먼저 company" in out, "없는 업체는 remove 못 한다", out[-200:])
 rc, out = setup("list")
@@ -101,6 +102,11 @@ print("=== 3. 되살림 (restore) ===")
 rc, out = setup("restore", CID)
 check(rc == 0 and db_get(f"meta/companies/{CID}/stts") == 0, "stts=0", out[-300:])
 check(account(U1).get("disabled") is not True and account(AG).get("disabled") is not True, "계정이 다시 열린다")
+call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:update",
+     {"localId": account(U1)["localId"], "disableUser": True}, OWNER)   # 서비스 중에 사람 하나만 따로 막아 둔다
+rc, out = setup("restore", CID)
+check(rc == 0 and out.strip() == "이미 서비스중인 업체입니다.", "살아 있는 업체를 restore 하면 알리기만 한다", out[-200:])
+check(account(U1).get("disabled") is True and account(AG).get("disabled") is not True, "따로 막아 둔 계정은 그대로 막혀 있다")
 rc, out = setup("pc", CID, "pc_2", "둘째")
 check(rc == 0 and db_get(f"meta/companies/{CID}/pcs/pc_2/label") == "둘째", "되살린 업체엔 다시 pc 를 만들 수 있다", out[-200:])
 

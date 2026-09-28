@@ -180,6 +180,12 @@ if (cmdName === "company") {
   checkKey("cid", cid);
   const removing = cmdName === "remove";
   const v = await companyOf(cid, { removed: true });
+  const removed = v.stts === 9;
+  if (removing && removed) console.log("이미 삭제된 업체입니다.");   // 그래도 다시 막는다 (중간에 멈췄거나 누가 enable 했을 때)
+  if (!removing && !removed) {   // 계정을 다 열면 따로 막아 둔 계정까지 열린다 - 아무것도 안 한다
+    console.log("이미 서비스중인 업체입니다.");
+    process.exit(0);
+  }
   const users = await usersOf(cid);
   await rtdb.ref(`meta/companies/${cid}/stts`).set(removing ? 9 : 0);
   for (const u of users) {

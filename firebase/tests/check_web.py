@@ -63,6 +63,12 @@ def make_user(email, password, claims):
     return r["localId"]
 
 
+def sign_in_id(email):
+    """에뮬레이터 계정의 localId (막기 전에 찾는다)"""
+    r = call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:lookup", {"email": [email]}, OWNER)
+    return r["users"][0]["localId"]
+
+
 def sign_in(email, password):
     try:
         call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=emu",
@@ -174,6 +180,24 @@ with sync_playwright() as pw:
     page.fill("#login-id", "admin@t.local"); page.fill("#password", "틀린비밀번호"); page.click("#login-btn")
     page.wait_for_selector("#login-alert:not(.hide)")
     check(page.text_content("#login-alert") == "업체코드, 아이디 또는 비밀번호가 맞지 않습니다", "틀린 비밀번호 안내 (세 칸 문구)")
+    geo = page.evaluate("""() => { const b = document.getElementById('login-btn').getBoundingClientRect(),
+        a = document.getElementById('login-alert').getBoundingClientRect(), s = getComputedStyle(document.getElementById('login-alert'));
+        return { right: a.left >= b.right, row: Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < 4, color: s.color,
+                 bad: getComputedStyle(document.documentElement).getPropertyValue('--bad').trim(), bg: getComputedStyle(document.body).backgroundColor }; }""")
+    check(geo["right"] and geo["row"], "로그인 안내는 로그인 버튼 오른쪽 같은 줄")
+    _rgb = lambda s: "#%02x%02x%02x" % tuple(int(x) for x in s[s.index("(") + 1:-1].split(",")[:3])
+    check(_rgb(geo["color"]) == geo["bad"].lower(), "로그인 안내는 빨간 글씨(--bad)")
+    _lum = lambda h: sum(w * ((v / 12.92) if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4)
+                         for w, v in zip((0.2126, 0.7152, 0.0722), (int(h[i:i + 2], 16) / 255 for i in (1, 3, 5))))
+    _la, _lb = _lum(_rgb(geo["color"])), _lum(_rgb(geo["bg"]))
+    check((max(_la, _lb) + 0.05) / (min(_la, _lb) + 0.05) >= 4.5, "로그인 안내 글자 대비 4.5:1 이상")
+    make_user("off@t.local", "pw123456", {"cid": "c_demo", "role": "viewer"})
+    call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:update",
+         {"localId": sign_in_id("off@t.local"), "disableUser": True}, OWNER)
+    page.fill("#login-id", "off@t.local"); page.fill("#password", "pw123456"); page.click("#login-btn")
+    page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('중지된 계정')", timeout=15000)
+    check(page.text_content("#login-alert") == "사용이 중지된 계정입니다", "막힌 계정 안내 (auth/user-disabled)")
+    page.fill("#login-id", "admin@t.local")
     check(page.locator("#email").count() == 0 and "업체코드" in page.text_content("#login") and page.get_attribute("#cid", "placeholder") is None and page.get_attribute("#login-id", "placeholder") is None, "로그인은 업체코드·아이디·비밀번호 세 칸, 힌트 글 없음")
     page.fill("#password", "pw123456"); page.click("#login-btn")
     page.wait_for_selector("#main:not(.hide)", timeout=15000)
