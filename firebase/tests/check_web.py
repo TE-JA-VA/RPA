@@ -779,6 +779,21 @@ with sync_playwright() as pw:
     check(page.evaluate("""async () => {
       const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
       return a.getAuth().currentUser === null; }"""), "기계 계정은 곧바로 로그아웃된다")
+    # 삭제(비활성)된 업체(stts=9). setup.js remove 가 계정도 막지만, 이미 받은 토큰이 1시간 사는 동안 화면에서 막는다
+    make_user("gone@t.local", "pw123456", {"cid": "c_gone", "role": "admin"})
+    db_put("meta/companies/c_gone", {"name": "지운 회사", "stts": 9, "pcs": {"pc_1": {"label": "PC"}}})
+    page.fill("#cid", ""); page.fill("#login-id", "gone@t.local"); page.fill("#password", "pw123456")
+    page.click("#login-btn")
+    page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('중지')", timeout=15000)
+    check(page.is_visible("#login") and page.is_hidden("#main"), "삭제된 업체 계정은 로그인 화면에 그대로")
+    check(page.text_content("#login-alert") == "사용이 중지된 업체입니다", "삭제된 업체 안내 문구")
+    check(page.evaluate("""async () => {
+      const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
+      return a.getAuth().currentUser === null; }"""), "삭제된 업체 계정은 곧바로 로그아웃된다")
+    db_put("meta/companies/c_gone/stts", 0)
+    login(page, "gone@t.local")
+    check("gone@t.local" in page.text_content("#who") and "지운 회사" in page.text_content("#company"), "되살리면(stts=0) 들어온다")
+    page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")
     browser.close()

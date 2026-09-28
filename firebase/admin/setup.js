@@ -10,7 +10,10 @@
 //   node setup.js show     <cid|-> <아이디|이메일>
 //   node setup.js list     [cid]
 //   node setup.js modules  <cid> Hold=off Output=on   (업체가 안 쓰는 모듈. off 면 화면에서 숨고 에이전트가 강제로 끈다)
+//   node setup.js remove   <cid>                                   업체 삭제(비활성): stts=9, 그 업체 계정 전부 막음. 자료는 남는다
+//   node setup.js restore  <cid>                                   되살림: stts=0, 계정 다시 엶
 //
+// 업체 상태 stts: 0(또는 없음) 사용, 9 삭제(비활성). 삭제된 업체엔 pc·user·agent 를 못 만든다.
 // 비밀번호는 명령줄로 받지 않는다. 무작위로 만들어 딱 한 번 찍고, 잃으면 passwd 로 다시 발급한다.
 // 이메일은 조립한다: <아이디>@<cid 의 _ 를 - 로>.rpa-test-f02e0.firebaseapp.com (cid 가 - 면 도메인만, 기계 계정은 agent-<pcId>).
 // 아이디에 @ 가 있으면 그대로 이메일로 쓴다(외부 메일 계정).
@@ -28,7 +31,7 @@ const emailFor = (cid, local) => local.includes("@") ? local : `${local.replaceA
 const randomPassword = () => randomBytes(18).toString("base64url");   // 24자
 
 // 인수 개수 [최소, 최대]. 옛 꼴(user <이메일> <비밀번호> …, agent <이메일> <비밀번호> …)은 받지 않는다.
-const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2] };
+const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2], remove: [1, 1], restore: [1, 1] };
 
 const [, , cmdName, ...rest] = process.argv;
 const [min, max = Infinity] = ARGC[cmdName] ?? [];
@@ -72,17 +75,38 @@ async function createUser(email, password) {
 
 const userOf = (cidArg, id) => auth.getUserByEmail(emailFor(cidOf(cidArg), id));
 
+// 업체 메타. 없거나 삭제(stts=9)된 업체면 멈춘다 - removed=true 는 remove/restore 처럼 삭제된 업체도 다뤄야 할 때
+async function companyOf(cid, { removed = false } = {}) {
+  const v = (await rtdb.ref(`meta/companies/${cid}`).get()).val();
+  if (!v?.name) throw new Error(`먼저 company 로 등록: node setup.js company ${cid} <회사 이름>`);
+  if (!removed && v.stts === 9) throw new Error(`${cid} 는 삭제된 업체다. 되살리려면: node setup.js restore ${cid}`);
+  return v;
+}
+
+// 그 업체의 계정 전부 (cid 없으면 모두). 기계 계정도 claim 에 cid 가 있어 같이 잡힌다
+async function usersOf(cid) {
+  const rows = [];
+  let token;
+  do {
+    const page = await auth.listUsers(1000, token);
+    rows.push(...page.users.filter((u) => !cid || u.customClaims?.cid === cid));
+    token = page.pageToken;
+  } while (token);
+  return rows;
+}
+
 if (cmdName === "company") {
   const [cid, ...nameParts] = rest;
   checkKey("cid", cid);
-  await rtdb.ref(`meta/companies/${cid}`).update({ name: nameParts.join(" ") });
+  if ((await rtdb.ref(`meta/companies/${cid}/stts`).get()).val() === 9) throw new Error(`${cid} 는 삭제된 업체다. 되살리려면: node setup.js restore ${cid}`);
+  await rtdb.ref(`meta/companies/${cid}`).update({ name: nameParts.join(" "), stts: 0 });
   console.log(`회사 등록: ${cid}`);
   console.log(`  이 업체가 안 쓰는 모듈이 있으면: node setup.js modules ${cid} Hold=off`);
 
 } else if (cmdName === "pc") {
   const [cid, pcId, ...labelParts] = rest;
   checkKey("cid", cid); checkKey("pcId", pcId);
-  if (!(await rtdb.ref(`meta/companies/${cid}/name`).get()).exists()) throw new Error(`먼저 company 로 등록: node setup.js company ${cid} <회사 이름>`);
+  await companyOf(cid);
   await rtdb.ref(`meta/companies/${cid}/pcs/${pcId}`).update({ label: labelParts.join(" ") });
   console.log(`PC 등록: ${cid}/${pcId}`);
 
@@ -91,6 +115,7 @@ if (cmdName === "company") {
   if (!["super", "admin", "viewer"].includes(role)) throw new Error("role 은 super/admin/viewer");
   const cid = cidOf(cidArg);
   if (role !== "super" && !cid) throw new Error("super 가 아니면 cid 가 있어야 한다");
+  if (cid) await companyOf(cid);
   const email = emailFor(cid, id), password = randomPassword();
   const user = await createUser(email, password);
   try {
@@ -105,7 +130,7 @@ if (cmdName === "company") {
 } else if (cmdName === "agent") {
   const [cid, pcId] = rest;
   checkKey("cid", cid); checkKey("pcId", pcId);
-  if (!(await rtdb.ref(`meta/companies/${cid}/pcs/${pcId}`).get()).exists()) throw new Error(`먼저 pc 로 등록: node setup.js pc ${cid} ${pcId} <PC 이름>`);
+  if (!(await companyOf(cid)).pcs?.[pcId]) throw new Error(`먼저 pc 로 등록: node setup.js pc ${cid} ${pcId} <PC 이름>`);
   const email = emailFor(cid, `agent-${pcId}`), password = randomPassword();
   const user = await createUser(email, password);
   try {
@@ -141,17 +166,30 @@ if (cmdName === "company") {
 } else if (cmdName === "list") {
   const [cid] = rest;
   if (cid) checkKey("cid", cid);
-  const rows = [];
-  let token;
-  do {
-    const page = await auth.listUsers(1000, token);
-    for (const u of page.users) {
-      const c = u.customClaims ?? {};
-      if (!cid || c.cid === cid) rows.push({ email: u.email, cid: c.cid ?? "-", role: c.role ?? "-", pcId: c.pcId ?? "-", disabled: u.disabled, lastSignIn: u.metadata.lastSignInTime ?? "-" });
-    }
-    token = page.pageToken;
-  } while (token);
-  console.table(rows);
+  const companies = (await rtdb.ref("meta/companies").get()).val() ?? {};
+  if (!cid) console.table(Object.entries(companies).map(([k, v]) => ({ cid: k, name: v.name ?? "-", stts: v.stts ?? 0, pcs: Object.keys(v.pcs ?? {}).join(" ") || "-" })));
+  console.table((await usersOf(cid)).map((u) => {
+    const c = u.customClaims ?? {};
+    return { email: u.email, cid: c.cid ?? "-", stts: c.cid ? companies[c.cid]?.stts ?? 0 : "-", role: c.role ?? "-", pcId: c.pcId ?? "-", disabled: u.disabled, lastSignIn: u.metadata.lastSignInTime ?? "-" };
+  }));
+
+} else if (cmdName === "remove" || cmdName === "restore") {
+  // 삭제는 표시(stts=9)와 계정 막기뿐이다. 메타·현황·명령·이력은 남으니 되살리면 그대로 돌아온다.
+  // ponytail: restore 는 그 업체 계정을 전부 다시 연다 - 삭제 전에 따로 막아 둔 계정이 있었으면 다시 disable 할 것
+  const [cid] = rest;
+  checkKey("cid", cid);
+  const removing = cmdName === "remove";
+  const v = await companyOf(cid, { removed: true });
+  const users = await usersOf(cid);
+  await rtdb.ref(`meta/companies/${cid}/stts`).set(removing ? 9 : 0);
+  for (const u of users) {
+    await auth.updateUser(u.uid, { disabled: removing });
+    if (removing) await auth.revokeRefreshTokens(u.uid);
+  }
+  console.log(removing
+    ? `업체 삭제(비활성): ${cid} ${v.name}  stts=9, 계정 ${users.length}개 막음 (이미 받은 토큰은 최대 1시간 산다. 에이전트는 그 안에 멈춘다)`
+    : `업체 되살림: ${cid} ${v.name}  stts=0, 계정 ${users.length}개 다시 엶`);
+  for (const u of users) console.log(`  ${u.email}`);
 
 } else if (cmdName === "modules") {
   // 업체 단위로 안 쓰는 모듈을 정한다. off = 화면에서 숨기고 에이전트가 강제로 끔, on = 정책을 지움(그 업체가 쓴다)

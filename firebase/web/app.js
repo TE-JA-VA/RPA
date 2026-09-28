@@ -80,8 +80,13 @@ onAuthStateChanged(auth, async (user) => {
   }
   me = { uid: user.uid, email: user.email, cid: t.claims.cid || null, role: t.claims.role || null };
   $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "열람"})`;
-  show($("login"), false); show($("main"), true);
   await loadCompany();
+  if (company.stts === 9) {   // 삭제(비활성)된 업체. setup.js remove 가 계정도 막지만 이미 받은 토큰은 1시간 살아서 화면에서도 막는다
+    await signOut(auth);
+    $("login-alert").textContent = "사용이 중지된 업체입니다"; show($("login-alert"), true);
+    return;
+  }
+  show($("login"), false); show($("main"), true);
   paintNav();
   mount(APPS[0]);
 });

@@ -45,7 +45,7 @@ firebase/
     에이전트_시작.bat    관리자 권한 확인 후 agent.py 실행
   rules/     database.rules.json, firestore.rules, firestore.indexes.json
   admin/     우리 PC 전용. setup.js + serviceAccountKey.json (고객 PC 에 절대 금지)
-  tests/     rules.test.js, test_agent.py, integration.js, check_web.py
+  tests/     rules.test.js, test_agent.py, integration.js, check_web.py, check_setup.py
   design/    시안 (배포 안 함)
   firebase.json, .firebaserc, emu_env.ps1
 ```
@@ -56,7 +56,7 @@ firebase/
 
 Realtime DB
 ```
-meta/companies/{cid}                    { name, pcs: { pcId: { label } } }
+meta/companies/{cid}                    { name, stts, pcs: { pcId: { label } } }   stts 0(없음도) 사용 · 9 삭제(비활성)
 apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현재 상태
                                         { programs, modules, schedule, recent[20], heartbeat, host, server_time }
 apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, schedule }
@@ -100,7 +100,11 @@ node setup.js pc      c_demo pc_a A 컴퓨터
 node setup.js user    c_demo <아이디> admin <이름>     # 비밀번호는 무작위로 만들어 한 번만 찍는다
 node setup.js agent   c_demo pc_a                    # 회사 코드·PC 이름·비밀번호 세 값이 나온다
 node setup.js passwd  c_demo <아이디>                  # 새 비밀번호. disable / enable / show / list 도 있다
+node setup.js remove  c_demo                         # 업체 삭제(비활성): stts=9 + 그 업체 계정 전부 막음. 자료는 남는다
+node setup.js restore c_demo                         # 되살림: stts=0 + 계정 다시 엶
 ```
+
+삭제된 업체(stts=9)에는 pc·user·agent 를 만들 수 없고, 남은 토큰으로 화면에 들어와도 "사용이 중지된 업체입니다" 로 내보낸다. 에이전트는 계정이 막혀 1시간 안에 멈춘다.
 
 이메일은 `<아이디>@<회사 코드>.rpa-test-f02e0.firebaseapp.com` 으로 조립한다(밑줄은 하이픈, 기계 계정은 `agent-<pcId>`). 같은 규칙이 `agent.py`, `app.js`, `setup.js` 에 한 줄씩 있다.
 
@@ -165,6 +169,7 @@ python tests\test_agent.py                      # 에이전트 단위 (Firebase 
 cd tests; npm test                              # 규칙
 firebase emulators:exec --config ../firebase.json --only auth,database,firestore          --project rpa-test-f02e0 "node integration.js"
 firebase emulators:exec --config ../firebase.json --only auth,database,firestore,hosting  --project rpa-test-f02e0 "python check_web.py"
+firebase emulators:exec --config ../firebase.json --only auth,database,firestore          --project rpa-test-f02e0 "python check_setup.py"
 cd ..; firebase deploy --only hosting --config firebase.json
 ```
 
@@ -173,7 +178,8 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 규칙 | 24 | 다른 회사·열람자·위조 거부, 명령 상태 전이 |
 | 에이전트 단위 | 123 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행 |
 | 통합 | 30 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치 |
-| 화면 | 213 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프 |
+| 화면 | 217 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체 거부 |
+| 관리 스크립트 | 20 | setup.js 를 에뮬레이터에 대고 등록 → remove(stts=9, 계정 막힘, 새 등록 거부) → restore |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.
 
@@ -183,7 +189,7 @@ cd ..; firebase deploy --only hosting --config firebase.json
 - `serviceAccountKey.json` 은 규칙을 우회하는 만능 열쇠다. `firebase/admin/` 에만 두고 고객 PC 에 복사하지 않는다.
 - `agent_config.json`, `queue.jsonl`, `history_pos.txt`, 에이전트 기록은 모두 gitignore 다.
 - 비밀번호는 `setup.js` 가 무작위로 만들어 한 번만 찍는다. 명령줄에 없으니 이력에 남지 않는다. 예전 이력에 남은 것은 `Remove-Item (Get-PSReadLineOption).HistorySavePath` 로 저장 파일을 지운다 (`Clear-History` 는 세션 버퍼만 비운다).
-- PC 를 빼거나 담당자가 바뀌면 `setup.js disable` 또는 `passwd`. 이미 받은 토큰은 최대 1시간 산다.
+- PC 를 빼거나 담당자가 바뀌면 `setup.js disable` 또는 `passwd`. 업체와 계약이 끝나면 `setup.js remove <cid>` (계정 전부 막힘, 자료는 남음). 이미 받은 토큰은 최대 1시간 산다.
 
 ## 10. 아직 안 한 것
 
