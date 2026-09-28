@@ -42,7 +42,12 @@ applyAccent(getAccent());
 // --- 로그인 ---------------------------------------------------------
 // 공유 계약 (agent.py·setup.js 와 같은 규칙): 아이디에 @ 가 있으면 그대로, 없으면 아이디@회사코드.프로젝트도메인. '_' 는 '-' 로. 업체코드가 비면(총괄) 프로젝트 도메인만
 export const emailFor = (cid, id) => id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}rpa-test-f02e0.firebaseapp.com`;
-try { $("cid").value = localStorage.getItem("cid") || ""; } catch {}   // 업체코드는 이 브라우저에 기억해 둔다
+// '업체코드·아이디 저장' 을 켜고 로그인하면 이 브라우저에 남긴다. 끄고 로그인하면 지운다
+try {
+  localStorage.removeItem("cid");   // 옛 저장(업체코드만, 항상)은 버린다
+  const saved = JSON.parse(localStorage.getItem("login") || "null");
+  if (saved) { $("cid").value = saved.cid || ""; $("login-id").value = saved.id || ""; $("remember").checked = true; }
+} catch {}
 $("login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const alert = $("login-alert");
@@ -52,7 +57,10 @@ $("login-form").addEventListener("submit", async (ev) => {
   try {
     await signInWithEmailAndPassword(auth, emailFor(cid, $("login-id").value.trim()), $("password").value);
     $("password").value = "";
-    try { localStorage.setItem("cid", cid); } catch {}
+    try {
+      if ($("remember").checked) localStorage.setItem("login", JSON.stringify({ cid, id: $("login-id").value.trim() }));
+      else localStorage.removeItem("login");
+    } catch {}
   } catch (e) {
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password",
       "auth/user-not-found", "auth/invalid-email", "auth/missing-password"];

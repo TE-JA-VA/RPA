@@ -58,10 +58,20 @@
   label { display:block; margin-bottom:8px; }
 
   /* 로그인 */
-  #login { max-width:380px; margin:10vh auto 0; padding-inline:16px; }
-  #login h1 { font-size:16px; letter-spacing:.14em; margin:0 0 14px; }
+  /* 왼쪽 칸에 양식, 오른쪽은 그림이 세로로 꽉 찬다. 좁은 화면(폰)에서는 그림을 숨긴다 */
+  #login { display:flex; min-height:100vh; }
+  #login .login-col { flex:0 0 min(100%, 520px); box-sizing:border-box; display:flex; flex-direction:column; justify-content:center;
+    padding:40px clamp(16px, 8vw, 96px); }
+  #login h1 { font-size:28px; letter-spacing:.12em; margin:0 0 32px; }
+  #login label { margin-bottom:14px; font-weight:500; }
+  #login label input { margin-top:6px; }
+  #login .remember { display:flex; align-items:center; gap:8px; margin:2px 0 20px; font-weight:400; font-size:13px; }
+  #login .remember input { margin:0; }
   #login .login-row { display:flex; align-items:center; gap:12px; }
+  #login-btn { padding:10px 32px; }
   #login-alert { color:var(--bad); font-weight:600; }   /* 로그인 버튼 오른쪽, 빨간 글씨 */
+  #login .login-art { flex:1; min-width:0; background:url(img/login.webp) center/cover no-repeat; }
+  @media (max-width:720px) { #login .login-art { display:none; } }
 
   /* 뼈대: 사이드바 + 본문 */
   .shell { display:flex; min-height:100%; }
@@ -313,17 +323,21 @@
 </svg>
 
 <section id="login" class="hide">
-  <h1>AFTER MARKET</h1>
-  <!-- 업체코드·아이디로 프로그램이 이메일을 조립한다 (app.js emailFor). form 이라 어느 칸에서든 Enter 로 로그인 -->
-  <form id="login-form">
-    <label>업체코드 <input id="cid" autocomplete="off"></label>
-    <label>아이디 <input id="login-id" autocomplete="username"></label>
-    <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
-    <div class="login-row">
-      <button id="login-btn" class="primary">로그인</button>
-      <div id="login-alert" class="hide" role="alert"></div>
-    </div>
-  </form>
+  <div class="login-col">
+    <h1>AFTER MARKET</h1>   <!-- 나중에 로고 이미지로 바꿀 자리 -->
+    <!-- 업체코드·아이디로 프로그램이 이메일을 조립한다 (app.js emailFor). form 이라 어느 칸에서든 Enter 로 로그인 -->
+    <form id="login-form">
+      <label>업체코드 <input id="cid" autocomplete="off"></label>
+      <label>아이디 <input id="login-id" autocomplete="username"></label>
+      <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
+      <label class="remember"><input id="remember" type="checkbox"> 업체코드·아이디 저장</label>
+      <div class="login-row">
+        <button id="login-btn" class="primary">로그인</button>
+        <div id="login-alert" class="hide" role="alert"></div>
+      </div>
+    </form>
+  </div>
+  <div class="login-art" aria-hidden="true"></div>   <!-- 오른쪽 그림. img/login.webp 를 바꾸면 된다 (webp·jpg 아무거나, 세로로 긴 칸이라 가운데가 남는다) -->
 </section>
 
 <div id="main" class="shell hide">
