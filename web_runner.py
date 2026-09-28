@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-r"""WebManageConfig.json 을 읽어 사이트별 웹 작업을 실행한다.
+r"""사용자 설정(RPA_UserConfig.json)의 Sites 를 읽어 사이트별 웹 작업을 실행한다.
 
 ERPia 루틴(run_routine.py), 문자 감시(sms_watch.py) 와 별개로 도는 독립 프로그램이다.
 
@@ -78,7 +78,6 @@ import perform_login as pl
 # ---------------------------------------------------------------------------
 # 설정값
 # ---------------------------------------------------------------------------
-CONFIG_NAME = "WebManageConfig.json"
 REQUIRED_KEYS = ("URL", "ID", "PW", "Action", "Stts")
 
 # Stts(Status): 사이트별 실행 여부.
@@ -125,7 +124,6 @@ def app_base_dir():
 
 
 BASE_DIR = app_base_dir()
-CONFIG_PATH = os.path.join(BASE_DIR, CONFIG_NAME)
 
 # 로그인 후 쿠키를 저장해 두는 곳.
 # 기본값은 '쓰지 않음' 이다. 매번 새로 로그인하고 2차인증을 거치는 편이 한결같고,
@@ -207,15 +205,22 @@ def mask_pw(pw):
 # 설정 읽기
 # ---------------------------------------------------------------------------
 def load_config(path=None):
-    path = path or CONFIG_PATH
-    if not os.path.exists(path):
-        raise RuntimeError(f"설정 파일이 없습니다: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-    if not isinstance(raw, dict):
-        raise RuntimeError("설정 파일의 최상위는 객체여야 합니다.")
-    # '_' 로 시작하는 키는 주석이므로 걷어낸다
-    return {k: v for k, v in raw.items() if not k.startswith("_")}
+    """사이트 설정 {이름: 사이트}. 사용자 설정의 Sites (파일이 아직 없으면 옛 WebManageConfig.json).
+    잠긴 비밀번호는 여기서 푼다 - 이 뒤로는 예전처럼 평문을 다룬다 (로그에는 mask_pw 로만)."""
+    try:
+        sites = status.read_user_config(path).get(status.SITES_SECTION)
+    except ValueError as e:
+        raise RuntimeError(str(e)) from None
+    if not isinstance(sites, dict):
+        raise RuntimeError(f"사이트 설정이 없습니다: {path or status.user_config_path()} 의 '{status.SITES_SECTION}'")
+    out = {}
+    for name, site in sites.items():
+        if name.startswith("_"):      # '_' 로 시작하는 키는 주석이므로 걷어낸다
+            continue
+        if isinstance(site, dict) and site.get("PW"):
+            site = dict(site, PW=status.unseal(site["PW"]))
+        out[name] = site
+    return out
 
 
 def site_actions(site):
@@ -1166,7 +1171,8 @@ def run_site(browser, name, site, use_session=True, keep_open=False):
 
 def cmd_check():
     log("=== 설정 점검 ===")
-    log(f"  설정 파일: {CONFIG_PATH}")
+    log(f"  설정 파일: {status.user_config_path()}"
+        + ("" if os.path.isfile(status.user_config_path()) else " (아직 없음 - 옛 WebManageConfig.json 을 읽는다)"))
     try:
         cfg = load_config()
     except Exception as e:
@@ -1324,7 +1330,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
 
 def main():
     ap = argparse.ArgumentParser(
-        description="WebManageConfig.json 을 읽어 사이트별 웹 작업을 실행합니다.")
+        description="RPA_UserConfig.json 의 Sites 를 읽어 사이트별 웹 작업을 실행합니다.")
     ap.add_argument("--check", action="store_true", help="설정 파일 점검")
     ap.add_argument("--selftest", action="store_true", help="내장 폼으로 동작 확인")
     ap.add_argument("--site", action="append", metavar="이름",

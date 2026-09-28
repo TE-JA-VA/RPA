@@ -62,6 +62,10 @@ json.dump([{"LogIn": [{"AdminCode": "erpiatest2"}, {"ID": "admin"}, {"PW": PW}]}
 
 
 def routine_in_file():
+    # 대시보드가 처음 쓸 때 옛 파일을 합쳐 RPA_UserConfig.json(cred 옆)을 만들고 옛 파일은 .old 로 바꾼다
+    new = os.path.join(sim, "RPA_UserConfig.json")
+    if os.path.exists(new):
+        return json.load(open(new, encoding="utf-8"))["Routine"]
     data = json.load(open(cred, encoding="utf-8"))
     sec = next(x for x in data if "Routine" in x)["Routine"]
     return {k: v for item in sec for k, v in item.items()}
@@ -141,9 +145,11 @@ try:
         check(pg.is_hidden("#set-dirty"), "적용 뒤 경고 사라짐")
         rf = routine_in_file()
         check(rf == {"Login": "Y", "Sales": "N", "Hold": "Y", "Logistics": "Y", "Output": "Y"}, f"파일의 Routine 이 바뀜 {rf}")
-        data = json.load(open(cred, encoding="utf-8"))
-        check(data[0]["LogIn"][2]["PW"] == PW and data[1]["Logistic"][0]["cboBS_Auto_YN"] == "Y", "비밀번호·다른 섹션은 그대로")
-        check(os.path.exists(cred + ".bak"), ".bak 생성")
+        new = os.path.join(sim, "RPA_UserConfig.json")
+        data = json.load(open(new, encoding="utf-8"))
+        check(st.unseal(data["LogIn"]["PW"]) == PW and data["Logistic"]["cboBS_Auto_YN"] == "Y", "비밀번호·다른 섹션은 그대로")
+        check(PW not in open(new, encoding="utf-8").read() and os.path.exists(cred + ".old"),
+              "옛 파일을 합쳐 RPA_UserConfig.json 으로 (비밀번호는 잠김, 옛 파일은 .old)")
 
         # 새로고침해도 유지
         # 새로 열어도 유지되는지 (환경설정 탭은 현황 카드가 숨겨져 있으므로 카드가 아니라 스위치를 기다린다)
@@ -156,9 +162,9 @@ try:
         check(routine_in_file()["Sales"] == "Y", "되돌리기 반영")
 
         # 파일 값이 잘못됐을 때 경고 + 적용으로 고치기
-        data = json.load(open(cred, encoding="utf-8"))
-        next(x for x in data if "Routine" in x)["Routine"] = [{"Login": "Y"}, {"Hold": "maybe"}]
-        json.dump(data, open(cred, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        data = json.load(open(new, encoding="utf-8"))
+        data["Routine"] = {"Login": "Y", "Hold": "maybe"}
+        json.dump(data, open(new, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         pg.click("#set-refresh"); pg.wait_for_function("!document.getElementById('mod-problem').hidden")
         check("Hold" in pg.inner_text("#mod-problem"), "잘못된 값 경고")
         check(not pg.is_disabled("#set-apply"), "잘못된 값이 있으면 곧바로 적용 가능 (고치라는 뜻)")

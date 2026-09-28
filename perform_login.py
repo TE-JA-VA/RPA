@@ -8,7 +8,6 @@
     바탕화면에 'AI 로그인 실패(YYYYMMDD_HHmmss).txt' 에러 로그를 남긴다.
     (파일명에 콜론(:)은 Windows에서 사용할 수 없어 HHmmss로 대체함)
 """
-import json
 import os
 import sys
 import time
@@ -39,10 +38,9 @@ def app_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-# 이 프로그램이 쓰는 파일은 모두 여기 모은다.
-# (설정, 받은 엑셀, 출력 결과, 실패 기록)
+# 이 프로그램이 만드는 파일은 모두 여기 모은다.
+# (받은 엑셀, 출력 결과, 실패 기록. 설정은 exe 옆 RPA_UserConfig.json - rpa_status 의 '사용자 설정' 절)
 AI_DIR_NAME = "ERPIA_AI"
-CRED_FILE_NAME = "ERPIA_AI.txt"
 
 
 def find_ai_dir():
@@ -59,21 +57,11 @@ def find_ai_dir():
     return path
 
 
-def find_cred_file():
-    """ERPIA_AI.txt 위치. 새 자리에 없으면 예전 자리(바탕화면 루트)도 본다.
-
-    이미 쓰고 있던 PC 에서 파일을 안 옮겨도 그대로 돌아가게 하기 위한 것이다.
-    """
-    # 대시보드(rpa_status.cred_file_path)와 같은 규칙을 쓴다 - 두 프로그램이 다른 파일을 보면 화면과 실제가 갈라진다.
-    # (새 자리 -> 예전 자리 -> 새 자리 경로. 시험용 환경변수 RPA_CRED_FILE 도 같이 따른다)
-    find_ai_dir()   # 새 자리 폴더는 만들어 둔다
-    return rpa_status.cred_file_path()
-
-
 BASE_DIR = app_base_dir()
 DESKTOP_DIR = find_desktop_dir()
 AI_DIR = find_ai_dir()
-CRED_FILE = find_cred_file()
+# 사용자 설정 파일. None 이면 기본 자리(rpa_status.user_config_path, 없으면 옛 두 파일). 시험이 바꿔 끼운다
+CONFIG_FILE = None
 OUT_FILE = os.path.join(BASE_DIR, "perform_login_result.txt")
 
 TWO_FA_KEYWORD = "2차 인증"
@@ -83,79 +71,47 @@ POPUP_POLL_SECONDS = 5
 POPUP_POLL_INTERVAL = 0.5
 
 
-LOGIN_SECTION = "LogIn"
+LOGIN_SECTION = rpa_status.LOGIN_SECTION
 LOGISTIC_SECTION = "Logistic"
 
 
-def _read_text(path):
-    """설정 파일을 인코딩을 가리지 않고 읽는다.
-
-    메모장에서 편집·저장하면 기본이 ANSI(CP949)라 한글 값이 UTF-8이 아니게 된다.
-    사용자가 어떤 편집기로 저장하든 루틴이 깨지지 않도록 순서대로 시도한다.
-    """
-    last_error = None
-    for encoding in ("utf-8-sig", "cp949", "utf-16"):
-        try:
-            with open(path, "r", encoding=encoding) as f:
-                return f.read()
-        except (UnicodeDecodeError, UnicodeError) as e:
-            last_error = e
-    raise RuntimeError(f"{path} 의 인코딩을 알 수 없습니다: {last_error}")
-
-
-def _flatten(value):
-    """[{"K": v}, {"K2": v2}] 또는 {"K": v} 를 하나의 dict 로 합친다."""
-    out = {}
-    if isinstance(value, dict):
-        out.update(value)
-    elif isinstance(value, list):
-        for item in value:
-            if isinstance(item, dict):
-                out.update(item)
-    return out
+def config_name():
+    """오류 문장에 쓰는 설정 파일 이름."""
+    return os.path.basename(CONFIG_FILE or rpa_status.user_config_path())
 
 
 def load_settings():
-    """ERPIA_AI.txt 를 {섹션명: {키: 값}} 형태로 읽는다.
+    """사용자 설정(RPA_UserConfig.json)을 {섹션명: {키: 값}} 형태로 읽는다. 비밀번호는 잠긴 채.
 
-    현재 형태 - 섹션 안에 단일키 객체들이 배열로 들어간다:
-      [{"LogIn": [{"AdminCode": ...}, {"ID": ...}, {"PW": ...}]},
-       {"Logistic": [{"cboTag": ...}, {"cboTagAmt": ...}, ...]}]
-
-    섹션 없이 키가 바로 있던 옛 형태([{"AdminCode": ...}, ...])도 계속 읽을 수 있게
-    LogIn 섹션에 있는 것으로 간주한다.
+    파일이 아직 없으면 옛 ERPIA_AI.txt·WebManageConfig.json 을 읽고, ERPIA_AI.txt 의 옛 형식
+    ([{"LogIn": [{"AdminCode": ...}, ...]}], 섹션 없는 키)도 풀어 준다 - rpa_status.read_user_config.
+    메모장이 ANSI(CP949)로 저장해도 읽는다.
     """
-    data = json.loads(_read_text(CRED_FILE))
-
-    if not isinstance(data, (dict, list)):
-        raise RuntimeError(
-            f"{CRED_FILE} 의 JSON 최상위가 객체도 배열도 아닙니다: {type(data).__name__}")
-
-    top = _flatten(data)
-    sections = {}
-    loose = {}
-    for key, value in top.items():
-        if isinstance(value, (dict, list)):
-            sections[key] = _flatten(value)
-        else:
-            loose[key] = value  # 섹션으로 감싸지 않은 옛 형태
-    if loose:
-        sections.setdefault(LOGIN_SECTION, {}).update(loose)
-    return sections
+    try:
+        data = rpa_status.read_user_config(CONFIG_FILE)
+    except ValueError as e:
+        raise RuntimeError(str(e)) from None
+    if not data:
+        # 없는 파일을 '전부 켬' 으로 읽어 모듈을 돌리기 시작하면 안 된다 - 루틴 main 이 여기서 '설정 파일 오류' 로 멈춘다
+        raise RuntimeError(f"설정 파일이 없습니다: {CONFIG_FILE or rpa_status.user_config_path()}")
+    return data
 
 
 def load_credentials():
-    creds = load_settings().get(LOGIN_SECTION, {})
+    """(업체코드, 아이디, 비밀번호). 비밀번호는 여기서만 푼다 (잠긴 값을 못 풀면 RuntimeError)."""
+    creds = load_settings().get(LOGIN_SECTION)
+    creds = creds if isinstance(creds, dict) else {}
     missing = [k for k in ("AdminCode", "ID", "PW") if not creds.get(k)]
     if missing:
         raise RuntimeError(
-            f"{CRED_FILE} 의 '{LOGIN_SECTION}' 섹션에 다음 값이 없습니다: {', '.join(missing)}")
-    return creds["AdminCode"], creds["ID"], creds["PW"]
+            f"{config_name()} 의 '{LOGIN_SECTION}' 섹션에 다음 값이 없습니다: {', '.join(missing)}")
+    return creds["AdminCode"], creds["ID"], rpa_status.unseal(creds["PW"])
 
 
 def load_logistic_options():
     """물류 관리 '배송정보설정'에서 고를 값. {콤보 automation_id: 선택할 값}"""
-    return load_settings().get(LOGISTIC_SECTION, {})
+    options = load_settings().get(LOGISTIC_SECTION)
+    return options if isinstance(options, dict) else {}
 
 
 ROUTINE_SECTION = "Routine"
@@ -164,21 +120,22 @@ ROUTINE_SECTION = "Routine"
 def load_routine_modules(module_keys):
     """어떤 모듈을 돌릴지. ({설정 키: True/False}, 모르는 키 목록) 을 돌려준다.
 
-    ERPIA_AI.txt 의 "Routine" 섹션에 모듈 키마다 "Y"(켬) / "N"(끔) 을 적는다.
-      예: {"Routine": [{"Login": "Y"}, {"Sales": "Y"}, {"Hold": "N"}, {"Logistics": "Y"}, {"Output": "Y"}]}
+    사용자 설정의 "Routine" 섹션에 모듈 키마다 "Y"(켬) / "N"(끔) 을 적는다.
+      예: {"Routine": {"Login": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y"}}
     섹션이나 키가 없으면 켠 것으로 본다 (예전 파일 그대로 돌아가게).
     그 밖의 값이면 RuntimeError - 사용자가 고치기 전에는 아무것도 돌리지 않는다.
     (어떤 모듈을 돌릴지는 사용자 설정이 정확히 지켜져야 하는 것이라, 어중간한 값을
      '켬'이나 '끔' 어느 쪽으로도 짐작하지 않는다.)
     """
     settings = load_settings()
-    # {"Routine": "Y"} 처럼 섹션이 아니라 값으로 잘못 쓰면 load_settings 가 LogIn 에 섞어 넣는다.
-    # 그대로 두면 '섹션 없음 = 전부 켬' 으로 읽혀 사용자 의도와 어긋나므로 여기서 잡는다.
-    if settings.get(LOGIN_SECTION, {}).get(ROUTINE_SECTION) is not None:
-        raise RuntimeError(
-            f"{CRED_FILE} 의 '{ROUTINE_SECTION}' 은 값이 아니라 섹션이어야 합니다. "
-            f'예: {{"{ROUTINE_SECTION}": [{{"Login": "Y"}}, {{"Sales": "Y"}}]}}')
     section = settings.get(ROUTINE_SECTION, {})
+    # {"Routine": "Y"} 처럼 섹션이 아니라 값으로 잘못 쓴 경우. 그대로 두면 '섹션 없음 = 전부 켬' 으로 읽혀
+    # 사용자 의도와 어긋나므로 여기서 잡는다 (LogIn 안에 섞여 들어간 가장 옛 형식도 같이).
+    login = settings.get(LOGIN_SECTION)
+    if not isinstance(section, dict) or (isinstance(login, dict) and login.get(ROUTINE_SECTION) is not None):
+        raise RuntimeError(
+            f"{config_name()} 의 '{ROUTINE_SECTION}' 은 값이 아니라 섹션이어야 합니다. "
+            f'예: {{"{ROUTINE_SECTION}": {{"Login": "Y", "Sales": "Y"}}}}')
 
     selected = {}
     bad = []
@@ -196,7 +153,7 @@ def load_routine_modules(module_keys):
             bad.append(f"{key}={raw!r}")
     if bad:
         raise RuntimeError(
-            f"{CRED_FILE} 의 '{ROUTINE_SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")
+            f"{config_name()} 의 '{ROUTINE_SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")
     unknown = sorted(k for k in section if k not in module_keys)
     return selected, unknown
 

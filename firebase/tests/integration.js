@@ -9,7 +9,7 @@
 // FIREBASE_AUTH_EMULATOR_HOST / FIREBASE_DATABASE_EMULATOR_HOST 는 emulators:exec 가 자식 프로세스에
 // 직접 넣어 준다. 여기서 process.env 에 넣으면 늦다 - ES 모듈은 본문보다 import 가 먼저 평가된다.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, cpSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, cpSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +50,17 @@ const wrote = spawnSync("python", ["-c", py], { cwd: AGENT_DIR, encoding: "utf8"
 if (wrote.status !== 0) { console.error(wrote.stderr); process.exit(1); }
 check(existsSync(cfgPath), "에이전트 설정 파일을 만들었다");
 
+// 옛 두 파일 - 에이전트가 켤 때 RPA_UserConfig.json 으로 합치고 비밀번호를 잠근다. 실제 파일 대신 임시 폴더 (RPA_USER_CONFIG)
+const userCfg = join(work, "RPA_UserConfig.json");
+writeFileSync(join(work, "ERPIA_AI.txt"), JSON.stringify([
+  { LogIn: [{ AdminCode: "x" }, { ID: "a" }, { PW: "통합-비번" }] }, { Routine: [{ Login: "Y" }] }]));
+writeFileSync(join(work, "WebManageConfig.json"), JSON.stringify({
+  SITE1: { URL: "https://a.example.com", ID: "u", PW: "사이트-비번", Action: ["login"], Stts: 9 } }));
+const fakeExe = join(work, "ERPiaNet", "ERPiaMain.exe").replaceAll("\\", "/");     // 가짜 ERPia (빈 파일)
+mkdirSync(join(work, "ERPiaNet"));
+writeFileSync(fakeExe, "");
+writeFileSync(join(work, "login_manager_config.json"), JSON.stringify({ admin_code: "x", id: "a", exe_path: fakeExe }));
+
 // --- 3. 명령 하나를 관리자 이름으로 넣는다 ----------------------------------
 const now = Math.floor(Date.now() / 1000);
 const cmdRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
@@ -68,6 +79,7 @@ const env = {
   RPA_STATUS_DIR: statusDir,
   RPA_AGENT_CONFIG: cfgPath,
   RPA_AGENT_QUEUE: queuePath,
+  RPA_USER_CONFIG: userCfg,
   PYTHONIOENCODING: "utf-8",
 };
 const agent = spawn("python", ["agent.py"], { cwd: AGENT_DIR, env });
@@ -113,7 +125,24 @@ await waitFor("연달아 실행하면 잠금이 거절한다 (failed + 사유)",
   return v.state === "failed" && /진행 중|돌고/.test(v.result || "");
 });
 
-// set_modules 는 실제 ERPIA_AI.txt 를 써야 해서 실기에서 본다.
+// 사용자 설정 한 파일: 켤 때 옮기기·잠그기, set_modules 는 그 파일의 Routine 에 쓴다 (임시 폴더라 실제 설정은 안 건드린다)
+await waitFor("켤 때 옛 두 파일을 RPA_UserConfig.json 으로 합친다", async () => existsSync(userCfg));
+const uc = readFileSync(userCfg, "utf8");
+check(!uc.includes("통합-비번") && !uc.includes("사이트-비번")
+  && JSON.parse(uc).LogIn.PW.startsWith("dpapi:") && JSON.parse(uc).Sites.SITE1.PW.startsWith("dpapi:"), "비밀번호는 잠겨서 들어간다");
+check(existsSync(join(work, "ERPIA_AI.txt.old")) && existsSync(join(work, "WebManageConfig.json.old"))
+  && existsSync(join(work, "login_manager_config.json.old")), "옛 파일 셋은 .old 로");
+check(JSON.parse(uc).ERPia?.ExePath === fakeExe, `ERPia 위치도 한 파일로 (${JSON.parse(uc).ERPia?.ExePath})`);
+check(/ERPia 위치: /.test(agentOut), "에이전트가 켤 때 ERPia 위치를 확인해 기록한다 (창 없는 실행이라 고르는 창은 안 뜬다)");
+const modRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
+  type: "set_modules", args: { Login: true, Sales: false, Hold: true, Logistics: true, Output: true }, by: adminUser.uid,
+  created_at: now, expires_at: now + 600, state: "queued",
+});
+await waitFor("set_modules 가 done 이 된다", async () => (await modRef.child("state").get()).val() === "done");
+const routine = JSON.parse(readFileSync(userCfg, "utf8")).Routine;
+check(routine.Sales === "N" && routine.Hold === "Y" && routine.Login === "Y", `RPA_UserConfig.json 의 Routine 에 쓴다 (${JSON.stringify(routine)})`);
+await waitFor("live.modules 로 올라온다 (Sales 끔)", async () =>
+  (await db.ref("apps/rpa/live/c_demo/pc_office/modules/Sales").get()).val() === false);
 
 // 자동 실행 설정: 복사한 status_sim 의 settings.json 에 쓰이고 live.schedule 로 돌아온다
 const schedRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({

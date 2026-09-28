@@ -21,6 +21,7 @@ r"""RPA 진행 현황 기록. 대시보드(rpa_dashboard.py)가 이 기록을 �
   crashed   프로그램 오류로 죽었거나, 강제 종료되어 기록 없이 사라졌다
 """
 import atexit
+import base64
 import ctypes
 import datetime
 import functools
@@ -28,6 +29,7 @@ import json
 import os
 import re
 import socket
+import sys
 import threading
 import time
 import traceback
@@ -46,7 +48,15 @@ HISTORY_NAME = "history.jsonl"
 HISTORY_OLD_NAME = "history.1.jsonl"
 HISTORY_MAX_BYTES = 5 * 1024 * 1024
 SETTINGS_NAME = "settings.json"      # 대시보드 환경설정 (자동 실행 주기 등)
-CRED_FILE_NAME = "ERPIA_AI.txt"      # 업체코드/아이디만 읽는다. 비밀번호는 절대 읽어 돌려주지 않는다.
+CRED_FILE_NAME = "ERPIA_AI.txt"      # 옛 자격증명 파일 (바탕화면). RPA_UserConfig.json 으로 옮겨 온다
+WEB_CONFIG_NAME = "WebManageConfig.json"   # 옛 사이트 설정 (exe 옆). RPA_UserConfig.json 의 Sites 로 옮겨 온다
+LOGIN_MANAGER_NAME = "login_manager_config.json"   # 옛 ERPia 위치 파일 (exe 옆). RPA_UserConfig.json 의 ERPia 로 옮겨 온다
+USER_CONFIG_NAME = "RPA_UserConfig.json"   # 사용자 설정 한 파일 (배포 폴더 루트, exe 옆). 아래 '사용자 설정' 절
+LOGIN_SECTION = "LogIn"
+SITES_SECTION = "Sites"
+ERPIA_SECTION = "ERPia"              # {"ExePath": "C:/…/ERPiaMain.exe"}. 아래 'ERPia 프로그램 위치' 절
+ERPIA_EXE_NAME = "ERPiaMain.exe"
+SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
 # 자동 실행 예약: 요일(월=0 … 일=6) + 시각("HH:MM", 5분 단위, 여러 개)
 SCHEDULE_MINUTE_STEP = 5
 SCHEDULE_MAX_TIMES = 3      # 하루에 넣을 수 있는 실행 시각 개수
@@ -132,16 +142,6 @@ def write_settings(data):
     return write_json_atomic(settings_path(), data)
 
 
-def _decode_any(raw):
-    """바이트를 utf-8-sig -> cp949 -> utf-16 순서로 풀어 본다. 못 풀면 None."""
-    for encoding in ("utf-8-sig", "cp949", "utf-16"):
-        try:
-            return raw.decode(encoding)
-        except (UnicodeDecodeError, UnicodeError):
-            continue
-    return None
-
-
 def _read_text_any(path):
     for encoding in ("utf-8-sig", "cp949", "utf-16"):
         try:
@@ -164,35 +164,412 @@ def _flatten(value):
 
 
 def read_account():
-    """ERPIA_AI.txt 의 업체코드(AdminCode)와 아이디(ID)만 읽는다.
+    """사용자 설정의 업체코드(AdminCode)와 아이디(ID)만 읽는다.
 
     비밀번호는 읽지 않는다. 대시보드는 로그인 없이 사내망 누구나 보는 화면이라
     이 함수가 돌려주는 값은 그대로 화면에 나간다고 생각해야 한다.
     """
-    path = cred_file_path()
-    if os.path.isfile(path):
-        try:
-            text = _read_text_any(path)
-            top = _flatten(json.loads(text)) if text else {}
-            login = _flatten(top.get("LogIn")) if isinstance(top.get("LogIn"), (dict, list)) else {}
-            for k, v in top.items():
-                if not isinstance(v, (dict, list)):
-                    login.setdefault(k, v)   # 섹션 없이 키가 바로 있던 옛 형태
-            return {"admin_code": str(login.get("AdminCode") or ""),
-                    "user_id": str(login.get("ID") or "")}
-        except Exception:
-            return None
-    return None
-
+    try:
+        login = read_user_config().get(LOGIN_SECTION)
+    except Exception:
+        return None
+    if not isinstance(login, dict):
+        return None
+    return {"admin_code": str(login.get("AdminCode") or ""),
+            "user_id": str(login.get("ID") or "")}
 
 
 # ---------------------------------------------------------------------------
-# 루틴 RPA 의 실행 모듈 설정 (ERPIA_AI.txt 의 "Routine" 섹션)
+# 사용자 설정: RPA_UserConfig.json (배포 폴더 루트, exe 옆) 한 파일
 #
-# 대시보드 환경설정에서 관리자가 켜고 끈다. 이 파일에는 ERPia 비밀번호가 평문으로 들어 있으므로
+#   {"LogIn":    {"AdminCode": …, "ID": …, "PW": …},
+#    "Routine":  {"Login": "Y", "Sales": "Y", "Hold": "N", …},
+#    "Logistic": {"cboBS_Auto_YN": …, "Printer": …, …},
+#    "Sites":    {"SITE1": {"URL": …, "ID": …, "PW": …, "Action": […], "Stts": 0, …}, …},
+#    "ERPia":    {"ExePath": "C:/Program Files (x86)/OneZeroSoft/ERPiaNet/ERPiaMain.exe"}}
+#
+# 예전의 ERPIA_AI.txt(바탕화면, LogIn·Logistic·Routine), WebManageConfig.json(exe 옆, 사이트),
+# login_manager_config.json(exe 옆, ERPia 위치 exe_path)을 합친 것이다.
+#   - 비밀번호(PW)는 DPAPI(이 PC·이 윈도우 계정에서만 풀림)로 잠가 "dpapi:…" 로 넣는다. 평문으로 적어 두어도
+#     읽히고, 이 파일을 쓸 때(에이전트가 켤 때 포함) 잠긴다. 읽기 함수는 잠긴 채 돌려주고 로그인하는 곳만 unseal 한다.
+#   - 이 파일이 없으면 옛 파일들을 읽는다 (에이전트가 아직 옮기기 전인 PC). 처음 쓸 때 합쳐 만들고 옛 파일은 .old 로.
+#   - 시험은 RPA_USER_CONFIG(또는 옛 RPA_CRED_FILE)로 임시 폴더를 가리킨다. 그러면 새 파일·옛 파일 모두 그 폴더만 본다.
+# ---------------------------------------------------------------------------
+def program_dir():
+    """RPA exe 가 있는 폴더 (배포 폴더 루트). exe 면 exe 옆, 소스면 이 파일 옆.
+    개발 PC 처럼 옆 dist 에 Run_All.bat 이 있으면 dist - 대시보드가 띄우는 exe 와 같은 설정을 본다
+    (rpa_dashboard.run_command_path 와 같은 규칙)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    here = os.path.dirname(os.path.abspath(__file__))
+    dist = os.path.join(here, "dist")
+    return dist if os.path.isfile(os.path.join(dist, "Run_All.bat")) else here
+
+
+def user_config_path():
+    """RPA_UserConfig.json 위치. 시험용 RPA_USER_CONFIG 가 있으면 그 파일, RPA_CRED_FILE 만 있으면 그 옆."""
+    override = os.environ.get("RPA_USER_CONFIG")
+    if override:
+        return override
+    cred = os.environ.get("RPA_CRED_FILE")
+    if cred:
+        return os.path.join(os.path.dirname(cred), USER_CONFIG_NAME)
+    return os.path.join(program_dir(), USER_CONFIG_NAME)
+
+
+def _old_config_paths():
+    """옮겨 올 옛 파일 (ERPIA_AI.txt, WebManageConfig.json, login_manager_config.json). 시험용 환경변수가 있으면
+    그 폴더만 본다."""
+    base = os.path.dirname(user_config_path())
+    only_new = os.environ.get("RPA_USER_CONFIG") and not os.environ.get("RPA_CRED_FILE")
+    return (os.path.join(base, CRED_FILE_NAME) if only_new else cred_file_path(),
+            os.path.join(base, WEB_CONFIG_NAME),
+            os.path.join(base, LOGIN_MANAGER_NAME))
+
+
+def _old_exe_path(path):
+    """옛 login_manager_config.json 의 exe_path (업체코드·아이디도 있었지만 쓰는 곳이 없어 버린다)."""
+    data = _read_json(path)
+    return data.get("exe_path") if isinstance(data, dict) else None
+
+
+class _Blob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+_DPAPI = None
+
+
+def _dpapi(protect, data):
+    """DPAPI(현재 사용자 범위)로 감싸거나 푼다. crypt32·kernel32 은 이 모듈 전용 인스턴스에만 원형을 붙인다
+    (_k32 와 같은 이유 - 같은 프로세스의 pywinauto 호출과 섞이지 않게)."""
+    global _DPAPI
+    if _DPAPI is None:
+        c = ctypes.WinDLL("crypt32")
+        tail = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(_Blob))
+        c.CryptProtectData.argtypes = (ctypes.POINTER(_Blob), ctypes.c_wchar_p) + tail
+        c.CryptUnprotectData.argtypes = (ctypes.POINTER(_Blob), ctypes.c_void_p) + tail
+        c.CryptProtectData.restype = c.CryptUnprotectData.restype = ctypes.c_int
+        k = ctypes.WinDLL("kernel32")
+        k.LocalFree.argtypes = (ctypes.c_void_p,)
+        k.LocalFree.restype = ctypes.c_void_p
+        _DPAPI = (c, k)
+    c, k = _DPAPI
+    buf = ctypes.create_string_buffer(data, len(data))
+    src, out = _Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), _Blob()
+    if protect:
+        ok = c.CryptProtectData(ctypes.byref(src), "rpa-user-config", None, None, None, 0, ctypes.byref(out))
+    else:
+        ok = c.CryptUnprotectData(ctypes.byref(src), None, None, None, None, 0, ctypes.byref(out))
+    if not ok:
+        raise OSError("DPAPI 실패")
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        k.LocalFree(ctypes.cast(out.pbData, ctypes.c_void_p))
+
+
+def seal(text):
+    """비밀번호를 잠근 "dpapi:…". 비었거나 이미 잠겼으면 그대로."""
+    if not isinstance(text, str) or not text or text.startswith(SEALED_PREFIX):
+        return text
+    return SEALED_PREFIX + base64.b64encode(_dpapi(True, text.encode("utf-8"))).decode("ascii")
+
+
+def unseal(value):
+    """잠긴 비밀번호를 푼다. 평문이면 그대로 (사람이 파일에 적은 값 - 다음에 파일을 쓸 때 잠긴다)."""
+    if not isinstance(value, str) or not value.startswith(SEALED_PREFIX):
+        return value
+    try:
+        return _dpapi(False, base64.b64decode(value[len(SEALED_PREFIX):])).decode("utf-8")
+    except Exception:
+        raise RuntimeError(
+            f"{USER_CONFIG_NAME} 의 비밀번호를 풀지 못했습니다. 다른 PC 나 다른 윈도우 계정에서 잠근 값입니다. "
+            "이 PC 에서 비밀번호를 다시 넣으세요 (파일에 평문으로 적으면 에이전트가 켤 때 잠급니다)") from None
+
+
+def _pw_slots(data):
+    """비밀번호 자리 (담은 dict, 키): LogIn.PW 와 사이트마다 PW."""
+    login = data.get(LOGIN_SECTION)
+    if isinstance(login, dict) and "PW" in login:
+        yield login, "PW"
+    sites = data.get(SITES_SECTION)
+    for site in (sites.values() if isinstance(sites, dict) else ()):
+        if isinstance(site, dict) and "PW" in site:
+            yield site, "PW"
+
+
+def _read_json(path):
+    """인코딩을 가리지 않고 JSON 을 읽는다. 깨졌으면 ValueError - 메시지에 파일 내용은 싣지 않는다."""
+    text = _read_text_any(path)
+    if text is None:
+        raise ValueError(f"{os.path.basename(path)} 의 인코딩을 알 수 없습니다")
+    try:
+        return json.loads(text)
+    except ValueError:
+        raise ValueError(f"{os.path.basename(path)} 이(가) JSON 형식이 아닙니다") from None
+
+
+def _sections(data, name):
+    """설정 JSON 을 {섹션: {키: 값}} 으로 푼다. ERPIA_AI.txt 의 옛 형식(단일 키 dict 목록)도 받는다.
+    섹션 없이 바로 있는 값은 LogIn 에 넣는다 (가장 옛 형식). 단 Routine 을 값으로 잘못 쓴 것은 그대로 둬서
+    읽는 쪽이 '잘못됨' 으로 알린다. '_' 로 시작하는 키는 사람이 적는 주석이라 손대지 않고 둔다."""
+    if not isinstance(data, (dict, list)):
+        raise ValueError(f"{name} 의 JSON 최상위가 객체도 배열도 아닙니다")
+    out, loose = {}, {}
+    for key, value in _flatten(data).items():
+        if key.startswith("_") or (key == ROUTINE_SECTION and not isinstance(value, (dict, list))):
+            out[key] = value
+        elif isinstance(value, (dict, list)):
+            out[key] = _flatten(value)
+        else:
+            loose[key] = value
+    if loose:
+        out.setdefault(LOGIN_SECTION, {}).update(loose)
+    return out
+
+
+def read_user_config(path=None):
+    """사용자 설정을 {섹션: {키: 값}} 으로 읽는다. 비밀번호는 잠긴 채 (로그인하는 곳에서 unseal).
+
+    path 를 주면 그 파일만 본다. 안 주면 RPA_UserConfig.json, 그게 없으면 옛 파일들을 합쳐 읽는다.
+    아무것도 없으면 {}. 깨졌으면 ValueError.
+    """
+    if path or os.path.isfile(user_config_path()):
+        path = path or user_config_path()
+        return _sections(_read_json(path), os.path.basename(path)) if os.path.isfile(path) else {}
+    cred, web, lm = _old_config_paths()
+    out = _sections(_read_json(cred), CRED_FILE_NAME) if os.path.isfile(cred) else {}
+    if os.path.isfile(web):
+        sites = _read_json(web)
+        if isinstance(sites, dict):
+            out[SITES_SECTION] = sites
+    if os.path.isfile(lm) and _old_exe_path(lm):
+        out[ERPIA_SECTION] = {"ExePath": _old_exe_path(lm)}
+    return out
+
+
+def write_user_config(data, path=None):
+    """사용자 설정을 쓴다. 평문 비밀번호는 잠가서 넣는다. 임시 파일에 다 쓴 뒤 바꿔치기한다 (반쯤 쓴 파일이 남지 않게).
+    평문이 남는 사본(.bak)은 만들지 않는다. 기본 자리에 쓰면 옛 파일들을 .old 로 바꾸고 그 목록을 돌려준다
+    (이제 안 읽는다는 표시. 평문 비밀번호가 들어 있으니 RPA 가 잘 도는 것을 본 뒤 지운다)."""
+    target = path or user_config_path()
+    data = json.loads(json.dumps(data, ensure_ascii=False))   # 사본 - 부른 쪽 dict 에 잠근 값이 섞이지 않게
+    for holder, key in _pw_slots(data):
+        holder[key] = seal(holder[key])
+    # 임시 파일에도 설정이 통째로 들어가므로, 바꿔치기가 실패하면 반드시 지운다.
+    tmp = f"{target}.{os.getpid()}.tmp"
+    try:
+        # 메모장 기본(BOM 없는 UTF-8)으로 쓴다. 읽는 쪽은 utf-8-sig 로 먼저 읽으므로 BOM 이 없어도 읽는다.
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(data, ensure_ascii=False, indent=2))
+            f.write("\n")
+        last = None
+        for _ in range(5):
+            try:
+                os.replace(tmp, target)
+                last = None
+                break
+            except PermissionError as e:   # 루틴이나 메모장이 막 읽고 있는 순간
+                last = e
+                time.sleep(0.1)
+        if last is not None:
+            raise last
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+    if path:
+        return []
+    moved = []
+    for old in _old_config_paths():
+        if os.path.isfile(old):
+            try:
+                os.replace(old, old + ".old")
+                moved.append(old)
+            except OSError:
+                pass        # 다른 프로그램이 잡고 있으면 둔다 - 새 파일이 있으면 어차피 안 읽는다
+    return moved
+
+
+def migrate_user_config():
+    """에이전트가 켤 때 부른다. RPA_UserConfig.json 이 없으면 옛 파일들을 합쳐 만들고, 있으면 평문 비밀번호를 잠그고
+    아직 남은 login_manager_config.json 의 ERPia 위치를 가져온다 (그 파일보다 먼저 옮긴 PC).
+    한 일을 한 문장으로 돌려준다 (할 일이 없으면 None). 실패하면 예외 - 부른 쪽이 기록만 하고 넘어간다
+    (RPA 는 옛 파일이나 평문으로도 돈다)."""
+    existed = os.path.isfile(user_config_path())
+    data = read_user_config()
+    if not data:
+        return None
+    parts = []
+    plain = sum(1 for h, k in _pw_slots(data)
+                if isinstance(h[k], str) and h[k] and not h[k].startswith(SEALED_PREFIX))
+    if plain:
+        parts.append(f"평문 비밀번호 {plain}개를 잠갔습니다")
+    lm = _old_config_paths()[2]
+    erpia = data.get(ERPIA_SECTION)
+    if existed and os.path.isfile(lm) and not (isinstance(erpia, dict) and erpia.get("ExePath")) and _old_exe_path(lm):
+        data[ERPIA_SECTION] = dict(erpia if isinstance(erpia, dict) else {}, ExePath=_old_exe_path(lm))
+        parts.append("ERPia 위치를 옮겨 왔습니다")
+    if existed and not parts:
+        return None
+    moved = write_user_config(data)
+    if moved:
+        parts.append(f"옛 파일 {' · '.join(os.path.basename(p) for p in moved)} 은 .old 로 바꿨습니다 - "
+                     "평문 비밀번호가 들어 있으니 RPA 가 잘 돌면 지우세요")
+    head = USER_CONFIG_NAME if existed else f"{USER_CONFIG_NAME} 을 만들었습니다"
+    return f"{head} ({', '.join(parts)})" if parts else head
+
+
+# ---------------------------------------------------------------------------
+# ERPia 프로그램 위치 (사용자 설정의 "ERPia": {"ExePath": …})
+#
+# 적힌 값이 맞으면 그대로. 틀렸거나 없으면 설치 기록(제어판 '프로그램 제거' 목록의 설치 폴더)과 기본 설치 폴더에서
+# ERPiaMain.exe 를 찾아 고쳐 적는다. 그래도 없으면 사람이 있을 때만 파일 고르는 창을 띄운다 - 대시보드·예약이
+# 띄운 무인 실행이 창 앞에서 기다리며 멈추면 안 되기 때문이다 (그때는 바로 멈추고 사유를 남긴다).
+# 이름이 ERPiaMain.exe 인 파일만 받는다 - 같은 회사의 다른 프로그램(ERPia_Login.exe 등)으로는 루틴이 돌지 않는다.
+# ---------------------------------------------------------------------------
+def _erpia_file(path):
+    """path 가 실제로 있는 ERPiaMain.exe 면 정리한 경로, 아니면 None. 폴더를 주면 그 안의 ERPiaMain.exe 를 본다."""
+    if not path or not isinstance(path, str):
+        return None
+    if not path.lower().endswith(".exe"):
+        path = os.path.join(path, ERPIA_EXE_NAME)
+    path = os.path.normpath(path)
+    return path if os.path.basename(path).lower() == ERPIA_EXE_NAME.lower() and os.path.isfile(path) else None
+
+
+def _erpia_install_dirs():
+    """ERPiaMain.exe 가 있을 만한 폴더: 설치 기록(레지스트리)의 설치 폴더들, 그다음 기본 설치 폴더."""
+    dirs = []
+    if winreg is not None:
+        for root, sub in ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+                          (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+                          (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")):
+            try:
+                with winreg.OpenKey(root, sub) as k:
+                    for i in range(winreg.QueryInfoKey(k)[0]):
+                        try:
+                            with winreg.OpenKey(k, winreg.EnumKey(k, i)) as app:
+                                dirs.append(winreg.QueryValueEx(app, "InstallLocation")[0])
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+    for env, default in (("ProgramFiles(x86)", r"C:\Program Files (x86)"), ("ProgramFiles", r"C:\Program Files")):
+        dirs.append(os.path.join(os.environ.get(env) or default, "OneZeroSoft", "ERPiaNet"))
+    return dirs
+
+
+def find_erpia_exe():
+    """(찾은 ERPiaMain.exe 또는 None, 설정에 적힌 값). 찾기만 하고 아무것도 쓰지 않는다 (점검 모드도 쓴다)."""
+    try:
+        section = read_user_config().get(ERPIA_SECTION)
+    except Exception:
+        section = None           # 설정이 깨졌어도 ERPia 는 찾는다 (깨진 설정은 로그인 정보를 읽을 때 알린다)
+    configured = section.get("ExePath") if isinstance(section, dict) else None
+    found = _erpia_file(configured)
+    if not found:
+        for folder in _erpia_install_dirs():
+            found = _erpia_file(folder)
+            if found:
+                break
+    return found, configured
+
+
+def set_erpia_exe(path):
+    """ERPia 위치를 사용자 설정에 적는다. 사람이 고쳐 적기 쉽게 / 로 적는다 (JSON 에서 \\ 는 두 번 써야 한다)."""
+    data = read_user_config()
+    section = data.get(ERPIA_SECTION)
+    data[ERPIA_SECTION] = dict(section if isinstance(section, dict) else {}, ExePath=path.replace("\\", "/"))
+    write_user_config(data)
+
+
+def pick_erpia_exe():
+    """ERPiaMain.exe 를 고르는 창을 띄운다 - 사람이 있을 때만 부를 것. 고른 경로, 취소면 None.
+    다른 이름의 파일을 고르면 다시 묻는다. 창은 새 스레드(STA)에서 띄운다 - 부른 쪽 스레드의 COM 상태와 섞이지 않게."""
+    result = []
+    worker = threading.Thread(target=lambda: result.append(_pick_erpia_exe_sta()), daemon=True)
+    worker.start()
+    worker.join()
+    return result[0] if result else None
+
+
+def _pick_erpia_exe_sta():
+    from ctypes import wintypes
+
+    class OFN(ctypes.Structure):          # OPENFILENAMEW
+        _fields_ = [("lStructSize", wintypes.DWORD), ("hwndOwner", wintypes.HWND), ("hInstance", wintypes.HINSTANCE),
+                    ("lpstrFilter", wintypes.LPCWSTR), ("lpstrCustomFilter", wintypes.LPWSTR),
+                    ("nMaxCustFilter", wintypes.DWORD), ("nFilterIndex", wintypes.DWORD),
+                    ("lpstrFile", wintypes.LPWSTR), ("nMaxFile", wintypes.DWORD),
+                    ("lpstrFileTitle", wintypes.LPWSTR), ("nMaxFileTitle", wintypes.DWORD),
+                    ("lpstrInitialDir", wintypes.LPCWSTR), ("lpstrTitle", wintypes.LPCWSTR), ("Flags", wintypes.DWORD),
+                    ("nFileOffset", wintypes.WORD), ("nFileExtension", wintypes.WORD), ("lpstrDefExt", wintypes.LPCWSTR),
+                    ("lCustData", wintypes.LPARAM), ("lpfnHook", ctypes.c_void_p), ("lpTemplateName", wintypes.LPCWSTR),
+                    ("pvReserved", ctypes.c_void_p), ("dwReserved", wintypes.DWORD), ("FlagsEx", wintypes.DWORD)]
+
+    ole32 = ctypes.WinDLL("ole32")
+    ole32.CoInitializeEx.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    hr = ole32.CoInitializeEx(None, 0x2)                # COINIT_APARTMENTTHREADED
+    try:
+        dlg = ctypes.WinDLL("comdlg32")
+        dlg.GetOpenFileNameW.argtypes = (ctypes.POINTER(OFN),)
+        dlg.GetOpenFileNameW.restype = wintypes.BOOL
+        k = ctypes.WinDLL("kernel32")
+        k.GetConsoleWindow.restype = wintypes.HWND
+        filt = ctypes.create_unicode_buffer(f"ERPia 프로그램 ({ERPIA_EXE_NAME})\0{ERPIA_EXE_NAME}\0\0")
+        start = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles") or "C:\\"
+        title = f"ERPia 프로그램({ERPIA_EXE_NAME})이 어디 있는지 골라 주세요"
+        for _ in range(3):
+            buf = ctypes.create_unicode_buffer(1024)
+            ofn = OFN()
+            ofn.lStructSize = ctypes.sizeof(OFN)
+            ofn.hwndOwner = k.GetConsoleWindow()
+            ofn.lpstrFilter = ctypes.cast(filt, wintypes.LPCWSTR)
+            ofn.nFilterIndex = 1
+            ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
+            ofn.nMaxFile = len(buf)
+            ofn.lpstrInitialDir = start
+            ofn.lpstrTitle = title
+            # OFN_EXPLORER | FILEMUSTEXIST | PATHMUSTEXIST | NOCHANGEDIR | HIDEREADONLY | DONTADDTORECENT
+            ofn.Flags = 0x00080000 | 0x00001000 | 0x00000800 | 0x00000008 | 0x00000004 | 0x02000000
+            if not dlg.GetOpenFileNameW(ctypes.byref(ofn)):
+                return None                             # 취소
+            found = _erpia_file(buf.value)
+            if found:
+                return found
+            title = f"{ERPIA_EXE_NAME} 가 아닙니다. ERPia 설치 폴더의 {ERPIA_EXE_NAME} 를 골라 주세요"
+            start = os.path.dirname(buf.value) or start
+        return None
+    finally:
+        if hr >= 0:
+            ole32.CoUninitialize()
+
+
+def erpia_exe(ask=False):
+    """ERPiaMain.exe 경로. 적힌 값이 틀렸으면 찾아서 고쳐 적고, 그래도 없으면 ask 일 때만 고르는 창을 띄운다.
+    끝내 없으면 None. 고쳐 적기가 실패해도(쓰기 권한 등) 찾은 경로는 돌려준다 - 이번 실행은 돌게."""
+    found, configured = find_erpia_exe()
+    if not found and ask:
+        found = pick_erpia_exe()
+    if found and found != _erpia_file(configured):
+        try:
+            set_erpia_exe(found)
+        except Exception:
+            pass
+    return found
+
+
+# ---------------------------------------------------------------------------
+# 루틴 RPA 의 실행 모듈 설정 (사용자 설정의 "Routine" 섹션)
+#
+# 대시보드 환경설정에서 관리자가 켜고 끈다. 이 파일에는 ERPia 비밀번호가 들어 있으므로
 #   - 읽을 때는 Routine 섹션의 값만 꺼내고 나머지는 절대 밖으로 내보내지 않는다
-#   - 쓸 때는 파일 전체를 읽어 Routine 항목만 제자리에서 바꾸고, 나머지(비밀번호 포함)는 그대로 둔다
-#   - 쓰기 전에 같은 폴더에 .bak 을 남기고, 임시 파일에 다 쓴 뒤 바꿔치기한다 (반쯤 쓴 파일이 남지 않게)
+#   - 쓸 때는 파일 전체를 읽어 Routine 항목만 바꾸고, 나머지(비밀번호 포함)는 그대로 둔다
 # 모듈 목록은 run_routine.ROUTINE_MODULES 와 같아야 한다 (시험이 대조한다). 대시보드는 pywinauto 를
 # 들여올 수 없어 run_routine 을 import 하지 못하므로 여기에 따로 둔다.
 # ---------------------------------------------------------------------------
@@ -225,46 +602,15 @@ def cred_file_path():
     return os.path.join(desktop, AI_DIR_NAME, CRED_FILE_NAME)
 
 
-def _routine_section(data):
-    """파일 JSON 에서 Routine 섹션 값을 찾는다. (담고 있는 dict, 없으면 None)"""
-    if isinstance(data, dict):
-        return data if ROUTINE_SECTION in data else None
-    if isinstance(data, list):
-        found = None
-        for item in data:
-            if isinstance(item, dict) and ROUTINE_SECTION in item:
-                found = item      # 여럿이면 마지막 것 (루틴의 _flatten 도 뒤의 것이 이긴다)
-        return found
-    return None
-
-
 def _merge_routine_section(existing, final):
     """기존 Routine 섹션에서 아는 키만 Y/N 으로 바꾸고, 모르는 키는 그대로 둔다. 없던 키는 뒤에 붙인다.
 
     모르는 키를 지우지 않는 이유: 루틴이 '모르는 키' 경고를 내 주는데, 대시보드가 조용히 지워 버리면
-    사용자가 오타를 알 길이 없어진다. 형식(단일 키 dict 목록 / dict)은 있던 대로 유지한다.
+    사용자가 오타를 알 길이 없어진다.
     """
-    known = {k: ("Y" if final[k] else "N") for k in final}
-    if isinstance(existing, dict):
-        out = dict(existing)
-        out.update(known)
-        return out
-    items = []
-    seen = set()
-    for item in (existing if isinstance(existing, list) else []):
-        if isinstance(item, dict):
-            new = {}
-            for k, v in item.items():
-                new[k] = known.get(k, v)
-                if k in known:
-                    seen.add(k)
-            items.append(new)
-        else:
-            items.append(item)
-    for k in final:
-        if k not in seen:
-            items.append({k: known[k]})
-    return items
+    out = dict(existing) if isinstance(existing, dict) else {}
+    out.update({k: ("Y" if final[k] else "N") for k in final})
+    return out
 
 
 def read_routine_modules(path=None):
@@ -272,24 +618,21 @@ def read_routine_modules(path=None):
 
     키가 없으면 True(켬). 값이 Y/N 이 아니면 None 으로 두고 문제 목록에 적는다
     (루틴은 그런 값이면 돌지 않는다 - 화면에서 '잘못됨' 으로 보여 주기 위해).
-    파일이 없거나 못 읽으면 전부 None 과 문제 한 줄.
+    파일이 없거나 못 읽으면 전부 None 과 문제 한 줄. path 를 안 주면 사용자 설정 (없으면 옛 파일).
     """
-    path = path or cred_file_path()
+    name = os.path.basename(path or user_config_path())
     keys = [k for k, _ in ROUTINE_CONFIG_MODULES]
     try:
-        text = _read_text_any(path)
-        data = json.loads(text) if text else None
+        data = read_user_config(path)
     except Exception as e:
-        return {k: None for k in keys}, [f"{os.path.basename(path)} 을(를) 읽지 못했습니다: {type(e).__name__}"]
-    if data is None:
-        return {k: None for k in keys}, [f"{os.path.basename(path)} 이(가) 없거나 비어 있습니다"]
-    holder = _routine_section(data)
-    raw_section = holder.get(ROUTINE_SECTION) if holder else None
-    if holder and not isinstance(raw_section, (dict, list)):
+        return {k: None for k in keys}, [f"{name} 을(를) 읽지 못했습니다: {type(e).__name__}"]
+    if not data:
+        return {k: None for k in keys}, [f"{name} 이(가) 없거나 비어 있습니다"]
+    section = data.get(ROUTINE_SECTION, {})
+    if not isinstance(section, dict):
         # {"Routine": "Y"} 처럼 섹션이 아니라 값으로 쓴 경우. 루틴은 이 파일로 돌지 않는다.
         return ({k: None for k in keys},
-                [f"'{ROUTINE_SECTION}' 은 값이 아니라 섹션이어야 합니다 (예: [{{\"Login\": \"Y\"}}, ...])"])
-    section = _flatten(raw_section) if holder else {}
+                [f"'{ROUTINE_SECTION}' 은 값이 아니라 섹션이어야 합니다 (예: {{\"Login\": \"Y\", ...}})"])
     selected = {}
     problems = []
     for k in keys:
@@ -307,63 +650,22 @@ def read_routine_modules(path=None):
 
 
 def write_routine_modules(selected, path=None):
-    """Routine 섹션만 바꿔 쓴다. 나머지(비밀번호 포함)는 손대지 않는다. 새로 쓴 {키: True/False} 를 돌려준다.
+    """Routine 섹션만 바꿔 쓴다. 나머지(비밀번호 포함)는 그대로 둔다. 새로 쓴 {키: True/False} 를 돌려준다.
 
     selected: {설정 키: True/False}. 모르는 키는 ValueError. 빠진 키는 켬(Y)으로 쓴다.
-    파일 형식: 최상위가 [{"LogIn": [...]}, {"Logistic": [...]}, ...] 목록이면 Routine 항목을 제자리에서
-    바꾸거나 끝에 붙이고, 최상위가 dict 면 키를 바꾼다. 그 밖의 형식은 ValueError.
+    path 를 안 주면 사용자 설정에 쓴다 - 아직 옛 파일뿐이면 이때 합쳐 만든다 (write_user_config).
+    읽을 설정이 아무것도 없으면 FileNotFoundError (자격증명 없는 파일을 새로 만들지 않는다).
     """
     keys = [k for k, _ in ROUTINE_CONFIG_MODULES]
     unknown = sorted(set(selected) - set(keys))
     if unknown:
         raise ValueError(f"모르는 모듈 키: {', '.join(unknown)}")
     final = {k: bool(selected.get(k, True)) for k in keys}
-    section = [{k: ("Y" if final[k] else "N")} for k in keys]
-
-    path = path or cred_file_path()
-    raw = open(path, "rb").read()          # 한 번만 읽는다 (.bak 도 이 바이트 그대로). 없으면 FileNotFoundError
-    text = _decode_any(raw)
-    if text is None:
-        raise ValueError(f"{os.path.basename(path)} 의 인코딩을 알 수 없습니다")
-    data = json.loads(text)
-
-    if isinstance(data, list):
-        holder = _routine_section(data)
-        if holder is None:
-            data.append({ROUTINE_SECTION: section})
-        else:
-            holder[ROUTINE_SECTION] = _merge_routine_section(holder.get(ROUTINE_SECTION), final)
-    elif isinstance(data, dict):
-        data[ROUTINE_SECTION] = _merge_routine_section(data.get(ROUTINE_SECTION), final)
-    else:
-        raise ValueError(f"{os.path.basename(path)} 의 JSON 최상위가 객체도 배열도 아닙니다")
-
-    with open(path + ".bak", "wb") as f:
-        f.write(raw)
-    # 임시 파일에도 비밀번호가 들어가므로, 바꿔치기가 실패하면 반드시 지운다.
-    tmp = f"{path}.{os.getpid()}.tmp"
-    try:
-        # 메모장 기본(BOM 없는 UTF-8)으로 쓴다. 루틴은 utf-8-sig 로 먼저 읽으므로 BOM 이 없어도 읽는다.
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps(data, ensure_ascii=False, indent=2))
-            f.write("\n")
-        last = None
-        for _ in range(5):
-            try:
-                os.replace(tmp, path)
-                last = None
-                break
-            except PermissionError as e:   # 루틴이나 메모장이 막 읽고 있는 순간
-                last = e
-                time.sleep(0.1)
-        if last is not None:
-            raise last
-    finally:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except Exception:
-            pass
+    data = read_user_config(path)
+    if not data:
+        raise FileNotFoundError(path or user_config_path())
+    data[ROUTINE_SECTION] = _merge_routine_section(data.get(ROUTINE_SECTION), final)
+    write_user_config(data, path)
     return final
 
 # ---------------------------------------------------------------------------

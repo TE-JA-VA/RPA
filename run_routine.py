@@ -1,7 +1,7 @@
 r"""ERPia 정해진 업무 루틴을 처음부터 끝까지 한 번에 실행한다.
 
 모듈 (2026-09-18):
-    아래 흐름을 다섯 화면 모듈로 나눠 ERPIA_AI.txt 의 "Routine" 섹션으로 골라 돌린다.
+    아래 흐름을 다섯 화면 모듈로 나눠 사용자 설정(RPA_UserConfig.json)의 "Routine" 섹션으로 골라 돌린다.
       Login / Sales / Hold / Logistics / Output  = "Y"(켬) 또는 "N"(끔). 섹션·키가 없으면 켬.
       예: {"Routine": [{"Login": "Y"}, {"Sales": "Y"}, {"Hold": "N"}, {"Logistics": "Y"}, {"Output": "Y"}]}
       Y/N 이 아닌 값이면 아무것도 돌리지 않고 멈춘다 (설정은 정확히 지켜져야 한다).
@@ -19,8 +19,8 @@ r"""ERPia 정해진 업무 루틴을 처음부터 끝까지 한 번에 실행한
       module_flags 비트: login=1 sales=2 hold=4 logistics=8 output=16 (완료·대상없음·건너뜀이면 1).
 
 흐름:
-1. 자격증명(업체코드/아이디/비밀번호) 로드 - 바탕화면\ERPIA_AI\ERPIA_AI.txt
-2. 실행 경로 로드 - login_manager_config.json (exe_path)
+1. 자격증명(업체코드/아이디/비밀번호) 로드 - exe 옆 RPA_UserConfig.json 의 LogIn (비밀번호는 잠긴 값을 풀어 쓴다)
+2. ERPia 위치 - RPA_UserConfig.json 의 ERPia.ExePath (틀렸으면 설치 기록에서 찾아 고친다. ERPia 가 이미 떠 있으면 안 본다)
 3. ERPiaMain.exe가 안 떠있으면 실행하고, 로그인 창이 뜰 때까지 대기
 4. 자동 로그인 (2차 인증 팝업/기타 팝업 처리 규칙은 perform_login.login_flow와 동일)
 5. '주문매핑 매출처리' 화면으로 이동
@@ -67,14 +67,14 @@ r"""ERPia 정해진 업무 루틴을 처음부터 끝까지 한 번에 실행한
     -> 좌측 '물류처리' 클릭 -> '물류 관리' 메뉴 열림 확인
 15. 물류 관리 처리
     15-1. 화면에 들어오자마자 자동/수동(cboBS_Auto_YN)을 설정값대로 맞춘다.
-          ERPIA_AI.txt 의 Logistic.cboBS_Auto_YN 이 "A" 또는 "Y" 면 자동, "N" 이면 수동.
+          사용자 설정의 Logistic.cboBS_Auto_YN 이 "A" 또는 "Y" 면 자동, "N" 이면 수동.
           값이 없거나 자동 값이 아니거나 콤보 컨트롤 자체가 화면에 없으면 모두 '수동'으로 본다.
           이 값이 바뀌면 상단 버튼 배치와 상단 그리드 컬럼 구성이 통째로 바뀌므로
           그리드를 잡기 전에 먼저 맞춰야 한다. (업체에 따라 이 콤보가 없을 수 있다)
     15-2. 하단 그리드 조회 완료 대기 -> 하단 그리드 우클릭 '전체선택'
           -> 우클릭 '개별 배송(B)' -> 상단 그리드에 배송 데이터 생성 확인
 16. 배송정보설정: 업체(cboTag) / 박스(cboTagAmt) / 구분(cboBeasong_Gu_Apply)을
-    ERPIA_AI.txt 의 값으로 고르고 각각 '적용'. 이 값들은 로그인 세션마다 초기화되므로
+    사용자 설정의 값으로 고르고 각각 '적용'. 이 값들은 로그인 세션마다 초기화되므로
     매번 명시적으로 설정해야 한다. 실패 시 잘못된 값으로 저장하지 않도록 중단한다.
 17. 저장(S): '현재 저장중' 스피너가 사라질 때까지 대기 후 팝업 판정
     - 검증 오류 문구(배송일/연락처/우편번호 미입력 등)가 있으면 팝업을 그대로 두고 루틴 종료
@@ -93,7 +93,6 @@ r"""ERPia 정해진 업무 루틴을 처음부터 끝까지 한 번에 실행한
       하단 그리드의 '개별 배송(B)'이 비활성화되므로 루틴에서는 누르지 않는다.
       (하단 그리드 조회는 '주문조회(J)')
 """
-import json
 import os
 import re
 import shutil
@@ -131,7 +130,6 @@ def app_base_dir():
 
 # 경로는 이 스크립트(또는 exe)가 있는 폴더 기준으로 잡는다
 BASE_DIR = app_base_dir()
-CONFIG_PATH = os.path.join(BASE_DIR, "login_manager_config.json")
 RESULT_PATH = os.path.join(BASE_DIR, "run_routine_result.txt")
 PROCESS_WAIT_SECONDS = 30
 LOGIN_WINDOW_WAIT_SECONDS = 30
@@ -206,7 +204,7 @@ ROUTINE_STEPS = (
     ("output", "운송장 출력 / 엑셀 생성"),
 )
 
-# 화면 단위 모듈. 설정(ERPIA_AI.txt 의 "Routine" 섹션)으로 골라 돌린다.
+# 화면 단위 모듈. 사용자 설정(RPA_UserConfig.json 의 "Routine" 섹션)으로 골라 돌린다.
 # (모듈 키, 설정 키, 화면 이름, 이 모듈이 맡는 ROUTINE_STEPS 키들, module_flags 비트)
 # 순서가 곧 실행 순서다. 비트는 명시 값이다 - 순서를 바꾸거나 모듈을 끼워 넣어도 기존 비트는 바꾸지 않는다
 # (이력의 module_flags 정수 의미가 달라지면 안 된다). 새 모듈은 다음 빈 비트(32, 64, ...)를 쓴다.
@@ -248,17 +246,18 @@ def log(msg):
 
 
 def load_exe_path():
-    if not os.path.exists(CONFIG_PATH):
-        raise RuntimeError(f"설정 파일이 없습니다: {CONFIG_PATH}")
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    path = cfg.get("exe_path")
-    if not path or not os.path.isfile(path):
-        raise RuntimeError(f"exe_path가 유효하지 않습니다: {path}")
+    """ERPiaMain.exe 경로 (사용자 설정의 ERPia.ExePath). 틀렸으면 설치 기록·기본 폴더에서 찾아 고쳐 적는다.
+    그래도 없으면 사람이 직접 띄운 실행일 때만 고르는 창을 띄운다. 대시보드·에이전트·예약이 띄운 무인 실행
+    (RPA_UNATTENDED=1)은 창 앞에서 멈추면 안 되니 바로 멈추고 사유를 남긴다."""
+    path = status.erpia_exe(ask=not os.environ.get("RPA_UNATTENDED"))
+    if not path:
+        raise RuntimeError("ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. ERPia 가 설치되어 있는지 보고, "
+                           "에이전트를 다시 켜거나 루틴 RPA 를 직접 실행하면 위치를 고르는 창이 뜹니다")
     return path
 
 
-def ensure_erpia_running(exe_path):
+def ensure_erpia_running():
+    """ERPia 가 떠 있으면 그 PID. 없으면 띄운다 - 위치는 이때만 찾는다 (떠 있으면 위치가 틀려도 상관없다)."""
     try:
         pid = ec.find_erpia_pid()
         log(f"ERPiaMain.exe 이미 실행 중 (PID={pid})")
@@ -266,6 +265,7 @@ def ensure_erpia_running(exe_path):
     except RuntimeError:
         pass
 
+    exe_path = load_exe_path()
     log(f"ERPiaMain.exe 미실행 -> 실행: {exe_path}")
     subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
 
@@ -346,7 +346,7 @@ class RoutineContext:
         self.hwnd = None
         self.app = None
         self.win = None
-        self.options = None      # 물류 설정 (ERPIA_AI.txt Logistic). 처음 필요할 때 읽는다.
+        self.options = None      # 물류 설정 (사용자 설정 Logistic). 처음 필요할 때 읽는다.
         self.results = {}        # 이번 실행의 모듈 결과 {모듈 키: "done" | "no_target" | ...}
 
     def refresh(self):
@@ -3176,7 +3176,7 @@ def run_stock_review_step(app, pid, hwnd):
 # 물류 관리 > 배송정보설정 (업체/박스/구분 콤보 선택 + 적용)
 # ---------------------------------------------------------------------------
 # (콤보 automation_id, '적용' 버튼 automation_id, 화면상 라벨)
-# 실제로 고를 값은 ERPIA_AI.txt 의 "Logistic" 섹션에서 콤보 automation_id 를 키로 읽는다.
+# 실제로 고를 값은 사용자 설정의 "Logistic" 섹션에서 콤보 automation_id 를 키로 읽는다.
 # automation_id 는 창 크기/해상도와 무관하게 고정이라 좌표보다 안전하다.
 SHIPPING_CONTROLS = (
     ("cboTag", "cmdTag", "업체"),
@@ -3613,7 +3613,7 @@ def apply_auto_mode(app, hwnd, options):
 def run_shipping_setup_step(app, pid, hwnd, options=None):
     """물류 관리 화면 '배송정보설정': 업체/박스/구분을 각각 고르고 '적용'을 누른다.
 
-    고를 값은 ERPIA_AI.txt 의 "Logistic" 섹션에서 읽는다.
+    고를 값은 사용자 설정의 "Logistic" 섹션에서 읽는다.
     이 값들은 로그인 세션마다 기본값으로 돌아가므로 루틴이 매번 명시적으로 설정해야 한다.
     """
     if options is None:
@@ -5325,10 +5325,10 @@ def run_self_check():
     log(f"=== 설정 점검 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
     log(f"실행 형태   : {'exe(패키징됨)' if getattr(sys, 'frozen', False) else '파이썬 스크립트'}")
     log(f"기준 폴더   : {BASE_DIR}")
-    log(f"설정 파일   : {CONFIG_PATH}  {'있음' if os.path.exists(CONFIG_PATH) else '없음!'}")
     log(f"바탕화면    : {pl.DESKTOP_DIR}  {'있음' if os.path.isdir(pl.DESKTOP_DIR) else '없음!'}")
     log(f"작업 폴더   : {pl.AI_DIR}  {'있음' if os.path.isdir(pl.AI_DIR) else '없음!'}")
-    log(f"자격증명파일: {pl.CRED_FILE}  {'있음' if os.path.exists(pl.CRED_FILE) else '없음!'}")
+    user_cfg = status.user_config_path()
+    log(f"사용자 설정 : {user_cfg}  {'있음' if os.path.exists(user_cfg) else '없음 (옛 ERPIA_AI.txt·WebManageConfig.json 을 읽는다)'}")
     log(f"엑셀 폴더   : {excel_upload_dir()}")
     log(f"저장 폴더   : {os.path.join(pl.AI_DIR, JOBS_DIR_NAME)}")
 
@@ -5359,10 +5359,15 @@ def run_self_check():
         log(f"실행 모듈   : 읽기 실패 - {e}")
 
     try:
-        exe_path = load_exe_path()
-        log(f"프로그램    : {exe_path}  {'있음' if os.path.exists(exe_path) else '없음!'}")
+        found, configured = status.find_erpia_exe()   # 점검은 찾기만 한다 (고쳐 적거나 창을 띄우지 않는다)
+        if found and os.path.normpath(configured or "") == found:
+            log(f"프로그램    : {found}  있음")
+        elif found:
+            log(f"프로그램    : {found}  있음 (적힌 값 '{configured or '없음'}' 은 틀려서 찾아냄 - 실행하면 고쳐 적는다)")
+        else:
+            log(f"프로그램    : 못 찾음! (적힌 값 '{configured or '없음'}'. 루틴을 직접 실행하면 고르는 창이 뜬다)")
     except Exception as e:
-        log(f"프로그램    : 읽기 실패 - {e}")
+        log(f"프로그램    : 찾기 실패 - {e}")
 
     try:
         log(f"실행 상태   : ERPiaMain.exe 실행 중 (PID={ec.find_erpia_pid()})")
@@ -5458,8 +5463,7 @@ def module_login(ctx):
     """ERPia 를 띄우고(이미 떠 있으면 그대로) 로그인한 뒤 메인 창을 잡는다."""
     status.step("login")
     admin_code, user_id, password = pl.load_credentials()
-    exe_path = load_exe_path()
-    ctx.pid = ensure_erpia_running(exe_path)
+    ctx.pid = ensure_erpia_running()
 
     state, obj = wait_login_or_main(ctx.pid)
     if state == "timeout":

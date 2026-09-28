@@ -74,6 +74,13 @@ try:
 except RuntimeError as e:
     check("섹션을 스칼라로 잘못 쓰면 RuntimeError", "Routine" in str(e), str(e))
 
+with_settings({"LogIn": {"AdminCode": "x"}, "Routine": "Y"})    # RPA_UserConfig.json 에서 섹션 자리에 값을 쓴 경우
+try:
+    pl.load_routine_modules(KEYS)
+    check("새 파일에서 섹션 자리에 값을 써도 RuntimeError", False, "예외 없음")
+except RuntimeError as e:
+    check("새 파일에서 섹션 자리에 값을 써도 RuntimeError", "Routine" in str(e) and "섹션" in str(e), str(e))
+
 # ---------------------------------------------------------------------------
 import rpa_status as st  # noqa: E402
 

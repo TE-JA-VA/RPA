@@ -20,7 +20,7 @@ AFTER MARKET 은 플랫폼 이름이고 RPA 는 그 안의 앱 하나다. 데이
  │ 에이전트 (python, 콘솔 창)   │          │   apps/rpa/commands/…    │        │  Auth            │
  │   · 5초 heartbeat          │  명령 SSE  │ Firestore (서울)          │  조회   │  (이메일+비밀번호) │
  │   · exe 실행 / ERPia 종료   │ ◀─────── │   runs/{회사}/items/…     │ ◀──────│                  │
- │   · ERPIA_AI.txt 쓰기       │          │   users/{uid}            │        └──────────────────┘
+ │   · 사용자 설정 쓰기         │          │   users/{uid}            │        └──────────────────┘
  │   · 자동 실행 예약           │          │ Hosting (정적 화면)        │
  └────────────────────────────┘          └──────────────────────────┘
 ```
@@ -115,6 +115,24 @@ node setup.js passwd  c_demo <아이디>                  # 새 비밀번호. di
 - 못 올린 것은 `queue.jsonl` 에 쌓고 연결되면 순서대로 보낸다. 규칙이 거부한 것은 버린다. 기록 실패가 RPA 를 막는 일은 없다.
 - **자동 실행 예약기를 에이전트가 띄운다.** 그래서 옛 8765 대시보드(`RPA_Dashboard.exe`, `대시보드_시작.bat`)와 같이 띄우면 예약이 두 번 돈다. 배포 폴더에서 옛 대시보드를 빼 둔 이유가 이것이다.
 - 로그인 모듈은 항상 켬으로 고정한다. 화면에서도 잠겨 있고 에이전트도 `Login=Y` 로 덮어쓴다.
+- 켤 때 사용자 설정을 한 파일로 옮긴다. 아래 '사용자 설정' 참고.
+
+### 사용자 설정: `RPA_UserConfig.json`
+
+업체마다 사람이 정하는 값은 배포 폴더 루트(exe 옆)의 이 파일 하나에 있다. 개발 PC 는 `dist\` 에 있다.
+
+```json
+{"LogIn":    {"AdminCode": "…", "ID": "…", "PW": "dpapi:…"},
+ "Routine":  {"Login": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y"},
+ "Logistic": {"cboBS_Auto_YN": "…", "Printer": "…", "cboTag": "…", "cboTagAmt": "…", "cboBeasong_Gu_Apply": "…"},
+ "Sites":    {"SITE1": {"URL": "…", "ID": "…", "PW": "dpapi:…", "Action": ["…"], "Stts": 0, "…": "…"}},
+ "ERPia":    {"ExePath": "C:/Program Files (x86)/OneZeroSoft/ERPiaNet/ERPiaMain.exe"}}
+```
+
+- 예전의 `ERPIA_AI.txt`(바탕화면, 로그인·물류·모듈), `WebManageConfig.json`(exe 옆, 사이트), `login_manager_config.json`(exe 옆, ERPia 위치 `exe_path`)을 합친 것이다. 에이전트가 켤 때 이 파일이 없으면 옛 파일들을 합쳐 만들고 옛 파일은 `.old` 로 바꾼다. `.old` 에는 평문 비밀번호가 있으니 RPA 가 잘 도는 것을 본 뒤 지운다.
+- 비밀번호(`PW`)는 DPAPI 로 잠가 `dpapi:…` 로 넣는다. 그 PC·그 윈도우 계정에서만 풀린다. 평문으로 적어도 읽히고, 에이전트가 켤 때 잠근다. 다른 PC 에서 잠근 값은 못 푸니 파일째 옮기지 말고 평문으로 다시 적는다.
+- 읽는 곳은 `rpa_status` 한 곳이다(`read_user_config`). 이 파일이 없으면 옛 파일들을 읽으므로 exe 만 먼저 바꿔도 돈다. 비밀번호는 로그인하는 곳(`perform_login.load_credentials`, `web_runner.load_config`)에서만 푼다.
+- **ERPia 위치(`ERPia.ExePath`)** 는 적힌 값이 틀리면 설치 기록(제어판 '프로그램 제거' 목록의 설치 폴더)과 기본 설치 폴더에서 `ERPiaMain.exe` 를 찾아 고쳐 적는다. 그래도 없으면 **사람이 있을 때만** 파일 고르는 창을 띄운다: 에이전트 창을 켤 때, 또는 루틴을 직접 실행할 때. 대시보드·에이전트·예약이 띄운 실행은 `RPA_UNATTENDED=1` 이 붙어 창을 띄우지 않고 바로 멈춘다(아무도 없는 PC 에서 창 앞에 멈추면 안 된다). ERPia 가 이미 떠 있으면 위치는 보지 않는다.
 
 첫 실행에는 설정 파일이 없으므로 회사 코드·PC 이름·비밀번호를 묻고(`setup.js agent` 가 찍어 준 세 값) 이메일은 프로그램이 조립한다. 로그인해 보고 토큰의 회사·PC 가 친 값과 같아야 `agent_config.json` 을 만든다. 돌다가 인증이 죽으면(비밀번호 교체·계정 막힘) 멈추고 이유를 찍은 뒤 창에서 새 비밀번호를 다시 묻는다. 비밀번호는 DPAPI 로 그 PC, 그 윈도우 계정에서만 풀리게 잠긴다. 사람 계정으로는 거부한다.
 
@@ -131,7 +149,7 @@ node setup.js passwd  c_demo <아이디>                  # 새 비밀번호. di
 
 1. 우리 PC 에서 `setup.js pc` 와 `setup.js agent` 로 PC 와 기계 계정을 만든다.
 2. 배포 폴더(`D:\AX\배포_A_20260921` 이 본)를 통째로 복사한다. 옛 대시보드는 넣지 않는다.
-3. 바탕화면 `ERPIA_AI\ERPIA_AI.txt`, `WebManageConfig.json`, `login_manager_config.json` 을 그 업체 값으로 맞춘다.
+3. `RPA_UserConfig.json` 을 그 업체 값으로 맞춘다. 비밀번호는 평문으로 적으면 에이전트가 처음 켤 때 잠근다. ERPia 위치는 에이전트가 켤 때 찾고, 못 찾으면 고르는 창을 띄운다.
 4. `firebase\agent\에이전트_시작.bat` 을 실행하고 1번에서 받은 회사 코드·PC 이름·비밀번호를 넣는다.
 5. 대시보드에서 그 PC 를 고른다. PC 가 둘 이상이면 제목 옆에 고르는 칸이 생긴다.
 
@@ -153,15 +171,15 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
 | 규칙 | 24 | 다른 회사·열람자·위조 거부, 명령 상태 전이 |
-| 에이전트 단위 | 122 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행 |
-| 통합 | 20 | 에뮬레이터에 에이전트를 붙여 명령 왕복 |
+| 에이전트 단위 | 123 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행 |
+| 통합 | 30 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치 |
 | 화면 | 213 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프 |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.
 
 ## 9. 비밀 취급
 
-- `ERPIA_AI.txt`, `WebManageConfig.json` 에는 평문 비밀번호가 있다. **PC 밖으로 나가지 않는다.** 클라우드에는 모듈 켬/끔 값만 오간다.
+- `RPA_UserConfig.json` 의 비밀번호는 DPAPI 로 잠겨 있지만 **PC 밖으로 내보내지 않는다.** 클라우드에는 모듈 켬/끔 값만 오간다. 옮기고 남은 `ERPIA_AI.txt.old`, `WebManageConfig.json.old` 에는 평문이 있으니 확인 뒤 지운다 (`login_manager_config.json.old` 는 ERPia 위치뿐).
 - `serviceAccountKey.json` 은 규칙을 우회하는 만능 열쇠다. `firebase/admin/` 에만 두고 고객 PC 에 복사하지 않는다.
 - `agent_config.json`, `queue.jsonl`, `history_pos.txt`, 에이전트 기록은 모두 gitignore 다.
 - 비밀번호는 `setup.js` 가 무작위로 만들어 한 번만 찍는다. 명령줄에 없으니 이력에 남지 않는다. 예전 이력에 남은 것은 `Remove-Item (Get-PSReadLineOption).HistorySavePath` 로 저장 파일을 지운다 (`Clear-History` 는 세션 버퍼만 비운다).

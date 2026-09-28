@@ -7,6 +7,7 @@ PC 에서만 할 수 있는 일을 맡는다: 상태 올리기, heartbeat, 클�
   rpa_status.dashboard_snapshot()  현황
   rpa_dashboard.launch()/stop_erpia()  실행·종료 (1PC 1프로그램 잠금 포함)
   rpa_status.write_routine_modules()  실행 모듈
+  rpa_status.migrate_user_config()  사용자 설정 한 파일로 옮기기·비밀번호 잠금 (켤 때)
 """
 import datetime
 import json
@@ -531,6 +532,23 @@ def run(cfg):
     up = Uploader(client, cfg["cid"], cfg["pc_id"])
     cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"])))
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
+    # 사용자 설정 한 파일로 옮기기 (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json → RPA_UserConfig.json,
+    # 비밀번호 잠금). 실패해도 에이전트는 계속 돈다 - RPA 는 옛 파일이나 평문으로도 돈다
+    try:
+        moved = st.migrate_user_config()
+        if moved:
+            log(moved)
+    except Exception as e:
+        log(f"사용자 설정을 옮기지 못했습니다 ({type(e).__name__}: {e}). 옛 파일 그대로 돕니다")
+    # ERPia 위치: 적힌 값이 틀렸으면 찾아 고친다. 못 찾으면 사람이 띄운 창일 때만 고르는 창을 띄운다
+    # (루틴 RPA 는 무인으로 돌 때 창을 못 띄우니 여기서 정해 둔다)
+    try:
+        exe = st.erpia_exe(ask=sys.stdin.isatty())
+        log(f"ERPia 위치: {exe}" if exe else
+            "ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. 루틴 RPA 가 ERPia 를 켜지 못합니다 - "
+            "ERPia 를 설치했는지 보고 에이전트를 다시 켜서 위치를 고르세요")
+    except Exception as e:
+        log(f"ERPia 위치를 확인하지 못했습니다 ({type(e).__name__})")
 
     # 자동 실행 예약은 PC 에서 돈다. 기존 대시보드의 Scheduler 그대로 (꺼져 있던 동안 지난 예약은 건너뛴다).
     # 8765 대시보드와 같이 띄우면 예약이 둘이 되어 두 번 실행될 수 있다 - 하나만 띄운다.
@@ -553,7 +571,7 @@ def run(cfg):
             try:
                 snap = st.dashboard_snapshot()
                 try:
-                    snap["modules"] = st.read_routine_modules()[0]   # PC 의 실제 실행 모듈 (ERPIA_AI.txt)
+                    snap["modules"] = st.read_routine_modules()[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)
                 except Exception:
                     snap["modules"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다

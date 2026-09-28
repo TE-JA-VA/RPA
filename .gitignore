@@ -2,6 +2,8 @@
 WebManageConfig.json
 login_manager_config.json
 ERPIA_AI.txt
+RPA_UserConfig.json
+*.old
 *.bak
 
 # ---- 가상환경 / 빌드 산출물 ----

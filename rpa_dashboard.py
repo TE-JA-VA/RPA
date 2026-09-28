@@ -430,7 +430,10 @@ def launch(target, by):
             except OSError:
                 err_fh = None
             try:
+                # 여기서 띄우는 실행은 모두 무인이다 (원격 버튼·자동 실행). RPA 가 사람에게 묻는 창(ERPia 위치 고르기 등)을
+                # 띄우고 기다리면 아무도 없는 PC 에서 멈추므로, 표시를 넘겨 바로 멈추고 사유를 남기게 한다.
                 proc = subprocess.Popen(cmd, cwd=os.path.dirname(path), stderr=err_fh,
+                                        env=dict(os.environ, RPA_UNATTENDED="1"),
                                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             finally:
                 if err_fh is not None:
@@ -657,16 +660,16 @@ def apply_schedule(payload):
 
 
 def routine_modules_view():
-    """환경설정 화면의 '실행 모듈'. ERPIA_AI.txt 의 Routine 섹션만 읽는다.
+    """환경설정 화면의 '실행 모듈'. 사용자 설정(RPA_UserConfig.json)의 Routine 섹션만 읽는다.
 
-    그 파일에는 ERPia 비밀번호가 평문으로 있다. 여기서 나가는 것은 모듈 켬/끔뿐이어야 한다.
+    그 파일에는 ERPia 비밀번호가 있다. 여기서 나가는 것은 모듈 켬/끔뿐이어야 한다.
     enabled 가 None 이면 파일의 값이 Y/N 이 아니라는 뜻 (루틴은 그런 값이면 돌지 않는다).
     """
     selected, problems = st.read_routine_modules()
     return {"items": [{"key": k, "label": label, "enabled": selected.get(k)}
                       for k, label in st.ROUTINE_CONFIG_MODULES],
             "problems": problems,
-            "file": os.path.basename(st.cred_file_path())}
+            "file": os.path.basename(st.user_config_path())}
 
 
 def _wanted_routine_modules(payload, before):
@@ -697,7 +700,7 @@ def validate_routine_modules(payload):
 
 
 def apply_routine_modules(payload):
-    """환경설정 화면의 '적용' - 실행 모듈. {설정 키: true/false} 를 검증해 ERPIA_AI.txt 에 쓴다.
+    """환경설정 화면의 '적용' - 실행 모듈. {설정 키: true/false} 를 검증해 사용자 설정에 쓴다.
 
     바뀐 것이 있으면 True. 빠진 키는 지금 값(잘못된 값이면 켬)을 유지한다. 전부 끄는 것은 거절한다.
     파일을 못 쓰면 RuntimeError - 메시지에 파일 내용은 절대 싣지 않는다.
@@ -792,7 +795,7 @@ _account_cache = {"at": 0.0, "value": None}
 
 
 def erpia_account_view():
-    """RPA 가 ERPia 에 로그인할 때 쓰는 계정 (ERPIA_AI.txt, 비밀번호 제외)."""
+    """RPA 가 ERPia 에 로그인할 때 쓰는 계정 (사용자 설정의 LogIn, 비밀번호 제외)."""
     now = time.time()
     if now - _account_cache["at"] > ACCOUNT_CACHE_SEC:
         _account_cache["value"] = st.read_account()
@@ -1171,8 +1174,8 @@ def main():
     else:
         print(f"  (--host {args.host} 로 떠서 다른 PC 에서는 볼 수 없습니다)")
     print(f"  기록 폴더   : {st.status_dir()}")
-    print(f"  설정 파일   : {st.cred_file_path()}"
-          + (" (환경변수 RPA_CRED_FILE - 시험용)" if os.environ.get("RPA_CRED_FILE") else ""))
+    print(f"  설정 파일   : {st.user_config_path()}"
+          + (" (환경변수 - 시험용)" if os.environ.get("RPA_USER_CONFIG") or os.environ.get("RPA_CRED_FILE") else ""))
     print("  로그인      : 관리자 admin / 일반 user" + (" (기본 계정을 새로 만들었습니다)" if made_default else ""))
     print(f"  관리자 권한 : {'예' if is_admin() else '아니오 (지금 실행·자동 실행·ERPia 종료가 ERPia 를 다루지 못할 수 있습니다)'}")
     if args.no_scheduler:

@@ -468,26 +468,29 @@ with tempfile.TemporaryDirectory() as d:
         acts = ag.real_actions()
         msg = acts["set_modules"]({"Login": False, "Sales": False, "Hold": True})
         import rpa_status as st
-        sel = st.read_routine_modules(cred)[0]
+        sel = st.read_routine_modules()[0]
         check(sel["Login"] is True and sel["Sales"] is False and sel["Hold"] is True, f"로그인은 꺼 달라고 해도 켜진 채 저장 ({sel})")
         check("Login" in msg, "결과 문장에 로그인 포함")
-        raw = open(cred, encoding="utf-8").read()
-        check("비밀-시험" in raw, "자격증명은 그대로 남는다")
+        # 처음 쓰면 옛 파일을 합쳐 RPA_UserConfig.json 을 만든다 (RPA_CRED_FILE 옆 = 임시 폴더)
+        new = os.path.join(d, "RPA_UserConfig.json")
+        raw = open(new, encoding="utf-8").read()
+        check(os.path.isfile(cred + ".old") and not os.path.exists(cred), "옛 자격증명 파일은 .old 로")
+        check("비밀-시험" not in raw and st.unseal(json.loads(raw)["LogIn"]["PW"]) == "비밀-시험", "자격증명은 잠긴 채 그대로 남는다")
         acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": False, "Output": True})
-        sel = st.read_routine_modules(cred)[0]
+        sel = st.read_routine_modules()[0]
         check(sel["Output"] is False, f"물류관리가 꺼지면 운송장 출력도 꺼진다 ({sel})")
         acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": False})   # Output 을 안 보내면 Y 로 쓰이던 자리
-        check(st.read_routine_modules(cred)[0]["Output"] is False, "값을 안 보내도 물류관리가 꺼져 있으면 출력은 꺼짐")
+        check(st.read_routine_modules()[0]["Output"] is False, "값을 안 보내도 물류관리가 꺼져 있으면 출력은 꺼짐")
         acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True})
-        check(st.read_routine_modules(cred)[0]["Output"] is True, "물류관리가 켜져 있으면 출력을 켤 수 있다")
+        check(st.read_routine_modules()[0]["Output"] is True, "물류관리가 켜져 있으면 출력을 켤 수 있다")
         acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": False})
-        check(st.read_routine_modules(cred)[0]["Output"] is False, "물류관리가 켜져 있어도 출력만 끌 수 있다")
+        check(st.read_routine_modules()[0]["Output"] is False, "물류관리가 켜져 있어도 출력만 끌 수 있다")
         # 업체 정책 (총괄이 정한 '이 업체는 안 씀'). 화면을 우회한 명령도 여기서 막힌다
         strict = ag.real_actions(lambda: {"Hold": False})
         strict["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True})
-        sel = st.read_routine_modules(cred)[0]
+        sel = st.read_routine_modules()[0]
         check(sel["Hold"] is False and sel["Sales"] is True, f"업체가 안 쓰는 모듈은 켜 달라고 해도 꺼진다 ({sel})")
-        check(ag.real_actions(lambda: {"Nope": False})["set_modules"]({"Sales": True}) and st.read_routine_modules(cred)[0]["Sales"] is True,
+        check(ag.real_actions(lambda: {"Nope": False})["set_modules"]({"Sales": True}) and st.read_routine_modules()[0]["Sales"] is True,
               "정책에 모르는 키가 있어도 넘어간다")
         try:
             acts["set_modules"]({"Nope": True}); check(False, "모르는 모듈만 있으면 거부")
