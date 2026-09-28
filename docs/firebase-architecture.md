@@ -97,10 +97,12 @@ custom claim 세 가지가 전부다.
 ```
 node setup.js company c_demo 테스트업체
 node setup.js pc      c_demo pc_a A 컴퓨터
-node setup.js user    <이메일> <비밀번호> c_demo admin <이름>
-node setup.js agent   <이메일> <비밀번호> c_demo pc_a
-node setup.js show    <이메일>
+node setup.js user    c_demo <아이디> admin <이름>     # 비밀번호는 무작위로 만들어 한 번만 찍는다
+node setup.js agent   c_demo pc_a                    # 회사 코드·PC 이름·비밀번호 세 값이 나온다
+node setup.js passwd  c_demo <아이디>                  # 새 비밀번호. disable / enable / show / list 도 있다
 ```
+
+이메일은 `<아이디>@<회사 코드>.rpa-test-f02e0.firebaseapp.com` 으로 조립한다(밑줄은 하이픈, 기계 계정은 `agent-<pcId>`). 같은 규칙이 `agent.py`, `app.js`, `setup.js` 에 한 줄씩 있다.
 
 **서버 코드가 없으므로 규칙이 유일한 방어선이다.** 규칙을 고치면 `tests/rules.test.js` 를 반드시 돌린다. 화면 코드에서 버튼을 숨기는 것은 편의일 뿐 보안이 아니다.
 
@@ -114,7 +116,7 @@ node setup.js show    <이메일>
 - **자동 실행 예약기를 에이전트가 띄운다.** 그래서 옛 8765 대시보드(`RPA_Dashboard.exe`, `대시보드_시작.bat`)와 같이 띄우면 예약이 두 번 돈다. 배포 폴더에서 옛 대시보드를 빼 둔 이유가 이것이다.
 - 로그인 모듈은 항상 켬으로 고정한다. 화면에서도 잠겨 있고 에이전트도 `Login=Y` 로 덮어쓴다.
 
-첫 실행에는 설정 파일이 없으므로 기계 계정 이메일과 비밀번호를 묻는다. 로그인해 보고 회사·PC 를 토큰에서 읽어 `agent_config.json` 을 만든다. 비밀번호는 DPAPI 로 그 PC, 그 윈도우 계정에서만 풀리게 잠긴다. 사람 계정으로는 거부한다.
+첫 실행에는 설정 파일이 없으므로 회사 코드·PC 이름·비밀번호를 묻고(`setup.js agent` 가 찍어 준 세 값) 이메일은 프로그램이 조립한다. 로그인해 보고 토큰의 회사·PC 가 친 값과 같아야 `agent_config.json` 을 만든다. 돌다가 인증이 죽으면(비밀번호 교체·계정 막힘) 멈추고 이유를 찍은 뒤 창에서 새 비밀번호를 다시 묻는다. 비밀번호는 DPAPI 로 그 PC, 그 윈도우 계정에서만 풀리게 잠긴다. 사람 계정으로는 거부한다.
 
 ## 6. 화면
 
@@ -130,7 +132,7 @@ node setup.js show    <이메일>
 1. 우리 PC 에서 `setup.js pc` 와 `setup.js agent` 로 PC 와 기계 계정을 만든다.
 2. 배포 폴더(`D:\AX\배포_A_20260921` 이 본)를 통째로 복사한다. 옛 대시보드는 넣지 않는다.
 3. 바탕화면 `ERPIA_AI\ERPIA_AI.txt`, `WebManageConfig.json`, `login_manager_config.json` 을 그 업체 값으로 맞춘다.
-4. `firebase\agent\에이전트_시작.bat` 을 실행하고 기계 계정을 넣는다.
+4. `firebase\agent\에이전트_시작.bat` 을 실행하고 1번에서 받은 회사 코드·PC 이름·비밀번호를 넣는다.
 5. 대시보드에서 그 PC 를 고른다. PC 가 둘 이상이면 제목 옆에 고르는 칸이 생긴다.
 
 자세한 절차는 배포 폴더의 `클라우드_안내.txt` 에 있다.
@@ -150,10 +152,10 @@ cd ..; firebase deploy --only hosting --config firebase.json
 
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
-| 규칙 | 22 | 다른 회사·열람자·위조 거부 |
-| 에이전트 단위 | 81 | 큐, 토큰, 명령 전이, 첫 실행 설정 |
+| 규칙 | 24 | 다른 회사·열람자·위조 거부, 명령 상태 전이 |
+| 에이전트 단위 | 122 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행 |
 | 통합 | 20 | 에뮬레이터에 에이전트를 붙여 명령 왕복 |
-| 화면 | 114 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면 |
+| 화면 | 213 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프 |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.
 
@@ -162,7 +164,8 @@ cd ..; firebase deploy --only hosting --config firebase.json
 - `ERPIA_AI.txt`, `WebManageConfig.json` 에는 평문 비밀번호가 있다. **PC 밖으로 나가지 않는다.** 클라우드에는 모듈 켬/끔 값만 오간다.
 - `serviceAccountKey.json` 은 규칙을 우회하는 만능 열쇠다. `firebase/admin/` 에만 두고 고객 PC 에 복사하지 않는다.
 - `agent_config.json`, `queue.jsonl`, `history_pos.txt`, 에이전트 기록은 모두 gitignore 다.
-- 계정을 만들 때 비밀번호가 명령 이력에 남으므로 뒤에 `Clear-History` 로 지운다.
+- 비밀번호는 `setup.js` 가 무작위로 만들어 한 번만 찍는다. 명령줄에 없으니 이력에 남지 않는다. 예전 이력에 남은 것은 `Remove-Item (Get-PSReadLineOption).HistorySavePath` 로 저장 파일을 지운다 (`Clear-History` 는 세션 버퍼만 비운다).
+- PC 를 빼거나 담당자가 바뀌면 `setup.js disable` 또는 `passwd`. 이미 받은 토큰은 최대 1시간 산다.
 
 ## 10. 아직 안 한 것
 

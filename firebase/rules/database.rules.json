@@ -55,7 +55,7 @@
                   ".validate": "newData.isNumber() && (!data.exists() || data.val() === newData.val())"
                 },
                 "state": {
-                  ".validate": "newData.isString() && (!data.exists() ? newData.val() === 'queued' : (auth.token.role === 'agent' && (newData.val() === 'running' || newData.val() === 'done' || newData.val() === 'failed' || newData.val() === 'expired')))"
+                  ".validate": "newData.isString() && (!data.exists() ? newData.val() === 'queued' : (auth.token.role === 'agent' && ((data.val() === 'queued' && (newData.val() === 'running' || newData.val() === 'expired')) || (data.val() === 'running' && (newData.val() === 'done' || newData.val() === 'failed')))))"
                 },
                 "args": { ".validate": "!data.exists() || data.val() === newData.val()" },
                 "result": { ".validate": "newData.isString() && auth.token.role === 'agent'" },

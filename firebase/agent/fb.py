@@ -5,7 +5,8 @@
 - RTDB: <database_url>/<path>.json?auth=<idToken>
 - 구독: 같은 주소에 Accept: text/event-stream (SSE)
 
-비밀번호는 첫 로그인 요청에만 실린다. 기록에는 어떤 경우에도 남기지 않는다.
+비밀번호는 로그인 요청에만 실린다 - 처음 한 번, 그리고 갱신이 거부됐을 때(비밀번호 변경·회수) 다시. 기록에는 어떤 경우에도 남기지 않는다.
+로그인까지 거부되면 그 뒤로는 망에 나가지 않고 같은 AuthError 만 올린다 (매초 두드리지 않게).
 FIREBASE_AUTH_EMULATOR_HOST 가 있으면 로그인·갱신을 에뮬레이터로 보낸다 (통합 시험용).
 """
 import base64
@@ -55,6 +56,15 @@ class HttpError(Exception):
         self.body = body
 
 
+class AuthError(Exception):
+    """로그인·갱신을 Identity Toolkit 이 거부한 것(code 가 읽히는 4xx). code 는 error.message 의 첫 낱말
+    (INVALID_LOGIN_CREDENTIALS / USER_DISABLED / TOO_MANY_ATTEMPTS_TRY_LATER …). 한국어 문구는 agent 쪽에서 매긴다."""
+    def __init__(self, status, code):
+        super().__init__(f"HTTP {status} {code}")
+        self.status = status
+        self.code = code
+
+
 def claims(id_token):
     """ID 토큰 가운데 조각(JSON)을 읽는다. 서명은 확인하지 않는다 - 값을 믿는 쪽은 어차피 규칙이 지킨다."""
     part = id_token.split(".")[1]
@@ -89,13 +99,25 @@ class Client:
         self._id_token = None
         self._refresh_token = None
         self._expires_at = 0.0
+        self._dead = None       # 비밀번호 로그인까지 거부한 AuthError. 새 Client 를 만들면 당연히 비어 있다
 
     # --- 토큰 ---------------------------------------------------------
     def _post_json(self, url, payload):
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"}, method="POST")
-        return json.loads(self._open(req, timeout=20).read().decode("utf-8"))
+        try:
+            return json.loads(self._open(req, timeout=20).read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                code = str(json.loads(e.read().decode("utf-8", "replace"))["error"]["message"]).split()[0]   # "CODE : 설명" 꼴도 온다
+            except Exception:
+                code = ""
+            # Identity Toolkit 이 code 를 준 4xx 만 인증 거부다. 5xx·429·프록시 407·포털 403(HTML 본문) 은 망 사정이라 그대로
+            # 올린다 - 에이전트가 멈추거나 비밀번호를 다시 묻지 않고 전처럼 1초마다 다시 시도한다 (날 HTTPError 라 큐에서도 안 버린다)
+            if e.code >= 500 or e.code == 429 or not code:
+                raise
+            raise AuthError(e.code, code) from None          # 본문은 보관하지 않는다 - code 만
 
     def _sign_in(self):
         r = self._post_json(f"{_auth_host()}/v1/accounts:signInWithPassword?key={self._cfg['api_key']}", {
@@ -113,15 +135,21 @@ class Client:
         self._expires_at = self._now() + float(r.get("expires_in", 3600))
 
     def token(self):
+        if self._dead:
+            raise self._dead
         if self._id_token and self._now() < self._expires_at - RENEW_BEFORE_SEC:
             return self._id_token
         if self._refresh_token:
             try:
                 self._refresh()
                 return self._id_token
-            except Exception:
-                pass          # 갱신이 막히면 처음부터 다시 로그인한다
-        self._sign_in()
+            except AuthError:
+                pass          # 갱신이 거부됐다(비밀번호 변경·회수) - 비밀번호로 처음부터 다시 로그인한다. 망 오류는 그대로 올라간다
+        try:
+            self._sign_in()
+        except AuthError as e:
+            self._dead = e    # 이 뒤로는 망에 안 나가고 같은 예외를 올린다. agent 가 멈추고 비밀번호를 다시 묻는다
+            raise
         return self._id_token
 
     def renew(self):

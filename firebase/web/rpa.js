@@ -127,6 +127,8 @@ let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 �
 
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
+// 에이전트·Firestore 에서 온 값은 innerHTML 에 넣기 전에 반드시 씌운다 (app.js 와 같은 구현)
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const hhmm = (iso) => iso ? iso.slice(11, 16) : "";
 const dur = (sec) => sec == null ? "" : sec >= 60 ? `${Math.floor(sec / 60)}분 ${sec % 60}초` : `${sec}초`;
 const when = (iso) => {
@@ -163,7 +165,7 @@ export function mount(el, context) {
     b.onclick = () => { form.sch.days = [...days]; paintDays(); paintScheduleMeta(); };
     return b;
   }));
-  show($("sidecol"), c.isAdmin);   // 열람·기계 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
+  show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
   paintedRecent = null;
   const strip = $("recent-strip");
   // 폭이 바뀌거나 다시 보이면 칸 크기를 다시 맞추고 오늘(오른쪽 끝)로. 띠 위에서 세로 휠은 가로 스크롤로 (넘칠 때만)
@@ -333,7 +335,7 @@ function paintTiles() {
   $("tiles").classList.toggle("hide", !tiles.length);
   $("tiles").replaceChildren(...tiles.map(([k, v, u, approx]) => {
     const d = document.createElement("div"); d.className = "tile";
-    d.innerHTML = `<span class="k">${k}</span><span class="v num">${approx ? '<span class="approx">≈</span>' : ""}${v}<small>${u}</small></span>`;
+    d.innerHTML = `<span class="k">${esc(k)}</span><span class="v num">${approx ? '<span class="approx">≈</span>' : ""}${esc(v)}<small>${esc(u)}</small></span>`;
     return d;
   }));
   // 연결·다음 자동 실행은 처리 건수와 성격이 달라 상태 띠 오른쪽에 붙인다 (띠 색을 따라가므로 글자색은 안 준다)
@@ -344,7 +346,7 @@ function paintTiles() {
     ["다음 자동 실행", sch?.enabled && sch.next_run_at ? when(sch.next_run_at) : "꺼짐", ""],
   ].map(([k, v, id]) => {
     const d = document.createElement("div"); d.className = "stat";
-    d.innerHTML = `<span class="k">${k}</span><span class="v num"${id ? ` id="${id}"` : ""}>${v}</span>`;
+    d.innerHTML = `<span class="k">${k}</span><span class="v num"${id ? ` id="${id}"` : ""}>${esc(v)}</span>`;
     return d;
   }));
 }
@@ -357,7 +359,7 @@ function donutSvg(ok, bad, crash, size) {
   const goodLen = total ? ok / total * 100 : 0, crashLen = total ? crash / total * 100 : 0;
   const arc = (len, start, color) => `<circle cx="21" cy="21" r="15.915" fill="none" stroke="${color}" stroke-width="6"
       stroke-dasharray="${len} ${100 - len}" stroke-dashoffset="${25 - start}"></circle>`;
-  return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="${total ? `성공 ${ok}건, 실패 ${bad}건, 오류 ${crash}건` : "실행 없음"}">
+  return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="${total ? esc(`성공 ${ok}건, 실패 ${bad}건, 오류 ${crash}건`) : "실행 없음"}">
     <circle cx="21" cy="21" r="15.915" fill="none" stroke="${total ? "var(--bad)" : "url(#hatch)"}" stroke-width="6"></circle>
     ${total ? arc(goodLen, 0, "var(--good)") + arc(crashLen, goodLen, "var(--warn-mark)") : ""}
   </svg>`;
@@ -395,14 +397,14 @@ function paintRecent() {
     cell.className = "day" + (n ? "" : " empty");
     cell.dataset.date = d.date;
     cell.title = n ? `${d.date} · 성공 ${d.success || 0} 실패 ${d.failed || 0} 오류 ${d.crashed || 0} · 기록 보기` : `${d.date} · 실행 없음`;
-    cell.innerHTML = `${donutSvg(d.success || 0, d.failed || 0, d.crashed || 0, 44)}<div class="d">${d.date.slice(5).replace("-", "/")}</div>`;
+    cell.innerHTML = `${donutSvg(d.success || 0, d.failed || 0, d.crashed || 0, 44)}<div class="d">${esc(d.date.slice(5).replace("-", "/"))}</div>`;
     cell.onclick = () => { $("hist-date").value = d.date; showView("history"); loadHistory(d.date); };
     return cell;
   }));
   fitStrip();
   const total = ok + bad + crash;
   $("recent-donut").innerHTML = total
-    ? `${donutSvg(ok, bad, crash, 104)}<div class="legend"><span><i style="background:var(--good)"></i>성공 ${ok}</span><span><i style="background:var(--bad)"></i>실패 ${bad}</span><span><i style="background:var(--warn-mark)"></i>오류 ${crash}</span></div>`
+    ? `${donutSvg(ok, bad, crash, 104)}<div class="legend"><span><i style="background:var(--good)"></i>성공 ${esc(ok)}</span><span><i style="background:var(--bad)"></i>실패 ${esc(bad)}</span><span><i style="background:var(--warn-mark)"></i>오류 ${esc(crash)}</span></div>`
     : donutSvg(0, 0, 0, 104);   // 실행이 없는 날도 같은 자리에 빗금 도넛 (칸과 같은 모양)
 }
 
@@ -501,7 +503,7 @@ function histRow(r) {
   const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : r.state === "crashed" ? "crash" : "bad";
   const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
   const prog = PROGRAM_SHORT[r.program] || r.program_label || r.program || "";   // 표에선 'RPA' 를 뗀다
-  tr.innerHTML = `<td class="num">${t}</td><td>${prog}</td><td><span class="pill ${cls}">${STATE_LABEL[r.state] || r.state || ""}</span></td><td class="num">${dur(r.duration_sec)}</td><td class="muted">${r.reason || ms}</td>`;
+  tr.innerHTML = `<td class="num">${esc(t)}</td><td>${esc(prog)}</td><td><span class="pill ${cls}">${esc(STATE_LABEL[r.state] || r.state || "")}</span></td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td>`;
   const detail = document.createElement("tr");
   detail.className = "hist-detail hide";
   const td = document.createElement("td"); td.colSpan = 5;

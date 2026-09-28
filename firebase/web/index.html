@@ -312,9 +312,13 @@
 
 <section id="login" class="hide">
   <h1>AFTER MARKET</h1>
-  <label>이메일 <input id="email" type="email" autocomplete="username"></label>
-  <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
-  <button id="login-btn" class="primary">로그인</button>
+  <!-- 업체코드·아이디로 프로그램이 이메일을 조립한다 (app.js emailFor). form 이라 어느 칸에서든 Enter 로 로그인 -->
+  <form id="login-form">
+    <label>업체코드 <input id="cid" autocomplete="off"></label>
+    <label>아이디 <input id="login-id" autocomplete="username"></label>
+    <label>비밀번호 <input id="password" type="password" autocomplete="current-password"></label>
+    <button id="login-btn" class="primary">로그인</button>
+  </form>
   <div id="login-alert" class="alert bad hide"></div>
 </section>
 

@@ -2,12 +2,14 @@
 
 실행: python tests/test_agent.py   (D:\\AX\\RPA\\firebase 에서)
 """
+import base64
 import json
 import os
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent"))
+os.environ.setdefault("RPA_AGENT_QUEUE", os.path.join(tempfile.mkdtemp(), "queue.jsonl"))   # log() 가 실제 기록을 어지럽히지 않게
 
 FAIL = []
 COUNT = 0
@@ -43,6 +45,17 @@ with tempfile.TemporaryDirectory() as d:
     cfg = secret.load_config(p)
     check(cfg["password"] == "비밀번호-시험-1234", "읽으면 비밀번호가 풀린다")
     check(cfg["cid"] == "c_demo" and cfg["pc_id"] == "pc_office", "나머지 값도 읽는다")
+    check("\\" in json.loads(raw).get("windows_user", "") and cfg["windows_user"] == json.loads(raw)["windows_user"],
+          "만든 윈도우 계정(도메인\\이름)을 함께 적고 읽는다")
+    with open(p, encoding="utf-8") as f:
+        broken = json.load(f)
+    broken["password_dpapi"] = base64.b64encode(b"not-dpapi").decode()   # 다른 계정에서 만든 것처럼
+    json.dump(broken, open(p, "w", encoding="utf-8"))
+    try:
+        secret.load_config(p)
+        check(False, "못 풀면 누가 만들었고 어떻게 하는지 알려준다")
+    except OSError as e:
+        check(broken["windows_user"] in str(e) and "agent_config.json 을 지우고" in str(e), "못 풀면 누가 만들었고 어떻게 하는지 알려준다")
 
     json.dump({"cid": "c_demo"}, open(p, "w", encoding="utf-8"))
     try:
@@ -68,13 +81,16 @@ class FakeHTTP:
         self.now = 1000.0
 
     def add(self, payload, status=200):
-        self.replies.append((status, json.dumps(payload).encode("utf-8")))
+        """payload 가 예외면 (URLError 같은 망 오류) 그대로 던진다"""
+        self.replies.append((status, payload if isinstance(payload, Exception) else json.dumps(payload).encode("utf-8")))
 
     def __call__(self, req, timeout=None):
         body = req.data.decode("utf-8") if req.data else None
         self.calls.append((req.get_method(), req.full_url, body, dict(req.headers)))
         self.last_timeout = timeout
         status, data = self.replies.pop(0)
+        if isinstance(data, Exception):
+            raise data
         if status >= 400:
             import urllib.error
             raise urllib.error.HTTPError(req.full_url, status, "err", {}, io.BytesIO(data))
@@ -119,6 +135,74 @@ try:
     check(False, "거부는 HttpError 로 올린다")
 except fb.HttpError as e:
     check(e.status == 403, "거부는 HttpError 로 올린다")
+
+print("\n2-2절 인증이 죽었을 때 (비밀번호 변경·회수·정지)")
+import urllib.error
+
+
+def fresh_client():
+    h = FakeHTTP()
+    h.add({"idToken": "T1", "refreshToken": "R1", "expiresIn": "3600"})
+    c = fb.Client(CFG, opener=h, clock=lambda: h.now)
+    c.token()
+    h.now += 3600            # 만료 - 다음 token() 은 갱신부터
+    return h, c
+
+
+h3, c3 = fresh_client()
+h3.add({"error": {"code": 400, "message": "TOKEN_EXPIRED"}}, status=400)                  # 갱신 거부 (회수)
+h3.add({"error": {"code": 400, "message": "INVALID_LOGIN_CREDENTIALS"}}, status=400)      # 비밀번호 로그인 거부
+try:
+    c3.token(); check(False, "갱신·로그인이 다 거부되면 AuthError(code)")
+except fb.AuthError as e:
+    check(e.status == 400 and e.code == "INVALID_LOGIN_CREDENTIALS", "갱신·로그인이 다 거부되면 AuthError(code)")
+check("signInWithPassword" in h3.calls[-1][1] and "pw" in h3.calls[-1][2], "갱신이 거부되면 비밀번호로 다시 로그인해 본다")
+n = len(h3.calls)
+try:
+    c3.token(); check(False, "죽은 뒤 token() 은 망에 안 나가고 같은 예외")
+except fb.AuthError as e:
+    check(e.code == "INVALID_LOGIN_CREDENTIALS" and len(h3.calls) == n, "죽은 뒤 token() 은 망에 안 나가고 같은 예외")
+try:
+    c3.put("apps/rpa/live/c_demo/pc_office", {"a": 1}); check(False, "_send 는 AuthError 를 그대로 올린다 (HttpError 로 안 감싼다)")
+except fb.AuthError:
+    check(len(h3.calls) == n, "_send 는 AuthError 를 그대로 올린다 (HttpError 로 안 감싼다)")
+check(fb.Client(CFG, opener=h3, clock=lambda: h3.now)._dead is None, "새 Client 는 다시 시도한다")
+
+h4, c4 = fresh_client()
+h4.add(urllib.error.URLError("망 끊김"))
+try:
+    c4.token(); check(False, "갱신이 망 오류면 비밀번호를 보내지 않고 그대로 올린다")
+except urllib.error.URLError:
+    check(len(h4.calls) == 2 and "pw" not in h4.calls[-1][2], "갱신이 망 오류면 비밀번호를 보내지 않고 그대로 올린다")
+h4.add({"error": {"code": 503, "message": "BACKEND_ERROR"}}, status=503)
+try:
+    c4.token(); check(False, "갱신이 5xx 면 그대로 올리고, 비밀번호는 안 나간다")
+except urllib.error.HTTPError as e:
+    check(e.code == 503 and len(h4.calls) == 3 and "pw" not in h4.calls[-1][2], "갱신이 5xx 면 그대로 올리고, 비밀번호는 안 나간다")
+h4.add({"id_token": "T2", "refresh_token": "R2", "expires_in": "3600"})
+check(c4.token() == "T2", "망이 돌아오면 갱신해서 이어간다")
+
+h6, c6 = fresh_client()
+h6.replies.append((403, b"<html>portal</html>"))          # 캡티브 포털·프록시 - Identity Toolkit 의 code 가 없다
+try:
+    c6.token(); check(False, "본문이 JSON 이 아닌 4xx 는 망 사정 - 그대로 올리고 _dead 가 안 된다")
+except urllib.error.HTTPError as e:
+    check(e.code == 403 and c6._dead is None and "pw" not in h6.calls[-1][2], "본문이 JSON 이 아닌 4xx 는 망 사정 - 그대로 올리고 _dead 가 안 된다")
+h6.add({"error": {"code": 429, "message": "RESOURCE_EXHAUSTED"}}, status=429)
+try:
+    c6.token(); check(False, "429 도 망 사정 - _dead 가 안 된다")
+except urllib.error.HTTPError as e:
+    check(e.code == 429 and c6._dead is None, "429 도 망 사정 - _dead 가 안 된다")
+h6.add({"id_token": "T2", "refresh_token": "R2", "expires_in": "3600"})
+check(c6.token() == "T2" and len(h6.calls) == 4, "망이 돌아오면 다시 나가서 갱신한다")
+
+h5, c5 = fresh_client()
+h5.add({"error": {"code": 400, "message": "TOKEN_EXPIRED"}}, status=400)
+h5.add({"error": {"code": 400, "message": "TOO_MANY_ATTEMPTS_TRY_LATER : Access to this account has been temporarily disabled"}}, status=400)
+try:
+    c5.token(); check(False, "'CODE : 설명' 꼴이면 CODE 만 남긴다")
+except fb.AuthError as e:
+    check(e.code == "TOO_MANY_ATTEMPTS_TRY_LATER" and "Access" not in str(e), "'CODE : 설명' 꼴이면 CODE 만 남긴다")
 
 check(fb.parse_sse(["event: put", 'data: {"path":"/","data":{"a":1}}', ""]) ==
       [("put", {"path": "/", "data": {"a": 1}})], "SSE 한 덩이를 읽는다")
@@ -219,6 +303,9 @@ class FlakyClient:
 
     patch = put   # 현황은 PATCH 로 간다 (heartbeat 를 지우지 않으려고). 기록만 하면 된다
 
+    def fs_create(self, path, fields, doc_id):
+        self.put(path, doc_id)
+
 
 with tempfile.TemporaryDirectory() as d:
     q = os.path.join(d, "queue.jsonl")
@@ -230,14 +317,15 @@ with tempfile.TemporaryDirectory() as d:
 
     cl.ok = False
     up.push_live({"host": "PC2"})
-    up.push_heartbeat({"at": 1})
-    check(up.pending() == 2, "끊기면 큐에 쌓는다")
+    check(up.push_heartbeat({"at": 1}) is False and up.pending() == 1, "끊기면 현황은 큐에 쌓고 heartbeat 는 버린다")
+    up.push_run(dict(doc, run_id="r9"))
+    check(up.pending() == 2, "이력도 큐에")
     check(os.path.exists(q), "큐는 파일로 남는다")
 
     cl.ok = True
     up.flush()
     check(up.pending() == 0, "연결되면 큐를 비운다")
-    check([p for p, _ in cl.puts][-2:] == ["apps/rpa/live/c_demo/pc_office", "apps/rpa/live/c_demo/pc_office/heartbeat"],
+    check([p for p, _ in cl.puts][-2:] == ["apps/rpa/live/c_demo/pc_office", "runs/c_demo/items"],
           "쌓인 순서대로 보낸다")
 
     cl.ok = False
@@ -277,6 +365,22 @@ with tempfile.TemporaryDirectory() as d:
     check(not os.path.exists(q), "큐 파일도 비운다")
     up4._send("live/x", {"a": 1})
     check(up4.pending() == 0, "거부된 것은 애초에 큐에 넣지 않는다")
+
+
+class DeadClient:
+    """인증이 죽은 클라이언트 - token() 이 매번 같은 AuthError 를 올린다"""
+    def put(self, path, value):
+        raise fb.AuthError(400, "USER_DISABLED")
+
+    patch = put
+
+
+with tempfile.TemporaryDirectory() as d:
+    up5 = ag.Uploader(DeadClient(), "c_demo", "pc_office", os.path.join(d, "q.jsonl"))
+    try:
+        up5.push_live({"a": 1}); check(False, "인증이 죽으면 큐에 두지 않고 밖으로 올린다 (에이전트가 멈추고 다시 묻게)")
+    except fb.AuthError:
+        check(up5.pending() == 0, "인증이 죽으면 큐에 두지 않고 밖으로 올린다 (에이전트가 멈추고 다시 묻게)")
 
 print("\n4절 명령 처리")
 
@@ -339,6 +443,19 @@ cmds.handle("k6", dict(ok_cmd, type="stop_erpia"), NOW)
 check(cl.patches[-1][1]["state"] == "failed" and "할 수 없" in cl.patches[-1][1]["result"],
       "할 줄 모르는 종류는 failed 로 닫는다 (명령이 영원히 남지 않게)")
 
+
+class DenyRunning(RecClient):
+    """규칙이 queued→running 을 거부 (다른 PC 가 먼저 잡았거나 끊김)"""
+    def patch(self, path, value):
+        if value.get("state") == "running":
+            raise fb.HttpError(401, "Permission denied")
+        super().patch(path, value)
+
+
+ran = []
+cmds = ag.Commands(DenyRunning(), "c_demo", "pc_office", {"launch": lambda args: ran.append(1)})
+check(cmds.handle("k7", dict(ok_cmd), NOW) == "deferred" and ran == [], "running 표시를 못 하면 실행하지 않고 deferred")
+
 print("\n5절 실제 동작 - 실행 모듈 (가짜 자격증명 파일)")
 with tempfile.TemporaryDirectory() as d:
     cred = os.path.join(d, "ERPIA_AI.txt")
@@ -400,7 +517,6 @@ check(ag.company_modules(PolicyClient(None), "c_x") == {}, "정책이 없으면 
 check(ag.company_modules(PolicyClient(fb.HttpError(401, "denied")), "c_x") == {}, "못 읽어도 실행을 막지 않는다")
 
 print("\n8절 첫 실행 설정 (새 PC)")
-import base64
 
 
 def jwt(payload):
@@ -417,22 +533,44 @@ class TokenClient:
 
 
 check(fb.claims(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"}))["pcId"] == "pc_y", "토큰에서 클레임을 읽는다")
+
+# 이메일 조립 규칙 - setup.js·app.js 와 같은 예시
+check(ag.email_for("c_demo", "pc_office") == "agent-pc-office@c-demo.rpa-test-f02e0.firebaseapp.com", "기계 계정 이메일 (지금 실제 계정과 같다)")
+check(ag.email_for("", "pc_x") == "agent-pc-x@rpa-test-f02e0.firebaseapp.com", "회사가 없으면 프로젝트 도메인")
+check(ag.email_for("c_a_b", "pc_1_2") == "agent-pc-1-2@c-a-b.rpa-test-f02e0.firebaseapp.com", "밑줄은 전부 하이픈으로")
+
+check(ag.auth_message("INVALID_LOGIN_CREDENTIALS") == ag.auth_message("EMAIL_NOT_FOUND") == ag.auth_message("INVALID_PASSWORD")
+      and "비밀번호가 맞지" in ag.auth_message("INVALID_PASSWORD"), "자격증명 거부 셋은 한 문구")
+check("막혀" in ag.auth_message("USER_DISABLED") and "10분" in ag.auth_message("TOO_MANY_ATTEMPTS_TRY_LATER"), "정지·과다 시도 문구")
+check(ag.auth_message("OPERATION_NOT_ALLOWED") == "로그인 거부: OPERATION_NOT_ALLOWED", "모르는 code 는 그대로 보여 준다")
+
 with tempfile.TemporaryDirectory() as d:
     p = os.path.join(d, "agent_config.json")
-    cfg = ag.first_run(p, " agent-pc-y@c-x.example.com ", "pw-1234",
-                       TokenClient(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"})))
-    check(cfg["cid"] == "c_x" and cfg["pc_id"] == "pc_y" and cfg["email"] == "agent-pc-y@c-x.example.com"
-          and cfg["password"] == "pw-1234", "회사·PC 는 토큰에서, 이메일은 다듬어서 저장한다")
+    cfg = ag.first_run(p, "c_x", "pc_y", "pw-1234", TokenClient(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"})))
+    check(cfg["cid"] == "c_x" and cfg["pc_id"] == "pc_y" and cfg["email"] == "agent-pc-y@c-x.rpa-test-f02e0.firebaseapp.com"
+          and cfg["password"] == "pw-1234", "회사 코드·PC 이름으로 이메일을 조립해 저장한다")
     check(cfg["project_id"] == secret.PUBLIC["project_id"] and cfg["database_url"] == secret.PUBLIC["database_url"],
           "프로젝트 값은 공개 설정에서")
     with open(p, encoding="utf-8") as f:
         check("pw-1234" not in f.read(), "파일에 평문 비밀번호가 없다")
+    cfg = ag.first_run(p, "c_x", "pc_y", "pw-new", TokenClient(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"})),
+                       email="agent-pc-y@c-x.example.com")
+    check(cfg["email"] == "agent-pc-y@c-x.example.com" and cfg["password"] == "pw-new", "비밀번호를 다시 물을 때는 옛 이메일을 그대로")
+    cfg = ag.first_run(p, "c_x", "pc_y", "pw-new", TokenClient(jwt({"cid": "c_x", "pcId": "pc_z", "role": "agent"})),
+                       email="agent-pc-y@c-x.example.com")
+    check(cfg["pc_id"] == "pc_z" and cfg["cid"] == "c_x" and secret.load_config(p)["pc_id"] == "pc_z",
+          "다시 물을 때 토큰의 회사·PC 가 다르면 토큰 값을 쓴다 (클레임을 옮기고 비밀번호도 바꾼 경우)")
     bad = os.path.join(d, "x.json")
     try:
-        ag.first_run(bad, "admin@c-x.example.com", "pw", TokenClient(jwt({"cid": "c_x", "role": "admin"})))
+        ag.first_run(bad, "c_x", "pc_y", "pw", TokenClient(jwt({"cid": "c_x", "role": "admin"})))
         check(False, "사람 계정은 거부한다")
     except ValueError:
         check(not os.path.exists(bad), "사람 계정은 거부한다")
+    try:
+        ag.first_run(bad, "c_x", "pc_z", "pw", TokenClient(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"})))
+        check(False, "토큰의 회사·PC 가 친 값과 다르면 거부한다")
+    except ValueError as e:
+        check("c_x/pc_y" in str(e) and not os.path.exists(bad), "토큰의 회사·PC 가 친 값과 다르면 거부한다")
 
 print("\n9절 명령 구독 (토큰 만료·끊김)")
 
@@ -464,6 +602,13 @@ why = ag.watch_commands(sc, "apps/rpa/commands/c_demo/pc_office", lambda i, c: g
 check(got == ["c1", "c2", "c3"], "처음 덩어리와 낱개 명령을 건네주고, 하위 값 변경은 건너뛴다")
 check(why == "auth_revoked" and sc.renewed == 1 and sc.closed, "토큰 만료 알림이 오면 토큰을 버리고 돌아온다 (다시 붙게)")
 check(ag.watch_commands(StreamClient([("keep-alive", None)]), "p", lambda i, c: None) == "ended", "서버가 닫으면 ended")
+
+import threading
+ev, got2 = threading.Event(), []
+ev.set()
+sc2 = StreamClient([("keep-alive", None), ("put", {"path": "/c1", "data": {"type": "launch"}})])
+check(ag.watch_commands(sc2, "p", lambda i, c: got2.append(i), stop=ev) == "stopped" and got2 == [] and sc2.closed,
+      "stop 이 켜지면 keep-alive 에서 빠져나온다 (pump 가 인증이 죽은 걸 먼저 봤을 때)")
 
 h2 = FakeHTTP()
 h2.add({"idToken": "T", "refreshToken": "R", "expiresIn": "3600"})

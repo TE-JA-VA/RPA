@@ -110,6 +110,26 @@ test("commands: 그 PC 의 에이전트만 state 를 옮길 수 있다", async (
   await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { state: "done", ended_at: 1200, result: "ok" }));
 });
 
+// 전이는 queued→running|expired, running→done|failed 만. 그 밖은 규칙이 거부한다 (선점·재접속 중복 실행 방지).
+test("commands: queued 에서 바로 done 은 거부, running 은 한 번만 잡는다, done 뒤엔 못 돌아간다", async () => {
+  const at = (db) => ref(db, "apps/rpa/commands/ca/pc1/c1");
+  await assertSucceeds(set(at(asAdminA()), cmd()));
+  await assertFails(update(at(asAgentA1()), { state: "done", ended_at: 1200, result: "ok" }));       // queued→done
+  await assertSucceeds(update(at(asAgentA1()), { state: "running", started_at: 1100 }));
+  await assertFails(update(at(asAgentA1()), { state: "running", started_at: 1101 }));                // running→running (두 번째 선점)
+  await assertSucceeds(update(at(asAgentA1()), { state: "done", ended_at: 1200, result: "ok" }));
+  await assertFails(update(at(asAgentA1()), { state: "running", started_at: 1300 }));                // done→running
+});
+
+test("commands: 늦게 받으면 queued→expired, 돌다 죽으면 running→failed", async () => {
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd()));
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { state: "expired" }));
+  await assertFails(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { state: "running", started_at: 1100 }));   // expired→running
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c2"), cmd()));
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c2"), { state: "running", started_at: 1100 }));
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c2"), { state: "failed", ended_at: 1200, result: "죽음" }));
+});
+
 test("commands: 에이전트가 type 을 바꾸면 거부", async () => {
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd()));
   await assertFails(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { type: "stop_erpia" }));

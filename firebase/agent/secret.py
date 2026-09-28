@@ -61,6 +61,8 @@ def write_config(path, values, password):
     """설정을 쓴다. password 는 감싸서 password_dpapi 로만 들어간다."""
     data = {k: values[k] for k in REQUIRED}
     data["password_dpapi"] = protect(password)
+    # 누가 만들었나 - DPAPI 는 이 윈도우 계정에서만 풀리니, 못 풀 때 안내에 쓴다 (선택 항목, 옛 설정에는 없다)
+    data["windows_user"] = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}"
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -78,5 +80,12 @@ def load_config(path=None):
     if not data.get("password_dpapi"):
         raise ValueError(f"설정에 password_dpapi 가 없습니다 ({path})")
     out = {k: data[k] for k in REQUIRED}
-    out["password"] = unprotect(data["password_dpapi"])
+    if data.get("windows_user"):
+        out["windows_user"] = data["windows_user"]
+    try:
+        out["password"] = unprotect(data["password_dpapi"])
+    except OSError:
+        raise OSError(f"비밀번호를 풀지 못했습니다. 이 설정은 {data.get('windows_user') or '다른 윈도우'} 계정으로 만들었습니다. "
+                      "같은 윈도우 계정(UAC 에 넣는 계정)으로 띄우거나, agent_config.json 을 지우고 다시 띄우면 "
+                      "기계 계정을 다시 묻습니다") from None
     return out

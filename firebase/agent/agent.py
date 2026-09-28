@@ -11,6 +11,7 @@ PC 에서만 할 수 있는 일을 맡는다: 상태 올리기, heartbeat, 클�
 import datetime
 import json
 import os
+import re
 import sys
 import time
 
@@ -22,11 +23,28 @@ import fb   # noqa: E402
 
 APP = "rpa"                      # 이 에이전트가 맡는 앱. 경로는 apps/<앱>/... (플랫폼 AFTER MARKET 은 여러 앱을 담는다)
 BAD_KEY_CHARS = ".$#[]/"
+PROJECT_DOMAIN = "rpa-test-f02e0.firebaseapp.com"
 
 
 def app_path(kind, cid, pc_id, app=APP):
     """apps/<앱>/<live|commands|settings>/<회사>/<PC>"""
     return f"apps/{app}/{kind}/{cid}/{pc_id}"
+
+
+def email_for(cid, pc_id):
+    """기계 계정 이메일. setup.js·app.js 의 같은 규칙과 똑같아야 한다 (밑줄→하이픈, 회사가 없으면 프로젝트 도메인)."""
+    return f"agent-{pc_id.replace('_', '-')}@{cid.replace('_', '-') + '.' if cid else ''}{PROJECT_DOMAIN}"
+
+
+def auth_message(code):
+    """Identity Toolkit 의 거부 code → 사람이 할 일. 첫 실행과 운영 중 둘 다 이 문구를 쓴다."""
+    if code in ("INVALID_LOGIN_CREDENTIALS", "INVALID_PASSWORD", "EMAIL_NOT_FOUND"):
+        return "비밀번호가 맞지 않습니다 (바뀌었으면 새 비밀번호를 넣으세요)"
+    if code == "USER_DISABLED":
+        return "이 기계 계정은 막혀 있습니다. 관리자에게 물어보세요"
+    if code == "TOO_MANY_ATTEMPTS_TRY_LATER":
+        return "시도가 너무 많아 잠시 막혔습니다. 10분쯤 뒤에 다시 띄우세요"
+    return f"로그인 거부: {code}"
 LOG_LINES = 80
 QUEUE_PATH = os.environ.get("RPA_AGENT_QUEUE") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "queue.jsonl")
@@ -202,12 +220,14 @@ class Uploader:
         HttpError 를 올리므로, 여기 오는 401 은 토큰 만료가 아니라 규칙 거부다. 429(너무 잦음)만 다시 보낸다."""
         return isinstance(e, fb.HttpError) and 400 <= e.status < 500 and e.status != 429
 
-    def _send(self, path, value, method="put"):
+    def _send(self, path, value, method="put", queue=True):
         try:
             self._call(method, path, value)
             return True
+        except fb.AuthError:
+            raise         # 인증이 죽은 것 - 큐에 둘 일이 아니라 에이전트가 멈추고 비밀번호를 다시 물어야 한다
         except Exception as e:
-            if self._rejected(e):
+            if not queue or self._rejected(e):
                 return False
             self._queue.append({"path": path, "value": value, "method": method})
             del self._queue[:-QUEUE_MAX]
@@ -219,7 +239,8 @@ class Uploader:
         return self._send(self._base, clean_for_rtdb(trim_logs(snapshot)) or {}, method="patch")
 
     def push_heartbeat(self, info):
-        return self._send(f"{self._base}/heartbeat", clean_for_rtdb(info))
+        # 큐에 넣지 않는다 - 지난 heartbeat 를 나중에 올려 봐야 의미 없고, 큐 500칸에서 이력을 밀어낸다
+        return self._send(f"{self._base}/heartbeat", clean_for_rtdb(info), queue=False)
 
     def flush(self):
         """쌓인 것을 순서대로 보낸다. 끊겨서 실패하면 거기서 멈추고, 거부된 것은 버리고 계속 간다."""
@@ -227,6 +248,8 @@ class Uploader:
             row = self._queue[0]
             try:
                 self._call(row.get("method", "put"), row["path"], row["value"])
+            except fb.AuthError:
+                raise
             except Exception as e:
                 if not self._rejected(e):
                     self._write_queue()
@@ -268,10 +291,12 @@ class Commands:
         self._actions = actions
 
     def _mark(self, cmd_id, **fields):
+        """상태를 쓴다. 못 쓰면 False (에이전트는 계속 돈다)."""
         try:
             self._client.patch(f"{self._base}/{cmd_id}", fields)
+            return True
         except Exception:
-            pass      # 상태를 못 써도 에이전트는 계속 돈다
+            return False
 
     def handle(self, cmd_id, cmd, now=None):
         now = time.time() if now is None else now
@@ -282,7 +307,10 @@ class Commands:
             self._mark(cmd_id, state="expired", result=reason, ended_at=int(now))
             return verdict
 
-        self._mark(cmd_id, state="running", started_at=int(now))
+        # running 표시가 안 되면 실행하지 않는다. 규칙이 queued→running 을 한 번만 허용하므로 같은 계정의 두 PC 중
+        # 하나는 여기서 걸린다. 끊긴 경우엔 명령이 queued 로 남아 다음 접속 때 다시 오거나 만료된다.
+        if not self._mark(cmd_id, state="running", started_at=int(now)):
+            return "deferred"
         kind = cmd.get("type")
         action = self._actions.get(kind)
         try:
@@ -355,15 +383,18 @@ def real_actions(policy=None):
     return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule}
 
 
-def watch_commands(client, path, on_command):
+def watch_commands(client, path, on_command, stop=None):
     """명령함을 한 번 구독한다. 서버가 스트림을 닫으면 'ended', 토큰이 죽었다는 알림이면 'auth_revoked' 를 돌려준다.
-    호출자가 곧바로 다시 붙인다.
+    호출자가 곧바로 다시 붙인다. stop(Event)이 켜지면 다음 이벤트에서 'stopped' - pump 가 인증이 죽은 걸 먼저 봤을 때
+    스트림에 실린 옛 토큰은 만료(최대 1시간)까지 살아 있으니, keep-alive(30초)마다 stop 을 봐야 그 안에 빠져나온다.
 
     로그인 토큰은 1시간마다 만료되고 그때 Firebase 가 auth_revoked 를 보낸다. 이걸 무시하면 heartbeat 는 계속
     올라가는데(다른 요청이라 토큰이 갱신된다) 명령만 영원히 못 받는 귀머거리가 된다. 2026-09-22 실기에서 두 번 겪었다."""
     gen = client.stream(path)
     try:
         for event, data in gen:
+            if stop is not None and stop.is_set():
+                return "stopped"
             if event in ("auth_revoked", "cancel"):
                 client.renew()          # 다음 요청이 토큰을 새로 받게
                 return event
@@ -396,21 +427,57 @@ def log(text):
         pass
 
 
-def first_run(path, email, password, client=None):
-    """설정 파일이 없을 때 한 번. 기계 계정으로 로그인해 보고 회사·PC 를 토큰에서 읽어 저장한다."""
+def first_run(path, cid, pc_id, password, client=None, email=None):
+    """설정 파일이 없을 때 한 번 (비밀번호를 다시 물을 때도 쓴다). 회사 코드·PC 이름으로 이메일을 조립해 로그인해 보고,
+    토큰의 회사·PC 가 친 값과 같아야 저장한다. email 은 옛 설정의 것을 그대로 쓸 때만 넘긴다 - 이때는 회사·PC 를 다시 물을
+    칸이 없으니 토큰이 다르면 run() 처럼 토큰 값을 쓴다 (클레임을 옮기고 비밀번호도 바꾼 경우)."""
     import secret
-    cfg = dict(secret.PUBLIC, email=email.strip(), password=password, cid="", pc_id="")
+    cfg = dict(secret.PUBLIC, email=email or email_for(cid, pc_id), password=password, cid=cid, pc_id=pc_id)
     c = fb.claims((client or fb.Client(cfg)).token())
-    if c.get("role") != "agent" or not c.get("cid") or not c.get("pcId"):
+    if c.get("role") != "agent":
         raise ValueError("기계 계정(agent-…)이 아닙니다. 사람 계정으로는 에이전트를 띄울 수 없습니다")
-    cfg.update(cid=c["cid"], pc_id=c["pcId"])
+    if (c.get("cid"), c.get("pcId")) != (cid, pc_id):
+        if email is None or not (c.get("cid") and c.get("pcId")):
+            raise ValueError(f"이 계정은 {c.get('cid')}/{c.get('pcId')} 의 것입니다. 회사 코드·PC 이름을 확인하세요")
+        log(f"토큰의 회사·PC({c['cid']}/{c['pcId']})가 설정({cid}/{pc_id})과 다릅니다. 토큰 값을 씁니다")
+        cfg.update(cid=c["cid"], pc_id=c["pcId"])
     secret.write_config(path, cfg, password)
     return secret.load_config(path)
 
 
+def ask_key(label):
+    """회사 코드·PC 이름 - 소문자·숫자·밑줄만. 아니면 다시 묻는다."""
+    while True:
+        v = input(f"{label}: ").strip()
+        if re.fullmatch(r"[a-z0-9_]+", v):
+            return v
+        print("  소문자·숫자·밑줄만 쓸 수 있습니다")
+
+
+def ask_setup(known=None):
+    """창에서 물어 설정을 만든다. known=(cid, pc_id, email) 이면 비밀번호만 묻는다 (운영 중 인증이 죽었을 때).
+    로그인이 거부되면 이유를 찍고 다시 묻는다. 취소(Ctrl+C·EOF)나 망 오류면 None."""
+    import getpass
+    import secret
+    while True:
+        try:
+            cid, pc_id, email = known or (ask_key("회사 코드"), ask_key("PC 이름"), None)
+            return first_run(secret.CONFIG_PATH, cid, pc_id, getpass.getpass("비밀번호 (화면에 안 보임): "), email=email)
+        except (EOFError, KeyboardInterrupt):
+            log("입력을 취소했습니다")
+            return None
+        except fb.AuthError as e:
+            log(f"로그인 실패: {auth_message(e.code)}")
+        except ValueError as e:
+            log(f"로그인 실패: {e}")
+        except Exception as e:
+            log(f"설정을 만들지 못했습니다: {type(e).__name__}: {e}")
+            return None
+
+
 def main():
-    import threading
-    import rpa_status as st
+    """감독자. 설정을 읽거나 처음 물어 만들고 run() 을 돈다. 인증이 죽어 run() 이 멈추면 이유를 찍고 (창이 있으면)
+    비밀번호를 다시 물어 다시 돈다. 종료 코드: 0 정상, 2 설정 문제, 3 인증이 죽었는데 창이 없어 다시 물을 수 없음."""
     import secret
 
     try:
@@ -419,37 +486,63 @@ def main():
         if not sys.stdin.isatty():
             log(f"설정 파일이 없습니다: {secret.CONFIG_PATH}")
             return 2
-        import getpass
-        print("처음 실행입니다. 이 PC 의 기계 계정(agent-…@…)을 넣으세요. 비밀번호는 이 PC 에만 잠가서 저장합니다.")
-        try:
-            cfg = first_run(secret.CONFIG_PATH, input("이메일: "), getpass.getpass("비밀번호 (화면에 안 보임): "))
-        except (EOFError, KeyboardInterrupt):
-            log("입력을 취소했습니다")
-            return 2
-        except Exception as e:
-            if getattr(e, "code", None) == 400:
-                log("로그인 실패: 이메일 또는 비밀번호가 맞지 않습니다")
-            else:
-                log(f"설정을 만들지 못했습니다: {type(e).__name__}: {e}")
+        print("처음 실행입니다. 이 PC 의 회사 코드·PC 이름과 기계 계정 비밀번호를 넣으세요. 비밀번호는 이 PC 에만 잠가서 저장합니다.")
+        cfg = ask_setup()
+        if cfg is None:
             return 2
         log(f"설정을 저장했습니다: {secret.CONFIG_PATH}")
     except (ValueError, OSError) as e:
         log(f"설정을 읽지 못했습니다: {e}")
         return 2
+
+    while True:
+        dead = run(cfg)
+        if dead is None:
+            return 0
+        log(f"인증이 죽어 멈췄습니다: {auth_message(dead.code)}")
+        # 막힌 계정·시도 초과는 비밀번호를 다시 넣어도 소용없다 - 안내대로 나중에 다시 띄운다
+        if not sys.stdin.isatty() or dead.code in ("USER_DISABLED", "TOO_MANY_ATTEMPTS_TRY_LATER"):
+            return 3
+        print(f"비밀번호가 바뀌었거나 계정이 막혔습니다: {auth_message(dead.code)}. "
+              f"새 비밀번호를 넣으세요 (회사 {cfg['cid']} / PC {cfg['pc_id']}). "
+              f"기계 계정 자체가 바뀌었으면 Ctrl+C 로 나가서 {os.path.basename(secret.CONFIG_PATH)} 을 지우고 다시 띄우세요")
+        cfg = ask_setup((cfg["cid"], cfg["pc_id"], cfg["email"]))
+        if cfg is None:
+            return 3
+
+
+def run(cfg):
+    """설정 하나로 에이전트를 돈다. Ctrl+C 면 None, 인증이 죽어 멈췄으면 그 AuthError 를 돌려준다 (main 이 다시 묻는다).
+    클레임을 옮긴 경우(토큰의 회사·PC 가 설정과 다름) cfg 를 토큰 값으로 고쳐 쓴다."""
+    import threading
+    import rpa_dashboard as dash
+    import rpa_status as st
+
     client = fb.Client(cfg)
+    try:
+        c = fb.claims(client.token())
+        if c.get("cid") and c.get("pcId") and (c["cid"], c["pcId"]) != (cfg["cid"], cfg["pc_id"]):
+            log(f"토큰의 회사·PC({c['cid']}/{c['pcId']})가 설정({cfg['cid']}/{cfg['pc_id']})과 다릅니다. 토큰 값을 씁니다")
+            cfg.update(cid=c["cid"], pc_id=c["pcId"])
+    except fb.AuthError as e:
+        return e
+    except Exception as e:
+        log(f"첫 로그인을 못 했습니다 ({type(e).__name__}). 설정 값으로 시작하고 이어서 시도합니다")
     up = Uploader(client, cfg["cid"], cfg["pc_id"])
     cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"])))
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
 
     # 자동 실행 예약은 PC 에서 돈다. 기존 대시보드의 Scheduler 그대로 (꺼져 있던 동안 지난 예약은 건너뛴다).
     # 8765 대시보드와 같이 띄우면 예약이 둘이 되어 두 번 실행될 수 있다 - 하나만 띄운다.
-    import rpa_dashboard as dash
-    dash.SCHEDULER.resync()
-    dash.SCHEDULER.start()
+    # 비밀번호를 다시 물은 뒤의 재시작에서는 이미 돌고 있다 - 프로세스에서 한 번만 start 한다.
+    if not dash.SCHEDULER.is_alive():
+        dash.SCHEDULER.resync()
+        dash.SCHEDULER.start()
     sch = st.read_settings()["schedule"]
     log("자동 실행: " + (dash.schedule_label(sch) + f"  다음 {sch.get('next_run_at') or '(곧 계산)'}" if sch.get("enabled") else "꺼짐"))
 
     stop = threading.Event()
+    dead = []     # 인증이 죽은 AuthError. pump 스레드와 구독 루프 어느 쪽이 먼저 만나든 여기 담고 둘 다 멈춘다
 
     def pump():
         """상태와 heartbeat. 1초마다 상태 파일을 보고 바뀌었을 때만 올린다."""
@@ -495,6 +588,9 @@ def main():
                     })
                     last_beat = time.time()
                 up.flush()
+            except fb.AuthError as e:
+                dead.append(e)
+                stop.set()
             except Exception as e:
                 log(f"상태 올리기 실패: {type(e).__name__}")
             stop.wait(1.0)
@@ -510,18 +606,23 @@ def main():
     backoff = 1
     while not stop.is_set():
         try:
-            why = watch_commands(client, app_path("commands", cfg["cid"], cfg["pc_id"]), on_command)
-            log(f"구독이 끝났습니다 ({why}). 바로 다시 붙습니다")   # auth_revoked 는 1시간마다 오는 정상 절차
+            why = watch_commands(client, app_path("commands", cfg["cid"], cfg["pc_id"]), on_command, stop)
+            if why != "stopped":
+                log(f"구독이 끝났습니다 ({why}). 바로 다시 붙습니다")   # auth_revoked 는 1시간마다 오는 정상 절차
             backoff = 1
         except KeyboardInterrupt:
-            break
+            stop.set()
+            dash.SCHEDULER.stop.set()
+            return None
+        except fb.AuthError as e:
+            dead.append(e)
+            stop.set()
         except Exception as e:
-            log(f"구독이 끊겼습니다 ({type(e).__name__}). {backoff}초 뒤 다시 붙습니다")
+            code = getattr(e, "code", None)          # 날 HTTPError 면 상태코드도 - "(HTTPError 401)"
+            log(f"구독이 끊겼습니다 ({type(e).__name__}{f' {code}' if code else ''}). {backoff}초 뒤 다시 붙습니다")
             stop.wait(backoff)
             backoff = min(backoff * 2, 60)
-    stop.set()
-    dash.SCHEDULER.stop.set()
-    return 0
+    return dead[0] if dead else None
 
 
 if __name__ == "__main__":

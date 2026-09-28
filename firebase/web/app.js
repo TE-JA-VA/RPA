@@ -40,24 +40,29 @@ paintThemeButton();
 applyAccent(getAccent());
 
 // --- 로그인 ---------------------------------------------------------
-$("login-btn").addEventListener("click", async () => {
+// 공유 계약 (agent.py·setup.js 와 같은 규칙): 아이디에 @ 가 있으면 그대로, 없으면 아이디@회사코드.프로젝트도메인. '_' 는 '-' 로. 업체코드가 비면(총괄) 프로젝트 도메인만
+export const emailFor = (cid, id) => id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}rpa-test-f02e0.firebaseapp.com`;
+try { $("cid").value = localStorage.getItem("cid") || ""; } catch {}   // 업체코드는 이 브라우저에 기억해 둔다
+$("login-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
   const alert = $("login-alert");
   show(alert, false);
   $("login-btn").disabled = true;
+  const cid = $("cid").value.trim().replace(/^-$/, "");   // setup.js 관습대로 '-' 도 '회사 없음'
   try {
-    await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value);
+    await signInWithEmailAndPassword(auth, emailFor(cid, $("login-id").value.trim()), $("password").value);
     $("password").value = "";
+    try { localStorage.setItem("cid", cid); } catch {}
   } catch (e) {
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password",
       "auth/user-not-found", "auth/invalid-email", "auth/missing-password"];
     alert.textContent = wrong.includes(e.code)
-      ? "이메일 또는 비밀번호가 맞지 않습니다" : `로그인하지 못했습니다 (${e.code})`;
+      ? "업체코드, 아이디 또는 비밀번호가 맞지 않습니다" : `로그인하지 못했습니다 (${e.code})`;
     show(alert, true);
   } finally {
     $("login-btn").disabled = false;
   }
 });
-$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") $("login-btn").click(); });
 $("logout-btn").addEventListener("click", () => signOut(auth));
 
 onAuthStateChanged(auth, async (user) => {
@@ -68,8 +73,13 @@ onAuthStateChanged(auth, async (user) => {
     return;
   }
   const t = await user.getIdTokenResult(true);
+  if (t.claims.role === "agent") {   // 기계 계정은 PC 에이전트 전용. 화면에서 비밀번호를 바꾸면 그 PC 가 죽으니 아예 안 들인다
+    await signOut(auth);
+    $("login-alert").textContent = "기계 계정으로는 화면에 들어올 수 없습니다"; show($("login-alert"), true);
+    return;
+  }
   me = { uid: user.uid, email: user.email, cid: t.claims.cid || null, role: t.claims.role || null };
-  $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : me.role === "agent" ? "기계" : "열람"})`;
+  $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "열람"})`;
   show($("login"), false); show($("main"), true);
   await loadCompany();
   paintNav();

@@ -1,7 +1,7 @@
 """화면 시험 (Playwright + 에뮬레이터). 실제 프로젝트를 건드리지 않는다.
 
 실행 (firebase/tests 에서, emu_env.ps1 을 읽은 창):
-  firebase emulators:exec --config ../firebase.json --only auth,database,hosting --project rpa-test-f02e0 "python check_web.py"
+  firebase emulators:exec --config ../firebase.json --only auth,database,firestore,hosting --project rpa-test-f02e0 "python check_web.py"
 
 에뮬레이터 REST 는 'Authorization: Bearer owner' 로 규칙을 우회한다 (시드용).
 """
@@ -147,10 +147,12 @@ print("시드 완료")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
-def login(page, email, pw="pw123456"):
+def login(page, login_id, pw="pw123456", cid=""):
+    """세 칸 로그인. 아이디 칸에 이메일을 넣으면 그대로 쓰이고, 회사 코드 + 아이디면 화면이 이메일을 조립한다"""
     page.goto(WEB)
     page.wait_for_selector("#login:not(.hide)")
-    page.fill("#email", email)
+    page.fill("#cid", cid)
+    page.fill("#login-id", login_id)
     page.fill("#password", pw)
     page.click("#login-btn")
     page.wait_for_selector("#main:not(.hide)", timeout=15000)
@@ -169,9 +171,10 @@ with sync_playwright() as pw:
     print("1절 로그인과 껍데기")
     page.goto(WEB)
     page.wait_for_selector("#login:not(.hide)")
-    page.fill("#email", "admin@t.local"); page.fill("#password", "틀린비밀번호"); page.click("#login-btn")
+    page.fill("#login-id", "admin@t.local"); page.fill("#password", "틀린비밀번호"); page.click("#login-btn")
     page.wait_for_selector("#login-alert:not(.hide)")
-    check("맞지 않습니다" in page.text_content("#login-alert"), "틀린 비밀번호 안내")
+    check(page.text_content("#login-alert") == "업체코드, 아이디 또는 비밀번호가 맞지 않습니다", "틀린 비밀번호 안내 (세 칸 문구)")
+    check(page.locator("#email").count() == 0 and "업체코드" in page.text_content("#login") and page.get_attribute("#cid", "placeholder") is None and page.get_attribute("#login-id", "placeholder") is None, "로그인은 업체코드·아이디·비밀번호 세 칸, 힌트 글 없음")
     page.fill("#password", "pw123456"); page.click("#login-btn")
     page.wait_for_selector("#main:not(.hide)", timeout=15000)
     check(page.title() == "AFTER MARKET", "플랫폼 이름")
@@ -738,6 +741,44 @@ with sync_playwright() as pw:
       catch (e) { return e.code || String(e); }
     }""")
     check(denied == "PERMISSION_DENIED", f"열람자가 우회해 써도 규칙이 거부 ({denied})")
+
+    print("9절 이스케이프·세 칸 로그인·기계 계정")
+    # 공유 계약 예시(agent.py·setup.js 와 같아야 한다) — 같은 URL 의 모듈이라 이미 뜬 app.js 가 돌아온다
+    check(page.evaluate("""async () => { const m = await import(location.origin + '/app.js');
+      return [m.emailFor('c_demo','agent-pc-office'), m.emailFor('c_demo','admin'), m.emailFor('','super'), m.emailFor('c_a_b','a_b_c'), m.emailFor('c_demo','x@y.z')]; }""")
+      == ["agent-pc-office@c-demo.rpa-test-f02e0.firebaseapp.com", "admin@c-demo.rpa-test-f02e0.firebaseapp.com",
+          "super@rpa-test-f02e0.firebaseapp.com", "a-b-c@c-a-b.rpa-test-f02e0.firebaseapp.com", "x@y.z"], "emailFor 가 공유 계약 예시 다섯 개와 같다")
+    # 에이전트가 올린 값이 HTML 로 실행되면 안 된다. reason 은 기록 표에 innerHTML 로 들어간다
+    XSS = '<img src=x onerror="document.title=\'xss\'">'
+    seed_run("r_xss", "routine", "stopped", "2026-09-10T09:00:00", 5, reason=XSS)
+    page.click("#tab-history")
+    page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
+    rows = page.locator("#hist-rows tr.hist")
+    check(rows.count() == 7 and XSS in rows.nth(6).text_content(), "기록 표의 사유가 글자 그대로 보인다")
+    check(page.locator("#hist-rows img").count() == 0 and page.title() == "AFTER MARKET", "태그로 해석되지 않는다 (제목이 안 바뀜)")
+    page.click("#tab-status")
+    db_patch(f"{LIVE}/programs/routine/metrics/0", {"unit": XSS})   # 숫자 타일의 단위도 에이전트 값
+    page.wait_for_function("(document.getElementById('tiles')?.textContent || '').includes('<img')", timeout=10000)
+    check(page.locator("#tiles img").count() == 0 and page.title() == "AFTER MARKET", "숫자 타일의 단위도 글자 그대로")
+    db_patch(f"{LIVE}/programs/routine/metrics/0", {"unit": "건"})
+    # 회사 코드 t + 아이디 who → who@t.rpa-test-f02e0.firebaseapp.com (공유 계약)
+    make_user("who@t.rpa-test-f02e0.firebaseapp.com", "pw123456", {"cid": "t", "role": "viewer"})
+    page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+    login(page, "who", cid="t")
+    check("who@t.rpa-test-f02e0.firebaseapp.com (열람)" in page.text_content("#who"), "회사 코드·아이디로 이메일을 조립해 로그인한다")
+    page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+    page.reload(); page.wait_for_selector("#login:not(.hide)")
+    check(page.input_value("#cid") == "t" and page.input_value("#login-id") == "", "다시 열면 회사 코드만 채워져 있다")
+    # 기계 계정(role agent)은 화면에 못 들어온다. agent-pc-office@c-demo.… 는 실제 기계 계정과 같은 꼴
+    make_user("agent-pc-office@c-demo.rpa-test-f02e0.firebaseapp.com", "pw123456", {"cid": "c_demo", "pcId": "pc_office", "role": "agent"})
+    page.fill("#cid", "c_demo"); page.fill("#login-id", "agent-pc-office"); page.fill("#password", "pw123456")
+    page.press("#login-id", "Enter")   # 어느 칸에서든 Enter 로 로그인
+    page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('기계 계정')", timeout=15000)
+    check(page.is_visible("#login") and page.is_hidden("#main"), "기계 계정은 로그인 화면에 그대로")
+    check(page.text_content("#login-alert") == "기계 계정으로는 화면에 들어올 수 없습니다", "기계 계정 안내 문구")
+    check(page.evaluate("""async () => {
+      const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
+      return a.getAuth().currentUser === null; }"""), "기계 계정은 곧바로 로그아웃된다")
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")
     browser.close()
