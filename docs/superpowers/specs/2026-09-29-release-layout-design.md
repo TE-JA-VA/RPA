@@ -193,6 +193,7 @@ RPA 화면 상태 카드 오른쪽(`#hero-side`)의 "연결"·"다음 자동 실
 - **새로 안 것**: Nuitka exe 는 출력을 파이프로 받으면 **UTF-8** 로 찍는다 (PyInstaller exe 는 CP949). 사람이 보는 콘솔 창은 둘 다 정상. 출력을 읽는 곳(빌드 스크립트의 `--check` 확인)은 두 인코딩을 다 본다
 - 알림: Nuitka 가 "Windows Runtime DLL 을 넣지 못했다" 고 경고한다 - 받는 PC 에 UCRT 가 있어야 하는데 Windows 10·11 에는 기본으로 있다
 - 쓴 옵션: 두 exe 모두 `--onefile --assume-yes-for-downloads --windows-console-mode=force --remove-output --include-package=comtypes --include-package=pywinauto --include-module=win32timezone` + 제외 목록(`--nofollow-import-to=` numpy·yaml·scipy·pandas·torch·cv2·matplotlib·networkx·graphify), 프리페어는 `--include-package=playwright --include-package-data=playwright` 를 더함
+- **2026-09-29 판 -6 에서 터진 것**: Nuitka 는 DLL 을 찾을 때 System32 를 건너뛰어, 거기에만 있던 `mfc140u.dll`(pywinauto 가 부르는 win32ui 가 씀)이 경고 없이 빠졌다. VC++ 재배포 패키지가 없는 노트북·샌드박스에서 두 exe 가 켜지자마자 `ImportError`. 개발 PC 점검으로는 안 보였다. 판 -7 부터 `--include-data-files=<System32>\mfc140u.dll=mfc140u.dll` 을 두 exe 에 넣고, 샌드박스 시험이 설치된 exe 를 `--check` 로 켜 본다 (샌드박스에서는 파일로 받은 출력이 CP949)
 
 ## 8. 빌드 스크립트
 

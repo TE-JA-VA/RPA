@@ -1,0 +1,11 @@
+# Nuitka 사용자 패키지 설정 - tools/build_release.py 가 --user-package-configuration-file 로 넘긴다.
+# comtypes 는 exe 에 묶인 gen 모듈(빌드 PC 에서 만든 것)을 쓰기 전에 지금 PC 의 typelib 파일 시각과 비교하고,
+# sys.frozen 이 있으면(PyInstaller) 건너뛴다. Nuitka 는 sys.frozen 을 달지 않아 빌드 PC 와 윈도우 판이 다른 PC 에서
+# 'Typelib different than module' 로 죽었다 (2026-09-29 노트북, UIAutomationCore.dll). PyInstaller exe 처럼 건너뛴다.
+# Nuitka 는 바꿀 글자가 없어도 말없이 넘어간다 - 그 글자가 comtypes 에 있는지는 tests/test_build_release.py 가 본다.
+---
+- module-name: 'comtypes._tlib_version_checker'
+  anti-bloat:
+    - description: 'skip typelib mtime check inside the exe, like PyInstaller builds'
+      replacements_plain:
+        'if not hasattr(sys, "frozen"):': 'if False:'

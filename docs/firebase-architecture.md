@@ -177,6 +177,7 @@ cd D:\AX\RPA
 .venv\Scripts\python.exe tests\test_settings.py       # 설정 창 (창 없는 부분)
 .venv\Scripts\python.exe tests\check_settings_ui.py   # 설정 창을 진짜로 띄워 본다 (몇 초 뜬다, 인수로 사진 경로)
 .venv\Scripts\python.exe tests\test_background.py     # 에이전트 감독
+.venv\Scripts\python.exe tests\test_start_failure.py  # 띄운 RPA 가 기록도 못 남기고 죽으면 '시작하지 못함' 이력
 .venv\Scripts\python.exe tests\test_encoding.py       # .bat 는 CP949, 안내 문서·설치 스크립트는 BOM 있는 UTF-8
 .venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 윈도우 샌드박스에서 설치 파일
 cd D:\AX\RPA\firebase; . .\emu_env.ps1

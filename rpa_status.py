@@ -956,6 +956,16 @@ def append_history(record):
         return False
 
 
+def record_start_failure(program, started_at, reason, log_tail=()):
+    """프로그램이 기록을 시작하기도 전에 끝났다 (띄운 쪽이 부른다). 이력만 남기고 상태 파일은 건드리지 않는다."""
+    stamp = (parse_iso(started_at) or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
+    return append_history(history_record({
+        "run_id": f"{program}_{stamp}_nostart", "program": program, "program_label": PROGRAMS.get(program, program),
+        "host": socket.gethostname(), "state": "crashed", "reason": reason,
+        "started_at": started_at, "finished_at": now_iso(), "log_tail": list(log_tail),
+    }))
+
+
 def read_history(limit=0, program=None, since=None):
     """이력을 최신순으로 돌려준다. since 는 'YYYY-MM-DDTHH:MM:SS' 문자열."""
     folder = status_dir(create=False)

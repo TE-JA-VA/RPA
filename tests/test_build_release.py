@@ -54,6 +54,8 @@ for rel, src in br.PROGRAM_FILES + br.OTHER_FILES:
 for exe in br.EXES:
     write(os.path.join(exe_dir, exe), b"MZ fake " + exe.encode())
 write(os.path.join(runtime, "python", "Lib", "__pycache__", "os.cpython-314.pyc"), b"pyc")   # 내장 파이썬엔 원래 있다
+for exe in ("python.exe", "pythonw.exe"):   # 이름 바꾼 사본을 만들려면 진짜 exe 여야 한다 (버전 정보를 고친다)
+    shutil.copy2(os.path.join(br.RUNTIME_ROOT, "python", exe), os.path.join(runtime, "python", exe))
 write(os.path.join(runtime, "ms-playwright", "chromium-1234", "chrome.exe"), b"chrome")
 write(os.path.join(runtime, "ms-playwright", ".links", "x"), b"")                              # playwright 가 남기는 표시 폴더
 others = [rel for rel, _ in br.OTHER_FILES]
@@ -70,9 +72,30 @@ check("날이 바뀌면 다시 1", br.next_version(out_root, datetime.date(2026,
 # ---------------------------------------------------------------------------
 print("=== 2. 모으기와 판 목록 ===")
 out_dir = os.path.join(out_root, "배포_2026.09.29-3")
-program = br.collect(out_dir, exe_dir, repo=repo, runtime_root=runtime)
-check("판 목록 대상은 exe 둘과 프로그램 파일",
-      set(program) == set(br.EXES) | {rel for rel, _ in br.PROGRAM_FILES}, str(program))
+program = br.collect(out_dir, exe_dir, repo=repo, runtime_root=runtime, version="2026.9.29.3")
+branded = {f"python/{name}" for name in br.BRANDED}
+check("판 목록 대상은 exe 둘과 프로그램 파일, AFTER MARKET 이름의 파이썬 둘",
+      set(program) == set(br.EXES) | {rel for rel, _ in br.PROGRAM_FILES} | branded and len(branded) == 2, str(program))
+import win32api  # noqa: E402
+import win32con  # noqa: E402
+
+
+def version_info(path):
+    h = win32api.LoadLibraryEx(path, 0, win32con.LOAD_LIBRARY_AS_DATAFILE)
+    try:
+        langs = win32api.EnumResourceLanguages(h, 16, 1)
+    finally:
+        win32api.FreeLibrary(h)
+    lang, cp = win32api.GetFileVersionInfo(path, "\\VarFileInfo\\Translation")[0]
+    get = lambda k: win32api.GetFileVersionInfo(path, f"\\StringFileInfo\\{lang:04x}{cp:04x}\\{k}")  # noqa: E731
+    return langs, get("FileDescription"), get("CompanyName")
+
+
+for name, (src, desc) in br.BRANDED.items():
+    langs, got, company = version_info(os.path.join(out_dir, "python", name))
+    check(f"{name}: 작업 관리자 설명 '{desc}', 회사 AFTER MARKET, 버전 정보는 한 벌 (옛 'Python' 이 안 남는다)",
+          desc.startswith("AFTER MARKET") and got == desc and company == "AFTER MARKET" and len(langs) == 1,
+          (langs, got, company))
 man = br.write_manifest(out_dir, "2026.09.29-3", "nuitka 4.2.2 · python 3.14.7", program)
 check("형식·판 번호·빌더", man["format"] == st.MANIFEST_FORMAT and man["version"] == "2026.09.29-3"
       and man["builder"] == "nuitka 4.2.2 · python 3.14.7")
@@ -185,6 +208,16 @@ with tempfile.TemporaryDirectory() as d:
     label = br.reuse_exes(src, os.path.join(d, "work"))
     check("--exes-from: 두 exe 를 가져오고 builder 칸에 적는다", label == "nuitka 4.2.2 · python 3.14.7 (판 2026.09.29-4 에서 가져옴)"
           and all(os.path.isfile(os.path.join(d, "work", n)) for n in br.EXES), label)
+mfc = [o for o in br.NUITKA_COMMON if o.endswith("mfc140u.dll=mfc140u.dll")]
+check("두 exe 에 mfc140u.dll 을 넣는다 (win32ui 가 쓰는데 Nuitka 는 System32 를 안 뒤진다 - 2026-09-29 노트북)",
+      len(mfc) == 1 and mfc[0].startswith("--include-data-files=")
+      and os.path.isfile(mfc[0][len("--include-data-files="):-len("=mfc140u.dll")]), mfc)
+import comtypes._tlib_version_checker as tvc  # noqa: E402
+FROZEN_LINE = 'if not hasattr(sys, "frozen"):'   # Nuitka 는 바꿀 글자가 없어도 말없이 넘어간다 → comtypes 를 올리면 여기서 잡는다
+yml = open(br.NUITKA_YML, encoding="utf-8").read() if os.path.isfile(br.NUITKA_YML) else ""
+check("두 exe 가 comtypes 의 typelib 시각 비교를 건너뛴다 (PyInstaller 처럼. 윈도우 판이 다른 PC 에서 죽었다 - 2026-09-29 노트북)",
+      f"--user-package-configuration-file={br.NUITKA_YML}" in br.NUITKA_COMMON and FROZEN_LINE in yml
+      and FROZEN_LINE in open(tvc.__file__, encoding="utf-8").read())
 iscc = br.find_iscc()
 check("이 PC 에 Inno Setup (ISCC.exe)", iscc is not None)
 if iscc:

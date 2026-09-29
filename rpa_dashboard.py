@@ -365,7 +365,8 @@ TARGETS = {
     "prepare": ("프리페어 RPA", "Prepare_RPA.exe", ("--all", "--no-keep-open")),
     "routine": ("루틴 RPA", "ERPia_RPA.exe", ()),
 }
-_active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0}
+_active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
+_check_lock = threading.Lock()   # 에이전트 순환과 명령 처리가 같이 launch_state 를 불러도 한 번만 남긴다
 
 
 def target_path(target):
@@ -383,12 +384,43 @@ def launch_state():
         return None
     proc = _active["proc"]
     if proc is not None:
-        alive = proc.poll() is None          # 손잡이가 있으면 프로세스 생사가 곧 답이다
+        code = proc.poll()
+        alive = code is None                 # 손잡이가 있으면 프로세스 생사가 곧 답이다
+        if not alive:
+            with _check_lock:
+                first, _active["checked"] = not _active["checked"], True
+            if first:
+                _note_start_failure(code)
     else:
         alive = time.time() < _active["until"]   # 손잡이가 없을 때(시험 모드)만 유예 시간을 쓴다
     if not alive:
         return None
     return {"target": _active["target"], "by": _active["by"], "sec": int(time.time() - _active["at"])}
+
+
+def _note_start_failure(code):
+    """띄운 것이 끝났는데 그 뒤로 기록을 하나도 안 남긴 프로그램은 '시작하지 못함' 이력으로 남긴다. 두 프로그램 모두
+    정상이면 맨 먼저 status.start 를 부르니, 기록이 없으면 켜지자마자 죽은 것이다 (2026-09-29 노트북: exe 가
+    ImportError 로 죽었는데 기록 탭이 비어 있었다). 종료 코드는 안 본다 - Run_All.bat 은 늘 0 으로 끝난다."""
+    try:
+        target = _active["target"]
+        since = datetime.datetime.fromtimestamp(_active["at"]).replace(microsecond=0)
+        try:
+            raw = open(os.path.join(st.status_dir(), f"stderr_{target}.txt"), "rb").read()
+        except OSError:
+            raw = b""
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("cp949", "replace")     # 파일로 받은 exe 출력이 CP949 일 때가 있다 (샌드박스 실측)
+        tail = [ln for ln in text.splitlines() if ln.strip()][-20:]
+        reason = "시작하지 못했습니다 - " + (tail[-1].strip() if tail else f"오류 출력 없음, 종료 코드 {code}")
+        for program in (("prepare", "routine") if target == "all" else (target,)):
+            started = st.parse_iso((st.read_json(st.status_path(program)) or {}).get("started_at"))
+            if started is None or started < since:
+                st.record_start_failure(program, since.isoformat(), reason, tail)
+    except Exception:
+        pass   # 기록은 RPA·에이전트를 멈추게 하면 안 된다
 
 
 def launching_sec():
@@ -439,7 +471,7 @@ def launch(target, by):
                 if err_fh is not None:
                     err_fh.close()   # 자식이 손잡이를 물려받았으므로 여기서는 닫아도 된다
         now_t = time.time()
-        _active.update(target=target, by=by, at=now_t, proc=proc,
+        _active.update(target=target, by=by, at=now_t, proc=proc, checked=False,
                        until=now_t + (3 if DRY_RUN else LAUNCH_GRACE_SEC))
         now = datetime.datetime.now()
         with _settings_lock:

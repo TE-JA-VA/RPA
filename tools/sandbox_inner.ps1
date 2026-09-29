@@ -43,6 +43,27 @@ $un = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" 
 Check "앱 및 기능 목록" ($null -ne $un)
 $tk = & $Py -c "import tkinter; r = tkinter.Tk(); r.destroy(); print('tk ok')"
 Check "내장 파이썬 tkinter" ("$tk" -eq "tk ok") "$tk"
+# exe 가 새 윈도우에서 켜지는가 (2026-09-29 노트북: System32 에만 있던 mfc140u.dll 이 exe 에 안 들어가 win32ui 에서 죽었다).
+# 빌드 PC 점검(smoke_check)과 같게 임시 설정으로 --check. 파일로 받으면 CP949 로 찍혀 나와서(샌드박스 실측) 둘 다 본다
+# 노트북 흉내: 윈도우 판이 다르면 UIAutomationCore.dll 시각이 빌드 PC 와 달라, exe 에 묶인 comtypes 모듈이 거부된다
+# (2026-09-29 노트북 'Typelib different than module'). 샌드박스는 이 PC 의 윈도우 파일을 빌려 써서 그대로 두면 못 잡는다
+$uia = "C:\Windows\System32\UIAutomationCore.dll"
+takeown /f $uia | Out-Null
+icacls $uia /grant "*S-1-5-32-544:F" | Out-Null
+(Get-Item $uia).LastWriteTime = Get-Date "2020-01-01"
+Check "UIAutomationCore.dll 시각을 바꿨다 (빌드 PC 와 다른 윈도우 흉내)" ((Get-Item $uia).LastWriteTime.Year -eq 2020)
+$X = "$O\exe"
+New-Item -ItemType Directory -Force "$X\cfg" | Out-Null
+Copy-Item "$App\RPA_UserConfig.template.json" "$X\cfg\RPA_UserConfig.json"
+$env:RPA_USER_CONFIG = "$X\cfg\RPA_UserConfig.json"; $env:RPA_PROGRAMDATA = "$X\pd"; $env:RPA_STATUS_DIR = "$X\st"; $env:RPA_UNATTENDED = "1"
+foreach ($e in @(@("ERPia_RPA.exe", "=== 점검 끝"), @("Prepare_RPA.exe", "쓸 수 있는 Action"))) {
+    $p = Start-Process "$App\$($e[0])" -ArgumentList "--check" -WorkingDirectory $App -PassThru -WindowStyle Hidden -RedirectStandardOutput "$X\$($e[0]).out.txt" -RedirectStandardError "$X\$($e[0]).err.txt"
+    $done = $p.WaitForExit(180000)
+    $bytes = [IO.File]::ReadAllBytes("$X\$($e[0]).out.txt") + [IO.File]::ReadAllBytes("$X\$($e[0]).err.txt")
+    $u8 = [Text.Encoding]::UTF8.GetString($bytes); $ks = [Text.Encoding]::GetEncoding(949).GetString($bytes)
+    Check "$($e[0]) --check 가 켜져 끝까지 간다" ($done -and ($u8.Contains($e[1]) -or $ks.Contains($e[1]))) ($u8.Substring([Math]::Max(0, $u8.Length - 300)))
+}
+Remove-Item Env:RPA_USER_CONFIG, Env:RPA_PROGRAMDATA, Env:RPA_STATUS_DIR, Env:RPA_UNATTENDED
 
 # 2. 가짜 설정 (로그인 없이 파일만) → --after-install --no-window → 작업 등록·에이전트 켜기
 $cfg = @'
@@ -64,6 +85,11 @@ Check "--after-install --no-window (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.
 $q = (schtasks /Query /TN $Task /XML) -join "`n"
 $q | Set-Content "$O\task.xml" -Encoding UTF8
 Check "작업 등록 (가장 높은 권한·배터리·제한 없음·우선순위 5)" (($q -match "<RunLevel>HighestAvailable</RunLevel>") -and ($q -match "<DisallowStartIfOnBatteries>false") -and ($q -match "<StopIfGoingOnBatteries>false") -and ($q -match "<ExecutionTimeLimit>PT0S") -and ($q -match "<Priority>5</Priority>"))
+# 작업 관리자에 'Python' 대신 AFTER MARKET 으로 (2026-09-29 요청): 작업은 감독 사본으로, 감독은 에이전트 사본으로 띄운다
+$Brand = @{ "AFTER_MARKET_RPA_Supervisor.exe" = "AFTER MARKET RPA 에이전트 감독"; "AFTER_MARKET_RPA_Agent.exe" = "AFTER MARKET RPA 에이전트" }
+Check "작업이 AFTER MARKET 감독 사본으로 띄운다" ($q -match "AFTER_MARKET_RPA_Supervisor\.exe")
+$desc = @($Brand.Keys | Where-Object { (Get-Item "$App\python\$_").VersionInfo.FileDescription -eq $Brand[$_] })
+Check "AFTER MARKET 사본 설명 둘 (작업 관리자 '프로세스' 탭 글자)" ($desc.Count -eq 2) ($Brand.Keys | ForEach-Object { "$_=" + (Get-Item "$App\python\$_" -ErrorAction SilentlyContinue).VersionInfo.FileDescription })
 
 # 3. 감독 → 에이전트. 인터넷이 있으면: 가짜 비밀번호라 로그인이 거부되고(3) 감독도 같이 끝난다 (틀린 비밀번호로
 #    되풀이하지 않는다). 없으면 (2026-09-29 첫 시험의 샌드박스가 그랬다): 에이전트는 죽지 않고 다시 붙으려 한다
@@ -72,14 +98,16 @@ $online = $false
 try { Invoke-WebRequest -Uri "https://identitytoolkit.googleapis.com/" -UseBasicParsing -TimeoutSec 10 | Out-Null; $online = $true }
 catch { if ($_.Exception.Response) { $online = $true } }      # 404 여도 닿은 것이다
 $results.Add("참고  샌드박스 인터넷: $(if ($online) { '있음' } else { '없음' })")
-function AgentProcs { @(Get-CimInstance Win32_Process -Filter "Name='python.exe' or Name='pythonw.exe'" | Where-Object { $_.CommandLine -match "background\.py|agent\.py" }) }
+function AgentProcs { @(Get-CimInstance Win32_Process -Filter "Name='python.exe' or Name='pythonw.exe' or Name='AFTER_MARKET_RPA_Supervisor.exe' or Name='AFTER_MARKET_RPA_Agent.exe'" | Where-Object { $_.CommandLine -match "background\.py|agent\.py" }) }
 if ($online) {
-    $ok3 = $false
-    for ($i = 0; $i -lt 120; $i++) {
-        Start-Sleep 1
-        if ((Test-Path $log) -and ((Get-Content $log -Encoding UTF8 -Raw) -match "코드 3")) { $ok3 = $true; break }
+    $ok3 = $false; $seen = @{}
+    for ($i = 0; $i -lt 600; $i++) {        # 0.2초마다 - 가짜 비밀번호라 에이전트는 몇 초만 산다
+        Start-Sleep -Milliseconds 200
+        AgentProcs | ForEach-Object { $seen[$_.Name] = 1 }
+        if (($i % 5 -eq 0) -and (Test-Path $log) -and ((Get-Content $log -Encoding UTF8 -Raw) -match "코드 3")) { $ok3 = $true; break }
     }
     Check "감독이 에이전트를 띄웠고, 로그인 거부(3)에 같이 끝났다" $ok3
+    Check "감독·에이전트가 AFTER MARKET 이름으로 떴다" ($seen.ContainsKey("AFTER_MARKET_RPA_Supervisor.exe") -and $seen.ContainsKey("AFTER_MARKET_RPA_Agent.exe")) (($seen.Keys) -join ", ")
     $stopJson = if (Test-Path "$PD\data\에이전트_멈춤.json") { Get-Content "$PD\data\에이전트_멈춤.json" -Encoding UTF8 -Raw } else { "" }
     Check "멈춘 까닭을 설정 창이 볼 파일에 남겼다 (코드 3)" ($stopJson -match '"code": 3') $stopJson
     Start-Sleep 2
@@ -91,6 +119,8 @@ if ($online) {
     $retries = ([regex]::Matches($text, "구독이 끊겼습니다")).Count
     $procs = AgentProcs
     Check "인터넷이 없어도 에이전트는 죽지 않고 다시 붙으려 한다 (감독·에이전트 둘 다 창 없이 돈다)" (($text -match "감독: 시작합니다") -and ($retries -ge 2) -and ($procs.Count -eq 2)) "다시 붙기 $retries 번, 프로세스 $($procs.Count)"
+    $names = @($procs | ForEach-Object { $_.Name })
+    Check "감독·에이전트가 AFTER MARKET 이름으로 떴다" (($names -contains "AFTER_MARKET_RPA_Supervisor.exe") -and ($names -contains "AFTER_MARKET_RPA_Agent.exe")) ($names -join ", ")
 }
 Copy-Item $log "$O\agent_log1.txt" -ErrorAction SilentlyContinue
 Copy-Item "$PD\data\에이전트_오류.txt" "$O\agent_err1.txt" -ErrorAction SilentlyContinue

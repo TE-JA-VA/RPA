@@ -314,9 +314,15 @@ check("배터리여도 켜고 안 멈춤 (노트북)", val("t:Settings/t:Disallo
       and val("t:Settings/t:StopIfGoingOnBatteries") == "false")
 check("실행 시간 제한 없음 (기본 3일)", val("t:Settings/t:ExecutionTimeLimit") == "PT0S")
 check("우선순위 5 (기본 7 은 낮음)", val("t:Settings/t:Priority") == "5")
-check("동작: 내장 pythonw 로 background.py", val("t:Actions/t:Exec/t:Command") == prog + r"\python\pythonw.exe"
+check("동작: AFTER MARKET 사본이 없으면 내장 pythonw 로 background.py", val("t:Actions/t:Exec/t:Command") == prog + r"\python\pythonw.exe"
       and val("t:Actions/t:Exec/t:Arguments") == f'"{prog}\\firebase\\agent\\background.py"'
       and val("t:Actions/t:Exec/t:WorkingDirectory") == prog + r"\firebase\agent")
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, "python"))
+    open(os.path.join(d, "python", bg.SUPERVISOR_EXE), "wb").close()
+    cmd = ET.fromstring(rs.task_xml("PC\\me", d).encode("utf-16")).find("t:Actions/t:Exec/t:Command", ns).text
+    check("동작: 설치 판은 작업 관리자에 AFTER MARKET 으로 보이는 감독 사본", cmd == os.path.join(d, "python", bg.SUPERVISOR_EXE)
+          and bg.SUPERVISOR_EXE.startswith("AFTER_MARKET"), cmd)
 name = f"RPA_settings_selftest_{os.getpid()}"
 xf = os.path.join(TMP, "selftest.xml")
 with open(xf, "w", encoding="utf-16") as f:

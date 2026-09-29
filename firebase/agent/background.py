@@ -105,10 +105,20 @@ def log(folder, text):
         pass
 
 
-def agent_command():
-    """창 없이 띄울 에이전트 명령. pythonw 옆 python.exe (둘 다 내장 파이썬) - 콘솔 프로그램이라 입출력이 있다."""
-    py = os.path.join(os.path.dirname(sys.executable), "python.exe")
-    return [py if os.path.isfile(py) else sys.executable, os.path.join(HERE, "agent.py")]
+# 설치 판의 내장 파이썬 사본 (tools/build_release.py 가 만든다) - 작업 관리자에 'Python' 대신 AFTER MARKET 으로 보인다
+SUPERVISOR_EXE = "AFTER_MARKET_RPA_Supervisor.exe"   # pythonw 사본 (창 없음) - 작업이 이것으로 이 파일을 띄운다
+AGENT_EXE = "AFTER_MARKET_RPA_Agent.exe"             # python 사본 (콘솔 프로그램)
+
+
+def agent_command(exe_dir=None):
+    """창 없이 띄울 에이전트 명령. 감독 옆 AFTER MARKET 사본, 없으면 python.exe (둘 다 내장 파이썬) - 콘솔 프로그램이라
+    입출력이 있다."""
+    exe_dir = exe_dir or os.path.dirname(sys.executable)
+    for name in (AGENT_EXE, "python.exe"):
+        py = os.path.join(exe_dir, name)
+        if os.path.isfile(py):
+            return [py, os.path.join(HERE, "agent.py")]
+    return [sys.executable, os.path.join(HERE, "agent.py")]
 
 
 def start_agent(cmd, folder):

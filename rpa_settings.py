@@ -200,7 +200,10 @@ def agent_running(name=None):
 # ---------------------------------------------------------------------------
 def task_xml(user, program_dir):
     """작업 스케줄러 XML. 기본값(3일 제한·배터리면 멈춤·낮은 우선순위)을 믿지 않고 모두 적는다."""
-    py = os.path.join(program_dir, "python", "pythonw.exe")
+    import background
+    py = os.path.join(program_dir, "python", background.SUPERVISOR_EXE)   # 작업 관리자에 AFTER MARKET 으로 보인다
+    if not os.path.isfile(py):
+        py = os.path.join(program_dir, "python", "pythonw.exe")
     agent_dir = os.path.join(program_dir, "firebase", "agent")
     script = os.path.join(agent_dir, "background.py")
     return f"""<?xml version="1.0" encoding="UTF-16"?>

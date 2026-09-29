@@ -191,8 +191,13 @@ check("다시 켜지 않는 코드 = 0·2·3·4", set(bg.STOP_CODES) == {0, 2, 3
 src = (ROOT / "firebase" / "agent" / "agent.py").read_text(encoding="utf-8")
 check("agent.main 이 그 코드들을 쓴다", all(f"return {c}" in src for c in (2, 3, 4)))
 cmd = bg.agent_command()
-check("에이전트 명령: pythonw 옆 python.exe 와 agent.py",
+check("에이전트 명령: AFTER MARKET 사본이 없으면 pythonw 옆 python.exe 와 agent.py",
       os.path.basename(cmd[0]).lower() == "python.exe" and cmd[-1] == os.path.join(AGENT_DIR, "agent.py"), cmd)
+with tempfile.TemporaryDirectory() as d:
+    open(os.path.join(d, bg.AGENT_EXE), "wb").close()
+    cmd = bg.agent_command(d)
+    check("에이전트 명령: 설치 판에는 작업 관리자에 AFTER MARKET 으로 보이는 사본으로",
+          cmd[0] == os.path.join(d, bg.AGENT_EXE) and bg.AGENT_EXE.startswith("AFTER_MARKET"), cmd)
 
 print("=== 7. 윈도우 루트 인증서 채우기 (갓 설치한 윈도우) ===")
 sys.path.insert(0, AGENT_DIR)

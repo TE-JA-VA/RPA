@@ -21,14 +21,21 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import zipfile
 
+import win32api
+import win32con
+import win32verstamp
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO not in sys.path:
-    sys.path.insert(0, REPO)
+for _p in (REPO, os.path.join(REPO, "firebase", "agent")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import background as bg  # noqa: E402
 import rpa_status as st  # noqa: E402
 
 OUT_ROOT = r"D:\AX"
@@ -59,9 +66,18 @@ FORBIDDEN = ["__pycache__", "*.pyc", "*_result.txt", "sms_watch_log.txt", "web_*
              "serviceAccountKey.json"]
 MARKERS = {"ERPia_RPA.exe": "=== 점검 끝", "Prepare_RPA.exe": "쓸 수 있는 Action"}   # --check 의 끝 줄
 EXCLUDE = ["numpy", "yaml", "scipy", "pandas", "torch", "cv2", "matplotlib", "networkx", "graphify"]
+# pywinauto 가 부르는 win32ui 는 MFC DLL 을 쓰는데, 이 PC 에는 System32 에만 있고 Nuitka 는 System32 를 안 뒤져
+# 말없이 뺀다 → VC++ 재배포 패키지가 없는 PC 에서 exe 가 켜지자마자 ImportError (2026-09-29 노트북). 직접 넣는다
+MFC_DLL = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "mfc140u.dll")
+NUITKA_YML = os.path.join(REPO, "tools", "nuitka-package.config.yml")   # comtypes typelib 시각 비교 끄기 (파일 안 설명)
+# 작업 관리자에 'Python' 대신 AFTER MARKET 으로 보이게 (2026-09-29 요청): 내장 파이썬 exe 를 이 이름으로 복사하고
+# 설명 칸(작업 관리자 '프로세스' 탭이 보여 주는 글자)을 바꾼다. 사본은 파이썬 재단 서명이 빠진다 (Defender 는 통과)
+BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "AFTER MARKET RPA 에이전트 감독"),
+           bg.AGENT_EXE: ("python.exe", "AFTER MARKET RPA 에이전트")}
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
 NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--windows-console-mode=force", "--remove-output",
-                  "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone"]
+                  "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone",
+                  f"--include-data-files={MFC_DLL}=mfc140u.dll", f"--user-package-configuration-file={NUITKA_YML}"]
                  + [f"--nofollow-import-to={m}" for m in EXCLUDE])
 NUITKA_EXTRA = {"ERPia_RPA.exe": [], "Prepare_RPA.exe": ["--include-package=playwright", "--include-package-data=playwright"]}
 ISS_PATH = os.path.join(REPO, "release", "installer.iss")
@@ -85,8 +101,29 @@ def _copy(src, out_dir, rel):
     shutil.copy2(src, dst)
 
 
-def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT):
-    """배포판 폴더를 모은다. 판 목록에 들어갈 상대 경로('/')를 돌려준다. 이미 있으면 멈춘다 (덮어쓰지 않는다)."""
+def brand_exe(src, dst, description, version):
+    """src 를 dst 로 복사하고 버전 정보(설명·회사·제품)를 바꾼다. 원래 있던 언어 자리에 덮어써 한 벌만 남긴다
+    (win32verstamp.stamp 를 그대로 쓰면 중립 언어로 한 벌이 더 생겨 옛 'Python' 이 남는다)."""
+    shutil.copy2(src, dst)
+    h = win32api.LoadLibraryEx(dst, 0, win32con.LOAD_LIBRARY_AS_DATAFILE)
+    try:
+        langs = win32api.EnumResourceLanguages(h, 16, 1)          # RT_VERSION, 이름 1
+    finally:
+        win32api.FreeLibrary(h)
+    text = {"CompanyName": "AFTER MARKET", "FileDescription": description, "ProductName": "AFTER MARKET RPA",
+            "FileVersion": version, "ProductVersion": version,
+            "InternalName": os.path.basename(dst), "OriginalFilename": os.path.basename(dst)}
+    vs = win32verstamp.VS_VERSION_INFO(*[int(x) for x in version.split(".")], text,
+                                       {"Translation": struct.pack("hh", 0x409, 1252)}, 0, 0)
+    u = win32api.BeginUpdateResource(dst, 0)
+    for lang in langs:
+        win32api.UpdateResource(u, 16, 1, vs, lang)
+    win32api.EndUpdateResource(u, 0)
+
+
+def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0.0.0"):
+    """배포판 폴더를 모은다. 판 목록에 들어갈 상대 경로('/')를 돌려준다. 이미 있으면 멈춘다 (덮어쓰지 않는다).
+    version 은 AFTER MARKET 파이썬 사본의 파일 버전 (num_version 모양)."""
     if os.path.exists(out_dir):
         raise FileExistsError(out_dir)
     os.makedirs(out_dir)
@@ -101,6 +138,9 @@ def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT):
         _copy(os.path.join(repo, *src.split("/")), out_dir, rel)
     for d in RUNTIME_DIRS:
         shutil.copytree(os.path.join(runtime_root, d), os.path.join(out_dir, d))
+    for name, (src, desc) in BRANDED.items():
+        brand_exe(os.path.join(out_dir, "python", src), os.path.join(out_dir, "python", name), desc, version)
+        program.append(f"python/{name}")
     return program
 
 
@@ -305,7 +345,7 @@ def main(argv=None):
     print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else args.builder})")
     builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(args.builder, work)
     out_dir = os.path.join(OUT_ROOT, f"배포_{version}")
-    program = collect(out_dir, work)
+    program = collect(out_dir, work, version=num_version(version))
     man = write_manifest(out_dir, version, builder, program)
     zip_path = out_dir + ".zip"
     make_zip(out_dir, zip_path)
