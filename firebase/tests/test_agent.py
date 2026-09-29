@@ -652,6 +652,31 @@ with tempfile.TemporaryDirectory() as d:
     check(got == [os.path.join(d, "q", "queue.jsonl"), os.path.join(d, "q", "history_pos.txt"),
                   os.path.join(d, "c.json")], f"시험용 환경변수가 새 구조보다 앞선다 {got}")
 
+print("\n11절 에이전트 하나만 (설치 마법사 2부)")
+import ctypes  # noqa: E402
+import agent  # noqa: E402
+
+lock = rf"Local\AFTER_MARKET_RPA_AGENT_TEST_{os.getpid()}"
+check(agent.single_instance(lock) is True, "처음 잡으면 True")
+check(agent.single_instance(lock) is True, "같은 프로세스가 다시 부르면 그대로 True (이미 잡았다)")
+child = f"import sys; sys.path.insert(0, {AGENT_DIR!r}); import agent; print(agent.single_instance({lock!r}))"
+r = subprocess.run([sys.executable, "-c", child], cwd=AGENT_DIR, capture_output=True, text=True, encoding="utf-8",
+                   timeout=60, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+check(r.stdout.strip().splitlines()[-1:] == ["False"], f"다른 프로세스는 못 잡는다 {r.stdout[-200:]} {r.stderr[-200:]}")
+held = rf"Local\AFTER_MARKET_RPA_AGENT_HELD_{os.getpid()}"
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+k32.CreateMutexW.restype = ctypes.c_void_p
+k32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+held_handle = k32.CreateMutexW(None, False, held)       # '다른 에이전트' 가 잡은 잠금 흉내
+old_name = agent.MUTEX_NAME
+agent.MUTEX_NAME = held
+try:
+    check(agent.main() == 4, "이미 돌고 있으면 main() 은 설정을 읽기 전에 4 로 끝난다")
+finally:
+    agent.MUTEX_NAME = old_name
+check(agent.MUTEX_NAME == (os.environ.get("RPA_AGENT_MUTEX") or r"Local\AFTER_MARKET_RPA_AGENT"),
+      "기본 이름 Local\\AFTER_MARKET_RPA_AGENT (시험은 RPA_AGENT_MUTEX)")
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

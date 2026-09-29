@@ -484,11 +484,48 @@ def ask_setup(known=None):
             return None
 
 
+# ---------------------------------------------------------------------------
+# 에이전트 하나만 (설치 마법사 2부 5절). 설정 창(rpa_settings)이 같은 이름으로 '돌고 있음' 을 본다
+# ---------------------------------------------------------------------------
+MUTEX_NAME = os.environ.get("RPA_AGENT_MUTEX") or r"Local\AFTER_MARKET_RPA_AGENT"   # 시험은 RPA_AGENT_MUTEX 로 따로
+ERROR_ACCESS_DENIED = 5
+ERROR_ALREADY_EXISTS = 183
+_MUTEX = {}        # 이름 → 이 프로세스가 잡은 잠금. 프로세스가 끝나면 윈도우가 푼다
+
+
+def single_instance(name=None):
+    """이 윈도우 로그인에서 에이전트가 하나만 돌게 이름 있는 잠금(뮤텍스)을 잡는다. 이미 있으면 False.
+    다른 권한(관리자)으로 만든 잠금이라 못 여는 것(접근 거부)도 '있다' 다. 그 밖의 까닭으로 못 만들면 막지 않는다
+    (잠금 때문에 에이전트가 안 뜨면 안 된다). 같은 프로세스가 다시 부르면 True."""
+    import ctypes
+    name = name or MUTEX_NAME
+    if name in _MUTEX:
+        return True
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateMutexW.restype = ctypes.c_void_p
+    k.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+    k.CloseHandle.argtypes = (ctypes.c_void_p,)
+    ctypes.set_last_error(0)
+    h = k.CreateMutexW(None, False, name)
+    err = ctypes.get_last_error()
+    if not h:
+        return err != ERROR_ACCESS_DENIED
+    if err == ERROR_ALREADY_EXISTS:
+        k.CloseHandle(h)
+        return False
+    _MUTEX[name] = h
+    return True
+
+
 def main():
     """감독자. 설정을 읽거나 처음 물어 만들고 run() 을 돈다. 인증이 죽어 run() 이 멈추면 이유를 찍고 (창이 있으면)
-    비밀번호를 다시 물어 다시 돈다. 종료 코드: 0 정상, 2 설정 문제, 3 인증이 죽었는데 창이 없어 다시 물을 수 없음."""
+    비밀번호를 다시 물어 다시 돈다. 종료 코드: 0 정상, 2 설정 문제, 3 인증이 죽었는데 창이 없어 다시 물을 수 없음,
+    4 이 PC 에서 에이전트가 이미 돌고 있음 (background.py 가 이 코드들을 보고 다시 켤지 정한다)."""
     import secret
 
+    if not single_instance():
+        log("이 PC 에서 에이전트가 이미 돌고 있습니다 (창 없이 도는 에이전트일 수 있습니다). 이 창은 닫아도 됩니다")
+        return 4
     try:
         cfg = secret.load_config()
     except FileNotFoundError:

@@ -9,7 +9,7 @@
 | 부 | 하는 일 | 문서 |
 |---|---|---|
 | **1부 판 구조** | 파일을 프로그램·설정·기록으로 나누고, 판 번호와 판 목록을 만들고, 두 exe 를 Nuitka 로 만든다 | 이 문서 |
-| 2부 설치 마법사 | 새 PC 에 이 구조대로 설치하고 설정을 입력받는다. 기존 PC 를 새 자리로 옮긴다 | 나중에 |
+| 2부 설치 마법사 | 새 PC 에 이 구조대로 설치하고 설정을 입력받는다. 기존 PC 를 새 자리로 옮긴다 | `2026-09-29-installer-design.md` |
 | 3부 자동 업데이트 | 에이전트가 새 판을 받아 프로그램 파일만 바꾼다 | 나중에 |
 
 2·3부가 이 구조에 무엇을 기대는지는 10절에 적었다.
@@ -233,7 +233,7 @@ RPA 화면 상태 카드 오른쪽(`#hero-side`)의 "연결"·"다음 자동 실
 
 ## 10. 2·3부가 이 구조에 기대는 것
 
-**2부 설치 마법사**
+**2부 설치 마법사** (설계: `2026-09-29-installer-design.md`)
 - `install_root()\config` 를 만들어 새 구조로 넘긴다. `C:\ProgramData\AFTER MARKET\RPA` 권한을 Administrators·SYSTEM 으로 막는다.
 - 압축 내용을 `Program Files\AFTER MARKET\RPA` 에 둔다.
 - 기존 PC 의 `RPA_UserConfig.json`·`agent_config.json` 을 `config\` 로 옮긴다. DPAPI 로 잠근 값은 같은 PC·같은 윈도우 계정이면 옮겨도 풀린다.

@@ -1,13 +1,15 @@
-r"""배포판을 만든다 (배포판 구조 1부 8절, docs/superpowers/specs/2026-09-29-release-layout-design.md).
+r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpowers/specs/2026-09-29-release-layout-design.md,
+2026-09-29-installer-design.md).
 
-    .venv\Scripts\python.exe tools\build_release.py [--builder nuitka|pyinstaller] [--to-dist]
+    .venv\Scripts\python.exe tools\build_release.py [--builder nuitka|pyinstaller] [--exes-from <판 폴더>] [--no-setup] [--to-dist]
 
-1. 두 exe 를 만든다 (build\release 에)
+1. 두 exe 를 만든다 (build\release 에). --exes-from 이면 그 판 폴더의 exe 를 가져온다 (exe 소스가 안 바뀐 판)
 2. 정해 둔 파일만 D:\AX\배포_<판 번호>\ 에 모은다
 3. 판 목록(manifest.json)을 쓴다
-4. D:\AX\배포_<판 번호>.zip 으로 압축한다 (맨 위 폴더도 같은 이름 - D:\AX 에 풀면 바로 가기가 맞는다)
-5. 스스로 확인한다: 압축 목록·지문·들어가면 안 되는 파일·빈 배포 틀, 풀어서 두 exe --check
-비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다).
+4. D:\AX\배포_<판 번호>.zip 으로 압축한다 (맨 위 폴더도 같은 이름 - 손으로 넘기는 대비책)
+5. 스스로 확인한다: 압축 목록·지문·들어가면 안 되는 파일·빈 배포 틀, 풀어서 두 exe --check, 내장 파이썬 tkinter
+6. 설치 파일 D:\AX\AFTER_MARKET_RPA_Setup_<판 번호>.exe 를 만든다 (Inno Setup, release/installer.iss). --no-setup 이면 건너뛴다
+비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다. 설치 파일은 5번을 통과한 판 폴더로만 만든다).
 """
 import argparse
 import datetime
@@ -38,9 +40,11 @@ PROGRAM_FILES = [
     ("Run_All.bat", "Run_All.bat"),
     ("rpa_status.py", "rpa_status.py"),
     ("rpa_dashboard.py", "rpa_dashboard.py"),
+    ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
+    ("firebase/agent/background.py", "firebase/agent/background.py"),         # 에이전트 감독 (2부)
     ("firebase/agent/에이전트_시작.bat", "firebase/agent/에이전트_시작.bat"),
 ]
 # 판 목록에 넣지 않는 것 (문서·빈 배포 틀). 업데이트가 건드리지 않는다
@@ -60,6 +64,11 @@ NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--windows-console-
                   "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone"]
                  + [f"--nofollow-import-to={m}" for m in EXCLUDE])
 NUITKA_EXTRA = {"ERPia_RPA.exe": [], "Prepare_RPA.exe": ["--include-package=playwright", "--include-package-data=playwright"]}
+ISS_PATH = os.path.join(REPO, "release", "installer.iss")
+# Inno Setup 6 의 ISCC.exe 를 찾는 자리 (이 PC 는 winget 사용자 설치 → LOCALAPPDATA)
+ISCC_DIRS = (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6"),
+             os.path.join(os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)", "Inno Setup 6"),
+             os.path.join(os.environ.get("ProgramFiles") or r"C:\Program Files", "Inno Setup 6"))
 
 
 def next_version(out_root, today):
@@ -222,27 +231,99 @@ def build_exes(builder, work_dir):
     return f"{builder} {ver} · python {platform.python_version()}"
 
 
+def reuse_exes(src_dir, work_dir):
+    """두 exe 를 새로 만들지 않고 src_dir(판 폴더)에서 work_dir 로 복사한다. 판 목록 builder 칸 글자를 돌려준다."""
+    os.makedirs(work_dir, exist_ok=True)
+    for exe in EXES:
+        shutil.copy2(os.path.join(src_dir, exe), os.path.join(work_dir, exe))
+    try:
+        with open(os.path.join(src_dir, st.MANIFEST_NAME), encoding="utf-8") as f:
+            man = json.load(f)
+        return f"{man.get('builder') or '?'} (판 {man.get('version') or '?'} 에서 가져옴)"
+    except (OSError, ValueError):
+        return f"? ({os.path.basename(os.path.normpath(src_dir))} 에서 가져옴)"
+
+
+def runtime_has_tkinter(root):
+    """root\\python 의 내장 파이썬이 tkinter 를 불러오나 (설정 창이 쓴다)."""
+    try:
+        r = subprocess.run([os.path.join(root, "python", "python.exe"), "-c", "import tkinter"],
+                           capture_output=True, timeout=60)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def find_iscc(dirs=ISCC_DIRS):
+    """ISCC.exe 경로, 없으면 None."""
+    for d in dirs:
+        path = os.path.join(d, "ISCC.exe")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def num_version(version):
+    """파일 속성용 판 번호: 2026.09.29-5 → 2026.9.29.5 (숫자 넷)."""
+    day, n = version.split("-")
+    return ".".join(str(int(p)) for p in day.split(".") + [n])
+
+
+def setup_name(version):
+    return f"AFTER_MARKET_RPA_Setup_{version}.exe"
+
+
+def iscc_command(iscc, out_dir, version, out_root=OUT_ROOT, iss=ISS_PATH):
+    return [iscc, "/Qp", f"/DAppVersion={version}", f"/DNumVersion={num_version(version)}", f"/DSourceDir={out_dir}",
+            f"/O{out_root}", f"/F{setup_name(version)[:-4]}", iss]
+
+
+def build_setup(out_dir, version, out_root=OUT_ROOT):
+    """판 폴더로 설치 파일을 만든다. 경로를 돌려준다. ISCC 가 없거나 컴파일이 안 되면 RuntimeError."""
+    iscc = find_iscc()
+    if not iscc:
+        raise RuntimeError("Inno Setup(ISCC.exe) 이 없습니다. winget install JRSoftware.InnoSetup --scope user 로 설치하거나 "
+                           "--no-setup 으로 건너뛰세요")
+    r = subprocess.run(iscc_command(iscc, out_dir, version, out_root), capture_output=True)
+    path = os.path.join(out_root, setup_name(version))
+    if r.returncode != 0 or not os.path.isfile(path):
+        raise RuntimeError(f"설치 파일을 만들지 못했습니다 (ISCC {r.returncode}): "
+                           f"{(r.stdout + r.stderr)[-500:].decode('utf-8', 'replace')}")
+    return path
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="배포판을 만든다")
     ap.add_argument("--builder", choices=("nuitka", "pyinstaller"), default="nuitka")
     ap.add_argument("--to-dist", action="store_true",
                     help="두 exe 를 이 PC 의 dist 에도 복사한다 (설정 파일은 건드리지 않는다)")
+    ap.add_argument("--exes-from", metavar="판폴더", help="두 exe 를 만들지 않고 이 판 폴더에서 가져온다 (exe 소스가 안 바뀐 판)")
+    ap.add_argument("--no-setup", action="store_true", help="설치 파일(setup.exe)을 만들지 않는다")
     args = ap.parse_args(argv)
     version = next_version(OUT_ROOT, datetime.date.today())
     work = os.path.join(REPO, "build", "release")
-    print(f"판 {version} 을 만듭니다 ({args.builder})")
-    builder = build_exes(args.builder, work)
+    print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else args.builder})")
+    builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(args.builder, work)
     out_dir = os.path.join(OUT_ROOT, f"배포_{version}")
     program = collect(out_dir, work)
     man = write_manifest(out_dir, version, builder, program)
     zip_path = out_dir + ".zip"
     make_zip(out_dir, zip_path)
     problems = verify_zip(zip_path, man, program, [rel for rel, _ in OTHER_FILES]) + smoke_check(zip_path)
+    if not runtime_has_tkinter(out_dir):
+        problems.append("내장 파이썬에 tkinter 가 없습니다 - 설정 창이 뜨지 않습니다 (2부 6절)")
     for p in problems:
         print("  문제:", p)
     if problems:
         print(f"배포판에 문제가 {len(problems)}건 있습니다. {zip_path} 를 쓰지 마세요")
         return 1
+    if not args.no_setup:
+        try:
+            setup = build_setup(out_dir, version)
+        except RuntimeError as e:
+            print("  문제:", e)
+            return 1
+        print(f"  설치 파일 {setup}  ({os.path.getsize(setup) // 2 ** 20}MB)")
     if args.to_dist:
         for exe in EXES:
             shutil.copy2(os.path.join(out_dir, exe), os.path.join(REPO, "dist", exe))

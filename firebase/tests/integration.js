@@ -81,6 +81,7 @@ const env = {
   RPA_AGENT_QUEUE: queuePath,
   RPA_USER_CONFIG: userCfg,
   PYTHONIOENCODING: "utf-8",
+  RPA_AGENT_MUTEX: `Local\\AFTER_MARKET_RPA_AGENT_IT_${process.pid}`,   // 개발 PC 에서 도는 진짜 에이전트의 잠금과 따로
 };
 const agent = spawn("python", ["agent.py"], { cwd: AGENT_DIR, env });
 let agentOut = "";

@@ -43,6 +43,7 @@ firebase/
     fb.py              Auth·RTDB·Firestore REST 와 SSE (표준 라이브러리만)
     secret.py          설정 파일 + DPAPI 로 비밀번호 잠그기
     에이전트_시작.bat    관리자 권한 확인 후 agent.py 실행
+    background.py      감독 (설치한 PC: 작업 스케줄러 → 창 없이 에이전트, 오류로 죽으면 다시 켬)
   rules/     database.rules.json, firestore.rules, firestore.indexes.json
   admin/     우리 PC 전용. setup.js + serviceAccountKey.json (고객 PC 에 절대 금지)
   tests/     rules.test.js, test_agent.py, integration.js, check_web.py, check_setup.py
@@ -51,6 +52,8 @@ firebase/
 ```
 
 에이전트는 저장소 루트의 **`rpa_status.py` 와 `rpa_dashboard.py` 를 import 해서 쓴다**(복사하지 않는다). `launch`, `stop_erpia`, `apply_schedule`, `SCHEDULER`, `write_routine_modules` 가 전부 거기 있던 것이다. 그래서 배포 폴더에도 이 두 파일이 같이 간다.
+
+저장소 루트의 `rpa_settings.py` 는 설치한 PC 의 **설정 창**이다 (기계 계정·ERPia 로그인·메일·프린터 입력, 자동 시작 작업 등록, 에이전트 켜고 끄기, 옛 폴더에서 가져오기). 설치 파일은 `release/installer.iss`(Inno Setup) 이고, `tools/build_release.py` 가 zip 과 설치 파일을 함께 만든다. 설계: `docs/superpowers/specs/2026-09-29-installer-design.md`.
 
 ## 3. 데이터 경로
 
@@ -122,6 +125,8 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 - **자동 실행 예약기를 에이전트가 띄운다.** 그래서 옛 8765 대시보드(`RPA_Dashboard.exe`, `대시보드_시작.bat`)와 같이 띄우면 예약이 두 번 돈다. 배포 폴더에서 옛 대시보드를 빼 둔 이유가 이것이다.
 - 로그인 모듈은 항상 켬으로 고정한다. 화면에서도 잠겨 있고 에이전트도 `Login=Y` 로 덮어쓴다.
 - 켤 때 사용자 설정을 한 파일로 옮긴다. 아래 '사용자 설정' 참고.
+- **설치한 PC** 에서는 작업 스케줄러 작업 `AFTER MARKET\RPA Agent` 가 윈도우 로그인 때 `background.py` 를 창 없이(`pythonw`) 띄우고, 감독이 에이전트를 창 없이 띄워 자기 잡(job)에 넣는다. 에이전트가 0·2·3·4(정상·설정 문제·인증 멈춤·이미 돌고 있음)로 끝나면 감독도 끝나고, 그 밖은 10·30·60·120·300초 뒤 다시 켠다. 감독이 죽으면 에이전트도 죽고, 에이전트가 띄운 RPA 는 잡에서 빠져 끝까지 간다. 에이전트의 입력은 닫힌 파이프다 (`DEVNULL` 은 윈도우에서 `isatty()` 가 참이라 쓰면 안 된다). 감독은 에이전트를 켜기 전에, 설정 창은 기계 계정 로그인 전에 PowerShell 로 Firebase 주소를 한 번씩 찔러 윈도우가 루트 인증서를 받아 두게 한다 - 갓 설치한 윈도우에서는 이게 없으면 파이썬이 `CERTIFICATE_VERIFY_FAILED` 로 못 붙는다.
+- 에이전트는 이름 있는 잠금 `Local\AFTER_MARKET_RPA_AGENT` 로 한 PC 에 하나만 돈다. 이미 돌면 "이미 돌고 있습니다" 를 찍고 4 로 끝난다 (시험은 `RPA_AGENT_MUTEX` 로 다른 이름).
 
 ### 사용자 설정: `RPA_UserConfig.json`
 
@@ -154,12 +159,12 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 ## 7. 새 PC 붙이기
 
 1. 우리 PC 에서 `setup.js pc` 와 `setup.js agent` 로 PC 와 기계 계정을 만든다.
-2. 배포 폴더를 통째로 복사한다. 배포판은 우리 PC 에서 `.venv\Scripts\python.exe tools\build_release.py` 로 만든다 (`D:\AX\배포_<판 번호>` 와 같은 이름의 zip. 정해 둔 파일만 담고 스스로 검사한다). 파일 몇 개만 손으로 넘길 때는 `manifest.json` 도 같이 넘긴다.
-3. `RPA_UserConfig.json` 을 그 업체 값으로 맞춘다. 비밀번호는 평문으로 적으면 에이전트가 처음 켤 때 잠근다. ERPia 위치는 에이전트가 켤 때 찾고, 못 찾으면 고르는 창을 띄운다.
-4. `firebase\agent\에이전트_시작.bat` 을 실행하고 1번에서 받은 회사 코드·PC 이름·비밀번호를 넣는다.
+2. 우리 PC 에서 `.venv\Scripts\python.exe tools\build_release.py` 로 판을 만든다. `D:\AX\배포_<판 번호>` (+ 같은 이름의 zip) 와 설치 파일 `D:\AX\AFTER_MARKET_RPA_Setup_<판 번호>.exe` 가 생긴다. 정해 둔 파일만 담고 스스로 검사하며, 설치 파일은 검사를 통과한 판 폴더로만 만든다 (Inno Setup 이 있어야 한다. 없으면 `--no-setup`).
+3. 설치 파일과 1번의 세 값(회사 코드·PC 이름·기계 계정 비밀번호)을 설치할 사람에게 넘긴다.
+4. 그 PC 에서 설치 파일을 실행한다. 설치 끝에 뜨는 설정 창에 세 값과 ERPia 로그인·메일·프린터를 넣고 저장하면, 기계 계정으로 로그인해 보고 윈도우 로그인 때 에이전트가 창 없이 켜지게 등록한 뒤 켠다. 옛 구조 PC 는 설정 창의 [기존 폴더에서 가져오기] 로 옮긴다 (옛 에이전트는 닫게 하고, 저장 뒤 옛 폴더 이름을 `_옮김` 으로 바꿀지 묻는다).
 5. 대시보드에서 그 PC 를 고른다. PC 가 둘 이상이면 제목 옆에 고르는 칸이 생긴다.
 
-자세한 절차는 배포 폴더의 `클라우드_안내.txt` 에 있다.
+손으로 넘기는 대비책: zip 을 풀고 `RPA_UserConfig.json` 을 채운 뒤 `firebase\agent\에이전트_시작.bat` 을 실행한다 (옛 구조로 돈다). 파일 몇 개만 넘길 때는 `manifest.json` 도 같이 넘긴다. 자세한 절차는 배포 폴더의 `배포안내.txt` (0번이 설치 파일) 와 `클라우드_안내.txt` 에 있다.
 
 ## 8. 고치고 시험하기
 
@@ -168,7 +173,12 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 ```powershell
 cd D:\AX\RPA
 .venv\Scripts\python.exe tests\test_layout.py         # 배치·판 (자리 찾기, 판 점검)
-.venv\Scripts\python.exe tests\test_build_release.py  # 빌드 스크립트 (exe 는 안 만든다)
+.venv\Scripts\python.exe tests\test_build_release.py  # 빌드 스크립트 (exe 는 안 만든다, installer.iss 는 가짜 판으로 컴파일)
+.venv\Scripts\python.exe tests\test_settings.py       # 설정 창 (창 없는 부분)
+.venv\Scripts\python.exe tests\check_settings_ui.py   # 설정 창을 진짜로 띄워 본다 (몇 초 뜬다, 인수로 사진 경로)
+.venv\Scripts\python.exe tests\test_background.py     # 에이전트 감독
+.venv\Scripts\python.exe tests\test_encoding.py       # .bat 는 CP949, 안내 문서·설치 스크립트는 BOM 있는 UTF-8
+.venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 윈도우 샌드박스에서 설치 파일
 cd D:\AX\RPA\firebase; . .\emu_env.ps1
 python tests\test_agent.py                      # 에이전트 단위 (Firebase 없이)
 cd tests; npm test                              # 규칙
@@ -181,11 +191,16 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
 | 규칙 | 24 | 다른 회사·열람자·위조 거부, 명령 상태 전이 |
-| 에이전트 단위 | 126 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리 |
+| 에이전트 단위 | 131 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기 |
 | 통합 | 32 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기 |
 | 화면 | 239 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸 |
 | 배치·판 | 45 | 자리 찾기(새·옛 구조, PyInstaller·Nuitka), 판 점검, exe 쪽 모듈 자리 |
-| 빌드 스크립트 | 21 | 판 번호·모으기·압축·찌꺼기·빈 틀·exe 출력 표지 |
+| 빌드 스크립트 | 40 | 판 번호·모으기·압축·찌꺼기·빈 틀·exe 출력 표지, 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·가짜 판 컴파일)·tkinter·exe 가져오기 |
+| 설정 창 | 101 | 칸 확인, 설정 합치기(잠금·비운 칸은 그대로), 저장 순서(인증서 채우기 → 로그인), 멈춘 까닭, ERPia 못 찾음, 작업 XML(진짜 작업 스케줄러 등록), 옛 에이전트, 멈추기 0·5·6·확인만, 가져오기(Run_All.bat)·이름 바꾸기, 계정·설치 폴더 확인, 오류 가드 |
+| 설정 창 화면 | 20 | 진짜 tkinter 창: 첫 모습, 빈 칸의 빨간 안내, 저장·'켜는 중', 가져오기, 없는 프린터, 멈춘 까닭, 옛 에이전트, 이름 잘림, 단추 오류 |
+| 감독 | 27 | 종료 코드별 다시 켜기, 멈춘 까닭 파일, 기다림, 창 없는 입출력(닫힌 파이프·UTF-8), 잡(감독이 죽으면 에이전트도, RPA 는 남음), 윈도우 인증서 채우기 |
+| 인코딩 | 15 | .bat CP949·CRLF 와 실제 실행, 안내 문서·installer.iss·sandbox_inner.ps1 BOM UTF-8 |
+| 샌드박스 | 24 | 깨끗한 윈도우: 조용한 설치·파일·판 점검·권한·바로 가기·제거 목록·tkinter → 작업 등록 → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 다시 설치(--stop) → 설정 창 사진 → 조용한 제거 |
 | 관리 스크립트 | 23 | setup.js 를 에뮬레이터에 대고 등록 → remove(stts=9, 계정 막힘, 새 등록 거부) → restore |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.

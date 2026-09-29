@@ -69,6 +69,13 @@ for want in ("1/2  프리페어 RPA - 메일 첨부파일 내려받기", "[경�
     check(f"한글 줄이 그대로 찍힌다: {want[:24]}…", want in text, text[-300:])
 check("명령 창 오류가 한 줄도 없다 (줄 조각이 명령으로 실행되면 여기 찍힌다)", errs.strip() == "", errs[-300:])
 
+print("=== 4. 설치 파일 스크립트는 BOM 있는 UTF-8 ===")
+for s in (ROOT / "release" / "installer.iss", ROOT / "tools" / "sandbox_inner.ps1"):
+    if s.exists():
+        b = s.read_bytes()
+        check(f"{s.name} 는 BOM 있는 UTF-8 (Inno Setup·PowerShell 5.1 이 한글을 그렇게 읽는다)",
+              b.startswith(b"\xef\xbb\xbf") and decodes(b[3:], "utf-8"))
+
 print()
 print(f"실패: {'없음' if not fails else fails}")
 sys.exit(1 if fails else 0)
