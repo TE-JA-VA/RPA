@@ -8,11 +8,25 @@ import base64
 import ctypes
 import json
 import os
+import sys
 from ctypes import wintypes
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_config_path():
+    """새 구조(설치 마법사가 %ProgramData%\\AFTER MARKET\\RPA\\config 를 만든 PC)면 거기, 아니면 이 파일 옆 (옛 자리).
+    rpa_status 는 두 단계 위(저장소·배포 폴더 뿌리)에 있다 - agent.py 의 RPA_DIR 과 같은 자리. 단위 시험처럼
+    agent.py 보다 먼저 불려도 찾게 여기서도 sys.path 에 넣는다."""
+    root = os.path.abspath(os.path.join(_HERE, "..", ".."))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import rpa_status
+    return os.path.join(rpa_status.config_dir() if rpa_status.new_layout() else _HERE, "agent_config.json")
+
+
 # RPA_AGENT_CONFIG 는 시험용 - 통합 시험이 실제 설정을 덮어쓰지 않게 다른 파일을 가리킨다
-CONFIG_PATH = os.environ.get("RPA_AGENT_CONFIG") or os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "agent_config.json")
+CONFIG_PATH = os.environ.get("RPA_AGENT_CONFIG") or _default_config_path()
 REQUIRED = ("project_id", "api_key", "database_url", "cid", "pc_id", "email")
 # 공개 값 (web/firebase-config.js 와 같다). 첫 실행 때 이메일·비밀번호만 물으면 되게 여기 둔다
 PUBLIC = {

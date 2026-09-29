@@ -842,6 +842,63 @@ with sync_playwright() as pw:
     check("gone@t.local" in page.text_content("#who") and "지운 회사" in page.text_content("#company"), "되살리면(stts=0) 들어온다")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
 
+    print("10절 버전 표시")
+    login(page, "admin@t.local", pw="newpass123")   # 7절에서 이 계정 비밀번호를 바꿨다
+    page.wait_for_selector("#hero-side .stat")
+    check(page.query_selector(".subnav #ver") is not None and page.is_hidden("#ver"),
+          "버전 정보가 없으면 (옛 에이전트) 탭 줄 오른쪽 자리가 비어 있다")
+    check(page.locator("#hero-side .stat").count() == 2, "상태 카드에는 연결·다음 자동 실행 두 칸만 (버전은 탭 줄로)")
+
+    def show_ver(v, want):
+        """want 가 None 이면 숨는지 기다린다. 마우스 글(title)을 돌려준다."""
+        db_patch(LIVE, {"version": v})
+        if want is None:
+            page.wait_for_function("document.getElementById('ver')?.classList.contains('hide')", timeout=5000)
+            return ""
+        page.wait_for_function(f"document.getElementById('ver')?.textContent.trim() === {json.dumps(want)}",
+                               timeout=5000)
+        return page.get_attribute("#ver", "title") or ""
+
+    warn = lambda: page.evaluate("document.getElementById('ver').classList.contains('warn')")
+    t = show_ver({"version": "2026.09.29-1", "state": "ok", "changed_count": 0, "checked_at": "2026-09-29T10:00:00"},
+                 "버전 2026.09.29-1")
+    check(t == "" and not warn() and page.is_visible("#ver"), "맞음이면 '버전 번호' 만, 보통 글씨")
+    t = show_ver({"version": "2026.09.29-1", "state": "mixed", "changed": ["rpa_status.py", "firebase/agent/agent.py"],
+                  "changed_count": 2, "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 다른 파일 2")
+    check("rpa_status.py" in t and "firebase/agent/agent.py" in t and warn(), f"섞임이면 노란 글씨, 다른 파일은 마우스 글로 ({t})")
+    t = show_ver({"version": "2026.09.29-1", "state": "mixed", "changed": [f"f{i}.txt" for i in range(10)],
+                  "changed_count": 15, "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 다른 파일 15")
+    check("외 5개" in t, f"이름을 다 못 보냈으면 나머지 개수 ({t})")
+    t = show_ver({"state": "error", "error": "ValueError: 판 목록 형식이 다릅니다", "changed_count": 0,
+                  "checked_at": "2026-09-29T10:00:00"}, "버전 확인 실패")
+    check("형식" in t and warn(), f"확인 실패면 노란 글씨, 이유는 마우스 글로 ({t})")
+    show_ver({"state": "none", "changed_count": 0, "checked_at": "2026-09-29T10:00:00"}, None)
+    check(page.is_hidden("#ver"), "목록이 없는 PC (개발 PC 등) 는 안 보인다")
+    show_ver({"version": "<b>x</b>", "state": "mixed", "changed": ["<img src=x onerror=alert(1)>"], "changed_count": 1,
+              "checked_at": "2026-09-29T10:00:00"}, "버전 <b>x</b> · 다른 파일 1")
+    check(page.locator(".subnav img, .subnav b").count() == 0, "버전 이름·파일 이름은 글자로만 (이스케이프)")
+    show_ver("이상한 값", None)
+    check(page.is_hidden("#ver"), "version 이 객체가 아니어도 안 보인다 (오류 없음)")
+    # 폰 폭: 버전은 탭 줄 안에 들고, 상태 카드 칸은 상태 글 아래 한 줄로 왼쪽부터
+    show_ver({"version": "2026.09.29-1", "state": "mixed", "changed": ["rpa_status.py"], "changed_count": 1,
+              "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 다른 파일 1")
+    page.set_viewport_size({"width": 400, "height": 900}); page.wait_for_timeout(300)
+    geo = page.evaluate("""() => { const h = document.getElementById('hero').getBoundingClientRect(),
+        st = [...document.querySelectorAll('#hero-side .stat')].map(e => e.getBoundingClientRect()),
+        v = document.getElementById('ver').getBoundingClientRect();
+      return { sameRow: Math.abs(st[0].top - st[1].top) < 2, leftStart: st[0].left - h.left < 40,
+               verIn: v.right <= window.innerWidth && v.left >= 0, noScroll: document.documentElement.scrollWidth <= window.innerWidth,
+               heroH: Math.round(h.height) }; }""")
+    check(geo["sameRow"] and geo["leftStart"], f"폰 폭에서 상태 카드 칸은 한 줄, 왼쪽부터 {geo}")
+    check(geo["verIn"] and geo["noScroll"], f"폰 폭에서 버전 글이 화면 안에 들고 가로 스크롤이 없다 {geo}")
+    if os.environ.get("SHOT_DIR"):
+        for w in (1280, 400):
+            page.set_viewport_size({"width": w, "height": 900}); page.wait_for_timeout(300)
+            page.screenshot(path=os.path.join(os.environ["SHOT_DIR"], f"ver_{w}.png"), clip={"x": 0, "y": 0, "width": w, "height": 560})
+    page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
+    db_patch(LIVE, {"version": None})
+    page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+
     check(not errors, f"페이지 오류 없음 {errors[:2]}")
     browser.close()
 

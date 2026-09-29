@@ -620,6 +620,38 @@ c2 = fb.Client(CFG, opener=h2, clock=lambda: h2.now)
 check(list(c2.stream("apps/rpa/commands/c_demo/pc_office")) == [("keep-alive", None)] and h2.last_timeout == 90,
       "구독 연결에 90초 읽기 시한 (30초 keep-alive 가 세 번 안 오면 끊긴 것)")
 
+print("\n10절 에이전트 파일 자리 (배포판 구조 1부)")
+import subprocess  # noqa: E402
+
+AGENT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent"))
+WHERE = "import json, agent, secret; print(json.dumps([agent.QUEUE_PATH, agent.HISTORY_POS_PATH, secret.CONFIG_PATH]))"
+
+
+def where(extra):
+    """새 프로세스에서 agent·secret 을 불러와 기본 자리를 받는다 (모듈 상수라 import 할 때 정해진다)."""
+    env = {k: v for k, v in os.environ.items() if k not in ("RPA_AGENT_QUEUE", "RPA_AGENT_CONFIG", "RPA_PROGRAMDATA")}
+    env.update(extra, PYTHONIOENCODING="utf-8")
+    r = subprocess.run([sys.executable, "-c", WHERE], cwd=AGENT_DIR, env=env, capture_output=True,
+                       text=True, encoding="utf-8", timeout=60)
+    if r.returncode != 0:
+        return r.stderr[-300:]
+    return [os.path.normpath(p) for p in json.loads(r.stdout.strip().splitlines()[-1])]
+
+
+with tempfile.TemporaryDirectory() as d:
+    got = where({"RPA_PROGRAMDATA": os.path.join(d, "none")})
+    check(got == [os.path.join(AGENT_DIR, n) for n in ("queue.jsonl", "history_pos.txt", "agent_config.json")],
+          f"옛 구조는 지금 자리 (에이전트 폴더, 개발 PC 도 dist 가 아니다) {got}")
+    root = os.path.join(d, "AFTER MARKET", "RPA")
+    os.makedirs(os.path.join(root, "config"))
+    got = where({"RPA_PROGRAMDATA": root})
+    check(got == [os.path.join(root, "data", "queue.jsonl"), os.path.join(root, "data", "history_pos.txt"),
+                  os.path.join(root, "config", "agent_config.json")], f"새 구조는 data·config {got}")
+    got = where({"RPA_PROGRAMDATA": root, "RPA_AGENT_QUEUE": os.path.join(d, "q", "queue.jsonl"),
+                 "RPA_AGENT_CONFIG": os.path.join(d, "c.json")})
+    check(got == [os.path.join(d, "q", "queue.jsonl"), os.path.join(d, "q", "history_pos.txt"),
+                  os.path.join(d, "c.json")], f"시험용 환경변수가 새 구조보다 앞선다 {got}")
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

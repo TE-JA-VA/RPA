@@ -58,7 +58,7 @@ Realtime DB
 ```
 meta/companies/{cid}                    { name, stts, pcs: { pcId: { label } } }   stts 0(없음도) 사용 · 9 삭제(비활성)
 apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현재 상태
-                                        { programs, modules, schedule, recent[20], heartbeat, host, server_time }
+                                        { programs, modules, schedule, recent[20], heartbeat, host, server_time, version }
 apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, schedule }
 apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at, state, result, … }
 ```
@@ -67,6 +67,8 @@ Firestore
 runs/{cid}/items/{runId}   실행 이력 한 건 (조회용 필드 + payload JSON)
 users/{uid}                { cid, role, name } - 표시용. 권한 근거는 custom claim 이다
 ```
+
+`version` 은 에이전트가 켤 때 잰 판이다 (`rpa_status.check_install()`: 판 목록 `manifest.json` 과 파일 지문을 맞춰 `ok`·`mixed`·`none`·`error`). 화면은 RPA 현황·기록 탭 줄 오른쪽에 `버전 2026.09.29-2` 처럼 보여 준다 (섞임·확인 실패는 노란 글씨, 목록이 없으면 숨김). 설계: `docs/superpowers/specs/2026-09-29-release-layout-design.md`.
 
 기준값은 항상 `live` 다. `settings` 는 "이렇게 해 달라" 는 요청이고, PC 가 실제로 반영한 결과가 `live.modules` 와 `live.schedule` 로 돌아온다.
 
@@ -152,7 +154,7 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 ## 7. 새 PC 붙이기
 
 1. 우리 PC 에서 `setup.js pc` 와 `setup.js agent` 로 PC 와 기계 계정을 만든다.
-2. 배포 폴더(지금 본은 `D:\AX\배포_20260928_3`, 같은 이름의 zip 도 있다)를 통째로 복사한다. 옛 대시보드는 넣지 않는다.
+2. 배포 폴더를 통째로 복사한다. 배포판은 우리 PC 에서 `.venv\Scripts\python.exe tools\build_release.py` 로 만든다 (`D:\AX\배포_<판 번호>` 와 같은 이름의 zip. 정해 둔 파일만 담고 스스로 검사한다). 파일 몇 개만 손으로 넘길 때는 `manifest.json` 도 같이 넘긴다.
 3. `RPA_UserConfig.json` 을 그 업체 값으로 맞춘다. 비밀번호는 평문으로 적으면 에이전트가 처음 켤 때 잠근다. ERPia 위치는 에이전트가 켤 때 찾고, 못 찾으면 고르는 창을 띄운다.
 4. `firebase\agent\에이전트_시작.bat` 을 실행하고 1번에서 받은 회사 코드·PC 이름·비밀번호를 넣는다.
 5. 대시보드에서 그 PC 를 고른다. PC 가 둘 이상이면 제목 옆에 고르는 칸이 생긴다.
@@ -164,6 +166,9 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 에뮬레이터는 Java 21 이 필요하다. 창마다 `. .\emu_env.ps1` 로 그 창에서만 앞세운다. 시스템 Java 8 은 건드리지 않는다.
 
 ```powershell
+cd D:\AX\RPA
+.venv\Scripts\python.exe tests\test_layout.py         # 배치·판 (자리 찾기, 판 점검)
+.venv\Scripts\python.exe tests\test_build_release.py  # 빌드 스크립트 (exe 는 안 만든다)
 cd D:\AX\RPA\firebase; . .\emu_env.ps1
 python tests\test_agent.py                      # 에이전트 단위 (Firebase 없이)
 cd tests; npm test                              # 규칙
@@ -176,9 +181,11 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
 | 규칙 | 24 | 다른 회사·열람자·위조 거부, 명령 상태 전이 |
-| 에이전트 단위 | 123 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행 |
-| 통합 | 30 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치 |
-| 화면 | 228 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스 |
+| 에이전트 단위 | 126 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리 |
+| 통합 | 32 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기 |
+| 화면 | 239 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸 |
+| 배치·판 | 45 | 자리 찾기(새·옛 구조, PyInstaller·Nuitka), 판 점검, exe 쪽 모듈 자리 |
+| 빌드 스크립트 | 21 | 판 번호·모으기·압축·찌꺼기·빈 틀·exe 출력 표지 |
 | 관리 스크립트 | 23 | setup.js 를 에뮬레이터에 대고 등록 → remove(stts=9, 계정 막힘, 새 등록 거부) → restore |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.

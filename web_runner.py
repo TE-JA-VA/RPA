@@ -37,9 +37,7 @@ def _setup_playwright_browsers():
     """
     if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
         return
-    here = (os.path.dirname(os.path.abspath(sys.executable))
-            if getattr(sys, "frozen", False)
-            else os.path.dirname(os.path.abspath(__file__)))
+    here = status.program_dir()
 
     # 1) exe(또는 스크립트) 옆에 ms-playwright 폴더가 있으면 그걸 쓴다 (배포용)
     candidate = os.path.join(here, "ms-playwright")
@@ -49,8 +47,8 @@ def _setup_playwright_browsers():
 
     # 2) exe 로 묶이면 playwright 가 임시 압축해제 폴더 안의 .local-browsers 를
     #    브라우저 위치로 착각해서 "Executable doesn't exist" 로 죽는다.
-    #    이 PC 에 이미 받아둔 기본 위치를 직접 알려준다.
-    if getattr(sys, "frozen", False):
+    #    이 PC 에 이미 받아둔 기본 위치를 직접 알려준다. (Nuitka exe 도 임시 폴더에 풀려 돈다)
+    if status.packaged():
         default = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
         if os.path.isdir(default):
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = default
@@ -116,14 +114,8 @@ SMS_WAIT_SECONDS = 90
 SMS_POLL_SECONDS = 2.0
 
 
-def app_base_dir():
-    """PyInstaller 로 묶이면 __file__ 이 임시폴더를 가리키므로 exe 위치를 쓴다."""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-BASE_DIR = app_base_dir()
+# 결과 로그·화면 사진·세션을 둘 폴더. 옛 구조는 exe 옆, 새 구조는 ProgramData\AFTER MARKET\RPA\data
+BASE_DIR = status.data_dir()
 
 # 로그인 후 쿠키를 저장해 두는 곳.
 # 기본값은 '쓰지 않음' 이다. 매번 새로 로그인하고 2차인증을 거치는 편이 한결같고,

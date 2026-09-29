@@ -130,6 +130,10 @@
   .hero .stats .stat { display:grid; gap:2px; text-align:right; }
   .hero .stats .k { font-size:12px; letter-spacing:.04em; opacity:.8; }
   .hero .stats .v { font-size:18px; font-weight:600; white-space:nowrap; }
+  @media (max-width:640px) {   /* 폰: 연결·다음 자동 실행을 상태 글 아래 한 줄로, 왼쪽부터 (오른쪽 정렬 기둥이 되지 않게) */
+    .hero .stats { display:flex; flex-wrap:wrap; gap:8px 28px; width:100%; padding:0 24px 18px; }
+    .hero .stats .stat { text-align:left; }
+  }
   .hero .state { display:flex; align-items:center; gap:10px; font-weight:700; font-size:24px; color:var(--on); }
   .hero .dot { width:12px; height:12px; border-radius:50%; background:var(--on); flex:none; opacity:.9; }
   /* 진행 중이면 상태 카드 점도 같이 숨쉰다 (카드는 색으로 채워져 있어 흰 빛무리로) */
@@ -249,7 +253,10 @@
   .apply { margin-top:10px; width:100%; }
 
   /* 현황 / 기록 */
-  .subnav { display:flex; gap:6px; margin-bottom:12px; }
+  .subnav { display:flex; gap:6px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+  /* 탭 줄 오른쪽 끝: 이 PC 의 버전 (판 목록이 없으면 숨김). 섞임·확인 실패는 노란 글씨 */
+  .ver-note { margin-left:auto; font-size:13px; color:var(--muted); white-space:nowrap; }
+  .ver-note.warn { color:var(--warn); font-weight:600; }
   .subnav button { border-radius:999px; padding:6px 16px; }
   .subnav button[aria-selected="true"] { border-color:var(--accent); color:var(--accent); font-weight:700; }
 

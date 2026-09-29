@@ -42,6 +42,7 @@ const HTML = `
   <div class="subnav" role="tablist">
     <button id="tab-status" role="tab" aria-selected="true">현황</button>
     <button id="tab-history" role="tab" aria-selected="false">기록</button>
+    <span class="ver-note hide" id="ver"></span>
   </div>
 
   <div id="view-status">
@@ -324,6 +325,32 @@ function summaryText(v) {
   return parts.length ? parts.join(" · ") : metricText(v);
 }
 
+// live.version → 탭 줄 오른쪽 "버전" 글과 마우스를 올리면 보이는 글 (배포판 구조 1부 6절). null 이면 숨긴다.
+// 옛 에이전트는 version 을 안 올리고, 목록이 없는 판(none)은 version·changed 필드가 빠진 채 온다.
+// "최신 버전입니다 / 업데이트가 있습니다" 는 3부(자동 업데이트)에서 내보낸 판 번호가 생기면 붙인다
+function verStat(v) {
+  if (!v || typeof v !== "object") return null;
+  const name = typeof v.version === "string" ? v.version : "";
+  if (v.state === "ok" && name) return { text: `버전 ${name}`, title: "", warn: false };
+  if (v.state === "mixed") {
+    const list = Array.isArray(v.changed) ? v.changed.filter((x) => typeof x === "string") : [];
+    const n = Number(v.changed_count) || list.length;
+    const more = n > list.length ? ` 외 ${n - list.length}개` : "";
+    return { text: `버전 ${name || "?"} · 다른 파일 ${n}`, warn: true,
+             title: list.length ? `판 목록과 다른 파일: ${list.join(", ")}${more}` : "" };
+  }
+  if (v.state === "error") return { text: "버전 확인 실패", title: typeof v.error === "string" ? v.error : "", warn: true };
+  return null;
+}
+
+function paintVer() {
+  const v = verStat(live?.version), el = $("ver");
+  el.textContent = v ? v.text : "";          // 글자로만 넣는다 (이스케이프가 필요 없다)
+  el.title = v?.title || "";
+  el.classList.toggle("warn", !!v?.warn);
+  el.classList.toggle("hide", !v);
+}
+
 function paintTiles() {
   const r = live?.programs?.routine;
   const off = offlineSec();
@@ -349,6 +376,7 @@ function paintTiles() {
     d.innerHTML = `<span class="k">${k}</span><span class="v num"${id ? ` id="${id}"` : ""}>${esc(v)}</span>`;
     return d;
   }));
+  paintVer();
 }
 
 // 도넛 SVG. 둘레 100 으로 맞춘 stroke-dasharray. 가운데 글자는 없다 (수치는 옆 범례에)

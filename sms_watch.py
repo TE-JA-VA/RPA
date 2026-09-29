@@ -47,6 +47,8 @@ import win32con
 import win32gui
 from pywinauto import Application
 
+import rpa_status
+
 # ---------------------------------------------------------------------------
 # 설정값
 # ---------------------------------------------------------------------------
@@ -81,14 +83,8 @@ LAUNCH_WAIT_SECONDS = 40      # 앱을 새로 띄웠을 때 창이 뜨기를 기
 RECONNECT_WAIT_SECONDS = 5
 
 
-def app_base_dir():
-    """PyInstaller 로 묶이면 __file__ 이 임시폴더를 가리키므로 exe 위치를 쓴다."""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-BASE_DIR = app_base_dir()
+# 점검 기록을 둘 폴더. 옛 구조는 exe 옆, 새 구조는 ProgramData\AFTER MARKET\RPA\data
+BASE_DIR = rpa_status.data_dir()
 LOG_PATH = os.path.join(BASE_DIR, "sms_watch_log.txt")
 
 
@@ -414,8 +410,8 @@ def handle_new_messages(new_items):
 # ---------------------------------------------------------------------------
 def cmd_check():
     log("=== 실행 환경 점검 ===")
-    log(f"  실행 형태: {'exe(패키징됨)' if getattr(sys, 'frozen', False) else '파이썬 스크립트'}")
-    log(f"  기준 폴더: {BASE_DIR}")
+    log(f"  실행 형태: {rpa_status.run_kind()}")
+    log(f"  기록 폴더: {BASE_DIR}")
     log(f"  관리자 권한: {'예' if is_admin() else '아니오'}")
 
     h = find_phone_link_hwnd()

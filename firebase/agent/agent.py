@@ -47,8 +47,16 @@ def auth_message(code):
         return "시도가 너무 많아 잠시 막혔습니다. 10분쯤 뒤에 다시 띄우세요"
     return f"로그인 거부: {code}"
 LOG_LINES = 80
-QUEUE_PATH = os.environ.get("RPA_AGENT_QUEUE") or os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "queue.jsonl")
+
+
+def _data_dir():
+    """에이전트 큐·위치·기록을 둘 폴더. 새 구조면 %ProgramData%\\AFTER MARKET\\RPA\\data, 아니면 이 파일 옆 (옛 자리).
+    옛 구조에서 rpa_status.data_dir() 을 쓰지 않는 까닭: 개발 PC 는 그 값이 dist 라 큐가 엉뚱한 곳에 생긴다."""
+    import rpa_status as st
+    return st.data_dir() if st.new_layout() else os.path.dirname(os.path.abspath(__file__))
+
+
+QUEUE_PATH = os.environ.get("RPA_AGENT_QUEUE") or os.path.join(_data_dir(), "queue.jsonl")
 QUEUE_MAX = 500
 
 
@@ -549,6 +557,12 @@ def run(cfg):
             "ERPia 를 설치했는지 보고 에이전트를 다시 켜서 위치를 고르세요")
     except Exception as e:
         log(f"ERPia 위치를 확인하지 못했습니다 ({type(e).__name__})")
+    # 판: 프로그램 폴더를 판 목록(manifest.json)과 맞춰 PC 현황에 올린다 (배포판 구조 1부 5절).
+    # 파일은 업데이트나 손으로 넣을 때만 바뀌고 둘 다 에이전트를 다시 켜므로 켤 때 한 번이면 된다. 예외를 내지 않는다
+    install = st.check_install()
+    detail = {"mixed": f", 다른 파일 {install['changed_count']}개: {', '.join(install['changed'])}",
+              "error": f", {install.get('error')}"}.get(install["state"], "")
+    log(f"버전: {install['version'] or '없음'} ({install['state']}{detail})")
 
     # 자동 실행 예약은 PC 에서 돈다. 기존 대시보드의 Scheduler 그대로 (꺼져 있던 동안 지난 예약은 건너뛴다).
     # 8765 대시보드와 같이 띄우면 예약이 둘이 되어 두 번 실행될 수 있다 - 하나만 띄운다.
@@ -589,6 +603,7 @@ def run(cfg):
                 # 띄워 놓은 프로세스가 아직 살아 있나. 명령이 done 이 된 뒤 상태 파일에 'running' 이 찍히기까지의
                 # 몇 초를 이 값이 메운다 (그 틈에 화면의 실행 버튼이 풀리면 두 번 실행될 수 있다)
                 snap["launching"] = bool(dash.launch_state())
+                snap["version"] = install      # 켤 때 한 번 잰 판 (바뀌지 않으니 비교 body 에는 안 넣는다)
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
                 upload_new_history(hist_path, up, cfg)
                 body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule"), snap.get("recent"),

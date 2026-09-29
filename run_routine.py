@@ -117,19 +117,8 @@ import erpia_common as ec
 import perform_login as pl
 import rpa_status as status
 
-def app_base_dir():
-    """설정 파일과 로그를 둘 폴더.
-
-    PyInstaller 로 묶으면 __file__ 은 실행 시 임시로 풀리는 폴더를 가리키므로,
-    그대로 쓰면 exe 옆에 있는 설정 파일을 못 찾는다. 묶인 상태에서는 exe 위치를 쓴다.
-    """
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-# 경로는 이 스크립트(또는 exe)가 있는 폴더 기준으로 잡는다
-BASE_DIR = app_base_dir()
+# 결과 로그를 둘 폴더. 옛 구조는 exe 옆, 새 구조는 ProgramData\AFTER MARKET\RPA\data (rpa_status 가 정한다)
+BASE_DIR = status.data_dir()
 RESULT_PATH = os.path.join(BASE_DIR, "run_routine_result.txt")
 PROCESS_WAIT_SECONDS = 30
 LOGIN_WINDOW_WAIT_SECONDS = 30
@@ -5323,8 +5312,9 @@ def run_self_check():
     실행: ERPia_RPA.exe --check
     """
     log(f"=== 설정 점검 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
-    log(f"실행 형태   : {'exe(패키징됨)' if getattr(sys, 'frozen', False) else '파이썬 스크립트'}")
-    log(f"기준 폴더   : {BASE_DIR}")
+    log(f"실행 형태   : {status.run_kind()}")
+    log(f"프로그램 폴더: {status.program_dir()}")
+    log(f"기록 폴더   : {BASE_DIR}{'  (새 구조)' if status.new_layout() else ''}")
     log(f"바탕화면    : {pl.DESKTOP_DIR}  {'있음' if os.path.isdir(pl.DESKTOP_DIR) else '없음!'}")
     log(f"작업 폴더   : {pl.AI_DIR}  {'있음' if os.path.isdir(pl.AI_DIR) else '없음!'}")
     user_cfg = status.user_config_path()
@@ -5386,7 +5376,7 @@ def run_uia_check():
     실행: ERPia_RPA.exe --uiacheck
     """
     log(f"=== 화면 조회(UIA) 점검 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
-    log(f"실행 형태: {'exe(패키징됨)' if getattr(sys, 'frozen', False) else '파이썬 스크립트'}")
+    log(f"실행 형태: {status.run_kind()}")
 
     try:
         pid = ec.find_erpia_pid()

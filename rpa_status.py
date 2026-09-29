@@ -25,6 +25,7 @@ import base64
 import ctypes
 import datetime
 import functools
+import hashlib
 import json
 import os
 import re
@@ -195,10 +196,34 @@ def read_account():
 #   - 이 파일이 없으면 옛 파일들을 읽는다 (에이전트가 아직 옮기기 전인 PC). 처음 쓸 때 합쳐 만들고 옛 파일은 .old 로.
 #   - 시험은 RPA_USER_CONFIG(또는 옛 RPA_CRED_FILE)로 임시 폴더를 가리킨다. 그러면 새 파일·옛 파일 모두 그 폴더만 본다.
 # ---------------------------------------------------------------------------
+PRODUCT_DIRS = ("AFTER MARKET", "RPA")   # 새 구조 폴더: Program Files\AFTER MARKET\RPA, ProgramData\AFTER MARKET\RPA
+
+
+def _nuitka():
+    """Nuitka 로 컴파일된 모듈이면 __compiled__ 가 있다 (PyInstaller·소스에는 없다)."""
+    return globals().get("__compiled__")
+
+
+def packaged():
+    """exe 로 묶여 도는가 (Nuitka 또는 PyInstaller)."""
+    return _nuitka() is not None or bool(getattr(sys, "frozen", False))
+
+
+def run_kind():
+    """--check 에 찍는 실행 형태."""
+    if _nuitka() is not None:
+        return "exe(Nuitka)"
+    return "exe(PyInstaller)" if packaged() else "파이썬 스크립트"
+
+
 def program_dir():
-    """RPA exe 가 있는 폴더 (배포 폴더 루트). exe 면 exe 옆, 소스면 이 파일 옆.
+    """RPA exe 가 있는 폴더 (배포 폴더 루트, 새 구조면 Program Files\\AFTER MARKET\\RPA).
+    Nuitka onefile 은 풀린 임시 폴더가 아니라 exe 가 놓인 폴더, PyInstaller 는 exe 옆, 소스면 이 파일 옆.
     개발 PC 처럼 옆 dist 에 Run_All.bat 이 있으면 dist - 대시보드가 띄우는 exe 와 같은 설정을 본다
     (rpa_dashboard.run_command_path 와 같은 규칙)."""
+    compiled = _nuitka()
+    if compiled is not None:
+        return getattr(compiled, "containing_dir", None) or os.path.dirname(os.path.abspath(sys.argv[0]))
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     here = os.path.dirname(os.path.abspath(__file__))
@@ -206,15 +231,105 @@ def program_dir():
     return dist if os.path.isfile(os.path.join(dist, "Run_All.bat")) else here
 
 
+def install_root():
+    """새 구조의 설정·기록 뿌리 %ProgramData%\\AFTER MARKET\\RPA. 시험용 RPA_PROGRAMDATA 가 있으면 그 폴더."""
+    return os.environ.get("RPA_PROGRAMDATA") or os.path.join(
+        os.environ.get("ProgramData") or r"C:\ProgramData", *PRODUCT_DIRS)
+
+
+def new_layout():
+    """설치 마법사(2부)가 install_root()\\config 를 만든 PC 인가. 아니면 옛 구조 (설정·기록 = exe 옆)."""
+    return os.path.isdir(os.path.join(install_root(), "config"))
+
+
+def config_dir():
+    """사용자 설정(RPA_UserConfig.json)을 둘 폴더."""
+    return os.path.join(install_root(), "config") if new_layout() else program_dir()
+
+
+def data_dir():
+    """기록(결과 로그·화면 사진·세션)을 둘 폴더. 새 구조면 없을 때 만든다 - 못 만들어도 예외는 내지 않는다
+    (기록 때문에 RPA 가 멈추면 안 된다. 쓰는 쪽이 실패를 삼킨다)."""
+    if not new_layout():
+        return program_dir()
+    path = os.path.join(install_root(), "data")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        pass
+    return path
+
+
 def user_config_path():
-    """RPA_UserConfig.json 위치. 시험용 RPA_USER_CONFIG 가 있으면 그 파일, RPA_CRED_FILE 만 있으면 그 옆."""
+    """RPA_UserConfig.json 위치. 시험용 RPA_USER_CONFIG 가 있으면 그 파일, RPA_CRED_FILE 만 있으면 그 옆.
+    아니면 config_dir() (옛 구조는 exe 옆 그대로)."""
     override = os.environ.get("RPA_USER_CONFIG")
     if override:
         return override
     cred = os.environ.get("RPA_CRED_FILE")
     if cred:
         return os.path.join(os.path.dirname(cred), USER_CONFIG_NAME)
-    return os.path.join(program_dir(), USER_CONFIG_NAME)
+    return os.path.join(config_dir(), USER_CONFIG_NAME)
+
+
+# ---------------------------------------------------------------------------
+# 판 (배포판 구조 1부, docs/superpowers/specs/2026-09-29-release-layout-design.md 4·5절)
+# 프로그램 폴더의 manifest.json 에 판 번호와 우리 파일의 지문(SHA-256)을 적는다. tools/build_release.py 가 쓰고,
+# 에이전트가 켤 때 check_install() 로 맞춰 본다. 사고(섞임) 확인용이지 변조 방어가 아니다 - 서명은 3부.
+# ---------------------------------------------------------------------------
+MANIFEST_NAME = "manifest.json"
+MANIFEST_FORMAT = 1
+CHANGED_MAX = 10          # 화면에 보낼 다른 파일 이름 수 (전체 개수는 changed_count)
+
+
+def file_digest(path):
+    """판 목록의 한 줄 {"sha256", "size"}."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return {"sha256": h.hexdigest(), "size": os.path.getsize(path)}
+
+
+def manifest_path_ok(rel):
+    """판 목록의 경로는 프로그램 폴더 안의 상대 경로('/' 구분)만 받는다. 3부 업데이트가 이 경로에 쓰므로
+    밖(.., 절대 경로, 드라이브)을 못 가리키게 한다."""
+    return (isinstance(rel, str) and rel != "" and not rel.startswith("/") and "\\" not in rel and ":" not in rel
+            and all(part not in ("", ".", "..") for part in rel.split("/")))
+
+
+def check_install(root=None):
+    """프로그램 폴더를 판 목록과 맞춰 본다. 예외를 내보내지 않는다 (에이전트가 켤 때 부른다).
+
+    ok     목록의 모든 파일이 있고 지문이 같다
+    mixed  없거나 지문이 다른 파일이 있다 (몇 개만 손으로 넣었거나 덮어쓰다 끊김)
+    none   목록이 없다 (옛 배포 폴더, 개발 PC)
+    error  목록을 못 믿는다 (깨짐, 형식 번호가 다름, 밖을 가리키는 경로)
+    """
+    out = {"version": None, "state": "none", "changed": [], "changed_count": 0,
+           "checked_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        root = root or program_dir()
+        path = os.path.join(root, MANIFEST_NAME)
+        if not os.path.isfile(path):
+            return out
+        with open(path, encoding="utf-8") as f:
+            man = json.load(f)
+        files = man.get("files") if isinstance(man, dict) else None
+        if man.get("format") != MANIFEST_FORMAT or not isinstance(files, dict):
+            raise ValueError("판 목록 형식이 다릅니다")
+        out["version"] = str(man.get("version") or "") or None
+        changed = []
+        for rel, want in files.items():
+            if not manifest_path_ok(rel) or not isinstance(want, dict):
+                raise ValueError(f"판 목록의 경로가 잘못되었습니다: {rel!r}")
+            full = os.path.join(root, *rel.split("/"))
+            if not os.path.isfile(full) or file_digest(full)["sha256"] != want.get("sha256"):
+                changed.append(rel)
+        out.update(state="mixed" if changed else "ok", changed=changed[:CHANGED_MAX], changed_count=len(changed))
+    except Exception as e:
+        out.update(state="error", changed=[], changed_count=0, error=f"{type(e).__name__}: {e}"[:200])
+    return out
 
 
 def _old_config_paths():

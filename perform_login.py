@@ -9,7 +9,6 @@
     (파일명에 콜론(:)은 Windows에서 사용할 수 없어 HHmmss로 대체함)
 """
 import os
-import sys
 import time
 from datetime import datetime
 
@@ -31,13 +30,6 @@ def find_desktop_dir():
     return rpa_status.find_desktop_dir()
 
 
-def app_base_dir():
-    """로그를 둘 폴더. PyInstaller 로 묶인 상태에서는 exe 위치를 쓴다."""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-
 # 이 프로그램이 만드는 파일은 모두 여기 모은다.
 # (받은 엑셀, 출력 결과, 실패 기록. 설정은 exe 옆 RPA_UserConfig.json - rpa_status 의 '사용자 설정' 절)
 AI_DIR_NAME = "ERPIA_AI"
@@ -57,7 +49,7 @@ def find_ai_dir():
     return path
 
 
-BASE_DIR = app_base_dir()
+BASE_DIR = rpa_status.data_dir()   # 옛 구조는 exe 옆, 새 구조는 ProgramData\AFTER MARKET\RPA\data
 DESKTOP_DIR = find_desktop_dir()
 AI_DIR = find_ai_dir()
 # 사용자 설정 파일. None 이면 기본 자리(rpa_status.user_config_path, 없으면 옛 두 파일). 시험이 바꿔 끼운다

@@ -112,6 +112,10 @@ await waitFor("heartbeat 가 올라온다", async () =>
 const live = (await db.ref("apps/rpa/live/c_demo/pc_office").get()).val();
 check(live?.heartbeat?.every === 5, `heartbeat 에 신호 주기 (${live?.heartbeat?.every})`);
 check(typeof live?.launching === "boolean", `띄우는 중인지도 올린다 (${live?.launching})`);
+const ver = live?.version;
+check(ver && ["none", "ok", "mixed"].includes(ver.state) && typeof ver.checked_at === "string",
+  `켤 때 판을 점검해 올린다 (${JSON.stringify(ver)})`);
+check(/버전: /.test(agentOut), "에이전트 기록에 버전 줄이 남는다");
 const logLen = live?.programs?.routine?.log?.length ?? 0;
 check(logLen <= 80, `로그는 80줄 이하 (${logLen})`);
 
