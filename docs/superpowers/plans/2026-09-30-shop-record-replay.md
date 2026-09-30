@@ -79,9 +79,14 @@
 
 ---
 
-### Task 0: 이미 끝난 것 확인 (아이콘, 2026-09-30)
+### Task 0: 이미 끝난 것 확인 (아이콘·기록기 잠금, 2026-09-30)
 
-**Files:** 이미 고친 것 - `tools/make_icon.py`, `release/AFTER_MARKET_PREPARE.ico` (새로), `tools/build_release.py` (`ICON_PREPARE`, exe 마다 아이콘, `PROGRAM_FILES` 에 주황 ico), `tests/test_build_release.py` (49), `tools/sandbox_inner.ps1` (프리페어만 주황), `docs/firebase-architecture.md` (시험 표). 커밋 안 됨.
+**Files:** 이미 고친 것 - `tools/make_icon.py`, `release/AFTER_MARKET_PREPARE.ico` (새로), `tools/build_release.py` (`ICON_PREPARE`, exe 마다 아이콘, `PROGRAM_FILES` 에 주황 ico), `tests/test_build_release.py` (49), `tools/sandbox_inner.ps1` (프리페어만 주황), `docs/firebase-architecture.md` (시험 표) - 커밋 `4ce8b71`.
+
+**기록기 잠금** (같은 날 17시대 구현, 사용자 "바로 고쳐도 될 것 같은데? 진행해봐"): 기록하는 동안 RPA 가 화면·마우스를 잡지 않게.
+`rpa_status` 에 `hold_lock(name)`·`lock_held(name)`·`recorder_open()`·`RECORDER_LOCK` (`Local\AFTER_MARKET_RPA_RECORDER`, 시험은 `RPA_RECORDER_LOCK`)·`running_programs()`.
+`rpa_dashboard.launch` 는 기록기가 떠 있으면 `쇼핑몰 기록기가 켜져 있습니다. 기록기를 닫은 뒤 실행하세요` 로 거절하고, `Scheduler.tick` 은 닫힐 때까지 기다린다 (건너뛰지 않는다).
+`agent.single_instance`·`rpa_settings.agent_running` 은 `rpa_status` 의 잠금 함수를 쓴다. 기록기 쪽 (켤 때 잠금을 쥐고, RPA 가 돌면 안 켜짐) 은 작업 4 Step 7 `busy_problem`.
 
 - [ ] **Step 1: 빌드 시험이 그대로 통과하는지**
 
@@ -92,6 +97,11 @@ Expected: 마지막 줄 `실패: 없음` (49개).
 
 Run: `.venv\Scripts\python.exe tests\test_encoding.py`
 Expected: `실패: 없음` (`sandbox_inner.ps1` BOM 유지).
+
+- [ ] **Step 3: 기록기 잠금 시험**
+
+Run: `.venv\Scripts\python.exe tests\test_schedule_slots.py`, 그리고 `firebase` 폴더에서 `..\.venv\Scripts\python.exe tests\test_agent.py`
+Expected: `실패: 없음` (6-2절 7개 포함), `131/131 통과`.
 
 ---
 
@@ -587,6 +597,7 @@ TMP = tempfile.mkdtemp(prefix="rpa_presets_")
 os.environ["RPA_USER_CONFIG"] = os.path.join(TMP, "config", "RPA_UserConfig.json")
 os.environ["RPA_PROGRAMDATA"] = os.path.join(TMP, "programdata")
 os.environ["RPA_STATUS_DIR"] = os.path.join(TMP, "status")
+os.environ["RPA_RECORDER_LOCK"] = rf"Local\AFTER_MARKET_RPA_RECORDER_PRESETS_TEST_{os.getpid()}"   # 개발 PC 의 진짜 에이전트가 기다리지 않게
 os.makedirs(os.path.join(TMP, "config"))
 os.makedirs(os.path.join(TMP, "programdata", "config"))    # 새 구조로 보이게 (기록 폴더가 programdata\data 가 된다)
 ROOT = Path(__file__).resolve().parent.parent
@@ -1118,6 +1129,7 @@ Expected: `실패: 없음` (web_runner 를 부르는 자리 찾기 시험).
 
 **Interfaces:**
 - Consumes: Task 1 `web_replay` 전부 (`Recorder`, `finalize(…, viewport=)`, `keep_steps`, `describe(…, hide_values=True)`, `Replayer` + `cancel`); Task 2 `st.read_presets`, `st.write_presets`, `st.save_preset_sites`, `st.presets_path`, `st.preset_site_key`, `st.read_user_config`, `st.SITES_SECTION`, `st.unseal`, `st.data_dir`, `st.program_dir`, `st.packaged`, `st.setup_playwright_browsers`, `st.is_admin`, `st.run_as_admin`, `st.process_user`, `st.session_user`, `st.same_account`, `st.start`/`step`/`note`/`fail_step`/`log_line`/`finish`
+- Consumes (Task 0, 이미 있음): `st.hold_lock`, `st.RECORDER_LOCK`, `st.running_programs`, `st.PROGRAMS`
 - Produces: `rpa_recorder.main(argv=None) -> int`, `check() -> 0`, `CHECK_DONE = "기록기 점검 끝"`, `APP_ID = "AFTERMARKET.RPA.Recorder"`, `ICON_NAME = "AFTER_MARKET_PREPARE.ico"`, `load_presets() -> list[dict]` (`ValueError`), `validate_presets(presets) -> (no, 문장) | None`, `start_problem(me=None, session=None) -> str | None`, `self_command(args) -> (exe, list)`, `stored_password(no) -> str`, `new_root()`, `dpi_scale()`, `frame_rect(hwnd)`, `App(root, scale, presets, hint="", fake_creds=None)` (시험 고리 `on_ready`·`on_recording`·`on_stopped`·`on_human_done`·`on_preview_done`), 모듈 이름 `rec` (= `web_replay`)
 
 - [ ] **Step 1: 옮기기**
@@ -1151,6 +1163,17 @@ check("비밀번호가 저장돼 있지도 않고 치지도 않았으면 막는�
       and rr.validate_presets([P(1, has_pw=False, pw="x")]) is None)
 check("다른 계정의 관리자 권한이면 멈춘다 (비밀번호가 그 계정으로 잠긴다)",
       "PC\\b" in (rr.start_problem(me="PC\\a", session="PC\\b") or "") and rr.start_problem(me="PC\\a", session="pc\\A") is None)
+st.start("prepare", ["a"])
+st.flush()
+busy = rr.busy_problem()
+st.finish("success")
+check("RPA 가 돌고 있으면 기록기를 안 연다 (RPA 가 화면·마우스를 쓴다)", "프리페어 RPA 가 돌고 있습니다" in (busy or ""), str(busy))
+check("켜면 기록기 잠금을 쥔다 - 쥔 동안 대시보드는 RPA 를 안 띄우고 자동 실행은 기다린다",
+      rr.busy_problem() is None and st.recorder_open())
+hold = st.hold_lock
+st.hold_lock = lambda name: False
+check("기록기가 이미 떠 있으면 하나 더 안 연다", "이미 켜져" in (rr.busy_problem() or ""))
+st.hold_lock = hold
 exe, params = rr.self_command(["--x"])
 check("소스로 돌 때 다시 띄우기는 파이썬 + 이 파일", exe == sys.executable and params[0].endswith("rpa_recorder.py")
       and params[1:] == ["--x"])
@@ -1527,6 +1550,19 @@ def start_problem(me=None, session=None):
     return None
 
 
+def busy_problem():
+    """다른 기록기·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 기록기 잠금을 쥔다 - 쥔 동안 대시보드는
+    RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
+    if not st.hold_lock(st.RECORDER_LOCK):
+        return "쇼핑몰 기록기가 이미 켜져 있습니다. 작업 표시줄에서 그 창을 쓰세요."
+    # ponytail: 예약이 RPA 를 띄우고 RPA 가 '도는 중' 을 적기까지 몇 초 틈은 못 막는다 (그 사이 켜면 둘 다 뜬다)
+    running = [st.PROGRAMS.get(p, p) for p in st.running_programs()]
+    if running:
+        return (f"{', '.join(running)} 가 돌고 있습니다. 끝난 뒤 기록기를 여세요.\n"
+                "RPA 가 화면·마우스를 쓰는 동안 기록하면 서로 부딪힙니다.")
+    return None
+
+
 def show_error(text):
     ctypes.windll.user32.MessageBoxW(None, text, "쇼핑몰 기록기", 0x10)
 
@@ -1567,7 +1603,7 @@ def main(argv=None):
             return 0
         show_error("관리자 권한이 있어야 기록을 저장할 수 있습니다. 다시 열고 '예' 를 누르세요.")
         return 1
-    problem = start_problem()
+    problem = start_problem() or busy_problem()
     if problem:
         show_error(problem)
         return 1

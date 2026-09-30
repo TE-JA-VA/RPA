@@ -127,6 +127,7 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 - 켤 때 사용자 설정을 한 파일로 옮긴다. 아래 '사용자 설정' 참고.
 - **설치한 PC** 에서는 작업 스케줄러 작업 `AFTER MARKET\RPA Agent` 가 윈도우 로그인 때 `background.py` 를 창 없이(`pythonw`) 띄우고, 감독이 에이전트를 창 없이 띄워 자기 잡(job)에 넣는다. 에이전트가 0·2·3·4(정상·설정 문제·인증 멈춤·이미 돌고 있음)로 끝나면 감독도 끝나고, 그 밖은 10·30·60·120·300초 뒤 다시 켠다. 감독이 죽으면 에이전트도 죽고, 에이전트가 띄운 RPA 는 잡에서 빠져 끝까지 간다. 에이전트의 입력은 닫힌 파이프다 (`DEVNULL` 은 윈도우에서 `isatty()` 가 참이라 쓰면 안 된다). 감독은 에이전트를 켜기 전에, 설정 창은 기계 계정 로그인 전에 PowerShell 로 Firebase 주소를 한 번씩 찔러 윈도우가 루트 인증서를 받아 두게 한다 - 갓 설치한 윈도우에서는 이게 없으면 파이썬이 `CERTIFICATE_VERIFY_FAILED` 로 못 붙는다.
 - 에이전트는 이름 있는 잠금 `Local\AFTER_MARKET_RPA_AGENT` 로 한 PC 에 하나만 돈다. 이미 돌면 "이미 돌고 있습니다" 를 찍고 4 로 끝난다 (시험은 `RPA_AGENT_MUTEX` 로 다른 이름).
+- 쇼핑몰 기록기가 떠 있으면 (기록기가 쥐는 잠금 `Local\AFTER_MARKET_RPA_RECORDER`, `rpa_status.recorder_open`) 자동 실행은 닫힐 때까지 기다리고 실행 명령은 "쇼핑몰 기록기가 켜져 있습니다…" 로 거절한다 (시험은 `RPA_RECORDER_LOCK`). 잠금 함수는 `rpa_status.hold_lock`·`lock_held` 하나를 에이전트·설정 창·기록기가 같이 쓴다.
 
 ### 사용자 설정: `RPA_UserConfig.json`
 
@@ -178,6 +179,7 @@ cd D:\AX\RPA
 .venv\Scripts\python.exe tests\check_settings_ui.py   # 설정 창을 진짜로 띄워 본다 (몇 초 뜬다, 인수로 사진 경로)
 .venv\Scripts\python.exe tests\test_background.py     # 에이전트 감독
 .venv\Scripts\python.exe tests\test_start_failure.py  # 띄운 RPA 가 기록도 못 남기고 죽으면 '시작하지 못함' 이력
+.venv\Scripts\python.exe tests\test_schedule_slots.py    # 자동 실행 예약, RPA·쇼핑몰 기록기가 떠 있으면 기다림
 .venv\Scripts\python.exe tests\test_encoding.py       # .bat 는 CP949, 안내 문서·설치 스크립트는 BOM 있는 UTF-8
 .venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 윈도우 샌드박스에서 설치 파일
 cd D:\AX\RPA\firebase; . .\emu_env.ps1
@@ -201,6 +203,7 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 설정 창 화면 | 40 | 진짜 tkinter 창: 첫 모습(단추 이름·맨 위 한 줄), 빈 칸 안 흐린 안내(보이고 사라짐·칸 안에 들어감·값이 아님), '(기본 프린터)', 창 폭(≤520)·높이(≤690)·긴 까닭 줄바꿈, 출력 방식·물류 경고 줄, 수동이면 프린터 칸 꺼짐·없는 프린터 줄 숨김, ERPia 못 찾음, 빈 칸의 빨간 안내, 저장·'켜는 중', 가져오기, 없는 프린터, 멈춘 까닭, 옛 에이전트, 이름 잘림, 단추 오류 |
 | 감독 | 28 | 종료 코드별 다시 켜기, 멈춘 까닭 파일, 기다림, 창 없는 입출력(닫힌 파이프·UTF-8), 잡(감독이 죽으면 에이전트도, RPA 는 남음), 윈도우 인증서 채우기, AFTER MARKET 에이전트 사본 |
 | 시작하지 못함 | 10 | 띄운 RPA 가 기록도 못 남기고 끝나면 '시작하지 못함' 이력 한 건 (오류 출력 마지막 줄·종료 코드, 전체 실행은 둘 다) |
+| 자동 실행 | 69 | 요일·시간 예약 계산, 예약기 (RPA 가 돌거나 쇼핑몰 기록기가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 기록기가 죽으면 풀림), 다시 켤 때 건너뛰기 |
 | 인코딩 | 15 | .bat CP949·CRLF 와 실제 실행, 안내 문서·installer.iss·sandbox_inner.ps1 BOM UTF-8 |
 | 샌드박스 | 32 | 깨끗한 윈도우: 조용한 설치·파일·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·tkinter → 설치된 두 exe --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내) → 작업 등록(AFTER MARKET 사본, exe 넷의 아이콘 - 프리페어만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 다시 설치(--stop) → 설정 창 사진 → 조용한 제거 |
 | 관리 스크립트 | 23 | setup.js 를 에뮬레이터에 대고 등록 → remove(stts=9, 계정 막힘, 새 등록 거부) → restore |

@@ -193,15 +193,7 @@ def rpa_running(procs):
 def agent_running(name=None):
     """에이전트 잠금이 있나 (agent.single_instance 가 잡는다). 권한 때문에 못 여는 것도 '있다'."""
     import agent
-    k = ctypes.WinDLL("kernel32", use_last_error=True)
-    k.OpenMutexW.restype = ctypes.c_void_p
-    k.OpenMutexW.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p)
-    k.CloseHandle.argtypes = (ctypes.c_void_p,)
-    h = k.OpenMutexW(0x00100000, False, name or agent.MUTEX_NAME)          # SYNCHRONIZE
-    if h:
-        k.CloseHandle(h)
-        return True
-    return ctypes.get_last_error() == agent.ERROR_ACCESS_DENIED
+    return st.lock_held(name or agent.MUTEX_NAME)
 
 
 # ---------------------------------------------------------------------------

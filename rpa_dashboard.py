@@ -349,8 +349,7 @@ def erpia_running():
 
 
 def any_rpa_running(snapshot=None):
-    snap = snapshot or st.dashboard_snapshot()
-    return [p for p, v in snap["programs"].items() if v and v.get("state") == "running"]
+    return st.running_programs(snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +449,8 @@ def launch(target, by):
         ls = launch_state()
         if ls:
             raise RuntimeError(f"{TARGETS[ls['target']][0]} 이(가) 아직 진행 중입니다 ({ls['sec']}초째)")
+        if st.recorder_open():
+            raise RuntimeError("쇼핑몰 기록기가 켜져 있습니다. 기록기를 닫은 뒤 실행하세요")
         proc = None
         if DRY_RUN:
             LAUNCHED.append(f"{target}:{by}")
@@ -569,6 +570,7 @@ class Scheduler(threading.Thread):
     - 이 프로그램이 떠 있는 동안만 돈다. 대시보드 창을 닫으면 예약도 멈춘다.
     - 대시보드가 꺼져 있던 동안 지난 예약은 켤 때 건너뛴다 (resync). 켜자마자 갑자기 돌지 않게.
     - RPA 가 이미 돌고 있으면 끝날 때까지 미룬다 (건너뛰지 않는다). 그 사이 지난 예약들은 한 번으로 합쳐진다.
+    - 쇼핑몰 기록기가 떠 있어도 닫힐 때까지 미룬다 (기록하던 사람과 RPA 가 화면·마우스를 두고 부딪히지 않게).
     - 띄운 뒤에는 next_run_at 을 다음 예약 시각으로 옮긴다.
     """
 
@@ -633,6 +635,9 @@ class Scheduler(threading.Thread):
             return
         if launch_state() is not None:
             self.waiting_reason = "대시보드가 띄운 실행이 끝나기를 기다립니다"
+            return
+        if st.recorder_open():
+            self.waiting_reason = "쇼핑몰 기록기가 켜져 있어 닫히기를 기다립니다"
             return
         self.waiting_reason = None
         self.launch()

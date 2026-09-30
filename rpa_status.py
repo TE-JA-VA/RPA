@@ -806,6 +806,10 @@ def _k32():
         k.CloseHandle.argtypes = (ctypes.c_void_p,)
         k.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32))
         k.GetProcessTimes.argtypes = (ctypes.c_void_p,) + (ctypes.POINTER(ctypes.c_uint64),) * 4
+        k.CreateMutexW.restype = ctypes.c_void_p
+        k.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+        k.OpenMutexW.restype = ctypes.c_void_p
+        k.OpenMutexW.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p)
         _K32 = k
     return _K32
 
@@ -855,6 +859,53 @@ def process_alive(pid, created=None):
         return True
     except Exception:
         return None
+
+
+# 이름 있는 잠금 (뮤텍스): 에이전트·쇼핑몰 기록기가 'PC 에 하나만' 과 '떠 있다' 를 알린다.
+# 잡은 프로세스가 끝나면 (죽어도) 윈도우가 푼다.
+SYNCHRONIZE = 0x00100000
+ERROR_ALREADY_EXISTS = 183
+RECORDER_LOCK = os.environ.get("RPA_RECORDER_LOCK") or r"Local\AFTER_MARKET_RPA_RECORDER"   # 시험은 RPA_RECORDER_LOCK 로 따로
+_LOCKS = {}        # 이름 → 이 프로세스가 잡은 잠금
+
+
+def hold_lock(name):
+    """이름 있는 잠금을 잡는다. 다른 프로세스가 이미 잡았으면 False.
+    다른 권한(관리자)으로 만든 잠금이라 못 여는 것(접근 거부)도 '있다' 다. 그 밖의 까닭으로 못 만들면 막지 않는다
+    (잠금 때문에 프로그램이 안 뜨면 안 된다). 같은 프로세스가 다시 부르면 True."""
+    if name in _LOCKS:
+        return True
+    k = _k32()
+    if k is None:
+        return True
+    ctypes.set_last_error(0)
+    h = k.CreateMutexW(None, False, name)
+    err = ctypes.get_last_error()
+    if not h:
+        return err != ERROR_ACCESS_DENIED
+    if err == ERROR_ALREADY_EXISTS:
+        k.CloseHandle(h)
+        return False
+    _LOCKS[name] = h
+    return True
+
+
+def lock_held(name):
+    """누가 그 잠금을 잡고 있나. 권한 때문에 못 여는 것(접근 거부)도 '있다'."""
+    k = _k32()
+    if k is None:
+        return False
+    h = k.OpenMutexW(SYNCHRONIZE, False, name)
+    if h:
+        k.CloseHandle(h)
+        return True
+    return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+
+
+def recorder_open():
+    """쇼핑몰 기록기가 떠 있나 (기록기가 켤 때 hold_lock(RECORDER_LOCK) 을 잡는다). 떠 있는 동안 대시보드는 RPA 를
+    띄우지 않는다 - RPA 가 화면·마우스를 잡으면 기록하던 사람과 부딪힌다."""
+    return lock_held(RECORDER_LOCK)
 
 
 # ---------------------------------------------------------------------------
@@ -1539,3 +1590,9 @@ def dashboard_snapshot():
         "labels": PROGRAMS,
         "programs": programs,
     }
+
+
+def running_programs(snapshot=None):
+    """지금 도는 RPA (PROGRAMS 의 키) 목록. 대시보드 실행·자동 실행·쇼핑몰 기록기가 본다."""
+    snap = snapshot or dashboard_snapshot()
+    return [p for p, v in snap["programs"].items() if v and v.get("state") == "running"]
