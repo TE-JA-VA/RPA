@@ -97,11 +97,14 @@ Check "작업이 AFTER MARKET 감독 사본으로 띄운다" ($q -match "AFTER_M
 $desc = @($Brand.Keys | Where-Object { (Get-Item "$App\python\$_").VersionInfo.FileDescription -eq $Brand[$_] })
 Check "AFTER MARKET 사본 설명 둘 (작업 관리자 '프로세스' 탭 글자)" ($desc.Count -eq 2) ($Brand.Keys | ForEach-Object { "$_=" + (Get-Item "$App\python\$_" -ErrorAction SilentlyContinue).VersionInfo.FileDescription })
 # 탐색기·작업 관리자가 보여 주는 아이콘을 ico 파일의 것과 견준다. 루틴·프리페어 exe 는 Nuitka 로 새로 빌드한 판이어야 맞다 (--exes-from 옛 exe 면 실패)
+# 프리페어만 주황 A (2026-09-30 '나. 주황 A' - 작업 표시줄에서 루틴과 가른다)
 Add-Type -AssemblyName System.Drawing
 function IconPng($path) { $ms = New-Object IO.MemoryStream; [Drawing.Icon]::ExtractAssociatedIcon($path).ToBitmap().Save($ms, [Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()) }
-$want = IconPng $Ico
-$plain = @(@("ERPia_RPA.exe", "Prepare_RPA.exe") + @($Brand.Keys | ForEach-Object { "python\$_" }) | Where-Object { (-not (Test-Path "$App\$_")) -or ((IconPng "$App\$_") -ne $want) })
-Check "exe 넷의 아이콘이 AFTER MARKET (루틴·프리페어·감독·에이전트)" ($plain.Count -eq 0) ($plain -join ", ")
+$IcoPrep = "$App\AFTER_MARKET_PREPARE.ico"
+$want = @{ "ERPia_RPA.exe" = $Ico; "Prepare_RPA.exe" = $IcoPrep }
+$Brand.Keys | ForEach-Object { $want["python\$_"] = $Ico }
+$plain = @($want.Keys | Where-Object { (-not (Test-Path "$App\$_")) -or (-not (Test-Path $want[$_])) -or ((IconPng "$App\$_") -ne (IconPng $want[$_])) })
+Check "exe 넷의 아이콘: 루틴·감독·에이전트는 크림 A, 프리페어는 주황 A" (($plain.Count -eq 0) -and ((IconPng $Ico) -ne (IconPng $IcoPrep))) ($plain -join ", ")
 
 # 3. 감독 → 에이전트. 인터넷이 있으면: 가짜 비밀번호라 로그인이 거부되고(3) 감독도 같이 끝난다 (틀린 비밀번호로
 #    되풀이하지 않는다). 없으면 (2026-09-29 첫 시험의 샌드박스가 그랬다): 에이전트는 죽지 않고 다시 붙으려 한다

@@ -1,10 +1,13 @@
-r"""AFTER MARKET 아이콘(release/AFTER_MARKET.ico)을 만든다 (2026-09-30 사용자가 고른 '크림 반투명 잔상' 시안).
+r"""AFTER MARKET 아이콘 둘을 만든다 (2026-09-30 사용자가 고른 시안).
+
+    release/AFTER_MARKET.ico          크림 A - '크림 반투명 잔상'. 설치 파일·설정 창·바로 가기·루틴 exe·에이전트
+    release/AFTER_MARKET_PREPARE.ico  주황 A - '나. 주황 A'. 프리페어 exe·기록기 (작업 표시줄에서 루틴과 가른다)
 
     .venv\Scripts\python.exe tools\make_icon.py
 
-짙은 청록 둥근 사각형 위에 앞으로 기운 크림색 A, 그 뒤를 흐린 M 이 따라온다 (AFTER = 뒤따르는).
+짙은 청록 둥근 사각형 위에 앞으로 기운 A, 그 뒤를 흐린 크림색 M 이 따라온다 (AFTER = 뒤따르는). 둘은 A 색만 다르다.
 글자는 글꼴 없이 다각형으로 그린다 (글꼴 라이선스와 무관). 16·20·24px 은 M 이 뭉개져서 A 만 넣는다.
-설정 창·설치 파일·바로 가기·두 exe 가 이 파일을 쓴다 (build_release.PROGRAM_FILES·NUITKA_COMMON, release/installer.iss).
+쓰는 곳: build_release.PROGRAM_FILES·ICON·ICON_PREPARE·NUITKA_EXTRA, release/installer.iss.
 """
 import os
 
@@ -12,10 +15,12 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICO_PATH = os.path.join(REPO, "release", "AFTER_MARKET.ico")
+PREPARE_ICO_PATH = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")
 
 N = 1024                       # 그리는 해상도
 BG = (0x00, 0x2B, 0x36)        # 웹 대시보드 다크 바탕
 CREAM = (0xFD, 0xF6, 0xE3)     # 웹 대시보드 밝은 바탕
+ORANGE = (0xF5, 0x8A, 0x1F)    # 프리페어의 A (16px 에서도 보이게 A 자체를 칠한다 - 띠·잔상만 칠하면 작은 크기에서 사라진다)
 M_ALPHA = 0.30                 # M 잔상 농도
 SHEAR = 0.21                   # 약 12도 앞으로
 FILL = 0.70                    # 글자 묶음이 네모에서 차지하는 비율
@@ -47,8 +52,8 @@ def _mask(polys, holes=()):
     return m
 
 
-def draw(with_m=True):
-    """N×N RGBA 아이콘 한 장."""
+def draw(with_m=True, a_color=CREAM):
+    """N×N RGBA 아이콘 한 장. M 잔상은 늘 크림색."""
     polys = {"a": _shear(A_OUT), "hole": _shear(A_HOLE), "hull": _shear(A_HULL),
              "m": _shear(M_OUT, M_SHIFT), "clip": _shear(RIGHT_OF_A)}
     pts = [p for k in (("a", "m") if with_m else ("a",)) for p in polys[k]]
@@ -66,13 +71,13 @@ def draw(with_m=True):
         cover = _mask([P["hull"], P["clip"]]).filter(ImageFilter.MaxFilter(int(N * 0.03) | 1))   # A 둘레에 틈
         m = ImageChops.subtract(_mask([P["m"]]), cover).point(lambda v: int(v * M_ALPHA))
         img.paste(Image.new("RGBA", (N, N), CREAM + (255,)), (0, 0), m)
-    img.paste(Image.new("RGBA", (N, N), CREAM + (255,)), (0, 0), _mask([P["a"]], [P["hole"]]))
+    img.paste(Image.new("RGBA", (N, N), a_color + (255,)), (0, 0), _mask([P["a"]], [P["hole"]]))
     return img
 
 
-def build(path=ICO_PATH):
+def build(path=ICO_PATH, a_color=CREAM):
     """크기별 그림을 담은 .ico 를 쓴다. 크기별로 쓴 그림을 돌려준다 (시험용)."""
-    full, a_only = draw(True), draw(False)
+    full, a_only = draw(True, a_color), draw(False, a_color)
     frames = {s: (a_only if s in SMALL else full).resize((s, s), Image.LANCZOS) for s in SMALL + LARGE}
     frames[256].save(path, format="ICO", sizes=[(s, s) for s in frames],
                      append_images=[im for s, im in frames.items() if s != 256])
@@ -80,11 +85,12 @@ def build(path=ICO_PATH):
 
 
 if __name__ == "__main__":
-    frames = build()
-    # 자체 점검: 모든 크기가 들어갔고, 크기마다 우리가 그린 그림이 그대로 들어갔다 (Pillow 가 다시 줄이지 않았다)
-    ico = Image.open(ICO_PATH)
-    assert set(ico.info["sizes"]) == {(s, s) for s in frames}, ico.info["sizes"]
-    for s, im in frames.items():
-        got = ico.ico.getimage((s, s)).convert("RGBA")
-        assert ImageChops.difference(got, im).getbbox() is None, f"{s}px 가 다르다"
-    print(f"ok {ICO_PATH} ({', '.join(str(s) for s in frames)}px)")
+    for path, color in ((ICO_PATH, CREAM), (PREPARE_ICO_PATH, ORANGE)):
+        frames = build(path, color)
+        # 자체 점검: 모든 크기가 들어갔고, 크기마다 우리가 그린 그림이 그대로 들어갔다 (Pillow 가 다시 줄이지 않았다)
+        ico = Image.open(path)
+        assert set(ico.info["sizes"]) == {(s, s) for s in frames}, ico.info["sizes"]
+        for s, im in frames.items():
+            got = ico.ico.getimage((s, s)).convert("RGBA")
+            assert ImageChops.difference(got, im).getbbox() is None, f"{path} {s}px 가 다르다"
+        print(f"ok {path} ({', '.join(str(s) for s in frames)}px)")

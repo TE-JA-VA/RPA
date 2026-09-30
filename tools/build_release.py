@@ -49,6 +49,7 @@ PROGRAM_FILES = [
     ("rpa_dashboard.py", "rpa_dashboard.py"),
     ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
     ("AFTER_MARKET.ico", "release/AFTER_MARKET.ico"),                         # 설정 창·바로 가기 아이콘 (tools/make_icon.py)
+    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # 프리페어·기록기 창의 주황 A (샌드박스가 exe 와 견준다)
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
@@ -77,12 +78,14 @@ BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "AFTER MARKET RPA 에이전트 감
            bg.AGENT_EXE: ("python.exe", "AFTER MARKET RPA 에이전트")}
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
 ICON = os.path.join(REPO, "release", "AFTER_MARKET.ico")
+ICON_PREPARE = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")    # 작업 표시줄에서 루틴과 가르는 주황 A (2026-09-30)
 NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--windows-console-mode=force", "--remove-output",
-                  f"--windows-icon-from-ico={ICON}",
                   "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone",
                   f"--include-data-files={MFC_DLL}=mfc140u.dll", f"--user-package-configuration-file={NUITKA_YML}"]
                  + [f"--nofollow-import-to={m}" for m in EXCLUDE])
-NUITKA_EXTRA = {"ERPia_RPA.exe": [], "Prepare_RPA.exe": ["--include-package=playwright", "--include-package-data=playwright"]}
+NUITKA_EXTRA = {"ERPia_RPA.exe": [f"--windows-icon-from-ico={ICON}"],
+                "Prepare_RPA.exe": [f"--windows-icon-from-ico={ICON_PREPARE}",
+                                    "--include-package=playwright", "--include-package-data=playwright"]}
 ISS_PATH = os.path.join(REPO, "release", "installer.iss")
 # Inno Setup 6 의 ISCC.exe 를 찾는 자리 (이 PC 는 winget 사용자 설치 → LOCALAPPDATA)
 ISCC_DIRS = (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6"),

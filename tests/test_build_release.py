@@ -253,6 +253,15 @@ yml = open(br.NUITKA_YML, encoding="utf-8").read() if os.path.isfile(br.NUITKA_Y
 check("두 exe 가 comtypes 의 typelib 시각 비교를 건너뛴다 (PyInstaller 처럼. 윈도우 판이 다른 PC 에서 죽었다 - 2026-09-29 노트북)",
       f"--user-package-configuration-file={br.NUITKA_YML}" in br.NUITKA_COMMON and FROZEN_LINE in yml
       and FROZEN_LINE in open(tvc.__file__, encoding="utf-8").read())
+icon_opts = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-icon-from-ico=")]
+             for exe in br.EXES}
+prep = getattr(br, "ICON_PREPARE", "")
+check("아이콘: 루틴 exe 는 크림 A, 프리페어 exe 는 주황 A 한 벌씩, 주황 ico 도 판에 들어간다 (2026-09-30 사용자가 고른 '나')",
+      icon_opts == {"ERPia_RPA.exe": [f"--windows-icon-from-ico={br.ICON}"],
+                    "Prepare_RPA.exe": [f"--windows-icon-from-ico={prep}"]}
+      and os.path.isfile(prep) and br.icon_resources(prep)[1]
+      and open(prep, "rb").read() != open(br.ICON, "rb").read()
+      and ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico") in br.PROGRAM_FILES, icon_opts)
 iscc = br.find_iscc()
 check("이 PC 에 Inno Setup (ISCC.exe)", iscc is not None)
 if iscc:
