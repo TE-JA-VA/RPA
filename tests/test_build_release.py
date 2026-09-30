@@ -144,6 +144,14 @@ p = variant("배포_leak", lambda d: write(os.path.join(d, "RPA_UserConfig.json"
                                           json.dumps({"LogIn": {"AdminCode": "a", "ID": "b", "PW": "진짜비번"}})))
 check("로그인이 든 배포 틀은 문제로 잡고, 값은 찍지 않는다",
       any("LogIn.PW" in x for x in p) and not any("진짜비번" in x for x in p), str(p))
+p = br.template_problems({"Logistic": {"cboBS_Auto_YN": "N", "Printer": "", "cboTag": "한진연동", "cboTagAmt": "대",
+                                       "cboBeasong_Gu_Apply": ""}})
+check("우리 회사 물류 값(택배사·박스·운임)이 든 배포 틀은 문제로 잡는다 - 업체마다 설정 창에서 넣는다 (2026-09-30)",
+      any("Logistic.cboTag " in x for x in p) and any("Logistic.cboTagAmt" in x for x in p)
+      and not any("cboBeasong" in x for x in p), str(p))
+real = json.loads((ROOT / "release" / "RPA_UserConfig.template.json").read_text(encoding="utf-8-sig"))
+check("저장소의 배포 틀은 통과 (출력 방식 수동, 택배사·박스·운임 빈 값)",
+      br.template_problems(real) == [] and real["Logistic"]["cboBS_Auto_YN"] == "N", str(br.template_problems(real)))
 p = variant("배포_tamper", lambda d: write(os.path.join(d, "rpa_status.py"), b"changed"))
 check("지문이 다른 파일은 문제로 잡는다", any("지문 다름: rpa_status.py" in x for x in p), str(p))
 p = variant("배포_extra", lambda d: write(os.path.join(d, "memo.txt"), b"x"))

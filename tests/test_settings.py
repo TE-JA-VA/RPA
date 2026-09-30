@@ -75,7 +75,8 @@ def write_stop(paths, code):
 
 def good_form(**kw):
     f = dict(cid="net", pc_id="test", agent_pw=AGENT_PW, admin_code="AM001", erp_id="rpa", erp_pw=ERP_PW,
-             erpia_path="", mail_id="mail@x.com", mail_pw=MAIL_PW, printer="사무실 프린터")
+             erpia_path="", mail_id="mail@x.com", mail_pw=MAIL_PW, printer="사무실 프린터",
+             print_mode=rs.PRINT_MANUAL, carrier="롯데택배", box="소", fare="착불")
     f.update(kw)
     return f
 
@@ -142,6 +143,8 @@ check("ERPia 위치: ERPiaMain.exe 나 그 폴더면 통과", rs.validate(good_f
 check("메일 아이디만 있고 비밀번호가 없으면 알린다",
       any("메일 비밀번호" in x for x in rs.validate(good_form(mail_pw=""), NONE_STATE)))
 check("메일 사이트가 없으면 메일 칸은 안 본다", rs.validate(good_form(mail_pw=""), dict(NONE_STATE, mail_site=None)) == [])
+check("물류 칸은 비워도 통과 (물류 모듈을 안 쓰는 업체)",
+      rs.validate(good_form(carrier="", box="", fare="", printer=""), NONE_STATE) == [])
 
 print("=== 2. 설정 합치기 ===")
 base = st.read_user_config(str(TEMPLATE))
@@ -153,9 +156,12 @@ check("메일 사이트(SITE1) 아이디·비밀번호", merged["Sites"]["SITE1"
       and merged["Sites"]["SITE1"]["PW"] == MAIL_PW)
 check("다른 사이트·주석은 그대로", merged["Sites"]["SITE2"] == base["Sites"]["SITE2"]
       and merged["Sites"]["_주석"] == base["Sites"]["_주석"])
-check("프린터만 바꾸고 물류 나머지는 그대로", merged["Logistic"]["Printer"] == "사무실 프린터" and
-      {k: v for k, v in merged["Logistic"].items() if k != "Printer"} ==
-      {k: v for k, v in base["Logistic"].items() if k != "Printer"})
+check("물류 칸 다섯을 RPA 가 읽는 이름으로 (출력 방식 수동 = N)", merged["Logistic"] == {
+    "cboBS_Auto_YN": "N", "Printer": "사무실 프린터", "cboTag": "롯데택배", "cboTagAmt": "소", "cboBeasong_Gu_Apply": "착불"},
+    merged["Logistic"])
+auto = rs.merge_user_config(dict(base, Logistic=dict(base["Logistic"], _메모="그대로")), good_form(print_mode=rs.PRINT_AUTO))
+check("출력 방식 자동 = Y, 물류 섹션의 다른 키는 그대로", auto["Logistic"]["cboBS_Auto_YN"] == "Y"
+      and auto["Logistic"]["_메모"] == "그대로", auto["Logistic"])
 check("ERPia 위치는 폴더를 줘도 exe 경로로, / 로", merged["ERPia"]["ExePath"] == fake_exe.replace("\\", "/"))
 check("받은 dict 는 그대로 (사본에 쓴다)", base["LogIn"]["PW"] == "")
 kept = rs.merge_user_config(dict(base, LogIn={"AdminCode": "a", "ID": "b", "PW": "dpapi:old"},
@@ -163,6 +169,26 @@ kept = rs.merge_user_config(dict(base, LogIn={"AdminCode": "a", "ID": "b", "PW":
 check("비밀번호 칸이 비면 저장된 값을 둔다", kept["LogIn"]["PW"] == "dpapi:old"
       and kept["Sites"]["SITE1"]["PW"] == base["Sites"]["SITE1"]["PW"])
 check("ERPia 위치 칸이 비면 저장된 값을 둔다", kept["ERPia"]["ExePath"] == "C:/x/ERPiaMain.exe")
+
+print("=== 2-1. 물류 칸 채우기 ===")
+check("출력 방식 목록: 수동이 먼저 (기본값, 수동을 쓰는 업체가 더 많다)", list(rs.PRINT_MODES) == [rs.PRINT_MANUAL, rs.PRINT_AUTO]
+      and rs.PRINT_MODES == {rs.PRINT_MANUAL: "N", rs.PRINT_AUTO: "Y"})
+check("빈 틀: 출력 방식 수동(N), 택배사·박스·운임은 비어 있다 (우리 회사 값을 다른 업체가 물려받지 않게)",
+      base["Logistic"] == {"cboBS_Auto_YN": "N", "Printer": "", "cboTag": "", "cboTagAmt": "", "cboBeasong_Gu_Apply": ""},
+      base["Logistic"])
+L = paths_in("logistic")
+form, _ = rs.load_state(L)
+check("새 설치(빈 틀)는 수동, 빈 칸", form["print_mode"] == rs.PRINT_MANUAL and form["carrier"] == form["box"] == form["fare"] == "",
+      form)
+data = st.read_user_config(str(TEMPLATE))
+data["Logistic"].update(cboBS_Auto_YN="a", cboTag="한진연동", cboTagAmt="대", cboBeasong_Gu_Apply="신용")
+st.write_user_config(data, L["user_config"])
+form, _ = rs.load_state(L)
+check("저장된 값으로 채운다 (A·Y 는 자동 - RPA 의 resolve_auto_mode 와 같은 규칙, 소문자도)",
+      form["print_mode"] == rs.PRINT_AUTO and (form["carrier"], form["box"], form["fare"]) == ("한진연동", "대", "신용"), form)
+del data["Logistic"]["cboBS_Auto_YN"]
+st.write_user_config(data, L["user_config"])
+check("출력 방식 값이 없으면 수동 (RPA 도 수동으로 돈다)", rs.load_state(L)[0]["print_mode"] == rs.PRINT_MANUAL)
 
 print("=== 3. 메일 사이트 고르기 ===")
 check("빈 틀은 SITE1", rs.mail_site(base) == "SITE1")
@@ -196,12 +222,14 @@ check("작업 등록 뒤 켜기 (꺼져 있어도 먼저 끝낸다)", rec.verbs(
 check("작업 XML 은 잠깐 썼다 지운다", not os.path.exists(os.path.join(P["config_dir"], "agent_task.xml")))
 first_pw = cfg["LogIn"]["PW"]
 rec = Recorder()
-done = rs.save(good_form(agent_pw="", erp_pw="", mail_pw="", printer="다른 프린터"), P, login=fake_login, run=rec,
-               running=Running(True), user="PC\\me")
+done = rs.save(good_form(agent_pw="", erp_pw="", mail_pw="", printer="다른 프린터", carrier="CJ대한통운"), P,
+               login=fake_login, run=rec, running=Running(True), user="PC\\me")
 cfg = st.read_user_config(P["user_config"])
-check("비밀번호를 비우고 프린터만 바꾸면 로그인·다시 켜기 없이 저장", len(logins) == 1 and rec.verbs() == ["/Create"]
+check("비밀번호를 비우고 프린터·택배사만 바꾸면 로그인·다시 켜기 없이 저장 (RPA 는 실행할 때마다 설정을 읽는다)",
+      len(logins) == 1 and rec.verbs() == ["/Create"]
       and "에이전트를 켰습니다" not in " ".join(done) and "설정을 저장했습니다" in " ".join(done), (logins, rec.verbs(), done))
-check("비운 비밀번호 칸은 저장된 값 그대로", cfg["LogIn"]["PW"] == first_pw and cfg["Logistic"]["Printer"] == "다른 프린터")
+check("비운 비밀번호 칸은 저장된 값 그대로", cfg["LogIn"]["PW"] == first_pw and cfg["Logistic"]["Printer"] == "다른 프린터"
+      and cfg["Logistic"]["cboTag"] == "CJ대한통운")
 check("로그인을 안 하면 인증서도 안 채운다", warms == [0], warms)
 rec = Recorder()
 rs.save(good_form(agent_pw="new-agent-pw", erp_pw=""), P, login=fake_login, run=rec, running=Running(True, rec),
@@ -392,6 +420,7 @@ os.makedirs(os.path.join(old, "firebase", "agent"))
 open(os.path.join(old, "Run_All.bat"), "wb").close()                  # 옛 배포 폴더 표시
 old_cfg = st.read_user_config(str(TEMPLATE))
 old_cfg["LogIn"].update(AdminCode="OLD", ID="old", PW="dpapi:AAAA")     # 다른 PC 에서 잠근 값 흉내
+old_cfg["Logistic"].update(cboBS_Auto_YN="Y", cboTag="한진연동", cboTagAmt="대", cboBeasong_Gu_Apply="신용")
 st.write_user_config(old_cfg, os.path.join(old, st.USER_CONFIG_NAME))
 secret.write_config(os.path.join(old, "firebase", "agent", rs.AGENT_CONFIG_NAME),
                     dict(secret.PUBLIC, email=agent.email_for("net", "test"), cid="net", pc_id="test"), AGENT_PW)
@@ -401,6 +430,8 @@ form, state = rs.load_state(Q)
 check("가져온 값으로 칸을 채운다 (비밀번호 칸은 비움)", form["cid"] == "net" and form["admin_code"] == "OLD"
       and form["agent_pw"] == "" and state["saved"] == ("net", "test"), (form, state))
 check("이 PC 에서 잠근 기계 계정은 ok, 못 푸는 ERPia 비밀번호는 bad", state["agent_pw"] == "ok" and state["erp_pw"] == "bad")
+check("옛 폴더의 물류 값도 딸려 온다", form["print_mode"] == rs.PRINT_AUTO
+      and (form["carrier"], form["box"], form["fare"]) == ("한진연동", "대", "신용"), form)
 try:
     rs.import_old(old, Q["config_dir"])
     check("이미 있으면 묻는다 (FileExistsError)", False)

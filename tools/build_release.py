@@ -186,10 +186,14 @@ def make_zip(out_dir, zip_path):
 
 
 def template_problems(cfg):
-    """배포 틀에 비밀이 있으면 문제. 로그인(AdminCode·ID·PW)과 사이트 ID·PW 는 비어야 한다. 값은 찍지 않는다."""
+    """배포 틀에 비밀이나 우리 회사 값이 있으면 문제. 로그인(AdminCode·ID·PW)·사이트 ID·PW 와 물류 택배사·박스·운임은
+    비어야 한다 (물류 값은 업체마다 설정 창에서 넣는다 - 2026-09-30). 값은 찍지 않는다."""
     out = []
     login = cfg.get("LogIn") if isinstance(cfg.get("LogIn"), dict) else {}
     out += [f"배포 틀의 LogIn.{k} 가 비어 있지 않습니다" for k in ("AdminCode", "ID", "PW") if login.get(k)]
+    logistic = cfg.get("Logistic") if isinstance(cfg.get("Logistic"), dict) else {}
+    out += [f"배포 틀의 Logistic.{k} 가 비어 있지 않습니다 (업체마다 설정 창에서 넣는다)"
+            for k in ("cboTag", "cboTagAmt", "cboBeasong_Gu_Apply") if logistic.get(k)]
     for name, site in (cfg.get("Sites") or {}).items():
         if isinstance(site, dict):
             out += [f"배포 틀의 Sites.{name}.{k} 가 비어 있지 않습니다" for k in ("ID", "PW") if site.get(k)]

@@ -43,7 +43,13 @@ EXIT_RPA_RUNNING = 5
 EXIT_STOP_FAILED = 6
 STOP_WAIT_SEC = 15
 CREATE_NO_WINDOW = 0x08000000
-FORM_KEYS = ("cid", "pc_id", "agent_pw", "admin_code", "erp_id", "erp_pw", "erpia_path", "mail_id", "mail_pw", "printer")
+FORM_KEYS = ("cid", "pc_id", "agent_pw", "admin_code", "erp_id", "erp_pw", "erpia_path", "mail_id", "mail_pw",
+             "print_mode", "carrier", "box", "fare", "printer")
+# 물류 칸 → 사용자 설정 Logistic 키. RPA 가 물류관리 화면의 같은 이름 콤보에서 글자 그대로 고른다 (업체마다 다르다 - 2026-09-30)
+LOGISTIC_KEYS = {"carrier": "cboTag", "box": "cboTagAmt", "fare": "cboBeasong_Gu_Apply", "printer": "Printer"}
+AUTO_MODE_KEY = "cboBS_Auto_YN"
+PRINT_MANUAL, PRINT_AUTO = "수동 - 엑셀 파일", "자동 - 운송장 인쇄"
+PRINT_MODES = {PRINT_MANUAL: "N", PRINT_AUTO: "Y"}    # 수동이 먼저·기본 (수동을 쓰는 업체가 더 많다)
 PASSWORD_KEYS = ("agent_pw", "erp_pw", "mail_pw")
 CRASH_LOG_NAME = "설정창_오류.txt"               # 뜻밖의 오류 추적 (기록 폴더)
 # 설치 파일이 넣는 자리 {commonpf64}\AFTER MARKET\RPA (ProgramW6432 는 32비트 프로세스에서도 64비트 Program Files)
@@ -359,11 +365,13 @@ def load_state(paths):
     site = data[st.SITES_SECTION][site_name] if site_name else {}
     exe = st._erpia_file(erpia.get("ExePath")) or next(
         (found for found in (st._erpia_file(d) for d in st._erpia_install_dirs()) if found), "")
+    auto = str(logistic.get(AUTO_MODE_KEY) or "").strip().upper() in ("A", "Y")   # run_routine.resolve_auto_mode 와 같은 규칙
     form = {k: "" for k in FORM_KEYS}
     form.update(cid=str(raw.get("cid") or ""), pc_id=str(raw.get("pc_id") or ""),
                 admin_code=str(login.get("AdminCode") or ""), erp_id=str(login.get("ID") or ""),
                 erpia_path=exe.replace("\\", "/"), mail_id=str(site.get("ID") or ""),
-                printer=str(logistic.get("Printer") or ""))
+                print_mode=PRINT_AUTO if auto else PRINT_MANUAL,
+                **{k: str(logistic.get(v) or "") for k, v in LOGISTIC_KEYS.items()})
     stopped = read_stop(paths.get("stop_file"))
     agent_state = pw_state(raw.get("password_dpapi"), secret.unprotect)
     if stopped and stopped.get("code") == 3 and agent_state == "ok":
@@ -434,7 +442,9 @@ def merge_user_config(base, form):
         site["ID"] = form["mail_id"]
         if form["mail_pw"]:
             site["PW"] = form["mail_pw"]
-    data[LOGISTIC_SECTION] = dict(_section(data, LOGISTIC_SECTION), Printer=form["printer"])
+    logistic = dict(_section(data, LOGISTIC_SECTION), **{v: form[k] for k, v in LOGISTIC_KEYS.items()})
+    logistic[AUTO_MODE_KEY] = PRINT_MODES.get(form["print_mode"], "N")
+    data[LOGISTIC_SECTION] = logistic
     return data
 
 
@@ -597,10 +607,17 @@ ROWS = (
         ("mail_id", "아이디", "", "text"),
         ("mail_pw", "비밀번호", "", "password"),
     )),
-    ("프린터 - 운송장을 출력할 때만", (
-        ("printer", "프린터", "이 PC 의 프린터에서 고릅니다", "printer"),
+    ("물류관리·운송장 - 물류 모듈을 쓸 때만", (
+        ("print_mode", "출력 방식", "자동은 운송장 인쇄, 수동은 엑셀 파일", "choice"),
+        ("carrier", "택배사", "ERPia 에 등록한 택배사 이름 그대로", "text"),
+        ("box", "박스", "ERPia 배송정보설정의 '박스' 그대로", "text"),
+        ("fare", "운임", "ERPia 배송정보설정의 '구분' 그대로", "text"),
+        ("printer", "프린터", "자동일 때만 - 비우면 기본 프린터", "printer"),
     )),
 )
+# 묶음 아래 늘 보이는 주황 한 줄 (2026-09-30 사용자 문구). 칸 안 흐린 글자는 값이 있으면 안 보이고 툴팁은 마우스를 올려야 보인다
+NOTES = {"물류관리·운송장 - 물류 모듈을 쓸 때만":
+         "※ 실제 ERPia 에 등록한 택배사·박스·운임과 다를 경우 물류관리에서 저장할 수 없습니다."}
 PW_HINTS = {"none": "처음이라 꼭 넣습니다", "ok": "저장됨 - 바꿀 때만 넣습니다", "bad": "저장된 값이 안 풀립니다 - 다시 넣으세요",
             "refused": "로그인이 거부되어 멈췄습니다 - 새 비밀번호를 넣으세요"}
 INTRO = ("관리자가 알려 준 업체코드·PC코드·기계 계정 비밀번호와 이 PC 의 ERPia 로그인을 넣고 [저장] 을 누르세요.\n"
@@ -678,6 +695,8 @@ class SettingsWindow:
                 ttk.Label(box, text=label, width=18).grid(row=i, column=0, sticky="w", pady=2)   # '기계 계정 비밀번호' 가 들어가게
                 if kind == "printer":
                     w = ttk.Combobox(box, textvariable=self.vars[key], width=31, state="readonly")
+                elif kind == "choice":
+                    w = ttk.Combobox(box, textvariable=self.vars[key], values=list(PRINT_MODES), width=31, state="readonly")
                 else:
                     w = ttk.Entry(box, textvariable=self.vars[key], width=33, show="•" if kind == "password" else "")
                 w.grid(row=i, column=1, sticky="w", pady=2)
@@ -689,6 +708,9 @@ class SettingsWindow:
                 h = ttk.Label(box, text=hint, foreground=GRAY)
                 h.grid(row=i, column=col, columnspan=4 - col, sticky="w", padx=(8, 0))
                 self.hints[key] = (h, hint)
+            if title in NOTES:
+                ttk.Label(box, text=NOTES[title], foreground=AMBER).grid(row=len(fields), column=0, columnspan=4,
+                                                                         sticky="w", pady=(2, 0))
         bottom = ttk.Frame(frame)
         bottom.grid(row=2 + len(ROWS), column=0, sticky="ew", pady=(8, 0))
         self.close_btn = ttk.Button(bottom, text="닫기", command=self.on_close)

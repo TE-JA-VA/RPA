@@ -132,6 +132,15 @@ face = tkfont.nametofont("TkDefaultFont")
 cut = [w.cget("text") for w in all_widgets(root) if w.winfo_class() == "TLabel" and w.cget("text") in names
        and face.measure(w.cget("text")) > w.winfo_width()]
 check("칸 이름이 잘리지 않는다 (글자 폭 ≤ 칸 폭)", not cut, cut)
+check("출력 방식: 두 가지에서만 고르고, 새 설치는 수동", list(win.entries["print_mode"].cget("values")) == list(rs.PRINT_MODES)
+      and win.vars["print_mode"].get() == rs.PRINT_MANUAL and str(win.entries["print_mode"].cget("state")) == "readonly",
+      (win.entries["print_mode"].cget("values"), win.vars["print_mode"].get()))
+notes = [w for w in all_widgets(root) if w.winfo_class() == "TLabel" and "물류관리에서 저장할 수 없습니다" in str(w.cget("text"))]
+check("물류 경고 한 줄: 늘 보이는 주황 글씨 (2026-09-30 사용자 문구)", len(notes) == 1
+      and str(notes[0].cget("foreground")) == rs.AMBER and notes[0].winfo_ismapped()
+      and "실제 ERPia 에 등록한 택배사·박스·운임과 다를 경우" in notes[0].cget("text"), [n.cget("text") for n in notes])
+check(f"창 높이 {root.winfo_height()} ≤ 690 (768 높이 노트북에서 작업 표시줄·제목 줄을 빼고 들어간다)",
+      root.winfo_height() <= 690)
 
 print("=== 2. 빈 칸으로 저장 ===")
 win.on_save()
@@ -141,13 +150,17 @@ check("저장 안 됨", not win.saved and not os.path.exists(paths["user_config"
 
 print("=== 3. 채우고 저장 ===")
 for k, v in dict(cid="net", pc_id="test", agent_pw="Agent-Pw-5555!", admin_code="AM001", erp_id="rpa",
-                 erp_pw="Erp-Pw-1234!", mail_id="mail@x.com", mail_pw="Mail-Pw-9876!", printer="사무실 프린터").items():
+                 erp_pw="Erp-Pw-1234!", mail_id="mail@x.com", mail_pw="Mail-Pw-9876!", printer="사무실 프린터",
+                 print_mode=rs.PRINT_AUTO, carrier="한진연동", box="대", fare="신용").items():
     win.vars[k].set(v)
 win.on_save()
 ok = wait_idle()
 check("저장됨 (초록 안내)", ok and win.saved and "에이전트를 켰습니다" in win.msg.get() and win.msg_label.cget("fg") == rs.GREEN,
       win.msg.get())
 check("설정 파일 두 개", os.path.isfile(paths["user_config"]) and os.path.isfile(paths["agent_config"]))
+saved_logistic = st.read_user_config(paths["user_config"])["Logistic"]
+check("물류 칸이 설정 파일에 (자동 = Y)", saved_logistic == {"cboBS_Auto_YN": "Y", "Printer": "사무실 프린터", "cboTag": "한진연동",
+                                                    "cboTagAmt": "대", "cboBeasong_Gu_Apply": "신용"}, saved_logistic)
 check("작업 등록 → 켜기", calls == ["/Create", "/End", "/Run"], calls)
 check("막 켰으면 상태 줄은 '켜는 중' (감독이 인증서를 채우고 켜기까지 1분쯤)", "켜는 중" in win.status.get(), win.status.get())
 check("저장 뒤 비밀번호 칸은 비고 안내는 '저장됨'", all(win.vars[k].get() == "" for k in rs.PASSWORD_KEYS)

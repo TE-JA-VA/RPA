@@ -12,11 +12,11 @@
     "Output": "N"
   },
   "Logistic": {
-    "cboBS_Auto_YN": "Y",
+    "cboBS_Auto_YN": "N",
     "Printer": "",
-    "cboTag": "한진연동",
-    "cboTagAmt": "대",
-    "cboBeasong_Gu_Apply": "신용"
+    "cboTag": "",
+    "cboTagAmt": "",
+    "cboBeasong_Gu_Apply": ""
   },
   "Sites": {
     "_주석": [
