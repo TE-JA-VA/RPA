@@ -36,7 +36,9 @@ SetupLogging=yes
 CloseApplications=no
 RestartApplications=no
 UninstallDisplayName=AFTER MARKET RPA
-UninstallDisplayIcon={app}\python\pythonw.exe
+; 아이콘: tools/make_icon.py 가 만든다. 설치 파일 아이콘은 이 스크립트 옆 것, 나머지는 판 폴더에 들어간 사본
+SetupIconFile=AFTER_MARKET.ico
+UninstallDisplayIcon={app}\AFTER_MARKET.ico
 OutputDir=.
 OutputBaseFilename=AFTER_MARKET_RPA_Setup_{#AppVersion}
 
@@ -55,10 +57,12 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "\RPA_UserConfig.json,\배
 Source: "{#SourceDir}\RPA_UserConfig.json"; DestDir: "{app}"; DestName: "RPA_UserConfig.template.json"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\RPA 설정"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"""; WorkingDir: "{app}"; Comment: "RPA 설정 창 (관리자 권한 요청이 뜹니다)"
+Name: "{group}\RPA 설정"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"""; WorkingDir: "{app}"; Comment: "RPA 설정 창 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET.ico"; AppUserModelID: "AFTERMARKET.RPA.Settings"
 
 [INI]
 Filename: "{group}\RPA 대시보드.url"; Section: "InternetShortcut"; Key: "URL"; String: "https://rpa-test-f02e0.web.app"
+Filename: "{group}\RPA 대시보드.url"; Section: "InternetShortcut"; Key: "IconFile"; String: "{app}\AFTER_MARKET.ico"
+Filename: "{group}\RPA 대시보드.url"; Section: "InternetShortcut"; Key: "IconIndex"; String: "0"
 
 [Run]
 ; 상속을 끊고 Administrators(S-1-5-32-544)·SYSTEM(S-1-5-18) 만 남긴다. 한글 윈도우의 그룹 이름 차이에 흔들리지 않게 SID 로.

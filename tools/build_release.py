@@ -48,6 +48,7 @@ PROGRAM_FILES = [
     ("rpa_status.py", "rpa_status.py"),
     ("rpa_dashboard.py", "rpa_dashboard.py"),
     ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
+    ("AFTER_MARKET.ico", "release/AFTER_MARKET.ico"),                         # 설정 창·바로 가기 아이콘 (tools/make_icon.py)
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
@@ -75,7 +76,9 @@ NUITKA_YML = os.path.join(REPO, "tools", "nuitka-package.config.yml")   # comtyp
 BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "AFTER MARKET RPA 에이전트 감독"),
            bg.AGENT_EXE: ("python.exe", "AFTER MARKET RPA 에이전트")}
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
+ICON = os.path.join(REPO, "release", "AFTER_MARKET.ico")
 NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--windows-console-mode=force", "--remove-output",
+                  f"--windows-icon-from-ico={ICON}",
                   "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone",
                   f"--include-data-files={MFC_DLL}=mfc140u.dll", f"--user-package-configuration-file={NUITKA_YML}"]
                  + [f"--nofollow-import-to={m}" for m in EXCLUDE])
@@ -101,13 +104,31 @@ def _copy(src, out_dir, rel):
     shutil.copy2(src, dst)
 
 
-def brand_exe(src, dst, description, version):
+def icon_resources(ico_path):
+    """.ico 를 exe 자원 모양으로 바꾼다: (RT_GROUP_ICON 자료, 번호 1 부터의 RT_ICON 자료들)."""
+    with open(ico_path, "rb") as f:
+        data = f.read()
+    if data[:4] != b"\0\0\1\0":
+        raise ValueError(f"아이콘 파일이 아닙니다: {ico_path}")
+    count = struct.unpack_from("<H", data, 4)[0]
+    group, images = struct.pack("<HHH", 0, 1, count), []
+    for i in range(count):
+        w, h, colors, _, planes, bits, size, offset = struct.unpack_from("<BBBBHHII", data, 6 + 16 * i)
+        group += struct.pack("<BBBBHHIH", w, h, colors, 0, planes or 1, bits, size, i + 1)   # 파일 속 위치 대신 그림 번호
+        images.append(data[offset:offset + size])
+    return group, images
+
+
+def brand_exe(src, dst, description, version, icon=None):
     """src 를 dst 로 복사하고 버전 정보(설명·회사·제품)를 바꾼다. 원래 있던 언어 자리에 덮어써 한 벌만 남긴다
-    (win32verstamp.stamp 를 그대로 쓰면 중립 언어로 한 벌이 더 생겨 옛 'Python' 이 남는다)."""
+    (win32verstamp.stamp 를 그대로 쓰면 중립 언어로 한 벌이 더 생겨 옛 'Python' 이 남는다).
+    icon(.ico)을 주면 파이썬 아이콘을 모두 지우고 그 아이콘 한 벌을 넣는다 (작업 관리자·탐색기에 보이는 것)."""
     shutil.copy2(src, dst)
     h = win32api.LoadLibraryEx(dst, 0, win32con.LOAD_LIBRARY_AS_DATAFILE)
     try:
         langs = win32api.EnumResourceLanguages(h, 16, 1)          # RT_VERSION, 이름 1
+        old_icons = [(rt, n, lang) for rt in (win32con.RT_GROUP_ICON, win32con.RT_ICON) if icon
+                     for n in win32api.EnumResourceNames(h, rt) for lang in win32api.EnumResourceLanguages(h, rt, n)]
     finally:
         win32api.FreeLibrary(h)
     text = {"CompanyName": "AFTER MARKET", "FileDescription": description, "ProductName": "AFTER MARKET RPA",
@@ -118,6 +139,13 @@ def brand_exe(src, dst, description, version):
     u = win32api.BeginUpdateResource(dst, 0)
     for lang in langs:
         win32api.UpdateResource(u, 16, 1, vs, lang)
+    if icon:
+        for rt, n, lang in old_icons:
+            win32api.UpdateResource(u, rt, n, None, lang)          # 자료 없이 쓰면 지워진다
+        group, images = icon_resources(icon)
+        for i, img in enumerate(images, 1):
+            win32api.UpdateResource(u, win32con.RT_ICON, i, img, langs[0])
+        win32api.UpdateResource(u, win32con.RT_GROUP_ICON, 1, group, langs[0])
     win32api.EndUpdateResource(u, 0)
 
 
@@ -138,8 +166,9 @@ def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0
         _copy(os.path.join(repo, *src.split("/")), out_dir, rel)
     for d in RUNTIME_DIRS:
         shutil.copytree(os.path.join(runtime_root, d), os.path.join(out_dir, d))
-    for name, (src, desc) in BRANDED.items():
-        brand_exe(os.path.join(out_dir, "python", src), os.path.join(out_dir, "python", name), desc, version)
+    for name, (src, desc) in BRANDED.items():           # 아이콘은 위 PROGRAM_FILES 가 판 폴더에 넣은 사본
+        brand_exe(os.path.join(out_dir, "python", src), os.path.join(out_dir, "python", name), desc, version,
+                  icon=os.path.join(out_dir, "AFTER_MARKET.ico"))
         program.append(f"python/{name}")
     return program
 

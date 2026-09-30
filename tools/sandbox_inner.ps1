@@ -41,6 +41,12 @@ Check "config 는 관리자·SYSTEM 만" (($acl -match "Administrators") -and ($
 Check "시작 메뉴 바로 가기 둘" ((Test-Path "$SM\RPA 설정.lnk") -and (Test-Path "$SM\RPA 대시보드.url"))
 $un = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" | Where-Object { $_.GetValue("DisplayName") -eq "AFTER MARKET RPA" }
 Check "앱 및 기능 목록" ($null -ne $un)
+# 아이콘 (2026-09-30): 바로 가기 둘·제거 목록이 설치 폴더의 AFTER_MARKET.ico 를 쓴다
+$Ico = "$App\AFTER_MARKET.ico"
+$lnkIcon = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\RPA 설정.lnk").IconLocation
+$urlIcon = Select-String -Path "$SM\RPA 대시보드.url" -Pattern "^IconFile=(.*)$" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches[0].Groups[1].Value }
+$unIcon = if ($un) { $un.GetValue("DisplayIcon") }
+Check "아이콘: 설정·대시보드 바로 가기, 앱 및 기능 목록" ((Test-Path $Ico) -and ($lnkIcon -like "$Ico*") -and ($urlIcon -eq $Ico) -and ($unIcon -eq $Ico)) "lnk=$lnkIcon url=$urlIcon un=$unIcon"
 $tk = & $Py -c "import tkinter; r = tkinter.Tk(); r.destroy(); print('tk ok')"
 Check "내장 파이썬 tkinter" ("$tk" -eq "tk ok") "$tk"
 # exe 가 새 윈도우에서 켜지는가 (2026-09-29 노트북: System32 에만 있던 mfc140u.dll 이 exe 에 안 들어가 win32ui 에서 죽었다).
@@ -90,6 +96,12 @@ $Brand = @{ "AFTER_MARKET_RPA_Supervisor.exe" = "AFTER MARKET RPA 에이전트 �
 Check "작업이 AFTER MARKET 감독 사본으로 띄운다" ($q -match "AFTER_MARKET_RPA_Supervisor\.exe")
 $desc = @($Brand.Keys | Where-Object { (Get-Item "$App\python\$_").VersionInfo.FileDescription -eq $Brand[$_] })
 Check "AFTER MARKET 사본 설명 둘 (작업 관리자 '프로세스' 탭 글자)" ($desc.Count -eq 2) ($Brand.Keys | ForEach-Object { "$_=" + (Get-Item "$App\python\$_" -ErrorAction SilentlyContinue).VersionInfo.FileDescription })
+# 탐색기·작업 관리자가 보여 주는 아이콘을 ico 파일의 것과 견준다. 루틴·프리페어 exe 는 Nuitka 로 새로 빌드한 판이어야 맞다 (--exes-from 옛 exe 면 실패)
+Add-Type -AssemblyName System.Drawing
+function IconPng($path) { $ms = New-Object IO.MemoryStream; [Drawing.Icon]::ExtractAssociatedIcon($path).ToBitmap().Save($ms, [Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()) }
+$want = IconPng $Ico
+$plain = @(@("ERPia_RPA.exe", "Prepare_RPA.exe") + @($Brand.Keys | ForEach-Object { "python\$_" }) | Where-Object { (-not (Test-Path "$App\$_")) -or ((IconPng "$App\$_") -ne $want) })
+Check "exe 넷의 아이콘이 AFTER MARKET (루틴·프리페어·감독·에이전트)" ($plain.Count -eq 0) ($plain -join ", ")
 
 # 3. 감독 → 에이전트. 인터넷이 있으면: 가짜 비밀번호라 로그인이 거부되고(3) 감독도 같이 끝난다 (틀린 비밀번호로
 #    되풀이하지 않는다). 없으면 (2026-09-29 첫 시험의 샌드박스가 그랬다): 에이전트는 죽지 않고 다시 붙으려 한다

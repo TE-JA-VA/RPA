@@ -53,6 +53,8 @@ PRINT_MANUAL, PRINT_AUTO = "수동 - 엑셀 파일", "자동 - 운송장 인쇄"
 PRINT_MODES = {PRINT_MANUAL: "N", PRINT_AUTO: "Y"}    # 수동이 먼저·기본 (수동을 쓰는 업체가 더 많다)
 PASSWORD_KEYS = ("agent_pw", "erp_pw")
 CRASH_LOG_NAME = "설정창_오류.txt"               # 뜻밖의 오류 추적 (기록 폴더)
+ICON_NAME = "AFTER_MARKET.ico"                  # 프로그램 폴더 (tools/make_icon.py 가 만든다)
+APP_ID = "AFTERMARKET.RPA.Settings"             # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 # 설치 파일이 넣는 자리 {commonpf64}\AFTER MARKET\RPA (ProgramW6432 는 32비트 프로세스에서도 64비트 Program Files)
 INSTALL_DIR = os.path.normpath(os.path.join(os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles")
                                             or r"C:\Program Files", *st.PRODUCT_DIRS))
@@ -608,6 +610,23 @@ def dpi_aware():
         pass
 
 
+def new_root():
+    """Tk 뿌리 창을 AFTER MARKET 아이콘으로 만든다. 앱 ID 는 창보다 먼저 정해야 한다 - 없으면 작업 표시줄이
+    pythonw.exe 의 파이썬 아이콘으로 묶는다. 아이콘 파일이 없어도 창은 뜬다."""
+    import tkinter as tk
+    dpi_aware()
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        pass
+    root = tk.Tk()
+    icon = os.path.join(HERE, ICON_NAME)
+    if os.path.isfile(icon):
+        root.iconbitmap(icon)                       # 이 창 (default 만 주면 이 창은 깃털 그대로 - 2026-09-30 실측)
+        root.iconbitmap(default=icon)               # 뒤에 뜨는 알림 창
+    return root
+
+
 class Dialogs:
     """알림·고르기 창. 시험은 같은 이름의 가짜로 바꾼다."""
 
@@ -917,9 +936,7 @@ class SettingsWindow:
 
 def run_window(paths, after_install=False):
     """창을 띄우고 닫힐 때까지 돈다. 창이 뜨면 옛 에이전트부터 본다."""
-    import tkinter as tk
-    dpi_aware()
-    root = tk.Tk()
+    root = new_root()
     win = SettingsWindow(root, paths, after_install=after_install)
     root.after(200, win.startup)
     root.mainloop()
@@ -927,10 +944,8 @@ def run_window(paths, after_install=False):
 
 
 def show_error_box(text):
-    import tkinter as tk
     from tkinter import messagebox
-    dpi_aware()
-    root = tk.Tk()
+    root = new_root()
     root.withdraw()
     messagebox.showerror("RPA 설정", text, parent=root)
     root.destroy()

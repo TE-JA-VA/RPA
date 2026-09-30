@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import zipfile
@@ -56,6 +57,8 @@ for exe in br.EXES:
 write(os.path.join(runtime, "python", "Lib", "__pycache__", "os.cpython-314.pyc"), b"pyc")   # 내장 파이썬엔 원래 있다
 for exe in ("python.exe", "pythonw.exe"):   # 이름 바꾼 사본을 만들려면 진짜 exe 여야 한다 (버전 정보를 고친다)
     shutil.copy2(os.path.join(br.RUNTIME_ROOT, "python", exe), os.path.join(runtime, "python", exe))
+ICO = (ROOT / "release" / "AFTER_MARKET.ico").read_bytes()   # 사본의 아이콘으로도 쓰니 진짜여야 한다
+write(os.path.join(repo, "release", "AFTER_MARKET.ico"), ICO)
 write(os.path.join(runtime, "ms-playwright", "chromium-1234", "chrome.exe"), b"chrome")
 write(os.path.join(runtime, "ms-playwright", ".links", "x"), b"")                              # playwright 가 남기는 표시 폴더
 others = [rel for rel, _ in br.OTHER_FILES]
@@ -96,6 +99,30 @@ for name, (src, desc) in br.BRANDED.items():
     check(f"{name}: 작업 관리자 설명 '{desc}', 회사 AFTER MARKET, 버전 정보는 한 벌 (옛 'Python' 이 안 남는다)",
           desc.startswith("AFTER MARKET") and got == desc and company == "AFTER MARKET" and len(langs) == 1,
           (langs, got, company))
+
+
+def icons(path):
+    """exe 의 아이콘 자원: (아이콘 묶음 이름들, 첫 묶음이 가리키는 그림 번호들, [(그림 번호, 자료)])."""
+    h = win32api.LoadLibraryEx(path, 0, win32con.LOAD_LIBRARY_AS_DATAFILE)
+    try:
+        imgs = [(n, win32api.LoadResource(h, win32con.RT_ICON, n, lang))
+                for n in win32api.EnumResourceNames(h, win32con.RT_ICON)
+                for lang in win32api.EnumResourceLanguages(h, win32con.RT_ICON, n)]
+        groups = win32api.EnumResourceNames(h, win32con.RT_GROUP_ICON)
+        g = win32api.LoadResource(h, win32con.RT_GROUP_ICON, groups[0],
+                                  win32api.EnumResourceLanguages(h, win32con.RT_GROUP_ICON, groups[0])[0])
+        ids = [struct.unpack_from("<H", g, 6 + 14 * i + 12)[0] for i in range(struct.unpack_from("<H", g, 4)[0])]
+        return groups, ids, imgs
+    finally:
+        win32api.FreeLibrary(h)
+
+
+for name in br.BRANDED:
+    groups, ids, imgs = icons(os.path.join(out_dir, "python", name))
+    check(f"{name}: 아이콘은 AFTER MARKET 한 벌 (작업 관리자·탐색기에 보이는 것, 파이썬 아이콘은 안 남는다)",
+          len(groups) == 1 and len(imgs) == int.from_bytes(ICO[4:6], "little")
+          and all(data in ICO for _, data in imgs) and sorted(ids) == sorted(n for n, _ in imgs),
+          (groups, ids, [n for n, _ in imgs]))
 man = br.write_manifest(out_dir, "2026.09.29-3", "nuitka 4.2.2 · python 3.14.7", program)
 check("형식·판 번호·빌더", man["format"] == st.MANIFEST_FORMAT and man["version"] == "2026.09.29-3"
       and man["builder"] == "nuitka 4.2.2 · python 3.14.7")
