@@ -114,11 +114,6 @@ win = rs.SettingsWindow(root, paths, login=fake_login, run=fake_run, running=lam
 root.update()
 
 print("=== 1. 첫 모습 ===")
-check("비밀번호 칸 안내: 처음", all(win.hints[k][0].cget("text") == rs.PW_HINTS["none"] for k in rs.PASSWORD_KEYS))
-check("상태 줄: 버전 없음·에이전트 꺼짐", "버전 없음" in win.status.get() and "꺼져 있음" in win.status.get(), win.status.get())
-check("메일 칸이 켜져 있다 (빈 틀에 SITE1)", str(win.entries["mail_id"].cget("state")) == "normal")
-check("프린터 목록", list(win.entries["printer"].cget("values")) == ["", "사무실 프린터", "Microsoft Print to PDF"],
-      win.entries["printer"].cget("values"))
 
 
 def all_widgets(w):
@@ -126,6 +121,37 @@ def all_widgets(w):
         yield c
         yield from all_widgets(c)
 
+
+def shown(key):
+    """칸 안 흐린 안내가 보이면 그 글자, 안 보이면 None."""
+    root.update()
+    label = win.hints[key][0]
+    return label.cget("text") if label.winfo_ismapped() else None
+
+
+check("처음 비밀번호 칸은 아무 글도 없다 ('*필수' 없앰 - 빠지면 저장할 때 빨간 글씨로 알린다)",
+      rs.PW_HINTS["none"] == "" and all(shown(k) is None for k in rs.PASSWORD_KEYS), [shown(k) for k in rs.PASSWORD_KEYS])
+check("상태 줄: 버전 없음·에이전트 꺼짐", "버전 없음" in win.status.get() and "꺼져 있음" in win.status.get(), win.status.get())
+check("메일 칸이 없다 (다른 프로그램이 맡는다 - 2026-09-30)", "mail_id" not in win.entries and "mail_pw" not in win.entries)
+check("프린터 목록: 맨 위 '(기본 프린터)', 안 골랐으면 그것이 보인다",
+      list(win.entries["printer"].cget("values")) == [rs.DEFAULT_PRINTER, "사무실 프린터", "Microsoft Print to PDF"]
+      and win.vars["printer"].get() == rs.DEFAULT_PRINTER, (win.entries["printer"].cget("values"), win.vars["printer"].get()))
+check("단추 이름 '기존 설정값 가져오기'", win.import_btn.cget("text") == "기존 설정값 가져오기", win.import_btn.cget("text"))
+check(f"창 폭 {root.winfo_width()} ≤ 520 (오른쪽 설명 열을 없애고 설명은 빈 칸 안으로 - 2026-09-30)", root.winfo_width() <= 520)
+check("빈 칸 안 흐린 안내: 택배사·박스·운임", all(shown(k) == win.hints[k][1] != "" and win.hints[k][0].cget("fg") == rs.PLACEHOLDER
+                                          for k in ("carrier", "box", "fare")), [shown(k) for k in ("carrier", "box", "fare")])
+face_now = tkfont.nametofont("TkDefaultFont")
+candidates = ([(k, win.hints[k][1]) for k in win.hints if win.hints[k][1]]
+              + [(k, t) for k in rs.PASSWORD_KEYS for t in rs.PW_HINTS.values() if t] + [("erpia_path", rs.ERPIA_MISSING)])
+fits = [(k, t) for k, t in candidates if face_now.measure(t) + 8 > win.entries[k].winfo_width()]
+check("흐린 안내는 칸 안에 다 들어간다 (잘리지 않는다)", not fits, fits)
+win.vars["carrier"].set("한진")
+gone = shown("carrier")
+win.vars["carrier"].set("")
+check("값을 넣으면 흐린 안내가 사라지고, 지우면 다시 보인다", gone is None and shown("carrier") == win.hints["carrier"][1])
+check("흐린 안내·'(기본 프린터)' 는 값이 아니다 (저장할 값은 빈 칸)", win.form()["carrier"] == "" and win.form()["printer"] == "",
+      (win.form()["carrier"], win.form()["printer"]))
+check("업체코드·PC코드·ERPia 업체코드 칸은 안내가 없다", all(win.hints[k][1] == "" for k in ("cid", "pc_id", "admin_code")))
 
 names = {label for _, fields in rs.ROWS for _, label, _, _ in fields}
 face = tkfont.nametofont("TkDefaultFont")
@@ -141,6 +167,26 @@ check("물류 경고 한 줄: 늘 보이는 주황 글씨 (2026-09-30 사용자 
       and "실제 ERPia 에 등록한 택배사·박스·운임과 다를 경우" in notes[0].cget("text"), [n.cget("text") for n in notes])
 check(f"창 높이 {root.winfo_height()} ≤ 690 (768 높이 노트북에서 작업 표시줄·제목 줄을 빼고 들어간다)",
       root.winfo_height() <= 690)
+texts = [str(w.cget("text")) for w in all_widgets(root) if w.winfo_class() in ("TLabel", "TLabelframe")]
+check("맨 위 긴 안내는 없고 대시보드 연결 묶음 맨 위에 '담당자로부터 받은 정보를 입력해주세요.' (2026-09-30)",
+      "담당자로부터 받은 정보를 입력해주세요." in texts and not any("[저장] 을 누르세요" in t for t in texts), texts[:6])
+check("칸 이름: ERPia 로그인의 '업체코드', 'ERPia 설치 위치', 묶음 '물류 처리 옵션'",
+      "업체코드" in [label for key, label, _, _ in rs.ROWS[1][1] if key == "admin_code"]
+      and "ERPia 설치 위치" in texts and "물류 처리 옵션" in texts, texts)
+
+
+def printer_view():
+    """(프린터 칸 상태, 없는 프린터 주황 줄이 보이나)"""
+    root.update()
+    return str(win.entries["printer"].cget("state")), bool(win.printer_warn.winfo_ismapped())
+
+
+check("수동이면 프린터 칸이 꺼진다", printer_view() == ("disabled", False), printer_view())
+win.vars["print_mode"].set(rs.PRINT_AUTO)
+check("자동으로 바꾸면 고를 수 있다 (안 고르면 기본 프린터)", printer_view() == ("readonly", False)
+      and win.vars["printer"].get() == rs.DEFAULT_PRINTER, printer_view())
+win.vars["print_mode"].set(rs.PRINT_MANUAL)
+check("다시 수동이면 다시 꺼진다", printer_view() == ("disabled", False), printer_view())
 
 print("=== 2. 빈 칸으로 저장 ===")
 win.on_save()
@@ -150,7 +196,7 @@ check("저장 안 됨", not win.saved and not os.path.exists(paths["user_config"
 
 print("=== 3. 채우고 저장 ===")
 for k, v in dict(cid="net", pc_id="test", agent_pw="Agent-Pw-5555!", admin_code="AM001", erp_id="rpa",
-                 erp_pw="Erp-Pw-1234!", mail_id="mail@x.com", mail_pw="Mail-Pw-9876!", printer="사무실 프린터",
+                 erp_pw="Erp-Pw-1234!", printer="사무실 프린터",
                  print_mode=rs.PRINT_AUTO, carrier="한진연동", box="대", fare="신용").items():
     win.vars[k].set(v)
 win.on_save()
@@ -163,8 +209,9 @@ check("물류 칸이 설정 파일에 (자동 = Y)", saved_logistic == {"cboBS_A
                                                     "cboTagAmt": "대", "cboBeasong_Gu_Apply": "신용"}, saved_logistic)
 check("작업 등록 → 켜기", calls == ["/Create", "/End", "/Run"], calls)
 check("막 켰으면 상태 줄은 '켜는 중' (감독이 인증서를 채우고 켜기까지 1분쯤)", "켜는 중" in win.status.get(), win.status.get())
-check("저장 뒤 비밀번호 칸은 비고 안내는 '저장됨'", all(win.vars[k].get() == "" for k in rs.PASSWORD_KEYS)
-      and all(win.hints[k][0].cget("text") == rs.PW_HINTS["ok"] for k in rs.PASSWORD_KEYS))
+check("저장 뒤 비밀번호 칸은 비고, 칸 안에 흐린 '저장됨 - 바꿀 때만 입력'", all(win.vars[k].get() == "" for k in rs.PASSWORD_KEYS)
+      and rs.PW_HINTS["ok"] == "저장됨 - 바꿀 때만 입력" and all(shown(k) == rs.PW_HINTS["ok"] for k in rs.PASSWORD_KEYS),
+      [shown(k) for k in rs.PASSWORD_KEYS])
 root.update()
 time.sleep(0.3)
 root.update()
@@ -193,8 +240,14 @@ data["Logistic"]["Printer"] = "없는 프린터"
 st.write_user_config(data, paths["user_config"])
 win.reload()
 root.update()
-check("이 PC 에 없는 프린터면 알리고 목록에 넣어 둔다", "이 PC 에 없는 프린터" in win.hints["printer"][0].cget("text")
-      and "없는 프린터" in list(win.entries["printer"].cget("values")))
+check("이 PC 에 없는 프린터면 프린터 줄 아래 주황 한 줄, 목록에도 넣어 둔다 (자동)", printer_view() == ("readonly", True)
+      and win.printer_warn.cget("text") == rs.MISSING_PRINTER and str(win.printer_warn.cget("foreground")) == rs.AMBER
+      and "없는 프린터" in list(win.entries["printer"].cget("values")) and win.vars["printer"].get() == "없는 프린터",
+      printer_view())
+win.vars["print_mode"].set(rs.PRINT_MANUAL)
+check("수동이면 그 줄도 숨긴다 (프린터를 안 쓴다)", printer_view() == ("disabled", False), printer_view())
+win.vars["print_mode"].set(rs.PRINT_AUTO)
+check("자동으로 돌아오면 다시 보인다", printer_view() == ("readonly", True), printer_view())
 
 print("=== 5-2. 에이전트가 멈춘 까닭 ===")
 with open(paths["stop_file"], "w", encoding="utf-8") as f:
@@ -203,8 +256,23 @@ win.reload()
 root.update()
 check("멈춘 까닭을 상태 줄에 노란 글씨로", "멈춤" in win.status.get() and "로그인이 막혔습니다" in win.status.get()
       and str(win.status_label.cget("foreground")) == rs.AMBER, win.status.get())
-check("로그인 거부로 멈췄으면 기계 계정 비밀번호 칸이 '다시 넣으세요'", win.hints["agent_pw"][0].cget("text") == rs.PW_HINTS["refused"])
+check("로그인 거부로 멈췄으면 기계 계정 비밀번호 칸 안에 주황 '새 비밀번호 입력'", shown("agent_pw") == rs.PW_HINTS["refused"]
+      and str(win.hints["agent_pw"][0].cget("fg")) == rs.AMBER, shown("agent_pw"))
+check(f"긴 까닭은 줄을 바꿔 창 폭을 늘리지 않는다 ({root.winfo_width()} ≤ 520 - 2026-09-29 샌드박스에서 1070 까지 늘었다)",
+      root.winfo_width() <= 520)
 os.remove(paths["stop_file"])
+
+print("=== 5-3. ERPia 를 못 찾으면 ===")
+data = st.read_user_config(paths["user_config"])
+data["ERPia"] = {"ExePath": "C:/없는 폴더/ERPiaMain.exe"}
+st.write_user_config(data, paths["user_config"])
+saved_dirs, st._erpia_install_dirs = st._erpia_install_dirs, lambda: []
+try:
+    win.reload()
+    check("ERPia 설치 위치 칸 안에 주황 '못 찾음 - [찾기]'", shown("erpia_path") == rs.ERPIA_MISSING
+          and str(win.hints["erpia_path"][0].cget("fg")) == rs.AMBER, shown("erpia_path"))
+finally:
+    st._erpia_install_dirs = saved_dirs
 
 print("=== 6. 옛 에이전트 ===")
 win.procs = lambda: [(9, "python.exe", r"D:\old\python\python.exe", "python agent.py")]

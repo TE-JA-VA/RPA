@@ -5,7 +5,8 @@ r"""RPA 설정 창 (배포판 구조 2부 4절 - docs/superpowers/specs/2026-09-
 
     {설치 폴더}\python\pythonw.exe {설치 폴더}\rpa_settings.py [--after-install [--no-window] | --stop | --remove-task | --check-rpa]
 
-창: 기계 계정(업체코드·PC코드·비밀번호), ERPia 로그인·위치, 메일 사이트, 프린터를 받아 저장하고, 윈도우 로그인 때
+창: 기계 계정(업체코드·PC코드·비밀번호), ERPia 로그인·설치 위치, 물류 처리 옵션(출력 방식·택배사·박스·운임·프린터)을
+받아 저장하고 (메일은 다른 프로그램이 맡는다 - 2026-09-30), 윈도우 로그인 때
 에이전트를 창 없이 켜는 작업(AFTER MARKET\RPA Agent)을 등록하고 에이전트를 켠다. 옛 배포 폴더에서 설정을 가져온다.
 창 없는 모드는 설치 파일(release/installer.iss)이 부른다. 종료 코드: 0 됨, 5 RPA 가 돌고 있음, 6 에이전트가 안 멈춤.
 
@@ -43,14 +44,14 @@ EXIT_RPA_RUNNING = 5
 EXIT_STOP_FAILED = 6
 STOP_WAIT_SEC = 15
 CREATE_NO_WINDOW = 0x08000000
-FORM_KEYS = ("cid", "pc_id", "agent_pw", "admin_code", "erp_id", "erp_pw", "erpia_path", "mail_id", "mail_pw",
+FORM_KEYS = ("cid", "pc_id", "agent_pw", "admin_code", "erp_id", "erp_pw", "erpia_path",
              "print_mode", "carrier", "box", "fare", "printer")
 # 물류 칸 → 사용자 설정 Logistic 키. RPA 가 물류관리 화면의 같은 이름 콤보에서 글자 그대로 고른다 (업체마다 다르다 - 2026-09-30)
 LOGISTIC_KEYS = {"carrier": "cboTag", "box": "cboTagAmt", "fare": "cboBeasong_Gu_Apply", "printer": "Printer"}
 AUTO_MODE_KEY = "cboBS_Auto_YN"
 PRINT_MANUAL, PRINT_AUTO = "수동 - 엑셀 파일", "자동 - 운송장 인쇄"
 PRINT_MODES = {PRINT_MANUAL: "N", PRINT_AUTO: "Y"}    # 수동이 먼저·기본 (수동을 쓰는 업체가 더 많다)
-PASSWORD_KEYS = ("agent_pw", "erp_pw", "mail_pw")
+PASSWORD_KEYS = ("agent_pw", "erp_pw")
 CRASH_LOG_NAME = "설정창_오류.txt"               # 뜻밖의 오류 추적 (기록 폴더)
 # 설치 파일이 넣는 자리 {commonpf64}\AFTER MARKET\RPA (ProgramW6432 는 32비트 프로세스에서도 64비트 Program Files)
 INSTALL_DIR = os.path.normpath(os.path.join(os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles")
@@ -334,20 +335,6 @@ def pw_state(value, unseal):
         return "bad"
 
 
-def mail_site(data):
-    """메일 칸이 고치는 사이트 이름: Action 에 mail_download 가 든 첫 사이트. 없으면 None."""
-    sites = data.get(st.SITES_SECTION)
-    if not isinstance(sites, dict):
-        return None
-    for name, site in sites.items():
-        if name.startswith("_") or not isinstance(site, dict):
-            continue
-        actions = site.get("Action") if isinstance(site.get("Action"), list) else [site.get("Action")]
-        if "mail_download" in actions:
-            return name
-    return None
-
-
 def _section(data, name):
     value = data.get(name)
     return value if isinstance(value, dict) else {}
@@ -355,22 +342,19 @@ def _section(data, name):
 
 def load_state(paths):
     """창에 채울 값과 비밀번호 칸 상태 (form, state). form 의 비밀번호 칸은 늘 비어 있다.
-    state: agent_pw·erp_pw·mail_pw 는 'none'|'ok'|'bad', mail_site 는 사이트 이름|None, saved 는 저장된 (cid, pc_id)."""
+    state: agent_pw·erp_pw 는 'none'|'ok'|'bad'(기계 계정은 'refused' 도), saved 는 저장된 (cid, pc_id)."""
     import secret
     raw = read_agent_raw(paths["agent_config"])
     path = paths["user_config"] if os.path.isfile(paths["user_config"]) else paths["template"]
     data = st.read_user_config(path) if os.path.isfile(path) else {}
     login, erpia, logistic = _section(data, st.LOGIN_SECTION), _section(data, st.ERPIA_SECTION), _section(data, LOGISTIC_SECTION)
-    site_name = mail_site(data)
-    site = data[st.SITES_SECTION][site_name] if site_name else {}
     exe = st._erpia_file(erpia.get("ExePath")) or next(
         (found for found in (st._erpia_file(d) for d in st._erpia_install_dirs()) if found), "")
     auto = str(logistic.get(AUTO_MODE_KEY) or "").strip().upper() in ("A", "Y")   # run_routine.resolve_auto_mode 와 같은 규칙
     form = {k: "" for k in FORM_KEYS}
     form.update(cid=str(raw.get("cid") or ""), pc_id=str(raw.get("pc_id") or ""),
                 admin_code=str(login.get("AdminCode") or ""), erp_id=str(login.get("ID") or ""),
-                erpia_path=exe.replace("\\", "/"), mail_id=str(site.get("ID") or ""),
-                print_mode=PRINT_AUTO if auto else PRINT_MANUAL,
+                erpia_path=exe.replace("\\", "/"), print_mode=PRINT_AUTO if auto else PRINT_MANUAL,
                 **{k: str(logistic.get(v) or "") for k, v in LOGISTIC_KEYS.items()})
     stopped = read_stop(paths.get("stop_file"))
     agent_state = pw_state(raw.get("password_dpapi"), secret.unprotect)
@@ -378,8 +362,7 @@ def load_state(paths):
         agent_state = "refused"          # 저장된 값은 풀리지만 Firebase 가 거부했다 - 새 비밀번호가 있어야 다시 켤 수 있다
     state = {"agent_pw": agent_state,
              "erp_pw": pw_state(login.get("PW"), st.unseal),
-             "mail_pw": pw_state(site.get("PW"), st.unseal) if site_name else "none",
-             "mail_site": site_name, "saved": (raw.get("cid"), raw.get("pc_id")),
+             "saved": (raw.get("cid"), raw.get("pc_id")),
              "stopped": stopped, "erpia_missing": not exe}
     return form, state
 
@@ -413,21 +396,20 @@ def validate(form, state):
                "refused": "에이전트가 로그인을 거부당해 멈춰서"}.get(state["agent_pw"], "업체코드나 PC코드를 바꿔서")
         out.append(f"{why} 기계 계정 비밀번호를 넣어야 합니다")
     if not form["admin_code"]:
-        out.append("ERPia 관리자코드를 넣으세요")
+        out.append("ERPia 업체코드를 넣으세요")
     if not form["erp_id"]:
         out.append("ERPia 아이디를 넣으세요")
     if not form["erp_pw"] and state["erp_pw"] != "ok":
         out.append("ERPia 비밀번호를 넣으세요" + (" (저장된 값을 이 PC 에서 풀 수 없습니다)" if state["erp_pw"] == "bad" else ""))
     if form["erpia_path"] and not st._erpia_file(form["erpia_path"]):
-        out.append(f"ERPia 위치에 {st.ERPIA_EXE_NAME} 가 없습니다. [찾기] 로 고르거나 비워 두세요")
-    if state["mail_site"] and form["mail_id"] and not form["mail_pw"] and state["mail_pw"] != "ok":
-        out.append("메일 비밀번호를 넣으세요" + (" (저장된 값을 이 PC 에서 풀 수 없습니다)" if state["mail_pw"] == "bad" else ""))
+        out.append(f"ERPia 설치 위치에 {st.ERPIA_EXE_NAME} 가 없습니다. [찾기] 로 고르거나 비워 두세요")
     return out
 
 
 def merge_user_config(base, form):
     """칸 값을 사용자 설정({섹션: {키: 값}})에 넣은 사본. 비밀번호·ERPia 위치 칸이 비었으면 저장된 값을 그대로 둔다.
-    다른 섹션·키·주석은 건드리지 않는다. 비밀번호 잠그기는 write_user_config 가 한다."""
+    다른 섹션·키·주석은 건드리지 않는다 - Sites(메일 등)는 다른 프로그램이 맡는다 (2026-09-30). 비밀번호 잠그기는
+    write_user_config 가 한다."""
     data = json.loads(json.dumps(base, ensure_ascii=False))
     login = data[st.LOGIN_SECTION] = _section(data, st.LOGIN_SECTION)
     login["AdminCode"], login["ID"] = form["admin_code"], form["erp_id"]
@@ -436,12 +418,6 @@ def merge_user_config(base, form):
     exe = st._erpia_file(form["erpia_path"]) if form["erpia_path"] else None
     if exe:
         data[st.ERPIA_SECTION] = dict(_section(data, st.ERPIA_SECTION), ExePath=exe.replace("\\", "/"))
-    site_name = mail_site(data)
-    if site_name:
-        site = data[st.SITES_SECTION][site_name]
-        site["ID"] = form["mail_id"]
-        if form["mail_pw"]:
-            site["PW"] = form["mail_pw"]
     logistic = dict(_section(data, LOGISTIC_SECTION), **{v: form[k] for k, v in LOGISTIC_KEYS.items()})
     logistic[AUTO_MODE_KEY] = PRINT_MODES.get(form["print_mode"], "N")
     data[LOGISTIC_SECTION] = logistic
@@ -593,36 +569,35 @@ def list_printers():
 # ---------------------------------------------------------------------------
 ROWS = (
     ("대시보드 연결", (
-        ("cid", "업체코드", "영어 소문자·숫자·밑줄 (예: net)", "text"),
-        ("pc_id", "PC코드", "이 PC 의 코드 (예: test)", "text"),
+        ("cid", "업체코드", "", "text"),
+        ("pc_id", "PC코드", "", "text"),
         ("agent_pw", "기계 계정 비밀번호", "", "password"),
     )),
     ("ERPia 로그인", (
-        ("admin_code", "관리자코드", "ERPia 로그인 화면의 관리자코드", "text"),
+        ("admin_code", "업체코드", "", "text"),      # 대시보드 업체코드와 같은 개념이라 같은 이름 (2026-09-30 사용자)
         ("erp_id", "아이디", "", "text"),
         ("erp_pw", "비밀번호", "", "password"),
-        ("erpia_path", "ERPia 위치", "비우면 설치된 곳을 찾아 씁니다", "path"),
+        ("erpia_path", "ERPia 설치 위치", "비우면 설치된 곳을 찾아 씁니다", "path"),
     )),
-    ("메일 - 첨부파일을 받을 때만 (프리페어)", (
-        ("mail_id", "아이디", "", "text"),
-        ("mail_pw", "비밀번호", "", "password"),
-    )),
-    ("물류관리·운송장 - 물류 모듈을 쓸 때만", (
-        ("print_mode", "출력 방식", "자동은 운송장 인쇄, 수동은 엑셀 파일", "choice"),
-        ("carrier", "택배사", "ERPia 에 등록한 택배사 이름 그대로", "text"),
-        ("box", "박스", "ERPia 배송정보설정의 '박스' 그대로", "text"),
-        ("fare", "운임", "ERPia 배송정보설정의 '구분' 그대로", "text"),
-        ("printer", "프린터", "자동일 때만 - 비우면 기본 프린터", "printer"),
+    ("물류 처리 옵션", (
+        ("print_mode", "출력 방식", "", "choice"),
+        ("carrier", "택배사", "ERPia 에 등록한 이름 그대로", "text"),
+        ("box", "박스", "배송정보설정의 박스 그대로", "text"),
+        ("fare", "운임", "배송정보설정의 구분 그대로", "text"),
+        ("printer", "프린터", "", "printer"),      # 안 골랐으면 DEFAULT_PRINTER, 자동일 때만 켜진다 (sync_printer)
     )),
 )
-# 묶음 아래 늘 보이는 주황 한 줄 (2026-09-30 사용자 문구). 칸 안 흐린 글자는 값이 있으면 안 보이고 툴팁은 마우스를 올려야 보인다
-NOTES = {"물류관리·운송장 - 물류 모듈을 쓸 때만":
-         "※ 실제 ERPia 에 등록한 택배사·박스·운임과 다를 경우 물류관리에서 저장할 수 없습니다."}
-PW_HINTS = {"none": "처음이라 꼭 넣습니다", "ok": "저장됨 - 바꿀 때만 넣습니다", "bad": "저장된 값이 안 풀립니다 - 다시 넣으세요",
-            "refused": "로그인이 거부되어 멈췄습니다 - 새 비밀번호를 넣으세요"}
-INTRO = ("관리자가 알려 준 업체코드·PC코드·기계 계정 비밀번호와 이 PC 의 ERPia 로그인을 넣고 [저장] 을 누르세요.\n"
-         "저장할 때 기계 계정으로 실제 로그인해 보고, 윈도우 로그인 때 에이전트가 창 없이 켜지게 합니다.")
-GRAY, RED, GREEN, AMBER = "#6b7280", "#dc2626", "#15803d", "#b45309"
+# 셋째 칸(설명)은 칸 안 흐린 안내 - 빈 칸일 때만 보인다. 오른쪽 설명 열을 없애 창 폭을 줄였다 (2026-09-30 사용자)
+# 묶음 맨 위 한 줄과 묶음 아래 늘 보이는 주황 한 줄 (2026-09-30 사용자 문구)
+LEADS = {"대시보드 연결": "담당자로부터 받은 정보를 입력해주세요."}
+NOTES = {"물류 처리 옵션": "※ 실제 ERPia 에 등록한 택배사·박스·운임과 다를 경우\n   물류관리에서 저장할 수 없습니다."}
+PW_HINTS = {"none": "", "ok": "저장됨 - 바꿀 때만 입력", "bad": "다시 입력 - 저장값이 안 풀림",
+            "refused": "새 비밀번호 입력 - 로그인 거부됨"}   # 빈 칸 안 흐린 안내. 처음('none')은 없음 - 빠지면 저장 때 알린다
+ERPIA_MISSING = "ERPia 를 못 찾음 - [찾기]"
+DEFAULT_PRINTER = "(기본 프린터)"                 # 프린터 목록 맨 위. 저장은 빈 값 = 윈도우 기본 프린터
+MISSING_PRINTER = "이 PC 에 없는 프린터입니다 - 다시 고르세요"
+WRAP_STATUS, WRAP_MSG = "230p", "330p"            # 긴 글이 창을 넓히지 않게 줄바꿈 (포인트라 화면 배율을 따른다)
+GRAY, RED, GREEN, AMBER, PLACEHOLDER = "#6b7280", "#dc2626", "#15803d", "#b45309", "#9ca3af"
 
 
 def dpi_aware():
@@ -678,47 +653,59 @@ class SettingsWindow:
         root.resizable(False, False)
         self.vars = {k: tk.StringVar(master=root) for k in FORM_KEYS}
         self.status, self.msg = tk.StringVar(master=root), tk.StringVar(master=root)
-        self.entries, self.hints = {}, {}
+        self.entries, self.hints, self.printer_missing = {}, {}, False
         frame = ttk.Frame(root, padding=14)
         frame.grid(sticky="nsew")
         top = ttk.Frame(frame)
-        top.grid(row=0, column=0, sticky="ew")
-        self.status_label = ttk.Label(top, textvariable=self.status)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.status_label = ttk.Label(top, textvariable=self.status, wraplength=WRAP_STATUS)
         self.status_label.pack(side="left")
-        self.import_btn = ttk.Button(top, text="기존 폴더에서 가져오기", command=self.on_import)
+        self.import_btn = ttk.Button(top, text="기존 설정값 가져오기", command=self.on_import)
         self.import_btn.pack(side="right")
-        ttk.Label(frame, text=INTRO, foreground=GRAY, justify="left").grid(row=1, column=0, sticky="w", pady=(6, 2))
         for n, (title, fields) in enumerate(ROWS):
             box = ttk.LabelFrame(frame, text=title, padding=(10, 2, 10, 4))
-            box.grid(row=2 + n, column=0, sticky="ew", pady=3)
-            for i, (key, label, hint, kind) in enumerate(fields):
+            box.grid(row=1 + n, column=0, sticky="ew", pady=3)
+            first = 0
+            if title in LEADS:
+                ttk.Label(box, text=LEADS[title], foreground=GRAY).grid(row=0, column=0, columnspan=3, sticky="w",
+                                                                        pady=(0, 2))
+                first = 1
+            for i, (key, label, hint, kind) in enumerate(fields, start=first):
                 ttk.Label(box, text=label, width=18).grid(row=i, column=0, sticky="w", pady=2)   # '기계 계정 비밀번호' 가 들어가게
-                if kind == "printer":
-                    w = ttk.Combobox(box, textvariable=self.vars[key], width=31, state="readonly")
-                elif kind == "choice":
-                    w = ttk.Combobox(box, textvariable=self.vars[key], values=list(PRINT_MODES), width=31, state="readonly")
+                if kind in ("printer", "choice"):
+                    w = ttk.Combobox(box, textvariable=self.vars[key], width=31, state="readonly",
+                                     values=list(PRINT_MODES) if kind == "choice" else ())
                 else:
                     w = ttk.Entry(box, textvariable=self.vars[key], width=33, show="•" if kind == "password" else "")
+                    # 흐린 안내: 칸 위에 얹은 글씨라 칸 값은 빈 채로 있다 (저장되지 않는다). 칸에 들어가면 숨는다 - 커서를 가리지 않게
+                    ph = tk.Label(box, text=hint, fg=PLACEHOLDER, bg="SystemWindow", bd=0, padx=0, pady=0, cursor="xterm")
+                    ph.bind("<Button-1>", lambda _e, entry=w: entry.focus_set())
+                    for event in ("<FocusIn>", "<FocusOut>"):
+                        w.bind(event, lambda _e, k=key: self.sync_hint(k), add="+")
+                    self.vars[key].trace_add("write", lambda *_, k=key: self.sync_hint(k))
+                    self.hints[key] = (ph, hint)
                 w.grid(row=i, column=1, sticky="w", pady=2)
                 self.entries[key] = w
-                col = 2
                 if kind == "path":
                     ttk.Button(box, text="찾기", width=5, command=self.on_browse).grid(row=i, column=2, padx=(4, 0))
-                    col = 3
-                h = ttk.Label(box, text=hint, foreground=GRAY)
-                h.grid(row=i, column=col, columnspan=4 - col, sticky="w", padx=(8, 0))
-                self.hints[key] = (h, hint)
+            row = first + len(fields)
+            if "printer" in (f[0] for f in fields):     # 없는 프린터는 프린터 줄 바로 아래 주황 한 줄 (자동일 때만)
+                self.printer_warn = ttk.Label(box, text=MISSING_PRINTER, foreground=AMBER)
+                self.printer_warn.grid(row=row, column=0, columnspan=3, sticky="w")
+                self.printer_warn.grid_remove()
+                row += 1
             if title in NOTES:
-                ttk.Label(box, text=NOTES[title], foreground=AMBER).grid(row=len(fields), column=0, columnspan=4,
-                                                                         sticky="w", pady=(2, 0))
+                ttk.Label(box, text=NOTES[title], foreground=AMBER, justify="left").grid(row=row, column=0, columnspan=3,
+                                                                                         sticky="w", pady=(2, 0))
+        self.vars["print_mode"].trace_add("write", self.sync_printer)
+        self.msg_label = tk.Label(frame, textvariable=self.msg, fg=RED, wraplength=WRAP_MSG, justify="left", anchor="w")
+        self.msg_label.grid(row=1 + len(ROWS), column=0, sticky="ew", pady=(6, 0))
         bottom = ttk.Frame(frame)
-        bottom.grid(row=2 + len(ROWS), column=0, sticky="ew", pady=(8, 0))
+        bottom.grid(row=2 + len(ROWS), column=0, sticky="e", pady=(4, 0))
         self.close_btn = ttk.Button(bottom, text="닫기", command=self.on_close)
         self.close_btn.pack(side="right")
         self.save_btn = ttk.Button(bottom, text="저장", command=self.on_save)
         self.save_btn.pack(side="right", padx=(0, 6))
-        self.msg_label = tk.Label(bottom, textvariable=self.msg, fg=RED, wraplength=560, justify="left", anchor="w")
-        self.msg_label.pack(side="left", fill="x", expand=True)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.report_callback_exception = self._callback_error
         self.reload()
@@ -736,24 +723,44 @@ class SettingsWindow:
         form, self.state = load_state(self.paths)
         for k in FORM_KEYS:
             self.vars[k].set(form[k])
-        for label, hint in self.hints.values():
-            label.configure(text=hint, foreground=GRAY)
+        for key, (_, hint) in self.hints.items():
+            self.set_hint(key, hint)
         for key in PASSWORD_KEYS:
-            self.hints[key][0].configure(text=PW_HINTS[self.state[key]],
-                                         foreground=AMBER if self.state[key] in ("bad", "refused") else GRAY)
+            self.set_hint(key, PW_HINTS[self.state[key]], AMBER if self.state[key] in ("bad", "refused") else PLACEHOLDER)
         if self.state["erpia_missing"]:
-            self.hints["erpia_path"][0].configure(text="ERPia 를 찾지 못했습니다 - 설치한 뒤 [찾기]", foreground=AMBER)
-        mail_on = "normal" if self.state["mail_site"] else "disabled"
-        for key in ("mail_id", "mail_pw"):
-            self.entries[key].configure(state=mail_on)
-        if not self.state["mail_site"]:
-            self.hints["mail_pw"][0].configure(text="설정에 메일 사이트가 없습니다")
-        values = [""] + self.printers
-        if form["printer"] and form["printer"] not in self.printers:
-            values.append(form["printer"])
-            self.hints["printer"][0].configure(text="이 PC 에 없는 프린터입니다 - 다시 고르세요", foreground=AMBER)
-        self.entries["printer"].configure(values=values)
+            self.set_hint("erpia_path", ERPIA_MISSING, AMBER)
+        self.printer_missing = bool(form["printer"]) and form["printer"] not in self.printers
+        self.entries["printer"].configure(
+            values=[DEFAULT_PRINTER] + self.printers + ([form["printer"]] if self.printer_missing else []))
+        self.vars["printer"].set(form["printer"] or DEFAULT_PRINTER)
+        self.sync_printer()
         self.set_status()
+
+    def set_hint(self, key, text, color=PLACEHOLDER):
+        self.hints[key][0].configure(text=text, fg=color)
+        self.sync_hint(key)
+
+    def sync_hint(self, key):
+        """흐린 안내는 칸이 비었고 그 칸에 들어가 있지 않을 때만 보인다."""
+        label, entry = self.hints[key][0], self.entries[key]
+        try:
+            inside = self.root.focus_get() is entry
+        except KeyError:                    # 콤보 목록이 열려 있는 순간 등 - 칸 안이 아니다
+            inside = False
+        if label.cget("text") and not self.vars[key].get() and not inside:
+            label.place(in_=entry, x=5, rely=0.5, anchor="w")
+        else:
+            label.place_forget()
+
+    def sync_printer(self, *_):
+        """프린터는 출력 방식이 자동일 때만 고른다 - 수동은 엑셀 파일이라 안 쓴다 (2026-09-30). 없는 프린터 주황 줄도
+        자동일 때만. 값은 지우지 않는다 (자동으로 돌아오면 그대로)."""
+        auto = self.vars["print_mode"].get() == PRINT_AUTO
+        self.entries["printer"].configure(state="readonly" if auto else "disabled")
+        if auto and self.printer_missing:
+            self.printer_warn.grid()
+        else:
+            self.printer_warn.grid_remove()
 
     def set_status(self, starting=False):
         """맨 위 줄: 버전과 에이전트 상태. 감독이 까닭을 남기고 멈췄으면 그 까닭을 노란 글씨로 (2026-09-29 검토)."""
@@ -783,6 +790,8 @@ class SettingsWindow:
 
     def form(self):
         out = {k: self.vars[k].get() for k in FORM_KEYS}
+        if out["printer"] == DEFAULT_PRINTER:
+            out["printer"] = ""                 # 보이는 글자일 뿐 - 빈 값이 윈도우 기본 프린터다
         return {k: (v if k in PASSWORD_KEYS else v.strip()) for k, v in out.items()}
 
     # --- 옛 에이전트 ------------------------------------------------------
@@ -891,8 +900,7 @@ class SettingsWindow:
             return
         self.imported_from = folder
         self.reload()
-        bad = [label for key, label in (("agent_pw", "기계 계정"), ("erp_pw", "ERPia"), ("mail_pw", "메일"))
-               if self.state[key] == "bad"]
+        bad = [label for key, label in (("agent_pw", "기계 계정"), ("erp_pw", "ERPia")) if self.state[key] == "bad"]
         self.say(f"가져왔습니다 ({', '.join(names)}). "
                  + (f"다른 PC·계정에서 잠근 비밀번호라 다시 넣어야 합니다: {', '.join(bad)}. " if bad else "")
                  + "확인한 뒤 [저장] 을 누르세요.", GREEN)
