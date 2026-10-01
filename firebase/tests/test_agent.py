@@ -677,6 +677,38 @@ finally:
 check(agent.MUTEX_NAME == (os.environ.get("RPA_AGENT_MUTEX") or r"Local\AFTER_MARKET_RPA_AGENT"),
       "기본 이름 Local\\AFTER_MARKET_RPA_AGENT (시험은 RPA_AGENT_MUTEX)")
 
+print("\n5-2절 실제 동작 - 쇼핑몰 프리셋 (가짜 사용자 설정)")
+with tempfile.TemporaryDirectory() as d:
+    os.environ["RPA_USER_CONFIG"] = os.path.join(d, "RPA_UserConfig.json")
+    try:
+        import rpa_status as st
+        st.write_user_config({"LogIn": {"AdminCode": "x", "ID": "a", "PW": "비밀-시험"}, "Sites": {
+            "PRESET1": {"URL": "https://x/login", "ID": "seller", "PW": "몰-비밀", "Action": ["replay"], "Stts": 9, "Preset": 1,
+                        "note": "지마켓"},
+            "PRESET2": {"URL": "https://y/login", "ID": "seller", "PW": "", "Action": ["replay"], "Stts": 9, "Preset": 2,
+                        "note": "쿠팡"}}})
+        rec1 = {"version": 1, "start_url": "https://x/login", "steps": [{"kind": "goto", "page": 0, "href": "https://x/login"}]}
+        st.write_presets([{"no": 1, "name": "지마켓", "code": "012", "saved_at": None, "record": rec1},
+                          {"no": 2, "name": "쿠팡", "code": "013", "saved_at": None, "record": rec1}])
+        acts = ag.real_actions()
+        msg = acts["set_presets"]({"PRESET1": True})
+        check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 0 and "① 지마켓" in msg, f"켜면 Stts 0, 결과에 이름 ({msg})")
+        acts["set_presets"]({"PRESET1": False})
+        check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 9, "끄면 Stts 9")
+        for args, why in (({"PRESET7": True}, "아는 프리셋"), ({"PRESET2": True}, "켤 수 없")):
+            try:
+                acts["set_presets"](args)
+                check(False, f"거부: {why}")
+            except RuntimeError as e:
+                check(why in str(e), f"거부: {why} ({e})")
+        check(ag.decide({"type": "set_presets", "state": "queued", "expires_at": NOW + 60}, NOW)[0] == "run", "set_presets 는 아는 명령")
+        rows2 = [{"started_at": "2026-09-14T13:55:00", "state": "success", "program": "observer"},
+                 {"started_at": "2026-09-14T13:56:00", "state": "stopped", "program": "prepare"}]
+        check(ag.recent_summary(rows2, _dt.date(2026, 9, 14))[-1] == {"date": "2026-09-14", "success": 0, "failed": 1, "crashed": 0},
+              "옵저버 미리보기는 날짜별 도넛에 안 센다")
+    finally:
+        os.environ.pop("RPA_USER_CONFIG", None)
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

@@ -94,6 +94,10 @@ test("commands: 만들 때 state 가 queued 가 아니면 거부", async () => {
   await assertFails(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ state: "done" })));
 });
 
+test("commands: set_presets 는 관리자가 만들 수 있다 (쇼핑몰 프리셋 켬/끔)", async () => {
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "set_presets", args: { PRESET1: true } })));
+});
+
 test("commands: 모르는 type 은 거부", async () => {
   await assertFails(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "rm_rf" })));
 });

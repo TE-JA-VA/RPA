@@ -47,6 +47,8 @@ $lnkIcon = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\RPA 설정.
 $urlIcon = Select-String -Path "$SM\RPA 대시보드.url" -Pattern "^IconFile=(.*)$" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches[0].Groups[1].Value }
 $unIcon = if ($un) { $un.GetValue("DisplayIcon") }
 Check "아이콘: 설정·대시보드 바로 가기, 앱 및 기능 목록" ((Test-Path $Ico) -and ($lnkIcon -like "$Ico*") -and ($urlIcon -eq $Ico) -and ($unIcon -eq $Ico)) "lnk=$lnkIcon url=$urlIcon un=$unIcon"
+$recLnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\RPA 옵저버.lnk")
+Check "시작 메뉴 'RPA 옵저버' (옵저버 exe, 주황 아이콘)" (($recLnk.TargetPath -eq "$App\Prepare_Observer.exe") -and ($recLnk.IconLocation -like "$App\AFTER_MARKET_PREPARE.ico*")) "target=$($recLnk.TargetPath) icon=$($recLnk.IconLocation)"
 $tk = & $Py -c "import tkinter; r = tkinter.Tk(); r.destroy(); print('tk ok')"
 Check "내장 파이썬 tkinter" ("$tk" -eq "tk ok") "$tk"
 # exe 가 새 윈도우에서 켜지는가 (2026-09-29 노트북: System32 에만 있던 mfc140u.dll 이 exe 에 안 들어가 win32ui 에서 죽었다).
@@ -62,7 +64,7 @@ $X = "$O\exe"
 New-Item -ItemType Directory -Force "$X\cfg" | Out-Null
 Copy-Item "$App\RPA_UserConfig.template.json" "$X\cfg\RPA_UserConfig.json"
 $env:RPA_USER_CONFIG = "$X\cfg\RPA_UserConfig.json"; $env:RPA_PROGRAMDATA = "$X\pd"; $env:RPA_STATUS_DIR = "$X\st"; $env:RPA_UNATTENDED = "1"
-foreach ($e in @(@("ERPia_RPA.exe", "=== 점검 끝"), @("Prepare_RPA.exe", "쓸 수 있는 Action"))) {
+foreach ($e in @(@("ERPia_RPA.exe", "=== 점검 끝"), @("Prepare_RPA.exe", "쓸 수 있는 Action"), @("Prepare_Observer.exe", "옵저버 점검 끝"))) {
     $p = Start-Process "$App\$($e[0])" -ArgumentList "--check" -WorkingDirectory $App -PassThru -WindowStyle Hidden -RedirectStandardOutput "$X\$($e[0]).out.txt" -RedirectStandardError "$X\$($e[0]).err.txt"
     $done = $p.WaitForExit(180000)
     $bytes = [IO.File]::ReadAllBytes("$X\$($e[0]).out.txt") + [IO.File]::ReadAllBytes("$X\$($e[0]).err.txt")
@@ -97,14 +99,14 @@ Check "작업이 AFTER MARKET 감독 사본으로 띄운다" ($q -match "AFTER_M
 $desc = @($Brand.Keys | Where-Object { (Get-Item "$App\python\$_").VersionInfo.FileDescription -eq $Brand[$_] })
 Check "AFTER MARKET 사본 설명 둘 (작업 관리자 '프로세스' 탭 글자)" ($desc.Count -eq 2) ($Brand.Keys | ForEach-Object { "$_=" + (Get-Item "$App\python\$_" -ErrorAction SilentlyContinue).VersionInfo.FileDescription })
 # 탐색기·작업 관리자가 보여 주는 아이콘을 ico 파일의 것과 견준다. 루틴·프리페어 exe 는 Nuitka 로 새로 빌드한 판이어야 맞다 (--exes-from 옛 exe 면 실패)
-# 프리페어만 주황 A (2026-09-30 '나. 주황 A' - 작업 표시줄에서 루틴과 가른다)
+# 프리페어·옵저버는 주황 A (2026-09-30 '나. 주황 A' - 작업 표시줄에서 루틴과 가른다)
 Add-Type -AssemblyName System.Drawing
 function IconPng($path) { $ms = New-Object IO.MemoryStream; [Drawing.Icon]::ExtractAssociatedIcon($path).ToBitmap().Save($ms, [Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()) }
 $IcoPrep = "$App\AFTER_MARKET_PREPARE.ico"
-$want = @{ "ERPia_RPA.exe" = $Ico; "Prepare_RPA.exe" = $IcoPrep }
+$want = @{ "ERPia_RPA.exe" = $Ico; "Prepare_RPA.exe" = $IcoPrep; "Prepare_Observer.exe" = $IcoPrep }
 $Brand.Keys | ForEach-Object { $want["python\$_"] = $Ico }
 $plain = @($want.Keys | Where-Object { (-not (Test-Path "$App\$_")) -or (-not (Test-Path $want[$_])) -or ((IconPng "$App\$_") -ne (IconPng $want[$_])) })
-Check "exe 넷의 아이콘: 루틴·감독·에이전트는 크림 A, 프리페어는 주황 A" (($plain.Count -eq 0) -and ((IconPng $Ico) -ne (IconPng $IcoPrep))) ($plain -join ", ")
+Check "exe 다섯의 아이콘: 루틴·감독·에이전트는 크림 A, 프리페어·옵저버는 주황 A" (($plain.Count -eq 0) -and ((IconPng $Ico) -ne (IconPng $IcoPrep))) ($plain -join ", ")
 
 # 3. 감독 → 에이전트. 인터넷이 있으면: 가짜 비밀번호라 로그인이 거부되고(3) 감독도 같이 끝난다 (틀린 비밀번호로
 #    되풀이하지 않는다). 없으면 (2026-09-29 첫 시험의 샌드박스가 그랬다): 에이전트는 죽지 않고 다시 붙으려 한다

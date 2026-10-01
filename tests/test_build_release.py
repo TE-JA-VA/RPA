@@ -237,11 +237,11 @@ check("종료 코드 = 설정 창과 같다", f"EXIT_RPA_RUNNING = {rs.EXIT_RPA_
 check("내장 파이썬에 tkinter (D:\\AX\\runtime)", br.runtime_has_tkinter(br.RUNTIME_ROOT))
 with tempfile.TemporaryDirectory() as d:
     src = os.path.join(d, "src")
-    for rel in ("ERPia_RPA.exe", "Prepare_RPA.exe"):
+    for rel in br.EXES:
         write(os.path.join(src, rel), rel.encode())
     write(os.path.join(src, st.MANIFEST_NAME), json.dumps({"version": "2026.09.29-4", "builder": "nuitka 4.2.2 · python 3.14.7"}).encode())
     label = br.reuse_exes(src, os.path.join(d, "work"))
-    check("--exes-from: 두 exe 를 가져오고 builder 칸에 적는다", label == "nuitka 4.2.2 · python 3.14.7 (판 2026.09.29-4 에서 가져옴)"
+    check("--exes-from: 세 exe 를 가져오고 builder 칸에 적는다", label == "nuitka 4.2.2 · python 3.14.7 (판 2026.09.29-4 에서 가져옴)"
           and all(os.path.isfile(os.path.join(d, "work", n)) for n in br.EXES), label)
 mfc = [o for o in br.NUITKA_COMMON if o.endswith("mfc140u.dll=mfc140u.dll")]
 check("두 exe 에 mfc140u.dll 을 넣는다 (win32ui 가 쓰는데 Nuitka 는 System32 를 안 뒤진다 - 2026-09-29 노트북)",
@@ -256,12 +256,48 @@ check("두 exe 가 comtypes 의 typelib 시각 비교를 건너뛴다 (PyInstall
 icon_opts = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-icon-from-ico=")]
              for exe in br.EXES}
 prep = getattr(br, "ICON_PREPARE", "")
-check("아이콘: 루틴 exe 는 크림 A, 프리페어 exe 는 주황 A 한 벌씩, 주황 ico 도 판에 들어간다 (2026-09-30 사용자가 고른 '나')",
+check("아이콘: 루틴 exe 는 크림 A, 프리페어·옵저버 exe 는 주황 A 한 벌씩, 주황 ico 도 판에 들어간다 (2026-09-30 사용자가 고른 '나')",
       icon_opts == {"ERPia_RPA.exe": [f"--windows-icon-from-ico={br.ICON}"],
-                    "Prepare_RPA.exe": [f"--windows-icon-from-ico={prep}"]}
+                    "Prepare_RPA.exe": [f"--windows-icon-from-ico={prep}"],
+                    "Prepare_Observer.exe": [f"--windows-icon-from-ico={prep}"]}
       and os.path.isfile(prep) and br.icon_resources(prep)[1]
       and open(prep, "rb").read() != open(br.ICON, "rb").read()
       and ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico") in br.PROGRAM_FILES, icon_opts)
+console = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-console-mode=")]
+           for exe in br.EXES}
+check("콘솔: 루틴·프리페어는 늘 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창 없음)",
+      console == {"ERPia_RPA.exe": ["--windows-console-mode=force"], "Prepare_RPA.exe": ["--windows-console-mode=force"],
+                  "Prepare_Observer.exe": ["--windows-console-mode=attach"]}, str(console))
+rex = br.NUITKA_EXTRA.get("Prepare_Observer.exe", [])
+check("옵저버 exe: rpa_observer.py, tk-inter, Playwright, --check 끝 줄, 작업 표시줄 ID",
+      br.EXES.get("Prepare_Observer.exe") == "rpa_observer.py" and br.TK_PLUGIN in rex
+      and "--include-package=playwright" in rex and br.MARKERS.get("Prepare_Observer.exe") == "옵저버 점검 끝"
+      and 'APP_ID = "AFTERMARKET.RPA.Observer"' in (ROOT / "rpa_observer.py").read_text(encoding="utf-8"))
+with tempfile.TemporaryDirectory() as d:
+    tcl, tkd = br.tcl_tk_dirs(d)
+    cmd = br.nuitka_command("py", "Prepare_Observer.exe", d, (tcl, tkd))
+    check("Tcl/Tk 를 폴더로 꺼내 Nuitka 에 넘긴다 (3.14 는 DLL 안 zipfs - 2026-09-30)",
+          os.path.isfile(os.path.join(tcl, "init.tcl")) and os.path.isfile(os.path.join(tkd, "tk.tcl"))
+          and f"--tcl-library-dir={tcl}" in cmd and f"--tk-library-dir={tkd}" in cmd and cmd[-1].endswith("rpa_observer.py"),
+          str(cmd[-4:]))
+    check("tk-inter 를 안 쓰는 exe 에는 Tcl 옵션이 없다",
+          not any("library-dir" in o for o in br.nuitka_command("py", "Prepare_RPA.exe", d)))
+try:
+    br.build_exes("pyinstaller", tempfile.mkdtemp())
+    check("PyInstaller 로는 만들지 않는다 (옵저버는 tk-inter)", False)
+except RuntimeError:
+    check("PyInstaller 로는 만들지 않는다 (옵저버는 tk-inter)", True)
+with tempfile.TemporaryDirectory() as d:
+    for rel in ("ERPia_RPA.exe", "Prepare_RPA.exe"):
+        write(os.path.join(d, rel), rel.encode())
+    try:
+        br.reuse_exes(d, os.path.join(d, "work"))
+        check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", False)
+    except FileNotFoundError as e:
+        check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", "Prepare_Observer.exe" in str(e), str(e))
+check("설치 파일: 시작 메뉴 'RPA 옵저버' (주황 아이콘, 작업 표시줄 ID 가 옵저버와 같다)",
+      '"{group}\\RPA 옵저버"' in iss and 'Filename: "{app}\\Prepare_Observer.exe"' in iss
+      and 'IconFilename: "{app}\\AFTER_MARKET_PREPARE.ico"' in iss and 'AppUserModelID: "AFTERMARKET.RPA.Observer"' in iss)
 iscc = br.find_iscc()
 check("이 PC 에 Inno Setup (ISCC.exe)", iscc is not None)
 if iscc:

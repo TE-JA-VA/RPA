@@ -30,6 +30,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -42,6 +43,9 @@ except ImportError:  # 윈도우가 아닌 곳에서 대시보드 화면만 시�
     winreg = None
 
 PROGRAMS = {"prepare": "프리페어 RPA", "routine": "루틴 RPA"}
+# 이력(대시보드 '기록' 표)에만 남는 프로그램. 현황 카드·실행 단추·날짜별 도넛은 PROGRAMS 만 본다 (2026-09-30 옵저버 미리보기)
+HISTORY_ONLY = {"observer": "옵저버"}
+LABELS = {**PROGRAMS, **HISTORY_ONLY}
 
 AI_DIR_NAME = "ERPIA_AI"
 STATUS_DIR_NAME = "RPA_STATUS"
@@ -229,6 +233,25 @@ def program_dir():
     here = os.path.dirname(os.path.abspath(__file__))
     dist = os.path.join(here, "dist")
     return dist if os.path.isfile(os.path.join(dist, "Run_All.bat")) else here
+
+
+def setup_playwright_browsers():
+    """exe 로 묶였을 때 브라우저가 어디 있는지 알려준다. playwright 를 import 하기 전에 부른다 (프리페어·옵저버).
+
+    Chromium 은 압축을 풀면 700MB 가 넘어 exe 안에 넣을 수 없다. exe 옆에 ms-playwright 폴더를 두고 그걸 쓴다
+    (개발 중에는 %LOCALAPPDATA%\\ms-playwright). exe 로 묶이면 playwright 가 임시 압축해제 폴더 안의
+    .local-browsers 를 브라우저 위치로 착각해 "Executable doesn't exist" 로 죽으니 기본 위치를 직접 알려준다.
+    """
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    candidate = os.path.join(program_dir(), "ms-playwright")
+    if os.path.isdir(candidate):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = candidate
+        return
+    if packaged():
+        default = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
+        if os.path.isdir(default):
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = default
 
 
 def install_root():
@@ -464,6 +487,17 @@ def read_user_config(path=None):
     return out
 
 
+def _replace_retry(tmp, target):
+    """tmp 를 target 으로 바꿔치기. 다른 프로그램(루틴·메모장·에이전트)이 막 읽고 있는 순간이면 몇 번 다시 한다."""
+    for i in range(5):
+        try:
+            return os.replace(tmp, target)
+        except PermissionError:
+            if i == 4:
+                raise
+            time.sleep(0.1)
+
+
 def write_user_config(data, path=None):
     """사용자 설정을 쓴다. 평문 비밀번호는 잠가서 넣는다. 임시 파일에 다 쓴 뒤 바꿔치기한다 (반쯤 쓴 파일이 남지 않게).
     평문이 남는 사본(.bak)은 만들지 않는다. 기본 자리에 쓰면 옛 파일들을 .old 로 바꾸고 그 목록을 돌려준다
@@ -479,17 +513,7 @@ def write_user_config(data, path=None):
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(data, ensure_ascii=False, indent=2))
             f.write("\n")
-        last = None
-        for _ in range(5):
-            try:
-                os.replace(tmp, target)
-                last = None
-                break
-            except PermissionError as e:   # 루틴이나 메모장이 막 읽고 있는 순간
-                last = e
-                time.sleep(0.1)
-        if last is not None:
-            raise last
+        _replace_retry(tmp, target)
     finally:
         try:
             if os.path.exists(tmp):
@@ -784,6 +808,208 @@ def write_routine_modules(selected, path=None):
     return final
 
 # ---------------------------------------------------------------------------
+# 쇼핑몰 프리셋 (옵저버가 쓰고, 프리페어가 재생하고, 대시보드가 켠다 - 2026-09-30 설계 5절)
+# ---------------------------------------------------------------------------
+PRESETS_NAME = "RPA_Presets.json"
+PRESET_MIN, PRESET_MAX = 2, 10
+REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
+_PRESET_KEY = re.compile(r"(?:PRESET)?(\d+)")
+
+
+def presets_path():
+    """프리셋 파일 자리 - 사용자 설정과 같은 폴더 (시험은 RPA_USER_CONFIG 를 따라온다)."""
+    return os.path.join(os.path.dirname(user_config_path()), PRESETS_NAME)
+
+
+def blank_preset(no):
+    return {"no": no, "name": f"프리셋 {no}", "code": "", "saved_at": None, "record": None}
+
+
+def read_presets():
+    """[{no, name, code, saved_at, record}] - 번호는 1부터 빈틈없이, 최소 PRESET_MIN 개. 파일이 없으면 빈 프리셋 둘.
+    깨졌으면 ValueError (옵저버가 덮어쓰지 않게 - 사람이 고쳐야 한다)."""
+    path = presets_path()
+    if not os.path.isfile(path):
+        return [blank_preset(i + 1) for i in range(PRESET_MIN)]
+    data = _read_json(path)
+    if not isinstance(data, list):
+        raise ValueError(f"{PRESETS_NAME} 가 목록이 아닙니다")
+    if len(data) > PRESET_MAX:
+        raise ValueError(f"{PRESETS_NAME} 에 프리셋이 {len(data)}개 있습니다 (최대 {PRESET_MAX})")
+    out, codes = [], {}
+    for i, d in enumerate(data, 1):
+        # 손으로 고친 파일을 고쳐 읽지 않는다: 번호가 밀리면 다른 쇼핑몰의 Sites.PRESETn 계정과 엮인다 (2026-10-01 검토)
+        if not isinstance(d, dict) or d.get("no") != i:
+            raise ValueError(f"{PRESETS_NAME} 의 {i}번째가 프리셋 {i} 이 아닙니다 (번호가 빠졌거나 바뀌었습니다)")
+        r = d.get("record")
+        if r is not None and not (isinstance(r, dict) and isinstance(r.get("steps"), list)):
+            raise ValueError(f"{PRESETS_NAME} 의 프리셋 {i} 기록 모양이 틀렸습니다")
+        if d.get("saved_at") is not None and not isinstance(d.get("saved_at"), str):
+            raise ValueError(f"{PRESETS_NAME} 의 프리셋 {i} 저장 시각이 틀렸습니다")
+        p = blank_preset(i)
+        p.update(name=str(d.get("name") or p["name"]), code=str(d.get("code") or ""), saved_at=d.get("saved_at"), record=r)
+        if r and p["code"] in codes:
+            raise ValueError(f"{PRESETS_NAME} 의 프리셋 {codes[p['code']]} 와 {i} 이 같은 사이트코드 {p['code']} 입니다")
+        codes[p["code"]] = i
+        out.append(p)
+    while len(out) < PRESET_MIN:
+        out.append(blank_preset(len(out) + 1))
+    return out
+
+
+def write_presets(presets):
+    """프리셋 목록을 통째로 쓴다 (번호는 순서대로 다시 매긴다). PRESET_MIN~PRESET_MAX 개가 아니면 ValueError.
+    임시 파일에 다 쓴 뒤 바꿔치기한다 (반쯤 쓴 파일이 남지 않게). 쓴 목록을 돌려준다."""
+    if not PRESET_MIN <= len(presets) <= PRESET_MAX:
+        raise ValueError(f"프리셋은 {PRESET_MIN}~{PRESET_MAX}개입니다 ({len(presets)}개)")
+    data = [{"no": i, "name": str(p.get("name") or f"프리셋 {i}"), "code": str(p.get("code") or ""),
+             "saved_at": p.get("saved_at"), "record": p.get("record")} for i, p in enumerate(presets, 1)]
+    path = presets_path()
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(data, ensure_ascii=False, indent=1))
+        _replace_retry(tmp, path)            # 에이전트가 1초마다 읽는다
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return data
+
+
+def preset_site_key(no):
+    """사용자 설정 Sites 에서 프리셋 no 의 칸 이름."""
+    return f"PRESET{no}"
+
+
+def save_preset_sites(presets, logins, fresh=()):
+    """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
+    presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
+    기록이 있는 프리셋만 칸을 둔다 - 새 칸과 fresh (이번에 다시 기록한 번호) 는 꺼짐(Stts 9), 나머지 있던 칸의 켬/끔은 그대로
+    (확인 안 한 기록이 다음 자동 실행에 끼지 않게 - 2026-10-01 검토). 기록이 없거나 빠진 번호의 칸은 지운다.
+    사용자 설정이 아예 없으면 FileNotFoundError (자격증명 없는 설정을 새로 만들지 않는다 - write_routine_modules 와 같다)."""
+    data = read_user_config()
+    if not data:
+        raise FileNotFoundError(user_config_path())
+    sites = data.get(SITES_SECTION) if isinstance(data.get(SITES_SECTION), dict) else {}
+    others = {k: v for k, v in sites.items() if not re.fullmatch(r"PRESET\d+", k)}
+    mine = {}
+    for p in presets:
+        if not p.get("record"):
+            continue
+        key = preset_site_key(p["no"])
+        old = sites.get(key) if isinstance(sites.get(key), dict) else {}
+        login_id, pw = logins.get(p["no"], (old.get("ID", ""), None))
+        mine[key] = {"URL": p["record"].get("start_url") or old.get("URL", ""), "ID": (login_id or "").strip(),
+                     "PW": pw or old.get("PW", ""), "Action": [REPLAY_ACTION],
+                     "Stts": 9 if (not old or p["no"] in fresh) else old.get("Stts", 9), "Preset": p["no"], "note": p["name"]}
+    data[SITES_SECTION] = {**others, **mine}       # 프리페어는 이 순서로 돈다 (번호 순)
+    write_user_config(data)
+
+
+def preset_summary():
+    """대시보드용 [{no, name, code, steps, saved_at, has_login, on}] - 기록 내용·아이디·비밀번호는 싣지 않는다.
+    사용자 설정이 없거나 프리셋 파일이 깨졌으면 None (화면이 카드를 숨긴다 - 빈 목록으로 속이지 않는다)."""
+    try:
+        cfg = read_user_config()
+        if not cfg:
+            return None
+        presets = read_presets()
+    except (ValueError, OSError):
+        return None
+    sites = cfg.get(SITES_SECTION) if isinstance(cfg.get(SITES_SECTION), dict) else {}
+    out = []
+    for p in presets:
+        site = sites.get(preset_site_key(p["no"]))
+        site = site if isinstance(site, dict) else {}
+        out.append({"no": p["no"], "name": p["name"], "code": p["code"],
+                    "steps": len((p["record"] or {}).get("steps") or []), "saved_at": p["saved_at"],
+                    "has_login": bool(site.get("ID")) and bool(site.get("PW")),
+                    "on": str(site.get("Stts", "")).strip() == "0"})
+    return out
+
+
+def set_preset_switches(wanted):
+    """{키: 켬} 대로 Sites 의 PRESETn 을 켠다(Stts 0)·끈다(9). 키는 "PRESET1"·"1"·1 (대시보드는 "PRESET1" -
+    숫자 키는 Realtime DB 가 배열로 바꿔 읽는다). 칸이 있는 번호만 다루고, 바꾼 {번호: 켬} 을 돌려준다.
+    아는 번호가 하나도 없으면 ValueError. 켜기는 기록·아이디·비밀번호가 다 있는 것만 (아니면 ValueError, 아무것도 안 바꿈)."""
+    data = read_user_config()
+    if not data:
+        raise FileNotFoundError(user_config_path())
+    sites = data.get(SITES_SECTION) if isinstance(data.get(SITES_SECTION), dict) else {}
+    final = {}
+    for k, v in (wanted or {}).items():
+        m = _PRESET_KEY.fullmatch(str(k))
+        if m and isinstance(sites.get(preset_site_key(int(m.group(1)))), dict):
+            final[int(m.group(1))] = bool(v)
+    if not final:
+        raise ValueError("아는 프리셋이 없습니다")
+    ready = {s["no"] for s in (preset_summary() or []) if s["steps"] and s["has_login"]}
+    blocked = sorted(no for no, on in final.items() if on and no not in ready)
+    if blocked:
+        raise ValueError(f"기록이나 아이디·비밀번호가 없어 켤 수 없습니다: {', '.join(str(n) for n in blocked)}번")
+    for no, on in final.items():
+        sites[preset_site_key(no)]["Stts"] = 0 if on else 9
+    write_user_config(data)
+    return final
+
+
+# ---------------------------------------------------------------------------
+# 관리자 권한과 윈도우 계정 (설정 창·옵저버가 같이 쓴다)
+# ---------------------------------------------------------------------------
+def is_admin():
+    try:
+        return bool(ctypes.WinDLL("shell32").IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def run_as_admin(exe, args, cwd):
+    """exe 를 관리자 권한으로 띄운다 (UAC 요청). 띄웠으면 True, 사용자가 거절하면 False."""
+    sh = ctypes.WinDLL("shell32")
+    sh.ShellExecuteW.restype = ctypes.c_void_p
+    sh.ShellExecuteW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
+                                 ctypes.c_wchar_p, ctypes.c_int)
+    return (sh.ShellExecuteW(None, "runas", exe, subprocess.list2cmdline(list(args)), cwd, 1) or 0) > 32
+
+
+def process_user():
+    """이 프로세스의 윈도우 계정 'PC이름\\사용자' (다른 계정 비밀번호로 권한만 올렸으면 그 계정)."""
+    secur = ctypes.WinDLL("secur32")
+    secur.GetUserNameExW.argtypes = (ctypes.c_int, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint32))
+    size = ctypes.c_uint32(512)
+    buf = ctypes.create_unicode_buffer(size.value)
+    if secur.GetUserNameExW(2, buf, ctypes.byref(size)):                  # NameSamCompatible
+        return buf.value
+    return f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}"
+
+
+def session_user():
+    """이 PC 화면(지금 세션)에 로그인한 계정 'PC이름\\사용자'. 못 알아내면 None."""
+    try:
+        wts = ctypes.WinDLL("wtsapi32")
+        wts.WTSQuerySessionInformationW.argtypes = (ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int,
+                                                    ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint32))
+        wts.WTSFreeMemory.argtypes = (ctypes.c_void_p,)
+        parts = []
+        for info in (7, 5):                                   # WTSDomainName, WTSUserName
+            buf, size = ctypes.c_void_p(), ctypes.c_uint32()
+            # 0xFFFFFFFF = WTS_CURRENT_SESSION (이 프로세스의 세션)
+            if not wts.WTSQuerySessionInformationW(None, 0xFFFFFFFF, info, ctypes.byref(buf), ctypes.byref(size)):
+                return None
+            try:
+                parts.append(ctypes.wstring_at(buf.value))
+            finally:
+                wts.WTSFreeMemory(buf)
+        return f"{parts[0]}\\{parts[1]}" if parts[1] else None
+    except Exception:
+        return None
+
+
+def same_account(a, b):
+    return bool(a) and bool(b) and a.casefold() == b.casefold()
+
+
+# ---------------------------------------------------------------------------
 # 프로세스가 살아 있는지 (강제 종료 감지용)
 # ---------------------------------------------------------------------------
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -861,11 +1087,11 @@ def process_alive(pid, created=None):
         return None
 
 
-# 이름 있는 잠금 (뮤텍스): 에이전트·쇼핑몰 기록기가 'PC 에 하나만' 과 '떠 있다' 를 알린다.
+# 이름 있는 잠금 (뮤텍스): 에이전트·옵저버가 'PC 에 하나만' 과 '떠 있다' 를 알린다.
 # 잡은 프로세스가 끝나면 (죽어도) 윈도우가 푼다.
 SYNCHRONIZE = 0x00100000
 ERROR_ALREADY_EXISTS = 183
-RECORDER_LOCK = os.environ.get("RPA_RECORDER_LOCK") or r"Local\AFTER_MARKET_RPA_RECORDER"   # 시험은 RPA_RECORDER_LOCK 로 따로
+OBSERVER_LOCK = os.environ.get("RPA_OBSERVER_LOCK") or r"Local\AFTER_MARKET_RPA_OBSERVER"   # 시험은 RPA_OBSERVER_LOCK 로 따로
 _LOCKS = {}        # 이름 → 이 프로세스가 잡은 잠금
 
 
@@ -902,10 +1128,10 @@ def lock_held(name):
     return ctypes.get_last_error() == ERROR_ACCESS_DENIED
 
 
-def recorder_open():
-    """쇼핑몰 기록기가 떠 있나 (기록기가 켤 때 hold_lock(RECORDER_LOCK) 을 잡는다). 떠 있는 동안 대시보드는 RPA 를
+def observer_open():
+    """옵저버가 떠 있나 (옵저버가 켤 때 hold_lock(OBSERVER_LOCK) 을 잡는다). 떠 있는 동안 대시보드는 RPA 를
     띄우지 않는다 - RPA 가 화면·마우스를 잡으면 기록하던 사람과 부딪힌다."""
-    return lock_held(RECORDER_LOCK)
+    return lock_held(OBSERVER_LOCK)
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1237,7 @@ def record_start_failure(program, started_at, reason, log_tail=()):
     """프로그램이 기록을 시작하기도 전에 끝났다 (띄운 쪽이 부른다). 이력만 남기고 상태 파일은 건드리지 않는다."""
     stamp = (parse_iso(started_at) or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
     return append_history(history_record({
-        "run_id": f"{program}_{stamp}_nostart", "program": program, "program_label": PROGRAMS.get(program, program),
+        "run_id": f"{program}_{stamp}_nostart", "program": program, "program_label": LABELS.get(program, program),
         "host": socket.gethostname(), "state": "crashed", "reason": reason,
         "started_at": started_at, "finished_at": now_iso(), "log_tail": list(log_tail),
     }))
@@ -1154,7 +1380,7 @@ def start(program, steps=(), title=None):
             "schema": 2,   # 2 = modules / module_flags 키가 있다 (빈 목록일 수 있음)
             "run_id": f"{program}_{datetime.datetime.now():%Y%m%d_%H%M%S}_{pid}",
             "program": program,
-            "program_label": PROGRAMS.get(program, program),
+            "program_label": LABELS.get(program, program),
             "title": title,
             "state": "running",
             "reason": None,
@@ -1593,6 +1819,6 @@ def dashboard_snapshot():
 
 
 def running_programs(snapshot=None):
-    """지금 도는 RPA (PROGRAMS 의 키) 목록. 대시보드 실행·자동 실행·쇼핑몰 기록기가 본다."""
+    """지금 도는 RPA (PROGRAMS 의 키) 목록. 대시보드 실행·자동 실행·옵저버가 본다."""
     snap = snapshot or dashboard_snapshot()
     return [p for p, v in snap["programs"].items() if v and v.get("state") == "running"]

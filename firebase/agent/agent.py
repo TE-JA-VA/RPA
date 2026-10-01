@@ -83,11 +83,14 @@ def recent_summary(rows, today, days=RECENT_DAYS):
     import datetime as dt
     first = today - dt.timedelta(days=days - 1)
     per = {(first + dt.timedelta(days=i)).isoformat(): {"success": 0, "failed": 0, "crashed": 0} for i in range(days)}
+    import rpa_status as st
     for r in rows or []:
+        if r.get("program") in st.HISTORY_ONLY:
+            continue     # 옵저버 미리보기는 RPA 실행이 아니다 - 날짜별 도넛에 안 센다
         d = (r.get("started_at") or "")[:10]
         if d in per:
-            st = r.get("state")
-            per[d]["success" if st == "success" else "crashed" if st == "crashed" else "failed"] += 1
+            state = r.get("state")
+            per[d]["success" if state == "success" else "crashed" if state == "crashed" else "failed"] += 1
     return [{"date": d, **v} for d, v in per.items()]
 
 
@@ -271,7 +274,7 @@ class Uploader:
 # ---------------------------------------------------------------------------
 # 명령
 # ---------------------------------------------------------------------------
-KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule")
+KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule", "set_presets")
 HEARTBEAT_SEC = 5   # 화면은 HEARTBEAT_STALE_SEC(20초) 넘게 없으면 '끊김' - 네 번 놓쳐야 끊김이다
 
 
@@ -381,6 +384,19 @@ def real_actions(policy=None):
         on = [k for k, v in wanted.items() if v]
         return f"실행 모듈을 바꿨습니다 (켬: {', '.join(on)})"
 
+    def do_presets(args):
+        if not isinstance(args, dict) or not args:
+            raise RuntimeError("프리셋 값이 없습니다")
+        try:
+            final = st.set_preset_switches(args)
+        except FileNotFoundError:
+            raise RuntimeError("이 PC 의 사용자 설정이 없습니다") from None
+        except ValueError as e:
+            raise RuntimeError(str(e)) from None
+        names = {p["no"]: p["name"] for p in (st.preset_summary() or [])}
+        on = [f"{chr(0x2460 + no - 1)} {names.get(no, no)}" for no, v in sorted(final.items()) if v]
+        return f"프리셋을 바꿨습니다 (켬: {', '.join(on) or '없음'})"
+
     def do_schedule(args):
         # 검증·저장·다음 시각 계산은 기존 apply_schedule 이 다 한다 (요일 0~6, 5분 단위, 최대 개수)
         changed = dash.apply_schedule(args)
@@ -389,7 +405,7 @@ def real_actions(policy=None):
             return "자동 실행을 껐습니다"
         return f"자동 실행: {dash.schedule_label(sch)}" + ("" if changed else " (변경 없음)")
 
-    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule}
+    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets}
 
 
 def watch_commands(client, path, on_command, stop=None):
@@ -605,6 +621,10 @@ def run(cfg):
                     snap["modules"] = st.read_routine_modules()[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)
                 except Exception:
                     snap["modules"] = None
+                try:
+                    snap["presets"] = st.preset_summary()   # 이름·코드·단계 수·켬 (기록 내용·아이디·비밀번호는 안 싣는다)
+                except Exception:
+                    snap["presets"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
                 snap["schedule"] = st.read_settings().get("schedule")
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
@@ -623,7 +643,7 @@ def run(cfg):
                 snap["version"] = install      # 켤 때 한 번 잰 판 (바뀌지 않으니 비교 body 에는 안 넣는다)
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
                 upload_new_history(hist_path, up, cfg)
-                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("schedule"), snap.get("recent"),
+                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("schedule"), snap.get("recent"),
                                    snap.get("launching")], ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)

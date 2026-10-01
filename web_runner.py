@@ -21,40 +21,15 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sys
 import time
 
 import rpa_status as status
 
 
-def _setup_playwright_browsers():
-    """exe 로 묶였을 때 브라우저가 어디 있는지 알려준다.
-
-    Chromium 은 압축을 풀면 700MB 가 넘어 exe 안에 넣을 수 없다.
-    exe 옆에 ms-playwright 폴더를 두고 그걸 쓰게 한다.
-    (개발 중에는 %LOCALAPPDATA%\\ms-playwright 를 그대로 쓴다)
-    playwright 를 import 하기 전에 정해 두어야 한다.
-    """
-    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        return
-    here = status.program_dir()
-
-    # 1) exe(또는 스크립트) 옆에 ms-playwright 폴더가 있으면 그걸 쓴다 (배포용)
-    candidate = os.path.join(here, "ms-playwright")
-    if os.path.isdir(candidate):
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = candidate
-        return
-
-    # 2) exe 로 묶이면 playwright 가 임시 압축해제 폴더 안의 .local-browsers 를
-    #    브라우저 위치로 착각해서 "Executable doesn't exist" 로 죽는다.
-    #    이 PC 에 이미 받아둔 기본 위치를 직접 알려준다. (Nuitka exe 도 임시 폴더에 풀려 돈다)
-    if status.packaged():
-        default = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
-        if os.path.isdir(default):
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = default
-
-
-_setup_playwright_browsers()
+# exe 로 묶였을 때 브라우저 자리 (playwright 를 import 하기 전에). 옵저버와 같이 쓴다 - rpa_status 에 있다
+status.setup_playwright_browsers()
 
 from playwright.sync_api import TimeoutError as PWTimeout   # noqa: E402
 from playwright.sync_api import sync_playwright             # noqa: E402
@@ -240,6 +215,20 @@ def site_will_run(site):
     return site_stts(site) == STTS_RUN
 
 
+def _replay_problems(name, site):
+    """replay 칸의 프리셋이 재생할 수 있는 것인가 (옵저버에서 기록·저장했나, 사이트코드)."""
+    no = site.get("Preset")
+    try:
+        p = next((x for x in status.read_presets() if x["no"] == no), None)
+    except ValueError as e:
+        return [f"{name}: 프리셋 파일을 읽지 못했습니다 ({e})"]
+    if p is None or not p.get("record"):
+        return [f"{name}: 프리셋 {no} 의 기록이 없습니다 (옵저버에서 기록하고 저장하세요)"]
+    if not re.fullmatch(r"\d{3}", p.get("code") or ""):
+        return [f"{name}: 프리셋 {no} 의 사이트코드가 숫자 세 자리가 아닙니다 ({p.get('code')!r})"]
+    return []
+
+
 def validate_site(name, site):
     """설정 한 건을 검사해 문제 목록을 돌려준다."""
     problems = []
@@ -269,6 +258,8 @@ def validate_site(name, site):
         if a not in ACTIONS:
             problems.append(f"{name}: 모르는 Action '{a}' "
                             f"(쓸 수 있는 값: {', '.join(sorted(ACTIONS))})")
+    if status.REPLAY_ACTION in acts:
+        problems += _replay_problems(name, site)
 
     for placeholder in ("여기에_아이디", "여기에_비밀번호"):
         if site.get("ID") == placeholder or site.get("PW") == placeholder:
@@ -1042,12 +1033,36 @@ def action_mail_download(page, name, site):
     return True
 
 
+def action_replay(page, name, site):
+    """옵저버로 기록한 프리셋을 재생해 엑셀을 받는다. 받은 파일은 (사이트코드)원래이름 으로 ERPIA_AI_EXCEL 에.
+    로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다 (대시보드로 간다). 실패 사진은 기록 폴더에 (받은 파일 폴더가 아니라)."""
+    import web_replay
+    problems = _replay_problems(name, site)
+    if problems:
+        raise RuntimeError(problems[0])
+    p = next(x for x in status.read_presets() if x["no"] == site.get("Preset"))
+    dest = download_dir()
+    log(f"  [{name}] 프리셋 {p['no']} '{p['name']}' 재생 ({len(p['record']['steps'])}단계) → {dest}")
+    rp = web_replay.Replayer(page.context, p["record"], {"ID": site["ID"], "PW": site["PW"]}, dest, p["code"],
+                             log=log, hide_values=True, shot_dir=BASE_DIR)
+    rp.first_page = page
+    rp.fit_viewport = True
+    ok = rp.run()
+    status.metric(f"{name}:files", "받은 엑셀", len(rp.saved), unit="개")
+    if not ok:
+        i, _, why = rp.results[-1] if rp.results else (0, "fail", "알 수 없음")
+        raise RuntimeError(f"{i}단계에서 멈췄습니다: {why}")
+    log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in rp.saved) or '없음'}")
+    return True
+
+
 # 대시보드에 보여줄 Action 이름
 ACTION_LABELS = {
     "login": "로그인",
     "sms_2fa": "문자 2차인증",
     "mail_check": "메일 확인",
     "mail_download": "첨부 내려받기",
+    "replay": "엑셀 받기",
 }
 
 ACTIONS = {
@@ -1055,6 +1070,7 @@ ACTIONS = {
     "sms_2fa": action_sms_2fa,
     "mail_check": action_mail_check,
     "mail_download": action_mail_download,
+    "replay": action_replay,
 }
 
 
@@ -1094,7 +1110,11 @@ def prepare_steps(chosen):
     for name, site in chosen:
         for act in site_actions(site):
             label = ACTION_LABELS.get(act, act)
-            out.append((step_key(name, act), f"{name} {label}" if many else label))
+            if act == status.REPLAY_ACTION:     # 칸 이름(PRESET1) 대신 프리셋 이름
+                out.append((step_key(name, act), f"{site.get('note') or name} {label}"))
+            else:
+                out.append((step_key(name, act), f"{name} {label}" if many else label))
+    return out
     return out
 
 

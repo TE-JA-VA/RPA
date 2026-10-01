@@ -564,6 +564,32 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=10000)
     check(True, "띄우기가 끝나면 풀린다")
 
+    print("5-2절 쇼핑몰 프리셋")
+    SHOPS = [{"no": 1, "name": "지마켓", "code": "012", "steps": 12, "saved_at": "2026-09-30T18:20:00", "has_login": True, "on": False},
+             {"no": 2, "name": "<b>몰</b>", "code": "", "steps": 0, "has_login": False, "on": False}]
+    check(page.is_hidden("#shop-card"), "옛 에이전트(프리셋을 안 올림)면 카드가 없다")
+    db_patch(LIVE, {"presets": SHOPS})
+    page.wait_for_function("document.querySelectorAll('#shop-list label').length === 2", timeout=10000)
+    first = page.text_content("#shop-list label:nth-child(1)")
+    check("① 지마켓 (012) · 12단계 · 9/30 저장" in first, f"줄 글자 ({first})")
+    check(page.text_content("#shop-list label:nth-child(2)").startswith("② <b>몰</b>")
+          and page.locator("#shop-list b").count() == 0, "이름의 꺾쇠는 글자 그대로 (태그가 아니다 - Review Focus 5)")
+    check(page.locator("#shop-list label:nth-child(2) input").is_disabled()
+          and "옵저버" in (page.get_attribute("#shop-list label:nth-child(2)", "title") or ""), "기록이 없는 줄은 스위치가 잠기고 까닭이 보인다")
+    check(page.is_disabled("#shop-apply") and "0/2 켬" in page.text_content("#shop-meta"), "바뀐 게 없으면 적용 비활성")
+    page.click("#shop-list label:nth-child(1)")
+    check(not page.is_disabled("#shop-apply") and "1/2 켬" in page.text_content("#shop-meta"), "켜면 요약·적용 활성")
+    page.click("#shop-apply")
+    time.sleep(1.5)
+    check(db_get(f"{SETTINGS}/presets") == {"PRESET1": True, "PRESET2": False}, f"settings.presets 에 저장 ({db_get(f'{SETTINGS}/presets')})")
+    sent = cmds_of("set_presets")
+    check(len(sent) == 1 and sent[0]["args"] == {"PRESET1": True, "PRESET2": False}, f"set_presets 명령 ({sent})")
+    key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_presets")
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "프리셋을 바꿨습니다 (켬: ① 지마켓)", "started_at": 1, "ended_at": 2})
+    db_put(f"{LIVE}/presets/0/on", True)
+    page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
+    check("1/2 켬" in page.text_content("#shop-meta"), "PC 값이 돌아오면 기준값 갱신")
+
     print("6절 자동 실행")
     check("평일 09:05" in page.text_content("#sch-meta"), "현재 예약 요약")
     check("다음 9월 22일" in page.text_content("#sch-info") and "마지막" in page.text_content("#sch-info"), "다음·마지막 실행")
@@ -897,6 +923,15 @@ with sync_playwright() as pw:
             page.screenshot(path=os.path.join(os.environ["SHOT_DIR"], f"ver_{w}.png"), clip={"x": 0, "y": 0, "width": w, "height": 560})
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
     db_patch(LIVE, {"version": None})
+
+    print("11절 옵저버 미리보기 기록")
+    seed_run("r_rec_0909", "observer", "success", "2026-09-09T08:00:00", 27,
+             log=["[08:00:00] === 미리보기: ① 지마켓 (12단계) ==="])
+    page.click("#tab-history")
+    page.fill("#hist-date", "2026-09-09"); page.dispatch_event("#hist-date", "change")
+    page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-09'", timeout=15000)
+    page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
+    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "옵저버", "기록 표의 프로그램 칸이 '옵저버'")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")

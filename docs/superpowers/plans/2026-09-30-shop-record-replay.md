@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 어느 쇼핑몰에나 쓰는 기록기(`Prepare_Recorder.exe`)로 '로그인 ~ 엑셀 받기' 를 프리셋 ①~⑩ 에 기록하고, 프리페어 RPA 가 켜진 프리셋을 재생해 `(사이트코드)이름.xlsx` 를 `ERPIA_AI_EXCEL` 에 넣으며, 대시보드에서 프리셋을 켜고 끄고 기록기 미리보기 기록을 본다.
+**Goal:** 어느 쇼핑몰에나 쓰는 옵저버(`Prepare_Observer.exe`)로 '로그인 ~ 엑셀 받기' 를 프리셋 ①~⑩ 에 기록하고, 프리페어 RPA 가 켜진 프리셋을 재생해 `(사이트코드)이름.xlsx` 를 `ERPIA_AI_EXCEL` 에 넣으며, 대시보드에서 프리셋을 켜고 끄고 옵저버 미리보기 기록을 본다.
 
-**Architecture:** spike 엔진(`rec.py`)을 `web_replay.py` 로, 한 화면 기록기(`rec_app.py`)를 `rpa_recorder.py` 로 옮긴다. 프리셋 파일·`Sites` 칸·요약·켬끔은 모든 프로그램이 이미 쓰는 `rpa_status.py` 에 두고, 프리페어(`web_runner.py`)에는 Action `replay` 하나, 에이전트에는 명령 `set_presets` 하나, 대시보드에는 '실행 모듈' 과 같은 스위치 카드 하나를 더한다. 빌드는 세 번째 Nuitka exe(tk-inter, 콘솔 attach)를 만든다.
+**Architecture:** spike 엔진(`rec.py`)을 `web_replay.py` 로, 한 화면 옵저버(`rec_app.py`)를 `rpa_observer.py` 로 옮긴다. 프리셋 파일·`Sites` 칸·요약·켬끔은 모든 프로그램이 이미 쓰는 `rpa_status.py` 에 두고, 프리페어(`web_runner.py`)에는 Action `replay` 하나, 에이전트에는 명령 `set_presets` 하나, 대시보드에는 '실행 모듈' 과 같은 스위치 카드 하나를 더한다. 빌드는 세 번째 Nuitka exe(tk-inter, 콘솔 attach)를 만든다.
 
 **Tech Stack:** Python 3.14 (`D:\AX\RPA\.venv`), Playwright sync API + Chromium, tkinter (Tcl/Tk 9), Nuitka 4.2.2 onefile, Inno Setup 6, Firebase RTDB·Firestore·Hosting (에뮬레이터, Java 21), 순수 JS 모듈 화면, pywinauto (화면 시험의 주소줄 치기).
 
@@ -18,7 +18,7 @@
 - 대시보드로 가는 로그 줄(상태 기록 `log_line`)에는 칸에 친 값·주소의 `?` 뒤가 없고 누른 글자는 20자까지 (`web_replay.describe(s, hide_values=True)`).
 - 새로 저장한 프리셋은 `Stts` 9 (꺼짐). 켬/끔은 대시보드 → 명령 `set_presets` `{"PRESET1": true}` → `Stts` 0/9.
 - 프리셋 수 2~10. 사이트코드 숫자 세 자리, 프리셋끼리 겹치지 않는다.
-- 미리보기·기록 때 받은 파일은 `data\기록기\미리보기`·`data\기록기\기록` (`ERPIA_AI_EXCEL` 아님).
+- 미리보기·기록 때 받은 파일은 `data\옵저버\미리보기`·`data\옵저버\기록` (`ERPIA_AI_EXCEL` 아님).
 - 개발 PC: 진짜 `C:\ProgramData\AFTER MARKET\RPA\config` 를 만들지 않는다. `dist\RPA_UserConfig.json` 을 건드리지 않는다. setup.exe 를 돌리지 않는다. 시험은 `RPA_USER_CONFIG`·`RPA_PROGRAMDATA`·`RPA_STATUS_DIR` 를 임시 폴더로.
 - `setup.js` 의 `user`·`agent`·`passwd` 는 Claude 도구로 돌리지 않는다 (이 계획에는 필요 없다).
 - 인코딩: `.iss`·`.ps1` 은 BOM 있는 UTF-8 그대로 (편집 뒤 `tests\test_encoding.py`). 파이썬·문서는 BOM 없는 UTF-8. 작업 폴더는 CRLF (git autocrlf=true).
@@ -30,10 +30,10 @@
 
 ## Review Focus
 
-1. **사람이 `RPA_Presets.json` 을 손으로 고쳐 깨뜨림** → 기록기는 덮어쓰지 않고 알리고 열지 않는다, 프리페어 `--check` 는 문제로 적는다, 대시보드는 카드를 숨긴다 (빈 목록으로 속이지 않는다). 시험: Task 2 (`read_presets`·`preset_summary`), Task 3 (`validate_site`), Task 4 (`load_presets`).
+1. **사람이 `RPA_Presets.json` 을 손으로 고쳐 깨뜨림** → 옵저버는 덮어쓰지 않고 알리고 열지 않는다, 프리페어 `--check` 는 문제로 적는다, 대시보드는 카드를 숨긴다 (빈 목록으로 속이지 않는다). 시험: Task 2 (`read_presets`·`preset_summary`), Task 3 (`validate_site`), Task 4 (`load_presets`).
 2. **두 프리셋이 같은 사이트코드** → 저장 거부 (루틴은 한 코드에 최신 파일 하나만 올리고 나머지는 오류 폴더로 보낸다). 시험: Task 4 `validate_presets`.
 3. **눌러도 파일이 안 받아짐** (사이트가 확인 창을 하나 더 넣은 날) → 정해진 시간 뒤 그 단계 실패로 끝난다. 시험: Task 1 시험 I.
-4. **미리보기 도중 기록기 창을 닫음** → 다음 단계 전에 멈추고 브라우저를 닫는다, 대시보드 기록은 '실패' 한 줄 ('진행 중' 으로 남지 않음). 시험: Task 1 시험 J (`cancel`), Task 4 (`quit` → `cancel`, `finally` 의 `finish`).
+4. **미리보기 도중 옵저버 창을 닫음** → 다음 단계 전에 멈추고 브라우저를 닫는다, 대시보드 기록은 '실패' 한 줄 ('진행 중' 으로 남지 않음). 시험: Task 1 시험 J (`cancel`), Task 4 (`quit` → `cancel`, `finally` 의 `finish`).
 5. **프리셋 이름에 `<b>` 같은 꺾쇠** → 대시보드에 글자 그대로 (태그로 해석되지 않는다). 시험: Task 7.
 
 ## 파일 지도
@@ -46,18 +46,18 @@
 | `tests/stress_web_replay.py` | 새로 | CPU 부하 반복 재생 (따로 돌린다) |
 | `rpa_status.py` | 고침 | 프리셋 파일·`Sites` 칸·요약·켬끔, `LABELS`, 브라우저 자리, 관리자·계정 확인 |
 | `rpa_settings.py` | 고침 | 관리자·계정 확인을 `rpa_status` 것으로 |
-| `tests/test_presets.py` | 새로 | 프리셋·설정·프리페어 replay·기록기 저장 전 확인 |
+| `tests/test_presets.py` | 새로 | 프리셋·설정·프리페어 replay·옵저버 저장 전 확인 |
 | `web_runner.py` | 고침 | Action `replay`, 점검, 단계 이름 |
-| `rpa_recorder.py` | 새로 (spike `rec_app.py`) | 기록기 창 → `Prepare_Recorder.exe` |
-| `tests/check_recorder_ui.py` | 새로 | 기록기 창을 진짜로 띄워 한 바퀴 |
+| `rpa_observer.py` | 새로 (spike `rec_app.py`) | 옵저버 창 → `Prepare_Observer.exe` |
+| `tests/check_observer_ui.py` | 새로 | 옵저버 창을 진짜로 띄워 한 바퀴 |
 | `tools/build_release.py` | 고침 | 세 번째 exe, 콘솔은 exe 마다, Tcl/Tk 꺼내기, 없는 exe 거부 |
 | `tests/test_build_release.py` | 고침 | 위를 확인 |
-| `release/installer.iss` | 고침 | 시작 메뉴 '쇼핑몰 기록기' |
-| `tools/sandbox_inner.ps1` | 고침 | 기록기 `--check`·바로 가기·아이콘 |
-| `firebase/agent/agent.py` | 고침 | 현황 `presets`, 명령 `set_presets`, 도넛에서 기록기 빼기 |
+| `release/installer.iss` | 고침 | 시작 메뉴 'RPA 옵저버' |
+| `tools/sandbox_inner.ps1` | 고침 | 옵저버 `--check`·바로 가기·아이콘 |
+| `firebase/agent/agent.py` | 고침 | 현황 `presets`, 명령 `set_presets`, 도넛에서 옵저버 빼기 |
 | `firebase/tests/test_agent.py` | 고침 | 위를 확인 |
 | `firebase/rules/database.rules.json`, `firebase/tests/rules.test.js` | 고침 | 명령 종류 `set_presets` |
-| `firebase/web/rpa.js`, `firebase/tests/check_web.py` | 고침 | '쇼핑몰 프리셋' 카드, 기록 표 '기록기' |
+| `firebase/web/rpa.js`, `firebase/tests/check_web.py` | 고침 | '쇼핑몰 프리셋' 카드, 기록 표 '옵저버' |
 | `docs/firebase-architecture.md`, 스펙 상태 줄 | 고침 | 파일 지도·데이터 경로·시험 표 |
 
 ## 걸리는 시간 (어림, 한 세션이 직접 할 때 - 2026-09-30 실측으로 고침)
@@ -68,8 +68,8 @@
 | 1 엔진 | 20 | 가짜 쇼핑몰 시험 한 바퀴 3~4분 × 3 |
 | 2 프리셋·설정 | 10 | |
 | 3 프리페어 replay | 10 | 끝까지 도는 시험 1~2분 |
-| 4 기록기 창 | 25 | 옮길 코드가 가장 많다, 창 시험 한 바퀴 3분 |
-| 5 빌드·설치·샌드박스 스크립트 | 15 | 기록기 exe 한 번 빌드 3분 |
+| 4 옵저버 창 | 25 | 옮길 코드가 가장 많다, 창 시험 한 바퀴 3분 |
+| 5 빌드·설치·샌드박스 스크립트 | 15 | 옵저버 exe 한 번 빌드 3분 |
 | 6 에이전트·규칙 | 10 | 규칙 시험은 에뮬레이터 |
 | 7 대시보드 | 15 | 화면 시험 한 바퀴 2~5분 |
 | 8 문서·판 빌드·샌드박스 | 20 | 판 빌드 10분쯤, 샌드박스 3분쯤 (기다림) |
@@ -79,14 +79,14 @@
 
 ---
 
-### Task 0: 이미 끝난 것 확인 (아이콘·기록기 잠금, 2026-09-30)
+### Task 0: 이미 끝난 것 확인 (아이콘·옵저버 잠금, 2026-09-30)
 
 **Files:** 이미 고친 것 - `tools/make_icon.py`, `release/AFTER_MARKET_PREPARE.ico` (새로), `tools/build_release.py` (`ICON_PREPARE`, exe 마다 아이콘, `PROGRAM_FILES` 에 주황 ico), `tests/test_build_release.py` (49), `tools/sandbox_inner.ps1` (프리페어만 주황), `docs/firebase-architecture.md` (시험 표) - 커밋 `4ce8b71`.
 
-**기록기 잠금** (같은 날 17시대 구현, 사용자 "바로 고쳐도 될 것 같은데? 진행해봐"): 기록하는 동안 RPA 가 화면·마우스를 잡지 않게.
-`rpa_status` 에 `hold_lock(name)`·`lock_held(name)`·`recorder_open()`·`RECORDER_LOCK` (`Local\AFTER_MARKET_RPA_RECORDER`, 시험은 `RPA_RECORDER_LOCK`)·`running_programs()`.
-`rpa_dashboard.launch` 는 기록기가 떠 있으면 `쇼핑몰 기록기가 켜져 있습니다. 기록기를 닫은 뒤 실행하세요` 로 거절하고, `Scheduler.tick` 은 닫힐 때까지 기다린다 (건너뛰지 않는다).
-`agent.single_instance`·`rpa_settings.agent_running` 은 `rpa_status` 의 잠금 함수를 쓴다. 기록기 쪽 (켤 때 잠금을 쥐고, RPA 가 돌면 안 켜짐) 은 작업 4 Step 7 `busy_problem`.
+**옵저버 잠금** (같은 날 17시대 구현, 사용자 "바로 고쳐도 될 것 같은데? 진행해봐"): 기록하는 동안 RPA 가 화면·마우스를 잡지 않게.
+`rpa_status` 에 `hold_lock(name)`·`lock_held(name)`·`observer_open()`·`OBSERVER_LOCK` (`Local\AFTER_MARKET_RPA_OBSERVER`, 시험은 `RPA_OBSERVER_LOCK`)·`running_programs()`.
+`rpa_dashboard.launch` 는 옵저버가 떠 있으면 `옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 실행하세요` 로 거절하고, `Scheduler.tick` 은 닫힐 때까지 기다린다 (건너뛰지 않는다).
+`agent.single_instance`·`rpa_settings.agent_running` 은 `rpa_status` 의 잠금 함수를 쓴다. 옵저버 쪽 (켤 때 잠금을 쥐고, RPA 가 돌면 안 켜짐) 은 작업 4 Step 7 `busy_problem`.
 
 - [ ] **Step 1: 빌드 시험이 그대로 통과하는지**
 
@@ -98,7 +98,7 @@ Expected: 마지막 줄 `실패: 없음` (49개).
 Run: `.venv\Scripts\python.exe tests\test_encoding.py`
 Expected: `실패: 없음` (`sandbox_inner.ps1` BOM 유지).
 
-- [ ] **Step 3: 기록기 잠금 시험**
+- [ ] **Step 3: 옵저버 잠금 시험**
 
 Run: `.venv\Scripts\python.exe tests\test_schedule_slots.py`, 그리고 `firebase` 폴더에서 `..\.venv\Scripts\python.exe tests\test_agent.py`
 Expected: `실패: 없음` (6-2절 7개 포함), `131/131 통과`.
@@ -117,7 +117,7 @@ Expected: `실패: 없음` (6-2절 7개 포함), `131/131 통과`.
 - Consumes: 없음 (spike 원본만)
 - Produces:
   - `web_replay.RECORD_VERSION = 1`, `DOWNLOAD_TIMEOUT_MS = 60000`, `CUT = 20`, `SETTLE_MAX_MS`, `OPTIONAL_WAIT`, `NAV_KINDS`, `SESSION_Q`
-  - `web_replay.Recorder(context, sample_dir=None)` - `.steps: list[dict]`, `.pages`, `.samples`, `._page(page)`, `._event(source, ev)`, `._dialog(d)`, `._download(d)` (기록기가 상속한다)
+  - `web_replay.Recorder(context, sample_dir=None)` - `.steps: list[dict]`, `.pages`, `.samples`, `._page(page)`, `._event(source, ev)`, `._dialog(d)`, `._download(d)` (옵저버가 상속한다)
   - `web_replay.user_tab(page) -> bool`, `web_replay.url_path(url) -> str`
   - `web_replay.finalize(steps, record_date: datetime.date, start_url: str, viewport: dict | None = None) -> dict` → `{"version", "start_url", "record_date", "steps"[, "viewport"]}`
   - `web_replay.keep_steps(rec: dict, keep: list[int]) -> dict`
@@ -143,7 +143,7 @@ Copy-Item D:\AX\spike_rec_2026-09-30\spike_test.py D:\AX\RPA\tests\test_web_repl
 # -*- coding: utf-8 -*-
 """[시험용 · 버리는 코드] 가짜 쇼핑몰에서 기록 → (다음 날) 재생 → 서버 기록으로 결과를 확인한다.
 
-사람 역할은 화면 위치를 마우스로 누르고 키보드로 친다 (기록기는 사람이 한 것만 받는다).
+사람 역할은 화면 위치를 마우스로 누르고 키보드로 친다 (옵저버는 사람이 한 것만 받는다).
     python spike_test.py
 """
 import datetime
@@ -157,7 +157,7 @@ import rec
 
 sys.stdout.reconfigure(encoding="utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "out", "시험")        # 이 폴더만 비운다 (기록기 앱의 out\앱 은 건드리지 않는다)
+OUT = os.path.join(HERE, "out", "시험")        # 이 폴더만 비운다 (옵저버 앱의 out\앱 은 건드리지 않는다)
 ```
 
 새로:
@@ -166,7 +166,7 @@ OUT = os.path.join(HERE, "out", "시험")        # 이 폴더만 비운다 (기�
 # -*- coding: utf-8 -*-
 """기록·재생 엔진(web_replay) 시험 - 가짜 쇼핑몰(tests/fake_mall.py)에서 기록 → (다음 날) 재생 → 서버 기록으로 확인한다.
 
-사람 역할은 화면 위치를 마우스로 누르고 키보드로 친다 (기록기는 사람이 한 것만 받는다). 창은 뜨지 않는다.
+사람 역할은 화면 위치를 마우스로 누르고 키보드로 친다 (옵저버는 사람이 한 것만 받는다). 창은 뜨지 않는다.
     .venv\\Scripts\\python.exe tests\\test_web_replay.py
 """
 import datetime
@@ -194,7 +194,7 @@ OUT = tempfile.mkdtemp(prefix="rpa_replay_")   # 받은 파일·실패 사진 (�
 1. 맨 위 설명(`"""[시험용 · 버리는 코드] …` 부터 닫는 `"""` 까지)을 이것으로:
 
 ```python
-"""사이트를 가리지 않는 조작 기록·재생 엔진 (기록기 rpa_recorder 와 프리페어 web_runner 의 replay 가 쓴다).
+"""사이트를 가리지 않는 조작 기록·재생 엔진 (옵저버 rpa_observer 와 프리페어 web_runner 의 replay 가 쓴다).
 
 기록: 누른 것마다 단서를 여러 개 적는다 (id·글자·name·안내 글·칸 이름·위치·같은 글자 중 몇 번째).
       비밀번호 칸은 값을 아예 받지 않는다. 아이디는 '설정의 아이디' 로 바꿔 적는다. 사람이 한 것만 적는다 (isTrusted).
@@ -205,7 +205,7 @@ OUT = tempfile.mkdtemp(prefix="rpa_replay_")   # 받은 파일·실패 사진 (�
 ```
 
 2. `import argparse` 줄을 지운다.
-3. 파일 끝의 `def main():` 부터 `if __name__ == "__main__":` 와 그 아래 `main()` 까지 지운다 (명령줄은 기록기와 프리페어가 맡는다).
+3. 파일 끝의 `def main():` 부터 `if __name__ == "__main__":` 와 그 아래 `main()` 까지 지운다 (명령줄은 옵저버와 프리페어가 맡는다).
 4. `Replayer._pick` 안의 디버그 세 줄을 지운다:
 
 ```python
@@ -263,7 +263,7 @@ Expected: `[통과]` 44줄, 마지막 `실패: 없음` (3~4분).
              {"kind": "goto", "href": "https://shop.example.com/main?sid=abc123&x=1"},
              {"kind": "click", "target": dict(T, tag="a", text="아주아주긴글자가스무자를넘어가는링크이름입니다정말로")}]
         full, hidden = [rec.describe(s) for s in g], [rec.describe(s, hide_values=True) for s in g]
-        check("G: 평소 설명에는 친 값·주소가 다 보인다 (기록기 목록)", "주문 처리 - 비밀아님" in full[0] and "sid=abc123" in full[1])
+        check("G: 평소 설명에는 친 값·주소가 다 보인다 (옵저버 목록)", "주문 처리 - 비밀아님" in full[0] and "sid=abc123" in full[1])
         check("G: 대시보드용 설명에는 친 값·주소 ? 뒤가 없고 누른 글자는 20자까지", "비밀아님" not in hidden[0]
               and "글자" in hidden[0] and "abc123" not in hidden[1] and "https://shop.example.com/main" in hidden[1]
               and "정말로" not in hidden[2] and "…" in hidden[2], str(hidden))
@@ -404,9 +404,9 @@ def describe(s, hide_values=False):
         self.pages, self.watched, self.saved, self.results, self.baseline = {}, set(), [], [], {}
         self.progress = None        # (번호, run/ok/skip/fail, 설명) - 화면이 단계마다 표시
         self.page_hook = None       # 첫 창이 뜨면 (창 자리 맞추기)
-        self.first_page = None      # 이미 있는 창에서 시작 (기록기·프리페어가 연 창)
-        self.fit_viewport = False   # 기록 때 창 안쪽 크기로 (프리페어. 기록기 미리보기는 창 자리를 맞춘다)
-        self.cancel = None          # threading.Event - 켜지면 다음 단계 전에 멈춘다 (기록기 창을 닫음)
+        self.first_page = None      # 이미 있는 창에서 시작 (옵저버·프리페어가 연 창)
+        self.fit_viewport = False   # 기록 때 창 안쪽 크기로 (프리페어. 옵저버 미리보기는 창 자리를 맞춘다)
+        self.cancel = None          # threading.Event - 켜지면 다음 단계 전에 멈춘다 (옵저버 창을 닫음)
         self.download_timeout_ms = DOWNLOAD_TIMEOUT_MS
         self.elapsed = 0.0
 ```
@@ -419,7 +419,7 @@ def describe(s, hide_values=False):
     def run(self):
         if self.rec.get("version") != RECORD_VERSION:
             raise ValueError(f"모르는 기록 형식입니다 (version {self.rec.get('version')!r}) - "
-                             "기록기와 프리페어를 같은 판으로 맞추세요")
+                             "옵저버와 프리페어를 같은 판으로 맞추세요")
         page = self.first_page or self.context.new_page()
         if self.page_hook:
             self.page_hook(page)
@@ -438,7 +438,7 @@ def describe(s, hide_values=False):
         for i, s in enumerate(steps, 1):
             text = describe(s, self.hide_values)
             if self.cancel is not None and self.cancel.is_set():
-                self.results.append((i, "fail", "멈춤 - 기록기 창을 닫았습니다"))
+                self.results.append((i, "fail", "멈춤 - 옵저버 창을 닫았습니다"))
                 self.log(f"  {i:2d}/{len(steps)} {text}  - 멈춤 (창을 닫았습니다)")
                 if self.progress:
                     self.progress(*self.results[-1])
@@ -565,7 +565,7 @@ Expected: `web_replay.py`, `tests/fake_mall.py`, `tests/test_web_replay.py`, `te
 **Interfaces:**
 - Consumes: 없음 (`web_replay` 의 기록 dict 모양만: `record["steps"]`, `record["start_url"]`)
 - Produces (`rpa_status`):
-  - `HISTORY_ONLY = {"recorder": "기록기"}`, `LABELS = {**PROGRAMS, **HISTORY_ONLY}`
+  - `HISTORY_ONLY = {"observer": "옵저버"}`, `LABELS = {**PROGRAMS, **HISTORY_ONLY}`
   - `PRESETS_NAME = "RPA_Presets.json"`, `PRESET_MIN = 2`, `PRESET_MAX = 10`, `REPLAY_ACTION = "replay"`
   - `presets_path() -> str`, `blank_preset(no) -> dict`, `read_presets() -> list[dict]` (`{no, name, code, saved_at, record}`, 깨졌으면 `ValueError`), `write_presets(presets) -> list[dict]` (2~10 아니면 `ValueError`)
   - `preset_site_key(no) -> "PRESETn"`, `save_preset_sites(presets, logins: {no: (id, pw 또는 None)}) -> None` (설정 없으면 `FileNotFoundError`)
@@ -580,7 +580,7 @@ Create `tests/test_presets.py`:
 
 ```python
 """쇼핑몰 프리셋 시험 - 프리셋 파일·사용자 설정 Sites 의 PRESETn 칸·대시보드 요약·켬끔 (rpa_status),
-프리페어의 replay (web_runner), 기록기의 저장 전 확인 (rpa_recorder). 창은 뜨지 않는다.
+프리페어의 replay (web_runner), 옵저버의 저장 전 확인 (rpa_observer). 창은 뜨지 않는다.
 
 실제 설정은 건드리지 않는다. RPA_USER_CONFIG·RPA_PROGRAMDATA·RPA_STATUS_DIR 를 임시 폴더로.
     .venv\\Scripts\\python.exe tests\\test_presets.py
@@ -597,7 +597,7 @@ TMP = tempfile.mkdtemp(prefix="rpa_presets_")
 os.environ["RPA_USER_CONFIG"] = os.path.join(TMP, "config", "RPA_UserConfig.json")
 os.environ["RPA_PROGRAMDATA"] = os.path.join(TMP, "programdata")
 os.environ["RPA_STATUS_DIR"] = os.path.join(TMP, "status")
-os.environ["RPA_RECORDER_LOCK"] = rf"Local\AFTER_MARKET_RPA_RECORDER_PRESETS_TEST_{os.getpid()}"   # 개발 PC 의 진짜 에이전트가 기다리지 않게
+os.environ["RPA_OBSERVER_LOCK"] = rf"Local\AFTER_MARKET_RPA_OBSERVER_PRESETS_TEST_{os.getpid()}"   # 개발 PC 의 진짜 에이전트가 기다리지 않게
 os.makedirs(os.path.join(TMP, "config"))
 os.makedirs(os.path.join(TMP, "programdata", "config"))    # 새 구조로 보이게 (기록 폴더가 programdata\data 가 된다)
 ROOT = Path(__file__).resolve().parent.parent
@@ -694,14 +694,14 @@ check("깨진 프리셋 파일은 ValueError (덮어쓰지 않게)", raises(Valu
 check("깨진 파일이면 요약은 없음 (빈 목록으로 속이지 않는다)", st.preset_summary() is None)
 st.write_presets(ps)
 
-print("=== 2. 기록기 미리보기는 이력에만 ===")
-st.start("recorder", [("s1", "하나")], title="① 지마켓")
+print("=== 2. 옵저버 미리보기는 이력에만 ===")
+st.start("observer", [("s1", "하나")], title="① 지마켓")
 st.step("s1")
 st.log_line("[10:00:00] 미리보기 성공")
 st.finish("success")
-rows = st.read_history(program="recorder")
-check("기록기 미리보기는 이력에 '기록기' 로 남는다", bool(rows) and rows[0]["program_label"] == "기록기", str(rows[:1]))
-check("현황 카드(프로그램 목록)에는 안 나온다", "recorder" not in st.dashboard_snapshot()["programs"])
+rows = st.read_history(program="observer")
+check("옵저버 미리보기는 이력에 '옵저버' 로 남는다", bool(rows) and rows[0]["program_label"] == "옵저버", str(rows[:1]))
+check("현황 카드(프로그램 목록)에는 안 나온다", "observer" not in st.dashboard_snapshot()["programs"])
 
 print("=== 3. 관리자·계정 확인 (설정 창과 같이 쓴다) ===")
 import rpa_settings as rs  # noqa: E402
@@ -725,8 +725,8 @@ Expected: `AttributeError: module 'rpa_status' has no attribute 'presets_path'` 
 2. `PROGRAMS = {"prepare": "프리페어 RPA", "routine": "루틴 RPA"}` 바로 아래:
 
 ```python
-# 이력(대시보드 '기록' 표)에만 남는 프로그램. 현황 카드·실행 단추·날짜별 도넛은 PROGRAMS 만 본다 (2026-09-30 기록기 미리보기)
-HISTORY_ONLY = {"recorder": "기록기"}
+# 이력(대시보드 '기록' 표)에만 남는 프로그램. 현황 카드·실행 단추·날짜별 도넛은 PROGRAMS 만 본다 (2026-09-30 옵저버 미리보기)
+HISTORY_ONLY = {"observer": "옵저버"}
 LABELS = {**PROGRAMS, **HISTORY_ONLY}
 ```
 
@@ -735,7 +735,7 @@ LABELS = {**PROGRAMS, **HISTORY_ONLY}
 
 ```python
 def setup_playwright_browsers():
-    """exe 로 묶였을 때 브라우저가 어디 있는지 알려준다. playwright 를 import 하기 전에 부른다 (프리페어·기록기).
+    """exe 로 묶였을 때 브라우저가 어디 있는지 알려준다. playwright 를 import 하기 전에 부른다 (프리페어·옵저버).
 
     Chromium 은 압축을 풀면 700MB 가 넘어 exe 안에 넣을 수 없다. exe 옆에 ms-playwright 폴더를 두고 그걸 쓴다
     (개발 중에는 %LOCALAPPDATA%\\ms-playwright). exe 로 묶이면 playwright 가 임시 압축해제 폴더 안의
@@ -757,7 +757,7 @@ def setup_playwright_browsers():
 
 ```python
 # ---------------------------------------------------------------------------
-# 쇼핑몰 프리셋 (기록기가 쓰고, 프리페어가 재생하고, 대시보드가 켠다 - 2026-09-30 설계 5절)
+# 쇼핑몰 프리셋 (옵저버가 쓰고, 프리페어가 재생하고, 대시보드가 켠다 - 2026-09-30 설계 5절)
 # ---------------------------------------------------------------------------
 PRESETS_NAME = "RPA_Presets.json"
 PRESET_MIN, PRESET_MAX = 2, 10
@@ -776,7 +776,7 @@ def blank_preset(no):
 
 def read_presets():
     """[{no, name, code, saved_at, record}] - 번호는 1부터 빈틈없이, 최소 PRESET_MIN 개. 파일이 없으면 빈 프리셋 둘.
-    깨졌으면 ValueError (기록기가 덮어쓰지 않게 - 사람이 고쳐야 한다)."""
+    깨졌으면 ValueError (옵저버가 덮어쓰지 않게 - 사람이 고쳐야 한다)."""
     path = presets_path()
     if not os.path.isfile(path):
         return [blank_preset(i + 1) for i in range(PRESET_MIN)]
@@ -891,7 +891,7 @@ def set_preset_switches(wanted):
 
 
 # ---------------------------------------------------------------------------
-# 관리자 권한과 윈도우 계정 (설정 창·기록기가 같이 쓴다)
+# 관리자 권한과 윈도우 계정 (설정 창·옵저버가 같이 쓴다)
 # ---------------------------------------------------------------------------
 def is_admin():
     try:
@@ -916,7 +916,7 @@ def run_as_admin(exe, args, cwd):
 `def is_admin():` 부터 `def same_account(a, b): return …` 까지(`relaunch_as_admin` 포함)를 이것으로 바꾼다:
 
 ```python
-# 관리자·계정 확인은 기록기도 쓴다 - rpa_status 에 있다 (시험은 이 모듈의 이름을 바꿔 끼운다)
+# 관리자·계정 확인은 옵저버도 쓴다 - rpa_status 에 있다 (시험은 이 모듈의 이름을 바꿔 끼운다)
 is_admin, process_user, session_user, same_account = st.is_admin, st.process_user, st.session_user, st.same_account
 
 
@@ -939,7 +939,7 @@ Expected: `실패: 없음`.
 - [ ] **Step 6: graphify·변경 확인**
 
 Run: `graphify update .`, `git status --short`
-제안 커밋: `프리셋: 파일·Sites 칸·요약·켬끔을 rpa_status 에, 기록기 이력 이름, 관리자·계정 확인을 설정 창과 같이`.
+제안 커밋: `프리셋: 파일·Sites 칸·요약·켬끔을 rpa_status 에, 옵저버 이력 이름, 관리자·계정 확인을 설정 창과 같이`.
 
 ---
 
@@ -1037,7 +1037,7 @@ Expected: 4절 첫 줄들이 `[실패]` (`모르는 Action 'replay'` 가 문제�
 2. `def _setup_playwright_browsers():` 부터 그 아래 호출 줄 `_setup_playwright_browsers()` 까지(29~57줄)를 이것으로:
 
 ```python
-# exe 로 묶였을 때 브라우저 자리 (playwright 를 import 하기 전에). 기록기와 같이 쓴다 - rpa_status 에 있다
+# exe 로 묶였을 때 브라우저 자리 (playwright 를 import 하기 전에). 옵저버와 같이 쓴다 - rpa_status 에 있다
 status.setup_playwright_browsers()
 ```
 
@@ -1052,14 +1052,14 @@ status.setup_playwright_browsers()
 
 ```python
 def _replay_problems(name, site):
-    """replay 칸의 프리셋이 재생할 수 있는 것인가 (기록기에서 기록·저장했나, 사이트코드)."""
+    """replay 칸의 프리셋이 재생할 수 있는 것인가 (옵저버에서 기록·저장했나, 사이트코드)."""
     no = site.get("Preset")
     try:
         p = next((x for x in status.read_presets() if x["no"] == no), None)
     except ValueError as e:
         return [f"{name}: 프리셋 파일을 읽지 못했습니다 ({e})"]
     if p is None or not p.get("record"):
-        return [f"{name}: 프리셋 {no} 의 기록이 없습니다 (기록기에서 기록하고 저장하세요)"]
+        return [f"{name}: 프리셋 {no} 의 기록이 없습니다 (옵저버에서 기록하고 저장하세요)"]
     if not re.fullmatch(r"\d{3}", p.get("code") or ""):
         return [f"{name}: 프리셋 {no} 의 사이트코드가 숫자 세 자리가 아닙니다 ({p.get('code')!r})"]
     return []
@@ -1069,7 +1069,7 @@ def _replay_problems(name, site):
 
 ```python
 def action_replay(page, name, site):
-    """기록기로 기록한 프리셋을 재생해 엑셀을 받는다. 받은 파일은 (사이트코드)원래이름 으로 ERPIA_AI_EXCEL 에.
+    """옵저버로 기록한 프리셋을 재생해 엑셀을 받는다. 받은 파일은 (사이트코드)원래이름 으로 ERPIA_AI_EXCEL 에.
     로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다 (대시보드로 간다). 실패 사진은 기록 폴더에 (받은 파일 폴더가 아니라)."""
     import web_replay
     problems = _replay_problems(name, site)
@@ -1120,22 +1120,22 @@ Expected: `실패: 없음` (web_runner 를 부르는 자리 찾기 시험).
 
 ---
 
-### Task 4: 기록기 창 `rpa_recorder.py`
+### Task 4: 옵저버 창 `rpa_observer.py`
 
 **Files:**
-- Create: `rpa_recorder.py` (spike `rec_app.py` 를 옮기고 고친다)
-- Create: `tests/check_recorder_ui.py`
+- Create: `rpa_observer.py` (spike `rec_app.py` 를 옮기고 고친다)
+- Create: `tests/check_observer_ui.py`
 - Modify: `tests/test_presets.py` (5절)
 
 **Interfaces:**
 - Consumes: Task 1 `web_replay` 전부 (`Recorder`, `finalize(…, viewport=)`, `keep_steps`, `describe(…, hide_values=True)`, `Replayer` + `cancel`); Task 2 `st.read_presets`, `st.write_presets`, `st.save_preset_sites`, `st.presets_path`, `st.preset_site_key`, `st.read_user_config`, `st.SITES_SECTION`, `st.unseal`, `st.data_dir`, `st.program_dir`, `st.packaged`, `st.setup_playwright_browsers`, `st.is_admin`, `st.run_as_admin`, `st.process_user`, `st.session_user`, `st.same_account`, `st.start`/`step`/`note`/`fail_step`/`log_line`/`finish`
-- Consumes (Task 0, 이미 있음): `st.hold_lock`, `st.RECORDER_LOCK`, `st.running_programs`, `st.PROGRAMS`
-- Produces: `rpa_recorder.main(argv=None) -> int`, `check() -> 0`, `CHECK_DONE = "기록기 점검 끝"`, `APP_ID = "AFTERMARKET.RPA.Recorder"`, `ICON_NAME = "AFTER_MARKET_PREPARE.ico"`, `load_presets() -> list[dict]` (`ValueError`), `validate_presets(presets) -> (no, 문장) | None`, `start_problem(me=None, session=None) -> str | None`, `self_command(args) -> (exe, list)`, `stored_password(no) -> str`, `new_root()`, `dpi_scale()`, `frame_rect(hwnd)`, `App(root, scale, presets, hint="", fake_creds=None)` (시험 고리 `on_ready`·`on_recording`·`on_stopped`·`on_human_done`·`on_preview_done`), 모듈 이름 `rec` (= `web_replay`)
+- Consumes (Task 0, 이미 있음): `st.hold_lock`, `st.OBSERVER_LOCK`, `st.running_programs`, `st.PROGRAMS`
+- Produces: `rpa_observer.main(argv=None) -> int`, `check() -> 0`, `CHECK_DONE = "옵저버 점검 끝"`, `APP_ID = "AFTERMARKET.RPA.Observer"`, `ICON_NAME = "AFTER_MARKET_PREPARE.ico"`, `load_presets() -> list[dict]` (`ValueError`), `validate_presets(presets) -> (no, 문장) | None`, `start_problem(me=None, session=None) -> str | None`, `self_command(args) -> (exe, list)`, `stored_password(no) -> str`, `new_root()`, `dpi_scale()`, `frame_rect(hwnd)`, `App(root, scale, presets, hint="", fake_creds=None)` (시험 고리 `on_ready`·`on_recording`·`on_stopped`·`on_human_done`·`on_preview_done`), 모듈 이름 `rec` (= `web_replay`)
 
 - [ ] **Step 1: 옮기기**
 
 ```powershell
-Copy-Item D:\AX\spike_rec_2026-09-30\rec_app.py D:\AX\RPA\rpa_recorder.py
+Copy-Item D:\AX\spike_rec_2026-09-30\rec_app.py D:\AX\RPA\rpa_observer.py
 ```
 
 - [ ] **Step 2: 실패하는 시험을 쓴다 (`tests/test_presets.py` 5절)**
@@ -1143,8 +1143,8 @@ Copy-Item D:\AX\spike_rec_2026-09-30\rec_app.py D:\AX\RPA\rpa_recorder.py
 끝의 세 줄 앞에 넣는다:
 
 ```python
-print("=== 5. 기록기 저장 전 확인 (rpa_recorder) ===")
-import rpa_recorder as rr  # noqa: E402
+print("=== 5. 옵저버 저장 전 확인 (rpa_observer) ===")
+import rpa_observer as rr  # noqa: E402
 
 R = {"steps": [{"kind": "goto"}]}
 
@@ -1167,43 +1167,43 @@ st.start("prepare", ["a"])
 st.flush()
 busy = rr.busy_problem()
 st.finish("success")
-check("RPA 가 돌고 있으면 기록기를 안 연다 (RPA 가 화면·마우스를 쓴다)", "프리페어 RPA 가 돌고 있습니다" in (busy or ""), str(busy))
-check("켜면 기록기 잠금을 쥔다 - 쥔 동안 대시보드는 RPA 를 안 띄우고 자동 실행은 기다린다",
-      rr.busy_problem() is None and st.recorder_open())
+check("RPA 가 돌고 있으면 옵저버를 안 연다 (RPA 가 화면·마우스를 쓴다)", "프리페어 RPA 가 돌고 있습니다" in (busy or ""), str(busy))
+check("켜면 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는 RPA 를 안 띄우고 자동 실행은 기다린다",
+      rr.busy_problem() is None and st.observer_open())
 hold = st.hold_lock
 st.hold_lock = lambda name: False
-check("기록기가 이미 떠 있으면 하나 더 안 연다", "이미 켜져" in (rr.busy_problem() or ""))
+check("옵저버가 이미 떠 있으면 하나 더 안 연다", "이미 켜져" in (rr.busy_problem() or ""))
 st.hold_lock = hold
 exe, params = rr.self_command(["--x"])
-check("소스로 돌 때 다시 띄우기는 파이썬 + 이 파일", exe == sys.executable and params[0].endswith("rpa_recorder.py")
+check("소스로 돌 때 다시 띄우기는 파이썬 + 이 파일", exe == sys.executable and params[0].endswith("rpa_observer.py")
       and params[1:] == ["--x"])
-r = subprocess.run([sys.executable, str(ROOT / "rpa_recorder.py"), "--check"], capture_output=True, env=dict(os.environ),
+r = subprocess.run([sys.executable, str(ROOT / "rpa_observer.py"), "--check"], capture_output=True, env=dict(os.environ),
                    timeout=120)
 out = (r.stdout + r.stderr).decode("utf-8", "replace")
 check("--check 는 창 없이 끝 줄을 찍고 관리자 권한을 묻지 않는다", r.returncode == 0 and rr.CHECK_DONE in out, out[-400:])
 with open(st.presets_path(), "w", encoding="utf-8") as f:
     f.write("{깨진")
-check("깨진 프리셋 파일이면 기록기는 열지 않는다 (덮어쓰지 않게 - Review Focus 1)", raises(ValueError, rr.load_presets))
+check("깨진 프리셋 파일이면 옵저버는 열지 않는다 (덮어쓰지 않게 - Review Focus 1)", raises(ValueError, rr.load_presets))
 ```
 
 Run: `.venv\Scripts\python.exe tests\test_presets.py`
 Expected: 5절에서 `ModuleNotFoundError: No module named 'rec'` (복사한 spike 파일이 아직 spike 엔진 이름을 부른다) 로 멈춘다.
 
-- [ ] **Step 3: 머리·상수 (`rpa_recorder.py`)**
+- [ ] **Step 3: 머리·상수 (`rpa_observer.py`)**
 
 1. 맨 위 설명을 이것으로:
 
 ```python
 # -*- coding: utf-8 -*-
-r"""쇼핑몰 기록기 - 왼쪽 브라우저(주소줄 있음), 오른쪽 프리셋 ①~⑩ 과 사람이 한 조작 목록, 아래 미리보기·저장.
+r"""옵저버 - 왼쪽 브라우저(주소줄 있음), 오른쪽 프리셋 ①~⑩ 과 사람이 한 조작 목록, 아래 미리보기·저장.
 
-    시작 메뉴 '쇼핑몰 기록기' (Prepare_Recorder.exe). 켤 때 관리자 권한을 묻는다 (설정 폴더는 관리자만 고칠 수 있다).
-    Prepare_Recorder.exe --check      창 없이 확인하고 끝 줄 '기록기 점검 끝' (빌드·샌드박스)
-    .venv\Scripts\python.exe rpa_recorder.py   개발 PC 에서는 RPA_USER_CONFIG·RPA_PROGRAMDATA 로 시험 폴더를 가리킨 채로만
+    시작 메뉴 'RPA 옵저버' (Prepare_Observer.exe). 켤 때 관리자 권한을 묻는다 (설정 폴더는 관리자만 고칠 수 있다).
+    Prepare_Observer.exe --check      창 없이 확인하고 끝 줄 '옵저버 점검 끝' (빌드·샌드박스)
+    .venv\Scripts\python.exe rpa_observer.py   개발 PC 에서는 RPA_USER_CONFIG·RPA_PROGRAMDATA 로 시험 폴더를 가리킨 채로만
 
 프리셋마다 '로그인 ~ 엑셀 받기' 기록 하나 → 사용자 설정 옆 RPA_Presets.json (rpa_status.read_presets/write_presets).
 아이디·비밀번호는 사용자 설정 Sites 의 PRESETn 칸에 (비밀번호는 쓰는 순간 잠긴다, rpa_status.save_preset_sites).
-설계: docs/superpowers/specs/2026-09-30-shop-record-replay-design.md 4절. 화면 시험: tests/check_recorder_ui.py
+설계: docs/superpowers/specs/2026-09-30-shop-record-replay-design.md 4절. 화면 시험: tests/check_observer_ui.py
 브라우저를 이 창 속에 끼우지 않는다 (SetParent 로 끼우면 한글 입력·포커스가 흔들린다). 기록 창 왼쪽에 붙여 두고 같이 옮긴다.
 Playwright 는 한 스레드에서만 부를 수 있어 일꾼 스레드가 브라우저를 모두 맡고, 화면(tkinter)과는 큐로만 주고받는다.
 """
@@ -1224,13 +1224,13 @@ import web_replay as rec                           # noqa: E402
 3. 상수 `HERE`·`OUT`·`PRESET_FILE`·`MIN_PRESETS, MAX_PRESETS = 2, 10` 네 줄을 이것으로:
 
 ```python
-REC_DIR = os.path.join(st.data_dir(), "기록기")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
+REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
 RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
 MIN_PRESETS, MAX_PRESETS = st.PRESET_MIN, st.PRESET_MAX
-APP_ID = "AFTERMARKET.RPA.Recorder"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
+APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 주황 A (tools/make_icon.py)
-CHECK_DONE = "기록기 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
+CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
 ```
 
 - [ ] **Step 4: 일꾼 (`class Worker`)**
@@ -1243,7 +1243,7 @@ CHECK_DONE = "기록기 점검 끝"                              # --check 끝 �
         self.bounds, self.ui, self.hint, self.cmd = bounds, ui, hint, queue.Queue()
         self.ctx = self.prof = self.page = self.recorder = None
         self.rec_no = None
-        self.cancel = threading.Event()   # 기록기 창을 닫으면 켠다 - 미리보기가 다음 단계 전에 멈춘다
+        self.cancel = threading.Event()   # 옵저버 창을 닫으면 켠다 - 미리보기가 다음 단계 전에 멈춘다
         self.human = None                 # 시험: 사람 대신 조작할 함수
 ```
 
@@ -1274,13 +1274,13 @@ CHECK_DONE = "기록기 점검 끝"                              # --check 끝 �
 
 ```python
     def _do_preview(self, record, ids, creds, code, label):
-        """새 프로필 브라우저로 켜 둔 단계를 따라 한다. 한 번 할 때마다 상태 기록 'recorder' 한 건 (대시보드 '기록').
+        """새 프로필 브라우저로 켜 둔 단계를 따라 한다. 한 번 할 때마다 상태 기록 'observer' 한 건 (대시보드 '기록').
         로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다."""
         where = self._rec_bounds()
         self.cancel.clear()
         stamp = lambda: datetime.datetime.now().strftime("[%H:%M:%S]")   # noqa: E731
         steps = record["steps"]
-        st.start("recorder", [(f"s{i}", rec.describe(s, hide_values=True)) for i, s in enumerate(steps, 1)], title=label)
+        st.start("observer", [(f"s{i}", rec.describe(s, hide_values=True)) for i, s in enumerate(steps, 1)], title=label)
         st.log_line(f"{stamp()} === 미리보기: {label} ({len(steps)}단계) ===")
         ok, why, saved, sec = False, "미리보기가 끝까지 가지 못했습니다", [], 0.0
         ctx, prof = launch(self.p, slow_mo=120)     # 새 프로필 = RPA 가 혼자 돌 때처럼 로그아웃 상태
@@ -1392,7 +1392,7 @@ class App:
             self.presets[0].update(name="가짜 쇼핑몰", code="012", id=fake_creds[0], pw=fake_creds[1])
 ```
 
-(그 아래 `self.cur, self.recording, …` 부터는 그대로.) `root.title("AFTER MARKET - 사용자 행위 기록 (시험판)")` 은 `root.title("AFTER MARKET - 쇼핑몰 기록기")` 로.
+(그 아래 `self.cur, self.recording, …` 부터는 그대로.) `root.title("AFTER MARKET - 사용자 행위 기록 (시험판)")` 은 `root.title("AFTER MARKET - 옵저버")` 로.
 
 2. `_build` 안의 안내 글 두 줄
 
@@ -1545,26 +1545,26 @@ def start_problem(me=None, session=None):
     me = me or st.process_user()
     session = st.session_user() if session is None else session
     if session and not st.same_account(me, session):
-        return (f"이 PC 에 로그인한 윈도우 계정({session})이 아니라 다른 계정({me})의 관리자 권한으로 기록기가 떴습니다.\n"
+        return (f"이 PC 에 로그인한 윈도우 계정({session})이 아니라 다른 계정({me})의 관리자 권한으로 옵저버가 떴습니다.\n"
                 f"비밀번호는 윈도우 계정마다 잠겨서 다른 계정으로 저장하면 RPA 가 풀지 못합니다. {session} 계정으로 다시 여세요.")
     return None
 
 
 def busy_problem():
-    """다른 기록기·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 기록기 잠금을 쥔다 - 쥔 동안 대시보드는
+    """다른 옵저버·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는
     RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
-    if not st.hold_lock(st.RECORDER_LOCK):
-        return "쇼핑몰 기록기가 이미 켜져 있습니다. 작업 표시줄에서 그 창을 쓰세요."
+    if not st.hold_lock(st.OBSERVER_LOCK):
+        return "옵저버가 이미 켜져 있습니다. 작업 표시줄에서 그 창을 쓰세요."
     # ponytail: 예약이 RPA 를 띄우고 RPA 가 '도는 중' 을 적기까지 몇 초 틈은 못 막는다 (그 사이 켜면 둘 다 뜬다)
     running = [st.PROGRAMS.get(p, p) for p in st.running_programs()]
     if running:
-        return (f"{', '.join(running)} 가 돌고 있습니다. 끝난 뒤 기록기를 여세요.\n"
+        return (f"{', '.join(running)} 가 돌고 있습니다. 끝난 뒤 옵저버를 여세요.\n"
                 "RPA 가 화면·마우스를 쓰는 동안 기록하면 서로 부딪힙니다.")
     return None
 
 
 def show_error(text):
-    ctypes.windll.user32.MessageBoxW(None, text, "쇼핑몰 기록기", 0x10)
+    ctypes.windll.user32.MessageBoxW(None, text, "옵저버", 0x10)
 
 
 def check():
@@ -1592,7 +1592,7 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if sys.stdout is not None:
         sys.stdout.reconfigure(encoding="utf-8")        # 콘솔 없는 exe 를 시작 메뉴로 켜면 stdout 이 없다
-    ap = argparse.ArgumentParser(description="쇼핑몰 기록기")
+    ap = argparse.ArgumentParser(description="옵저버")
     ap.add_argument("--check", action="store_true", help="창 없이 확인 (빌드·샌드박스)")
     a = ap.parse_args(argv)
     if a.check:
@@ -1610,7 +1610,7 @@ def main(argv=None):
     try:
         presets = load_presets()
     except ValueError as e:
-        show_error(f"설정을 읽지 못해 기록기를 열지 않습니다 (덮어쓰지 않게).\n{st.presets_path()}\n{e}\n"
+        show_error(f"설정을 읽지 못해 옵저버를 열지 않습니다 (덮어쓰지 않게).\n{st.presets_path()}\n{e}\n"
                    "고치거나 지운 뒤 다시 여세요.")
         return 1
     scale = dpi_scale()
@@ -1628,18 +1628,18 @@ if __name__ == "__main__":
 
 Run: `.venv\Scripts\python.exe tests\test_presets.py`
 Expected: `실패: 없음`.
-Run: `.venv\Scripts\python.exe -m py_compile rpa_recorder.py` 와 `Select-String -Path rpa_recorder.py -Pattern "\bOUT\b|PRESET_FILE|fake_mall|selftest"`
+Run: `.venv\Scripts\python.exe -m py_compile rpa_observer.py` 와 `Select-String -Path rpa_observer.py -Pattern "\bOUT\b|PRESET_FILE|fake_mall|selftest"`
 Expected: 컴파일 오류 없음, 남은 spike 이름 없음 (찾기 결과 빈 줄).
 
 - [ ] **Step 9: 화면 시험을 쓴다**
 
-Create `tests/check_recorder_ui.py`:
+Create `tests/check_observer_ui.py`:
 
 ```python
 # -*- coding: utf-8 -*-
-"""기록기 화면 시험 - 진짜 창을 띄워 혼자 주소 치기 → 기록 → 단계 지우기·끄기 → 기록 끝 → 미리보기 → 저장을 하고 사진을 남긴다.
+"""옵저버 화면 시험 - 진짜 창을 띄워 혼자 주소 치기 → 기록 → 단계 지우기·끄기 → 기록 끝 → 미리보기 → 저장을 하고 사진을 남긴다.
 2~3분 동안 마우스·키보드를 쓴다 (주소줄은 pywinauto 로 친다). 임시 설정으로만 돈다 (진짜 설정은 안 건드린다).
-    .venv\\Scripts\\python.exe tests\\check_recorder_ui.py [사진 폴더]
+    .venv\\Scripts\\python.exe tests\\check_observer_ui.py [사진 폴더]
 """
 import datetime
 import json
@@ -1649,7 +1649,7 @@ import tempfile
 import time
 from pathlib import Path
 
-TMP = tempfile.mkdtemp(prefix="rpa_recorder_ui_")
+TMP = tempfile.mkdtemp(prefix="rpa_observer_ui_")
 os.environ["RPA_USER_CONFIG"] = os.path.join(TMP, "config", "RPA_UserConfig.json")
 os.environ["RPA_PROGRAMDATA"] = os.path.join(TMP, "programdata")
 os.environ["RPA_STATUS_DIR"] = os.path.join(TMP, "status")
@@ -1666,7 +1666,7 @@ st.write_user_config({"LogIn": {"AdminCode": "t", "ID": "erp", "PW": "erp-pw"}, 
 import tkinter as tk  # noqa: E402
 
 import fake_mall  # noqa: E402
-import rpa_recorder as rr  # noqa: E402
+import rpa_observer as rr  # noqa: E402
 import test_web_replay as twr  # noqa: E402
 from PIL import ImageGrab  # noqa: E402
 from pywinauto import Desktop  # noqa: E402
@@ -1765,13 +1765,13 @@ def main():
     check("사용자 설정 PRESET1: 아이디, 잠긴 비밀번호, 꺼짐, replay", site.get("ID") == fake_mall.USER
           and st.unseal(site.get("PW")) == fake_mall.PASSWORD and site.get("Stts") == 9 and site.get("Action") == ["replay"],
           str(site))
-    row = (st.read_history(program="recorder") or [{}])[0]
+    row = (st.read_history(program="observer") or [{}])[0]
     logs = "\n".join(row.get("log_tail") or [])
-    check("대시보드 기록에 '기록기' 미리보기 한 줄 (성공)", row.get("program_label") == "기록기" and row.get("state") == "success",
+    check("대시보드 기록에 '옵저버' 미리보기 한 줄 (성공)", row.get("program_label") == "옵저버" and row.get("state") == "success",
           str(row)[:300])
     check("그 로그에는 칸에 친 값·아이디·비밀번호가 없다", "주문 처리" not in logs and fake_mall.USER not in logs
           and fake_mall.PASSWORD not in logs, logs[-500:])
-    pv = os.path.join(st.data_dir(), "기록기", "미리보기")
+    pv = os.path.join(st.data_dir(), "옵저버", "미리보기")
     check("미리보기로 받은 파일은 기록 폴더 (ERPIA_AI_EXCEL 아님)", os.path.isdir(pv) and any(n.startswith("(012)") for n in os.listdir(pv)))
     check("프리셋은 10개까지 - 10개면 [+] 가 없다", result.get("ten") == (10, False), str(result.get("ten")))
     print(f"사진: {SHOTS}")
@@ -1785,12 +1785,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 10: 화면 시험을 돌린다**
 
-Run: `.venv\Scripts\python.exe tests\check_recorder_ui.py`
+Run: `.venv\Scripts\python.exe tests\check_observer_ui.py`
 Expected: `실패: 없음` (2~3분, 그동안 마우스·키보드를 건드리지 않는다). 사진 넷(`0_안내`·`1_기록`·`2_미리보기`·`3_끝`)을 열어 창 모양·주황 아이콘(제목 줄)·기록 목록을 눈으로 본다.
 
 - [ ] **Step 11: graphify·변경 확인**
 
-제안 커밋: `기록기 rpa_recorder - 프리셋을 설정 폴더·Sites 에, 미리보기는 대시보드 기록 '기록기', 관리자·계정 확인, --check`.
+제안 커밋: `옵저버 rpa_observer - 프리셋을 설정 폴더·Sites 에, 미리보기는 대시보드 기록 '옵저버', 관리자·계정 확인, --check`.
 
 ---
 
@@ -1803,18 +1803,18 @@ Expected: `실패: 없음` (2~3분, 그동안 마우스·키보드를 건드리�
 - Modify: `tools/sandbox_inner.ps1`
 
 **Interfaces:**
-- Consumes: Task 4 `rpa_recorder.py` (`--check` → `기록기 점검 끝`, `APP_ID = "AFTERMARKET.RPA.Recorder"`), Task 0 `ICON_PREPARE`
-- Produces: `build_release.EXES["Prepare_Recorder.exe"] = "rpa_recorder.py"`, `MARKERS["Prepare_Recorder.exe"] = "기록기 점검 끝"`, `TK_PLUGIN = "--enable-plugin=tk-inter"`, `PLAYWRIGHT = [...]`, `tcl_tk_dirs(dest) -> (tcl, tk)`, `nuitka_command(py, exe, work_dir, tk_dirs=None) -> list[str]`, `build_exes(builder, work_dir, only=None) -> str`
+- Consumes: Task 4 `rpa_observer.py` (`--check` → `옵저버 점검 끝`, `APP_ID = "AFTERMARKET.RPA.Observer"`), Task 0 `ICON_PREPARE`
+- Produces: `build_release.EXES["Prepare_Observer.exe"] = "rpa_observer.py"`, `MARKERS["Prepare_Observer.exe"] = "옵저버 점검 끝"`, `TK_PLUGIN = "--enable-plugin=tk-inter"`, `PLAYWRIGHT = [...]`, `tcl_tk_dirs(dest) -> (tcl, tk)`, `nuitka_command(py, exe, work_dir, tk_dirs=None) -> list[str]`, `build_exes(builder, work_dir, only=None) -> str`
 
 - [ ] **Step 1: 실패하는 시험을 쓴다 (`tests/test_build_release.py`)**
 
 1. Task 0 에서 넣은 아이콘 확인의 기대값을 셋으로:
 
 ```python
-check("아이콘: 루틴 exe 는 크림 A, 프리페어·기록기 exe 는 주황 A 한 벌씩, 주황 ico 도 판에 들어간다 (2026-09-30 사용자가 고른 '나')",
+check("아이콘: 루틴 exe 는 크림 A, 프리페어·옵저버 exe 는 주황 A 한 벌씩, 주황 ico 도 판에 들어간다 (2026-09-30 사용자가 고른 '나')",
       icon_opts == {"ERPia_RPA.exe": [f"--windows-icon-from-ico={br.ICON}"],
                     "Prepare_RPA.exe": [f"--windows-icon-from-ico={prep}"],
-                    "Prepare_Recorder.exe": [f"--windows-icon-from-ico={prep}"]}
+                    "Prepare_Observer.exe": [f"--windows-icon-from-ico={prep}"]}
       and os.path.isfile(prep) and br.icon_resources(prep)[1]
       and open(prep, "rb").read() != open(br.ICON, "rb").read()
       and ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico") in br.PROGRAM_FILES, icon_opts)
@@ -1826,39 +1826,39 @@ check("아이콘: 루틴 exe 는 크림 A, 프리페어·기록기 exe 는 주�
 ```python
 console = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-console-mode=")]
            for exe in br.EXES}
-check("콘솔: 루틴·프리페어는 늘 콘솔, 기록기는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창 없음)",
+check("콘솔: 루틴·프리페어는 늘 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창 없음)",
       console == {"ERPia_RPA.exe": ["--windows-console-mode=force"], "Prepare_RPA.exe": ["--windows-console-mode=force"],
-                  "Prepare_Recorder.exe": ["--windows-console-mode=attach"]}, str(console))
-rex = br.NUITKA_EXTRA.get("Prepare_Recorder.exe", [])
-check("기록기 exe: rpa_recorder.py, tk-inter, Playwright, --check 끝 줄, 작업 표시줄 ID",
-      br.EXES.get("Prepare_Recorder.exe") == "rpa_recorder.py" and br.TK_PLUGIN in rex
-      and "--include-package=playwright" in rex and br.MARKERS.get("Prepare_Recorder.exe") == "기록기 점검 끝"
-      and 'APP_ID = "AFTERMARKET.RPA.Recorder"' in (ROOT / "rpa_recorder.py").read_text(encoding="utf-8"))
+                  "Prepare_Observer.exe": ["--windows-console-mode=attach"]}, str(console))
+rex = br.NUITKA_EXTRA.get("Prepare_Observer.exe", [])
+check("옵저버 exe: rpa_observer.py, tk-inter, Playwright, --check 끝 줄, 작업 표시줄 ID",
+      br.EXES.get("Prepare_Observer.exe") == "rpa_observer.py" and br.TK_PLUGIN in rex
+      and "--include-package=playwright" in rex and br.MARKERS.get("Prepare_Observer.exe") == "옵저버 점검 끝"
+      and 'APP_ID = "AFTERMARKET.RPA.Observer"' in (ROOT / "rpa_observer.py").read_text(encoding="utf-8"))
 with tempfile.TemporaryDirectory() as d:
     tcl, tkd = br.tcl_tk_dirs(d)
-    cmd = br.nuitka_command("py", "Prepare_Recorder.exe", d, (tcl, tkd))
+    cmd = br.nuitka_command("py", "Prepare_Observer.exe", d, (tcl, tkd))
     check("Tcl/Tk 를 폴더로 꺼내 Nuitka 에 넘긴다 (3.14 는 DLL 안 zipfs - 2026-09-30)",
           os.path.isfile(os.path.join(tcl, "init.tcl")) and os.path.isfile(os.path.join(tkd, "tk.tcl"))
-          and f"--tcl-library-dir={tcl}" in cmd and f"--tk-library-dir={tkd}" in cmd and cmd[-1].endswith("rpa_recorder.py"),
+          and f"--tcl-library-dir={tcl}" in cmd and f"--tk-library-dir={tkd}" in cmd and cmd[-1].endswith("rpa_observer.py"),
           str(cmd[-4:]))
     check("tk-inter 를 안 쓰는 exe 에는 Tcl 옵션이 없다",
           not any("library-dir" in o for o in br.nuitka_command("py", "Prepare_RPA.exe", d)))
 try:
     br.build_exes("pyinstaller", tempfile.mkdtemp())
-    check("PyInstaller 로는 만들지 않는다 (기록기는 tk-inter)", False)
+    check("PyInstaller 로는 만들지 않는다 (옵저버는 tk-inter)", False)
 except RuntimeError:
-    check("PyInstaller 로는 만들지 않는다 (기록기는 tk-inter)", True)
+    check("PyInstaller 로는 만들지 않는다 (옵저버는 tk-inter)", True)
 with tempfile.TemporaryDirectory() as d:
     for rel in ("ERPia_RPA.exe", "Prepare_RPA.exe"):
         write(os.path.join(d, rel), rel.encode())
     try:
         br.reuse_exes(d, os.path.join(d, "work"))
-        check("--exes-from: 기록기 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", False)
+        check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", False)
     except FileNotFoundError as e:
-        check("--exes-from: 기록기 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", "Prepare_Recorder.exe" in str(e), str(e))
-check("설치 파일: 시작 메뉴 '쇼핑몰 기록기' (주황 아이콘, 작업 표시줄 ID 가 기록기와 같다)",
-      '"{group}\\쇼핑몰 기록기"' in iss and 'Filename: "{app}\\Prepare_Recorder.exe"' in iss
-      and 'IconFilename: "{app}\\AFTER_MARKET_PREPARE.ico"' in iss and 'AppUserModelID: "AFTERMARKET.RPA.Recorder"' in iss)
+        check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", "Prepare_Observer.exe" in str(e), str(e))
+check("설치 파일: 시작 메뉴 'RPA 옵저버' (주황 아이콘, 작업 표시줄 ID 가 옵저버와 같다)",
+      '"{group}\\RPA 옵저버"' in iss and 'Filename: "{app}\\Prepare_Observer.exe"' in iss
+      and 'IconFilename: "{app}\\AFTER_MARKET_PREPARE.ico"' in iss and 'AppUserModelID: "AFTERMARKET.RPA.Observer"' in iss)
 ```
 
 (아이콘 확인은 `iss = …` 를 읽은 뒤, `iscc = br.find_iscc()` 바로 앞에 있다 - 이 블록도 그 자리라 `iss` 를 쓸 수 있다.)
@@ -1871,12 +1871,12 @@ Expected: 새 확인들이 `[실패]` 또는 `AttributeError: … 'tcl_tk_dirs'`
 1. `EXES` 와 `MARKERS`:
 
 ```python
-EXES = {"ERPia_RPA.exe": "run_routine.py", "Prepare_RPA.exe": "web_runner.py", "Prepare_Recorder.exe": "rpa_recorder.py"}
+EXES = {"ERPia_RPA.exe": "run_routine.py", "Prepare_RPA.exe": "web_runner.py", "Prepare_Observer.exe": "rpa_observer.py"}
 ```
 
 ```python
 MARKERS = {"ERPia_RPA.exe": "=== 점검 끝", "Prepare_RPA.exe": "쓸 수 있는 Action",
-           "Prepare_Recorder.exe": "기록기 점검 끝"}   # --check 의 끝 줄
+           "Prepare_Observer.exe": "옵저버 점검 끝"}   # --check 의 끝 줄
 ```
 
 2. `NUITKA_COMMON` 에서 `"--windows-console-mode=force", ` 를 빼고, `NUITKA_EXTRA` 를:
@@ -1884,11 +1884,11 @@ MARKERS = {"ERPia_RPA.exe": "=== 점검 끝", "Prepare_RPA.exe": "쓸 수 있는
 ```python
 PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright"]
 TK_PLUGIN = "--enable-plugin=tk-inter"
-# 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 기록기는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
+# 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
 # --check 는 부른 쪽이 출력을 받는다)
 NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON}"],
                 "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_PREPARE}", *PLAYWRIGHT],
-                "Prepare_Recorder.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
+                "Prepare_Observer.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
                                          *PLAYWRIGHT, TK_PLUGIN]}
 ```
 
@@ -1930,7 +1930,7 @@ def nuitka_command(py, exe, work_dir, tk_dirs=None):
 def build_exes(builder, work_dir, only=None):
     """exe 들(only 를 주면 그것만)을 work_dir 에 만든다. 판 목록의 builder 칸 글자를 돌려준다 ("nuitka 4.2.2 · python 3.14.7")."""
     if builder != "nuitka":
-        raise RuntimeError("기록기 exe 는 Nuitka 로만 만든다 (tk-inter) - --builder nuitka 를 쓰세요")
+        raise RuntimeError("옵저버 exe 는 Nuitka 로만 만든다 (tk-inter) - --builder nuitka 를 쓰세요")
     os.makedirs(work_dir, exist_ok=True)
     py = sys.executable
     tk_dirs = None
@@ -1949,7 +1949,7 @@ def build_exes(builder, work_dir, only=None):
 ```python
     missing = [exe for exe in EXES if not os.path.isfile(os.path.join(src_dir, exe))]
     if missing:
-        raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (기록기가 없던 옛 판) - "
+        raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (옵저버가 없던 옛 판) - "
                                 "--exes-from 없이 새로 빌드하세요")
 ```
 
@@ -1970,7 +1970,7 @@ def build_exes(builder, work_dir, only=None):
 `[Icons]` 의 `Name: "{group}\RPA 설정"; …` 줄 바로 아래에 (편집 도구로 - BOM 유지):
 
 ```
-Name: "{group}\쇼핑몰 기록기"; Filename: "{app}\Prepare_Recorder.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작 기록기 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Recorder"
+Name: "{group}\RPA 옵저버"; Filename: "{app}\Prepare_Observer.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작을 기록해 프리페어가 따라 하게 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Observer"
 ```
 
 - [ ] **Step 4: 샌드박스 확인 (`tools/sandbox_inner.ps1`, BOM 유지)**
@@ -1978,17 +1978,17 @@ Name: "{group}\쇼핑몰 기록기"; Filename: "{app}\Prepare_Recorder.exe"; Wor
 1. exe `--check` 줄:
 
 ```powershell
-foreach ($e in @(@("ERPia_RPA.exe", "=== 점검 끝"), @("Prepare_RPA.exe", "쓸 수 있는 Action"), @("Prepare_Recorder.exe", "기록기 점검 끝"))) {
+foreach ($e in @(@("ERPia_RPA.exe", "=== 점검 끝"), @("Prepare_RPA.exe", "쓸 수 있는 Action"), @("Prepare_Observer.exe", "옵저버 점검 끝"))) {
 ```
 
 2. `Check "아이콘: 설정·대시보드 바로 가기, 앱 및 기능 목록" …` 줄 바로 아래에:
 
 ```powershell
-$recLnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\쇼핑몰 기록기.lnk")
-Check "시작 메뉴 '쇼핑몰 기록기' (기록기 exe, 주황 아이콘)" (($recLnk.TargetPath -eq "$App\Prepare_Recorder.exe") -and ($recLnk.IconLocation -like "$App\AFTER_MARKET_PREPARE.ico*")) "target=$($recLnk.TargetPath) icon=$($recLnk.IconLocation)"
+$recLnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\RPA 옵저버.lnk")
+Check "시작 메뉴 'RPA 옵저버' (옵저버 exe, 주황 아이콘)" (($recLnk.TargetPath -eq "$App\Prepare_Observer.exe") -and ($recLnk.IconLocation -like "$App\AFTER_MARKET_PREPARE.ico*")) "target=$($recLnk.TargetPath) icon=$($recLnk.IconLocation)"
 ```
 
-3. 아이콘 확인의 `$want = @{ "ERPia_RPA.exe" = $Ico; "Prepare_RPA.exe" = $IcoPrep }` 를 `$want = @{ "ERPia_RPA.exe" = $Ico; "Prepare_RPA.exe" = $IcoPrep; "Prepare_Recorder.exe" = $IcoPrep }` 로, 그 `Check` 이름을 `"exe 다섯의 아이콘: 루틴·감독·에이전트는 크림 A, 프리페어·기록기는 주황 A"` 로.
+3. 아이콘 확인의 `$want = @{ "ERPia_RPA.exe" = $Ico; "Prepare_RPA.exe" = $IcoPrep }` 를 `$want = @{ "ERPia_RPA.exe" = $Ico; "Prepare_RPA.exe" = $IcoPrep; "Prepare_Observer.exe" = $IcoPrep }` 로, 그 `Check` 이름을 `"exe 다섯의 아이콘: 루틴·감독·에이전트는 크림 A, 프리페어·옵저버는 주황 A"` 로.
 
 - [ ] **Step 5: 시험 통과**
 
@@ -1999,25 +1999,25 @@ Expected: `실패: 없음`.
 Run: `powershell -NoProfile -Command "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('D:\AX\RPA\tools\sandbox_inner.ps1',[ref]$null,[ref]$e); $e.Count"`
 Expected: `0`.
 
-- [ ] **Step 6: 기록기 exe 를 한 번 빌드해 콘솔·--check 를 확인한다**
+- [ ] **Step 6: 옵저버 exe 를 한 번 빌드해 콘솔·--check 를 확인한다**
 
 Run (3분쯤):
 
 ```powershell
-.venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'tools'); import build_release as br; print(br.build_exes('nuitka', r'build\rec_try', only=['Prepare_Recorder.exe']))"
-.venv\Scripts\python.exe -c "import struct; d = open(r'build\rec_try\Prepare_Recorder.exe', 'rb').read(4096); o = struct.unpack_from('<I', d, 0x3C)[0]; print('subsystem', struct.unpack_from('<H', d, o + 92)[0])"
-.venv\Scripts\python.exe -c "import os, subprocess, tempfile; t = tempfile.mkdtemp(); env = dict(os.environ, RPA_USER_CONFIG=os.path.join(t, 'RPA_UserConfig.json'), RPA_PROGRAMDATA=os.path.join(t, 'pd'), RPA_STATUS_DIR=os.path.join(t, 'st'), RPA_UNATTENDED='1'); r = subprocess.run([r'build\rec_try\Prepare_Recorder.exe', '--check'], capture_output=True, env=env, timeout=180); print(r.returncode); print((r.stdout + r.stderr).decode('utf-8', 'replace')[-400:])"
+.venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'tools'); import build_release as br; print(br.build_exes('nuitka', r'build\rec_try', only=['Prepare_Observer.exe']))"
+.venv\Scripts\python.exe -c "import struct; d = open(r'build\rec_try\Prepare_Observer.exe', 'rb').read(4096); o = struct.unpack_from('<I', d, 0x3C)[0]; print('subsystem', struct.unpack_from('<H', d, o + 92)[0])"
+.venv\Scripts\python.exe -c "import os, subprocess, tempfile; t = tempfile.mkdtemp(); env = dict(os.environ, RPA_USER_CONFIG=os.path.join(t, 'RPA_UserConfig.json'), RPA_PROGRAMDATA=os.path.join(t, 'pd'), RPA_STATUS_DIR=os.path.join(t, 'st'), RPA_UNATTENDED='1'); r = subprocess.run([r'build\rec_try\Prepare_Observer.exe', '--check'], capture_output=True, env=env, timeout=180); print(r.returncode); print((r.stdout + r.stderr).decode('utf-8', 'replace')[-400:])"
 ```
 
-Expected: `subsystem 2` (창 프로그램 - 시작 메뉴로 켜면 콘솔이 안 뜬다), 그리고 `0` 과 끝 줄 `기록기 점검 끝`, `Tcl/Tk: 9.0.…`.
+Expected: `subsystem 2` (창 프로그램 - 시작 메뉴로 켜면 콘솔이 안 뜬다), 그리고 `0` 과 끝 줄 `옵저버 점검 끝`, `Tcl/Tk: 9.0.…`.
 
-**끝 줄이 안 찍히면** (attach 가 출력을 못 넘김 - 스펙 11절 위험): `rpa_recorder.check()` 끝에 `path = os.environ.get("RPA_CHECK_FILE")` 가 있으면 그 파일에 `CHECK_DONE` 을 쓰게 하고, `build_release.smoke_check` 와 `sandbox_inner.ps1` 의 exe 줄이 기록기일 때 `RPA_CHECK_FILE` 을 주고 그 파일 내용도 보게 고친 뒤 이 단계를 다시 돌린다.
+**끝 줄이 안 찍히면** (attach 가 출력을 못 넘김 - 스펙 11절 위험): `rpa_observer.check()` 끝에 `path = os.environ.get("RPA_CHECK_FILE")` 가 있으면 그 파일에 `CHECK_DONE` 을 쓰게 하고, `build_release.smoke_check` 와 `sandbox_inner.ps1` 의 exe 줄이 옵저버일 때 `RPA_CHECK_FILE` 을 주고 그 파일 내용도 보게 고친 뒤 이 단계를 다시 돌린다.
 
 Run: `Remove-Item -Recurse -Force build\rec_try`
 
 - [ ] **Step 7: graphify·변경 확인**
 
-제안 커밋: `빌드: 세 번째 exe Prepare_Recorder (tk-inter·콘솔 attach·주황 아이콘), Tcl/Tk 꺼내기, 시작 메뉴 '쇼핑몰 기록기', 샌드박스 확인`.
+제안 커밋: `빌드: 세 번째 exe Prepare_Observer (tk-inter·콘솔 attach·주황 아이콘), Tcl/Tk 꺼내기, 시작 메뉴 'RPA 옵저버', 샌드박스 확인`.
 
 ---
 
@@ -2063,10 +2063,10 @@ with tempfile.TemporaryDirectory() as d:
             except RuntimeError as e:
                 check(why in str(e), f"거부: {why} ({e})")
         check(ag.decide({"type": "set_presets", "state": "queued", "expires_at": NOW + 60}, NOW)[0] == "run", "set_presets 는 아는 명령")
-        rows2 = [{"started_at": "2026-09-14T13:55:00", "state": "success", "program": "recorder"},
+        rows2 = [{"started_at": "2026-09-14T13:55:00", "state": "success", "program": "observer"},
                  {"started_at": "2026-09-14T13:56:00", "state": "stopped", "program": "prepare"}]
         check(ag.recent_summary(rows2, _dt.date(2026, 9, 14))[-1] == {"date": "2026-09-14", "success": 0, "failed": 1, "crashed": 0},
-              "기록기 미리보기는 날짜별 도넛에 안 센다")
+              "옵저버 미리보기는 날짜별 도넛에 안 센다")
     finally:
         os.environ.pop("RPA_USER_CONFIG", None)
 ```
@@ -2093,7 +2093,7 @@ Expected: 새 규칙 시험 하나 실패.
 
 ```python
         if r.get("program") in st.HISTORY_ONLY:
-            continue     # 기록기 미리보기는 RPA 실행이 아니다 - 날짜별 도넛에 안 센다
+            continue     # 옵저버 미리보기는 RPA 실행이 아니다 - 날짜별 도넛에 안 센다
 ```
 
 3. `real_actions` 의 `def do_schedule(args):` 앞에:
@@ -2138,11 +2138,11 @@ Expected: 통합 시험 그대로 통과 (명령 왕복).
 
 - [ ] **Step 4: graphify·변경 확인**
 
-제안 커밋: `에이전트: 현황에 쇼핑몰 프리셋 요약, 명령 set_presets, 날짜별 도넛에서 기록기 빼기 / 규칙: set_presets`.
+제안 커밋: `에이전트: 현황에 쇼핑몰 프리셋 요약, 명령 set_presets, 날짜별 도넛에서 옵저버 빼기 / 규칙: set_presets`.
 
 ---
 
-### Task 7: 대시보드 '쇼핑몰 프리셋' 카드·기록 표 '기록기'
+### Task 7: 대시보드 '쇼핑몰 프리셋' 카드·기록 표 '옵저버'
 
 **Files:**
 - Modify: `firebase/web/rpa.js` (`PROGRAM_SHORT`, 화면 틀의 `mod-card` 뒤, `mount` 의 연결, `onValue`, `paintButtons`, 실행 모듈 절 뒤)
@@ -2168,7 +2168,7 @@ Expected: 통합 시험 그대로 통과 (명령 왕복).
     check(page.text_content("#shop-list label:nth-child(2)").startswith("② <b>몰</b>")
           and page.locator("#shop-list b").count() == 0, "이름의 꺾쇠는 글자 그대로 (태그가 아니다 - Review Focus 5)")
     check(page.locator("#shop-list label:nth-child(2) input").is_disabled()
-          and "기록기" in (page.get_attribute("#shop-list label:nth-child(2)", "title") or ""), "기록이 없는 줄은 스위치가 잠기고 까닭이 보인다")
+          and "옵저버" in (page.get_attribute("#shop-list label:nth-child(2)", "title") or ""), "기록이 없는 줄은 스위치가 잠기고 까닭이 보인다")
     check(page.is_disabled("#shop-apply") and "0/2 켬" in page.text_content("#shop-meta"), "바뀐 게 없으면 적용 비활성")
     page.click("#shop-list label:nth-child(1)")
     check(not page.is_disabled("#shop-apply") and "1/2 켬" in page.text_content("#shop-meta"), "켜면 요약·적용 활성")
@@ -2187,22 +2187,22 @@ Expected: 통합 시험 그대로 통과 (명령 왕복).
 `print("10절 버전 표시")` 절이 끝나는 곳(파일의 `browser.close()` 앞, 마지막 절 뒤)에:
 
 ```python
-    print("11절 기록기 미리보기 기록")
-    seed_run("r_rec_0909", "recorder", "success", "2026-09-09T08:00:00", 27,
+    print("11절 옵저버 미리보기 기록")
+    seed_run("r_rec_0909", "observer", "success", "2026-09-09T08:00:00", 27,
              log=["[08:00:00] === 미리보기: ① 지마켓 (12단계) ==="])
     page.click("#tab-history")
     page.fill("#hist-date", "2026-09-09"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-09'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
-    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "기록기", "기록 표의 프로그램 칸이 '기록기'")
+    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "옵저버", "기록 표의 프로그램 칸이 '옵저버'")
 ```
 
 Run: `cd firebase\tests; firebase emulators:exec --config ../firebase.json --only auth,database,firestore,hosting --project rpa-test-f02e0 "python check_web.py"`
-Expected: 5-2절이 `#shop-card` 를 못 찾아 실패, 11절 '기록기' 가 아니라 '프리페어 RPA'.
+Expected: 5-2절이 `#shop-card` 를 못 찾아 실패, 11절 '옵저버' 가 아니라 '프리페어 RPA'.
 
 - [ ] **Step 2: 구현 (`firebase/web/rpa.js`)**
 
-1. `const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어" };` → `const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어", recorder: "기록기" };`
+1. `const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어" };` → `const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어", observer: "옵저버" };`
 2. 화면 틀의 `mod-card` 블록(`<button class="apply" id="mod-apply" disabled>적용</button>` 다음 `</div>`) 뒤에:
 
 ```html
@@ -2221,7 +2221,7 @@ Expected: 5-2절이 `#shop-card` 를 못 찾아 실패, 11절 '기록기' 가 �
 
 ```js
 // --- 쇼핑몰 프리셋 --------------------------------------------------
-// PC 의 기록기가 저장한 프리셋 (에이전트가 이름·코드·단계 수·켬만 올린다). 켜면 다음 프리페어부터 그 쇼핑몰에서 엑셀을 받는다.
+// PC 의 옵저버가 저장한 프리셋 (에이전트가 이름·코드·단계 수·켬만 올린다). 켜면 다음 프리페어부터 그 쇼핑몰에서 엑셀을 받는다.
 // 명령 키는 "PRESET1" - 숫자 키는 Realtime DB 가 배열로 바꿔 읽는다
 const circled = (n) => String.fromCharCode(0x2460 + n - 1);
 const savedShops = () => (Array.isArray(live?.presets) ? live.presets : []);
@@ -2247,13 +2247,13 @@ function paintShops() {
     cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
     cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
     cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
-    if (!ready) row.title = p.steps ? "쇼핑몰 기록기에서 아이디·비밀번호를 넣고 저장하세요" : "쇼핑몰 기록기에서 기록하고 저장하세요";
+    if (!ready) row.title = p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
     cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
     row.append(Object.assign(document.createElement("span"), { textContent: shopLine(p) }), cb,
       Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
-  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '쇼핑몰 기록기' 에서 기록하세요";
+  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '옵저버' 에서 기록하세요";
   paintShopMeta();
 }
 function paintShopMeta() {
@@ -2280,7 +2280,7 @@ Expected: 전부 통과 (예전 239 + 5-2절 10 + 11절 1). 브라우저 콘솔 
 
 - [ ] **Step 4: graphify·변경 확인**
 
-제안 커밋: `대시보드: 환경설정 '쇼핑몰 프리셋' 스위치 (set_presets), 기록 표 '기록기'`.
+제안 커밋: `대시보드: 환경설정 '쇼핑몰 프리셋' 스위치 (set_presets), 기록 표 '옵저버'`.
 
 ---
 
@@ -2307,10 +2307,10 @@ Expected: 모두 `실패: 없음` / `N/N 통과`. 각 스크립트가 찍은 건
 - [ ] **Step 2: 문서**
 
 `docs/firebase-architecture.md`:
-- 파일 지도에 세 줄: `web_replay.py` (쇼핑몰 조작 기록·재생 엔진), `rpa_recorder.py` → `Prepare_Recorder.exe` (쇼핑몰 기록기, 시작 메뉴 '쇼핑몰 기록기', 주황 A), 설정 폴더의 `RPA_Presets.json` (프리셋 ①~⑩ 기록, 비밀 없음).
+- 파일 지도에 세 줄: `web_replay.py` (쇼핑몰 조작 기록·재생 엔진), `rpa_observer.py` → `Prepare_Observer.exe` (옵저버, 시작 메뉴 'RPA 옵저버', 주황 A), 설정 폴더의 `RPA_Presets.json` (프리셋 ①~⑩ 기록, 비밀 없음).
 - 데이터 경로에: 현황 `live/{cid}/{pc}.presets` (이름·코드·단계 수·켬), `settings/{cid}/{pc}/presets` (`{"PRESET1": true}`), 명령 `set_presets` → 에이전트가 `Sites.PRESETn.Stts` 0/9.
 - 에이전트가 하는 일에: 프리셋 요약 올리기, `set_presets`, 도넛은 프리페어·루틴만.
-- 시험 표에 줄 셋 - `기록·재생 엔진` (`tests/test_web_replay.py`, 건수), `프리셋` (`tests/test_presets.py`, 건수), `기록기 화면` (`tests/check_recorder_ui.py`, 건수) - 과 빌드 스크립트·샌드박스·에이전트·규칙·화면 건수 고침.
+- 시험 표에 줄 셋 - `기록·재생 엔진` (`tests/test_web_replay.py`, 건수), `프리셋` (`tests/test_presets.py`, 건수), `옵저버 화면` (`tests/check_observer_ui.py`, 건수) - 과 빌드 스크립트·샌드박스·에이전트·규칙·화면 건수 고침.
 - 비밀 취급에 한 줄: 프리셋 파일에는 비밀이 없고, 대시보드로는 이름·코드·단계 수·켬과 값을 뺀 로그만 간다.
 
 스펙 상태 줄을 `**상태:** 구현됨 (2026-MM-DD, 판 <판> - 샌드박스 N/N). 설계는 2026-09-30 사용자 승인` 으로 (실제 날짜·판·수).
@@ -2318,12 +2318,12 @@ Expected: 모두 `실패: 없음` / `N/N 통과`. 각 스크립트가 찍은 건
 - [ ] **Step 3: 판 빌드 (10분쯤)**
 
 Run: `.venv\Scripts\python.exe tools\build_release.py`
-Expected: `판 2026.MM.DD-N` 과 설치 파일 `D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe`, `문제` 없음 (기록기 `--check` 포함 exe 셋의 표지).
+Expected: `판 2026.MM.DD-N` 과 설치 파일 `D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe`, `문제` 없음 (옵저버 `--check` 포함 exe 셋의 표지).
 
 - [ ] **Step 4: 샌드박스 (3분쯤)**
 
 Run: `.venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe`
-Expected: `34/34` (32 + 기록기 `--check` + 시작 메뉴 '쇼핑몰 기록기').
+Expected: `34/34` (32 + 옵저버 `--check` + 시작 메뉴 'RPA 옵저버').
 
 - [ ] **Step 5: 배포 - 사용자에게 묻고 나서만**
 
@@ -2336,6 +2336,6 @@ firebase deploy --only database,hosting --config firebase.json
 
 - [ ] **Step 6: 기억·안내**
 
-- 기억 `web-record-replay.md`·`next-steps.md`: 구현됨, 판 번호, 샌드박스 수, 노트북에서 할 실기 (기록기로 실제 쇼핑몰 한 곳 = spike 2).
-- 사용자에게: 새 판 설치 파일, 시작 메뉴 '쇼핑몰 기록기', 새 프리셋은 대시보드에서 켜야 돈다는 것.
+- 기억 `web-record-replay.md`·`next-steps.md`: 구현됨, 판 번호, 샌드박스 수, 노트북에서 할 실기 (옵저버로 실제 쇼핑몰 한 곳 = spike 2).
+- 사용자에게: 새 판 설치 파일, 시작 메뉴 'RPA 옵저버', 새 프리셋은 대시보드에서 켜야 돈다는 것.
 - 제안 커밋: `문서: 쇼핑몰 기록·재생 - 파일 지도·데이터 경로·시험 표, 스펙 구현됨 (판 …)`.

@@ -1,7 +1,7 @@
 r"""AFTER MARKET 아이콘 둘을 만든다 (2026-09-30 사용자가 고른 시안).
 
     release/AFTER_MARKET.ico          크림 A - '크림 반투명 잔상'. 설치 파일·설정 창·바로 가기·루틴 exe·에이전트
-    release/AFTER_MARKET_PREPARE.ico  주황 A - '나. 주황 A'. 프리페어 exe·기록기 (작업 표시줄에서 루틴과 가른다)
+    release/AFTER_MARKET_PREPARE.ico  주황 A - '나. 주황 A'. 프리페어 exe·옵저버 (작업 표시줄에서 루틴과 가른다)
 
     .venv\Scripts\python.exe tools\make_icon.py
 

@@ -55,14 +55,17 @@ firebase/
 
 저장소 루트의 `rpa_settings.py` 는 설치한 PC 의 **설정 창**이다 (기계 계정·ERPia 로그인·물류 처리 옵션(출력 방식·택배사·박스·운임·프린터) 입력, 자동 시작 작업 등록, 에이전트 켜고 끄기, 옛 폴더에서 설정값 가져오기. 메일은 2026-09-30 부터 다른 프로그램이 맡는다). 설치 파일은 `release/installer.iss`(Inno Setup) 이고, `tools/build_release.py` 가 zip 과 설치 파일을 함께 만든다. 설계: `docs/superpowers/specs/2026-09-29-installer-design.md`.
 
+쇼핑몰 엑셀 받기 (2026-10-01, 설계 `docs/superpowers/specs/2026-09-30-shop-record-replay-design.md`): `web_replay.py` 는 사이트를 가리지 않는 조작 기록·재생 엔진, `rpa_observer.py` → `Prepare_Observer.exe` 는 **옵저버** (시작 메뉴 'RPA 옵저버', 주황 A, 콘솔 없음, 켤 때 관리자 권한) - 사람이 한 번 해 보인 '로그인 ~ 엑셀 받기' 를 프리셋 ①~⑩ 으로 기록한다. 기록은 설정 폴더의 `RPA_Presets.json` (비밀 없음), 아이디·잠근 비밀번호는 사용자 설정 `Sites.PRESETn` (처음엔 `Stts` 9 = 꺼짐). 프리페어(`web_runner.py`)의 할 일 `replay` 가 켜진 프리셋을 재생해 `(사이트코드)원래이름` 으로 `ERPIA_AI_EXCEL` 에 받고, 루틴의 엑셀업로드가 그대로 올린다.
+
 ## 3. 데이터 경로
 
 Realtime DB
 ```
 meta/companies/{cid}                    { name, stts, pcs: { pcId: { label } } }   stts 0(없음도) 사용 · 9 삭제(비활성)
 apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현재 상태
-                                        { programs, modules, schedule, recent[20], heartbeat, host, server_time, version }
-apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, schedule }
+                                        { programs, modules, presets, schedule, recent[20], heartbeat, host, server_time, version }
+                                        presets = [{ no, name, code, steps, saved_at, has_login, on }] (기록 내용·아이디·비밀번호 없음)
+apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, schedule }
 apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at, state, result, … }
 ```
 Firestore
@@ -75,7 +78,7 @@ users/{uid}                { cid, role, name } - 표시용. 권한 근거는 cus
 
 기준값은 항상 `live` 다. `settings` 는 "이렇게 해 달라" 는 요청이고, PC 가 실제로 반영한 결과가 `live.modules` 와 `live.schedule` 로 돌아온다.
 
-명령 종류는 `launch`, `stop_erpia`, `set_modules`, `set_schedule` 넷이다. 상태는 `queued → running → done|failed`, 늦게 받으면 `expired`.
+명령 종류는 `launch`, `stop_erpia`, `set_modules`, `set_schedule`, `set_presets` 다섯이다 (`set_presets` 는 에이전트가 `Sites.PRESETn.Stts` 를 0/9 로 - 키가 `PRESET1` 인 것은 숫자 키를 Realtime DB 가 배열로 바꿔 읽기 때문). 상태는 `queued → running → done|failed`, 늦게 받으면 `expired`.
 
 | 값 | 지금 |
 |---|---|
@@ -124,10 +127,11 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 - 못 올린 것은 `queue.jsonl` 에 쌓고 연결되면 순서대로 보낸다. 규칙이 거부한 것은 버린다. 기록 실패가 RPA 를 막는 일은 없다.
 - **자동 실행 예약기를 에이전트가 띄운다.** 그래서 옛 8765 대시보드(`RPA_Dashboard.exe`, `대시보드_시작.bat`)와 같이 띄우면 예약이 두 번 돈다. 배포 폴더에서 옛 대시보드를 빼 둔 이유가 이것이다.
 - 로그인 모듈은 항상 켬으로 고정한다. 화면에서도 잠겨 있고 에이전트도 `Login=Y` 로 덮어쓴다.
+- 옵저버가 저장한 쇼핑몰 프리셋 요약(`rpa_status.preset_summary`: 이름·코드·단계 수·저장 시각·아이디 유무·켬)을 `live.presets` 로 올리고, `set_presets` 로 켬/끔을 받는다. 기록 내용·아이디·비밀번호는 안 올린다. 옵저버 미리보기는 이력('기록' 표의 '옵저버')에만 남고 날짜별 도넛은 프리페어·루틴만 센다.
 - 켤 때 사용자 설정을 한 파일로 옮긴다. 아래 '사용자 설정' 참고.
 - **설치한 PC** 에서는 작업 스케줄러 작업 `AFTER MARKET\RPA Agent` 가 윈도우 로그인 때 `background.py` 를 창 없이(`pythonw`) 띄우고, 감독이 에이전트를 창 없이 띄워 자기 잡(job)에 넣는다. 에이전트가 0·2·3·4(정상·설정 문제·인증 멈춤·이미 돌고 있음)로 끝나면 감독도 끝나고, 그 밖은 10·30·60·120·300초 뒤 다시 켠다. 감독이 죽으면 에이전트도 죽고, 에이전트가 띄운 RPA 는 잡에서 빠져 끝까지 간다. 에이전트의 입력은 닫힌 파이프다 (`DEVNULL` 은 윈도우에서 `isatty()` 가 참이라 쓰면 안 된다). 감독은 에이전트를 켜기 전에, 설정 창은 기계 계정 로그인 전에 PowerShell 로 Firebase 주소를 한 번씩 찔러 윈도우가 루트 인증서를 받아 두게 한다 - 갓 설치한 윈도우에서는 이게 없으면 파이썬이 `CERTIFICATE_VERIFY_FAILED` 로 못 붙는다.
 - 에이전트는 이름 있는 잠금 `Local\AFTER_MARKET_RPA_AGENT` 로 한 PC 에 하나만 돈다. 이미 돌면 "이미 돌고 있습니다" 를 찍고 4 로 끝난다 (시험은 `RPA_AGENT_MUTEX` 로 다른 이름).
-- 쇼핑몰 기록기가 떠 있으면 (기록기가 쥐는 잠금 `Local\AFTER_MARKET_RPA_RECORDER`, `rpa_status.recorder_open`) 자동 실행은 닫힐 때까지 기다리고 실행 명령은 "쇼핑몰 기록기가 켜져 있습니다…" 로 거절한다 (시험은 `RPA_RECORDER_LOCK`). 잠금 함수는 `rpa_status.hold_lock`·`lock_held` 하나를 에이전트·설정 창·기록기가 같이 쓴다.
+- 옵저버가 떠 있으면 (옵저버가 쥐는 잠금 `Local\AFTER_MARKET_RPA_OBSERVER`, `rpa_status.observer_open`) 자동 실행은 닫힐 때까지 기다리고 실행 명령은 "옵저버가 켜져 있습니다…" 로 거절한다 (시험은 `RPA_OBSERVER_LOCK`). 잠금 함수는 `rpa_status.hold_lock`·`lock_held` 하나를 에이전트·설정 창·옵저버가 같이 쓴다.
 
 ### 사용자 설정: `RPA_UserConfig.json`
 
@@ -179,7 +183,7 @@ cd D:\AX\RPA
 .venv\Scripts\python.exe tests\check_settings_ui.py   # 설정 창을 진짜로 띄워 본다 (몇 초 뜬다, 인수로 사진 경로)
 .venv\Scripts\python.exe tests\test_background.py     # 에이전트 감독
 .venv\Scripts\python.exe tests\test_start_failure.py  # 띄운 RPA 가 기록도 못 남기고 죽으면 '시작하지 못함' 이력
-.venv\Scripts\python.exe tests\test_schedule_slots.py    # 자동 실행 예약, RPA·쇼핑몰 기록기가 떠 있으면 기다림
+.venv\Scripts\python.exe tests\test_schedule_slots.py    # 자동 실행 예약, RPA·옵저버가 떠 있으면 기다림
 .venv\Scripts\python.exe tests\test_encoding.py       # .bat 는 CP949, 안내 문서·설치 스크립트는 BOM 있는 UTF-8
 .venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 윈도우 샌드박스에서 설치 파일
 cd D:\AX\RPA\firebase; . .\emu_env.ps1
@@ -193,19 +197,22 @@ cd ..; firebase deploy --only hosting --config firebase.json
 
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
-| 규칙 | 24 | 다른 회사·열람자·위조 거부, 명령 상태 전이 |
-| 에이전트 단위 | 131 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기 |
+| 규칙 | 25 | 다른 회사·열람자·위조 거부, 명령 상태 전이, 명령 set_presets |
+| 에이전트 단위 | 137 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기, 쇼핑몰 프리셋 요약·set_presets·도넛에서 옵저버 빼기 |
 | 통합 | 32 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기 |
-| 화면 | 239 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸 |
+| 화면 | 249 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버' |
 | 배치·판 | 45 | 자리 찾기(새·옛 구조, PyInstaller·Nuitka), 판 점검, exe 쪽 모듈 자리 |
-| 빌드 스크립트 | 49 | 판 번호·모으기·압축·찌꺼기·빈 틀(비밀·우리 물류 값)·exe 출력 표지, 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·가짜 판 컴파일)·tkinter·exe 가져오기, mfc140u.dll·comtypes 시각 비교 끄기, AFTER MARKET 파이썬 사본(설명 칸·아이콘 한 벌), exe 별 아이콘(루틴 크림 A·프리페어 주황 A) |
+| 빌드 스크립트 | 56 | 판 번호·모으기·압축·찌꺼기·빈 틀(비밀·우리 물류 값)·exe 출력 표지, 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·가짜 판 컴파일)·tkinter·exe 가져오기, mfc140u.dll·comtypes 시각 비교 끄기, AFTER MARKET 파이썬 사본(설명 칸·아이콘 한 벌), exe 별 아이콘(루틴 크림 A·프리페어 주황 A), exe 셋(옵저버 콘솔 attach·tk-inter·Tcl/Tk 꺼내기·옛 판 가져오기 거부) |
 | 설정 창 | 106 | 칸 확인(대시보드·ERPia 업체코드 따로), 설정 합치기(잠금·비운 칸은 그대로, Sites 는 안 건드림), 물류 칸(출력 방식 A·Y=자동, 빈 틀 수동, 가져오기), 메일 칸 없음, 저장 순서(인증서 채우기 → 로그인), 멈춘 까닭, ERPia 못 찾음, 작업 XML(진짜 작업 스케줄러 등록, AFTER MARKET 감독 사본), 옛 에이전트, 멈추기 0·5·6·확인만, 가져오기(Run_All.bat)·이름 바꾸기, 계정·설치 폴더 확인, 오류 가드 |
 | 설정 창 화면 | 40 | 진짜 tkinter 창: 첫 모습(단추 이름·맨 위 한 줄), 빈 칸 안 흐린 안내(보이고 사라짐·칸 안에 들어감·값이 아님), '(기본 프린터)', 창 폭(≤520)·높이(≤690)·긴 까닭 줄바꿈, 출력 방식·물류 경고 줄, 수동이면 프린터 칸 꺼짐·없는 프린터 줄 숨김, ERPia 못 찾음, 빈 칸의 빨간 안내, 저장·'켜는 중', 가져오기, 없는 프린터, 멈춘 까닭, 옛 에이전트, 이름 잘림, 단추 오류 |
 | 감독 | 28 | 종료 코드별 다시 켜기, 멈춘 까닭 파일, 기다림, 창 없는 입출력(닫힌 파이프·UTF-8), 잡(감독이 죽으면 에이전트도, RPA 는 남음), 윈도우 인증서 채우기, AFTER MARKET 에이전트 사본 |
 | 시작하지 못함 | 10 | 띄운 RPA 가 기록도 못 남기고 끝나면 '시작하지 못함' 이력 한 건 (오류 출력 마지막 줄·종료 코드, 전체 실행은 둘 다) |
-| 자동 실행 | 69 | 요일·시간 예약 계산, 예약기 (RPA 가 돌거나 쇼핑몰 기록기가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 기록기가 죽으면 풀림), 다시 켤 때 건너뛰기 |
+| 자동 실행 | 69 | 요일·시간 예약 계산, 예약기 (RPA 가 돌거나 옵저버가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 옵저버가 죽으면 풀림), 다시 켤 때 건너뛰기 |
+| 기록·재생 엔진 | 52 | `tests/test_web_replay.py`: 가짜 쇼핑몰을 기록해 다음 날·모레·기다림 없이·예상 밖 공지·느린 목록·단계 뺀 기록으로 재생, 마우스 올리기 메뉴, 주소줄 단계, 창 크기, 값 없는 설명, 모르는 형식, 받기 시간 초과, 멈춤. 부하는 `tests/stress_web_replay.py` (22번) |
+| 프리셋 | 45 | `tests/test_presets.py`: 프리셋 파일·Sites 칸(잠김·Stts 9)·요약·켬끔, 옵저버 미리보기는 이력에만, 관리자·계정 확인, 프리페어 replay 로 `(012)…` 받기, 옵저버 저장 전 확인·잠금 |
+| 옵저버 화면 | 9 | `tests/check_observer_ui.py`: 진짜 창으로 주소 치기 → 기록 → 끄기·지우기 → 미리보기 → 저장, 사진 넷 (2~3분 마우스·키보드를 쓴다) |
 | 인코딩 | 15 | .bat CP949·CRLF 와 실제 실행, 안내 문서·installer.iss·sandbox_inner.ps1 BOM UTF-8 |
-| 샌드박스 | 32 | 깨끗한 윈도우: 조용한 설치·파일·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·tkinter → 설치된 두 exe --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내) → 작업 등록(AFTER MARKET 사본, exe 넷의 아이콘 - 프리페어만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 다시 설치(--stop) → 설정 창 사진 → 조용한 제거 |
+| 샌드박스 | 33 | 깨끗한 윈도우: 조용한 설치·파일·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·tkinter → 설치된 두 exe --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내) → 작업 등록(AFTER MARKET 사본, exe 넷의 아이콘 - 프리페어만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 다시 설치(--stop) → 설정 창 사진 → 조용한 제거, 옵저버 exe `--check`·시작 메뉴 'RPA 옵저버' (판 2026.10.01-1) |
 | 관리 스크립트 | 23 | setup.js 를 에뮬레이터에 대고 등록 → remove(stts=9, 계정 막힘, 새 등록 거부) → restore |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.
@@ -214,6 +221,7 @@ cd ..; firebase deploy --only hosting --config firebase.json
 
 - `RPA_UserConfig.json` 의 비밀번호는 DPAPI 로 잠겨 있지만 **PC 밖으로 내보내지 않는다.** 클라우드에는 모듈 켬/끔 값만 오간다. 옮기고 남은 `ERPIA_AI.txt.old`, `WebManageConfig.json.old` 에는 평문이 있으니 확인 뒤 지운다 (`login_manager_config.json.old` 는 ERPia 위치뿐).
 - `serviceAccountKey.json` 은 규칙을 우회하는 만능 열쇠다. `firebase/admin/` 에만 두고 고객 PC 에 복사하지 않는다.
+- 쇼핑몰 프리셋 파일 `RPA_Presets.json` 에는 비밀이 없다 (비밀번호 칸은 값 없이 기록, 아이디는 '설정의 아이디' 로). 그래도 사이트 메뉴·누른 글자가 있으니 PC 밖으로 보내지 않는다. 대시보드로는 이름·코드·단계 수·켬과, 칸에 친 값·주소 `?` 뒤를 뺀 미리보기·재생 로그만 간다.
 - `agent_config.json`, `queue.jsonl`, `history_pos.txt`, 에이전트 기록은 모두 gitignore 다.
 - 비밀번호는 `setup.js` 가 무작위로 만들어 한 번만 찍는다. 명령줄에 없으니 이력에 남지 않는다. 예전 이력에 남은 것은 `Remove-Item (Get-PSReadLineOption).HistorySavePath` 로 저장 파일을 지운다 (`Clear-History` 는 세션 버퍼만 비운다).
 - PC 를 빼거나 담당자가 바뀌면 `setup.js disable` 또는 `passwd`. 업체와 계약이 끝나면 `setup.js remove <cid>` (계정 전부 막힘, 자료는 남음). 이미 받은 토큰은 최대 1시간 산다.

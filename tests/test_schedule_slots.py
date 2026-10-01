@@ -13,7 +13,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 tmp = tempfile.mkdtemp(prefix="rpa_sched_")
 os.environ["RPA_STATUS_DIR"] = tmp
 os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
-os.environ["RPA_RECORDER_LOCK"] = rf"Local\AFTER_MARKET_RPA_RECORDER_SCHED_TEST_{os.getpid()}"
+os.environ["RPA_OBSERVER_LOCK"] = rf"Local\AFTER_MARKET_RPA_OBSERVER_SCHED_TEST_{os.getpid()}"
 sys.path.insert(0, r"D:\AX\RPA")
 import rpa_status as st  # noqa: E402
 import rpa_dashboard as d  # noqa: E402
@@ -129,32 +129,32 @@ d.launch_run_all("manual:admin")
 check(st.read_settings()["schedule"]["next_run_at"] == before, "수동 실행은 예약 시각을 바꾸지 않음")
 d._active["until"] = 0
 
-print("\n=== 6-2. 쇼핑몰 기록기가 떠 있으면 (기록하는 사람과 RPA 가 화면을 두고 부딪히지 않게) ===")
+print("\n=== 6-2. 옵저버가 떠 있으면 (기록하는 사람과 RPA 가 화면을 두고 부딪히지 않게) ===")
 saved = list(d.LAUNCHED)
 RPA = os.path.dirname(os.path.abspath(st.__file__))
 holder = subprocess.Popen(
     [sys.executable, "-c", f"import os, sys; sys.path.insert(0, {RPA!r}); import rpa_status as st; "
-                           "print(st.hold_lock(st.RECORDER_LOCK), os.getpid(), flush=True); sys.stdin.read()"],
+                           "print(st.hold_lock(st.OBSERVER_LOCK), os.getpid(), flush=True); sys.stdin.read()"],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 held, pid = (holder.stdout.readline().split() + ["", "0"])[:2]
-check(held == "True", "기록기(다른 프로세스)가 잠금을 잡음")
-check(st.recorder_open() is True, "잠금이 있으면 기록기가 떠 있다")
-check(st.hold_lock(st.RECORDER_LOCK) is False, "기록기는 둘이 못 뜬다")
+check(held == "True", "옵저버(다른 프로세스)가 잠금을 잡음")
+check(st.observer_open() is True, "잠금이 있으면 옵저버가 떠 있다")
+check(st.hold_lock(st.OBSERVER_LOCK) is False, "옵저버는 둘이 못 뜬다")
 set_next(-3)
 sched.tick()
-check(d.LAUNCHED == saved and "기록기" in (sched.waiting_reason or ""), f"예약 시각이 와도 기다림: {sched.waiting_reason}")
+check(d.LAUNCHED == saved and "옵저버" in (sched.waiting_reason or ""), f"예약 시각이 와도 기다림: {sched.waiting_reason}")
 try:
     d.launch_run_all("cloud")
-    check(False, "기록기가 떠 있는데 실행 단추가 띄움")
+    check(False, "옵저버가 떠 있는데 실행 단추가 띄움")
 except RuntimeError as e:
-    check("기록기" in str(e) and d.LAUNCHED == saved, f"실행 단추는 까닭과 함께 거절: {e}")
+    check("옵저버" in str(e) and d.LAUNCHED == saved, f"실행 단추는 까닭과 함께 거절: {e}")
 if pid != "0":
     os.kill(int(pid), signal.SIGTERM)   # 잠금을 쥔 파이썬을 바로 죽인다 (venv 의 python.exe 는 진짜 파이썬을 자식으로 띄운다)
 holder.stdin.close()
 holder.wait()
-check(st.recorder_open() is False, "기록기가 끝나면 (죽어도) 잠금이 풀린다")
+check(st.observer_open() is False, "옵저버가 끝나면 (죽어도) 잠금이 풀린다")
 sched.tick()
-check(d.LAUNCHED == saved + ["all:auto"], "기록기가 닫히면 미룬 예약이 돈다")
+check(d.LAUNCHED == saved + ["all:auto"], "옵저버가 닫히면 미룬 예약이 돈다")
 d.LAUNCHED[:] = saved
 d._active["until"] = 0
 d._active["proc"] = None

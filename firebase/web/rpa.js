@@ -18,7 +18,7 @@ const P = (kind, cid, pcId) => `apps/rpa/${kind}/${cid}/${pcId}`;
 // 상태 이름은 세 가지로 통일 (2026-09-22): 성공 / 실패(단계 검사에서 스스로 멈춤, 사용자 중지 포함) / 오류(프로그램이 죽음).
 // 상태 카드·도넛 범례·기록 표 알약이 모두 같은 말을 쓴다. done·skipped 는 단계 상태
 const STATE_LABEL = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류", done: "완료", skipped: "건너뜀" };
-const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어" };   // 기록 표의 프로그램 칸. RPA 인 건 아니까 뗀다
+const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어", observer: "옵저버" };   // 기록 표의 프로그램 칸. RPA 인 건 아니까 뗀다
 const HERO_TITLE = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류" };
 const MODULES = [
   ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
@@ -85,6 +85,12 @@ const HTML = `
           <div id="mod-list"></div>
           <button class="apply" id="mod-apply" disabled>적용</button>
         </div>
+        <div class="card hide" id="shop-card">
+          <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
+          <div id="shop-list"></div>
+          <div class="msg" id="shop-info"></div>
+          <button class="apply" id="shop-apply" disabled>적용</button>
+        </div>
         <div class="card" id="sch-card">
           <h2>자동 실행 <span class="muted" id="sch-meta"></span></h2>
           <label class="switch first"><span>켬</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
@@ -119,7 +125,7 @@ let root = null, c = null;
 let stopLive = null;
 let busy = false;
 let live = null;
-let form = { modules: {}, sch: { enabled: false, days: [], times: [] } };
+let form = { modules: {}, shops: {}, sch: { enabled: false, days: [], times: [] } };
 let fs = null;
 let resizeObs = null;
 let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 - 진행 시간이 올라가고, 에이전트가 죽어도(값이 안 바뀜) 끊김이 보이게
@@ -158,6 +164,7 @@ export function mount(el, context) {
   $("run-all").onclick = () => sendCommand("launch", { target: "all" }, "전체 실행");
   $("stop-erpia").onclick = () => { if (confirm("ERPia 를 종료할까요?")) sendCommand("stop_erpia", null, "ERPia 종료"); };
   $("mod-apply").onclick = applyModules;
+  $("shop-apply").onclick = applyShops;
   $("sch-apply").onclick = applySchedule;
   $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
   $("sch-add").onclick = () => { if (form.sch.times.length >= MAX_TIMES) return; form.sch.times.push("09:00"); paintTimes(); paintScheduleMeta(); };
@@ -186,6 +193,7 @@ export function mount(el, context) {
     paintHero(); paintTiles(); paintRecent(); paintSteps(); paintLog();
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신)
     if (first || !modulesDirty()) resetModules();
+    if (first || !shopsDirty()) resetShops();
     if (first || !scheduleDirty()) resetSchedule();
     paintButtons();
   }, (e) => { $("h-state").textContent = e.code === "PERMISSION_DENIED" ? "권한 없음" : "읽지 못했습니다"; });
@@ -594,7 +602,7 @@ function paintButtons() {
     $(id).title = running && !off ? "RPA 가 돌고 있어 실행할 수 없습니다" : "";
   }
   $("stop-erpia").disabled = off;                        // 종료는 도는 중에도 눌러야 한다
-  paintModuleMeta(); paintScheduleMeta();
+  paintModuleMeta(); paintShopMeta(); paintScheduleMeta();
 }
 
 // --- 실행 모듈 ------------------------------------------------------
@@ -658,6 +666,56 @@ async function applyModules() {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
   await sendCommand("set_modules", wanted, "실행 모듈");
+}
+
+// --- 쇼핑몰 프리셋 --------------------------------------------------
+// PC 의 옵저버가 저장한 프리셋 (에이전트가 이름·코드·단계 수·켬만 올린다). 켜면 다음 프리페어부터 그 쇼핑몰에서 엑셀을 받는다.
+// 명령 키는 "PRESET1" - 숫자 키는 Realtime DB 가 배열로 바꿔 읽는다
+const circled = (n) => String.fromCharCode(0x2460 + n - 1);
+const savedShops = () => (Array.isArray(live?.presets) ? live.presets : []);
+const shopReady = (p) => p.steps > 0 && p.has_login;
+function resetShops() {
+  form.shops = Object.fromEntries(savedShops().map((p) => [p.no, !!p.on]));
+  paintShops();
+}
+function shopsDirty() {
+  return savedShops().some((p) => !!form.shops?.[p.no] !== !!p.on);
+}
+function shopLine(p) {
+  const saved = p.saved_at ? ` · ${Number(p.saved_at.slice(5, 7))}/${Number(p.saved_at.slice(8, 10))} 저장` : "";
+  return `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""} · ${p.steps}단계${saved}`;
+}
+function paintShops() {
+  show($("shop-card"), Array.isArray(live?.presets));   // 옛 에이전트·설정이 깨진 PC 는 카드를 숨긴다
+  const list = savedShops();
+  $("shop-list").replaceChildren(...list.map((p, i) => {
+    const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
+    const cb = document.createElement("input");
+    const ready = shopReady(p);
+    cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
+    cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
+    cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
+    if (!ready) row.title = p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
+    cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
+    row.append(Object.assign(document.createElement("span"), { textContent: shopLine(p) }), cb,
+      Object.assign(document.createElement("span"), { className: "knob" }));
+    return row;
+  }));
+  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '옵저버' 에서 기록하세요";
+  paintShopMeta();
+}
+function paintShopMeta() {
+  const list = savedShops();
+  const on = list.filter((p) => form.shops?.[p.no]).length;
+  $("shop-meta").textContent = list.length ? `${on}/${list.length} 켬` : "";
+  $("shop-apply").disabled = !c.isAdmin || busy || !shopsDirty();
+}
+async function applyShops() {
+  const wanted = Object.fromEntries(savedShops().map((p) => [`PRESET${p.no}`, !!form.shops[p.no]]));
+  try {
+    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/presets`), wanted);
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  await sendCommand("set_presets", wanted, "쇼핑몰 프리셋");
 }
 
 // --- 자동 실행 ------------------------------------------------------

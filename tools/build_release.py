@@ -3,11 +3,11 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 
     .venv\Scripts\python.exe tools\build_release.py [--builder nuitka|pyinstaller] [--exes-from <판 폴더>] [--no-setup] [--to-dist]
 
-1. 두 exe 를 만든다 (build\release 에). --exes-from 이면 그 판 폴더의 exe 를 가져온다 (exe 소스가 안 바뀐 판)
+1. exe 셋을 만든다 (build\release 에). --exes-from 이면 그 판 폴더의 exe 를 가져온다 (exe 소스가 안 바뀐 판)
 2. 정해 둔 파일만 D:\AX\배포_<판 번호>\ 에 모은다
 3. 판 목록(manifest.json)을 쓴다
 4. D:\AX\배포_<판 번호>.zip 으로 압축한다 (맨 위 폴더도 같은 이름 - 손으로 넘기는 대비책)
-5. 스스로 확인한다: 압축 목록·지문·들어가면 안 되는 파일·빈 배포 틀, 풀어서 두 exe --check, 내장 파이썬 tkinter
+5. 스스로 확인한다: 압축 목록·지문·들어가면 안 되는 파일·빈 배포 틀, 풀어서 exe 셋 --check, 내장 파이썬 tkinter
 6. 설치 파일 D:\AX\AFTER_MARKET_RPA_Setup_<판 번호>.exe 를 만든다 (Inno Setup, release/installer.iss). --no-setup 이면 건너뛴다
 비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다. 설치 파일은 5번을 통과한 판 폴더로만 만든다).
 """
@@ -15,7 +15,6 @@ import argparse
 import datetime
 import fnmatch
 import hashlib
-import importlib.metadata
 import json
 import os
 import platform
@@ -41,7 +40,7 @@ import rpa_status as st  # noqa: E402
 OUT_ROOT = r"D:\AX"
 RUNTIME_ROOT = r"D:\AX\runtime"           # python\·ms-playwright\ (처음 한 번 배포_20260928_3 에서 복사)
 RUNTIME_DIRS = ("python", "ms-playwright")
-EXES = {"ERPia_RPA.exe": "run_routine.py", "Prepare_RPA.exe": "web_runner.py"}
+EXES = {"ERPia_RPA.exe": "run_routine.py", "Prepare_RPA.exe": "web_runner.py", "Prepare_Observer.exe": "rpa_observer.py"}
 # (배포판 안 자리, 저장소 안 원본). exe 와 함께 판 목록에 지문으로 들어간다
 PROGRAM_FILES = [
     ("Run_All.bat", "Run_All.bat"),
@@ -49,7 +48,7 @@ PROGRAM_FILES = [
     ("rpa_dashboard.py", "rpa_dashboard.py"),
     ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
     ("AFTER_MARKET.ico", "release/AFTER_MARKET.ico"),                         # 설정 창·바로 가기 아이콘 (tools/make_icon.py)
-    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # 프리페어·기록기 창의 주황 A (샌드박스가 exe 와 견준다)
+    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # 프리페어·옵저버 창의 주황 A (샌드박스가 exe 와 견준다)
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
@@ -66,7 +65,8 @@ OTHER_FILES = [
 FORBIDDEN = ["__pycache__", "*.pyc", "*_result.txt", "sms_watch_log.txt", "web_*.png", "sessions",
              "agent_config.json", "queue.jsonl", "history_pos.txt", "에이전트_기록.txt", "*.old", "*.bak",
              "serviceAccountKey.json"]
-MARKERS = {"ERPia_RPA.exe": "=== 점검 끝", "Prepare_RPA.exe": "쓸 수 있는 Action"}   # --check 의 끝 줄
+MARKERS = {"ERPia_RPA.exe": "=== 점검 끝", "Prepare_RPA.exe": "쓸 수 있는 Action",
+           "Prepare_Observer.exe": "옵저버 점검 끝"}   # --check 의 끝 줄
 EXCLUDE = ["numpy", "yaml", "scipy", "pandas", "torch", "cv2", "matplotlib", "networkx", "graphify"]
 # pywinauto 가 부르는 win32ui 는 MFC DLL 을 쓰는데, 이 PC 에는 System32 에만 있고 Nuitka 는 System32 를 안 뒤져
 # 말없이 뺀다 → VC++ 재배포 패키지가 없는 PC 에서 exe 가 켜지자마자 ImportError (2026-09-29 노트북). 직접 넣는다
@@ -79,13 +79,18 @@ BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "AFTER MARKET RPA 에이전트 감
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
 ICON = os.path.join(REPO, "release", "AFTER_MARKET.ico")
 ICON_PREPARE = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")    # 작업 표시줄에서 루틴과 가르는 주황 A (2026-09-30)
-NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--windows-console-mode=force", "--remove-output",
+NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--remove-output",
                   "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone",
                   f"--include-data-files={MFC_DLL}=mfc140u.dll", f"--user-package-configuration-file={NUITKA_YML}"]
                  + [f"--nofollow-import-to={m}" for m in EXCLUDE])
-NUITKA_EXTRA = {"ERPia_RPA.exe": [f"--windows-icon-from-ico={ICON}"],
-                "Prepare_RPA.exe": [f"--windows-icon-from-ico={ICON_PREPARE}",
-                                    "--include-package=playwright", "--include-package-data=playwright"]}
+PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright"]
+TK_PLUGIN = "--enable-plugin=tk-inter"
+# 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
+# --check 는 부른 쪽이 출력을 받는다)
+NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON}"],
+                "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_PREPARE}", *PLAYWRIGHT],
+                "Prepare_Observer.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
+                                         *PLAYWRIGHT, TK_PLUGIN]}
 ISS_PATH = os.path.join(REPO, "release", "installer.iss")
 # Inno Setup 6 의 ISCC.exe 를 찾는 자리 (이 PC 는 winget 사용자 설치 → LOCALAPPDATA)
 ISCC_DIRS = (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6"),
@@ -263,7 +268,7 @@ def found_marker(out, marker):
 
 
 def smoke_check(zip_path, timeout=180):
-    """압축을 임시 폴더에 풀고 두 exe 를 임시 설정으로 --check 한다. 끝 줄이 찍히면 통과
+    """압축을 임시 폴더에 풀고 exe 셋을 임시 설정으로 --check 한다. 끝 줄이 찍히면 통과
     (빈 설정이라 나오는 '문제' 줄과 종료 코드는 보지 않는다)."""
     problems = []
     with tempfile.TemporaryDirectory(prefix="rpa_release_", ignore_cleanup_errors=True) as tmp:
@@ -289,26 +294,59 @@ def smoke_check(zip_path, timeout=180):
     return problems
 
 
-def build_exes(builder, work_dir):
-    """두 exe 를 work_dir 에 만든다. 판 목록의 builder 칸 글자를 돌려준다 ("nuitka 4.2.2 · python 3.14.7")."""
+def tcl_tk_dirs(dest):
+    """tkinter 가 쓰는 Tcl·Tk 라이브러리 폴더 (Nuitka tk-inter 에 넘길 것). 파이썬 3.14 의 Tcl/Tk 9 는 라이브러리가
+    tcl90.dll·tcl9tk90.dll 안 zipfs 에 있어 Nuitka 가 못 찾는다 (2026-09-30) → dest\\tcltk 에 꺼내 그 자리를 돌려준다.
+    진짜 폴더면 그대로 쓴다."""
+    import tkinter
+    root = tkinter.Tk()
+    try:
+        root.withdraw()
+        out = []
+        for name, src in (("tcl", root.tk.eval("info library")), ("tk", root.tk.eval("set tk_library"))):
+            if os.path.isdir(src):
+                out.append(src)
+                continue
+            dst = os.path.join(dest, "tcltk", name)
+            shutil.rmtree(dst, ignore_errors=True)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            root.tk.eval(f"file copy -force {{{src}}} {{{dst.replace(os.sep, '/')}}}")
+            out.append(dst)
+        return tuple(out)
+    finally:
+        root.destroy()
+
+
+def nuitka_command(py, exe, work_dir, tk_dirs=None):
+    """exe 하나를 만드는 Nuitka 명령. tk-inter 를 쓰는 exe 는 tk_dirs (tcl_tk_dirs 의 결과) 가 있어야 한다."""
+    extra = list(NUITKA_EXTRA[exe])
+    if TK_PLUGIN in extra:
+        extra += [f"--tcl-library-dir={tk_dirs[0]}", f"--tk-library-dir={tk_dirs[1]}"]
+    return [py, "-m", "nuitka", *NUITKA_COMMON, *extra, f"--output-dir={work_dir}", f"--output-filename={exe}",
+            os.path.join(REPO, EXES[exe])]
+
+
+def build_exes(builder, work_dir, only=None):
+    """exe 들(only 를 주면 그것만)을 work_dir 에 만든다. 판 목록의 builder 칸 글자를 돌려준다 ("nuitka 4.2.2 · python 3.14.7")."""
+    if builder != "nuitka":
+        raise RuntimeError("옵저버 exe 는 Nuitka 로만 만든다 (tk-inter) - --builder nuitka 를 쓰세요")
     os.makedirs(work_dir, exist_ok=True)
     py = sys.executable
-    if builder == "nuitka":
-        for exe, entry in EXES.items():
-            subprocess.run([py, "-m", "nuitka", *NUITKA_COMMON, *NUITKA_EXTRA[exe], f"--output-dir={work_dir}",
-                            f"--output-filename={exe}", os.path.join(REPO, entry)], cwd=REPO, check=True)
-        ver = subprocess.run([py, "-m", "nuitka", "--version"], capture_output=True, text=True,
-                             check=True).stdout.split()[0]
-    else:
-        for spec in ("ERPia_RPA.spec", "Prepare_RPA.spec"):
-            subprocess.run([py, "-m", "PyInstaller", "--noconfirm", "--clean", "--distpath", work_dir,
-                            "--workpath", os.path.join(work_dir, "pyi_work"), spec], cwd=REPO, check=True)
-        ver = importlib.metadata.version("pyinstaller")
-    return f"{builder} {ver} · python {platform.python_version()}"
+    tk_dirs = None
+    for exe in (only or EXES):
+        if TK_PLUGIN in NUITKA_EXTRA[exe] and tk_dirs is None:
+            tk_dirs = tcl_tk_dirs(work_dir)
+        subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True)
+    ver = subprocess.run([py, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
+    return f"nuitka {ver} · python {platform.python_version()}"
 
 
 def reuse_exes(src_dir, work_dir):
-    """두 exe 를 새로 만들지 않고 src_dir(판 폴더)에서 work_dir 로 복사한다. 판 목록 builder 칸 글자를 돌려준다."""
+    """exe 들 를 새로 만들지 않고 src_dir(판 폴더)에서 work_dir 로 복사한다. 판 목록 builder 칸 글자를 돌려준다."""
+    missing = [exe for exe in EXES if not os.path.isfile(os.path.join(src_dir, exe))]
+    if missing:
+        raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (옵저버가 없던 옛 판) - "
+                                "--exes-from 없이 새로 빌드하세요")
     os.makedirs(work_dir, exist_ok=True)
     for exe in EXES:
         shutil.copy2(os.path.join(src_dir, exe), os.path.join(work_dir, exe))
@@ -372,14 +410,18 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="배포판을 만든다")
     ap.add_argument("--builder", choices=("nuitka", "pyinstaller"), default="nuitka")
     ap.add_argument("--to-dist", action="store_true",
-                    help="두 exe 를 이 PC 의 dist 에도 복사한다 (설정 파일은 건드리지 않는다)")
-    ap.add_argument("--exes-from", metavar="판폴더", help="두 exe 를 만들지 않고 이 판 폴더에서 가져온다 (exe 소스가 안 바뀐 판)")
+                    help="exe 셋을 이 PC 의 dist 에도 복사한다 (설정 파일은 건드리지 않는다)")
+    ap.add_argument("--exes-from", metavar="판폴더", help="exe 셋을 만들지 않고 이 판 폴더에서 가져온다 (exe 소스가 안 바뀐 판)")
     ap.add_argument("--no-setup", action="store_true", help="설치 파일(setup.exe)을 만들지 않는다")
     args = ap.parse_args(argv)
     version = next_version(OUT_ROOT, datetime.date.today())
     work = os.path.join(REPO, "build", "release")
     print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else args.builder})")
-    builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(args.builder, work)
+    try:
+        builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(args.builder, work)
+    except (FileNotFoundError, RuntimeError) as e:
+        print("  문제:", e)
+        return 1
     out_dir = os.path.join(OUT_ROOT, f"배포_{version}")
     program = collect(out_dir, work, version=num_version(version))
     man = write_manifest(out_dir, version, builder, program)
@@ -403,7 +445,7 @@ def main(argv=None):
     if args.to_dist:
         for exe in EXES:
             shutil.copy2(os.path.join(out_dir, exe), os.path.join(REPO, "dist", exe))
-        print("  dist 에 두 exe 를 복사했습니다 (설정 파일은 그대로)")
+        print("  dist 에 exe 셋을 복사했습니다 (설정 파일은 그대로)")
     print(f"판 {version}  {zip_path}  ({os.path.getsize(zip_path) // 2 ** 20}MB)")
     return 0
 

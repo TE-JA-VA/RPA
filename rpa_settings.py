@@ -74,58 +74,13 @@ def default_paths():
             "stop_file": os.path.join(st.data_dir(), background.STOP_NAME)}
 
 
-def is_admin():
-    try:
-        return bool(ctypes.WinDLL("shell32").IsUserAnAdmin())
-    except Exception:
-        return False
+# 관리자·계정 확인은 옵저버도 쓴다 - rpa_status 에 있다 (시험은 이 모듈의 이름을 바꿔 끼운다)
+is_admin, process_user, session_user, same_account = st.is_admin, st.process_user, st.session_user, st.same_account
 
 
 def relaunch_as_admin(args):
     """관리자 권한으로 자기를 다시 띄운다 (UAC 요청). 띄웠으면 True, 사용자가 거절하면 False."""
-    sh = ctypes.WinDLL("shell32")
-    sh.ShellExecuteW.restype = ctypes.c_void_p
-    sh.ShellExecuteW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
-                                 ctypes.c_wchar_p, ctypes.c_int)
-    params = subprocess.list2cmdline([os.path.abspath(__file__), *args])
-    return (sh.ShellExecuteW(None, "runas", sys.executable, params, HERE, 1) or 0) > 32
-
-
-def process_user():
-    """이 프로세스의 윈도우 계정 'PC이름\\사용자' (다른 계정 비밀번호로 권한만 올렸으면 그 계정)."""
-    secur = ctypes.WinDLL("secur32")
-    secur.GetUserNameExW.argtypes = (ctypes.c_int, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint32))
-    size = ctypes.c_uint32(512)
-    buf = ctypes.create_unicode_buffer(size.value)
-    if secur.GetUserNameExW(2, buf, ctypes.byref(size)):                  # NameSamCompatible
-        return buf.value
-    return f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}"
-
-
-def session_user():
-    """이 PC 화면(지금 세션)에 로그인한 계정 'PC이름\\사용자'. 못 알아내면 None."""
-    try:
-        wts = ctypes.WinDLL("wtsapi32")
-        wts.WTSQuerySessionInformationW.argtypes = (ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int,
-                                                    ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint32))
-        wts.WTSFreeMemory.argtypes = (ctypes.c_void_p,)
-        parts = []
-        for info in (7, 5):                                   # WTSDomainName, WTSUserName
-            buf, size = ctypes.c_void_p(), ctypes.c_uint32()
-            # 0xFFFFFFFF = WTS_CURRENT_SESSION (이 프로세스의 세션)
-            if not wts.WTSQuerySessionInformationW(None, 0xFFFFFFFF, info, ctypes.byref(buf), ctypes.byref(size)):
-                return None
-            try:
-                parts.append(ctypes.wstring_at(buf.value))
-            finally:
-                wts.WTSFreeMemory(buf)
-        return f"{parts[0]}\\{parts[1]}" if parts[1] else None
-    except Exception:
-        return None
-
-
-def same_account(a, b):
-    return bool(a) and bool(b) and a.casefold() == b.casefold()
+    return st.run_as_admin(sys.executable, [os.path.abspath(__file__), *args], HERE)
 
 
 def start_problem(session=None, me=None, here=None):
