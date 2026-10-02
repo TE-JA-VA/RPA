@@ -14,6 +14,7 @@ Playwright 는 한 스레드에서만 부를 수 있어 일꾼 스레드가 브�
 import argparse
 import ctypes
 import datetime
+import glob
 import json
 import os
 import queue
@@ -43,6 +44,7 @@ MIN_PRESETS, MAX_PRESETS = st.PRESET_MIN, st.PRESET_MAX
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 주황 A (tools/make_icon.py)
 CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
+PROFILE_PREFIX = "rec_prof_"                            # 기록·미리보기 브라우저의 새 프로필 (로그인 쿠키가 든다 - 끝나면 지운다)
 UI = "맑은 고딕"
 F = (UI, 10)
 F_SMALL = (UI, 9)
@@ -158,15 +160,27 @@ class LiveRecorder(rec.Recorder):
 
 
 def launch(p, **kw):
-    """새 프로필 브라우저 (주소줄·탭 보임). 자동화 안내 띠·비밀번호 저장 제안·다운로드 알림은 끈다 (기록 중 화면을 가린다)."""
-    prof = tempfile.mkdtemp(prefix="rec_prof_")
-    os.makedirs(os.path.join(prof, "Default"))
-    with open(os.path.join(prof, "Default", "Preferences"), "w", encoding="utf-8") as f:
-        json.dump({"credentials_enable_service": False, "profile": {"password_manager_enabled": False},
-                   "download_bubble": {"partial_view_enabled": False}}, f)
-    ctx = p.chromium.launch_persistent_context(prof, headless=False, no_viewport=True, accept_downloads=True,
-                                               ignore_default_args=["--enable-automation"], **kw)
+    """새 프로필 브라우저 (주소줄·탭 보임). 자동화 안내 띠·비밀번호 저장 제안·다운로드 알림은 끈다 (기록 중 화면을 가린다).
+    못 띄우면 만든 프로필 폴더를 지우고 오류를 그대로 올린다."""
+    prof = tempfile.mkdtemp(prefix=PROFILE_PREFIX)
+    try:
+        os.makedirs(os.path.join(prof, "Default"))
+        with open(os.path.join(prof, "Default", "Preferences"), "w", encoding="utf-8") as f:
+            json.dump({"credentials_enable_service": False, "profile": {"password_manager_enabled": False},
+                       "download_bubble": {"partial_view_enabled": False}}, f)
+        ctx = p.chromium.launch_persistent_context(prof, headless=False, no_viewport=True, accept_downloads=True,
+                                                   ignore_default_args=["--enable-automation"], **kw)
+    except BaseException:
+        shutil.rmtree(prof, ignore_errors=True)
+        raise
     return ctx, prof
+
+
+def sweep_profiles(root=None):
+    """지난번에 못 지운 기록·미리보기 프로필을 지운다 (작업 관리자로 끔·정전 - 로그인 쿠키가 남는다).
+    옵저버 잠금을 쥔 뒤에만 부른다 - 그때는 다른 옵저버가 쓰는 프로필일 수 없다."""
+    for path in glob.glob(os.path.join(root or tempfile.gettempdir(), PROFILE_PREFIX + "*")):
+        shutil.rmtree(path, ignore_errors=True)
 
 
 class Worker(threading.Thread):
@@ -177,7 +191,8 @@ class Worker(threading.Thread):
         self.bounds, self.ui, self.hint, self.cmd = bounds, ui, hint, queue.Queue()
         self.ctx = self.prof = self.page = self.recorder = None
         self.rec_no = None
-        self.cancel = threading.Event()   # 옵저버 창을 닫으면 켠다 - 미리보기가 다음 단계 전에 멈춘다
+        self.cancel = threading.Event()   # [■ 중단]·창 닫기 - 미리보기가 찾기·기다리기 중에도 곧 멈춘다
+        self.pause = threading.Event()    # [Ⅱ 일시정지] - 미리보기가 다음 단계 앞에서 기다린다. 둘 다 화면이 켜고 끈다
         self.human = None                 # 시험: 사람 대신 조작할 함수
 
     def run(self):
@@ -297,23 +312,31 @@ class Worker(threading.Thread):
 
     def _do_preview(self, record, ids, creds, code, label):
         """새 프로필 브라우저로 켜 둔 단계를 따라 한다. 한 번 할 때마다 상태 기록 'observer' 한 건 (대시보드 '기록').
-        로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다."""
+        로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다. 끝나면 (못 띄웠어도·중단해도) 늘 preview_done 과 프로필 지우기."""
         where = self._rec_bounds()
-        self.cancel.clear()
         stamp = lambda: datetime.datetime.now().strftime("[%H:%M:%S]")   # noqa: E731
         steps = record["steps"]
         st.start("observer", [(f"s{i}", rec.describe(s, hide_values=True)) for i, s in enumerate(steps, 1)], title=label)
         st.log_line(f"{stamp()} === 미리보기: {label} ({len(steps)}단계) ===")
-        ok, why, saved, sec = False, "미리보기가 끝까지 가지 못했습니다", [], 0.0
-        ctx, prof = launch(self.p, slow_mo=120)     # 새 프로필 = RPA 가 혼자 돌 때처럼 로그아웃 상태
+        ok, why, note, saved, sec = False, "미리보기가 끝까지 가지 못했습니다", None, [], 0.0
+        ctx = prof = None
         try:
+            try:
+                ctx, prof = launch(self.p, slow_mo=120)     # 새 프로필 = RPA 가 혼자 돌 때처럼 로그아웃 상태
+            except Exception as e:
+                why = note = f"미리보기 브라우저를 띄우지 못했습니다: {type(e).__name__}: {str(e).splitlines()[0]}"
+                st.log_line(f"{stamp()} {why}")
+                return
             rp = rec.Replayer(ctx, record, creds, PREVIEW_DL, code, review=True, hide_values=True,
                               log=lambda m: st.log_line(f"{stamp()} {m}"), step_timeout=20)
             rp.first_page = ctx.pages[0] if ctx.pages else None
             rp.page_hook = lambda pg: self._set_bounds(pg, where)               # 기록 창 자리에 겹쳐 띄운다
-            rp.cancel = self.cancel
+            rp.cancel, rp.pause = self.cancel, self.pause
 
             def progress(i, state, how):
+                if state == "paused":
+                    self.ui.put(("paused",))
+                    return
                 if state == "run":
                     st.step(f"s{i}")
                 elif state == "skip":
@@ -324,7 +347,9 @@ class Worker(threading.Thread):
             rp.progress = progress
             ok = rp.run()
             saved, sec = [os.path.basename(x) for x in rp.saved], rp.elapsed
-            if not ok and rp.results:
+            if not ok and self.cancel.is_set():
+                why = note = "미리보기를 중단했습니다"
+            elif not ok and rp.results:
                 i, _, how = rp.results[-1]
                 why = f"{i}단계에서 멈췄습니다: {how}"
             st.log_line(f"{stamp()} {'미리보기 성공' if ok else '미리보기 멈춤'} ({sec:.0f}초) - 받은 파일: "
@@ -333,15 +358,18 @@ class Worker(threading.Thread):
                 ctx.pages[0].wait_for_timeout(1500)
         except Exception as e:
             why = f"{type(e).__name__}: {str(e).splitlines()[0]}"
-            st.log_line(f"{stamp()} 미리보기 오류: {why}")
+            note = f"미리보기 오류: {why}"
+            st.log_line(f"{stamp()} {note}")
         finally:
             st.finish("success" if ok else "stopped", None if ok else why)
-            try:
-                ctx.close()
-            except Exception:
-                pass
-            shutil.rmtree(prof, ignore_errors=True)
-            self.ui.put(("preview_done", ok, saved, sec))
+            if ctx is not None:
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
+            if prof:
+                shutil.rmtree(prof, ignore_errors=True)
+            self.ui.put(("preview_done", ok, saved, sec, note))
 
 
 def new_preset(no, name=None, code=""):
@@ -393,6 +421,17 @@ def password_in_record(record, pw):
     return bool(pw) and any(pw in str(s.get(k) or "") for s in (record or {}).get("steps", []) for k in ("value", "href"))
 
 
+def keep_dates(files, old, logins_changed, now):
+    """저장 날짜는 이번에 바뀐 프리셋만 now (이름·사이트코드·기록, 아이디·비밀번호), 그대로인 것은 원래 날짜.
+    예전엔 저장할 때마다 모든 프리셋이 그날로 바뀌었다 (2026-10-01 검토). old: {번호: 예전 파일의 프리셋}. files 를 고쳐 돌려준다."""
+    for f in files:
+        o = old.get(f["no"]) or {}
+        same = (f["record"] and f["no"] not in logins_changed and o.get("saved_at")
+                and all(o.get(k) == f[k] for k in ("name", "code", "record")))
+        f["saved_at"] = o["saved_at"] if same else (now if f["record"] else None)
+    return files
+
+
 def store(files, logins, fresh=()):
     """프리셋 파일과 Sites 의 PRESETn 을 쓴다. 못 쓰면 화면에 보일 문장 (콘솔 없는 exe 라 조용히 넘어가면 안 된다), 되면 None."""
     try:
@@ -435,6 +474,12 @@ def enable(b, on):
     b.config(state="normal" if on else "disabled", bg=b.colors[0] if on else GRAY_BTN, cursor="hand2" if on else "arrow")
 
 
+def skin(b, text, color, dark, command):
+    """같은 단추를 다른 일에 (미리보기 중에는 [▶ 미리보기]·[저장] 자리가 [Ⅱ 일시정지]·[■ 중단]). 색은 enable 이 칠한다."""
+    b.config(text=text, command=command, activebackground=dark)
+    b.colors = (color, dark)
+
+
 class App:
     def __init__(self, root, scale, presets, hint="", fake_creds=None):
         self.root, self.scale = root, scale
@@ -442,6 +487,8 @@ class App:
         if fake_creds and not any(p["loaded"] for p in self.presets):      # 시험: 가짜 쇼핑몰 계정
             self.presets[0].update(name="가짜 쇼핑몰", code="012", id=fake_creds[0], pw=fake_creds[1])
         self.cur, self.recording, self.previewing = 0, None, False
+        self.paused = self.stopping = self.closing = False      # 미리보기 [Ⅱ 일시정지]·[■ 중단]·일시정지 중 창 닫기
+        self.tell, self.ask = messagebox.showinfo, messagebox.askyesno     # 시험이 갈아 끼운다
         self.labels, self.base, self.shown, self._dock_job = {}, {}, 0, None
         self.start_url = None           # 시험: 주소를 치지 않고 바로 연다
         self.ui = queue.Queue()
@@ -577,10 +624,19 @@ class App:
         rec_on = self.recording is not None
         self.rec_btn.config(text="■  기록 끝" if rec_on else "●  기록 시작")
         enable(self.rec_btn, not self.previewing and (not rec_on or self.recording == self.cur))
-        p = self.presets[self.cur]
-        has = bool(p["raw"] or p["loaded"])
-        enable(self.prev_btn, has and not self.previewing and not rec_on)
-        enable(self.save_btn, not self.previewing)
+        if self.previewing:         # 창을 닫는 대신 멈추는 단추 (2026-10-02 - 미리보기 중에는 창이 안 닫힌다)
+            skin(self.prev_btn, "▶  계속" if self.paused else "Ⅱ  일시정지", BLUE, BLUE_D, self.toggle_pause)
+            skin(self.save_btn, "■  중단", RED, RED_D, self.stop_preview)
+            enable(self.prev_btn, not (self.stopping or self.closing))
+            enable(self.save_btn, not (self.stopping or self.closing))
+        else:
+            p = self.presets[self.cur]
+            final = None if rec_on else self._final(p)
+            kept = bool(final) and bool(self._kept(p, final))
+            skin(self.prev_btn, "▶  미리보기", BLUE, BLUE_D, self.preview)
+            skin(self.save_btn, "저장", GREEN, GREEN_D, self.save)
+            enable(self.prev_btn, kept)
+            enable(self.save_btn, kept)     # 기록이 끝나 있고 켜 둔 단계가 한 줄은 있어야 (2026-10-02)
         self.paint_presets()
 
     def _load_fields(self):
@@ -700,6 +756,8 @@ class App:
             return
         mark, color = {"run": ("▶ ", BLUE), "ok": ("✓ ", GREEN_D), "skip": ("– ", MUTED), "fail": ("✗ ", RED)}[st]
         tail = {"ok": f"  [{how}]", "skip": "  (건너뜀 - 화면에 없음)", "fail": f"\n    {how}"}.get(st, "")
+        if st == "fail" and self.worker.cancel.is_set():
+            mark, color, tail = "■ ", MUTED, "  (중단)"      # 사람이 멈춘 것 - 고칠 단계가 아니다
         lab.config(text=mark + self.base[sid] + tail, fg=color)
         y = lab.winfo_y() + lab.master.winfo_y()
         h = max(self.inner.winfo_height(), 1)
@@ -737,19 +795,38 @@ class App:
         r = rec.keep_steps(final, kept)
         ids = [s["id"] for s in r["steps"]]
         self.render()
-        self.previewing = True
+        self.worker.cancel.clear()          # 명령보다 먼저 - 일꾼이 받기 전에 누른 [■ 중단] 을 지우지 않게
+        self.worker.pause.clear()
+        self.previewing, self.paused, self.stopping = True, False, False
         self.paint_buttons()
         self.msg.config(text="미리보기 중 - 새 브라우저가 같은 자리에서 따라 합니다. 보기만 하세요", fg=BLUE)
         self.worker.cmd.put(("preview", r, ids, {"ID": p["id"].strip(), "PW": pw}, p["code"] or "000",
                              f"{circled(self.cur + 1)} {p['name']}"))
 
+    def toggle_pause(self):
+        """[Ⅱ 일시정지]: 지금 단계를 마치고 다음 단계 앞에서 기다린다. [▶ 계속] 이면 이어 간다."""
+        self.paused = not self.paused
+        (self.worker.pause.set if self.paused else self.worker.pause.clear)()
+        self.msg.config(text="일시정지 - 지금 단계를 마치고 멈춥니다" if self.paused else
+                        "미리보기 중 - 새 브라우저가 같은 자리에서 따라 합니다. 보기만 하세요", fg=BLUE)
+        self.paint_buttons()
+
+    def stop_preview(self):
+        """[■ 중단]: 찾거나 기다리던 것을 그만두고 브라우저를 닫는다 (대개 1초 안). 끝나면 preview_done."""
+        self.stopping = True
+        self.worker.cancel.set()
+        self.msg.config(text="중단하는 중…", fg=MUTED)
+        self.paint_buttons()
+
     def save(self):
+        if self.recording is not None or self.previewing:
+            return None                     # 단추가 잠겨 있다 - 기록·미리보기가 끝난 뒤에만 (2026-10-02)
         self._store_fields()
         try:
-            has_config = bool(st.read_user_config())
+            cfg = st.read_user_config()
         except ValueError as e:
             return self.msg.config(text=f"사용자 설정을 읽지 못했습니다: {e}", fg=RED)
-        if not has_config:
+        if not cfg:
             return self.msg.config(text="이 PC 의 사용자 설정이 없습니다 - 시작 메뉴 'RPA 설정' 에서 먼저 저장하세요", fg=RED)
         now = datetime.datetime.now().isoformat(timespec="seconds")
         out = []
@@ -759,7 +836,7 @@ class App:
                 r = rec.keep_steps(final, self._kept(p, final))
                 for s in r["steps"]:
                     s.pop("id", None)
-            out.append({"no": no, "name": p["name"], "code": p["code"], "saved_at": now if r else None, "record": r,
+            out.append({"no": no, "name": p["name"], "code": p["code"], "record": r,
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"]})
         problem = validate_presets(out)
         if problem:
@@ -768,7 +845,15 @@ class App:
         for o in out:
             if o["record"]:
                 scrub_login(o["record"], o["id"])      # 아이디는 기록에 글자로 안 남긴다 (설정의 아이디로 친다)
-        files = [{k: o[k] for k in ("no", "name", "code", "saved_at", "record")} for o in out]
+        try:
+            old = {p["no"]: p for p in st.read_presets()}
+        except ValueError:
+            old = {}                                   # 예전 파일을 못 읽으면 기록 있는 것은 모두 오늘 날짜
+        sites = cfg.get(st.SITES_SECTION)
+        sites = sites if isinstance(sites, dict) else {}
+        logins_changed = {o["no"] for o in out if o["pw"] or o["id"].strip() != (
+            (sites.get(st.preset_site_key(o["no"])) or {}).get("ID") or "")}
+        files = keep_dates([{k: o[k] for k in ("no", "name", "code", "record")} for o in out], old, logins_changed, now)
         for o in out:
             try:
                 pw = o["pw"] or (stored_password(o["no"]) if o["has_pw"] else "")
@@ -783,9 +868,9 @@ class App:
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh)
         if problem:
             return self.msg.config(text=problem, fg=RED)
-        for p, o in zip(self.presets, out):
-            if o["record"]:
-                p.update(pw="", has_pw=True, saved_at=o["saved_at"], fresh=False)
+        for p, f in zip(self.presets, files):
+            if f["record"]:
+                p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
         self._load_fields()
         n = sum(1 for o in out if o["record"])
         self.msg.config(text=f"저장했습니다 - 기록 있는 프리셋 {n}개. 새로 기록한 프리셋은 꺼진 채입니다: 대시보드 환경설정 "
@@ -830,13 +915,23 @@ class App:
                     self.on_stopped()
                 elif m[0] == "progress":
                     self._progress(*m[1:])
+                elif m[0] == "paused":
+                    self.msg.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하세요. 지금은 창을 닫아도 됩니다",
+                                    fg=BLUE)
+                    self.on_paused()
                 elif m[0] == "preview_done":
-                    ok, saved, sec = m[1:]
-                    self.previewing = False
+                    ok, saved, sec, note = m[1:]
+                    stopped = self.stopping
+                    self.previewing = self.paused = self.stopping = False
+                    if self.closing:            # 일시정지 중에 창을 닫았다 - 브라우저·프로필 정리가 끝났다
+                        return self._close_now()
                     self.paint_buttons()
-                    self.msg.config(text=(f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}" if ok else
-                                          "미리보기가 멈췄습니다 - 빨간 단계를 끄거나 지운 뒤 다시 해 보세요"),
-                                    fg=GREEN_D if ok else RED)
+                    if ok:
+                        self.msg.config(text=f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}", fg=GREEN_D)
+                    elif stopped:
+                        self.msg.config(text="미리보기를 중단했습니다", fg=MUTED)
+                    else:
+                        self.msg.config(text=note or "미리보기가 멈췄습니다 - 빨간 단계를 끄거나 지운 뒤 다시 해 보세요", fg=RED)
                     self.on_preview_done(ok)
                 elif m[0] == "human_done":
                     self.on_human_done()
@@ -861,13 +956,34 @@ class App:
     def on_human_done(self):
         pass
 
+    def on_paused(self):
+        pass
+
     def on_preview_done(self, ok):
         pass
 
     def quit(self):
-        self.worker.cancel.set()           # 미리보기 중이면 다음 단계 전에 멈춘다 (Review Focus 4)
+        """창 닫기 (X). 미리보기가 도는 중에는 닫지 않는다 - 예전엔 30초 기다리다 그냥 닫혀 로그인 쿠키가 든 프로필이 남았다
+        (2026-10-02). 일시정지·중단 중이면 미리보기를 멈추고 정리가 끝난 뒤 (preview_done) 닫는다."""
+        if self.closing:
+            return
+        if self.previewing and not (self.paused or self.stopping):
+            return self.tell("미리보기 중", "미리보기 중에는 창을 닫을 수 없습니다.\n[Ⅱ 일시정지] 나 [■ 중단] 을 누른 뒤 닫으세요.")
+        if any(p.get("fresh") for p in self.presets) and not self.ask(
+                "저장하지 않은 기록", "저장하지 않은 기록이 있습니다. 저장하지 않고 닫을까요?"):
+            return
+        if self.previewing:
+            self.closing = True
+            self.worker.cancel.set()
+            self.msg.config(text="미리보기를 멈추고 닫는 중…", fg=MUTED)
+            self.paint_buttons()
+            return
+        self._close_now()
+
+    def _close_now(self):
+        self.worker.cancel.set()
         self.worker.cmd.put(("quit",))
-        self.worker.join(timeout=30)       # 지금 단계가 끝나기를 (단계 기다림 최대 20초)
+        self.worker.join(timeout=10)       # 기록 브라우저를 닫고 프로필을 지운다
         self.root.destroy()
 
 
@@ -968,6 +1084,7 @@ def main(argv=None):
     if problem:
         show_error(problem)
         return 1
+    sweep_profiles()                    # 잠금을 쥔 뒤 - 지난번에 못 지운 프로필 (로그인 쿠키)
     try:
         presets = load_presets()
     except ValueError as e:

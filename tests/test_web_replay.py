@@ -272,8 +272,8 @@ def main():
         try:
             rec.Replayer(None, {"version": 99, "steps": []}, {}, OUT, "012").run()
             check("H: 모르는 기록 형식은 재생하지 않는다", False)
-        except ValueError as e:
-            check("H: 모르는 기록 형식은 재생하지 않는다", "형식" in str(e), str(e))
+        except ValueError as err:          # 'e' 는 E 기록 (except ... as 는 끝나면 그 이름을 지운다)
+            check("H: 모르는 기록 형식은 재생하지 않는다", "형식" in str(err), str(err))
 
         # ---------------- I: 눌러도 파일이 안 온다 (Review Focus 3) ----------------
         bad = json.loads(json.dumps(a))
@@ -290,7 +290,7 @@ def main():
             ok = r.run()
             browser.close()
         check("I: 파일이 안 오면 정해진 시간 뒤 그 단계 실패 (끝없이 기다리지 않는다)", not ok and r.results[-1][0] == 8
-              and "Timeout" in r.results[-1][2] and time.time() - t0 < 60, str(r.results[-1]))
+              and "3초 안에 파일이 오지 않았습니다" in r.results[-1][2] and time.time() - t0 < 60, str(r.results[-1]))
 
         # ---------------- J: 미리보기 중 창을 닫음 (Review Focus 4) ----------------
         ev = threading.Event()
@@ -306,6 +306,89 @@ def main():
             browser.close()
         check("J: 멈춤(cancel)이 켜지면 다음 단계 전에 멈춘다", not ok and r.results[-1][:2] == (4, "fail")
               and "멈춤" in r.results[-1][2] and m.downloads == [], str(r.results[-2:]))
+        creds = {"ID": fake_mall.USER, "PW": fake_mall.PASSWORD}
+
+        # ---------------- K: 단계 안에서 기다리는 중에 중단 (2026-10-02 미리보기 [■ 중단]) ----------------
+        lost = json.loads(json.dumps(a))
+        lost["steps"][2]["target"].update(id="", text="없는 단추", css="#no-such-button", name="", aria="", title="",
+                                          placeholder="")                    # '로그인' 단추가 사라진 날
+        ev, t_run = threading.Event(), {}
+
+        def on_k(i, state, how):
+            if (i, state) == (3, "run"):
+                t_run["t"] = time.time()
+                threading.Timer(1.0, ev.set).start()
+        srv.mall = fake_mall.Mall(day, False)
+        with rec.sync_playwright() as p:
+            browser = p.chromium.launch()
+            ctx = browser.new_context(accept_downloads=True)
+            r = rec.Replayer(ctx, lost, creds, os.path.join(OUT, "K"), "012", today=day, log=print, step_timeout=20)
+            r.cancel, r.progress = ev, on_k
+            ok = r.run()
+            took = time.time() - t_run.get("t", time.time())
+            browser.close()
+        check("K: 단추를 찾으며 기다리는 중에 중단해도 곧 멈춘다 (20초를 다 기다리지 않는다)", not ok
+              and r.results[-1][:2] == (3, "fail") and "멈춤" in r.results[-1][2] and took < 6, f"{took:.1f}초 {r.results[-1:]}")
+
+        # ---------------- L: 일시정지 - 지금 단계를 마치고 다음 단계 앞에서 기다린다 ----------------
+        pause, seen, held = threading.Event(), [], {}
+
+        def on_l(i, state, how):
+            seen.append((i, state))
+            if (i, state) == (2, "ok"):
+                pause.set()
+
+                def resume():
+                    held["results"] = len(r.results)
+                    pause.clear()
+                threading.Timer(2.0, resume).start()
+        srv.mall = m = fake_mall.Mall(day, False)
+        with rec.sync_playwright() as p:
+            browser = p.chromium.launch()
+            ctx = browser.new_context(accept_downloads=True)
+            r = rec.Replayer(ctx, e, creds, os.path.join(OUT, "L"), "012", today=day, log=print)
+            r.pause, r.progress = pause, on_l
+            ok = r.run()
+            browser.close()
+        check("L: 일시정지면 다음 단계 앞에서 기다리고 ('paused' 알림), 풀면 끝까지 간다", ok and (3, "paused") in seen
+              and held.get("results") == 2 and m.ship_downloads == [day.isoformat()], f"{held} {seen}")
+
+        # ---------------- M: 새 창(팝업)이 내려 주는 파일 (2026-10-02 미룬 것 4) ----------------
+        print("=== M. 기록 (팝업이 파일을 내려 주고 스스로 닫힌다)")
+        srv.mall = mall = fake_mall.Mall(DAY, False)
+
+        def human_m(page):
+            hclick(page, page.get_by_placeholder("아이디"))
+            page.keyboard.type(fake_mall.USER, delay=15)
+            hclick(page, page.get_by_placeholder("비밀번호"))
+            page.keyboard.type(fake_mall.PASSWORD, delay=15)
+            hclick(page, page.get_by_role("button", name="로그인", exact=True))
+            page.wait_for_url("**/main**")
+            page.get_by_role("link", name="배송관리", exact=True).hover()
+            hclick(page, page.get_by_role("link", name="송장전송", exact=True))
+            hclick(page, page.frame_locator("iframe[name=content]").get_by_role("button", name="팝업으로 받기", exact=True))
+            for _ in range(40):
+                if mall.ship_downloads:
+                    break
+                page.wait_for_timeout(250)
+            page.wait_for_timeout(500)
+        mr = rec.record(url + "/login", os.path.join(OUT, "rec_m.json"), headless=True, human=human_m, record_date=DAY)
+        for i, s in enumerate(mr["steps"], 1):
+            print(f"    {i:2d}. {rec.describe(s)}")
+        check("M: 팝업을 여는 단계에 '새 창' 과 '파일 받기' 가 같이 적힌다", mr["steps"][-1].get("opens") == 1
+              and mr["steps"][-1].get("download"), json.dumps(mr["steps"][-1:], ensure_ascii=False)[:300])
+        day = DAY + datetime.timedelta(days=1)
+        srv.mall = m = fake_mall.Mall(day, False)
+        with rec.sync_playwright() as p:
+            browser = p.chromium.launch()
+            ctx = browser.new_context(accept_downloads=True)
+            r = rec.Replayer(ctx, mr, creds, os.path.join(OUT, "M"), "012", today=day, log=print)
+            r.download_timeout_ms = 10000
+            ok = r.run()
+            browser.close()
+        check("M: 재생도 팝업이 내려 준 파일을 받는다 (누른 창에서만 기다리지 않는다)", ok
+              and [os.path.basename(x) for x in r.saved] == [f"(012)송장목록_{day.isoformat()}.xlsx"]
+              and m.ship_downloads == [day.isoformat()], str(r.results[-1:]))
     finally:
         srv.shutdown()
     print()

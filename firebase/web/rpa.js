@@ -594,12 +594,20 @@ function watchCommand(cmdKey, label) {
 function rpaRunning() {
   return live?.launching === true || Object.values(live?.programs || {}).some((p) => p && p.state === "running");
 }
+// 도는 RPA 의 단추는 화살표 없이 '… 실행중' - 끝나면 (성공·실패·오류) 원래대로 (2026-10-02 요청)
+const RUN_LABELS = { "run-prepare": ["prepare", "프리페어 RPA"], "run-routine": ["routine", "루틴 RPA"] };
 function paintButtons() {
   const off = !c.isAdmin || busy || !c.pcId;
   const running = rpaRunning();
   for (const id of ["run-prepare", "run-routine", "run-all"]) {
     $(id).disabled = off || running;                     // 다른 사람이 이미 돌리는 중이면 못 누른다
     $(id).title = running && !off ? "RPA 가 돌고 있어 실행할 수 없습니다" : "";
+  }
+  for (const [id, [key, name]] of Object.entries(RUN_LABELS)) {
+    const on = live?.programs?.[key]?.state === "running";
+    $(id).querySelector(".t").textContent = on ? `${name} 실행중` : name;
+    $(id).querySelector(".fly").hidden = on;
+    $(id).classList.toggle("busy", on);
   }
   $("stop-erpia").disabled = off;                        // 종료는 도는 중에도 눌러야 한다
   paintModuleMeta(); paintShopMeta(); paintScheduleMeta();
@@ -629,6 +637,12 @@ function modulesDirty() {
   return MODULES.some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
 }
 const dict = (pairs) => Object.fromEntries(pairs);
+/** 스위치 줄의 글자. why 가 있으면 그 아래 작은 글씨로 - 잠긴 까닭 (마우스 글(title)은 휴대폰에 안 보인다 - 2026-10-02) */
+function switchText(text, why) {
+  const s = Object.assign(document.createElement("span"), { textContent: text });
+  if (why) s.append(Object.assign(document.createElement("small"), { className: "why", textContent: why }));
+  return s;
+}
 // 받침이 있으면 '을', 없으면 '를' (한글이 아니면 '를')
 const josa = (w) => {
   const code = (w || "").charCodeAt((w || "").length - 1) - 0xac00;
@@ -641,14 +655,15 @@ function paintModules() {
     const needOff = NEEDS[k] && !form.modules[NEEDS[k]];   // 앞 모듈이 꺼져 있으면 이 스위치는 잠근다
     cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k) || needOff;
     cb.setAttribute("aria-label", text);
-    if (needOff) { const need = dict(MODULES)[NEEDS[k]]; row.title = `${need}${josa(need)} 켜야 쓸 수 있습니다`; }
+    const need = needOff ? dict(MODULES)[NEEDS[k]] : "";
     cb.onchange = () => {
       form.modules[k] = cb.checked;
       // 딸린 모듈이 있는 스위치면 다시 그린다 (끄면 딸린 것도 꺼지고 잠기고, 켜면 잠금만 풀린다)
       if (Object.values(NEEDS).includes(k)) { applyNeeds(form.modules); paintModules(); return; }
       paintModuleMeta();
     };
-    row.append(Object.assign(document.createElement("span"), { textContent: text }), cb, Object.assign(document.createElement("span"), { className: "knob" }));
+    row.append(switchText(text, need && `${need}${josa(need)} 켜야 쓸 수 있습니다`), cb,
+      Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
   paintModuleMeta();
@@ -695,10 +710,9 @@ function paintShops() {
     cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
     cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
     cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
-    if (!ready) row.title = p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
+    const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
     cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
-    row.append(Object.assign(document.createElement("span"), { textContent: shopLine(p) }), cb,
-      Object.assign(document.createElement("span"), { className: "knob" }));
+    row.append(switchText(shopLine(p), why), cb, Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
   $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '옵저버' 에서 기록하세요";

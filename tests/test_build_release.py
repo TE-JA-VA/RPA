@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import sys
@@ -282,11 +283,15 @@ with tempfile.TemporaryDirectory() as d:
           str(cmd[-4:]))
     check("tk-inter 를 안 쓰는 exe 에는 Tcl 옵션이 없다",
           not any("library-dir" in o for o in br.nuitka_command("py", "Prepare_RPA.exe", d)))
-try:
-    br.build_exes("pyinstaller", tempfile.mkdtemp())
-    check("PyInstaller 로는 만들지 않는다 (옵저버는 tk-inter)", False)
-except RuntimeError:
-    check("PyInstaller 로는 만들지 않는다 (옵저버는 tk-inter)", True)
+check("--builder 선택지는 없다 (옵저버 exe 는 Nuitka 로만 - 고르면 늘 실패하던 pyinstaller 를 뺐다, 2026-10-02)",
+      "--builder" not in Path(br.__file__).read_text(encoding="utf-8"))
+lock = re.search(r'OBSERVER_LOCK = os\.environ\.get\("RPA_OBSERVER_LOCK"\) or r"([^"]+)"', (ROOT / "rpa_status.py").read_text(encoding="utf-8"))
+prep_code = iss[iss.find("function PrepareToInstall"):iss.find("function InitializeUninstall")]
+check("옵저버가 켜져 있으면 판 올림·지우기를 시작 전에 멈춘다 (켜진 exe 는 덮지 못한다) - 잠금 이름은 rpa_status 와 같고, "
+      "판 올림은 에이전트를 멈추기 전에 본다",
+      bool(lock) and f"OBSERVER_LOCK = '{lock.group(1)}';" in iss and "CheckForMutexes(OBSERVER_LOCK)" in prep_code
+      and prep_code.find("CheckForMutexes") < prep_code.find("RunSettings('--stop')")
+      and "CheckForMutexes(OBSERVER_LOCK)" in iss[iss.find("function InitializeUninstall"):], prep_code[:400])
 with tempfile.TemporaryDirectory() as d:
     for rel in ("ERPia_RPA.exe", "Prepare_RPA.exe"):
         write(os.path.join(d, rel), rel.encode())

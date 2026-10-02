@@ -1047,7 +1047,12 @@ def action_replay(page, name, site):
                              log=log, hide_values=True, shot_dir=BASE_DIR)
     rp.first_page = page
     rp.fit_viewport = True
-    ok = rp.run()
+    # 알림창은 재생기 하나만 받는다 - 둘이 받으면 로그가 두 줄이고, 대시보드로 가는 글이 줄지 않았다 (2026-10-01 검토)
+    page.remove_listener("dialog", on_dialog)
+    try:
+        ok = rp.run()
+    finally:
+        page.on("dialog", on_dialog)
     status.metric(f"{name}:files", "받은 엑셀", len(rp.saved), unit="개")
     if not ok:
         i, _, why = rp.results[-1] if rp.results else (0, "fail", "알 수 없음")
@@ -1087,16 +1092,17 @@ def prepare_page(page):
     실패 원인을 찾지 못한다(실제로 '문자가 안 온다'의 이유를 놓친 적이 있다).
     """
     page.set_default_timeout(FIELD_TIMEOUT_MS)
-
-    def on_dialog(d):
-        log(f"  브라우저 알림({d.type}): {d.message}")
-        try:
-            d.accept()
-        except Exception:
-            pass
-
     page.on("dialog", on_dialog)
     return page
+
+
+def on_dialog(d):
+    """prepare_page 가 붙이는 알림창 받기. replay 동안은 떼어 둔다 (재생기가 받는다 - action_replay)."""
+    log(f"  브라우저 알림({d.type}): {d.message}")
+    try:
+        d.accept()
+    except Exception:
+        pass
 
 
 def step_key(name, act):
@@ -1114,7 +1120,6 @@ def prepare_steps(chosen):
                 out.append((step_key(name, act), f"{site.get('note') or name} {label}"))
             else:
                 out.append((step_key(name, act), f"{name} {label}" if many else label))
-    return out
     return out
 
 

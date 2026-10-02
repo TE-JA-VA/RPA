@@ -10,6 +10,7 @@
   - 기간 칸(오늘 날짜) + 오늘·어제·1주일 단추, 주문상태 고르기
   - 엑셀 요청 → 새 창에서 다운로드 사유 + 확인 알림창 → 목록에 '생성 중' 이 몇 초 뒤 '다운로드' 로
     (어제 받은 옛 파일도 목록에 있다 - 너무 일찍 누르면 옛 파일을 받는다)
+  - 송장전송의 '팝업으로 받기': 작은 창이 파일을 내려 주고 스스로 닫힌다 (누른 창에서는 파일이 안 온다)
 
 손으로 해 볼 때:  python fake_mall.py [--port 8800] [--notice on|off|random]
 아이디 seller01 / 비밀번호 pw1234
@@ -103,7 +104,13 @@ trig.addEventListener('mouseenter', openMenu); trig.addEventListener('mouseleave
 
 SHIP = """<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:12px">
 <h3>송장전송</h3><p>오늘 보낼 송장 2건</p>
-<button type="button" id="{a}" onclick="location.href='/shipfile?sid={sid}'">송장 엑셀 받기</button>"""
+<button type="button" id="{a}" onclick="location.href='/shipfile?sid={sid}'">송장 엑셀 받기</button>
+<button type="button" id="{b}" onclick="window.open('/shippop?sid={sid}','pop','width=360,height=220')">팝업으로 받기</button>"""
+
+# 작은 창이 뜨자마자 파일을 내려 주고 스스로 닫힌다 (쇼핑몰에 흔한 '엑셀 다운로드' 팝업)
+SHIP_POP = """<!doctype html><meta charset="utf-8"><title>파일 준비</title><body style="font-family:sans-serif;padding:12px">
+<p>파일을 준비하는 중…</p>
+<script>setTimeout(() => {{ location.href = '/shipfile?sid={sid}'; }}, 600); setTimeout(() => window.close(), 2500);</script>"""
 
 NOTICE = """<div class="layer" id="{a}"><div class="in"><b>[공지] 추석 연휴 배송 안내</b><p>10월 3일~9일 택배사 휴무</p>
 <button type="button" id="{b}" onclick="this.closest('.layer').remove()">오늘 하루 보지 않기</button>
@@ -196,6 +203,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(HOME)
         if u.path == "/ship":
             return self._send(SHIP.format(sid=sid, **_ids()))
+        if u.path == "/shippop":
+            return self._send(SHIP_POP.format(sid=sid))
         if u.path == "/shipfile":
             m.ship_downloads.append(m.today.isoformat())
             name = urllib.parse.quote(f"송장목록_{m.today.isoformat()}.xlsx")

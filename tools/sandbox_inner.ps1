@@ -142,7 +142,14 @@ if ($online) {
 Copy-Item $log "$O\agent_log1.txt" -ErrorAction SilentlyContinue
 Copy-Item "$PD\data\에이전트_오류.txt" "$O\agent_err1.txt" -ErrorAction SilentlyContinue
 
-# 4. 한 번 더 설치 (판 올림 흉내): 먼저 --stop, 끝나면 창 없이 작업 등록·켜기
+# 4. 한 번 더 설치 (판 올림 흉내). 옵저버가 켜져 있으면 (잠금 이름은 rpa_status.OBSERVER_LOCK) 파일을 덮기 전에 멈춘다 -
+#    켜진 exe 는 덮을 수 없어 설치가 가운데서 막혔다 (2026-10-02). 그때는 에이전트도 멈추지 않는다 (--stop 을 안 부른다)
+$obs = New-Object System.Threading.Mutex($false, "Local\AFTER_MARKET_RPA_OBSERVER")
+$p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup_observer.log`"" -Wait -PassThru
+$lo = Get-Content "$O\setup_observer.log" -Raw
+Check "옵저버가 켜져 있으면 설치를 시작 전에 멈춘다 (코드 7, 에이전트는 안 멈춤)" (($p.ExitCode -eq 7) -and -not ($lo -match "rpa_settings --stop")) "코드 $($p.ExitCode)"
+$obs.Dispose()
+# 이제 정말로: 먼저 --stop, 끝나면 창 없이 작업 등록·켜기
 $p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup2.log`"" -Wait -PassThru
 Check "다시 설치 (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.ExitCode)"
 $l2 = Get-Content "$O\setup2.log" -Raw

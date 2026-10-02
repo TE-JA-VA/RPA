@@ -423,6 +423,13 @@ class Skip(Exception):
     pass
 
 
+class Cancelled(Exception):
+    """[■ 중단] (옵저버 미리보기) - 찾거나 기다리던 것을 그만둔다."""
+
+
+STOPPED = "멈춤 - 중단을 눌렀습니다"
+
+
 def q(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -464,8 +471,10 @@ class Replayer:
         self.page_hook = None       # 첫 창이 뜨면 (창 자리 맞추기)
         self.first_page = None      # 이미 있는 창에서 시작 (옵저버·프리페어가 연 창)
         self.fit_viewport = False   # 기록 때 창 안쪽 크기로 (프리페어. 옵저버 미리보기는 창 자리를 맞춘다)
-        self.cancel = None          # threading.Event - 켜지면 다음 단계 전에 멈춘다 (옵저버 창을 닫음)
+        self.cancel = None          # threading.Event - 켜지면 곧 멈춘다 (찾기·기다리기 중에도. 옵저버 [■ 중단])
+        self.pause = None           # threading.Event - 켜져 있으면 다음 단계 앞에서 기다린다 (옵저버 [Ⅱ 일시정지])
         self.download_timeout_ms = DOWNLOAD_TIMEOUT_MS
+        self.downloads = []         # 지금 단계에서 온 파일 - 어느 창에서 왔든 (누른 창 말고 팝업이 내려 줄 때가 있다)
         self.elapsed = 0.0
 
     def _watch(self, page):
@@ -474,9 +483,64 @@ class Replayer:
         self.watched.add(page)
 
         def on_dialog(d):
-            self.log(f"      알림창 '{d.message}' -> 확인")
-            d.accept()
+            self.log(f"      알림창 '{_cut(d.message, self.hide_values)}' -> 확인")
+            try:
+                d.accept()
+            except Exception:
+                pass                # 그 사이 사이트가 닫았다
         page.on("dialog", on_dialog)
+        page.on("download", lambda dl: self.downloads.append(dl))
+
+    # --- 중단·일시정지 ---
+    def _check_cancel(self):
+        if self.cancel is not None and self.cancel.is_set():
+            raise Cancelled()
+
+    def _idle(self, ms, page=None):
+        """ms 동안 쉰다 - 살아 있는 창에서 기다려야 Playwright 가 그동안 알림창·파일을 받는다."""
+        for pg in ([page] if page is not None else []) + list(self.context.pages):
+            try:
+                if not pg.is_closed():
+                    pg.wait_for_timeout(ms)
+                    return
+            except Exception:
+                pass
+        time.sleep(ms / 1000)
+
+    def _wait(self, page, ms):
+        """page.wait_for_timeout 대신 - 0.2초씩 쉬며 [■ 중단] 을 본다."""
+        end = time.time() + ms / 1000
+        while True:
+            self._check_cancel()
+            left = end - time.time()
+            if left <= 0:
+                return
+            self._idle(min(200, left * 1000), page)
+
+    def _hold(self, i):
+        """다음 단계 앞: 중단이면 Cancelled, 일시정지면 풀릴 때까지 기다린다 (하던 단계는 끝까지 한다)."""
+        self._check_cancel()
+        if self.pause is None or not self.pause.is_set():
+            return
+        if self.progress:
+            self.progress(i, "paused", "")
+        self.log(f"  {i:2d}단계 앞에서 일시정지")
+        while self.pause.is_set():
+            self._check_cancel()
+            self._idle(200)
+
+    def _until_download(self, page, act):
+        """act() 를 하고 파일이 올 때까지 기다린다 - 누른 창이든 그 단추가 연 새 창이든 (2026-10-02: 팝업이 내려 주는 파일을
+        누른 창에서만 기다려 못 받았다). 안 오면 download_timeout_ms 뒤 그 단계 실패."""
+        self.downloads = []
+        act()
+        end = time.time() + self.download_timeout_ms / 1000
+        while not self.downloads:
+            self._check_cancel()
+            if time.time() > end:
+                raise NotFound(f"{self.download_timeout_ms / 1000:.0f}초 안에 파일이 오지 않았습니다")
+            self._idle(200, page)
+        return self.downloads[0]
 
     # --- 찾기 ---
     def _frame(self, page, info):
@@ -536,6 +600,7 @@ class Replayer:
         cands = candidates(t)
         deadline = time.time() + (OPTIONAL_WAIT if s.get("optional") else self.step_timeout)
         while True:
+            self._check_cancel()
             frame = self._frame(page, s["frame"])
             if frame is not None:
                 for how, sel, nth in cands:
@@ -676,7 +741,7 @@ class Replayer:
         if page is None or page.is_closed():
             raise NotFound(f"창 {s['page']} 이 없음")
         # 사람이 기다린 시간의 절반 (0.3~3초): 화면이 따라올 틈
-        page.wait_for_timeout(min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
+        self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
         if s["kind"] == "goto":
             page.goto(s["href"], wait_until="domcontentloaded")
             return "주소로 이동"
@@ -693,19 +758,21 @@ class Replayer:
                              " setTimeout(() => { e.style.outline = o; e.style.outlineOffset = f; }, 900); }")
             except Exception:
                 pass
-            page.wait_for_timeout(900)
-        if s.get("download"):
-            with page.expect_download(timeout=self.download_timeout_ms) as di:
-                self._act(page, loc, s)
-            how += f", 받음 {os.path.basename(self._save(di.value))}"
-        elif s.get("opens"):
+            self._wait(page, 900)
+
+        def act():
+            if not s.get("opens"):
+                return self._act(page, loc, s)
             with page.expect_popup(timeout=15000) as pi:
                 self._act(page, loc, s)
             self.pages[s["opens"]] = pi.value
             self._watch(pi.value)
-            pi.value.wait_for_load_state("domcontentloaded")
+            if not s.get("download"):       # 파일만 내려 주는 팝업은 곧 스스로 닫힌다
+                pi.value.wait_for_load_state("domcontentloaded")
+        if s.get("download"):
+            how += f", 받음 {os.path.basename(self._save(self._until_download(page, act)))}"
         else:
-            self._act(page, loc, s)
+            act()
         return how
 
     def run(self):
@@ -718,6 +785,7 @@ class Replayer:
         if self.fit_viewport and self.rec.get("viewport"):
             page.set_viewport_size(self.rec["viewport"])        # 기록 때 창 안쪽 크기 (반응형 사이트의 메뉴 모양)
         self._watch(page)
+        self.context.on("page", self._watch)                    # 기록에 없던 새 창도 - 알림창을 받고 파일을 기다린다
         self.pages[0] = page
         steps = self.rec["steps"]
         if not (steps and steps[0]["kind"] == "goto"):         # 주소줄로 시작한 기록은 그 단계가 곧 시작 주소
@@ -729,18 +797,19 @@ class Replayer:
         started = time.time()
         for i, s in enumerate(steps, 1):
             text = describe(s, self.hide_values)
-            if self.cancel is not None and self.cancel.is_set():
-                self.results.append((i, "fail", "멈춤 - 옵저버 창을 닫았습니다"))
-                self.log(f"  {i:2d}/{len(steps)} {text}  - 멈춤 (창을 닫았습니다)")
-                if self.progress:
-                    self.progress(*self.results[-1])
-                break
-            if self.progress:
-                self.progress(i, "run", "")
             try:
+                self._hold(i)
+                if self.progress:
+                    self.progress(i, "run", "")
                 how = self._step(i - 1, s)
                 self.results.append((i, "ok", how))
                 self.log(f"  {i:2d}/{len(steps)} {text}  [{how}]")
+            except Cancelled:
+                self.results.append((i, "fail", STOPPED))
+                self.log(f"  {i:2d}/{len(steps)} {text}  - {STOPPED}")
+                if self.progress:
+                    self.progress(*self.results[-1])
+                break
             except Skip as e:
                 self.results.append((i, "skip", str(e)))
                 self.log(f"  {i:2d}/{len(steps)} {text}  - 건너뜀 ({e})")

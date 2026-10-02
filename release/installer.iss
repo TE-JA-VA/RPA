@@ -86,6 +86,9 @@ Type: dirifempty; Name: "{commonpf64}\AFTER MARKET"
 const
   EXIT_RPA_RUNNING = 5;
   EXIT_STOP_FAILED = 6;
+  // 옵저버가 켜 있는 동안 쥐는 잠금 (rpa_status.OBSERVER_LOCK 과 같아야 한다). 켜진 exe 는 덮지도 지우지도 못한다
+  OBSERVER_LOCK = 'Local\AFTER_MARKET_RPA_OBSERVER';
+  OBSERVER_OPEN = '옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 다시 ';
 
 // 설치돼 있는 rpa_settings.py 를 창 없이 돌린다. 처음 설치라 파일이 없으면 -1, 못 띄우면 -2
 function RunSettings(const Args: String): Integer;
@@ -112,6 +115,12 @@ var
   Code: Integer;
 begin
   Result := '';
+  // 에이전트를 멈추기 전에 본다 - 여기서 그만두면 에이전트는 그대로 돈다 (2026-10-02: 켜진 옵저버 exe 를 덮다 막혔다)
+  if CheckForMutexes(OBSERVER_LOCK) then
+  begin
+    Result := OBSERVER_OPEN + '설치하세요.';
+    exit;
+  end;
   Code := RunSettings('--stop');
   if Code = EXIT_RPA_RUNNING then
     Result := 'RPA 가 돌고 있습니다. RPA 가 끝난 뒤 다시 설치하세요.'
@@ -129,6 +138,12 @@ end;
 function InitializeUninstall(): Boolean;
 begin
   Result := True;
+  if CheckForMutexes(OBSERVER_LOCK) then
+  begin
+    SuppressibleMsgBox(OBSERVER_OPEN + '지우세요.', mbError, MB_OK, IDOK);
+    Result := False;
+    exit;
+  end;
   if RunSettings('--check-rpa') = EXIT_RPA_RUNNING then
   begin
     SuppressibleMsgBox('RPA 가 돌고 있습니다. RPA 가 끝난 뒤 다시 지우세요.', mbError, MB_OK, IDOK);

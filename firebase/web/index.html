@@ -237,6 +237,9 @@
   .actions button:hover:not(:disabled) .t { transform:translateX(9em); opacity:0; }
   .actions button:active:not(:disabled) { transform:scale(.97); }
   .actions button:disabled { opacity:.45; cursor:default; }
+  /* 도는 RPA 의 단추: 화살표 없이 '… 실행중', 흐리게 하지 않는다 (지금 도는 것이 무엇인지 읽히게 - 다른 단추만 흐림) */
+  .actions button.busy { padding-left:1em; }
+  .actions button.busy:disabled { opacity:1; }
   /* 전체 실행은 더 진한 초록, 종료는 빨강으로 떨어뜨려 다른 묶음으로 읽히게 */
   .actions button.primary { --fill:color-mix(in srgb, var(--good-fill) 62%, #06231f); }
   .actions button.danger { --fill:var(--bad-fill); margin-top:6px; }
@@ -250,6 +253,7 @@
   .switch input:checked + .knob { background:var(--accent); }
   .switch input:checked + .knob::after { transform:translateX(18px); }
   .switch input:disabled + .knob { opacity:.4; }
+  .switch .why { display:block; font-size:12px; font-weight:400; color:var(--muted); margin-top:2px; }   /* 잠긴 까닭 */
   .apply { margin-top:10px; width:100%; }
 
   /* 현황 / 기록 */

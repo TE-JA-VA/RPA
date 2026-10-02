@@ -1,7 +1,7 @@
 r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpowers/specs/2026-09-29-release-layout-design.md,
 2026-09-29-installer-design.md).
 
-    .venv\Scripts\python.exe tools\build_release.py [--builder nuitka|pyinstaller] [--exes-from <판 폴더>] [--no-setup] [--to-dist]
+    .venv\Scripts\python.exe tools\build_release.py [--exes-from <판 폴더>] [--no-setup] [--to-dist]
 
 1. exe 셋을 만든다 (build\release 에). --exes-from 이면 그 판 폴더의 exe 를 가져온다 (exe 소스가 안 바뀐 판)
 2. 정해 둔 파일만 D:\AX\배포_<판 번호>\ 에 모은다
@@ -326,10 +326,9 @@ def nuitka_command(py, exe, work_dir, tk_dirs=None):
             os.path.join(REPO, EXES[exe])]
 
 
-def build_exes(builder, work_dir, only=None):
-    """exe 들(only 를 주면 그것만)을 work_dir 에 만든다. 판 목록의 builder 칸 글자를 돌려준다 ("nuitka 4.2.2 · python 3.14.7")."""
-    if builder != "nuitka":
-        raise RuntimeError("옵저버 exe 는 Nuitka 로만 만든다 (tk-inter) - --builder nuitka 를 쓰세요")
+def build_exes(work_dir, only=None):
+    """exe 들(only 를 주면 그것만)을 Nuitka 로 work_dir 에 만든다. 판 목록의 builder 칸 글자를 돌려준다
+    ("nuitka 4.2.2 · python 3.14.7"). 옵저버(tk-inter)가 Nuitka 로만 돼서 PyInstaller 선택지는 뺐다 (2026-10-02)."""
     os.makedirs(work_dir, exist_ok=True)
     py = sys.executable
     tk_dirs = None
@@ -342,7 +341,7 @@ def build_exes(builder, work_dir, only=None):
 
 
 def reuse_exes(src_dir, work_dir):
-    """exe 들 를 새로 만들지 않고 src_dir(판 폴더)에서 work_dir 로 복사한다. 판 목록 builder 칸 글자를 돌려준다."""
+    """exe 들을 새로 만들지 않고 src_dir(판 폴더)에서 work_dir 로 복사한다. 판 목록 builder 칸 글자를 돌려준다."""
     missing = [exe for exe in EXES if not os.path.isfile(os.path.join(src_dir, exe))]
     if missing:
         raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (옵저버가 없던 옛 판) - "
@@ -408,7 +407,6 @@ def build_setup(out_dir, version, out_root=OUT_ROOT):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="배포판을 만든다")
-    ap.add_argument("--builder", choices=("nuitka", "pyinstaller"), default="nuitka")
     ap.add_argument("--to-dist", action="store_true",
                     help="exe 셋을 이 PC 의 dist 에도 복사한다 (설정 파일은 건드리지 않는다)")
     ap.add_argument("--exes-from", metavar="판폴더", help="exe 셋을 만들지 않고 이 판 폴더에서 가져온다 (exe 소스가 안 바뀐 판)")
@@ -416,9 +414,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
     version = next_version(OUT_ROOT, datetime.date.today())
     work = os.path.join(REPO, "build", "release")
-    print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else args.builder})")
+    print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else 'Nuitka'})")
     try:
-        builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(args.builder, work)
+        builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(work)
     except (FileNotFoundError, RuntimeError) as e:
         print("  문제:", e)
         return 1

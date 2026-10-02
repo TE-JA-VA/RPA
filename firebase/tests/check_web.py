@@ -485,7 +485,10 @@ with sync_playwright() as pw:
     page.click(logi_row)                                   # 물류관리 끄기 → 출력도 따라 꺼지고 잠긴다
     check(not out_cb.is_checked() and out_cb.is_disabled(), "물류관리를 끄면 출력도 꺼지고 잠긴다")
     check("3/5 켬" in page.text_content("#mod-meta"), f"둘 다 꺼진 개수 ({page.text_content('#mod-meta')})")
-    check(page.get_attribute(out_row, "title") == "물류관리를 켜야 쓸 수 있습니다", f"잠긴 이유를 알려 준다 ({page.get_attribute(out_row, 'title')})")
+    why = page.text_content(f"{out_row} .why") if page.locator(f"{out_row} .why").count() else None
+    check(why == "물류관리를 켜야 쓸 수 있습니다" and page.is_visible(f"{out_row} .why"),
+          f"잠긴 이유를 줄 아래 글로 보여 준다 - 휴대폰에는 마우스 글(title)이 없다 ({why})")
+    if os.environ.get("SHOT_DIR"): page.locator("#mod-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "mod_why.png"))
     page.click(out_row, force=True)   # 잠긴 스위치라 Playwright 가 '비활성' 으로 본다
     check(not out_cb.is_checked(), "잠긴 동안은 눌러도 안 켜진다")
     page.click(logi_row)                                   # 물류관리 다시 켜기
@@ -527,6 +530,10 @@ with sync_playwright() as pw:
     check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
     check("돌고 있어" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
+    check(page.text_content("#run-routine .t") == "루틴 RPA 실행중" and page.is_hidden("#run-routine .fly")
+          and page.text_content("#run-prepare .t") == "프리페어 RPA" and page.is_visible("#run-prepare .fly"),
+          f"도는 RPA 의 단추는 '… 실행중' (화살표 없이), 다른 단추는 그대로 ({page.text_content('#run-routine .t')})")
+    if os.environ.get("SHOT_DIR"): page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_busy.png"))
     # 진행 중 단계 점만 숨쉬고, 로그가 늘어도 애니메이션이 처음부터 다시 돌지 않는다 (목록을 제자리에서 고친다)
     anim = lambda sel: page.evaluate(f"getComputedStyle(document.querySelector({sel!r})).animationName")
     check(anim("#list-routine li.running .mark") == "step-glow", "진행 중 점이 숨쉰다")
@@ -551,6 +558,9 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/programs/routine", {"state": "crashed", "reason": "프로그램이 사라졌습니다", "finished_at": f"{TODAY}T16:22:00"})
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('오류')", timeout=10000)
     check(page.locator("#toasts .toast.warn", has_text="오류").count() == 1, "죽으면 노란 토스트 (오류)")
+    page.wait_for_function("document.querySelector('#run-routine .t')?.textContent === '루틴 RPA'", timeout=10000)
+    check(not page.is_disabled("#run-routine") and page.is_visible("#run-routine .fly"),
+          "끝나면 (오류로 끝나도) '→ 루틴 RPA' 로 돌아와 다시 누를 수 있다")
     db_patch(f"{LIVE}/programs/routine", routine)
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('루틴 RPA 성공')", timeout=10000)
     check(page.locator("#toasts .toast.ok", has_text="루틴 RPA 성공").count() == 1, "끝나면 초록 토스트 (성공 · 소요)")
@@ -575,7 +585,10 @@ with sync_playwright() as pw:
     check(page.text_content("#shop-list label:nth-child(2)").startswith("② <b>몰</b>")
           and page.locator("#shop-list b").count() == 0, "이름의 꺾쇠는 글자 그대로 (태그가 아니다 - Review Focus 5)")
     check(page.locator("#shop-list label:nth-child(2) input").is_disabled()
-          and "옵저버" in (page.get_attribute("#shop-list label:nth-child(2)", "title") or ""), "기록이 없는 줄은 스위치가 잠기고 까닭이 보인다")
+          and "옵저버에서 기록하고 저장하세요" == (page.text_content("#shop-list label:nth-child(2) .why") or "")
+          and page.locator("#shop-list label:nth-child(1) .why").count() == 0,
+          "기록이 없는 줄은 스위치가 잠기고 까닭이 줄 아래 글로 보인다 (준비된 줄에는 없다)")
+    if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "shop_why.png"))
     check(page.is_disabled("#shop-apply") and "0/2 켬" in page.text_content("#shop-meta"), "바뀐 게 없으면 적용 비활성")
     page.click("#shop-list label:nth-child(1)")
     check(not page.is_disabled("#shop-apply") and "1/2 켬" in page.text_content("#shop-meta"), "켜면 요약·적용 활성")

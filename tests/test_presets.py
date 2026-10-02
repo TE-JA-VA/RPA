@@ -193,6 +193,34 @@ check("비밀번호가 틀리면 그 단계 실패로 끝나고 사유가 남는
       and "단계에서 멈췄습니다" in (row["steps"][0].get("note") or ""), str(row["steps"]))
 check("실패 사진은 받은 파일 폴더가 아니라 기록 폴더", not any(n.endswith(".png") for n in os.listdir(DL))
       and any(n.startswith("실패_") for n in os.listdir(wr.BASE_DIR)), str(os.listdir(DL)))
+
+
+def human_alert(page):
+    hclick(page, page.get_by_role("link", name="로그인 정책", exact=True))     # 알림창 '로그인 정책: 비밀번호는 90일마다 바꿉니다'
+    page.wait_for_timeout(300)
+
+
+rec_alert = web_replay.record(url + "/login", os.path.join(TMP, "rec_alert.json"), headless=True, human=human_alert,
+                              record_date=TODAY)
+st.write_presets([{"no": 1, "name": "알림몰", "code": "014", "saved_at": None, "record": rec_alert}, st.blank_preset(2)])
+site = dict(st.read_user_config()["Sites"]["PRESET1"], ID=fake_mall.USER, PW=fake_mall.PASSWORD)
+lines, real_log = [], wr.log
+wr.log = lines.append
+try:
+    with web_replay.sync_playwright() as pw_:
+        browser = pw_.chromium.launch()
+        page = wr.prepare_page(browser.new_context().new_page())
+        replayed = wr.action_replay(page, "PRESET1", site)
+        page.evaluate("() => alert('재생 뒤 알림')")
+        browser.close()
+finally:
+    wr.log = real_log
+said = [x for x in lines if "로그인 정책" in x]
+check("재생 중 알림창은 재생기 하나만 받는다 (프리페어 쪽 '브라우저 알림' 줄이 겹치지 않는다)", replayed
+      and sum("-> 확인" in x for x in said) == 1 and not any("브라우저 알림" in x for x in said), "\n".join(said))
+check("대시보드로 가는 알림 글은 20자로 줄인다", not any("바꿉니다" in x for x in lines), "\n".join(said))
+check("재생이 끝나면 프리페어 쪽 알림 받기가 돌아온다", any("브라우저 알림" in x and "재생 뒤 알림" in x for x in lines),
+      "\n".join(lines[-3:]))
 srv.shutdown()
 
 
@@ -327,6 +355,52 @@ with web_replay.sync_playwright() as pw_:
     browser.close()
 check("대시보드로 가는 실패 사유·로그에는 주소의 ? 뒤가 없다", not ok and "SECRET1" not in r.results[-1][2]
       and not any("SECRET1" in x for x in lines), str(r.results[-1:]))
+
+print("=== 7. 미룬 것 손질 (2026-10-02) ===")
+REC2 = {"version": 1, "start_url": "https://shop2.example.com/login", "steps": [{"kind": "goto", "href": "https://shop2.example.com/"}]}
+old = {1: {"no": 1, "name": "몰1", "code": "012", "saved_at": "2026-09-30T10:00:00", "record": REC1},
+       2: {"no": 2, "name": "몰2", "code": "013", "saved_at": "2026-09-30T11:00:00", "record": REC2}}
+NOW = "2026-10-02T09:00:00"
+
+
+def files_now():
+    return json.loads(json.dumps([old[1], dict(old[2], name="몰2 새 이름"),
+                                  {"no": 3, "name": "몰3", "code": "014", "saved_at": None, "record": REC1},
+                                  {"no": 4, "name": "프리셋 4", "code": "", "saved_at": None, "record": None}]))
+
+
+got = [f["saved_at"] for f in rr.keep_dates(files_now(), old, set(), NOW)]
+check("저장 날짜: 바뀐 프리셋(이름·새 기록)만 오늘, 그대로인 것은 원래 날짜, 기록 없는 것은 없음",
+      got == ["2026-09-30T10:00:00", NOW, NOW, None], str(got))
+got = [f["saved_at"] for f in rr.keep_dates(files_now(), old, {1}, NOW)]
+check("저장 날짜: 아이디·비밀번호만 바꿔도 그 프리셋은 오늘", got[0] == NOW, str(got))
+got = [f["saved_at"] for f in rr.keep_dates(files_now(), {}, set(), NOW)]
+check("저장 날짜: 예전 파일을 못 읽었으면 기록 있는 것은 모두 오늘", got == [NOW, NOW, NOW, None], str(got))
+
+tmp_root = os.path.join(TMP, "temp_root")
+stale = os.path.join(tmp_root, rr.PROFILE_PREFIX + "old", "Default")
+os.makedirs(stale)
+other = os.path.join(tmp_root, "남의_폴더")
+os.makedirs(other)
+rr.sweep_profiles(tmp_root)
+check("지난번에 못 지운 브라우저 프로필(로그인 쿠키)은 옵저버를 켤 때 지운다, 다른 폴더는 그대로",
+      not os.path.exists(os.path.dirname(stale)) and os.path.isdir(other), str(os.listdir(tmp_root)))
+
+
+class NoBrowser:
+    class chromium:
+        @staticmethod
+        def launch_persistent_context(*a, **k):
+            raise RuntimeError("브라우저 없음")
+
+
+import glob  # noqa: E402
+
+pattern = os.path.join(tempfile.gettempdir(), rr.PROFILE_PREFIX + "*")
+before = set(glob.glob(pattern))
+e = raises(RuntimeError, rr.launch, NoBrowser)
+check("브라우저를 못 띄우면 만든 프로필 폴더도 지운다", e is not None and set(glob.glob(pattern)) == before,
+      str(set(glob.glob(pattern)) - before))
 
 print()
 print(f"실패: {'없음' if not fails else fails}")
