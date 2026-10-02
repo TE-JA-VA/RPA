@@ -534,17 +534,23 @@ class App:
         tk.Label(inner, text="프리셋", font=F_BOLD, bg=CARD, fg=INK).pack(anchor="w")
         self.preset_bar = tk.Frame(inner, bg=CARD)
         self.preset_bar.pack(fill="x", pady=(6, 8))
-        form = tk.Frame(inner, bg=CARD)
+        form = tk.Frame(inner, bg=CARD)          # 프리셋마다 따로인 칸은 모두 여기 (아이디·비밀번호도 - 2026-10-02)
         form.pack(fill="x")
-        tk.Label(form, text="이름", font=F, bg=CARD, fg=MUTED).grid(row=0, column=0, sticky="w")
-        self._entry(form, self.name_var, 18).grid(row=0, column=1, sticky="we", padx=(6, 12), ipady=3)
-        tk.Label(form, text="사이트코드", font=F, bg=CARD, fg=MUTED).grid(row=0, column=2, sticky="w")
-        self._entry(form, self.code_var, 5).grid(row=0, column=3, sticky="w", padx=(6, 0), ipady=3)
+        for r, (left, lvar, right, rvar, show) in enumerate((("이름", self.name_var, "사이트코드", self.code_var, ""),
+                                                             ("아이디", self.id_var, "비밀번호", self.pw_var, "•"))):
+            y = (6 if r else 0, 0)
+            tk.Label(form, text=left, font=F, bg=CARD, fg=MUTED).grid(row=r, column=0, sticky="w", pady=y)
+            self._entry(form, lvar, 18).grid(row=r, column=1, sticky="we", padx=(6, 12), pady=y, ipady=3)
+            tk.Label(form, text=right, font=F, bg=CARD, fg=MUTED).grid(row=r, column=2, sticky="w", pady=y)
+            self._entry(form, rvar, 12, show=show).grid(row=r, column=3, sticky="we", padx=(6, 0), pady=y, ipady=3)
         form.columnconfigure(1, weight=1)
+        self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
+                                wraplength=self.panel_w - 2 * pad - 26)
+        self.pw_hint.pack(fill="x", pady=(6, 0))
         self.name_var.trace_add("write", lambda *a: self._field_changed())
         self.code_var.trace_add("write", lambda *a: self._field_changed())
 
-        # 상태 + 기록 단추
+        # 안내 한 줄 (기록·미리보기·저장 모두 여기 - 두 곳이면 지난 일이 남는다, 2026-10-02) + 기록 단추
         bar = tk.Frame(root, bg=BG)
         bar.pack(fill="x", padx=pad, pady=(6, 4))
         self.rec_btn = button(bar, "●  기록 시작", RED, RED_D, self.toggle_record)
@@ -572,25 +578,9 @@ class App:
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.win, width=e.width))
         self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta / 120), "units"))
 
-        # 미리보기용 계정 + 단추
-        bot = tk.Frame(root, bg=BG)
-        bot.pack(fill="x", padx=pad, pady=(6, pad))
-        acc = tk.Frame(bot, bg=BG)
-        acc.pack(fill="x")
-        tk.Label(acc, text="아이디", font=F, bg=BG, fg=MUTED).grid(row=0, column=0, sticky="w")
-        self._entry(acc, self.id_var, 13).grid(row=0, column=1, sticky="we", padx=(6, 12), ipady=3)
-        tk.Label(acc, text="비밀번호", font=F, bg=BG, fg=MUTED).grid(row=0, column=2, sticky="w")
-        self._entry(acc, self.pw_var, 13, show="•").grid(row=0, column=3, sticky="we", padx=(6, 0), ipady=3)
-        acc.columnconfigure(1, weight=1)
-        acc.columnconfigure(3, weight=1)
-        self.pw_hint = tk.Label(bot, text="", font=F_SMALL, bg=BG, fg=MUTED, anchor="w", justify="left",
-                                wraplength=self.panel_w - 2 * pad)
-        self.pw_hint.pack(fill="x", pady=(3, 8))
-        self.msg = tk.Label(bot, text="", font=F, bg=BG, fg=MUTED, anchor="w", justify="left",
-                            wraplength=self.panel_w - 2 * pad)
-        self.msg.pack(fill="x", pady=(0, 8))
-        btns = tk.Frame(bot, bg=BG)
-        btns.pack(fill="x")
+        # 단추
+        btns = tk.Frame(root, bg=BG)
+        btns.pack(fill="x", padx=pad, pady=(8, pad))
         self.save_btn = button(btns, "저장", GREEN, GREEN_D, self.save, width=8)
         self.save_btn.pack(side="right")
         self.prev_btn = button(btns, "▶  미리보기", BLUE, BLUE_D, self.preview, width=12)
@@ -631,9 +621,7 @@ class App:
             enable(self.prev_btn, not (self.stopping or self.closing))
             enable(self.save_btn, not (self.stopping or self.closing))
         else:
-            p = self.presets[self.cur]
-            final = None if rec_on else self._final(p)
-            kept = bool(final) and bool(self._kept(p, final))
+            kept = not rec_on and self._has_kept(self.presets[self.cur])
             skin(self.prev_btn, "▶  미리보기", BLUE, BLUE_D, self.preview)
             skin(self.save_btn, "저장", GREEN, GREEN_D, self.save)
             enable(self.prev_btn, kept)
@@ -671,7 +659,7 @@ class App:
         self._store_fields()
         self.cur, self.shown = i, 0
         self._load_fields()
-        self.msg.config(text="")
+        self.status.config(text="")         # 다른 프리셋의 일을 말하는 글은 지운다
         self.render()
 
     def add_preset(self):
@@ -703,6 +691,10 @@ class App:
 
     def _kept(self, p, final):
         return [i for i, s in enumerate(final["steps"]) if s["id"] not in p["deleted"] and self._var(p, s["id"]).get()]
+
+    def _has_kept(self, p):
+        final = self._final(p)
+        return bool(final) and bool(self._kept(p, final))
 
     def render(self):
         for c in self.inner.winfo_children():
@@ -776,7 +768,6 @@ class App:
             return
         p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set())
         self.recording, self.shown = self.cur, 0
-        self.msg.config(text="")
         self.status.config(text="브라우저를 여는 중…", fg=MUTED)
         self.render()
         self.worker.cmd.put(("record", self.cur, p["name"], self.start_url))
@@ -786,13 +777,13 @@ class App:
         p = self.presets[self.cur]
         final = self._final(p)
         if not final:
-            return self.msg.config(text="미리보기할 기록이 없습니다", fg=RED)
+            return self.status.config(text="미리보기할 기록이 없습니다", fg=RED)
         kept = self._kept(p, final)
         if not kept:
-            return self.msg.config(text="켜 둔 단계가 없습니다", fg=RED)
+            return self.status.config(text="켜 둔 단계가 없습니다", fg=RED)
         pw = p["pw"] or (stored_password(self.cur + 1) if p["has_pw"] else "")
         if not p["id"].strip() or not pw:
-            return self.msg.config(text="아이디·비밀번호를 넣어야 미리보기를 할 수 있습니다", fg=RED)
+            return self.status.config(text="아이디·비밀번호를 넣어야 미리보기를 할 수 있습니다", fg=RED)
         r = rec.keep_steps(final, kept)
         ids = [s["id"] for s in r["steps"]]
         self.render()
@@ -800,7 +791,7 @@ class App:
         self.worker.pause.clear()
         self.previewing, self.paused, self.stopping = True, False, False
         self.paint_buttons()
-        self.msg.config(text="미리보기 중 - 새 브라우저가 같은 자리에서 따라 합니다. 보기만 하세요", fg=BLUE)
+        self.status.config(text="미리보기 중 - 새 브라우저가 같은 자리에서 따라 합니다. 보기만 하세요", fg=BLUE)
         self.worker.cmd.put(("preview", r, ids, {"ID": p["id"].strip(), "PW": pw}, p["code"] or "000",
                              f"{circled(self.cur + 1)} {p['name']}"))
 
@@ -808,7 +799,7 @@ class App:
         """[Ⅱ 일시정지]: 지금 단계를 마치고 다음 단계 앞에서 기다린다. [▶ 계속] 이면 이어 간다."""
         self.paused = not self.paused
         (self.worker.pause.set if self.paused else self.worker.pause.clear)()
-        self.msg.config(text="일시정지 - 지금 단계를 마치고 멈춥니다" if self.paused else
+        self.status.config(text="일시정지 - 지금 단계를 마치고 멈춥니다" if self.paused else
                         "미리보기 중 - 새 브라우저가 같은 자리에서 따라 합니다. 보기만 하세요", fg=BLUE)
         self.paint_buttons()
 
@@ -816,7 +807,7 @@ class App:
         """[■ 중단]: 찾거나 기다리던 것을 그만두고 브라우저를 닫는다 (대개 1초 안). 끝나면 preview_done."""
         self.stopping = True
         self.worker.cancel.set()
-        self.msg.config(text="중단하는 중…", fg=MUTED)
+        self.status.config(text="중단하는 중…", fg=MUTED)
         self.paint_buttons()
 
     def save(self):
@@ -826,9 +817,9 @@ class App:
         try:
             cfg = st.read_user_config()
         except ValueError as e:
-            return self.msg.config(text=f"사용자 설정을 읽지 못했습니다: {e}", fg=RED)
+            return self.status.config(text=f"사용자 설정을 읽지 못했습니다: {e}", fg=RED)
         if not cfg:
-            return self.msg.config(text="이 PC 의 사용자 설정이 없습니다 - 시작 메뉴 'RPA 설정' 에서 먼저 저장하세요", fg=RED)
+            return self.status.config(text="이 PC 의 사용자 설정이 없습니다 - 시작 메뉴 'RPA 설정' 에서 먼저 저장하세요", fg=RED)
         now = datetime.datetime.now().isoformat(timespec="seconds")
         out = []
         for no, p in enumerate(self.presets, 1):
@@ -842,7 +833,7 @@ class App:
         problem = validate_presets(out)
         if problem:
             self.select(problem[0] - 1)
-            return self.msg.config(text=problem[1], fg=RED)
+            return self.status.config(text=problem[1], fg=RED)
         for o in out:
             if o["record"]:
                 scrub_login(o["record"], o["id"])      # 아이디는 기록에 글자로 안 남긴다 (설정의 아이디로 친다)
@@ -859,22 +850,22 @@ class App:
             try:
                 pw = o["pw"] or (stored_password(o["no"]) if o["has_pw"] else "")
             except RuntimeError as e:
-                return self.msg.config(text=f"{circled(o['no'])} 저장된 비밀번호를 풀지 못했습니다 ({e}) - 비밀번호를 다시 넣고 "
+                return self.status.config(text=f"{circled(o['no'])} 저장된 비밀번호를 풀지 못했습니다 ({e}) - 비밀번호를 다시 넣고 "
                                             "저장하세요", fg=RED)
             if any(password_in_record(f["record"], pw) for f in files):    # 비밀번호 칸이 아닌 곳에 비밀번호를 친 경우
                 self.select(o["no"] - 1)
-                return self.msg.config(text=f"{circled(o['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다 - "
+                return self.status.config(text=f"{circled(o['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다 - "
                                             "그 단계를 지우세요", fg=RED)
         fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh)
         if problem:
-            return self.msg.config(text=problem, fg=RED)
+            return self.status.config(text=problem, fg=RED)
         for p, f in zip(self.presets, files):
             if f["record"]:
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
         self._load_fields()
         n = sum(1 for o in out if o["record"])
-        self.msg.config(text=f"저장했습니다 - 기록 있는 프리셋 {n}개. 새로 기록한 프리셋은 꺼진 채입니다: 대시보드 환경설정 "
+        self.status.config(text=f"저장했습니다 - 기록 있는 프리셋 {n}개. 새로 기록한 프리셋은 꺼진 채입니다: 대시보드 환경설정 "
                              "'쇼핑몰 프리셋' 에서 켜면 다음 프리페어부터 돕니다.", fg=GREEN_D)
         return st.presets_path()
 
@@ -913,11 +904,13 @@ class App:
                 elif m[0] == "recording_stopped":
                     self.recording = None
                     dirty = True
+                    if not self._has_kept(self.presets[self.cur]):     # 일꾼의 '[미리보기] 로 확인하세요' 대신
+                        self.status.config(text="기록된 단계가 없습니다 - 다시 [● 기록 시작] 을 누르세요", fg=MUTED)
                     self.on_stopped()
                 elif m[0] == "progress":
                     self._progress(*m[1:])
                 elif m[0] == "paused":
-                    self.msg.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하세요. 지금은 창을 닫아도 됩니다",
+                    self.status.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하세요. 지금은 창을 닫아도 됩니다",
                                     fg=BLUE)
                     self.on_paused()
                 elif m[0] == "preview_done":
@@ -928,11 +921,11 @@ class App:
                         return self._close_now()
                     self.paint_buttons()
                     if ok:
-                        self.msg.config(text=f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}", fg=GREEN_D)
+                        self.status.config(text=f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}", fg=GREEN_D)
                     elif stopped:
-                        self.msg.config(text="미리보기를 중단했습니다", fg=MUTED)
+                        self.status.config(text="미리보기를 중단했습니다", fg=MUTED)
                     else:
-                        self.msg.config(text=note or "미리보기가 멈췄습니다 - 빨간 단계를 끄거나 지운 뒤 다시 해 보세요", fg=RED)
+                        self.status.config(text=note or "미리보기가 멈췄습니다 - 빨간 단계를 끄거나 지운 뒤 다시 해 보세요", fg=RED)
                     self.on_preview_done(ok)
                 elif m[0] == "human_done":
                     self.on_human_done()
@@ -976,7 +969,7 @@ class App:
         if self.previewing:
             self.closing = True
             self.worker.cancel.set()
-            self.msg.config(text="미리보기를 멈추고 닫는 중…", fg=MUTED)
+            self.status.config(text="미리보기를 멈추고 닫는 중…", fg=MUTED)
             self.paint_buttons()
             return
         self._close_now()
