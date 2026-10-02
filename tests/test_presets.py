@@ -402,6 +402,29 @@ e = raises(RuntimeError, rr.launch, NoBrowser)
 check("브라우저를 못 띄우면 만든 프로필 폴더도 지운다", e is not None and set(glob.glob(pattern)) == before,
       str(set(glob.glob(pattern)) - before))
 
+print("=== 8. 콘솔 없이 켜진 exe (2026-10-02 첫 실행) ===")
+NO_CONSOLE = r"""
+import ctypes, sys
+for n in (-10, -11, -12):           # Nuitka attach exe 를 시작 메뉴·관리자 권한으로 켰을 때처럼
+    ctypes.windll.kernel32.SetStdHandle(n, ctypes.c_void_p(-1))
+sys.stderr = None
+import rpa_observer as rr
+if sys.argv[1] == "fix":
+    rr.fix_std_handles()
+from playwright.sync_api import sync_playwright
+try:
+    with sync_playwright():
+        pass
+    print("드라이버 뜸")
+except OSError as e:
+    print(f"WinError {e.winerror}")
+"""
+got = {m: subprocess.run([sys.executable, "-c", NO_CONSOLE, m], cwd=ROOT, capture_output=True, timeout=60,
+                         env=dict(os.environ, PYTHONIOENCODING="utf-8")).stdout.decode("utf-8", "replace").strip()
+       for m in ("as_is", "fix")}
+check("표준 핸들이 못 쓰는 값이면 그대로는 WinError 6, fix_std_handles 뒤에는 Playwright 드라이버가 뜬다",
+      got["as_is"].endswith("WinError 6") and got["fix"].endswith("드라이버 뜸"), str(got))
+
 print()
 print(f"실패: {'없음' if not fails else fails}")
 sys.exit(1 if fails else 0)

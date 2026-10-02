@@ -3,6 +3,7 @@
 **날짜:** 2026-09-30
 **상태:** 구현됨 (2026-10-01, 판 2026.10.01-1 - 샌드박스 33/33). 설계는 2026-09-30 사용자 승인 ("허가합니다!"), 이름은 2026-10-01 '옵저버'.
 2026-10-02 미룬 것 손질 (사용자 승인 "가랏!", 판 2026.10.02-1 - 샌드박스 34/34): 미리보기 [Ⅱ 일시정지]·[■ 중단]과 창 닫기, 저장 단추·저장 날짜, 팝업이 내려 주는 파일, 알림창 한 곳, 대시보드 실행 단추 '… 실행중'·잠긴 까닭 글, 설치 파일의 옵저버 확인 (3·4·6·7절에 그날 날짜로)
+2026-10-02 첫 실행에서 옵저버 exe 가 켜자마자 `OSError: [WinError 6]` → 판 2026.10.02-2 (7절)
 **이 문서는 결정 기록이다.** 무엇을 왜 그렇게 정했는지 남긴다. 구현하며 바뀌면 여기에 날짜와 함께 고쳐 적는다.
 
 ## 0. 왜 하나
@@ -176,6 +177,7 @@ spike `rec_app.py` 의 화면을 옮긴다 (2026-09-30 사용자가 직접 써 �
 ## 7. 빌드·설치
 
 - `EXES` 에 `Prepare_Observer.exe` (`rpa_observer.py`). Nuitka 옵션: 주황 아이콘, Playwright, `tk-inter` 플러그인, 콘솔은 `attach` (시작 메뉴로 켜면 창 없음, `--check` 는 부른 쪽이 출력을 받음 - 첫 빌드 때 확인). 콘솔 옵션은 exe 마다로 옮긴다 (루틴·프리페어는 지금처럼 `force`).
+- **콘솔 없이 켜진 attach exe** (2026-10-02 첫 실행): 시작 메뉴·관리자 권한으로 다시 켜기처럼 붙을 콘솔이 없으면 Nuitka 가 표준 핸들 셋을 `INVALID_HANDLE_VALUE` 로 둔다 (`HelpersConsole.c`). Playwright 는 `sys.stderr` 가 None 이면 드라이버의 stderr 를 비워 두고, `subprocess` 가 그 표준 핸들을 집다 `WinError 6` - 일꾼이 Playwright 를 못 띄워 옵저버가 켜자마자 오류만 보였다. `main()` 이 맨 먼저 `fix_std_handles()` 로 못 쓰는 핸들을 NUL 로 바꾼다 (판 2026.10.02-2). `--check` 는 콘솔에서 불러 못 잡았다 → `tests/test_presets.py` 8절이 핸들을 그 값으로 만들고 드라이버를 띄우고, 샌드박스는 설치된 옵저버를 콘솔 없는 pythonw 로 켜 드라이버(node.exe run-driver)가 뜨는지 본다 (35/35). 바로 가기를 탐색기로 여는 실측: 고치기 전 핸들 셋 다 `0xFFFF…`·`WinError 6`, 고친 뒤 성공.
 - **Tcl/Tk 꺼내기** (2026-09-30 실측): 파이썬 3.14 의 Tcl/Tk 9 는 라이브러리가 `tcl90.dll`·`tcl9tk90.dll` 안의 압축(zipfs)에 있어 Nuitka 가 못 찾는다. 빌드가 tkinter 로 `//zipfs:/lib/tcl/tcl_library` 와 `//zipfs:/lib/tk/tk_library` 를 작업 폴더에 꺼내 `--tcl-library-dir`·`--tk-library-dir` 로 넘긴다. `info library` 가 진짜 폴더면 그대로 쓴다. spike 빌드: 176초, 52MB, exe 로 혼자 도는 시험 통과.
 - `MARKERS` 에 `옵저버 점검 끝`. `--exes-from` 으로 가져올 판에 옵저버 exe 가 없으면 무엇이 없는지 말하고 멈춘다.
 - 설치 파일 시작 메뉴 `RPA 옵저버` (주황 아이콘, AppUserModelID `AFTERMARKET.RPA.Observer`).

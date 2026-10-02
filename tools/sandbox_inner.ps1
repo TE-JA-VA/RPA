@@ -71,6 +71,27 @@ foreach ($e in @(@("ERPia_RPA.exe", "=== 점검 끝"), @("Prepare_RPA.exe", "쓸
     $u8 = [Text.Encoding]::UTF8.GetString($bytes); $ks = [Text.Encoding]::GetEncoding(949).GetString($bytes)
     Check "$($e[0]) --check 가 켜져 끝까지 간다" ($done -and ($u8.Contains($e[1]) -or $ks.Contains($e[1]))) ($u8.Substring([Math]::Max(0, $u8.Length - 300)))
 }
+# 옵저버를 시작 메뉴처럼 붙을 콘솔 없이 켠다 (2026-10-02 첫 실행: 표준 핸들이 못 쓰는 값이라 Playwright 가 WinError 6 -
+# --check 는 콘솔에서 불러 못 잡았다). 콘솔 없는 pythonw 가 띄우고 관리자 권한은 이 스크립트에서 물려받는다 (UAC 창 없음).
+# 일꾼이 Playwright 드라이버(node.exe run-driver)를 띄우면 통과. -Wait 는 쓰지 않는다 (자손까지 기다려 켜 둔 옵저버에서 멈춘다)
+Set-Content "$X\no_console.py" "import subprocess, sys`nsubprocess.Popen([sys.argv[1]], cwd=sys.argv[2])" -Encoding ASCII
+Start-Process "$App\python\pythonw.exe" -ArgumentList "`"$X\no_console.py`" `"$App\Prepare_Observer.exe`" `"$App`""
+$drv = $null
+for ($i = 0; $i -lt 120 -and -not $drv; $i++) {
+    Start-Sleep -Milliseconds 500
+    $drv = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match "run-driver" }
+}
+Start-Sleep 2
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+$bmp.Save("$O\observer.png")
+$g.Dispose(); $bmp.Dispose()
+$obs = @(Get-CimInstance Win32_Process -Filter "Name='Prepare_Observer.exe'")
+Check "옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜도 Playwright 드라이버가 뜬다 (사진 observer.png)" ($null -ne $drv) "옵저버 프로세스 $($obs.Count)개, 드라이버 없음"
+$obs | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }
 Remove-Item Env:RPA_USER_CONFIG, Env:RPA_PROGRAMDATA, Env:RPA_STATUS_DIR, Env:RPA_UNATTENDED
 
 # 2. 가짜 설정 (로그인 없이 파일만) → --after-install --no-window → 작업 등록·에이전트 켜기

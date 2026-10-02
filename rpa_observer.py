@@ -16,6 +16,7 @@ import ctypes
 import datetime
 import glob
 import json
+import msvcrt
 import os
 import queue
 import re
@@ -1044,6 +1045,18 @@ def show_error(text):
     ctypes.windll.user32.MessageBoxW(None, text, "옵저버", 0x10)
 
 
+def fix_std_handles():
+    """시작 메뉴로 켠 exe 는 표준 핸들 셋이 INVALID_HANDLE_VALUE 다 (Nuitka attach 가 붙을 콘솔이 없으면 그렇게 둔다).
+    그대로면 Playwright 가 드라이버를 띄우다 subprocess 가 WinError 6 (2026-10-02 첫 실행). 못 쓰는 핸들은 NUL 로."""
+    k = ctypes.WinDLL("kernel32")                       # windll.kernel32 의 restype 을 바꾸지 않게 따로
+    k.GetStdHandle.restype = wintypes.HANDLE
+    k.GetFileType.argtypes = (wintypes.HANDLE,)
+    k.SetStdHandle.argtypes = (wintypes.DWORD, wintypes.HANDLE)
+    for n in (-10, -11, -12):                           # STD_INPUT/OUTPUT/ERROR_HANDLE
+        if not k.GetFileType(k.GetStdHandle(n)):        # FILE_TYPE_UNKNOWN - 없거나 못 쓰는 핸들
+            k.SetStdHandle(n, msvcrt.get_osfhandle(os.open(os.devnull, os.O_RDWR)))    # 끝날 때까지 닫지 않는다
+
+
 def check():
     """창 없이 확인하고 끝 줄 CHECK_DONE (빌드·샌드박스가 본다). 관리자 권한을 묻지 않는다."""
     print(f"설정 폴더: {os.path.dirname(st.user_config_path())}")
@@ -1066,6 +1079,7 @@ def check():
 
 
 def main(argv=None):
+    fix_std_handles()                                   # 무엇보다 먼저 - 일꾼이 곧 Playwright(subprocess)를 띄운다
     argv = sys.argv[1:] if argv is None else list(argv)
     if sys.stdout is not None:
         sys.stdout.reconfigure(encoding="utf-8")        # 콘솔 없는 exe 를 시작 메뉴로 켜면 stdout 이 없다
