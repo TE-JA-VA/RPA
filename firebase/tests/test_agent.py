@@ -359,15 +359,18 @@ class WalletClient:
     def fs_get(self, path):
         return self.wallet if path == "wallet/c_demo" else None
 
-    def fs_sum(self, parent, collection, field):
-        self.asked.append((parent, collection, field))
+    def fs_sum(self, parent, collection, field, since=None):
+        self.asked.append((parent, collection, field, since))
         return self.spent
 
 
 check(ag.balance(WalletClient(None, 3), "c_demo") is None, "통장이 없는 업체는 None - 토큰 제도 밖 (세기만 한다)")
 wc = WalletClient({"granted": 10}, 3)
-check(ag.balance(wc, "c_demo") == 7 and wc.asked == [("runs/c_demo", "items", "cost")],
+check(ag.balance(wc, "c_demo") == 7 and wc.asked == [("runs/c_demo", "items", "cost", None)],
       "남은 토큰 = 넣은 합계 - 실행 기록들의 쓴 토큰 합 (Firestore 가 서버에서 더한다)")
+wc = WalletClient({"granted": 10, "since": "2026-10-06T12:00:00"}, 3)
+check(ag.balance(wc, "c_demo") == 7 and wc.asked == [("runs/c_demo", "items", "cost", "2026-10-06T12:00:00")],
+      "통장 시작 시각(since)이 있으면 그 뒤에 시작한 기록만 뺀다 (3부 - 통장 전에 쓴 것은 안 뺀다)")
 check(ag.balance(WalletClient({"granted": 1}, 4), "c_demo") == -3, "마이너스도 그대로 (1 이상이면 시작해 끝까지 - 사용자 결정)")
 
 print("토큰 2부: 막기 - 0 이하면 실행 거절, 통장 없으면 통과, 확인 못 하면 마지막으로 확인한 값 (2026-10-06 사용자 결정)")
@@ -384,10 +387,10 @@ class TokenClient(WalletClient):
             raise fb.HttpError(503, "끊김")
         return {"default": 1, "login": 0} if path == "meta/prices" else super().fs_get(path)
 
-    def fs_sum(self, parent, collection, field):
+    def fs_sum(self, parent, collection, field, since=None):
         if self.fail:
             raise fb.HttpError(503, "끊김")
-        return super().fs_sum(parent, collection, field)
+        return super().fs_sum(parent, collection, field, since)
 
 
 def plan():

@@ -219,6 +219,10 @@ await waitFor("현황에 남은 토큰·실행 1번에 드는 토큰", async () 
   const t = (await db.ref("apps/rpa/live/c_demo/pc_office/tokens").get()).val();
   return t?.balance === -6 && Number.isInteger(t?.cost?.all) && t.cost.all === t.cost.routine + t.cost.prepare;
 });
+// 3부: 통장 시작 시각(since) 뒤에 시작한 기록만 뺀다 - 진짜 REST 의 started_at >= since 거르기
+await store.doc("wallet/c_demo").set({ granted: 10, since: "2999-01-01T00:00:00" });
+b = bal();
+check(b.status === 0 && Number(b.stdout.trim()) === 10, `통장 시작 뒤 기록이 없으면 넣은 그대로 (${b.stdout.trim() || b.stderr.slice(-300)})`);
 
 // --- 6. 정리 -------------------------------------------------------------
 agent.kill();

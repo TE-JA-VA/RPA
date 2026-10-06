@@ -254,12 +254,17 @@ class Client:
         doc = self._fs_call("GET", f"{self._fs_base()}/{path.strip('/')}")
         return None if doc is None else {k: fs_value(v) for k, v in (doc.get("fields") or {}).items()}
 
-    def fs_sum(self, parent, collection, field):
+    def fs_sum(self, parent, collection, field, since=None):
         """parent 아래 collection 문서들의 field 합 - 서버가 더한다 (문서를 내려받지 않는다, 1000건에 읽기 1번).
-        그 칸이 없는 문서(토큰 전 옛 기록)는 빠진다."""
+        그 칸이 없는 문서(토큰 전 옛 기록)는 빠진다. since 면 started_at >= since 인 것만 (복합 색인 started_at·field 가
+        rules/firestore.indexes.json 에 있어야 한다 - 에뮬레이터는 색인을 안 따진다)."""
+        query = {"from": [{"collectionId": collection}]}
+        if since:
+            query["where"] = {"fieldFilter": {"field": {"fieldPath": "started_at"}, "op": "GREATER_THAN_OR_EQUAL",
+                                              "value": {"stringValue": since}}}
         r = self._fs_call("POST", f"{self._fs_base()}/{parent.strip('/')}:runAggregationQuery", {
             "structuredAggregationQuery": {
-                "structuredQuery": {"from": [{"collectionId": collection}]},
+                "structuredQuery": query,
                 "aggregations": [{"alias": "s", "sum": {"field": {"fieldPath": field}}}]}})
         return fs_value(((r or [{}])[0].get("result") or {}).get("aggregateFields", {}).get("s", {})) or 0
 

@@ -16,7 +16,19 @@
         { "fieldPath": "date", "order": "ASCENDING" },
         { "fieldPath": "started_at", "order": "DESCENDING" }
       ]
-    }
+    },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "cost", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.sales", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.hold", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.logistics", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.output", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.sites", "order": "ASCENDING" }] }
   ],
   "fieldOverrides": []
 }

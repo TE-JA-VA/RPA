@@ -576,12 +576,31 @@ with sync_playwright() as pw:
 
     # 토큰 (2026-10-06, 2부): 실행 단추 아래 늘 보이는 한 줄 - 통장이 없으면 없음, 평소 회색, 모자라면 노랑, 0 이하면 빨강 + 단추 잠금.
     # 예약 칸에도 (지켜볼 사람이 없는 실행이라)
-    check(page.is_hidden("#token-line"), "통장이 없는 업체는 토큰 줄이 없다")
+    check(page.is_hidden("#token-line") and page.is_hidden("#usage-card"), "통장이 없는 업체는 토큰 줄도 사용량도 없다")
+    # 3부 이번 달 사용량: 통장(이달 1일 시작)과 이번 달 기록 셋 - 끝나면 지운다 (기록 탭 시험이 이 시드를 모른다)
+    month = time.strftime("%Y-%m")
+    first_day = TODAY == f"{month}-01"
+    usage_runs = {"u_month": (f"{month}-01T00:00:01", {"hold": 4}, 4),
+                  "u_today1": (f"{TODAY}T08:00:00", {"login": 1, "sales": 1, "logistics": 1}, 2),
+                  "u_today2": (f"{TODAY}T09:00:00", {"logistics": 1, "sites": 2}, 3)}
+    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "500"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
+    for rid, (started, used, spent) in usage_runs.items():
+        call("POST", f"{FS}/runs/c_demo/items?documentId={rid}", {"fields": {
+            **fs_fields({"cid": "c_demo", "pcId": "pc_office", "run_id": rid, "program": "routine", "state": "success",
+                         "started_at": started, "date": started[:10], "cost": spent, "payload": "{}"}),
+            "used": {"mapValue": {"fields": {k: {"integerValue": str(n)} for k, n in used.items()}}}}}, OWNER)
     cost = {"all": 6, "prepare": 2, "routine": 4}
     db_patch(LIVE, {"tokens": {"balance": 120, "cost": cost}})
     page.wait_for_function("document.getElementById('token-line')?.hidden === false", timeout=10000)
     check(page.text_content("#token-line") == "남은 토큰 120개 · 전체 실행 1번에 6개"
           and page.get_attribute("#token-line", "class") == "msg", f"평소: 회색 한 줄 ({page.text_content('#token-line')})")
+    page.wait_for_function("!document.getElementById('usage-card')?.classList.contains('hide')", timeout=10000)
+    rows = page.evaluate("[...document.querySelectorAll('#usage-list .u-row')].map((r) => r.children[0].textContent + ' ' + r.children[1].textContent)")
+    check(rows == ["주문매핑 매출처리 1회", "물류대기 관리 4회", "물류관리 2회", "쇼핑몰·사이트 받기 2회"],
+          f"이번 달 사용량: 모듈별 횟수 (모듈 순서, 0회·로그인은 안 보임) ({rows})")
+    check(page.text_content("#usage-sum") == f"합계 9개 · 오늘 {9 if first_day else 5}개"
+          and page.text_content("#usage-meta") == f"({int(month[5:])}월 1일부터)",
+          f"합계·오늘은 서버가 더한 쓴 토큰, 이달 1일부터 ({page.text_content('#usage-meta')} {page.text_content('#usage-sum')})")
     db_patch(LIVE, {"tokens": {"balance": 3, "cost": cost}})
     page.wait_for_function("document.getElementById('token-line')?.classList.contains('warn')", timeout=10000)
     check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개 - 마이너스로 떨어질 수 있습니다"
@@ -598,7 +617,11 @@ with sync_playwright() as pw:
           f"예약 칸: 건너뛴다고 빨간 글 ({page.text_content('#sch-info')})")
     db_patch(LIVE, {"tokens": None})                   # PATCH 의 null 이 그 칸을 지운다 (call 은 None 이면 본문 없이 보낸다)
     page.wait_for_function("document.getElementById('token-line')?.hidden === true", timeout=10000)
-    check(not page.is_disabled("#run-all") and "토큰" not in page.text_content("#sch-info"), "통장이 사라지면 (옛 에이전트) 줄도 잠금도 없다")
+    check(not page.is_disabled("#run-all") and "토큰" not in page.text_content("#sch-info") and page.is_hidden("#usage-card"),
+          "통장이 사라지면 (옛 에이전트) 줄도 잠금도 사용량도 없다")
+    for rid in usage_runs:
+        call("DELETE", f"{FS}/runs/c_demo/items/{rid}", None, OWNER)
+    call("DELETE", f"{FS}/wallet/c_demo", None, OWNER)
 
     print("5-2절 쇼핑몰 프리셋")
     SHOPS = [{"no": 1, "name": "지마켓", "code": "012", "steps": 12, "saved_at": "2026-09-30T18:20:00", "has_login": True, "on": False},

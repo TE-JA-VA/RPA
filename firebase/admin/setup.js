@@ -12,6 +12,9 @@
 //   node setup.js modules  <cid> Hold=off Output=on   (업체가 안 쓰는 모듈. off 면 화면에서 숨고 에이전트가 강제로 끈다)
 //   node setup.js remove   <cid>                                   업체 삭제(비활성): stts=9, 그 업체 계정 전부 막음. 자료는 남는다
 //   node setup.js restore  <cid>                                   되살림: stts=0, 계정 다시 엶
+//   node setup.js tokens   <cid> [+1000|-50] [메모]                토큰 넣기·빼기 (처음 넣으면 통장을 만든다), 금액 없으면 보기
+//   node setup.js price    [<모듈 키> <값>]                         토큰 값표 보기·바꾸기 (예: price logistics 2)
+//   node setup.js usage    [cid]                                   업체마다 남은 토큰·이번 달 쓴 토큰
 //
 // 업체 상태 stts: 0(또는 없음) 사용, 9 삭제(비활성). 삭제된 업체엔 pc·user·agent 를 못 만든다.
 // 비밀번호는 명령줄로 받지 않는다. 무작위로 만들어 딱 한 번 찍고, 잃으면 passwd 로 다시 발급한다.
@@ -23,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getDatabase } from "firebase-admin/database";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, AggregateField } from "firebase-admin/firestore";
 
 // 공유 계약 — agent/agent.py, web/app.js 에도 같은 규칙이 한 줄씩 있다. 셋이 같아야 한다.
 const DOMAIN = "rpa-test-f02e0.firebaseapp.com";
@@ -31,7 +34,8 @@ const emailFor = (cid, local) => local.includes("@") ? local : `${local.replaceA
 const randomPassword = () => randomBytes(18).toString("base64url");   // 24자
 
 // 인수 개수 [최소, 최대]. 옛 꼴(user <이메일> <비밀번호> …, agent <이메일> <비밀번호> …)은 받지 않는다.
-const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2], remove: [1, 1], restore: [1, 1] };
+const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2], remove: [1, 1], restore: [1, 1],
+  tokens: [1], price: [0, 2], usage: [0, 1] };
 
 const [, , cmdName, ...rest] = process.argv;
 const [min, max = Infinity] = ARGC[cmdName] ?? [];
@@ -81,6 +85,16 @@ async function companyOf(cid, { removed = false } = {}) {
   if (!v?.name) throw new Error(`먼저 company 로 등록: node setup.js company ${cid} <회사 이름>`);
   if (!removed && v.stts === 9) throw new Error(`${cid} 는 삭제된 업체다. 되살리려면: node setup.js restore ${cid}`);
   return v;
+}
+
+// 토큰 (2026-10-06): 지금 한국 시각 - PC 가 기록에 적는 started_at 과 같은 꼴 ("2026-10-06T13:55:49")
+const nowKst = () => new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace(" ", "T");
+
+// 그 업체 실행 기록의 쓴 토큰 합 (since 뒤에 시작한 것만). 서버가 더한다 - 복합 색인 started_at·cost (rules/firestore.indexes.json)
+async function spentSince(cid, since) {
+  let q = store.collection(`runs/${cid}/items`);
+  if (since) q = q.where("started_at", ">=", since);
+  return (await q.aggregate({ s: AggregateField.sum("cost") }).get()).data().s ?? 0;
 }
 
 // 그 업체의 계정 전부 (cid 없으면 모두). 기계 계정도 claim 에 cid 가 있어 같이 잡힌다
@@ -212,6 +226,62 @@ if (cmdName === "company") {
   const at = rtdb.ref(`meta/companies/${cid}/apps/rpa/modules`);
   await at.update(patch);
   console.log(`모듈 정책: ${cid}`, (await at.get()).val() ?? "(없음 - 전부 사용)");
+
+} else if (cmdName === "tokens") {
+  // 토큰 통장 wallet/{cid} = { granted 넣은 합계, since 시작 시각 } + grants 넣은 내역 (업체는 못 본다).
+  // 남은 토큰 = granted - since 뒤에 시작한 기록의 cost 합 (agent.balance 와 같다). 통장이 생기면 그 업체는 0 이하에서 막힌다
+  const [cid, amount, ...memoParts] = rest;
+  checkKey("cid", cid);
+  const v = await companyOf(cid);
+  const wallet = store.doc(`wallet/${cid}`);
+  if (amount !== undefined) {
+    if (!/^[+-]?\d+$/.test(amount) || Number(amount) === 0) throw new Error(`토큰 수는 +1000 이나 -50 처럼 0 이 아닌 정수 (받은 값: ${amount})`);
+    const n = Number(amount), at = nowKst();
+    const created = await store.runTransaction(async (t) => {
+      const cur = await t.get(wallet);
+      t.set(wallet, cur.exists ? { granted: (cur.data().granted ?? 0) + n } : { granted: n, since: at }, { merge: true });
+      t.create(wallet.collection("grants").doc(), { amount: n, at, memo: memoParts.join(" ") });
+      return !cur.exists;
+    });
+    if (created) console.log(`통장을 만들었습니다: ${cid} ${v.name} - 지금부터 남은 토큰이 0 이하면 실행이 막힙니다 (그 전에 쓴 것은 안 뺀다)`);
+  }
+  const w = (await wallet.get()).data();
+  if (!w) {
+    console.log(`${cid} ${v.name} 는 통장이 없다 (토큰 제도 밖 - 세기만 한다). 넣으려면: node setup.js tokens ${cid} +1000 "메모"`);
+  } else {
+    const spent = await spentSince(cid, w.since);
+    console.log(`토큰: ${cid} ${v.name}  넣은 합계 ${w.granted} · 쓴 ${spent} · 남은 ${w.granted - spent}  (${w.since} 부터)`);
+    const grants = await wallet.collection("grants").orderBy("at", "desc").limit(10).get();
+    console.table(grants.docs.map((d) => ({ 언제: d.data().at, 얼마: d.data().amount, 메모: d.data().memo || "-" })));
+  }
+
+} else if (cmdName === "price") {
+  // 토큰 값표 meta/prices - 에이전트가 10분마다 읽는다 (처음 값표 default 1 · login 0 위에 덮어쓴다). 바꿔도 지난 기록은 그때 값
+  const [key, value] = rest;
+  const at = store.doc("meta/prices");
+  if (key !== undefined) {
+    checkKey("모듈 키", key);
+    if (!/^\d+$/.test(value ?? "")) throw new Error(`값은 0 이상 정수 (받은 값: ${value})`);
+    await at.set({ [key]: Number(value) }, { merge: true });
+  }
+  console.log("토큰 값표 (값표에 없는 모듈은 default):", { default: 1, login: 0, ...((await at.get()).data() ?? {}) });
+
+} else if (cmdName === "usage") {
+  // 우리 통계: 업체마다 남은 토큰 · 이번 달 쓴 토큰 (통장 시작이 이번 달이면 그때부터). 통장이 없어도 쓴 것은 센다
+  const [cid] = rest;
+  if (cid) checkKey("cid", cid);
+  const companies = (await rtdb.ref("meta/companies").get()).val() ?? {};
+  const month = `${nowKst().slice(0, 7)}-01T00:00:00`;
+  const rows = [];
+  for (const [k, v] of Object.entries(companies)) {
+    if (cid && k !== cid) continue;
+    const w = (await store.doc(`wallet/${k}`).get()).data();
+    rows.push({
+      cid: k, 이름: v.name ?? "-", 남은: w ? w.granted - await spentSince(k, w.since) : "-",
+      이번달: await spentSince(k, w?.since > month ? w.since : month), 통장: w ? `${w.since} 부터` : "없음",
+    });
+  }
+  console.table(rows);
 }
 
 process.exit(0);

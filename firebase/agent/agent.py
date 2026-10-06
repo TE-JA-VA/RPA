@@ -149,12 +149,13 @@ class Prices:
 
 
 def balance(client, cid):
-    """남은 토큰 = 넣은 합계(wallet/{cid}.granted - setup.js 만 쓴다) - 실행 기록들의 쓴 토큰 합 (Firestore 가 서버에서 더한다).
-    통장이 없는 업체는 None - 아직 토큰 제도 밖이라 세기만 하고 막지 않는다. 마이너스도 그대로 (1 이상이면 시작해 끝까지)."""
+    """남은 토큰 = 넣은 합계(wallet/{cid}.granted - setup.js 만 쓴다) - 통장 시작(since) 뒤에 시작한 실행 기록들의 쓴 토큰 합
+    (Firestore 가 서버에서 더한다 - 통장을 만들기 전에 쓴 것은 안 뺀다). 통장이 없는 업체는 None - 아직 토큰 제도 밖이라 세기만
+    하고 막지 않는다. 마이너스도 그대로 (1 이상이면 시작해 끝까지)."""
     wallet = client.fs_get(f"wallet/{cid}")
     if wallet is None:
         return None
-    return int(wallet.get("granted") or 0) - int(client.fs_sum(f"runs/{cid}", "items", "cost"))
+    return int(wallet.get("granted") or 0) - int(client.fs_sum(f"runs/{cid}", "items", "cost", wallet.get("since")))
 
 
 def local_plan():

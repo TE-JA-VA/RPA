@@ -110,6 +110,65 @@ check(account(U1).get("disabled") is True and account(AG).get("disabled") is not
 rc, out = setup("pc", CID, "pc_2", "둘째")
 check(rc == 0 and db_get(f"meta/companies/{CID}/pcs/pc_2/label") == "둘째", "되살린 업체엔 다시 pc 를 만들 수 있다", out[-200:])
 
+print("=== 4. 토큰 (tokens · price · usage, 2026-10-06 3부) ===")
+import datetime  # noqa: E402
+
+FS = f"http://127.0.0.1:8080/v1/projects/{PROJECT}/databases/(default)/documents"
+
+
+def fs_doc(path):
+    """문서 fields 를 파이썬 값으로 (없으면 None) - 정수·글자만"""
+    try:
+        d = call("GET", f"{FS}/{path}", None, OWNER)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    return {k: int(v["integerValue"]) if "integerValue" in v else v.get("stringValue") for k, v in (d.get("fields") or {}).items()}
+
+
+def fs_list(path):
+    return [{k: int(v["integerValue"]) if "integerValue" in v else v.get("stringValue") for k, v in (x.get("fields") or {}).items()}
+            for x in (call("GET", f"{FS}/{path}", None, OWNER) or {}).get("documents", [])]
+
+
+def fs_run(run_id, started_at, cost):
+    call("POST", f"{FS}/runs/{CID}/items?documentId={run_id}", {"fields": {
+        "cid": {"stringValue": CID}, "pcId": {"stringValue": "pc_1"}, "started_at": {"stringValue": started_at},
+        "cost": {"integerValue": str(cost)}, "used": {"mapValue": {"fields": {"logistics": {"integerValue": str(cost)}}}}}}, OWNER)
+
+
+fs_run("before", "2020-01-01T09:00:00", 5)                 # 통장을 만들기 전 기록 - 빼지 않는다
+rc, out = setup("tokens", CID)
+check(rc == 0 and "통장이 없다" in out and fs_doc(f"wallet/{CID}") is None, "통장이 없으면 그렇다고만 (만들지 않는다)", out[-200:])
+rc, out = setup("tokens", CID, "+1000", "10월", "결제")
+w = fs_doc(f"wallet/{CID}") or {}
+check(rc == 0 and w.get("granted") == 1000 and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", w.get("since") or ""),
+      "처음 넣으면 통장을 만든다 (넣은 합계·시작 시각 - 기록의 started_at 과 같은 꼴)", out[-300:])
+check("통장을 만들었습니다" in out and "막힙니다" in out and "남은 1000" in out, "만들었다고 알리고, 통장 전 기록은 안 뺀다", out[-300:])
+g = fs_list(f"wallet/{CID}/grants")
+check(len(g) == 1 and g[0].get("amount") == 1000 and g[0].get("memo") == "10월 결제" and g[0].get("at"), "넣은 내역 한 줄 (언제·얼마·메모)", str(g))
+fs_run("after", (datetime.datetime.now() + datetime.timedelta(minutes=1)).isoformat(timespec="seconds"), 30)
+rc, out = setup("tokens", CID, "-50", "정정")
+check(rc == 0 and (fs_doc(f"wallet/{CID}") or {}).get("granted") == 950 and "쓴 30" in out and "남은 920" in out
+      and len(fs_list(f"wallet/{CID}/grants")) == 2, "빼기(정정)도 내역에 남고, 통장 시작 뒤 기록만 뺀다", out[-300:])
+rc, out = setup("tokens", CID)
+check(rc == 0 and "남은 920" in out and "10월 결제" in out and "정정" in out, "금액 없이 부르면 합계·남은 토큰·넣은 내역", out[-400:])
+for bad in ("abc", "0", "1.5"):
+    rc, out = setup("tokens", CID, bad)
+    check(rc != 0 and "0 이 아닌 정수" in out and (fs_doc(f"wallet/{CID}") or {}).get("granted") == 950, f"토큰 수 '{bad}' 은 거절", out[-200:])
+rc, out = setup("tokens", "t_none", "+5")
+check(rc != 0 and "먼저 company" in out and fs_doc("wallet/t_none") is None, "없는 업체엔 못 넣는다", out[-200:])
+rc, out = setup("price")
+check(rc == 0 and "default" in out and "login" in out, "값표 보기 (서버 값표가 없으면 처음 값표)", out[-200:])
+rc, out = setup("price", "logistics", "2")
+check(rc == 0 and (fs_doc("meta/prices") or {}).get("logistics") == 2, "값 바꾸기", out[-200:])
+for args in (("logistics", "-1"), ("logistics", "x"), ("Bad-Key", "1"), ("logistics",)):
+    rc, out = setup("price", *args)
+    check(rc != 0 and (fs_doc("meta/prices") or {}).get("logistics") == 2, f"값표 {args} 은 거절", out[-200:])
+rc, out = setup("usage")
+check(rc == 0 and CID in out and "920" in out and "30" in out, "usage: 업체마다 남은 토큰·이번 달 쓴 토큰", out[-500:])
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

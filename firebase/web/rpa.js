@@ -5,6 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import {
   getFirestore, collection, query, where, orderBy, limit, getDocs, connectFirestoreEmulator,
+  doc, getDoc, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS, COMMAND_TTL_SEC } from "./firebase-config.js";
 import { toast } from "./toast.js";
@@ -80,6 +81,11 @@ const HTML = `
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
           <div class="msg" id="token-line" hidden></div>
+        </div>
+        <div class="card hide" id="usage-card">
+          <h2>이번 달 사용량 <span class="muted" id="usage-meta"></span></h2>
+          <div id="usage-list"></div>
+          <div class="msg" id="usage-sum"></div>
         </div>
         <div class="card" id="mod-card">
           <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
@@ -619,6 +625,7 @@ function paintButtons() {
 // 남은 토큰이 1 이상이면 실행은 된다 (도중에 떨어져도 끝까지) - 이번 실행에 드는 것보다 적으면 노랑, 0 이하면 빨강·잠금
 function paintTokens() {
   const t = live?.tokens, line = $("token-line");
+  paintUsage();                                          // 통장이 사라졌을 때 카드를 숨기는 것도 여기서
   line.hidden = typeof t?.balance !== "number";
   if (line.hidden) return;
   const all = t.cost?.all ?? 0;
@@ -628,6 +635,50 @@ function paintTokens() {
   } else {
     line.textContent = `남은 토큰 ${t.balance}개 · 전체 실행 1번에 ${all}개` + (t.balance < all ? " - 마이너스로 떨어질 수 있습니다" : "");
     line.className = t.balance < all ? "msg warn" : "msg";
+  }
+}
+
+// --- 이번 달 사용량 (토큰 3부, 관리자만 - 오른쪽 열): 이달 1일과 통장 시작 중 늦은 때부터, 업체 전체(PC 모두)를 서버가 더한다.
+// 남은 토큰이 바뀔 때(실행이 끝났거나 충전됐다)만 다시 읽는다. 로그인은 0개라 안 보인다. 새 모듈은 여기와 색인(firestore.indexes.json)에 더한다
+const USAGE_KEYS = [...MODULES.filter(([k]) => k !== "Login").map(([k, l]) => [k.toLowerCase(), l]), ["sites", "쇼핑몰·사이트 받기"]];
+let usageFor = null, usageSeq = 0;
+async function paintUsage() {
+  const t = live?.tokens, card = $("usage-card");
+  if (typeof t?.balance !== "number") { card.classList.add("hide"); usageFor = null; usageSeq++; return; }
+  if (usageFor === t.balance) return;
+  usageFor = t.balance;
+  const seq = ++usageSeq;                      // 읽는 사이 남은 토큰이 바뀌거나 통장이 사라지면 늦게 온 결과는 버린다
+  try {
+    const w = (await getDoc(doc(fs, "wallet", c.me.cid))).data();
+    if (seq !== usageSeq) return;
+    if (!w) { card.classList.add("hide"); return; }
+    const kst = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace(" ", "T");   // PC 기록의 started_at 과 같은 꼴
+    const month = `${kst.slice(0, 7)}-01T00:00:00`, today = `${kst.slice(0, 10)}T00:00:00`;
+    const from = w.since > month ? w.since : month;
+    // 한 질의에 여러 칸을 같이 더하면 그 칸이 모두 있는 기록만 센다 (Firestore) - 칸마다 따로 (각각 읽기 1번 꼴)
+    const one = (at, field) => getAggregateFromServer(query(collection(fs, "runs", c.me.cid, "items"), where("started_at", ">=", at)),
+      { s: sum(field) }).then((r) => r.data().s ?? 0);
+    const keys = USAGE_KEYS.map(([k]) => k);
+    const [total, todayTotal, ...counts] = await Promise.all([
+      one(from, "cost"), one(from > today ? from : today, "cost"), ...keys.map((k) => one(from, `used.${k}`))]);
+    if (seq !== usageSeq) return;
+    const got = Object.fromEntries(keys.map((k, i) => [k, counts[i]]));
+    $("usage-list").replaceChildren(...USAGE_KEYS.filter(([k]) => got[k] > 0).map(([k, label]) => {
+      const row = document.createElement("div"); row.className = "u-row";
+      const name = document.createElement("span"); name.textContent = label;
+      const n = document.createElement("span"); n.className = "num"; n.textContent = `${got[k]}회`;
+      row.append(name, n);
+      return row;
+    }));
+    $("usage-meta").textContent = `(${+from.slice(5, 7)}월 ${+from.slice(8, 10)}일${from === month ? "" : " 통장 시작"}부터)`;
+    $("usage-sum").textContent = total ? `합계 ${total}개 · 오늘 ${todayTotal}개` : "이번 달에 쓴 토큰이 없습니다";
+    card.classList.remove("hide");
+  } catch {
+    if (seq !== usageSeq) return;
+    usageFor = null;                           // 다음 현황 때 다시 읽는다
+    $("usage-list").replaceChildren();
+    $("usage-sum").textContent = "사용량을 읽지 못했습니다";
+    card.classList.remove("hide");
   }
 }
 
