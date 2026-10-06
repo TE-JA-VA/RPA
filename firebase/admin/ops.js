@@ -255,7 +255,7 @@ export async function companyDetail(cid) {
     users, modules: v.apps?.rpa?.modules ?? {}, tokens: (await tokenStatus(cid)).wallet };
 }
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.
-// 이미 있는 업체·PC 는 그대로 쓰고, 이미 있는 계정은 건너뛰고, 통장이 이미 있으면 첫 토큰은 건너뛴다 - 다시 누르면 남은 것만
+// 이미 있는 업체·PC 는 그대로 쓰고, 이미 있는 계정은 건너뛰고, 토큰 정보가 이미 있으면 최초 토큰은 건너뛴다 - 다시 누르면 남은 것만
 function checkPlan(plan) {
   if (!plan || typeof plan !== "object") throw new Refused("신규 업체 내용이 비었습니다");
   checkKey("업체코드", plan.cid);
@@ -270,10 +270,10 @@ function checkPlan(plan) {
     if (!String(u.id ?? "").trim()) throw new Refused("계정 아이디를 넣으세요");
   }
   if (new Set(users.map((u) => String(u.id).trim())).size !== users.length) throw new Refused("계정 아이디가 겹칩니다");
-  if (typeof plan.hold !== "boolean") throw new Refused("물류대기 관리를 쓰는지 골라 주세요 (업체마다 다릅니다)");
+  if (typeof plan.hold !== "boolean") throw new Refused("물류대기 관리 메뉴 사용 여부를 골라 주세요 (업체마다 다릅니다)");
   if (plan.tokens) {
     const a = String(plan.tokens.amount ?? "").trim();
-    if (!/^\+?\d+$/.test(a) || Number(a) <= 0) throw new Refused(`첫 토큰은 1 이상 정수 (받은 값: ${a})`);
+    if (!/^\+?\d+$/.test(a) || Number(a) <= 0) throw new Refused(`최초 토큰량은 1 이상 정수 (받은 값: ${a})`);
   }
 }
 export async function setupCompany(plan) {
@@ -307,9 +307,9 @@ export async function setupCompany(plan) {
       () => skipExisting(async () => { made.users.push({ ...(await addUser(cid, String(u.id).trim(), u.role, u.name)), id: String(u.id).trim() }); })))
     && await each(plan.pcs, (p) => step(`에이전트 계정 ${p.pcId}`,
       () => skipExisting(async () => { made.agents.push({ ...(await addAgent(cid, p.pcId)), label: p.label ?? "" }); })))
-    && await step(`물류대기 관리 ${plan.hold ? "씀" : "안 씀"}`, async () => { await setModules(cid, { Hold: plan.hold ? "on" : "off" }); });
+    && await step(`물류대기 관리 메뉴 ${plan.hold ? "사용" : "사용 안 함"}`, async () => { await setModules(cid, { Hold: plan.hold ? "on" : "off" }); });
   if (ok && plan.tokens) {
-    await step(`첫 토큰 ${Number(String(plan.tokens.amount).trim())}개`, async () => {
+    await step(`최초 토큰 ${Number(String(plan.tokens.amount).trim())}개`, async () => {
       if ((await store.doc(`wallet/${cid}`).get()).exists) return "이미 토큰 정보가 있어 건너뜀";
       await grantTokens(cid, plan.tokens.amount, plan.tokens.memo);
     });

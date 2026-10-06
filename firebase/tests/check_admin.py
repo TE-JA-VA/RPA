@@ -141,7 +141,7 @@ PLAN = {"cid": "t_new", "name": "<img src=x onerror=alert(1)> 새 업체", "hold
         "tokens": {"amount": "+500", "memo": "첫 결제"}}
 for bad, why in ((dict(PLAN, cid="Net-1"), "업체코드"), ({k: v for k, v in PLAN.items() if k != "hold"}, "물류대기"),
                  (dict(PLAN, pcs=[]), "PC"), (dict(PLAN, users=[{"id": "v", "role": "viewer"}]), "관리자"),
-                 (dict(PLAN, tokens={"amount": "1,000"}), "첫 토큰")):
+                 (dict(PLAN, tokens={"amount": "1,000"}), "최초 토큰량")):
     code, r = api("POST", "/api/setup", bad)
     check(code == 400 and why in r.get("error", ""), f"잘못된 내용은 만들기 전에 거절: {why}", (code, r))
 check(db_get("meta/companies/t_new") is None, "거절된 내용으로는 아무것도 안 만든다")
@@ -151,7 +151,8 @@ SECRETS += [u.get("password", "") for u in made.get("users", [])] + [a.get("pass
 check(code == 200 and r["ok"] and len(r["steps"]) == 9 and all(s["ok"] for s in r["steps"]),
       "다 만들었다 (업체·PC 2·계정 2·에이전트 계정 2·물류대기·첫 토큰 = 9 줄)", (code, r.get("steps")))
 labels = [x["label"] for x in r.get("steps", [])] if code == 200 else []
-check("유저 계정 staff" in labels and "에이전트 계정 pc_a" in labels and not any(w in " ".join(labels) for w in ("열람자", "기계")),
+check("유저 계정 staff" in labels and "에이전트 계정 pc_a" in labels and "물류대기 관리 메뉴 사용 안 함" in labels and "최초 토큰 500개" in labels
+      and not any(w in " ".join(labels) for w in ("열람자", "기계", "첫 토큰", "씀")),
       "단계 이름: 유저 계정·에이전트 계정 (사용자가 고른 이름 2026-10-06)", labels)
 check({u["id"] for u in made.get("users", [])} == {"boss", "staff"} and {a["pcId"] for a in made.get("agents", [])} == {"pc_a", "pc_b"}
       and len(SECRETS) == 4 and all(len(s) == 24 for s in SECRETS), "만든 계정의 비밀번호를 한 번 돌려준다 (24자)")
@@ -246,8 +247,11 @@ with sync_playwright() as pw:
     page.click("#companies tr[data-cid='t_new']")
     page.wait_for_function("document.getElementById('detail')?.textContent.includes('남은 600')", timeout=15000)
     check(True, "줄을 누르면 상세: 남은 토큰 600")
-    OLD = ("기계", "열람자", "통장", "막기", "막힘", "막을", "막았", "열기", "열림", "열었", "더하기", "더했", "삭제", "되살")
+    OLD = ("기계", "열람자", "통장", "막기", "막힘", "막을", "막았", "열기", "열림", "열었", "더하기", "더했", "삭제", "되살",
+           "한 대 더", "쓰나요", "예, 씁니다", "첫 토큰", "세기만")
     NEW = ("에이전트 계정도 만들기", "PC 추가", '"추가"', "사용중지", "사용중", "유저", "토큰 정보", "업체 비활성화", "다시 활성화",
+           '<button id="s-add-pc">+ 추가</button>', "4. 물류대기 관리 메뉴 사용 여부", 'value="yes">예</label>', 'value="no">아니오</label>',
+           "5. 최초 토큰량 설정", 'value="later" checked>나중에 설정</label>',
            "업체가 보유한 토큰 정보가 없습니다. 최초 토큰 생성시 토큰 정보가 함께 생성됩니다. 토큰이 0이하라면 모듈 실행을 막습니다.",
            "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다.",
            "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다.")

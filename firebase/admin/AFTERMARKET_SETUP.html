@@ -82,25 +82,25 @@
     <div class="card">
       <h2>신규 업체</h2>
       <div class="lbl">1. 업체</div>
-      <div class="row"><input id="s-cid" placeholder="업체코드 (영문 소문자·숫자·밑줄, 예: net)" size="34"><input id="s-name" placeholder="업체 이름" size="24"></div>
+      <div class="row"><input id="s-cid" placeholder="업체코드 (영문 소문자·숫자·밑줄, 예: net)" size="40"><input id="s-name" placeholder="업체 이름" size="24"></div>
       <div class="lbl">2. PC</div>
       <div id="s-pcs"></div>
-      <button id="s-add-pc">한 대 더</button>
+      <button id="s-add-pc">+ 추가</button>
       <div class="lbl">3. 관리자 계정 (대시보드에 로그인할 사람)</div>
       <div class="row"><input id="s-admin-id" placeholder="아이디 (예: admin)" size="18"><input id="s-admin-name" placeholder="이름" size="18"></div>
       <div id="s-viewers"></div>
       <button id="s-add-viewer">유저 추가</button>
-      <div class="lbl">4. 물류대기 관리를 쓰나요? (업체마다 다릅니다 - 꼭 고르세요)</div>
+      <div class="lbl">4. 물류대기 관리 메뉴 사용 여부</div>
       <div class="row">
-        <label class="inline"><input type="radio" name="hold" value="yes">예, 씁니다</label>
-        <label class="inline"><input type="radio" name="hold" value="no">아니요 (업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다)</label>
+        <label class="inline"><input type="radio" name="hold" value="yes">예</label>
+        <label class="inline"><input type="radio" name="hold" value="no">아니오</label>
       </div>
-      <div class="lbl">5. 첫 토큰</div>
+      <div class="lbl">5. 최초 토큰량 설정</div>
       <div class="row">
         <label class="inline"><input type="radio" name="tok" value="now">지금 넣기</label>
         <input id="s-tok-amount" placeholder="토큰 수 (예: 1000)" size="14" inputmode="numeric"><input id="s-tok-memo" placeholder="메모 (예: 10월 결제)" size="22">
       </div>
-      <div class="row"><label class="inline"><input type="radio" name="tok" value="later" checked>나중에 (토큰 정보 없이 시작 - 막지 않고 세기만 합니다)</label></div>
+      <div class="row"><label class="inline"><input type="radio" name="tok" value="later" checked>나중에 설정</label></div>
       <div class="row" style="margin-top:16px"><button id="s-make" class="primary">만들기</button></div>
     </div>
     <div class="card hide" id="setup-result"></div>
@@ -304,7 +304,7 @@ $("s-make").onclick = () => act($("s-make"), async () => {
     users: [{ id: $("s-admin-id").value.trim(), name: $("s-admin-name").value.trim(), role: "admin" },
       ...[...document.querySelectorAll("#s-viewers .viewer")].map((r) => ({ id: r.querySelector(".v-id").value.trim(), name: r.querySelector(".v-name").value.trim(), role: "viewer" }))
         .filter((u) => u.id)],
-    hold: hold ? hold.value === "yes" : null,         // 안 고르면 서버가 '물류대기 관리를 쓰는지 골라 주세요' 로 거절한다
+    hold: hold ? hold.value === "yes" : null,         // 안 고르면 서버가 '물류대기 관리 메뉴 사용 여부를 골라 주세요' 로 거절한다
     tokens: tok?.value === "now" ? { amount: $("s-tok-amount").value.trim(), memo: $("s-tok-memo").value.trim() } : null,
   };
   showSetupResult(plan, await api("POST", "/api/setup", plan));
