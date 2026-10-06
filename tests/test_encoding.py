@@ -49,6 +49,12 @@ for bat in BATS:
     commands = [l.strip().lower() for l in b.split(b"\r\n") if not l.strip().lower().startswith(b"rem")]
     check(f"{bat.name} 에 chcp 65001 명령이 없다 (설명 줄 rem 은 뺀다)", not any(l.startswith(b"chcp 65001") for l in commands))
 
+print("=== 1-2. 관리 화면 bat 은 영문만 (한글이 없으면 CP949·UTF-8 어느 쪽으로 읽어도 같다 - 2026-10-06) ===")
+admin_bat = ROOT / "firebase" / "admin" / "AFTERMARKET_SETUP.bat"
+b = admin_bat.read_bytes() if admin_bat.exists() else b"\xff"
+check("AFTERMARKET_SETUP.bat 는 영문만 (ASCII)", all(c < 128 for c in b))
+check("AFTERMARKET_SETUP.bat 줄 끝은 모두 CRLF", b.count(b"\n") == b.count(b"\r\n") and b.count(b"\n") > 0)
+
 print("=== 2. 안내 문서는 UTF-8 (BOM 포함) ===")
 for g in GUIDES:
     b = g.read_bytes()

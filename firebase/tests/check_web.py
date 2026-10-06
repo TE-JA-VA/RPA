@@ -601,6 +601,15 @@ with sync_playwright() as pw:
     check(page.text_content("#usage-sum") == f"합계 9개 · 오늘 {9 if first_day else 5}개"
           and page.text_content("#usage-meta") == f"({int(month[5:])}월 1일부터)",
           f"합계·오늘은 서버가 더한 쓴 토큰, 이달 1일부터 ({page.text_content('#usage-meta')} {page.text_content('#usage-sum')})")
+    # 토큰 정보(통장)를 이달 중간에 만들었으면 그날부터 - 남은 토큰이 바뀌어야 다시 읽는다 (2026-10-06 이름: 통장 시작 → 토큰 정보 생성)
+    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "500"}, "since": {"stringValue": f"{TODAY}T00:00:00"}}}, OWNER)
+    db_patch(LIVE, {"tokens": {"balance": 121, "cost": cost}})
+    want = f"({int(month[5:])}월 1일부터)" if first_day else f"({int(TODAY[5:7])}월 {int(TODAY[8:10])}일 토큰 정보 생성부터)"
+    try:
+        page.wait_for_function(f"document.getElementById('usage-meta')?.textContent === {json.dumps(want)}", timeout=10000)
+    except Exception:
+        pass
+    check(page.text_content("#usage-meta") == want, f"토큰 정보를 이달 중간에 만들었으면 그날부터 ({page.text_content('#usage-meta')})")
     db_patch(LIVE, {"tokens": {"balance": 3, "cost": cost}})
     page.wait_for_function("document.getElementById('token-line')?.classList.contains('warn')", timeout=10000)
     check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개 - 마이너스로 떨어질 수 있습니다"
@@ -851,7 +860,7 @@ with sync_playwright() as pw:
     page.click("#logout-btn")
     page.wait_for_selector("#login:not(.hide)")
     login(page, "viewer@t.local")
-    check("(열람)" in page.text_content("#who"), "열람자로 표시")
+    check("(유저)" in page.text_content("#who"), "유저로 표시 (전 '열람' - 2026-10-06 이름)")
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
     check(page.is_hidden("#act-card") and page.is_hidden("#mod-card") and page.is_hidden("#sch-card"), "열람자는 실행·모듈·자동 실행 카드가 없다")
     cols_w = page.evaluate("document.querySelector('.cols').getBoundingClientRect().width")
@@ -865,6 +874,9 @@ with sync_playwright() as pw:
       catch (e) { return e.code || String(e); }
     }""")
     check(denied == "PERMISSION_DENIED", f"열람자가 우회해 써도 규칙이 거부 ({denied})")
+    page.click("#admin-nav a[data-key='account']"); page.wait_for_selector("#acct-role")
+    check(page.text_content("#acct-role") == "유저", f"계정 화면의 역할도 '유저' ({page.text_content('#acct-role')})")
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000)
 
     print("9절 이스케이프·세 칸 로그인·기계 계정")
     # 공유 계약 예시(agent.py·setup.js 와 같아야 한다) — 같은 URL 의 모듈이라 이미 뜬 app.js 가 돌아온다
@@ -889,7 +901,7 @@ with sync_playwright() as pw:
     make_user("who@t.rpa-test-f02e0.firebaseapp.com", "pw123456", {"cid": "t", "role": "viewer"})
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
     login(page, "who", cid="t")
-    check("who@t.rpa-test-f02e0.firebaseapp.com (열람)" in page.text_content("#who"), "회사 코드·아이디로 이메일을 조립해 로그인한다")
+    check("who@t.rpa-test-f02e0.firebaseapp.com (유저)" in page.text_content("#who"), "회사 코드·아이디로 이메일을 조립해 로그인한다")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
     page.reload(); page.wait_for_selector("#login:not(.hide)")
     check(page.input_value("#cid") == "" and page.input_value("#login-id") == "" and not page.is_checked("#remember"), "저장을 안 켜고 로그인하면 다시 열 때 비어 있다")
@@ -908,9 +920,9 @@ with sync_playwright() as pw:
     make_user("agent-pc-office@c-demo.rpa-test-f02e0.firebaseapp.com", "pw123456", {"cid": "c_demo", "pcId": "pc_office", "role": "agent"})
     page.fill("#cid", "c_demo"); page.fill("#login-id", "agent-pc-office"); page.fill("#password", "pw123456")
     page.press("#login-id", "Enter")   # 어느 칸에서든 Enter 로 로그인
-    page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('기계 계정')", timeout=15000)
-    check(page.is_visible("#login") and page.is_hidden("#main"), "기계 계정은 로그인 화면에 그대로")
-    check(page.text_content("#login-alert") == "기계 계정으로는 화면에 들어올 수 없습니다", "기계 계정 안내 문구")
+    page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('에이전트 계정')", timeout=15000)
+    check(page.is_visible("#login") and page.is_hidden("#main"), "에이전트 계정은 로그인 화면에 그대로")
+    check(page.text_content("#login-alert") == "에이전트 계정으로는 화면에 들어올 수 없습니다", "에이전트 계정 안내 문구 (전 '기계 계정')")
     check(page.evaluate("""async () => {
       const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
       return a.getAuth().currentUser === null; }"""), "기계 계정은 곧바로 로그아웃된다")

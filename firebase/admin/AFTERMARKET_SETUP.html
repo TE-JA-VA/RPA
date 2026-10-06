@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AFTER MARKET 관리</title>
+<style>
+  /* 색은 대시보드(firebase/web/index.html)와 같은 토큰. 밖에서 불러오는 것이 없다 */
+  :root {
+    --bg:#fdf6e3; --card:#fffdf6; --soft:#eee8d5; --ink:#3d3d4d; --strong:#1e1e2c; --muted:#6e6e80; --line:#e6dfc8;
+    --accent:#f29f67; --accent-ink:#1e1e2c; --good:#1a7f79; --bad:#c93b36;
+    --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#002b36; --card:#073642; --soft:#0f4553; --ink:#dbe3e3; --strong:#fdf6e3; --muted:#9cb0b0; --line:#1b4f5c; --good:#34b1aa; --bad:#f57a72;
+  } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 var(--font); }
+  header { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; padding:12px 20px;
+    background:var(--card); border-bottom:1px solid var(--line); }
+  header strong { color:var(--strong); font-size:17px; }
+  .badge { padding:3px 10px; border-radius:999px; font-size:13px; font-weight:600; background:var(--soft); color:var(--muted); }
+  .badge.real { background:var(--accent); color:var(--accent-ink); }
+  nav { display:flex; gap:6px; }
+  .grow { flex:1; }
+  button { font:inherit; cursor:pointer; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); padding:7px 12px; }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  button.danger { color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  nav button.on { background:var(--strong); color:var(--card); border-color:var(--strong); }
+  input, select { font:inherit; padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); }
+  input[type=checkbox], input[type=radio] { width:auto; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  main { max-width:1100px; margin:0 auto; padding:18px 16px 60px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:16px; }
+  h2 { margin:0 0 12px; font-size:17px; color:var(--strong); }
+  h3 { margin:18px 0 6px; font-size:15px; color:var(--strong); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; font-size:13px; }
+  tbody tr.pick { cursor:pointer; }
+  tbody tr.pick:hover, tbody tr.pick.on { background:var(--soft); }
+  .num { font-variant-numeric:tabular-nums; }
+  .muted { color:var(--muted); }
+  .bad { color:var(--bad); }
+  .hide { display:none !important; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
+  .lbl { font-size:13px; color:var(--muted); margin:14px 0 4px; }
+  .secret { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--soft); }
+  .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
+  .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
+  label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:14px; }
+  #flash { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); padding:10px 16px; border-radius:10px; background:var(--strong);
+    color:var(--card); font-size:14px; max-width:90vw; }
+  #flash.bad { background:var(--bad); color:#fff; }
+</style>
+</head>
+<body>
+<header>
+  <strong>AFTER MARKET 관리</strong>
+  <span id="badge" class="badge">연결 확인 중</span>
+  <nav>
+    <button data-view="companies" class="on">업체</button>
+    <button data-view="setup">신규 업체</button>
+    <button data-view="rates">토큰 배율·통계</button>
+  </nav>
+  <span class="grow"></span>
+  <button id="quit">끄기</button>
+</header>
+<main>
+  <section id="view-companies">
+    <div class="card">
+      <h2>업체</h2>
+      <table>
+        <thead><tr><th>업체코드</th><th>이름</th><th>상태</th><th>PC</th><th>계정</th><th>남은 토큰</th><th>이번 달</th><th>마지막 로그인</th></tr></thead>
+        <tbody id="companies"></tbody>
+      </table>
+    </div>
+    <div class="card hide" id="detail"></div>
+  </section>
+
+  <section id="view-setup" class="hide">
+    <div class="card">
+      <h2>신규 업체</h2>
+      <div class="lbl">1. 업체</div>
+      <div class="row"><input id="s-cid" placeholder="업체코드 (영문 소문자·숫자·밑줄, 예: net)" size="34"><input id="s-name" placeholder="업체 이름" size="24"></div>
+      <div class="lbl">2. PC</div>
+      <div id="s-pcs"></div>
+      <button id="s-add-pc">한 대 더</button>
+      <div class="lbl">3. 관리자 계정 (대시보드에 로그인할 사람)</div>
+      <div class="row"><input id="s-admin-id" placeholder="아이디 (예: admin)" size="18"><input id="s-admin-name" placeholder="이름" size="18"></div>
+      <div id="s-viewers"></div>
+      <button id="s-add-viewer">유저 추가</button>
+      <div class="lbl">4. 물류대기 관리를 쓰나요? (업체마다 다릅니다 - 꼭 고르세요)</div>
+      <div class="row">
+        <label class="inline"><input type="radio" name="hold" value="yes">예, 씁니다</label>
+        <label class="inline"><input type="radio" name="hold" value="no">아니요 (업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다)</label>
+      </div>
+      <div class="lbl">5. 첫 토큰</div>
+      <div class="row">
+        <label class="inline"><input type="radio" name="tok" value="now">지금 넣기</label>
+        <input id="s-tok-amount" placeholder="토큰 수 (예: 1000)" size="14" inputmode="numeric"><input id="s-tok-memo" placeholder="메모 (예: 10월 결제)" size="22">
+      </div>
+      <div class="row"><label class="inline"><input type="radio" name="tok" value="later" checked>나중에 (토큰 정보 없이 시작 - 막지 않고 세기만 합니다)</label></div>
+      <div class="row" style="margin-top:16px"><button id="s-make" class="primary">만들기</button></div>
+    </div>
+    <div class="card hide" id="setup-result"></div>
+  </section>
+
+  <section id="view-rates" class="hide">
+    <div class="card">
+      <h2>토큰 배율</h2>
+      <p class="muted">모듈을 한 번 쓸 때 빠지는 토큰 수입니다. 처음엔 모두 1, 로그인은 0. 바꿔도 지난 기록은 그때 값 그대로입니다. PC 는 10분 안에 새 배율을 씁니다.</p>
+      <table><thead><tr><th>모듈</th><th>키</th><th>배율</th><th></th></tr></thead><tbody id="rates"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>통계</h2>
+      <table><thead><tr><th>업체코드</th><th>이름</th><th>남은 토큰</th><th>이번 달 쓴 토큰</th><th>토큰 정보 생성</th></tr></thead><tbody id="usage"></tbody></table>
+    </div>
+  </section>
+</main>
+<div id="flash" class="hide"></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+// 비밀 값은 서버가 연 주소(?k=)에만 있다 - 탭 안에만 두고 주소창에서는 지운다 (새로고침은 sessionStorage 로)
+const KEY = new URLSearchParams(location.search).get("k") || sessionStorage.getItem("k") || "";
+if (KEY) sessionStorage.setItem("k", KEY);
+history.replaceState(null, "", "/");
+const ROLE = { admin: "관리자", viewer: "유저", agent: "에이전트", super: "총괄" };
+const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 관리", Logistics: "물류관리", Output: "운송장 출력 / 엑셀 생성" };
+const RATE_NAMES = { default: "그 밖의 모듈 (기본)", login: "로그인", sales: "주문매핑 매출처리", hold: "물류대기 관리",
+  logistics: "물류관리", output: "운송장 출력 / 엑셀 생성", sites: "쇼핑몰·사이트 받기" };
+let info = { dashboard: "" };
+
+// 글은 모두 textContent 로 넣는다 - 업체 이름 등에 HTML 이 있어도 글자로만 보인다
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, "");
+    else if (v !== false && v !== null && v !== undefined) e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false && kid !== "") e.append(kid instanceof Node ? kid : String(kid));
+  return e;
+}
+let flashTimer;
+function flash(text, bad = false) {
+  const f = $("flash");
+  f.textContent = text;
+  f.className = bad ? "bad" : "";
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => f.classList.add("hide"), bad ? 9000 : 3500);
+}
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: { "X-Admin-Key": KEY, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `요청이 실패했습니다 (${r.status})`);
+  return data;
+}
+// 누르는 동안 단추를 잠그고 실패하면 빨간 알림 (서버도 고치는 요청은 하나씩 한다)
+async function act(btn, fn) {
+  if (btn) btn.disabled = true;
+  try { return await fn(); } catch (e) { flash(e.message, true); return undefined; } finally { if (btn) btn.disabled = false; }
+}
+const when = (iso) => (iso ? new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-");
+const local = (s) => (s ? s.replace("T", " ") : "-");     // 한국 시각 글 ("2026-10-06T13:55:49") 그대로
+function secretBox(title, text) {
+  const copy = el("button", { onclick: async () => { await navigator.clipboard.writeText(text).catch(() => {}); copy.textContent = "복사했습니다"; } }, "복사");
+  return el("div", { class: "secret" }, el("strong", {}, title), el("pre", {}, text),
+    el("div", { class: "row" }, copy, el("span", { class: "muted" }, "이 화면을 떠나면 비밀번호는 다시 볼 수 없습니다 (잃으면 재발급)")));
+}
+
+// --- 메뉴 --------------------------------------------------------------------
+function show(view) {
+  for (const b of document.querySelectorAll("nav button")) b.classList.toggle("on", b.dataset.view === view);
+  for (const v of ["companies", "setup", "rates"]) $(`view-${v}`).classList.toggle("hide", v !== view);
+  if (view === "companies") loadCompanies();
+  if (view === "rates") loadRates();
+}
+for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(b.dataset.view);
+
+// --- ① 업체 ---------------------------------------------------------------------
+let current = null;
+async function loadCompanies() {
+  const rows = await act(null, () => api("GET", "/api/companies"));
+  if (!rows) return;
+  $("companies").replaceChildren(...rows.map((r) => el("tr", { class: `pick${r.cid === current ? " on" : ""}`, "data-cid": r.cid, onclick: () => openDetail(r.cid) },
+    el("td", {}, r.cid), el("td", {}, r.name), el("td", { class: r.stts === 9 ? "muted" : "" }, r.stts === 9 ? "비활성" : "사용중"),
+    el("td", { class: "num" }, r.pcs), el("td", { class: "num" }, r.users), el("td", { class: "num" }, r.left === null ? "토큰 정보 없음" : r.left),
+    el("td", { class: "num" }, r.month), el("td", {}, when(r.lastSignIn)))));
+}
+async function openDetail(cid, keep) {
+  const d = await act(null, () => api("GET", `/api/companies/${cid}`));
+  if (!d) return;
+  current = cid;
+  for (const tr of $("companies").children) tr.classList.toggle("on", tr.dataset.cid === cid);
+  const box = $("detail");
+  box.replaceChildren(el("h2", {}, `${d.name} (${d.cid})`, d.stts === 9 ? el("span", { class: "muted" }, " · 비활성화된 업체") : ""),
+    keep ?? "", pcSection(d), userSection(d), tokenSection(d), moduleSection(d), dangerSection(d));
+  box.classList.remove("hide");
+}
+const refresh = (cid, keep) => { openDetail(cid, keep); loadCompanies(); };
+function pcSection(d) {
+  const id = el("input", { placeholder: "PC코드 (예: office)", size: 16 }), label = el("input", { placeholder: "PC 이름 (예: 사무실 PC)", size: 20 });
+  const agent = el("input", { type: "checkbox", checked: true });
+  const add = el("button", { onclick: () => act(add, async () => {
+    const r = await api("POST", `/api/companies/${d.cid}/pcs`, { pcId: id.value.trim(), label: label.value.trim(), agent: agent.checked });
+    flash(`PC ${r.pc.pcId} 를 추가했습니다`);
+    refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
+  }) }, "PC 추가");
+  return el("div", {}, el("h3", {}, "PC"),
+    d.pcs.length ? el("ul", {}, d.pcs.map((p) => el("li", {}, `${p.label || "(이름 없음)"} · ${p.pcId}`))) : el("p", { class: "muted" }, "PC 가 없습니다"),
+    el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
+}
+function userSection(d) {
+  const rows = d.users.map((u) => {
+    const pw = el("button", { onclick: () => act(pw, async () => {
+      if (!confirm(`${u.email} 의 비밀번호를 새로 만들까요? 옛 비밀번호의 로그인은 1시간 안에 끊깁니다.`)) return;
+      const r = await api("POST", `/api/companies/${d.cid}/passwd`, { id: u.email });
+      openDetail(d.cid, secretBox(`새 비밀번호 - ${r.email}`, r.agent ? `업체코드: ${d.cid}   PC코드: ${u.pcId}   비밀번호: ${r.password}`
+        : `업체코드: ${d.cid}   아이디: ${u.id}   비밀번호: ${r.password}`));
+    }) }, "비밀번호 재발급");
+    const lock = el("button", { onclick: () => act(lock, async () => {
+      if (!u.disabled && !confirm(`${u.email} 계정을 사용중지할까요? 1시간 안에 로그인이 끊깁니다.`)) return;
+      await api("POST", `/api/companies/${d.cid}/disabled`, { id: u.email, disabled: !u.disabled });
+      flash(u.disabled ? "계정을 다시 사용할 수 있습니다" : "계정을 사용중지했습니다");
+      openDetail(d.cid);
+    }) }, u.disabled ? "사용" : "사용중지");
+    return el("tr", {}, el("td", {}, u.role === "agent" ? `${u.id} (PC ${u.pcId})` : u.id), el("td", {}, ROLE[u.role] || u.role),
+      el("td", { class: u.disabled ? "bad" : "" }, u.disabled ? "사용중지" : "사용중"), el("td", {}, when(u.lastSignIn)), el("td", {}, el("div", { class: "row" }, pw, lock)));
+  });
+  const id = el("input", { placeholder: "아이디", size: 14 }), name = el("input", { placeholder: "이름", size: 14 });
+  const role = el("select", {}, el("option", { value: "admin" }, "관리자"), el("option", { value: "viewer" }, "유저"));
+  const add = el("button", { onclick: () => act(add, async () => {
+    const r = await api("POST", `/api/companies/${d.cid}/users`, { id: id.value.trim(), name: name.value.trim(), role: role.value });
+    refresh(d.cid, secretBox(`새 계정 - 대시보드 로그인 (${ROLE[r.role]})`, `업체코드: ${d.cid}   아이디: ${id.value.trim()}   비밀번호: ${r.password}`));
+  }) }, "추가");
+  return el("div", {}, el("h3", {}, "계정"),
+    el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "아이디"), el("th", {}, "역할"), el("th", {}, "상태"), el("th", {}, "마지막 로그인"), el("th", {}, ""))),
+      el("tbody", {}, rows)),
+    el("div", { class: "row" }, id, name, role, add));
+}
+function tokenSection(d) {
+  const t = d.tokens;
+  const amount = el("input", { placeholder: "+1000 또는 -50", size: 12, inputmode: "numeric" }), memo = el("input", { placeholder: "메모 (예: 10월 결제)", size: 22 });
+  const give = el("button", { class: "primary", onclick: () => act(give, async () => {
+    const r = await api("POST", `/api/companies/${d.cid}/tokens`, { amount: amount.value.trim(), memo: memo.value.trim() });
+    flash(r.created ? "토큰 정보를 만들었습니다 - 지금부터 토큰이 0 이하면 모듈 실행을 막습니다" : "토큰을 넣었습니다");
+    refresh(d.cid);
+  }) }, "넣기");
+  return el("div", {}, el("h3", {}, "토큰"),
+    t ? el("p", {}, `넣은 합계 ${t.granted} · 쓴 ${t.spent} · `, el("strong", {}, `남은 ${t.left}`), el("span", { class: "muted" }, `  (${local(t.since)} 토큰 정보 생성)`))
+      : el("p", { class: "muted" }, "업체가 보유한 토큰 정보가 없습니다. 최초 토큰 생성시 토큰 정보가 함께 생성됩니다. 토큰이 0이하라면 모듈 실행을 막습니다."),
+    el("div", { class: "row" }, amount, memo, give),
+    t && t.grants.length ? el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "언제"), el("th", {}, "얼마"), el("th", {}, "메모"))),
+      el("tbody", {}, t.grants.map((g) => el("tr", {}, el("td", {}, local(g.at)), el("td", { class: "num" }, g.amount > 0 ? `+${g.amount}` : g.amount), el("td", {}, g.memo || "-"))))) : "");
+}
+function moduleSection(d) {
+  const boxes = Object.entries(MODULE_NAMES).map(([k, name]) => {
+    const cb = el("input", { type: "checkbox", checked: d.modules[k] !== false });
+    cb.onchange = () => act(cb, async () => {
+      try { await api("POST", `/api/companies/${d.cid}/modules`, { [k]: cb.checked ? "on" : "off" }); flash(`${name}: ${cb.checked ? "씀" : "안 씀"}`); }
+      finally { openDetail(d.cid); }
+    });
+    return el("label", { class: "inline" }, cb, name);
+  });
+  return el("div", {}, el("h3", {}, "모듈 정책"), el("p", { class: "muted" }, "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes));
+}
+function dangerSection(d) {
+  if (d.stts === 9) {
+    const back = el("button", { onclick: () => act(back, async () => {
+      await api("POST", `/api/companies/${d.cid}/restore`, {});
+      flash("업체를 다시 활성화했습니다 - 계정을 다시 사용할 수 있습니다");
+      refresh(d.cid);
+    }) }, "다시 활성화");
+    return el("div", {}, el("h3", {}, "업체 다시 활성화"), el("p", { class: "muted" }, "이 업체를 다시 활성화합니다. 계정도 모두 다시 사용할 수 있습니다."), back);
+  }
+  const code = el("input", { placeholder: `${d.cid} 를 똑같이 치세요`, size: 22 });
+  const del = el("button", { class: "danger", onclick: () => act(del, async () => {
+    const r = await api("POST", `/api/companies/${d.cid}/remove`, { confirm: code.value.trim() });
+    flash(`업체를 비활성화했습니다 - 계정 ${r.users.length}개를 사용중지했습니다 (데이터는 남습니다)`);
+    refresh(d.cid);
+  }) }, "업체 비활성화");
+  return el("div", {}, el("h3", {}, "업체 비활성화"), el("p", { class: "muted" }, "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다."),
+    el("div", { class: "row" }, code, del));
+}
+
+// --- ② 신규 업체 -----------------------------------------------------------------
+const pcRow = () => el("div", { class: "row pc" }, el("input", { class: "pc-id", placeholder: "PC코드 (예: office)", size: 18 }),
+  el("input", { class: "pc-label", placeholder: "PC 이름 (예: 사무실 PC)", size: 22 }));
+const viewerRow = () => el("div", { class: "row viewer" }, el("input", { class: "v-id", placeholder: "유저 아이디", size: 18 }),
+  el("input", { class: "v-name", placeholder: "이름", size: 18 }));
+$("s-pcs").append(pcRow());
+$("s-add-pc").onclick = () => $("s-pcs").append(pcRow());
+$("s-add-viewer").onclick = () => $("s-viewers").append(viewerRow());
+$("s-make").onclick = () => act($("s-make"), async () => {
+  const hold = document.querySelector("input[name=hold]:checked"), tok = document.querySelector("input[name=tok]:checked");
+  const plan = {
+    cid: $("s-cid").value.trim(), name: $("s-name").value.trim(),
+    pcs: [...document.querySelectorAll("#s-pcs .pc")].map((r) => ({ pcId: r.querySelector(".pc-id").value.trim(), label: r.querySelector(".pc-label").value.trim() }))
+      .filter((p) => p.pcId || p.label),
+    users: [{ id: $("s-admin-id").value.trim(), name: $("s-admin-name").value.trim(), role: "admin" },
+      ...[...document.querySelectorAll("#s-viewers .viewer")].map((r) => ({ id: r.querySelector(".v-id").value.trim(), name: r.querySelector(".v-name").value.trim(), role: "viewer" }))
+        .filter((u) => u.id)],
+    hold: hold ? hold.value === "yes" : null,         // 안 고르면 서버가 '물류대기 관리를 쓰는지 골라 주세요' 로 거절한다
+    tokens: tok?.value === "now" ? { amount: $("s-tok-amount").value.trim(), memo: $("s-tok-memo").value.trim() } : null,
+  };
+  showSetupResult(plan, await api("POST", "/api/setup", plan));
+});
+function showSetupResult(plan, r) {
+  const pw = (made) => (made ? made.password : "(이미 있던 계정 - 모르면 업체 화면에서 재발급)");
+  const lines = [`[대시보드]  ${info.dashboard}`];
+  for (const u of plan.users) lines.push(`${u.role === "viewer" ? "유저" : "관리자"}  업체코드: ${plan.cid}   아이디: ${u.id}   비밀번호: ${pw(r.made.users.find((m) => m.id === u.id))}`);
+  lines.push("", "[PC 설정 창 - 에이전트 계정]");
+  for (const p of plan.pcs) lines.push(`${p.label || p.pcId} → 업체코드: ${plan.cid}   PC코드: ${p.pcId}   비밀번호: ${pw(r.made.agents.find((a) => a.pcId === p.pcId))}`);
+  const box = $("setup-result");
+  box.replaceChildren(el("h2", {}, r.ok ? "다 만들었습니다" : "중간에 멈췄습니다 - 고친 뒤 [만들기] 를 다시 누르면 남은 것만 합니다"),
+    el("ul", { class: "steps" }, r.steps.map((s) => el("li", { class: s.ok ? "ok" : "bad" }, `${s.ok ? "✓" : "✗"} ${s.label}${s.note ? ` - ${s.note}` : ""}`))),
+    r.made.users.length || r.made.agents.length ? secretBox("고객에게 보낼 정보", lines.join("\n")) : "");
+  box.classList.remove("hide");
+  box.scrollIntoView({ behavior: "smooth" });
+}
+
+// --- ③ 토큰 배율·통계 ---------------------------------------------------------------
+async function loadRates() {
+  const got = await act(null, () => Promise.all([api("GET", "/api/prices"), api("GET", "/api/usage")]));
+  if (!got) return;
+  const [rates, usage] = got;
+  $("rates").replaceChildren(...[...new Set([...Object.keys(RATE_NAMES), ...Object.keys(rates)])].map((k) => {
+    const v = el("input", { value: rates[k] ?? rates.default ?? 1, size: 5, inputmode: "numeric", class: "num" });
+    const save = el("button", { onclick: () => act(save, async () => {
+      await api("POST", "/api/prices", { key: k, value: v.value.trim() });
+      flash(`${RATE_NAMES[k] || k} 토큰 배율을 ${v.value.trim()} 로 바꿨습니다`);
+      loadRates();
+    }) }, "저장");
+    return el("tr", {}, el("td", {}, RATE_NAMES[k] || k), el("td", { class: "muted" }, k), el("td", {}, v), el("td", {}, save));
+  }));
+  $("usage").replaceChildren(...usage.map((u) => el("tr", {}, el("td", {}, u.cid), el("td", {}, u.name),
+    el("td", { class: "num" }, u.left === null ? "토큰 정보 없음" : u.left), el("td", { class: "num" }, u.month), el("td", {}, local(u.since)))));
+}
+
+// --- 켜기·끄기 -----------------------------------------------------------------------
+$("quit").onclick = () => act($("quit"), async () => {
+  if (!confirm("관리 화면을 끌까요?")) return;
+  await api("POST", "/api/quit");
+  document.body.replaceChildren(el("main", {}, el("div", { class: "card" }, el("h2", {}, "관리 화면을 껐습니다"),
+    el("p", { class: "muted" }, "다시 쓰려면 바탕화면의 'AFTER MARKET 관리' 를 누르세요. 이 창은 닫아도 됩니다."))));
+});
+(async () => {
+  try {
+    info = await api("GET", "/api/info");
+    $("badge").textContent = info.emulator ? "에뮬레이터 (시험)" : `실제 서버 (${info.project})`;
+    $("badge").className = info.emulator ? "badge" : "badge real";
+    loadCompanies();
+  } catch (e) {
+    $("badge").textContent = "연결 안 됨";
+    flash(e.message, true);
+  }
+})();
+</script>
+</body>
+</html>

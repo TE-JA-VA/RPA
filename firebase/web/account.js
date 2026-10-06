@@ -40,7 +40,7 @@ export function mount(el, context) {
   root = el; c = context;
   root.innerHTML = HTML;
   $("acct-email").textContent = c.me.email;
-  $("acct-role").textContent = { admin: "관리자", super: "총괄", viewer: "열람" }[c.me.role] || c.me.role || "";
+  $("acct-role").textContent = { admin: "관리자", super: "총괄", viewer: "유저" }[c.me.role] || c.me.role || "";
   $("pw-btn").onclick = change;
   $("pw-new2").addEventListener("keydown", (e) => { if (e.key === "Enter") change(); });
   $("accent-pick").oninput = (e) => setAccent(e.target.value);

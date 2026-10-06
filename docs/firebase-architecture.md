@@ -45,8 +45,8 @@ firebase/
     에이전트_시작.bat    관리자 권한 확인 후 agent.py 실행
     background.py      감독 (설치한 PC: 작업 스케줄러 → 창 없이 에이전트, 오류로 죽으면 다시 켬)
   rules/     database.rules.json, firestore.rules, firestore.indexes.json
-  admin/     우리 PC 전용. setup.js + serviceAccountKey.json (고객 PC 에 절대 금지)
-  tests/     rules.test.js, test_agent.py, integration.js, check_web.py, check_setup.py
+  admin/     우리 PC 전용. ops.js(일) · setup.js(터미널) · admin.js + AFTERMARKET_SETUP.html/.bat(관리 화면) + serviceAccountKey.json (고객 PC 에 절대 금지)
+  tests/     rules.test.js, test_agent.py, integration.js, check_web.py, check_setup.py, check_admin.py
   design/    시안 (배포 안 함)
   firebase.json, .firebaserc, emu_env.ps1
 ```
@@ -72,14 +72,14 @@ apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at
 Firestore
 ```
 runs/{cid}/items/{runId}   실행 이력 한 건 (조회용 필드 + 쓴 것 used·쓴 토큰 cost + payload JSON)
-meta/prices                토큰 값표 { default: 1, login: 0, … } - setup.js(Admin SDK)만 쓴다
-wallet/{cid}               토큰 통장 { granted } + grants/{id} 넣은 내역 - setup.js(Admin SDK)만 쓴다
+meta/prices                토큰 배율 { default: 1, login: 0, … } - 우리 PC(관리 화면·setup.js, Admin SDK)만 쓴다
+wallet/{cid}               토큰 통장 { granted } + grants/{id} 넣은 내역 - 우리 PC(관리 화면·setup.js, Admin SDK)만 쓴다
 users/{uid}                { cid, role, name } - 표시용. 권한 근거는 custom claim 이다
 ```
 
 **토큰** (2026-10-06, 설계 `docs/superpowers/specs/2026-10-06-tokens-design.md`): 업체가 산 만큼 우리가 넣고, 모듈을 쓸 때마다 빠진다.
 에이전트가 기록 한 장을 올릴 때 `used`(모듈별 횟수 map - 루틴은 완료·대상 없음인 모듈, 프리페어는 단계가 모두 완료인 사이트 수
-`sites`, 옵저버 미리보기는 안 셈)와 `cost`(횟수 × 값표, 값표에 없는 새 모듈은 default)를 적는다. 남은 토큰 = `granted` - 그 회사
+`sites`, 옵저버 미리보기는 안 셈)와 `cost`(횟수 × 토큰 배율, 토큰 배율에 없는 새 모듈은 default)를 적는다. 남은 토큰 = `granted` - 그 회사
 기록들의 `cost` 합 (Firestore 가 서버에서 더한다, `agent.balance`). 기록은 만들기만 되고 이름이 run_id 라 두 번 빠지지 않는다.
 통장이 없는 업체는 토큰 제도 밖 (세기만 한다).
 **막기** (2부): 실행 단추·예약은 모두 `rpa_dashboard.launch` 를 지나고, 에이전트가 단 확인(`dash.TOKEN_GATE = agent.Tokens.gate`)이
@@ -87,7 +87,7 @@ users/{uid}                { cid, role, name } - 표시용. 권한 근거는 cus
 예약은 그 글을 `last_error` 로 남기고 다음 예약으로). 1 이상이면 끝까지 (마이너스 가능). 못 확인하면 마지막으로 확인한 값, 한 번도
 못 했으면 막지 않는다. 에이전트는 기록을 올린 뒤·10분마다 다시 보고 `live.tokens` 로 올린다 → 화면은 실행 단추 아래 한 줄 (회색 평소,
 노랑 '마이너스로 떨어질 수 있습니다', 빨강 0 이하 + 실행 단추 셋 잠김)과 예약 칸. 손으로 켠 exe 는 못 막고 기록이 올라갈 때 빠진다.
-**넣기·보기** (3부): 토큰은 우리 PC 의 `setup.js tokens` 로만 넣는다 (처음 넣으면 통장을 만들고 시작 시각 `since` 를 적는다 - 남은
+**넣기·보기** (3부): 토큰은 우리 PC 에서만 넣는다 - 관리 화면(업체 → 토큰 [넣기]) 또는 `setup.js tokens` (처음 넣으면 통장을 만들고 시작 시각 `since` 를 적는다 - 남은
 토큰은 since 뒤에 시작한 기록만 뺀다, 그 전에 쓴 것은 안 뺀다. 유효기간·자동 체험분 없음). 넣은 내역 `grants` 는 업체가 못 본다.
 업체 화면은 관리자에게만 (오른쪽 열) '이번 달 사용량' 카드 - 이달 1일과 since 중 늦은 때부터 업체 전체의 모듈별 횟수·합계·오늘을
 서버가 더한다 (칸마다 질의 하나 - 한 질의에 여러 칸을 더하면 그 칸이 모두 있는 기록만 센다). 거르기+합은 복합 색인
@@ -119,7 +119,12 @@ custom claim 세 가지가 전부다.
 | `{cid, pcId, role:"agent"}` | PC 에이전트 | 그 PC 의 live 쓰기, 명령 상태 갱신, 이력 올리기 |
 | `{role:"super"}` | 우리 | 전 회사 |
 
-계정은 `firebase/admin/setup.js` 로 우리 PC 에서만 만든다. 자가 가입은 없다.
+계정은 우리 PC 에서만 만든다. 자가 가입은 없다. **관리 화면** (바탕화면 'AFTER MARKET 관리' → `firebase/admin/AFTERMARKET_SETUP.bat` →
+`node admin.js`) 이 먼저고, 터미널 `firebase/admin/setup.js` 도 그대로 있다 - 둘 다 같은 `ops.js` 를 쓴다. 관리 화면은 127.0.0.1 에서만
+듣고, 켤 때마다 새 비밀 값을 연 주소(`?k=`)에만 실어 `/api` 요청마다 `X-Admin-Key` 로 확인하며, `Host` 가 `127.0.0.1:<포트>` 가 아니면
+거절한다. 고치는 요청은 하나씩 처리한다 ([만들기] 를 두 번 눌러도 토큰은 한 번, [끄기] 는 하던 일을 끝낸 뒤). 이미 있는 업체코드는 이름이 같을 때만 이어서 한다. 신규 업체는 한 흐름(업체 → PC → 관리자·유저 →
+에이전트 계정 → 물류대기 사용 여부 → 첫 토큰)으로 만들고, 끝에 '고객에게 보낼 정보' 를 복사한다 - 중간에 멈추면 다시 눌러 남은 것만.
+한 일은 `firebase/admin/관리_기록.txt` 에 한 줄씩 (비밀번호 없이, gitignore). 바로 가기를 다시 만들려면 `node admin.js --shortcut`.
 
 ```
 node setup.js company c_demo 테스트업체
@@ -127,17 +132,17 @@ node setup.js pc      c_demo pc_a A 컴퓨터
 node setup.js user    c_demo <아이디> admin <이름>     # 비밀번호는 무작위로 만들어 한 번만 찍는다
 node setup.js agent   c_demo pc_a                    # 회사 코드·PC 이름·비밀번호 세 값이 나온다
 node setup.js passwd  c_demo <아이디>                  # 새 비밀번호. disable / enable / show / list 도 있다
-node setup.js remove  c_demo                         # 업체 삭제(비활성): stts=9 + 그 업체 계정 전부 막음. 자료는 남는다
-node setup.js restore c_demo                         # 되살림: stts=0 + 계정 다시 엶
-node setup.js tokens  c_demo +1000 "10월 결제"         # 토큰 넣기 (처음이면 통장을 만든다 - 그때부터 0 이하면 막힌다), -50 은 빼기
+node setup.js remove  c_demo                         # 업체 비활성화: stts=9 + 그 업체 계정 전부 사용중지. 데이터는 남는다
+node setup.js restore c_demo                         # 다시 활성화: stts=0 + 계정 다시 사용
+node setup.js tokens  c_demo +1000 "10월 결제"         # 토큰 넣기 (처음이면 토큰 정보를 만든다 - 그때부터 0 이하면 막힌다), -50 은 빼기
 node setup.js tokens  c_demo                         # 넣은 합계·쓴 합계·남은 토큰·넣은 내역 10줄
-node setup.js price   logistics 2                    # 토큰 값표 (인자 없으면 보기)
+node setup.js price   logistics 2                    # 토큰 배율 (인자 없으면 보기)
 node setup.js usage                                  # 업체마다 남은 토큰·이번 달 쓴 토큰
 ```
 
 삭제된 업체(stts=9)에는 pc·user·agent 를 만들 수 없고, 남은 토큰으로 화면에 들어와도 "사용이 중지된 업체입니다" 로 내보낸다. 에이전트는 계정이 막혀 1시간 안에 멈춘다.
 
-이메일은 `<아이디>@<회사 코드>.rpa-test-f02e0.firebaseapp.com` 으로 조립한다(밑줄은 하이픈, 기계 계정은 `agent-<pcId>`). 같은 규칙이 `agent.py`, `app.js`, `setup.js` 에 한 줄씩 있다.
+이메일은 `<아이디>@<회사 코드>.rpa-test-f02e0.firebaseapp.com` 으로 조립한다(밑줄은 하이픈, 기계 계정은 `agent-<pcId>`). 같은 규칙이 `agent.py`, `app.js`, `ops.js` 에 한 줄씩 있다.
 
 **서버 코드가 없으므로 규칙이 유일한 방어선이다.** 규칙을 고치면 `tests/rules.test.js` 를 반드시 돌린다. 화면 코드에서 버튼을 숨기는 것은 편의일 뿐 보안이 아니다.
 
@@ -145,7 +150,7 @@ node setup.js usage                                  # 업체마다 남은 토�
 
 - 1초마다 `rpa_status` 상태 파일을 보고 바뀌었을 때만 `live` 를 PATCH 한다.
 - 5초마다 heartbeat. 신호에 주기(`every`)를 같이 올리고, 화면은 그 값으로 끊김 기준을 잡는다. 그래서 아직 안 고친 PC 가 30초마다 보내도 깜빡이지 않는다.
-- `history.jsonl` 에 새 줄이 생기면 Firestore 에 올린다. 어디까지 올렸는지는 `history_pos.txt` 에 바이트 위치로 남겨 다시 켜도 이어서 간다. 올릴 때 쓴 것·쓴 토큰을 같이 적는다 (값표 `meta/prices` 는 10분마다 다시 읽고, 못 읽으면 처음 값표).
+- `history.jsonl` 에 새 줄이 생기면 Firestore 에 올린다. 어디까지 올렸는지는 `history_pos.txt` 에 바이트 위치로 남겨 다시 켜도 이어서 간다. 올릴 때 쓴 것·쓴 토큰을 같이 적는다 (토큰 배율 `meta/prices` 는 10분마다 다시 읽고, 못 읽으면 처음 토큰 배율).
 - 명령은 SSE 로 받는다. 끊기면 1초부터 60초까지 늘려 가며 다시 붙는다. 로그인 토큰이 1시간마다 만료되면 Firebase 가 `auth_revoked` 를 보내고, 그러면 토큰을 새로 받아 바로 다시 붙는다. 90초 넘게 아무것도(keep-alive 포함) 안 오면 죽은 연결로 보고 다시 붙는다.
 - 못 올린 것은 `queue.jsonl` 에 쌓고 연결되면 순서대로 보낸다. 규칙이 거부한 것은 버린다. 기록 실패가 RPA 를 막는 일은 없다.
 - **자동 실행 예약기를 에이전트가 띄운다.** 그래서 옛 8765 대시보드(`RPA_Dashboard.exe`, `대시보드_시작.bat`)와 같이 띄우면 예약이 두 번 돈다. 배포 폴더에서 옛 대시보드를 빼 둔 이유가 이것이다.
@@ -186,7 +191,7 @@ node setup.js usage                                  # 업체마다 남은 토�
 
 ## 7. 새 PC 붙이기
 
-1. 우리 PC 에서 `setup.js pc` 와 `setup.js agent` 로 PC 와 기계 계정을 만든다.
+1. 우리 PC 에서 PC 와 기계 계정을 만든다 - 관리 화면의 업체 → [PC 추가] (에이전트 계정도 만들기), 또는 `setup.js pc` 와 `setup.js agent`.
 2. 우리 PC 에서 `.venv\Scripts\python.exe tools\build_release.py` 로 판을 만든다. `D:\AX\배포_<판 번호>` (+ 같은 이름의 zip) 와 설치 파일 `D:\AX\AFTER_MARKET_RPA_Setup_<판 번호>.exe` 가 생긴다. 정해 둔 파일만 담고 스스로 검사하며, 설치 파일은 검사를 통과한 판 폴더로만 만든다 (Inno Setup 이 있어야 한다. 없으면 `--no-setup`).
 3. 설치 파일과 1번의 세 값(회사 코드·PC 이름·기계 계정 비밀번호)을 설치할 사람에게 넘긴다.
 4. 그 PC 에서 설치 파일을 실행한다. 설치 끝에 뜨는 설정 창에 세 값과 ERPia 로그인·물류 값(그 업체가 ERPia 에 등록한 택배사·박스·운임과 글자 그대로)을 넣고 저장하면, 기계 계정으로 로그인해 보고 윈도우 로그인 때 에이전트가 창 없이 켜지게 등록한 뒤 켠다. 옛 구조 PC 는 설정 창의 [기존 설정값 가져오기] 로 옮긴다 (옛 에이전트는 닫게 하고, 저장 뒤 옛 폴더 이름을 `_옮김` 으로 바꿀지 묻는다).
@@ -216,16 +221,18 @@ cd tests; npm test                              # 규칙
 firebase emulators:exec --config ../firebase.json --only auth,database,firestore          --project rpa-test-f02e0 "node integration.js"
 firebase emulators:exec --config ../firebase.json --only auth,database,firestore,hosting  --project rpa-test-f02e0 "python check_web.py"
 firebase emulators:exec --config ../firebase.json --only auth,database,firestore          --project rpa-test-f02e0 "python check_setup.py"
+firebase emulators:exec --config ../firebase.json --only auth,database,firestore          --project rpa-test-f02e0 "python check_admin.py"
 cd ..; firebase deploy --only hosting --config firebase.json
 ```
 
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
-| 규칙 | 29 | 다른 회사·열람자·위조 거부, 명령 상태 전이, 명령 set_presets, 기록의 쓴 토큰(0 이상 정수)·쓴 것(map), 자기 회사 쓴 토큰 합, 값표·통장은 아무도 못 씀 |
-| 관리 도구 | 40 | `tests/check_setup.py` (에뮬레이터): 업체 등록·삭제·되살림, 토큰 넣기·빼기·통장 시작 시각·넣은 내역·잘못된 수 거절, 값표, usage |
-| 에이전트 단위 | 166 | 큐, 로그인 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기, 쇼핑몰 프리셋 요약·set_presets·도넛에서 옵저버 빼기, 토큰(쓴 것·쓴 토큰·값표 읽기·남은 토큰, 막기: 0 이하 거절·통장 없음 통과·확인 실패는 지난 값·실행 1번에 드는 토큰) |
-| 통합 | 40 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기, 기록마다 서버 값표로 센 쓴 토큰, 남은 토큰(통장 없음 null), 토큰이 없으면 실행 명령이 그 까닭으로 실패·현황 tokens, 통장 시작 뒤 기록만 뺀다 |
-| 화면 | 260 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버', 실행 단추 '… 실행중'(끝나면 돌아옴), 잠긴 까닭은 줄 아래 글(휴대폰), 토큰 줄(통장 없음 숨김·회색·노랑·빨강+실행 단추 잠금)·예약 칸 토큰 글, 이번 달 사용량 카드(모듈별 횟수·합계·오늘, 통장이 없으면 숨김) |
+| 규칙 | 29 | 다른 회사·열람자·위조 거부, 명령 상태 전이, 명령 set_presets, 기록의 쓴 토큰(0 이상 정수)·쓴 것(map), 자기 회사 쓴 토큰 합, 토큰 배율·통장은 아무도 못 씀 |
+| 관리 도구 | 44 | `tests/check_setup.py` (에뮬레이터): 업체 등록·비활성화·다시 활성화, 거절은 '오류: …' 한 줄, 도움말·출력도 관리 화면과 같은 이름(사용중지·업체 비활성화·토큰 정보·업체코드/PC코드), 없는 업체엔 모듈 정책 거절, 토큰 넣기·빼기·통장 시작 시각·넣은 내역·잘못된 수 거절, 토큰 배율, usage |
+| 관리 화면 | 55 | `tests/check_admin.py` (에뮬레이터 + Playwright): 비밀 값·Host 검사, 못 읽는 요청 줄(`GET //[`)에도 서버가 산다, 신규 업체 한 흐름(잘못된 내용은 만들기 전에 거절·동시에 두 번 눌러도 토큰 한 번·다시 누르면 남은 것만, 이미 있는 계정은 건너뛰고 재발급 안내, 이미 있는 업체코드를 다른 이름으로 치면 거절), 업체 표·상세(토큰 넣기·재발급·사용중지/사용·모듈 정책·비활성화는 업체코드를 쳐야·다시 활성화), 화면 이름(사용자가 고른 이름만·옛 이름 없음), 토큰 배율·통계, 화면(업체 이름 속 HTML 은 글자로·물류대기를 안 고르면 거절·고객에게 보낼 정보·옛 주소는 '다시 켜세요'), [끄기] 는 하던 일을 끝낸 뒤, 관리_기록.txt·서버 출력에 비밀번호 없음 |
+| 에이전트 단위 | 166 | 큐, 로그인 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기, 쇼핑몰 프리셋 요약·set_presets·도넛에서 옵저버 빼기, 토큰(쓴 것·쓴 토큰·토큰 배율 읽기·남은 토큰, 막기: 0 이하 거절·통장 없음 통과·확인 실패는 지난 값·실행 1번에 드는 토큰) |
+| 통합 | 40 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기, 기록마다 서버 토큰 배율로 센 쓴 토큰, 남은 토큰(통장 없음 null), 토큰이 없으면 실행 명령이 그 까닭으로 실패·현황 tokens, 통장 시작 뒤 기록만 뺀다 |
+| 화면 | 262 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버', 실행 단추 '… 실행중'(끝나면 돌아옴), 잠긴 까닭은 줄 아래 글(휴대폰), 토큰 줄(통장 없음 숨김·회색·노랑·빨강+실행 단추 잠금)·예약 칸 토큰 글, 이번 달 사용량 카드(모듈별 횟수·합계·오늘, 통장이 없으면 숨김, 이달 중간에 만든 토큰 정보는 '…일 토큰 정보 생성부터'), 역할 이름 '유저'(전 '열람'), 에이전트 계정 안내 |
 | 배치·판 | 45 | 자리 찾기(새·옛 구조, PyInstaller·Nuitka), 판 점검, exe 쪽 모듈 자리 |
 | 빌드 스크립트 | 58 | 판 번호·모으기(브라우저 폴더는 runtime 에 남아 있어도 판에 없다 - Edge)·압축·찌꺼기·빈 틀(비밀·우리 물류 값)·exe 출력 표지, Nuitka 링크도 일반 x86-64 CPU(LDFLAGS - 빌드 PC 의 AVX-512 가 인텔 노트북에서 0xC000001D), 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·옵저버가 켜져 있으면 멈춤·가짜 판 컴파일)·tkinter·exe 가져오기, mfc140u.dll·comtypes 시각 비교 끄기, AFTER MARKET 파이썬 사본(설명 칸·아이콘 한 벌), exe 별 아이콘(루틴 크림 A·프리페어 주황 A), exe 셋(옵저버 콘솔 attach·tk-inter·Tcl/Tk 꺼내기·옛 판 가져오기 거부·Nuitka 만) |
 | 설정 창 | 106 | 칸 확인(대시보드·ERPia 업체코드 따로), 설정 합치기(잠금·비운 칸은 그대로, Sites 는 안 건드림), 물류 칸(출력 방식 A·Y=자동, 빈 틀 수동, 가져오기), 메일 칸 없음, 저장 순서(인증서 채우기 → 로그인), 멈춘 까닭, ERPia 못 찾음, 작업 XML(진짜 작업 스케줄러 등록, AFTER MARKET 감독 사본), 옛 에이전트, 멈추기 0·5·6·확인만, 가져오기(Run_All.bat)·이름 바꾸기, 계정·설치 폴더 확인, 오류 가드 |
@@ -237,9 +244,8 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 프리셋 | 68 | `tests/test_presets.py` (깔린 Edge): 프리셋 파일·Sites 칸(잠김·Stts 9)·요약·켬끔, 옵저버 미리보기는 이력에만, 관리자·계정 확인, 프리페어 replay 로 `(012)…` 받기·알림창은 재생기 하나만(글 20자), 옵저버 저장 전 확인·잠금, 바뀐 프리셋만 저장 날짜, 남은 프로필 지우기, 콘솔 없이 켜진 exe 처럼 표준 핸들이 못 쓰는 값이어도 Playwright 드라이버가 뜸 |
 | 브라우저 (Edge) | 11 | `tests/test_edge.py`: 같이 싣는 브라우저 없이 기록·재생·프리페어 자체 시험이 깔린 Edge 로, 옵저버 Edge 명령줄(`--no-sandbox`·`--enable-automation` 없음)·다운로드 창을 끈 프로필·`--check` 의 Edge 판, Edge 다운로드 창(`edge://downloads-hub`)과 늦게 주소가 붙는 새 탭은 사이트가 연 창이 아니다, 사람이 연 Edge 새 탭(MSN 새 탭 주소 `ntp.msn.com/edge/ntp` - 바로 생김·나중에 붙음)은 '새 탭' 단계, Edge 가 없으면 "Microsoft Edge 가 없습니다" |
 | 옵저버 화면 | 21 | `tests/check_observer_ui.py`: 진짜 창으로 주소 치기 → 기록 → 끄기·지우기 → 미리보기 → 저장, 기록 중 저장 잠김·저장 안 한 기록 묻기, 안내 한 줄(프리셋을 바꾸면 비움·남은 단계가 없으면 그렇다고), 미리보기 [Ⅱ 일시정지]·[■ 중단]·도는 중 닫기 거절·브라우저 못 띄움·일시정지 중 닫기, 다시 저장해도 날짜 그대로, 사진 다섯 (3~4분 마우스·키보드를 쓴다) |
-| 인코딩 | 15 | .bat CP949·CRLF 와 실제 실행, 안내 문서·installer.iss·sandbox_inner.ps1 BOM UTF-8 |
+| 인코딩 | 17 | .bat CP949·CRLF 와 실제 실행, 관리 화면 bat 은 영문만·CRLF, 안내 문서·installer.iss·sandbox_inner.ps1 BOM UTF-8 |
 | 샌드박스 | 38 | 깨끗한 윈도우: 조용한 설치·파일(같이 싣던 브라우저 ms-playwright 없음)·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·시작 메뉴 'RPA 옵저버'·tkinter → 설치된 exe 셋 --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내)·프리페어 --selftest --headless·옵저버 --check 가 깔린 Edge 를 띄움 → 옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜면 Playwright 드라이버가 깔린 Edge 창을 띄움(사진 observer.png) → 작업 등록(AFTER MARKET 사본, exe 다섯의 아이콘 - 프리페어·옵저버만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 옵저버가 켜진 채 다시 설치는 시작 전에 멈춤(코드 7, --stop 안 부름) → 다시 설치(--stop, 옛 판의 ms-playwright 폴더를 지움) → 설정 창 사진 → 조용한 제거 (판 2026.10.06-2) |
-| 관리 스크립트 | 23 | setup.js 를 에뮬레이터에 대고 등록 → remove(stts=9, 계정 막힘, 새 등록 거부) → restore |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.
 
@@ -249,8 +255,8 @@ cd ..; firebase deploy --only hosting --config firebase.json
 - `serviceAccountKey.json` 은 규칙을 우회하는 만능 열쇠다. `firebase/admin/` 에만 두고 고객 PC 에 복사하지 않는다.
 - 쇼핑몰 프리셋 파일 `RPA_Presets.json` 에는 비밀이 없다 (비밀번호 칸은 값 없이 기록, 아이디는 '설정의 아이디' 로). 그래도 사이트 메뉴·누른 글자가 있으니 PC 밖으로 보내지 않는다. 대시보드로는 이름·코드·단계 수·켬과, 칸에 친 값·주소 `?` 뒤를 뺀 미리보기·재생 로그만 간다.
 - `agent_config.json`, `queue.jsonl`, `history_pos.txt`, 에이전트 기록은 모두 gitignore 다.
-- 비밀번호는 `setup.js` 가 무작위로 만들어 한 번만 찍는다. 명령줄에 없으니 이력에 남지 않는다. 예전 이력에 남은 것은 `Remove-Item (Get-PSReadLineOption).HistorySavePath` 로 저장 파일을 지운다 (`Clear-History` 는 세션 버퍼만 비운다).
-- PC 를 빼거나 담당자가 바뀌면 `setup.js disable` 또는 `passwd`. 업체와 계약이 끝나면 `setup.js remove <cid>` (계정 전부 막힘, 자료는 남음). 이미 받은 토큰은 최대 1시간 산다.
+- 비밀번호는 `ops.js` 가 무작위로 만들어 한 번만 보여 준다 (터미널은 찍고, 관리 화면은 결과 칸에만 - 서버 콘솔·관리_기록.txt 에는 안 남는다). 명령줄에 없으니 이력에 남지 않는다. 예전 이력에 남은 것은 `Remove-Item (Get-PSReadLineOption).HistorySavePath` 로 저장 파일을 지운다 (`Clear-History` 는 세션 버퍼만 비운다).
+- PC 를 빼거나 담당자가 바뀌면 사용중지 또는 비밀번호 재발급 (관리 화면, 또는 `setup.js disable`·`passwd`). 업체와 계약이 끝나면 업체 비활성화 (관리 화면에서 업체코드를 쳐야, 또는 `setup.js remove <cid>`) (계정 전부 막힘, 자료는 남음). 이미 받은 토큰은 최대 1시간 산다.
 
 ## 10. 아직 안 한 것
 

@@ -670,7 +670,7 @@ async function paintUsage() {
       row.append(name, n);
       return row;
     }));
-    $("usage-meta").textContent = `(${+from.slice(5, 7)}월 ${+from.slice(8, 10)}일${from === month ? "" : " 통장 시작"}부터)`;
+    $("usage-meta").textContent = `(${+from.slice(5, 7)}월 ${+from.slice(8, 10)}일${from === month ? "" : " 토큰 정보 생성"}부터)`;
     $("usage-sum").textContent = total ? `합계 ${total}개 · 오늘 ${todayTotal}개` : "이번 달에 쓴 토큰이 없습니다";
     card.classList.remove("hide");
   } catch {

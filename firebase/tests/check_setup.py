@@ -76,23 +76,27 @@ check(rc == 0 and db_get(f"meta/companies/{CID}/pcs/pc_1/label") == "첫 PC", "p
 rc, out = setup("user", CID, "u1", "admin", "담당자")
 check(rc == 0 and "비밀번호: ****" in out and account(U1) and not account(U1).get("disabled"), "user 등록", out[-200:])
 rc, out = setup("agent", CID, "pc_1")
-check(rc == 0 and account(AG) and not account(AG).get("disabled"), "agent 등록", out[-200:])
+check(rc == 0 and account(AG) and not account(AG).get("disabled") and "업체코드: t_x   PC코드: pc_1   비밀번호: ****" in out,
+      "agent 등록 - PC 설정 창의 칸 이름 그대로 (업체코드·PC코드)", out[-200:])
 rc, out = setup("user", "t_none", "u9", "admin", "없는 업체")
 check(rc != 0 and "먼저 company" in out and account(f"u9@t-none.{PROJECT}.firebaseapp.com") is None, "없는 업체엔 user 를 못 만든다", out[-200:])
+check(out.strip().startswith("오류: 먼저 company") and "    at " not in out, "거절은 '오류: …' 한 줄 (오류 꼬리 없이)", out[-200:])
+rc, out = setup("modules", "t_none", "Hold=off")
+check(rc != 0 and "먼저 company" in out and db_get("meta/companies/t_none") is None, "없는 업체엔 모듈 정책을 못 넣는다", out[-200:])
 
 print("=== 2. 삭제 (remove) ===")
 rc, out = setup("remove", CID)
 check(rc == 0 and db_get(f"meta/companies/{CID}/stts") == 9, "stts=9", out[-300:])
 check(account(U1).get("disabled") is True and account(AG).get("disabled") is True, "그 업체 계정(사람·기계)이 모두 막힌다")
-check("계정 2개 막음" in out and U1 in out and AG in out, "막은 계정을 찍는다", out[-300:])
+check("업체 비활성화: t_x" in out and "계정 2개 사용중지" in out and U1 in out and AG in out, "사용중지한 계정을 찍는다", out[-300:])
 check(db_get(f"meta/companies/{CID}/name") == "시험 업체" and db_get(f"meta/companies/{CID}/pcs/pc_1/label") == "첫 PC", "이름·PC 는 남는다")
 for args in (("pc", CID, "pc_2", "둘"), ("user", CID, "u2", "admin", "둘"), ("agent", CID, "pc_1"), ("company", CID, "다시")):
     rc, out = setup(*args)
-    check(rc != 0 and "삭제된 업체" in out and "restore" in out, f"삭제된 업체엔 {args[0]} 을 막는다", out[-200:])
+    check(rc != 0 and "비활성화된 업체" in out and "restore" in out, f"비활성화된 업체엔 {args[0]} 을 막는다", out[-200:])
 check(db_get(f"meta/companies/{CID}/pcs/pc_2") is None and db_get(f"meta/companies/{CID}/name") == "시험 업체", "막힌 명령은 아무것도 안 쓴다")
 rc, out = setup("remove", CID)
 check(rc == 0 and db_get(f"meta/companies/{CID}/stts") == 9, "remove 를 다시 돌려도 된다 (중간에 실패했을 때)", out[-200:])
-check(out.startswith("이미 삭제된 업체입니다.") and "계정 2개 막음" in out, "다시 remove 하면 이미 삭제됐다고 알리고 그래도 막는다", out[-200:])
+check(out.startswith("이미 비활성화된 업체입니다.") and "계정 2개 사용중지" in out, "다시 remove 하면 이미 비활성화됐다고 알리고 그래도 사용중지한다", out[-200:])
 rc, out = setup("remove", "t_none")
 check(rc != 0 and "먼저 company" in out, "없는 업체는 remove 못 한다", out[-200:])
 rc, out = setup("list")
@@ -105,7 +109,7 @@ check(account(U1).get("disabled") is not True and account(AG).get("disabled") is
 call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:update",
      {"localId": account(U1)["localId"], "disableUser": True}, OWNER)   # 서비스 중에 사람 하나만 따로 막아 둔다
 rc, out = setup("restore", CID)
-check(rc == 0 and out.strip() == "이미 서비스중인 업체입니다.", "살아 있는 업체를 restore 하면 알리기만 한다", out[-200:])
+check(rc == 0 and out.strip() == "이미 사용중인 업체입니다.", "사용중인 업체를 restore 하면 알리기만 한다", out[-200:])
 check(account(U1).get("disabled") is True and account(AG).get("disabled") is not True, "따로 막아 둔 계정은 그대로 막혀 있다")
 rc, out = setup("pc", CID, "pc_2", "둘째")
 check(rc == 0 and db_get(f"meta/companies/{CID}/pcs/pc_2/label") == "둘째", "되살린 업체엔 다시 pc 를 만들 수 있다", out[-200:])
@@ -140,12 +144,12 @@ def fs_run(run_id, started_at, cost):
 
 fs_run("before", "2020-01-01T09:00:00", 5)                 # 통장을 만들기 전 기록 - 빼지 않는다
 rc, out = setup("tokens", CID)
-check(rc == 0 and "통장이 없다" in out and fs_doc(f"wallet/{CID}") is None, "통장이 없으면 그렇다고만 (만들지 않는다)", out[-200:])
+check(rc == 0 and "토큰 정보가 없다" in out and fs_doc(f"wallet/{CID}") is None, "토큰 정보가 없으면 그렇다고만 (만들지 않는다)", out[-200:])
 rc, out = setup("tokens", CID, "+1000", "10월", "결제")
 w = fs_doc(f"wallet/{CID}") or {}
 check(rc == 0 and w.get("granted") == 1000 and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", w.get("since") or ""),
       "처음 넣으면 통장을 만든다 (넣은 합계·시작 시각 - 기록의 started_at 과 같은 꼴)", out[-300:])
-check("통장을 만들었습니다" in out and "막힙니다" in out and "남은 1000" in out, "만들었다고 알리고, 통장 전 기록은 안 뺀다", out[-300:])
+check("토큰 정보를 만들었습니다" in out and "모듈 실행을 막습니다" in out and "남은 1000" in out, "만들었다고 알리고, 토큰 정보 전 기록은 안 뺀다", out[-300:])
 g = fs_list(f"wallet/{CID}/grants")
 check(len(g) == 1 and g[0].get("amount") == 1000 and g[0].get("memo") == "10월 결제" and g[0].get("at"), "넣은 내역 한 줄 (언제·얼마·메모)", str(g))
 fs_run("after", (datetime.datetime.now() + datetime.timedelta(minutes=1)).isoformat(timespec="seconds"), 30)
@@ -160,15 +164,19 @@ for bad in ("abc", "0", "1.5"):
 rc, out = setup("tokens", "t_none", "+5")
 check(rc != 0 and "먼저 company" in out and fs_doc("wallet/t_none") is None, "없는 업체엔 못 넣는다", out[-200:])
 rc, out = setup("price")
-check(rc == 0 and "default" in out and "login" in out, "값표 보기 (서버 값표가 없으면 처음 값표)", out[-200:])
+check(rc == 0 and "토큰 배율" in out and "default" in out and "login" in out, "토큰 배율 보기 (서버에 없으면 처음 배율)", out[-200:])
 rc, out = setup("price", "logistics", "2")
 check(rc == 0 and (fs_doc("meta/prices") or {}).get("logistics") == 2, "값 바꾸기", out[-200:])
 for args in (("logistics", "-1"), ("logistics", "x"), ("Bad-Key", "1"), ("logistics",)):
     rc, out = setup("price", *args)
     check(rc != 0 and (fs_doc("meta/prices") or {}).get("logistics") == 2, f"값표 {args} 은 거절", out[-200:])
 rc, out = setup("usage")
+check(rc == 0 and "토큰 정보" in out and "통장" not in out, "usage 칸 이름도 '토큰 정보'", out[-300:])
 check(rc == 0 and CID in out and "920" in out and "30" in out, "usage: 업체마다 남은 토큰·이번 달 쓴 토큰", out[-500:])
 
+rc, out = setup()
+old = [w for w in ("막기", "막음", "다시 엶", "통장", "삭제(비활성)", "되살림", "서비스중") if w in out]
+check(rc != 0 and "사용중지" in out and "업체 비활성화" in out and "다시 활성화" in out and not old, "도움말도 새 이름 (사용중지·업체 비활성화·다시 활성화·토큰 정보)", old)
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

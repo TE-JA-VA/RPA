@@ -84,11 +84,11 @@ onAuthStateChanged(auth, async (user) => {
   const t = await user.getIdTokenResult(true);
   if (t.claims.role === "agent") {   // 기계 계정은 PC 에이전트 전용. 화면에서 비밀번호를 바꾸면 그 PC 가 죽으니 아예 안 들인다
     await signOut(auth);
-    $("login-alert").textContent = "기계 계정으로는 화면에 들어올 수 없습니다"; show($("login-alert"), true);
+    $("login-alert").textContent = "에이전트 계정으로는 화면에 들어올 수 없습니다"; show($("login-alert"), true);
     return;
   }
   me = { uid: user.uid, email: user.email, cid: t.claims.cid || null, role: t.claims.role || null };
-  $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "열람"})`;
+  $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "유저"})`;
   await loadCompany();
   if (company.stts === 9) {   // 삭제(비활성)된 업체. setup.js remove 가 계정도 막지만 이미 받은 토큰은 1시간 살아서 화면에서도 막는다
     await signOut(auth);
