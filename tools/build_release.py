@@ -83,6 +83,10 @@ NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--remove-output",
                   "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone",
                   f"--include-data-files={MFC_DLL}=mfc140u.dll", f"--user-package-configuration-file={NUITKA_YML}"]
                  + [f"--nofollow-import-to={m}" for m in EXCLUDE])
+# Nuitka 는 Zig 에 일반 x86-64 CPU(-march)를 컴파일 때만 준다. 링크 때 Zig 가 붙이는 C 런타임(memcpy 등)은 이 PC 의
+# CPU(Ryzen 9700X)에 맞춰 AVX-512 를 써서, AVX-512 가 없는 인텔 노트북에서 exe 가 켜지자마자 0xC000001D 로 죽었다
+# (2026-10-02 시연 노트북. 샌드박스는 이 PC 의 CPU 를 그대로 써서 못 잡는다). Nuitka 가 LDFLAGS 를 링크에 붙인다
+NUITKA_ENV = {"LDFLAGS": "-march=x86_64"}
 PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright"]
 TK_PLUGIN = "--enable-plugin=tk-inter"
 # 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
@@ -335,7 +339,7 @@ def build_exes(work_dir, only=None):
     for exe in (only or EXES):
         if TK_PLUGIN in NUITKA_EXTRA[exe] and tk_dirs is None:
             tk_dirs = tcl_tk_dirs(work_dir)
-        subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True)
+        subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True, env=dict(os.environ, **NUITKA_ENV))
     ver = subprocess.run([py, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
     return f"nuitka {ver} · python {platform.python_version()}"
 

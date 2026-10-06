@@ -285,6 +285,23 @@ with tempfile.TemporaryDirectory() as d:
           not any("library-dir" in o for o in br.nuitka_command("py", "Prepare_RPA.exe", d)))
 check("--builder 선택지는 없다 (옵저버 exe 는 Nuitka 로만 - 고르면 늘 실패하던 pyinstaller 를 뺐다, 2026-10-02)",
       "--builder" not in Path(br.__file__).read_text(encoding="utf-8"))
+calls = []
+
+
+class _Done:
+    stdout = "4.2.2\n"
+
+
+real_run, br.subprocess.run = br.subprocess.run, lambda cmd, **kw: calls.append(kw) or _Done()
+try:
+    with tempfile.TemporaryDirectory() as d:
+        br.build_exes(d, only=["Prepare_RPA.exe"])
+finally:
+    br.subprocess.run = real_run
+env = calls[0].get("env") or {}
+check("Nuitka 는 링크에도 일반 x86-64 CPU 를 준다 (LDFLAGS) - 안 주면 Zig 가 이 PC(Ryzen 9700X)에 맞춘 AVX-512 memcpy 를 "
+      "붙여 인텔 노트북에서 exe 가 켜지자마자 0xC000001D (2026-10-02)",
+      env.get("LDFLAGS") == "-march=x86_64" and env.get("PATH") == os.environ.get("PATH"), str(env.get("LDFLAGS")))
 lock = re.search(r'OBSERVER_LOCK = os\.environ\.get\("RPA_OBSERVER_LOCK"\) or r"([^"]+)"', (ROOT / "rpa_status.py").read_text(encoding="utf-8"))
 prep_code = iss[iss.find("function PrepareToInstall"):iss.find("function InitializeUninstall")]
 check("옵저버가 켜져 있으면 판 올림·지우기를 시작 전에 멈춘다 (켜진 exe 는 덮지 못한다) - 잠금 이름은 rpa_status 와 같고, "
