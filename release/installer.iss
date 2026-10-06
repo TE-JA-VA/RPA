@@ -51,6 +51,10 @@ Name: "{commonappdata}\AFTER MARKET\RPA\config"; Flags: uninsneveruninstall
 Name: "{commonappdata}\AFTER MARKET\RPA\data"; Flags: uninsneveruninstall
 Name: "{group}"
 
+[InstallDelete]
+; 2026-10-06 부터 브라우저는 깔린 Edge 를 쓴다 - 옛 판이 싣던 ms-playwright(713MB)는 판을 올릴 때 지운다
+Type: filesandordirs; Name: "{app}\ms-playwright"
+
 [Files]
 ; 판 폴더 전부. 빈 틀은 template 이름으로 (프로그램 폴더에 진짜 설정처럼 보이는 파일을 두지 않는다), 안내 문서는 넣지 않는다
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "\RPA_UserConfig.json,\배포안내.txt,\클라우드_안내.txt"; Flags: ignoreversion recursesubdirs createallsubdirs

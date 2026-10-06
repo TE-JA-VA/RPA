@@ -55,7 +55,7 @@ firebase/
 
 저장소 루트의 `rpa_settings.py` 는 설치한 PC 의 **설정 창**이다 (기계 계정·ERPia 로그인·물류 처리 옵션(출력 방식·택배사·박스·운임·프린터) 입력, 자동 시작 작업 등록, 에이전트 켜고 끄기, 옛 폴더에서 설정값 가져오기. 메일은 2026-09-30 부터 다른 프로그램이 맡는다). 설치 파일은 `release/installer.iss`(Inno Setup) 이고, `tools/build_release.py` 가 zip 과 설치 파일을 함께 만든다. 설계: `docs/superpowers/specs/2026-09-29-installer-design.md`.
 
-쇼핑몰 엑셀 받기 (2026-10-01, 설계 `docs/superpowers/specs/2026-09-30-shop-record-replay-design.md`): `web_replay.py` 는 사이트를 가리지 않는 조작 기록·재생 엔진, `rpa_observer.py` → `Prepare_Observer.exe` 는 **옵저버** (시작 메뉴 'RPA 옵저버', 주황 A, 콘솔 없음, 켤 때 관리자 권한) - 사람이 한 번 해 보인 '로그인 ~ 엑셀 받기' 를 프리셋 ①~⑩ 으로 기록한다. 기록은 설정 폴더의 `RPA_Presets.json` (비밀 없음), 아이디·잠근 비밀번호는 사용자 설정 `Sites.PRESETn` (처음엔 `Stts` 9 = 꺼짐). 프리페어(`web_runner.py`)의 할 일 `replay` 가 켜진 프리셋을 재생해 `(사이트코드)원래이름` 으로 `ERPIA_AI_EXCEL` 에 받고, 루틴의 엑셀업로드가 그대로 올린다.
+쇼핑몰 엑셀 받기 (2026-10-01, 설계 `docs/superpowers/specs/2026-09-30-shop-record-replay-design.md`): `web_replay.py` 는 사이트를 가리지 않는 조작 기록·재생 엔진, `rpa_observer.py` → `Prepare_Observer.exe` 는 **옵저버** (시작 메뉴 'RPA 옵저버', 주황 A, 콘솔 없음, 켤 때 관리자 권한) - 사람이 한 번 해 보인 '로그인 ~ 엑셀 받기' 를 프리셋 ①~⑩ 으로 기록한다. 기록은 설정 폴더의 `RPA_Presets.json` (비밀 없음), 아이디·잠근 비밀번호는 사용자 설정 `Sites.PRESETn` (처음엔 `Stts` 9 = 꺼짐). 프리페어(`web_runner.py`)의 할 일 `replay` 가 켜진 프리셋을 재생해 `(사이트코드)원래이름` 으로 `ERPIA_AI_EXCEL` 에 받고, 루틴의 엑셀업로드가 그대로 올린다. 브라우저는 2026-10-06 부터 PC 에 깔린 Edge 를 빈 프로필로 띄운다 (`web_replay.edge`, 같이 싣던 Chromium `ms-playwright` 713MB 를 뺐다).
 
 ## 3. 데이터 경로
 
@@ -185,6 +185,7 @@ cd D:\AX\RPA
 .venv\Scripts\python.exe tests\test_start_failure.py  # 띄운 RPA 가 기록도 못 남기고 죽으면 '시작하지 못함' 이력
 .venv\Scripts\python.exe tests\test_schedule_slots.py    # 자동 실행 예약, RPA·옵저버가 떠 있으면 기다림
 .venv\Scripts\python.exe tests\test_encoding.py       # .bat 는 CP949, 안내 문서·설치 스크립트는 BOM 있는 UTF-8
+.venv\Scripts\python.exe tests\test_edge.py           # 깔린 Edge (같이 싣는 브라우저 없이), 옵저버 Edge 명령줄·프로필, Edge 없는 PC
 .venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 윈도우 샌드박스에서 설치 파일
 cd D:\AX\RPA\firebase; . .\emu_env.ps1
 python tests\test_agent.py                      # 에이전트 단위 (Firebase 없이)
@@ -202,17 +203,18 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 통합 | 32 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기 |
 | 화면 | 251 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버', 실행 단추 '… 실행중'(끝나면 돌아옴), 잠긴 까닭은 줄 아래 글(휴대폰) |
 | 배치·판 | 45 | 자리 찾기(새·옛 구조, PyInstaller·Nuitka), 판 점검, exe 쪽 모듈 자리 |
-| 빌드 스크립트 | 58 | 판 번호·모으기·압축·찌꺼기·빈 틀(비밀·우리 물류 값)·exe 출력 표지, Nuitka 링크도 일반 x86-64 CPU(LDFLAGS - 빌드 PC 의 AVX-512 가 인텔 노트북에서 0xC000001D), 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·옵저버가 켜져 있으면 멈춤·가짜 판 컴파일)·tkinter·exe 가져오기, mfc140u.dll·comtypes 시각 비교 끄기, AFTER MARKET 파이썬 사본(설명 칸·아이콘 한 벌), exe 별 아이콘(루틴 크림 A·프리페어 주황 A), exe 셋(옵저버 콘솔 attach·tk-inter·Tcl/Tk 꺼내기·옛 판 가져오기 거부·Nuitka 만) |
+| 빌드 스크립트 | 58 | 판 번호·모으기(브라우저 폴더는 runtime 에 남아 있어도 판에 없다 - Edge)·압축·찌꺼기·빈 틀(비밀·우리 물류 값)·exe 출력 표지, Nuitka 링크도 일반 x86-64 CPU(LDFLAGS - 빌드 PC 의 AVX-512 가 인텔 노트북에서 0xC000001D), 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·옵저버가 켜져 있으면 멈춤·가짜 판 컴파일)·tkinter·exe 가져오기, mfc140u.dll·comtypes 시각 비교 끄기, AFTER MARKET 파이썬 사본(설명 칸·아이콘 한 벌), exe 별 아이콘(루틴 크림 A·프리페어 주황 A), exe 셋(옵저버 콘솔 attach·tk-inter·Tcl/Tk 꺼내기·옛 판 가져오기 거부·Nuitka 만) |
 | 설정 창 | 106 | 칸 확인(대시보드·ERPia 업체코드 따로), 설정 합치기(잠금·비운 칸은 그대로, Sites 는 안 건드림), 물류 칸(출력 방식 A·Y=자동, 빈 틀 수동, 가져오기), 메일 칸 없음, 저장 순서(인증서 채우기 → 로그인), 멈춘 까닭, ERPia 못 찾음, 작업 XML(진짜 작업 스케줄러 등록, AFTER MARKET 감독 사본), 옛 에이전트, 멈추기 0·5·6·확인만, 가져오기(Run_All.bat)·이름 바꾸기, 계정·설치 폴더 확인, 오류 가드 |
 | 설정 창 화면 | 40 | 진짜 tkinter 창: 첫 모습(단추 이름·맨 위 한 줄), 빈 칸 안 흐린 안내(보이고 사라짐·칸 안에 들어감·값이 아님), '(기본 프린터)', 창 폭(≤520)·높이(≤690)·긴 까닭 줄바꿈, 출력 방식·물류 경고 줄, 수동이면 프린터 칸 꺼짐·없는 프린터 줄 숨김, ERPia 못 찾음, 빈 칸의 빨간 안내, 저장·'켜는 중', 가져오기, 없는 프린터, 멈춘 까닭, 옛 에이전트, 이름 잘림, 단추 오류 |
 | 감독 | 28 | 종료 코드별 다시 켜기, 멈춘 까닭 파일, 기다림, 창 없는 입출력(닫힌 파이프·UTF-8), 잡(감독이 죽으면 에이전트도, RPA 는 남음), 윈도우 인증서 채우기, AFTER MARKET 에이전트 사본 |
 | 시작하지 못함 | 10 | 띄운 RPA 가 기록도 못 남기고 끝나면 '시작하지 못함' 이력 한 건 (오류 출력 마지막 줄·종료 코드, 전체 실행은 둘 다) |
 | 자동 실행 | 69 | 요일·시간 예약 계산, 예약기 (RPA 가 돌거나 옵저버가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 옵저버가 죽으면 풀림), 다시 켤 때 건너뛰기 |
-| 기록·재생 엔진 | 56 | `tests/test_web_replay.py`: 가짜 쇼핑몰을 기록해 다음 날·모레·기다림 없이·예상 밖 공지·느린 목록·단계 뺀 기록으로 재생, 마우스 올리기 메뉴, 주소줄 단계, 창 크기, 값 없는 설명, 모르는 형식, 받기 시간 초과, 멈춤(단계 앞·찾는 중), 일시정지, 팝업이 내려 주는 파일. 부하는 `tests/stress_web_replay.py` (22번) |
-| 프리셋 | 68 | `tests/test_presets.py`: 프리셋 파일·Sites 칸(잠김·Stts 9)·요약·켬끔, 옵저버 미리보기는 이력에만, 관리자·계정 확인, 프리페어 replay 로 `(012)…` 받기·알림창은 재생기 하나만(글 20자), 옵저버 저장 전 확인·잠금, 바뀐 프리셋만 저장 날짜, 남은 프로필 지우기, 콘솔 없이 켜진 exe 처럼 표준 핸들이 못 쓰는 값이어도 Playwright 드라이버가 뜸 |
+| 기록·재생 엔진 | 56 | `tests/test_web_replay.py` (같이 싣는 브라우저 없이 - 깔린 Edge): 가짜 쇼핑몰을 기록해 다음 날·모레·기다림 없이·예상 밖 공지·느린 목록·단계 뺀 기록으로 재생, 마우스 올리기 메뉴, 주소줄 단계, 창 크기, 값 없는 설명, 모르는 형식, 받기 시간 초과, 멈춤(단계 앞·찾는 중), 일시정지, 팝업이 내려 주는 파일. 부하는 `tests/stress_web_replay.py` (22번) |
+| 프리셋 | 68 | `tests/test_presets.py` (깔린 Edge): 프리셋 파일·Sites 칸(잠김·Stts 9)·요약·켬끔, 옵저버 미리보기는 이력에만, 관리자·계정 확인, 프리페어 replay 로 `(012)…` 받기·알림창은 재생기 하나만(글 20자), 옵저버 저장 전 확인·잠금, 바뀐 프리셋만 저장 날짜, 남은 프로필 지우기, 콘솔 없이 켜진 exe 처럼 표준 핸들이 못 쓰는 값이어도 Playwright 드라이버가 뜸 |
+| 브라우저 (Edge) | 11 | `tests/test_edge.py`: 같이 싣는 브라우저 없이 기록·재생·프리페어 자체 시험이 깔린 Edge 로, 옵저버 Edge 명령줄(`--no-sandbox`·`--enable-automation` 없음)·다운로드 창을 끈 프로필·`--check` 의 Edge 판, Edge 다운로드 창(`edge://downloads-hub`)과 늦게 주소가 붙는 새 탭은 사이트가 연 창이 아니다, 사람이 연 Edge 새 탭(MSN 새 탭 주소 `ntp.msn.com/edge/ntp` - 바로 생김·나중에 붙음)은 '새 탭' 단계, Edge 가 없으면 "Microsoft Edge 가 없습니다" |
 | 옵저버 화면 | 21 | `tests/check_observer_ui.py`: 진짜 창으로 주소 치기 → 기록 → 끄기·지우기 → 미리보기 → 저장, 기록 중 저장 잠김·저장 안 한 기록 묻기, 안내 한 줄(프리셋을 바꾸면 비움·남은 단계가 없으면 그렇다고), 미리보기 [Ⅱ 일시정지]·[■ 중단]·도는 중 닫기 거절·브라우저 못 띄움·일시정지 중 닫기, 다시 저장해도 날짜 그대로, 사진 다섯 (3~4분 마우스·키보드를 쓴다) |
 | 인코딩 | 15 | .bat CP949·CRLF 와 실제 실행, 안내 문서·installer.iss·sandbox_inner.ps1 BOM UTF-8 |
-| 샌드박스 | 35 | 깨끗한 윈도우: 조용한 설치·파일·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·tkinter → 설치된 두 exe --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내) → 옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜면 Playwright 드라이버가 뜸(사진 observer.png) → 작업 등록(AFTER MARKET 사본, exe 넷의 아이콘 - 프리페어만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 옵저버가 켜진 채 다시 설치는 시작 전에 멈춤(코드 7, --stop 안 부름) → 다시 설치(--stop) → 설정 창 사진 → 조용한 제거, 옵저버 exe `--check`·시작 메뉴 'RPA 옵저버' (판 2026.10.02-2) |
+| 샌드박스 | 38 | 깨끗한 윈도우: 조용한 설치·파일(같이 싣던 브라우저 ms-playwright 없음)·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·시작 메뉴 'RPA 옵저버'·tkinter → 설치된 exe 셋 --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내)·프리페어 --selftest --headless·옵저버 --check 가 깔린 Edge 를 띄움 → 옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜면 Playwright 드라이버가 깔린 Edge 창을 띄움(사진 observer.png) → 작업 등록(AFTER MARKET 사본, exe 다섯의 아이콘 - 프리페어·옵저버만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 옵저버가 켜진 채 다시 설치는 시작 전에 멈춤(코드 7, --stop 안 부름) → 다시 설치(--stop, 옛 판의 ms-playwright 폴더를 지움) → 설정 창 사진 → 조용한 제거 (판 2026.10.06-2) |
 | 관리 스크립트 | 23 | setup.js 를 에뮬레이터에 대고 등록 → remove(stts=9, 계정 막힘, 새 등록 거부) → restore |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.

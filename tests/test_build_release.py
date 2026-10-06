@@ -60,8 +60,8 @@ for exe in ("python.exe", "pythonw.exe"):   # 이름 바꾼 사본을 만들려�
     shutil.copy2(os.path.join(br.RUNTIME_ROOT, "python", exe), os.path.join(runtime, "python", exe))
 ICO = (ROOT / "release" / "AFTER_MARKET.ico").read_bytes()   # 사본의 아이콘으로도 쓰니 진짜여야 한다
 write(os.path.join(repo, "release", "AFTER_MARKET.ico"), ICO)
-write(os.path.join(runtime, "ms-playwright", "chromium-1234", "chrome.exe"), b"chrome")
-write(os.path.join(runtime, "ms-playwright", ".links", "x"), b"")                              # playwright 가 남기는 표시 폴더
+write(os.path.join(runtime, "ms-playwright", "chromium-1234", "chrome.exe"), b"chrome")   # 옛 판의 브라우저가 runtime 에 남아 있어도
+write(os.path.join(runtime, "ms-playwright", ".links", "x"), b"")                         # 판에는 안 들어간다 (2026-10-06 부터 Edge)
 others = [rel for rel, _ in br.OTHER_FILES]
 
 # ---------------------------------------------------------------------------
@@ -131,8 +131,8 @@ check("문서·배포 틀은 판 목록에 없다", not set(others) & set(man["f
 bat = "firebase/agent/에이전트_시작.bat"
 check("한글 파일 이름도 지문", man["files"][bat]["sha256"]
       == hashlib.sha256(f"{bat} 내용\r\n".encode("cp949")).hexdigest())
-check("런타임은 이름표만 (점으로 시작하는 표시 폴더는 뺀다)",
-      man["runtime"]["ms-playwright"] == ["chromium-1234"] and "python" in man["runtime"], str(man["runtime"]))
+check("같이 싣는 브라우저(ms-playwright 713MB)는 판에 없다 - 깔린 Edge 를 쓴다 (runtime 에 남아 있어도)",
+      not os.path.exists(os.path.join(out_dir, "ms-playwright")) and list(man["runtime"]) == ["python"], str(man["runtime"]))
 check("만든 판은 에이전트의 판 점검에서 ok", st.check_install(out_dir)["state"] == "ok", str(st.check_install(out_dir)))
 try:
     br.collect(out_dir, exe_dir, repo=repo, runtime_root=runtime)

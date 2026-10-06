@@ -235,25 +235,6 @@ def program_dir():
     return dist if os.path.isfile(os.path.join(dist, "Run_All.bat")) else here
 
 
-def setup_playwright_browsers():
-    """exe 로 묶였을 때 브라우저가 어디 있는지 알려준다. playwright 를 import 하기 전에 부른다 (프리페어·옵저버).
-
-    Chromium 은 압축을 풀면 700MB 가 넘어 exe 안에 넣을 수 없다. exe 옆에 ms-playwright 폴더를 두고 그걸 쓴다
-    (개발 중에는 %LOCALAPPDATA%\\ms-playwright). exe 로 묶이면 playwright 가 임시 압축해제 폴더 안의
-    .local-browsers 를 브라우저 위치로 착각해 "Executable doesn't exist" 로 죽으니 기본 위치를 직접 알려준다.
-    """
-    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        return
-    candidate = os.path.join(program_dir(), "ms-playwright")
-    if os.path.isdir(candidate):
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = candidate
-        return
-    if packaged():
-        default = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
-        if os.path.isdir(default):
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = default
-
-
 def install_root():
     """새 구조의 설정·기록 뿌리 %ProgramData%\\AFTER MARKET\\RPA. 시험용 RPA_PROGRAMDATA 가 있으면 그 폴더."""
     return os.environ.get("RPA_PROGRAMDATA") or os.path.join(

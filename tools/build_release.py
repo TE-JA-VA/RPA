@@ -38,8 +38,8 @@ import background as bg  # noqa: E402
 import rpa_status as st  # noqa: E402
 
 OUT_ROOT = r"D:\AX"
-RUNTIME_ROOT = r"D:\AX\runtime"           # python\·ms-playwright\ (처음 한 번 배포_20260928_3 에서 복사)
-RUNTIME_DIRS = ("python", "ms-playwright")
+RUNTIME_ROOT = r"D:\AX\runtime"           # python\ (처음 한 번 배포_20260928_3 에서 복사)
+RUNTIME_DIRS = ("python",)                # 브라우저(ms-playwright 713MB)는 안 싣는다 - 깔린 Edge 를 쓴다 (2026-10-06, web_replay.edge)
 EXES = {"ERPia_RPA.exe": "run_routine.py", "Prepare_RPA.exe": "web_runner.py", "Prepare_Observer.exe": "rpa_observer.py"}
 # (배포판 안 자리, 저장소 안 원본). exe 와 함께 판 목록에 지문으로 들어간다
 PROGRAM_FILES = [
@@ -198,13 +198,12 @@ def _runtime_python(out_dir):
 
 def write_manifest(out_dir, version, builder, program):
     """manifest.json 을 쓰고 그 내용을 돌려준다."""
-    browsers = sorted(n for n in os.listdir(os.path.join(out_dir, "ms-playwright")) if not n.startswith("."))
     man = {
         "format": st.MANIFEST_FORMAT,
         "version": version,
         "built_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "builder": builder,
-        "runtime": {"python": _runtime_python(out_dir), "ms-playwright": browsers},
+        "runtime": {"python": _runtime_python(out_dir)},
         "files": {rel: st.file_digest(os.path.join(out_dir, *rel.split("/"))) for rel in program},
     }
     with open(os.path.join(out_dir, st.MANIFEST_NAME), "w", encoding="utf-8", newline="\n") as f:

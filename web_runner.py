@@ -3,9 +3,8 @@ r"""사용자 설정(RPA_UserConfig.json)의 Sites 를 읽어 사이트별 웹 �
 
 ERPia 루틴(run_routine.py), 문자 감시(sms_watch.py) 와 별개로 도는 독립 프로그램이다.
 
-브라우저는 Playwright 가 들고 있는 전용 Chromium 을 쓴다.
-그래서 사용자 PC 에 어떤 브라우저가 깔려 있는지, 기본 브라우저가 무엇인지
-전혀 신경 쓸 필요가 없다.
+브라우저는 PC 에 깔린 Edge 를 빈 프로필로 띄운다 (web_replay.edge, 2026-10-06 - 그 전에는 같이 싣던 Chromium).
+사용자가 쓰는 Edge 의 로그인·쿠키와는 섞이지 않고, 기본 브라우저가 무엇인지도 상관없다.
 
 사용법
     python web_runner.py --check            설정 파일 점검 (비밀번호는 가림)
@@ -25,14 +24,11 @@ import re
 import sys
 import time
 
+from playwright.sync_api import TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
+
 import rpa_status as status
-
-
-# exe 로 묶였을 때 브라우저 자리 (playwright 를 import 하기 전에). 옵저버와 같이 쓴다 - rpa_status 에 있다
-status.setup_playwright_browsers()
-
-from playwright.sync_api import TimeoutError as PWTimeout   # noqa: E402
-from playwright.sync_api import sync_playwright             # noqa: E402
+import web_replay              # 브라우저 띄우기(web_replay.edge - 깔린 Edge)와 프리셋 재생
 
 # 문자 인증번호는 sms_watch 가 'PC와 연결'(Phone Link) 에서 읽어온다.
 # 같은 로직을 두 벌 두지 않으려고 그대로 가져다 쓴다.
@@ -1036,7 +1032,6 @@ def action_mail_download(page, name, site):
 def action_replay(page, name, site):
     """옵저버로 기록한 프리셋을 재생해 엑셀을 받는다. 받은 파일은 (사이트코드)원래이름 으로 ERPIA_AI_EXCEL 에.
     로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다 (대시보드로 간다). 실패 사진은 기록 폴더에 (받은 파일 폴더가 아니라)."""
-    import web_replay
     problems = _replay_problems(name, site)
     if problems:
         raise RuntimeError(problems[0])
@@ -1236,7 +1231,7 @@ def cmd_selftest(headless):
     """실제 사이트 없이 로그인 자동 찾기가 되는지 확인한다."""
     log("=== 자체 테스트 (내장 로그인 폼) ===")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        browser = web_replay.edge(p.chromium.launch, headless=headless)
         page = browser.new_page()
         page.set_content(SELFTEST_HTML)
 
@@ -1321,7 +1316,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
     log(f"{len(chosen)}개 사이트를 실행합니다. (창 {'숨김' if headless else '표시'})")
     done = 0
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        browser = web_replay.edge(p.chromium.launch, headless=headless)
         try:
             for name, site in chosen:
                 if run_site(browser, name, site,

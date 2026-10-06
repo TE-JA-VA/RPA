@@ -17,6 +17,7 @@ os.environ["RPA_USER_CONFIG"] = os.path.join(TMP, "config", "RPA_UserConfig.json
 os.environ["RPA_PROGRAMDATA"] = os.path.join(TMP, "programdata")
 os.environ["RPA_STATUS_DIR"] = os.path.join(TMP, "status")
 os.environ["RPA_OBSERVER_LOCK"] = rf"Local\AFTER_MARKET_RPA_OBSERVER_PRESETS_TEST_{os.getpid()}"   # 개발 PC 의 진짜 에이전트가 기다리지 않게
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(TMP, "no_browsers")   # 배포판처럼 같이 싣는 브라우저가 없다 - 깔린 Edge 로만 뜬다
 os.makedirs(os.path.join(TMP, "config"))
 os.makedirs(os.path.join(TMP, "programdata", "config"))    # 새 구조로 보이게 (기록 폴더가 programdata\data 가 된다)
 ROOT = Path(__file__).resolve().parent.parent
@@ -208,7 +209,7 @@ lines, real_log = [], wr.log
 wr.log = lines.append
 try:
     with web_replay.sync_playwright() as pw_:
-        browser = pw_.chromium.launch()
+        browser = web_replay.edge(pw_.chromium.launch)
         page = wr.prepare_page(browser.new_context().new_page())
         replayed = wr.action_replay(page, "PRESET1", site)
         page.evaluate("() => alert('재생 뒤 알림')")
@@ -346,7 +347,7 @@ check("다시 기록한 프리셋은 꺼진 채로 (확인 전에 자동 실행�
       kept == 0 and fresh == 9, f"kept={kept} fresh={fresh}")
 
 with web_replay.sync_playwright() as pw_:
-    browser = pw_.chromium.launch()
+    browser = web_replay.edge(pw_.chromium.launch)
     lines = []
     r = web_replay.Replayer(browser.new_context(), {"version": 1, "start_url": "", "steps": [
         {"kind": "goto", "page": 0, "href": "http://127.0.0.1:9/login?sid=SECRET1", "gap": 0}]},

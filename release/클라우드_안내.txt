@@ -22,7 +22,7 @@
 
 
 ■ 준비 (배포안내.txt 1~4번은 그대로)
-    1) 이 폴더를 통째로 복사한다. (ms-playwright, python 폴더 포함)
+    1) 이 폴더를 통째로 복사한다. (python 폴더 포함. 브라우저는 그 PC 에 깔린 Edge 를 쓴다)
     2) RPA_UserConfig.json 을 이 업체 값으로 맞춘다.
        ERPia 로그인(LogIn) · 물류(Logistic) · 실행 모듈(Routine) · 프리페어 사이트(Sites) · ERPia 위치(ERPia) 가
        이 파일 하나에 다 있다. 비밀번호(PW)는 평문으로 적는다 - 에이전트가 처음 켤 때

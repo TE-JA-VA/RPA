@@ -30,7 +30,7 @@ if (-not $admin) {
 # 1. 조용한 설치
 $p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup1.log`"" -Wait -PassThru
 Check "조용한 설치 (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.ExitCode)"
-Check "프로그램 파일" ((Test-Path "$App\rpa_settings.py") -and (Test-Path "$App\firebase\agent\background.py") -and (Test-Path "$App\python\pythonw.exe") -and (Test-Path "$App\ERPia_RPA.exe") -and (Test-Path "$App\ms-playwright") -and (Test-Path "$App\manifest.json"))
+Check "프로그램 파일 (같이 싣던 브라우저 ms-playwright 는 없다 - 깔린 Edge)" ((Test-Path "$App\rpa_settings.py") -and (Test-Path "$App\firebase\agent\background.py") -and (Test-Path "$App\python\pythonw.exe") -and (Test-Path "$App\ERPia_RPA.exe") -and -not (Test-Path "$App\ms-playwright") -and (Test-Path "$App\manifest.json"))
 Check "빈 틀은 template 이름으로, 진짜 설정 이름·안내 문서는 없다" ((Test-Path "$App\RPA_UserConfig.template.json") -and -not (Test-Path "$App\RPA_UserConfig.json") -and -not (Test-Path "$App\배포안내.txt"))
 $ver = & $Py -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; r = st.check_install(r'$App'); print(r['state'], r['version'])"
 Check "판 점검 ok" ("$ver" -like "ok *") "$ver"
@@ -64,24 +64,32 @@ $X = "$O\exe"
 New-Item -ItemType Directory -Force "$X\cfg" | Out-Null
 Copy-Item "$App\RPA_UserConfig.template.json" "$X\cfg\RPA_UserConfig.json"
 $env:RPA_USER_CONFIG = "$X\cfg\RPA_UserConfig.json"; $env:RPA_PROGRAMDATA = "$X\pd"; $env:RPA_STATUS_DIR = "$X\st"; $env:RPA_UNATTENDED = "1"
-foreach ($e in @(@("ERPia_RPA.exe", "=== 점검 끝"), @("Prepare_RPA.exe", "쓸 수 있는 Action"), @("Prepare_Observer.exe", "옵저버 점검 끝"))) {
-    $p = Start-Process "$App\$($e[0])" -ArgumentList "--check" -WorkingDirectory $App -PassThru -WindowStyle Hidden -RedirectStandardOutput "$X\$($e[0]).out.txt" -RedirectStandardError "$X\$($e[0]).err.txt"
+$outs = @{}
+foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝"), @("Prepare_RPA.exe", "--check", "쓸 수 있는 Action"), @("Prepare_Observer.exe", "--check", "옵저버 점검 끝"),
+                 @("Prepare_RPA.exe", "--selftest --headless", "자체 테스트 통과"))) {
+    $n = "$($e[0]) $($e[1])"
+    $p = Start-Process "$App\$($e[0])" -ArgumentList $e[1] -WorkingDirectory $App -PassThru -WindowStyle Hidden -RedirectStandardOutput "$X\$n.out.txt" -RedirectStandardError "$X\$n.err.txt"
     $done = $p.WaitForExit(180000)
-    $bytes = [IO.File]::ReadAllBytes("$X\$($e[0]).out.txt") + [IO.File]::ReadAllBytes("$X\$($e[0]).err.txt")
+    $bytes = [IO.File]::ReadAllBytes("$X\$n.out.txt") + [IO.File]::ReadAllBytes("$X\$n.err.txt")
     $u8 = [Text.Encoding]::UTF8.GetString($bytes); $ks = [Text.Encoding]::GetEncoding(949).GetString($bytes)
-    Check "$($e[0]) --check 가 켜져 끝까지 간다" ($done -and ($u8.Contains($e[1]) -or $ks.Contains($e[1]))) ($u8.Substring([Math]::Max(0, $u8.Length - 300)))
+    $outs[$n] = "$u8`n$ks"
+    Check "$n 가 켜져 끝까지 간다" ($done -and ($u8.Contains($e[2]) -or $ks.Contains($e[2]))) ($u8.Substring([Math]::Max(0, $u8.Length - 300)))
 }
+# 브라우저는 깔린 Edge (2026-10-06 - 같이 싣던 Chromium 713MB 를 뺐다). 프리페어 --selftest 는 위에서 Edge 로 내장 로그인 폼을 채웠다
+Check "옵저버 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: Microsoft Edge …')" ($outs["Prepare_Observer.exe --check"] -match "브라우저: Microsoft Edge \d") (($outs["Prepare_Observer.exe --check"] -split "`n" | Where-Object { $_ -match "브라우저" }) -join " / ")
 # 옵저버를 시작 메뉴처럼 붙을 콘솔 없이 켠다 (2026-10-02 첫 실행: 표준 핸들이 못 쓰는 값이라 Playwright 가 WinError 6 -
 # --check 는 콘솔에서 불러 못 잡았다). 콘솔 없는 pythonw 가 띄우고 관리자 권한은 이 스크립트에서 물려받는다 (UAC 창 없음).
-# 일꾼이 Playwright 드라이버(node.exe run-driver)를 띄우면 통과. -Wait 는 쓰지 않는다 (자손까지 기다려 켜 둔 옵저버에서 멈춘다)
+# 일꾼이 Playwright 드라이버(node.exe run-driver)를 띄우고 드라이버가 깔린 Edge 를 창으로 띄우면 통과 (2026-10-06 - 드라이버만 보고
+# 찍으면 사진이 '브라우저를 여는 중...' 이었다). -Wait 는 쓰지 않는다 (자손까지 기다려 켜 둔 옵저버에서 멈춘다)
 Set-Content "$X\no_console.py" "import subprocess, sys`nsubprocess.Popen([sys.argv[1]], cwd=sys.argv[2])" -Encoding ASCII
 Start-Process "$App\python\pythonw.exe" -ArgumentList "`"$X\no_console.py`" `"$App\Prepare_Observer.exe`" `"$App`""
-$drv = $null
-for ($i = 0; $i -lt 120 -and -not $drv; $i++) {
+$drv = $null; $edge = $null
+for ($i = 0; $i -lt 120 -and -not $edge; $i++) {
     Start-Sleep -Milliseconds 500
-    $drv = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match "run-driver" }
+    if (-not $drv) { $drv = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match "run-driver" } }
+    $edge = Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { ($_.CommandLine -match "remote-debugging-pipe") -and ($_.CommandLine -notmatch "--headless") }
 }
-Start-Sleep 2
+Start-Sleep 5                                       # Edge 창이 다 그려지고 옵저버 글이 '기록 중' 으로 바뀔 때까지
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
@@ -90,7 +98,7 @@ $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
 $bmp.Save("$O\observer.png")
 $g.Dispose(); $bmp.Dispose()
 $obs = @(Get-CimInstance Win32_Process -Filter "Name='Prepare_Observer.exe'")
-Check "옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜도 Playwright 드라이버가 뜬다 (사진 observer.png)" ($null -ne $drv) "옵저버 프로세스 $($obs.Count)개, 드라이버 없음"
+Check "옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜도 Playwright 드라이버가 깔린 Edge 창을 띄운다 (사진 observer.png)" ($null -ne $edge) "옵저버 프로세스 $($obs.Count)개, 드라이버 $(if ($drv) { '있음' } else { '없음' }), Edge 창 없음"
 $obs | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }
 Remove-Item Env:RPA_USER_CONFIG, Env:RPA_PROGRAMDATA, Env:RPA_STATUS_DIR, Env:RPA_UNATTENDED
 
@@ -170,9 +178,12 @@ $p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /
 $lo = Get-Content "$O\setup_observer.log" -Raw
 Check "옵저버가 켜져 있으면 설치를 시작 전에 멈춘다 (코드 7, 에이전트는 안 멈춤)" (($p.ExitCode -eq 7) -and -not ($lo -match "rpa_settings --stop")) "코드 $($p.ExitCode)"
 $obs.Dispose()
-# 이제 정말로: 먼저 --stop, 끝나면 창 없이 작업 등록·켜기
+# 이제 정말로: 먼저 --stop, 끝나면 창 없이 작업 등록·켜기. 옛 판(2026.10.02-4 까지)이 싣던 브라우저 폴더가 있는 것처럼 해 둔다
+New-Item -ItemType Directory -Force "$App\ms-playwright\chromium-1234" | Out-Null
+Set-Content "$App\ms-playwright\chromium-1234\chrome.exe" "old"
 $p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup2.log`"" -Wait -PassThru
 Check "다시 설치 (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.ExitCode)"
+Check "다시 설치하면 옛 판의 브라우저 폴더(ms-playwright 713MB)를 지운다" (-not (Test-Path "$App\ms-playwright"))
 $l2 = Get-Content "$O\setup2.log" -Raw
 Check "파일을 덮기 전에 --stop (0)" ($l2 -match "rpa_settings --stop -> 0")
 

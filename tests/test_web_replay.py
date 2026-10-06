@@ -22,6 +22,7 @@ import web_replay as rec  # noqa: E402
 
 sys.stdout.reconfigure(encoding="utf-8")
 OUT = tempfile.mkdtemp(prefix="rpa_replay_")   # 받은 파일·실패 사진 (저장소 밖)
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(OUT, "no_browsers")   # 배포판처럼 같이 싣는 브라우저가 없다 - 깔린 Edge 로만 뜬다
 DAY = datetime.date(2026, 9, 30)
 fails = []
 
@@ -243,7 +244,7 @@ def main():
                        {"kind": "goto", "page": 0, "url": "/login", "href": url + "/login?b=1", "gap": 0},
                        {"kind": "back", "page": 0, "url": "/login", "gap": 0}]}
         with rec.sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = rec.edge(p.chromium.launch)
             ctx = browser.new_context()
             r = rec.Replayer(ctx, f, {"ID": "", "PW": ""}, os.path.join(OUT, "F"), "012", log=print)
             r.fit_viewport = True
@@ -282,7 +283,7 @@ def main():
         srv.mall = m = fake_mall.Mall(day, False)
         t0 = time.time()
         with rec.sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = rec.edge(p.chromium.launch)
             ctx = browser.new_context(accept_downloads=True)
             r = rec.Replayer(ctx, bad, {"ID": fake_mall.USER, "PW": fake_mall.PASSWORD}, os.path.join(OUT, "I"), "012",
                              today=day, log=print)
@@ -296,7 +297,7 @@ def main():
         ev = threading.Event()
         srv.mall = m = fake_mall.Mall(day, False)
         with rec.sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = rec.edge(p.chromium.launch)
             ctx = browser.new_context(accept_downloads=True)
             r = rec.Replayer(ctx, a, {"ID": fake_mall.USER, "PW": fake_mall.PASSWORD}, os.path.join(OUT, "J"), "012",
                              today=day, log=print)
@@ -320,7 +321,7 @@ def main():
                 threading.Timer(1.0, ev.set).start()
         srv.mall = fake_mall.Mall(day, False)
         with rec.sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = rec.edge(p.chromium.launch)
             ctx = browser.new_context(accept_downloads=True)
             r = rec.Replayer(ctx, lost, creds, os.path.join(OUT, "K"), "012", today=day, log=print, step_timeout=20)
             r.cancel, r.progress = ev, on_k
@@ -344,7 +345,7 @@ def main():
                 threading.Timer(2.0, resume).start()
         srv.mall = m = fake_mall.Mall(day, False)
         with rec.sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = rec.edge(p.chromium.launch)
             ctx = browser.new_context(accept_downloads=True)
             r = rec.Replayer(ctx, e, creds, os.path.join(OUT, "L"), "012", today=day, log=print)
             r.pause, r.progress = pause, on_l
@@ -380,7 +381,7 @@ def main():
         day = DAY + datetime.timedelta(days=1)
         srv.mall = m = fake_mall.Mall(day, False)
         with rec.sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = rec.edge(p.chromium.launch)
             ctx = browser.new_context(accept_downloads=True)
             r = rec.Replayer(ctx, mr, creds, os.path.join(OUT, "M"), "012", today=day, log=print)
             r.download_timeout_ms = 10000

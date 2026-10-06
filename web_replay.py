@@ -17,6 +17,21 @@ import urllib.parse
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
+EDGE_MISSING = "Microsoft Edge 가 없습니다 - Edge 를 설치한 뒤 다시 실행하세요"
+
+
+def edge(launch, *args, **kw):
+    """PC 에 깔린 Edge 로 띄운다 - 기록·재생·옵저버·프리페어가 모두 여기로 (2026-10-06 부터. 그 전에는 Playwright 의
+    Chromium 713MB 를 배포판에 같이 실었다). launch 는 p.chromium.launch 나 launch_persistent_context.
+    Edge 가 없으면 사람 말로 멈춘다 (Playwright 는 'playwright install msedge' 하라는 개발자 말을 한다)."""
+    try:
+        return launch(*args, channel="msedge", **kw)
+    except Exception as e:
+        if "'msedge' is not found" in str(e):        # Chromium distribution 'msedge' is not found at C:\...\msedge.exe
+            raise RuntimeError(EDGE_MISSING) from None
+        raise
+
+
 JS = r"""
 (() => {
   // 문서마다 한 번. window 에 표시하면 안 된다: 새 창은 빈 페이지(about:blank)의 window 를 진짜 주소에서도 그대로 써서
@@ -164,10 +179,14 @@ TEXT_OF = """e => { const n = s => (s || '').replace(/\\s+/g, ' ').trim(); const
   if (t === 'TEXTAREA' || t === 'SELECT') return ''; return n(e.textContent).slice(0, 80); }"""
 
 
+EDGE_NEW_TAB = "https://ntp.msn.com/edge/ntp"  # 사람이 Ctrl+T·+ 로 연 Edge 새 탭은 edge:// 가 아니라 이 주소로 바로 생긴다 (2026-10-06 실측)
+BROWSER_PAGES = ("chrome://", "edge://", EDGE_NEW_TAB)   # 브라우저 자체 페이지 (새 탭·Edge 다운로드 창) - 사이트가 연 창이 아니다
+
+
 def user_tab(page):
     """사람이 Ctrl+T·+ 로 연 탭 (페이지가 연 창이 아니다)."""
     try:
-        return page.opener() is None and page.url.startswith("chrome://")
+        return page.opener() is None and page.url.startswith(BROWSER_PAGES)
     except Exception:
         return False
 
@@ -207,14 +226,28 @@ class Recorder:
 
     def _page(self, page):
         no = self._no(page)
-        if no and self.steps and not user_tab(page):
-            self.steps[-1].setdefault("opens", no)       # 앞 동작이 새 창을 열었다 (사람이 연 새 탭은 아니다)
+        step = self.steps[-1] if self.steps else None
+        if no and step is not None and not user_tab(page):
+            step.setdefault("opens", no)                 # 앞 동작이 새 창을 열었다 (사람이 연 새 탭은 아니다)
+
+        def became_browser_page(frame):                  # Edge 다운로드 창은 주소 없이 생겼다가 곧 edge:// 주소가 붙는다
+            if frame is page.main_frame and frame.url.startswith(BROWSER_PAGES):
+                page.remove_listener("framenavigated", became_browser_page)
+                self._browser_page(page, no, step)
+        if no:
+            page.on("framenavigated", became_browser_page)
         page.on("dialog", self._dialog)
         page.on("download", self._download)
         # add_init_script 만 믿으면 안 된다: window.open 새 창은 빈 페이지에만 심기고 진짜 주소의 문서에는 안 심긴다
         # (2026-09-30 시험). 문서가 바뀔 때마다 한 번 더 심는다 - 문서마다 표시가 있어 두 번 붙지는 않는다
         page.on("framenavigated", self._inject)
         page.on("domcontentloaded", lambda pg: [self._inject(f) for f in pg.frames])
+
+    def _browser_page(self, page, no, step):
+        """새 창이 나중에 브라우저 자체 페이지로 밝혀졌다 - 앞 동작이 연 창으로 적은 것을 되돌린다 (2026-10-06: Edge 는 파일을
+        받으면 다운로드 창 edge://downloads-hub 을 페이지로 열어, 재생이 오지 않을 새 창을 15초 기다리다 실패했다)."""
+        if step is not None and step.get("opens") == no:
+            del step["opens"]
 
     def _inject(self, frame):
         try:
@@ -320,7 +353,7 @@ def keep_steps(rec_obj, keep):
 def record(start_url, out_path, headless=False, human=None, record_date=None, sample_dir=None):
     """브라우저를 띄워 기록한다. human(page) 를 주면 그 함수가 사람 대신 조작한다 (시험용)."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        browser = edge(p.chromium.launch, headless=headless)
         context = browser.new_context(accept_downloads=True)
         rec = Recorder(context, sample_dir)
         page = context.new_page()
@@ -839,7 +872,7 @@ class Replayer:
 
 def replay(rec, creds, out_dir, code, today=None, review=False, headless=True, log=print, step_timeout=30.0):
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless, slow_mo=250 if review else 0)
+        browser = edge(p.chromium.launch, headless=headless, slow_mo=250 if review else 0)
         context = browser.new_context(accept_downloads=True)
         r = Replayer(context, rec, creds, out_dir, code, today=today, review=review, log=log, step_timeout=step_timeout)
         ok = r.run()

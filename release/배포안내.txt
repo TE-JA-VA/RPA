@@ -57,38 +57,20 @@
         RPA_Dashboard.exe          현황 대시보드 (웹, 아래 8번)
         RPA_UserConfig.json        사용자 설정 한 파일 (ERPia 로그인 · 물류 · 실행 모듈 · 프리페어 사이트 · ERPia 위치)
         manifest.json              버전 번호와 프로그램 파일 목록 (지우지 말 것)
-        ms-playwright\             브라우저 (아래 2번 참고)
+        (브라우저는 그 PC 에 깔린 Microsoft Edge 를 쓴다 - 아래 2번)
 
     ※ *_result.txt, *_log.txt 는 실행하면 생기는 기록이라 가져갈 필요 없다.
 
 
-■ 2. 브라우저 폴더 (프리페어 RPA 에 필수)
-    가져올 곳 : C:\Users\<사용자>\AppData\Local\ms-playwright
-    둘 곳     : Prepare_RPA.exe 가 있는 바로 그 폴더
+■ 2. 브라우저 - 그 PC 에 깔린 Microsoft Edge (2026-10-06 부터)
+    프리페어 RPA 와 옵저버는 윈도우에 기본으로 깔린 Edge 를 빈 프로필로 띄운다. 따로 옮길 것이 없다.
+    그 PC 사용자가 쓰는 Edge 의 로그인·쿠키와는 섞이지 않는다.
+    (그 전 판은 ms-playwright 폴더(약 715MB)를 exe 옆에 두었다. 새 판을 설치하면 그 폴더는 지운다)
 
-    폴더를 열어서 안의 내용물을 꺼내는 것이 아니라,
-    'ms-playwright' 폴더째로 그 이름 그대로 exe 옆에 둔다.
+    Edge 를 지운 PC 면 "Microsoft Edge 가 없습니다" 로 멈춘다 → Edge 를 설치한다.
+    확인: Prepare_Observer.exe --check 에 '브라우저: Microsoft Edge <버전>' 줄이 나오면 된다.
 
-        1번의 프로그램 폴더\
-          Run_All.bat
-          Prepare_RPA.exe          <- 이 exe 가 자기 옆을 본다
-          ERPia_RPA.exe
-          RPA_Dashboard.exe
-          RPA_UserConfig.json
-          ms-playwright\           <- 여기. 이름 그대로
-            chromium-1234\
-            winldd-1007\
-            ...
-
-    이게 없으면 프리페어 RPA 가 브라우저를 못 찾아 바로 죽는다.
-    (exe 옆에 이 폴더가 있으면 그걸 쓰고, 없으면 그 PC 의 기본 위치를 찾는다.
-     playwright 를 설치한 적 없는 PC 라면 기본 위치에도 없으므로 반드시 복사해야 한다)
-
-    ERPia_RPA.exe 는 브라우저를 쓰지 않으므로 이 폴더가 필요 없다.
-
-    - 전부 복사하면 약 715MB (가장 안전)
-    - 줄이려면 chromium-1234 (439MB) 와 winldd-1007 만 복사해도 된다.
-      단 --headless 옵션은 쓸 수 없게 된다.
+    ERPia_RPA.exe 는 브라우저를 쓰지 않는다.
 
 
 ■ 3. 작업 폴더 - 바탕화면\ERPIA_AI

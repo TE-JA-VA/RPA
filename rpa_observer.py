@@ -29,13 +29,10 @@ import tkinter as tk
 from ctypes import wintypes
 from tkinter import messagebox
 
+from playwright.sync_api import sync_playwright
+
 import rpa_status as st
-
-st.setup_playwright_browsers()                     # playwright 를 부르기 전에 (exe 로 묶이면 브라우저 자리를 알려 줘야 한다)
-
-from playwright.sync_api import sync_playwright    # noqa: E402
-
-import web_replay as rec                           # noqa: E402
+import web_replay as rec
 
 
 REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
@@ -97,7 +94,7 @@ class LiveRecorder(rec.Recorder):
     """rec.Recorder + 주소줄에 친 주소·뒤로 가기·새 탭도 단계로, 바뀔 때마다 화면에 알림. 단계마다 고유 번호."""
 
     def __init__(self, context, sample_dir, notify):
-        self.notify, self.next_id, self.context = notify, 0, context
+        self.notify, self.next_id, self.context, self.tabs = notify, 0, context, set()
         super().__init__(context, sample_dir)
 
     def _ids(self):
@@ -120,9 +117,19 @@ class LiveRecorder(rec.Recorder):
         super()._page(page)
         no = self._no(page)
         if no and rec.user_tab(page):
-            self._add({"kind": "newtab", "page": no, "url": ""})
+            self._new_tab(no)
         self._track_nav(page, no)
         self._ids()
+
+    def _browser_page(self, page, no, step):
+        super()._browser_page(page, no, step)
+        if "newtab" in page.url or "new-tab" in page.url or page.url.startswith(rec.EDGE_NEW_TAB):  # 주소 없이 생겼다가 새 탭 주소가 붙은 탭
+            self._new_tab(no)
+
+    def _new_tab(self, no):
+        if no not in self.tabs:
+            self.tabs.add(no)
+            self._add({"kind": "newtab", "page": no, "url": ""})
 
     def _track_nav(self, page, no):
         """크롬 이력의 이동 종류로 가른다: typed = 사람이 주소줄에 친 것, 번호가 줄면 뒤로 가기 (2026-09-30 실험)."""
@@ -161,16 +168,17 @@ class LiveRecorder(rec.Recorder):
 
 
 def launch(p, **kw):
-    """새 프로필 브라우저 (주소줄·탭 보임). 자동화 안내 띠·비밀번호 저장 제안·다운로드 알림은 끈다 (기록 중 화면을 가린다).
+    """새 프로필 Edge (주소줄·탭 보임). 기록 중 화면을 가리는 것은 끈다: 자동화 안내 띠, 비밀번호 저장 제안, 파일을 받을 때
+    뜨는 다운로드 창, '--no-sandbox' 경고 띠 (자동화 안내 띠를 끄면 대신 뜬다 - 보호 기능을 켜 그 플래그를 안 붙인다).
     못 띄우면 만든 프로필 폴더를 지우고 오류를 그대로 올린다."""
     prof = tempfile.mkdtemp(prefix=PROFILE_PREFIX)
     try:
         os.makedirs(os.path.join(prof, "Default"))
         with open(os.path.join(prof, "Default", "Preferences"), "w", encoding="utf-8") as f:
             json.dump({"credentials_enable_service": False, "profile": {"password_manager_enabled": False},
-                       "download_bubble": {"partial_view_enabled": False}}, f)
-        ctx = p.chromium.launch_persistent_context(prof, headless=False, no_viewport=True, accept_downloads=True,
-                                                   ignore_default_args=["--enable-automation"], **kw)
+                       "browser": {"show_hub_popup_on_download_start": False}}, f)
+        ctx = rec.edge(p.chromium.launch_persistent_context, prof, headless=False, no_viewport=True, accept_downloads=True,
+                       ignore_default_args=["--enable-automation"], chromium_sandbox=True, **kw)
     except BaseException:
         shutil.rmtree(prof, ignore_errors=True)
         raise
@@ -1058,8 +1066,13 @@ def check():
         print(f"프리셋 {len(ps)}개 (기록 있는 것 {sum(1 for p in ps if p['record'])}개)")
     except ValueError as e:
         print(f"문제: 프리셋 파일을 읽지 못했습니다 ({e})")
-    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
-    print(f"브라우저: {browsers} ({'있음' if os.path.isdir(browsers) else '없음'})")
+    try:                                                # 깔린 Edge 를 실제로 띄워 본다 (샌드박스가 이 줄을 본다)
+        with sync_playwright() as p:
+            b = rec.edge(p.chromium.launch, headless=True)
+            print(f"브라우저: Microsoft Edge {b.version}")
+            b.close()
+    except Exception as e:
+        print(f"문제: 브라우저를 띄우지 못했습니다 ({type(e).__name__}: {(str(e).splitlines() or [''])[0]})")
     try:
         root = tk.Tk()
         root.withdraw()
