@@ -63,16 +63,31 @@ Realtime DB
 ```
 meta/companies/{cid}                    { name, stts, pcs: { pcId: { label } } }   stts 0(없음도) 사용 · 9 삭제(비활성)
 apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현재 상태
-                                        { programs, modules, presets, schedule, recent[20], heartbeat, host, server_time, version }
+                                        { programs, modules, presets, schedule, recent[20], heartbeat, host, server_time, version, tokens }
+                                        tokens = { balance, cost: { routine, prepare, all } } (통장이 없는 업체는 없음)
                                         presets = [{ no, name, code, steps, saved_at, has_login, on }] (기록 내용·아이디·비밀번호 없음)
 apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, schedule }
 apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at, state, result, … }
 ```
 Firestore
 ```
-runs/{cid}/items/{runId}   실행 이력 한 건 (조회용 필드 + payload JSON)
+runs/{cid}/items/{runId}   실행 이력 한 건 (조회용 필드 + 쓴 것 used·쓴 토큰 cost + payload JSON)
+meta/prices                토큰 값표 { default: 1, login: 0, … } - setup.js(Admin SDK)만 쓴다
+wallet/{cid}               토큰 통장 { granted } + grants/{id} 넣은 내역 - setup.js(Admin SDK)만 쓴다
 users/{uid}                { cid, role, name } - 표시용. 권한 근거는 custom claim 이다
 ```
+
+**토큰** (2026-10-06, 설계 `docs/superpowers/specs/2026-10-06-tokens-design.md`): 업체가 산 만큼 우리가 넣고, 모듈을 쓸 때마다 빠진다.
+에이전트가 기록 한 장을 올릴 때 `used`(모듈별 횟수 map - 루틴은 완료·대상 없음인 모듈, 프리페어는 단계가 모두 완료인 사이트 수
+`sites`, 옵저버 미리보기는 안 셈)와 `cost`(횟수 × 값표, 값표에 없는 새 모듈은 default)를 적는다. 남은 토큰 = `granted` - 그 회사
+기록들의 `cost` 합 (Firestore 가 서버에서 더한다, `agent.balance`). 기록은 만들기만 되고 이름이 run_id 라 두 번 빠지지 않는다.
+통장이 없는 업체는 토큰 제도 밖 (세기만 한다).
+**막기** (2부): 실행 단추·예약은 모두 `rpa_dashboard.launch` 를 지나고, 에이전트가 단 확인(`dash.TOKEN_GATE = agent.Tokens.gate`)이
+띄우기 직전에 남은 토큰을 다시 본다 - 0 이하면 "토큰이 없습니다 (남은 N개). 충전한 뒤 실행하세요" 로 거절 (실행 명령은 그 글로 실패,
+예약은 그 글을 `last_error` 로 남기고 다음 예약으로). 1 이상이면 끝까지 (마이너스 가능). 못 확인하면 마지막으로 확인한 값, 한 번도
+못 했으면 막지 않는다. 에이전트는 기록을 올린 뒤·10분마다 다시 보고 `live.tokens` 로 올린다 → 화면은 실행 단추 아래 한 줄 (회색 평소,
+노랑 '마이너스로 떨어질 수 있습니다', 빨강 0 이하 + 실행 단추 셋 잠김)과 예약 칸. 손으로 켠 exe 는 못 막고 기록이 올라갈 때 빠진다.
+넣기·보기(3부)는 아직이다.
 
 `version` 은 에이전트가 켤 때 잰 판이다 (`rpa_status.check_install()`: 판 목록 `manifest.json` 과 파일 지문을 맞춰 `ok`·`mixed`·`none`·`error`). 화면은 RPA 현황·기록 탭 줄 오른쪽에 `버전 2026.09.29-2` 처럼 보여 준다 (섞임·확인 실패는 노란 글씨, 목록이 없으면 숨김). 설계: `docs/superpowers/specs/2026-09-29-release-layout-design.md`.
 
@@ -122,7 +137,7 @@ node setup.js restore c_demo                         # 되살림: stts=0 + 계�
 
 - 1초마다 `rpa_status` 상태 파일을 보고 바뀌었을 때만 `live` 를 PATCH 한다.
 - 5초마다 heartbeat. 신호에 주기(`every`)를 같이 올리고, 화면은 그 값으로 끊김 기준을 잡는다. 그래서 아직 안 고친 PC 가 30초마다 보내도 깜빡이지 않는다.
-- `history.jsonl` 에 새 줄이 생기면 Firestore 에 올린다. 어디까지 올렸는지는 `history_pos.txt` 에 바이트 위치로 남겨 다시 켜도 이어서 간다.
+- `history.jsonl` 에 새 줄이 생기면 Firestore 에 올린다. 어디까지 올렸는지는 `history_pos.txt` 에 바이트 위치로 남겨 다시 켜도 이어서 간다. 올릴 때 쓴 것·쓴 토큰을 같이 적는다 (값표 `meta/prices` 는 10분마다 다시 읽고, 못 읽으면 처음 값표).
 - 명령은 SSE 로 받는다. 끊기면 1초부터 60초까지 늘려 가며 다시 붙는다. 로그인 토큰이 1시간마다 만료되면 Firebase 가 `auth_revoked` 를 보내고, 그러면 토큰을 새로 받아 바로 다시 붙는다. 90초 넘게 아무것도(keep-alive 포함) 안 오면 죽은 연결로 보고 다시 붙는다.
 - 못 올린 것은 `queue.jsonl` 에 쌓고 연결되면 순서대로 보낸다. 규칙이 거부한 것은 버린다. 기록 실패가 RPA 를 막는 일은 없다.
 - **자동 실행 예약기를 에이전트가 띄운다.** 그래서 옛 8765 대시보드(`RPA_Dashboard.exe`, `대시보드_시작.bat`)와 같이 띄우면 예약이 두 번 돈다. 배포 폴더에서 옛 대시보드를 빼 둔 이유가 이것이다.
@@ -198,17 +213,17 @@ cd ..; firebase deploy --only hosting --config firebase.json
 
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
-| 규칙 | 25 | 다른 회사·열람자·위조 거부, 명령 상태 전이, 명령 set_presets |
-| 에이전트 단위 | 137 | 큐, 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기, 쇼핑몰 프리셋 요약·set_presets·도넛에서 옵저버 빼기 |
-| 통합 | 32 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기 |
-| 화면 | 251 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버', 실행 단추 '… 실행중'(끝나면 돌아옴), 잠긴 까닭은 줄 아래 글(휴대폰) |
+| 규칙 | 29 | 다른 회사·열람자·위조 거부, 명령 상태 전이, 명령 set_presets, 기록의 쓴 토큰(0 이상 정수)·쓴 것(map), 자기 회사 쓴 토큰 합, 값표·통장은 아무도 못 씀 |
+| 에이전트 단위 | 165 | 큐, 로그인 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기, 쇼핑몰 프리셋 요약·set_presets·도넛에서 옵저버 빼기, 토큰(쓴 것·쓴 토큰·값표 읽기·남은 토큰, 막기: 0 이하 거절·통장 없음 통과·확인 실패는 지난 값·실행 1번에 드는 토큰) |
+| 통합 | 39 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기, 기록마다 서버 값표로 센 쓴 토큰, 남은 토큰(통장 없음 null), 토큰이 없으면 실행 명령이 그 까닭으로 실패·현황 tokens |
+| 화면 | 258 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버', 실행 단추 '… 실행중'(끝나면 돌아옴), 잠긴 까닭은 줄 아래 글(휴대폰), 토큰 줄(통장 없음 숨김·회색·노랑·빨강+실행 단추 잠금)·예약 칸 토큰 글 |
 | 배치·판 | 45 | 자리 찾기(새·옛 구조, PyInstaller·Nuitka), 판 점검, exe 쪽 모듈 자리 |
 | 빌드 스크립트 | 58 | 판 번호·모으기(브라우저 폴더는 runtime 에 남아 있어도 판에 없다 - Edge)·압축·찌꺼기·빈 틀(비밀·우리 물류 값)·exe 출력 표지, Nuitka 링크도 일반 x86-64 CPU(LDFLAGS - 빌드 PC 의 AVX-512 가 인텔 노트북에서 0xC000001D), 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·옵저버가 켜져 있으면 멈춤·가짜 판 컴파일)·tkinter·exe 가져오기, mfc140u.dll·comtypes 시각 비교 끄기, AFTER MARKET 파이썬 사본(설명 칸·아이콘 한 벌), exe 별 아이콘(루틴 크림 A·프리페어 주황 A), exe 셋(옵저버 콘솔 attach·tk-inter·Tcl/Tk 꺼내기·옛 판 가져오기 거부·Nuitka 만) |
 | 설정 창 | 106 | 칸 확인(대시보드·ERPia 업체코드 따로), 설정 합치기(잠금·비운 칸은 그대로, Sites 는 안 건드림), 물류 칸(출력 방식 A·Y=자동, 빈 틀 수동, 가져오기), 메일 칸 없음, 저장 순서(인증서 채우기 → 로그인), 멈춘 까닭, ERPia 못 찾음, 작업 XML(진짜 작업 스케줄러 등록, AFTER MARKET 감독 사본), 옛 에이전트, 멈추기 0·5·6·확인만, 가져오기(Run_All.bat)·이름 바꾸기, 계정·설치 폴더 확인, 오류 가드 |
 | 설정 창 화면 | 40 | 진짜 tkinter 창: 첫 모습(단추 이름·맨 위 한 줄), 빈 칸 안 흐린 안내(보이고 사라짐·칸 안에 들어감·값이 아님), '(기본 프린터)', 창 폭(≤520)·높이(≤690)·긴 까닭 줄바꿈, 출력 방식·물류 경고 줄, 수동이면 프린터 칸 꺼짐·없는 프린터 줄 숨김, ERPia 못 찾음, 빈 칸의 빨간 안내, 저장·'켜는 중', 가져오기, 없는 프린터, 멈춘 까닭, 옛 에이전트, 이름 잘림, 단추 오류 |
 | 감독 | 28 | 종료 코드별 다시 켜기, 멈춘 까닭 파일, 기다림, 창 없는 입출력(닫힌 파이프·UTF-8), 잡(감독이 죽으면 에이전트도, RPA 는 남음), 윈도우 인증서 채우기, AFTER MARKET 에이전트 사본 |
 | 시작하지 못함 | 10 | 띄운 RPA 가 기록도 못 남기고 끝나면 '시작하지 못함' 이력 한 건 (오류 출력 마지막 줄·종료 코드, 전체 실행은 둘 다) |
-| 자동 실행 | 69 | 요일·시간 예약 계산, 예약기 (RPA 가 돌거나 옵저버가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 옵저버가 죽으면 풀림), 다시 켤 때 건너뛰기 |
+| 자동 실행 | 72 | 요일·시간 예약 계산, 예약기 (RPA 가 돌거나 옵저버가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 옵저버가 죽으면 풀림), 다시 켤 때 건너뛰기, 토큰 확인(TOKEN_GATE)이 거절하면 실행 단추는 그 글로·예약은 까닭을 남기고 다음으로 |
 | 기록·재생 엔진 | 56 | `tests/test_web_replay.py` (같이 싣는 브라우저 없이 - 깔린 Edge): 가짜 쇼핑몰을 기록해 다음 날·모레·기다림 없이·예상 밖 공지·느린 목록·단계 뺀 기록으로 재생, 마우스 올리기 메뉴, 주소줄 단계, 창 크기, 값 없는 설명, 모르는 형식, 받기 시간 초과, 멈춤(단계 앞·찾는 중), 일시정지, 팝업이 내려 주는 파일. 부하는 `tests/stress_web_replay.py` (22번) |
 | 프리셋 | 68 | `tests/test_presets.py` (깔린 Edge): 프리셋 파일·Sites 칸(잠김·Stts 9)·요약·켬끔, 옵저버 미리보기는 이력에만, 관리자·계정 확인, 프리페어 replay 로 `(012)…` 받기·알림창은 재생기 하나만(글 20자), 옵저버 저장 전 확인·잠금, 바뀐 프리셋만 저장 날짜, 남은 프로필 지우기, 콘솔 없이 켜진 exe 처럼 표준 핸들이 못 쓰는 값이어도 Playwright 드라이버가 뜸 |
 | 브라우저 (Edge) | 11 | `tests/test_edge.py`: 같이 싣는 브라우저 없이 기록·재생·프리페어 자체 시험이 깔린 Edge 로, 옵저버 Edge 명령줄(`--no-sandbox`·`--enable-automation` 없음)·다운로드 창을 끈 프로필·`--check` 의 Edge 판, Edge 다운로드 창(`edge://downloads-hub`)과 늦게 주소가 붙는 새 탭은 사이트가 연 창이 아니다, 사람이 연 Edge 새 탭(MSN 새 탭 주소 `ntp.msn.com/edge/ntp` - 바로 생김·나중에 붙음)은 '새 탭' 단계, Edge 가 없으면 "Microsoft Edge 가 없습니다" |

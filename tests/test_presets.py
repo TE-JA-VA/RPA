@@ -194,6 +194,17 @@ check("비밀번호가 틀리면 그 단계 실패로 끝나고 사유가 남는
       and "단계에서 멈췄습니다" in (row["steps"][0].get("note") or ""), str(row["steps"]))
 check("실패 사진은 받은 파일 폴더가 아니라 기록 폴더", not any(n.endswith(".png") for n in os.listdir(DL))
       and any(n.startswith("실패_") for n in os.listdir(wr.BASE_DIR)), str(os.listdir(DL)))
+# 앞 사이트가 실패하고 마지막 사이트가 성공 - 실행은 '중단' 으로 끝나도 마지막 사이트의 단계는 '완료' (전엔 finish 가 '중단' 으로
+# 덮어 기록 탭에 실패로 보였고 토큰 셈에서도 빠졌다, 2026-10-06)
+st.write_presets([{"no": 1, "name": "가짜몰", "code": "012", "saved_at": None, "record": rec_e},
+                  {"no": 2, "name": "가짜몰2", "code": "013", "saved_at": None, "record": rec_e}])
+st.save_preset_sites(st.read_presets(), {2: (fake_mall.USER, fake_mall.PASSWORD)})     # ① 은 위의 틀린 비밀번호 그대로
+st.set_preset_switches({"PRESET1": True, "PRESET2": True})
+srv.mall = mall = fake_mall.Mall(TODAY, False)
+code = wr.cmd_run(["PRESET1", "PRESET2"], headless=True)
+row = st.read_history(program="prepare")[0]
+check("앞 사이트 실패·마지막 사이트 성공: 실행은 중단, 마지막 사이트 단계는 완료로 남는다", code == 1 and row["state"] == "stopped"
+      and [s["state"] for s in row["steps"]] == ["failed", "done"], str([(s["key"], s["state"]) for s in row["steps"]]))
 
 
 def human_alert(page):

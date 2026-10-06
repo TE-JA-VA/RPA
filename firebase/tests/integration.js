@@ -72,6 +72,12 @@ const expiredRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
   created_at: now - 1000, expires_at: now - 400, state: "queued",
 });
 
+// 토큰 값표 (2026-10-06) - 에이전트가 기록을 올릴 때 읽는다. 처음 값표(sites 1)와 다르게 둬서 서버 값표를 읽었는지 본다
+const { getFirestore, AggregateField } = await import("firebase-admin/firestore");
+const store = getFirestore(app);
+const PRICE = { default: 1, login: 0, sites: 2 };
+await store.doc("meta/prices").set(PRICE);
+
 // --- 4. 에이전트 띄우기 ---------------------------------------------------
 const env = {
   ...process.env,
@@ -176,13 +182,43 @@ check(recent.length === 20 && recent.every((d) => /^\d{4}-\d\d-\d\d$/.test(d.dat
   `최근 20일 요약이 올라온다 (${recent.length}일)`);
 
 // 이력: status_sim 의 history.jsonl (26건) 이 Firestore runs/c_demo/items 로 올라간다
-const { getFirestore } = await import("firebase-admin/firestore");
-const store = getFirestore(app);
 await waitFor("이력이 Firestore 에 올라온다 (26건)", async () =>
   (await store.collection("runs/c_demo/items").count().get()).data().count >= 26, 30000);
 const one = (await store.collection("runs/c_demo/items").where("state", "==", "stopped").limit(1).get()).docs[0]?.data();
 check(one && one.pcId === "pc_office" && one.cid === "c_demo" && typeof one.date === "string", "문서에 cid·pcId·date");
 check(one && Array.isArray(JSON.parse(one.payload).steps), "payload 에 단계 목록");
+
+// 토큰: 기록마다 쓴 것(map)·쓴 토큰(정수). status_sim 에서 단계가 모두 완료인 프리페어 8건이 사이트 1회씩 (값표 sites 2)
+const docs = (await store.collection("runs/c_demo/items").get()).docs.map((d) => d.data());
+check(docs.every((d) => Number.isInteger(d.cost) && d.used && typeof d.used === "object"
+  && d.cost === Object.entries(d.used).reduce((a, [k, n]) => a + (PRICE[k] ?? PRICE.default) * n, 0)),
+  "모든 기록에 쓴 것(map)·쓴 토큰(정수) - 서버 값표로 셌다");
+check(docs.filter((d) => d.used?.sites === 1).length === 8, `단계가 모두 완료인 프리페어 기록 8건이 사이트 1회씩 (${docs.filter((d) => d.used?.sites).length}건)`);
+// 남은 토큰: 에이전트 코드(agent.balance)가 진짜 REST 로 통장을 읽고 쓴 토큰을 서버에서 더한다
+const balancePy = `import json, secret, fb, agent
+print(json.dumps(agent.balance(fb.Client(secret.load_config(r"${cfgPath}")), "c_demo")))`;
+const bal = () => spawnSync("python", ["-c", balancePy], { cwd: AGENT_DIR, env, encoding: "utf8" });
+let b = bal();
+check(b.status === 0 && b.stdout.trim() === "null", `통장이 없는 업체는 null - 세기만 한다 (${b.stdout.trim() || b.stderr.slice(-300)})`);
+await store.doc("wallet/c_demo").set({ granted: 100 });
+const spent = (await store.collection("runs/c_demo/items").aggregate({ s: AggregateField.sum("cost") }).get()).data().s;
+b = bal();
+check(b.status === 0 && spent === 16 && Number(b.stdout.trim()) === 100 - spent,
+  `남은 토큰 = 넣은 100 - 쓴 ${spent} (${b.stdout.trim() || b.stderr.slice(-300)})`);
+
+// 2부 막기: 남은 토큰이 0 이하면 실행 명령은 까닭과 함께 실패 (에이전트가 띄우기 직전에 다시 확인한다)
+await store.doc("wallet/c_demo").set({ granted: 10 });                       // 10 - 16 = -6
+const tokenCmd = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
+  type: "launch", args: { target: "routine" }, by: adminUser.uid,
+  created_at: Math.floor(Date.now() / 1000), expires_at: Math.floor(Date.now() / 1000) + 600, state: "queued",
+});
+await waitFor("토큰이 없으면 실행 명령이 실패로 끝난다", async () => (await tokenCmd.child("state").get()).val() === "failed");
+const refusedCmd = (await tokenCmd.get()).val();
+check(refusedCmd.result === "토큰이 없습니다 (남은 -6개). 충전한 뒤 실행하세요", `까닭을 그대로 (${refusedCmd.result})`);
+await waitFor("현황에 남은 토큰·실행 1번에 드는 토큰", async () => {
+  const t = (await db.ref("apps/rpa/live/c_demo/pc_office/tokens").get()).val();
+  return t?.balance === -6 && Number.isInteger(t?.cost?.all) && t.cost.all === t.cost.routine + t.cost.prepare;
+});
 
 // --- 6. 정리 -------------------------------------------------------------
 agent.kill();

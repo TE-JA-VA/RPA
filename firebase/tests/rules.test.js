@@ -1,12 +1,13 @@
 // RTDB 보안 규칙 시험. 에뮬레이터가 떠 있어야 한다 (npm test 가 띄운다).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import assert from "node:assert/strict";
 import test, { before, after, beforeEach } from "node:test";
 import {
   initializeTestEnvironment, assertFails, assertSucceeds,
 } from "@firebase/rules-unit-testing";
 import { ref, set, update, get } from "firebase/database";
-import { doc, setDoc, getDoc, updateDoc, deleteDoc } from "firebase/firestore";
+import { doc, setDoc, getDoc, updateDoc, deleteDoc, collection, getAggregateFromServer, sum } from "firebase/firestore";
 
 const rulesPath = fileURLToPath(new URL("../rules/database.rules.json", import.meta.url));
 let env;
@@ -195,6 +196,54 @@ test("runs: 만든 이력은 고치거나 지울 수 없다", async () => {
   await assertFails(updateDoc(doc(fsAgentA1(), "runs/ca/items/r1"), { state: "조작" }));
   await assertFails(deleteDoc(doc(fsAgentA1(), "runs/ca/items/r1")));
   await assertFails(deleteDoc(doc(fsSuper(), "runs/ca/items/r1")));
+});
+
+// 토큰 (2026-10-06): 실행 기록 한 장에 쓴 것(used)·쓴 토큰(cost). 남은 토큰 = wallet.granted - 기록들의 cost 합
+test("runs: 쓴 토큰은 0 이상 정수, 쓴 것은 map (없으면 옛 에이전트 - 그대로 받는다)", async () => {
+  await assertSucceeds(setDoc(doc(fsAgentA1(), "runs/ca/items/r1"), run({ used: { sales: 1, login: 1 }, cost: 1 })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r2"), run({ run_id: "r2", cost: -1 })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r3"), run({ run_id: "r3", cost: 1.5 })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r4"), run({ run_id: "r4", cost: "1" })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r5"), run({ run_id: "r5", used: "sales" })));
+});
+
+test("runs: 에이전트는 자기 회사 기록의 쓴 토큰을 서버에서 더하고, 다른 회사 것은 거부", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "runs/ca/items/r1"), run({ cost: 2 }));
+    await setDoc(doc(c.firestore(), "runs/ca/items/r2"), run({ run_id: "r2", cost: 3 }));
+  });
+  const got = await assertSucceeds(getAggregateFromServer(collection(fsAgentA1(), "runs/ca/items"), { s: sum("cost") }));
+  assert.equal(got.data().s, 5);
+  const fsAgentB1 = env.authenticatedContext("u_agent_b1", { cid: "cb", pcId: "pc1", role: "agent" }).firestore();
+  await assertFails(getAggregateFromServer(collection(fsAgentB1, "runs/ca/items"), { s: sum("cost") }));
+});
+
+test("meta/prices: 로그인한 사람은 읽고 아무도 못 쓴다 (값표는 setup.js 만)", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "meta/prices"), { default: 1, login: 0 });
+  });
+  await assertSucceeds(getDoc(doc(fsAgentA1(), "meta/prices")));
+  await assertSucceeds(getDoc(doc(fsAdminB(), "meta/prices")));
+  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), "meta/prices")));
+  await assertFails(setDoc(doc(fsSuper(), "meta/prices"), { default: 0 }));
+  await assertFails(setDoc(doc(fsAgentA1(), "meta/prices"), { default: 0 }));
+});
+
+test("wallet: 같은 회사와 super 는 읽고 다른 회사는 거부, 아무도 못 쓴다 (넣기는 setup.js 만)", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "wallet/ca"), { granted: 100 });
+    await setDoc(doc(c.firestore(), "wallet/ca/grants/g1"), { amount: 100, at: "2026-10-06T12:00:00", memo: "첫 결제" });
+  });
+  for (const who of [fsAgentA1(), fsAdminA(), fsSuper()]) {
+    await assertSucceeds(getDoc(doc(who, "wallet/ca")));
+    await assertSucceeds(getDoc(doc(who, "wallet/ca/grants/g1")));
+  }
+  await assertFails(getDoc(doc(fsAdminB(), "wallet/ca")));
+  await assertFails(getDoc(doc(fsAdminB(), "wallet/ca/grants/g1")));
+  for (const who of [fsAgentA1(), fsAdminA(), fsSuper()]) {
+    await assertFails(updateDoc(doc(who, "wallet/ca"), { granted: 999 }));
+    await assertFails(setDoc(doc(who, "wallet/ca/grants/g2"), { amount: 999 }));
+  }
 });
 
 test("users: 본인과 super 만 읽고 아무도 못 쓴다", async () => {

@@ -1579,6 +1579,19 @@ def skip(key, note=None):
 
 
 @_safe
+def done_step():
+    """지금 단계를 끝냈다 - 다음 단계 없이 끝나는 마지막 사이트처럼. 실행이 '중단' 으로 끝나도 이 단계는 완료로 남는다
+    (전엔 finish 가 '중단' 으로 덮어 기록 탭에 실패로 보였고 토큰 셈에서도 빠졌다, 2026-10-06)."""
+    with _lock:
+        if not _active():
+            return
+        s = _find_step(_state.get("current"))
+        if s is not None and s["state"] == "running":
+            s.update(state="done", finished_at=now_iso())
+        _touch_locked(immediate=True)
+
+
+@_safe
 def fail_step(note=None):
     """지금 단계가 실패했다 (프로그램은 계속 돈다)."""
     with _lock:

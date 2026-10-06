@@ -235,10 +235,12 @@ check(len(rs) == 20 and rs[0]["date"] == "2026-08-26" and rs[-1]["date"] == "202
 check(rs[-1] == {"date": "2026-09-14", "success": 1, "failed": 1, "crashed": 0}, "하루에 성공·실패·비정상을 센다")
 check(rs[-2]["crashed"] == 1 and rs[-2]["failed"] == 0 and sum(d["success"] for d in rs) == 1, "중단은 실패, 비정상 종료는 따로, 20일 밖은 뺀다")
 
-ff = fb.fs_fields({"a": "x", "b": 3, "c": True, "d": None, "e": 1.5, "f": {"k": [1]}})
+ff = fb.fs_fields({"a": "x", "b": 3, "c": True, "d": None, "e": 1.5, "f": {"k": 2, "m": {"n": "o"}}, "g": [1]})
 check(ff["a"] == {"stringValue": "x"} and ff["b"] == {"integerValue": "3"} and ff["c"] == {"booleanValue": True}
       and ff["d"] == {"nullValue": None} and ff["e"] == {"doubleValue": 1.5}, "Firestore 형 붙이기")
-check(json.loads(ff["f"]["stringValue"]) == {"k": [1]}, "복합 값은 JSON 문자열")
+check(ff["f"] == {"mapValue": {"fields": {"k": {"integerValue": "2"}, "m": {"mapValue": {"fields": {"n": {"stringValue": "o"}}}}}}},
+      "dict 는 Firestore map (서버가 칸마다 더할 수 있게 - 토큰)")
+check(json.loads(ff["g"]["stringValue"]) == [1], "목록은 JSON 문자열")
 
 rec = {"run_id": "r1", "program": "routine", "program_label": "루틴 RPA", "state": "stopped", "reason": "주소",
        "started_at": "2026-09-14T13:39:00", "finished_at": "2026-09-14T13:39:02", "duration_sec": 2,
@@ -289,6 +291,143 @@ with tempfile.TemporaryDirectory() as d:
     n = ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
     check(n == 1 and fcl.docs[-1][1] == "h3", "이어서 쓴 줄을 다음에 올린다")
     check(ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos) == 0, "바뀐 게 없으면 안 올린다")
+
+print("토큰: 실행 기록 한 건이 쓴 것·쓴 토큰 (2026-10-06 사용자 결정 - 완료·대상 없음은 쓰고 실패·건너뜀·중단은 안 쓴다)")
+mods = [{"key": "login", "state": "done"}, {"key": "sales", "state": "done"}, {"key": "hold", "state": "no_target"},
+        {"key": "logistics", "state": "failed"}, {"key": "output", "state": "skipped"}]
+check(ag.usage({"program": "routine", "modules": mods}) == {"login": 1, "sales": 1, "hold": 1},
+      "루틴: 완료·대상 없음인 모듈만 (실패·건너뜀은 안 씀)")
+check(ag.usage({"program": "routine", "modules": [{"key": "sales", "state": "stopped"}, {"key": "hold", "state": "pending"},
+                                                  {"key": "logistics", "state": "off"}]}) == {}, "중단·안 돈 모듈·꺼진 모듈은 안 씀")
+check(ag.usage({"program": "prepare", "steps": [
+    {"key": "PRESET1:replay", "state": "done"}, {"key": "PRESET2:replay", "state": "failed"},
+    {"key": "SITE1:login", "state": "done"}, {"key": "SITE1:download", "state": "done"},
+    {"key": "SITE2:login", "state": "done"}, {"key": "SITE2:download", "state": "skipped"}]}) == {"sites": 2},
+      "프리페어: 단계가 모두 완료인 사이트(프리셋) 하나가 1회")
+check(ag.usage({"program": "observer", "steps": [{"key": "PRESET1:replay", "state": "done"}]}) == {}, "옵저버 미리보기는 안 센다")
+check(ag.usage({"program": "routine", "state": "crashed"}) == {}, "시작하지 못한 실행은 0")
+check(ag.run_cost({"login": 1, "sales": 1, "hold": 1}, ag.PRICES) == 2, "처음 값표: 모두 1, 로그인 0")
+check(ag.run_cost({"sales": 2, "invoice_send": 1}, {"default": 1, "login": 0, "sales": 3}) == 7,
+      "값표의 값 × 횟수, 값표에 없는 새 모듈은 default")
+doc2 = ag.run_doc(dict(rec, modules=mods), "c_demo", "pc_office")
+check(doc2["used"] == {"login": 1, "sales": 1, "hold": 1} and doc2["cost"] == 2, "기록 문서에 쓴 것·쓴 토큰 (값표를 안 주면 처음 값표)")
+check(ag.run_doc(dict(rec, modules=mods), "c_demo", "pc_office", {"default": 5, "login": 0})["cost"] == 10, "준 값표로 센다")
+
+
+class PriceClient:
+    def __init__(self, got):
+        self.got, self.calls = got, 0
+
+    def fs_get(self, path):
+        self.calls += 1
+        if isinstance(self.got, Exception):
+            raise self.got
+        return {"meta/prices": self.got}.get(path)
+
+
+pc = PriceClient({"default": 2, "sales": 3, "hold": -1, "output": "9", "flag": True})
+prices = ag.Prices(pc)
+check(prices.get() == {"default": 2, "login": 0, "sales": 3}, "서버 값표(meta/prices)를 처음 값표 위에 - 0 이상 정수만, 이상한 값은 버림")
+prices.get()
+check(pc.calls == 1, "10분 안에는 다시 읽지 않는다")
+check(ag.Prices(PriceClient(None)).get() == ag.PRICES, "서버에 값표가 없으면 처음 값표")
+check(ag.Prices(PriceClient(fb.HttpError(503, "끊김"))).get() == ag.PRICES, "못 읽으면 처음 값표 (기록 올리기를 막지 않는다)")
+
+with tempfile.TemporaryDirectory() as d:
+    fcl = FsClient()
+    upl = ag.Uploader(fcl, "c_demo", "pc_office", os.path.join(d, "q.jsonl"))
+    hist, pos, asked = os.path.join(d, "history.jsonl"), os.path.join(d, "history_pos.txt"), []
+
+    def table():
+        asked.append(1)
+        return {"default": 1, "login": 0}
+    open(hist, "w", encoding="utf-8").close()
+    ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos, prices=table)
+    check(not asked, "올릴 기록이 없으면 값표를 안 읽는다")
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="t1", modules=mods), ensure_ascii=False) + "\n")
+    ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos, prices=table)
+    sent = fcl.docs[-1][2]
+    check(len(asked) == 1 and sent["cost"] == {"integerValue": "2"} and set(sent["used"]["mapValue"]["fields"]) == {"login", "sales", "hold"},
+          "올릴 때 값표를 읽어 쓴 토큰(정수)·쓴 것(map)을 싣는다")
+
+
+class WalletClient:
+    def __init__(self, wallet, spent):
+        self.wallet, self.spent, self.asked = wallet, spent, []
+
+    def fs_get(self, path):
+        return self.wallet if path == "wallet/c_demo" else None
+
+    def fs_sum(self, parent, collection, field):
+        self.asked.append((parent, collection, field))
+        return self.spent
+
+
+check(ag.balance(WalletClient(None, 3), "c_demo") is None, "통장이 없는 업체는 None - 토큰 제도 밖 (세기만 한다)")
+wc = WalletClient({"granted": 10}, 3)
+check(ag.balance(wc, "c_demo") == 7 and wc.asked == [("runs/c_demo", "items", "cost")],
+      "남은 토큰 = 넣은 합계 - 실행 기록들의 쓴 토큰 합 (Firestore 가 서버에서 더한다)")
+check(ag.balance(WalletClient({"granted": 1}, 4), "c_demo") == -3, "마이너스도 그대로 (1 이상이면 시작해 끝까지 - 사용자 결정)")
+
+print("토큰 2부: 막기 - 0 이하면 실행 거절, 통장 없으면 통과, 확인 못 하면 마지막으로 확인한 값 (2026-10-06 사용자 결정)")
+
+
+class TokenClient(WalletClient):
+    def __init__(self, granted, spent):
+        super().__init__(None if granted is None else {"granted": granted}, spent)
+        self.fail, self.reads = False, 0
+
+    def fs_get(self, path):
+        self.reads += 1
+        if self.fail:
+            raise fb.HttpError(503, "끊김")
+        return {"default": 1, "login": 0} if path == "meta/prices" else super().fs_get(path)
+
+    def fs_sum(self, parent, collection, field):
+        if self.fail:
+            raise fb.HttpError(503, "끊김")
+        return super().fs_sum(parent, collection, field)
+
+
+def plan():
+    return ["login", "sales", "hold"], 2       # 켠 루틴 모듈 키, 켠 사이트·프리셋 수
+
+
+def refused(tk, target="routine"):
+    try:
+        tk.gate(target)
+        return None
+    except RuntimeError as e:
+        return str(e)
+
+
+tc = TokenClient(None, 0)
+tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan)
+check(refused(tk) is None and tk.view() is None, "통장이 없는 업체: 막지 않고 현황에도 안 올린다 (화면은 줄을 숨긴다)")
+tc = TokenClient(5, 2)
+tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan)
+check(refused(tk) is None and tk.view() == {"balance": 3, "cost": {"routine": 2, "prepare": 2, "all": 4}},
+      "남은 3: 실행하고, 현황에 남은 토큰·실행 1번에 드는 토큰 (켠 모듈 × 값표, 로그인 0, 사이트 × 값표, 전체 = 둘의 합)")
+tc.spent = 5
+check(refused(tk) == "토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요", "남은 0: 실행 직전에 다시 확인해 거절 (사람에게 보일 글)")
+tc.spent = 7
+check(refused(tk, "all") == "토큰이 없습니다 (남은 -2개). 충전한 뒤 실행하세요", "마이너스도 거절")
+tc.spent, tc.fail = 2, True
+check(refused(tk) == "토큰이 없습니다 (남은 -2개). 충전한 뒤 실행하세요" and tk.view()["balance"] == -2,
+      "확인을 못 하면 마지막으로 확인한 값으로 판단 (그 값이 0 이하면 막는다)")
+tc.fail = False
+reads = tc.reads
+tk.refresh()
+check(tc.reads == reads, "10분 안에는 다시 확인하지 않는다 (실행 직전·기록을 올린 뒤에는 force)")
+tk.refresh(force=True)
+check(tk.view()["balance"] == 3, "force 면 바로 다시 확인")
+tc2 = TokenClient(5, 0)
+tc2.fail = True
+tk2 = ag.Tokens(tc2, "c_demo", ag.Prices(tc2), plan)
+check(refused(tk2) is None and tk2.view() is None, "한 번도 확인하지 못했으면 막지 않는다 (인터넷 사정으로 업무가 멈추지 않게)")
+check(ag.Tokens(TokenClient(9, 0), "c_demo", ag.Prices(TokenClient(9, 0)), lambda: (["login"], 0)).costs()
+      == {"routine": 0, "prepare": 0, "all": 0}, "켠 것이 로그인뿐이면 0")
 
 
 class FlakyClient:

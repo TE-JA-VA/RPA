@@ -79,6 +79,7 @@ const HTML = `
             ${runBtn("run-routine", ARROW, "루틴 RPA")}
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
+          <div class="msg" id="token-line" hidden></div>
         </div>
         <div class="card" id="mod-card">
           <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
@@ -599,8 +600,9 @@ const RUN_LABELS = { "run-prepare": ["prepare", "프리페어 RPA"], "run-routin
 function paintButtons() {
   const off = !c.isAdmin || busy || !c.pcId;
   const running = rpaRunning();
+  const empty = typeof live?.tokens?.balance === "number" && live.tokens.balance <= 0;   // 에이전트도 거절한다 (2부)
   for (const id of ["run-prepare", "run-routine", "run-all"]) {
-    $(id).disabled = off || running;                     // 다른 사람이 이미 돌리는 중이면 못 누른다
+    $(id).disabled = off || running || empty;            // 다른 사람이 이미 돌리는 중이면 못 누른다
     $(id).title = running && !off ? "RPA 가 돌고 있어 실행할 수 없습니다" : "";
   }
   for (const [id, [key, name]] of Object.entries(RUN_LABELS)) {
@@ -610,7 +612,23 @@ function paintButtons() {
     $(id).classList.toggle("busy", on);
   }
   $("stop-erpia").disabled = off;                        // 종료는 도는 중에도 눌러야 한다
-  paintModuleMeta(); paintShopMeta(); paintScheduleMeta();
+  paintTokens(); paintModuleMeta(); paintShopMeta(); paintScheduleMeta();
+}
+
+// --- 토큰 (2026-10-06, 2부): 실행 단추 아래 늘 보이는 한 줄. 통장이 없는 업체(live.tokens 없음)는 줄이 없다 ------
+// 남은 토큰이 1 이상이면 실행은 된다 (도중에 떨어져도 끝까지) - 이번 실행에 드는 것보다 적으면 노랑, 0 이하면 빨강·잠금
+function paintTokens() {
+  const t = live?.tokens, line = $("token-line");
+  line.hidden = typeof t?.balance !== "number";
+  if (line.hidden) return;
+  const all = t.cost?.all ?? 0;
+  if (t.balance <= 0) {
+    line.textContent = `토큰이 없습니다 (남은 ${t.balance}개) - 충전한 뒤 실행하세요`;
+    line.className = "msg bad";
+  } else {
+    line.textContent = `남은 토큰 ${t.balance}개 · 전체 실행 1번에 ${all}개` + (t.balance < all ? " - 마이너스로 떨어질 수 있습니다" : "");
+    line.className = t.balance < all ? "msg warn" : "msg";
+  }
 }
 
 // --- 실행 모듈 ------------------------------------------------------
@@ -779,8 +797,17 @@ function paintScheduleMeta() {
   if (s.enabled && s.next_run_at) info.push(`다음 ${when(s.next_run_at)}`);
   if (s.last_launch_at) info.push(`마지막 ${when(s.last_launch_at)}${s.last_launch_by === "auto" ? " (자동)" : ""}`);
   if (s.last_error) info.push(`오류: ${s.last_error}`);
+  let cls = s.last_error ? " bad" : "";
+  const t = live?.tokens;                                // 예약 실행은 지켜볼 사람이 없다 - 토큰이 모자라면 여기에도 (2부)
+  if (s.enabled && typeof t?.balance === "number") {
+    if (t.balance <= 0) { info.push("토큰이 없어 예약 실행을 건너뜁니다"); cls = " bad"; }
+    else if (t.balance < (t.cost?.all ?? 0)) {
+      info.push(`다음 예약 실행에 ${t.cost.all}개 · 남은 ${t.balance}개 - 마이너스로 떨어질 수 있습니다`);
+      cls = cls || " warn";
+    }
+  }
   $("sch-info").textContent = info.join(" · ");
-  $("sch-info").className = "msg" + (s.last_error ? " bad" : "");
+  $("sch-info").className = "msg" + cls;
   const ok = !form.sch.enabled || (form.sch.days.length > 0 && form.sch.times.length > 0 && form.sch.times.length <= MAX_TIMES
     && form.sch.times.every((t) => /^\d\d:\d\d$/.test(t)));
   $("sch-apply").disabled = dis || !scheduleDirty() || !ok;

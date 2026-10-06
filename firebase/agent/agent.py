@@ -94,17 +94,135 @@ def recent_summary(rows, today, days=RECENT_DAYS):
     return [{"date": d, **v} for d, v in per.items()]
 
 
-def run_doc(rec, cid, pc_id):
-    """history_record 한 건 → Firestore 문서 (조회용 필드 + payload JSON). 규칙이 cid·pcId 를 claim 과 대조한다."""
+# 토큰 (2026-10-06 사용자 결정): 실행 기록 한 장에 쓴 것(used)·쓴 토큰(cost) 을 적어 올린다. 남은 토큰 = 넣은 합계 - cost 합.
+# 기록은 만들기만 되고(규칙) 이름이 run_id 라 두 번 들어가지 않으니 토큰도 두 번 안 빠진다
+PRICES = {"default": 1, "login": 0}     # 값표 - 서버 meta/prices 가 없거나 못 읽을 때. 값표에 없는 새 모듈은 default
+USED_STATES = ("done", "no_target")     # 토큰을 쓰는 모듈 결과 - 대상 없음도 돌아서 확인했으니 쓴다. 실패·건너뜀·중단은 안 쓴다
+PRICES_EVERY_SEC = 600
+
+
+def usage(rec):
+    """실행 기록 한 건이 쓴 것 {키: 횟수}. 루틴은 완료·대상 없음인 모듈 (로그인도 세고 값표에서 0), 프리페어는 단계가 모두
+    완료인 사이트(프리셋) 수 'sites'. 옵저버 미리보기는 시험이라 안 센다."""
+    import rpa_status as st
+    if rec.get("program") in st.HISTORY_ONLY:
+        return {}
+    used = {}
+    for m in rec.get("modules") or []:
+        if isinstance(m, dict) and m.get("key") and m.get("state") in USED_STATES:
+            used[m["key"]] = used.get(m["key"], 0) + 1
+    if rec.get("program") == "prepare":
+        sites = {}
+        for s in rec.get("steps") or []:
+            if isinstance(s, dict):
+                site = str(s.get("key") or "").split(":")[0]       # 단계 키는 'PRESET1:replay' 꼴 (web_runner.step_key)
+                sites[site] = sites.get(site, True) and s.get("state") == "done"
+        if sum(sites.values()):
+            used["sites"] = sum(sites.values())
+    return used
+
+
+def run_cost(used, prices):
+    """쓴 토큰 = 값표의 값 × 횟수 (값표에 없는 키는 default)."""
+    return sum(int(prices.get(k, prices.get("default", 1))) * n for k, n in used.items())
+
+
+class Prices:
+    """토큰 값표 Firestore meta/prices (우리만 고친다 - setup.js). 10분마다 다시 읽고, 못 읽으면 지난 값 (처음엔 PRICES) -
+    값표를 못 읽어도 기록 올리기는 막지 않는다."""
+
+    def __init__(self, client, every=PRICES_EVERY_SEC):
+        self._client, self._every, self._at, self._value = client, every, None, dict(PRICES)
+
+    def get(self):
+        if self._at is None or time.time() - self._at >= self._every:
+            self._at = time.time()
+            try:
+                got = self._client.fs_get("meta/prices") or {}
+                self._value = {**PRICES, **{k: v for k, v in got.items()
+                                            if isinstance(v, int) and not isinstance(v, bool) and v >= 0}}
+            except fb.AuthError:
+                raise
+            except Exception:
+                pass
+        return self._value
+
+
+def balance(client, cid):
+    """남은 토큰 = 넣은 합계(wallet/{cid}.granted - setup.js 만 쓴다) - 실행 기록들의 쓴 토큰 합 (Firestore 가 서버에서 더한다).
+    통장이 없는 업체는 None - 아직 토큰 제도 밖이라 세기만 하고 막지 않는다. 마이너스도 그대로 (1 이상이면 시작해 끝까지)."""
+    wallet = client.fs_get(f"wallet/{cid}")
+    if wallet is None:
+        return None
+    return int(wallet.get("granted") or 0) - int(client.fs_sum(f"runs/{cid}", "items", "cost"))
+
+
+def local_plan():
+    """이 PC 의 실행 1번 계획: (켠 루틴 모듈 키 목록, 켠 사이트·프리셋 수). 모듈 키는 설정 키의 소문자 - 이력의
+    modules[].key 와 같다 (run_routine.ROUTINE_MODULES: login·Login, sales·Sales …). 사이트는 Stts 0 (web_runner.site_will_run)."""
+    import rpa_status as st
+    mods = [k.lower() for k, on in st.read_routine_modules()[0].items() if on]
+    try:
+        sites = (st.read_user_config() or {}).get(st.SITES_SECTION) or {}
+    except Exception:
+        sites = {}
+    return mods, sum(1 for s in sites.values() if isinstance(s, dict) and str(s.get("Stts")).strip() == "0")
+
+
+class Tokens:
+    """남은 토큰 확인과 실행 막기 (2부). 남은 토큰이 0 이하면 실행을 거절하고, 1 이상이면 끝까지 (마이너스 가능).
+    확인한 값을 기억해 두고 못 확인하면 그 값으로 판단한다 - 한 번도 못 했으면 막지 않는다 (인터넷 사정으로 업무가 멈추지
+    않게, 2026-10-06 사용자 결정). 통장이 없는 업체는 막지 않는다 (토큰 제도 밖)."""
+
+    def __init__(self, client, cid, prices, plan=local_plan, every=PRICES_EVERY_SEC):
+        self._client, self._cid, self._prices, self._plan, self._every = client, cid, prices, plan, every
+        self._at, self.balance = None, None       # balance None = 통장 없음 또는 아직 모름
+
+    def refresh(self, force=False):
+        """10분마다 (우리가 넣은 것), force 면 바로 (실행 직전·기록을 올린 뒤)."""
+        if force or self._at is None or time.time() - self._at >= self._every:
+            self._at = time.time()
+            try:
+                self.balance = balance(self._client, self._cid)
+            except fb.AuthError:
+                raise
+            except Exception:
+                pass                              # 마지막으로 확인한 값 그대로
+        return self.balance
+
+    def costs(self):
+        """실행 1번에 드는 토큰 = 켠 모듈·사이트 × 값표 (실패한 것은 안 빠지니 많아야 이만큼)."""
+        mods, sites = self._plan()
+        table = self._prices.get()
+        routine = run_cost({m: 1 for m in mods}, table)
+        prepare = run_cost({"sites": sites}, table) if sites else 0
+        return {"routine": routine, "prepare": prepare, "all": routine + prepare}
+
+    def gate(self, target):
+        """rpa_dashboard.launch 가 띄우기 직전에 부른다 (dash.TOKEN_GATE). 남은 토큰이 0 이하면 RuntimeError - 실행 명령의
+        결과 글과 예약 칸의 까닭이 된다."""
+        left = self.refresh(force=True)
+        if left is not None and left <= 0:
+            raise RuntimeError(f"토큰이 없습니다 (남은 {left}개). 충전한 뒤 실행하세요")
+
+    def view(self):
+        """현황 live.tokens - {balance, cost: {routine, prepare, all}}. 통장이 없거나 아직 모르면 None (화면은 줄을 숨긴다)."""
+        return None if self.balance is None else {"balance": self.balance, "cost": self.costs()}
+
+
+def run_doc(rec, cid, pc_id, prices=None):
+    """history_record 한 건 → Firestore 문서 (조회용 필드 + 쓴 것·쓴 토큰 + payload JSON). 규칙이 cid·pcId 를 claim 과 대조한다."""
     rec = dict(rec)
     rec["log"] = (rec.get("log") or rec.get("log_tail") or [])[-LOG_LINES:]
     rec.pop("log_tail", None)
+    used = usage(rec)
     doc = {
         "cid": cid, "pcId": pc_id,
         "run_id": rec.get("run_id"), "program": rec.get("program"), "program_label": rec.get("program_label"),
         "state": rec.get("state"), "reason": rec.get("reason"),
         "started_at": rec.get("started_at"), "finished_at": rec.get("finished_at"),
         "duration_sec": rec.get("duration_sec"), "date": (rec.get("started_at") or "")[:10],
+        "used": used, "cost": run_cost(used, prices or PRICES),
         "payload": json.dumps(rec, ensure_ascii=False, default=str),
     }
     return doc
@@ -122,10 +240,11 @@ def trim_logs(snapshot, lines=LOG_LINES):
 HISTORY_POS_PATH = os.path.join(os.path.dirname(QUEUE_PATH), "history_pos.txt")
 
 
-def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH):
+def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH, prices=None):
     """history.jsonl 에서 아직 안 올린 줄을 Firestore 로. 읽은 바이트 위치를 파일에 남긴다.
 
     파일이 줄었으면(회전) 처음부터 다시 본다 - 같은 run_id 는 Firestore 가 409 로 거절하니 겹쳐도 안전하다.
+    prices 는 값표를 돌려주는 함수 (Prices.get) - 올릴 줄이 있을 때만 부른다.
     """
     try:
         size = os.path.getsize(hist_path)
@@ -140,7 +259,7 @@ def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH):
         pos = 0
     if pos == size:
         return 0
-    sent = 0
+    sent, table = 0, None
     with open(hist_path, "rb") as f:
         f.seek(pos)
         chunk = f.read()
@@ -155,7 +274,9 @@ def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH):
         except ValueError:
             continue
         if isinstance(rec, dict) and rec.get("run_id"):
-            up.push_run(run_doc(rec, cfg["cid"], cfg["pc_id"]))
+            if table is None:
+                table = prices() if prices else PRICES
+            up.push_run(run_doc(rec, cfg["cid"], cfg["pc_id"], table))
             sent += 1
     new_pos = size - len(tail)
     try:
@@ -571,6 +692,9 @@ def run(cfg):
     except Exception as e:
         log(f"첫 로그인을 못 했습니다 ({type(e).__name__}). 설정 값으로 시작하고 이어서 시도합니다")
     up = Uploader(client, cfg["cid"], cfg["pc_id"])
+    prices = Prices(client)            # 토큰 값표 - 기록을 올릴 때 쓴 토큰을 센다
+    tokens = Tokens(client, cfg["cid"], prices)
+    dash.TOKEN_GATE = tokens.gate      # 실행 단추·예약이 띄우기 직전에 남은 토큰을 본다 (0 이하면 거절)
     cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"])))
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
     # 사용자 설정 한 파일로 옮기기 (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json → RPA_UserConfig.json,
@@ -642,9 +766,11 @@ def run(cfg):
                 snap["launching"] = bool(dash.launch_state())
                 snap["version"] = install      # 켤 때 한 번 잰 판 (바뀌지 않으니 비교 body 에는 안 넣는다)
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
-                upload_new_history(hist_path, up, cfg)
+                sent = upload_new_history(hist_path, up, cfg, prices=prices.get)
+                tokens.refresh(force=bool(sent))           # 방금 올린 기록만큼 줄었다 - 아니면 10분마다 (우리가 넣은 것)
+                snap["tokens"] = tokens.view()
                 body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("schedule"), snap.get("recent"),
-                                   snap.get("launching")], ensure_ascii=False, default=str)
+                                   snap.get("launching"), snap.get("tokens")], ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)
                     last = body

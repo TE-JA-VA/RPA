@@ -1158,6 +1158,8 @@ def run_site(browser, name, site, use_session=True, keep_open=False):
         if wait_after:
             log(f"  [{name}] 확인용으로 {wait_after}초 열어둡니다.")
             time.sleep(wait_after)
+        if ok:
+            status.done_step()           # 이 사이트를 끝냈다 - 마지막 사이트여도 실행 끝의 '중단' 에 안 덮인다 (토큰 셈)
     except PWTimeout as e:
         log(f"  [{name}] 시간 초과: {str(e).splitlines()[0]}")
         status.fail_step(f"시간 초과: {str(e).splitlines()[0]}")

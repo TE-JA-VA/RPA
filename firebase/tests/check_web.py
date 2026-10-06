@@ -574,6 +574,32 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=10000)
     check(True, "띄우기가 끝나면 풀린다")
 
+    # 토큰 (2026-10-06, 2부): 실행 단추 아래 늘 보이는 한 줄 - 통장이 없으면 없음, 평소 회색, 모자라면 노랑, 0 이하면 빨강 + 단추 잠금.
+    # 예약 칸에도 (지켜볼 사람이 없는 실행이라)
+    check(page.is_hidden("#token-line"), "통장이 없는 업체는 토큰 줄이 없다")
+    cost = {"all": 6, "prepare": 2, "routine": 4}
+    db_patch(LIVE, {"tokens": {"balance": 120, "cost": cost}})
+    page.wait_for_function("document.getElementById('token-line')?.hidden === false", timeout=10000)
+    check(page.text_content("#token-line") == "남은 토큰 120개 · 전체 실행 1번에 6개"
+          and page.get_attribute("#token-line", "class") == "msg", f"평소: 회색 한 줄 ({page.text_content('#token-line')})")
+    db_patch(LIVE, {"tokens": {"balance": 3, "cost": cost}})
+    page.wait_for_function("document.getElementById('token-line')?.classList.contains('warn')", timeout=10000)
+    check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개 - 마이너스로 떨어질 수 있습니다"
+          and not page.is_disabled("#run-all"), f"모자라면 노란 글, 실행은 된다 ({page.text_content('#token-line')})")
+    check("다음 예약 실행에 6개 · 남은 3개 - 마이너스로 떨어질 수 있습니다" in page.text_content("#sch-info")
+          and "warn" in page.get_attribute("#sch-info", "class"), f"예약 칸에도 노란 글 ({page.text_content('#sch-info')})")
+    db_patch(LIVE, {"tokens": {"balance": 0, "cost": cost}})
+    page.wait_for_function("document.getElementById('run-all')?.disabled === true", timeout=10000)
+    check(page.text_content("#token-line") == "토큰이 없습니다 (남은 0개) - 충전한 뒤 실행하세요"
+          and "bad" in page.get_attribute("#token-line", "class")
+          and all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")) and not page.is_disabled("#stop-erpia"),
+          "0 이하면 빨간 글, 실행 단추 셋 잠김 (ERPia 종료는 그대로)")
+    check("토큰이 없어 예약 실행을 건너뜁니다" in page.text_content("#sch-info") and "bad" in page.get_attribute("#sch-info", "class"),
+          f"예약 칸: 건너뛴다고 빨간 글 ({page.text_content('#sch-info')})")
+    db_patch(LIVE, {"tokens": None})                   # PATCH 의 null 이 그 칸을 지운다 (call 은 None 이면 본문 없이 보낸다)
+    page.wait_for_function("document.getElementById('token-line')?.hidden === true", timeout=10000)
+    check(not page.is_disabled("#run-all") and "토큰" not in page.text_content("#sch-info"), "통장이 사라지면 (옛 에이전트) 줄도 잠금도 없다")
+
     print("5-2절 쇼핑몰 프리셋")
     SHOPS = [{"no": 1, "name": "지마켓", "code": "012", "steps": 12, "saved_at": "2026-09-30T18:20:00", "has_login": True, "on": False},
              {"no": 2, "name": "<b>몰</b>", "code": "", "steps": 0, "has_login": False, "on": False}]

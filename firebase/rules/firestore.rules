@@ -7,15 +7,39 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function sameCompany(cid) { return signedIn() && (claims().cid == cid || claims().role == 'super'); }
 
-    // 실행 이력. 에이전트가 만들고 아무도 고치지 않는다.
+    // 토큰 (2026-10-06): 기록 한 장의 쓴 것(used, 모듈별 횟수)·쓴 토큰(cost). 없으면 옛 에이전트라 그대로 받는다
+    function validUsage(d) {
+      return (!('cost' in d) || (d.cost is int && d.cost >= 0))
+          && (!('used' in d) || d.used is map);
+    }
+
+    // 실행 이력. 에이전트가 만들고 아무도 고치지 않는다 - 그래서 한 번 적힌 쓴 토큰은 바뀌지 않는다.
     match /runs/{cid}/items/{runId} {
       allow read: if sameCompany(cid);
       allow create: if signedIn()
                     && claims().role == 'agent'
                     && claims().cid == cid
                     && request.resource.data.pcId == claims().pcId
-                    && request.resource.data.cid == cid;
+                    && request.resource.data.cid == cid
+                    && validUsage(request.resource.data);
       allow update, delete: if false;
+    }
+
+    // 토큰 값표 { default, login, … } - 에이전트가 기록의 쓴 토큰을 셀 때 읽는다. 쓰기는 setup.js(Admin SDK)만
+    match /meta/prices {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // 토큰 통장 { granted } 와 넣은 내역 grants/{id}. 남은 토큰 = granted - 그 회사 runs 의 cost 합.
+    // 쓰기는 setup.js(Admin SDK)만 - 에이전트·관리자·super 화면 어느 쪽도 늘리거나 고치지 못한다
+    match /wallet/{cid} {
+      allow read: if sameCompany(cid);
+      allow write: if false;
+      match /grants/{gid} {
+        allow read: if sameCompany(cid);
+        allow write: if false;
+      }
     }
 
     // 사용자 표시용. 권한 근거는 custom claim 이고 이 문서가 아니다.

@@ -159,6 +159,40 @@ d.LAUNCHED[:] = saved
 d._active["until"] = 0
 d._active["proc"] = None
 
+print("\n=== 6-3. 토큰이 없으면 (2026-10-06 - 에이전트가 TOKEN_GATE 를 단다) ===")
+saved, asked = list(d.LAUNCHED), []
+NO_TOKENS = "토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요"
+
+
+def no_tokens(target):
+    asked.append(target)
+    raise RuntimeError(NO_TOKENS)
+
+
+d.TOKEN_GATE = no_tokens
+try:
+    try:
+        d.launch("routine", "cloud")
+        check(False, "토큰이 없는데 실행 단추가 띄움")
+    except RuntimeError as e:
+        check(str(e) == NO_TOKENS and d.LAUNCHED == saved and asked == ["routine"], f"실행 단추는 까닭과 함께 거절: {e}")
+    set_next(-3)
+    sched.tick_safe()
+    sch = st.read_settings()["schedule"]
+    check(d.LAUNCHED == saved and asked[-1] == "all" and sch["last_error"] == NO_TOKENS
+          and st.parse_iso(sch["next_run_at"]) > dt.datetime.now(),
+          f"예약은 건너뛰고 까닭을 그대로 남긴 뒤 다음 예약으로 ({sch['last_error']})")
+    d.TOKEN_GATE = lambda target: None
+    set_next(-3)
+    sched.tick_safe()
+    check(d.LAUNCHED == saved + ["all:auto"] and st.read_settings()["schedule"]["last_error"] is None,
+          "토큰이 있으면 예약이 돌고 남은 까닭은 지워진다")
+finally:
+    d.TOKEN_GATE = None
+d.LAUNCHED[:] = saved
+d._active["until"] = 0
+d._active["proc"] = None
+
 print("\n=== 7. 대시보드를 다시 켰을 때 (resync) ===")
 set_next(-3600)
 s2 = d.Scheduler(); s2.resync()

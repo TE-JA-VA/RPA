@@ -365,6 +365,9 @@ TARGETS = {
     "routine": ("루틴 RPA", "ERPia_RPA.exe", ()),
 }
 _active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
+# 토큰 확인 (2026-10-06): 에이전트가 agent.Tokens.gate 를 단다 - 띄우기 직전에 target 으로 부르고, 남은 토큰이 없으면
+# RuntimeError(사람에게 보일 글). 에이전트 없이 도는 옛 8765 대시보드·시험은 None (막지 않는다)
+TOKEN_GATE = None
 _check_lock = threading.Lock()   # 에이전트 순환과 명령 처리가 같이 launch_state 를 불러도 한 번만 남긴다
 
 
@@ -451,6 +454,8 @@ def launch(target, by):
             raise RuntimeError(f"{TARGETS[ls['target']][0]} 이(가) 아직 진행 중입니다 ({ls['sec']}초째)")
         if st.observer_open():
             raise RuntimeError("옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 실행하세요")
+        if TOKEN_GATE is not None:
+            TOKEN_GATE(target)             # 실행 단추·예약 모두 여기를 지난다
         proc = None
         if DRY_RUN:
             LAUNCHED.append(f"{target}:{by}")
@@ -598,10 +603,15 @@ class Scheduler(threading.Thread):
 
     def run(self):
         while not self.stop.wait(SCHEDULER_TICK):
-            try:
-                self.tick()
-            except Exception as e:
-                self._record_error(f"{type(e).__name__}: {e}")
+            self.tick_safe()
+
+    def tick_safe(self):
+        try:
+            self.tick()
+        except RuntimeError as e:          # launch 의 거절 (토큰이 없음 등) - 사람에게 보일 글 그대로
+            self._record_error(str(e))
+        except Exception as e:
+            self._record_error(f"{type(e).__name__}: {e}")
 
     def _record_error(self, text):
         with _settings_lock:

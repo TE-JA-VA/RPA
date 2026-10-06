@@ -31,7 +31,8 @@ def _token_host():
 
 
 def fs_fields(data):
-    """dict → Firestore REST 의 형 붙은 fields. 값은 문자열·불·정수·실수·None 만 (나머지는 JSON 문자열로)."""
+    """dict → Firestore REST 의 형 붙은 fields. 값은 문자열·불·정수·실수·None·dict(map) 만 (나머지는 JSON 문자열로).
+    dict 를 map 으로 두는 것은 서버가 칸마다 더할 수 있게 (실행 기록의 쓴 것 used - 토큰, 2026-10-06)."""
     out = {}
     for k, v in data.items():
         if v is None:
@@ -44,9 +45,26 @@ def fs_fields(data):
             out[k] = {"doubleValue": v}
         elif isinstance(v, str):
             out[k] = {"stringValue": v}
+        elif isinstance(v, dict):
+            out[k] = {"mapValue": {"fields": fs_fields(v)}}
         else:
             out[k] = {"stringValue": json.dumps(v, ensure_ascii=False, default=str)}
     return out
+
+
+def fs_value(v):
+    """Firestore REST 의 형 붙은 값 하나 → 파이썬 값 (fs_fields 의 거꾸로). 모르는 형은 None."""
+    if "integerValue" in v:
+        return int(v["integerValue"])
+    if "doubleValue" in v:
+        return float(v["doubleValue"])
+    if "stringValue" in v:
+        return v["stringValue"]
+    if "booleanValue" in v:
+        return v["booleanValue"]
+    if "mapValue" in v:
+        return {k: fs_value(x) for k, x in (v["mapValue"].get("fields") or {}).items()}
+    return None
 
 
 class HttpError(Exception):
@@ -215,6 +233,35 @@ class Client:
                 return self.fs_create(path, fields, doc_id, retried=True)
             raise HttpError(e.code, e.read().decode("utf-8", "replace")) from None
         return True
+
+    def _fs_call(self, method, url, body=None, retried=False):
+        """Firestore REST 한 번 (401 이면 토큰을 새로 받아 한 번 더). 없는 문서(404)는 None."""
+        data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method=method, headers={
+            "Content-Type": "application/json", "Authorization": f"Bearer {self.token()}"})
+        try:
+            return json.loads(self._open(req, timeout=30).read().decode("utf-8") or "null")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            if e.code == 401 and not retried:
+                self.renew()
+                return self._fs_call(method, url, body, retried=True)
+            raise HttpError(e.code, e.read().decode("utf-8", "replace")) from None
+
+    def fs_get(self, path):
+        """문서 하나의 값 dict (없으면 None)."""
+        doc = self._fs_call("GET", f"{self._fs_base()}/{path.strip('/')}")
+        return None if doc is None else {k: fs_value(v) for k, v in (doc.get("fields") or {}).items()}
+
+    def fs_sum(self, parent, collection, field):
+        """parent 아래 collection 문서들의 field 합 - 서버가 더한다 (문서를 내려받지 않는다, 1000건에 읽기 1번).
+        그 칸이 없는 문서(토큰 전 옛 기록)는 빠진다."""
+        r = self._fs_call("POST", f"{self._fs_base()}/{parent.strip('/')}:runAggregationQuery", {
+            "structuredAggregationQuery": {
+                "structuredQuery": {"from": [{"collectionId": collection}]},
+                "aggregations": [{"alias": "s", "sum": {"field": {"fieldPath": field}}}]}})
+        return fs_value(((r or [{}])[0].get("result") or {}).get("aggregateFields", {}).get("s", {})) or 0
 
     # --- 구독 ---------------------------------------------------------
     def stream(self, path, params=None, timeout=90):
