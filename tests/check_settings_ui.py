@@ -251,12 +251,12 @@ check("자동으로 돌아오면 다시 보인다", printer_view() == ("readonly
 
 print("=== 5-2. 에이전트가 멈춘 까닭 ===")
 with open(paths["stop_file"], "w", encoding="utf-8") as f:
-    f.write('{"code": 3, "reason": "로그인이 막혔습니다 (기계 계정 비밀번호가 바뀌었거나 계정이 막힘)", "at": "2026-09-29 15:00:00"}')
+    f.write('{"code": 3, "reason": "로그인이 막혔습니다 (에이전트 계정 비밀번호가 바뀌었거나 계정이 사용중지됨)", "at": "2026-09-29 15:00:00"}')
 win.reload()
 root.update()
 check("멈춘 까닭을 상태 줄에 노란 글씨로", "멈춤" in win.status.get() and "로그인이 막혔습니다" in win.status.get()
       and str(win.status_label.cget("foreground")) == rs.AMBER, win.status.get())
-check("로그인 거부로 멈췄으면 기계 계정 비밀번호 칸 안에 주황 '새 비밀번호 입력'", shown("agent_pw") == rs.PW_HINTS["refused"]
+check("로그인 거부로 멈췄으면 에이전트 계정 비밀번호 칸 안에 주황 '새 비밀번호 입력'", shown("agent_pw") == rs.PW_HINTS["refused"]
       and str(win.hints["agent_pw"][0].cget("fg")) == rs.AMBER, shown("agent_pw"))
 check(f"긴 까닭은 줄을 바꿔 창 폭을 늘리지 않는다 ({root.winfo_width()} ≤ 520 - 2026-09-29 샌드박스에서 1070 까지 늘었다)",
       root.winfo_width() <= 520)

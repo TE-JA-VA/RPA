@@ -86,10 +86,9 @@
       <div class="lbl">2. PC</div>
       <div id="s-pcs"></div>
       <button id="s-add-pc">+ 추가</button>
-      <div class="lbl">3. 관리자 계정 (대시보드에 로그인할 사람)</div>
-      <div class="row"><input id="s-admin-id" placeholder="아이디 (예: admin)" size="18"><input id="s-admin-name" placeholder="이름" size="18"></div>
-      <div id="s-viewers"></div>
-      <button id="s-add-viewer">유저 추가</button>
+      <div class="lbl">3. 대시보드 계정 (줄마다 역할 - 관리자 1명 이상, 유저는 보기만)</div>
+      <div id="s-users"></div>
+      <button id="s-add-user">+ 추가</button>
       <div class="lbl">4. 물류대기 관리 메뉴 사용 여부</div>
       <div class="row">
         <label class="inline"><input type="radio" name="hold" value="yes">예</label>
@@ -290,20 +289,21 @@ function dangerSection(d) {
 // --- ② 신규 업체 -----------------------------------------------------------------
 const pcRow = () => el("div", { class: "row pc" }, el("input", { class: "pc-id", placeholder: "PC코드 (예: office)", size: 18 }),
   el("input", { class: "pc-label", placeholder: "PC 이름 (예: 사무실 PC)", size: 22 }));
-const viewerRow = () => el("div", { class: "row viewer" }, el("input", { class: "v-id", placeholder: "유저 아이디", size: 18 }),
-  el("input", { class: "v-name", placeholder: "이름", size: 18 }));
+const userRow = (role) => el("div", { class: "row acct" },
+  el("select", { class: "u-role" }, el("option", { value: "admin", selected: role === "admin" }, "관리자"), el("option", { value: "viewer", selected: role === "viewer" }, "유저")),
+  el("input", { class: "u-id", placeholder: role === "admin" ? "아이디 (예: admin)" : "아이디", size: 18 }), el("input", { class: "u-name", placeholder: "이름", size: 18 }));
 $("s-pcs").append(pcRow());
 $("s-add-pc").onclick = () => $("s-pcs").append(pcRow());
-$("s-add-viewer").onclick = () => $("s-viewers").append(viewerRow());
+$("s-users").append(userRow("admin"));
+$("s-add-user").onclick = () => $("s-users").append(userRow("viewer"));
 $("s-make").onclick = () => act($("s-make"), async () => {
   const hold = document.querySelector("input[name=hold]:checked"), tok = document.querySelector("input[name=tok]:checked");
   const plan = {
     cid: $("s-cid").value.trim(), name: $("s-name").value.trim(),
     pcs: [...document.querySelectorAll("#s-pcs .pc")].map((r) => ({ pcId: r.querySelector(".pc-id").value.trim(), label: r.querySelector(".pc-label").value.trim() }))
       .filter((p) => p.pcId || p.label),
-    users: [{ id: $("s-admin-id").value.trim(), name: $("s-admin-name").value.trim(), role: "admin" },
-      ...[...document.querySelectorAll("#s-viewers .viewer")].map((r) => ({ id: r.querySelector(".v-id").value.trim(), name: r.querySelector(".v-name").value.trim(), role: "viewer" }))
-        .filter((u) => u.id)],
+    users: [...document.querySelectorAll("#s-users .acct")].map((r) => ({ id: r.querySelector(".u-id").value.trim(), name: r.querySelector(".u-name").value.trim(),
+      role: r.querySelector(".u-role").value })).filter((u) => u.id),    // 관리자가 없으면 서버가 '관리자 계정을 한 명 이상' 으로 거절한다
     hold: hold ? hold.value === "yes" : null,         // 안 고르면 서버가 '물류대기 관리 메뉴 사용 여부를 골라 주세요' 로 거절한다
     tokens: tok?.value === "now" ? { amount: $("s-tok-amount").value.trim(), memo: $("s-tok-memo").value.trim() } : null,
   };

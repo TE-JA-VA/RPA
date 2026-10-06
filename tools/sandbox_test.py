@@ -6,7 +6,7 @@ r"""설치 파일을 윈도우 샌드박스에서 시험한다 (설계 9절). �
 -FeatureName Containers-DisposableClientVM -All, 재부팅). 샌드박스 안에서 tools\sandbox_inner.ps1 이 조용한 설치 →
 확인 → 가짜 설정으로 에이전트 → 다시 설치 → 설정 창 사진 → 조용한 제거를 하고 결과를 적은 뒤 샌드박스를 끈다.
 결과는 임시 폴더의 out\results.txt·settings.png·setup*.log·agent_log1.txt. 샌드박스 안의 인터넷을 쓴다
-(에이전트가 가짜 기계 계정으로 로그인을 한 번 시도해 거부당한다).
+(에이전트가 가짜 에이전트 계정으로 로그인을 한 번 시도해 거부당한다).
 """
 import os
 import shutil

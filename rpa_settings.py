@@ -5,7 +5,7 @@ r"""RPA 설정 창 (배포판 구조 2부 4절 - docs/superpowers/specs/2026-09-
 
     {설치 폴더}\python\pythonw.exe {설치 폴더}\rpa_settings.py [--after-install [--no-window] | --stop | --remove-task | --check-rpa]
 
-창: 기계 계정(업체코드·PC코드·비밀번호), ERPia 로그인·설치 위치, 물류 처리 옵션(출력 방식·택배사·박스·운임·프린터)을
+창: 에이전트 계정(업체코드·PC코드·비밀번호), ERPia 로그인·설치 위치, 물류 처리 옵션(출력 방식·택배사·박스·운임·프린터)을
 받아 저장하고 (메일은 다른 프로그램이 맡는다 - 2026-09-30), 윈도우 로그인 때
 에이전트를 창 없이 켜는 작업(AFTER MARKET\RPA Agent)을 등록하고 에이전트를 켠다. 옛 배포 폴더에서 설정을 가져온다.
 창 없는 모드는 설치 파일(release/installer.iss)이 부른다. 종료 코드: 0 됨, 5 RPA 가 돌고 있음, 6 에이전트가 안 멈춤.
@@ -291,7 +291,7 @@ def _section(data, name):
 
 def load_state(paths):
     """창에 채울 값과 비밀번호 칸 상태 (form, state). form 의 비밀번호 칸은 늘 비어 있다.
-    state: agent_pw·erp_pw 는 'none'|'ok'|'bad'(기계 계정은 'refused' 도), saved 는 저장된 (cid, pc_id)."""
+    state: agent_pw·erp_pw 는 'none'|'ok'|'bad'(에이전트 계정은 'refused' 도), saved 는 저장된 (cid, pc_id)."""
     import secret
     raw = read_agent_raw(paths["agent_config"])
     path = paths["user_config"] if os.path.isfile(paths["user_config"]) else paths["template"]
@@ -327,7 +327,7 @@ def read_stop(path):
 
 
 def needs_agent_login(form, state):
-    """기계 계정 로그인을 다시 해야 하나: 비밀번호를 넣었거나, 코드가 바뀌었거나, 저장된 비밀번호가 없거나 안 풀린다."""
+    """에이전트 계정 로그인을 다시 해야 하나: 비밀번호를 넣었거나, 코드가 바뀌었거나, 저장된 비밀번호가 없거나 안 풀린다."""
     return (bool(form["agent_pw"]) or state["agent_pw"] != "ok"
             or (form["cid"], form["pc_id"]) != tuple(state["saved"]))
 
@@ -343,7 +343,7 @@ def validate(form, state):
     if needs_agent_login(form, state) and not form["agent_pw"]:
         why = {"none": "처음 설정이라", "bad": "저장된 비밀번호를 이 PC 에서 풀 수 없어",
                "refused": "에이전트가 로그인을 거부당해 멈춰서"}.get(state["agent_pw"], "업체코드나 PC코드를 바꿔서")
-        out.append(f"{why} 기계 계정 비밀번호를 넣어야 합니다")
+        out.append(f"{why} 에이전트 계정 비밀번호를 넣어야 합니다")
     if not form["admin_code"]:
         out.append("ERPia 업체코드를 넣으세요")
     if not form["erp_id"]:
@@ -374,7 +374,7 @@ def merge_user_config(base, form):
 
 
 def agent_login(path, cid, pc_id, password):
-    """기계 계정으로 실제 로그인해 보고 agent_config.json 을 쓴다 (agent.first_run). 안 되면 ValueError(사람 문장)."""
+    """에이전트 계정으로 실제 로그인해 보고 agent_config.json 을 쓴다 (agent.first_run). 안 되면 ValueError(사람 문장)."""
     import urllib.request
     import agent
     import fb
@@ -384,14 +384,14 @@ def agent_login(path, cid, pc_id, password):
     try:
         agent.first_run(path, cid, pc_id, password)
     except fb.AuthError as e:
-        raise ValueError(f"기계 계정 로그인이 안 됩니다: {agent.auth_message(e.code)}") from None
+        raise ValueError(f"에이전트 계정 로그인이 안 됩니다: {agent.auth_message(e.code)}") from None
     except ValueError as e:
-        raise ValueError(f"기계 계정 로그인이 안 됩니다: {e}") from None
+        raise ValueError(f"에이전트 계정 로그인이 안 됩니다: {e}") from None
     except OSError as e:
         if isinstance(getattr(e, "reason", e), ssl.SSLCertVerificationError):
             raise ValueError("Firebase 의 보안 인증서를 확인하지 못했습니다. 인터넷 연결과 이 PC 의 날짜·시간이 맞는지 보고 "
                              "다시 저장하세요 (CERTIFICATE_VERIFY_FAILED)") from None
-        raise ValueError(f"인터넷에 연결하지 못해 기계 계정을 확인하지 못했습니다 ({type(e).__name__}). "
+        raise ValueError(f"인터넷에 연결하지 못해 에이전트 계정을 확인하지 못했습니다 ({type(e).__name__}). "
                          "연결을 확인하고 다시 저장하세요") from None
 
 
@@ -417,7 +417,7 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None)
     if relogin:
         warm_roots()
         login(paths["agent_config"], form["cid"], form["pc_id"], form["agent_pw"])
-        done.append("기계 계정 로그인을 확인했습니다.")
+        done.append("에이전트 계정 로그인을 확인했습니다.")
     merged = merge_user_config(st.read_user_config(base_path), form)
     st.write_user_config(merged, paths["user_config"])
     done.append("설정을 저장했습니다.")
@@ -436,7 +436,7 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None)
 
 
 def configured(paths):
-    """두 설정 파일이 다 있고 읽히나 - 기계 계정 비밀번호까지 풀려야 한다 (판을 올린 설치면 참)."""
+    """두 설정 파일이 다 있고 읽히나 - 에이전트 계정 비밀번호까지 풀려야 한다 (판을 올린 설치면 참)."""
     import secret
     if not os.path.isfile(paths["user_config"]):
         return False
@@ -520,7 +520,7 @@ ROWS = (
     ("대시보드 연결", (
         ("cid", "업체코드", "", "text"),
         ("pc_id", "PC코드", "", "text"),
-        ("agent_pw", "기계 계정 비밀번호", "", "password"),
+        ("agent_pw", "에이전트 계정 비밀번호", "", "password"),
     )),
     ("ERPia 로그인", (
         ("admin_code", "업체코드", "", "text"),      # 대시보드 업체코드와 같은 개념이라 같은 이름 (2026-09-30 사용자)
@@ -637,7 +637,7 @@ class SettingsWindow:
                                                                         pady=(0, 2))
                 first = 1
             for i, (key, label, hint, kind) in enumerate(fields, start=first):
-                ttk.Label(box, text=label, width=18).grid(row=i, column=0, sticky="w", pady=2)   # '기계 계정 비밀번호' 가 들어가게
+                ttk.Label(box, text=label, width=21).grid(row=i, column=0, sticky="w", pady=2)   # '에이전트 계정 비밀번호' 가 들어가게 (18 이면 잘린다)
                 if kind in ("printer", "choice"):
                     w = ttk.Combobox(box, textvariable=self.vars[key], width=31, state="readonly",
                                      values=list(PRINT_MODES) if kind == "choice" else ())
@@ -752,7 +752,7 @@ class SettingsWindow:
         for b in (self.save_btn, self.close_btn, self.import_btn):
             b.state(["disabled"] if on else ["!disabled"])
         if on:
-            self.say("확인하는 중입니다… (기계 계정 로그인·자동 시작 등록)", GRAY)
+            self.say("확인하는 중입니다… (에이전트 계정 로그인·자동 시작 등록)", GRAY)
 
     def form(self):
         out = {k: self.vars[k].get() for k in FORM_KEYS}
@@ -866,7 +866,7 @@ class SettingsWindow:
             return
         self.imported_from = folder
         self.reload()
-        bad = [label for key, label in (("agent_pw", "기계 계정"), ("erp_pw", "ERPia")) if self.state[key] == "bad"]
+        bad = [label for key, label in (("agent_pw", "에이전트 계정"), ("erp_pw", "ERPia")) if self.state[key] == "bad"]
         self.say(f"가져왔습니다 ({', '.join(names)}). "
                  + (f"다른 PC·계정에서 잠근 비밀번호라 다시 넣어야 합니다: {', '.join(bad)}. " if bad else "")
                  + "확인한 뒤 [저장] 을 누르세요.", GREEN)

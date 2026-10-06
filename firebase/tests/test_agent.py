@@ -680,13 +680,14 @@ class TokenClient:
 check(fb.claims(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"}))["pcId"] == "pc_y", "토큰에서 클레임을 읽는다")
 
 # 이메일 조립 규칙 - setup.js·app.js 와 같은 예시
-check(ag.email_for("c_demo", "pc_office") == "agent-pc-office@c-demo.rpa-test-f02e0.firebaseapp.com", "기계 계정 이메일 (지금 실제 계정과 같다)")
+check(ag.email_for("c_demo", "pc_office") == "agent-pc-office@c-demo.rpa-test-f02e0.firebaseapp.com", "에이전트 계정 이메일 (지금 실제 계정과 같다)")
 check(ag.email_for("", "pc_x") == "agent-pc-x@rpa-test-f02e0.firebaseapp.com", "회사가 없으면 프로젝트 도메인")
 check(ag.email_for("c_a_b", "pc_1_2") == "agent-pc-1-2@c-a-b.rpa-test-f02e0.firebaseapp.com", "밑줄은 전부 하이픈으로")
 
 check(ag.auth_message("INVALID_LOGIN_CREDENTIALS") == ag.auth_message("EMAIL_NOT_FOUND") == ag.auth_message("INVALID_PASSWORD")
       and "비밀번호가 맞지" in ag.auth_message("INVALID_PASSWORD"), "자격증명 거부 셋은 한 문구")
-check("막혀" in ag.auth_message("USER_DISABLED") and "10분" in ag.auth_message("TOO_MANY_ATTEMPTS_TRY_LATER"), "정지·과다 시도 문구")
+check(ag.auth_message("USER_DISABLED") == "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 물어보세요"
+      and "10분" in ag.auth_message("TOO_MANY_ATTEMPTS_TRY_LATER"), "사용중지·과다 시도 문구 (2026-10-06 이름: 에이전트 계정·사용중지)")
 check(ag.auth_message("OPERATION_NOT_ALLOWED") == "로그인 거부: OPERATION_NOT_ALLOWED", "모르는 code 는 그대로 보여 준다")
 
 with tempfile.TemporaryDirectory() as d:

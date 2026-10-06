@@ -33,7 +33,7 @@ def app_path(kind, cid, pc_id, app=APP):
 
 
 def email_for(cid, pc_id):
-    """기계 계정 이메일. setup.js·app.js 의 같은 규칙과 똑같아야 한다 (밑줄→하이픈, 회사가 없으면 프로젝트 도메인)."""
+    """에이전트 계정 이메일. setup.js·app.js 의 같은 규칙과 똑같아야 한다 (밑줄→하이픈, 회사가 없으면 프로젝트 도메인)."""
     return f"agent-{pc_id.replace('_', '-')}@{cid.replace('_', '-') + '.' if cid else ''}{PROJECT_DOMAIN}"
 
 
@@ -42,7 +42,7 @@ def auth_message(code):
     if code in ("INVALID_LOGIN_CREDENTIALS", "INVALID_PASSWORD", "EMAIL_NOT_FOUND"):
         return "비밀번호가 맞지 않습니다 (바뀌었으면 새 비밀번호를 넣으세요)"
     if code == "USER_DISABLED":
-        return "이 기계 계정은 막혀 있습니다. 관리자에게 물어보세요"
+        return "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 물어보세요"
     if code == "TOO_MANY_ATTEMPTS_TRY_LATER":
         return "시도가 너무 많아 잠시 막혔습니다. 10분쯤 뒤에 다시 띄우세요"
     return f"로그인 거부: {code}"
@@ -582,7 +582,7 @@ def first_run(path, cid, pc_id, password, client=None, email=None):
     cfg = dict(secret.PUBLIC, email=email or email_for(cid, pc_id), password=password, cid=cid, pc_id=pc_id)
     c = fb.claims((client or fb.Client(cfg)).token())
     if c.get("role") != "agent":
-        raise ValueError("기계 계정(agent-…)이 아닙니다. 사람 계정으로는 에이전트를 띄울 수 없습니다")
+        raise ValueError("에이전트 계정(agent-…)이 아닙니다. 사람 계정으로는 에이전트를 띄울 수 없습니다")
     if (c.get("cid"), c.get("pcId")) != (cid, pc_id):
         if email is None or not (c.get("cid") and c.get("pcId")):
             raise ValueError(f"이 계정은 {c.get('cid')}/{c.get('pcId')} 의 것입니다. 회사 코드·PC 이름을 확인하세요")
@@ -650,7 +650,7 @@ def main():
         if not sys.stdin.isatty():
             log(f"설정 파일이 없습니다: {secret.CONFIG_PATH}")
             return 2
-        print("처음 실행입니다. 이 PC 의 회사 코드·PC 이름과 기계 계정 비밀번호를 넣으세요. 비밀번호는 이 PC 에만 잠가서 저장합니다.")
+        print("처음 실행입니다. 이 PC 의 회사 코드·PC 이름과 에이전트 계정 비밀번호를 넣으세요. 비밀번호는 이 PC 에만 잠가서 저장합니다.")
         cfg = ask_setup()
         if cfg is None:
             return 2
@@ -667,9 +667,9 @@ def main():
         # 막힌 계정·시도 초과는 비밀번호를 다시 넣어도 소용없다 - 안내대로 나중에 다시 띄운다
         if not sys.stdin.isatty() or dead.code in ("USER_DISABLED", "TOO_MANY_ATTEMPTS_TRY_LATER"):
             return 3
-        print(f"비밀번호가 바뀌었거나 계정이 막혔습니다: {auth_message(dead.code)}. "
+        print(f"비밀번호가 바뀌었거나 계정이 사용중지되었습니다: {auth_message(dead.code)}. "
               f"새 비밀번호를 넣으세요 (회사 {cfg['cid']} / PC {cfg['pc_id']}). "
-              f"기계 계정 자체가 바뀌었으면 Ctrl+C 로 나가서 {os.path.basename(secret.CONFIG_PATH)} 을 지우고 다시 띄우세요")
+              f"에이전트 계정 자체가 바뀌었으면 Ctrl+C 로 나가서 {os.path.basename(secret.CONFIG_PATH)} 을 지우고 다시 띄우세요")
         cfg = ask_setup((cfg["cid"], cfg["pc_id"], cfg["email"]))
         if cfg is None:
             return 3

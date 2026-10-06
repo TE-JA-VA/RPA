@@ -121,7 +121,7 @@ OK_STATE = {"agent_pw": "ok", "erp_pw": "ok", "saved": ("net", "test")}
 print("=== 1. 칸 확인 ===")
 p = rs.validate({k: "" for k in rs.FORM_KEYS}, NONE_STATE)
 check("빈 칸은 모두 알린다", all(any(w in x for x in p) for w in (
-    "PC코드를 넣으세요", "처음 설정이라 기계 계정 비밀번호", "ERPia 아이디", "ERPia 비밀번호")), p)
+    "PC코드를 넣으세요", "처음 설정이라 에이전트 계정 비밀번호", "ERPia 아이디", "ERPia 비밀번호")), p)
 check("업체코드는 대시보드 것과 ERPia 것을 따로 알린다 (칸 이름이 같다 - 2026-09-30)",
       "업체코드를 넣으세요" in p and "ERPia 업체코드를 넣으세요" in p, p)
 check("업체코드 대문자는 안 된다", any("소문자" in x for x in rs.validate(good_form(cid="Net"), NONE_STATE)))
@@ -236,7 +236,7 @@ P2 = paths_in("loginfail")
 
 
 def refuse(*a):
-    raise ValueError("기계 계정 로그인이 안 됩니다: 비밀번호가 맞지 않습니다")
+    raise ValueError("에이전트 계정 로그인이 안 됩니다: 비밀번호가 맞지 않습니다")
 
 
 try:
@@ -291,7 +291,7 @@ print("=== 6. 기계 계정 로그인 오류 문장 ===")
 orig_first_run = agent.first_run
 try:
     for exc, want in ((fb.AuthError(400, "INVALID_LOGIN_CREDENTIALS"), "비밀번호가 맞지 않습니다"),
-                      (ValueError("기계 계정(agent-…)이 아닙니다"), "기계 계정(agent-…)이 아닙니다"),
+                      (ValueError("에이전트 계정(agent-…)이 아닙니다"), "에이전트 계정(agent-…)이 아닙니다"),
                       (urllib.error.URLError("down"), "인터넷에 연결하지 못해"),
                       (urllib.error.URLError(ssl.SSLCertVerificationError(
                           1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")), "보안 인증서")):
@@ -483,6 +483,13 @@ check("기계 계정 비밀번호가 안 풀리면 판 올림이 아니다 (창�
 rec = Recorder()
 rs.finish_upgrade(P, run=rec, running=Running(False), user="PC\\me")
 check("판 올림: 작업 다시 등록 → 켜기", rec.verbs() == ["/Create", "/End", "/Run"], rec.verbs())
+
+print("=== 13-2. 이름: '기계 계정' → '에이전트 계정' (2026-10-06 사용자) ===")
+PC_SIDE = [ROOT / "rpa_settings.py", ROOT / "firebase" / "agent" / "agent.py", ROOT / "firebase" / "agent" / "secret.py",
+           ROOT / "firebase" / "agent" / "background.py", ROOT / "release" / "배포안내.txt", ROOT / "release" / "클라우드_안내.txt"]
+old_name = [f.name for f in PC_SIDE if "기계 계정" in f.read_text(encoding="utf-8-sig")]
+check("PC 쪽 글(설정 창·에이전트·감독·배포 안내)에 '기계 계정' 이 없다", not old_name, old_name)
+check("설정 창 칸 이름은 '에이전트 계정 비밀번호'", "에이전트 계정 비밀번호" in {label for _, fields in rs.ROWS for _, label, _, _ in fields})
 
 print("=== 14. 그 밖 ===")
 check("프린터 목록은 글자 목록", isinstance(rs.list_printers(), list) and all(isinstance(n, str) for n in rs.list_printers()))

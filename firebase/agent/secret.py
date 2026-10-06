@@ -101,5 +101,5 @@ def load_config(path=None):
     except OSError:
         raise OSError(f"비밀번호를 풀지 못했습니다. 이 설정은 {data.get('windows_user') or '다른 윈도우'} 계정으로 만들었습니다. "
                       "같은 윈도우 계정(UAC 에 넣는 계정)으로 띄우거나, agent_config.json 을 지우고 다시 띄우면 "
-                      "기계 계정을 다시 묻습니다") from None
+                      "에이전트 계정을 다시 묻습니다") from None
     return out

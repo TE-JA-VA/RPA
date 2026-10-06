@@ -1,7 +1,7 @@
 // 관리 작업 - setup.js(터미널 명령)와 admin.js(관리 화면 AFTERMARKET_SETUP)가 같이 쓴다. 우리 PC 에서만 돈다.
 // 값을 돌려줄 뿐 찍지 않는다. 사람이 고칠 수 있는 거절은 Refused (그 글을 터미널은 '오류: …', 화면은 빨간 알림으로).
 // 비밀번호는 무작위로 만들어 돌려줄 뿐 어디에도 남기지 않는다.
-// 이메일은 조립한다: <아이디>@<cid 의 _ 를 - 로>.rpa-test-f02e0.firebaseapp.com (cid 가 없으면 도메인만, 기계 계정은 agent-<pcId>).
+// 이메일은 조립한다: <아이디>@<cid 의 _ 를 - 로>.rpa-test-f02e0.firebaseapp.com (cid 가 없으면 도메인만, 에이전트 계정은 agent-<pcId>).
 // 아이디에 @ 가 있으면 그대로 이메일로 쓴다(외부 메일 계정).
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -68,7 +68,7 @@ export async function companyOf(cid, { removed = false } = {}) {
   if (!removed && v.stts === 9) throw new Refused(`${cid} 는 비활성화된 업체다. 다시 활성화: 관리 화면의 [다시 활성화] 또는 node setup.js restore ${cid}`);
   return v;
 }
-// 그 업체의 계정 전부 (cid 없으면 모두). 기계 계정도 claim 에 cid 가 있어 같이 잡힌다
+// 그 업체의 계정 전부 (cid 없으면 모두). 에이전트 계정도 claim 에 cid 가 있어 같이 잡힌다
 export async function usersOf(cid) {
   const rows = [];
   let token;
@@ -264,7 +264,7 @@ function checkPlan(plan) {
   if (!pcs.length) throw new Refused("PC 를 하나 이상 넣으세요");
   for (const p of pcs) checkKey("PC코드", p.pcId);
   if (new Set(pcs.map((p) => p.pcId)).size !== pcs.length) throw new Refused("PC코드가 겹칩니다");
-  if (!users.some((u) => u.role === "admin")) throw new Refused("관리자 계정을 넣으세요");
+  if (!users.some((u) => u.role === "admin")) throw new Refused("관리자 계정을 한 명 이상 넣으세요");
   for (const u of users) {
     if (u.role !== "admin" && u.role !== "viewer") throw new Refused("계정 역할은 관리자나 유저");
     if (!String(u.id ?? "").trim()) throw new Refused("계정 아이디를 넣으세요");

@@ -248,10 +248,10 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('detail')?.textContent.includes('남은 600')", timeout=15000)
     check(True, "줄을 누르면 상세: 남은 토큰 600")
     OLD = ("기계", "열람자", "통장", "막기", "막힘", "막을", "막았", "열기", "열림", "열었", "더하기", "더했", "삭제", "되살",
-           "한 대 더", "쓰나요", "예, 씁니다", "첫 토큰", "세기만")
+           "한 대 더", "쓰나요", "예, 씁니다", "첫 토큰", "세기만", "관리자 계정 (대시보드에 로그인할 사람)", "유저 추가")
     NEW = ("에이전트 계정도 만들기", "PC 추가", '"추가"', "사용중지", "사용중", "유저", "토큰 정보", "업체 비활성화", "다시 활성화",
            '<button id="s-add-pc">+ 추가</button>', "4. 물류대기 관리 메뉴 사용 여부", 'value="yes">예</label>', 'value="no">아니오</label>',
-           "5. 최초 토큰량 설정", 'value="later" checked>나중에 설정</label>',
+           "5. 최초 토큰량 설정", 'value="later" checked>나중에 설정</label>', "3. 대시보드 계정", '<button id="s-add-user">+ 추가</button>',
            "업체가 보유한 토큰 정보가 없습니다. 최초 토큰 생성시 토큰 정보가 함께 생성됩니다. 토큰이 0이하라면 모듈 실행을 막습니다.",
            "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다.",
            "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다.")
@@ -270,8 +270,14 @@ with sync_playwright() as pw:
     page.fill("#s-name", "화면 업체")
     page.fill("#s-pcs .pc-id", "pc_ui")
     page.fill("#s-pcs .pc-label", "화면 PC")
-    page.fill("#s-admin-id", "ui_admin")
-    page.fill("#s-admin-name", "담당")
+    page.fill("#s-users .acct:nth-child(1) .u-id", "ui_admin")
+    page.fill("#s-users .acct:nth-child(1) .u-name", "담당")
+    page.click("#s-add-user"); page.click("#s-add-user")
+    roles = [page.input_value(f"#s-users .acct:nth-child({i}) .u-role") for i in (1, 2, 3)]
+    check(roles == ["admin", "viewer", "viewer"], f"계정 줄마다 역할 - 첫 줄은 관리자, + 추가 한 줄은 유저로 시작 ({roles})")
+    page.fill("#s-users .acct:nth-child(2) .u-id", "ui_boss2")
+    page.select_option("#s-users .acct:nth-child(2) .u-role", "admin")
+    page.fill("#s-users .acct:nth-child(3) .u-id", "ui_view")
     page.check("input[name=tok][value=later]")
     page.click("#s-make")
     page.wait_for_function("document.getElementById('flash')?.textContent.includes('물류대기')", timeout=15000)
@@ -282,11 +288,13 @@ with sync_playwright() as pw:
     sent = page.text_content("#setup-result .secret pre")
     seen = re.findall(r"비밀번호: (\S{24})", sent)
     SECRETS.extend(seen)
-    check(page.text_content("#setup-result h2") == "다 만들었습니다" and "업체코드: t_ui   아이디: ui_admin" in sent
-          and "업체코드: t_ui   PC코드: pc_ui" in sent and len(seen) == 2 and f"https://{PROJECT}.web.app" in sent,
-          "다 만들면 고객에게 보낼 정보 (대시보드 주소·관리자·기계 계정)", sent)
-    check(claims(email("t_ui", "ui_admin")) == {"cid": "t_ui", "role": "admin"} and (db_get("meta/companies/t_ui/apps/rpa/modules") or {}) == {},
-          "화면으로 만든 업체: 관리자 계정, 물류대기 씀 (정책 없음)")
+    check(page.text_content("#setup-result h2") == "다 만들었습니다" and "관리자  업체코드: t_ui   아이디: ui_admin" in sent
+          and "관리자  업체코드: t_ui   아이디: ui_boss2" in sent and "유저  업체코드: t_ui   아이디: ui_view" in sent
+          and "업체코드: t_ui   PC코드: pc_ui" in sent and len(seen) == 4 and f"https://{PROJECT}.web.app" in sent,
+          "다 만들면 고객에게 보낼 정보 (대시보드 주소·관리자 둘·유저·에이전트 계정)", sent)
+    check(claims(email("t_ui", "ui_admin")) == {"cid": "t_ui", "role": "admin"} and claims(email("t_ui", "ui_boss2")) == {"cid": "t_ui", "role": "admin"}
+          and claims(email("t_ui", "ui_view")) == {"cid": "t_ui", "role": "viewer"} and (db_get("meta/companies/t_ui/apps/rpa/modules") or {}) == {},
+          "화면으로 만든 업체: 고른 역할대로 관리자 둘·유저 하나, 물류대기 씀 (정책 없음)")
 
     page.click("nav button[data-view='rates']")
     page.wait_for_selector("#rates tr", timeout=15000)
@@ -307,7 +315,7 @@ with sync_playwright() as pw:
     late = []
     worker = threading.Thread(target=lambda: late.append(api("POST", "/api/setup", LATE)))
     worker.start()
-    for _ in range(1000):   # 첫 단계(업체)가 끝나 흐름이 한창 돌 때 [끄기] - PC 30대·기계 계정 30개가 남아 있다
+    for _ in range(1000):   # 첫 단계(업체)가 끝나 흐름이 한창 돌 때 [끄기] - PC 30대·에이전트 계정 30개가 남아 있다
         if db_get("meta/companies/t_late"):
             break
         time.sleep(0.01)
