@@ -52,6 +52,11 @@
   .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
   .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
   td.plus { color:var(--good); } td.minus { color:var(--bad); }   /* 토큰 내역: 넣음 초록 · 뺌 빨강 */
+  #detail .sec { border-top:1px solid var(--line); margin-top:24px; padding-top:20px; }
+  #detail .sec.top { border-top:0; margin-top:8px; padding-top:0; }
+  #detail .sec.danger { border-top-color:var(--bad); }
+  #detail .sec > h3 { margin:0 0 10px; font-size:16px; }
+  #detail .sec table + .row { margin-top:10px; }   /* 목록과 새로 넣는 칸 사이 */
   .mod-ok { margin-left:10px; color:var(--good); font-weight:500; font-size:14px; }
   td .row { margin:0; flex-wrap:nowrap; }   /* PC 표의 업데이트 칸 - 고르기·단추 사이는 아래 'PC 추가' 줄과 같은 8px */
   label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:14px; }
@@ -82,7 +87,7 @@
     <div class="card">
       <h2>업체</h2>
       <table>
-        <thead><tr><th>업체코드</th><th>이름</th><th>상태</th><th>PC</th><th>계정</th><th>남은 토큰</th><th>이번 달</th><th>마지막 로그인</th></tr></thead>
+        <thead><tr><th>업체코드</th><th>이름</th><th>상태</th><th>PC</th><th>계정</th><th>현재 토큰</th><th>이번 달</th><th>마지막 로그인</th></tr></thead>
         <tbody id="companies"></tbody>
       </table>
     </div>
@@ -108,7 +113,7 @@
       <div class="lbl">5. 최초 토큰량 설정</div>
       <div class="row">
         <label class="inline"><input type="radio" name="tok" value="now">지금 넣기</label>
-        <input id="s-tok-amount" placeholder="토큰 수 (예: 1000)" size="14" inputmode="numeric"><input id="s-tok-memo" placeholder="메모 (예: 10월 결제)" size="22">
+        <input id="s-tok-amount" placeholder="토큰 수 (예: 1000)" size="14" inputmode="numeric"><input id="s-tok-memo" placeholder="비고 (예: 10월 결제)" size="22">
       </div>
       <div class="row"><label class="inline"><input type="radio" name="tok" value="later" checked>나중에 설정</label></div>
       <div class="row" style="margin-top:16px"><button id="s-make" class="primary">만들기</button></div>
@@ -120,11 +125,11 @@
     <div class="card">
       <h2>토큰 배율</h2>
       <p class="muted">모듈을 한 번 쓸 때 빠지는 토큰 수입니다. 처음엔 모두 1, 로그인은 0. 바꿔도 지난 기록은 그때 값 그대로입니다. PC 는 10분 안에 새 배율을 씁니다.</p>
-      <table><thead><tr><th>모듈</th><th>키</th><th>배율</th><th></th></tr></thead><tbody id="rates"></tbody></table>
+      <table><thead><tr><th>모듈</th><th>배율</th><th></th></tr></thead><tbody id="rates"></tbody></table>
     </div>
     <div class="card">
       <h2>통계</h2>
-      <table><thead><tr><th>업체코드</th><th>이름</th><th>남은 토큰</th><th>이번 달 쓴 토큰</th><th>토큰 정보 생성</th></tr></thead><tbody id="usage"></tbody></table>
+      <table><thead><tr><th>업체코드</th><th>이름</th><th>현재 토큰</th><th>이번 달 사용한 토큰</th><th>토큰 정보 생성</th></tr></thead><tbody id="usage"></tbody></table>
     </div>
   </section>
 </main>
@@ -199,8 +204,8 @@ async function loadCompanies() {
   if (!rows) return;
   $("companies").replaceChildren(...rows.map((r) => el("tr", { class: `pick${r.cid === current ? " on" : ""}`, "data-cid": r.cid, onclick: () => openDetail(r.cid) },
     el("td", {}, r.cid), el("td", {}, r.name), el("td", { class: r.stts === 9 ? "muted" : "" }, r.stts === 9 ? "비활성" : "사용중"),
-    el("td", { class: "num" }, r.pcs), el("td", { class: "num" }, r.users), el("td", { class: "num" }, r.left === null ? "토큰 정보 없음" : r.left),
-    el("td", { class: "num" }, r.month), el("td", {}, when(r.lastSignIn)))));
+    el("td", { class: "num" }, r.pcs), el("td", { class: "num" }, r.users), el("td", { class: "num" }, r.left === null ? "토큰 정보 없음" : nf(r.left)),
+    el("td", { class: "num" }, nf(r.month)), el("td", {}, when(r.lastSignIn)))));
 }
 async function openDetail(cid, keep) {
   const d = await act(null, () => api("GET", `/api/companies/${cid}`));
@@ -267,7 +272,7 @@ function pcSection(d) {
     flash(`PC ${r.pc.pcId} 를 추가했습니다`);
     refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
   }) }, "PC 추가");
-  return el("div", {}, el("h3", {}, "PC"),
+  return el("div", { class: "sec top" }, el("h3", {}, "PC"),
     d.pcs.length ? el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"].map((h) => el("th", {}, h)))),
       el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases)))) : el("p", { class: "muted" }, "PC 가 없습니다"),
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
@@ -295,7 +300,7 @@ function userSection(d) {
     const r = await api("POST", `/api/companies/${d.cid}/users`, { id: id.value.trim(), name: name.value.trim(), role: role.value });
     refresh(d.cid, secretBox(`새 계정 - 대시보드 로그인 (${ROLE[r.role]})`, `업체코드: ${d.cid}   아이디: ${id.value.trim()}   비밀번호: ${r.password}`));
   }) }, "추가");
-  return el("div", {}, el("h3", {}, "계정"),
+  return el("div", { class: "sec" }, el("h3", {}, "계정"),
     el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "아이디"), el("th", {}, "역할"), el("th", {}, "상태"), el("th", {}, "마지막 로그인"), el("th", {}, ""))),
       el("tbody", {}, rows)),
     el("div", { class: "row" }, id, name, role, add));
@@ -308,7 +313,7 @@ function tokenSection(d) {
     flash(r.created ? "토큰 정보를 만들었습니다 - 지금부터 토큰이 0 이하면 모듈 실행을 막습니다" : "토큰을 넣었습니다");
     refresh(d.cid);
   }) }, "넣기");
-  return el("div", {}, el("h3", {}, "토큰"),
+  return el("div", { class: "sec" }, el("h3", {}, "토큰"),
     t ? el("table", { class: "wallet" }, el("thead", {}, el("tr", {}, ...["발급한 토큰", "사용한 토큰", "현재 토큰", "토큰 정보 생성"].map((h) => el("th", {}, h)))),
       el("tbody", {}, el("tr", {}, el("td", { class: "num" }, nf(t.granted)), el("td", { class: "num" }, nf(t.spent)),
         el("td", { class: "num left" }, el("strong", {}, nf(t.left))), el("td", {}, local(t.since)))))
@@ -332,7 +337,7 @@ function moduleSection(d) {
     clearTimeout(okTimer);
     okTimer = setTimeout(() => ok.classList.add("hide"), 2000);
   }) }, "적용");
-  return el("div", {}, el("h3", {}, "모듈 정책", ok),el("p", { class: "muted" }, "업체가 사용할 모듈을 결정합니다. 체크 해제시 업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes, apply));
+  return el("div", { class: "sec" }, el("h3", {}, "모듈 정책", ok),el("p", { class: "muted" }, "업체가 사용할 모듈을 결정합니다. 체크 해제시 업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes, apply));
 }
 function limitSection(d) {
   const n = el("input", { value: d.scheduleLimit ?? 2, size: 4, inputmode: "numeric", "aria-label": "자동 실행 슬롯 수" });
@@ -341,7 +346,7 @@ function limitSection(d) {
     flash(`자동 실행 슬롯 수: ${r.schedule} (PC 에는 10분 안에 닿습니다)`);
     openDetail(d.cid);
   }) }, "저장");
-  return el("div", {}, el("h3", {}, "자동 실행 슬롯 수"),
+  return el("div", { class: "sec" }, el("h3", {}, "자동 실행 슬롯 수"),
     el("p", { class: "muted" }, "예약 실행, 반복 실행 슬롯을 몇 개까지 열어줄 지 결정합니다. (0~12, 기본 2)"),
     el("div", { class: "row" }, n, save));
 }
@@ -352,7 +357,7 @@ function dangerSection(d) {
       flash("업체를 다시 활성화했습니다 - 계정을 다시 사용할 수 있습니다");
       refresh(d.cid);
     }) }, "다시 활성화");
-    return el("div", {}, el("h3", {}, "업체 다시 활성화"), el("p", { class: "muted" }, "이 업체를 다시 활성화합니다. 계정도 모두 다시 사용할 수 있습니다."), back);
+    return el("div", { class: "sec" }, el("h3", {}, "업체 다시 활성화"), el("p", { class: "muted" }, "이 업체를 다시 활성화합니다. 계정도 모두 다시 사용할 수 있습니다."), back);
   }
   const code = el("input", { placeholder: `${d.cid} 를 똑같이 치세요`, size: 22 });
   const del = el("button", { class: "danger", onclick: () => act(del, async () => {
@@ -360,7 +365,7 @@ function dangerSection(d) {
     flash(`업체를 비활성화했습니다 - 계정 ${r.users.length}개를 사용중지했습니다 (데이터는 남습니다)`);
     refresh(d.cid);
   }) }, "업체 비활성화");
-  return el("div", {}, el("h3", {}, "업체 비활성화"), el("p", { class: "muted" }, "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다."),
+  return el("div", { class: "sec danger" }, el("h3", {}, "업체 비활성화"), el("p", { class: "muted" }, "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다."),
     el("div", { class: "row" }, code, del));
 }
 
@@ -383,7 +388,7 @@ $("s-make").onclick = () => act($("s-make"), async () => {
     users: [...document.querySelectorAll("#s-users .acct")].map((r) => ({ id: r.querySelector(".u-id").value.trim(), name: r.querySelector(".u-name").value.trim(),
       role: r.querySelector(".u-role").value })).filter((u) => u.id),    // 관리자가 없으면 서버가 '관리자 계정을 한 명 이상' 으로 거절한다
     hold: hold ? hold.value === "yes" : null,         // 안 고르면 서버가 '물류대기 관리 메뉴 사용 여부를 골라 주세요' 로 거절한다
-    tokens: tok?.value === "now" ? { amount: $("s-tok-amount").value.trim(), memo: $("s-tok-memo").value.trim() } : null,
+    tokens: tok?.value === "now" ? { amount: $("s-tok-amount").value.replace(/,/g, "").trim(), memo: $("s-tok-memo").value.trim() } : null,
   };
   showSetupResult(plan, await api("POST", "/api/setup", plan));
 });
@@ -413,10 +418,10 @@ async function loadRates() {
       flash(`${RATE_NAMES[k] || k} 토큰 배율을 ${v.value.trim()} 로 바꿨습니다`);
       loadRates();
     }) }, "저장");
-    return el("tr", {}, el("td", {}, RATE_NAMES[k] || k), el("td", { class: "muted" }, k), el("td", {}, v), el("td", {}, save));
+    return el("tr", {}, el("td", {}, RATE_NAMES[k] || k), el("td", {}, v), el("td", {}, save));
   }));
   $("usage").replaceChildren(...usage.map((u) => el("tr", {}, el("td", {}, u.cid), el("td", {}, u.name),
-    el("td", { class: "num" }, u.left === null ? "토큰 정보 없음" : u.left), el("td", { class: "num" }, u.month), el("td", {}, local(u.since)))));
+    el("td", { class: "num" }, u.left === null ? "토큰 정보 없음" : nf(u.left)), el("td", { class: "num" }, nf(u.month)), el("td", {}, local(u.since)))));
 }
 
 // --- 켜기·끄기 -----------------------------------------------------------------------
@@ -426,6 +431,9 @@ $("quit").onclick = () => act($("quit"), async () => {
   document.body.replaceChildren(el("main", {}, el("div", { class: "card" }, el("h2", {}, "관리 화면을 껐습니다"),
     el("p", { class: "muted" }, "다시 쓰려면 바탕화면의 'AFTER MARKET 관리' 를 누르세요. 이 창은 닫아도 됩니다."))));
 });
+// 최초 토큰량 칸: 벗어나면 1000 단위 콤마, 다시 들어오면 콤마 없이 (숫자가 아니면 그대로 - 만들 때 서버가 거절)
+$("s-tok-amount").addEventListener("blur", (e) => { const v = e.target.value.replace(/,/g, "").trim(); if (/^\d+$/.test(v)) e.target.value = nf(v); });
+$("s-tok-amount").addEventListener("focus", (e) => { e.target.value = e.target.value.replace(/,/g, ""); });
 // --- 밝게·어둡게 (고른 값은 관리 도구 옆 admin_prefs.json - 포트가 바뀌어도 남는다) -----------
 const isDark = () => document.documentElement.dataset.theme === "dark"
   || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);

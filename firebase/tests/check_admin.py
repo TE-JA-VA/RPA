@@ -360,6 +360,12 @@ with sync_playwright() as pw:
     minus = [c for t, c in amt if t == "-50"]
     check(plus and minus and plus[0] != minus[0] and plus[0] != page.evaluate("getComputedStyle(document.body).color"),
           f"토큰량: 1000 단위 콤마, + 초록·- 빨강 ({amt}, good {good}, bad {bad})")
+    sec = page.evaluate("""[...document.querySelectorAll('#detail .sec')].map((s) => {
+        const c = getComputedStyle(s); return [parseFloat(c.borderTopWidth), parseFloat(c.paddingTop), c.borderTopColor]; })""")
+    check(len(sec) >= 6 and sec[0][0] == 0 and all(w >= 1 and pt >= 16 for w, pt, _ in sec[1:]) and sec[-1][2] != sec[1][2],
+          f"상세 항목 사이 가로선·간격 (첫 항목은 선 없음, 비활성화는 빨간 선) ({sec})")
+    crow = page.text_content(f"#companies tr[data-cid='{CID}']")
+    check("현재 토큰" in page.text_content("table:has(#companies) thead") and re.search(r"\d,\d{3}", crow), f"업체 표: 현재 토큰, 1000 단위 콤마 ({crow})")
     nav = page.text_content("nav")
     check("신규 업체 등록" in nav and "토큰 배율·통계" in nav, f"위 메뉴 글 ({nav})")
     check(page.text_content("#releases-open").strip() == "버전 목록", "버전 목록 단추")
@@ -390,6 +396,13 @@ with sync_playwright() as pw:
             open(prefs, "w", encoding="utf-8").write(prefs_before)
 
     page.click("nav button[data-view='setup']")
+    page.fill("#s-tok-amount", "100000")
+    page.focus("#s-tok-memo")
+    shown = page.input_value("#s-tok-amount")
+    page.focus("#s-tok-amount")
+    check(shown == "100,000" and page.input_value("#s-tok-amount") == "100000", f"최초 토큰량: 칸을 벗어나면 콤마, 다시 들어오면 콤마 없이 ({shown})")
+    check(page.get_attribute("#s-tok-memo", "placeholder").startswith("비고"), "최초 토큰량 옆 칸은 비고")
+    page.fill("#s-tok-amount", "")
     page.fill("#s-cid", "t_ui")
     page.fill("#s-name", "화면 업체")
     page.fill("#s-pcs .pc-id", "pc_ui")
@@ -428,6 +441,10 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('flash')?.textContent.includes('배율')", timeout=15000)
     check((fs_doc("meta/prices") or {}).get("sales") == 2, "토큰 배율 화면에서 바꾸기 (sales 2)")
     check(page.locator("#usage tr", has_text="t_new").count() == 1, "통계 표에 업체가 나온다")
+    rh = [h.strip() for h in page.locator("#view-rates table").first.locator("th").all_text_contents()]
+    uh = [h.strip() for h in page.locator("#view-rates table").nth(1).locator("th").all_text_contents()]
+    check("키" not in rh and rh[:2] == ["모듈", "배율"], f"토큰 배율 표: 키 칸 없음 ({rh})")
+    check("현재 토큰" in uh and "이번 달 사용한 토큰" in uh, f"통계 표 머리 ({uh})")
 
     old = browser.new_page()
     old.goto(f"{BASE}/?k={'x' * len(key)}")
