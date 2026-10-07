@@ -200,7 +200,46 @@ $g.Dispose(); $bmp.Dispose()
 Check "설정 창이 떴다 (사진 settings.png)" (-not $w.HasExited)
 Stop-Process -Id $w.Id -Force -ErrorAction SilentlyContinue
 
-# 6. 조용한 제거: 작업·프로그램·시작 메뉴는 없어지고 설정·기록은 남는다 (조용한 제거의 기본)
+# 5b. 자동 업데이트 (설계 12절): 샌드박스 안 가짜 호스팅 + 로그인 없는 3분 점검 (표시 파일 update\health_local)
+if (Test-Path "$T\site") {
+  New-Item -ItemType Directory -Force "$PD\update" | Out-Null
+  Set-Content "$PD\update\health_local" ""                                                   # 가짜 계정 - 로그인 없이 판 점검만
+  $web = Start-Process "$App\python\python.exe" -ArgumentList "-m http.server 8799 --directory `"$T\site`"" -PassThru -WindowStyle Hidden
+  $B = (Get-Content "$T\site\versions.txt")[0]; $C = (Get-Content "$T\site\versions.txt")[1]; $A = (Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version
+  $py = "$App\python\python.exe"
+  # 가짜 계정이라 명령이 안 온다 - 에이전트의 업데이트 스레드가 하는 일(run_update)을 직접 부른다 (받기 주소만 샌드박스 안, 서명은 시험용 공개 열쇠로 확인)
+  function Upd($mode, $ver) {
+    & $py -c "import sys; sys.path[:0]=[r'$App', r'$App\firebase\agent']; import rpa_update as u, rpa_settings as rs; u.run_update('$ver' or u.backup_version(), '$mode', r'$App', lambda: True, rs.register_helper_task, rs.run_helper_task, fetch=lambda v, p, s: u.fetch_release(v, p, s, base_url='http://127.0.0.1:8799', pub=bytes.fromhex(open(r'$T\site\pub.txt').read().strip()))); print(u.read_state())" 2>&1
+  }
+  function WaitState($want, $sec = 400) {
+    for ($i = 0; $i -lt $sec; $i += 5) { $s = (Get-Content "$PD\update\state.json" -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).state; if ($want -contains $s) { return $s }; Start-Sleep 5 }
+    return $s
+  }
+  Upd "update" $B | Out-File "$O\upd_b.txt"
+  $s = WaitState @("done", "rolled_back", "failed")
+  Check "판 B 로 업데이트 → done" ($s -eq "done") "$s $(Get-Content "$PD\update\state.json" -Raw)"
+  Check "판 점검 ok · 판 B" ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $B)
+  Check "제거 목록의 판 번호도 B" ((Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}_is1").DisplayVersion -eq $B)
+  schtasks /Query /TN "\AFTER MARKET\RPA Update" *> $null
+  Check "도우미 작업은 끝나면 지운다" ($LASTEXITCODE -ne 0)
+  Upd "rollback" "" | Out-File "$O\upd_back.txt"
+  $s = WaitState @("done", "rolled_back", "failed")
+  Check "[이전 판으로 되돌리기] → 판 A" (($s -eq "done") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
+  Upd "update" $C | Out-File "$O\upd_c.txt"
+  $s = WaitState @("rolled_back", "done", "failed")
+  Check "켜지지 않는 판 C → 3분 점검 실패 → 되돌림 (판 A)" (($s -eq "rolled_back") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
+  # 바꾸는 도중 끊김: 도우미가 applying 을 적자마자 죽이고, 도우미 작업을 다시 돌린다 (로그온 흉내)
+  Upd "update" $B | Out-File "$O\upd_kill.txt"
+  WaitState @("applying") 400 | Out-Null
+  Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*update_helper.py*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+  Check "끊긴 뒤 applying 이 남았다" ((WaitState @("applying") 5) -eq "applying")
+  schtasks /Run /TN "\AFTER MARKET\RPA Update" | Out-Null
+  $s = WaitState @("rolled_back", "done")
+  Check "다음 로그온(도우미 다시)에 되돌림 → 판 A (Review Focus 2)" (($s -eq "rolled_back") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
+  Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
+}
+
+# 6. 조용한 제거:작업·프로그램·시작 메뉴는 없어지고 설정·기록은 남는다 (조용한 제거의 기본)
 Start-Process "$App\unins000.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
 for ($i = 0; ($i -lt 60) -and (Test-Path $App); $i++) { Start-Sleep 1 }
 Check "제거: 프로그램 폴더가 없다" (-not (Test-Path $App))

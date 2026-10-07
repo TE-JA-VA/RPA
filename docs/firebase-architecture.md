@@ -166,6 +166,7 @@ node setup.js usage                                  # 업체마다 남은 토�
 - 예약 줄의 모듈은 띄울 때 `RPA_RUN_MODULES`, 띄운 까닭은 `RPA_RUN_TRIGGER`(auto·repeat). 반복 시간대는 예약기가 회차마다 루틴을 새로 띄우고 `status_routine.json` 으로 센다 (실패·토큰 없음이면 그 시간대 멈춤). 처리한 게 없는 반복 회차는 이력에 안 남긴다. 설계: `docs/superpowers/specs/2026-10-06-settings-schedule-design.md`.
 - 옵저버가 저장한 쇼핑몰 프리셋 요약(`rpa_status.preset_summary`: 이름·코드·단계 수·저장 시각·아이디 유무·켬)을 `live.presets` 로 올리고, `set_presets` 로 켬/끔을 받는다. 기록 내용·아이디·비밀번호는 안 올린다. 옵저버 미리보기는 이력('기록' 표의 '옵저버')에만 남고 날짜별 도넛은 프리페어·루틴만 센다.
 - 켤 때 사용자 설정을 한 파일로 옮긴다. 아래 '사용자 설정' 참고.
+- **자동 업데이트**: 관리 화면 → 명령 update/rollback → 에이전트가 받기·대기(RPA 가 바쁘면 기다림) → 도우미(`update\runner`)가 파일을 바꿈 → 3분 점검 → 실패하면 되돌리기. 판은 판 전용 호스팅 `rpa-test-f02e0-releases` 에서 받고(`firebase/releases.json`), 목록의 서명을 공개 열쇠로 확인한다. 설계서 `docs/superpowers/specs/2026-10-07-auto-update-design.md`.
 - **설치한 PC** 에서는 작업 스케줄러 작업 `AFTER MARKET\RPA Agent` 가 윈도우 로그인 때 `background.py` 를 창 없이(`pythonw`) 띄우고, 감독이 에이전트를 창 없이 띄워 자기 잡(job)에 넣는다. 에이전트가 0·2·3·4(정상·설정 문제·인증 멈춤·이미 돌고 있음)로 끝나면 감독도 끝나고, 그 밖은 10·30·60·120·300초 뒤 다시 켠다. 감독이 죽으면 에이전트도 죽고, 에이전트가 띄운 RPA 는 잡에서 빠져 끝까지 간다. 에이전트의 입력은 닫힌 파이프다 (`DEVNULL` 은 윈도우에서 `isatty()` 가 참이라 쓰면 안 된다). 감독은 에이전트를 켜기 전에, 설정 창은 에이전트 계정 로그인 전에 PowerShell 로 Firebase 주소를 한 번씩 찔러 윈도우가 루트 인증서를 받아 두게 한다 - 갓 설치한 윈도우에서는 이게 없으면 파이썬이 `CERTIFICATE_VERIFY_FAILED` 로 못 붙는다.
 - 에이전트는 이름 있는 잠금 `Local\AFTER_MARKET_RPA_AGENT` 로 한 PC 에 하나만 돈다. 이미 돌면 "이미 돌고 있습니다" 를 찍고 4 로 끝난다 (시험은 `RPA_AGENT_MUTEX` 로 다른 이름).
 - 옵저버가 떠 있으면 (옵저버가 쥐는 잠금 `Local\AFTER_MARKET_RPA_OBSERVER`, `rpa_status.observer_open`) 자동 실행은 닫힐 때까지 기다리고 실행 명령은 "옵저버가 켜져 있습니다…" 로 거절한다 (시험은 `RPA_OBSERVER_LOCK`). 잠금 함수는 `rpa_status.hold_lock`·`lock_held` 하나를 에이전트·설정 창·옵저버가 같이 쓴다.
@@ -226,6 +227,7 @@ cd D:\AX\RPA
 .venv\Scripts\python.exe tests\test_encoding.py       # .bat 는 CP949, 안내 문서·설치 스크립트는 BOM 있는 UTF-8
 .venv\Scripts\python.exe tests\test_edge.py           # 깔린 Edge (같이 싣는 브라우저 없이), 옵저버 Edge 명령줄·프로필, Edge 없는 PC
 .venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 윈도우 샌드박스에서 설치 파일
+.venv\Scripts\python.exe tools\sandbox_test.py --update D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 위에 더해 자동 업데이트 (최대 45분)
 cd D:\AX\RPA\firebase; . .\emu_env.ps1
 python tests\test_agent.py                      # 에이전트 단위 (Firebase 없이)
 cd tests; npm test                              # 규칙
@@ -257,6 +259,11 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 브라우저 (Edge) | 11 | `tests/test_edge.py`: 같이 싣는 브라우저 없이 기록·재생·프리페어 자체 시험이 깔린 Edge 로, 옵저버 Edge 명령줄(`--no-sandbox`·`--enable-automation` 없음)·다운로드 창을 끈 프로필·`--check` 의 Edge 판, Edge 다운로드 창(`edge://downloads-hub`)과 늦게 주소가 붙는 새 탭은 사이트가 연 창이 아니다, 사람이 연 Edge 새 탭(MSN 새 탭 주소 `ntp.msn.com/edge/ntp` - 바로 생김·나중에 붙음)은 '새 탭' 단계, Edge 가 없으면 "Microsoft Edge 가 없습니다" |
 | 옵저버 화면 | 21 | `tests/check_observer_ui.py`: 진짜 창으로 주소 치기 → 기록 → 끄기·지우기 → 미리보기 → 저장, 기록 중 저장 잠김·저장 안 한 기록 묻기, 안내 한 줄(프리셋을 바꾸면 비움·남은 단계가 없으면 그렇다고), 미리보기 [Ⅱ 일시정지]·[■ 중단]·도는 중 닫기 거절·브라우저 못 띄움·일시정지 중 닫기, 다시 저장해도 날짜 그대로, 사진 다섯 (3~4분 마우스·키보드를 쓴다) |
 | 인코딩 | 17 | .bat CP949·CRLF 와 실제 실행, 관리 화면 bat 은 영문만·CRLF, 안내 문서·installer.iss·sandbox_inner.ps1 BOM UTF-8 |
+| 자동 업데이트 서명 | 14 | `tests/test_update_sign.py`: 서명 만들기·확인, 위조·다른 열쇠·빈 열쇠 거부 |
+| 자동 업데이트 받기 | 50 | `tests/test_rpa_update.py`: 판 목록·서명 확인, 바뀐 파일만 받기, 지문·크기 틀리면 버림, 바쁨 검사, 상태 파일 |
+| 업데이트 도우미 | 40 | `tests/test_update_helper.py`: 파일 바꾸기·보관본·3분 점검·되돌리기, 바꾸는 도중 끊김 복구 (가짜 시계) |
+| 판 내보내기 | 17 | `tests/test_publish_release.py`: 서명·사이트 폴더·최근 5개+안정본 남기기·쓰지 않는 blob 지우기 |
+| 샌드박스 (자동 업데이트) | 8 | `tools/sandbox_test.py --update`: 시험용 열쇠(서명 뒤 지움)로 서명한 판 B(파일 하나 바뀜)·판 C(켜지지 않는 에이전트)를 샌드박스 안 가짜 호스팅(127.0.0.1:8799)에서 받아 판 B 업데이트(done·제거 목록 판 번호·도우미 작업 지움) → [이전 판으로 되돌리기] → 판 C 3분 점검 실패로 되돌림 → 바꾸는 도중 도우미를 죽이고 다시 돌리면 되돌림. 진짜 열쇠·호스팅은 안 쓴다 |
 | 샌드박스 | 38 | 깨끗한 윈도우: 조용한 설치·파일(같이 싣던 브라우저 ms-playwright 없음)·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·시작 메뉴 'RPA 옵저버'·tkinter → 설치된 exe 셋 --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내)·프리페어 --selftest --headless·옵저버 --check 가 깔린 Edge 를 띄움 → 옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜면 Playwright 드라이버가 깔린 Edge 창을 띄움(사진 observer.png) → 작업 등록(AFTER MARKET 사본, exe 다섯의 아이콘 - 프리페어·옵저버만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 옵저버가 켜진 채 다시 설치는 시작 전에 멈춤(코드 7, --stop 안 부름) → 다시 설치(--stop, 옛 판의 ms-playwright 폴더를 지움) → 설정 창 사진 → 조용한 제거 (판 2026.10.07-4) |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.
