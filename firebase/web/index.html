@@ -318,6 +318,13 @@
   .app-title { margin:0 0 10px; font-size:15px; letter-spacing:.04em; }
   .settings-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.25fr); gap:14px; align-items:start; }
   @media (max-width:1000px) { .settings-grid { grid-template-columns:minmax(0,1fr); } }
+  /* 자동 실행 줄: 시각 · 전체/고르기 · 모듈 단추 · 빼기. 좁으면 다음 줄로 넘어간다. 한도를 넘는 줄은 흐리게 */
+  .times .t { flex-wrap:wrap; }
+  .times .t select.mode { width:auto; padding:5px 8px; font-size:13px; }
+  .times .t .chips { margin-top:0; }
+  .times .t .chips button { padding:4px 8px; font-size:12px; }
+  .times .t.over { opacity:.6; }
+  .times .t .rest { font-size:12px; color:var(--warn); }
 
   table { width:100%; border-collapse:collapse; font-size:14px; }
   th { text-align:left; font-weight:500; color:var(--muted); font-size:12px; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--line); }

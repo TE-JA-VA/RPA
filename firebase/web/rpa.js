@@ -7,7 +7,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
-import { P, esc, MODULES, hhmm, when, isoDay, sendCommand } from "./rpa-common.js";
+import { P, esc, MODULES, hhmm, when, isoDay, sendCommand, slotNames } from "./rpa-common.js";
 export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 이 앱의 설정 화면을 붙인다 (settings.js)
 
 export const key = "rpa";
@@ -309,6 +309,12 @@ function paintVer() {
   el.classList.toggle("hide", !v);
 }
 
+/** 상태 띠 '다음 자동 실행'. 다음 줄이 '고르기' 면 모듈 이름까지 (예: 10월 7일 (화) 11:00 · 물류관리). 옛 판 PC 는 줄이 없어 시각만 */
+function nextRunText(sch) {
+  if (!(sch?.enabled && sch.next_run_at)) return "꺼짐";
+  const names = slotNames((Array.isArray(sch.slots) ? sch.slots : []).find((s) => s && s.at === sch.next_slot));
+  return when(sch.next_run_at) + (names ? ` · ${names}` : "");
+}
 function paintTiles() {
   const r = live?.programs?.routine;
   const off = offlineSec();
@@ -328,7 +334,7 @@ function paintTiles() {
   const sch = live?.schedule;
   $("hero-side").replaceChildren(...[
     ["연결", conn ? "정상" : (off == null ? "없음" : `끊김 ${ago(off)}`), "conn"],
-    ["다음 자동 실행", sch?.enabled && sch.next_run_at ? when(sch.next_run_at) : "꺼짐", ""],
+    ["다음 자동 실행", nextRunText(sch), ""],
   ].map(([k, v, id]) => {
     const d = document.createElement("div"); d.className = "stat";
     d.innerHTML = `<span class="k">${k}</span><span class="v num"${id ? ` id="${id}"` : ""}>${esc(v)}</span>`;

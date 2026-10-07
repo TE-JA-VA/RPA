@@ -716,10 +716,51 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"days": [0, 1, 2, 3, 4, 5, 6], "times": ["09:05", "13:30"]})
     page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30'", timeout=10000)
     check(page.is_disabled("#sch-apply"), "PC 값이 돌아오면 요약 갱신·적용 비활성")
+    check(page.is_visible("#sch-old") and page.locator("#sch-times select").count() == 0,
+          "옛 판 PC (live.schedule 에 version 없음): 시각만, 새 판 안내가 보인다 (Review Focus 4)")
+    # 새 판 PC (2부): 줄마다 전체/고르기
+    db_patch(f"{LIVE}/schedule", {"version": 2, "slots": [{"at": "09:05"}, {"at": "13:30"}], "times": None, "next_slot": "13:30",
+                                  "next_run_at": "2026-09-22T13:30:00"})
+    page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
+    check(page.is_hidden("#sch-old") and page.text_content("#sch-count") == "2/2 사용", "새 판 PC: 줄마다 고르기, 한도 2 중 2 사용")
+    check("자동 실행은 2개까지입니다" in page.text_content("#sch-limit") and page.is_disabled("#sch-add"), "한도에 닿으면 추가 잠김 + 문의 안내")
+    check("전체 실행과 '전체' 예약이 이 모듈을 돌립니다" in page.text_content("#mod-card"), "실행 모듈 카드: '전체' 의 뜻")
+    page.select_option("#sch-times .t:nth-child(2) select", "pick")
+    chips = "#sch-times .t:nth-child(2) .chips button"
+    check(page.locator(chips).count() == 5 and page.is_disabled("#sch-apply") and "모듈을 하나 이상" in page.text_content("#sch-limit"),
+          "고르기: 모듈 단추 다섯, 하나도 안 고르면 적용 안 됨")
+    check(page.is_disabled(f"{chips}[data-k='Output']"), "운송장은 물류관리를 고르기 전엔 잠김")
+    page.click(f"{chips}[data-k='Logistics']")
+    check(not page.is_disabled("#sch-apply") and not page.is_disabled(f"{chips}[data-k='Output']"), "물류관리를 고르면 적용 가능·운송장 풀림")
+    page.click("#sch-apply"); time.sleep(1.5)
+    saved = db_get(f"{SETTINGS}/schedule") or {}
+    check(saved.get("slots") == [{"at": "09:05"}, {"at": "13:30", "run": ["Logistics"]}] and "times" not in saved,
+          f"새 모양으로 저장 - '전체' 줄엔 run 없음 ({saved.get('slots')})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행: 매일 09:05, 13:30 물류관리", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}]})
+    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30 물류관리'", timeout=10000)
+    check(page.is_disabled("#sch-apply"), "PC 가 로그인을 붙여 돌려줘도 같은 값 (바뀜 없음)")
+    check("(물류관리)" in page.text_content("#sch-info"), f"다음 실행 글에 그 줄의 모듈 ({page.text_content('#sch-info')})")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 3}})   # 업체 한도는 총괄·관리 도구가 쓴다
+    reload_to(page, "settings"); page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
+    check(page.text_content("#sch-count") == "2/3 사용" and not page.is_disabled("#sch-add"), "한도 3: 2/3 사용, 추가 가능")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 1}})
+    reload_to(page, "settings"); page.wait_for_function("document.querySelectorAll('#sch-times .t.over').length === 1", timeout=10000)
+    page.click("#sch-days button:nth-child(7)")
+    check("한도를 넘어 쉬는 중" in page.text_content("#sch-times .t:nth-child(2)") and page.is_disabled("#sch-apply")
+          and "1개까지" in page.text_content("#sch-limit"), "한도를 낮추면 넘는 줄은 '쉬는 중', 그 상태로는 적용 안 됨")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
+    reload_to(page, "settings")
+    db_patch(f"{LIVE}/schedule", {"slots": None})       # 줄이 0개인 새 판 PC - Realtime DB 에선 빈 목록이 사라진다
+    page.wait_for_function("document.getElementById('sch-count')?.textContent === '0/2 사용'", timeout=10000)
+    check(page.is_hidden("#sch-old"), "줄이 0개여도 version 2 면 새 판으로 본다 (Review Focus 5)")
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}]})
+    page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
     page.click("label:has(#sch-enabled)")
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === false", timeout=5000)
-    page.click("#sch-times .t:nth-child(1) button")
-    page.click("#sch-times .t:nth-child(1) button")
+    page.click("#sch-times .t:nth-child(1) button.del")
+    page.click("#sch-times .t:nth-child(1) button.del")
     check(page.is_disabled("#sch-apply") is False, "끄면 시간이 없어도 적용 가능")
     page.click("label:has(#sch-enabled)")
     check(page.is_disabled("#sch-apply"), "켠 채 시간이 없으면 적용 불가")
@@ -736,11 +777,13 @@ with sync_playwright() as pw:
     page.wait_for_selector("#hero")
     check(page.text_content("#page-title") == "RPA", "예면 버리고 나간다")
     goto(page, "settings")
-    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30'", timeout=10000)
+    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30 물류관리'", timeout=10000)
     check(page.is_disabled("#sch-apply") and len(page.query_selector_all("#sch-times input")) == 2, "다시 열면 PC 값 그대로 (버린 변경은 없다)")
     goto(page, "rpa")
 
     print("6-2절 실행 단추 모양 (RPA 화면)")
+    page.wait_for_function("(document.querySelector('#hero .stats')?.textContent || '').includes('물류관리')", timeout=10000)
+    check("13:30 · 물류관리" in page.text_content("#hero .stats"), f"상태 띠 다음 자동 실행에 그 줄의 모듈 ({page.text_content('#hero .stats')})")
     check("primary" in (page.get_attribute("#run-all", "class") or "") and "primary" not in (page.get_attribute("#run-routine", "class") or ""), "강조는 전체 실행에")
     check(all(page.locator(f"#{i} svg").count() == 1 for i in ("run-all", "run-prepare", "run-routine")), "실행 버튼은 화살표 아이콘 하나")
     check(page.text_content("#stop-erpia .ic") == "⏼" and page.locator("#stop-erpia svg").count() == 0, "ERPia 종료는 전원 글자 ⏼ (U+23FC)")
