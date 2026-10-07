@@ -7,7 +7,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
-import { P, esc, MODULES, hhmm, when, isoDay, sendCommand, slotNames } from "./rpa-common.js";
+import { P, esc, MODULES, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf } from "./rpa-common.js";
 export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 이 앱의 설정 화면을 붙인다 (settings.js)
 
 export const key = "rpa";
@@ -73,6 +73,8 @@ const HTML = `
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
           <div class="msg" id="token-line" hidden></div>
+          <div class="msg bad" id="repeat-line" hidden></div>
+          <button class="apply" id="repeat-resume" hidden>반복 다시 시작</button>
         </div>
         <div class="card hide" id="usage-card">
           <h2>이번 달 사용량 <span class="muted" id="usage-meta"></span></h2>
@@ -127,6 +129,7 @@ export function mount(el, context) {
   $("run-prepare").onclick = () => send("launch", { target: "prepare" }, "프리페어 RPA");
   $("run-all").onclick = () => send("launch", { target: "all" }, "전체 실행");
   $("stop-erpia").onclick = () => { if (confirm("ERPia 를 종료할까요?")) send("stop_erpia", null, "ERPia 종료"); };
+  $("repeat-resume").onclick = () => send("resume_repeat", null, "반복 다시 시작");
   show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
   paintedRecent = null;
   const strip = $("recent-strip");
@@ -137,7 +140,7 @@ export function mount(el, context) {
     if (strip.scrollWidth <= strip.clientWidth || e.deltaX) return;
     strip.scrollLeft += e.deltaY; e.preventDefault();
   }, { passive: false });
-  tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); } }, 1000);
+  tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); paintRepeat(); } }, 1000);   // 시간대가 열리고 닫히는 것은 시각이 정한다
   if (!c.pcId) { $("h-state").textContent = "등록된 PC 가 없습니다"; return; }
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const v = snap.val();
@@ -153,6 +156,7 @@ export function unmount() {
   if (stopLive) { stopLive(); stopLive = null; }
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (tick) { clearInterval(tick); tick = null; }
+  usageSeq++; usageFor = null;   // 읽는 중인 사용량은 버린다 (화면을 떠난 뒤 늦게 온 결과가 없는 칸을 고치지 않게)
   root = null; c = null;
 }
 
@@ -309,11 +313,19 @@ function paintVer() {
   el.classList.toggle("hide", !v);
 }
 
-/** 상태 띠 '다음 자동 실행'. 다음 줄이 '고르기' 면 모듈 이름까지 (예: 10월 7일 (화) 11:00 · 물류관리). 옛 판 PC 는 줄이 없어 시각만 */
+/** 상태 띠 '다음 자동 실행'. 열린 반복 시간대면 '반복 중 · 12:00까지' (다음 회차) / '반복 멈춤'.
+ *  아니면 다음 줄 - '고르기' 면 모듈 이름까지 (예: 10월 7일 (화) 11:00 · 물류관리). 옛 판 PC 는 줄이 없어 시각만 */
 function nextRunText(sch) {
+  const win = openWindow(sch), rep = repeatOf(sch, win);
+  if (win) {
+    if (rep?.stopped) return "반복 멈춤";
+    const soon = rep?.next_at && Date.parse(rep.next_at) > Date.now() ? ` · 다음 ${hhmm(rep.next_at)}` : "";
+    return `반복 중 · ${win.until}까지${soon}`;
+  }
   if (!(sch?.enabled && sch.next_run_at)) return "꺼짐";
-  const names = slotNames((Array.isArray(sch.slots) ? sch.slots : []).find((s) => s && s.at === sch.next_slot));
-  return when(sch.next_run_at) + (names ? ` · ${names}` : "");
+  const slot = (Array.isArray(sch.slots) ? sch.slots : []).find((s) => s && s.at === sch.next_slot);
+  const names = slotNames(slot);
+  return when(sch.next_run_at) + (slot?.until ? " 반복" : "") + (names ? ` · ${names}` : "");
 }
 function paintTiles() {
   const r = live?.programs?.routine;
@@ -494,7 +506,7 @@ function histRow(r) {
   // 오류(crashed)는 노랑 채움 알약, 실패(stopped·failed)는 옅은 빨강 알약
   const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : r.state === "crashed" ? "crash" : "bad";
   const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
-  const prog = PROGRAM_SHORT[r.program] || r.program_label || r.program || "";   // 표에선 'RPA' 를 뗀다
+  const prog = (PROGRAM_SHORT[r.program] || r.program_label || r.program || "") + (payload.trigger === "repeat" ? " · 반복" : "");   // 표에선 'RPA' 를 뗀다. 처리한 반복 회차 (빈 회차는 기록에 없다)
   tr.innerHTML = `<td class="num">${esc(t)}</td><td>${esc(prog)}</td><td><span class="pill ${cls}">${esc(STATE_LABEL[r.state] || r.state || "")}</span></td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td>`;
   const detail = document.createElement("tr");
   detail.className = "hist-detail hide";
@@ -538,7 +550,7 @@ function paintButtons() {
     $(id).classList.toggle("busy", on);
   }
   $("stop-erpia").disabled = off;                        // 종료는 도는 중에도 눌러야 한다
-  paintTokens();
+  paintTokens(); paintRepeat();
 }
 
 // --- 토큰 (2026-10-06, 2부): 실행 단추 아래 늘 보이는 한 줄. 통장이 없는 업체(live.tokens 없음)는 줄이 없다 ------
@@ -556,6 +568,16 @@ function paintTokens() {
     line.textContent = `남은 토큰 ${t.balance}개 · 전체 실행 1번에 ${all}개` + (t.balance < all ? " - 마이너스로 떨어질 수 있습니다" : "");
     line.className = t.balance < all ? "msg warn" : "msg";
   }
+}
+
+// --- 반복 (3부): 지금 열린 시간대가 멈췄으면 까닭과 [반복 다시 시작] (관리자만) ------------------------------
+function paintRepeat() {
+  const sch = live?.schedule, rep = repeatOf(sch, openWindow(sch));
+  const stopped = !!rep?.stopped;
+  $("repeat-line").hidden = !stopped;
+  $("repeat-line").textContent = stopped ? `반복 멈춤: ${rep.stopped.reason || ""}`.trim() : "";
+  $("repeat-resume").hidden = !stopped || !c.isAdmin;
+  $("repeat-resume").disabled = busy || !c.pcId;
 }
 
 // --- 이번 달 사용량 (토큰 3부, 관리자만 - 오른쪽 열): 이달 1일과 통장 시작 중 늦은 때부터, 업체 전체(PC 모두)를 서버가 더한다.

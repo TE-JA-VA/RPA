@@ -127,9 +127,9 @@ def fs_fields(d):
     return out
 
 
-def seed_run(run_id, program, state, started, dur_sec, reason=None, steps=None, log=None, metrics=None):
+def seed_run(run_id, program, state, started, dur_sec, reason=None, steps=None, log=None, metrics=None, trigger=None):
     payload = {"run_id": run_id, "program": program, "state": state, "started_at": started, "duration_sec": dur_sec,
-               "reason": reason, "steps": steps or [], "log": log or [], "metrics": metrics or []}
+               "reason": reason, "steps": steps or [], "log": log or [], "metrics": metrics or [], "trigger": trigger}
     doc = {"cid": "c_demo", "pcId": "pc_office", "run_id": run_id, "program": program,
            "program_label": "루틴 RPA" if program == "routine" else "프리페어 RPA", "state": state, "reason": reason,
            "started_at": started, "finished_at": None, "duration_sec": dur_sec, "date": started[:10], "payload": json.dumps(payload, ensure_ascii=False)}
@@ -820,6 +820,72 @@ with sync_playwright() as pw:
         page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_hover_all.png"))
     page.mouse.move(0, 0)
 
+    print("6-3절 시간대 반복 (3부)")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 3}})
+    reload_to(page, "settings")
+    page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
+    page.click("#sch-add-win")
+    win = "#sch-times .t:nth-child(3)"
+    check(page.locator(f"{win} select").count() == 0 and page.locator(f"{win} .chips button[data-k='Prepare']").count() == 0
+          and page.locator(f"{win} .chips button").count() == 4, "반복 줄: 전체/고르기 없음, 쇼핑몰 받기 단추 없음")
+    check(page.is_disabled("#sch-apply") and "반복 줄에 모듈을" in page.text_content("#sch-limit"), "모듈을 안 고르면 적용 안 됨")
+    page.click(f"{win} .chips button[data-k='Logistics']")
+
+    def set_win(a, b):
+        for i, v in ((0, a), (1, b)):
+            el = page.query_selector_all(f"{win} input[type=time]")[i]
+            el.fill(v); el.dispatch_event("change")
+
+    set_win("13:00", "14:00")
+    check("13:00~14:00 반복 안에는 시각을 넣을 수 없습니다" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"),
+          f"시각 줄(13:30)이 반복 안에 있으면 거절 ({page.text_content('#sch-limit')})")
+    set_win("10:00", "11:00")
+    page.fill(f"{win} input.rest-min", "3"); page.dispatch_event(f"{win} input.rest-min", "change")
+    check(not page.is_disabled("#sch-apply"), "겹침이 없으면 적용 가능")
+    page.click("#sch-apply"); time.sleep(1.5)
+    slots = (db_get(f"{SETTINGS}/schedule") or {}).get("slots")
+    check(slots == [{"at": "09:05"}, {"at": "10:00", "until": "11:00", "rest_min": 3, "run": ["Logistics"]}, {"at": "13:30", "run": ["Logistics"]}],
+          f"반복 줄 저장 ({slots})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행: 매일 09:05, 10:00~11:00 반복 물류관리, 13:30 물류관리", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:05"}, {"at": "10:00", "until": "11:00", "rest_min": 3, "on_fail": "stop", "run": ["Login", "Logistics"]},
+                                            {"at": "13:30", "run": ["Login", "Logistics"]}],
+                                  "repeat": {"date": TODAY, "at": "10:00", "until": "11:00", "runs": 24, "done": 2, "stopped": None}})
+    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('오늘 반복 24회')", timeout=10000)
+    check("오늘 반복 24회 · 처리 2회" in page.text_content("#sch-info") and page.is_disabled("#sch-apply"),
+          "PC 가 돌려준 반복 상태: 오늘 횟수·처리 (on_fail·로그인이 붙어도 바뀜 없음)")
+    db_patch(f"{LIVE}/schedule/repeat", {"stopped": {"at": f"{TODAY}T10:23:00", "reason": "10:23 물류관리 실패로 반복을 멈췄습니다: 저장 실패"}})
+    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('멈췄습니다')", timeout=10000)
+    check("bad" in page.get_attribute("#sch-info", "class"), "멈췄으면 그 까닭을 빨간 글로")
+    if os.environ.get("SHOT_DIR"): page.locator("#settings-grid").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "settings_repeat.png"))
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
+    # RPA 화면: 지금 열린 시간대가 멈췄으면 까닭과 [반복 다시 시작]. 시간대를 지금 시각 둘레로 (23시 뒤면 건너뜀)
+    nw = datetime.datetime.now()
+    start = nw.replace(minute=nw.minute - nw.minute % 5, second=0, microsecond=0)
+    if start.hour < 23:
+        w_at, w_until = start.strftime("%H:%M"), (start + datetime.timedelta(minutes=55)).strftime("%H:%M")
+        db_patch(f"{LIVE}/schedule", {"enabled": True, "days": list(range(7)),
+                                      "slots": [{"at": w_at, "until": w_until, "rest_min": 2, "on_fail": "stop", "run": ["Login", "Logistics"]}],
+                                      "repeat": {"date": TODAY, "at": w_at, "until": w_until, "runs": 3, "done": 1, "stopped": None}})
+        goto(page, "rpa")
+        page.wait_for_function(f"(document.querySelector('#hero .stats')?.textContent || '').includes('반복 중 · {w_until}까지')", timeout=10000)
+        check(page.is_hidden("#repeat-resume"), "반복 중: 상태 띠 '반복 중 · 끝 시각까지', 다시 시작 단추는 없다")
+        db_patch(f"{LIVE}/schedule/repeat", {"stopped": {"at": f"{TODAY}T{w_at}:00", "reason": f"{w_at} 물류관리 실패로 반복을 멈췄습니다: 저장 실패"}})
+        page.wait_for_selector("#repeat-resume:not([hidden])", timeout=10000)
+        check("반복 멈춤" in page.text_content("#hero .stats") and "저장 실패" in page.text_content("#repeat-line"),
+              "멈췄으면 상태 띠 '반복 멈춤' + 실행 칸에 까닭")
+        page.click("#repeat-resume"); time.sleep(1.0)
+        check(len(cmds_of("resume_repeat")) == 1, "[반복 다시 시작] → resume_repeat 명령")
+        key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "resume_repeat"][-1]
+        db_patch(f"{CMDS}/{key}", {"state": "done", "result": f"반복을 다시 시작했습니다 ({w_until}까지)", "started_at": 1, "ended_at": 2})
+        db_patch(f"{LIVE}/schedule/repeat", {"stopped": None})
+        page.wait_for_selector("#repeat-resume[hidden]", state="attached", timeout=10000)
+        check(True, "멈춤이 풀리면 단추가 사라진다")
+    else:
+        print("  (23시 뒤라 지금 열린 시간대 화면 시험은 건너뜀)")
+        goto(page, "rpa")
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}], "repeat": None})
+
     print("7절 계정 페이지")
     page.click("#admin-nav a[data-key='account']")
     page.wait_for_selector("#pw-btn")
@@ -1099,6 +1165,11 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-09'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
     check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "옵저버", "기록 표의 프로그램 칸이 '옵저버'")
+    seed_run("r_rep_0908", "routine", "success", "2026-09-08T10:24:00", 40, trigger="repeat")
+    page.fill("#hist-date", "2026-09-08"); page.dispatch_event("#hist-date", "change")
+    page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-08'", timeout=15000)
+    page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
+    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "루틴 · 반복", "처리한 반복 회차는 기록 표에 '루틴 · 반복'")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")

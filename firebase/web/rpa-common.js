@@ -74,3 +74,22 @@ export const RUN_NAMES = dict(RUN_CHIPS);
 export const slotNames = (slot) => (slot?.run ? slot.run.filter((k) => k !== "Login").map((k) => RUN_NAMES[k] || k).join("·") : "");
 /** 줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' (PC 의 slot_text 와 같다) */
 export const slotText = (s) => (s.until ? `${s.at}~${s.until} 반복` : s.at) + (s.run ? ` ${slotNames(s)}` : "");
+
+// 반복 시간대 (3부)
+/** 도는 줄 (시각 순, 업체 한도로 자른 것 - PC 의 rpa_dashboard.active_slots 와 같은 규칙) */
+export function activeSlots(sch) {
+  const all = (Array.isArray(sch?.slots) ? sch.slots : []).filter((s) => s && typeof s.at === "string").sort((a, b) => a.at.localeCompare(b.at));
+  const lim = sch?.policy?.limit;
+  return Number.isInteger(lim) && lim >= 0 ? all.slice(0, lim) : all;
+}
+/** 지금 열려 있는 반복 시간대 (그날 요일 + 시작 ≤ 지금 < 끝). 이 브라우저 시각으로 본다 */
+export function openWindow(sch, now = new Date()) {
+  if (!sch?.enabled || !(sch.days || []).includes((now.getDay() + 6) % 7)) return null;
+  const hm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  return activeSlots(sch).find((s) => s.until && s.at <= hm && hm < s.until) || null;
+}
+/** 오늘 그 시간대의 반복 상태 (PC 가 schedule.repeat 에 적는다). 다른 날·다른 시간대 것이면 null */
+export function repeatOf(sch, win, now = new Date()) {
+  const r = sch?.repeat;
+  return r && win && r.date === isoDay(now) && r.at === win.at ? r : null;
+}
