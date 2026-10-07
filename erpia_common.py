@@ -2,6 +2,7 @@
 PID/창은 매번 바뀔 수 있으므로 항상 새로 찾고, 클릭/키 입력 전에는
 반드시 ERPia 창을 foreground(활성)로 전환한 뒤 진행한다.
 """
+import ctypes
 import time
 import win32api
 import win32com.client
@@ -10,12 +11,41 @@ import win32gui
 import win32process
 
 
+def literal_keys(text):
+    """type_keys 에 글자 그대로 넘길 값. pywinauto 는 + ^ % ~ ( ) { } 를 조합키·묶음으로 읽으므로 {} 로 감싼다.
+    (안 감싸면 'a(b)c' 가 'abc' 로 들어간다) 특수문자가 없는 값은 그대로다."""
+    return "".join("{" + c + "}" if c in "+^%~(){}" else c for c in str(text))
+
+
+def screen_locked():
+    """윈도우 화면이 잠겼는가. 잠기면 click_input 이 예외 없이 헛돌아 엉뚱한 실패(화면 이동 실패 등)가 난다.
+    입력 데스크톱이 안 열리거나, 맨 앞 창의 주인이 잠금 화면 앱(LockApp.exe)이면 잠김 - 창 제목은 언어마다 달라
+    프로세스 이름으로 본다 (LockApp.exe 는 평소에도 떠 있으므로 '맨 앞인가' 를 본다). 판정할 수 없으면 False."""
+    try:
+        handle = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0100)   # DESKTOP_SWITCHDESKTOP
+        if not handle:
+            return True
+        ctypes.windll.user32.CloseDesktop(handle)
+        fg = win32gui.GetForegroundWindow()
+        if not fg:
+            return False
+        return (get_process_name(win32process.GetWindowThreadProcessId(fg)[1]) or "").lower() == "lockapp.exe"
+    except Exception:
+        return False
+
+
 def find_erpia_pid(process_name="ERPiaMain.exe"):
     wmi = win32com.client.GetObject("winmgmts:")
     procs = wmi.ExecQuery(f"SELECT ProcessId FROM Win32_Process WHERE Name='{process_name}'")
     for p in procs:
         return int(p.ProcessId)
     raise RuntimeError(f"{process_name} 프로세스를 찾지 못했습니다.")
+
+
+def erpia_pids(process_name="ERPiaMain.exe"):
+    """떠 있는 ERPia 프로세스 번호 목록 (find_erpia_pid 는 그중 첫 번째만 본다)."""
+    wmi = win32com.client.GetObject("winmgmts:")
+    return [int(p.ProcessId) for p in wmi.ExecQuery(f"SELECT ProcessId FROM Win32_Process WHERE Name='{process_name}'")]
 
 
 def get_process_name(pid):
