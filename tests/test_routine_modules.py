@@ -614,4 +614,30 @@ sm = rec.of("set_modules")
 check("정상이면 set_modules 에 (키, 이름, 단계, 비트) 5개", bool(sm) and [m[3] for m in sm[0][0]] == [1, 2, 4, 8, 16], str(sm))
 check("정상이면 run_modules 로 간다 + finish(success)", ran and rec.of("finish")[-1] == ("success", None), str(rec.of("finish")))
 
+print()
+print("=== 11. 예약이 넘긴 이번 실행 모듈 (RPA_RUN_MODULES, 2026-10-07) ===")
+os.environ.pop("RPA_RUN_MODULES", None)
+check("변수가 없으면 None (설정 파일을 쓴다)", rr.run_modules_from_env(KEYS) == (None, []))
+os.environ["RPA_RUN_MODULES"] = "Logistics"
+sel, unknown = rr.run_modules_from_env(KEYS)
+check("물류관리만 → 로그인은 늘 켬, 나머지 끔", sel == {"Login": True, "Sales": False, "Hold": False, "Logistics": True, "Output": False} and unknown == [], f"{sel}")
+os.environ["RPA_RUN_MODULES"] = "Login,Output"
+sel, _ = rr.run_modules_from_env(KEYS)
+check("물류관리 없이 출력만 → 출력도 빠져 돌릴 게 없다", not any(sel.values()), f"{sel}")
+os.environ["RPA_RUN_MODULES"] = "Sales,Nope"
+sel, unknown = rr.run_modules_from_env(KEYS)
+check("모르는 키는 돌려주고 무시", unknown == ["Nope"] and sel["Sales"] and sel["Login"], f"{sel} {unknown}")
+rec = StatusRec(); rr.status = rec
+rr.pl.load_routine_modules = lambda keys: check("변수가 있으면 설정 파일을 안 읽는다", False) or ({k: True for k in keys}, [])
+ran = []
+rr.run_modules = lambda selected: ran.append(selected) or ("success", None)
+os.environ["RPA_RUN_MODULES"] = "Hold"
+rr.main()
+check("main 이 넘긴 모듈로 돈다", ran and ran[-1] == {"Login": True, "Sales": False, "Hold": True, "Logistics": False, "Output": False}, f"{ran}")
+os.environ["RPA_RUN_MODULES"] = "Login"
+rec = StatusRec(); rr.status = rec; ran.clear()
+rr.main()
+check("돌릴 게 없으면 run_modules 없이 중단 + 사유", not ran and rec.of("finish")[-1] == ("stopped", "이번 실행 모듈이 비었습니다"), f"{rec.of('finish')}")
+os.environ.pop("RPA_RUN_MODULES", None)
+
 finish()

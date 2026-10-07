@@ -62,17 +62,21 @@ SITES_SECTION = "Sites"
 ERPIA_SECTION = "ERPia"              # {"ExePath": "C:/…/ERPiaMain.exe"}. 아래 'ERPia 프로그램 위치' 절
 ERPIA_EXE_NAME = "ERPiaMain.exe"
 SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
-# 자동 실행 예약: 요일(월=0 … 일=6) + 시각("HH:MM", 5분 단위, 여러 개)
+# 자동 실행 예약: 요일(월=0 … 일=6, 모든 줄이 같이 씀) + 줄(slots). 줄 = {at:"HH:MM", run?:[모듈 키]} - run 이 없으면 '전체'.
+# (2026-10-07 시각별 모듈 - 설계 docs/superpowers/specs/2026-10-06-settings-schedule-design.md 5절. 옛 모양 {days, times} 는 read_settings 가 바꾼다)
 SCHEDULE_MINUTE_STEP = 5
-SCHEDULE_MAX_TIMES = 3      # 하루에 넣을 수 있는 실행 시각 개수
+SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
+SCHEDULE_VERSION = 2        # live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
     "schedule": {
+        "version": SCHEDULE_VERSION,
         "enabled": False,
         "days": [0, 1, 2, 3, 4],    # 평일
-        "times": ["09:00"],
+        "slots": [{"at": "09:00"}],
         "next_run_at": None,
+        "next_slot": None,          # next_run_at 이 가리키는 줄의 at
         "last_launch_at": None,
-        "last_launch_by": None,     # "auto" / "manual:<아이디>"
+        "last_launch_by": None,     # "auto" / "manual:<아이디>" / "cloud"
         "last_error": None,
     },
     # 대시보드 로그인 계정. 비밀번호는 해시로만 저장한다 (대시보드가 처음 뜰 때 기본 계정을 만든다).
@@ -133,13 +137,18 @@ def settings_path():
 
 
 def read_settings():
-    """대시보드 환경설정. 없거나 깨졌으면 기본값으로 채운다."""
+    """대시보드 환경설정. 없거나 깨졌으면 기본값으로 채운다. 옛 예약 {days, times} 는 줄(slots, 모두 '전체')로 바꿔 읽는다."""
     data = read_json(settings_path())
     out = json.loads(json.dumps(DEFAULT_SETTINGS))
     if isinstance(data, dict):
         for section, values in data.items():
             if isinstance(values, dict) and isinstance(out.get(section), dict):
                 out[section].update(values)
+        old = data.get("schedule")
+        if isinstance(old, dict) and "slots" not in old and "times" in old:   # 더 옛 모양(interval_min)은 기본 줄 그대로
+            out["schedule"]["slots"] = [{"at": t} for t in old.get("times") or [] if isinstance(t, str)]
+    out["schedule"].pop("times", None)
+    out["schedule"]["version"] = SCHEDULE_VERSION
     return out
 
 

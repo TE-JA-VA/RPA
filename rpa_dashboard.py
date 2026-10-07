@@ -56,6 +56,7 @@ MAX_BODY = 64 * 1024
 SCHEDULER_TICK = 5.0
 # 대시보드를 다시 켰을 때 이만큼 안에 지난 예약은 그대로 돌리고, 더 오래된 것은 건너뛴다
 MISSED_GRACE_SEC = 120
+NOW = datetime.datetime.now   # 예약 계산의 지금 - 시험이 가짜 시계로 바꾼다 (tests/test_schedule_repeat.py)
 WEEKDAY_NAMES = "월화수목금토일"
 ACCOUNT_CACHE_SEC = 30.0
 
@@ -357,6 +358,7 @@ def any_rpa_running(snapshot=None):
 # ---------------------------------------------------------------------------
 _launch_lock = threading.Lock()
 LAUNCHED = []   # 시험용(DRY_RUN) 기록: "target:by"
+LAUNCHED_ENV = []   # 시험용(DRY_RUN): 띄울 때 더한 환경 변수 (LAUNCHED 와 같은 순서)
 LAUNCH_GRACE_SEC = 90   # 프로세스 손잡이를 잃었을 때(대시보드 재시작 등)를 대비한 최소 잠금 시간
 TARGETS = {
     # target: (설명, 파일 이름, 추가 인자). 파일은 Run_All.bat 과 같은 폴더에 있다.
@@ -433,10 +435,11 @@ def launching_sec():
     return None
 
 
-def launch(target, by):
+def launch(target, by, env=None):
     """RPA 를 새 콘솔 창으로 띄우고 설정에 기록한다.
 
     target: all / prepare / routine,  by: 'auto' 또는 'manual:<아이디>'
+    env: 자식에게 더할 환경 변수 - 예약 줄의 이번 실행 모듈(RPA_RUN_MODULES)·띄운 까닭(RPA_RUN_TRIGGER)
     """
     if target not in TARGETS:
         raise ValueError("실행 대상이 잘못되었습니다")
@@ -459,6 +462,7 @@ def launch(target, by):
         proc = None
         if DRY_RUN:
             LAUNCHED.append(f"{target}:{by}")
+            LAUNCHED_ENV.append(dict(env or {}))
         else:
             cmd = ["cmd.exe", "/c", path] if path.lower().endswith(".bat") else [path, *args]
             # 새 콘솔 창은 프로그램이 끝나면 바로 닫혀 오류 출력이 사라진다. stderr 만 파일로 남긴다.
@@ -471,7 +475,7 @@ def launch(target, by):
                 # 여기서 띄우는 실행은 모두 무인이다 (원격 버튼·자동 실행). RPA 가 사람에게 묻는 창(ERPia 위치 고르기 등)을
                 # 띄우고 기다리면 아무도 없는 PC 에서 멈추므로, 표시를 넘겨 바로 멈추고 사유를 남기게 한다.
                 proc = subprocess.Popen(cmd, cwd=os.path.dirname(path), stderr=err_fh,
-                                        env=dict(os.environ, RPA_UNATTENDED="1"),
+                                        env={**os.environ, "RPA_UNATTENDED": "1", **(env or {})},
                                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             finally:
                 if err_fh is not None:
@@ -479,7 +483,7 @@ def launch(target, by):
         now_t = time.time()
         _active.update(target=target, by=by, at=now_t, proc=proc, checked=False,
                        until=now_t + (3 if DRY_RUN else LAUNCH_GRACE_SEC))
-        now = datetime.datetime.now()
+        now = NOW()
         with _settings_lock:
             cfg = st.read_settings()
             sch = cfg["schedule"]
@@ -490,13 +494,23 @@ def launch(target, by):
             if sch.get("enabled") and by == "auto":
                 # 이번 예약을 썼으니 다음 예약 시각으로 넘긴다.
                 # 수동 실행은 예약을 건드리지 않는다 (정해진 시각에는 정해진 대로 돈다).
-                sch["next_run_at"] = next_run_iso(sch, now)
+                advance(sch, now)
             st.write_settings(cfg)
     return path
 
 
 def launch_run_all(by):
     return launch("all", by)
+
+
+# ---------------------------------------------------------------------------
+# 자동 실행 예약 (2026-10-07 시각별 모듈, 설계 2026-10-06-settings-schedule 5절)
+#   schedule = {enabled, days(월=0, 모든 줄이 같이 씀), slots:[{at, run?}], next_run_at, next_slot, policy?, last_*}
+#   run 이 없는 줄은 '전체' (쇼핑몰 받기 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
+# ---------------------------------------------------------------------------
+ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Sales, Hold, Logistics, Output
+RUN_KEYS = ("Prepare",) + ROUTINE_KEYS                             # 줄의 run 에 쓰는 키. 이 순서로 저장한다
+SLOT_NAMES = {"Prepare": "쇼핑몰 받기", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장"}   # 화면 단추와 같은 말
 
 
 def normalize_days(days):
@@ -511,21 +525,70 @@ def normalize_days(days):
     return sorted(out)
 
 
+def _check_time(t):
+    """"HH:MM" 5분 단위 → 고친 글. 틀리면 ValueError (사람에게 보일 글)."""
+    if not isinstance(t, str) or len(t) != 5 or t[2] != ":" or not (t[:2] + t[3:]).isdigit():
+        raise ValueError(f"시간 형식이 잘못되었습니다: {t!r}")
+    hh, mm = int(t[:2]), int(t[3:])
+    if hh > 23 or mm > 59 or mm % st.SCHEDULE_MINUTE_STEP:
+        raise ValueError(f"시간은 00:00~23:55 사이 {st.SCHEDULE_MINUTE_STEP}분 단위여야 합니다: {t}")
+    return f"{hh:02d}:{mm:02d}"
+
+
 def normalize_times(times):
-    """시각 목록 ["HH:MM", ...] 을 검증해 중복 없이 정렬한다. 5분 단위만 받는다."""
+    """옛 모양의 시각 목록 ["HH:MM", ...] (옛 8765 화면·옛 웹이 보낸다) 을 검증해 중복 없이 정렬한다."""
     if not isinstance(times, list) or not times:
         raise ValueError("실행 시간을 하나 이상 넣으세요")
-    out = set()
-    for t in times:
-        if not isinstance(t, str) or len(t) != 5 or t[2] != ":" or not (t[:2] + t[3:]).isdigit():
-            raise ValueError(f"시간 형식이 잘못되었습니다: {t!r}")
-        hh, mm = int(t[:2]), int(t[3:])
-        if hh > 23 or mm > 59 or mm % st.SCHEDULE_MINUTE_STEP:
-            raise ValueError(f"시간은 00:00~23:55 사이 {st.SCHEDULE_MINUTE_STEP}분 단위여야 합니다: {t}")
-        out.add(f"{hh:02d}:{mm:02d}")
-    if len(out) > st.SCHEDULE_MAX_TIMES:
-        raise ValueError(f"실행 시간은 {st.SCHEDULE_MAX_TIMES}개까지 넣을 수 있습니다")
-    return sorted(out)
+    out = sorted({_check_time(t) for t in times})
+    if len(out) > st.SCHEDULE_MAX_SLOTS:
+        raise ValueError(f"실행 시간은 {st.SCHEDULE_MAX_SLOTS}개까지 넣을 수 있습니다")
+    return out
+
+
+def normalize_run(run):
+    """줄의 run (돌릴 모듈 키 목록). None 이면 '전체'. 고친 목록 (RUN_KEYS 순서). 틀리면 ValueError."""
+    if run is None:
+        return None
+    if not isinstance(run, list) or not all(isinstance(k, str) for k in run):
+        raise ValueError("모듈 목록이 잘못되었습니다")
+    bad = [k for k in run if k not in RUN_KEYS]
+    if bad:
+        raise ValueError(f"모르는 모듈입니다: {', '.join(bad)}")
+    if len(set(run)) != len(run):
+        raise ValueError("같은 모듈이 두 번 있습니다")
+    picked = set(run)
+    if picked & {k for k in ROUTINE_KEYS if k != "Login"}:
+        picked.add("Login")          # 루틴을 돌리면 로그인은 늘 (실행 모듈 카드처럼 못 끈다)
+    else:
+        picked.discard("Login")      # 루틴 모듈이 없으면 로그인만 돌릴 까닭이 없다
+    if "Output" in picked and "Logistics" not in picked:
+        raise ValueError("운송장 출력은 물류관리와 같이 골라야 합니다")
+    if not picked:
+        raise ValueError("모듈을 하나 이상 고르세요")
+    return [k for k in RUN_KEYS if k in picked]
+
+
+def normalize_slots(slots):
+    """줄 목록 검사 → 시각 순으로 정렬한 새 목록. 틀리면 ValueError (사람에게 보일 글)."""
+    if not isinstance(slots, list) or not slots:
+        raise ValueError("실행 시간을 하나 이상 넣으세요")
+    if len(slots) > st.SCHEDULE_MAX_SLOTS:
+        raise ValueError(f"자동 실행은 {st.SCHEDULE_MAX_SLOTS}개까지 넣을 수 있습니다")
+    out = []
+    for s in slots:
+        if not isinstance(s, dict):
+            raise ValueError("자동 실행 줄이 잘못되었습니다")
+        item = {"at": _check_time(s.get("at"))}
+        run = normalize_run(s.get("run"))
+        if run is not None:
+            item["run"] = run
+        out.append(item)
+    out.sort(key=lambda x: x["at"])
+    ats = [x["at"] for x in out]
+    dup = sorted({a for a in ats if ats.count(a) > 1})
+    if dup:
+        raise ValueError(f"같은 시각이 두 번 있습니다: {', '.join(dup)}")
+    return out
 
 
 def next_slot(days, times, after):
@@ -546,9 +609,69 @@ def next_slot(days, times, after):
     return None
 
 
+def sorted_slots(sch):
+    """적힌 줄 (시각 순). 잘못 적힌 줄은 건너뛴다."""
+    return sorted((s for s in sch.get("slots") or [] if isinstance(s, dict) and isinstance(s.get("at"), str)),
+                  key=lambda s: s["at"])
+
+
+def active_slots(sch):
+    """도는 줄 (시각 순)."""
+    return sorted_slots(sch)
+
+
+def next_due(sch, after):
+    """after 뒤 가장 가까운 예약 (시각, 그 줄). 없으면 (None, None)."""
+    slots = active_slots(sch)
+    when = next_slot(sch.get("days"), [s["at"] for s in slots], after)
+    if when is None:
+        return None, None
+    at = when.strftime("%H:%M")
+    return when, next(s for s in slots if s["at"] == at)
+
+
+def advance(sch, now):
+    """다음 예약 (next_run_at·next_slot) 을 now 뒤로 잡는다. 꺼져 있으면 비운다."""
+    when, slot = next_due(sch, now) if sch.get("enabled") else (None, None)
+    sch["next_run_at"] = when.isoformat(timespec="seconds") if when else None
+    sch["next_slot"] = slot["at"] if slot else None
+
+
 def next_run_iso(sch, after):
-    nxt = next_slot(sch.get("days"), sch.get("times"), after)
-    return nxt.isoformat(timespec="seconds") if nxt else None
+    when, _ = next_due(sch, after)
+    return when.isoformat(timespec="seconds") if when else None
+
+
+def slot_of(sch):
+    """next_run_at 이 가리키는 줄 (next_slot, 없으면 next_run_at 의 시각으로 찾는다). 도는 줄에 없으면 None."""
+    at = sch.get("next_slot") or (sch.get("next_run_at") or "")[11:16]
+    return next((s for s in active_slots(sch) if s["at"] == at), None)
+
+
+def slot_target(slot, off=()):
+    """줄 하나 → (띄울 target, 자식 환경). '전체' 줄은 ('all', {}). 업체가 안 쓰는 모듈(off)을 빼고 나서 돌릴 게 없으면 (None, {})."""
+    run = slot.get("run")
+    if run is None:
+        return "all", {}
+    keys = [k for k in run if k not in set(off)]
+    routine = [k for k in keys if k in ROUTINE_KEYS]
+    if "Output" in routine and "Logistics" not in routine:
+        routine.remove("Output")            # 물류관리가 빠지면 출력도 (루틴과 같은 규칙)
+    if not set(routine) - {"Login"}:
+        routine = []                         # 로그인만 남으면 루틴은 안 돈다
+    prepare = "Prepare" in keys
+    if not routine:
+        return ("prepare", {}) if prepare else (None, {})
+    return ("all" if prepare else "routine"), {"RPA_RUN_MODULES": ",".join(routine)}
+
+
+def launch_slot(slot, by="auto", trigger="auto"):
+    """예약 줄 하나를 띄운다. 업체가 안 쓰는 모듈만 남으면 RuntimeError (사람에게 보일 글 - 예약 칸의 까닭이 된다)."""
+    off = (st.read_settings()["schedule"].get("policy") or {}).get("off") or []
+    target, env = slot_target(slot, off)
+    if target is None:
+        raise RuntimeError("업체가 쓰지 않는 모듈만 남아 건너뜁니다")
+    return launch(target, by, dict(env, RPA_RUN_TRIGGER=trigger))
 
 
 def days_label(days):
@@ -562,21 +685,29 @@ def days_label(days):
     return "·".join(WEEKDAY_NAMES[v] for v in picked) or "요일 없음"
 
 
+def slot_text(s):
+    """줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' (로그인은 안 적는다)."""
+    head = f"{s['at']}~{s['until']} 반복" if s.get("until") else s["at"]
+    if s.get("run") is None:
+        return head
+    return f"{head} {'·'.join(SLOT_NAMES[k] for k in s['run'] if k != 'Login')}".strip()
+
+
 def schedule_label(sch):
-    """'평일 09:00, 13:00' 처럼 한 줄로. 시간이 많으면 앞 3개만."""
-    times = list(sch.get("times") or [])
-    shown = ", ".join(times[:3]) + (f" 외 {len(times) - 3}개" if len(times) > 3 else "")
+    """'평일 09:00, 11:00 물류관리' 처럼 한 줄로. 줄이 많으면 앞 3개만."""
+    parts = [slot_text(s) for s in sorted_slots(sch)]
+    shown = ", ".join(parts[:3]) + (f" 외 {len(parts) - 3}개" if len(parts) > 3 else "")
     return f"{days_label(sch.get('days'))} {shown}".strip()
 
 
 class Scheduler(threading.Thread):
-    """settings.json 의 schedule(요일 + 시간) 대로 Run_All.bat 을 띄운다.
+    """settings.json 의 schedule (요일 + 줄) 대로 띄운다. 줄마다 무엇을 띄울지는 slot_target.
 
-    - 이 프로그램이 떠 있는 동안만 돈다. 대시보드 창을 닫으면 예약도 멈춘다.
-    - 대시보드가 꺼져 있던 동안 지난 예약은 켤 때 건너뛴다 (resync). 켜자마자 갑자기 돌지 않게.
+    - 이 프로그램(에이전트)이 떠 있는 동안만 돈다.
+    - 꺼져 있던 동안 지난 예약은 켤 때 건너뛴다 (resync). 켜자마자 갑자기 돌지 않게.
     - RPA 가 이미 돌고 있으면 끝날 때까지 미룬다 (건너뛰지 않는다). 그 사이 지난 예약들은 한 번으로 합쳐진다.
     - 옵저버가 떠 있어도 닫힐 때까지 미룬다 (기록하던 사람과 RPA 가 화면·마우스를 두고 부딪히지 않게).
-    - 띄운 뒤에는 next_run_at 을 다음 예약 시각으로 옮긴다.
+    - 띄운 뒤에는 다음 예약으로 옮긴다 (advance).
     """
 
     def __init__(self):
@@ -592,13 +723,13 @@ class Scheduler(threading.Thread):
             sch = cfg["schedule"]
             if not sch.get("enabled"):
                 return
-            now = datetime.datetime.now()
+            now = NOW()
             nxt = st.parse_iso(sch.get("next_run_at"))
             if nxt is not None and (now - nxt).total_seconds() <= MISSED_GRACE_SEC:
                 return
             if nxt is not None:
                 self.skipped_at = nxt
-            sch["next_run_at"] = next_run_iso(sch, now)
+            advance(sch, now)
             st.write_settings(cfg)
 
     def run(self):
@@ -618,42 +749,50 @@ class Scheduler(threading.Thread):
             cfg = st.read_settings()
             sch = cfg["schedule"]
             sch["last_error"] = text
-            # 같은 오류로 5초마다 되풀이하지 않게 다음 예약 시각으로 넘긴다
-            sch["next_run_at"] = next_run_iso(sch, datetime.datetime.now())
+            advance(sch, NOW())             # 같은 오류로 5초마다 되풀이하지 않게 다음 예약으로
             st.write_settings(cfg)
 
+    def _advance_now(self, now):
+        with _settings_lock:
+            cfg = st.read_settings()
+            advance(cfg["schedule"], now)
+            st.write_settings(cfg)
+        return cfg["schedule"]
+
+    def busy(self):
+        """지금 띄우면 안 되는 까닭 (없으면 None)."""
+        if any_rpa_running():
+            return "RPA 가 아직 돌고 있어 끝나기를 기다립니다"
+        if launch_state() is not None:
+            return "대시보드가 띄운 실행이 끝나기를 기다립니다"
+        if st.observer_open():
+            return "옵저버가 켜져 있어 닫히기를 기다립니다"
+        return None
+
     def tick(self):
-        cfg = st.read_settings()
-        sch = cfg["schedule"]
+        sch = st.read_settings()["schedule"]
         if not sch.get("enabled"):
             self.waiting_reason = None
             return
-        now = datetime.datetime.now()
+        now = NOW()
         next_run = st.parse_iso(sch.get("next_run_at"))
         if next_run is None:
-            with _settings_lock:
-                cfg = st.read_settings()
-                cfg["schedule"]["next_run_at"] = next_run_iso(cfg["schedule"], now)
-                st.write_settings(cfg)
-            self.waiting_reason = None if cfg["schedule"]["next_run_at"] else "요일·시간 설정이 비어 있습니다"
+            sch = self._advance_now(now)
+            self.waiting_reason = None if sch["next_run_at"] else "요일·시간 설정이 비어 있습니다"
             return
         if now < next_run:
             self.waiting_reason = None
             return
-        if any_rpa_running():
-            self.waiting_reason = "RPA 가 아직 돌고 있어 끝나기를 기다립니다"
+        slot = slot_of(sch)
+        if slot is None:                   # 가리키던 줄이 없어졌다 (줄을 고쳤거나 한도가 줄었다) - 띄우지 않고 다음 줄로
+            self._advance_now(now)
             return
-        if launch_state() is not None:
-            self.waiting_reason = "대시보드가 띄운 실행이 끝나기를 기다립니다"
-            return
-        if st.observer_open():
-            self.waiting_reason = "옵저버가 켜져 있어 닫히기를 기다립니다"
-            return
-        self.waiting_reason = None
-        self.launch()
+        self.waiting_reason = self.busy()
+        if self.waiting_reason is None:
+            self.launch(slot)
 
-    def launch(self):
-        launch_run_all("auto")
+    def launch(self, slot):
+        launch_slot(slot)
 
 
 SCHEDULER = Scheduler()
@@ -661,15 +800,20 @@ SCHEDULER = Scheduler()
 
 def schedule_view():
     sch = st.read_settings()["schedule"]
-    now = datetime.datetime.now()
+    now = NOW()
     nxt = st.parse_iso(sch.get("next_run_at")) if sch.get("enabled") else None
+    slots = sorted_slots(sch)
     return {
+        "version": st.SCHEDULE_VERSION,
         "enabled": bool(sch.get("enabled")),
         "days": list(sch.get("days") or []),
-        "times": list(sch.get("times") or []),
+        "slots": slots,
+        "times": [s["at"] for s in slots if not s.get("until")],   # 옛 8765 화면 (dashboard.html) 은 시각 목록만 안다
         "label": schedule_label(sch),
         "next_run_at": nxt.isoformat(timespec="seconds") if nxt else None,
+        "next_slot": sch.get("next_slot") if nxt else None,
         "next_run_in_sec": max(0, int((nxt - now).total_seconds())) if nxt else None,
+        "policy": sch.get("policy"),
         "last_launch_at": sch.get("last_launch_at"),
         "last_launch_by": sch.get("last_launch_by"),
         "last_error": sch.get("last_error"),
@@ -681,26 +825,32 @@ def schedule_view():
 
 
 def apply_schedule(payload):
-    """환경설정 화면의 '적용'. 요일·시간을 검증해 저장하고, 바뀐 것이 있으면 다음 시각을 다시 잡는다."""
+    """'적용'. 요일·줄을 검증해 저장하고, 바뀐 것이 있으면 다음 시각을 다시 잡는다.
+    payload: {enabled, days, slots} - 옛 화면(8765·옛 웹)이 보내는 {enabled, days, times} 도 받는다 (모두 '전체' 줄).
+    끌 때는 요일·줄이 비어도 된다."""
     if not isinstance(payload, dict):
         raise ValueError("잘못된 요청입니다")
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         raise ValueError("enabled 는 true/false 여야 합니다")
-    days = normalize_days(payload.get("days"))
-    times = normalize_times(payload.get("times"))
+    raw_days = payload.get("days")
+    days = [] if not enabled and raw_days in (None, []) else normalize_days(raw_days)
+    raw = payload.get("slots") if "slots" in payload else payload.get("times")
+    if not enabled and raw in (None, []):
+        slots = []
+    elif "slots" in payload:
+        slots = normalize_slots(raw)
+    else:
+        slots = [{"at": t} for t in normalize_times(raw)]
     with _settings_lock:
         cfg = st.read_settings()
         sch = cfg["schedule"]
-        changed = (bool(sch.get("enabled")) != enabled or sch.get("days") != days
-                   or sch.get("times") != times)
+        changed = bool(sch.get("enabled")) != enabled or sch.get("days") != days or sch.get("slots") != slots
         sch.pop("interval_min", None)   # 예전 '실행 주기' 방식의 값
-        sch["enabled"] = enabled
-        sch["days"] = days
-        sch["times"] = times
+        sch.update(enabled=enabled, days=days, slots=slots)
         if changed:
             sch["last_error"] = None
-            sch["next_run_at"] = next_run_iso(sch, datetime.datetime.now()) if enabled else None
+            advance(sch, NOW())
         if not st.write_settings(cfg):
             raise RuntimeError("설정 파일을 쓰지 못했습니다")
     return changed
@@ -879,7 +1029,7 @@ def settings_view(session):
         "rpa_running": any_rpa_running(),
         "erpia_account": erpia_account_view(),
         "me": dict(me_view(session), default_password=bool(acc.get("default_password"))),
-        "schedule_limits": {"max_times": st.SCHEDULE_MAX_TIMES, "minute_step": st.SCHEDULE_MINUTE_STEP},
+        "schedule_limits": {"max_times": st.SCHEDULE_MAX_SLOTS, "minute_step": st.SCHEDULE_MINUTE_STEP},
         "routine_modules": routine_modules_view(),
     }
 

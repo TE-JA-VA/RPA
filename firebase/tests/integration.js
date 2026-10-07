@@ -164,10 +164,17 @@ await waitFor("set_schedule 가 done 이 된다", async () => (await schedRef.ch
 const sres = (await schedRef.get()).val();
 check(/월·수·금 09:05, 13:30/.test(sres.result || ""), `결과에 요일·시간 (${sres.result})`);
 const saved = JSON.parse(readFileSync(join(statusDir, "settings.json"), "utf8")).schedule;
-check(saved.enabled === true && saved.days.join() === "0,2,4" && saved.times.join() === "09:05,13:30", "PC 의 settings.json 에 저장");
+check(saved.enabled === true && saved.days.join() === "0,2,4" && saved.slots.map((s) => s.at).join() === "09:05,13:30" && !("times" in saved),
+      "PC 의 settings.json 에 저장 (옛 모양으로 보내도 '전체' 줄로)");
 check(typeof saved.next_run_at === "string", "다음 실행 시각을 잡는다");
 await waitFor("live.schedule 로 올라온다", async () =>
-  (await db.ref("apps/rpa/live/c_demo/pc_office/schedule/times").get()).val()?.join() === "09:05,13:30");
+  ((await db.ref("apps/rpa/live/c_demo/pc_office/schedule/slots").get()).val() || []).map((s) => s.at).join() === "09:05,13:30");
+const slotRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
+  type: "set_schedule", args: { enabled: true, days: [0, 2, 4], slots: [{ at: "10:00" }, { at: "11:00", run: ["Logistics"] }] }, by: adminUser.uid,
+  created_at: now, expires_at: now + 600, state: "queued",
+});
+await waitFor("줄 모양 set_schedule 도 done", async () => (await slotRef.child("state").get()).val() === "done");
+check(/월·수·금 10:00, 11:00 물류관리/.test(((await slotRef.get()).val().result) || ""), "결과 글에 줄의 모듈");
 const badSched = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
   type: "set_schedule", args: { enabled: true, days: [9], times: ["09:00"] }, by: adminUser.uid,
   created_at: now, expires_at: now + 600, state: "queued",

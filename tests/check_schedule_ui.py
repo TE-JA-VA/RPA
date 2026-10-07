@@ -157,7 +157,7 @@ try:
         ck = {c["name"]: c["value"] for c in pg.context.cookies()}
         for body_, what in ((b'{"schedule":{"enabled":true,"days":[],"times":["09:00"]}}', "요일 없음"),
                             (b'{"schedule":{"enabled":true,"days":[0],"times":["09:07"]}}', "5분 단위 아님"),
-                            (b'{"schedule":{"enabled":true,"days":[0],"times":["08:00","09:00","10:00","11:00"]}}', "시간 4개")):
+                            (json.dumps({"schedule": {"enabled": True, "days": [0], "times": [f"{h:02d}:00" for h in range(13)]}}).encode(), "시간 13개")):
             req = urllib.request.Request(BASE + "/api/settings", data=body_, method="POST",
                                          headers={"Content-Type": "application/json", "X-RPA-Action": "1", "Cookie": f"rpa_session={ck['rpa_session']}"})
             try:

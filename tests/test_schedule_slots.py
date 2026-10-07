@@ -54,27 +54,40 @@ for bad_days in ([], [7], [-1], ["1"], [True], None, "0,1"):
     except ValueError:
         check(True, f"요일 거부 {bad_days!r}")
 for bad_t in ([], ["9:00"], ["24:00"], ["09:03"], ["09:60"], ["0900"], [900], ["ab:cd"], None,
-              [f"{h:02d}:00" for h in range(4)]):
+              [f"{h:02d}:00" for h in range(13)]):
     label = bad_t if not isinstance(bad_t, list) or len(bad_t) < 5 else f"{len(bad_t)}개"
     try:
         d.normalize_times(bad_t); check(False, f"시간 거부 {label!r}")
     except ValueError:
         check(True, f"시간 거부 {label!r}")
-check(len(d.normalize_times([f"{h:02d}:00" for h in range(3)])) == 3, "3개까지는 받음")
+check(len(d.normalize_times([f"{h:02d}:00" for h in range(12)])) == 12, "12개까지는 받음 (PC 상한 - 업체 한도는 에이전트가)")
 
 print("\n=== 3. 이름표 ===")
 check(d.days_label(list(range(7))) == "매일", "매일")
 check(d.days_label([4, 3, 2, 1, 0]) == "평일", "평일")
 check(d.days_label([6, 5]) == "주말", "주말")
 check(d.days_label([0, 2, 4]) == "월·수·금", "월·수·금")
-check(d.schedule_label({"days": WK, "times": ["09:00", "13:00"]}) == "평일 09:00, 13:00", "평일 09:00, 13:00")
-check(d.schedule_label({"days": WK, "times": ["08:00", "10:00", "12:00", "14:00", "16:00"]}) == "평일 08:00, 10:00, 12:00 외 2개", "많으면 앞 3개 + 외 N개")
+check(d.schedule_label({"days": WK, "slots": [{"at": "09:00"}, {"at": "13:00"}]}) == "평일 09:00, 13:00", "평일 09:00, 13:00")
+check(d.schedule_label({"days": WK, "slots": [{"at": t} for t in ("08:00", "10:00", "12:00", "14:00", "16:00")]}) == "평일 08:00, 10:00, 12:00 외 2개", "많으면 앞 3개 + 외 N개")
+check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "run": ["Login", "Logistics"]}]}) == "평일 10:00, 11:00 물류관리",
+      "고르기 줄은 시각 뒤에 모듈 (로그인은 안 적는다)")
 
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
-check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["times"] == ["09:00"], "기본: 꺼짐, 평일 09:00")
+check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == 2, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 2")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
+st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
+conv = st.read_settings()["schedule"]
+check(conv["slots"] == [{"at": "13:30"}, {"at": "09:05"}] and "times" not in conv and conv["version"] == 2,
+      "옛 모양 {days, times} 는 '전체' 줄로 읽힌다 (Review Focus 4)")
+st.write_settings({"schedule": {"enabled": False, "interval_min": 15, "next_run_at": None}})
+check(st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], "더 옛 모양 (interval_min, 시각 없음) 은 기본 줄 그대로")
+st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
+sv = d.schedule_view()
+check(sv["times"] == ["09:05", "13:30"] and sv["slots"][0] == {"at": "09:05"} and sv["version"] == 2,
+      "화면 값: 줄은 시각 순, 옛 8765 화면용 times 도, 판 2 (줄이 0개여도 판으로 새 판을 안다 - Review Focus 5)")
 
 print("\n=== 5. 적용 ===")
 for bad in ({"enabled": "yes", "days": WK, "times": ["09:00"]}, {"enabled": True, "days": [], "times": ["09:00"]},
@@ -86,15 +99,48 @@ for bad in ({"enabled": "yes", "days": WK, "times": ["09:00"]}, {"enabled": True
 now = dt.datetime.now()
 changed = d.apply_schedule({"enabled": True, "days": list(range(7)), "times": ["23:55", "00:00", "12:00"]})
 sch = st.read_settings()["schedule"]
-check(changed and sch["times"] == ["00:00", "12:00", "23:55"] and sch["days"] == list(range(7)), "켜기 적용 -> 정렬해 저장")
+check(changed and [s["at"] for s in sch["slots"]] == ["00:00", "12:00", "23:55"] and sch["days"] == list(range(7)), "켜기 적용 -> 정렬해 저장")
 check("interval_min" not in sch, "적용하면 예전 interval_min 은 지움")
 nxt = st.parse_iso(sch["next_run_at"])
-check(nxt == d.next_slot(sch["days"], sch["times"], now) or nxt == d.next_slot(sch["days"], sch["times"], dt.datetime.now()),
+check(nxt == d.next_slot(sch["days"], [s["at"] for s in sch["slots"]], now) or nxt == d.next_slot(sch["days"], [s["at"] for s in sch["slots"]], dt.datetime.now()),
       f"next_run_at = 다음 예약 ({sch['next_run_at']})")
 check(d.apply_schedule({"enabled": True, "days": [6, 5, 4, 3, 2, 1, 0], "times": ["12:00", "00:00", "23:55"]}) is False,
       "같은 값(순서만 다름) 재적용 -> changed=False")
 sv = d.schedule_view()
 check(sv["label"] == "매일 00:00, 12:00, 23:55" and sv["times"] and sv["days"], f"schedule_view 이름표: {sv['label']}")
+
+print("\n=== 5-2. 줄마다 모듈 (2026-10-07 시각별 모듈) ===")
+check(d.normalize_run(None) is None, "run 이 없으면 '전체'")
+check(d.normalize_run(["Logistics"]) == ["Login", "Logistics"], "루틴 모듈을 고르면 로그인은 늘 붙는다")
+check(d.normalize_run(["Output", "Logistics", "Prepare"]) == ["Prepare", "Login", "Logistics", "Output"], "정한 순서로 (쇼핑몰 받기 → 루틴)")
+check(d.normalize_run(["Prepare", "Login"]) == ["Prepare"], "쇼핑몰 받기만이면 로그인은 뺀다")
+for bad, why in ((["Output"], "물류관리와 같이"), (["Login"], "하나 이상"), ([], "하나 이상"), (["Nope"], "모르는 모듈"),
+                 (["Sales", "Sales"], "두 번"), ("Sales", "잘못")):
+    try:
+        d.normalize_run(bad); check(False, f"run 거부 {bad!r}")
+    except ValueError as e:
+        check(why in str(e), f"run 거부 {bad!r} ({e})")
+slots = d.normalize_slots([{"at": "11:00", "run": ["Logistics"]}, {"at": "10:00"}])
+check(slots == [{"at": "10:00"}, {"at": "11:00", "run": ["Login", "Logistics"]}], f"줄은 시각 순, '전체' 줄엔 run 이 없다 ({slots})")
+for bad, why in (([{"at": "10:00"}, {"at": "10:00", "run": ["Hold"]}], "같은 시각"), ([{"at": "10:03"}], "5분"),
+                 ([{"at": f"{h:02d}:00"} for h in range(13)], "12개"), ([], "하나 이상"), (["10:00"], "줄이 잘못")):
+    try:
+        d.normalize_slots(bad); check(False, f"줄 거부 {why}")
+    except ValueError as e:
+        check(why in str(e), f"줄 거부 {why} ({e})")
+check(d.slot_target({"at": "10:00"}) == ("all", {}), "'전체' 줄 → 전체 실행, 넘길 모듈 없음")
+check(d.slot_target({"at": "11:00", "run": ["Login", "Logistics"]}) == ("routine", {"RPA_RUN_MODULES": "Login,Logistics"}), "쇼핑몰 받기 없음 → 루틴만")
+check(d.slot_target({"at": "12:00", "run": ["Prepare"]}) == ("prepare", {}), "쇼핑몰 받기만 → 프리페어")
+check(d.slot_target({"at": "13:00", "run": ["Prepare", "Login", "Sales"]}) == ("all", {"RPA_RUN_MODULES": "Login,Sales"}), "둘 다 → 전체 실행 + 루틴 모듈")
+check(d.slot_target({"at": "14:00", "run": ["Login", "Hold"]}, off=["Hold"]) == (None, {}), "업체가 안 쓰는 모듈을 빼면 돌릴 게 없다 → 안 띄움")
+check(d.slot_target({"at": "14:00", "run": ["Login", "Logistics", "Output"]}, off=["Logistics"]) == (None, {}), "물류관리를 빼면 출력도 빠진다")
+d.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "10:00"}, {"at": "11:00", "run": ["Logistics"]}]})
+sch = st.read_settings()["schedule"]
+check(sch["slots"] == [{"at": "10:00"}, {"at": "11:00", "run": ["Login", "Logistics"]}] and sch["next_slot"] in ("10:00", "11:00"),
+      f"줄 적용 → 저장·다음 줄 ({sch['next_slot']})")
+check(d.apply_schedule({"enabled": False, "days": [], "slots": []}) is True and st.read_settings()["schedule"]["slots"] == [],
+      "끌 때는 요일·줄이 비어도 된다")
+d.apply_schedule({"enabled": True, "days": list(range(7)), "times": ["23:55", "00:00", "12:00"]})   # 6절이 기대하는 상태로 되돌린다
 
 print("\n=== 6. 스케줄러 ===")
 d.LAUNCHED.clear()
@@ -121,7 +167,7 @@ check(d.LAUNCHED == ["all:auto"], "끝나면 자동 실행")
 sch = st.read_settings()["schedule"]
 nxt = st.parse_iso(sch["next_run_at"])
 check(sch["last_launch_by"] == "auto" and nxt and nxt > dt.datetime.now(), f"띄운 뒤 다음 예약으로 넘어감 ({sch['next_run_at']})")
-check(nxt.strftime("%H:%M") in sch["times"], "다음 시각이 예약 시간 중 하나")
+check(nxt.strftime("%H:%M") in [s["at"] for s in sch["slots"]], "다음 시각이 예약 시간 중 하나")
 d._active["until"] = 0; d._active["proc"] = None
 
 before = sch["next_run_at"]
@@ -192,6 +238,15 @@ finally:
 d.LAUNCHED[:] = saved
 d._active["until"] = 0
 d._active["proc"] = None
+
+print("\n=== 6-4. 고르기 줄은 그 모듈만 넘긴다 ===")
+saved = list(d.LAUNCHED)
+d.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Logistics"]}]})
+c = st.read_settings(); c["schedule"]["next_run_at"] = (dt.datetime.now() - dt.timedelta(seconds=3)).isoformat(timespec="seconds"); st.write_settings(c)
+sched.tick()
+check(d.LAUNCHED == saved + ["routine:auto"] and d.LAUNCHED_ENV[-1] == {"RPA_RUN_MODULES": "Login,Logistics", "RPA_RUN_TRIGGER": "auto"},
+      f"next_slot 의 줄대로 루틴만 + 이번 실행 모듈 ({d.LAUNCHED_ENV[-1:]})")
+d.LAUNCHED[:] = saved; d._active["until"] = 0; d._active["proc"] = None
 
 print("\n=== 7. 대시보드를 다시 켰을 때 (resync) ===")
 set_next(-3600)

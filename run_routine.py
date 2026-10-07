@@ -206,6 +206,25 @@ ROUTINE_MODULES = (
     ("logistics", "Logistics", "물류관리",             ("logistics_screen", "logistics", "shipping_setup", "logistics_save"), 8),
     ("output",    "Output",    "운송장 출력 / 엑셀 생성", ("output",), 16),
 )
+RUN_MODULES_ENV = "RPA_RUN_MODULES"   # 예약 줄이 고른 이번 실행 모듈 (rpa_dashboard.launch_slot) - 있으면 설정 파일 대신
+
+
+def run_modules_from_env(keys):
+    """예약이 넘긴 이번 실행 모듈. ({설정 키: True/False}, 모르는 키) - 변수가 없으면 (None, []).
+    로그인은 늘 켬, 물류관리가 없으면 출력은 뺀다 (설정 파일 규칙과 같다). 돌릴 게 없으면 전부 False."""
+    raw = os.environ.get(RUN_MODULES_ENV)
+    if raw is None:
+        return None, []
+    wanted = [k.strip() for k in raw.split(",") if k.strip()]
+    unknown = [k for k in wanted if k not in keys]
+    on = {k for k in wanted if k in keys}
+    if "Logistics" not in on:
+        on.discard("Output")
+    if not on - {"Login"}:
+        return {k: False for k in keys}, unknown
+    on.add("Login")
+    return {k: k in on for k in keys}, unknown
+
 # 모듈 함수가 돌려주는 결과와 화면에 쓸 이름
 MODULE_RESULT_LABEL = {"done": "완료", "no_target": "대상 없음", "skipped": "건너뜀",
                        "failed": "실패", "stopped": "중단"}
@@ -5848,17 +5867,30 @@ def main():
     if account and (account.get("admin_code") or account.get("user_id")):
         status.account(account.get("admin_code"), account.get("user_id"))
 
-    try:
-        selected, unknown = pl.load_routine_modules([m[1] for m in ROUTINE_MODULES])
-    except Exception as e:
-        log(f"설정 오류: {e}")
-        status.finish("stopped", f"설정 파일 오류: {e}")
+    keys = [m[1] for m in ROUTINE_MODULES]
+    selected, unknown = run_modules_from_env(keys)
+    from_env = selected is not None
+    if not from_env:
+        try:
+            selected, unknown = pl.load_routine_modules(keys)
+        except Exception as e:
+            log(f"설정 오류: {e}")
+            status.finish("stopped", f"설정 파일 오류: {e}")
+            log(f"=== 루틴 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+            return
+    for k in unknown:
+        log(f"경고: 예약에서 넘긴 '{k}' 는 모르는 모듈이라 무시합니다." if from_env
+            else f"경고: '{pl.ROUTINE_SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
+    if from_env and not any(selected.values()):
+        log("이번 실행 모듈이 비었습니다 (예약에서 넘긴 값)")
+        status.finish("stopped", "이번 실행 모듈이 비었습니다")
         log(f"=== 루틴 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
-    for k in unknown:
-        log(f"경고: '{pl.ROUTINE_SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
-    log("실행할 모듈: " + " / ".join(
-        f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
+    if from_env:
+        log("이번 실행 모듈 (예약): " + " / ".join(label for _, cfg, label, _, _ in ROUTINE_MODULES if selected[cfg]))
+    else:
+        log("실행할 모듈: " + " / ".join(
+            f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
 
     result, reason = run_modules(selected)
     status.finish(result, reason)
