@@ -4,9 +4,9 @@
 
 **Goal:** 우리 관리 화면에서 업체·PC·판을 골라 [업데이트] 를 누르면, 그 PC 가 RPA 가 쉴 때 바뀐 파일만 받아(서명 확인) 바꾸고, 3분 점검에 실패하거나 도중에 꺼지면 반드시 옛 판으로 되돌린다. 직전 판 하나를 보관해 [이전 판으로 되돌리기] 도 된다.
 
-**Architecture:** PC 쪽은 새 모듈 셋 - `update_sign.py`(표준 라이브러리 ed25519), `rpa_update.py`(상태·받기·확인·넘기기, 에이전트와 도우미가 같이 씀), `update_helper.py`(프로그램 폴더 밖에서 도는 도우미: 보관·바꾸기·3분 점검·되돌리기·재부팅 복구). 에이전트는 명령 `update`/`rollback` 을 받아 스레드로 받기→대기→넘기기를 하고, 도우미는 일회용 예약 작업 `\AFTER MARKET\RPA Update` 로 띄운다. 우리 쪽은 `tools/publish_release.py`(서명·판 전용 호스팅 사이트 폴더·5개+안정본 유지·배포), `setup.js release-*`, 관리 화면(PC 줄 상태·[업데이트]·[되돌리기]·판 목록·[안정본으로 지정]), 업체 웹(판 옆 상태·실행 단추 잠금).
+**Architecture:** PC 쪽은 새 모듈 셋 - `update_sign.py`(표준 라이브러리 ed25519), `rpa_update.py`(상태·받기·확인·넘기기, 에이전트와 도우미가 같이 씀), `update_helper.py`(프로그램 폴더 밖에서 도는 도우미: 보관·바꾸기·3분 점검·되돌리기·재부팅 복구). 에이전트는 명령 `update`/`rollback` 을 받아 스레드로 받기→대기→넘기기를 하고, 도우미는 일회용 예약 작업 `\AFTER MARKET\RPA Update` 로 띄운다. 우리 쪽은 `tools/publish_release.py`(서명·업데이트 전용 호스팅 사이트 폴더·5개+안정본 유지·배포), `setup.js release-*`, 관리 화면(PC 줄 상태·[업데이트]·[되돌리기]·판 목록·[안정본으로 지정]), 업체 웹(판 옆 상태·실행 단추 잠금).
 
-**Tech Stack:** Python 3.14 (내장 파이썬, 표준 라이브러리만), Windows 작업 스케줄러(schtasks), Firebase Realtime DB / Hosting (판 전용 사이트), Node(firebase-admin) 관리 도구, Playwright 시험, 윈도우 샌드박스.
+**Tech Stack:** Python 3.14 (내장 파이썬, 표준 라이브러리만), Windows 작업 스케줄러(schtasks), Firebase Realtime DB / Hosting (업데이트 전용 사이트), Node(firebase-admin) 관리 도구, Playwright 시험, 윈도우 샌드박스.
 
 **Spec:** `docs/superpowers/specs/2026-10-07-auto-update-design.md`
 
@@ -47,8 +47,8 @@
 | `rpa_dashboard.py` | `launch`·`Scheduler.busy` 가 `rpa_update.busy_reason()` 을 본다 |
 | `firebase/agent/agent.py` | `update`·`rollback` 명령, `by` 확인, 업데이트 스레드, `alive` 적기, `live.update` |
 | `tools/build_release.py` | PROGRAM_FILES 에 새 모듈 셋 |
-| `tools/publish_release.py` (새) | 열쇠 만들기, 서명, 판 전용 사이트 폴더, 5개+안정본 유지, `setup.js release-set`, 배포 |
-| `firebase/releases.json` (새) | 판 전용 사이트 배포 설정 (기존 `firebase.json` 은 그대로) |
+| `tools/publish_release.py` (새) | 열쇠 만들기, 서명, 업데이트 전용 사이트 폴더, 5개+안정본 유지, `setup.js release-set`, 배포 |
+| `firebase/releases.json` (새) | 업데이트 전용 사이트 배포 설정 (기존 `firebase.json` 은 그대로) |
 | `firebase/admin/ops.js`·`setup.js`·`admin.js`·`AFTERMARKET_SETUP.html` | 판 목록·안정본·업데이트/되돌리기 명령·PC 줄 상태 |
 | `firebase/web/rpa.js`·`index.html` | 판 옆 업데이트 상태, 실행 단추 잠금 |
 | `tools/sandbox_inner.ps1`·`tools/sandbox_test.py` | 판 B 업데이트·되돌리기·망가진 판 C·도중 끊김 |
@@ -1823,7 +1823,7 @@ def _set_releases(listing):
 
 
 def _deploy():
-    if input("판 전용 호스팅에 배포할까요? (예/아니오) ").strip() != "예":
+    if input("업데이트 전용 호스팅에 배포할까요? (예/아니오) ").strip() != "예":
         raise SystemExit("배포하지 않았습니다 (사이트 폴더와 DB 목록은 바뀌었습니다 - 다음에 다시 내보내면 같이 올라갑니다)")
     subprocess.run(["firebase", "deploy", "--only", "hosting", "--config", "releases.json"], cwd=os.path.join(REPO, "firebase"), check=True, shell=True)
 
@@ -2239,7 +2239,7 @@ if (Test-Path "$T\site") {
 
 `sandbox_test.py` 는 `site\versions.txt` 에 B·C 판 번호를 한 줄씩 쓴다. 샌드박스의 기존 30분 대기는 45분으로 늘린다 (3분 점검이 세 번).
 
-- [ ] **Step 3: 문서** - `docs/firebase-architecture.md` 시험 표에 새 시험 파일 넷과 샌드박스 줄(자동 업데이트), 구조 절에 "자동 업데이트: 관리 화면 → 명령 update/rollback → 에이전트 받기·대기 → 도우미(update\\runner) → 3분 점검·되돌리기, 판 전용 호스팅 rpa-test-f02e0-releases (firebase/releases.json)". 설계서 상태 줄에 "2026-10-0X 구현 (계획 docs/superpowers/plans/2026-10-07-auto-update.md)".
+- [ ] **Step 3: 문서** - `docs/firebase-architecture.md` 시험 표에 새 시험 파일 넷과 샌드박스 줄(자동 업데이트), 구조 절에 "자동 업데이트: 관리 화면 → 명령 update/rollback → 에이전트 받기·대기 → 도우미(update\\runner) → 3분 점검·되돌리기, 업데이트 전용 호스팅 rpa-test-f02e0-releases (firebase/releases.json)". 설계서 상태 줄에 "2026-10-0X 구현 (계획 docs/superpowers/plans/2026-10-07-auto-update.md)".
 
 - [ ] **Step 4: 빌드·샌드박스** (Task 10 의 열쇠 만들기와 공개 열쇠 넣기가 끝난 뒤)
 
@@ -2269,7 +2269,7 @@ git commit -m "자동 업데이트 10: 공개 열쇠"
 
 - [ ] **Step 2: Task 9 Step 4 (빌드·샌드박스)** - 이 열쇠로.
 
-- [ ] **Step 3: 판 전용 호스팅 사이트 만들기** (사용자 확인 뒤): `firebase hosting:sites:create rpa-test-f02e0-releases --project rpa-test-f02e0` (이름이 이미 쓰이면 사용자와 다른 이름을 정해 `firebase/releases.json`·`rpa_update.UPDATE_BASE_URL` 을 같이 고치고 다시 빌드).
+- [ ] **Step 3: 업데이트 전용 호스팅 사이트 만들기** (사용자 확인 뒤): `firebase hosting:sites:create rpa-test-f02e0-releases --project rpa-test-f02e0` (이름이 이미 쓰이면 사용자와 다른 이름을 정해 `firebase/releases.json`·`rpa_update.UPDATE_BASE_URL` 을 같이 고치고 다시 빌드).
 
 - [ ] **Step 4: 웹·DB 배포** (사용자 확인 뒤): `firebase deploy --only hosting --config firebase.json` (업체 웹 상태 글). 규칙은 안 바뀌었다.
 
@@ -2281,9 +2281,9 @@ git commit -m "자동 업데이트 10: 공개 열쇠"
 
 ## 자체 점검 (계획 쓴 뒤)
 
-- **설계서 덮기:** 2절 결정 - 관리 화면 [업데이트](T7)·호스팅 판 전용 사이트(T6·T10)·끝나면 바로(T4·T5)·되돌리기(T3)·직전 판 보관과 [되돌리기](T3·T5·T7)·옵저버 안내 뺌(없음)·A 방식(T2·T3)·5개+안정본/최신본(T6·T7). 4절 내보내기(T6), 5절 서명(T1·T2·T10), 6절 에이전트(T5), 7절 도우미(T3·T4), 8절 관리 화면(T7), 9절 업체 웹(T8), 10절 규칙(T5 decide·T8), 11절 오류 표(T2·T3), 12절 시험(T1~T9).
+- **설계서 덮기:** 2절 결정 - 관리 화면 [업데이트](T7)·호스팅 업데이트 전용 사이트(T6·T10)·끝나면 바로(T4·T5)·되돌리기(T3)·직전 판 보관과 [되돌리기](T3·T5·T7)·옵저버 안내 뺌(없음)·A 방식(T2·T3)·5개+안정본/최신본(T6·T7). 4절 내보내기(T6), 5절 서명(T1·T2·T10), 6절 에이전트(T5), 7절 도우미(T3·T4), 8절 관리 화면(T7), 9절 업체 웹(T8), 10절 규칙(T5 decide·T8), 11절 오류 표(T2·T3), 12절 시험(T1~T9).
 - **설계서와 다르게 한 것 (실행 때 장부에 `Ruling:` 으로):**
-  - 판 전용 사이트를 `firebase.json` 대상 둘이 아니라 **별도 설정 `firebase/releases.json`** 으로 배포 - 기존 `--only hosting`·에뮬레이터 시험(5000번)을 안 바꾼다.
+  - 업데이트 전용 사이트를 `firebase.json` 대상 둘이 아니라 **별도 설정 `firebase/releases.json`** 으로 배포 - 기존 `--only hosting`·에뮬레이터 시험(5000번)을 안 바꾼다.
   - **파이썬(`runtime`)이 바뀐 판은 자동 업데이트를 거절**("설치 파일로") - 파이썬 실행 환경은 판 목록 밖이라 지문으로 비교할 수 없다.
   - 3분 점검의 "첫 로그인" 은 **첫 heartbeat 성공**으로 본다 (로그인과 쓰기가 다 된 것). 샌드박스는 표시 파일 `update\health_local` 로 로그인 없이 판 점검만 (가짜 계정이라 로그인이 거부된다).
   - 샌드박스는 명령을 받을 수 없어(가짜 계정) 에이전트 스레드가 하는 `run_update` 를 직접 부른다 - 명령 검사(`do_update`)는 test_agent 가 맡는다.

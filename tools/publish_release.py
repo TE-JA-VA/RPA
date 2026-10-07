@@ -115,7 +115,7 @@ def _set_stable(version):
 
 
 def _deploy():
-    if input("판 전용 호스팅에 배포할까요? (예/아니오) ").strip() != "예":
+    if input("업데이트 전용 호스팅에 배포할까요? (예/아니오) ").strip() != "예":
         raise SystemExit("배포하지 않았습니다 (사이트 폴더만 바뀌었고 DB 목록은 그대로입니다 - 다음에 다시 내보내면 같이 올라갑니다)")
     subprocess.run(["firebase", "deploy", "--only", "hosting", "--config", "releases.json"], cwd=os.path.join(REPO, "firebase"), check=True, shell=True)
 
