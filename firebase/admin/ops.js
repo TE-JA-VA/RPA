@@ -180,6 +180,29 @@ export async function setScheduleLimit(cid, n) {
   await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/schedule`).set(Number(s));
   return { cid, schedule: Number(s) };
 }
+// 판 목록 (자동 업데이트 4절) - meta/releases. 판 키는 점을 _ 로 (RTDB 키에 . 을 못 쓴다)
+const relKey = (v) => String(v).replaceAll(".", "_");
+const VERSION_RE = /^\d{4}\.\d{2}\.\d{2}-\d+$/;
+export async function releasesOf() {
+  const v = (await rtdb.ref("meta/releases").get()).val() ?? {};
+  const list = Object.values(v.list ?? {}).sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""));
+  return { list, stable: v.stable ?? null, newest: v.newest ?? null };
+}
+export async function setReleases(list) {
+  if (!Array.isArray(list) || list.some((x) => !VERSION_RE.test(x?.version ?? ""))) throw new Refused("판 목록 모양이 다릅니다");
+  const cur = await releasesOf();
+  const newest = [...list].sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""))[0]?.version ?? null;
+  const stable = list.some((x) => x.version === cur.stable) ? cur.stable : null;
+  await rtdb.ref("meta/releases").set({ list: Object.fromEntries(list.map((x) => [relKey(x.version),
+    { version: x.version, published_at: x.published_at ?? null, bytes: Number(x.bytes) || 0, memo: x.memo ?? "" }])), stable, newest });
+  return { count: list.length, newest, stable };
+}
+export async function setStable(version) {
+  const cur = await releasesOf();
+  if (!cur.list.some((x) => x.version === version)) throw new Refused(`올라가 있지 않은 판입니다: ${version}`);
+  await rtdb.ref("meta/releases/stable").set(version);
+  return { stable: version };
+}
 export async function scheduleLimitOf(cid) {
   checkKey("cid", cid);
   return (await companyOf(cid, { removed: true })).apps?.rpa?.limits?.schedule ?? null;

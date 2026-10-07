@@ -44,3 +44,5 @@ firebase/**/*-debug.log
 firebase/agent/*_기록.txt*
 firebase/agent/history_pos.txt
 firebase/agent/*.zip
+firebase/releases_site/
+firebase/admin/update_signing_key.txt

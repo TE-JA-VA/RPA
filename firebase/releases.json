@@ -1,0 +1,8 @@
+{
+  "hosting": {
+    "site": "rpa-test-f02e0-releases",
+    "public": "releases_site",
+    "ignore": ["**/.*", "published.json", "stable.txt"],
+    "headers": [{ "source": "**", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }]
+  }
+}

@@ -12,3 +12,5 @@ tests/shots/
 tests/status_sim/
 *_result*.txt
 stderr_*.txt
+firebase/releases_site/
+firebase/admin/update_signing_key.txt

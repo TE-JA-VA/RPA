@@ -186,6 +186,22 @@ rc, out = setup("slots", CID, "13")
 check(rc != 0 and out.strip().startswith("오류:") and db_get(f"meta/companies/{CID}/apps/rpa/limits/schedule") == 3, "13 은 거절 (0~12)", out[-200:])
 rc, out = setup("slots", "t_none", "3")
 check(rc != 0 and "먼저 company" in out, "없는 업체는 거절", out[-200:])
+print("=== 6. 판 목록 (자동 업데이트 4절) ===")
+import tempfile  # noqa: E402
+lst = os.path.join(tempfile.gettempdir(), "rpa_releases_test.json")
+with open(lst, "w", encoding="utf-8") as f:
+    json.dump([{"version": "2026.10.07-4", "published_at": "2026-10-07T12:00:00", "bytes": 10, "memo": "a"},
+               {"version": "2026.10.07-5", "published_at": "2026-10-07T13:00:00", "bytes": 20, "memo": "b"}], f, ensure_ascii=False)
+rc, out = setup("release-set", lst)
+check(rc == 0, "release-set", out.strip()[-200:])
+rc, out = setup("stable", "2026.10.07-4")
+rc, out = setup("releases")
+r = json.loads(out.strip().splitlines()[-1])
+check(r["newest"] == "2026.10.07-5" and r["stable"] == "2026.10.07-4" and [x["version"] for x in r["list"]] == ["2026.10.07-5", "2026.10.07-4"],
+      "최신본 자동·안정본 지정·최근 판이 위", r)
+rc, out = setup("stable", "2026.10.07-9")
+check(rc == 1 and "올라가 있지 않은 판" in out, "목록에 없는 판은 안정본으로 못 한다", out[-200:])
+os.remove(lst)
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

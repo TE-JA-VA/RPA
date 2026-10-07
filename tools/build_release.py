@@ -54,6 +54,9 @@ PROGRAM_FILES = [
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
     ("firebase/agent/background.py", "firebase/agent/background.py"),         # 에이전트 감독 (2부)
     ("firebase/agent/에이전트_시작.bat", "firebase/agent/에이전트_시작.bat"),
+    ("rpa_update.py", "rpa_update.py"),                                       # 자동 업데이트 (3부)
+    ("update_helper.py", "update_helper.py"),
+    ("update_sign.py", "update_sign.py"),
 ]
 # 판 목록에 넣지 않는 것 (문서·빈 배포 틀). 업데이트가 건드리지 않는다
 OTHER_FILES = [

@@ -16,6 +16,9 @@
 //   node setup.js tokens   <cid> [+1000|-50] [메모]                토큰 넣기·빼기 (처음 넣으면 토큰 정보를 만든다), 금액 없으면 보기
 //   node setup.js price    [<모듈 키> <배율>]                       토큰 배율 보기·바꾸기 (예: price logistics 2)
 //   node setup.js usage    [cid]                                   업체마다 남은 토큰·이번 달 쓴 토큰
+//   node setup.js releases                                         올라간 판 목록·안정본·최신본 (JSON 한 줄)
+//   node setup.js release-set <json 파일>                          판 목록 통째로 쓰기 (tools/publish_release.py 가 부른다)
+//   node setup.js stable   <판>                                    안정본 지정 (목록에 있는 판만)
 //
 // 업체 상태 stts: 0(또는 없음) 사용중, 9 비활성. 비활성화된 업체엔 pc·user·agent 를 못 만든다.
 // 비밀번호는 명령줄로 받지 않는다. 무작위로 만들어 딱 한 번 찍고, 잃으면 passwd 로 다시 발급한다.
@@ -25,7 +28,8 @@ import { fileURLToPath } from "node:url";
 
 // 인수 개수 [최소, 최대]. 옛 꼴(user <이메일> <비밀번호> …, agent <이메일> <비밀번호> …)은 받지 않는다.
 const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2], slots: [1, 2], remove: [1, 1], restore: [1, 1],
-  tokens: [1], price: [0, 2], usage: [0, 1] };
+  tokens: [1], price: [0, 2], usage: [0, 1],
+  releases: [0, 0], "release-set": [1, 1], stable: [1, 1] };
 
 const [, , cmdName, ...rest] = process.argv;
 const [min, max = Infinity] = ARGC[cmdName] ?? [];
@@ -108,6 +112,13 @@ try {
     console.log("토큰 배율 (모듈을 한 번 쓸 때 빠지는 토큰 - 여기 없는 모듈은 default):", t);
   } else if (cmdName === "usage") {
     console.table((await ops.usageRows(rest[0])).map((r) => ({ cid: r.cid, 이름: r.name, 남은: r.left ?? "-", 이번달: r.month, "토큰 정보": r.since ? `${r.since} 부터` : "없음" })));
+  } else if (cmdName === "releases") {
+    console.log(JSON.stringify(await ops.releasesOf()));
+  } else if (cmdName === "release-set") {
+    const r = await ops.setReleases(JSON.parse(readFileSync(rest[0], "utf8")));
+    console.log(`판 목록 ${r.count}개 · 최신본 ${r.newest ?? "-"} · 안정본 ${r.stable ?? "-"}`);
+  } else if (cmdName === "stable") {
+    console.log(`안정본: ${(await ops.setStable(rest[0])).stable}`);
   }
 } catch (e) {
   if (!(e instanceof ops.Refused)) throw e;
