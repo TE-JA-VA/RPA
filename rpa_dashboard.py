@@ -876,12 +876,12 @@ class Scheduler(threading.Thread):
         return None
 
     def tick(self):
+        now = NOW()
+        self.check_repeat_result(now)            # 띄운 반복 회차가 끝났으면 센다 (시간대가 끝났어도, 자동 실행을 껐어도)
         sch = st.read_settings()["schedule"]
         if not sch.get("enabled"):
             self.waiting_reason = None
             return
-        now = NOW()
-        self.check_repeat_result(now)            # 띄운 반복 회차가 끝났으면 센다 (시간대가 끝났어도)
         next_run = st.parse_iso(sch.get("next_run_at"))
         if next_run is None:
             if not self._advance_now(now)["next_run_at"]:
@@ -924,8 +924,8 @@ class Scheduler(threading.Thread):
         stamp = now.isoformat(timespec="seconds")
         try:
             launch_slot(win, trigger="repeat")
-        except RuntimeError as e:                # 토큰이 없음·업체가 안 쓰는 모듈만 - 시각 줄처럼 넘기지 않고 멈춘다
-            self.mark_repeat(stopped={"at": stamp, "reason": f"{now:%H:%M} {e}"})
+        except Exception as e:                   # 토큰이 없음·업체가 안 쓰는 모듈만·exe 없음 - 넘기지 않고 멈춘다 (5초마다 다시 띄우지 않게)
+            self.mark_repeat(stopped={"at": stamp, "reason": f"{now:%H:%M} {e or type(e).__name__}"})
             return
         self.mark_repeat(pending=stamp, last_launch_at=stamp)
 
@@ -938,6 +938,9 @@ class Scheduler(threading.Thread):
         if v.get("state") == "running":
             return
         started = st.parse_iso(v.get("started_at"))
+        fresh = started is not None and started >= since
+        if not fresh and now < since + datetime.timedelta(seconds=LAUNCH_GRACE_SEC):
+            return                               # 띄운 프로그램이 아직 기록 전일 수 있다 (에이전트를 다시 켜 손잡이를 잃은 직후 등)
         with _settings_lock:
             cfg = st.read_settings()
             sch = cfg["schedule"]
@@ -946,8 +949,10 @@ class Scheduler(threading.Thread):
                 return
             rep["pending"] = None
             stamp = now.isoformat(timespec="seconds")
-            if started is None or started < since:   # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
+            if not fresh:                        # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
                 rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차가 시작하지 못했습니다"}
+            elif v.get("trigger") != "repeat":
+                pass                             # 다른 실행(사람이 누른 단추 등)이 상태를 덮었다 - 회차 결과를 모르니 세지도 멈추지도 않는다
             elif v.get("state") == "success":
                 rep["runs"] = int(rep.get("runs") or 0) + 1
                 rep["done"] = int(rep.get("done") or 0) + (1 if processed(v) else 0)

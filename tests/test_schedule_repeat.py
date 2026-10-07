@@ -40,13 +40,13 @@ def iso(t):
     return t.isoformat(timespec="seconds")
 
 
-def put_status(program, state, started, finished=None, modules=(), reason=None):
-    """상태 파일을 흉내 낸다 (running 이면 이 프로세스가 살아 있는 것으로 보인다)."""
+def put_status(program, state, started, finished=None, modules=(), reason=None, trigger="repeat"):
+    """상태 파일을 흉내 낸다 (running 이면 이 프로세스가 살아 있는 것으로 보인다). trigger 는 띄운 까닭 (사람이 누르면 None)."""
     st.write_json_atomic(st.status_path(program), {
         "schema": 2, "run_id": f"{program}_{started:%Y%m%d_%H%M%S}_{PID}", "program": program, "program_label": st.LABELS[program],
         "state": state, "reason": reason, "pid": PID, "pid_created": CREATED, "started_at": iso(started),
         "updated_at": iso(finished or started), "finished_at": iso(finished) if finished else None,
-        "steps": [], "metrics": [], "modules": [dict(m) for m in modules], "module_flags": 0, "log_tail": []})
+        "steps": [], "metrics": [], "modules": [dict(m) for m in modules], "module_flags": 0, "log_tail": [], "trigger": trigger})
 
 
 def ended():
@@ -227,6 +227,38 @@ sv = d.schedule_view()
 check(sv["times"] == ["10:00"] and sv["repeat"] is not None and sv["slots"][1]["until"] == "12:00", "옛 8765 화면엔 시각 줄만, 반복 상태도 싣는다")
 label = d.schedule_label(st.read_settings()["schedule"])
 check(label == "매일 10:00, 11:00~12:00 반복 물류관리", label)
+
+print("\n=== 14. 반복 회차를 다른 실행과 헷갈리지 않는다 (끝 검토) ===")
+d.apply_schedule({"enabled": True, "days": ALL, "slots": [dict(WIN)]})
+CLOCK[0] = at("11:00", day=6); n = len(d.LAUNCHED); sched.tick()
+check(len(d.LAUNCHED) == n + 1 and rep().get("pending") == iso(at("11:00", day=6)), "회차를 띄움")
+ended()
+CLOCK[0] = at("11:00", day=6, sec=30); sched.tick()
+check(rep().get("stopped") is None and rep().get("pending"), "상태 파일이 아직 옛 실행이어도 바로 '시작하지 못함' 으로 멈추지 않는다 (에이전트를 다시 켠 직후 등)")
+CLOCK[0] = at("11:02", day=6); sched.tick()
+check("시작하지 못했습니다" in (rep().get("stopped") or {}).get("reason", ""), "유예가 지나도 기록이 없으면 그때 멈춘다")
+d.resume_repeat(); sched.tick()
+check(len(d.LAUNCHED) == n + 2 and rep().get("pending") == iso(at("11:02", day=6)), "다시 시작 → 회차")
+ended()
+put_status("routine", "stopped", at("11:02", 6, 10), at("11:03", 6), [LOGIN], reason="사람이 누른 실행 실패", trigger=None)
+CLOCK[0] = at("11:04", day=6); sched.tick()
+check(rep().get("stopped") is None and rep().get("pending") is None and rep().get("runs") == 0 and len(d.LAUNCHED) == n + 2,
+      f"사람이 누른 실행이 상태를 덮었으면 세지도 멈추지도 않는다 ({rep().get('stopped')})")
+CLOCK[0] = at("11:05", day=6); sched.tick()
+check(len(d.LAUNCHED) == n + 3, "쉬는 시간 뒤 다음 회차")
+put_status("routine", "running", at("11:05", 6, 5))
+d.apply_schedule({"enabled": False, "days": ALL, "slots": [dict(WIN)]})
+put_status("routine", "success", at("11:05", 6, 5), at("11:07", 6), [LOGIN, DONE]); ended()
+CLOCK[0] = at("11:08", day=6); sched.tick()
+check(rep().get("runs") == 1 and rep().get("done") == 1 and rep().get("pending") is None and len(d.LAUNCHED) == n + 3,
+      f"자동 실행을 꺼도 돌던 회차는 센다, 새 회차는 없다 ({rep()})")
+d.apply_schedule({"enabled": True, "days": ALL, "slots": [dict(WIN)]})
+d.TOKEN_GATE = lambda target: (_ for _ in ()).throw(FileNotFoundError("ERPia_RPA.exe 이(가) 없습니다"))
+try:
+    CLOCK[0] = at("11:10", day=6); sched.tick_safe()
+    check("없습니다" in (rep().get("stopped") or {}).get("reason", ""), f"exe 가 없어도 그 시간대를 멈춘다 - 5초마다 다시 안 띄운다 ({rep().get('stopped')})")
+finally:
+    d.TOKEN_GATE = None
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
