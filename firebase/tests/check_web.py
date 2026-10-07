@@ -571,7 +571,11 @@ with sync_playwright() as pw:
     page.click("#mod-list label:nth-child(2)"); page.click("#mod-apply"); time.sleep(1.5)
     keys =sorted((db_get(f"{SETTINGS}/modules") or {}).keys())
     check(keys == ["Hold", "Login", "Sales", "Sap", "Wms"], f"웰라이프 업체: 모듈은 다섯 키만 저장 ({keys})")
-    db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
+    db_patch("meta/companies/c_demo/apps/rpa", {"modules": {"Hold": False}})   # 업체가 끈 모듈은 웰라이프 업체에서도 스위치가 없다 (에이전트가 꺼진 값으로 강제한다)
+    reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
+    check(page.locator("#mod-list label").count() == 4 and page.locator("#mod-list input[aria-label='물류대기 관리']").count() == 0,
+          "웰라이프 업체: 업체가 끈 모듈(물류대기 관리)은 스위치가 없다")
+    db_patch("meta/companies/c_demo/apps/rpa", {"modules": None, "limits": None})
     for path, old in ((CMDS, cmds0), (f"{SETTINGS}/modules", mods0), (f"{SETTINGS}/schedule", sets0)):   # 이 블록이 쓴 것을 되돌린다
         if old: db_put(path, old)
         else: db_patch(path, {k: None for k in (db_get(path) or {})})

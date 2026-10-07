@@ -123,7 +123,7 @@ async function send(type, args, label) {
 /** 이 업체가 안 쓰는 모듈 (총괄이 meta/companies/{cid}/apps/rpa/modules 에 false 로 정한다). 화면에서 아예 숨긴다 */
 const isWellife = () => wellifeOn(c?.me?.cid, c?.policy);
 const modList = () => (isWellife() ? WELLIFE_MODULES : MODULES);
-const offByCompany = (k) => !isWellife() && c?.policy?.rpa?.modules?.[k] === false;
+const offByCompany = (k) => c?.policy?.rpa?.modules?.[k] === false;
 const shownModules = () => modList().filter(([k]) => !offByCompany(k));
 
 /** 딸린 모듈과 업체 정책을 규칙대로 끈다. 켜는 것은 사람이 직접 한다 (물류관리를 켜도 출력은 꺼진 채로 둘 수 있다) */
