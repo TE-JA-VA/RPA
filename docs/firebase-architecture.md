@@ -264,7 +264,7 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 업데이트 도우미 | 40 | `tests/test_update_helper.py`: 파일 바꾸기·보관본·3분 점검·되돌리기, 바꾸는 도중 끊김 복구 (가짜 시계) |
 | 판 내보내기 | 17 | `tests/test_publish_release.py`: 서명·사이트 폴더·최근 5개+안정본 남기기·쓰지 않는 blob 지우기 |
 | 샌드박스 (자동 업데이트) | 8 | `tools/sandbox_test.py --update`: 시험용 열쇠(서명 뒤 지움)로 서명한 판 B(파일 하나 바뀜)·판 C(켜지지 않는 에이전트)를 샌드박스 안 가짜 호스팅(127.0.0.1:8799)에서 받아 판 B 업데이트(done·제거 목록 판 번호·도우미 작업 지움) → [이전 판으로 되돌리기] → 판 C 3분 점검 실패로 되돌림 → 바꾸는 도중 도우미를 죽이고 다시 돌리면 되돌림. 진짜 열쇠·호스팅은 안 쓴다 |
-| 샌드박스 | 38 | 깨끗한 윈도우: 조용한 설치·파일(같이 싣던 브라우저 ms-playwright 없음)·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·시작 메뉴 'RPA 옵저버'·tkinter → 설치된 exe 셋 --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내)·프리페어 --selftest --headless·옵저버 --check 가 깔린 Edge 를 띄움 → 옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜면 Playwright 드라이버가 깔린 Edge 창을 띄움(사진 observer.png) → 작업 등록(AFTER MARKET 사본, exe 다섯의 아이콘 - 프리페어·옵저버만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 옵저버가 켜진 채 다시 설치는 시작 전에 멈춤(코드 7, --stop 안 부름) → 다시 설치(--stop, 옛 판의 ms-playwright 폴더를 지움) → 설정 창 사진 → 조용한 제거 (판 2026.10.07-4) |
+| 샌드박스 | 38 | 깨끗한 윈도우: 조용한 설치·파일(같이 싣던 브라우저 ms-playwright 없음)·판 점검·권한·바로 가기·제거 목록·아이콘(바로 가기 둘·제거 목록)·시작 메뉴 'RPA 옵저버'·tkinter → 설치된 exe 셋 --check(UIAutomationCore.dll 시각을 바꿔 다른 윈도우 흉내)·프리페어 --selftest --headless·옵저버 --check 가 깔린 Edge 를 띄움 → 옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜면 Playwright 드라이버가 깔린 Edge 창을 띄움(사진 observer.png) → 작업 등록(AFTER MARKET 사본, exe 다섯의 아이콘 - 프리페어·옵저버만 주황 A) → 감독·에이전트(인터넷 있으면 로그인 거부 3 에 같이 끝남) → 옵저버가 켜진 채 다시 설치는 시작 전에 멈춤(코드 7, --stop 안 부름) → 다시 설치(--stop, 옛 판의 ms-playwright 폴더를 지움) → 설정 창 사진 → 조용한 제거 (판 2026.10.07-6, 자동 업데이트 8 줄과 함께 46/46) |
 
 에뮬레이터 명령에는 항상 `--config ../firebase.json` 이 붙는다. 화면을 에뮬레이터로 볼 때는 주소 뒤에 `?emu=1` 을 붙인다.
 
