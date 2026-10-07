@@ -5861,6 +5861,14 @@ def run_modules(selected, modules=None, funcs=None, section=None):
     return "success", None
 
 
+def wellife_route(policy_on, has_section):
+    """웰라이프 관문 (설계 2026-10-07-wellife-gate 4.3). policy_on: 에이전트가 적은 업체 정책, has_section: PC 의 Wellife 섹션.
+    ('wellife'|'routine'|'stop', 까닭). 열린 업체는 보통 루틴으로 새지 않고, 안 열린 업체는 파일을 고쳐도 웰라이프로 못 간다."""
+    if policy_on:
+        return ("wellife", None) if has_section else ("stop", "웰라이프 설정이 없습니다 (에이전트가 다시 씁니다)")
+    return ("stop", "이 업체는 웰라이프 실행이 열려 있지 않습니다 (관리 화면)") if has_section else ("routine", None)
+
+
 def main():
     if "--check" in sys.argv[1:]:
         run_self_check()
@@ -5869,8 +5877,14 @@ def main():
         run_uia_check()
         return
     rr = sys.modules[__name__]   # exe 에서는 __main__ - wellife 가 다시 import 하지 않게 넘긴다
-    if wellife.enabled(rr):      # 설정에 "Wellife" 섹션이 있는 PC 만. 없으면 아래 지금 루틴 그대로
+    route, why = wellife_route(status.wellife_policy(), wellife.enabled(rr))
+    if route == "wellife":
         wellife.run_main(rr)
+        return
+    if route == "stop":
+        status.start("routine", ROUTINE_STEPS)
+        log(f"웰라이프 관문: {why}")
+        status.finish("stopped", why)
         return
 
     status.start("routine", ROUTINE_STEPS)

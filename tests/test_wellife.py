@@ -151,6 +151,7 @@ wellife.run_main = called.append
 sys.argv = [sys.argv[0]]
 rec = Rec()
 rr.status = rec
+rec.wellife_policy = lambda: True   # 관문: 업체 정책이 열려 있어야 웰라이프로 간다
 settings(ALL_Y)
 rr.main()
 check("섹션이 있으면 main 이 웰라이프 실행으로 간다 (이 모듈을 넘김)", called == [rr] and not rec.of("start"), str(called))

@@ -59,5 +59,30 @@ check(dash.set_policy(2, ["Logistics", "Output"], wellife=True) is False, "같�
 check(dash.set_policy(2, [], wellife=False) is True and st.wellife_policy() is False, "꺼지면 False")
 check(dash.set_policy(2, []) is False, "wellife 를 안 넘기면 False 로 본다 (옛 부르는 쪽)")
 
+print("=== 3. 루틴 갈래 ===")
+import run_routine as rr  # noqa: E402
+check(rr.wellife_route(True, True) == ("wellife", None), "열림 + 섹션 → 웰라이프 순서")
+check(rr.wellife_route(True, False) == ("stop", "웰라이프 설정이 없습니다 (에이전트가 다시 씁니다)"), "열림 + 섹션 없음 → 멈춤 (보통 루틴으로 새지 않는다)")
+check(rr.wellife_route(False, True) == ("stop", "이 업체는 웰라이프 실행이 열려 있지 않습니다 (관리 화면)"), "안 열림 + 섹션 → 멈춤")
+check(rr.wellife_route(False, False) == ("routine", None), "안 열림 + 섹션 없음 → 지금 루틴 그대로")
+# main 이 정말 이 갈래를 쓰는지 - 정책 켬·섹션 없음이면 보통 루틴을 시작하지 않고 멈춤으로 끝낸다
+dash.set_policy(2, ["Logistics", "Output"], wellife=True)
+write_cfg({"LogIn": {}})
+called = []
+orig_run, orig_start = rr.wellife.run_main, rr.status.start
+rr.wellife.run_main = lambda r: called.append("wellife")
+rr.status.start = lambda *a, **k: called.append(("start",) + a[:1])
+finished = []
+orig_finish = rr.status.finish
+rr.status.finish = lambda result, reason=None, **k: finished.append((result, reason))
+try:
+    sys.argv = ["run_routine.py"]
+    rr.main()
+finally:
+    rr.wellife.run_main, rr.status.start, rr.status.finish = orig_run, orig_start, orig_finish
+check("wellife" not in called and finished and finished[-1][0] == "stopped" and "웰라이프 설정이 없습니다" in finished[-1][1],
+      f"main: 정책 켬·섹션 없음 → 보통 루틴 안 돌고 멈춤 ({called}, {finished})")
+dash.set_policy(2, [], wellife=False)
+
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
