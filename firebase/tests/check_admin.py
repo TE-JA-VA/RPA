@@ -266,7 +266,7 @@ with sync_playwright() as pw:
            '<button id="s-add-pc">+ 추가</button>', "4. 물류대기 관리 메뉴 사용 여부", 'value="yes">예</label>', 'value="no">아니오</label>',
            "5. 최초 토큰량 설정", 'value="later" checked>나중에 설정</label>', "3. 대시보드 계정", '<button id="s-add-user">+ 추가</button>',
            "업체가 보유한 토큰 정보가 없습니다. 최초 토큰 생성시 토큰 정보가 함께 생성됩니다. 토큰이 0이하라면 모듈 실행을 막습니다.",
-           "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다.",
+           "업체가 사용할 모듈을 결정합니다. 체크 해제시 업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다.",
            "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다.")
     shown = page_html + page.text_content("body")
     check(not [w for w in OLD if w in shown] and all(w in shown for w in NEW),
@@ -277,9 +277,9 @@ with sync_playwright() as pw:
     page.click("#detail button:has-text('넣기')")
     page.wait_for_function("document.querySelector('#detail table.wallet td.left')?.textContent === '650'", timeout=15000)
     check(True, "화면에서 토큰 넣기 → 현재 토큰 650")
-    page.fill("#detail input[aria-label='자동 실행 개수']", "4")
-    page.click("#detail .row:has(input[aria-label='자동 실행 개수']) button")
-    page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 개수']\")?.value === '4'", timeout=10000)
+    page.fill("#detail input[aria-label='자동 실행 슬롯 수']", "4")
+    page.click("#detail .row:has(input[aria-label='자동 실행 슬롯 수']) button")
+    page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")?.value === '4'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 4, "화면: 업체 상세에서 자동 실행 개수 저장")
 
     print("자동 업데이트 (설계 8절)")
@@ -333,14 +333,21 @@ with sync_playwright() as pw:
     check("지금은 기본값" not in page.text_content("#detail"), "자동 실행 개수: '지금은 기본값' 글 없음")
     hold0 = page.is_checked("#detail input[data-mod='Hold']")
     page.evaluate("document.getElementById('flash').classList.add('hide')")
+    before = db_get(f"meta/companies/{CID}/apps/rpa/modules") or {}
     page.click("#detail input[data-mod='Hold']")
+    page.wait_for_timeout(800)
+    check((db_get(f"meta/companies/{CID}/apps/rpa/modules") or {}) == before, "모듈 정책: 체크만으로는 안 바뀐다 ([적용] 을 눌러야)")
+    page.click("#detail button.mod-apply")
     page.wait_for_selector("#detail .mod-ok:not(.hide)", timeout=5000)
     mods = db_get(f"meta/companies/{CID}/apps/rpa/modules") or {}
     check(page.text_content("#detail .mod-ok").strip() == "반영되었습니다." and (mods.get("Hold") is False) == hold0
-          and "hide" in (page.get_attribute("#flash", "class") or ""), f"모듈 정책: 아래 알림 대신 제목 옆 초록 글 ({mods})")
+          and "hide" in (page.get_attribute("#flash", "class") or ""), f"[적용] → 제목 옆 초록 '반영되었습니다.' (아래 알림 없음) ({mods})")
     page.wait_for_selector("#detail .mod-ok.hide", state="attached", timeout=5000)
     check(True, "초록 글은 잠깐 뒤 사라진다")
+    check("자동 실행 슬롯 수" in page.text_content("#detail") and "자동 실행 개수" not in page.text_content("#detail"), "자동 실행 슬롯 수 (이름)")
+    check("예약 실행, 반복 실행 슬롯을 몇 개까지 열어줄 지 결정합니다. (0~12, 기본 2)" in page.text_content("#detail"), "자동 실행 슬롯 수 설명")
     page.click("#detail input[data-mod='Hold']")   # 되돌려 둔다
+    page.click("#detail button.mod-apply")
     page.wait_for_timeout(800)
     api("POST", f"/api/companies/{CID}/tokens", {"amount": 1500, "memo": "보기 시험"})
     api("POST", f"/api/companies/{CID}/tokens", {"amount": -50, "memo": "보기 시험 빼기"})

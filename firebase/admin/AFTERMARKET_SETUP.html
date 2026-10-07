@@ -320,31 +320,29 @@ function tokenSection(d) {
         el("td", {}, g.memo || "-"))))) : "");
 }
 function moduleSection(d) {
-  // 바뀌면 아래 알림 대신 제목 옆에 초록 '반영되었습니다.' 를 잠깐 (사용자 2026-10-07). 실패면 다시 그려 원래 값으로
+  // 체크만으로는 안 바뀌고 [적용] 때 한꺼번에 (사용자 2026-10-07). 되면 아래 알림 대신 제목 옆 초록 '반영되었습니다.' 를 잠깐, 실패면 다시 그려 원래 값으로
   const ok = el("span", { class: "mod-ok hide" }, "반영되었습니다.");
   let okTimer;
-  const boxes = Object.entries(MODULE_NAMES).map(([k, name]) => {
-    const cb = el("input", { type: "checkbox", "data-mod": k, checked: d.modules[k] !== false });
-    cb.onchange = () => act(cb, async () => {
-      try { await api("POST", `/api/companies/${d.cid}/modules`, { [k]: cb.checked ? "on" : "off" }); }
-      catch (e) { openDetail(d.cid); throw e; }
-      ok.classList.remove("hide");
-      clearTimeout(okTimer);
-      okTimer = setTimeout(() => ok.classList.add("hide"), 2000);
-    });
-    return el("label", { class: "inline" }, cb, name);
-  });
-  return el("div", {}, el("h3", {}, "모듈 정책", ok),el("p", { class: "muted" }, "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes));
+  const cbs = Object.entries(MODULE_NAMES).map(([k, name]) => [k, name, el("input", { type: "checkbox", "data-mod": k, checked: d.modules[k] !== false })]);
+  const boxes = cbs.map(([, name, cb]) => el("label", { class: "inline" }, cb, name));
+  const apply = el("button", { class: "mod-apply", onclick: () => act(apply, async () => {
+    try { await api("POST", `/api/companies/${d.cid}/modules`, Object.fromEntries(cbs.map(([k, , cb]) => [k, cb.checked ? "on" : "off"]))); }
+    catch (e) { openDetail(d.cid); throw e; }
+    ok.classList.remove("hide");
+    clearTimeout(okTimer);
+    okTimer = setTimeout(() => ok.classList.add("hide"), 2000);
+  }) }, "적용");
+  return el("div", {}, el("h3", {}, "모듈 정책", ok),el("p", { class: "muted" }, "업체가 사용할 모듈을 결정합니다. 체크 해제시 업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes, apply));
 }
 function limitSection(d) {
-  const n = el("input", { value: d.scheduleLimit ?? 2, size: 4, inputmode: "numeric", "aria-label": "자동 실행 개수" });
+  const n = el("input", { value: d.scheduleLimit ?? 2, size: 4, inputmode: "numeric", "aria-label": "자동 실행 슬롯 수" });
   const save = el("button", { onclick: () => act(save, async () => {
     const r = await api("POST", `/api/companies/${d.cid}/limits`, { schedule: n.value.trim() });
-    flash(`자동 실행 개수: ${r.schedule} (PC 에는 10분 안에 닿습니다)`);
+    flash(`자동 실행 슬롯 수: ${r.schedule} (PC 에는 10분 안에 닿습니다)`);
     openDetail(d.cid);
   }) }, "저장");
-  return el("div", {}, el("h3", {}, "자동 실행 개수"),
-    el("p", { class: "muted" }, "기본 2. 시각과 반복 시간대를 합친 줄 수 (0~12)"),
+  return el("div", {}, el("h3", {}, "자동 실행 슬롯 수"),
+    el("p", { class: "muted" }, "예약 실행, 반복 실행 슬롯을 몇 개까지 열어줄 지 결정합니다. (0~12, 기본 2)"),
     el("div", { class: "row" }, n, save));
 }
 function dangerSection(d) {
