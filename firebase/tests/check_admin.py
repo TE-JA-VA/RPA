@@ -361,9 +361,11 @@ with sync_playwright() as pw:
     check(plus and minus and plus[0] != minus[0] and plus[0] != page.evaluate("getComputedStyle(document.body).color"),
           f"토큰량: 1000 단위 콤마, + 초록·- 빨강 ({amt}, good {good}, bad {bad})")
     sec = page.evaluate("""[...document.querySelectorAll('#detail .sec')].map((s) => {
-        const c = getComputedStyle(s); return [parseFloat(c.borderTopWidth), parseFloat(c.paddingTop), c.borderTopColor]; })""")
-    check(len(sec) >= 6 and sec[0][0] == 0 and all(w >= 1 and pt >= 16 for w, pt, _ in sec[1:]) and sec[-1][2] != sec[1][2],
-          f"상세 항목 사이 가로선·간격 (첫 항목은 선 없음, 비활성화는 빨간 선) ({sec})")
+        const c = getComputedStyle(s); return [parseFloat(c.borderLeftWidth), c.backgroundColor, c.borderTopColor, parseFloat(c.borderTopLeftRadius)]; })""")
+    card = page.evaluate("getComputedStyle(document.getElementById('detail')).backgroundColor")
+    row_line = page.evaluate("getComputedStyle(document.querySelector('#detail table td')).borderBottomColor")
+    check(len(sec) >= 6 and all(w >= 1 and bg != card and r > 0 for w, bg, _, r in sec) and sec[1][2] != row_line and sec[-1][2] != sec[1][2],
+          f"상세 항목마다 상자 (바탕이 카드와 다르고, 테두리는 표 줄보다 진하게, 비활성화는 빨간 테두리) ({sec}, card {card}, row {row_line})")
     crow = page.text_content(f"#companies tr[data-cid='{CID}']")
     check("현재 토큰" in page.text_content("table:has(#companies) thead") and re.search(r"\d,\d{3}", crow), f"업체 표: 현재 토큰, 1000 단위 콤마 ({crow})")
     nav = page.text_content("nav")

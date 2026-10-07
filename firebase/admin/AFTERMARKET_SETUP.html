@@ -52,9 +52,9 @@
   .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
   .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
   td.plus { color:var(--good); } td.minus { color:var(--bad); }   /* 토큰 내역: 넣음 초록 · 뺌 빨강 */
-  #detail .sec { border-top:1px solid var(--line); margin-top:24px; padding-top:20px; }
-  #detail .sec.top { border-top:0; margin-top:8px; padding-top:0; }
-  #detail .sec.danger { border-top-color:var(--bad); }
+  /* 업체 상세 항목마다 상자 - 표의 줄(--line) 보다 진한 테두리, 카드와 다른 바탕 (사용자 2026-10-07: 가로선은 표 줄과 같아 안 보임) */
+  #detail .sec { border:1px solid color-mix(in srgb, var(--muted) 55%, var(--line)); border-radius:10px; background:var(--bg); padding:14px 16px; margin-top:14px; }
+  #detail .sec.danger { border-color:var(--bad); }
   #detail .sec > h3 { margin:0 0 10px; font-size:16px; }
   #detail .sec table + .row { margin-top:10px; }   /* 목록과 새로 넣는 칸 사이 */
   .mod-ok { margin-left:10px; color:var(--good); font-weight:500; font-size:14px; }
@@ -272,7 +272,7 @@ function pcSection(d) {
     flash(`PC ${r.pc.pcId} 를 추가했습니다`);
     refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
   }) }, "PC 추가");
-  return el("div", { class: "sec top" }, el("h3", {}, "PC"),
+  return el("div", { class: "sec" }, el("h3", {}, "PC"),
     d.pcs.length ? el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"].map((h) => el("th", {}, h)))),
       el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases)))) : el("p", { class: "muted" }, "PC 가 없습니다"),
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
