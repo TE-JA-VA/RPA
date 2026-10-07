@@ -51,6 +51,7 @@ const ROUTES = [
     (b, r, p) => `${r.disabled ? "사용중지" : "사용"} ${p.cid} ${r.email}`],
   ["POST", "/api/companies/:cid/modules", (b, p) => ops.setModules(p.cid, b),
     (b, r, p) => `모듈 정책 ${p.cid} ${Object.entries(b).map(([k, v]) => `${k}=${v}`).join(" ")}`],
+  ["POST", "/api/companies/:cid/limits", (b, p) => ops.setScheduleLimit(p.cid, b.schedule), (b, r, p) => `자동 실행 개수 ${p.cid} = ${r.schedule}`],
   ["POST", "/api/companies/:cid/remove", (b, p) => {
     if (b.confirm !== p.cid) throw new ops.Refused("업체코드를 똑같이 쳐야 비활성화합니다");
     return ops.setCompanyRemoved(p.cid, true);

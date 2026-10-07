@@ -661,6 +661,63 @@ check(pc.asked == ["meta/companies/c_x/apps/rpa/modules"], f"회사 메타에서
 check(ag.company_modules(PolicyClient(None), "c_x") == {}, "정책이 없으면 빈 값")
 check(ag.company_modules(PolicyClient(fb.HttpError(401, "denied")), "c_x") == {}, "못 읽어도 실행을 막지 않는다")
 
+print("\n5-3절 업체 정책: 자동 실행 개수 (2026-10-07)")
+
+
+class AppClient:
+    def __init__(self, value):
+        self.value, self.asked = value, []
+
+    def get(self, path):
+        self.asked.append(path)
+        if isinstance(self.value, Exception):
+            raise self.value
+        return self.value
+
+
+ac = AppClient({"modules": {"Hold": False, "Sales": True}, "limits": {"schedule": 3}})
+check(ag.company_policy(ac, "c_x") == (3, ["Hold"]) and ac.asked == ["meta/companies/c_x/apps/rpa"], "한 번 읽어 한도와 안 쓰는 모듈")
+check(ag.company_policy(AppClient(None), "c_x") == (2, []), "정책이 없으면 기본 2개·안 쓰는 모듈 없음")
+check(ag.company_policy(AppClient({"limits": {"schedule": "9"}}), "c_x")[0] == 2 and ag.company_policy(AppClient({"limits": {"schedule": 0}}), "c_x")[0] == 0,
+      "이상한 값은 기본 2, 0 은 0 (자동 실행을 못 쓴다)")
+with tempfile.TemporaryDirectory() as d:
+    os.environ["RPA_STATUS_DIR"] = d              # 실제 settings.json 을 건드리지 않게
+    os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
+    try:
+        import rpa_status as st
+        import rpa_dashboard as dash
+        three = {"enabled": True, "days": [0], "slots": [{"at": "09:00"}, {"at": "10:00"}, {"at": "11:00"}]}
+        acts = ag.real_actions(limits=lambda: (2, ["Hold"]))
+        try:
+            acts["set_schedule"](three); check(False, "한도를 넘는 줄 수는 거절")
+        except RuntimeError as e:
+            check(str(e) == "자동 실행은 2개까지입니다" and st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], f"한도를 넘으면 저장 전에 거절 ({e})")
+        msg = acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00"}, {"at": "11:00", "run": ["Logistics"]}]})
+        check("월 09:00, 11:00 물류관리" in msg, f"한도 안이면 저장 ({msg})")
+        dash.set_policy(1, [])
+        try:
+            ag.real_actions(limits=lambda: None)["set_schedule"](three); check(False, "못 읽어도 적힌 한도로 거절")
+        except RuntimeError as e:
+            check("1개까지" in str(e), "못 읽으면 PC 에 적힌 마지막 한도로")
+        st.write_settings({"schedule": {}})       # policy 없음 = 한 번도 못 읽음
+        ag.real_actions(limits=lambda: None)["set_schedule"](three)
+        check(len(st.read_settings()["schedule"]["slots"]) == 3, "한 번도 못 읽었으면 자르지 않는다 (PC 상한 12 까지만)")
+        pol = ag.Policy(AppClient({"limits": {"schedule": 3}, "modules": {"Hold": False}}), "c_x")
+        check(pol.refresh() == (3, ["Hold"]) and st.read_settings()["schedule"]["policy"]["limit"] == 3
+              and st.read_settings()["schedule"]["policy"]["off"] == ["Hold"], "정책을 읽어 PC 설정에 적는다")
+        check(pol.refresh() is None, "10분 안에는 다시 안 읽는다")
+        check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_x").refresh(force=True) is None
+              and st.read_settings()["schedule"]["policy"]["limit"] == 3, "못 읽으면 적힌 값 그대로")
+        dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Prepare", "Logistics"]}]})
+        tc = TokenClient(9, 0)
+        tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan, next_plan=ag.next_plan)
+        tk.refresh(force=True)
+        check(tk.view()["cost"]["next"] == 3, f"다음 예약 줄의 토큰 = 그 줄의 모듈 (물류관리 1·로그인 0) + 쇼핑몰 받기 (사이트 2) ({tk.view()['cost']})")
+        dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00"}]})
+        check("next" not in tk.costs(), "'전체' 줄이면 next 없음 (화면은 전체 실행 토큰을 쓴다)")
+    finally:
+        os.environ.pop("RPA_STATUS_DIR", None)
+
 print("\n8절 첫 실행 설정 (새 PC)")
 
 

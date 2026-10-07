@@ -197,7 +197,7 @@ async function openDetail(cid, keep) {
   for (const tr of $("companies").children) tr.classList.toggle("on", tr.dataset.cid === cid);
   const box = $("detail");
   box.replaceChildren(el("h2", {}, `${d.name} (${d.cid})`, d.stts === 9 ? el("span", { class: "muted" }, " · 비활성화된 업체") : ""),
-    keep ?? "", pcSection(d), userSection(d), tokenSection(d), moduleSection(d), dangerSection(d));
+    keep ?? "", pcSection(d), userSection(d), tokenSection(d), moduleSection(d), limitSection(d), dangerSection(d));
   box.classList.remove("hide");
 }
 const refresh = (cid, keep) => { openDetail(cid, keep); loadCompanies(); };
@@ -266,6 +266,17 @@ function moduleSection(d) {
     return el("label", { class: "inline" }, cb, name);
   });
   return el("div", {}, el("h3", {}, "모듈 정책"), el("p", { class: "muted" }, "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes));
+}
+function limitSection(d) {
+  const n = el("input", { value: d.scheduleLimit ?? 2, size: 4, inputmode: "numeric", "aria-label": "자동 실행 개수" });
+  const save = el("button", { onclick: () => act(save, async () => {
+    const r = await api("POST", `/api/companies/${d.cid}/limits`, { schedule: n.value.trim() });
+    flash(`자동 실행 개수: ${r.schedule} (PC 에는 10분 안에 닿습니다)`);
+    openDetail(d.cid);
+  }) }, "저장");
+  return el("div", {}, el("h3", {}, "자동 실행 개수"),
+    el("p", { class: "muted" }, `기본 2. 시각과 반복 시간대를 합친 줄 수 (0~12)${d.scheduleLimit == null ? " - 지금은 기본값" : ""}`),
+    el("div", { class: "row" }, n, save));
 }
 function dangerSection(d) {
   if (d.stts === 9) {

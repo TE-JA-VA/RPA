@@ -10,6 +10,7 @@
 //   node setup.js show     <cid|-> <아이디|이메일>
 //   node setup.js list     [cid]
 //   node setup.js modules  <cid> Hold=off Output=on   (업체가 안 쓰는 모듈. off 면 화면에서 숨고 에이전트가 강제로 끈다)
+//   node setup.js slots    <cid> [개수]                            자동 실행 개수 (시각·반복 시간대를 합친 줄 수, 기본 2, 0~12). 개수가 없으면 보기
 //   node setup.js remove   <cid>                                   업체 비활성화: stts=9, 그 업체 계정 전부 사용중지. 데이터는 남는다
 //   node setup.js restore  <cid>                                   다시 활성화: stts=0, 계정 다시 사용
 //   node setup.js tokens   <cid> [+1000|-50] [메모]                토큰 넣기·빼기 (처음 넣으면 토큰 정보를 만든다), 금액 없으면 보기
@@ -23,7 +24,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // 인수 개수 [최소, 최대]. 옛 꼴(user <이메일> <비밀번호> …, agent <이메일> <비밀번호> …)은 받지 않는다.
-const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2], remove: [1, 1], restore: [1, 1],
+const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2], slots: [1, 2], remove: [1, 1], restore: [1, 1],
   tokens: [1], price: [0, 2], usage: [0, 1] };
 
 const [, , cmdName, ...rest] = process.argv;
@@ -82,6 +83,15 @@ try {
     const [cid, ...pairs] = rest;
     const p = await ops.setModules(cid, Object.fromEntries(pairs.map((x) => x.split("="))));
     console.log(`모듈 정책: ${cid}`, Object.keys(p).length ? p : "(없음 - 전부 사용)");
+  } else if (cmdName === "slots") {
+    const [cid, n] = rest;
+    if (n === undefined) {
+      const v = await ops.scheduleLimitOf(cid);
+      console.log(`자동 실행 개수: ${cid}  ${v ?? `${ops.SCHEDULE_LIMIT_DEFAULT} (기본)`}`);
+    } else {
+      const r = await ops.setScheduleLimit(cid, n);
+      console.log(`자동 실행 개수: ${r.cid} = ${r.schedule} (PC 에는 10분 안에 닿는다)`);
+    }
   } else if (cmdName === "tokens") {
     const [cid, amount, ...memoParts] = rest;
     const s = amount === undefined ? await ops.tokenStatus(cid) : await ops.grantTokens(cid, amount, memoParts.join(" "));

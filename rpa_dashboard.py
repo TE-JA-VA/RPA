@@ -616,8 +616,30 @@ def sorted_slots(sch):
 
 
 def active_slots(sch):
-    """도는 줄 (시각 순)."""
-    return sorted_slots(sch)
+    """도는 줄 (시각 순). 업체 한도(policy.limit - 에이전트가 적는다)를 넘는 줄은 뺀다: 시각 순으로 앞 N줄만 (설계 5-3).
+    한도를 모르면 (에이전트가 한 번도 못 읽었으면) 자르지 않는다 - PC 상한 12 는 저장할 때 지킨다."""
+    out = sorted_slots(sch)
+    limit = (sch.get("policy") or {}).get("limit")
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0:
+        return out[:limit]
+    return out
+
+
+def set_policy(limit, off):
+    """에이전트가 읽은 업체 정책(자동 실행 개수·안 쓰는 모듈)을 settings.json 에 적는다 - 껐다 켜도·끊겨도 마지막 값.
+    같으면 안 쓴다 (False). 가리키던 다음 줄이 한도로 빠졌으면 다음 줄을 다시 잡는다. 다른 칸(줄·반복 상태)은 그대로."""
+    new = {"limit": limit, "off": sorted(off)}
+    with _settings_lock:
+        cfg = st.read_settings()
+        sch = cfg["schedule"]
+        old = sch.get("policy") or {}
+        if (old.get("limit"), old.get("off")) == (new["limit"], new["off"]):
+            return False
+        sch["policy"] = dict(new, read_at=now_text())
+        if sch.get("next_slot") and sch["next_slot"] not in [s["at"] for s in active_slots(sch)]:
+            advance(sch, NOW())
+        st.write_settings(cfg)
+        return True
 
 
 def next_due(sch, after):

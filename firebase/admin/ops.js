@@ -20,6 +20,8 @@ const DOMAIN = `${PROJECT}.firebaseapp.com`;
 export const emailFor = (cid, local) => local.includes("@") ? local : `${local.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}${DOMAIN}`;
 const randomPassword = () => randomBytes(18).toString("base64url");   // 24자
 export const POLICY_KEYS = ["Sales", "Hold", "Logistics", "Output"];   // Login 은 언제나 켬이라 정책 대상이 아니다
+export const SCHEDULE_LIMIT_DEFAULT = 2;   // 자동 실행 개수 - 값이 없을 때 (agent.SCHEDULE_LIMIT_DEFAULT 와 같다)
+export const SCHEDULE_LIMIT_MAX = 12;      // PC 쪽 절대 상한 (rpa_status.SCHEDULE_MAX_SLOTS)
 export const PRICE_BASE = { default: 1, login: 0 };                    // 에이전트에 박힌 처음 토큰 배율 (agent.PRICES) - 서버 값이 위에 덮인다
 
 const KEY = fileURLToPath(new URL("./serviceAccountKey.json", import.meta.url));
@@ -169,6 +171,19 @@ export async function setModules(cid, patch) {
   await at.update(clean);
   return (await at.get()).val() ?? {};
 }
+// 자동 실행 개수 = 시각·반복 시간대를 합친 줄 수 (설계 5-3). 유료 옵션 자리 - 업체마다 우리가 정한다. PC 에는 10분 안에 닿는다
+export async function setScheduleLimit(cid, n) {
+  checkKey("cid", cid);
+  await companyOf(cid, { removed: true });
+  const s = String(n ?? "").trim();
+  if (!/^\d+$/.test(s) || Number(s) > SCHEDULE_LIMIT_MAX) throw new Refused(`자동 실행 개수는 0~${SCHEDULE_LIMIT_MAX} 정수 (받은 값: ${s})`);
+  await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/schedule`).set(Number(s));
+  return { cid, schedule: Number(s) };
+}
+export async function scheduleLimitOf(cid) {
+  checkKey("cid", cid);
+  return (await companyOf(cid, { removed: true })).apps?.rpa?.limits?.schedule ?? null;
+}
 // 삭제는 표시(stts=9)와 계정 막기뿐 - 메타·현황·명령·이력·통장은 남아 되살리면 그대로 돌아온다.
 // 살아 있는 업체를 되살리면 아무것도 안 한다 (계정을 다 열면 따로 막아 둔 계정까지 열린다).
 // ponytail: 되살림은 그 업체 계정을 전부 다시 연다 - 삭제 전에 따로 막아 둔 계정이 있었으면 다시 막을 것
@@ -252,7 +267,7 @@ export async function companyDetail(cid) {
   const users = (await usersOf(cid)).map((u) => ({ email: u.email, id: u.email.split("@")[0], role: u.customClaims?.role ?? "-",
     pcId: u.customClaims?.pcId ?? null, disabled: u.disabled, lastSignIn: signedIn(u) }));
   return { cid, name: v.name, stts: v.stts ?? 0, pcs: Object.entries(v.pcs ?? {}).map(([pcId, p]) => ({ pcId, label: p.label ?? "" })),
-    users, modules: v.apps?.rpa?.modules ?? {}, tokens: (await tokenStatus(cid)).wallet };
+    users, modules: v.apps?.rpa?.modules ?? {}, scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null, tokens: (await tokenStatus(cid)).wallet };
 }
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.
 // 이미 있는 업체·PC 는 그대로 쓰고, 이미 있는 계정은 건너뛰고, 토큰 정보가 이미 있으면 최초 토큰은 건너뛴다 - 다시 누르면 남은 것만

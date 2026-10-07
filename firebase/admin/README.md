@@ -36,6 +36,7 @@ node setup.js disable c_demo agent-pc-office                # 사용중지. enab
 node setup.js show    c_demo admin
 node setup.js list    c_demo                                # cid 를 빼면 전부
 node setup.js modules c_demo Hold=off
+node setup.js slots c_demo 3        # 자동 실행 개수 (기본 2, 시각·반복 시간대 합친 줄 수)
 ```
 
 **새 업체를 등록할 때는 물류대기 관리를 쓰는지 반드시 물어본다.** 안 쓰는 업체면 `modules <cid> Hold=off` 로 꺼 둔다.

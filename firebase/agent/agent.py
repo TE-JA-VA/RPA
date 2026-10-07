@@ -99,6 +99,8 @@ def recent_summary(rows, today, days=RECENT_DAYS):
 PRICES = {"default": 1, "login": 0}     # 값표 - 서버 meta/prices 가 없거나 못 읽을 때. 값표에 없는 새 모듈은 default
 USED_STATES = ("done", "no_target")     # 토큰을 쓰는 모듈 결과 - 대상 없음도 돌아서 확인했으니 쓴다. 실패·건너뜀·중단은 안 쓴다
 PRICES_EVERY_SEC = 600
+SCHEDULE_LIMIT_DEFAULT = 2      # 업체 한도 '자동 실행 개수' 가 없을 때 (설계 5-3, ops.js 와 같다)
+SCHEDULE_LIMIT_MAX = 12         # rpa_status.SCHEDULE_MAX_SLOTS 와 같다
 
 
 def usage(rec):
@@ -170,13 +172,28 @@ def local_plan():
     return mods, sum(1 for s in sites.values() if isinstance(s, dict) and str(s.get("Stts")).strip() == "0")
 
 
+def next_plan():
+    """다음 예약 줄이 '고르기' 면 그 계획 (루틴 모듈 키 소문자 목록, 쇼핑몰 받기 여부) - 업체가 안 쓰는 모듈은 뺀다.
+    '전체' 거나 다음 예약이 없으면 None (화면은 전체 실행 토큰을 쓴다)."""
+    import rpa_dashboard as dash
+    import rpa_status as st
+    sch = st.read_settings()["schedule"]
+    slot = dash.slot_of(sch) if sch.get("enabled") and sch.get("next_run_at") else None
+    if not slot or slot.get("run") is None:
+        return None
+    off = set((sch.get("policy") or {}).get("off") or [])
+    run = [k for k in slot["run"] if k not in off]
+    return [k.lower() for k in run if k != "Prepare"], "Prepare" in run
+
+
 class Tokens:
     """남은 토큰 확인과 실행 막기 (2부). 남은 토큰이 0 이하면 실행을 거절하고, 1 이상이면 끝까지 (마이너스 가능).
     확인한 값을 기억해 두고 못 확인하면 그 값으로 판단한다 - 한 번도 못 했으면 막지 않는다 (인터넷 사정으로 업무가 멈추지
     않게, 2026-10-06 사용자 결정). 통장이 없는 업체는 막지 않는다 (토큰 제도 밖)."""
 
-    def __init__(self, client, cid, prices, plan=local_plan, every=PRICES_EVERY_SEC):
+    def __init__(self, client, cid, prices, plan=local_plan, every=PRICES_EVERY_SEC, next_plan=None):
         self._client, self._cid, self._prices, self._plan, self._every = client, cid, prices, plan, every
+        self._next_plan = next_plan               # 기본 None - 시험이 costs 를 그대로 비교한다
         self._at, self.balance = None, None       # balance None = 통장 없음 또는 아직 모름
 
     def refresh(self, force=False):
@@ -192,12 +209,16 @@ class Tokens:
         return self.balance
 
     def costs(self):
-        """실행 1번에 드는 토큰 = 켠 모듈·사이트 × 값표 (실패한 것은 안 빠지니 많아야 이만큼)."""
+        """실행 1번에 드는 토큰 = 켠 모듈·사이트 × 값표 (실패한 것은 안 빠지니 많아야 이만큼). 다음 예약 줄이 '고르기' 면 next 도."""
         mods, sites = self._plan()
         table = self._prices.get()
         routine = run_cost({m: 1 for m in mods}, table)
         prepare = run_cost({"sites": sites}, table) if sites else 0
-        return {"routine": routine, "prepare": prepare, "all": routine + prepare}
+        out = {"routine": routine, "prepare": prepare, "all": routine + prepare}
+        nxt = self._next_plan() if self._next_plan else None
+        if nxt is not None:
+            out["next"] = run_cost({m: 1 for m in nxt[0]}, table) + (prepare if nxt[1] else 0)
+        return out
 
     def gate(self, target):
         """rpa_dashboard.launch 가 띄우기 직전에 부른다 (dash.TOKEN_GATE). 남은 토큰이 0 이하면 RuntimeError - 실행 명령의
@@ -470,8 +491,41 @@ def company_modules(client, cid, app=APP):
         return {}
 
 
-def real_actions(policy=None):
-    """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)"""
+def company_policy(client, cid, app=APP):
+    """업체 정책 한 번에 - (자동 실행 개수, 안 쓰는 모듈 키 목록). 자리 meta/companies/{cid}/apps/{app} (총괄·Admin SDK 만 쓴다).
+    한도가 없거나 이상하면 기본 2. 못 읽으면 예외 - 부르는 쪽이 지난 값을 쓴다."""
+    got = client.get(f"meta/companies/{cid}/apps/{app}") or {}
+    raw = (got.get("limits") or {}).get("schedule")
+    ok = isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= SCHEDULE_LIMIT_MAX
+    return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(k for k, v in (got.get("modules") or {}).items() if v is False)
+
+
+class Policy:
+    """업체 정책을 10분마다 읽어 PC 설정(settings.json schedule.policy)에 적는다 - 예약기가 그 값으로 줄을 자르고 모듈을 뺀다.
+    못 읽으면 적힌 값 그대로 (지난 값)."""
+
+    def __init__(self, client, cid, every=PRICES_EVERY_SEC):
+        self._client, self._cid, self._every, self._at = client, cid, every, None
+
+    def refresh(self, force=False):
+        """읽었으면 (limit, off), 아직 때가 아니거나 못 읽었으면 None."""
+        if not force and self._at is not None and time.time() - self._at < self._every:
+            return None
+        self._at = time.time()
+        try:
+            got = company_policy(self._client, self._cid)
+        except fb.AuthError:
+            raise
+        except Exception:
+            return None
+        import rpa_dashboard as dash
+        dash.set_policy(*got)
+        return got
+
+
+def real_actions(policy=None, limits=None):
+    """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)
+    limits: 업체 정책을 지금 읽어 (limit, off) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)"""
     import rpa_dashboard as dash
     import rpa_status as st
 
@@ -520,7 +574,13 @@ def real_actions(policy=None):
         return f"프리셋을 바꿨습니다 (켬: {', '.join(on) or '없음'})"
 
     def do_schedule(args):
-        # 검증·저장·다음 시각 계산은 기존 apply_schedule 이 다 한다 (요일 0~6, 5분 단위, 최대 개수)
+        # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 못 읽으면 PC 에 적힌 마지막 값,
+        # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
+        got = limits() if limits else None
+        limit = got[0] if got else (st.read_settings()["schedule"].get("policy") or {}).get("limit")
+        rows = (args.get("slots") if "slots" in args else args.get("times")) if isinstance(args, dict) else None
+        if isinstance(limit, int) and isinstance(rows, list) and len(rows) > limit:
+            raise RuntimeError(f"자동 실행은 {limit}개까지입니다")
         changed = dash.apply_schedule(args)
         sch = st.read_settings()["schedule"]
         if not sch.get("enabled"):
@@ -694,9 +754,11 @@ def run(cfg):
         log(f"첫 로그인을 못 했습니다 ({type(e).__name__}). 설정 값으로 시작하고 이어서 시도합니다")
     up = Uploader(client, cfg["cid"], cfg["pc_id"])
     prices = Prices(client)            # 토큰 값표 - 기록을 올릴 때 쓴 토큰을 센다
-    tokens = Tokens(client, cfg["cid"], prices)
+    policy = Policy(client, cfg["cid"])         # 업체 정책 (자동 실행 개수·안 쓰는 모듈) - 10분마다 PC 설정에 적는다
+    tokens = Tokens(client, cfg["cid"], prices, next_plan=next_plan)
     dash.TOKEN_GATE = tokens.gate      # 실행 단추·예약이 띄우기 직전에 남은 토큰을 본다 (0 이하면 거절)
-    cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"])))
+    cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"]),
+                                                                   limits=lambda: policy.refresh(force=True)))
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
     # 사용자 설정 한 파일로 옮기기 (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json → RPA_UserConfig.json,
     # 비밀번호 잠금). 실패해도 에이전트는 계속 돈다 - RPA 는 옛 파일이나 평문으로도 돈다
@@ -751,6 +813,7 @@ def run(cfg):
                 except Exception:
                     snap["presets"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
+                policy.refresh()
                 snap["schedule"] = st.read_settings().get("schedule")
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
                 hist_path = os.path.join(st.status_dir(create=False), st.HISTORY_NAME)

@@ -177,6 +177,15 @@ check(rc == 0 and CID in out and "920" in out and "30" in out, "usage: 업체마
 rc, out = setup()
 old = [w for w in ("막기", "막음", "다시 엶", "통장", "삭제(비활성)", "되살림", "서비스중") if w in out]
 check(rc != 0 and "사용중지" in out and "업체 비활성화" in out and "다시 활성화" in out and not old, "도움말도 새 이름 (사용중지·업체 비활성화·다시 활성화·토큰 정보)", old)
+print("=== 5. 자동 실행 개수 (slots, 2026-10-07) ===")
+rc, out = setup("slots", CID)
+check(rc == 0 and "2 (기본)" in out, "값이 없으면 기본 2", out[-200:])
+rc, out = setup("slots", CID, "3")
+check(rc == 0 and db_get(f"meta/companies/{CID}/apps/rpa/limits/schedule") == 3 and "= 3" in out, "slots 3", out[-200:])
+rc, out = setup("slots", CID, "13")
+check(rc != 0 and out.strip().startswith("오류:") and db_get(f"meta/companies/{CID}/apps/rpa/limits/schedule") == 3, "13 은 거절 (0~12)", out[-200:])
+rc, out = setup("slots", "t_none", "3")
+check(rc != 0 and "먼저 company" in out, "없는 업체는 거절", out[-200:])
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

@@ -266,6 +266,26 @@ check(st.read_settings()["schedule"]["next_run_at"] is None, "꺼져 있으면 r
 sched.tick()
 check(d.LAUNCHED == ["all:auto", "all:manual:admin"], "꺼진 뒤 tick -> 띄우지 않음")
 
+print("\n=== 9. 업체 한도·안 쓰는 모듈 (에이전트가 policy 를 적는다) ===")
+d.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "10:00"}, {"at": "11:00", "run": ["Hold"]}, {"at": "12:00"}]})
+check([s["at"] for s in d.active_slots(st.read_settings()["schedule"])] == ["10:00", "11:00", "12:00"], "한도를 모르면 자르지 않는다")
+check(d.set_policy(2, ["Hold"]) is True and d.set_policy(2, ["Hold"]) is False, "정책을 적고, 같으면 다시 안 쓴다")
+sch = st.read_settings()["schedule"]
+check([s["at"] for s in d.active_slots(sch)] == ["10:00", "11:00"] and len(d.schedule_view()["slots"]) == 3
+      and sch["slots"][2] == {"at": "12:00"} and sch["next_slot"] in ("10:00", "11:00"),
+      "한도 2 → 시각 순 앞 2줄만 돈다 (줄은 지우지 않는다 - Review Focus 3)")
+saved = list(d.LAUNCHED)
+c = st.read_settings(); c["schedule"]["next_slot"] = "12:00"; c["schedule"]["next_run_at"] = (dt.datetime.now() - dt.timedelta(seconds=3)).isoformat(timespec="seconds"); st.write_settings(c)
+sched.tick()
+check(d.LAUNCHED == saved and st.read_settings()["schedule"]["next_slot"] in ("10:00", "11:00"), "가리키던 줄이 한도로 빠졌으면 띄우지 않고 다음 줄로")
+c = st.read_settings(); c["schedule"]["next_slot"] = "11:00"; c["schedule"]["next_run_at"] = (dt.datetime.now() - dt.timedelta(seconds=3)).isoformat(timespec="seconds"); st.write_settings(c)
+sched.tick_safe()
+check(d.LAUNCHED == saved and st.read_settings()["schedule"]["last_error"] == "업체가 쓰지 않는 모듈만 남아 건너뜁니다",
+      f"줄의 모듈이 모두 업체가 안 쓰는 것 → 건너뛰고 까닭 ({st.read_settings()['schedule']['last_error']})")
+d.set_policy(0, [])
+check(d.active_slots(st.read_settings()["schedule"]) == [] and d.schedule_view()["next_run_at"] is None, "한도 0 → 아무것도 안 돈다")
+d._active["until"] = 0; d._active["proc"] = None
+
 print("\n=== 8. 화면에 주는 값 ===")
 sess = {"user_id": "admin", "role": "admin", "admin_code": "erpiatest2"}
 try:
