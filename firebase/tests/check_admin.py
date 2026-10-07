@@ -368,6 +368,8 @@ with sync_playwright() as pw:
           f"상세 항목마다 상자 (바탕이 카드와 다르고, 테두리는 표 줄보다 진하게, 비활성화는 빨간 테두리) ({sec}, card {card}, row {row_line})")
     crow = page.text_content(f"#companies tr[data-cid='{CID}']")
     check("현재 토큰" in page.text_content("table:has(#companies) thead") and re.search(r"\d,\d{3}", crow), f"업체 표: 현재 토큰, 1000 단위 콤마 ({crow})")
+    ph = page.get_attribute("#detail .sec.danger input", "placeholder")
+    check(ph == CID, f"업체 비활성화 칸 안내 글은 업체코드만 (길면 잘림) ({ph})")
     nav = page.text_content("nav")
     check("신규 업체 등록" in nav and "토큰 배율·통계" in nav, f"위 메뉴 글 ({nav})")
     check(page.text_content("#releases-open").strip() == "버전 목록", "버전 목록 단추")
