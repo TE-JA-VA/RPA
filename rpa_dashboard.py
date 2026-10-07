@@ -45,6 +45,7 @@ import urllib.parse
 import urllib.request
 
 import rpa_status as st
+import rpa_update
 
 DEFAULT_PORT = 8765
 SIGNATURE = "ERPIA_RPA_DASHBOARD"
@@ -448,6 +449,9 @@ def launch(target, by, env=None):
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{name} 이(가) 없습니다: {path}")
     with _launch_lock:
+        upd = rpa_update.busy_reason()     # 업데이트 대기·바꾸는 중 - 단추·예약·반복 모두 여기서 막힌다 (자동 업데이트 6절)
+        if upd:
+            raise RuntimeError(upd)
         running = any_rpa_running()
         if running:
             names = ", ".join(st.PROGRAMS.get(p, p) for p in running)
@@ -874,6 +878,9 @@ class Scheduler(threading.Thread):
 
     def busy(self):
         """지금 띄우면 안 되는 까닭 (없으면 None)."""
+        upd = rpa_update.busy_reason()
+        if upd:
+            return upd
         if any_rpa_running():
             return "RPA 가 아직 돌고 있어 끝나기를 기다립니다"
         if launch_state() is not None:

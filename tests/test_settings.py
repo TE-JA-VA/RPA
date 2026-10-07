@@ -531,6 +531,21 @@ try:
 finally:
     rs.stop_agent, rs.delete_task = saved_funcs
 
+print("\n=== 자동 업데이트 도우미 작업 (설계 7절) ===")
+x = rs.helper_task_xml("PC\\user", r"C:\ProgramData\AFTER MARKET\RPA\update\runner")
+check(r"<Command>C:\ProgramData\AFTER MARKET\RPA\update\runner\python\pythonw.exe</Command>" in x
+      and '"C:\\ProgramData\\AFTER MARKET\\RPA\\update\\runner\\update_helper.py"' in x, "도우미는 runner 의 파이썬으로 (프로그램 폴더 밖)")
+check("<LogonTrigger>" in x and "<RunLevel>HighestAvailable</RunLevel>" in x and "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in x,
+      "로그온 때마다 · 가장 높은 권한 · 시간 제한 없음 (끊긴 업데이트를 다음 로그온에 되돌린다)")
+check("background.py" not in x and rs.HELPER_TASK_NAME == r"AFTER MARKET\RPA Update" and rs.HELPER_TASK_NAME != rs.TASK_NAME,
+      "에이전트 작업과 다른 이름·다른 명령 - /End 에 같이 안 죽는다 (Review Focus 1)")
+ran = []
+rs.register_helper_task(r"C:\r", run=lambda a: (ran.append(a), (0, ""))[1], user="PC\\user")
+rs.run_helper_task(run=lambda a: (ran.append(a), (0, ""))[1])
+rs.delete_helper_task(run=lambda a: (ran.append(a), (0, ""))[1])
+check([a[:3] for a in ran] == [["schtasks", "/Create", "/TN"], ["schtasks", "/Run", "/TN"], ["schtasks", "/Delete", "/TN"]]
+      and all(rs.HELPER_TASK_NAME in a for a in ran), f"등록·실행·지우기 ({[a[:4] for a in ran]})")
+
 shutil.rmtree(TMP, ignore_errors=True)
 print()
 print(f"실패: {'없음' if not fails else fails}")

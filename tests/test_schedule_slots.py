@@ -294,6 +294,21 @@ try:
 except Exception as e:
     check(False, f"settings_view 호출 실패: {type(e).__name__}: {e}")
 
+print("\n=== 10. 업데이트 대기 중이면 새 실행을 안 띄운다 (Review Focus 4) ===")
+import rpa_update as up  # noqa: E402
+d._active["until"] = 0; d._active["proc"] = None
+os.environ["RPA_PROGRAMDATA"] = os.path.join(tmp, "pd")
+for state in up.BUSY_STATES:
+    up.write_state({"state": state})
+    try:
+        d.launch("routine", "manual:admin"); check(False, f"{state}: 띄움")
+    except RuntimeError as e:
+        check(str(e) == "업데이트 중이라 잠시 실행할 수 없습니다", f"{state}: 단추 실행 거절 ({e})")
+    check(sched.busy() == "업데이트 중이라 잠시 실행할 수 없습니다", f"{state}: 예약·반복도 기다린다")
+up.write_state({"state": "done"})
+check(sched.busy() is None, "done 이면 다시 띄울 수 있다")
+os.environ.pop("RPA_PROGRAMDATA")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

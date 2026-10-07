@@ -223,6 +223,51 @@ def delete_task(run=run_quiet):
     run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
 
 
+HELPER_TASK_NAME = r"AFTER MARKET\RPA Update"   # 자동 업데이트 도우미 - 바꾸는 동안만 있다 (update_helper.py 가 끝나면 지운다)
+
+
+def helper_task_xml(user, runner_dir):
+    """도우미 작업: 프로그램 폴더 밖 runner 의 파이썬으로 update_helper.py. 지금 /Run 으로 한 번 + 로그온 때마다
+    (바꾸는 도중 꺼지면 다음 로그온에 되돌린다). 에이전트 작업과 이름이 달라 그 /End 에 같이 죽지 않는다."""
+    xml = task_xml(user, runner_dir)
+    py = os.path.join(runner_dir, "python", "pythonw.exe")
+    script = os.path.join(runner_dir, "update_helper.py")
+    start = xml.index("<Actions")
+    return (xml[:start].replace("AFTER MARKET RPA 에이전트 - 윈도우 로그인 때 창 없이 켠다 (설치 마법사가 등록)",
+                                "AFTER MARKET RPA 업데이트 도우미 - 업데이트가 끝나면 스스로 지운다")
+            + f"""<Actions Context="Author">
+    <Exec><Command>{escape(py)}</Command><Arguments>"{escape(script)}"</Arguments><WorkingDirectory>{escape(runner_dir)}</WorkingDirectory></Exec>
+  </Actions>
+</Task>
+""")
+
+
+def register_helper_task(runner_dir, run=run_quiet, user=None):
+    path = os.path.join(runner_dir, "helper_task.xml")
+    os.makedirs(runner_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-16") as f:
+        f.write(helper_task_xml(user or process_user(), runner_dir))
+    try:
+        code, out = run(["schtasks", "/Create", "/TN", HELPER_TASK_NAME, "/XML", path, "/F"])
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if code != 0:
+        raise RuntimeError(f"업데이트 도우미 작업을 등록하지 못했습니다: {out.strip()[-300:]}")
+
+
+def run_helper_task(run=run_quiet):
+    code, out = run(["schtasks", "/Run", "/TN", HELPER_TASK_NAME])
+    if code != 0:
+        raise RuntimeError(f"업데이트 도우미를 켜지 못했습니다: {out.strip()[-300:]}")
+
+
+def delete_helper_task(run=run_quiet):
+    run(["schtasks", "/Delete", "/TN", HELPER_TASK_NAME, "/F"])
+
+
 def wait_released(running, wait=STOP_WAIT_SEC, sleep=time.sleep):
     """에이전트 잠금이 풀릴 때까지 기다린다. 풀렸으면 True."""
     until = time.monotonic() + wait
