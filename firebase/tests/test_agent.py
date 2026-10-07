@@ -607,6 +607,7 @@ with tempfile.TemporaryDirectory() as d:
                    {"Routine": [{"Login": "Y"}, {"Sales": "Y"}]}], f, ensure_ascii=False)
     os.environ["RPA_CRED_FILE"] = cred
     os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
+    os.environ["RPA_STATUS_DIR"] = os.path.join(d, "status")
     try:
         acts = ag.real_actions()
         msg = acts["set_modules"]({"Login": False, "Sales": False, "Hold": True})
@@ -640,30 +641,35 @@ with tempfile.TemporaryDirectory() as d:
             acts["set_modules"]({"Nope": True}); check(False, "모르는 모듈만 있으면 거부")
         except RuntimeError as e:
             check("아는 모듈" in str(e), "모르는 모듈만 있으면 거부")
-        os.environ["RPA_STATUS_DIR"] = os.path.join(d, "status")
+        dash.set_policy(2, ["Logistics", "Output"], wellife=True)
+        msg = acts["set_modules"]({"Login": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False})
+        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False} and "켬" in msg,
+              f"웰라이프 업체: set_modules 는 Wellife 섹션에 쓴다 ({msg})")
         try:
-            dash.set_policy(2, ["Logistics", "Output"], wellife=True)
-            msg = acts["set_modules"]({"Login": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False})
-            check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False} and "켬" in msg,
-                  f"웰라이프 업체: set_modules 는 Wellife 섹션에 쓴다 ({msg})")
+            acts["set_modules"]({"Logistics": True}); check(False, "웰라이프 업체에 물류관리 거절")
+        except RuntimeError as e:
+            check("웰라이프 업체는 쓰지 않음" in str(e) and "물류관리" in str(e), f"웰라이프 업체: 물류관리·운송장은 거절 ({e})")
+        try:
+            acts["set_modules"]({"Output": True}); check(False, "웰라이프 업체에 운송장 거절")
+        except RuntimeError as e:
+            check(str(e) == "운송장 출력 / 엑셀 생성: 웰라이프 업체는 쓰지 않음", f"거절 글은 한국어 이름 ({e})")
+        ag.real_actions(lambda: {"Hold": False})["set_modules"]({"Hold": True, "Sales": True})
+        check(st.read_wellife_modules()[0]["Hold"] is False and st.read_wellife_modules()[0]["Sales"] is True, "웰라이프 업체도 업체 정책(안 쓰는 모듈)을 따른다")
+        check(acts["set_schedule"]({"enabled": False, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]}) == "자동 실행을 껐습니다",
+          "웰라이프 업체: 끄는 요청은 고르기 줄이 있어도 된다")
+        for bad in ({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]},
+                    {"enabled": True, "days": [0], "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5}]}):
             try:
-                acts["set_modules"]({"Logistics": True}); check(False, "웰라이프 업체에 물류관리 거절")
+                acts["set_schedule"](bad); check(False, f"웰라이프 업체 고르기·반복 줄 거절 {bad}")
             except RuntimeError as e:
-                check("웰라이프 업체는 쓰지 않음" in str(e), f"웰라이프 업체: 물류관리·운송장은 거절 ({e})")
-            for bad in ({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]},
-                        {"enabled": True, "days": [0], "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5}]}):
-                try:
-                    acts["set_schedule"](bad); check(False, f"웰라이프 업체 고르기·반복 줄 거절 {bad}")
-                except RuntimeError as e:
-                    check("'전체' 시각만" in str(e), f"웰라이프 업체: 고르기·반복 줄 거절 ({e})")
-            check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": None}]}), "웰라이프 업체: '전체' 줄은 된다")
-            dash.set_policy(2, [], wellife=False)
-            check(acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True}) and st.read_routine_modules()[0]["Logistics"] is True,
-                  "보통 업체는 그대로 Routine 섹션")
-        finally:
-            os.environ.pop("RPA_STATUS_DIR", None)
+                check("'전체' 시각만" in str(e), f"웰라이프 업체: 고르기·반복 줄 거절 ({e})")
+        check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": None}]}), "웰라이프 업체: '전체' 줄은 된다")
+        dash.set_policy(2, [], wellife=False)
+        check(acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True}) and st.read_routine_modules()[0]["Logistics"] is True,
+              "보통 업체는 그대로 Routine 섹션")
     finally:
         os.environ.pop("RPA_CRED_FILE", None)
+        os.environ.pop("RPA_STATUS_DIR", None)
 
 print("\n5-2절 업체 모듈 정책 읽기")
 

@@ -544,8 +544,8 @@ class Policy:
         if got[2]:
             try:
                 st.ensure_wellife_section()          # 처음 열리면 로그인·매출처리만 켠 섹션 (메모장 편집 없음)
-            except Exception:
-                pass                                 # 사용자 설정이 아직 없으면 다음 번에
+            except Exception as e:
+                log(f"웰라이프 설정을 만들지 못했습니다 ({type(e).__name__}) - 다음 번에 다시 합니다")
         return got
 
 
@@ -574,12 +574,15 @@ def real_actions(policy=None, limits=None, start_update=None):
         if not isinstance(args, dict) or not args:
             raise RuntimeError("모듈 값이 없습니다")
         if st.wellife_policy():                       # 웰라이프 업체 - Wellife 섹션 (설계 4.2)
-            blocked = [k for k, v in args.items() if v and k in WELLIFE_BLOCKED]
+            blocked = [dict(st.ROUTINE_CONFIG_MODULES).get(k, k) for k, v in args.items() if v and k in WELLIFE_BLOCKED]
             if blocked:
                 raise RuntimeError(f"{', '.join(blocked)}: 웰라이프 업체는 쓰지 않음")
             wanted = {k: bool(v) for k, v in args.items() if k in dict(st.WELLIFE_CONFIG_MODULES)}
             if not wanted:
                 raise RuntimeError("아는 모듈이 없습니다")
+            for k in (policy() if policy else {}):
+                if k in dict(st.WELLIFE_CONFIG_MODULES):
+                    wanted[k] = False        # 이 업체가 안 쓰는 모듈 (총괄이 정한다)
             final = st.write_wellife_modules(wanted)
             return f"실행 모듈을 바꿨습니다 (켬: {', '.join(k for k, v in final.items() if v)})"
         wanted = {k: bool(v) for k, v in args.items()
@@ -613,7 +616,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
         # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
         got = limits() if limits else None
-        if st.wellife_policy() and isinstance(args, dict) and any(      # limits() 가 정책을 새로 적은 뒤에 본다
+        if st.wellife_policy() and isinstance(args, dict) and args.get("enabled") is not False and any(      # limits() 가 정책을 새로 적은 뒤에 본다
                 isinstance(s, dict) and (s.get("run") or s.get("until")) for s in (args.get("slots") or [])):
             raise RuntimeError("웰라이프 업체는 '전체' 시각만 쓸 수 있습니다")
         limit = got[0] if got else (st.read_settings()["schedule"].get("policy") or {}).get("limit")
