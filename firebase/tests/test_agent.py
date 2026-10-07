@@ -693,6 +693,8 @@ with tempfile.TemporaryDirectory() as d:
             acts["set_schedule"](three); check(False, "한도를 넘는 줄 수는 거절")
         except RuntimeError as e:
             check(str(e) == "자동 실행은 2개까지입니다" and st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], f"한도를 넘으면 저장 전에 거절 ({e})")
+        msg = acts["set_schedule"]({**three, "enabled": False})
+        check(msg == "자동 실행을 껐습니다" and len(st.read_settings()["schedule"]["slots"]) == 3, f"끄기는 한도를 넘어도 된다 - 줄은 그대로 ({msg})")
         msg = acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00"}, {"at": "11:00", "run": ["Logistics"]}]})
         check("월 09:00, 11:00 물류관리" in msg, f"한도 안이면 저장 ({msg})")
         dash.set_policy(1, [])

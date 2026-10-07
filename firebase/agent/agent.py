@@ -574,12 +574,12 @@ def real_actions(policy=None, limits=None):
         return f"프리셋을 바꿨습니다 (켬: {', '.join(on) or '없음'})"
 
     def do_schedule(args):
-        # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 못 읽으면 PC 에 적힌 마지막 값,
+        # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
         # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
         got = limits() if limits else None
         limit = got[0] if got else (st.read_settings()["schedule"].get("policy") or {}).get("limit")
         rows = (args.get("slots") if "slots" in args else args.get("times")) if isinstance(args, dict) else None
-        if isinstance(limit, int) and isinstance(rows, list) and len(rows) > limit:
+        if isinstance(rows, list) and args.get("enabled") is not False and isinstance(limit, int) and len(rows) > limit:
             raise RuntimeError(f"자동 실행은 {limit}개까지입니다")
         changed = dash.apply_schedule(args)
         sch = st.read_settings()["schedule"]

@@ -299,14 +299,14 @@ function paintTimes() {
     const del = document.createElement("button"); del.className = "del"; del.textContent = "빼기";
     del.onclick = () => { form.sch.slots.splice(i, 1); paintTimes(); paintScheduleMeta(); };
     row.append(del);
-    if (over.has(s)) row.append(Object.assign(document.createElement("span"), { className: "rest", textContent: "한도를 넘어 쉬는 중" }));
+    if (over.has(s)) row.append(Object.assign(document.createElement("span"), { className: "rest", textContent: "미실행 (한도초과)" }));
     return row;
   }));
 }
-/** 적용을 막는 까닭 (없으면 ""). 한도·줄 모양은 꺼도 지킨다 - 에이전트도 줄 수를, PC 도 줄 모양을 본다 */
+/** 적용을 막는 까닭 (없으면 ""). 줄 모양은 꺼도 지킨다 (PC 가 본다). 한도는 켤 때만 - 끄기는 언제나 된다 (에이전트도 같다) */
 function scheduleProblem() {
   const lim = limitOf(), slots = form.sch.slots;
-  if (slots.length > lim) return lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 담당자에게 문의하세요";
+  if (form.sch.enabled && slots.length > lim) return lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 담당자에게 문의하세요";
   if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) return "시간을 확인하세요";
   for (const w of slots.filter((s) => s.until)) {
     if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) return `반복 끝 시각은 시작(${w.at})보다 늦어야 합니다`;

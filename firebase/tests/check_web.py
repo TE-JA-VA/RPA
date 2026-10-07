@@ -748,8 +748,11 @@ with sync_playwright() as pw:
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 1}})
     reload_to(page, "settings"); page.wait_for_function("document.querySelectorAll('#sch-times .t.over').length === 1", timeout=10000)
     page.click("#sch-days button:nth-child(7)")
-    check("한도를 넘어 쉬는 중" in page.text_content("#sch-times .t:nth-child(2)") and page.is_disabled("#sch-apply")
-          and "1개까지" in page.text_content("#sch-limit"), "한도를 낮추면 넘는 줄은 '쉬는 중', 그 상태로는 적용 안 됨")
+    check("미실행 (한도초과)" in page.text_content("#sch-times .t:nth-child(2)") and page.is_disabled("#sch-apply")
+          and "1개까지" in page.text_content("#sch-limit"), "한도를 낮추면 넘는 줄은 '미실행 (한도초과)', 그 상태로 켜 두기는 적용 안 됨")
+    page.click("label:has(#sch-enabled)")
+    check(not page.is_checked("#sch-enabled") and not page.is_disabled("#sch-apply") and "bad" not in page.get_attribute("#sch-limit", "class"),
+          "한도를 넘어도 끄기는 적용할 수 있다")
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
     reload_to(page, "settings")
     db_patch(f"{LIVE}/schedule", {"slots": None})       # 줄이 0개인 새 판 PC - Realtime DB 에선 빈 목록이 사라진다
