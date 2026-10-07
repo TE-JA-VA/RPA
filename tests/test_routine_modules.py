@@ -323,6 +323,7 @@ class StatusRec:
     """rr.status 대역. 무엇이 어떤 순서로 불렸는지 기록한다. 모든 함수는 None 을 돌려준다."""
 
     OFF_NOTE = "설정에서 끔"     # 상수는 진짜 값으로 (run_modules 가 status.OFF_NOTE 를 읽는다)
+    PICK_NOTE = "이번 실행에서 안 고름"
 
     def __init__(self):
         self.calls = []
@@ -381,6 +382,20 @@ check("끈 모듈은 부르지 않는다", called == ["login", "logistics", "out
 check("끈 모듈은 module_off", [r[0] for r in rec.of("module_off")] == ["sales", "hold"])
 skipped = rec.of("skip")
 check("끈 모듈의 단계는 '설정에서 끔' 으로 skip", len(skipped) == 9 and all(s[1] == "설정에서 끔" for s in skipped), str(skipped))
+logged = []
+rr.log = lambda msg="": logged.append(msg)
+os.environ["RPA_RUN_MODULES"] = "Logistics,Output"
+try:
+    out, called, rec, ac = run({**ALL_ON, "Sales": False, "Hold": False}, {})
+finally:
+    os.environ.pop("RPA_RUN_MODULES", None)
+    rr.log = lambda msg="": None
+skipped = rec.of("skip")
+check("예약이 고른 실행이면 안 고른 모듈은 '이번 실행에서 안 고름' (설정과 상관없다)",
+      len(skipped) == 9 and all(s[1] == "이번 실행에서 안 고름" for s in skipped)
+      and [r[1] for r in rec.of("module_off")] == ["이번 실행에서 안 고름"] * 2, str(skipped))
+check("로그도 '이번 실행에서 고르지 않아 건너뜁니다'",
+      any("[주문매핑 매출처리] 이번 실행에서 고르지 않아 건너뜁니다" in m for m in logged) and not any("설정에서 꺼져" in m for m in logged), str(logged[:3]))
 
 out, called, rec, ac = run({**ALL_ON, "Login": False}, {})
 check("로그인을 끄면 ERPia 에 붙어서 계속", called == ["sales", "hold", "logistics", "output"] and out[0] == "success", str(called))
@@ -390,6 +405,7 @@ check("붙기 실패면 아무 모듈도 안 돌고 stopped", called == [] and o
 check("붙기 실패는 그 모듈의 첫 단계에 실패로 보인다", rec.of("step") == [("order_screen",)] and rec.of("module_done")[-1][:2] == ("sales", "failed"), str(rec.of("step")))
 check("rpa_status.OFF_NOTE 가 있고 run_routine 에 리터럴이 없다",
       st.OFF_NOTE == "설정에서 끔" and '"설정에서 끔"' not in Path(rr.__file__).read_text(encoding="utf-8"))
+check("rpa_status.PICK_NOTE 도 같은 자리에", st.PICK_NOTE == "이번 실행에서 안 고름" and set(st.OFF_NOTES) == {st.OFF_NOTE, st.PICK_NOTE})
 
 out, called, rec, ac = run(ALL_ON, {"hold": ("failed", "그리드 없음")})
 check("failed 면 뒤 모듈 안 돌고 stopped", called == ["login", "sales", "hold"] and out == ("stopped", "그리드 없음"), str((called, out)))

@@ -5806,7 +5806,7 @@ MODULE_FUNCS = {
 def run_modules(selected):
     """설정대로 모듈을 차례로 돌린다. (전체 결과 "success"|"stopped", 사유)
 
-    - 끈 모듈은 부르지 않고 그 단계들을 '설정에서 끔' 으로 표시한다.
+    - 끈 모듈은 부르지 않고 그 단계들을 '설정에서 끔' 으로 표시한다 (예약 줄이 고른 실행이면 '이번 실행에서 안 고름').
     - 로그인 모듈 없이 시작하면 이미 떠 있는 ERPia 에 붙는다.
     - failed / stopped 가 나오면 뒤 모듈을 돌리지 않는다. done / no_target / skipped 는 계속 간다.
     """
@@ -5818,12 +5818,15 @@ def run_modules(selected):
         return "stopped", f"켜진 모듈이 없습니다 ('{pl.ROUTINE_SECTION}' 섹션 확인)"
 
     ctx = RoutineContext()
+    picked = os.environ.get(RUN_MODULES_ENV) is not None    # 예약 줄이 모듈을 골라 띄웠다 - 안 고른 모듈은 설정과 상관없다
     for key, cfg_key, label, steps, _bit in ROUTINE_MODULES:
         if not selected.get(cfg_key, True):
-            log(f"\n=== [{label}] 설정에서 꺼져 있어 건너뜁니다 ({cfg_key}=N) ===")
-            status.module_off(key, status.OFF_NOTE)
+            note = status.PICK_NOTE if picked else status.OFF_NOTE
+            log(f"\n=== [{label}] 이번 실행에서 고르지 않아 건너뜁니다 ===" if picked
+                else f"\n=== [{label}] 설정에서 꺼져 있어 건너뜁니다 ({cfg_key}=N) ===")
+            status.module_off(key, note)
             for s in steps:
-                status.skip(s, status.OFF_NOTE)
+                status.skip(s, note)
             continue
 
         if key != "login" and ctx.hwnd is None:

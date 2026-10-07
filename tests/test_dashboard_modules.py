@@ -233,6 +233,18 @@ rec = st.history_record(st._state)
 summ = d.run_summary(rec)
 check("run_summary 도 같은 계산 + module_flags/modules", summ["steps_total"] == 2 and summ["steps_done"] == 1 and summ["module_flags"] == 1 and [m["state"] for m in summ["modules"]] == ["done", "off", "running"], str(summ))
 st.finish("stopped", "시험 끝")
+# 예약이 고른 실행에서 안 고른 모듈 ('이번 실행에서 안 고름') 도 할 일이 아니다 (2026-10-07)
+st.start("routine", [("login", "로그인"), ("order_screen", "화면"), ("sales", "매출"), ("hold_screen", "이동")])
+st.set_modules([("login", "로그인", ("login",), 1), ("sales", "매출", ("order_screen", "sales"), 2), ("hold", "물류대기", ("hold_screen",), 4)])
+st.module_start("login"); st.step("login"); st.module_done("login", "done")
+st.module_off("sales", st.PICK_NOTE); st.skip("order_screen", st.PICK_NOTE); st.skip("sales", st.PICK_NOTE)
+st.module_start("hold"); st.step("hold_screen")
+view = st.decorate(st._state)
+summ = d.run_summary(st.history_record(st._state))
+check("안 고른 모듈의 단계도 분모/분자에서 빠진다 (현황·이력 둘 다)",
+      (view["steps_total"], view["steps_done"], summ["steps_total"], summ["steps_done"]) == (2, 1, 2, 1),
+      str((view["steps_total"], view["steps_done"], summ["steps_total"], summ["steps_done"])))
+st.finish("stopped", "시험 끝")
 
 # 전부 끔 / 로그인만 / 옛 형식 레코드가 계산에서 예외 없이 처리되는지 + 평균은 전체 실행만
 st.start("routine", [("login", "로그인"), ("sales", "매출")])

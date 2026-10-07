@@ -1129,7 +1129,7 @@ def run_summary(rec):
                                    "reason", "started_at", "finished_at", "duration_sec",
                                    "metrics")}
     # 설정에서 끈 모듈의 단계는 '할 일' 이 아니다 (현황 링과 같은 계산 - rpa_status.decorate)
-    counted = [s for s in steps if not (s.get("state") == "skipped" and s.get("note") == st.OFF_NOTE)]
+    counted = [s for s in steps if not (s.get("state") == "skipped" and s.get("note") in st.OFF_NOTES)]
     out["steps_total"] = len(counted)
     out["steps_done"] = sum(1 for s in counted if s.get("state") in ("done", "skipped"))
     out["last_step"] = last.get("label") if last else None

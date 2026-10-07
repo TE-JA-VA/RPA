@@ -706,6 +706,8 @@ ROUTINE_SECTION = "Routine"
 # 설정에서 끈 모듈의 단계에 붙는 note. 루틴(run_routine)이 이 값으로 skip 을 찍고,
 # 현황 링·이력의 단계 수 계산은 이 note 가 붙은 단계를 '할 일' 에서 뺀다.
 OFF_NOTE = "설정에서 끔"
+PICK_NOTE = "이번 실행에서 안 고름"   # 예약 줄이 모듈을 골라 띄웠을 때 안 고른 모듈 (RPA_RUN_MODULES, 2026-10-07)
+OFF_NOTES = (OFF_NOTE, PICK_NOTE)   # 둘 다 '할 일' 이 아니다
 ROUTINE_CONFIG_MODULES = (
     ("Login", "로그인"),
     ("Sales", "주문매핑 매출처리"),
@@ -1765,7 +1767,7 @@ def decorate(state):
         steps.append(item)
     view["steps"] = steps
     # 설정에서 끈 모듈의 단계는 '할 일' 이 아니므로 분모·분자 어느 쪽에도 넣지 않는다
-    counted = [s for s in steps if not (s.get("state") == "skipped" and s.get("note") == OFF_NOTE)]
+    counted = [s for s in steps if not (s.get("state") == "skipped" and s.get("note") in OFF_NOTES)]
     view["steps_total"] = len(counted)
     view["steps_done"] = sum(1 for s in counted if s.get("state") in ("done", "skipped"))
     # 각 지표(metric)에 그 지표가 기록된 단계의 '경과 시간'을 붙인다.
