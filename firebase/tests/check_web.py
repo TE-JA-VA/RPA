@@ -1162,7 +1162,7 @@ with sync_playwright() as pw:
           and page.get_attribute("#run-routine", "title") == "업데이트 중이라 잠시 실행할 수 없습니다", "업데이트 대기 중: 판 옆 글 + 실행 단추 잠금")
     db_patch(LIVE, {"update": {"state": "rolled_back", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T15:10:00",
                                "reason": "새 판이 3분 안에 정상으로 켜지지 않았습니다", "backup": "2026.10.07-3"}})
-    page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('옛 판으로 되돌림')", timeout=10000)
+    page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('이전 버전으로 되돌림')", timeout=10000)
     check("3분" in (page.get_attribute("#ver", "title") or "") and not page.is_disabled("#run-routine"), "되돌림: 까닭은 마우스 글, 실행 단추는 풀린다")
     db_patch(LIVE, {"update": {"state": "done", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T14:03:00", "backup": "2026.10.07-4"}})
     page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('업데이트됨 (10/7 14:03)')", timeout=10000)

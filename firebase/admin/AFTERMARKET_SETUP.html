@@ -213,7 +213,7 @@ async function openDetail(cid, keep) {
 }
 const refresh = (cid, keep) => { openDetail(cid, keep); loadCompanies(); };
 const UPD_TEXT = { downloading: "업데이트 받는 중", waiting: "업데이트 대기 중", ready: "바꾸는 중", applying: "바꾸는 중", rolling_back: "바꾸는 중",
-  failed: "업데이트 실패", rolled_back: "업데이트 실패 - 옛 판으로 되돌림" };
+  failed: "업데이트 실패", rolled_back: "업데이트 실패 - 이전 버전으로 되돌림" };
 const md = (iso) => (iso ? `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))} ${iso.slice(11, 16)}` : "");
 function updText(u) {
   if (!u?.state) return "";
@@ -221,7 +221,7 @@ function updText(u) {
 }
 function pcRowEl(d, p, rel) {
   const tag = (v) => (v === rel.stable ? " (안정본)" : v === rel.newest ? " (최신본)" : "");
-  const ver = p.version?.version ? `판 ${p.version.version}${tag(p.version.version)}` : "판 모름";
+  const ver = p.version?.version ? `버전 ${p.version.version}${tag(p.version.version)}` : "버전 모름";
   const busy = ["downloading", "waiting", "ready", "applying", "rolling_back"].includes(p.update?.state);
   const sel = el("select", { class: "upd-ver" }, rel.list.map((x) => el("option", { value: x.version }, `${x.version}${tag(x.version)}${x.memo ? ` - ${x.memo}` : ""}`)));
   if (rel.stable) sel.value = rel.stable;
@@ -231,10 +231,10 @@ function pcRowEl(d, p, rel) {
     flash(`업데이트 명령을 보냈습니다 (${p.pcId} → ${sel.value})`); openDetail(d.cid);
   }) }, "업데이트");
   const back = p.update?.backup ? el("button", { class: "upd-back", disabled: busy, onclick: () => act(back, async () => {
-    if (!confirm(`${d.cid} / ${p.pcId} 를 이전 판 ${p.update.backup} 로 되돌립니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
+    if (!confirm(`${d.cid} / ${p.pcId} 를 이전 버전 ${p.update.backup} 로 되돌립니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/rollback`, {});
     flash(`되돌리기 명령을 보냈습니다 (${p.pcId} → ${p.update.backup})`); openDetail(d.cid);
-  }) }, `이전 판으로 되돌리기 (${p.update.backup})`) : null;
+  }) }, `이전 버전으로 되돌리기 (${p.update.backup})`) : null;
   const status = updText(p.update);
   return el("li", { id: `pc-${p.pcId}`, title: p.update?.reason ?? "" },
     `${p.label || "(이름 없음)"} · ${p.pcId} · ${ver}${status ? ` · ${status}` : ""} `, sel, go, back ?? "");

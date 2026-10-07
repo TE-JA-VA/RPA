@@ -297,7 +297,7 @@ with sync_playwright() as pw:
 
     open_company(page, CID)
     row = page.text_content(f"#pc-{PC}")
-    check("판 2026.10.07-4 (안정본)" in row and "업데이트됨 10/7 14:03" in row, f"PC 줄: 판·표시·상태 ({row})")
+    check("버전 2026.10.07-4 (안정본)" in row and "판" not in row and "업데이트됨 10/7 14:03" in row, f"PC 줄: 판·표시·상태 ({row})")
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4"
           and "(최신본)" in page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']"), "판 고르기: 처음은 안정본, 최신본 표시")
     page.select_option(f"#pc-{PC} select.upd-ver", "2026.10.07-5")

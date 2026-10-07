@@ -299,7 +299,7 @@ function verStat(v) {
     const n = Number(v.changed_count) || list.length;
     const more = n > list.length ? ` 외 ${n - list.length}개` : "";
     return { text: `버전 ${name || "?"} · 다른 파일 ${n}`, warn: true,
-             title: list.length ? `판 목록과 다른 파일: ${list.join(", ")}${more}` : "" };
+             title: list.length ? `버전 목록과 다른 파일: ${list.join(", ")}${more}` : "" };
   }
   if (v.state === "error") return { text: "버전 확인 실패", title: typeof v.error === "string" ? v.error : "", warn: true };
   return null;
@@ -307,7 +307,7 @@ function verStat(v) {
 
 // live.update → 판 글 옆 업데이트 상태 (자동 업데이트 9절). 까닭은 마우스 글
 const UPD_TEXT = { downloading: "업데이트 받는 중", waiting: "업데이트 대기 중", ready: "바꾸는 중", applying: "바꾸는 중", rolling_back: "바꾸는 중",
-  failed: "업데이트 실패", rolled_back: "업데이트 실패 - 옛 판으로 되돌림" };
+  failed: "업데이트 실패", rolled_back: "업데이트 실패 - 이전 버전으로 되돌림" };
 const UPD_BUSY = ["waiting", "ready", "applying", "rolling_back"];   // 에이전트도 이 동안 실행을 거절한다 (rpa_update.BUSY_STATES)
 function updStat(u) {
   if (!u || typeof u !== "object" || typeof u.state !== "string") return null;
