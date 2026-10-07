@@ -155,6 +155,19 @@ st.step("login")
 st.finish("success")
 check("finish(success) 가 running 모듈을 done 으로 닫으면 비트도 세운다", st._state["modules"][0]["state"] == "done" and st._state["module_flags"] == 1, str(st._state["module_flags"]))
 check("last_problem() 이 있다", callable(getattr(st, "last_problem", None)))
+os.environ["RPA_RUN_TRIGGER"] = "repeat"
+st.start("routine", [("login", "로그인")])
+check("시작할 때 RPA_RUN_TRIGGER 를 trigger 로", st._state["trigger"] == "repeat" and st.history_record(st._state)["trigger"] == "repeat")
+os.environ.pop("RPA_RUN_TRIGGER")
+hist = os.path.join(_tmp, "history.jsonl")
+lines = lambda: len(open(hist, encoding="utf-8").read().splitlines()) if os.path.exists(hist) else 0
+n0 = lines()
+st.set_modules(MODS); st.module_start("login"); st.module_done("login", "done")
+check("done_modules: 완료 모듈 키", st.done_modules() == ["login"])
+st.finish("success", record=False)
+check("record=False 면 이력에 안 쓴다 (상태 파일은 끝남)", lines() == n0 and st.read_json(st.status_path("routine"))["state"] == "success")
+st.start("routine", [("login", "로그인")]); st.finish("success")
+check("평소엔 이력에 쓴다 (사람이 띄우면 trigger 없음)", lines() == n0 + 1 and __import__("json").loads(open(hist, encoding="utf-8").read().splitlines()[-1]).get("trigger") is None)
 
 # ---------------------------------------------------------------------------
 import run_routine as rr  # noqa: E402
@@ -316,7 +329,7 @@ class StatusRec:
 
     def __getattr__(self, name):
         def f(*a, **k):
-            self.calls.append((name,) + a)
+            self.calls.append((name,) + a + ((k,) if k else ()))
             return None
         return f
 
@@ -639,5 +652,35 @@ rec = StatusRec(); rr.status = rec; ran.clear()
 rr.main()
 check("돌릴 게 없으면 run_modules 없이 중단 + 사유", not ran and rec.of("finish")[-1] == ("stopped", "이번 실행 모듈이 비었습니다"), f"{rec.of('finish')}")
 os.environ.pop("RPA_RUN_MODULES", None)
+
+print()
+print("=== 12. 반복 회차 - 처리한 게 없으면 기록에 안 남긴다 (RPA_RUN_TRIGGER=repeat) ===")
+
+
+class DoneRec(StatusRec):
+    def __init__(self, done):
+        super().__init__()
+        self._done = done
+
+    def done_modules(self):
+        return self._done
+
+
+rr.pl.load_routine_modules = lambda keys: ({k: True for k in keys}, [])
+rr.run_modules = lambda selected: ("success", None)
+os.environ["RPA_RUN_TRIGGER"] = "repeat"
+for done, keep, what in ((["login"], False, "로그인만 완료 (대상 없음) → 기록 안 남김"), (["login", "logistics"], True, "처리한 모듈이 있으면 남김")):
+    rec = DoneRec(done); rr.status = rec
+    rr.main()
+    fin = rec.of("finish")[-1]
+    check(what, fin == (("success", None) if keep else ("success", None, {"record": False})), str(fin))
+rr.run_modules = lambda selected: ("stopped", "물류관리 실패")
+rec = DoneRec(["login"]); rr.status = rec; rr.main()
+check("실패한 반복 회차는 늘 남긴다", rec.of("finish")[-1] == ("stopped", "물류관리 실패"), str(rec.of("finish")))
+os.environ["RPA_RUN_TRIGGER"] = "auto"
+rr.run_modules = lambda selected: ("success", None)
+rec = DoneRec(["login"]); rr.status = rec; rr.main()
+check("정한 시각 실행은 대상 없음이어도 남긴다", rec.of("finish")[-1] == ("success", None), str(rec.of("finish")))
+os.environ.pop("RPA_RUN_TRIGGER", None)
 
 finish()

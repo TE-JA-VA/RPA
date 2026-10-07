@@ -511,6 +511,8 @@ def launch_run_all(by):
 ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Sales, Hold, Logistics, Output
 RUN_KEYS = ("Prepare",) + ROUTINE_KEYS                             # 줄의 run 에 쓰는 키. 이 순서로 저장한다
 SLOT_NAMES = {"Prepare": "쇼핑몰 받기", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장"}   # 화면 단추와 같은 말
+REST_MIN_DEFAULT = 2
+REST_MIN_RANGE = (1, 60)   # 반복 시간대 쉬는 시간 (분)
 
 
 def normalize_days(days):
@@ -580,10 +582,32 @@ def normalize_slots(slots):
             raise ValueError("자동 실행 줄이 잘못되었습니다")
         item = {"at": _check_time(s.get("at"))}
         run = normalize_run(s.get("run"))
+        if s.get("until") is not None:                 # 반복 시간대 (설계 6-1)
+            item["until"] = _check_time(s.get("until"))
+            if item["until"] <= item["at"]:
+                raise ValueError(f"반복 끝 시각은 시작({item['at']})보다 늦어야 합니다")
+            rest = s.get("rest_min", REST_MIN_DEFAULT)
+            if not isinstance(rest, int) or isinstance(rest, bool) or not REST_MIN_RANGE[0] <= rest <= REST_MIN_RANGE[1]:
+                raise ValueError("쉬는 시간은 1~60분 정수여야 합니다")
+            if s.get("on_fail", "stop") != "stop":
+                raise ValueError("실패하면 '멈춤' 만 됩니다")
+            if run is None:
+                raise ValueError("반복에는 '전체' 를 쓸 수 없습니다 - 모듈을 고르세요")
+            if "Prepare" in run:
+                raise ValueError("반복에는 쇼핑몰 받기를 넣을 수 없습니다")
+            item.update(rest_min=rest, on_fail="stop")
         if run is not None:
             item["run"] = run
         out.append(item)
     out.sort(key=lambda x: x["at"])
+    for w in (x for x in out if "until" in x):
+        for x in out:
+            if x is w:
+                continue
+            if "until" in x and x["at"] < w["until"] and w["at"] < x["until"]:
+                raise ValueError(f"반복 시간대가 겹칩니다: {w['at']}~{w['until']}, {x['at']}~{x['until']}")
+            if "until" not in x and w["at"] <= x["at"] < w["until"]:
+                raise ValueError(f"{w['at']}~{w['until']} 반복 안에는 시각을 넣을 수 없습니다")
     ats = [x["at"] for x in out]
     dup = sorted({a for a in ats if ats.count(a) > 1})
     if dup:
@@ -696,6 +720,66 @@ def launch_slot(slot, by="auto", trigger="auto"):
     return launch(target, by, dict(env, RPA_RUN_TRIGGER=trigger))
 
 
+def open_window(sch, now):
+    """지금 열려 있는 반복 시간대 (그날 요일 + 시작 ≤ 지금 < 끝, 한도 안의 줄). 없으면 None."""
+    if not sch.get("enabled") or now.weekday() not in (sch.get("days") or []):
+        return None
+    hm = now.strftime("%H:%M")
+    return next((s for s in active_slots(sch) if s.get("until") and s["at"] <= hm < s["until"]), None)
+
+
+def last_finished():
+    """루틴·프리페어 상태 파일에서 가장 늦게 끝난 시각 (누가 띄웠든). 쉬는 시간은 여기서부터 센다 (설계 6-2)."""
+    ends = []
+    for program in st.PROGRAMS:
+        v = st.read_json(st.status_path(program)) or {}
+        t = st.parse_iso(v.get("finished_at")) if v.get("state") != "running" else None
+        if t is not None:
+            ends.append(t)
+    return max(ends) if ends else None
+
+
+def processed(status):
+    """반복 회차가 처리한 게 있나 - 로그인 말고 '완료' 로 끝난 모듈 (대상 없음은 처리가 아니다)."""
+    return any(m.get("state") == "done" and m.get("key") != "login" for m in status.get("modules") or [])
+
+
+def stop_reason(status):
+    """멈춘 회차의 까닭 한 줄: '10:23 물류관리 실패로 반복을 멈췄습니다: <사유>'."""
+    bad = next((m for m in status.get("modules") or [] if m.get("state") in ("failed", "stopped")), None) or {}
+    word = "오류" if status.get("state") == "crashed" else "실패"
+    why = status.get("reason") or bad.get("reason") or "까닭 없음"
+    return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or '루틴'} {word}로 반복을 멈췄습니다: {why}".strip()
+
+
+def repeat_state(sch, win, now):
+    """오늘 열린 시간대 win 의 상태 (sch["repeat"]). 날이 바뀌었거나 다른 시간대면 새로 만든다. (상태, 새로 만들었나)
+    지난 시간대에 띄운 회차가 아직 안 끝났으면(pending) 이어서 기다린다."""
+    rep = sch.get("repeat")
+    key = (now.date().isoformat(), win["at"], win["until"])
+    if isinstance(rep, dict) and (rep.get("date"), rep.get("at"), rep.get("until")) == key:
+        return rep, False
+    rep = {"date": key[0], "at": key[1], "until": key[2], "runs": 0, "done": 0, "stopped": None,
+           "pending": rep.get("pending") if isinstance(rep, dict) else None, "last_launch_at": None, "next_at": None}
+    sch["repeat"] = rep
+    return rep, True
+
+
+def resume_repeat():
+    """[반복 다시 시작] (명령 resume_repeat). 열린 시간대의 멈춤을 풀어 바로 다음 회차. 멈춘 반복이 없으면 RuntimeError."""
+    now = NOW()
+    with _settings_lock:
+        cfg = st.read_settings()
+        sch = cfg["schedule"]
+        win = open_window(sch, now)
+        rep = sch.get("repeat") or {}
+        if win is None or not rep.get("stopped") or (rep.get("date"), rep.get("at")) != (now.date().isoformat(), win["at"]):
+            raise RuntimeError("지금은 멈춘 반복이 없습니다")
+        rep.update(stopped=None, next_at=None)
+        st.write_settings(cfg)
+    return f"반복을 다시 시작했습니다 ({win['until']}까지)"
+
+
 def days_label(days):
     picked = sorted(set(v for v in (days or []) if isinstance(v, int) and 0 <= v <= 6))
     if picked == list(range(7)):
@@ -797,21 +881,91 @@ class Scheduler(threading.Thread):
             self.waiting_reason = None
             return
         now = NOW()
+        self.check_repeat_result(now)            # 띄운 반복 회차가 끝났으면 센다 (시간대가 끝났어도)
         next_run = st.parse_iso(sch.get("next_run_at"))
         if next_run is None:
-            sch = self._advance_now(now)
-            self.waiting_reason = None if sch["next_run_at"] else "요일·시간 설정이 비어 있습니다"
-            return
-        if now < next_run:
+            if not self._advance_now(now)["next_run_at"]:
+                self.waiting_reason = "요일·시간 설정이 비어 있습니다"
+                return
+        elif now >= next_run:
+            slot = slot_of(sch)
+            if slot is not None and not slot.get("until"):
+                self.waiting_reason = self.busy()
+                if self.waiting_reason is None:
+                    self.launch(slot)
+                return
+            self._advance_now(now)               # 가리키던 줄이 없어졌거나 반복 시간대 - 다음 줄로 (시간대는 아래 반복이 맡는다)
+        win = open_window(st.read_settings()["schedule"], now)
+        if win is None:
             self.waiting_reason = None
             return
-        slot = slot_of(sch)
-        if slot is None:                   # 가리키던 줄이 없어졌다 (줄을 고쳤거나 한도가 줄었다) - 띄우지 않고 다음 줄로
-            self._advance_now(now)
+        self.tick_repeat(win, now)
+
+    def tick_repeat(self, win, now):
+        """열린 반복 시간대: 멈췄거나 띄운 회차가 아직이면 기다리고, 쉬는 시간이 지났으면 다음 회차를 띄운다."""
+        with _settings_lock:
+            cfg = st.read_settings()
+            rep, new = repeat_state(cfg["schedule"], win, now)
+            if new:
+                st.write_settings(cfg)
+        if rep.get("stopped"):
+            self.waiting_reason = "반복을 멈췄습니다 - [반복 다시 시작] 을 누르면 이어 돕니다"
+            return
+        if rep.get("pending"):
+            self.waiting_reason = "반복 회차가 끝나기를 기다립니다"
+            return
+        end = last_finished()
+        if end is not None and now < end + datetime.timedelta(minutes=win.get("rest_min", REST_MIN_DEFAULT)):
+            self.waiting_reason = None
             return
         self.waiting_reason = self.busy()
-        if self.waiting_reason is None:
-            self.launch(slot)
+        if self.waiting_reason is not None:
+            return
+        stamp = now.isoformat(timespec="seconds")
+        try:
+            launch_slot(win, trigger="repeat")
+        except RuntimeError as e:                # 토큰이 없음·업체가 안 쓰는 모듈만 - 시각 줄처럼 넘기지 않고 멈춘다
+            self.mark_repeat(stopped={"at": stamp, "reason": f"{now:%H:%M} {e}"})
+            return
+        self.mark_repeat(pending=stamp, last_launch_at=stamp)
+
+    def check_repeat_result(self, now):
+        """띄운 반복 회차가 끝났으면 센다. 성공 → 회차 +1 (처리했으면 처리 +1), 실패·중단·오류 → 그 시간대 반복 멈춤 + 까닭."""
+        since = st.parse_iso((st.read_settings()["schedule"].get("repeat") or {}).get("pending"))
+        if since is None or launch_state() is not None:
+            return
+        v = st.read_json(st.status_path("routine")) or {}
+        if v.get("state") == "running":
+            return
+        started = st.parse_iso(v.get("started_at"))
+        with _settings_lock:
+            cfg = st.read_settings()
+            sch = cfg["schedule"]
+            rep = sch.get("repeat")
+            if not isinstance(rep, dict) or rep.get("pending") is None:
+                return
+            rep["pending"] = None
+            stamp = now.isoformat(timespec="seconds")
+            if started is None or started < since:   # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
+                rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차가 시작하지 못했습니다"}
+            elif v.get("state") == "success":
+                rep["runs"] = int(rep.get("runs") or 0) + 1
+                rep["done"] = int(rep.get("done") or 0) + (1 if processed(v) else 0)
+                rest = next((s.get("rest_min", REST_MIN_DEFAULT) for s in active_slots(sch)
+                             if s.get("until") and s["at"] == rep.get("at")), REST_MIN_DEFAULT)
+                end = st.parse_iso(v.get("finished_at")) or now
+                rep["next_at"] = (end + datetime.timedelta(minutes=rest)).isoformat(timespec="seconds")
+            else:
+                rep["stopped"] = {"at": stamp, "reason": stop_reason(v)}
+            st.write_settings(cfg)
+
+    def mark_repeat(self, **fields):
+        with _settings_lock:
+            cfg = st.read_settings()
+            rep = cfg["schedule"].get("repeat")
+            if isinstance(rep, dict):
+                rep.update(fields)
+                st.write_settings(cfg)
 
     def launch(self, slot):
         launch_slot(slot)
@@ -836,6 +990,7 @@ def schedule_view():
         "next_slot": sch.get("next_slot") if nxt else None,
         "next_run_in_sec": max(0, int((nxt - now).total_seconds())) if nxt else None,
         "policy": sch.get("policy"),
+        "repeat": sch.get("repeat"),
         "last_launch_at": sch.get("last_launch_at"),
         "last_launch_by": sch.get("last_launch_by"),
         "last_error": sch.get("last_error"),

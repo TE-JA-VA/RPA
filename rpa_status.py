@@ -1197,6 +1197,7 @@ def history_record(state):
         "program_label": state.get("program_label"),
         "host": state.get("host"),
         "account": state.get("account"),
+        "trigger": state.get("trigger"),
         "state": state.get("state"),
         "reason": state.get("reason"),
         "started_at": state.get("started_at"),
@@ -1378,6 +1379,7 @@ def start(program, steps=(), title=None):
             "account": None,
             "pid": pid,
             "pid_created": process_created(pid),
+            "trigger": os.environ.get("RPA_RUN_TRIGGER") or None,   # 예약이 띄웠으면 auto / repeat (rpa_dashboard.launch_slot). 사람이 띄우면 None
             "started_at": now,
             "updated_at": now,
             "progress_at": now,
@@ -1645,8 +1647,9 @@ def log_line(line):
 
 
 @_safe
-def finish(result, reason=None):
-    """실행을 닫고 이력에 남긴다. result: success / stopped / crashed"""
+def finish(result, reason=None, record=True):
+    """실행을 닫고 이력에 남긴다. result: success / stopped / crashed
+    record=False 면 이력에 안 남긴다 (처리한 게 없는 반복 회차 - 설계 6-3, 상태 파일은 그대로 쓴다)"""
     global _finished
     with _lock:
         if not _active():
@@ -1677,8 +1680,16 @@ def finish(result, reason=None):
             _state["current"] = None
             _state["note"] = None
         _write_locked()
-        append_history(history_record(_state))
+        if record:
+            append_history(history_record(_state))
         _finished = True
+
+
+@_safe
+def done_modules():
+    """지금 실행에서 '완료' 로 끝난 모듈 키 (반복 회차가 처리한 게 있는지 본다 - 설계 6-3)."""
+    with _lock:
+        return [m.get("key") for m in ((_state or {}).get("modules") or []) if m.get("state") == "done"]
 
 
 @_safe

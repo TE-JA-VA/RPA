@@ -5893,7 +5893,12 @@ def main():
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
 
     result, reason = run_modules(selected)
-    status.finish(result, reason)
+    if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
+            and not [k for k in (status.done_modules() or []) if k != "login"]:
+        log("반복 회차 - 처리한 것이 없어 기록에 남기지 않습니다")
+        status.finish(result, reason, record=False)
+    else:
+        status.finish(result, reason)
     log(f"=== 루틴 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ({'성공' if result == 'success' else '중단'}) ===")
 
 
