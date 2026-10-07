@@ -10,7 +10,14 @@ export const MODULES = [
   ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
   ["Logistics", "물류관리"], ["Output", "운송장 출력 / 엑셀 생성"],
 ];
-export const LOCKED = new Set(["Login"]);   // 항상 켬. 관리자도 못 끈다 (에이전트도 파일에 Y 로 고정)
+// 웰라이프 업체 모듈 (설계 2026-10-07-wellife-gate) - PC 의 Wellife 섹션 키, wellife.MODULES 와 같다
+export const WELLIFE_MODULES = [
+  ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
+  ["Sap", "웰라이프 SAP 연동관리"], ["Wms", "웰라이프 WMS 이관관리"],
+];
+/** 웰라이프 업체인가 - 업체코드에 wellife (대소문자 무관) 또는 관리 화면에서 연 업체. 에이전트·관리 화면과 같은 규칙 */
+export const wellifeOn = (cid, policy) => String(cid ?? "").toLowerCase().includes("wellife") || policy?.rpa?.features?.wellife === true;
+export const LOCKED =new Set(["Login"]);   // 항상 켬. 관리자도 못 끈다 (에이전트도 파일에 Y 로 고정)
 // 앞 모듈이 꺼지면 따라 꺼지는 모듈. 운송장 출력은 물류관리가 만든 화면에서 돌기 때문에 혼자 돌 수 없다 (에이전트도 못 박는다)
 export const NEEDS = { Output: "Logistics" };
 export const DAYS = ["월", "화", "수", "목", "금", "토", "일"];

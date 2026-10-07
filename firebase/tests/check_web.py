@@ -536,6 +536,25 @@ with sync_playwright() as pw:
     db_patch("meta/companies/c_demo/apps/rpa", {"modules": None})   # null 로 PATCH = 그 자리 지우기 (PUT 은 본문이 비면 400)
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     check(page.locator("#mod-list label").count() == 5, "정책을 지우면 다시 보인다")
+    # 웰라이프 업체 (설계 2026-10-07-wellife-gate): 모듈 다섯, '전체' 시각만. 줄 고르기는 v2 PC 에서만 보이니 v2 live 를 먼저 만든다
+    rule = page.evaluate("import('./rpa-common.js').then(m => [m.wellifeOn('WELLIFE_x', null), m.wellifeOn('my_wellife', {}), m.wellifeOn('wel_life', null),"
+                         "m.wellifeOn('c_demo', {rpa: {features: {wellife: true}}}), m.wellifeOn('c_demo', {rpa: {features: {wellife: false}}})])")
+    check(rule == [True, True, False, True, False], f"웹 판정 규칙이 에이전트·관리 화면과 같다 ({rule})")
+    sch0 = db_get(f"{LIVE}/schedule") or {}
+    db_patch(f"{LIVE}/schedule", {"version": 2, "slots": [{"at": "09:05"}], "times": None})
+    reload_to(page, "settings"); page.wait_for_selector("#sch-times select.mode")
+    db_patch("meta/companies/c_demo/apps/rpa", {"features": {"wellife": True}})
+    reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
+    names = [x.strip() for x in page.locator("#mod-list label").all_text_contents()]
+    check(len(names) == 5 and any("웰라이프 SAP 연동관리" in n for n in names) and any("웰라이프 WMS 이관관리" in n for n in names)
+          and not any("물류관리" == n or "운송장" in n for n in names), f"웰라이프 업체: 모듈 다섯 (물류관리·운송장 없음) ({names})")
+    check(not page.is_visible("#sch-add-win") and page.locator("#sch-times select.mode").count() == 0,
+          "웰라이프 업체: '전체' 시각만 (고르기·반복 시간대 숨김)")
+    db_patch("meta/companies/c_demo/apps/rpa", {"features": None})
+    reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
+    check(page.locator("#mod-list label").count() == 5 and page.locator("#mod-list input[aria-label='물류관리']").count() == 1,
+          "보통 업체로 돌아오면 지금 그대로")
+    db_patch(f"{LIVE}/schedule", {**{k: None for k in ("version", "slots", "times")}, **sch0})   # v2 live 를 원래대로
 
     goto(page, "rpa")
     # RPA 가 도는 동안에는 실행 버튼을 잠근다 (다른 사람이 겹쳐 실행하지 않게). 종료 버튼만 열어 둔다

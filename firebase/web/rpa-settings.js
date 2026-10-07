@@ -1,7 +1,7 @@
 // RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 실행 모듈 · 쇼핑몰 프리셋 · 자동 실행 (PC 마다).
 // 값의 기준은 PC 가 올린 live. 적용 = settings 에 쓰고 명령을 넣는다 - PC 가 반영해 live 로 돌려준다
 import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import { P, MODULES, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
+import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
 
 export const title = "RPA";
 
@@ -44,7 +44,7 @@ const HTML = `
   </div>
   <p class="muted hide" id="no-pc">등록된 PC 가 없습니다</p>`;
 
-let root = null, c = null, stopLive = null, stopLimit = null, busy = false, live = null, liveLimit;
+let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, busy = false, live = null, liveLimit;
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
 let form = { modules: {}, shops: {}, sch: { enabled: false, days: [], slots: [] } };
 const $ = (id) => root.querySelector(`#${id}`);
@@ -74,6 +74,11 @@ export function mount(el, context) {
     liveLimit = snap.val();
     if (root && live) { paintTimes(); paintScheduleMeta(); }
   }, () => {});
+  // 웰라이프 열림도 같은 방식 - 로그인 뒤 관리 화면에서 바뀌어도 따라간다
+  stopFeatures = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/features`), (snap) => {
+    c.policy = { ...c.policy, rpa: { ...c.policy?.rpa, features: snap.val() || {} } };
+    if (root && live) { resetModules(); paintTimes(); paintScheduleMeta(); }
+  }, () => {});
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const first = live == null;
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신). 편집 중인지는 바뀌기 전 PC 값과 견준다 -
@@ -90,6 +95,7 @@ export function mount(el, context) {
 export function unmount() {
   if (stopLive) { stopLive(); stopLive = null; }
   if (stopLimit) { stopLimit(); stopLimit = null; }
+  if (stopFeatures) { stopFeatures(); stopFeatures = null; }
   root = null; c = null;
 }
 
@@ -112,8 +118,10 @@ async function send(type, args, label) {
 // --- 실행 모듈 ------------------------------------------------------
 
 /** 이 업체가 안 쓰는 모듈 (총괄이 meta/companies/{cid}/apps/rpa/modules 에 false 로 정한다). 화면에서 아예 숨긴다 */
-const offByCompany = (k) => c?.policy?.rpa?.modules?.[k] === false;
-const shownModules = () => MODULES.filter(([k]) => !offByCompany(k));
+const isWellife = () => wellifeOn(c?.me?.cid, c?.policy);
+const modList = () => (isWellife() ? WELLIFE_MODULES : MODULES);
+const offByCompany = (k) => !isWellife() && c?.policy?.rpa?.modules?.[k] === false;
+const shownModules = () => modList().filter(([k]) => !offByCompany(k));
 
 /** 딸린 모듈과 업체 정책을 규칙대로 끈다. 켜는 것은 사람이 직접 한다 (물류관리를 켜도 출력은 꺼진 채로 둘 수 있다) */
 function applyNeeds(mods) {
@@ -123,11 +131,11 @@ function applyNeeds(mods) {
 }
 const savedModules = () => live?.modules || {};
 function resetModules() {
-  form.modules = applyNeeds(Object.fromEntries(MODULES.map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false])));
+  form.modules = applyNeeds(Object.fromEntries(modList().map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false])));
   paintModules();
 }
 function modulesDirty() {
-  return MODULES.some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
+  return modList().some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
 }
 function paintModules() {
   $("mod-list").replaceChildren(...shownModules().map(([k, text], i) => {
@@ -136,7 +144,7 @@ function paintModules() {
     const needOff = NEEDS[k] && !form.modules[NEEDS[k]];   // 앞 모듈이 꺼져 있으면 이 스위치는 잠근다
     cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k) || needOff;
     cb.setAttribute("aria-label", text);
-    const need = needOff ? dict(MODULES)[NEEDS[k]] : "";
+    const need = needOff ? dict(modList())[NEEDS[k]] : "";
     cb.onchange = () => {
       form.modules[k] = cb.checked;
       // 딸린 모듈이 있는 스위치면 다시 그린다 (끄면 딸린 것도 꺼지고 잠기고, 켜면 잠금만 풀린다)
@@ -156,7 +164,7 @@ function paintModuleMeta() {
   $("mod-apply").disabled = !c.isAdmin || busy || !modulesDirty() || on === 0;
 }
 async function applyModules() {
-  const wanted = applyNeeds(Object.fromEntries(MODULES.map(([k]) => [k, !!form.modules[k]])));
+  const wanted = applyNeeds(Object.fromEntries(modList().map(([k]) => [k, !!form.modules[k]])));
   if (!Object.values(wanted).some(Boolean)) { notify("warn", "최소 한 모듈은 켜야 합니다"); return; }
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
@@ -299,7 +307,7 @@ function paintTimes() {
       row.append(Object.assign(document.createElement("span"), { textContent: "~" }), timeInput(s.until, "끝 시각", (v) => { s.until = v; }),
         Object.assign(document.createElement("span"), { className: "muted", textContent: "반복" }), runChips(s, false),
         rest, Object.assign(document.createElement("span"), { className: "muted", textContent: "분 쉬고" }));
-    } else if (isV2()) {
+    } else if (isV2() && !isWellife()) {
       const mode = document.createElement("select"); mode.className = "mode"; mode.setAttribute("aria-label", "돌릴 모듈");
       mode.append(new Option("전체", "all"), new Option("고르기", "pick"));
       mode.value = s.run ? "pick" : "all";
@@ -343,7 +351,7 @@ function paintScheduleMeta() {
   $("sch-enabled").disabled = dis;
   for (const el of $("sch-form").querySelectorAll("button, input, select")) if (!el.closest(".chips")) el.disabled = dis;
   $("sch-add").disabled = dis || n >= lim;
-  show($("sch-add-win"), isV2()); $("sch-add-win").disabled = dis || n >= lim;
+  show($("sch-add-win"), isV2() && !isWellife()); $("sch-add-win").disabled = dis || n >= lim;
   $("sch-count").textContent = `${n}/${lim} 사용`;
   const problem = scheduleProblem();
   const full = n >= lim ? (lim ? `자동 실행은 ${lim}개까지입니다. 더 필요하면 담당자에게 문의하세요` : "자동 실행을 쓰려면 담당자에게 문의하세요") : "";
