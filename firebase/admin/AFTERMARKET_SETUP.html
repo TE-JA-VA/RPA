@@ -51,6 +51,7 @@
   .secret { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--soft); }
   .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
   .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
+  .mod-ok { margin-left:10px; color:var(--good); font-weight:500; font-size:14px; }
   td .row { margin:0; flex-wrap:nowrap; }   /* PC 표의 업데이트 칸 - 고르기·단추 사이는 아래 'PC 추가' 줄과 같은 8px */
   label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:14px; }
   #flash { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); padding:10px 16px; border-radius:10px; background:var(--strong);
@@ -313,15 +314,21 @@ function tokenSection(d) {
       el("tbody", {}, t.grants.map((g) => el("tr", {}, el("td", {}, local(g.at)), el("td", { class: "num" }, g.amount > 0 ? `+${g.amount}` : g.amount), el("td", {}, g.memo || "-"))))) : "");
 }
 function moduleSection(d) {
+  // 바뀌면 아래 알림 대신 제목 옆에 초록 '반영되었습니다.' 를 잠깐 (사용자 2026-10-07). 실패면 다시 그려 원래 값으로
+  const ok = el("span", { class: "mod-ok hide" }, "반영되었습니다.");
+  let okTimer;
   const boxes = Object.entries(MODULE_NAMES).map(([k, name]) => {
-    const cb = el("input", { type: "checkbox", checked: d.modules[k] !== false });
+    const cb = el("input", { type: "checkbox", "data-mod": k, checked: d.modules[k] !== false });
     cb.onchange = () => act(cb, async () => {
-      try { await api("POST", `/api/companies/${d.cid}/modules`, { [k]: cb.checked ? "on" : "off" }); flash(`${name}: ${cb.checked ? "씀" : "안 씀"}`); }
-      finally { openDetail(d.cid); }
+      try { await api("POST", `/api/companies/${d.cid}/modules`, { [k]: cb.checked ? "on" : "off" }); }
+      catch (e) { openDetail(d.cid); throw e; }
+      ok.classList.remove("hide");
+      clearTimeout(okTimer);
+      okTimer = setTimeout(() => ok.classList.add("hide"), 2000);
     });
     return el("label", { class: "inline" }, cb, name);
   });
-  return el("div", {}, el("h3", {}, "모듈 정책"), el("p", { class: "muted" }, "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes));
+  return el("div", {}, el("h3", {}, "모듈 정책", ok),el("p", { class: "muted" }, "모듈에 체크를 해제하면 업체 대시보드에서도 보이지 않습니다. 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes));
 }
 function limitSection(d) {
   const n = el("input", { value: d.scheduleLimit ?? 2, size: 4, inputmode: "numeric", "aria-label": "자동 실행 개수" });
@@ -331,7 +338,7 @@ function limitSection(d) {
     openDetail(d.cid);
   }) }, "저장");
   return el("div", {}, el("h3", {}, "자동 실행 개수"),
-    el("p", { class: "muted" }, `기본 2. 시각과 반복 시간대를 합친 줄 수 (0~12)${d.scheduleLimit == null ? " - 지금은 기본값" : ""}`),
+    el("p", { class: "muted" }, "기본 2. 시각과 반복 시간대를 합친 줄 수 (0~12)"),
     el("div", { class: "row" }, n, save));
 }
 function dangerSection(d) {

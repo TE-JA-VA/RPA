@@ -328,6 +328,18 @@ with sync_playwright() as pw:
     check("안정본 지정 2026.10.07-5" in open(LOG, encoding="utf-8").read(), "관리 기록에 남는다")
 
     print("화면 다듬기 (사용자 2026-10-07)")
+    check("지금은 기본값" not in page.text_content("#detail"), "자동 실행 개수: '지금은 기본값' 글 없음")
+    hold0 = page.is_checked("#detail input[data-mod='Hold']")
+    page.evaluate("document.getElementById('flash').classList.add('hide')")
+    page.click("#detail input[data-mod='Hold']")
+    page.wait_for_selector("#detail .mod-ok:not(.hide)", timeout=5000)
+    mods = db_get(f"meta/companies/{CID}/apps/rpa/modules") or {}
+    check(page.text_content("#detail .mod-ok").strip() == "반영되었습니다." and (mods.get("Hold") is False) == hold0
+          and "hide" in (page.get_attribute("#flash", "class") or ""), f"모듈 정책: 아래 알림 대신 제목 옆 초록 글 ({mods})")
+    page.wait_for_selector("#detail .mod-ok.hide", state="attached", timeout=5000)
+    check(True, "초록 글은 잠깐 뒤 사라진다")
+    page.click("#detail input[data-mod='Hold']")   # 되돌려 둔다
+    page.wait_for_timeout(800)
     nav = page.text_content("nav")
     check("신규 업체 등록" in nav and "토큰 배율·통계" in nav, f"위 메뉴 글 ({nav})")
     check(page.text_content("#releases-open").strip() == "버전 목록", "버전 목록 단추")
