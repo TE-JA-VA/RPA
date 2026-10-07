@@ -197,6 +197,21 @@ export async function setReleases(list) {
     { version: x.version, published_at: x.published_at ?? null, bytes: Number(x.bytes) || 0, memo: x.memo ?? "" }])), stable, newest });
   return { count: list.length, newest, stable };
 }
+const COMMAND_TTL_SEC = 600;     // 웹 화면(firebase-config.js)과 같은 값 - PC 가 받자마자 '예약했습니다' 로 끝낸다
+async function sendAdminCommand(cid, pcId, type, args) {
+  checkKey("cid", cid); checkKey("pcId", pcId);
+  const v = await companyOf(cid);
+  if (!v.pcs?.[pcId]) throw new Refused(`없는 PC 입니다: ${pcId}`);
+  const now = Math.floor(Date.now() / 1000);
+  const ref = rtdb.ref(`apps/rpa/commands/${cid}/${pcId}`).push();
+  await ref.set({ type, args: args ?? null, by: "admin-tool", created_at: now, expires_at: now + COMMAND_TTL_SEC, state: "queued" });
+  return { key: ref.key };
+}
+export async function sendUpdate(cid, pcId, version) {
+  if (!(await releasesOf()).list.some((x) => x.version === version)) throw new Refused(`올라가 있지 않은 판입니다: ${version}`);
+  return sendAdminCommand(cid, pcId, "update", { version });
+}
+export const sendRollback = (cid, pcId) => sendAdminCommand(cid, pcId, "rollback", null);
 export async function setStable(version) {
   const cur = await releasesOf();
   if (!cur.list.some((x) => x.version === version)) throw new Refused(`올라가 있지 않은 판입니다: ${version}`);
@@ -289,7 +304,10 @@ export async function companyDetail(cid) {
   const v = await companyOf(cid, { removed: true });
   const users = (await usersOf(cid)).map((u) => ({ email: u.email, id: u.email.split("@")[0], role: u.customClaims?.role ?? "-",
     pcId: u.customClaims?.pcId ?? null, disabled: u.disabled, lastSignIn: signedIn(u) }));
-  return { cid, name: v.name, stts: v.stts ?? 0, pcs: Object.entries(v.pcs ?? {}).map(([pcId, p]) => ({ pcId, label: p.label ?? "" })),
+  return { cid, name: v.name, stts: v.stts ?? 0, pcs: await Promise.all(Object.entries(v.pcs ?? {}).map(async ([pcId, p]) => {
+      const live = (await rtdb.ref(`apps/rpa/live/${cid}/${pcId}`).get()).val() ?? {};
+      return { pcId, label: p.label ?? "", version: live.version ?? null, update: live.update ?? null };
+    })),
     users, modules: v.apps?.rpa?.modules ?? {}, scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null, tokens: (await tokenStatus(cid)).wallet };
 }
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.

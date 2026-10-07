@@ -69,6 +69,10 @@
 <main>
   <section id="view-companies">
     <div class="card">
+      <button id="releases-open">판 목록</button>
+      <div id="releases" class="hide"></div>
+    </div>
+    <div class="card">
       <h2>업체</h2>
       <table>
         <thead><tr><th>업체코드</th><th>이름</th><th>상태</th><th>PC</th><th>계정</th><th>남은 토큰</th><th>이번 달</th><th>마지막 로그인</th></tr></thead>
@@ -193,6 +197,7 @@ async function loadCompanies() {
 async function openDetail(cid, keep) {
   const d = await act(null, () => api("GET", `/api/companies/${cid}`));
   if (!d) return;
+  d.releases = (await act(null, () => api("GET", "/api/releases"))) ?? { list: [], stable: null, newest: null };
   current = cid;
   for (const tr of $("companies").children) tr.classList.toggle("on", tr.dataset.cid === cid);
   const box = $("detail");
@@ -201,6 +206,51 @@ async function openDetail(cid, keep) {
   box.classList.remove("hide");
 }
 const refresh = (cid, keep) => { openDetail(cid, keep); loadCompanies(); };
+const UPD_TEXT = { downloading: "업데이트 받는 중", waiting: "업데이트 대기 중", ready: "바꾸는 중", applying: "바꾸는 중", rolling_back: "바꾸는 중",
+  failed: "업데이트 실패", rolled_back: "업데이트 실패 - 옛 판으로 되돌림" };
+const md = (iso) => (iso ? `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))} ${iso.slice(11, 16)}` : "");
+function updText(u) {
+  if (!u?.state) return "";
+  return u.state === "done" ? `업데이트됨 ${md(u.at)}` : UPD_TEXT[u.state] ?? u.state;
+}
+function pcRowEl(d, p, rel) {
+  const tag = (v) => (v === rel.stable ? " (안정본)" : v === rel.newest ? " (최신본)" : "");
+  const ver = p.version?.version ? `판 ${p.version.version}${tag(p.version.version)}` : "판 모름";
+  const busy = ["downloading", "waiting", "ready", "applying", "rolling_back"].includes(p.update?.state);
+  const sel = el("select", { class: "upd-ver" }, rel.list.map((x) => el("option", { value: x.version }, `${x.version}${tag(x.version)}${x.memo ? ` - ${x.memo}` : ""}`)));
+  if (rel.stable) sel.value = rel.stable;
+  const go = el("button", { class: "upd-go", disabled: busy || !rel.list.length, onclick: () => act(go, async () => {
+    if (!confirm(`${d.cid} / ${p.pcId} 를 ${sel.value} 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
+    await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/update`, { version: sel.value });
+    flash(`업데이트 명령을 보냈습니다 (${p.pcId} → ${sel.value})`); openDetail(d.cid);
+  }) }, "업데이트");
+  const back = p.update?.backup ? el("button", { class: "upd-back", disabled: busy, onclick: () => act(back, async () => {
+    if (!confirm(`${d.cid} / ${p.pcId} 를 이전 판 ${p.update.backup} 로 되돌립니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
+    await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/rollback`, {});
+    flash(`되돌리기 명령을 보냈습니다 (${p.pcId} → ${p.update.backup})`); openDetail(d.cid);
+  }) }, `이전 판으로 되돌리기 (${p.update.backup})`) : null;
+  const status = updText(p.update);
+  return el("li", { id: `pc-${p.pcId}`, title: p.update?.reason ?? "" },
+    `${p.label || "(이름 없음)"} · ${p.pcId} · ${ver}${status ? ` · ${status}` : ""} `, sel, go, back ?? "");
+}
+// 판 목록 (업체 표 위) - [판 목록] 을 누르면 펼친다
+async function drawReleases() {
+  const rel = await act(null, () => api("GET", "/api/releases"));
+  if (!rel) return;
+  const rows = rel.list.map((x) => {
+    const mark = x.version === rel.stable ? "안정본" : x.version === rel.newest ? "최신본" : "";
+    const set = x.version === rel.stable ? "" : el("button", { "data-stable": x.version, onclick: () => act(set, async () => {
+      if (!confirm(`${x.version} 를 안정본으로 지정합니다.`)) return;
+      await api("POST", "/api/releases/stable", { version: x.version });
+      flash(`안정본: ${x.version}`); drawReleases();
+    }) }, "안정본으로 지정");
+    return el("tr", {}, el("td", {}, x.version), el("td", {}, local(x.published_at)), el("td", { class: "num" }, (x.bytes / 1048576).toFixed(1)),
+      el("td", {}, x.memo ?? ""), el("td", {}, mark), el("td", {}, set));
+  });
+  $("releases").replaceChildren(rows.length ? el("table", {}, el("thead", {}, el("tr", {}, ...["판", "내보낸 때", "크기 MB", "메모", "표시", ""].map((h) => el("th", {}, h)))),
+    el("tbody", {}, rows)) : el("p", { class: "muted" }, "올라간 판이 없습니다"));
+}
+$("releases-open").onclick = async () => { $("releases").classList.toggle("hide"); if (!$("releases").classList.contains("hide")) await drawReleases(); };
 function pcSection(d) {
   const id = el("input", { placeholder: "PC코드 (예: office)", size: 16 }), label = el("input", { placeholder: "PC 이름 (예: 사무실 PC)", size: 20 });
   const agent = el("input", { type: "checkbox", checked: true });
@@ -210,7 +260,7 @@ function pcSection(d) {
     refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
   }) }, "PC 추가");
   return el("div", {}, el("h3", {}, "PC"),
-    d.pcs.length ? el("ul", {}, d.pcs.map((p) => el("li", {}, `${p.label || "(이름 없음)"} · ${p.pcId}`))) : el("p", { class: "muted" }, "PC 가 없습니다"),
+    d.pcs.length ? el("ul", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases))) : el("p", { class: "muted" }, "PC 가 없습니다"),
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
 }
 function userSection(d) {

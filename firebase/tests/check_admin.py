@@ -61,6 +61,10 @@ def db_get(path):
     return call("GET", f"{DB}/{path}.json?ns={NS}", None, OWNER)
 
 
+def db_put(path, value):
+    return call("PUT", f"{DB}/{path}.json?ns={NS}", value, OWNER)
+
+
 def account(email_):
     r = call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:lookup", {"email": [email_]}, OWNER)
     return (r or {}).get("users", [None])[0] or {}
@@ -275,6 +279,51 @@ with sync_playwright() as pw:
     page.click("#detail .row:has(input[aria-label='자동 실행 개수']) button")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 개수']\")?.value === '4'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 4, "화면: 업체 상세에서 자동 실행 개수 저장")
+
+    print("자동 업데이트 (설계 8절)")
+    CID, PC = "t_new", "pc_a"
+    db_put("meta/releases", {"list": {"2026_10_07-4": {"version": "2026.10.07-4", "published_at": "2026-10-07T12:00:00", "bytes": 1, "memo": "안정"},
+                                      "2026_10_07-5": {"version": "2026.10.07-5", "published_at": "2026-10-07T13:00:00", "bytes": 1, "memo": "새"}},
+                             "stable": "2026.10.07-4", "newest": "2026.10.07-5"})
+    db_put(f"apps/rpa/live/{CID}/{PC}", {"version": {"version": "2026.10.07-4", "state": "ok"},
+                                          "update": {"state": "done", "target": "2026.10.07-4", "from": "2026.10.07-3", "at": "2026-10-07T14:03:00", "backup": "2026.10.07-3"}})
+
+    def open_company(pg, cid):
+        pg.click("nav button[data-view='companies']")
+        pg.wait_for_timeout(1000)   # 앞서 늦게 도착하는 상세 응답이 새 그림을 덮지 않게
+        pg.evaluate("document.getElementById('detail').replaceChildren()")   # 옛 상세를 비워야 새로 그린 줄을 기다린다
+        pg.click(f"#companies tr[data-cid='{cid}']")
+        pg.wait_for_selector(f"#detail #pc-{PC}", timeout=15000)
+
+    open_company(page, CID)
+    row = page.text_content(f"#pc-{PC}")
+    check("판 2026.10.07-4 (안정본)" in row and "업데이트됨 10/7 14:03" in row, f"PC 줄: 판·표시·상태 ({row})")
+    check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4"
+          and "(최신본)" in page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']"), "판 고르기: 처음은 안정본, 최신본 표시")
+    page.select_option(f"#pc-{PC} select.upd-ver", "2026.10.07-5")
+    dialogs.clear()   # 위쪽 page.on("dialog") 가 이미 모두 받아들인다
+    page.click(f"#pc-{PC} button.upd-go")
+    page.wait_for_timeout(800)
+    cmd = [v for v in (db_get(f"apps/rpa/commands/{CID}/{PC}") or {}).values() if v.get("type") == "update"]
+    check(dialogs == [f"{CID} / {PC} 를 2026.10.07-5 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다."], f"확인 창 ({dialogs})")
+    check(len(cmd) == 1 and cmd[0]["args"] == {"version": "2026.10.07-5"} and cmd[0]["by"] == "admin-tool" and cmd[0]["state"] == "queued"
+          and cmd[0]["expires_at"] - cmd[0]["created_at"] == 600, f"update 명령 ({cmd})")
+    check(page.is_visible(f"#pc-{PC} button.upd-back") and "2026.10.07-3" in page.text_content(f"#pc-{PC} button.upd-back"), "보관본이 있으면 되돌리기 단추")
+    page.click(f"#pc-{PC} button.upd-back")
+    page.wait_for_timeout(800)
+    check(any(v.get("type") == "rollback" and v["by"] == "admin-tool" and v["state"] == "queued"
+              for v in (db_get(f"apps/rpa/commands/{CID}/{PC}") or {}).values()), "되돌리기 명령")
+    code, r = api("POST", f"/api/companies/{CID}/pcs/{PC}/update", {"version": "2026.10.07-9"})
+    check(code == 400, "올라가 있지 않은 판은 거절", r)
+    db_put(f"apps/rpa/live/{CID}/{PC}/update", {"state": "waiting", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T15:00:00", "backup": "2026.10.07-3"})
+    open_company(page, CID)
+    check(page.is_disabled(f"#pc-{PC} button.upd-go") and page.is_disabled(f"#pc-{PC} button.upd-back")
+          and "업데이트 대기 중" in page.text_content(f"#pc-{PC}"), "진행 중이면 두 단추 잠금")
+    page.click("#releases-open")
+    page.click("#releases button[data-stable='2026.10.07-5']")
+    page.wait_for_timeout(800)
+    check(db_get("meta/releases/stable") == "2026.10.07-5", "판 목록에서 안정본으로 지정")
+    check("안정본 지정 2026.10.07-5" in open(LOG, encoding="utf-8").read(), "관리 기록에 남는다")
 
     page.click("nav button[data-view='setup']")
     page.fill("#s-cid", "t_ui")
