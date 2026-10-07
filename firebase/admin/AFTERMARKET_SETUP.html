@@ -330,14 +330,27 @@ function moduleSection(d) {
   let okTimer;
   const cbs = Object.entries(MODULE_NAMES).map(([k, name]) => [k, name, el("input", { type: "checkbox", "data-mod": k, checked: d.modules[k] !== false })]);
   const boxes = cbs.map(([, name, cb]) => el("label", { class: "inline" }, cb, name));
-  const apply = el("button", { class: "mod-apply", onclick: () => act(apply, async () => {
-    try { await api("POST", `/api/companies/${d.cid}/modules`, Object.fromEntries(cbs.map(([k, , cb]) => [k, cb.checked ? "on" : "off"]))); }
-    catch (e) { openDetail(d.cid); throw e; }
-    ok.classList.remove("hide");
+  const wl = el("input", { type: "checkbox", "data-feature": "wellife", checked: d.wellife, disabled: d.wellifeAuto });
+  const wlBox = el("label", { class: "inline" }, wl, "웰라이프 실행", d.wellifeAuto ? el("span", { class: "muted" }, " (업체코드에 wellife 포함 - 늘 켜짐)") : "");
+  // 웰라이프 업체: 물류관리·운송장 출력 체크는 잠근다 (에이전트가 막는다)
+  for (const [k, , cb] of cbs) if (d.wellife && (k === "Logistics" || k === "Output")) cb.disabled = true;
+  const show = (span) => {   // 초록 '반영되었습니다.' 를 2초
+    span.classList.remove("hide");
     clearTimeout(okTimer);
-    okTimer = setTimeout(() => ok.classList.add("hide"), 2000);
+    okTimer = setTimeout(() => span.classList.add("hide"), 2000);
+  };
+  const apply = el("button", { class: "mod-apply", onclick: () => act(apply, async () => {
+    try {
+      await api("POST", `/api/companies/${d.cid}/modules`, Object.fromEntries(cbs.map(([k, , cb]) => [k, cb.checked ? "on" : "off"])));
+      if (!d.wellifeAuto && wl.checked !== d.wellife) await api("POST", `/api/companies/${d.cid}/features`, { wellife: wl.checked });
+    } catch (e) { openDetail(d.cid); throw e; }
+    if (wl.checked === d.wellife) return show(ok);
+    await openDetail(d.cid);   // 웰라이프가 바뀌면 잠금이 바뀐다 - 다시 그린 상자에 보인다
+    const again = $("detail").querySelector(".mod-ok");
+    if (again) show(again);
   }) }, "적용");
-  return el("div", { class: "sec" }, el("h3", {}, "모듈 정책", ok),el("p", { class: "muted" }, "업체가 사용할 모듈을 결정합니다. 체크 해제시 업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다."), el("div", { class: "row" }, boxes, apply));
+  return el("div", { class: "sec" }, el("h3", {}, "모듈 정책", ok),el("p", { class: "muted" }, "업체가 사용할 모듈을 결정합니다. 체크 해제시 업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다."),
+    d.wellife ? el("p", { class: "muted" }, "웰라이프 업체는 쓰지 않음: 물류관리 · 운송장 출력 / 엑셀 생성") : "", el("div", { class: "row" }, boxes, wlBox, apply));
 }
 function limitSection(d) {
   const n = el("input", { value: d.scheduleLimit ?? 2, size: 4, inputmode: "numeric", "aria-label": "자동 실행 슬롯 수" });

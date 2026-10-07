@@ -171,6 +171,18 @@ export async function setModules(cid, patch) {
   await at.update(clean);
   return (await at.get()).val() ?? {};
 }
+/** 웰라이프 업체인가 - 업체코드에 wellife (대소문자 무관) 또는 관리 화면에서 연 업체. 에이전트(agent.wellife_on)·업체 웹(rpa-common.wellifeOn)과 같은 규칙 */
+export const wellifeAuto = (cid) => String(cid ?? "").toLowerCase().includes("wellife");
+export const wellifeOn = (cid, features) => wellifeAuto(cid) || features?.wellife === true;
+export async function setFeature(cid, key, on) {
+  checkKey("cid", cid);
+  if (key !== "wellife") throw new Refused(`모르는 기능입니다: ${key}`);
+  await companyOf(cid, { removed: true });
+  if (!on && wellifeAuto(cid)) throw new Refused("업체코드에 wellife 포함 - 늘 열림 (끌 수 없습니다)");
+  const at = rtdb.ref(`meta/companies/${cid}/apps/rpa/features/${key}`);
+  await at.set(on ? true : null);
+  return { features: (await rtdb.ref(`meta/companies/${cid}/apps/rpa/features`).get()).val() ?? {} };
+}
 // 자동 실행 개수 = 시각·반복 시간대를 합친 줄 수 (설계 5-3). 유료 옵션 자리 - 업체마다 우리가 정한다. PC 에는 10분 안에 닿는다
 export async function setScheduleLimit(cid, n) {
   checkKey("cid", cid);
@@ -308,7 +320,8 @@ export async function companyDetail(cid) {
       const live = (await rtdb.ref(`apps/rpa/live/${cid}/${pcId}`).get()).val() ?? {};
       return { pcId, label: p.label ?? "", version: live.version ?? null, update: live.update ?? null };
     })),
-    users, modules: v.apps?.rpa?.modules ?? {}, scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null, tokens: (await tokenStatus(cid)).wallet };
+    users, modules: v.apps?.rpa?.modules ?? {}, features: v.apps?.rpa?.features ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features),
+    wellifeAuto: wellifeAuto(cid), scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null, tokens: (await tokenStatus(cid)).wallet };
 }
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.
 // 이미 있는 업체·PC 는 그대로 쓰고, 이미 있는 계정은 건너뛰고, 토큰 정보가 이미 있으면 최초 토큰은 건너뛴다 - 다시 누르면 남은 것만
