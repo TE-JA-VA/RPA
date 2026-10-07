@@ -241,7 +241,29 @@ check(up.read_state()["state"] == "failed" and "서명" in up.read_state()["reas
 up.write_state({})
 up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: (_ for _ in ()).throw(RuntimeError("등록 실패")),
               run_task=lambda: None, fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None)
-check(up.read_state()["state"] == "failed" and "등록 실패" in up.read_state()["reason"], "도우미를 못 띄우면 failed (실행 막기가 풀린다)")
+check(up.read_state()["state"] == "failed" and "도우미" in up.read_state()["reason"], "도우미를 못 띄우면 failed (실행 막기가 풀린다)")
+
+print("\n=== 7. 다시 켜진 에이전트가 멈춘 대기를 정리 / 실패 글은 한국어 ===")
+for s0 in ("downloading", "waiting"):
+    up.write_state({"state": s0, "mode": "update", "target": "2026.10.07-2", "from": "2026.10.07-1"})
+    os.makedirs(up.path("staging", "files"), exist_ok=True)
+    up.clear_stale()
+    s = up.read_state()
+    check(s["state"] == "failed" and "다시 켜져" in s["reason"] and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1"
+          and not os.path.exists(up.path("staging")), f"{s0} 였다면 failed + staging 지움 ({s.get('reason')})")
+    check(up.busy_reason() is None, f"{s0} 정리 뒤엔 실행 막기가 풀린다")
+for s0 in ("ready", "applying", "rolling_back", "done"):
+    up.write_state({"state": s0, "target": "x"})
+    os.makedirs(up.path("staging"), exist_ok=True)
+    up.clear_stale()
+    check(up.read_state()["state"] == s0 and os.path.isdir(up.path("staging")), f"{s0} 는 건드리지 않는다")
+shutil.rmtree(up.path("staging"), ignore_errors=True)
+up.write_state({})
+shutil.rmtree(os.path.join(PROG, "python"), ignore_errors=True)
+up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: None, run_task=lambda: None,
+              fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None)
+r = up.read_state().get("reason") or ""
+check(up.read_state()["state"] == "failed" and "Error" not in r and "도우미" in r, f"보통 오류도 쉬운 한국어 ({r})")
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")

@@ -771,6 +771,26 @@ with tempfile.TemporaryDirectory() as d:
         os.environ.pop("RPA_PROGRAMDATA", None)
 check("update" in ag.KNOWN_TYPES and "rollback" in ag.KNOWN_TYPES, "명령 종류에 update·rollback")
 
+print("\n7-3절 접속에 성공했을 때만 살아 있음")
+with tempfile.TemporaryDirectory() as d:
+    os.environ["RPA_PROGRAMDATA"] = d
+    try:
+        import rpa_update as upd
+        upd.write_state({"state": "applying"})
+        class FakeUp:
+            def __init__(self, ok): self.ok = ok
+            def push_heartbeat(self, info): return self.ok
+        alive = [False]
+        inst = {"version": "2026.10.07-5", "state": "ok"}
+        ag.send_heartbeat(FakeUp(False), {"at": 1}, inst, alive)
+        check(alive[0] is False and not os.path.exists(upd.path("alive.json")), "heartbeat 실패면 alive.json 안 적는다")
+        ag.send_heartbeat(FakeUp(True), {"at": 1}, dict(inst, state="mixed"), alive)
+        check(alive[0] is False and not os.path.exists(upd.path("alive.json")), "판 점검이 ok 가 아니면 안 적는다")
+        ag.send_heartbeat(FakeUp(True), {"at": 1}, inst, alive)
+        check(alive[0] is True and os.path.isfile(upd.path("alive.json")), "heartbeat 성공이면 alive.json")
+    finally:
+        os.environ.pop("RPA_PROGRAMDATA", None)
+
 print("\n8절 첫 실행 설정 (새 PC)")
 
 

@@ -641,6 +641,13 @@ def real_actions(policy=None, limits=None, start_update=None):
             "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback}
 
 
+def send_heartbeat(up, info, install, alive):
+    """heartbeat 를 보내고, 서버가 받았을 때만 '살아 있음'을 적는다 (끊겼으면 도우미의 3분 점검이 되돌린다)."""
+    import rpa_update as upd
+    if up.push_heartbeat(info) and not alive[0] and install.get("state") == "ok":
+        alive[0] = upd.mark_alive(install)    # 업데이트 뒤 첫 접속 - 도우미의 3분 점검 (설계 7절 6)
+
+
 def watch_commands(client, path, on_command, stop=None):
     """명령함을 한 번 구독한다. 서버가 스트림을 닫으면 'ended', 토큰이 죽었다는 알림이면 'auth_revoked' 를 돌려준다.
     호출자가 곧바로 다시 붙인다. stop(Event)이 켜지면 다음 이벤트에서 'stopped' - pump 가 인증이 죽은 걸 먼저 봤을 때
@@ -794,6 +801,7 @@ def run(cfg):
     import rpa_status as st
     import rpa_update as upd
     alive = [False]
+    upd.clear_stale()                          # 지난번 에이전트가 받기·대기 중에 끝났다면 멈춘 채 남은 것을 정리
     if upd.health_local():                     # 샌드박스 시험: 로그인 없이 판 점검만 (자동 업데이트 계획 Task 9)
         alive[0] = upd.mark_alive(st.check_install())
 
@@ -895,15 +903,13 @@ def run(cfg):
                     up.push_live(snap)
                     last = body
                 if time.time() - last_beat >= HEARTBEAT_SEC:
-                    up.push_heartbeat({
+                    send_heartbeat(up, {
                         "at": int(time.time()),
                         "every": HEARTBEAT_SEC,   # 화면이 이 값으로 끊김 기준을 잡는다 (옛 에이전트는 없어서 30초로 본다)
                         "host": snap.get("host"),
                         "rpa_running": bool([p for p, v in (snap.get("programs") or {}).items()
                                              if v and v.get("state") == "running"]),
-                    })
-                    if not alive[0] and install.get("state") == "ok":
-                        alive[0] = upd.mark_alive(install)    # 업데이트 뒤 첫 접속 - 도우미의 3분 점검 (설계 7절 6)
+                    }, install, alive)
                     last_beat = time.time()
                 up.flush()
             except fb.AuthError as e:

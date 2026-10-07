@@ -257,8 +257,21 @@ def run_update(version, mode, program_root, idle, register, run_task, fetch=fetc
                 register, run_task)
         log("도우미에게 넘김")
     except Exception as e:
-        reason = str(e) if isinstance(e, UpdateError) else f"{type(e).__name__}: {e}"[:200]
+        reason = str(e) if isinstance(e, UpdateError) else f"도우미에게 넘기지 못했습니다 - 다시 [업데이트] 하세요"
         shutil.rmtree(staging, ignore_errors=True)
         write_state({"state": "failed", "mode": mode, "target": version, "from": read_state().get("from"),
                      "at": now_text(), "reason": reason})
-        log(f"실패: {reason}")
+        log(f"실패: {reason} [{type(e).__name__}: {e}]"[:300])
+
+
+def clear_stale():
+    """에이전트가 (다시) 켜질 때 부른다. 받기·대기는 에이전트 스레드만 이어 가므로, 에이전트가 끝났다면 영영 멈춘 것이다.
+    도우미는 이 두 상태를 쓰지 않으니 정리해도 안전하다 (ready 이후는 도우미 몫이라 건드리지 않는다)."""
+    s = read_state()
+    if s.get("state") not in ("downloading", "waiting"):
+        return False
+    shutil.rmtree(path("staging"), ignore_errors=True)
+    write_state({"state": "failed", "mode": s.get("mode"), "target": s.get("target"), "from": s.get("from"), "at": now_text(),
+                 "reason": "에이전트가 다시 켜져 업데이트를 멈췄습니다 - 다시 [업데이트] 하세요"})
+    log("다시 켜져 멈춘 업데이트를 정리")
+    return True
