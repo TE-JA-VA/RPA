@@ -8,7 +8,7 @@
 import hashlib
 import os
 
-PUBLIC_KEY_HEX = ""     # tools/publish_release.py --keygen 이 알려 준 값 (비어 있으면 업데이트를 받지 않는다)
+PUBLIC_KEY_HEX = "12753429a570f4dbfcc5d847f70a49cecc742a774f48a997cb25061777863009"     # tools/publish_release.py --keygen 이 알려 준 값 (비어 있으면 업데이트를 받지 않는다)
 
 _p = 2 ** 255 - 19
 _q = 2 ** 252 + 27742317777372353535851937790883648493
