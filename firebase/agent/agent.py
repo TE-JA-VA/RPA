@@ -498,13 +498,26 @@ def company_modules(client, cid, app=APP):
         return {}
 
 
+WELLIFE_BLOCKED = ("Logistics", "Output")    # 웰라이프 업체가 안 쓰는 보통 루틴 모듈 (설계 2026-10-07-wellife-gate)
+
+
+def wellife_on(cid, features):
+    """웰라이프 업체인가 - 업체코드에 wellife (대소문자 무관) 또는 관리 화면에서 연 업체 (features.wellife true).
+    관리 화면(ops.wellifeOn)·업체 웹(rpa-common.wellifeOn)과 같은 규칙."""
+    return "wellife" in str(cid or "").lower() or (isinstance(features, dict) and features.get("wellife") is True)
+
+
 def company_policy(client, cid, app=APP):
-    """업체 정책 한 번에 - (자동 실행 개수, 안 쓰는 모듈 키 목록). 자리 meta/companies/{cid}/apps/{app} (총괄·Admin SDK 만 쓴다).
+    """업체 정책 한 번에 - (자동 실행 개수, 안 쓰는 모듈 키 목록, 웰라이프). 웰라이프 업체는 물류관리·운송장 출력도 안 쓰는 모듈에 더한다. 자리 meta/companies/{cid}/apps/{app} (총괄·Admin SDK 만 쓴다).
     한도가 없거나 이상하면 기본 2. 못 읽으면 예외 - 부르는 쪽이 지난 값을 쓴다."""
     got = client.get(f"meta/companies/{cid}/apps/{app}") or {}
     raw = (got.get("limits") or {}).get("schedule")
     ok = isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= SCHEDULE_LIMIT_MAX
-    return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(k for k, v in (got.get("modules") or {}).items() if v is False)
+    off = {k for k, v in (got.get("modules") or {}).items() if v is False}
+    wl = wellife_on(cid, got.get("features"))
+    if wl:
+        off |= set(WELLIFE_BLOCKED)
+    return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(off), wl
 
 
 class Policy:
@@ -515,7 +528,7 @@ class Policy:
         self._client, self._cid, self._every, self._at = client, cid, every, None
 
     def refresh(self, force=False):
-        """읽었으면 (limit, off), 아직 때가 아니거나 못 읽었으면 None."""
+        """읽었으면 (limit, off, wellife), 아직 때가 아니거나 못 읽었으면 None."""
         if not force and self._at is not None and time.time() - self._at < self._every:
             return None
         self._at = time.time()
@@ -526,13 +539,19 @@ class Policy:
         except Exception:
             return None
         import rpa_dashboard as dash
+        import rpa_status as st
         dash.set_policy(*got)
+        if got[2]:
+            try:
+                st.ensure_wellife_section()          # 처음 열리면 로그인·매출처리만 켠 섹션 (메모장 편집 없음)
+            except Exception:
+                pass                                 # 사용자 설정이 아직 없으면 다음 번에
         return got
 
 
 def real_actions(policy=None, limits=None, start_update=None):
     """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)
-    limits: 업체 정책을 지금 읽어 (limit, off) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)"""
+    limits: 업체 정책을 지금 읽어 (limit, off, wellife) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)"""
     import rpa_dashboard as dash
     import rpa_status as st
     import rpa_update as upd
@@ -554,6 +573,15 @@ def real_actions(policy=None, limits=None, start_update=None):
     def do_modules(args):
         if not isinstance(args, dict) or not args:
             raise RuntimeError("모듈 값이 없습니다")
+        if st.wellife_policy():                       # 웰라이프 업체 - Wellife 섹션 (설계 4.2)
+            blocked = [k for k, v in args.items() if v and k in WELLIFE_BLOCKED]
+            if blocked:
+                raise RuntimeError(f"{', '.join(blocked)}: 웰라이프 업체는 쓰지 않음")
+            wanted = {k: bool(v) for k, v in args.items() if k in dict(st.WELLIFE_CONFIG_MODULES)}
+            if not wanted:
+                raise RuntimeError("아는 모듈이 없습니다")
+            final = st.write_wellife_modules(wanted)
+            return f"실행 모듈을 바꿨습니다 (켬: {', '.join(k for k, v in final.items() if v)})"
         wanted = {k: bool(v) for k, v in args.items()
                   if k in dict(st.ROUTINE_CONFIG_MODULES)}
         if not wanted:
@@ -585,6 +613,9 @@ def real_actions(policy=None, limits=None, start_update=None):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
         # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
         got = limits() if limits else None
+        if st.wellife_policy() and isinstance(args, dict) and any(      # limits() 가 정책을 새로 적은 뒤에 본다
+                isinstance(s, dict) and (s.get("run") or s.get("until")) for s in (args.get("slots") or [])):
+            raise RuntimeError("웰라이프 업체는 '전체' 시각만 쓸 수 있습니다")
         limit = got[0] if got else (st.read_settings()["schedule"].get("policy") or {}).get("limit")
         rows = (args.get("slots") if "slots" in args else args.get("times")) if isinstance(args, dict) else None
         if isinstance(rows, list) and args.get("enabled") is not False and isinstance(limit, int) and len(rows) > limit:
@@ -869,7 +900,7 @@ def run(cfg):
             try:
                 snap = st.dashboard_snapshot()
                 try:
-                    snap["modules"] = st.read_routine_modules()[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)
+                    snap["modules"] = (st.read_wellife_modules() if st.wellife_policy() else st.read_routine_modules())[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)
                 except Exception:
                     snap["modules"] = None
                 try:

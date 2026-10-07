@@ -611,6 +611,7 @@ with tempfile.TemporaryDirectory() as d:
         acts = ag.real_actions()
         msg = acts["set_modules"]({"Login": False, "Sales": False, "Hold": True})
         import rpa_status as st
+        import rpa_dashboard as dash
         sel = st.read_routine_modules()[0]
         check(sel["Login"] is True and sel["Sales"] is False and sel["Hold"] is True, f"로그인은 꺼 달라고 해도 켜진 채 저장 ({sel})")
         check("Login" in msg, "결과 문장에 로그인 포함")
@@ -639,6 +640,28 @@ with tempfile.TemporaryDirectory() as d:
             acts["set_modules"]({"Nope": True}); check(False, "모르는 모듈만 있으면 거부")
         except RuntimeError as e:
             check("아는 모듈" in str(e), "모르는 모듈만 있으면 거부")
+        os.environ["RPA_STATUS_DIR"] = os.path.join(d, "status")
+        try:
+            dash.set_policy(2, ["Logistics", "Output"], wellife=True)
+            msg = acts["set_modules"]({"Login": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False})
+            check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False} and "켬" in msg,
+                  f"웰라이프 업체: set_modules 는 Wellife 섹션에 쓴다 ({msg})")
+            try:
+                acts["set_modules"]({"Logistics": True}); check(False, "웰라이프 업체에 물류관리 거절")
+            except RuntimeError as e:
+                check("웰라이프 업체는 쓰지 않음" in str(e), f"웰라이프 업체: 물류관리·운송장은 거절 ({e})")
+            for bad in ({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]},
+                        {"enabled": True, "days": [0], "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5}]}):
+                try:
+                    acts["set_schedule"](bad); check(False, f"웰라이프 업체 고르기·반복 줄 거절 {bad}")
+                except RuntimeError as e:
+                    check("'전체' 시각만" in str(e), f"웰라이프 업체: 고르기·반복 줄 거절 ({e})")
+            check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": None}]}), "웰라이프 업체: '전체' 줄은 된다")
+            dash.set_policy(2, [], wellife=False)
+            check(acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True}) and st.read_routine_modules()[0]["Logistics"] is True,
+                  "보통 업체는 그대로 Routine 섹션")
+        finally:
+            os.environ.pop("RPA_STATUS_DIR", None)
     finally:
         os.environ.pop("RPA_CRED_FILE", None)
 
@@ -677,10 +700,16 @@ class AppClient:
 
 
 ac = AppClient({"modules": {"Hold": False, "Sales": True}, "limits": {"schedule": 3}})
-check(ag.company_policy(ac, "c_x") == (3, ["Hold"]) and ac.asked == ["meta/companies/c_x/apps/rpa"], "한 번 읽어 한도와 안 쓰는 모듈")
-check(ag.company_policy(AppClient(None), "c_x") == (2, []), "정책이 없으면 기본 2개·안 쓰는 모듈 없음")
+check(ag.company_policy(ac, "c_x") == (3, ["Hold"], False) and ac.asked == ["meta/companies/c_x/apps/rpa"], "한 번 읽어 한도·안 쓰는 모듈·웰라이프")
+check(ag.company_policy(AppClient(None), "c_x") == (2, [], False), "정책이 없으면 기본 2개·안 쓰는 모듈 없음·웰라이프 아님")
 check(ag.company_policy(AppClient({"limits": {"schedule": "9"}}), "c_x")[0] == 2 and ag.company_policy(AppClient({"limits": {"schedule": 0}}), "c_x")[0] == 0,
       "이상한 값은 기본 2, 0 은 0 (자동 실행을 못 쓴다)")
+for cid, feats, want in (("WELLIFE_x", None, True), ("my_wellife", None, True), ("Wellife", {}, True), ("wel_life", None, False),
+                         ("c_demo", {"wellife": True}, True), ("c_demo", {"wellife": False}, False), ("c_demo", None, False)):
+    check(ag.wellife_on(cid, feats) is want, f"웰라이프 판정 {cid} {feats} → {want}")
+check(ag.company_policy(AppClient({"modules": {"Hold": False}}), "wellife_a") == (2, ["Hold", "Logistics", "Output"], True),
+      "웰라이프 업체: 물류관리·운송장 출력을 안 쓰는 모듈에 더한다")
+check(ag.company_policy(AppClient({"features": {"wellife": True}}), "c_demo")[2] is True, "관리 화면에서 연 업체도 웰라이프")
 with tempfile.TemporaryDirectory() as d:
     os.environ["RPA_STATUS_DIR"] = d              # 실제 settings.json 을 건드리지 않게
     os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
@@ -706,11 +735,22 @@ with tempfile.TemporaryDirectory() as d:
         ag.real_actions(limits=lambda: None)["set_schedule"](three)
         check(len(st.read_settings()["schedule"]["slots"]) == 3, "한 번도 못 읽었으면 자르지 않는다 (PC 상한 12 까지만)")
         pol = ag.Policy(AppClient({"limits": {"schedule": 3}, "modules": {"Hold": False}}), "c_x")
-        check(pol.refresh() == (3, ["Hold"]) and st.read_settings()["schedule"]["policy"]["limit"] == 3
+        check(pol.refresh() == (3, ["Hold"], False) and st.read_settings()["schedule"]["policy"]["limit"] == 3
               and st.read_settings()["schedule"]["policy"]["off"] == ["Hold"], "정책을 읽어 PC 설정에 적는다")
         check(pol.refresh() is None, "10분 안에는 다시 안 읽는다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_x").refresh(force=True) is None
               and st.read_settings()["schedule"]["policy"]["limit"] == 3, "못 읽으면 적힌 값 그대로")
+        os.environ["RPA_USER_CONFIG"] = os.path.join(d, "RPA_UserConfig.json")
+        with open(os.environ["RPA_USER_CONFIG"], "w", encoding="utf-8") as f:
+            json.dump({"LogIn": {"AdminCode": "x"}}, f)
+        wl = ag.Policy(AppClient({"features": {"wellife": True}}), "c_demo")
+        check(wl.refresh(force=True) == (2, ["Logistics", "Output"], True) and st.wellife_policy() is True, "정책을 PC 에 적는다 (wellife)")
+        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False},
+              "처음 열리면 섹션을 기본값(로그인·매출처리만)으로 만든다")
+        check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_demo").refresh(force=True) is None and st.wellife_policy() is True,
+              "정책을 못 읽으면 PC 에 적힌 마지막 값 (웰라이프 그대로)")
+        os.environ.pop("RPA_USER_CONFIG", None)
+        dash.set_policy(3, [])
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Prepare", "Logistics"]}]})
         tc = TokenClient(9, 0)
         tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan, next_plan=ag.next_plan)
