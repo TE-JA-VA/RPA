@@ -607,7 +607,8 @@ def real_actions(policy=None, limits=None, start_update=None):
                 return not dash.any_rpa_running() and dash.launch_state() is None and not st.observer_open()
 
         threading.Thread(target=upd.run_update, daemon=True, name="update",
-                         args=(version, mode, st.program_dir(), idle, rs.register_helper_task, rs.run_helper_task)).start()
+                         args=(version, mode, st.program_dir(), idle, rs.register_helper_task, rs.run_helper_task),
+                         kwargs={"delete_task": rs.delete_helper_task}).start()
 
     start = start_update or default_start
 

@@ -110,7 +110,7 @@ def refused(what, host=None, pub=PK, version="2026.10.07-2", contains=""):
 
 
 refused("서명이 다르면 거절", pub=us.keygen()[1], contains="서명")
-refused("공개 열쇠가 없으면 거절", pub=b"", contains="서명")
+refused("공개 열쇠가 없으면 거절", pub=b"", contains="열쇠")
 bad = dict(HOST); bad[f"{BASE}/blobs/{MAN_B['files']['c.py']['sha256']}"] = b"tampered"
 refused("파일 지문이 다르면 거절 (Review Focus 3)", host=bad, contains="c.py")
 gone = dict(HOST); del gone[f"{BASE}/blobs/{MAN_B['files']['a.py']['sha256']}"]
@@ -225,15 +225,78 @@ def idle():
     return idle_calls[0] >= 3          # 두 번은 RPA 가 돌고 있다
 
 
-up.run_update("2026.10.07-2", "update", PROG, idle, register=lambda r: reg.append(("reg", r)), run_task=lambda: reg.append(("run",)),
-              fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None)
+at_run = []
+
+
+def run_task_ok():
+    reg.append(("run",))
+    at_run.append(up.read_state()["state"])
+    up.write_state({**up.read_state(), "state": "applying"})      # 도우미가 켜져 바꾸기 시작
+
+
+deleted = []
+up.run_update("2026.10.07-2", "update", PROG, idle, register=lambda r: reg.append(("reg", r)), run_task=run_task_ok,
+              fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None,
+              delete_task=lambda: deleted.append(1))
 s = up.read_state()
 check(seen == ["waiting"] * 3, f"받은 뒤 RPA 가 쉴 때까지 waiting ({seen})")
+check(at_run == ["ready"] and not deleted, f"작업 등록 → ready 적기 → 실행 (실행할 때 state={at_run}), 도우미가 켜졌으면 작업을 안 지운다")
+s = {**s, "state": "ready"}
 check(s["state"] == "ready" and s["mode"] == "update" and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1"
       and s["program_dir"] == PROG and s["staging"] == up.path("staging"), f"넘길 때 ready + 도우미가 쓸 칸 ({s})")
 check(all(os.path.isfile(up.path("runner", r)) for r in up.RUNNER_FILES) and os.path.isfile(up.path("runner", "python", "pythonw.exe")),
       "도우미와 파이썬을 runner 로 복사")
 check(reg == [("reg", up.path("runner")), ("run",)], f"작업 등록 → 실행 ({reg})")
+print("\n--- B. ready 에 갇히지 않는다 ---")
+up.write_state({})
+order, dels, slept = [], [], []
+up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: order.append(("reg", up.read_state().get("state"))),
+              run_task=lambda: order.append(("run", up.read_state().get("state"))),
+              fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: slept.append(s),
+              delete_task=lambda: dels.append(1))
+s = up.read_state()
+check(order == [("reg", "waiting"), ("run", "ready")], f"등록은 ready 보다 먼저, 실행은 ready 뒤 ({order})")
+check(s["state"] == "failed" and "도우미가 켜지지 않았습니다" in s["reason"] and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1",
+      f"도우미가 120초 안에 안 켜지면 failed (target·from 그대로) ({s})")
+check(dels == [1] and sum(slept) >= 120 and up.busy_reason() is None, f"작업 지움 {dels}, 2초씩 120초 기다림 ({sum(slept)}), 막기 풀림")
+up.write_state({})
+dels.clear()
+up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: None,
+              run_task=lambda: up.write_state({**up.read_state(), "state": "applying"}),
+              fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None,
+              delete_task=lambda: dels.append(1))
+check(up.read_state()["state"] == "applying" and not dels, "도우미가 applying 으로 바꾸면 failed 로 안 만든다")
+
+print("\n--- A. 상태 파일 쓰기 실패는 소리 내어 ---")
+real_wja = st.write_json_atomic
+st.write_json_atomic = lambda p, d: False
+try:
+    up.write_state({"state": "done"})
+    check(False, "write_state 가 쓰기 실패를 알린다 (예외 안 남)")
+except up.UpdateError as e:
+    check("상태 파일" in str(e), f"write_state 가 쓰기 실패면 UpdateError ({e})")
+finally:
+    st.write_json_atomic = real_wja
+# run_update 안에서 failed 도 못 적는 경우 스레드가 죽지 않는다
+up.write_state({})
+st.write_json_atomic = lambda p, d: False
+try:
+    up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: None, run_task=lambda: None,
+                  fetch=lambda v, p, s: None, sleep=lambda s: None)
+    check(True, "상태를 아예 못 써도 run_update 는 예외를 밖으로 안 던진다")
+except Exception as e:
+    check(False, f"run_update 가 예외를 던짐 ({e})")
+finally:
+    st.write_json_atomic = real_wja
+check("상태 파일" in open(up.path("업데이트_기록.txt"), encoding="utf-8").read(), "그 실패는 기록에 남는다")
+
+print("\n--- C. 열쇠 없는 판 ---")
+real_hex = us.PUBLIC_KEY_HEX
+us.PUBLIC_KEY_HEX = ""
+try:
+    refused("공개 열쇠가 비어 있으면 (pub 안 줌) 따로 안내", pub=None, contains="열쇠가 없습니다")
+finally:
+    us.PUBLIC_KEY_HEX = real_hex
 up.write_state({})
 up.run_update("2026.10.07-2", "update", PROG, idle, register=lambda r: None, run_task=lambda: None,
               fetch=lambda v, p, s: (_ for _ in ()).throw(up.UpdateError("판 서명이 맞지 않습니다 - 받지 않습니다")), sleep=lambda s: None)

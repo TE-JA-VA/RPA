@@ -333,4 +333,15 @@ if iscc:
         check("installer.iss 가 컴파일된다 (가짜 판 폴더)", r.returncode == 0 and os.path.isfile(out),
               (r.stdout + r.stderr)[-600:].decode("utf-8", "replace"))
 
+
+import update_sign as _us  # noqa: E402
+_hex = _us.PUBLIC_KEY_HEX
+try:
+    _us.PUBLIC_KEY_HEX = ""
+    check("업데이트 공개 열쇠가 비어 있으면 빌드를 거절한다", "열쇠" in (br.signing_key_problem() or ""))
+    _us.PUBLIC_KEY_HEX = _hex or "ab" * 32
+    check("공개 열쇠가 있으면 통과", br.signing_key_problem() is None)
+finally:
+    _us.PUBLIC_KEY_HEX = _hex
+
 finish()

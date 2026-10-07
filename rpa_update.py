@@ -53,7 +53,8 @@ def read_state():
 
 def write_state(state):
     os.makedirs(update_dir(), exist_ok=True)
-    st.write_json_atomic(path("state.json"), state)
+    if not st.write_json_atomic(path("state.json"), state):
+        raise UpdateError("상태 파일을 쓰지 못했습니다")      # 도우미의 판단이 이 파일에 달려 있다 - 조용히 넘기면 안 된다
 
 
 def log(msg):
@@ -128,7 +129,9 @@ def fetch_release(version, program_root, staging, base_url=None, get=http_get, p
             sig_bytes = bytes.fromhex(sig.decode("ascii").strip())
         except Exception:
             sig_bytes = b""
-        if not key or not update_sign.verify(key, man_bytes, sig_bytes):
+        if not key:
+            raise UpdateError("이 판에는 업데이트 확인 열쇠가 없습니다 - 설치 파일로 다시 설치하세요")
+        if not update_sign.verify(key, man_bytes, sig_bytes):
             raise UpdateError("판 서명이 맞지 않습니다 - 받지 않습니다")
         new_man = json.loads(man_bytes.decode("utf-8"))
         _check_manifest(new_man, version)
@@ -223,6 +226,7 @@ def mark_alive(install):
 
 import time  # noqa: E402  (run_update 의 sleep 기본값)
 
+HELPER_START_WAIT_SEC = 120
 RUNNER_FILES = ("update_helper.py", "rpa_update.py", "rpa_status.py", "update_sign.py")
 
 
@@ -234,12 +238,12 @@ def handoff(program_root, state, register, run_task):
     shutil.copytree(os.path.join(program_root, "python"), os.path.join(runner, "python"))
     for name in RUNNER_FILES:
         shutil.copy2(os.path.join(program_root, name), os.path.join(runner, name))
+    register(runner)                                  # 작업을 먼저 - 등록 전에 끊겨도 ready 에 갇히지 않는다
     write_state({**state, "state": "ready", "at": now_text()})
-    register(runner)
     run_task()
 
 
-def run_update(version, mode, program_root, idle, register, run_task, fetch=fetch_release, sleep=time.sleep):
+def run_update(version, mode, program_root, idle, register, run_task, fetch=fetch_release, sleep=time.sleep, delete_task=None):
     """에이전트의 업데이트 스레드. idle(): RPA·옵저버가 쉬나 (에이전트가 실행 잠금 안에서 본다)."""
     staging = path("staging")
     try:
@@ -256,12 +260,28 @@ def run_update(version, mode, program_root, idle, register, run_task, fetch=fetc
         handoff(program_root, {"mode": mode, "target": version, "from": cur, "program_dir": program_root, "staging": staging},
                 register, run_task)
         log("도우미에게 넘김")
+        for _ in range(HELPER_START_WAIT_SEC // 2):       # 도우미는 몇 초 안에 ready → applying 으로 바꾼다
+            if read_state().get("state") != "ready":
+                return
+            sleep(2)
+        if read_state().get("state") == "ready":
+            try:
+                if delete_task is None:
+                    import rpa_settings
+                    delete_task = rpa_settings.delete_helper_task
+                delete_task()
+            except Exception as e2:
+                log(f"도우미 작업 지우기 실패 ({type(e2).__name__})")
+            raise UpdateError("도우미가 켜지지 않았습니다 - 다시 [업데이트] 하세요")
     except Exception as e:
         reason = str(e) if isinstance(e, UpdateError) else f"도우미에게 넘기지 못했습니다 - 다시 [업데이트] 하세요"
         shutil.rmtree(staging, ignore_errors=True)
-        write_state({"state": "failed", "mode": mode, "target": version, "from": read_state().get("from"),
-                     "at": now_text(), "reason": reason})
         log(f"실패: {reason} [{type(e).__name__}: {e}]"[:300])
+        try:
+            write_state({"state": "failed", "mode": mode, "target": version, "from": read_state().get("from"),
+                         "at": now_text(), "reason": reason})
+        except Exception as e3:                          # 스레드가 말없이 죽지 않게 - 기록에 남긴다
+            log(f"실패 상태도 못 적음: {e3}")
 
 
 def clear_stale():

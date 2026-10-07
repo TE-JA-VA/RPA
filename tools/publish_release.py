@@ -59,7 +59,7 @@ def publish(version, release_dir, site_dir, key_path, memo="", stable=None, depl
         f.write(man_bytes)                                       # 서명한 바이트 그대로
     with open(os.path.join(rel_dir, "manifest.sig"), "w", encoding="ascii") as f:
         f.write(update_sign.sign(_secret(key_path), man_bytes).hex() + "\n")
-    info_path = os.path.join(site_dir, "published.json")         # 판마다 내보낸 시각·크기·메모 (사이트에도 올라가지만 비밀은 없다)
+    info_path = os.path.join(site_dir, "published.json")         # 판마다 내보낸 시각·크기·메모 (releases.json 호스팅이 무시해 사이트에는 안 올라간다)
     info = json.load(open(info_path, encoding="utf-8")) if os.path.isfile(info_path) else {}
     info[version] = {"version": version, "published_at": datetime.datetime.now().isoformat(timespec="seconds"),
                      "bytes": total, "memo": memo}
@@ -116,7 +116,7 @@ def _set_stable(version):
 
 def _deploy():
     if input("판 전용 호스팅에 배포할까요? (예/아니오) ").strip() != "예":
-        raise SystemExit("배포하지 않았습니다 (사이트 폴더와 DB 목록은 바뀌었습니다 - 다음에 다시 내보내면 같이 올라갑니다)")
+        raise SystemExit("배포하지 않았습니다 (사이트 폴더만 바뀌었고 DB 목록은 그대로입니다 - 다음에 다시 내보내면 같이 올라갑니다)")
     subprocess.run(["firebase", "deploy", "--only", "hosting", "--config", "releases.json"], cwd=os.path.join(REPO, "firebase"), check=True, shell=True)
 
 

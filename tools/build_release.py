@@ -36,6 +36,7 @@ for _p in (REPO, os.path.join(REPO, "firebase", "agent")):
         sys.path.insert(0, _p)
 import background as bg  # noqa: E402
 import rpa_status as st  # noqa: E402
+import update_sign  # noqa: E402
 
 OUT_ROOT = r"D:\AX"
 RUNTIME_ROOT = r"D:\AX\runtime"           # python\ (처음 한 번 배포_20260928_3 에서 복사)
@@ -411,6 +412,13 @@ def build_setup(out_dir, version, out_root=OUT_ROOT):
     return path
 
 
+def signing_key_problem():
+    """공개 열쇠가 비어 있으면 이 판은 영영 자동 업데이트를 받지 못한다 (검증은 깔려 있는 옛 코드가 한다)."""
+    if not update_sign.PUBLIC_KEY_HEX:
+        return "업데이트 공개 열쇠(update_sign.PUBLIC_KEY_HEX)가 비어 있습니다 - 이 판은 자동 업데이트를 받을 수 없습니다 (tools/publish_release.py --keygen 으로 만든 값을 넣으세요)"
+    return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="배포판을 만든다")
     ap.add_argument("--to-dist", action="store_true",
@@ -418,6 +426,10 @@ def main(argv=None):
     ap.add_argument("--exes-from", metavar="판폴더", help="exe 셋을 만들지 않고 이 판 폴더에서 가져온다 (exe 소스가 안 바뀐 판)")
     ap.add_argument("--no-setup", action="store_true", help="설치 파일(setup.exe)을 만들지 않는다")
     args = ap.parse_args(argv)
+    problem = signing_key_problem()
+    if problem:
+        print("  문제:", problem)
+        return 1
     version = next_version(OUT_ROOT, datetime.date.today())
     work = os.path.join(REPO, "build", "release")
     print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else 'Nuitka'})")

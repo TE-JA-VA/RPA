@@ -192,6 +192,7 @@ def rollback(state, ops, reason):
 def main(ops=None):
     ops = ops or Ops()
     state = up.read_state()
+    errored = False
     try:
         if state.get("state") == "ready":
             apply(state, ops)
@@ -204,10 +205,16 @@ def main(ops=None):
             if state.get("staging"):
                 up.write_state({**state, "staging": None})
     except Exception as e:                       # 시작도 못 한 보통 오류 (staging 없음 등) - 매 로그온마다 되풀이하지 않는다
+        errored = True
         up.log(f"도우미 오류 {type(e).__name__}: {e}"[:300])
         if up.read_state().get("state") == "ready":
-            up.write_state({**state, "state": "rolled_back", "at": up.now_text(), "reason": f"업데이트를 시작하지 못했습니다 ({type(e).__name__})"})
-    if up.read_state().get("state") not in ("applying", "rolling_back"):
+            try:
+                up.write_state({**state, "state": "rolled_back", "at": up.now_text(), "reason": f"업데이트를 시작하지 못했습니다 ({type(e).__name__})"})
+            except Exception as e2:
+                up.log(f"상태를 못 적음: {e2}")  # ready 로 남는다 - 작업을 지우지 않고 다음 로그온에 다시 해 본다
+    now = up.read_state().get("state")
+    # 끊긴 상태 · 정리가 덜 끝난 done · 못 적고 남은 ready 는 작업을 남겨 다음 로그온에 마저 한다
+    if now not in ("applying", "rolling_back") and not (errored and now in ("done", "ready")):
         ops.delete_helper_task()                 # 끊김(BaseException)은 여기까지 안 온다 - 작업이 남아 다음 로그온에 다시 뜬다
     return 0
 

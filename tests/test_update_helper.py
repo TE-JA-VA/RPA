@@ -317,6 +317,51 @@ except Exception:
     mv = None
 check(mv == "2026.10.07-1" and read(PROG, "a.py") == "A1" and up.read_state()["state"] == "rolled_back", f"manifest 온전 ({mv})")
 
+print("\n=== 12. 상태 파일 쓰기 실패 (끝 검토 A) ===")
+real_wja = st.write_json_atomic
+
+
+def fail_when(state_name):
+    st.write_json_atomic = lambda p, d: False if isinstance(d, dict) and d.get("state") == state_name else real_wja(p, d)
+
+
+try:
+    setup_a_and_staged_b()
+    fail_when("applying")
+    ops = FakeOps()
+    uh.main(ops)
+    st.write_json_atomic = real_wja
+    check(read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and "end" not in ops.calls and not os.path.isdir(up.path("backup_new", "files")),
+          f"applying 을 못 적으면 파일을 하나도 안 건드린다 ({ops.calls})")
+    check(up.read_state()["state"] != "applying", f"그 상태로 갇히지 않는다 ({up.read_state()['state']})")
+
+    setup_a_and_staged_b()
+    fail_when("done")
+    ops = FakeOps()
+    uh.main(ops)
+    st.write_json_atomic = real_wja
+    check(up.read_state()["state"] == "applying" and os.path.isdir(up.path("backup_new")) and not os.path.isdir(up.path("backup"))
+          and "deltask" not in ops.calls, f"done 을 못 적으면 정리를 안 하고(backup_new 그대로) 작업도 남긴다 ({up.read_state()['state']}, {ops.calls})")
+    uh.main(FakeOps(good=("2026.10.07-1",)))
+    check(read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None and up.read_state()["state"] == "rolled_back",
+          "다음 로그온에 보관(backup_new)으로 옛 판 복원")
+
+    setup_a_and_staged_b()
+    real_fc = uh.finish_cleanup
+    uh.finish_cleanup = lambda s: (_ for _ in ()).throw(OSError("잠김"))
+    ops = FakeOps()
+    try:
+        uh.main(ops)
+    finally:
+        uh.finish_cleanup = real_fc
+    check(up.read_state()["state"] == "done" and "deltask" not in ops.calls, f"정리가 실패하면 작업을 안 지운다 ({ops.calls})")
+    ops = FakeOps()
+    uh.main(ops)
+    check(up.read_state()["state"] == "done" and not up.read_state().get("staging") and up.backup_version() == "2026.10.07-1"
+          and ops.calls == ["deltask"], f"다음 로그온에 정리를 마치고 작업을 지운다 ({ops.calls})")
+finally:
+    st.write_json_atomic = real_wja
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
