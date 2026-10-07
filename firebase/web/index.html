@@ -313,6 +313,11 @@
   .times input[type=time] { width:auto; }
   .times .t button { padding:5px 9px; font-size:13px; }
   .lbl { font-size:12px; color:var(--muted); margin-top:10px; letter-spacing:.04em; }
+  /* 관리 > 환경설정: 앱 이름 머리 아래 카드들. 넓으면 두 칸 (왼쪽 실행 모듈·쇼핑몰 프리셋, 오른쪽 자동 실행 - 반복으로 길어진다) */
+  .app-settings + .app-settings { margin-top:22px; }
+  .app-title { margin:0 0 10px; font-size:15px; letter-spacing:.04em; }
+  .settings-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.25fr); gap:14px; align-items:start; }
+  @media (max-width:1000px) { .settings-grid { grid-template-columns:minmax(0,1fr); } }
 
   table { width:100%; border-collapse:collapse; font-size:14px; }
   th { text-align:left; font-weight:500; color:var(--muted); font-size:12px; letter-spacing:.04em; padding:6px 8px; border-bottom:1px solid var(--line); }

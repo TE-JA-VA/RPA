@@ -1,34 +1,26 @@
 // RPA 앱 화면. 껍데기(app.js)가 mount(root, ctx) 로 띄우고 unmount() 로 걷는다.
 // 현황은 apps/rpa/live/{cid}/{pcId} (RTDB), 기록은 runs/{cid}/items (Firestore). 기준값은 PC 가 올린 live 다.
-import {
-  ref, onValue, push, set,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+import { ref, onValue } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import {
   getFirestore, collection, query, where, orderBy, limit, getDocs, connectFirestoreEmulator,
   doc, getDoc, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS, COMMAND_TTL_SEC } from "./firebase-config.js";
+import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
+import { P, esc, MODULES, hhmm, when, isoDay, sendCommand } from "./rpa-common.js";
+export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 이 앱의 설정 화면을 붙인다 (settings.js)
 
 export const key = "rpa";
 export const label = "RPA";
 export const icon = "▣";
 export const perPc = true;
 
-const P = (kind, cid, pcId) => `apps/rpa/${kind}/${cid}/${pcId}`;
 // 상태 이름은 세 가지로 통일 (2026-09-22): 성공 / 실패(단계 검사에서 스스로 멈춤, 사용자 중지 포함) / 오류(프로그램이 죽음).
 // 상태 카드·도넛 범례·기록 표 알약이 모두 같은 말을 쓴다. done·skipped 는 단계 상태
 const STATE_LABEL = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류", done: "완료", skipped: "건너뜀" };
 const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어", observer: "옵저버" };   // 기록 표의 프로그램 칸. RPA 인 건 아니까 뗀다
 const HERO_TITLE = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류" };
-const MODULES = [
-  ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
-  ["Logistics", "물류관리"], ["Output", "운송장 출력 / 엑셀 생성"],
-];
-const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
-const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]], ["주말", [5, 6]]];
 const HISTORY_LIMIT = 100;
-const MAX_TIMES = 2;      // 하루 실행 시각 개수 (추가는 유료 옵션으로 열 예정)
 
 // 실행 버튼 아이콘 (heroicons 선 아이콘, 글자색을 따라간다)
 const ARROW = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75"/></svg>`;
@@ -87,31 +79,6 @@ const HTML = `
           <div id="usage-list"></div>
           <div class="msg" id="usage-sum"></div>
         </div>
-        <div class="card" id="mod-card">
-          <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
-          <div id="mod-list"></div>
-          <button class="apply" id="mod-apply" disabled>적용</button>
-        </div>
-        <div class="card hide" id="shop-card">
-          <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
-          <div id="shop-list"></div>
-          <div class="msg" id="shop-info"></div>
-          <button class="apply" id="shop-apply" disabled>적용</button>
-        </div>
-        <div class="card" id="sch-card">
-          <h2>자동 실행 <span class="muted" id="sch-meta"></span></h2>
-          <label class="switch first"><span>켬</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
-          <div id="sch-form">
-            <div class="lbl">요일</div>
-            <div class="seg" id="sch-presets"></div>
-            <div class="seg" id="sch-days"></div>
-            <div class="lbl">시간</div>
-            <div class="times" id="sch-times"></div>
-            <div class="seg"><button id="sch-add">+ 시간</button></div>
-          </div>
-          <div class="msg" id="sch-info"></div>
-          <button class="apply" id="sch-apply" disabled>적용</button>
-        </div>
       </div>
     </div>
   </div>
@@ -132,7 +99,6 @@ let root = null, c = null;
 let stopLive = null;
 let busy = false;
 let live = null;
-let form = { modules: {}, shops: {}, sch: { enabled: false, days: [], times: [] } };
 let fs = null;
 let resizeObs = null;
 let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 - 진행 시간이 올라가고, 에이전트가 죽어도(값이 안 바뀜) 끊김이 보이게
@@ -141,16 +107,7 @@ let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 �
 
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
-// 에이전트·Firestore 에서 온 값은 innerHTML 에 넣기 전에 반드시 씌운다 (app.js 와 같은 구현)
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const hhmm = (iso) => iso ? iso.slice(11, 16) : "";
 const dur = (sec) => sec == null ? "" : sec >= 60 ? `${Math.floor(sec / 60)}분 ${sec % 60}초` : `${sec}초`;
-const when = (iso) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${DAYS[(d.getDay() + 6) % 7]}) ${hhmm(iso)}`;
-};
-const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 // 현황은 하루 단위다. 어제 실행을 오늘 것처럼 띄우지 않는다 (상태 띠·단계·로그 모두)
 const isToday = (v) => ((v?.started_at || v?.finished_at || "").slice(0, 10)) === isoDay(new Date());
 
@@ -166,20 +123,10 @@ export function mount(el, context) {
   $("tab-history").onclick = () => showView("history");
   $("hist-date").onchange = () => loadHistory($("hist-date").value || null);
   $("hist-all").onclick = () => { $("hist-date").value = ""; loadHistory(null); };
-  $("run-routine").onclick = () => sendCommand("launch", { target: "routine" }, "루틴 RPA");
-  $("run-prepare").onclick = () => sendCommand("launch", { target: "prepare" }, "프리페어 RPA");
-  $("run-all").onclick = () => sendCommand("launch", { target: "all" }, "전체 실행");
-  $("stop-erpia").onclick = () => { if (confirm("ERPia 를 종료할까요?")) sendCommand("stop_erpia", null, "ERPia 종료"); };
-  $("mod-apply").onclick = applyModules;
-  $("shop-apply").onclick = applyShops;
-  $("sch-apply").onclick = applySchedule;
-  $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
-  $("sch-add").onclick = () => { if (form.sch.times.length >= MAX_TIMES) return; form.sch.times.push("09:00"); paintTimes(); paintScheduleMeta(); };
-  $("sch-presets").replaceChildren(...PRESETS.map(([t, days]) => {
-    const b = document.createElement("button"); b.textContent = t;
-    b.onclick = () => { form.sch.days = [...days]; paintDays(); paintScheduleMeta(); };
-    return b;
-  }));
+  $("run-routine").onclick = () => send("launch", { target: "routine" }, "루틴 RPA");
+  $("run-prepare").onclick = () => send("launch", { target: "prepare" }, "프리페어 RPA");
+  $("run-all").onclick = () => send("launch", { target: "all" }, "전체 실행");
+  $("stop-erpia").onclick = () => { if (confirm("ERPia 를 종료할까요?")) send("stop_erpia", null, "ERPia 종료"); };
   show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
   paintedRecent = null;
   const strip = $("recent-strip");
@@ -198,10 +145,6 @@ export function mount(el, context) {
     live = v || {};
     runToasts(first);
     paintHero(); paintTiles(); paintRecent(); paintSteps(); paintLog();
-    // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신)
-    if (first || !modulesDirty()) resetModules();
-    if (first || !shopsDirty()) resetShops();
-    if (first || !scheduleDirty()) resetSchedule();
     paintButtons();
   }, (e) => { $("h-state").textContent = e.code === "PERMISSION_DENIED" ? "권한 없음" : "읽지 못했습니다"; });
 }
@@ -559,41 +502,12 @@ function histRow(r) {
 }
 
 // --- 명령 -----------------------------------------------------------
-/** 명령·설정 안내는 토스트 하나를 이어서 고쳐 쓴다 (보냄 → 진행 중 → 결과) */
-const notify = (kind, text, ttlMs) => toast(kind, text, ttlMs, "act");
-
-async function sendCommand(type, args, label) {
+/** 실행 단추의 명령. 응답을 기다리는 동안 단추를 잠근다 */
+async function send(type, args, label) {
   if (busy || !c.pcId) return;
   busy = true; paintButtons();
-  notify("info", `${label} 명령을 보냈습니다. PC 응답을 기다립니다.`);
-  try {
-    const now = Math.floor(Date.now() / 1000);
-    const node = await push(ref(c.db, P("commands", c.me.cid, c.pcId)), {
-      type, args: args ?? null, by: c.me.uid, created_at: now, expires_at: now + COMMAND_TTL_SEC, state: "queued",
-    });
-    await watchCommand(node.key, label);
-  } catch (e) {
-    notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `보내지 못했습니다 (${e.code || e})`);
-  } finally {
-    busy = false;
-    if (root) paintButtons();
-  }
-}
-
-function watchCommand(cmdKey, label) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => { off(); if (root) notify("bad", "PC 가 응답하지 않습니다"); resolve(); }, 60000);
-    const off = onValue(ref(c.db, `${P("commands", c.me.cid, c.pcId)}/${cmdKey}`), (snap) => {
-      const v = snap.val();
-      if (!v || !root) return;
-      if (v.state === "running") notify("info", `${label} 진행 중`);
-      if (["done", "failed", "expired"].includes(v.state)) {
-        clearTimeout(timer); off();
-        notify(v.state === "done" ? "ok" : "bad", v.result || v.state);
-        resolve();
-      }
-    });
-  });
+  try { await sendCommand(c, type, args, label, () => !!root); }
+  finally { busy = false; if (root) paintButtons(); }
 }
 
 /** 이 PC 에서 RPA 가 돌고 있나 (누가 실행했든). 1PC 1프로그램이라 그 동안에는 다시 못 띄운다.
@@ -618,7 +532,7 @@ function paintButtons() {
     $(id).classList.toggle("busy", on);
   }
   $("stop-erpia").disabled = off;                        // 종료는 도는 중에도 눌러야 한다
-  paintTokens(); paintModuleMeta(); paintShopMeta(); paintScheduleMeta();
+  paintTokens();
 }
 
 // --- 토큰 (2026-10-06, 2부): 실행 단추 아래 늘 보이는 한 줄. 통장이 없는 업체(live.tokens 없음)는 줄이 없다 ------
@@ -680,200 +594,4 @@ async function paintUsage() {
     $("usage-sum").textContent = "사용량을 읽지 못했습니다";
     card.classList.remove("hide");
   }
-}
-
-// --- 실행 모듈 ------------------------------------------------------
-const LOCKED = new Set(["Login"]);   // 항상 켬. 관리자도 못 끈다 (에이전트도 파일에 Y 로 고정)
-// 앞 모듈이 꺼지면 따라 꺼지는 모듈. 운송장 출력은 물류관리가 만든 화면에서 돌기 때문에 혼자 돌 수 없다 (에이전트도 못 박는다)
-const NEEDS = { Output: "Logistics" };
-
-/** 이 업체가 안 쓰는 모듈 (총괄이 meta/companies/{cid}/apps/rpa/modules 에 false 로 정한다). 화면에서 아예 숨긴다 */
-const offByCompany = (k) => c?.policy?.rpa?.modules?.[k] === false;
-const shownModules = () => MODULES.filter(([k]) => !offByCompany(k));
-
-/** 딸린 모듈과 업체 정책을 규칙대로 끈다. 켜는 것은 사람이 직접 한다 (물류관리를 켜도 출력은 꺼진 채로 둘 수 있다) */
-function applyNeeds(mods) {
-  for (const k of Object.keys(mods)) if (offByCompany(k)) mods[k] = false;
-  for (const [k, need] of Object.entries(NEEDS)) if (!mods[need]) mods[k] = false;
-  return mods;
-}
-const savedModules = () => live?.modules || {};
-function resetModules() {
-  form.modules = applyNeeds(Object.fromEntries(MODULES.map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false])));
-  paintModules();
-}
-function modulesDirty() {
-  return MODULES.some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
-}
-const dict = (pairs) => Object.fromEntries(pairs);
-/** 스위치 줄의 글자. why 가 있으면 그 아래 작은 글씨로 - 잠긴 까닭 (마우스 글(title)은 휴대폰에 안 보인다 - 2026-10-02) */
-function switchText(text, why) {
-  const s = Object.assign(document.createElement("span"), { textContent: text });
-  if (why) s.append(Object.assign(document.createElement("small"), { className: "why", textContent: why }));
-  return s;
-}
-// 받침이 있으면 '을', 없으면 '를' (한글이 아니면 '를')
-const josa = (w) => {
-  const code = (w || "").charCodeAt((w || "").length - 1) - 0xac00;
-  return code >= 0 && code < 11172 && code % 28 ? "을" : "를";
-};
-function paintModules() {
-  $("mod-list").replaceChildren(...shownModules().map(([k, text], i) => {
-    const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
-    const cb = document.createElement("input");
-    const needOff = NEEDS[k] && !form.modules[NEEDS[k]];   // 앞 모듈이 꺼져 있으면 이 스위치는 잠근다
-    cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k) || needOff;
-    cb.setAttribute("aria-label", text);
-    const need = needOff ? dict(MODULES)[NEEDS[k]] : "";
-    cb.onchange = () => {
-      form.modules[k] = cb.checked;
-      // 딸린 모듈이 있는 스위치면 다시 그린다 (끄면 딸린 것도 꺼지고 잠기고, 켜면 잠금만 풀린다)
-      if (Object.values(NEEDS).includes(k)) { applyNeeds(form.modules); paintModules(); return; }
-      paintModuleMeta();
-    };
-    row.append(switchText(text, need && `${need}${josa(need)} 켜야 쓸 수 있습니다`), cb,
-      Object.assign(document.createElement("span"), { className: "knob" }));
-    return row;
-  }));
-  paintModuleMeta();
-}
-function paintModuleMeta() {
-  const shown = shownModules();
-  const on = shown.filter(([k]) => form.modules[k]).length;
-  $("mod-meta").textContent = live ? `${on}/${shown.length} 켬` : "";
-  $("mod-apply").disabled = !c.isAdmin || busy || !modulesDirty() || on === 0;
-}
-async function applyModules() {
-  const wanted = applyNeeds(Object.fromEntries(MODULES.map(([k]) => [k, !!form.modules[k]])));
-  if (!Object.values(wanted).some(Boolean)) { notify("warn", "최소 한 모듈은 켜야 합니다"); return; }
-  try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
-  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
-  await sendCommand("set_modules", wanted, "실행 모듈");
-}
-
-// --- 쇼핑몰 프리셋 --------------------------------------------------
-// PC 의 옵저버가 저장한 프리셋 (에이전트가 이름·코드·단계 수·켬만 올린다). 켜면 다음 프리페어부터 그 쇼핑몰에서 엑셀을 받는다.
-// 명령 키는 "PRESET1" - 숫자 키는 Realtime DB 가 배열로 바꿔 읽는다
-const circled = (n) => String.fromCharCode(0x2460 + n - 1);
-const savedShops = () => (Array.isArray(live?.presets) ? live.presets : []);
-const shopReady = (p) => p.steps > 0 && p.has_login;
-function resetShops() {
-  form.shops = Object.fromEntries(savedShops().map((p) => [p.no, !!p.on]));
-  paintShops();
-}
-function shopsDirty() {
-  return savedShops().some((p) => !!form.shops?.[p.no] !== !!p.on);
-}
-function shopLine(p) {
-  const saved = p.saved_at ? ` · ${Number(p.saved_at.slice(5, 7))}/${Number(p.saved_at.slice(8, 10))} 저장` : "";
-  return `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""} · ${p.steps}단계${saved}`;
-}
-function paintShops() {
-  show($("shop-card"), Array.isArray(live?.presets));   // 옛 에이전트·설정이 깨진 PC 는 카드를 숨긴다
-  const list = savedShops();
-  $("shop-list").replaceChildren(...list.map((p, i) => {
-    const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
-    const cb = document.createElement("input");
-    const ready = shopReady(p);
-    cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
-    cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
-    cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
-    const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
-    cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
-    row.append(switchText(shopLine(p), why), cb, Object.assign(document.createElement("span"), { className: "knob" }));
-    return row;
-  }));
-  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '옵저버' 에서 기록하세요";
-  paintShopMeta();
-}
-function paintShopMeta() {
-  const list = savedShops();
-  const on = list.filter((p) => form.shops?.[p.no]).length;
-  $("shop-meta").textContent = list.length ? `${on}/${list.length} 켬` : "";
-  $("shop-apply").disabled = !c.isAdmin || busy || !shopsDirty();
-}
-async function applyShops() {
-  const wanted = Object.fromEntries(savedShops().map((p) => [`PRESET${p.no}`, !!form.shops[p.no]]));
-  try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/presets`), wanted);
-  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
-  await sendCommand("set_presets", wanted, "쇼핑몰 프리셋");
-}
-
-// --- 자동 실행 ------------------------------------------------------
-const savedSch = () => live?.schedule || { enabled: false, days: [], times: [] };
-function resetSchedule() {
-  const s = savedSch();
-  form.sch = { enabled: !!s.enabled, days: [...(s.days || [])], times: [...(s.times || [])] };
-  $("sch-enabled").checked = form.sch.enabled;
-  paintDays(); paintTimes(); paintScheduleMeta();
-}
-function scheduleDirty() {
-  const s = savedSch();
-  return form.sch.enabled !== !!s.enabled
-    || [...form.sch.days].sort().join() !== [...(s.days || [])].sort().join()
-    || [...form.sch.times].sort().join() !== [...(s.times || [])].sort().join();
-}
-function paintDays() {
-  $("sch-days").replaceChildren(...DAYS.map((d, i) => {
-    const b = document.createElement("button"); b.textContent = d;
-    b.setAttribute("aria-pressed", form.sch.days.includes(i));
-    b.onclick = () => {
-      form.sch.days = form.sch.days.includes(i) ? form.sch.days.filter((x) => x !== i) : [...form.sch.days, i];
-      paintDays(); paintScheduleMeta();
-    };
-    return b;
-  }));
-}
-function paintTimes() {
-  $("sch-times").replaceChildren(...form.sch.times.map((t, i) => {
-    const row = document.createElement("div"); row.className = "t";
-    const inp = document.createElement("input"); inp.type = "time"; inp.step = 300; inp.value = t; inp.className = "num";
-    inp.onchange = () => { form.sch.times[i] = inp.value; paintScheduleMeta(); };
-    const del = document.createElement("button"); del.textContent = "빼기";
-    del.onclick = () => { form.sch.times.splice(i, 1); paintTimes(); paintScheduleMeta(); };
-    row.append(inp, del);
-    return row;
-  }));
-}
-function paintScheduleMeta() {
-  const s = savedSch();
-  const dis = !c.isAdmin || busy;
-  $("sch-enabled").disabled = dis;
-  for (const b of $("sch-form").querySelectorAll("button, input")) b.disabled = dis;
-  $("sch-add").disabled = dis || form.sch.times.length >= MAX_TIMES;
-  $("sch-meta").textContent = !live ? "" : s.enabled ? `${labelDays(s.days)} ${(s.times || []).join(", ")}` : "꺼짐";
-  const info = [];
-  if (s.enabled && s.next_run_at) info.push(`다음 ${when(s.next_run_at)}`);
-  if (s.last_launch_at) info.push(`마지막 ${when(s.last_launch_at)}${s.last_launch_by === "auto" ? " (자동)" : ""}`);
-  if (s.last_error) info.push(`오류: ${s.last_error}`);
-  let cls = s.last_error ? " bad" : "";
-  const t = live?.tokens;                                // 예약 실행은 지켜볼 사람이 없다 - 토큰이 모자라면 여기에도 (2부)
-  if (s.enabled && typeof t?.balance === "number") {
-    if (t.balance <= 0) { info.push("토큰이 없어 예약 실행을 건너뜁니다"); cls = " bad"; }
-    else if (t.balance < (t.cost?.all ?? 0)) {
-      info.push(`다음 예약 실행에 ${t.cost.all}개 · 남은 ${t.balance}개 - 마이너스로 떨어질 수 있습니다`);
-      cls = cls || " warn";
-    }
-  }
-  $("sch-info").textContent = info.join(" · ");
-  $("sch-info").className = "msg" + cls;
-  const ok = !form.sch.enabled || (form.sch.days.length > 0 && form.sch.times.length > 0 && form.sch.times.length <= MAX_TIMES
-    && form.sch.times.every((t) => /^\d\d:\d\d$/.test(t)));
-  $("sch-apply").disabled = dis || !scheduleDirty() || !ok;
-}
-function labelDays(days) {
-  const d = [...new Set(days || [])].sort();
-  if (d.join() === "0,1,2,3,4,5,6") return "매일";
-  if (d.join() === "0,1,2,3,4") return "평일";
-  if (d.join() === "5,6") return "주말";
-  return d.map((i) => DAYS[i]).join("·") || "요일 없음";
-}
-async function applySchedule() {
-  const payload = { enabled: form.sch.enabled, days: [...new Set(form.sch.days)].sort(), times: [...new Set(form.sch.times)].sort() };
-  try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/schedule`), payload);
-  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
-  await sendCommand("set_schedule", payload, "자동 실행");
 }

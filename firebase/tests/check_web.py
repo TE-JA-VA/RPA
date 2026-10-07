@@ -168,6 +168,19 @@ def cmds_of(kind):
     return [v for v in (db_get(CMDS) or {}).values() if v.get("type") == kind]
 
 
+def goto(page, key):
+    """사이드바 메뉴로 페이지를 바꾼다 (rpa / settings / account). 적용 안 한 변경이 있으면 확인 창이 뜬다 - 그런 곳은 시험이 직접 다룬다"""
+    page.click(f"{'#app-nav' if key == 'rpa' else '#admin-nav'} a[data-key='{key}']")
+    page.wait_for_selector({"rpa": "#hero", "settings": "#mod-card", "account": "#pw-btn"}[key])
+
+
+def reload_to(page, key):
+    """새로고침하면 첫 앱(RPA)이 뜬다 - 그 뒤 key 페이지로"""
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#hero")
+    if key != "rpa":
+        goto(page, key)
+
+
 with sync_playwright() as pw:
     browser = pw.chromium.launch()
     page = browser.new_page()
@@ -220,6 +233,9 @@ with sync_playwright() as pw:
     check(page.text_content("#app-nav a[aria-current='page']").strip().endswith("RPA"), "사이드바에서 RPA 가 현재 페이지")
     check(page.text_content("#page-title") == "RPA", "페이지 제목")
     check(page.is_hidden("#pc-pick"), "PC 가 하나면 고르기 숨김")
+    check(page.evaluate("[...document.querySelectorAll('#admin-nav a')].map((a) => a.dataset.key).join()") == "settings,account"
+          and page.text_content("#admin-nav a[data-key='settings']").strip().endswith("환경설정"), "관리 메뉴: 환경설정 · 계정 (환경설정이 위)")
+    check(page.locator("#mod-card, #shop-card, #sch-card").count() == 0, "RPA 화면에는 설정 카드가 없다 (환경설정으로 옮김)")
     def lum(hex6):
         ch = [int(hex6[i:i + 2], 16) / 255 for i in (1, 3, 5)]
         ch = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
@@ -466,7 +482,10 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=5000)
     check(True, "끝나면 버튼이 풀린다")
 
-    print("5절 실행 모듈")
+    print("5절 실행 모듈 (관리 > 환경설정)")
+    goto(page, "settings")
+    check(page.text_content("#page-title") == "환경설정" and page.text_content(".app-settings .app-title") == "RPA",
+          "환경설정 페이지: 제목과 앱 이름 머리")
     page.wait_for_function("document.getElementById('mod-meta')?.textContent === '4/5 켬'", timeout=10000)
     check(page.is_disabled("#mod-apply"), "바뀐 게 없으면 적용 비활성")
     login_cb = page.locator("#mod-list input[aria-label='로그인']")
@@ -507,7 +526,7 @@ with sync_playwright() as pw:
     check("5/5 켬" in page.text_content("#mod-meta"), "PC 값이 돌아오면 기준값 갱신")
     # 업체가 안 쓰는 모듈 (총괄이 meta 에 false 로 적는다) 은 목록에서 숨는다
     db_patch("meta/companies/c_demo/apps/rpa/modules", {"Hold": False})
-    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#mod-list label")
+    reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     check(page.locator("#mod-list input[aria-label='물류대기 관리']").count() == 0, "안 쓰는 업체면 그 스위치가 아예 없다")
     check(page.locator("#mod-list label").count() == 4 and "4 켬" in page.text_content("#mod-meta"), f"개수도 빼고 센다 ({page.text_content('#mod-meta')})")
     check(page.is_disabled("#mod-apply"), "숨긴 것 때문에 '바뀜' 으로 보이지 않는다")
@@ -515,9 +534,10 @@ with sync_playwright() as pw:
     sent = cmds_of("set_modules")[-1]["args"]
     check(sent["Hold"] is False, f"명령에도 꺼진 값으로 나간다 ({sent})")
     db_patch("meta/companies/c_demo/apps/rpa", {"modules": None})   # null 로 PATCH = 그 자리 지우기 (PUT 은 본문이 비면 400)
-    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#mod-list label")
+    reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     check(page.locator("#mod-list label").count() == 5, "정책을 지우면 다시 보인다")
 
+    goto(page, "rpa")
     # RPA 가 도는 동안에는 실행 버튼을 잠근다 (다른 사람이 겹쳐 실행하지 않게). 종료 버튼만 열어 둔다
     db_patch(f"{LIVE}/programs/routine", {"state": "running", "started_at": f"{TODAY}T16:20:00", "updated_at": f"{TODAY}T16:20:28",
                                           "steps_done": 1, "steps_total": 15, "current_label": "주문매핑 화면 이동", "reason": None,
@@ -614,20 +634,28 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('token-line')?.classList.contains('warn')", timeout=10000)
     check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개 - 마이너스로 떨어질 수 있습니다"
           and not page.is_disabled("#run-all"), f"모자라면 노란 글, 실행은 된다 ({page.text_content('#token-line')})")
+    goto(page, "settings")
+    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('남은 3개')", timeout=10000)
     check("다음 예약 실행에 6개 · 남은 3개 - 마이너스로 떨어질 수 있습니다" in page.text_content("#sch-info")
           and "warn" in page.get_attribute("#sch-info", "class"), f"예약 칸에도 노란 글 ({page.text_content('#sch-info')})")
+    goto(page, "rpa")
     db_patch(LIVE, {"tokens": {"balance": 0, "cost": cost}})
     page.wait_for_function("document.getElementById('run-all')?.disabled === true", timeout=10000)
     check(page.text_content("#token-line") == "토큰이 없습니다 (남은 0개) - 충전한 뒤 실행하세요"
           and "bad" in page.get_attribute("#token-line", "class")
           and all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")) and not page.is_disabled("#stop-erpia"),
           "0 이하면 빨간 글, 실행 단추 셋 잠김 (ERPia 종료는 그대로)")
+    goto(page, "settings")
+    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('토큰이 없어')", timeout=10000)
     check("토큰이 없어 예약 실행을 건너뜁니다" in page.text_content("#sch-info") and "bad" in page.get_attribute("#sch-info", "class"),
           f"예약 칸: 건너뛴다고 빨간 글 ({page.text_content('#sch-info')})")
+    goto(page, "rpa")
     db_patch(LIVE, {"tokens": None})                   # PATCH 의 null 이 그 칸을 지운다 (call 은 None 이면 본문 없이 보낸다)
     page.wait_for_function("document.getElementById('token-line')?.hidden === true", timeout=10000)
-    check(not page.is_disabled("#run-all") and "토큰" not in page.text_content("#sch-info") and page.is_hidden("#usage-card"),
-          "통장이 사라지면 (옛 에이전트) 줄도 잠금도 사용량도 없다")
+    check(not page.is_disabled("#run-all") and page.is_hidden("#usage-card"), "통장이 사라지면 (옛 에이전트) 줄도 잠금도 사용량도 없다")
+    goto(page, "settings")
+    page.wait_for_function("document.getElementById('sch-meta')?.textContent !== ''", timeout=10000)
+    check("토큰" not in page.text_content("#sch-info"), "예약 칸의 토큰 글도 없다")
     for rid in usage_runs:
         call("DELETE", f"{FS}/runs/c_demo/items/{rid}", None, OWNER)
     call("DELETE", f"{FS}/wallet/c_demo", None, OWNER)
@@ -672,6 +700,47 @@ with sync_playwright() as pw:
     inputs = page.query_selector_all("#sch-times input")
     check(len(inputs) == 2, "시간 추가")
     check(page.is_disabled("#sch-add"), "시간은 2개까지 (추가 버튼 잠김)")
+    inputs[1].fill("13:30")
+    inputs[1].dispatch_event("change")
+    check(not page.is_disabled("#sch-apply"), "바뀌면 적용 활성")
+    page.click("#sch-apply")
+    time.sleep(1.5)
+    saved = db_get(f"{SETTINGS}/schedule") or {}
+    check(saved.get("enabled") is True and saved.get("days") == [0, 1, 2, 3, 4, 5, 6] and saved.get("times") == ["09:05", "13:30"],
+          f"settings.schedule 저장 ({saved.get('days')} {saved.get('times')})")
+    sched = cmds_of("set_schedule")
+    check(len(sched) == 1 and sched[0]["args"]["times"] == ["09:05", "13:30"], "set_schedule 명령")
+    # 에이전트 역할: 명령을 닫고 PC 값(live.schedule)을 돌려준다
+    key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule")
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행: 매일 09:05, 13:30", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"days": [0, 1, 2, 3, 4, 5, 6], "times": ["09:05", "13:30"]})
+    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30'", timeout=10000)
+    check(page.is_disabled("#sch-apply"), "PC 값이 돌아오면 요약 갱신·적용 비활성")
+    page.click("label:has(#sch-enabled)")
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === false", timeout=5000)
+    page.click("#sch-times .t:nth-child(1) button")
+    page.click("#sch-times .t:nth-child(1) button")
+    check(page.is_disabled("#sch-apply") is False, "끄면 시간이 없어도 적용 가능")
+    page.click("label:has(#sch-enabled)")
+    check(page.is_disabled("#sch-apply"), "켠 채 시간이 없으면 적용 불가")
+
+    # 떠날 때 확인 (1부): 위에서 켬을 다시 켜고 줄을 지운 채 (적용 안 함) 다른 메뉴로 - '아니오' 면 남고, '예' 면 버리고 나간다
+    asked = []
+    page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.dismiss()))
+    page.click("#app-nav a[data-key='rpa']")
+    page.wait_for_timeout(300)
+    check(asked == ["적용하지 않은 변경이 있습니다. 버리고 나갈까요?"] and page.text_content("#page-title") == "환경설정"
+          and page.is_visible("#sch-card"), f"적용 안 한 변경이 있으면 묻고, 아니오면 남는다 ({asked})")
+    page.once("dialog", lambda dlg: dlg.accept())
+    page.click("#app-nav a[data-key='rpa']")
+    page.wait_for_selector("#hero")
+    check(page.text_content("#page-title") == "RPA", "예면 버리고 나간다")
+    goto(page, "settings")
+    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30'", timeout=10000)
+    check(page.is_disabled("#sch-apply") and len(page.query_selector_all("#sch-times input")) == 2, "다시 열면 PC 값 그대로 (버린 변경은 없다)")
+    goto(page, "rpa")
+
+    print("6-2절 실행 단추 모양 (RPA 화면)")
     check("primary" in (page.get_attribute("#run-all", "class") or "") and "primary" not in (page.get_attribute("#run-routine", "class") or ""), "강조는 전체 실행에")
     check(all(page.locator(f"#{i} svg").count() == 1 for i in ("run-all", "run-prepare", "run-routine")), "실행 버튼은 화살표 아이콘 하나")
     check(page.text_content("#stop-erpia .ic") == "⏼" and page.locator("#stop-erpia svg").count() == 0, "ERPia 종료는 전원 글자 ⏼ (U+23FC)")
@@ -707,29 +776,6 @@ with sync_playwright() as pw:
         page.hover("#run-all"); page.wait_for_timeout(800)
         page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_hover_all.png"))
     page.mouse.move(0, 0)
-    inputs[1].fill("13:30")
-    inputs[1].dispatch_event("change")
-    check(not page.is_disabled("#sch-apply"), "바뀌면 적용 활성")
-    page.click("#sch-apply")
-    time.sleep(1.5)
-    saved = db_get(f"{SETTINGS}/schedule") or {}
-    check(saved.get("enabled") is True and saved.get("days") == [0, 1, 2, 3, 4, 5, 6] and saved.get("times") == ["09:05", "13:30"],
-          f"settings.schedule 저장 ({saved.get('days')} {saved.get('times')})")
-    sched = cmds_of("set_schedule")
-    check(len(sched) == 1 and sched[0]["args"]["times"] == ["09:05", "13:30"], "set_schedule 명령")
-    # 에이전트 역할: 명령을 닫고 PC 값(live.schedule)을 돌려준다
-    key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule")
-    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행: 매일 09:05, 13:30", "started_at": 1, "ended_at": 2})
-    db_patch(f"{LIVE}/schedule", {"days": [0, 1, 2, 3, 4, 5, 6], "times": ["09:05", "13:30"]})
-    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30'", timeout=10000)
-    check(page.is_disabled("#sch-apply"), "PC 값이 돌아오면 요약 갱신·적용 비활성")
-    page.click("label:has(#sch-enabled)")
-    page.wait_for_function("document.getElementById('sch-apply')?.disabled === false", timeout=5000)
-    page.click("#sch-times .t:nth-child(1) button")
-    page.click("#sch-times .t:nth-child(1) button")
-    check(page.is_disabled("#sch-apply") is False, "끄면 시간이 없어도 적용 가능")
-    page.click("label:has(#sch-enabled)")
-    check(page.is_disabled("#sch-apply"), "켠 채 시간이 없으면 적용 불가")
 
     print("7절 계정 페이지")
     page.click("#admin-nav a[data-key='account']")
@@ -832,6 +878,9 @@ with sync_playwright() as pw:
     db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}, "pc_z": {"label": "창고 PC"}}})
     page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000); page.wait_for_selector("#hero")
     check(page.is_visible("#pc-pick") and page.text_content("#pc-pick .selected").strip() == "사무실 PC", "PC 가 둘이면 고르기가 보이고 지금 PC 가 적혀 있다")
+    goto(page, "settings")
+    check(page.is_visible("#pc-pick") and page.text_content("#page-title") == "환경설정", "환경설정도 PC 마다 - PC 고르기가 보인다")
+    goto(page, "rpa")
     check(page.locator("#pc-pick .option").count() == 1 and page.text_content("#pc-pick .option") == "창고 PC", "목록엔 다른 PC 만")
     opts_opacity = lambda: page.evaluate("getComputedStyle(document.querySelector('#pc-pick .options')).opacity")
     check(opts_opacity() == "0", "목록은 접혀 있다")
@@ -862,7 +911,8 @@ with sync_playwright() as pw:
     login(page, "viewer@t.local")
     check("(유저)" in page.text_content("#who"), "유저로 표시 (전 '열람' - 2026-10-06 이름)")
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
-    check(page.is_hidden("#act-card") and page.is_hidden("#mod-card") and page.is_hidden("#sch-card"), "열람자는 실행·모듈·자동 실행 카드가 없다")
+    check(page.is_hidden("#act-card") and page.locator("#admin-nav a[data-key='settings']").count() == 0,
+          "유저는 실행 카드도 환경설정 메뉴도 없다")
     cols_w = page.evaluate("document.querySelector('.cols').getBoundingClientRect().width")
     main_w = page.evaluate("document.querySelector('.cols > div').getBoundingClientRect().width")
     check(abs(cols_w - main_w) < 2, f"오른쪽 열 자리를 남기지 않는다 (본문 {main_w:.0f} / 전체 {cols_w:.0f})")

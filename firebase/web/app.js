@@ -10,10 +10,11 @@ import { firebaseConfig } from "./firebase-config.js";
 import { applyTheme, getTheme, isDark, applyAccent, getAccent } from "./theme.js";
 import * as rpa from "./rpa.js";
 import * as account from "./account.js";
+import * as settings from "./settings.js";
 
 // 앱 목록과 관리 페이지. 새 앱은 여기 한 줄과 모듈 파일 하나로 붙는다.
 const APPS = [rpa];
-const PAGES = [account];
+const PAGES = [settings, account];
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -130,6 +131,7 @@ function paintPcPick() {
   box.querySelector(".selected").onclick = () => box.classList.toggle("open");
   for (const b of box.querySelectorAll(".option")) {
     b.onclick = () => {
+      if (!leaveOk()) { box.classList.remove("open"); b.blur(); return; }
       pcId = b.dataset.pc; b.blur();
       try { localStorage.setItem(`pc:${me.cid}`, pcId); } catch {}
       paintPcPick(); if (current) mount(current);
@@ -142,7 +144,13 @@ document.addEventListener("click", (e) => { if (!$("pc-pick").contains(e.target)
 function ctx() {
   return { db, auth, me, pcId, pcLabel: company?.pcs?.[pcId]?.label || pcId || "",
            policy: company?.apps || {},   // 업체가 안 쓰는 기능 (총괄이 정한다). 예: apps.rpa.modules.Hold === false
-           isAdmin: !!me && (me.role === "admin" || me.role === "super") };
+           isAdmin: !!me && (me.role === "admin" || me.role === "super"),
+           apps: APPS };   // 환경설정 페이지가 앱마다 설정 화면을 붙인다
+}
+
+/** 적용 안 한 변경이 있는 페이지(환경설정)를 떠나기 전에 묻는다 - 메뉴·PC 바꾸기 모두 */
+function leaveOk() {
+  return !current?.dirty?.() || confirm("적용하지 않은 변경이 있습니다. 버리고 나갈까요?");
 }
 
 function navLink(mod) {
@@ -150,13 +158,13 @@ function navLink(mod) {
   a.href = "#"; a.dataset.key = mod.key;
   a.innerHTML = `<span class="ic">${mod.icon || "▣"}</span>`;
   a.append(mod.label);
-  a.onclick = (e) => { e.preventDefault(); mount(mod); };
+  a.onclick = (e) => { e.preventDefault(); if (leaveOk()) mount(mod); };
   return a;
 }
 
 function paintNav() {
   $("app-nav").replaceChildren(...APPS.map(navLink));
-  $("admin-nav").replaceChildren(...PAGES.map(navLink));
+  $("admin-nav").replaceChildren(...PAGES.filter((p) => !p.adminOnly || ctx().isAdmin).map(navLink));   // 유저는 환경설정 링크가 없다
 }
 
 function mount(mod) {
