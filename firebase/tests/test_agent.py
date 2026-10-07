@@ -729,6 +729,48 @@ with tempfile.TemporaryDirectory() as d:
         os.environ.pop("RPA_STATUS_DIR", None)
         os.environ.pop("RPA_DASHBOARD_DRY_RUN", None)
 
+print("\n7-2절 자동 업데이트 명령 (설계 6절)")
+check(ag.decide({"state": "queued", "type": "update", "expires_at": NOW + 60, "by": "uid-of-admin"}, NOW)[0] == "bad",
+      "관리 화면이 아닌 곳에서 온 update 는 버린다")
+check(ag.decide({"state": "queued", "type": "rollback", "expires_at": NOW + 60, "by": "admin-tool"}, NOW)[0] == "run", "관리 화면의 rollback 은 돈다")
+with tempfile.TemporaryDirectory() as d:
+    os.environ["RPA_PROGRAMDATA"] = d
+    try:
+        import rpa_update as upd
+        started = []
+        acts = ag.real_actions(start_update=lambda v, m: started.append((v, m)))
+        import rpa_status as st
+        orig = st.check_install
+        st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "ok"}
+        try:
+            for bad, why in (({"version": "../x"}, "판 번호"), ({"version": "2026.10.07-4"}, "이미")):
+                try:
+                    acts["update"](bad); check(False, f"거절 안 됨 {bad}")
+                except RuntimeError as e:
+                    check(why in str(e), f"update 거절: {why} ({e})")
+            msg = acts["update"]({"version": "2026.10.07-5"})
+            check(started == [("2026.10.07-5", "update")] and "예약" in msg, f"update → 스레드 시작 ({msg})")
+            upd.write_state({"state": "waiting"})
+            try:
+                acts["update"]({"version": "2026.10.07-6"}); check(False, "업데이트 중 두 번째")
+            except RuntimeError as e:
+                check("이미 업데이트" in str(e), f"업데이트 중이면 거절 ({e})")
+            upd.write_state({"state": "done"})
+            try:
+                acts["rollback"](None); check(False, "보관본 없이 되돌리기")
+            except RuntimeError as e:
+                check("이전 판" in str(e), f"보관본이 없으면 거절 ({e})")
+            st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "mixed"}
+            try:
+                acts["update"]({"version": "2026.10.07-5"}); check(False, "mixed 인데 업데이트")
+            except RuntimeError as e:
+                check("판 구조" in str(e), f"판 구조가 어긋난 PC 는 거절 ({e})")
+        finally:
+            st.check_install = orig
+    finally:
+        os.environ.pop("RPA_PROGRAMDATA", None)
+check("update" in ag.KNOWN_TYPES and "rollback" in ag.KNOWN_TYPES, "명령 종류에 update·rollback")
+
 print("\n8절 첫 실행 설정 (새 PC)")
 
 

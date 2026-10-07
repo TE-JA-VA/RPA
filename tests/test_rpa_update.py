@@ -205,6 +205,44 @@ open(up.path("health_local"), "w").close()
 check(up.health_local() is True, "샌드박스용 표시 파일 update\\health_local (관리자만 쓰는 폴더)")
 os.remove(up.path("health_local"))
 
+print("\n=== 6. 받기 → 대기 → 넘기기 (run_update) ===")
+for rel, text in (("a.py", "A1"), ("b.py", "B1")):
+    put(PROG, rel, text)
+for rel in ("c.py",):
+    os.remove(os.path.join(PROG, rel)) if os.path.exists(os.path.join(PROG, rel)) else None
+with open(os.path.join(PROG, "manifest.json"), "w", encoding="utf-8") as f:
+    json.dump(MAN_A, f)
+for rel in up.RUNNER_FILES:
+    put(PROG, rel, f"# {rel}")
+put(PROG, "python/pythonw.exe", "fake")
+up.write_state({}); shutil.rmtree(up.path("backup"), ignore_errors=True)
+seen, idle_calls, reg = [], [0], []
+
+
+def idle():
+    idle_calls[0] += 1
+    seen.append(up.read_state()["state"])
+    return idle_calls[0] >= 3          # 두 번은 RPA 가 돌고 있다
+
+
+up.run_update("2026.10.07-2", "update", PROG, idle, register=lambda r: reg.append(("reg", r)), run_task=lambda: reg.append(("run",)),
+              fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None)
+s = up.read_state()
+check(seen == ["waiting"] * 3, f"받은 뒤 RPA 가 쉴 때까지 waiting ({seen})")
+check(s["state"] == "ready" and s["mode"] == "update" and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1"
+      and s["program_dir"] == PROG and s["staging"] == up.path("staging"), f"넘길 때 ready + 도우미가 쓸 칸 ({s})")
+check(all(os.path.isfile(up.path("runner", r)) for r in up.RUNNER_FILES) and os.path.isfile(up.path("runner", "python", "pythonw.exe")),
+      "도우미와 파이썬을 runner 로 복사")
+check(reg == [("reg", up.path("runner")), ("run",)], f"작업 등록 → 실행 ({reg})")
+up.write_state({})
+up.run_update("2026.10.07-2", "update", PROG, idle, register=lambda r: None, run_task=lambda: None,
+              fetch=lambda v, p, s: (_ for _ in ()).throw(up.UpdateError("판 서명이 맞지 않습니다 - 받지 않습니다")), sleep=lambda s: None)
+check(up.read_state()["state"] == "failed" and "서명" in up.read_state()["reason"], "받기 실패면 failed + 까닭 (대기도 안 한다)")
+up.write_state({})
+up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: (_ for _ in ()).throw(RuntimeError("등록 실패")),
+              run_task=lambda: None, fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None)
+check(up.read_state()["state"] == "failed" and "등록 실패" in up.read_state()["reason"], "도우미를 못 띄우면 failed (실행 막기가 풀린다)")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

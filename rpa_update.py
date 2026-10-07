@@ -219,3 +219,46 @@ def mark_alive(install):
     st.write_json_atomic(path("alive.json"), {"version": install.get("version"), "state": install.get("state"),
                                               "at": now_text(), "pid": os.getpid()})
     return True
+
+
+import time  # noqa: E402  (run_update 의 sleep 기본값)
+
+RUNNER_FILES = ("update_helper.py", "rpa_update.py", "rpa_status.py", "update_sign.py")
+
+
+def handoff(program_root, state, register, run_task):
+    """도우미와 파이썬을 runner 로 복사하고 state 를 ready 로 적은 뒤 도우미 작업을 등록·실행한다.
+    파이썬(python\\)은 업데이트가 바꾸지 않는다 (판 목록 밖) - 그래서 지금 것을 복사해 써도 된다."""
+    runner = path("runner")
+    shutil.rmtree(runner, ignore_errors=True)
+    shutil.copytree(os.path.join(program_root, "python"), os.path.join(runner, "python"))
+    for name in RUNNER_FILES:
+        shutil.copy2(os.path.join(program_root, name), os.path.join(runner, name))
+    write_state({**state, "state": "ready", "at": now_text()})
+    register(runner)
+    run_task()
+
+
+def run_update(version, mode, program_root, idle, register, run_task, fetch=fetch_release, sleep=time.sleep):
+    """에이전트의 업데이트 스레드. idle(): RPA·옵저버가 쉬나 (에이전트가 실행 잠금 안에서 본다)."""
+    staging = path("staging")
+    try:
+        cur = _read_manifest(program_root).get("version")
+        write_state({"state": "downloading", "mode": mode, "target": version, "from": cur, "at": now_text()})
+        log(f"{'받기' if mode == 'update' else '되돌리기 준비'} {cur} → {version}")
+        if mode == "rollback":
+            stage_rollback(program_root, staging)
+        else:
+            fetch(version, program_root, staging)
+        write_state({"state": "waiting", "mode": mode, "target": version, "from": cur, "at": now_text()})
+        while not idle():
+            sleep(2)
+        handoff(program_root, {"mode": mode, "target": version, "from": cur, "program_dir": program_root, "staging": staging},
+                register, run_task)
+        log("도우미에게 넘김")
+    except Exception as e:
+        reason = str(e) if isinstance(e, UpdateError) else f"{type(e).__name__}: {e}"[:200]
+        shutil.rmtree(staging, ignore_errors=True)
+        write_state({"state": "failed", "mode": mode, "target": version, "from": read_state().get("from"),
+                     "at": now_text(), "reason": reason})
+        log(f"실패: {reason}")

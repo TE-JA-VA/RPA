@@ -419,7 +419,10 @@ class Uploader:
 # ---------------------------------------------------------------------------
 # 명령
 # ---------------------------------------------------------------------------
-KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule", "set_presets", "resume_repeat")
+KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule", "set_presets", "resume_repeat", "update", "rollback")
+ADMIN_ONLY_TYPES = ("update", "rollback")   # 관리 화면(Admin SDK)만 - DB 규칙의 type 목록에도 없다 (자동 업데이트 10절)
+ADMIN_TOOL_BY = "admin-tool"
+VERSION_RE = re.compile(r"\d{4}\.\d{2}\.\d{2}-\d+")
 HEARTBEAT_SEC = 5   # 화면은 HEARTBEAT_STALE_SEC(20초) 넘게 없으면 '끊김' - 네 번 놓쳐야 끊김이다
 
 
@@ -431,6 +434,8 @@ def decide(cmd, now):
         return "bad", f"queued 가 아닙니다 ({cmd.get('state')})"
     if cmd.get("type") not in KNOWN_TYPES:
         return "bad", f"모르는 종류입니다 ({cmd.get('type')})"
+    if cmd.get("type") in ADMIN_ONLY_TYPES and cmd.get("by") != ADMIN_TOOL_BY:
+        return "bad", "관리 화면에서만 보낼 수 있는 명령입니다"
     expires = cmd.get("expires_at")
     if not isinstance(expires, (int, float)):
         return "bad", "만료 시각이 없습니다"
@@ -525,11 +530,12 @@ class Policy:
         return got
 
 
-def real_actions(policy=None, limits=None):
+def real_actions(policy=None, limits=None, start_update=None):
     """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)
     limits: 업체 정책을 지금 읽어 (limit, off) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)"""
     import rpa_dashboard as dash
     import rpa_status as st
+    import rpa_update as upd
 
     def do_launch(args):
         target = (args or {}).get("target") if isinstance(args, dict) else None
@@ -592,8 +598,47 @@ def real_actions(policy=None, limits=None):
     def do_resume(args):
         return dash.resume_repeat()          # [반복 다시 시작] - 멈춘 반복이 없으면 RuntimeError (사람에게 보일 글)
 
+    def default_start(version, mode):
+        import threading
+        import rpa_settings as rs
+
+        def idle():
+            with dash._launch_lock:          # launch 와 같은 잠금 - 이 안에서 쉬면 그 뒤로는 waiting 이 새 실행을 막는다
+                return not dash.any_rpa_running() and dash.launch_state() is None and not st.observer_open()
+
+        threading.Thread(target=upd.run_update, daemon=True, name="update",
+                         args=(version, mode, st.program_dir(), idle, rs.register_helper_task, rs.run_helper_task)).start()
+
+    start = start_update or default_start
+
+    def check_can_update():
+        if upd.read_state().get("state") in upd.ACTIVE_STATES:
+            raise RuntimeError("이미 업데이트가 진행 중입니다")
+        install = st.check_install()
+        if install.get("state") != "ok":
+            raise RuntimeError(f"판 구조가 맞지 않아 업데이트하지 않습니다 ({install.get('state')}) - 설치 파일로 다시 설치하세요")
+        return install
+
+    def do_update(args):
+        version = (args or {}).get("version") if isinstance(args, dict) else None
+        if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
+            raise RuntimeError(f"판 번호가 잘못되었습니다 ({version})")
+        install = check_can_update()
+        if install.get("version") == version:
+            raise RuntimeError(f"이미 그 판입니다 ({version})")
+        start(version, "update")
+        return f"업데이트를 예약했습니다 ({install.get('version')} → {version}) - RPA 가 끝나면 바로 바뀝니다"
+
+    def do_rollback(args):
+        back = upd.backup_version()
+        if not back:
+            raise RuntimeError("되돌릴 이전 판이 없습니다")
+        check_can_update()
+        start(back, "rollback")
+        return f"이전 판으로 되돌리기를 예약했습니다 ({back}) - RPA 가 끝나면 바로 바뀝니다"
+
     return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets,
-            "resume_repeat": do_resume}
+            "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback}
 
 
 def watch_commands(client, path, on_command, stop=None):
@@ -747,6 +792,10 @@ def run(cfg):
     import threading
     import rpa_dashboard as dash
     import rpa_status as st
+    import rpa_update as upd
+    alive = [False]
+    if upd.health_local():                     # 샌드박스 시험: 로그인 없이 판 점검만 (자동 업데이트 계획 Task 9)
+        alive[0] = upd.mark_alive(st.check_install())
 
     client = fb.Client(cfg)
     try:
@@ -835,12 +884,13 @@ def run(cfg):
                 # 몇 초를 이 값이 메운다 (그 틈에 화면의 실행 버튼이 풀리면 두 번 실행될 수 있다)
                 snap["launching"] = bool(dash.launch_state())
                 snap["version"] = install      # 켤 때 한 번 잰 판 (바뀌지 않으니 비교 body 에는 안 넣는다)
+                snap["update"] = upd.live_view()
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
                 sent = upload_new_history(hist_path, up, cfg, prices=prices.get)
                 tokens.refresh(force=bool(sent))           # 방금 올린 기록만큼 줄었다 - 아니면 10분마다 (우리가 넣은 것)
                 snap["tokens"] = tokens.view()
                 body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("schedule"), snap.get("recent"),
-                                   snap.get("launching"), snap.get("tokens")], ensure_ascii=False, default=str)
+                                   snap.get("launching"), snap.get("tokens"), snap.get("update")], ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)
                     last = body
@@ -852,6 +902,8 @@ def run(cfg):
                         "rpa_running": bool([p for p, v in (snap.get("programs") or {}).items()
                                              if v and v.get("state") == "running"]),
                     })
+                    if not alive[0] and install.get("state") == "ok":
+                        alive[0] = upd.mark_alive(install)    # 업데이트 뒤 첫 접속 - 도우미의 3분 점검 (설계 7절 6)
                     last_beat = time.time()
                 up.flush()
             except fb.AuthError as e:
