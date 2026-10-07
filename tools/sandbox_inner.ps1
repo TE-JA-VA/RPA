@@ -204,7 +204,7 @@ Stop-Process -Id $w.Id -Force -ErrorAction SilentlyContinue
 if (Test-Path "$T\site") {
   New-Item -ItemType Directory -Force "$PD\update" | Out-Null
   Set-Content "$PD\update\health_local" ""                                                   # 가짜 계정 - 로그인 없이 판 점검만
-  $web = Start-Process "$App\python\python.exe" -ArgumentList "-m http.server 8799 --directory `"$T\site`"" -PassThru -WindowStyle Hidden
+  $web = Start-Process "$App\python\python.exe" -ArgumentList "-m http.server 8799 --bind 127.0.0.1 --directory `"$T\site`"" -PassThru -WindowStyle Hidden
   $B = (Get-Content "$T\site\versions.txt")[0]; $C = (Get-Content "$T\site\versions.txt")[1]; $A = (Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version
   $py = "$App\python\python.exe"
   # 가짜 계정이라 명령이 안 온다 - 에이전트의 업데이트 스레드가 하는 일(run_update)을 직접 부른다 (받기 주소만 샌드박스 안, 서명은 시험용 공개 열쇠로 확인)
