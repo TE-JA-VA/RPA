@@ -51,8 +51,7 @@
   .secret { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--soft); }
   .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
   .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
-  #detail li .upd-ver, #detail li .upd-go, #detail li .upd-back { margin-left:8px; }   /* 아래 'PC 추가' 줄(.row gap 8px) 과 같은 간격 */
-  #detail li { margin:4px 0; }
+  td .row { margin:0; flex-wrap:nowrap; }   /* PC 표의 업데이트 칸 - 고르기·단추 사이는 아래 'PC 추가' 줄과 같은 8px */
   label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:14px; }
   #flash { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); padding:10px 16px; border-radius:10px; background:var(--strong);
     color:var(--card); font-size:14px; max-width:90vw; }
@@ -221,7 +220,7 @@ function updText(u) {
 }
 function pcRowEl(d, p, rel) {
   const tag = (v) => (v === rel.stable ? " (안정본)" : v === rel.newest ? " (최신본)" : "");
-  const ver = p.version?.version ? `버전 ${p.version.version}${tag(p.version.version)}` : "버전 모름";
+  const ver = p.version?.version ? `${p.version.version}${tag(p.version.version)}` : "모름";
   const busy = ["downloading", "waiting", "ready", "applying", "rolling_back"].includes(p.update?.state);
   const sel = el("select", { class: "upd-ver" }, rel.list.map((x) => el("option", { value: x.version }, `${x.version}${tag(x.version)}${x.memo ? ` - ${x.memo}` : ""}`)));
   if (rel.stable) sel.value = rel.stable;
@@ -236,8 +235,8 @@ function pcRowEl(d, p, rel) {
     flash(`되돌리기 명령을 보냈습니다 (${p.pcId} → ${p.update.backup})`); openDetail(d.cid);
   }) }, `이전 버전으로 되돌리기 (${p.update.backup})`) : null;
   const status = updText(p.update);
-  return el("li", { id: `pc-${p.pcId}`, title: p.update?.reason ?? "" },
-    `${p.label || "(이름 없음)"} · ${p.pcId} · ${ver}${status ? ` · ${status}` : ""} `, sel, go, back ?? "");
+  return el("tr", { id: `pc-${p.pcId}` }, el("td", {}, p.label || "(이름 없음)"), el("td", {}, p.pcId), el("td", {}, ver),
+    el("td", { title: p.update?.reason ?? "" }, status || "-"), el("td", {}, el("div", { class: "row" }, sel, go, back)));
 }
 // 판 목록 (업체 표 위) - [판 목록] 을 누르면 펼친다
 async function drawReleases() {
@@ -266,7 +265,8 @@ function pcSection(d) {
     refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
   }) }, "PC 추가");
   return el("div", {}, el("h3", {}, "PC"),
-    d.pcs.length ? el("ul", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases))) : el("p", { class: "muted" }, "PC 가 없습니다"),
+    d.pcs.length ? el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"].map((h) => el("th", {}, h)))),
+      el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases)))) : el("p", { class: "muted" }, "PC 가 없습니다"),
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
 }
 function userSection(d) {

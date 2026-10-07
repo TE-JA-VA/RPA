@@ -296,8 +296,10 @@ with sync_playwright() as pw:
         pg.wait_for_selector(f"#detail #pc-{PC}", timeout=15000)
 
     open_company(page, CID)
-    row = page.text_content(f"#pc-{PC}")
-    check("버전 2026.10.07-4 (안정본)" in row and "판" not in row and "업데이트됨 10/7 14:03" in row, f"PC 줄: 판·표시·상태 ({row})")
+    heads = [h.strip() for h in page.locator("#detail table.pcs th").all_text_contents()]
+    check(heads == ["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"], f"PC 는 표로 - 칸이 맞춰진다 ({heads})")
+    cells = [c.strip() for c in page.locator(f"#pc-{PC} td").all_text_contents()]
+    check(cells[1] == PC and cells[2] == "2026.10.07-4 (안정본)" and cells[3] == "업데이트됨 10/7 14:03", f"PC 줄 칸: 코드·버전·상태 ({cells})")
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4"
           and "(최신본)" in page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']"), "판 고르기: 처음은 안정본, 최신본 표시")
     page.select_option(f"#pc-{PC} select.upd-ver", "2026.10.07-5")
