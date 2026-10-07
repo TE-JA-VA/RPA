@@ -775,7 +775,7 @@ def resume_repeat():
         rep = sch.get("repeat") or {}
         if win is None or not rep.get("stopped") or (rep.get("date"), rep.get("at")) != (now.date().isoformat(), win["at"]):
             raise RuntimeError("지금은 멈춘 반복이 없습니다")
-        rep.update(stopped=None, next_at=None)
+        rep.update(stopped=None, next_at=None, resumed_at=now.isoformat(timespec="seconds"))   # 쉬는 시간을 안 기다리고 바로 (tick_repeat)
         st.write_settings(cfg)
     return f"반복을 다시 시작했습니다 ({win['until']}까지)"
 
@@ -915,7 +915,8 @@ class Scheduler(threading.Thread):
             self.waiting_reason = "반복 회차가 끝나기를 기다립니다"
             return
         end = last_finished()
-        if end is not None and now < end + datetime.timedelta(minutes=win.get("rest_min", REST_MIN_DEFAULT)):
+        resumed = st.parse_iso(rep.get("resumed_at"))       # [반복 다시 시작] 뒤 첫 회차는 쉬지 않는다 - 그 회차가 끝나면 다시 쉰다
+        if end is not None and (resumed is None or resumed < end) and now < end + datetime.timedelta(minutes=win.get("rest_min", REST_MIN_DEFAULT)):
             self.waiting_reason = None
             return
         self.waiting_reason = self.busy()

@@ -260,6 +260,21 @@ try:
 finally:
     d.TOKEN_GATE = None
 
+print("\n=== 15. [반복 다시 시작] 은 쉬는 시간을 기다리지 않는다 (2026-10-07 사용자 '예') ===")
+d.resume_repeat()
+CLOCK[0] = at("11:11", day=6); n = len(d.LAUNCHED); sched.tick()
+check(len(d.LAUNCHED) == n + 1, "회차를 띄움")
+put_status("routine", "stopped", at("11:11", 6, 5), at("11:12", 6), [LOGIN], reason="저장 실패"); ended()
+CLOCK[0] = at("11:12", day=6, sec=30); sched.tick()
+check(rep().get("stopped") is not None, "실패로 멈춤")
+CLOCK[0] = at("11:13", day=6); d.resume_repeat(); sched.tick()
+check(len(d.LAUNCHED) == n + 2, "11:12 에 끝났어도 누르면 바로 (쉬는 시간 11:14 까지를 안 기다림)")
+put_status("routine", "success", at("11:13", 6, 5), at("11:15", 6), [LOGIN, DONE]); ended()
+CLOCK[0] = at("11:16", day=6); sched.tick()
+check(len(d.LAUNCHED) == n + 2, "그 회차 뒤로는 다시 쉬는 시간을 지킨다")
+CLOCK[0] = at("11:17", day=6); sched.tick()
+check(len(d.LAUNCHED) == n + 3, "쉬는 시간 뒤 다음 회차")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
