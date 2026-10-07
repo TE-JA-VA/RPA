@@ -292,11 +292,11 @@ with tempfile.TemporaryDirectory() as d:
     check(n == 1 and fcl.docs[-1][1] == "h3", "이어서 쓴 줄을 다음에 올린다")
     check(ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos) == 0, "바뀐 게 없으면 안 올린다")
 
-print("토큰: 실행 기록 한 건이 쓴 것·쓴 토큰 (2026-10-06 사용자 결정 - 완료·대상 없음은 쓰고 실패·건너뜀·중단은 안 쓴다)")
+print("토큰: 실행 기록 한 건이 쓴 것·쓴 토큰 (2026-10-07 바꿈 - '완료' 만 쓰고 대상 없음·실패·건너뜀·중단은 안 쓴다)")
 mods = [{"key": "login", "state": "done"}, {"key": "sales", "state": "done"}, {"key": "hold", "state": "no_target"},
         {"key": "logistics", "state": "failed"}, {"key": "output", "state": "skipped"}]
-check(ag.usage({"program": "routine", "modules": mods}) == {"login": 1, "sales": 1, "hold": 1},
-      "루틴: 완료·대상 없음인 모듈만 (실패·건너뜀은 안 씀)")
+check(ag.usage({"program": "routine", "modules": mods}) == {"login": 1, "sales": 1},
+      "루틴: 완료인 모듈만 (대상 없음·실패·건너뜀은 안 씀 - 반복이 빈 회차로 토큰을 먹지 않게)")
 check(ag.usage({"program": "routine", "modules": [{"key": "sales", "state": "stopped"}, {"key": "hold", "state": "pending"},
                                                   {"key": "logistics", "state": "off"}]}) == {}, "중단·안 돈 모듈·꺼진 모듈은 안 씀")
 check(ag.usage({"program": "prepare", "steps": [
@@ -310,8 +310,8 @@ check(ag.run_cost({"login": 1, "sales": 1, "hold": 1}, ag.PRICES) == 2, "처음 
 check(ag.run_cost({"sales": 2, "invoice_send": 1}, {"default": 1, "login": 0, "sales": 3}) == 7,
       "값표의 값 × 횟수, 값표에 없는 새 모듈은 default")
 doc2 = ag.run_doc(dict(rec, modules=mods), "c_demo", "pc_office")
-check(doc2["used"] == {"login": 1, "sales": 1, "hold": 1} and doc2["cost"] == 2, "기록 문서에 쓴 것·쓴 토큰 (값표를 안 주면 처음 값표)")
-check(ag.run_doc(dict(rec, modules=mods), "c_demo", "pc_office", {"default": 5, "login": 0})["cost"] == 10, "준 값표로 센다")
+check(doc2["used"] == {"login": 1, "sales": 1} and doc2["cost"] == 1, "기록 문서에 쓴 것·쓴 토큰 (값표를 안 주면 처음 값표)")
+check(ag.run_doc(dict(rec, modules=mods), "c_demo", "pc_office", {"default": 5, "login": 0})["cost"] == 5, "준 값표로 센다")
 
 
 class PriceClient:
@@ -348,7 +348,7 @@ with tempfile.TemporaryDirectory() as d:
         f.write(json.dumps(dict(rec, run_id="t1", modules=mods), ensure_ascii=False) + "\n")
     ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos, prices=table)
     sent = fcl.docs[-1][2]
-    check(len(asked) == 1 and sent["cost"] == {"integerValue": "2"} and set(sent["used"]["mapValue"]["fields"]) == {"login", "sales", "hold"},
+    check(len(asked) == 1 and sent["cost"] == {"integerValue": "1"} and set(sent["used"]["mapValue"]["fields"]) == {"login", "sales"},
           "올릴 때 값표를 읽어 쓴 토큰(정수)·쓴 것(map)을 싣는다")
 
 
@@ -534,6 +534,7 @@ check(ag.decide(dict(ok_cmd, expires_at=1999), NOW)[0] == "expired", "만료된 
 check(ag.decide(dict(ok_cmd, state="done"), NOW)[0] == "bad", "queued 가 아니면 건너뛴다")
 check(ag.decide(dict(ok_cmd, type="rm_rf"), NOW)[0] == "bad", "모르는 종류는 건너뛴다")
 check(ag.decide({}, NOW)[0] == "bad", "빈 명령은 건너뛴다")
+check(ag.decide(dict(ok_cmd, type="resume_repeat"), NOW)[0] == "run", "resume_repeat (반복 다시 시작) 은 아는 종류")
 
 
 class RecClient:
@@ -715,6 +716,10 @@ with tempfile.TemporaryDirectory() as d:
         check(tk.view()["cost"]["next"] == 3, f"다음 예약 줄의 토큰 = 그 줄의 모듈 (물류관리 1·로그인 0) + 쇼핑몰 받기 (사이트 2) ({tk.view()['cost']})")
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00"}]})
         check("next" not in tk.costs(), "'전체' 줄이면 next 없음 (화면은 전체 실행 토큰을 쓴다)")
+        try:
+            ag.real_actions()["resume_repeat"](None); check(False, "멈춘 반복이 없는데 다시 시작")
+        except RuntimeError as e:
+            check(str(e) == "지금은 멈춘 반복이 없습니다", "resume_repeat: 멈춘 반복이 없으면 그 글로 실패")
     finally:
         os.environ.pop("RPA_STATUS_DIR", None)
 

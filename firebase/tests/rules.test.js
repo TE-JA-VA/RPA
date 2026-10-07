@@ -99,6 +99,10 @@ test("commands: set_presets 는 관리자가 만들 수 있다 (쇼핑몰 프리
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "set_presets", args: { PRESET1: true } })));
 });
 
+test("commands: resume_repeat 는 관리자가 만들 수 있다 (반복 다시 시작)", async () => {
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "resume_repeat", args: null })));
+});
+
 test("commands: 모르는 type 은 거부", async () => {
   await assertFails(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "rm_rf" })));
 });

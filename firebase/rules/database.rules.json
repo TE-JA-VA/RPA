@@ -43,7 +43,7 @@
                 ".validate": "newData.hasChildren(['type', 'by', 'created_at', 'expires_at', 'state'])",
 
                 "type": {
-                  ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'set_modules' || newData.val() === 'set_schedule' || newData.val() === 'set_presets') && (!data.exists() || data.val() === newData.val())"
+                  ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'set_modules' || newData.val() === 'set_schedule' || newData.val() === 'set_presets' || newData.val() === 'resume_repeat') && (!data.exists() || data.val() === newData.val())"
                 },
                 "by": {
                   ".validate": "newData.isString() && (data.exists() ? data.val() === newData.val() : newData.val() === auth.uid)"

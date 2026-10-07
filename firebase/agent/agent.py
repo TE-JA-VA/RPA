@@ -97,14 +97,14 @@ def recent_summary(rows, today, days=RECENT_DAYS):
 # 토큰 (2026-10-06 사용자 결정): 실행 기록 한 장에 쓴 것(used)·쓴 토큰(cost) 을 적어 올린다. 남은 토큰 = 넣은 합계 - cost 합.
 # 기록은 만들기만 되고(규칙) 이름이 run_id 라 두 번 들어가지 않으니 토큰도 두 번 안 빠진다
 PRICES = {"default": 1, "login": 0}     # 값표 - 서버 meta/prices 가 없거나 못 읽을 때. 값표에 없는 새 모듈은 default
-USED_STATES = ("done", "no_target")     # 토큰을 쓰는 모듈 결과 - 대상 없음도 돌아서 확인했으니 쓴다. 실패·건너뜀·중단은 안 쓴다
+USED_STATES = ("done",)     # 토큰을 쓰는 모듈 결과 - '완료' 만 (2026-10-07 사용자: 대상 없음도 안 셈 - 시간대 반복의 빈 회차가 토큰을 먹지 않게). 실패·건너뜀·중단도 안 쓴다
 PRICES_EVERY_SEC = 600
 SCHEDULE_LIMIT_DEFAULT = 2      # 업체 한도 '자동 실행 개수' 가 없을 때 (설계 5-3, ops.js 와 같다)
 SCHEDULE_LIMIT_MAX = 12         # rpa_status.SCHEDULE_MAX_SLOTS 와 같다
 
 
 def usage(rec):
-    """실행 기록 한 건이 쓴 것 {키: 횟수}. 루틴은 완료·대상 없음인 모듈 (로그인도 세고 값표에서 0), 프리페어는 단계가 모두
+    """실행 기록 한 건이 쓴 것 {키: 횟수}. 루틴은 완료인 모듈 (로그인도 세고 값표에서 0), 프리페어는 단계가 모두
     완료인 사이트(프리셋) 수 'sites'. 옵저버 미리보기는 시험이라 안 센다."""
     import rpa_status as st
     if rec.get("program") in st.HISTORY_ONLY:
@@ -417,7 +417,7 @@ class Uploader:
 # ---------------------------------------------------------------------------
 # 명령
 # ---------------------------------------------------------------------------
-KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule", "set_presets")
+KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule", "set_presets", "resume_repeat")
 HEARTBEAT_SEC = 5   # 화면은 HEARTBEAT_STALE_SEC(20초) 넘게 없으면 '끊김' - 네 번 놓쳐야 끊김이다
 
 
@@ -587,7 +587,11 @@ def real_actions(policy=None, limits=None):
             return "자동 실행을 껐습니다"
         return f"자동 실행: {dash.schedule_label(sch)}" + ("" if changed else " (변경 없음)")
 
-    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets}
+    def do_resume(args):
+        return dash.resume_repeat()          # [반복 다시 시작] - 멈춘 반복이 없으면 RuntimeError (사람에게 보일 글)
+
+    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets,
+            "resume_repeat": do_resume}
 
 
 def watch_commands(client, path, on_command, stop=None):
