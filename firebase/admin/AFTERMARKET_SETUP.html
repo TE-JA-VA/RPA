@@ -51,6 +51,7 @@
   .secret { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--soft); }
   .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
   .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
+  td.plus { color:var(--good); } td.minus { color:var(--bad); }   /* 토큰 내역: 넣음 초록 · 뺌 빨강 */
   .mod-ok { margin-left:10px; color:var(--good); font-weight:500; font-size:14px; }
   td .row { margin:0; flex-wrap:nowrap; }   /* PC 표의 업데이트 칸 - 고르기·단추 사이는 아래 'PC 추가' 줄과 같은 8px */
   label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:14px; }
@@ -174,6 +175,7 @@ async function act(btn, fn) {
   try { return await fn(); } catch (e) { flash(e.message, true); return undefined; } finally { if (btn) btn.disabled = false; }
 }
 const when = (iso) => (iso ? new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-");
+const nf = (n) => Number(n ?? 0).toLocaleString("ko-KR");   // 1000 단위 콤마
 const local = (s) => (s ? s.replace("T", " ") : "-");     // 한국 시각 글 ("2026-10-06T13:55:49") 그대로
 function secretBox(title, text) {
   const copy = el("button", { onclick: async () => { await navigator.clipboard.writeText(text).catch(() => {}); copy.textContent = "복사했습니다"; } }, "복사");
@@ -300,18 +302,22 @@ function userSection(d) {
 }
 function tokenSection(d) {
   const t = d.tokens;
-  const amount = el("input", { placeholder: "+1000 또는 -50", size: 12, inputmode: "numeric" }), memo = el("input", { placeholder: "메모 (예: 10월 결제)", size: 22 });
+  const amount = el("input", { placeholder: "+1000 또는 -50", size: 12, inputmode: "numeric" }), memo = el("input", { placeholder: "비고 (예: 10월 결제)", size: 22 });
   const give = el("button", { class: "primary", onclick: () => act(give, async () => {
     const r = await api("POST", `/api/companies/${d.cid}/tokens`, { amount: amount.value.trim(), memo: memo.value.trim() });
     flash(r.created ? "토큰 정보를 만들었습니다 - 지금부터 토큰이 0 이하면 모듈 실행을 막습니다" : "토큰을 넣었습니다");
     refresh(d.cid);
   }) }, "넣기");
   return el("div", {}, el("h3", {}, "토큰"),
-    t ? el("p", {}, `넣은 합계 ${t.granted} · 쓴 ${t.spent} · `, el("strong", {}, `남은 ${t.left}`), el("span", { class: "muted" }, `  (${local(t.since)} 토큰 정보 생성)`))
+    t ? el("table", { class: "wallet" }, el("thead", {}, el("tr", {}, ...["발급한 토큰", "사용한 토큰", "현재 토큰", "토큰 정보 생성"].map((h) => el("th", {}, h)))),
+      el("tbody", {}, el("tr", {}, el("td", { class: "num" }, nf(t.granted)), el("td", { class: "num" }, nf(t.spent)),
+        el("td", { class: "num left" }, el("strong", {}, nf(t.left))), el("td", {}, local(t.since)))))
       : el("p", { class: "muted" }, "업체가 보유한 토큰 정보가 없습니다. 최초 토큰 생성시 토큰 정보가 함께 생성됩니다. 토큰이 0이하라면 모듈 실행을 막습니다."),
     el("div", { class: "row" }, amount, memo, give),
-    t && t.grants.length ? el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "언제"), el("th", {}, "얼마"), el("th", {}, "메모"))),
-      el("tbody", {}, t.grants.map((g) => el("tr", {}, el("td", {}, local(g.at)), el("td", { class: "num" }, g.amount > 0 ? `+${g.amount}` : g.amount), el("td", {}, g.memo || "-"))))) : "");
+    t && t.grants.length ? el("table", { class: "grants" }, el("thead", {}, el("tr", {}, el("th", {}, "날짜"), el("th", {}, "토큰량"), el("th", {}, "비고"))),
+      el("tbody", {}, t.grants.map((g) => el("tr", {}, el("td", {}, local(g.at)),
+        el("td", { class: `num ${g.amount > 0 ? "plus" : g.amount < 0 ? "minus" : ""}` }, `${g.amount > 0 ? "+" : ""}${nf(g.amount)}`),
+        el("td", {}, g.memo || "-"))))) : "");
 }
 function moduleSection(d) {
   // 바뀌면 아래 알림 대신 제목 옆에 초록 '반영되었습니다.' 를 잠깐 (사용자 2026-10-07). 실패면 다시 그려 원래 값으로

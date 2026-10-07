@@ -256,8 +256,10 @@ with sync_playwright() as pw:
     check(cell == PLAN["name"] and "1" not in dialogs and page.locator("#companies img").count() == 0,
           "업체 이름에 넣은 HTML 은 글자 그대로 (스크립트로 안 돈다)", cell)
     page.click("#companies tr[data-cid='t_new']")
-    page.wait_for_function("document.getElementById('detail')?.textContent.includes('남은 600')", timeout=15000)
-    check(True, "줄을 누르면 상세: 남은 토큰 600")
+    page.wait_for_function("document.querySelector('#detail table.wallet td.left')?.textContent === '600'", timeout=15000)
+    check(True, "줄을 누르면 상세: 현재 토큰 600")
+    heads = [h.strip() for h in page.locator("#detail table.wallet th").all_text_contents()]
+    check(heads == ["발급한 토큰", "사용한 토큰", "현재 토큰", "토큰 정보 생성"], f"토큰 정보는 표로 ({heads})")
     OLD = ("기계", "열람자", "통장", "막기", "막힘", "막을", "막았", "열기", "열림", "열었", "더하기", "더했", "삭제", "되살",
            "한 대 더", "쓰나요", "예, 씁니다", "첫 토큰", "세기만", "관리자 계정 (대시보드에 로그인할 사람)", "유저 추가")
     NEW = ("에이전트 계정도 만들기", "PC 추가", '"추가"', "사용중지", "사용중", "유저", "토큰 정보", "업체 비활성화", "다시 활성화",
@@ -271,10 +273,10 @@ with sync_playwright() as pw:
           "화면 이름은 사용자가 고른 것 (에이전트·유저·사용중지/사용·추가·토큰 정보·업체 비활성화 - 2026-10-06)",
           ([w for w in OLD if w in shown], [w for w in NEW if w not in shown]))
     page.fill("#detail input[placeholder^='+1000']", "+50")
-    page.fill("#detail input[placeholder^='메모']", "화면에서")
+    page.fill("#detail input[placeholder^='비고']", "화면에서")
     page.click("#detail button:has-text('넣기')")
-    page.wait_for_function("document.getElementById('detail')?.textContent.includes('남은 650')", timeout=15000)
-    check(True, "화면에서 토큰 넣기 → 남은 650")
+    page.wait_for_function("document.querySelector('#detail table.wallet td.left')?.textContent === '650'", timeout=15000)
+    check(True, "화면에서 토큰 넣기 → 현재 토큰 650")
     page.fill("#detail input[aria-label='자동 실행 개수']", "4")
     page.click("#detail .row:has(input[aria-label='자동 실행 개수']) button")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 개수']\")?.value === '4'", timeout=10000)
@@ -340,6 +342,17 @@ with sync_playwright() as pw:
     check(True, "초록 글은 잠깐 뒤 사라진다")
     page.click("#detail input[data-mod='Hold']")   # 되돌려 둔다
     page.wait_for_timeout(800)
+    api("POST", f"/api/companies/{CID}/tokens", {"amount": 1500, "memo": "보기 시험"})
+    api("POST", f"/api/companies/{CID}/tokens", {"amount": -50, "memo": "보기 시험 빼기"})
+    open_company(page, CID)
+    heads = [h.strip() for h in page.locator("#detail table.grants th").all_text_contents()]
+    check(heads == ["날짜", "토큰량", "비고"], f"토큰 내역 머리 ({heads})")
+    amt = page.evaluate("""[...document.querySelectorAll('#detail table.grants td.num')].map((td) => [td.textContent.trim(), getComputedStyle(td).color])""")
+    good, bad = page.evaluate("[getComputedStyle(document.body).getPropertyValue('--good').trim(), getComputedStyle(document.body).getPropertyValue('--bad').trim()]")
+    plus = [c for t, c in amt if t == "+1,500"]
+    minus = [c for t, c in amt if t == "-50"]
+    check(plus and minus and plus[0] != minus[0] and plus[0] != page.evaluate("getComputedStyle(document.body).color"),
+          f"토큰량: 1000 단위 콤마, + 초록·- 빨강 ({amt}, good {good}, bad {bad})")
     nav = page.text_content("nav")
     check("신규 업체 등록" in nav and "토큰 배율·통계" in nav, f"위 메뉴 글 ({nav})")
     check(page.text_content("#releases-open").strip() == "버전 목록", "버전 목록 단추")
