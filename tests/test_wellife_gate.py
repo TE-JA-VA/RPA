@@ -84,5 +84,17 @@ check("wellife" not in called and finished and finished[-1][0] == "stopped" and 
       f"main: 정책 켬·섹션 없음 → 보통 루틴 안 돌고 멈춤 ({called}, {finished})")
 dash.set_policy(2, [], wellife=False)
 
+print("=== 4. 웰라이프 업체는 '전체' 줄만 (옛 run·until 줄은 읽을 때 거른다) ===")
+import datetime as _dt  # noqa: E402
+_rows = [{"at": "09:00", "run": ["Sales"]}, {"at": "13:00", "until": "17:00", "rest_min": 10}]
+_sch = {"enabled": True, "days": list(range(7)), "slots": _rows, "policy": {"limit": None, "off": [], "wellife": True}}
+check(dash.active_slots(_sch) == [{"at": "09:00"}, {"at": "13:00"}], f"wellife 켬: 줄은 {{at}} 만 ({dash.active_slots(_sch)})")
+_noon = _dt.datetime(2026, 10, 7, 14, 0)
+check(dash.open_window(_sch, _noon) is None, "wellife 켬: until 시간대 안이어도 반복 시간대 없음")
+check(_sch["slots"] == _rows and "run" in _rows[0], "저장된 줄은 고쳐 쓰지 않는다")
+_sch["policy"]["wellife"] = False
+check(dash.active_slots(_sch) == _rows, "wellife 끔: 줄 그대로")
+check((dash.open_window(_sch, _noon) or {}).get("at") == "13:00", "wellife 끔: 반복 시간대 그대로")
+
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

@@ -647,6 +647,8 @@ def active_slots(sch):
     """도는 줄 (시각 순). 업체 한도(policy.limit - 에이전트가 적는다)를 넘는 줄은 뺀다: 시각 순으로 앞 N줄만 (설계 5-3).
     한도를 모르면 (에이전트가 한 번도 못 읽었으면) 자르지 않는다 - PC 상한 12 는 저장할 때 지킨다."""
     out = sorted_slots(sch)
+    if (sch.get("policy") or {}).get("wellife") is True:     # 웰라이프 업체는 '전체' 줄만 - 웰라이프 순서는 run·반복을 안 따른다 (옛 줄은 지우지 않고 읽을 때만 거른다)
+        out = [{"at": s["at"]} for s in out]
     limit = (sch.get("policy") or {}).get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0:
         return out[:limit]
