@@ -861,6 +861,16 @@ def ensure_wellife_section(path=None):
     return True
 
 
+def remove_wellife_section(path=None):
+    """웰라이프가 닫힌 업체의 Wellife 섹션만 지운다 (다른 섹션·비밀번호는 그대로). 지웠으면 True, 없었으면 False."""
+    data = read_user_config(path)
+    if WELLIFE_SECTION not in data:
+        return False
+    del data[WELLIFE_SECTION]
+    write_user_config(data, path)
+    return True
+
+
 def wellife_policy():
     """에이전트가 적은 업체 정책 - 이 PC 의 업체가 웰라이프로 열려 있나. 못 읽거나 없으면 False."""
     try:

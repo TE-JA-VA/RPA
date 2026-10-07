@@ -755,6 +755,13 @@ with tempfile.TemporaryDirectory() as d:
               "처음 열리면 섹션을 기본값(로그인·매출처리만)으로 만든다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_demo").refresh(force=True) is None and st.wellife_policy() is True,
               "정책을 못 읽으면 PC 에 적힌 마지막 값 (웰라이프 그대로)")
+        check(st.has_wellife_section() is True, "정책을 못 읽어도 섹션은 안 지운다")
+        check(ag.Policy(AppClient({"features": {"wellife": False}}), "c_demo").refresh(force=True) == (2, [], False)
+              and st.wellife_policy() is False and st.has_wellife_section() is False
+              and st.read_user_config()["LogIn"] == {"AdminCode": "x"}, "열렸다 닫히면 정책 False + Wellife 섹션 지움 (다른 섹션은 그대로)")
+        st.ensure_wellife_section()                  # 메모장으로 직접 넣은 섹션 - 한 번도 안 열렸던 업체
+        check(ag.Policy(AppClient({"features": {"wellife": False}}), "c_demo").refresh(force=True) is not None and st.has_wellife_section() is True,
+              "한 번도 안 열린 업체의 섹션은 지우지 않는다 (그대로 멈춤)")
         os.environ.pop("RPA_USER_CONFIG", None)
         dash.set_policy(3, [])
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Prepare", "Logistics"]}]})

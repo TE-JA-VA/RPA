@@ -540,7 +540,13 @@ class Policy:
             return None
         import rpa_dashboard as dash
         import rpa_status as st
+        was = st.wellife_policy()                    # 적기 전의 값 - 열렸다 닫힌 업체인지 본다
         dash.set_policy(*got)
+        if was and not got[2]:
+            try:
+                st.remove_wellife_section()          # 닫히면 섹션도 지운다 (안 지우면 '열려 있지 않습니다' 로 영영 멈춘다)
+            except Exception as e:
+                log(f"웰라이프 설정을 지우지 못했습니다 ({type(e).__name__}) - 다음 번에 다시 합니다")
         if got[2]:
             try:
                 st.ensure_wellife_section()          # 처음 열리면 로그인·매출처리만 켠 섹션 (메모장 편집 없음)

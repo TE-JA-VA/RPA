@@ -52,6 +52,13 @@ write_cfg({"LogIn": {}, "Wellife": {"Sales": "Y", "Hold": "maybe"}})
 sel, problems = st.read_wellife_modules()
 check(sel["Hold"] is None and problems and sel["Sap"] is False, f"Y/N 아닌 값은 None·문제, 빠진 키는 끔 ({sel}, {problems})")
 
+write_cfg({"LogIn": {}})
+check(st.remove_wellife_section() is False, "지울 섹션이 없으면 False")
+write_cfg({"LogIn": {"AdminCode": "x"}, "Routine": {"Logistics": "Y"}, "Wellife": {"Sales": "Y"}})
+check(st.remove_wellife_section() is True and "Wellife" not in read_cfg() and read_cfg()["Routine"] == {"Logistics": "Y"}
+      and read_cfg()["LogIn"]["AdminCode"] == "x", "Wellife 섹션만 지운다 (다른 섹션·값은 그대로)")
+check(st.remove_wellife_section() is False, "한 번 더 부르면 False")
+
 print("=== 2. 정책 값 (settings.json) ===")
 check(st.wellife_policy() is False, "정책을 한 번도 안 적었으면 False")
 check(dash.set_policy(2, ["Logistics", "Output"], wellife=True) is True and st.wellife_policy() is True, "set_policy 가 wellife 도 적는다")
