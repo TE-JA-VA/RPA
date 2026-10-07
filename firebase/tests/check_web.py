@@ -1156,6 +1156,18 @@ with sync_playwright() as pw:
     t = show_ver({"state": "error", "error": "ValueError: 판 목록 형식이 다릅니다", "changed_count": 0,
                   "checked_at": "2026-09-29T10:00:00"}, "버전 확인 실패")
     check("형식" in t and warn(), f"확인 실패면 노란 글씨, 이유는 마우스 글로 ({t})")
+    db_patch(LIVE, {"update": {"state": "waiting", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T15:00:00", "backup": None}})
+    page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('업데이트 대기 중')", timeout=10000)
+    check(page.is_disabled("#run-routine") and page.is_disabled("#run-all")
+          and page.get_attribute("#run-routine", "title") == "업데이트 중이라 잠시 실행할 수 없습니다", "업데이트 대기 중: 판 옆 글 + 실행 단추 잠금")
+    db_patch(LIVE, {"update": {"state": "rolled_back", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T15:10:00",
+                               "reason": "새 판이 3분 안에 정상으로 켜지지 않았습니다", "backup": "2026.10.07-3"}})
+    page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('옛 판으로 되돌림')", timeout=10000)
+    check("3분" in (page.get_attribute("#ver", "title") or "") and not page.is_disabled("#run-routine"), "되돌림: 까닭은 마우스 글, 실행 단추는 풀린다")
+    db_patch(LIVE, {"update": {"state": "done", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T14:03:00", "backup": "2026.10.07-4"}})
+    page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('업데이트됨 (10/7 14:03)')", timeout=10000)
+    check(True, "업데이트됨 (10/7 14:03)")
+    db_patch(LIVE, {"update": None})
     show_ver({"state": "none", "changed_count": 0, "checked_at": "2026-09-29T10:00:00"}, None)
     check(page.is_hidden("#ver"), "목록이 없는 PC (개발 PC 등) 는 안 보인다")
     show_ver({"version": "<b>x</b>", "state": "mixed", "changed": ["<img src=x onerror=alert(1)>"], "changed_count": 1,

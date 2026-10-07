@@ -103,6 +103,18 @@ test("commands: resume_repeat 는 관리자가 만들 수 있다 (반복 다시 
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "resume_repeat", args: null })));
 });
 
+test("commands: update·rollback 명령은 업체 관리자도 총괄도 못 넣는다 (관리 화면 Admin SDK 만 - 자동 업데이트 10절)", async () => {
+  for (const [who, uid] of [[asAdminA, "u_admin_a"], [asSuper, "u_super"]]) {
+    for (const type of ["update", "rollback"]) {
+      await assertFails(set(ref(who(), `apps/rpa/commands/ca/pc1/x_${type}`), cmd({ type, by: uid })));
+    }
+  }
+});
+
+test("meta/releases 는 업체 계정이 못 읽는다", async () => {
+  await assertFails(get(ref(asAdminA(), "meta/releases")));
+});
+
 test("commands: 모르는 type 은 거부", async () => {
   await assertFails(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "rm_rf" })));
 });

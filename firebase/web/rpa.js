@@ -305,12 +305,26 @@ function verStat(v) {
   return null;
 }
 
+// live.update → 판 글 옆 업데이트 상태 (자동 업데이트 9절). 까닭은 마우스 글
+const UPD_TEXT = { downloading: "업데이트 받는 중", waiting: "업데이트 대기 중", ready: "바꾸는 중", applying: "바꾸는 중", rolling_back: "바꾸는 중",
+  failed: "업데이트 실패", rolled_back: "업데이트 실패 - 옛 판으로 되돌림" };
+const UPD_BUSY = ["waiting", "ready", "applying", "rolling_back"];   // 에이전트도 이 동안 실행을 거절한다 (rpa_update.BUSY_STATES)
+function updStat(u) {
+  if (!u || typeof u !== "object" || typeof u.state !== "string") return null;
+  if (u.state === "done") {
+    const at = typeof u.at === "string" ? u.at : "";
+    return { text: at ? `업데이트됨 (${Number(at.slice(5, 7))}/${Number(at.slice(8, 10))} ${at.slice(11, 16)})` : "업데이트됨", title: "" };
+  }
+  return UPD_TEXT[u.state] ? { text: UPD_TEXT[u.state], title: typeof u.reason === "string" ? u.reason : "" } : null;
+}
+const updBusy = () => UPD_BUSY.includes(live?.update?.state);
+
 function paintVer() {
-  const v = verStat(live?.version), el = $("ver");
-  el.textContent = v ? v.text : "";          // 글자로만 넣는다 (이스케이프가 필요 없다)
-  el.title = v?.title || "";
-  el.classList.toggle("warn", !!v?.warn);
-  el.classList.toggle("hide", !v);
+  const v = verStat(live?.version), u = updStat(live?.update), el = $("ver");
+  el.textContent = [v?.text, u?.text].filter(Boolean).join(" · ");   // 글자로만 넣는다 (이스케이프가 필요 없다)
+  el.title = [v?.title, u?.title].filter(Boolean).join(" / ");
+  el.classList.toggle("warn", !!v?.warn || ["failed", "rolled_back"].includes(live?.update?.state));
+  el.classList.toggle("hide", !v && !u);
 }
 
 /** 상태 띠 '다음 자동 실행'. 열린 반복 시간대면 '반복 중 · 12:00까지' (다음 회차) / '반복 멈춤'.
@@ -539,9 +553,10 @@ function paintButtons() {
   const off = !c.isAdmin || busy || !c.pcId;
   const running = rpaRunning();
   const empty = typeof live?.tokens?.balance === "number" && live.tokens.balance <= 0;   // 에이전트도 거절한다 (2부)
+  const upd = updBusy();
   for (const id of ["run-prepare", "run-routine", "run-all"]) {
-    $(id).disabled = off || running || empty;            // 다른 사람이 이미 돌리는 중이면 못 누른다
-    $(id).title = running && !off ? "RPA 가 돌고 있어 실행할 수 없습니다" : "";
+    $(id).disabled = off || running || empty || upd;     // 다른 사람이 이미 돌리는 중이면 못 누른다
+    $(id).title = upd && !off ? "업데이트 중이라 잠시 실행할 수 없습니다" : running && !off ? "RPA 가 돌고 있어 실행할 수 없습니다" : "";
   }
   for (const [id, [key, name]] of Object.entries(RUN_LABELS)) {
     const on = live?.programs?.[key]?.state === "running";
