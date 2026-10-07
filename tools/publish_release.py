@@ -129,6 +129,9 @@ def main(argv=None):
     if not args:
         print(__doc__)
         return 2
+    if not os.path.isfile(KEY_PATH):
+        print("서명 열쇠가 이 PC 에 없습니다 - 버전 내보내기(자동 업데이트)는 저장소 관리자만 합니다. 저장소 관리자에게 요청하세요.")
+        return 3
     version, rest = args[0], args[1:]
     stable = version if "--stable" in rest else None
     memo = " ".join(x for x in rest if x != "--stable")

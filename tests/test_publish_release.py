@@ -114,6 +114,16 @@ pr.publish("2026.10.03-1", d, SITE3, KEY, deploy=None, set_releases=None, get_st
 check(open(os.path.join(SITE3, "blobs", sha_a), "rb").read() == b"A3", "잘린 blob 을 고쳐 놓는다")
 check(not [x for x in os.listdir(os.path.join(SITE3, "blobs")) if x.endswith(".tmp")], ".tmp 가 안 남는다")
 
+# --- 열쇠가 없는 PC (다른 작업자) - 내보내기는 저장소 관리자에게
+orig_key, pr.KEY_PATH = pr.KEY_PATH, os.path.join(tmp, "없는_열쇠.txt")
+out = io.StringIO()
+old_stdout, sys.stdout = sys.stdout, out
+try:
+    code = pr.main(["2026.10.03-1", "메모"])
+finally:
+    sys.stdout, pr.KEY_PATH = old_stdout, orig_key
+check(code != 0 and "저장소 관리자" in out.getvalue(), f"열쇠가 없으면 멈추고 저장소 관리자에게 가라고 알린다 ({out.getvalue().strip()})")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
