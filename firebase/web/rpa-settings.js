@@ -76,8 +76,11 @@ export function mount(el, context) {
   }, () => {});
   // 웰라이프 열림도 같은 방식 - 로그인 뒤 관리 화면에서 바뀌어도 따라간다
   stopFeatures = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/features`), (snap) => {
+    const was = root && live ? [modulesDirty(), scheduleDirty()] : null;   // 정책을 바꾸기 전 목록으로 편집 중인지 본다
     c.policy = { ...c.policy, rpa: { ...c.policy?.rpa, features: snap.val() || {} } };
-    if (root && live) { resetModules(); paintTimes(); paintScheduleMeta(); }
+    if (!was) return;
+    if (!was[0]) resetModules();   // 편집 중인 폼은 건드리지 않는다 (보내는 값은 어차피 규칙대로 거른다)
+    if (!was[1]) resetSchedule(); else { paintTimes(); paintScheduleMeta(); }
   }, () => {});
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const first = live == null;
@@ -126,7 +129,7 @@ const shownModules = () => modList().filter(([k]) => !offByCompany(k));
 /** 딸린 모듈과 업체 정책을 규칙대로 끈다. 켜는 것은 사람이 직접 한다 (물류관리를 켜도 출력은 꺼진 채로 둘 수 있다) */
 function applyNeeds(mods) {
   for (const k of Object.keys(mods)) if (offByCompany(k)) mods[k] = false;
-  for (const [k, need] of Object.entries(NEEDS)) if (!mods[need]) mods[k] = false;
+  for (const [k, need] of Object.entries(NEEDS)) if (k in mods && !mods[need]) mods[k] = false;
   return mods;
 }
 const savedModules = () => live?.modules || {};
@@ -237,11 +240,13 @@ const savedSch = () => live?.schedule || { enabled: false, days: [] };
 function savedSlots() {
   const s = savedSch();
   if (!isV2()) return (s.times || []).map((t) => ({ at: t, run: null }));
-  return (Array.isArray(s.slots) ? s.slots : []).filter((x) => x && typeof x.at === "string").map((x) => ({
+  return (Array.isArray(s.slots) ? s.slots : []).filter((x) => x && typeof x.at === "string").map((x) => wellifySlot({
     at: x.at, run: Array.isArray(x.run) ? x.run.filter((k) => k !== "Login") : null,
     ...(x.until ? { until: x.until, rest_min: x.rest_min ?? 2 } : {}),
   }));
 }
+/** 웰라이프 업체는 '전체' 시각만 - 반복·고르기 줄은 시작 시각만 남긴 '전체' 줄로 (에이전트가 그런 줄을 거절한다). 폼 줄과 보내는 값이 같은 곳을 지난다 */
+const wellifySlot = (s) => (isWellife() ? { at: s.at, run: null } : s);
 function resetSchedule() {
   const s = savedSch();
   form.sch = { enabled: !!s.enabled, days: [...(s.days || [])], slots: savedSlots() };
@@ -393,7 +398,7 @@ function labelDays(days) {
 function payloadOf() {
   const base = { enabled: form.sch.enabled, days: [...new Set(form.sch.days)].sort() };
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
-  return { ...base, slots: sortedForm().map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}) })) };
+  return { ...base, slots: sortedForm().map(wellifySlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}) })) };
 }
 async function applySchedule() {
   const payload = payloadOf();

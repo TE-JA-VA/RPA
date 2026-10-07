@@ -550,6 +550,31 @@ with sync_playwright() as pw:
           and not any("물류관리" == n or "운송장" in n for n in names), f"웰라이프 업체: 모듈 다섯 (물류관리·운송장 없음) ({names})")
     check(not page.is_visible("#sch-add-win") and page.locator("#sch-times select.mode").count() == 0,
           "웰라이프 업체: '전체' 시각만 (고르기·반복 시간대 숨김)")
+    # PC 에 반복·고르기 줄이 올라와 있어도 보내는 값은 '전체' 줄뿐 (에이전트가 그런 줄을 거절한다), 모듈은 다섯 키만
+    cmds0, mods0, sets0 = db_get(CMDS), db_get(f"{SETTINGS}/modules"), db_get(f"{SETTINGS}/schedule")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 4}})
+    db_patch(f"{LIVE}/schedule", {"enabled": True, "days": list(range(7)), "slots": [
+        {"at": "09:05"}, {"at": "10:00", "run": ["Login", "Logistics"]},
+        {"at": "11:00", "until": "12:00", "rest_min": 3, "run": ["Login", "Logistics"]}]})
+    reload_to(page, "settings"); page.wait_for_selector("#sch-times .t")
+    check(page.locator("#sch-times select").count() == 0 and page.locator("#sch-times .chips").count() == 0
+          and page.locator("#sch-times .t").count() == 3, "웰라이프 업체: PC 의 반복·고르기 줄도 '전체' 시각 줄로 보인다")
+    first = page.query_selector_all("#sch-times input")[0]
+    first.fill("09:10"); first.dispatch_event("change")
+    page.click("#sch-apply"); time.sleep(1.5)
+    saved = (db_get(f"{SETTINGS}/schedule") or {}).get("slots") or []
+    check([s.get("at") for s in saved] == ["09:10", "10:00", "11:00"] and not any("run" in s or "until" in s for s in saved),
+          f"웰라이프 업체: 보내는 줄에 run·until 이 없고 시각은 그대로 ({saved})")
+    for k, v in (db_get(CMDS) or {}).items():   # 보낸 명령을 닫아야 단추 잠금이 풀린다
+        if v.get("state") == "queued": db_patch(f"{CMDS}/{k}", {"state": "done", "result": "ok", "started_at": 1, "ended_at": 2})
+    page.wait_for_function("!document.getElementById('sch-apply')?.disabled || document.querySelector('#mod-list input')?.disabled === false", timeout=10000)
+    page.click("#mod-list label:nth-child(2)"); page.click("#mod-apply"); time.sleep(1.5)
+    keys =sorted((db_get(f"{SETTINGS}/modules") or {}).keys())
+    check(keys == ["Hold", "Login", "Sales", "Sap", "Wms"], f"웰라이프 업체: 모듈은 다섯 키만 저장 ({keys})")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
+    for path, old in ((CMDS, cmds0), (f"{SETTINGS}/modules", mods0), (f"{SETTINGS}/schedule", sets0)):   # 이 블록이 쓴 것을 되돌린다
+        if old: db_put(path, old)
+        else: db_patch(path, {k: None for k in (db_get(path) or {})})
     db_patch("meta/companies/c_demo/apps/rpa", {"features": None})
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     check(page.locator("#mod-list label").count() == 5 and page.locator("#mod-list input[aria-label='물류관리']").count() == 1,
