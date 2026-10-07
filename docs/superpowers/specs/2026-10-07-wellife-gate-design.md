@@ -44,7 +44,7 @@ PR #2 의 웰라이프 실행(로그인 → 주문매핑 → 물류대기 → �
 - `company_policy` 가 규칙 결과도 돌려준다. 웰라이프면 안 쓰는 모듈에 `Logistics`·`Output` 을 더한다.
 - PC 의 `settings.json` `schedule.policy` 에 `wellife: true/false` 를 함께 적는다 (껐다 켜도 마지막 값).
 - 업체 웹에서 실행 모듈을 바꾸면 (`set_modules`): 웰라이프 업체는 `"Wellife"` 섹션(Login·Sales·Hold·Sap·Wms)을 쓰고, 아니면 지금처럼 `Routine`. 메모장 편집이 필요 없어진다.
-- 웰라이프 업체가 처음 열렸는데 섹션이 없으면 다섯 모듈 모두 켬으로 섹션을 만든다.
+- 웰라이프 업체가 처음 열렸는데 섹션이 없으면 **로그인·주문매핑 매출처리만 켬, 나머지(물류대기·SAP·WMS)는 끔** 으로 섹션을 만든다 (사용자: 아직 배포판을 주지 않아 그럴 일이 적다).
 - 하트비트의 실행 모듈 값(`live.modules`)도 웰라이프 업체는 `Wellife` 섹션을 보낸다.
 - 막힌 모듈(Logistics·Output)이 명령으로 와도 거절한다 (지금 모듈 정책과 같은 길).
 
