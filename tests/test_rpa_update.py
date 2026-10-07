@@ -60,14 +60,14 @@ with open(os.path.join(PROG, "manifest.json"), "w", encoding="utf-8") as f:
 
 # 새 판 B: a.py 바뀜, b.py 없어짐, c.py 새로, agent.py 그대로
 SRC_B = os.path.join(tmp, "srcB")
-for rel, text in (("a.py", "A2"), ("c.py", "C2"), ("firebase/agent/agent.py", "G1")):
+for rel, text in (("a.py", "A2"), ("c.py", "C2"), ("pkg/__init__.py", ""), ("firebase/agent/agent.py", "G1")):
     put(SRC_B, rel, text)
-MAN_B = manifest_of(SRC_B, "2026.10.07-2", ["a.py", "c.py", "firebase/agent/agent.py"])
+MAN_B = manifest_of(SRC_B, "2026.10.07-2", ["a.py", "c.py", "pkg/__init__.py", "firebase/agent/agent.py"])
 MB = json.dumps(MAN_B).encode("utf-8")
 BASE = "https://example.test"
 HOST = {f"{BASE}/releases/2026.10.07-2/manifest.json": MB,
         f"{BASE}/releases/2026.10.07-2/manifest.sig": us.sign(SK, MB).hex().encode()}
-for rel in ("a.py", "c.py", "firebase/agent/agent.py"):
+for rel in ("a.py", "c.py", "pkg/__init__.py", "firebase/agent/agent.py"):
     HOST[f"{BASE}/blobs/{MAN_B['files'][rel]['sha256']}"] = open(os.path.join(SRC_B, *rel.split("/")), "rb").read()
 GOT = []
 
@@ -81,17 +81,18 @@ def get(url, host=HOST):
 
 print("=== 1. 바뀐 파일만 고르기 ===")
 fetch, remove, new = up.plan_files(MAN_A["files"], MAN_B["files"])
-check(fetch == ["a.py", "c.py"] and remove == ["b.py"] and new == ["c.py"], f"받을 것·치울 것·새 파일 ({fetch} {remove} {new})")
+check(fetch == ["a.py", "c.py", "pkg/__init__.py"] and remove == ["b.py"] and new == ["c.py", "pkg/__init__.py"], f"받을 것·치울 것·새 파일 ({fetch} {remove} {new})")
 
 print("\n=== 2. 받기·확인 ===")
 STG = up.path("staging")
 before = tree_digest(PROG)
 man = up.fetch_release("2026.10.07-2", PROG, STG, base_url=BASE, get=get, pub=PK)
 plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
-check(man["version"] == "2026.10.07-2" and plan == {"version": "2026.10.07-2", "from": "2026.10.07-1", "fetch": ["a.py", "c.py"],
-                                                  "remove": ["b.py"], "new": ["c.py"]}, f"plan.json ({plan})")
+check(man["version"] == "2026.10.07-2" and plan == {"version": "2026.10.07-2", "from": "2026.10.07-1", "fetch": ["a.py", "c.py", "pkg/__init__.py"],
+                                                  "remove": ["b.py"], "new": ["c.py", "pkg/__init__.py"]}, f"plan.json ({plan})")
 check(open(os.path.join(STG, "files", "a.py"), encoding="utf-8").read() == "A2"
       and not os.path.exists(os.path.join(STG, "files", "firebase", "agent", "agent.py")), "바뀐 파일만 받았다 (그대로인 agent.py 는 안 받음)")
+check(os.path.isfile(os.path.join(STG, "files", "pkg", "__init__.py")) and os.path.getsize(os.path.join(STG, "files", "pkg", "__init__.py")) == 0, "빈 파일(크기 0)도 받는다")
 check(open(os.path.join(STG, "manifest.json"), "rb").read() == MB, "받은 manifest 를 바이트 그대로 둔다")
 check(not any(u.endswith(MAN_B["files"]["firebase/agent/agent.py"]["sha256"]) for u in GOT), "그대로인 파일은 내려받지도 않는다")
 check(tree_digest(PROG) == before, "받기만으로는 프로그램 폴더가 안 바뀐다")
@@ -124,6 +125,25 @@ refused("파이썬이 바뀐 판은 거절 (설치 파일로)", host=rt, contain
 MAN_X = json.loads(MB); MAN_X["files"]["../evil.py"] = MAN_X["files"]["a.py"]; MX = json.dumps(MAN_X).encode()
 ev = dict(HOST); ev[f"{BASE}/releases/2026.10.07-2/manifest.json"] = MX; ev[f"{BASE}/releases/2026.10.07-2/manifest.sig"] = us.sign(SK, MX).hex().encode()
 refused("밖을 가리키는 경로는 서명이 맞아도 거절", host=ev, contains="경로")
+cut_n = []
+
+
+def cut_get(u):
+    if "/blobs/" in u:
+        cut_n.append(u)
+        if len(cut_n) == 2:
+            raise ConnectionResetError("끊김")
+    return get(u)
+
+
+shutil.rmtree(STG, ignore_errors=True)
+b4 = tree_digest(PROG)
+try:
+    up.fetch_release("2026.10.07-2", PROG, STG, base_url=BASE, get=cut_get, pub=PK)
+    check(False, "받다가 끊기면 거절 (거절 안 됨)")
+except up.UpdateError as e:
+    check("받기 실패" in str(e) and "ConnectionResetError" in str(e) and tree_digest(PROG) == b4 and not os.path.exists(STG),
+          f"받다가 끊기면 거절 - 프로그램 폴더 그대로, 받은 것 지움 ({e})")
 real_usage = shutil.disk_usage
 shutil.disk_usage = lambda p: real_usage(p)._replace(free=10)
 try:
@@ -154,7 +174,7 @@ print("\n=== 4. 되돌리기 준비 (보관본 → staging, 받기 없음) ===")
 for rel, text in (("a.py", "A1"), ("b.py", "B1")):
     put(up.path("backup", "files"), rel, text)
 # 지금 판을 B 로 바꿔 둔다
-for rel, text in (("a.py", "A2"), ("c.py", "C2")):
+for rel, text in (("a.py", "A2"), ("c.py", "C2"), ("pkg/__init__.py", "")):
     put(PROG, rel, text)
 os.remove(os.path.join(PROG, "b.py"))
 with open(os.path.join(PROG, "manifest.json"), "wb") as f:
@@ -162,7 +182,7 @@ with open(os.path.join(PROG, "manifest.json"), "wb") as f:
 shutil.rmtree(STG, ignore_errors=True)
 bman = up.stage_rollback(PROG, STG)
 plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
-check(bman["version"] == "2026.10.07-1" and plan["fetch"] == ["a.py", "b.py"] and plan["remove"] == ["c.py"] and plan["new"] == ["b.py"],
+check(bman["version"] == "2026.10.07-1" and plan["fetch"] == ["a.py", "b.py"] and plan["remove"] == ["c.py", "pkg/__init__.py"] and plan["new"] == ["b.py"],
       f"보관본으로 가는 plan ({plan})")
 check(open(os.path.join(STG, "files", "b.py"), encoding="utf-8").read() == "B1" and os.path.isfile(up.path("backup", "files", "a.py")),
       "보관본은 복사만 한다 (되돌리기가 실패해도 보관본은 남는다)")

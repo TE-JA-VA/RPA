@@ -145,7 +145,8 @@ def fetch_release(version, program_root, staging, base_url=None, get=http_get, p
         for rel in fetch:
             want = new_man["files"][rel]
             data = get(f"{base}/blobs/{want['sha256']}")
-            if len(data) != int(want.get("size") or -1) or hashlib.sha256(data).hexdigest() != want["sha256"]:
+            size = want.get("size")
+            if not isinstance(size, int) or len(data) != size or hashlib.sha256(data).hexdigest() != want["sha256"]:
                 raise UpdateError(f"받은 파일이 판 목록과 다릅니다: {rel}")
             full = os.path.join(staging, "files", *rel.split("/"))
             os.makedirs(os.path.dirname(full), exist_ok=True)
