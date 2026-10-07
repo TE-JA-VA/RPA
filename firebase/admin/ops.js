@@ -178,7 +178,7 @@ export async function setFeature(cid, key, on) {
   checkKey("cid", cid);
   if (key !== "wellife") throw new Refused(`모르는 기능입니다: ${key}`);
   await companyOf(cid, { removed: true });
-  if (!on && wellifeAuto(cid)) throw new Refused("업체코드에 wellife 포함 - 늘 열림 (끌 수 없습니다)");
+  if (!on && wellifeAuto(cid)) throw new Refused("업체코드에 wellife 포함 - 늘 켜짐 (끌 수 없습니다)");
   const at = rtdb.ref(`meta/companies/${cid}/apps/rpa/features/${key}`);
   await at.set(on ? true : null);
   return { features: (await rtdb.ref(`meta/companies/${cid}/apps/rpa/features`).get()).val() ?? {} };
