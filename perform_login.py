@@ -185,6 +185,13 @@ def find_other_erpia_popups(exclude_handles):
     return results
 
 
+def is_main_screen_texts(texts):
+    """창 안 글자들이 로그인 뒤의 메인 화면인가 - 좌측 메뉴(Accordion Menu / lcg_* 아이콘)가 있다.
+    run_routine.is_main_app_window 와 같은 기준. 로그인이 느리면 로그인 창이 닫히기 전에 메인 창이 먼저 떠서
+    '별도의 팝업 창'으로 잡히므로 이것으로 가린다."""
+    return any(t == "Accordion Menu" or t.startswith("lcg_") for t in texts)
+
+
 def find_embedded_popup_buttons(login_win):
     """로그인 창 내부에 기본 버튼(닫기/최소화/최대화/복원) 외의 버튼이 있으면
     경고/확인 팝업이 창 내부에 오버레이로 떠 있다는 뜻이다."""
@@ -219,7 +226,7 @@ def fill_login_fields(login_win, admin_code, user_id, password, log):
         edit.click_input()
         time.sleep(0.2)
         edit.type_keys("^a{DEL}")
-        edit.type_keys(value, with_spaces=True)
+        edit.type_keys(ec.literal_keys(value), with_spaces=True)   # 비밀번호의 ( ) + 등을 글자 그대로
         log(f"  {label} 입력 완료")
 
     fill(top_edit, admin_code, "AdminCode(업체코드)")
@@ -298,11 +305,13 @@ def login_flow(admin_code, user_id, password, log=None):
 
     for attempt in range(1, MAX_TWO_FA_RETRIES + 1):
         login_win = find_login_window()
-        if login_win is None:
+        # 로그인 뒤 숨은 채 남는 잔재 창은 로그인 창이 아니다 - 그 창 단추 좌표를 누르면 메인 화면이 눌린다
+        if login_win is None or not win32gui.IsWindowVisible(login_win.handle):
             log(f"[시도 {attempt}] 로그인 창이 사라짐 -> 로그인 성공으로 판단")
             log("\n=== 로그인 최종 성공 ===")
             return {"status": "success", "message": "로그인 성공", "error_log_path": None}
 
+        login_pid = win32process.GetWindowThreadProcessId(login_win.handle)[1]
         try:
             click_login_button(login_win, log)
         except Exception as e:
@@ -322,6 +331,12 @@ def login_flow(admin_code, user_id, password, log=None):
                 continue
 
         popup_text = collect_text(popup_win)
+        if (popup_win.handle != login_win.handle and is_main_screen_texts(popup_text.split(" | "))
+                and win32gui.IsWindowVisible(popup_win.handle)                                 # 숨은 메인 창도 아니다
+                and win32process.GetWindowThreadProcessId(popup_win.handle)[1] == login_pid):  # 다른 ERPia 의 메인 창은 아니다
+            log(f"[시도 {attempt}] 로그인 창이 닫히기 전에 메인 화면이 떴습니다 -> 로그인 성공으로 판단")
+            log("\n=== 로그인 최종 성공 ===")
+            return {"status": "success", "message": "로그인 성공", "error_log_path": None}
         log(f"[시도 {attempt}] 팝업 발견: handle={popup_win.handle} 내용='{popup_text}'")
 
         if TWO_FA_KEYWORD in popup_text:

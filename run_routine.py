@@ -116,6 +116,7 @@ import win32process
 import erpia_common as ec
 import perform_login as pl
 import rpa_status as status
+import wellife   # 설정에 "Wellife" 섹션이 있는 PC 만 쓴다 (main 참고)
 
 # 결과 로그를 둘 폴더. 옛 구조는 exe 옆, 새 구조는 ProgramData\AFTER MARKET\RPA\data (rpa_status 가 정한다)
 BASE_DIR = status.data_dir()
@@ -197,6 +198,7 @@ ROUTINE_STEPS = (
 # (모듈 키, 설정 키, 화면 이름, 이 모듈이 맡는 ROUTINE_STEPS 키들, module_flags 비트)
 # 순서가 곧 실행 순서다. 비트는 명시 값이다 - 순서를 바꾸거나 모듈을 끼워 넣어도 기존 비트는 바꾸지 않는다
 # (이력의 module_flags 정수 의미가 달라지면 안 된다). 새 모듈은 다음 빈 비트(32, 64, ...)를 쓴다.
+# (32·64·128·256 은 웰라이프 실행이 쓴다 - wellife.MODULES. 여기 새 모듈은 512 부터)
 # 모듈 안의 단계는 고를 수 없다 - 특히 물류관리의 배송정보설정(shipping_setup)은 로그인 세션마다
 # 초기화되므로 저장 앞에서 항상 돌아야 한다.
 ROUTINE_MODULES = (
@@ -394,7 +396,8 @@ def wait_login_or_main(pid):
     waited = 0.0
     while waited < LOGIN_WINDOW_WAIT_SECONDS:
         login_win = pl.find_login_window()
-        if login_win is not None:
+        # 로그인 뒤 숨은 채 남는 잔재 창은 아니다 (attach 와 같은 규칙) - 그 창 Edit 좌표를 누르면 메인 화면이 눌린다
+        if login_win is not None and win32gui.IsWindowVisible(login_win.handle):
             return "login_window", login_win
         try:
             hwnd = ec.find_main_hwnd(pid)
@@ -5803,23 +5806,28 @@ MODULE_FUNCS = {
 }
 
 
-def run_modules(selected):
+def run_modules(selected, modules=None, funcs=None, section=None):
     """설정대로 모듈을 차례로 돌린다. (전체 결과 "success"|"stopped", 사유)
 
     - 끈 모듈은 부르지 않고 그 단계들을 '설정에서 끔' 으로 표시한다 (예약 줄이 고른 실행이면 '이번 실행에서 안 고름').
     - 로그인 모듈 없이 시작하면 이미 떠 있는 ERPia 에 붙는다.
     - failed / stopped 가 나오면 뒤 모듈을 돌리지 않는다. done / no_target / skipped 는 계속 간다.
+    modules / funcs / section 은 웰라이프 실행(wellife.run_main)이 자기 표를 넘길 때만 준다. 없으면 이 파일의
+    ROUTINE_MODULES / MODULE_FUNCS / Routine 섹션 - 부를 때 찾는다 (시험이 MODULE_FUNCS 를 바꿔 끼운다).
     """
-    if not any(selected.get(cfg, True) for _, cfg, _, _, _ in ROUTINE_MODULES):
-        for key, _cfg, _label, steps, _bit in ROUTINE_MODULES:
+    modules = ROUTINE_MODULES if modules is None else modules
+    funcs = MODULE_FUNCS if funcs is None else funcs
+    section = section or pl.ROUTINE_SECTION
+    if not any(selected.get(cfg, True) for _, cfg, _, _, _ in modules):
+        for key, _cfg, _label, steps, _bit in modules:
             status.module_off(key, status.OFF_NOTE)
             for s in steps:
                 status.skip(s, status.OFF_NOTE)
-        return "stopped", f"켜진 모듈이 없습니다 ('{pl.ROUTINE_SECTION}' 섹션 확인)"
+        return "stopped", f"켜진 모듈이 없습니다 ('{section}' 섹션 확인)"
 
     ctx = RoutineContext()
     picked = os.environ.get(RUN_MODULES_ENV) is not None    # 예약 줄이 모듈을 골라 띄웠다 - 안 고른 모듈은 설정과 상관없다
-    for key, cfg_key, label, steps, _bit in ROUTINE_MODULES:
+    for key, cfg_key, label, steps, _bit in modules:
         if not selected.get(cfg_key, True):
             note = status.PICK_NOTE if picked else status.OFF_NOTE
             log(f"\n=== [{label}] 이번 실행에서 고르지 않아 건너뜁니다 ===" if picked
@@ -5841,7 +5849,7 @@ def run_modules(selected):
 
         status.module_start(key)
         log(f"\n=== [{label}] 시작 ===")
-        result, reason = MODULE_FUNCS[key](ctx)
+        result, reason = funcs[key](ctx)
         if reason is None and result in ("failed", "stopped"):
             reason = status.last_problem()
         status.module_done(key, result, reason)
@@ -5859,6 +5867,10 @@ def main():
         return
     if "--uiacheck" in sys.argv[1:]:
         run_uia_check()
+        return
+    rr = sys.modules[__name__]   # exe 에서는 __main__ - wellife 가 다시 import 하지 않게 넘긴다
+    if wellife.enabled(rr):      # 설정에 "Wellife" 섹션이 있는 PC 만. 없으면 아래 지금 루틴 그대로
+        wellife.run_main(rr)
         return
 
     status.start("routine", ROUTINE_STEPS)
