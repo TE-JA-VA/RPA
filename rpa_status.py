@@ -715,6 +715,15 @@ ROUTINE_CONFIG_MODULES = (
     ("Logistics", "물류관리"),
     ("Output", "운송장 출력 / 엑셀 생성"),
 )
+WELLIFE_SECTION = "Wellife"    # 웰라이프 업체 PC 만 (설계 2026-10-07-wellife-gate). 키 이름은 wellife.MODULES 와 같다 - 바꾸면 둘 다
+WELLIFE_CONFIG_MODULES = (
+    ("Login", "로그인"),
+    ("Sales", "주문매핑 매출처리"),
+    ("Hold", "물류대기 관리"),
+    ("Sap", "웰라이프 SAP 연동관리"),
+    ("Wms", "웰라이프 WMS 이관관리"),
+)
+WELLIFE_DEFAULT = {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False}   # 처음 열릴 때 (사용자 2026-10-07)
 
 
 def cred_file_path():
@@ -798,6 +807,66 @@ def write_routine_modules(selected, path=None):
     data[ROUTINE_SECTION] = _merge_routine_section(data.get(ROUTINE_SECTION), final)
     write_user_config(data, path)
     return final
+
+
+def read_wellife_modules(path=None):
+    """Wellife 섹션을 {키: True/False/None} 으로. 빠진 키는 끔 (Routine 과 반대 - wellife.load_switches 와 같다). 로그인은 늘 켬."""
+    keys = [k for k, _ in WELLIFE_CONFIG_MODULES]
+    try:
+        data = read_user_config(path) or {}
+    except Exception as e:
+        return {k: None for k in keys}, [f"설정을 읽지 못했습니다: {type(e).__name__}"]
+    section = data.get(WELLIFE_SECTION)
+    if not isinstance(section, dict):
+        return {k: (k == "Login") for k in keys}, ([] if section is None else [f"'{WELLIFE_SECTION}' 은 섹션이어야 합니다"])
+    selected, problems = {}, []
+    for k in keys:
+        raw = section.get(k)
+        v = str(raw).strip().upper() if raw is not None else "N"
+        if v in ("Y", "N"):
+            selected[k] = v == "Y" or k == "Login"
+        else:
+            selected[k] = None
+            problems.append(f"{k} 값이 Y/N 이 아닙니다 ({raw!r})")
+    return selected, problems
+
+
+def write_wellife_modules(selected, path=None):
+    """Wellife 섹션만 바꿔 쓴다 (나머지·비밀번호는 그대로). 로그인은 늘 Y, 빠진 키는 N. 모르는 키 ValueError."""
+    keys = [k for k, _ in WELLIFE_CONFIG_MODULES]
+    unknown = sorted(set(selected) - set(keys))
+    if unknown:
+        raise ValueError(f"모르는 모듈 키: {', '.join(unknown)}")
+    final = {k: (k == "Login") or bool(selected.get(k, False)) for k in keys}
+    data = read_user_config(path)
+    if not data:
+        raise FileNotFoundError(path or user_config_path())
+    data[WELLIFE_SECTION] = _merge_routine_section(data.get(WELLIFE_SECTION), final)
+    write_user_config(data, path)
+    return final
+
+
+def has_wellife_section(path=None):
+    try:
+        return isinstance((read_user_config(path) or {}).get(WELLIFE_SECTION), dict)
+    except Exception:
+        return False
+
+
+def ensure_wellife_section(path=None):
+    """웰라이프 업체가 처음 열렸는데 섹션이 없으면 기본값(로그인·주문매핑 매출처리만)으로 만든다. 만들었으면 True."""
+    if has_wellife_section(path):
+        return False
+    write_wellife_modules({k: v for k, v in WELLIFE_DEFAULT.items()}, path)
+    return True
+
+
+def wellife_policy():
+    """에이전트가 적은 업체 정책 - 이 PC 의 업체가 웰라이프로 열려 있나. 못 읽거나 없으면 False."""
+    try:
+        return (read_settings()["schedule"].get("policy") or {}).get("wellife") is True
+    except Exception:
+        return False
 
 # ---------------------------------------------------------------------------
 # 쇼핑몰 프리셋 (옵저버가 쓰고, 프리페어가 재생하고, 대시보드가 켠다 - 2026-09-30 설계 5절)
