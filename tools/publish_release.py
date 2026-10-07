@@ -38,7 +38,8 @@ def _secret(key_path):
         return bytes.fromhex(f.read().strip())
 
 
-def publish(version, release_dir, site_dir, key_path, memo="", stable=None, deploy=None, set_releases=None):
+def publish(version, release_dir, site_dir, key_path, memo="", stable=None, deploy=None, set_releases=None,
+            get_stable=None, set_stable=None):
     with open(os.path.join(release_dir, "manifest.json"), "rb") as f:
         man_bytes = f.read()
     man = json.loads(man_bytes.decode("utf-8"))
@@ -50,8 +51,9 @@ def publish(version, release_dir, site_dir, key_path, memo="", stable=None, depl
     total = 0
     for rel, d in man["files"].items():
         dst = os.path.join(site_dir, "blobs", d["sha256"])
-        if not os.path.isfile(dst):
-            shutil.copy2(os.path.join(release_dir, *rel.split("/")), dst)
+        if not os.path.isfile(dst) or os.path.getsize(dst) != int(d.get("size") or 0):   # 끊긴 복사가 남긴 잘린 파일도 다시
+            shutil.copy2(os.path.join(release_dir, *rel.split("/")), dst + ".tmp")
+            os.replace(dst + ".tmp", dst)
         total += int(d.get("size") or 0)
     with open(os.path.join(rel_dir, "manifest.json"), "wb") as f:
         f.write(man_bytes)                                       # 서명한 바이트 그대로
@@ -62,7 +64,8 @@ def publish(version, release_dir, site_dir, key_path, memo="", stable=None, depl
     info[version] = {"version": version, "published_at": datetime.datetime.now().isoformat(timespec="seconds"),
                      "bytes": total, "memo": memo}
     order = sorted(info, key=lambda v: (info[v]["published_at"], v))
-    keep = set(order[-KEEP:]) | {x for x in (stable, _stable_of(site_dir)) if x}
+    db_stable = get_stable() if get_stable else None                # 안정본은 DB 가 기준 (오래돼도 안 지운다)
+    keep = set(order[-KEEP:]) | {x for x in (stable, db_stable) if x}
     removed = [v for v in order if v not in keep]
     for v in removed:
         shutil.rmtree(os.path.join(site_dir, "releases", v), ignore_errors=True)
@@ -76,20 +79,14 @@ def publish(version, release_dir, site_dir, key_path, memo="", stable=None, depl
             os.remove(os.path.join(site_dir, "blobs", name))
     with open(info_path, "w", encoding="utf-8") as f:
         json.dump(info, f, ensure_ascii=False, indent=1)
-    if stable:
-        with open(os.path.join(site_dir, "stable.txt"), "w", encoding="ascii") as f:
-            f.write(stable + "\n")
     listing = [info[v] for v in sorted(info, key=lambda v: (info[v]["published_at"], v))]
+    if deploy:
+        deploy()                                                 # 배포가 먼저 - 실패하면 DB 목록은 그대로
     if set_releases:
         set_releases(listing)
-    if deploy:
-        deploy()
+    if stable and set_stable:
+        set_stable(stable)
     return {"version": version, "kept": [x["version"] for x in listing], "removed": removed, "bytes": total}
-
-
-def _stable_of(site_dir):
-    p = os.path.join(site_dir, "stable.txt")
-    return open(p, encoding="ascii").read().strip() if os.path.isfile(p) else None
 
 
 def _node(*args):
@@ -107,6 +104,14 @@ def _set_releases(listing):
         _node("release-set", path)
     finally:
         os.remove(path)
+
+
+def _get_stable():
+    return json.loads(_node("releases").strip().splitlines()[-1]).get("stable")
+
+
+def _set_stable(version):
+    _node("stable", version)
 
 
 def _deploy():
@@ -128,7 +133,7 @@ def main(argv=None):
     stable = version if "--stable" in rest else None
     memo = " ".join(x for x in rest if x != "--stable")
     r = publish(version, os.path.join(OUT_ROOT, f"배포_{version}"), SITE_DIR, KEY_PATH, memo=memo, stable=stable,
-                deploy=_deploy, set_releases=_set_releases)
+                deploy=_deploy, set_releases=_set_releases, get_stable=_get_stable, set_stable=_set_stable)
     print(f"내보냄 {r['version']} ({r['bytes'] // (1 << 20)}MB) · 남은 판 {', '.join(r['kept'])}" + (f" · 지운 판 {', '.join(r['removed'])}" if r["removed"] else ""))
     return 0
 

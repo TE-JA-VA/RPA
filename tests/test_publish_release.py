@@ -73,6 +73,47 @@ try:
 except ValueError as e:
     check("판" in str(e), f"판 번호가 다르면 멈춘다 ({e})")
 
+# --- 보완 1: 안정본은 DB 기준 (get_stable), --stable 은 DB 로 (set_stable)
+SITE2 = os.path.join(tmp, "site2")
+set_calls = []
+for n in range(1, 8):
+    d, _ = make_release(n, True)
+    pr.publish(f"2026.10.0{n}-1", d, SITE2, KEY, deploy=lambda: None, set_releases=lambda l: None,
+               get_stable=lambda: "2026.10.01-1", set_stable=lambda v: set_calls.append(v))
+kept2 = sorted(os.listdir(os.path.join(SITE2, "releases")))
+check("2026.10.01-1" in kept2 and len(kept2) == 6, f"DB 의 안정본은 오래돼도 안 지운다 ({kept2})")
+b1 = {f["sha256"] for f in json.load(open(os.path.join(SITE2, "releases", "2026.10.01-1", "manifest.json")))["files"].values()}
+check(b1 <= set(os.listdir(os.path.join(SITE2, "blobs"))), "안정본의 파일도 남는다")
+check(set_calls == [], "--stable 이 없으면 DB 안정본을 안 건드린다")
+pr.publish("2026.10.07-1", make_release(7, True)[0], SITE2, KEY, stable="2026.10.07-1", deploy=lambda: None,
+           set_releases=lambda l: None, get_stable=lambda: None, set_stable=lambda v: set_calls.append(v))
+check(set_calls == ["2026.10.07-1"], "--stable 은 set_stable 로 DB 에")
+check(not os.path.exists(os.path.join(SITE2, "stable.txt")), "stable.txt 는 안 만든다")
+
+# --- 보완 2: 배포가 먼저, 실패하면 DB 목록을 안 쓴다
+def boom():
+    raise RuntimeError("배포 실패")
+wrote = []
+try:
+    d8, _ = make_release(1, True)
+    mf = os.path.join(d8, "manifest.json")
+    m = json.load(open(mf)); m["version"] = "2026.10.08-1"; open(mf, "w").write(json.dumps(m))
+    pr.publish("2026.10.08-1", d8, SITE2, KEY, deploy=boom, set_releases=lambda l: wrote.append(l),
+               get_stable=lambda: None, set_stable=lambda v: None)
+    check(False, "배포 실패인데 통과")
+except RuntimeError:
+    check(wrote == [], "배포가 실패하면 DB 목록을 안 쓴다")
+
+# --- 보완 3: 잘린 blob 은 다시 복사
+SITE3 = os.path.join(tmp, "site3")
+d, m = make_release(3, True)
+os.makedirs(os.path.join(SITE3, "blobs"))
+sha_a = m["files"]["a.py"]["sha256"]
+open(os.path.join(SITE3, "blobs", sha_a), "wb").write(b"")
+pr.publish("2026.10.03-1", d, SITE3, KEY, deploy=None, set_releases=None, get_stable=lambda: None)
+check(open(os.path.join(SITE3, "blobs", sha_a), "rb").read() == b"A3", "잘린 blob 을 고쳐 놓는다")
+check(not [x for x in os.listdir(os.path.join(SITE3, "blobs")) if x.endswith(".tmp")], ".tmp 가 안 남는다")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
