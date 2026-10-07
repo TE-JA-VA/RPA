@@ -213,6 +213,110 @@ uh.main(FakeOps())
 check(read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None and up.backup_version() == "2026.10.07-2",
       "B → A, 보관본은 B (다시 앞으로 갈 수 있다)")
 
+print("\n=== 8. 성공 정리 도중 끊겨도 다음 실행이 마저 정리 - 되돌리지 않는다 ===")
+real_rmtree, real_replace, real_remove = shutil.rmtree, os.replace, os.remove
+for n in range(1, 5):            # 보관 지우기·보관 바꾸기·staging 지우기·alive 지우기
+    setup_a_and_staged_b()
+    cnt = [0]
+
+    def wrap(real, n=n):
+        def f(*a, **k):
+            if up.read_state().get("state") == "done":
+                cnt[0] += 1
+                if cnt[0] == n:
+                    raise Crash()
+            return real(*a, **k)
+        return f
+
+    shutil.rmtree, os.replace, os.remove = wrap(real_rmtree), wrap(real_replace), wrap(real_remove)
+    ops1 = FakeOps()
+    try:
+        uh.main(ops1)
+    except Crash:
+        pass
+    finally:
+        shutil.rmtree, os.replace, os.remove = real_rmtree, real_replace, real_remove
+    ops2 = FakeOps()
+    uh.main(ops2)
+    s = up.read_state()
+    check(s["state"] == "done" and read(PROG, "a.py") == "A2" and read(PROG, "c.py") == "C2" and read(PROG, "b.py") is None
+          and json.load(open(os.path.join(PROG, "manifest.json"), encoding="utf-8"))["version"] == "2026.10.07-2"
+          and up.backup_version() == "2026.10.07-1" and read(up.path("backup", "files"), "a.py") == "A1"
+          and not os.path.exists(up.path("backup_new")) and not os.path.exists(up.path("staging")) and not os.path.exists(up.path("alive.json")),
+          f"정리 {n}번째에서 끊김 → 다시 실행하면 done·새 판·보관은 옛 판 ({s['state']})")
+    check("deltask" not in ops1.calls and "end" not in ops2.calls, f"정리 {n}: 끊긴 쪽은 작업을 안 지움, 다시 실행은 되돌리기 안 함")
+
+print("\n=== 9. 보통 오류(끊김 아님) → 바로 되돌린다 ===")
+for n in range(1, 5):
+    setup_a_and_staged_b()
+    count = [0]
+
+    def oserr(src, dst, n=n):
+        count[0] += 1
+        if count[0] == n:
+            raise PermissionError("잠긴 파일")
+        real_move(src, dst)
+
+    uh._move = oserr
+    ops = FakeOps(good=("2026.10.07-1",))
+    try:
+        uh.main(ops)
+    finally:
+        uh._move = real_move
+    s = up.read_state()
+    check(read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None and s["state"] == "rolled_back"
+          and "바꾸는 중 오류 (PermissionError)" in s["reason"] and "설치 파일" not in s["reason"] and ops.calls[-1] == "deltask",
+          f"{n}번째 옮기기 오류 → 바로 옛 판 ({s.get('reason')})")
+
+print("\n=== 10. 되돌리는 중에도 오류 → 남기고 멈춘다 (되풀이 없음) ===")
+setup_a_and_staged_b()
+count = [0]
+
+
+def always_fail(src, dst):
+    count[0] += 1
+    if count[0] >= 3:
+        raise OSError("디스크 오류")
+    real_move(src, dst)
+
+
+uh._move = always_fail
+ops = FakeOps(good=())
+try:
+    uh.main(ops)
+finally:
+    uh._move = real_move
+s = up.read_state()
+check(s["state"] == "rolled_back" and "설치 파일로" in s["reason"] and ops.calls[-1] == "deltask", f"rolled_back + 다시 설치 안내 ({s.get('reason')})")
+ops = FakeOps()
+uh.main(ops)
+check(ops.calls == ["deltask"], "다음 로그온에는 할 일 없음")
+
+print("\n=== 11. 옛 manifest 보관 복사 도중 끊겨도 프로그램 manifest 는 온전 ===")
+setup_a_and_staged_b()
+real_copy2 = shutil.copy2
+
+
+def half(src, dst, *a, **k):
+    data = open(src, "rb").read()
+    open(dst, "wb").write(data[:10])
+    raise Crash()
+
+
+shutil.copy2 = half
+try:
+    uh.main(FakeOps())
+except Crash:
+    pass
+finally:
+    shutil.copy2 = real_copy2
+uh.main(FakeOps(good=("2026.10.07-1",)))
+try:
+    mv = json.load(open(os.path.join(PROG, "manifest.json"), encoding="utf-8"))["version"]
+except Exception:
+    mv = None
+check(mv == "2026.10.07-1" and read(PROG, "a.py") == "A1" and up.read_state()["state"] == "rolled_back", f"manifest 온전 ({mv})")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

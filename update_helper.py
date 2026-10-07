@@ -87,6 +87,13 @@ def wait_alive(version, since, ops):
         ops.sleep(HEALTH_POLL_SEC)
 
 
+def _copy_atomic(src, dst):
+    """임시 파일에 복사한 뒤 바꿔 놓는다 - 끊겨도 dst 는 옛 것 아니면 온전한 새 것."""
+    tmp = dst + ".tmp"
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+
+
 def restore(program_dir, backup_new, plan):
     for rel in plan["fetch"] + plan["remove"]:
         b = _full(os.path.join(backup_new, "files"), rel)
@@ -96,7 +103,20 @@ def restore(program_dir, backup_new, plan):
             os.remove(_full(program_dir, rel))
     old_man = os.path.join(backup_new, st.MANIFEST_NAME)
     if os.path.isfile(old_man):
-        shutil.copy2(old_man, os.path.join(program_dir, st.MANIFEST_NAME))
+        _copy_atomic(old_man, os.path.join(program_dir, st.MANIFEST_NAME))
+
+
+def finish_cleanup(state):
+    """성공(done) 뒤 정리 - 몇 번을 다시 해도 같다. done 을 먼저 적은 뒤 하므로 끊겨도 다음 실행이 마저 한다."""
+    bnew = up.path("backup_new")
+    if os.path.isdir(bnew):
+        shutil.rmtree(up.path("backup"), ignore_errors=True)
+        os.replace(bnew, up.path("backup"))
+    shutil.rmtree(state.get("staging") or up.path("staging"), ignore_errors=True)
+    try:
+        os.remove(up.path("alive.json"))
+    except OSError:
+        pass
 
 
 def apply(state, ops):
@@ -111,28 +131,29 @@ def apply(state, ops):
     state = {**state, "state": "applying", "started_at": started, "at": started}
     up.write_state(state)
     up.log(f"바꾸기 시작 {state['from']} → {state['target']} ({state.get('mode')}) 받을 {len(plan['fetch'])}·치울 {len(plan['remove'])}")
-    ops.end_agent()
-    os.makedirs(os.path.join(bnew, "files"), exist_ok=True)
-    shutil.copy2(os.path.join(prog, st.MANIFEST_NAME), os.path.join(bnew, st.MANIFEST_NAME))
-    for rel in plan["fetch"] + plan["remove"]:
-        if os.path.isfile(_full(prog, rel)):
-            _move(_full(prog, rel), _full(os.path.join(bnew, "files"), rel))
-    for rel in plan["fetch"]:
-        _move(_full(os.path.join(stg, "files"), rel), _full(prog, rel))
-    shutil.copy2(os.path.join(stg, "manifest.json"), os.path.join(prog, st.MANIFEST_NAME))
-    ops.set_display_version(state["target"])
-    ops.after_install(prog)
-    if not wait_alive(state["target"], started, ops):
-        return rollback(state, ops, f"새 판이 3분 안에 정상으로 켜지지 않았습니다 ({state['target']})")
-    shutil.rmtree(up.path("backup"), ignore_errors=True)
-    os.replace(bnew, up.path("backup"))
-    shutil.rmtree(stg, ignore_errors=True)
     try:
-        os.remove(up.path("alive.json"))
-    except OSError:
-        pass
-    up.write_state({"state": "done", "mode": state.get("mode"), "target": state["target"], "from": state["from"],
-                    "at": up.now_text(), "reason": None})
+        ops.end_agent()
+        os.makedirs(os.path.join(bnew, "files"), exist_ok=True)
+        _copy_atomic(os.path.join(prog, st.MANIFEST_NAME), os.path.join(bnew, st.MANIFEST_NAME))
+        for rel in plan["fetch"] + plan["remove"]:
+            if os.path.isfile(_full(prog, rel)):
+                _move(_full(prog, rel), _full(os.path.join(bnew, "files"), rel))
+        for rel in plan["fetch"]:
+            _move(_full(os.path.join(stg, "files"), rel), _full(prog, rel))
+        _copy_atomic(os.path.join(stg, "manifest.json"), os.path.join(prog, st.MANIFEST_NAME))
+        ops.set_display_version(state["target"])
+        ops.after_install(prog)
+        alive = wait_alive(state["target"], started, ops)
+    except Exception as e:                                    # 잠긴 파일·디스크 가득 등 - 끊김(BaseException)이 아닌 보통 오류
+        up.log(f"바꾸는 중 오류 {type(e).__name__}: {e}"[:300])
+        return rollback(state, ops, f"바꾸는 중 오류 ({type(e).__name__})")
+    if not alive:
+        return rollback(state, ops, f"새 판이 3분 안에 정상으로 켜지지 않았습니다 ({state['target']})")
+    done = {"state": "done", "mode": state.get("mode"), "target": state["target"], "from": state["from"],
+            "at": up.now_text(), "reason": None, "staging": stg}
+    up.write_state(done)                                      # 확정 - 여기부터 끊겨도 되돌리지 않고 정리만 마저 한다
+    finish_cleanup(done)
+    up.write_state({**done, "staging": None})
     up.log(f"성공 {state['target']}")
     return 0
 
@@ -143,18 +164,24 @@ def rollback(state, ops, reason):
     state = {**state, "state": "rolling_back", "reason": reason, "at": started}
     up.write_state(state)
     up.log(f"되돌리기: {reason}")
-    ops.end_agent()
+    err = None
     try:
-        plan = _plan(state)
-    except Exception:
-        plan = None                              # staging 이 없다 = 아직 아무것도 안 옮겼다
-    if plan is not None:
-        restore(prog, bnew, plan)
-    ops.set_display_version(state["from"])
-    ops.after_install(prog)
-    ok = wait_alive(state["from"], started, ops)
-    shutil.rmtree(bnew, ignore_errors=True)
-    shutil.rmtree(state.get("staging") or up.path("staging"), ignore_errors=True)
+        ops.end_agent()
+        try:
+            plan = _plan(state)
+        except Exception:
+            plan = None                          # staging 이 없다 = 아직 아무것도 안 옮겼다
+        if plan is not None:
+            restore(prog, bnew, plan)
+        ops.set_display_version(state["from"])
+        ops.after_install(prog)
+        ok = wait_alive(state["from"], started, ops)
+    except Exception as e:                       # 되돌리기도 실패 - 되풀이하지 말고 남기고 멈춘다
+        up.log(f"되돌리기 오류 {type(e).__name__}: {e}"[:300])
+        ok, err = False, e
+    if err is None:
+        shutil.rmtree(bnew, ignore_errors=True)
+        shutil.rmtree(state.get("staging") or up.path("staging"), ignore_errors=True)
     final = reason if ok else f"{reason} / 옛 판도 정상으로 켜지지 않았습니다 - 설치 파일로 다시 설치하세요"
     up.write_state({"state": "rolled_back", "mode": state.get("mode"), "target": state["target"], "from": state["from"],
                     "at": up.now_text(), "reason": final})
@@ -172,9 +199,16 @@ def main(ops=None):
             rollback(state, ops, "업데이트 도중 끊겼습니다 (정전·재부팅 등)")
         elif state.get("state") == "rolling_back":
             rollback(state, ops, state.get("reason") or "되돌리는 도중 끊겼습니다")
-    finally:
-        if up.read_state().get("state") not in ("applying", "rolling_back"):
-            ops.delete_helper_task()
+        elif state.get("state") == "done":
+            finish_cleanup(state)                # 성공을 적은 뒤 정리가 끊겼다면 마저 한다
+            if state.get("staging"):
+                up.write_state({**state, "staging": None})
+    except Exception as e:                       # 시작도 못 한 보통 오류 (staging 없음 등) - 매 로그온마다 되풀이하지 않는다
+        up.log(f"도우미 오류 {type(e).__name__}: {e}"[:300])
+        if up.read_state().get("state") == "ready":
+            up.write_state({**state, "state": "rolled_back", "at": up.now_text(), "reason": f"업데이트를 시작하지 못했습니다 ({type(e).__name__})"})
+    if up.read_state().get("state") not in ("applying", "rolling_back"):
+        ops.delete_helper_task()                 # 끊김(BaseException)은 여기까지 안 온다 - 작업이 남아 다음 로그온에 다시 뜬다
     return 0
 
 
