@@ -275,6 +275,35 @@ check(len(d.LAUNCHED) == n + 2, "그 회차 뒤로는 다시 쉬는 시간을 �
 CLOCK[0] = at("11:17", day=6); sched.tick()
 check(len(d.LAUNCHED) == n + 3, "쉬는 시간 뒤 다음 회차")
 
+print("\n=== 16. 한도를 올리면 새로 들어온 줄이 그날부터 돈다 (끝 검토 minor) ===")
+c = st.read_settings(); c["schedule"]["repeat"] = None; st.write_settings(c); ended()
+d.set_policy(1, [])
+CLOCK[0] = at("10:30", day=7)
+d.apply_schedule({"enabled": True, "days": ALL, "slots": [{"at": "10:00"}, {"at": "11:00"}, {"at": "12:00"}]})
+sch = st.read_settings()["schedule"]
+check(sch["next_run_at"] == iso(at("10:00", day=8)), f"한도 1: 다음은 내일 10:00 ({sch['next_run_at']})")
+d.set_policy(3, [])
+sch = st.read_settings()["schedule"]
+check(sch["next_run_at"] == iso(at("11:00", day=7)) and sch["next_slot"] == "11:00", f"한도를 3 으로 올리면 오늘 11:00 부터 ({sch['next_run_at']})")
+CLOCK[0] = at("11:00", day=7, sec=30)
+d.set_policy(2, [])
+check(st.read_settings()["schedule"]["next_run_at"] == iso(at("11:00", day=7)), "때가 된 줄은 한도가 바뀌어도 그대로 (아직 못 띄웠을 뿐)")
+
+print("\n=== 17. 붙은 시간대 둘 - 앞 시간대에 띄운 회차는 뒤 시간대에 세지 않는다 (끝 검토 minor) ===")
+d.set_policy(5, [])
+d.apply_schedule({"enabled": True, "days": ALL, "slots": [dict(WIN), {"at": "12:00", "until": "13:00", "rest_min": 2, "run": ["Logistics"]}]})
+CLOCK[0] = at("11:58", day=8); n = len(d.LAUNCHED); sched.tick()
+check(len(d.LAUNCHED) == n + 1 and rep().get("at") == "11:00", "11:58 앞 시간대 회차")
+put_status("routine", "running", at("11:58", 8, 5))
+CLOCK[0] = at("12:00", day=8, sec=30); sched.tick()
+check(rep().get("at") == "12:00" and rep().get("pending") and len(d.LAUNCHED) == n + 1, "뒤 시간대가 열려도 앞 회차가 끝나기를 기다린다")
+put_status("routine", "stopped", at("11:58", 8, 5), at("12:01", 8), [LOGIN], reason="저장 실패"); ended()
+CLOCK[0] = at("12:02", day=8); sched.tick()
+check(rep().get("stopped") is None and rep().get("runs") == 0 and rep().get("pending") is None,
+      f"앞 시간대 회차의 실패로 뒤 시간대를 멈추지 않고 세지도 않는다 ({rep().get('stopped')})")
+CLOCK[0] = at("12:03", day=8); sched.tick()
+check(len(d.LAUNCHED) == n + 2, "쉬는 시간 뒤 뒤 시간대 첫 회차")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

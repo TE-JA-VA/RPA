@@ -183,6 +183,8 @@ def next_plan():
         return None
     off = set((sch.get("policy") or {}).get("off") or [])
     run = [k for k in slot["run"] if k not in off]
+    if "Logistics" not in run:                    # 물류관리가 없으면 운송장도 안 돈다 (run_routine.run_modules_from_env)
+        run = [k for k in run if k != "Output"]
     return [k.lower() for k in run if k != "Prepare"], "Prepare" in run
 
 

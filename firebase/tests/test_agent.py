@@ -716,6 +716,9 @@ with tempfile.TemporaryDirectory() as d:
         tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan, next_plan=ag.next_plan)
         tk.refresh(force=True)
         check(tk.view()["cost"]["next"] == 3, f"다음 예약 줄의 토큰 = 그 줄의 모듈 (물류관리 1·로그인 0) + 쇼핑몰 받기 (사이트 2) ({tk.view()['cost']})")
+        dash.set_policy(3, ["Logistics"])
+        dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Sales", "Logistics", "Output"]}]})
+        check(tk.view()["cost"]["next"] == 1, f"업체가 물류관리를 안 쓰면 운송장도 안 돈다 - 주문매핑 1 만 ({tk.view()['cost']})")
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00"}]})
         check("next" not in tk.costs(), "'전체' 줄이면 next 없음 (화면은 전체 실행 토큰을 쓴다)")
         try:
@@ -724,6 +727,7 @@ with tempfile.TemporaryDirectory() as d:
             check(str(e) == "지금은 멈춘 반복이 없습니다", "resume_repeat: 멈춘 반복이 없으면 그 글로 실패")
     finally:
         os.environ.pop("RPA_STATUS_DIR", None)
+        os.environ.pop("RPA_DASHBOARD_DRY_RUN", None)
 
 print("\n8절 첫 실행 설정 (새 PC)")
 

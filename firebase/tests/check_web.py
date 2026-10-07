@@ -733,6 +733,14 @@ with sync_playwright() as pw:
     page.click(f"{chips}[data-k='Logistics']")
     check(not page.is_disabled("#sch-apply") and not page.is_disabled(f"{chips}[data-k='Output']"), "물류관리를 고르면 적용 가능·운송장 풀림")
     page.click("#sch-apply"); time.sleep(1.5)
+    asked = []
+    def on_dialog(dlg):
+        asked.append(dlg.message); dlg.dismiss()
+    page.on("dialog", on_dialog)
+    page.click("#app-nav a[data-key='rpa']"); page.wait_for_timeout(500)
+    page.remove_listener("dialog", on_dialog)
+    check(asked == [] and page.text_content("#page-title") == "RPA", f"적용을 누른 뒤 PC 응답 전에 떠나도 '적용 안 한 변경' 으로 묻지 않는다 ({asked})")
+    goto(page, "settings")
     saved = db_get(f"{SETTINGS}/schedule") or {}
     check(saved.get("slots") == [{"at": "09:05"}, {"at": "13:30", "run": ["Logistics"]}] and "times" not in saved,
           f"새 모양으로 저장 - '전체' 줄엔 run 없음 ({saved.get('slots')})")
@@ -745,6 +753,12 @@ with sync_playwright() as pw:
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 3}})   # 업체 한도는 총괄·관리 도구가 쓴다
     reload_to(page, "settings"); page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
     check(page.text_content("#sch-count") == "2/3 사용" and not page.is_disabled("#sch-add"), "한도 3: 2/3 사용, 추가 가능")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 4}})
+    try:
+        page.wait_for_function("document.getElementById('sch-count')?.textContent === '2/4 사용'", timeout=5000)
+        check(True, "업체 한도가 바뀌면 새로고침 없이 바로 (2/4 사용)")
+    except Exception:
+        check(False, f"업체 한도가 바뀌면 새로고침 없이 바로 ({page.text_content('#sch-count')})")
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 1}})
     reload_to(page, "settings"); page.wait_for_function("document.querySelectorAll('#sch-times .t.over').length === 1", timeout=10000)
     page.click("#sch-days button:nth-child(7)")
@@ -775,10 +789,18 @@ with sync_playwright() as pw:
     page.wait_for_timeout(300)
     check(asked == ["적용하지 않은 변경이 있습니다. 버리고 나갈까요?"] and page.text_content("#page-title") == "환경설정"
           and page.is_visible("#sch-card"), f"적용 안 한 변경이 있으면 묻고, 아니오면 남는다 ({asked})")
+    asked.clear()
+    page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.dismiss()))
+    page.click("#logout-btn")
+    page.wait_for_timeout(300)
+    check(asked == ["적용하지 않은 변경이 있습니다. 버리고 나갈까요?"] and page.is_visible("#main") and page.is_visible("#sch-card"),
+          f"로그아웃도 묻고, 아니오면 남는다 ({asked})")
+    check(page.evaluate("() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }") is True, "탭 닫기·새로고침은 브라우저가 묻는다")
     page.once("dialog", lambda dlg: dlg.accept())
     page.click("#app-nav a[data-key='rpa']")
     page.wait_for_selector("#hero")
     check(page.text_content("#page-title") == "RPA", "예면 버리고 나간다")
+    check(page.evaluate("() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }") is False, "바뀐 것이 없으면 탭을 닫아도 안 묻는다")
     goto(page, "settings")
     page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30 물류관리'", timeout=10000)
     check(page.is_disabled("#sch-apply") and len(page.query_selector_all("#sch-times input")) == 2, "다시 열면 PC 값 그대로 (버린 변경은 없다)")

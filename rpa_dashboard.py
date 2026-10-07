@@ -651,7 +651,8 @@ def active_slots(sch):
 
 def set_policy(limit, off):
     """에이전트가 읽은 업체 정책(자동 실행 개수·안 쓰는 모듈)을 settings.json 에 적는다 - 껐다 켜도·끊겨도 마지막 값.
-    같으면 안 쓴다 (False). 가리키던 다음 줄이 한도로 빠졌으면 다음 줄을 다시 잡는다. 다른 칸(줄·반복 상태)은 그대로."""
+    같으면 안 쓴다 (False). 다음 줄을 다시 잡는다 - 한도를 올리면 새로 들어온 줄이 그날부터 돌게, 가리키던 줄이 빠졌으면 다음 줄로.
+    때가 됐는데 아직 못 띄운 줄(바쁨)은 그대로 둔다. 다른 칸(줄·반복 상태)은 그대로."""
     new = {"limit": limit, "off": sorted(off)}
     with _settings_lock:
         cfg = st.read_settings()
@@ -660,7 +661,8 @@ def set_policy(limit, off):
         if (old.get("limit"), old.get("off")) == (new["limit"], new["off"]):
             return False
         sch["policy"] = dict(new, read_at=now_text())
-        if sch.get("next_slot") and sch["next_slot"] not in [s["at"] for s in active_slots(sch)]:
+        due = st.parse_iso(sch.get("next_run_at"))
+        if due is None or due > NOW() or sch.get("next_slot") not in [s["at"] for s in active_slots(sch)]:
             advance(sch, NOW())
         st.write_settings(cfg)
         return True
@@ -763,6 +765,11 @@ def repeat_state(sch, win, now):
            "pending": rep.get("pending") if isinstance(rep, dict) else None, "last_launch_at": None, "next_at": None}
     sch["repeat"] = rep
     return rep, True
+
+
+def launched_in(rep, since):
+    """since(띄운 때) 가 rep 의 시간대 안인가. 붙은 시간대로 넘어온 회차(repeat_state 가 pending 을 잇는다)는 아니다."""
+    return rep.get("date") == since.date().isoformat() and (rep.get("at") or "") <= since.strftime("%H:%M") < (rep.get("until") or "")
 
 
 def resume_repeat():
@@ -952,6 +959,8 @@ class Scheduler(threading.Thread):
             stamp = now.isoformat(timespec="seconds")
             if not fresh:                        # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
                 rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차가 시작하지 못했습니다"}
+            elif not launched_in(rep, since):
+                pass                             # 앞 시간대에 띄운 회차가 붙은 시간대가 열린 뒤 끝났다 - 이 시간대 회차가 아니니 세지도 멈추지도 않는다
             elif v.get("trigger") != "repeat":
                 pass                             # 다른 실행(사람이 누른 단추 등)이 상태를 덮었다 - 회차 결과를 모르니 세지도 멈추지도 않는다
             elif v.get("state") == "success":

@@ -44,13 +44,14 @@ const HTML = `
   </div>
   <p class="muted hide" id="no-pc">등록된 PC 가 없습니다</p>`;
 
-let root = null, c = null, stopLive = null, busy = false, live = null;
+let root = null, c = null, stopLive = null, stopLimit = null, busy = false, live = null, liveLimit;
+let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
 let form = { modules: {}, shops: {}, sch: { enabled: false, days: [], slots: [] } };
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
 
 export function mount(el, context) {
-  root = el; c = context; busy = false; live = null;
+  root = el; c = context; busy = false; live = null; liveLimit = undefined; sent = {};
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
   $("mod-apply").onclick = applyModules;
@@ -68,6 +69,11 @@ export function mount(el, context) {
     b.onclick = () => { form.sch.days = [...days]; paintDays(); paintScheduleMeta(); };
     return b;
   }));
+  // 업체 한도는 총괄·관리 도구가 바꾼다 - 로그인 때 읽은 값(c.policy) 대신 바로 따라간다
+  stopLimit = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/limits/schedule`), (snap) => {
+    liveLimit = snap.val();
+    if (root && live) { paintTimes(); paintScheduleMeta(); }
+  }, () => {});
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const first = live == null;
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신). 편집 중인지는 바뀌기 전 PC 값과 견준다 -
@@ -83,13 +89,16 @@ export function mount(el, context) {
 
 export function unmount() {
   if (stopLive) { stopLive(); stopLive = null; }
+  if (stopLimit) { stopLimit(); stopLimit = null; }
   root = null; c = null;
 }
 
 /** 적용 안 한 변경이 있나 (떠날 때 확인 - app.js) */
 export function dirty() {
-  return !!root && !!live && (modulesDirty() || shopsDirty() || scheduleDirty());
+  return !!root && !!live && ((modulesDirty() && sent.modules !== keyOf.modules())
+    || (shopsDirty() && sent.shops !== keyOf.shops()) || (scheduleDirty() && sent.sch !== keyOf.sch()));
 }
+const keyOf = { modules: () => JSON.stringify(form.modules), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()) };
 
 function paintAll() { paintModuleMeta(); paintShopMeta(); paintScheduleMeta(); }
 
@@ -152,6 +161,7 @@ async function applyModules() {
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  sent.modules = keyOf.modules();
   await send("set_modules", wanted, "실행 모듈");
 }
 
@@ -201,6 +211,7 @@ async function applyShops() {
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/presets`), wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  sent.shops = keyOf.shops();
   await send("set_presets", wanted, "쇼핑몰 프리셋");
 }
 
@@ -209,7 +220,7 @@ async function applyShops() {
 const isV2 = () => (live?.schedule?.version ?? 0) >= 2;
 /** 업체 한도 '자동 실행 개수' (meta/companies/{cid}/apps/rpa/limits/schedule, 없으면 2). 옛 판 PC 는 3개까지밖에 못 받는다 */
 function limitOf() {
-  const n = c?.policy?.rpa?.limits?.schedule;
+  const n = liveLimit !== undefined ? liveLimit : c?.policy?.rpa?.limits?.schedule;
   const lim = Number.isInteger(n) && n >= 0 ? n : 2;
   return isV2() ? lim : Math.min(lim, 3);
 }
@@ -381,5 +392,6 @@ async function applySchedule() {
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/schedule`), payload);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  sent.sch = keyOf.sch();
   await send("set_schedule", payload, "자동 실행");
 }

@@ -73,7 +73,9 @@ $("login-form").addEventListener("submit", async (ev) => {
     $("login-btn").disabled = false;
   }
 });
-$("logout-btn").addEventListener("click", () => signOut(auth));
+$("logout-btn").addEventListener("click", () => { if (leaveOk()) signOut(auth); });
+// 탭 닫기·새로고침은 브라우저가 묻는다 (글은 브라우저가 정한다)
+window.addEventListener("beforeunload", (e) => { if (current?.dirty?.()) { e.preventDefault(); e.returnValue = ""; } });
 
 onAuthStateChanged(auth, async (user) => {
   unmount();
@@ -148,7 +150,7 @@ function ctx() {
            apps: APPS };   // 환경설정 페이지가 앱마다 설정 화면을 붙인다
 }
 
-/** 적용 안 한 변경이 있는 페이지(환경설정)를 떠나기 전에 묻는다 - 메뉴·PC 바꾸기 모두 */
+/** 적용 안 한 변경이 있는 페이지(환경설정)를 떠나기 전에 묻는다 - 메뉴·PC 바꾸기·로그아웃 */
 function leaveOk() {
   return !current?.dirty?.() || confirm("적용하지 않은 변경이 있습니다. 버리고 나갈까요?");
 }
