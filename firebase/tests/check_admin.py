@@ -325,6 +325,36 @@ with sync_playwright() as pw:
     check(db_get("meta/releases/stable") == "2026.10.07-5", "판 목록에서 안정본으로 지정")
     check("안정본 지정 2026.10.07-5" in open(LOG, encoding="utf-8").read(), "관리 기록에 남는다")
 
+    print("화면 다듬기 (사용자 2026-10-07)")
+    nav = page.text_content("nav")
+    check("신규 업체 등록" in nav and "토큰 배율·통계" in nav, f"위 메뉴 글 ({nav})")
+    check(page.text_content("#releases-open").strip() == "버전 목록", "버전 목록 단추")
+    heads = [h.strip() for h in page.locator("#releases th").all_text_contents()]
+    check(heads[:5] == ["버전", "업데이트 날짜", "크기(MB)", "비고", "버전 특이사항"], f"버전 목록 머리 ({heads})")
+    gap = page.evaluate(f"""(() => {{ const s = document.querySelector('#pc-{PC} select.upd-ver').getBoundingClientRect(),
+        b = document.querySelector('#pc-{PC} button.upd-go').getBoundingClientRect(); return b.left - s.right; }})()""")
+    check(6 <= gap <= 12, f"PC 줄 고르기·단추 사이가 아래 줄처럼 8px 남짓 ({gap}px)")
+    prefs = os.path.join(ADMIN, "admin_prefs.json")
+    prefs_before = open(prefs, encoding="utf-8").read() if os.path.exists(prefs) else None
+    try:
+        theme = lambda: page.evaluate("document.documentElement.dataset.theme || ''")
+        bg = lambda: page.evaluate("getComputedStyle(document.body).backgroundColor")
+        t0, bg0 = theme(), bg()
+        page.click("#theme")
+        page.wait_for_timeout(500)
+        t1 = theme()
+        check(t1 in ("light", "dark") and t1 != t0 and bg() != bg0, f"[테마] 단추로 밝게/어둡게 ({t0!r} → {t1!r})")
+        check(page.text_content("#theme").strip() == ("☀ 밝게" if t1 == "dark" else "☾ 어둡게"), "단추 글은 바꿀 쪽")
+        page.reload()
+        page.wait_for_function(f"document.documentElement.dataset.theme === '{t1}'", timeout=10000)
+        check(True, "다시 열어도 고른 테마 (포트가 바뀌어도 - 관리 도구 옆 파일에 남긴다)")
+    finally:
+        if prefs_before is None:
+            if os.path.exists(prefs):
+                os.remove(prefs)
+        else:
+            open(prefs, "w", encoding="utf-8").write(prefs_before)
+
     page.click("nav button[data-view='setup']")
     page.fill("#s-cid", "t_ui")
     page.fill("#s-name", "화면 업체")

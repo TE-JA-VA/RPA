@@ -8,7 +8,7 @@
 //   node admin.js --shortcut    바탕화면에 'AFTER MARKET 관리' 바로 가기를 만든다 (한 번)
 import http from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { readFileSync, appendFileSync } from "node:fs";
+import { readFileSync, appendFileSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -35,8 +35,17 @@ const LOG = here("./관리_기록.txt");
 const log = (line) => { try { appendFileSync(LOG, `${ops.nowKst()}  ${line}\n`, "utf8"); } catch { /* 기록은 일을 막지 않는다 */ } };
 
 // [메서드, 경로, 할 일(body, params), 기록 글(body, 결과, params) - 없거나 null 이면 안 남긴다]. 비밀번호는 기록 글에 절대 넣지 않는다
+// 화면 테마 (밝게/어둡게) - 켤 때마다 포트가 바뀌어 브라우저 저장소로는 안 남는다 → 이 폴더의 파일에
+const PREFS = here("./admin_prefs.json");
+const readPrefs = () => { try { return JSON.parse(readFileSync(PREFS, "utf8")); } catch { return {}; } };
 const ROUTES = [
   ["GET", "/api/info", () => ({ emulator: ops.onEmulator(), project: ops.PROJECT, dashboard: ops.DASHBOARD_URL })],
+  ["GET", "/api/prefs", () => readPrefs()],
+  ["POST", "/api/prefs", (b) => {
+    const prefs = { ...readPrefs(), theme: ["light", "dark"].includes(b.theme) ? b.theme : null };
+    writeFileSync(PREFS, JSON.stringify(prefs));
+    return prefs;
+  }],
   ["GET", "/api/companies", () => ops.companyTable()],
   ["GET", "/api/companies/:cid", (b, p) => ops.companyDetail(p.cid)],
   ["POST", "/api/setup", (b) => ops.setupCompany(b),

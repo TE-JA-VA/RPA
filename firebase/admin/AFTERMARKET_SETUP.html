@@ -11,9 +11,12 @@
     --accent:#f29f67; --accent-ink:#1e1e2c; --good:#1a7f79; --bad:#c93b36;
     --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
   }
-  @media (prefers-color-scheme: dark) { :root {
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
     --bg:#002b36; --card:#073642; --soft:#0f4553; --ink:#dbe3e3; --strong:#fdf6e3; --muted:#9cb0b0; --line:#1b4f5c; --good:#34b1aa; --bad:#f57a72;
   } }
+  :root[data-theme="dark"] {
+    --bg:#002b36; --card:#073642; --soft:#0f4553; --ink:#dbe3e3; --strong:#fdf6e3; --muted:#9cb0b0; --line:#1b4f5c; --good:#34b1aa; --bad:#f57a72;
+  }
   body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 var(--font); }
   header { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; padding:12px 20px;
     background:var(--card); border-bottom:1px solid var(--line); }
@@ -48,6 +51,8 @@
   .secret { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--soft); }
   .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
   .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
+  #detail li .upd-ver, #detail li .upd-go, #detail li .upd-back { margin-left:8px; }   /* 아래 'PC 추가' 줄(.row gap 8px) 과 같은 간격 */
+  #detail li { margin:4px 0; }
   label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:14px; }
   #flash { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); padding:10px 16px; border-radius:10px; background:var(--strong);
     color:var(--card); font-size:14px; max-width:90vw; }
@@ -60,16 +65,17 @@
   <span id="badge" class="badge">연결 확인 중</span>
   <nav>
     <button data-view="companies" class="on">업체</button>
-    <button data-view="setup">신규 업체</button>
+    <button data-view="setup">신규 업체 등록</button>
     <button data-view="rates">토큰 배율·통계</button>
   </nav>
   <span class="grow"></span>
+  <button id="theme">☾ 어둡게</button>
   <button id="quit">끄기</button>
 </header>
 <main>
   <section id="view-companies">
     <div class="card">
-      <button id="releases-open">판 목록</button>
+      <button id="releases-open">버전 목록</button>
       <div id="releases" class="hide"></div>
     </div>
     <div class="card">
@@ -247,8 +253,8 @@ async function drawReleases() {
     return el("tr", {}, el("td", {}, x.version), el("td", {}, local(x.published_at)), el("td", { class: "num" }, (x.bytes / 1048576).toFixed(1)),
       el("td", {}, x.memo ?? ""), el("td", {}, mark), el("td", {}, set));
   });
-  $("releases").replaceChildren(rows.length ? el("table", {}, el("thead", {}, el("tr", {}, ...["판", "내보낸 때", "크기 MB", "메모", "표시", ""].map((h) => el("th", {}, h)))),
-    el("tbody", {}, rows)) : el("p", { class: "muted" }, "올라간 판이 없습니다"));
+  $("releases").replaceChildren(rows.length ? el("table", {}, el("thead", {}, el("tr", {}, ...["버전", "업데이트 날짜", "크기(MB)", "비고", "버전 특이사항", ""].map((h) => el("th", {}, h)))),
+    el("tbody", {}, rows)) : el("p", { class: "muted" }, "올라간 버전이 없습니다"));
 }
 $("releases-open").onclick = async () => { $("releases").classList.toggle("hide"); if (!$("releases").classList.contains("hide")) await drawReleases(); };
 function pcSection(d) {
@@ -409,6 +415,20 @@ $("quit").onclick = () => act($("quit"), async () => {
   document.body.replaceChildren(el("main", {}, el("div", { class: "card" }, el("h2", {}, "관리 화면을 껐습니다"),
     el("p", { class: "muted" }, "다시 쓰려면 바탕화면의 'AFTER MARKET 관리' 를 누르세요. 이 창은 닫아도 됩니다."))));
 });
+// --- 밝게·어둡게 (고른 값은 관리 도구 옆 admin_prefs.json - 포트가 바뀌어도 남는다) -----------
+const isDark = () => document.documentElement.dataset.theme === "dark"
+  || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  $("theme").textContent = isDark() ? "☀ 밝게" : "☾ 어둡게";
+}
+$("theme").onclick = () => {
+  const t = isDark() ? "light" : "dark";
+  applyTheme(t);
+  api("POST", "/api/prefs", { theme: t }).catch(() => {});   // 못 남겨도 이번 창에서는 바뀐다
+};
+applyTheme(null);
+api("GET", "/api/prefs").then((p) => applyTheme(p.theme), () => {});
 (async () => {
   try {
     info = await api("GET", "/api/info");
