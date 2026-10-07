@@ -743,7 +743,7 @@ with tempfile.TemporaryDirectory() as d:
         orig = st.check_install
         st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "ok"}
         try:
-            for bad, why in (({"version": "../x"}, "판 번호"), ({"version": "2026.10.07-4"}, "이미")):
+            for bad, why in (({"version": "../x"}, "판 번호"), ({"version": "2026.10.07-4"}, "이미 최신 업데이트를 사용하고 있습니다")):
                 try:
                     acts["update"](bad); check(False, f"거절 안 됨 {bad}")
                 except RuntimeError as e:

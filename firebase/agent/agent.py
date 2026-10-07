@@ -626,7 +626,7 @@ def real_actions(policy=None, limits=None, start_update=None):
             raise RuntimeError(f"판 번호가 잘못되었습니다 ({version})")
         install = check_can_update()
         if install.get("version") == version:
-            raise RuntimeError(f"이미 그 판입니다 ({version})")
+            raise RuntimeError("이미 최신 업데이트를 사용하고 있습니다")
         start(version, "update")
         return f"업데이트를 예약했습니다 ({install.get('version')} → {version}) - RPA 가 끝나면 바로 바뀝니다"
 
