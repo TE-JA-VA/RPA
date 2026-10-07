@@ -34,7 +34,10 @@ firebase/
   web/       화면 (Hosting 에 그대로 올라간다)
     index.html         껍데기 HTML + 모든 CSS(색 토큰, 밝음/어두움)
     app.js             로그인, 사이드바, 회사·PC 고르기, 앱 mount/unmount
-    rpa.js             RPA 앱 화면 (현황/기록 탭, 실행·모듈·자동 실행)
+    rpa.js             RPA 앱 화면 (현황/기록 탭, 실행 단추·이번 달 사용량·반복 다시 시작)
+    rpa-settings.js    RPA 의 환경설정 (실행 모듈·쇼핑몰 프리셋·자동 실행 - 관리 > 환경설정 이 붙인다)
+    rpa-common.js      RPA 화면 둘이 같이 쓰는 것 (경로·모듈 표·명령 보내기)
+    settings.js        관리 > 환경설정 껍데기 (앱마다 설정 화면, 관리자만)
     account.js         계정 페이지 (비밀번호 바꾸기, 강조색)
     theme.js           밝음/어두움 + 강조색 (localStorage)
     firebase-config.js 공개 설정값 + HEARTBEAT_STALE_SEC, COMMAND_TTL_SEC
@@ -62,11 +65,15 @@ firebase/
 Realtime DB
 ```
 meta/companies/{cid}                    { name, stts, pcs: { pcId: { label } } }   stts 0(없음도) 사용 · 9 삭제(비활성)
+meta/companies/{cid}/apps/rpa/limits/schedule   자동 실행 개수 (0~12, 없으면 2) - 총괄·관리 도구만
 apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현재 상태
                                         { programs, modules, presets, schedule, recent[20], heartbeat, host, server_time, version, tokens }
                                         tokens = { balance, cost: { routine, prepare, all } } (통장이 없는 업체는 없음)
                                         presets = [{ no, name, code, steps, saved_at, has_login, on }] (기록 내용·아이디·비밀번호 없음)
-apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, schedule }
+                                        schedule = { version 2, enabled, days, slots, next_run_at, next_slot, policy{limit, off},
+                                                     repeat{date, at, until, runs, done, stopped, pending, next_at}, last_* } (version 이 없으면 옛 판 PC - times 만)
+                                        tokens.cost.next = 다음 예약 줄이 '고르기' 면 그 줄의 토큰
+apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, schedule {enabled, days, slots: [{at, run?, until?, rest_min?}]} }
 apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at, state, result, … }
 ```
 Firestore
@@ -78,7 +85,7 @@ users/{uid}                { cid, role, name } - 표시용. 권한 근거는 cus
 ```
 
 **토큰** (2026-10-06, 설계 `docs/superpowers/specs/2026-10-06-tokens-design.md`): 업체가 산 만큼 우리가 넣고, 모듈을 쓸 때마다 빠진다.
-에이전트가 기록 한 장을 올릴 때 `used`(모듈별 횟수 map - 루틴은 완료·대상 없음인 모듈, 프리페어는 단계가 모두 완료인 사이트 수
+에이전트가 기록 한 장을 올릴 때 `used`(모듈별 횟수 map - 루틴은 완료인 모듈 (2026-10-07 부터 대상 없음은 안 셈), 프리페어는 단계가 모두 완료인 사이트 수
 `sites`, 옵저버 미리보기는 안 셈)와 `cost`(횟수 × 토큰 배율, 토큰 배율에 없는 새 모듈은 default)를 적는다. 남은 토큰 = `granted` - 그 회사
 기록들의 `cost` 합 (Firestore 가 서버에서 더한다, `agent.balance`). 기록은 만들기만 되고 이름이 run_id 라 두 번 빠지지 않는다.
 통장이 없는 업체는 토큰 제도 밖 (세기만 한다).
@@ -97,7 +104,7 @@ users/{uid}                { cid, role, name } - 표시용. 권한 근거는 cus
 
 기준값은 항상 `live` 다. `settings` 는 "이렇게 해 달라" 는 요청이고, PC 가 실제로 반영한 결과가 `live.modules` 와 `live.schedule` 로 돌아온다.
 
-명령 종류는 `launch`, `stop_erpia`, `set_modules`, `set_schedule`, `set_presets` 다섯이다 (`set_presets` 는 에이전트가 `Sites.PRESETn.Stts` 를 0/9 로 - 키가 `PRESET1` 인 것은 숫자 키를 Realtime DB 가 배열로 바꿔 읽기 때문). 상태는 `queued → running → done|failed`, 늦게 받으면 `expired`.
+명령 종류는 `launch`, `stop_erpia`, `set_modules`, `set_schedule`, `set_presets`, `resume_repeat`(반복 다시 시작) 여섯이다 (`set_presets` 는 에이전트가 `Sites.PRESETn.Stts` 를 0/9 로 - 키가 `PRESET1` 인 것은 숫자 키를 Realtime DB 가 배열로 바꿔 읽기 때문). 상태는 `queued → running → done|failed`, 늦게 받으면 `expired`.
 
 | 값 | 지금 |
 |---|---|
@@ -155,6 +162,8 @@ node setup.js usage                                  # 업체마다 남은 토�
 - 못 올린 것은 `queue.jsonl` 에 쌓고 연결되면 순서대로 보낸다. 규칙이 거부한 것은 버린다. 기록 실패가 RPA 를 막는 일은 없다.
 - **자동 실행 예약기를 에이전트가 띄운다.** 그래서 옛 8765 대시보드(`RPA_Dashboard.exe`, `대시보드_시작.bat`)와 같이 띄우면 예약이 두 번 돈다. 배포 폴더에서 옛 대시보드를 빼 둔 이유가 이것이다.
 - 로그인 모듈은 항상 켬으로 고정한다. 화면에서도 잠겨 있고 에이전트도 `Login=Y` 로 덮어쓴다.
+- 업체 정책(자동 실행 개수·안 쓰는 모듈)을 10분마다 읽어 settings.json schedule.policy 에 적는다 - 예약기가 줄을 자르고 모듈을 뺀다. `set_schedule` 도 한도를 넘으면 저장 전에 거절한다.
+- 예약 줄의 모듈은 띄울 때 `RPA_RUN_MODULES`, 띄운 까닭은 `RPA_RUN_TRIGGER`(auto·repeat). 반복 시간대는 예약기가 회차마다 루틴을 새로 띄우고 `status_routine.json` 으로 센다 (실패·토큰 없음이면 그 시간대 멈춤). 처리한 게 없는 반복 회차는 이력에 안 남긴다. 설계: `docs/superpowers/specs/2026-10-06-settings-schedule-design.md`.
 - 옵저버가 저장한 쇼핑몰 프리셋 요약(`rpa_status.preset_summary`: 이름·코드·단계 수·저장 시각·아이디 유무·켬)을 `live.presets` 로 올리고, `set_presets` 로 켬/끔을 받는다. 기록 내용·아이디·비밀번호는 안 올린다. 옵저버 미리보기는 이력('기록' 표의 '옵저버')에만 남고 날짜별 도넛은 프리페어·루틴만 센다.
 - 켤 때 사용자 설정을 한 파일로 옮긴다. 아래 '사용자 설정' 참고.
 - **설치한 PC** 에서는 작업 스케줄러 작업 `AFTER MARKET\RPA Agent` 가 윈도우 로그인 때 `background.py` 를 창 없이(`pythonw`) 띄우고, 감독이 에이전트를 창 없이 띄워 자기 잡(job)에 넣는다. 에이전트가 0·2·3·4(정상·설정 문제·인증 멈춤·이미 돌고 있음)로 끝나면 감독도 끝나고, 그 밖은 10·30·60·120·300초 뒤 다시 켠다. 감독이 죽으면 에이전트도 죽고, 에이전트가 띄운 RPA 는 잡에서 빠져 끝까지 간다. 에이전트의 입력은 닫힌 파이프다 (`DEVNULL` 은 윈도우에서 `isatty()` 가 참이라 쓰면 안 된다). 감독은 에이전트를 켜기 전에, 설정 창은 에이전트 계정 로그인 전에 PowerShell 로 Firebase 주소를 한 번씩 찔러 윈도우가 루트 인증서를 받아 두게 한다 - 갓 설치한 윈도우에서는 이게 없으면 파이썬이 `CERTIFICATE_VERIFY_FAILED` 로 못 붙는다.
@@ -185,6 +194,7 @@ node setup.js usage                                  # 업체마다 남은 토�
 - `app.js` 가 껍데기다. 로그인, 사이드바, 회사 이름, PC 고르기, 앱 mount 를 맡는다.
 - 앱 모듈은 `key/label/icon/perPc/mount(root, ctx)/unmount()` 를 내보낸다. 새 앱을 붙이려면 파일 하나를 만들고 `APPS` 에 넣으면 된다.
 - 관리자가 아니면 오른쪽 열이 통째로 빠지고 본문이 그 폭을 쓴다.
+- 설정(실행 모듈·쇼핑몰 프리셋·자동 실행)은 '관리 > 환경설정' 한 곳 (관리자만, PC 마다). 앱 모듈이 `settings` 를 내보내면 붙는다. 적용 안 한 변경이 있으면 떠날 때 묻는다.
 - 색은 `index.html` 의 토큰 한 곳에서 정한다. 상태색은 성공 초록, 진행 파랑, 실패 빨강, 오류 노랑이다. 강조색은 사용자가 계정 페이지에서 고른다.
 - 상태 이름은 세 가지뿐이다. **성공**(success), **실패**(stopped·failed: 단계 검사에서 스스로 멈춤, 사용자 중지 포함), **오류**(crashed: 프로그램이 죽음). 상태 카드, 도넛 범례, 기록 표가 모두 같은 말을 쓴다. 실패는 데이터를 보고, 오류는 PC 를 본다.
 - 배포 뒤 옛 화면이 남지 않게 js·html 에 `Cache-Control: no-cache` 를 걸어 두었다.
@@ -211,7 +221,8 @@ cd D:\AX\RPA
 .venv\Scripts\python.exe tests\check_settings_ui.py   # 설정 창을 진짜로 띄워 본다 (몇 초 뜬다, 인수로 사진 경로)
 .venv\Scripts\python.exe tests\test_background.py     # 에이전트 감독
 .venv\Scripts\python.exe tests\test_start_failure.py  # 띄운 RPA 가 기록도 못 남기고 죽으면 '시작하지 못함' 이력
-.venv\Scripts\python.exe tests\test_schedule_slots.py    # 자동 실행 예약, RPA·옵저버가 떠 있으면 기다림
+.venv\Scripts\python.exe tests\test_schedule_slots.py    # 자동 실행 예약 (줄마다 모듈·업체 한도), RPA·옵저버가 떠 있으면 기다림
+.venv\Scripts\python.exe tests\test_schedule_repeat.py   # 시간대 반복 (가짜 시계)
 .venv\Scripts\python.exe tests\test_encoding.py       # .bat 는 CP949, 안내 문서·설치 스크립트는 BOM 있는 UTF-8
 .venv\Scripts\python.exe tests\test_edge.py           # 깔린 Edge (같이 싣는 브라우저 없이), 옵저버 Edge 명령줄·프로필, Edge 없는 PC
 .venv\Scripts\python.exe tools\sandbox_test.py D:\AX\AFTER_MARKET_RPA_Setup_<판>.exe   # 윈도우 샌드박스에서 설치 파일
@@ -227,19 +238,20 @@ cd ..; firebase deploy --only hosting --config firebase.json
 
 | 시험 | 건수 | 보는 것 |
 |---|---|---|
-| 규칙 | 29 | 다른 회사·열람자·위조 거부, 명령 상태 전이, 명령 set_presets, 기록의 쓴 토큰(0 이상 정수)·쓴 것(map), 자기 회사 쓴 토큰 합, 토큰 배율·통장은 아무도 못 씀 |
-| 관리 도구 | 44 | `tests/check_setup.py` (에뮬레이터): 업체 등록·비활성화·다시 활성화, 거절은 '오류: …' 한 줄, 도움말·출력도 관리 화면과 같은 이름(사용중지·업체 비활성화·토큰 정보·업체코드/PC코드), 없는 업체엔 모듈 정책 거절, 토큰 넣기·빼기·통장 시작 시각·넣은 내역·잘못된 수 거절, 토큰 배율, usage |
-| 관리 화면 | 56 | `tests/check_admin.py` (에뮬레이터 + Playwright): 비밀 값·Host 검사, 못 읽는 요청 줄(`GET //[`)에도 서버가 산다, 신규 업체 한 흐름(계정은 줄마다 관리자/유저, 잘못된 내용은 만들기 전에 거절·동시에 두 번 눌러도 토큰 한 번·다시 누르면 남은 것만, 이미 있는 계정은 건너뛰고 재발급 안내, 이미 있는 업체코드를 다른 이름으로 치면 거절), 업체 표·상세(토큰 넣기·재발급·사용중지/사용·모듈 정책·비활성화는 업체코드를 쳐야·다시 활성화), 화면 이름(사용자가 고른 이름만·옛 이름 없음), 토큰 배율·통계, 화면(업체 이름 속 HTML 은 글자로·물류대기를 안 고르면 거절·고객에게 보낼 정보·옛 주소는 '다시 켜세요'), [끄기] 는 하던 일을 끝낸 뒤, 관리_기록.txt·서버 출력에 비밀번호 없음 |
-| 에이전트 단위 | 166 | 큐, 로그인 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기, 쇼핑몰 프리셋 요약·set_presets·도넛에서 옵저버 빼기, 토큰(쓴 것·쓴 토큰·토큰 배율 읽기·남은 토큰, 막기: 0 이하 거절·통장 없음 통과·확인 실패는 지난 값·실행 1번에 드는 토큰) |
-| 통합 | 40 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기, 기록마다 서버 토큰 배율로 센 쓴 토큰, 남은 토큰(통장 없음 null), 토큰이 없으면 실행 명령이 그 까닭으로 실패·현황 tokens, 통장 시작 뒤 기록만 뺀다 |
-| 화면 | 262 | Playwright. 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버', 실행 단추 '… 실행중'(끝나면 돌아옴), 잠긴 까닭은 줄 아래 글(휴대폰), 토큰 줄(통장 없음 숨김·회색·노랑·빨강+실행 단추 잠금)·예약 칸 토큰 글, 이번 달 사용량 카드(모듈별 횟수·합계·오늘, 통장이 없으면 숨김, 이달 중간에 만든 토큰 정보는 '…일 토큰 정보 생성부터'), 역할 이름 '유저'(전 '열람'), 에이전트 계정 안내 |
+| 규칙 | 30 | 다른 회사·열람자·위조 거부, 명령 상태 전이, 명령 set_presets·resume_repeat, 기록의 쓴 토큰(0 이상 정수)·쓴 것(map), 자기 회사 쓴 토큰 합, 토큰 배율·통장은 아무도 못 씀 |
+| 관리 도구 | 48 | `tests/check_setup.py` (에뮬레이터): 업체 등록·비활성화·다시 활성화, 거절은 '오류: …' 한 줄, 도움말·출력도 관리 화면과 같은 이름(사용중지·업체 비활성화·토큰 정보·업체코드/PC코드), 없는 업체엔 모듈 정책 거절, 토큰 넣기·빼기·통장 시작 시각·넣은 내역·잘못된 수 거절, 토큰 배율, usage, 자동 실행 개수(slots, 0~12) |
+| 관리 화면 | 64 | `tests/check_admin.py` (에뮬레이터 + Playwright): 비밀 값·Host 검사, 못 읽는 요청 줄(`GET //[`)에도 서버가 산다, 신규 업체 한 흐름(계정은 줄마다 관리자/유저, 잘못된 내용은 만들기 전에 거절·동시에 두 번 눌러도 토큰 한 번·다시 누르면 남은 것만, 이미 있는 계정은 건너뛰고 재발급 안내, 이미 있는 업체코드를 다른 이름으로 치면 거절), 업체 표·상세(토큰 넣기·재발급·사용중지/사용·모듈 정책·자동 실행 개수·비활성화는 업체코드를 쳐야·다시 활성화), 화면 이름(사용자가 고른 이름만·옛 이름 없음), 토큰 배율·통계, 화면(업체 이름 속 HTML 은 글자로·물류대기를 안 고르면 거절·고객에게 보낼 정보·옛 주소는 '다시 켜세요'), [끄기] 는 하던 일을 끝낸 뒤, 관리_기록.txt·서버 출력에 비밀번호 없음 |
+| 에이전트 단위 | 180 | 큐, 로그인 토큰, 인증 거부·망 오류 구분, 명령 선점, 세 칸 첫 실행, 에이전트 파일 자리, 하나만 돌기, 쇼핑몰 프리셋 요약·set_presets·도넛에서 옵저버 빼기, 토큰(쓴 것·쓴 토큰·토큰 배율 읽기·남은 토큰, 막기: 0 이하 거절·통장 없음 통과·확인 실패는 지난 값·실행 1번에 드는 토큰, '완료' 만 셈), 업체 정책(자동 실행 개수 읽기·PC 에 적기·한도 넘는 set_schedule 거절·다음 줄 토큰), resume_repeat |
+| 통합 | 42 | 에뮬레이터에 에이전트를 붙여 명령 왕복, 사용자 설정 옮기기·잠금·모듈 쓰기·ERPia 위치, 켤 때 판 올리기, 기록마다 서버 토큰 배율로 센 쓴 토큰, 남은 토큰(통장 없음 null), 토큰이 없으면 실행 명령이 그 까닭으로 실패·현황 tokens, 통장 시작 뒤 기록만 뺀다, 옛 모양·줄 모양 set_schedule |
+| 화면 | 296 | Playwright. 관리 > 환경설정(떠날 때 확인·PC 마다), 자동 실행 줄(전체/고르기·업체 한도 N/M·한도 넘는 줄 쉬는 중·옛 판 PC 는 시각만·줄 0개도 새 판), 반복 시간대(겹침 거절·오늘 N회·멈춤 까닭·[반복 다시 시작]·기록 '루틴 · 반복'), 대비 4.5:1, 띠, 기록 탭, 권한별 화면, 세 칸 로그인, 이스케이프, 삭제된 업체·막힌 계정 안내, 두 칸 로그인·저장 체크박스, 판 칸, '쇼핑몰 프리셋' 스위치(잠김·까닭·적용·꺾쇠), 기록 표 '옵저버', 실행 단추 '… 실행중'(끝나면 돌아옴), 잠긴 까닭은 줄 아래 글(휴대폰), 토큰 줄(통장 없음 숨김·회색·노랑·빨강+실행 단추 잠금)·예약 칸 토큰 글, 이번 달 사용량 카드(모듈별 횟수·합계·오늘, 통장이 없으면 숨김, 이달 중간에 만든 토큰 정보는 '…일 토큰 정보 생성부터'), 역할 이름 '유저'(전 '열람'), 에이전트 계정 안내 |
 | 배치·판 | 45 | 자리 찾기(새·옛 구조, PyInstaller·Nuitka), 판 점검, exe 쪽 모듈 자리 |
 | 빌드 스크립트 | 58 | 판 번호·모으기(브라우저 폴더는 runtime 에 남아 있어도 판에 없다 - Edge)·압축·찌꺼기·빈 틀(비밀·우리 물류 값)·exe 출력 표지, Nuitka 링크도 일반 x86-64 CPU(LDFLAGS - 빌드 PC 의 AVX-512 가 인텔 노트북에서 0xC000001D), 설치 파일(ISCC 명령·installer.iss 와 자리 규칙·제거 순서·권한·옵저버가 켜져 있으면 멈춤·가짜 판 컴파일)·tkinter·exe 가져오기, mfc140u.dll·comtypes 시각 비교 끄기, AFTER MARKET 파이썬 사본(설명 칸·아이콘 한 벌), exe 별 아이콘(루틴 크림 A·프리페어 주황 A), exe 셋(옵저버 콘솔 attach·tk-inter·Tcl/Tk 꺼내기·옛 판 가져오기 거부·Nuitka 만) |
 | 설정 창 | 108 | 칸 확인(대시보드·ERPia 업체코드 따로), 설정 합치기(잠금·비운 칸은 그대로, Sites 는 안 건드림), 물류 칸(출력 방식 A·Y=자동, 빈 틀 수동, 가져오기), 메일 칸 없음, 저장 순서(인증서 채우기 → 로그인), 멈춘 까닭, ERPia 못 찾음, 작업 XML(진짜 작업 스케줄러 등록, AFTER MARKET 감독 사본), 옛 에이전트, 멈추기 0·5·6·확인만, 가져오기(Run_All.bat)·이름 바꾸기, 계정·설치 폴더 확인, 오류 가드 |
 | 설정 창 화면 | 40 | 진짜 tkinter 창: 첫 모습(단추 이름·맨 위 한 줄), 빈 칸 안 흐린 안내(보이고 사라짐·칸 안에 들어감·값이 아님), '(기본 프린터)', 창 폭(≤520)·높이(≤690)·긴 까닭 줄바꿈, 출력 방식·물류 경고 줄, 수동이면 프린터 칸 꺼짐·없는 프린터 줄 숨김, ERPia 못 찾음, 빈 칸의 빨간 안내, 저장·'켜는 중', 가져오기, 없는 프린터, 멈춘 까닭, 옛 에이전트, 이름 잘림, 단추 오류 |
 | 감독 | 28 | 종료 코드별 다시 켜기, 멈춘 까닭 파일, 기다림, 창 없는 입출력(닫힌 파이프·UTF-8), 잡(감독이 죽으면 에이전트도, RPA 는 남음), 윈도우 인증서 채우기, AFTER MARKET 에이전트 사본 |
+| 시간대 반복 | 44 | `tests/test_schedule_repeat.py` (가짜 시계): 반복 줄 검사(겹침·전체·쇼핑몰 받기·자정), 첫 회차·쉬는 시간(누가 띄웠든 마지막 끝난 때부터)·처리 센다, 실패·토큰 없음이면 멈춤·다시 시작, 끝 시각 뒤 새 회차 없음, 시간대 중 고치기·지우기, 정책 쓰기가 반복 상태를 안 지움, 자정 넘긴 회차 |
 | 시작하지 못함 | 10 | 띄운 RPA 가 기록도 못 남기고 끝나면 '시작하지 못함' 이력 한 건 (오류 출력 마지막 줄·종료 코드, 전체 실행은 둘 다) |
-| 자동 실행 | 72 | 요일·시간 예약 계산, 예약기 (RPA 가 돌거나 옵저버가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 옵저버가 죽으면 풀림), 다시 켤 때 건너뛰기, 토큰 확인(TOKEN_GATE)이 거절하면 실행 단추는 그 글로·예약은 까닭을 남기고 다음으로 |
+| 자동 실행 | 107 | 요일·시간 예약 계산, 줄마다 모듈(전체/루틴만/프리페어만, RPA_RUN_MODULES)·옛 모양 {days, times} 바꾸기·업체 한도(앞 N줄만, 안 쓰는 모듈만 남으면 건너뜀), 예약기 (RPA 가 돌거나 옵저버가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 옵저버가 죽으면 풀림), 다시 켤 때 건너뛰기, 토큰 확인(TOKEN_GATE)이 거절하면 실행 단추는 그 글로·예약은 까닭을 남기고 다음으로 |
 | 기록·재생 엔진 | 56 | `tests/test_web_replay.py` (같이 싣는 브라우저 없이 - 깔린 Edge): 가짜 쇼핑몰을 기록해 다음 날·모레·기다림 없이·예상 밖 공지·느린 목록·단계 뺀 기록으로 재생, 마우스 올리기 메뉴, 주소줄 단계, 창 크기, 값 없는 설명, 모르는 형식, 받기 시간 초과, 멈춤(단계 앞·찾는 중), 일시정지, 팝업이 내려 주는 파일. 부하는 `tests/stress_web_replay.py` (22번) |
 | 프리셋 | 68 | `tests/test_presets.py` (깔린 Edge): 프리셋 파일·Sites 칸(잠김·Stts 9)·요약·켬끔, 옵저버 미리보기는 이력에만, 관리자·계정 확인, 프리페어 replay 로 `(012)…` 받기·알림창은 재생기 하나만(글 20자), 옵저버 저장 전 확인·잠금, 바뀐 프리셋만 저장 날짜, 남은 프로필 지우기, 콘솔 없이 켜진 exe 처럼 표준 핸들이 못 쓰는 값이어도 Playwright 드라이버가 뜸 |
 | 브라우저 (Edge) | 11 | `tests/test_edge.py`: 같이 싣는 브라우저 없이 기록·재생·프리페어 자체 시험이 깔린 Edge 로, 옵저버 Edge 명령줄(`--no-sandbox`·`--enable-automation` 없음)·다운로드 창을 끈 프로필·`--check` 의 Edge 판, Edge 다운로드 창(`edge://downloads-hub`)과 늦게 주소가 붙는 새 탭은 사이트가 연 창이 아니다, 사람이 연 Edge 새 탭(MSN 새 탭 주소 `ntp.msn.com/edge/ntp` - 바로 생김·나중에 붙음)은 '새 탭' 단계, Edge 가 없으면 "Microsoft Edge 가 없습니다" |

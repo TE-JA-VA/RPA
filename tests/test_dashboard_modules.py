@@ -454,6 +454,6 @@ finally:
 
 import rpa_dashboard as dash  # noqa: E402
 src = open(dash.__file__, encoding="utf-8").read()
-check("대시보드·에이전트가 띄우는 실행에는 무인 표시(RPA_UNATTENDED)를 붙인다", 'env=dict(os.environ, RPA_UNATTENDED="1")' in src)
+check("대시보드·에이전트가 띄우는 실행에는 무인 표시(RPA_UNATTENDED)를 붙인다", 'env={**os.environ, "RPA_UNATTENDED": "1", **(env or {})}' in src)   # 예약 줄의 모듈(RPA_RUN_MODULES)도 같이 (2026-10-07)
 
 finish()
