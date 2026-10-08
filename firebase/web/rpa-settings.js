@@ -382,7 +382,7 @@ function scheduleProblems() {
     });
   });
   if (slots.some((a, i) => slots.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) out.push("같은 시각이 두 번 있습니다");
-  if (slots.some((s) => s.run && !s.run.length)) out.push("고르기 줄에 모듈을 하나 이상 고르세요");
+  if (slots.some((s) => s.until === undefined && s.run && !s.run.length)) out.push("'선택 모듈만 실행' 줄에 모듈을 하나 이상 고르세요");   // 반복 줄은 위에서 따로
   if (form.sch.enabled && !isV3() && !form.sch.days.length) out.push("요일을 하나 이상 고르세요");
   if (form.sch.enabled && !slots.length) out.push("시간을 하나 이상 넣으세요");
   return [...new Set(out)];

@@ -1042,6 +1042,7 @@ with sync_playwright() as pw:
     lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
     check("같은 시각이 두 번 있습니다" in lines and "반복 줄에 모듈을 하나 이상 고르세요" in lines and page.is_disabled("#sch-apply"),
           f"막는 까닭은 하나씩이 아니라 모두, 한 줄에 하나씩 (사용자 2026-10-08) ({lines})")
+    check(len(lines) == 2, f"반복 줄의 모듈 미선택은 한 번만 ('선택 모듈만 실행' 줄 글과 겹치지 않는다) ({lines})")
     page.click(f"{row3} button.del")
     el = page.query_selector(f"{row2} input[type=time]"); el.fill("09:00"); el.dispatch_event("change")
     check("같은 시각" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "요일이 겹치는 같은 시각은 막는다")
