@@ -66,7 +66,7 @@ SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
 # (2026-10-07 시각별 모듈 - 설계 docs/superpowers/specs/2026-10-06-settings-schedule-design.md 5절. 옛 모양 {days, times} 는 read_settings 가 바꾼다)
 SCHEDULE_MINUTE_STEP = 5
 SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
-SCHEDULE_VERSION = 2        # live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
+SCHEDULE_VERSION = 3        # 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
     "schedule": {
         "version": SCHEDULE_VERSION,

@@ -73,7 +73,7 @@ apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현�
                                         schedule = { version 2, enabled, days, slots, next_run_at, next_slot, policy{limit, off},
                                                      repeat{date, at, until, runs, done, stopped, pending, next_at}, last_* } (version 이 없으면 옛 판 PC - times 만)
                                         tokens.cost.next = 다음 예약 줄이 '고르기' 면 그 줄의 토큰
-apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, schedule {enabled, days, slots: [{at, run?, until?, rest_min?}]} }
+apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, schedule {enabled, days, slots: [{at, days?, run?, until?, rest_min?}]} (줄마다 요일 days 는 판 3 PC - live.schedule.version 3, 없으면 공통 days) }
 apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at, state, result, … }
 ```
 Firestore
@@ -252,7 +252,7 @@ cd ..; firebase deploy --only hosting --config firebase.json
 | 설정 창 | 108 | 칸 확인(대시보드·ERPia 업체코드 따로), 설정 합치기(잠금·비운 칸은 그대로, Sites 는 안 건드림), 물류 칸(출력 방식 A·Y=자동, 빈 틀 수동, 가져오기), 메일 칸 없음, 저장 순서(인증서 채우기 → 로그인), 멈춘 까닭, ERPia 못 찾음, 작업 XML(진짜 작업 스케줄러 등록, AFTER MARKET 감독 사본), 옛 에이전트, 멈추기 0·5·6·확인만, 가져오기(Run_All.bat)·이름 바꾸기, 계정·설치 폴더 확인, 오류 가드 |
 | 설정 창 화면 | 40 | 진짜 tkinter 창: 첫 모습(단추 이름·맨 위 한 줄), 빈 칸 안 흐린 안내(보이고 사라짐·칸 안에 들어감·값이 아님), '(기본 프린터)', 창 폭(≤520)·높이(≤690)·긴 까닭 줄바꿈, 출력 방식·물류 경고 줄, 수동이면 프린터 칸 꺼짐·없는 프린터 줄 숨김, ERPia 못 찾음, 빈 칸의 빨간 안내, 저장·'켜는 중', 가져오기, 없는 프린터, 멈춘 까닭, 옛 에이전트, 이름 잘림, 단추 오류 |
 | 감독 | 28 | 종료 코드별 다시 켜기, 멈춘 까닭 파일, 기다림, 창 없는 입출력(닫힌 파이프·UTF-8), 잡(감독이 죽으면 에이전트도, RPA 는 남음), 윈도우 인증서 채우기, AFTER MARKET 에이전트 사본 |
-| 시간대 반복 | 44 | `tests/test_schedule_repeat.py` (가짜 시계): 반복 줄 검사(겹침·전체·쇼핑몰 받기·자정), 첫 회차·쉬는 시간(누가 띄웠든 마지막 끝난 때부터)·처리 센다, 실패·토큰 없음이면 멈춤·다시 시작, 끝 시각 뒤 새 회차 없음, 시간대 중 고치기·지우기, 정책 쓰기가 반복 상태를 안 지움, 자정 넘긴 회차 |
+| 시간대 반복 | 66 | `tests/test_schedule_repeat.py` (가짜 시계): 반복 줄 검사(겹침·전체·자정, 사이트 수집도 넣을 수 있음 - 사이트 수집만이면 프리페어 상태로 회차를 센다), 첫 회차·쉬는 시간(누가 띄웠든 마지막 끝난 때부터)·처리 센다, 실패·토큰 없음이면 멈춤·다시 시작, 끝 시각 뒤 새 회차 없음, 시간대 중 고치기·지우기, 정책 쓰기가 반복 상태를 안 지움, 자정 넘긴 회차 |
 | 시작하지 못함 | 10 | 띄운 RPA 가 기록도 못 남기고 끝나면 '시작하지 못함' 이력 한 건 (오류 출력 마지막 줄·종료 코드, 전체 실행은 둘 다) |
 | 웰라이프 관문 | 31 | `tests/test_wellife_gate.py`: Wellife 섹션 읽기·쓰기(처음은 로그인·매출처리만·빠진 키는 끔·모르는 키 거절), 정책 값 wellife, 루틴 갈래 네 칸·main 이 정책 켬+섹션 없음이면 멈춤 / `tests/test_login_flow.py`: 재시도 때 숨은 로그인 창은 안 누름, 같은 ERPia 의 보이는 메인 창만 성공 (가짜 창) |
 | 자동 실행 | 107 | 요일·시간 예약 계산, 줄마다 모듈(전체/루틴만/프리페어만, RPA_RUN_MODULES)·옛 모양 {days, times} 바꾸기·업체 한도(앞 N줄만, 안 쓰는 모듈만 남으면 건너뜀), 예약기 (RPA 가 돌거나 옵저버가 떠 있으면 기다림·실행 단추 거절·잠금 쥔 옵저버가 죽으면 풀림), 다시 켤 때 건너뛰기, 토큰 확인(TOKEN_GATE)이 거절하면 실행 단추는 그 글로·예약은 까닭을 남기고 다음으로 |

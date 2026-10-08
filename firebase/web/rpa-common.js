@@ -75,7 +75,7 @@ function watchCommand(c, cmdKey, label, alive) {
 }
 
 // 예약 줄 (2부). 단추 글은 PC 의 rpa_dashboard.SLOT_NAMES 와 같은 말
-export const RUN_CHIPS = [["Prepare", "쇼핑몰 받기"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Logistics", "물류관리"], ["Output", "운송장"]];
+export const RUN_CHIPS = [["Prepare", "사이트 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Logistics", "물류관리"], ["Output", "운송장"]];
 export const RUN_NAMES = dict(RUN_CHIPS);
 /** '고르기' 줄의 모듈 이름 (로그인은 늘 붙으니 안 적는다). '전체' 거나 줄이 없으면 "" */
 export const slotNames = (slot) => (slot?.run ? slot.run.filter((k) => k !== "Login").map((k) => RUN_NAMES[k] || k).join("·") : "");

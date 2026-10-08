@@ -1,4 +1,4 @@
-// RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 실행 모듈 · 쇼핑몰 프리셋 · 자동 실행 (PC 마다).
+// RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 프리페어 RPA(사이트 수집: 쇼핑몰 프리셋) · 루틴 RPA(실행 모듈) · 자동 실행 (PC 마다).
 // 값의 기준은 PC 가 올린 live. 적용 = settings 에 쓰고 명령을 넣는다 - PC 가 반영해 live 로 돌려준다
 import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
@@ -10,31 +10,40 @@ const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]],
 const HTML = `
   <div class="settings-grid" id="settings-grid">
     <div>
-      <div class="card" id="mod-card">
-        <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
-        <div class="msg">전체 실행과 '전체' 예약이 이 모듈을 돌립니다</div>
-        <div id="mod-list"></div>
-        <button class="apply" id="mod-apply" disabled>적용</button>
-      </div>
+      <h3 class="grp">프리페어 RPA (사이트 수집)</h3>
+      <div class="msg grp-note">쇼핑몰 사이트에서 주문 엑셀을 받아 옵니다</div>
       <div class="card hide" id="shop-card">
         <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
         <div id="shop-list"></div>
         <div class="msg" id="shop-info"></div>
         <button class="apply" id="shop-apply" disabled>적용</button>
       </div>
+      <div class="msg hide" id="shop-none">이 PC 는 아직 사이트 수집 정보를 보내지 않았습니다 (에이전트를 새 버전으로 업데이트하세요)</div>
+      <h3 class="grp">루틴 RPA</h3>
+      <div class="msg grp-note">받아 온 주문을 ERPia 에서 처리합니다</div>
+      <div class="card" id="mod-card">
+        <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
+        <div class="msg">전체 실행과 '전체 모듈 실행' 예약이 이 모듈을 돌립니다</div>
+        <div id="mod-list"></div>
+        <button class="apply" id="mod-apply" disabled>적용</button>
+      </div>
     </div>
     <div>
+      <h3 class="grp">자동 실행</h3>
+      <div class="msg grp-note">시각마다 사이트 수집과 루틴을 함께 고를 수 있습니다</div>
       <div class="card" id="sch-card">
         <h2>자동 실행 <span class="muted" id="sch-meta"></span></h2>
-        <label class="switch first"><span>켬</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
+        <label class="switch first"><span>활성화</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
         <div id="sch-form">
-          <div class="lbl">요일</div>
+          <div class="lbl" id="sch-days-lbl">요일</div>
           <div class="seg" id="sch-presets"></div>
           <div class="seg" id="sch-days"></div>
           <div class="lbl">시간 · <span id="sch-count"></span></div>
           <div class="times" id="sch-times"></div>
           <div class="seg"><button id="sch-add">+ 시각</button><button id="sch-add-win" class="hide">+ 반복 시간대</button></div>
           <div class="msg" id="sch-limit"></div>
+          <div class="msg warn hide" id="sch-warn">너무 잦은 사이트 수집은 2차인증을 요구할 수도 있습니다.</div>
+          <div class="msg good hide" id="sch-full"></div>
         </div>
         <div class="msg" id="sch-old" hidden>이 PC 는 새 판을 깔아야 시각별 모듈·반복을 쓸 수 있습니다</div>
         <div class="msg" id="sch-info"></div>
@@ -58,10 +67,10 @@ export function mount(el, context) {
   $("shop-apply").onclick = applyShops;
   $("sch-apply").onclick = applySchedule;
   $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
-  $("sch-add").onclick = () => { if (form.sch.slots.length >= limitOf()) return; form.sch.slots.push({ at: "09:00", run: null }); paintTimes(); paintScheduleMeta(); };
+  $("sch-add").onclick = () => { if (form.sch.slots.length >= limitOf()) return; form.sch.slots.push({ at: "09:00", run: null, ...newDays() }); paintTimes(); paintScheduleMeta(); };
   $("sch-add-win").onclick = () => {
     if (form.sch.slots.length >= limitOf()) return;
-    form.sch.slots.push({ at: "10:00", until: "11:00", rest_min: 2, run: [] });
+    form.sch.slots.push({ at: "10:00", until: "11:00", rest_min: 2, run: [], ...newDays() });
     paintTimes(); paintScheduleMeta();
   };
   $("sch-presets").replaceChildren(...PRESETS.map(([t, days]) => {
@@ -195,6 +204,7 @@ function shopLine(p) {
 }
 function paintShops() {
   show($("shop-card"), Array.isArray(live?.presets));   // 옛 에이전트·설정이 깨진 PC 는 카드를 숨긴다
+  show($("shop-none"), !!live && !Array.isArray(live.presets));
   const list = savedShops();
   $("shop-list").replaceChildren(...list.map((p, i) => {
     const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
@@ -229,6 +239,11 @@ async function applyShops() {
 // --- 자동 실행 (2부: 줄마다 전체/고르기, 업체 한도) ----------------------------------------
 // 새 판 PC 는 live.schedule.version 2 와 줄(slots)을 올린다. 없으면 옛 판 - 시각만 넣고 옛 모양 {enabled, days, times} 로 보낸다
 const isV2 = () => (live?.schedule?.version ?? 0) >= 2;
+// 판 3 PC 는 줄마다 요일 (slots[i].days, 사용자 2026-10-08). 옛 판 PC 에는 지금처럼 카드의 공통 요일 하나
+const isV3 = () => (live?.schedule?.version ?? 0) >= 3;
+const WEEKDAYS = [0, 1, 2, 3, 4];
+const newDays = () => (isV3() ? { days: [...WEEKDAYS] } : {});     // 새 줄은 늘 평일 (사용자 2026-10-08)
+const sameDay = (a, b) => !isV3() || a.days.some((d) => b.days.includes(d));
 /** 업체 한도 '자동 실행 개수' (meta/companies/{cid}/apps/rpa/limits/schedule, 없으면 2). 옛 판 PC 는 3개까지밖에 못 받는다 */
 function limitOf() {
   const n = liveLimit !== undefined ? liveLimit : c?.policy?.rpa?.limits?.schedule;
@@ -243,10 +258,11 @@ function savedSlots() {
   return (Array.isArray(s.slots) ? s.slots : []).filter((x) => x && typeof x.at === "string").map((x) => wellifySlot({
     at: x.at, run: Array.isArray(x.run) ? x.run.filter((k) => k !== "Login") : null,
     ...(x.until ? { until: x.until, rest_min: x.rest_min ?? 2 } : {}),
+    ...(isV3() ? { days: [...(Array.isArray(x.days) ? x.days : s.days || [])].sort() } : {}),
   }));
 }
 /** 웰라이프 업체는 '전체' 시각만 - 반복·고르기 줄은 시작 시각만 남긴 '전체' 줄로 (에이전트가 그런 줄을 거절한다). 폼 줄과 보내는 값이 같은 곳을 지난다 */
-const wellifySlot = (s) => (isWellife() ? { at: s.at, run: null } : s);
+const wellifySlot = (s) => (isWellife() ? { at: s.at, run: null, ...(s.days ? { days: s.days } : {}) } : s);
 function resetSchedule() {
   const s = savedSch();
   form.sch = { enabled: !!s.enabled, days: [...(s.days || [])], slots: savedSlots() };
@@ -254,12 +270,12 @@ function resetSchedule() {
   paintDays(); paintTimes(); paintScheduleMeta();
 }
 const runKey = (run) => (run ? [...run].filter((k) => k !== "Login").sort().join() : "*");
-const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}`;
+const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}${s.days ? `@${[...s.days].sort()}` : ""}`;
 const slotsKey = (slots) => slots.map(slotKey).sort().join("|");
 function scheduleDirty() {
   const s = savedSch();
   return form.sch.enabled !== !!s.enabled
-    || [...form.sch.days].sort().join() !== [...(s.days || [])].sort().join()
+    || (!isV3() && [...form.sch.days].sort().join() !== [...(s.days || [])].sort().join())
     || slotsKey(form.sch.slots) !== slotsKey(savedSlots());
 }
 function paintDays() {
@@ -280,11 +296,23 @@ function timeInput(value, label, apply) {
   inp.onchange = () => { apply(inp.value); paintTimes(); paintScheduleMeta(); };
   return inp;
 }
+/** 줄의 요일 단추 일곱 개 (판 3 PC) */
+function dayChips(s) {
+  const box = document.createElement("span"); box.className = "seg days-mini";
+  DAYS.forEach((d, i) => {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = d;
+    b.setAttribute("aria-pressed", s.days.includes(i));
+    b.disabled = !c.isAdmin || busy;
+    b.onclick = () => { s.days = s.days.includes(i) ? s.days.filter((x) => x !== i) : [...s.days, i].sort(); paintTimes(); paintScheduleMeta(); };
+    box.append(b);
+  });
+  return box;
+}
 /** 줄의 모듈 단추. 업체가 안 쓰는 모듈은 없다. 운송장은 물류관리를 고르기 전엔 잠김 (실행 모듈 카드와 같은 규칙) */
-function runChips(s, withPrepare) {
+function runChips(s) {
   const box = document.createElement("span"); box.className = "seg chips";
   for (const [k, text] of RUN_CHIPS) {
-    if (k === "Prepare" ? !withPrepare : offByCompany(k)) continue;
+    if (k !== "Prepare" && offByCompany(k)) continue;
     const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.dataset.k = k;
     b.setAttribute("aria-pressed", s.run.includes(k));
     const locked = k === "Output" && !s.run.includes("Logistics");
@@ -304,22 +332,24 @@ function paintTimes() {
   $("sch-times").replaceChildren(...form.sch.slots.map((s, i) => {
     const row = document.createElement("div"); row.className = "t" + (over.has(s) ? " over" : "");
     row.append(timeInput(s.at, "시각", (v) => { s.at = v; }));
-    if (s.until) {                                   // 반복 시간대 줄: 시작 ~ 끝 · 모듈 (쇼핑몰 받기 없음) · 쉬는 시간
+    if (s.until !== undefined) {                     // 반복 시간대 줄: 시작 ~ 끝 · 모듈 (사이트 수집 포함 - 사용자 2026-10-08) · 쉬는 시간. 끝 시각을 지워도("") 반복 줄 그대로
       const rest = document.createElement("input");
       Object.assign(rest, { type: "number", min: 1, max: 60, value: s.rest_min, className: "num rest-min" });
       rest.setAttribute("aria-label", "쉬는 시간 (분)");
       rest.onchange = () => { s.rest_min = Number(rest.value); paintScheduleMeta(); };
-      row.append(Object.assign(document.createElement("span"), { textContent: "~" }), timeInput(s.until, "끝 시각", (v) => { s.until = v; }),
-        Object.assign(document.createElement("span"), { className: "muted", textContent: "반복" }), runChips(s, false),
+      row.append(Object.assign(document.createElement("span"), { textContent: "~" }), timeInput(s.until, "끝 시각", (v) => { s.until = v; }));
+      if (isV3()) row.append(dayChips(s));
+      row.append(Object.assign(document.createElement("span"), { className: "muted", textContent: "반복" }), runChips(s),
         rest, Object.assign(document.createElement("span"), { className: "muted", textContent: "분 쉬고" }));
     } else if (isV2() && !isWellife()) {
+      if (isV3()) row.append(dayChips(s));
       const mode = document.createElement("select"); mode.className = "mode"; mode.setAttribute("aria-label", "돌릴 모듈");
-      mode.append(new Option("전체", "all"), new Option("고르기", "pick"));
+      mode.append(new Option("전체 모듈 실행", "all"), new Option("선택 모듈만 실행", "pick"));
       mode.value = s.run ? "pick" : "all";
       mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; paintTimes(); paintScheduleMeta(); };
       row.append(mode);
-      if (s.run) row.append(runChips(s, true));
-    }
+      if (s.run) row.append(runChips(s));
+    } else if (isV3()) row.append(dayChips(s));   // 웰라이프 업체도 줄마다 요일
     const del = document.createElement("button"); del.className = "del"; del.textContent = "빼기";
     del.onclick = () => { form.sch.slots.splice(i, 1); paintTimes(); paintScheduleMeta(); };
     row.append(del);
@@ -330,23 +360,23 @@ function paintTimes() {
 /** 적용을 막는 까닭 (없으면 ""). 줄 모양은 꺼도 지킨다 (PC 가 본다). 한도는 켤 때만 - 끄기는 언제나 된다 (에이전트도 같다) */
 function scheduleProblem() {
   const lim = limitOf(), slots = form.sch.slots;
-  if (form.sch.enabled && slots.length > lim) return lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 담당자에게 문의하세요";
+  if (form.sch.enabled && slots.length > lim) return lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 ERPia에 문의해주세요.";
   if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) return "시간을 확인하세요";
-  for (const w of slots.filter((s) => s.until)) {
+  if (isV3() && slots.some((s) => !s.days.length)) return "요일을 하나 이상 고르세요";
+  for (const w of slots.filter((s) => s.until !== undefined)) {
     if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) return `반복 끝 시각은 시작(${w.at})보다 늦어야 합니다`;
     if (!(Number.isInteger(w.rest_min) && w.rest_min >= 1 && w.rest_min <= 60)) return "쉬는 시간은 1~60분입니다";
     if (!w.run.length) return "반복 줄에 모듈을 하나 이상 고르세요";
     for (const x of slots) {
-      if (x === w) continue;
+      if (x === w || !sameDay(w, x)) continue;
       if (x.until && x.at < w.until && w.at < x.until) return `반복 시간대가 겹칩니다: ${w.at}~${w.until}, ${x.at}~${x.until}`;
-      if (!x.until && w.at <= x.at && x.at < w.until) return `${w.at}~${w.until} 반복 안에는 시각을 넣을 수 없습니다`;
+      if (!x.until && w.at <= x.at && x.at < w.until) return `${x.at} 은 반복 시간대(${w.at}~${w.until}) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오.`;
     }
   }
-  const ats = slots.map((s) => s.at);
-  if (new Set(ats).size !== ats.length) return "같은 시각이 두 번 있습니다";
+  if (slots.some((a, i) => slots.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) return "같은 시각이 두 번 있습니다";
   if (slots.some((s) => s.run && !s.run.length)) return "고르기 줄에 모듈을 하나 이상 고르세요";
   if (!form.sch.enabled) return "";
-  if (!form.sch.days.length) return "요일을 하나 이상 고르세요";
+  if (!isV3() && !form.sch.days.length) return "요일을 하나 이상 고르세요";
   if (!slots.length) return "시간을 하나 이상 넣으세요";
   return "";
 }
@@ -359,14 +389,22 @@ function paintScheduleMeta() {
   show($("sch-add-win"), isV2() && !isWellife()); $("sch-add-win").disabled = dis || n >= lim;
   $("sch-count").textContent = `${n}/${lim} 사용`;
   const problem = scheduleProblem();
-  const full = n >= lim ? (lim ? `자동 실행은 ${lim}개까지입니다. 더 필요하면 담당자에게 문의하세요` : "자동 실행을 쓰려면 담당자에게 문의하세요") : "";
-  $("sch-limit").textContent = problem || full;
+  const full = n >= lim ? (lim ? `자동 실행 슬롯은 최대 ${lim}개까지입니다. 추가를 원하시면 ERPia에 문의해주세요.` : "자동 실행을 쓰려면 ERPia에 문의해주세요.") : "";
+  // 글은 중요도 순으로 위에서 아래: 막는 까닭(빨강) > 사이트 수집 경고(호박색) > 한도 안내(초록) (사용자 2026-10-08)
+  $("sch-limit").textContent = problem;
   $("sch-limit").className = "msg" + (problem ? " bad" : "");
+  $("sch-full").textContent = full;
+  show($("sch-full"), !!full && !(form.sch.enabled && n > lim));   // 넘친 채 켜 두면 빨간 글이 같은 말을 한다
+  // 반복 줄에 사이트 수집 - 쇼핑몰에 자주 로그인하면 2차 인증을 물을 수 있다 (사용자 2026-10-08, 빨강 아래 호박색)
+  show($("sch-warn"), form.sch.slots.some((x) => x.until !== undefined && x.run?.includes("Prepare")));
   $("sch-old").hidden = !live || isV2();
-  $("sch-meta").textContent = !live ? "" : s.enabled ? `${labelDays(s.days)} ${savedSlots().map(slotText).join(", ")}` : "꺼짐";
+  for (const id of ["sch-days-lbl", "sch-presets", "sch-days"]) show($(id), !isV3());
+  $("sch-meta").textContent = !live ? "" : !s.enabled ? "비활성화"
+    : isV3() ? savedSlots().map((x) => `${labelDays(x.days)} ${slotText(x)}`).join(", ") : `${labelDays(s.days)} ${savedSlots().map(slotText).join(", ")}`;
   const info = [];
   if (s.enabled && s.next_run_at) {
-    const names = slotNames((Array.isArray(s.slots) ? s.slots : []).find((x) => x && x.at === s.next_slot));
+    const wd = (new Date(s.next_run_at).getDay() + 6) % 7;     // 월=0 - 같은 시각 줄이 요일별로 여럿이면 그날 줄
+    const names = slotNames((Array.isArray(s.slots) ? s.slots : []).find((x) => x && x.at === s.next_slot && (!Array.isArray(x.days) || x.days.includes(wd))));
     info.push(`다음 ${when(s.next_run_at)}${names ? ` (${names})` : ""}`);
   }
   if (s.last_launch_at) info.push(`마지막 ${when(s.last_launch_at)}${s.last_launch_by === "auto" ? " (자동)" : ""}`);
@@ -396,9 +434,10 @@ function labelDays(days) {
 }
 /** 보낼 값. 옛 판 PC 는 옛 모양, 새 판은 줄 (로그인은 PC 가 붙인다) */
 function payloadOf() {
-  const base = { enabled: form.sch.enabled, days: [...new Set(form.sch.days)].sort() };
+  // 판 3 은 공통 요일 = 줄 요일을 모두 합친 것 (옛 판 에이전트가 읽어도 그 요일만 돈다)
+  const base = { enabled: form.sch.enabled, days: [...new Set(isV3() ? form.sch.slots.flatMap((s) => s.days) : form.sch.days)].sort() };
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
-  return { ...base, slots: sortedForm().map(wellifySlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}) })) };
+  return { ...base, slots: sortedForm().map(wellifySlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}) })) };
 }
 async function applySchedule() {
   const payload = payloadOf();

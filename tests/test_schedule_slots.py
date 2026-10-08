@@ -75,18 +75,18 @@ check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
 check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
-      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == 2, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 2")
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == 3, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 3")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
 conv = st.read_settings()["schedule"]
-check(conv["slots"] == [{"at": "13:30"}, {"at": "09:05"}] and "times" not in conv and conv["version"] == 2,
+check(conv["slots"] == [{"at": "13:30"}, {"at": "09:05"}] and "times" not in conv and conv["version"] == 3,
       "옛 모양 {days, times} 는 '전체' 줄로 읽힌다 (Review Focus 4)")
 st.write_settings({"schedule": {"enabled": False, "interval_min": 15, "next_run_at": None}})
 check(st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], "더 옛 모양 (interval_min, 시각 없음) 은 기본 줄 그대로")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
 sv = d.schedule_view()
-check(sv["times"] == ["09:05", "13:30"] and sv["slots"][0] == {"at": "09:05"} and sv["version"] == 2,
+check(sv["times"] == ["09:05", "13:30"] and sv["slots"][0] == {"at": "09:05"} and sv["version"] == 3,
       "화면 값: 줄은 시각 순, 옛 8765 화면용 times 도, 판 2 (줄이 0개여도 판으로 새 판을 안다 - Review Focus 5)")
 
 print("\n=== 5. 적용 ===")
@@ -112,8 +112,8 @@ check(sv["label"] == "매일 00:00, 12:00, 23:55" and sv["times"] and sv["days"]
 print("\n=== 5-2. 줄마다 모듈 (2026-10-07 시각별 모듈) ===")
 check(d.normalize_run(None) is None, "run 이 없으면 '전체'")
 check(d.normalize_run(["Logistics"]) == ["Login", "Logistics"], "루틴 모듈을 고르면 로그인은 늘 붙는다")
-check(d.normalize_run(["Output", "Logistics", "Prepare"]) == ["Prepare", "Login", "Logistics", "Output"], "정한 순서로 (쇼핑몰 받기 → 루틴)")
-check(d.normalize_run(["Prepare", "Login"]) == ["Prepare"], "쇼핑몰 받기만이면 로그인은 뺀다")
+check(d.normalize_run(["Output", "Logistics", "Prepare"]) == ["Prepare", "Login", "Logistics", "Output"], "정한 순서로 (사이트 수집 → 루틴)")
+check(d.normalize_run(["Prepare", "Login"]) == ["Prepare"], "사이트 수집만이면 로그인은 뺀다")
 for bad, why in ((["Output"], "물류관리와 같이"), (["Login"], "하나 이상"), ([], "하나 이상"), (["Nope"], "모르는 모듈"),
                  (["Sales", "Sales"], "두 번"), ("Sales", "잘못")):
     try:
@@ -129,8 +129,8 @@ for bad, why in (([{"at": "10:00"}, {"at": "10:00", "run": ["Hold"]}], "같은 �
     except ValueError as e:
         check(why in str(e), f"줄 거부 {why} ({e})")
 check(d.slot_target({"at": "10:00"}) == ("all", {}), "'전체' 줄 → 전체 실행, 넘길 모듈 없음")
-check(d.slot_target({"at": "11:00", "run": ["Login", "Logistics"]}) == ("routine", {"RPA_RUN_MODULES": "Login,Logistics"}), "쇼핑몰 받기 없음 → 루틴만")
-check(d.slot_target({"at": "12:00", "run": ["Prepare"]}) == ("prepare", {}), "쇼핑몰 받기만 → 프리페어")
+check(d.slot_target({"at": "11:00", "run": ["Login", "Logistics"]}) == ("routine", {"RPA_RUN_MODULES": "Login,Logistics"}), "사이트 수집 없음 → 루틴만")
+check(d.slot_target({"at": "12:00", "run": ["Prepare"]}) == ("prepare", {}), "사이트 수집만 → 프리페어")
 check(d.slot_target({"at": "13:00", "run": ["Prepare", "Login", "Sales"]}) == ("all", {"RPA_RUN_MODULES": "Login,Sales"}), "둘 다 → 전체 실행 + 루틴 모듈")
 check(d.slot_target({"at": "14:00", "run": ["Login", "Hold"]}, off=["Hold"]) == (None, {}), "업체가 안 쓰는 모듈을 빼면 돌릴 게 없다 → 안 띄움")
 check(d.slot_target({"at": "14:00", "run": ["Login", "Logistics", "Output"]}, off=["Logistics"]) == (None, {}), "물류관리를 빼면 출력도 빠진다")
@@ -308,6 +308,34 @@ for state in up.BUSY_STATES:
 up.write_state({"state": "done"})
 check(sched.busy() is None, "done 이면 다시 띄울 수 있다")
 os.environ.pop("RPA_PROGRAMDATA")
+
+print("\n=== 줄마다 요일 (사용자 2026-10-08) ===")
+one = d.normalize_slots([{"at": "09:00", "days": [4, 0, 0]}, {"at": "09:00", "days": [5], "run": ["Logistics"]}])
+check(one == [{"at": "09:00", "days": [0, 4]}, {"at": "09:00", "days": [5], "run": ["Login", "Logistics"]}],
+      f"줄마다 요일을 저장 - 요일이 다르면 같은 시각도 된다 ({one})")
+for bad, why in (([{"at": "09:00", "days": []}], "요일을 하나 이상"),
+                 ([{"at": "09:00", "days": [0, 1]}, {"at": "09:00", "days": [1]}], "같은 시각"),
+                 ([{"at": "10:00", "until": "11:00", "run": ["Hold"], "days": [0]}, {"at": "10:30", "days": [0, 6]}], "겹칩니다")):
+    try:
+        d.normalize_slots(bad); check(False, f"거부: {why}")
+    except ValueError as e:
+        check(why in str(e), f"거부: {why} ({e})")
+check(len(d.normalize_slots([{"at": "10:00", "until": "11:00", "run": ["Hold"], "days": [0]}, {"at": "10:30", "days": [6]}])) == 2,
+      "요일이 다르면 반복 시간대 안의 시각도 된다")
+SCH = {"enabled": True, "days": [0, 1, 2, 3, 4, 5, 6],
+       "slots": [{"at": "09:00", "days": [0, 1, 2, 3, 4]}, {"at": "09:00", "days": [5], "run": ["Logistics"]}, {"at": "10:00"}]}
+when, slot = d.next_due(SCH, at(4, 9, 30))                    # 금 09:30 -> 금 10:00 (요일 없는 줄은 공통 요일)
+check(when == at(4, 10, 0) and slot == {"at": "10:00"}, f"요일 없는 줄은 공통 요일 ({when}, {slot})")
+when, slot = d.next_due(SCH, at(4, 10, 0))                    # 금 10:00 -> 토 09:00 은 토요일 줄
+check(when == at(5, 9, 0) and slot.get("run") == ["Logistics"], f"토요일 09:00 은 토요일 줄 ({when}, {slot})")
+sch2 = dict(SCH, next_run_at=at(5, 9, 0).isoformat(timespec="seconds"), next_slot="09:00")
+check(d.slot_of(sch2).get("run") == ["Logistics"], "같은 시각 줄이 둘이면 그날 요일의 줄을 띄운다")
+check(d.next_due(dict(SCH, slots=[{"at": "09:00", "days": [2]}]), at(0, 8, 0))[0] == at(2, 9, 0), "수요일만 고른 줄은 수요일에")
+WSCH = {"enabled": True, "days": [0, 1, 2, 3, 4], "slots": [{"at": "10:00", "until": "11:00", "run": ["Hold"], "days": [5]}]}
+check(d.open_window(WSCH, at(5, 10, 30)) is not None and d.open_window(WSCH, at(0, 10, 30)) is None,
+      "반복 시간대도 그 줄의 요일에만 열린다")
+check(d.schedule_label(SCH) == "평일 09:00, 토 09:00 물류관리, 매일 10:00", f"요약 글은 줄마다 요일 ({d.schedule_label(SCH)})")
+check(d.schedule_label({"days": [0, 1, 2, 3, 4], "slots": [{"at": "09:00"}]}) == "평일 09:00", "줄마다 요일이 없으면 지금처럼")
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")

@@ -768,7 +768,7 @@ with tempfile.TemporaryDirectory() as d:
         tc = TokenClient(9, 0)
         tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan, next_plan=ag.next_plan)
         tk.refresh(force=True)
-        check(tk.view()["cost"]["next"] == 3, f"다음 예약 줄의 토큰 = 그 줄의 모듈 (물류관리 1·로그인 0) + 쇼핑몰 받기 (사이트 2) ({tk.view()['cost']})")
+        check(tk.view()["cost"]["next"] == 3, f"다음 예약 줄의 토큰 = 그 줄의 모듈 (물류관리 1·로그인 0) + 사이트 수집 (사이트 2) ({tk.view()['cost']})")
         dash.set_policy(3, ["Logistics"])
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Sales", "Logistics", "Output"]}]})
         check(tk.view()["cost"]["next"] == 1, f"업체가 물류관리를 안 쓰면 운송장도 안 돈다 - 주문매핑 1 만 ({tk.view()['cost']})")

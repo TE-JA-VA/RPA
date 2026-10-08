@@ -173,7 +173,7 @@ def local_plan():
 
 
 def next_plan():
-    """다음 예약 줄이 '고르기' 면 그 계획 (루틴 모듈 키 소문자 목록, 쇼핑몰 받기 여부) - 업체가 안 쓰는 모듈은 뺀다.
+    """다음 예약 줄이 '고르기' 면 그 계획 (루틴 모듈 키 소문자 목록, 사이트 수집 여부) - 업체가 안 쓰는 모듈은 뺀다.
     '전체' 거나 다음 예약이 없으면 None (화면은 전체 실행 토큰을 쓴다)."""
     import rpa_dashboard as dash
     import rpa_status as st

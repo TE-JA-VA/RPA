@@ -509,12 +509,13 @@ def launch_run_all(by):
 
 # ---------------------------------------------------------------------------
 # 자동 실행 예약 (2026-10-07 시각별 모듈, 설계 2026-10-06-settings-schedule 5절)
-#   schedule = {enabled, days(월=0, 모든 줄이 같이 씀), slots:[{at, run?}], next_run_at, next_slot, policy?, last_*}
-#   run 이 없는 줄은 '전체' (쇼핑몰 받기 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
+#   schedule = {enabled, days(월=0, 요일을 안 적은 줄이 쓴다), slots:[{at, days?, run?}], next_run_at, next_slot, policy?, last_*}
+#   줄마다 요일 slots[i].days (2026-10-08 사용자) - 없으면 위 days (옛 저장 값·옛 화면)
+#   run 이 없는 줄은 '전체' (사이트 수집 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
 # ---------------------------------------------------------------------------
 ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Sales, Hold, Logistics, Output
 RUN_KEYS = ("Prepare",) + ROUTINE_KEYS                             # 줄의 run 에 쓰는 키. 이 순서로 저장한다
-SLOT_NAMES = {"Prepare": "쇼핑몰 받기", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장"}   # 화면 단추와 같은 말
+SLOT_NAMES = {"Prepare": "사이트 수집", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장"}   # 화면 단추와 같은 말
 REST_MIN_DEFAULT = 2
 REST_MIN_RANGE = (1, 60)   # 반복 시간대 쉬는 시간 (분)
 
@@ -585,6 +586,8 @@ def normalize_slots(slots):
         if not isinstance(s, dict):
             raise ValueError("자동 실행 줄이 잘못되었습니다")
         item = {"at": _check_time(s.get("at"))}
+        if s.get("days") is not None:
+            item["days"] = normalize_days(s.get("days"))
         run = normalize_run(s.get("run"))
         if s.get("until") is not None:                 # 반복 시간대 (설계 6-1)
             item["until"] = _check_time(s.get("until"))
@@ -597,8 +600,6 @@ def normalize_slots(slots):
                 raise ValueError("실패하면 '멈춤' 만 됩니다")
             if run is None:
                 raise ValueError("반복에는 '전체' 를 쓸 수 없습니다 - 모듈을 고르세요")
-            if "Prepare" in run:
-                raise ValueError("반복에는 쇼핑몰 받기를 넣을 수 없습니다")
             item.update(rest_min=rest, on_fail="stop")
         if run is not None:
             item["run"] = run
@@ -606,17 +607,26 @@ def normalize_slots(slots):
     out.sort(key=lambda x: x["at"])
     for w in (x for x in out if "until" in x):
         for x in out:
-            if x is w:
+            if x is w or not _same_day(w, x):
                 continue
             if "until" in x and x["at"] < w["until"] and w["at"] < x["until"]:
                 raise ValueError(f"반복 시간대가 겹칩니다: {w['at']}~{w['until']}, {x['at']}~{x['until']}")
             if "until" not in x and w["at"] <= x["at"] < w["until"]:
-                raise ValueError(f"{w['at']}~{w['until']} 반복 안에는 시각을 넣을 수 없습니다")
-    ats = [x["at"] for x in out]
-    dup = sorted({a for a in ats if ats.count(a) > 1})
+                raise ValueError(f"{x['at']} 은 반복 시간대({w['at']}~{w['until']}) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오.")
+    dup = sorted({x["at"] for i, x in enumerate(out) for y in out[i + 1:] if x["at"] == y["at"] and _same_day(x, y)})
     if dup:
         raise ValueError(f"같은 시각이 두 번 있습니다: {', '.join(dup)}")
     return out
+
+
+def _same_day(a, b):
+    """두 줄이 같은 요일에 도나 - 요일을 안 적은 줄은 공통 요일이라 늘 겹친다고 본다."""
+    return not a.get("days") or not b.get("days") or bool(set(a["days"]) & set(b["days"]))
+
+
+def slot_days(sch, s):
+    """줄이 도는 요일 - 줄마다 요일이 없으면 공통 요일 (옛 저장 값)."""
+    return s.get("days") or sch.get("days") or []
 
 
 def next_slot(days, times, after):
@@ -648,7 +658,7 @@ def active_slots(sch):
     한도를 모르면 (에이전트가 한 번도 못 읽었으면) 자르지 않는다 - PC 상한 12 는 저장할 때 지킨다."""
     out = sorted_slots(sch)
     if (sch.get("policy") or {}).get("wellife") is True:     # 웰라이프 업체는 '전체' 줄만 - 웰라이프 순서는 run·반복을 안 따른다 (옛 줄은 지우지 않고 읽을 때만 거른다)
-        out = [{"at": s["at"]} for s in out]
+        out = [{"at": s["at"], **({"days": s["days"]} if s.get("days") else {})} for s in out]
     limit = (sch.get("policy") or {}).get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0:
         return out[:limit]
@@ -678,11 +688,14 @@ def set_policy(limit, off, wellife=False):
 def next_due(sch, after):
     """after 뒤 가장 가까운 예약 (시각, 그 줄). 없으면 (None, None)."""
     slots = active_slots(sch)
-    when = next_slot(sch.get("days"), [s["at"] for s in slots], after)
-    if when is None:
-        return None, None
-    at = when.strftime("%H:%M")
-    return when, next(s for s in slots if s["at"] == at)
+    for offset in range(8):   # 오늘 포함 8일이면 어떤 요일 조합이든 한 번은 걸린다
+        day = after.date() + datetime.timedelta(days=offset)
+        for s in slots:       # 시각 순
+            if day.weekday() in slot_days(sch, s):
+                cand = datetime.datetime.combine(day, datetime.time(int(s["at"][:2]), int(s["at"][3:])))
+                if cand > after:
+                    return cand, s
+    return None, None
 
 
 def advance(sch, now):
@@ -700,7 +713,10 @@ def next_run_iso(sch, after):
 def slot_of(sch):
     """next_run_at 이 가리키는 줄 (next_slot, 없으면 next_run_at 의 시각으로 찾는다). 도는 줄에 없으면 None."""
     at = sch.get("next_slot") or (sch.get("next_run_at") or "")[11:16]
-    return next((s for s in active_slots(sch) if s["at"] == at), None)
+    due = st.parse_iso(sch.get("next_run_at"))
+    same = [s for s in active_slots(sch) if s["at"] == at]
+    # 같은 시각 줄이 요일별로 여럿이면 그날 요일의 줄 (2026-10-08 줄마다 요일)
+    return next((s for s in same if due is None or due.weekday() in slot_days(sch, s)), same[0] if same else None)
 
 
 def slot_target(slot, off=()):
@@ -731,10 +747,17 @@ def launch_slot(slot, by="auto", trigger="auto"):
 
 def open_window(sch, now):
     """지금 열려 있는 반복 시간대 (그날 요일 + 시작 ≤ 지금 < 끝, 한도 안의 줄). 없으면 None."""
-    if not sch.get("enabled") or now.weekday() not in (sch.get("days") or []):
+    if not sch.get("enabled"):
         return None
     hm = now.strftime("%H:%M")
-    return next((s for s in active_slots(sch) if s.get("until") and s["at"] <= hm < s["until"]), None)
+    return next((s for s in active_slots(sch) if s.get("until") and s["at"] <= hm < s["until"]
+                 and now.weekday() in slot_days(sch, s)), None)
+
+
+def window_at(sch, at, now):
+    """시작 시각 at 인 반복 시간대 줄 - 요일별로 여럿이면 오늘 요일의 줄 (자정을 넘긴 회차면 첫 줄)."""
+    same = [s for s in active_slots(sch) if s.get("until") and s["at"] == at]
+    return next((s for s in same if now.weekday() in slot_days(sch, s)), same[0] if same else None)
 
 
 def last_finished():
@@ -815,9 +838,11 @@ def slot_text(s):
 
 def schedule_label(sch):
     """'평일 09:00, 11:00 물류관리' 처럼 한 줄로. 줄이 많으면 앞 3개만."""
-    parts = [slot_text(s) for s in sorted_slots(sch)]
+    slots = sorted_slots(sch)
+    per_slot = any(s.get("days") for s in slots)
+    parts = [f"{days_label(slot_days(sch, s))} {slot_text(s)}" if per_slot else slot_text(s) for s in slots]
     shown = ", ".join(parts[:3]) + (f" 외 {len(parts) - 3}개" if len(parts) > 3 else "")
-    return f"{days_label(sch.get('days'))} {shown}".strip()
+    return shown if per_slot else f"{days_label(sch.get('days'))} {shown}".strip()
 
 
 class Scheduler(threading.Thread):
@@ -952,7 +977,11 @@ class Scheduler(threading.Thread):
         since = st.parse_iso((st.read_settings()["schedule"].get("repeat") or {}).get("pending"))
         if since is None or launch_state() is not None:
             return
-        v = st.read_json(st.status_path("routine")) or {}
+        sch0 = st.read_settings()["schedule"]
+        win = window_at(sch0, (sch0.get("repeat") or {}).get("at"), now)
+        # 사이트 수집만 고른 반복 회차는 프리페어가 돈다 - 그 상태로 센다 (사용자 2026-10-08: 반복에도 사이트 수집)
+        program = "prepare" if win and slot_target(win, (sch0.get("policy") or {}).get("off") or [])[0] == "prepare" else "routine"
+        v = st.read_json(st.status_path(program)) or {}
         if v.get("state") == "running":
             return
         started = st.parse_iso(v.get("started_at"))
@@ -976,8 +1005,7 @@ class Scheduler(threading.Thread):
             elif v.get("state") == "success":
                 rep["runs"] = int(rep.get("runs") or 0) + 1
                 rep["done"] = int(rep.get("done") or 0) + (1 if processed(v) else 0)
-                rest = next((s.get("rest_min", REST_MIN_DEFAULT) for s in active_slots(sch)
-                             if s.get("until") and s["at"] == rep.get("at")), REST_MIN_DEFAULT)
+                rest = (window_at(sch, rep.get("at"), now) or {}).get("rest_min", REST_MIN_DEFAULT)
                 end = st.parse_iso(v.get("finished_at")) or now
                 rep["next_at"] = (end + datetime.timedelta(minutes=rest)).isoformat(timespec="seconds")
             else:

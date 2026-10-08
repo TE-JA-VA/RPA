@@ -255,8 +255,18 @@ with sync_playwright() as pw:
         pairs = {"글자": contrast(tok("--ink"), card), "회색 글자": contrast(tok("--muted"), card), "제목": contrast(tok("--strong"), card)}
         for st_ in ["good", "warn", "bad", "run"]:
             pairs[f"채운 카드 {st_}"] = contrast(tok("--on-fill"), tok(f"--{st_}-fill"))
+        for st_ in ["red", "amber", "green"]:
+            pairs[f"환경설정 글자 {st_}"] = contrast(tok(f"--ecam-{st_}"), card)
+            pairs[f"환경설정 글자 {st_} (바탕)"] = contrast(tok(f"--ecam-{st_}"), tok("--bg"))
         low = {k: round(v, 2) for k, v in pairs.items() if v < 4.5}
         check(not low, f"{theme} 대비 4.5:1 이상 {low or ''}")
+        # 환경설정 안내 글자만 AIRBUS ECAM 처럼 빨강·호박색·초록 (사용자 2026-10-08) - 색상(hue)으로 본다, 밝기는 대비에 맞춘다
+        import colorsys
+        hue = lambda h: colorsys.rgb_to_hls(*[int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)])[0] * 360
+        hues = {k: round(hue(tok(f"--ecam-{k}"))) for k in ("red", "amber", "green")}
+        check((hues["red"] <= 5 or hues["red"] >= 355) and 30 <= hues["amber"] <= 42 and 110 <= hues["green"] <= 130,
+              f"{theme} 환경설정 글자색은 ECAM 빨강·호박색·초록 ({hues})")
+        check(round(hue(tok("--good"))) > 150, f"{theme} RPA 메뉴의 상태 색은 그대로 (환경설정만 ECAM) ({round(hue(tok('--good')))})")
     check(page.evaluate("getComputedStyle(document.body).fontFamily").startswith('"Pretendard Variable"'), "본문 서체 Pretendard")
     contrast_ok("밝음")
     if os.environ.get("SHOT_DIR"): page.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "theme_light.png"), full_page=True)
@@ -771,8 +781,12 @@ with sync_playwright() as pw:
                                   "next_run_at": "2026-09-22T13:30:00"})
     page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
     check(page.is_hidden("#sch-old") and page.text_content("#sch-count") == "2/2 사용", "새 판 PC: 줄마다 고르기, 한도 2 중 2 사용")
-    check("자동 실행은 2개까지입니다" in page.text_content("#sch-limit") and page.is_disabled("#sch-add"), "한도에 닿으면 추가 잠김 + 문의 안내")
-    check("전체 실행과 '전체' 예약이 이 모듈을 돌립니다" in page.text_content("#mod-card"), "실행 모듈 카드: '전체' 의 뜻")
+    check(page.text_content("#sch-full") == "자동 실행 슬롯은 최대 2개까지입니다. 추가를 원하시면 ERPia에 문의해주세요." and page.is_disabled("#sch-add"),
+          f"한도에 닿으면 추가 잠김 + 문의 안내 (사용자 문구 2026-10-08) ({page.text_content('#sch-full')})")
+    order = page.evaluate("['sch-limit','sch-warn','sch-full'].map(i => document.getElementById(i)).every((e, i, a) => !i || a[i - 1].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)")
+    check("good" in page.get_attribute("#sch-full", "class") and order,
+          "문의 안내는 초록·가장 아래 (빨강 > 호박색 > 초록, 사용자 2026-10-08)")
+    check("전체 실행과 '전체 모듈 실행' 예약이 이 모듈을 돌립니다" in page.text_content("#mod-card"), "실행 모듈 카드: '전체 모듈 실행' 의 뜻")
     page.select_option("#sch-times .t:nth-child(2) select", "pick")
     chips = "#sch-times .t:nth-child(2) .chips button"
     check(page.locator(chips).count() == 5 and page.is_disabled("#sch-apply") and "모듈을 하나 이상" in page.text_content("#sch-limit"),
@@ -897,10 +911,24 @@ with sync_playwright() as pw:
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 3}})
     reload_to(page, "settings")
     page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
+    check(page.text_content("#sch-card h2").startswith("자동 실행") and page.text_content("label:has(#sch-enabled)").strip() == "활성화",
+          f"카드 이름 '자동 실행'·스위치 '활성화' (사용자 2026-10-08) ({page.text_content('#sch-card h2')})")
+    gap = page.evaluate("document.querySelector('#sch-times').previousElementSibling.getBoundingClientRect().top - document.getElementById('sch-days').getBoundingClientRect().bottom")
+    check(gap >= 16, f"요일 단추와 '시간' 사이를 띄운다 ({gap}px)")
+    was_on = (db_get(f"{LIVE}/schedule") or {}).get("enabled")
+    db_patch(f"{LIVE}/schedule", {"enabled": False})
+    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '비활성화'", timeout=10000)
+    check(True, "자동 실행이 꺼져 있으면 '비활성화' (전 '꺼짐')")
+    db_patch(f"{LIVE}/schedule", {"enabled": was_on})
+    grps = [x.strip() for x in page.locator("#settings-grid h3.grp").all_text_contents()]
+    check(grps == ["프리페어 RPA (사이트 수집)", "루틴 RPA", "자동 실행"], f"환경설정 RPA 는 프리페어·루틴·자동 실행으로 나뉜다 (사용자 2026-10-08) ({grps})")
+    check(page.evaluate("import('./rpa-common.js').then(m => m.RUN_NAMES.Prepare)") == "사이트 수집", "자동 실행 단추 이름 '사이트 수집' (전 '쇼핑몰 받기')")
     page.click("#sch-add-win")
     win = "#sch-times .t:nth-child(3)"
-    check(page.locator(f"{win} select").count() == 0 and page.locator(f"{win} .chips button[data-k='Prepare']").count() == 0
-          and page.locator(f"{win} .chips button").count() == 4, "반복 줄: 전체/고르기 없음, 쇼핑몰 받기 단추 없음")
+    check(page.locator(f"{win} select").count() == 0 and page.locator(f"{win} .chips button[data-k='Prepare']").count() == 1
+          and page.locator(f"{win} .chips button").count() == 5, "반복 줄: 전체/고르기 없음, 사이트 수집 단추 있음 (사용자 2026-10-08)")
+    modes = [x.strip() for x in page.locator("#sch-times select.mode").first.locator("option").all_text_contents()]
+    check(modes == ["전체 모듈 실행", "선택 모듈만 실행"], f"시각 줄 고르기 이름 (사용자 2026-10-08) ({modes})")
     check(page.is_disabled("#sch-apply") and "반복 줄에 모듈을" in page.text_content("#sch-limit"), "모듈을 안 고르면 적용 안 됨")
     page.click(f"{win} .chips button[data-k='Logistics']")
 
@@ -909,8 +937,23 @@ with sync_playwright() as pw:
             el = page.query_selector_all(f"{win} input[type=time]")[i]
             el.fill(v); el.dispatch_event("change")
 
+    set_win("10:00", "")   # 끝 시각을 지워도 (백스페이스) 반복 줄은 반복 줄 그대로 - 보통 줄로 바뀌어 '사이트 수집' 이 생기면 안 된다
+    check(page.locator(f"{win} input.rest-min").count() == 1 and page.locator(f"{win} select").count() == 0
+          and page.is_disabled("#sch-apply") and "반복 끝 시각은" in page.text_content("#sch-limit"),
+          f"끝 시각을 지우면 반복 줄 그대로·적용 막음 ({page.text_content('#sch-limit')})")
+    check(not page.is_visible("#sch-warn"), "사이트 수집을 안 켜면 경고 없음")
+    page.click(f"{win} .chips button[data-k='Prepare']")
+    pos = page.evaluate("[document.getElementById('sch-limit').getBoundingClientRect().top, document.getElementById('sch-warn').getBoundingClientRect().top]")
+    check(page.is_visible("#sch-warn") and "너무 잦은 사이트 수집은 2차인증을 요구할 수도 있습니다." in page.text_content("#sch-warn")
+          and "warn" in page.get_attribute("#sch-warn", "class") and pos[1] > pos[0],
+          f"반복 줄에 사이트 수집을 켜면 빨간 글 아래 호박색 경고 (사용자 2026-10-08) ({pos})")
+    warn_rgb = page.evaluate("getComputedStyle(document.getElementById('sch-warn')).color")
+    check(rgb2hex(warn_rgb) == page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--ecam-amber').trim()"),
+          f"경고 글자는 ECAM 호박색 ({warn_rgb})")
+    page.click(f"{win} .chips button[data-k='Prepare']")
+    check(not page.is_visible("#sch-warn"), "사이트 수집을 끄면 경고도 사라진다")
     set_win("13:00", "14:00")
-    check("13:00~14:00 반복 안에는 시각을 넣을 수 없습니다" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"),
+    check(page.text_content("#sch-limit") == "13:30 은 반복 시간대(13:00~14:00) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오." and page.is_disabled("#sch-apply"),
           f"시각 줄(13:30)이 반복 안에 있으면 거절 ({page.text_content('#sch-limit')})")
     set_win("10:00", "11:00")
     page.fill(f"{win} input.rest-min", "3"); page.dispatch_event(f"{win} input.rest-min", "change")
@@ -958,6 +1001,48 @@ with sync_playwright() as pw:
         print("  (23시 뒤라 지금 열린 시간대 화면 시험은 건너뜀)")
         goto(page, "rpa")
     db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}], "repeat": None})
+
+    print("6-4절 줄마다 요일 (사용자 2026-10-08, 판 3 PC)")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 3}})
+    db_patch(f"{LIVE}/schedule", {"version": 3, "enabled": True, "days": [0, 1, 2, 3, 4, 5, 6],
+                                  "slots": [{"at": "09:00", "days": [0, 1, 2, 3, 4]}], "times": None, "repeat": None,
+                                  "next_run_at": None, "next_slot": None})
+    goto(page, "settings")
+    page.wait_for_selector("#sch-times .t .days-mini button", timeout=10000)
+    row1 = "#sch-times .t:nth-child(1)"
+    pressed = lambda row: [b.get_attribute("aria-pressed") == "true" for b in page.locator(f"{row} .days-mini button").all()]
+    check(page.is_hidden("#sch-days") and page.is_hidden("#sch-presets") and page.is_hidden("#sch-days-lbl"),
+          "판 3 PC: 카드의 공통 요일 줄이 없다")
+    check(pressed(row1) == [True] * 5 + [False] * 2, f"줄마다 요일 단추 일곱 개 - 저장된 요일이 눌려 있다 ({pressed(row1)})")
+    page.click(f"{row1} .days-mini button:nth-child(6)")       # 토
+    page.click("#sch-add")
+    row2 = "#sch-times .t:nth-child(2)"
+    check(pressed(row2) == [True] * 5 + [False] * 2, "[+ 시각] 새 줄은 평일(월~금)로 시작")
+    el = page.query_selector(f"{row2} input[type=time]"); el.fill("09:00"); el.dispatch_event("change")
+    check("같은 시각" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "요일이 겹치는 같은 시각은 막는다")
+    for i in range(1, 6):
+        page.click(f"{row2} .days-mini button:nth-child({i})")  # 월~금 끄기
+    check("요일을 하나 이상" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "요일을 하나도 안 고른 줄은 막는다")
+    page.click(f"{row2} .days-mini button:nth-child(7)")       # 일
+    check(page.text_content("#sch-limit") == "" and not page.is_disabled("#sch-apply"), "요일이 다르면 같은 시각도 된다")
+    page.click("#sch-apply"); time.sleep(1.5)
+    saved = db_get(f"{SETTINGS}/schedule") or {}
+    check(saved.get("slots") == [{"at": "09:00", "days": [0, 1, 2, 3, 4, 5]}, {"at": "09:00", "days": [6]}] and saved.get("days") == list(range(7)),
+          f"줄마다 요일을 저장 (공통 요일은 모두 합친 것 - 옛 판 에이전트 대비) ({saved})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": saved["slots"]})
+    page.wait_for_function("document.getElementById('sch-meta')?.textContent === '월·화·수·목·금·토 09:00, 일 09:00'", timeout=10000)
+    check(page.is_disabled("#sch-apply"), "PC 가 돌려준 값과 같으면 바뀜 없음 - 카드 옆 요약도 줄마다 요일")
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:00", "days": [0, 1, 2, 3, 4, 5]}, {"at": "09:00", "days": [6], "run": ["Login", "Logistics"]}],
+                                  "next_run_at": "2026-10-11T09:00:00", "next_slot": "09:00"})   # 2026-10-11 은 일요일
+    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('다음')", timeout=10000)
+    check("(물류관리)" in page.text_content("#sch-info"), f"다음 실행 글은 그날 요일 줄의 모듈 ({page.text_content('#sch-info')})")
+    db_patch(f"{LIVE}/schedule", {"version": 2, "days": [0, 1, 2, 3, 4, 5, 6], "slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}]})
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
+    goto(page, "settings")
+    page.wait_for_function("document.querySelectorAll('#sch-times select').length === 2", timeout=10000)
+    check(page.is_visible("#sch-days") and page.locator("#sch-times .days-mini").count() == 0, "옛 판(2) PC 는 지금처럼 공통 요일")
 
     print("7절 계정 페이지")
     page.click("#admin-nav a[data-key='account']")

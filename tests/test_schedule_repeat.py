@@ -76,16 +76,17 @@ for bad, why in (
         ([{"at": "11:00", "until": "12:00", "run": ["Hold"], "rest_min": 61}], "1~60"),
         ([{"at": "11:00", "until": "12:00", "run": ["Hold"], "on_fail": "retry"}], "멈춤"),
         ([{"at": "11:00", "until": "12:00"}], "전체"),
-        ([{"at": "11:00", "until": "12:00", "run": ["Prepare", "Hold"]}], "쇼핑몰 받기"),
         ([dict(WIN), {"at": "11:30", "until": "12:30", "run": ["Hold"]}], "겹칩니다"),
-        ([dict(WIN), {"at": "11:30"}], "반복 안에는"),
-        ([dict(WIN), {"at": "11:00"}], "반복 안에는"),
+        ([dict(WIN), {"at": "11:30"}], "11:30 은 반복 시간대(11:00~12:00) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오."),
+        ([dict(WIN), {"at": "11:00"}], "11:00 은 반복 시간대(11:00~12:00) 와 겹칩니다."),
         ([{"at": "23:00", "until": "24:00", "run": ["Hold"]}], "23:55")):
     try:
         d.normalize_slots(bad); check(False, f"거부: {why}")
     except ValueError as e:
         check(why in str(e), f"거부: {why} ({e})")
 check(len(d.normalize_slots([dict(WIN), {"at": "12:00"}])) == 2, "끝 시각과 같은 시각(12:00)은 된다")
+check(d.normalize_slots([{"at": "11:00", "until": "12:00", "run": ["Prepare", "Hold"]}])[0]["run"] == ["Prepare", "Login", "Hold"],
+      "반복에도 사이트 수집을 넣을 수 있다 (사용자 2026-10-08)")
 
 print("\n=== 2. 시간대가 열리면 첫 회차 ===")
 d.apply_schedule({"enabled": True, "days": ALL, "slots": [dict(WIN)]})
@@ -304,6 +305,15 @@ check(rep().get("stopped") is None and rep().get("runs") == 0 and rep().get("pen
 CLOCK[0] = at("12:03", day=8); sched.tick()
 check(len(d.LAUNCHED) == n + 2, "쉬는 시간 뒤 뒤 시간대 첫 회차")
 
+print("\n=== 사이트 수집만 반복 (사용자 2026-10-08) ===")
+d.apply_schedule({"enabled": True, "days": ALL, "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5, "run": ["Prepare"]}]})
+ended(); put_status("routine", "success", at("12:03", 8, 5), at("12:05", 8), [LOGIN, DONE])   # 앞 절의 회차를 끝낸다
+CLOCK[0] = at("09:00", day=9); n = len(d.LAUNCHED); sched.tick()
+check(d.LAUNCHED[n:] == ["prepare:auto"] and d.LAUNCHED_ENV[-1] == {"RPA_RUN_TRIGGER": "repeat"}, f"사이트 수집만 고른 반복은 프리페어를 띄운다 ({d.LAUNCHED[n:]})")
+put_status("prepare", "success", at("09:00", 9, 5), at("09:02", 9), [{"key": "site1", "label": "쇼핑몰1", "state": "done"}]); ended()
+CLOCK[0] = at("09:03", day=9); sched.tick()
+check(rep().get("runs") == 1 and rep().get("stopped") is None and rep().get("next_at") == iso(at("09:07", 9)),
+      f"회차 결과는 프리페어 상태로 센다 - '시작하지 못함' 으로 멈추지 않는다 ({rep()})")
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
