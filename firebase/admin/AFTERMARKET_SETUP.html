@@ -226,27 +226,62 @@ function updText(u) {
   if (!u?.state) return "";
   return u.state === "done" ? `업데이트됨 ${md(u.at)}` : UPD_TEXT[u.state] ?? u.state;
 }
+// 관리 화면이 보낸 마지막 업데이트/되돌리기 명령(p.cmd)과 PC 상태(p.update)로 줄의 글과 '진행 중' 을 정한다.
+// 명령 시각(started_at)과 상태 시각(update.at)은 둘 다 PC 시계라 견줄 수 있다. 받기 전 만료는 이 PC 시계(expires_at)로 본다.
+const UPD_BUSY = ["downloading", "waiting", "ready", "applying", "rolling_back"];
+function updPhase(p) {
+  const c = p.cmd, u = p.update;
+  const fresh = u?.at && c?.started_at && Date.parse(u.at) / 1000 >= c.started_at - 1;   // 이 명령 뒤에 바뀐 PC 상태인가
+  if (UPD_BUSY.includes(u?.state)) return { text: updText(u), busy: true };
+  if (c && !fresh) {
+    const left = (c.expires_at ?? 0) > Date.now() / 1000;
+    if (c.state === "queued" || c.state === "running") return left ? { text: "명령 보냄 - PC 응답 기다리는 중", busy: true } : { text: "PC 가 응답하지 않습니다 (꺼져 있거나 인터넷이 끊김)", busy: false };
+    if (c.state === "expired") return { text: "PC 가 응답하지 않습니다 (꺼져 있거나 인터넷이 끊김)", busy: false };
+    if (c.state === "failed") return { text: `명령 실패: ${c.result ?? ""}`, busy: false };
+    if (c.state === "done" && left) return { text: "명령 받음 - 시작 기다리는 중", busy: true };
+  }
+  return { text: updText(u) || "-", busy: false };
+}
+// 진행 중인 줄만 3초마다 다시 읽어 그 줄만 바꾼다 (사용자 2026-10-08) - 줄이 화면에서 빠지면(다른 업체를 열면) 멈춘다
+function followRow(d, pcId, tr) {
+  setTimeout(async () => {
+    if (!tr.isConnected) return;
+    let p;
+    try { p = await api("GET", `/api/companies/${d.cid}/pcs/${pcId}/status`); } catch { return followRow(d, pcId, tr); }
+    if (!tr.isConnected) return;
+    const row = d.pcs.find((x) => x.pcId === pcId);
+    Object.assign(row, p);
+    tr.replaceWith(pcRowEl(d, row, d.releases));
+  }, 3000);
+}
+async function refreshRow(d, pcId) {
+  const tr = document.getElementById(`pc-${pcId}`);
+  const row = d.pcs.find((x) => x.pcId === pcId);
+  Object.assign(row, await api("GET", `/api/companies/${d.cid}/pcs/${pcId}/status`));
+  if (tr?.isConnected) tr.replaceWith(pcRowEl(d, row, d.releases));
+}
 function pcRowEl(d, p, rel) {
   const tag = (v) => (v === rel.stable ? " (안정본)" : v === rel.newest ? " (최신본)" : "");
   const cur = p.version?.version;
   const ver = cur ? `${cur}${tag(cur)}` : "버전 정보 없음";
-  const busy = ["downloading", "waiting", "ready", "applying", "rolling_back"].includes(p.update?.state);
+  const phase = updPhase(p), busy = phase.busy;
   const sel = el("select", { class: "upd-ver" }, rel.list.map((x) => el("option", { value: x.version }, `${x.version}${tag(x.version)}${x.memo ? ` - ${x.memo}` : ""}`)));
   // 고르기 칸은 지금 버전부터 (목록에 없거나 모르면 안정본) - 새로 고쳐도 방금 올린 버전이 보이게 (사용자 2026-10-08)
   sel.value = rel.list.some((x) => x.version === cur) ? cur : rel.stable ?? "";
   const go = el("button", { class: "upd-go", disabled: busy || !rel.list.length, onclick: () => act(go, async () => {
     if (!confirm(`${d.cid} / ${p.pcId} 를 ${sel.value} 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/update`, { version: sel.value });
-    flash(`업데이트 명령을 보냈습니다 (${p.pcId} → ${sel.value})`); openDetail(d.cid);
+    flash(`업데이트 명령을 보냈습니다 (${p.pcId} → ${sel.value})`); await refreshRow(d, p.pcId);
   }) }, "업데이트");
   const back = p.update?.backup ? el("button", { class: "upd-back", disabled: busy, onclick: () => act(back, async () => {
     if (!confirm(`${d.cid} / ${p.pcId} 를 이전 버전 ${p.update.backup} 로 되돌립니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/rollback`, {});
-    flash(`되돌리기 명령을 보냈습니다 (${p.pcId} → ${p.update.backup})`); openDetail(d.cid);
+    flash(`되돌리기 명령을 보냈습니다 (${p.pcId} → ${p.update.backup})`); await refreshRow(d, p.pcId);
   }) }, `이전 버전으로 되돌리기 (${p.update.backup})`) : null;
-  const status = updText(p.update);
-  return el("tr", { id: `pc-${p.pcId}` }, el("td", {}, p.label || "(이름 없음)"), el("td", {}, p.pcId), el("td", {}, ver),
-    el("td", { title: p.update?.reason ?? "" }, status || "-"), el("td", {}, el("div", { class: "row" }, sel, go, back)));
+  const tr = el("tr", { id: `pc-${p.pcId}` }, el("td", {}, p.label || "(이름 없음)"), el("td", {}, p.pcId), el("td", {}, ver),
+    el("td", { title: p.update?.reason ?? "" }, phase.text), el("td", {}, el("div", { class: "row" }, sel, go, back)));
+  if (busy) followRow(d, p.pcId, tr);
+  return tr;
 }
 // 판 목록 (업체 표 위) - [판 목록] 을 누르면 펼친다
 async function drawReleases() {
@@ -443,8 +478,14 @@ async function loadRates() {
 $("quit").onclick = () => act($("quit"), async () => {
   if (!confirm("관리 화면을 끌까요?")) return;
   await api("POST", "/api/quit");
+  const note = el("p", { class: "muted" }, "3초 뒤 이 창을 닫습니다.");
   document.body.replaceChildren(el("main", {}, el("div", { class: "card" }, el("h2", {}, "관리 화면을 껐습니다"),
-    el("p", { class: "muted" }, "다시 쓰려면 바탕화면의 'AFTER MARKET 관리' 를 누르세요. 이 창은 닫아도 됩니다."))));
+    el("p", { class: "muted" }, "다시 쓰려면 바탕화면의 'AFTER MARKET 관리' 를 누르세요."), note)));
+  // 3초 뒤 탭을 닫는다 (사용자 2026-10-08). 브라우저는 스크립트가 연 창이나 이동 기록이 하나뿐인 탭만 닫게 해 준다 - 막히면 알린다
+  setTimeout(() => {
+    window.close();
+    setTimeout(() => { note.textContent = "브라우저가 자동으로 닫지 못하게 했습니다. 이 창은 직접 닫아 주세요."; }, 500);
+  }, 3000);
 });
 // 최초 토큰량 칸: 벗어나면 1000 단위 콤마, 다시 들어오면 콤마 없이 (숫자가 아니면 그대로 - 만들 때 서버가 거절)
 $("s-tok-amount").addEventListener("blur", (e) => { const v = e.target.value.replace(/,/g, "").trim(); if (/^\d+$/.test(v)) e.target.value = nf(v); });

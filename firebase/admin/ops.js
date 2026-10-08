@@ -224,6 +224,16 @@ export async function sendUpdate(cid, pcId, version) {
   return sendAdminCommand(cid, pcId, "update", { version });
 }
 export const sendRollback = (cid, pcId) => sendAdminCommand(cid, pcId, "rollback", null);
+/** PC 한 대의 버전·업데이트 상태와 관리 화면이 보낸 마지막 업데이트/되돌리기 명령 - 화면이 진행 중인 줄만 3초마다 다시 읽는다 */
+export async function pcUpdateStatus(cid, pcId) {
+  checkKey("cid", cid); checkKey("pcId", pcId);
+  const live = (await rtdb.ref(`apps/rpa/live/${cid}/${pcId}`).get()).val() ?? {};
+  const recent = (await rtdb.ref(`apps/rpa/commands/${cid}/${pcId}`).orderByKey().limitToLast(20).get()).val() ?? {};
+  const c = Object.values(recent).filter((x) => x?.by === "admin-tool" && (x.type === "update" || x.type === "rollback")).at(-1);
+  const cmd = c ? { type: c.type, state: c.state, created_at: c.created_at ?? null, expires_at: c.expires_at ?? null,
+    started_at: c.started_at ?? null, result: c.result ?? null } : null;
+  return { version: live.version ?? null, update: live.update ?? null, cmd };
+}
 export async function setStable(version) {
   const cur = await releasesOf();
   if (!cur.list.some((x) => x.version === version)) throw new Refused(`올라가 있지 않은 판입니다: ${version}`);
@@ -316,10 +326,8 @@ export async function companyDetail(cid) {
   const v = await companyOf(cid, { removed: true });
   const users = (await usersOf(cid)).map((u) => ({ email: u.email, id: u.email.split("@")[0], role: u.customClaims?.role ?? "-",
     pcId: u.customClaims?.pcId ?? null, disabled: u.disabled, lastSignIn: signedIn(u) }));
-  return { cid, name: v.name, stts: v.stts ?? 0, pcs: await Promise.all(Object.entries(v.pcs ?? {}).map(async ([pcId, p]) => {
-      const live = (await rtdb.ref(`apps/rpa/live/${cid}/${pcId}`).get()).val() ?? {};
-      return { pcId, label: p.label ?? "", version: live.version ?? null, update: live.update ?? null };
-    })),
+  return { cid, name: v.name, stts: v.stts ?? 0, pcs: await Promise.all(Object.entries(v.pcs ?? {}).map(async ([pcId, p]) =>
+      ({ pcId, label: p.label ?? "", ...(await pcUpdateStatus(cid, pcId)) }))),
     users, modules: v.apps?.rpa?.modules ?? {}, features: v.apps?.rpa?.features ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features),
     wellifeAuto: wellifeAuto(cid), scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null, tokens: (await tokenStatus(cid)).wallet };
 }

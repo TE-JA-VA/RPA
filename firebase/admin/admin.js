@@ -71,6 +71,7 @@ const ROUTES = [
   ["POST", "/api/companies/:cid/tokens", (b, p) => ops.grantTokens(p.cid, b.amount, b.memo), (b, r, p) => `토큰 ${b.amount} ${p.cid} ${b.memo ?? ""}`.trim()],
   ["GET", "/api/releases", () => ops.releasesOf()],
   ["POST", "/api/releases/stable", (b) => ops.setStable(b.version), (b) => `안정본 지정 ${b.version}`],
+  ["GET", "/api/companies/:cid/pcs/:pcId/status", (b, p) => ops.pcUpdateStatus(p.cid, p.pcId)],
   ["POST", "/api/companies/:cid/pcs/:pcId/update", (b, p) => ops.sendUpdate(p.cid, p.pcId, b.version), (b, r, p) => `업데이트 ${p.cid}/${p.pcId} → ${b.version}`],
   ["POST", "/api/companies/:cid/pcs/:pcId/rollback", (b, p) => ops.sendRollback(p.cid, p.pcId), (b, r, p) => `이전 판으로 되돌리기 ${p.cid}/${p.pcId}`],
   ["GET", "/api/prices", () => ops.getPrices()],

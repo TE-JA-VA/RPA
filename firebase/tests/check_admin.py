@@ -6,6 +6,7 @@
 만드는 계정은 에뮬레이터 것이라도 비밀번호를 찍지 않는다 (길이만 보고, 실패 글에서도 가린다).
 """
 import atexit
+import datetime
 import json
 import os
 import re
@@ -55,6 +56,10 @@ def call(method, url, body=None, headers=None):
     with urllib.request.urlopen(req, timeout=60) as r:
         raw = r.read().decode("utf-8")
         return json.loads(raw) if raw else None
+
+
+def db_patch(path, value):
+    return call("PATCH", f"{DB}/{path}.json?ns={NS}", value, OWNER)
 
 
 def db_get(path):
@@ -325,6 +330,32 @@ with sync_playwright() as pw:
     check(dialogs == [f"{CID} / {PC} 를 2026.10.07-5 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다."], f"확인 창 ({dialogs})")
     check(len(cmd) == 1 and cmd[0]["args"] == {"version": "2026.10.07-5"} and cmd[0]["by"] == "admin-tool" and cmd[0]["state"] == "queued"
           and cmd[0]["expires_at"] - cmd[0]["created_at"] == 600, f"update 명령 ({cmd})")
+    # 누른 뒤 그 줄만 따라간다 (사용자 2026-10-08): 명령 보냄 → PC 상태 → 끝나면 단추가 풀린다
+    status_cell = f"#pc-{PC} td:nth-child(4)"
+    check("명령 보냄 - PC 응답 기다리는 중" in page.text_content(status_cell) and page.is_disabled(f"#pc-{PC} button.upd-go")
+          and page.is_disabled(f"#pc-{PC} button.upd-back"), f"누르면 바로 '명령 보냄'·단추 잠금 ({page.text_content(status_cell)})")
+    ckey = [k for k, v in (db_get(f"apps/rpa/commands/{CID}/{PC}") or {}).items() if v.get("type") == "update"][0]
+    t0 = int(time.time())
+    db_patch(f"apps/rpa/commands/{CID}/{PC}/{ckey}", {"state": "done", "started_at": t0, "ended_at": t0, "result": "업데이트를 예약했습니다"})
+    db_put(f"apps/rpa/live/{CID}/{PC}/update", {"state": "downloading", "target": "2026.10.07-5", "from": "2026.10.07-4",
+                                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "backup": "2026.10.07-3"})
+    page.wait_for_function(f"document.querySelector('{status_cell}')?.textContent.includes('업데이트 받는 중')", timeout=10000)
+    check(page.is_disabled(f"#pc-{PC} button.upd-go"), "새로 고치지 않아도 그 줄이 'PC 상태' 를 따라간다 (받는 중엔 잠금)")
+    db_put(f"apps/rpa/live/{CID}/{PC}/update", {"state": "done", "target": "2026.10.07-5", "from": "2026.10.07-4",
+                                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "backup": "2026.10.07-3"})
+    page.wait_for_function(f"document.querySelector('{status_cell}')?.textContent.includes('업데이트됨')", timeout=10000)
+    check(not page.is_disabled(f"#pc-{PC} button.upd-go"), "끝나면 단추가 다시 풀린다")
+    old = int(time.time()) - 700
+    db_put(f"apps/rpa/commands/{CID}/{PC}/zz_old", {"type": "update", "args": {"version": "2026.10.07-5"}, "by": "admin-tool",
+                                                   "created_at": old, "expires_at": old + 600, "state": "queued"})
+    open_company(page, CID)
+    check("PC 가 응답하지 않습니다" in page.text_content(status_cell) and not page.is_disabled(f"#pc-{PC} button.upd-go"),
+          f"10분 안에 PC 가 안 받으면 '응답하지 않습니다' ({page.text_content(status_cell)})")
+    db_patch(f"apps/rpa/commands/{CID}/{PC}/zz_old", {"state": "failed", "started_at": int(time.time()), "result": "이미 최신 업데이트를 사용하고 있습니다"})
+    open_company(page, CID)
+    check("명령 실패: 이미 최신 업데이트를 사용하고 있습니다" in page.text_content(status_cell), f"PC 가 거절하면 그 까닭 ({page.text_content(status_cell)})")
+    call("DELETE", f"{DB}/apps/rpa/commands/{CID}/{PC}/zz_old.json?ns={NS}", None, OWNER)
+    open_company(page, CID)
     check(page.is_visible(f"#pc-{PC} button.upd-back") and "2026.10.07-3" in page.text_content(f"#pc-{PC} button.upd-back"), "보관본이 있으면 되돌리기 단추")
     page.click(f"#pc-{PC} button.upd-back")
     page.wait_for_timeout(800)
@@ -499,6 +530,11 @@ with sync_playwright() as pw:
     page.click("#quit")
     worker.join(timeout=60)
     srv.wait(timeout=15)
+    page.wait_for_function("document.body.textContent.includes('관리 화면을 껐습니다')", timeout=15000)
+    check("3초 뒤 이 창을 닫습니다" in page.text_content("body"), "끄면 '3초 뒤 이 창을 닫습니다' (사용자 2026-10-08)")
+    page.wait_for_timeout(3800)
+    check(page.is_closed() or "직접 닫아 주세요" in page.text_content("body"),
+          "3초 뒤 창을 닫는다 - 브라우저가 막으면 직접 닫으라고 알린다")
     browser.close()
     done = late[0][1] if late and late[0][0] == 200 else {}
     SECRETS += [u["password"] for u in done.get("made", {}).get("users", [])] + [a["password"] for a in done.get("made", {}).get("agents", [])]
