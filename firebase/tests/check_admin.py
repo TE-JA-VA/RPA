@@ -334,7 +334,17 @@ with sync_playwright() as pw:
     check(cells[1] == PC and cells[2] == "2026.10.07-4 (안정본)" and cells[3] == "업데이트됨 10/7 14:03", f"PC 줄 칸: 코드·버전·상태 ({cells})")
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4"
           and "(최신본)" in page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']"), "판 고르기: 처음은 안정본, 최신본 표시")
+    # 줄이 자연스럽게 (사용자 2026-10-08): 고르기 칸엔 버전만, 비고는 칸 아래 작은 글로. 머리·칸·단추는 한 줄
+    opt = page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']")
+    check(opt == "2026.10.07-5 (최신본)" and page.text_content(f"#pc-{PC} .upd-memo") == "안정",
+          f"고르기 칸은 버전만, 고른 버전의 비고는 아래에 ({opt!r}, {page.text_content(f'#pc-{PC} .upd-memo')!r})")
+    lines = lambda sel: page.evaluate(f"""[...document.querySelectorAll("{sel}")].map((el) => {{ const r = document.createRange();
+      r.selectNodeContents(el); return r.getClientRects().length; }})""")
+    check(set(lines("#detail table.pcs th") + lines(f"#pc-{PC} td:not(:last-child)") + lines(f"#pc-{PC} button")) == {1},
+          f"PC 표 머리·칸·단추가 한 줄 ({lines('#detail table.pcs th')}, {lines(f'#pc-{PC} td:not(:last-child)')}, {lines(f'#pc-{PC} button')})")
+    if os.environ.get("SHOT_DIR"): page.locator("#detail .sec").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "pc_row.png"))
     page.select_option(f"#pc-{PC} select.upd-ver", "2026.10.07-5")
+    check(page.text_content(f"#pc-{PC} .upd-memo") == "새", "다른 버전을 고르면 그 버전의 비고")
     dialogs.clear()   # 위쪽 page.on("dialog") 가 이미 모두 받아들인다
     page.click(f"#pc-{PC} button.upd-go")
     page.wait_for_timeout(800)
@@ -379,6 +389,8 @@ with sync_playwright() as pw:
     open_company(page, CID)
     check(page.is_disabled(f"#pc-{PC} button.upd-go") and page.is_disabled(f"#pc-{PC} button.upd-back")
           and "업데이트 대기 중" in page.text_content(f"#pc-{PC}"), "진행 중이면 두 단추 잠금")
+    check(page.text_content(f"#pc-{PC} button.upd-back") == "이전 버전으로 되돌리기",
+          f"진행 중엔 되돌리기 단추에 버전을 안 붙인다 (보관본은 끝나야 바뀐다) ({page.text_content(f'#pc-{PC} button.upd-back')})")
     db_put(f"apps/rpa/live/{CID}/{PC}/version", {"version": "2026.10.07-5", "state": "ok"})
     open_company(page, CID)
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-5", "버전 고르기: 지금 버전이 있으면 지금 버전")

@@ -60,7 +60,10 @@
   #detail .sec > h3 { margin:0 0 10px; font-size:16px; }
   #detail .sec table + .row { margin-top:10px; }   /* 목록과 새로 넣는 칸 사이 */
   .mod-ok { margin-left:10px; color:var(--good); font-weight:500; font-size:14px; }
-  td .row { margin:0; flex-wrap:nowrap; }   /* PC 표의 업데이트 칸 - 고르기·단추 사이는 아래 'PC 추가' 줄과 같은 8px */
+  td .row { margin:0; flex-wrap:nowrap; }
+  table.pcs th, table.pcs td, table.pcs button { white-space:nowrap; }   /* PC 표는 줄바꿈 없이 (좁으면 상자가 옆으로 스크롤) */
+  table.pcs td:last-child { width:100%; }
+  .upd-memo { font-size:12px; margin-top:4px; }   /* PC 표의 업데이트 칸 - 고르기·단추 사이는 아래 'PC 추가' 줄과 같은 8px */
   label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:14px; }
   #flash { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); padding:10px 16px; border-radius:10px; background:var(--strong);
     color:var(--card); font-size:14px; max-width:90vw; }
@@ -275,9 +278,13 @@ function pcRowEl(d, p, rel) {
   const cur = p.version?.version;
   const ver = cur ? `${cur}${tag(cur)}` : "버전 정보 없음";
   const phase = updPhase(p), busy = phase.busy;
-  const sel = el("select", { class: "upd-ver" }, rel.list.map((x) => el("option", { value: x.version }, `${x.version}${tag(x.version)}${x.memo ? ` - ${x.memo}` : ""}`)));
+  // 고르기 칸엔 버전만 - 비고까지 넣으면 칸이 넓어져 표가 줄바꿈된다. 고른 버전의 비고는 칸 아래 작은 글로 (사용자 2026-10-08)
+  const sel = el("select", { class: "upd-ver" }, rel.list.map((x) => el("option", { value: x.version }, `${x.version}${tag(x.version)}`)));
+  const memo = el("div", { class: "upd-memo muted" });
+  sel.onchange = () => { memo.textContent = rel.list.find((x) => x.version === sel.value)?.memo ?? ""; };
   // 고르기 칸은 지금 버전부터 (목록에 없거나 모르면 안정본) - 새로 고쳐도 방금 올린 버전이 보이게 (사용자 2026-10-08)
   sel.value = rel.list.some((x) => x.version === cur) ? cur : rel.stable ?? "";
+  sel.onchange();
   const go = el("button", { class: "upd-go", disabled: busy || !rel.list.length, onclick: () => act(go, async () => {
     if (!confirm(`${d.cid} / ${p.pcId} 를 ${sel.value} 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/update`, { version: sel.value });
@@ -287,9 +294,9 @@ function pcRowEl(d, p, rel) {
     if (!confirm(`${d.cid} / ${p.pcId} 를 이전 버전 ${p.update.backup} 로 되돌립니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/rollback`, {});
     flash(`되돌리기 명령을 보냈습니다 (${p.pcId} → ${p.update.backup})`); await refreshRow(d, p.pcId);
-  }) }, `이전 버전으로 되돌리기 (${p.update.backup})`) : null;
+  }) }, `이전 버전으로 되돌리기${busy ? "" : ` (${p.update.backup})`}`) : null;   // 진행 중엔 보관본이 아직 옛 값이다
   const tr = el("tr", { id: `pc-${p.pcId}` }, el("td", {}, p.label || "(이름 없음)"), el("td", {}, p.pcId), el("td", {}, ver),
-    el("td", { title: p.update?.reason ?? "" }, phase.text), el("td", {}, el("div", { class: "row" }, sel, go, back)));
+    el("td", { title: p.update?.reason ?? "" }, phase.text), el("td", {}, el("div", { class: "row" }, sel, go, back), memo));
   if (busy) followRow(d, p.pcId, tr);
   return tr;
 }
@@ -320,8 +327,8 @@ function pcSection(d) {
     refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
   }) }, "PC 추가");
   return el("div", { class: "sec" }, el("h3", {}, "PC"),
-    d.pcs.length ? el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"].map((h) => el("th", {}, h)))),
-      el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases)))) : el("p", { class: "muted" }, "PC 가 없습니다"),
+    d.pcs.length ? el("div", { style: "overflow-x:auto" }, el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"].map((h) => el("th", {}, h)))),
+      el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases))))) : el("p", { class: "muted" }, "PC 가 없습니다"),
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
 }
 function userSection(d) {
