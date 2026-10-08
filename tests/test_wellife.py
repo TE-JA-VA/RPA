@@ -186,6 +186,13 @@ check("반복 회차가 처리한 것이 없으면 이력에 남기지 않는다
 picked_run("Wms", done=["login", "wellife_wms"], trigger="repeat")
 check("반복 회차가 실제로 넘긴 것이 있으면 이력에 남긴다",
       fins and fins[-1][0][0] == "success" and fins[-1][1].get("record", True) is True, str(fins))
+rr.ec.screen_locked = lambda: True
+picked_run("Wms", trigger="repeat")
+check("반복 회차가 잠긴 화면에서 시작도 못 했으면 이력에 남기지 않는다 (PC 가 그 회차만 건너뛴다 - 사용자 10-08)",
+      fins and fins[-1][0][0] == "stopped" and "화면이 잠겨" in fins[-1][0][1] and fins[-1][1].get("record") is False, str(fins))
+picked_run("Wms", trigger="auto")
+check("반복이 아닌 실행은 잠겨 못 돈 것도 이력에 남긴다", fins and fins[-1][0][0] == "stopped" and fins[-1][1].get("record", True) is True, str(fins))
+rr.ec.screen_locked = lambda: False
 picked_run("Wms", trigger="auto")
 check("반복이 아닌 예약 실행은 처리한 것이 없어도 이력에 남긴다",
       fins and fins[-1][1].get("record", True) is True, str(fins))

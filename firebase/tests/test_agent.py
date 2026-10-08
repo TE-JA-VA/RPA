@@ -809,6 +809,25 @@ with tempfile.TemporaryDirectory() as d:
         check(tk.view()["cost"]["next"] == 1, f"업체가 물류관리를 안 쓰면 운송장도 안 돈다 - 주문매핑 1 만 ({tk.view()['cost']})")
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00"}]})
         check("next" not in tk.costs(), "'전체' 줄이면 next 없음 (화면은 전체 실행 토큰을 쓴다)")
+        # 웰라이프 업체: 예상도 이력과 같은 키(wellife_*)로 센다 - 업체 배율 prices/{cid} 가 맞게 걸리게 (2026-10-08)
+        class WlClient(TokenClient):
+            def fs_get(self, path):
+                return {"wellife_wms": 4, "wellife_sales": 3} if path == "prices/c_demo" else super().fs_get(path)
+        wc = WlClient(9, 0)
+        os.environ["RPA_USER_CONFIG"] = os.path.join(d, "RPA_UserConfig.json")
+        try:
+            dash.set_policy(3, ["Logistics", "Output"], wellife=True)
+            st.ensure_wellife_section()                                   # 로그인·주문매핑만 켬
+            check(ag.local_plan()[0] == ["login", "wellife_sales"], f"웰라이프 업체의 실행 1번 = Wellife 섹션에서 켠 모듈, 이력 키로 ({ag.local_plan()})")
+            dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
+            check(ag.next_plan() == (["login", "wellife_wms"], False), f"웰라이프 줄도 이력 키로 ({ag.next_plan()})")
+            wk = ag.Tokens(wc, "c_demo", ag.Prices(wc, "c_demo"), ag.local_plan, next_plan=ag.next_plan)
+            wk.refresh(force=True)
+            check(wk.view()["cost"]["routine"] == 3 and wk.view()["cost"]["next"] == 4,
+                  f"업체 배율이 웰라이프 모듈에 걸린다 - 주문매핑 3, WMS 4 ({wk.view()['cost']})")
+        finally:
+            os.environ.pop("RPA_USER_CONFIG", None)
+            dash.set_policy(3, [])
         try:
             ag.real_actions()["resume_repeat"](None); check(False, "멈춘 반복이 없는데 다시 시작")
         except RuntimeError as e:

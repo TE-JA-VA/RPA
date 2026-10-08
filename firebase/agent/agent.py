@@ -169,11 +169,18 @@ def balance(client, cid):
     return int(wallet.get("granted") or 0) - int(client.fs_sum(f"runs/{cid}", "items", "cost", wallet.get("since")))
 
 
+def history_key(cfg, wellife):
+    """설정 키 → 이력의 modules[].key. 루틴은 소문자 (run_routine.ROUTINE_MODULES: login·Login, sales·Sales …),
+    웰라이프는 로그인 말고 'wellife_' 를 붙인다 (wellife.MODULES: wellife_sap·Sap …) - 업체 배율이 같은 키에 걸리게."""
+    return cfg.lower() if not wellife or cfg == "Login" else f"wellife_{cfg.lower()}"
+
+
 def local_plan():
-    """이 PC 의 실행 1번 계획: (켠 루틴 모듈 키 목록, 켠 사이트·프리셋 수). 모듈 키는 설정 키의 소문자 - 이력의
-    modules[].key 와 같다 (run_routine.ROUTINE_MODULES: login·Login, sales·Sales …). 사이트는 Stts 0 (web_runner.site_will_run)."""
+    """이 PC 의 실행 1번 계획: (켠 모듈의 이력 키 목록, 켠 사이트·프리셋 수). 웰라이프 업체는 Wellife 섹션, 그 밖은 Routine 섹션.
+    사이트는 Stts 0 (web_runner.site_will_run)."""
     import rpa_status as st
-    mods = [k.lower() for k, on in st.read_routine_modules()[0].items() if on]
+    wl = st.wellife_policy()
+    mods = [history_key(k, wl) for k, on in (st.read_wellife_modules() if wl else st.read_routine_modules())[0].items() if on]
     try:
         sites = (st.read_user_config() or {}).get(st.SITES_SECTION) or {}
     except Exception:
@@ -194,7 +201,8 @@ def next_plan():
     run = [k for k in slot["run"] if k not in off]
     if "Logistics" not in run:                    # 물류관리가 없으면 운송장도 안 돈다 (run_routine.run_modules_from_env)
         run = [k for k in run if k != "Output"]
-    return [k.lower() for k in run if k != "Prepare"], "Prepare" in run
+    wl = (sch.get("policy") or {}).get("wellife") is True
+    return [history_key(k, wl) for k in run if k != "Prepare"], "Prepare" in run
 
 
 class Tokens:

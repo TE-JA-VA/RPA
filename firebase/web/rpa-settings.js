@@ -426,7 +426,7 @@ function paintScheduleMeta() {
   let cls = err ? " bad" : "";
   const rep = s.repeat;                                  // 반복 상태 (PC 가 적는다) - 오늘 것만
   if (rep && rep.date === isoDay(new Date())) {
-    info.push(`오늘 반복 ${rep.runs || 0}회 · 처리 ${rep.done || 0}회`);
+    info.push(`오늘 반복 ${rep.runs || 0}회 · 처리 ${rep.done || 0}회` + (rep.skipped ? ` · 화면 잠김으로 건너뜀 ${rep.skipped}회` : ""));   // 잠긴 회차는 건너뛰고 잇는다 (사용자 2026-10-08)
     if (rep.stopped) {
       const why = rep.stopped.reason || "반복을 멈췄습니다";
       info.push(tokenErr(why) && t.balance <= 0 ? "반복을 멈췄습니다" : why); cls = " bad";

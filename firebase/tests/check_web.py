@@ -995,6 +995,11 @@ with sync_playwright() as pw:
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('오늘 반복 24회')", timeout=10000)
     check("오늘 반복 24회 · 처리 2회" in page.text_content("#sch-info") and page.is_disabled("#sch-apply"),
           "PC 가 돌려준 반복 상태: 오늘 횟수·처리 (on_fail·로그인이 붙어도 바뀜 없음)")
+    check("건너뜀" not in page.text_content("#sch-info"), "건너뛴 회차가 없으면 그 말은 없다")
+    db_patch(f"{LIVE}/schedule/repeat", {"skipped": 3})
+    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('건너뜀')", timeout=10000)
+    check("오늘 반복 24회 · 처리 2회 · 화면 잠김으로 건너뜀 3회" in page.text_content("#sch-info") and "bad" not in page.get_attribute("#sch-info", "class"),
+          f"화면이 잠겨 건너뛴 회차 수 (멈춘 것이 아니라 빨간 글 아님 - 사용자 2026-10-08) ({page.text_content('#sch-info')})")
     db_patch(f"{LIVE}/schedule/repeat", {"stopped": {"at": f"{TODAY}T10:23:00", "reason": "10:23 물류관리 실패로 반복을 멈췄습니다: 저장 실패"}})
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('멈췄습니다')", timeout=10000)
     check("bad" in page.get_attribute("#sch-info", "class"), "멈췄으면 그 까닭을 빨간 글로")

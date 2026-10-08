@@ -782,6 +782,16 @@ def processed(status):
     return any(m.get("state") == "done" and m.get("key") != "login" for m in status.get("modules") or [])
 
 
+LOCKED_TEXT = "화면이 잠겨"   # 웰라이프가 잠긴 화면에서 멈출 때 쓰는 말 (wellife.run_main·Stop)
+
+
+def locked_round(status):
+    """화면이 잠겨 멈춘 회차인가 - 그 회차만 건너뛰고 반복은 잇는다 (사용자 2026-10-08).
+    ponytail: 까닭 글로 가린다. 글을 바꾸면 여기도 - 늘면 상태 파일에 칸을 둘 것"""
+    texts = [status.get("reason") or ""] + [m.get("reason") or "" for m in status.get("modules") or [] if isinstance(m, dict)]
+    return status.get("state") != "success" and any(LOCKED_TEXT in t for t in texts)
+
+
 def stop_reason(status):
     """멈춘 회차의 까닭 한 줄: '10:23 물류관리 실패로 반복을 멈췄습니다: <사유>'."""
     bad = next((m for m in status.get("modules") or [] if m.get("state") in ("failed", "stopped")), None) or {}
@@ -1008,9 +1018,12 @@ class Scheduler(threading.Thread):
                 pass                             # 앞 시간대에 띄운 회차가 붙은 시간대가 열린 뒤 끝났다 - 이 시간대 회차가 아니니 세지도 멈추지도 않는다
             elif v.get("trigger") != "repeat":
                 pass                             # 다른 실행(사람이 누른 단추 등)이 상태를 덮었다 - 회차 결과를 모르니 세지도 멈추지도 않는다
-            elif v.get("state") == "success":
-                rep["runs"] = int(rep.get("runs") or 0) + 1
-                rep["done"] = int(rep.get("done") or 0) + (1 if processed(v) else 0)
+            elif v.get("state") == "success" or locked_round(v):
+                if locked_round(v):              # 화면이 잠긴 회차는 세지 않고 건너뛴다 - 쉬는 시간 뒤 다음 회차 (사용자 2026-10-08)
+                    rep["skipped"] = int(rep.get("skipped") or 0) + 1
+                else:
+                    rep["runs"] = int(rep.get("runs") or 0) + 1
+                    rep["done"] = int(rep.get("done") or 0) + (1 if processed(v) else 0)
                 rest = (window_at(sch, rep.get("at"), now) or {}).get("rest_min", REST_MIN_DEFAULT)
                 end = st.parse_iso(v.get("finished_at")) or now
                 rep["next_at"] = (end + datetime.timedelta(minutes=rest)).isoformat(timespec="seconds")

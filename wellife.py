@@ -208,7 +208,9 @@ def run_main(rr):
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in MODULES))
     if rr.ec.screen_locked():   # 잠긴 화면에서는 클릭이 헛돌아 엉뚱한 실패가 난다 (10-07 실측)
         log("윈도우 화면이 잠겨 있어 실행하지 않았습니다.")
-        status.finish("stopped", "윈도우 화면이 잠겨 있어 실행하지 않았습니다 (화면을 풀고 다시 실행)")
+        # 반복 회차는 PC 가 이 회차만 건너뛰고 쉬는 시간 뒤 다시 띄운다 - 잠긴 동안 회차마다 이력이 쌓이지 않게 (사용자 10-08)
+        status.finish("stopped", "윈도우 화면이 잠겨 있어 실행하지 않았습니다 (화면을 풀고 다시 실행)",
+                      record=os.environ.get("RPA_RUN_TRIGGER") != "repeat")
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
     pids = rr.ec.erpia_pids()
