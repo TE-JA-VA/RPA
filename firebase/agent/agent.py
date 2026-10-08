@@ -181,7 +181,7 @@ def next_plan():
     slot = dash.slot_of(sch) if sch.get("enabled") and sch.get("next_run_at") else None
     if not slot or slot.get("run") is None:
         return None
-    off = set((sch.get("policy") or {}).get("off") or [])
+    off = set(dash.slot_off(sch))                 # 업체가 안 쓰는 모듈 + (웰라이프가 아니면) SAP 연동·WMS 이관 - 띄울 때와 같다
     run = [k for k in slot["run"] if k not in off]
     if "Logistics" not in run:                    # 물류관리가 없으면 운송장도 안 돈다 (run_routine.run_modules_from_env)
         run = [k for k in run if k != "Output"]
@@ -622,9 +622,13 @@ def real_actions(policy=None, limits=None, start_update=None):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
         # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
         got = limits() if limits else None
-        if st.wellife_policy() and isinstance(args, dict) and args.get("enabled") is not False and any(      # limits() 가 정책을 새로 적은 뒤에 본다
-                isinstance(s, dict) and (s.get("run") or s.get("until")) for s in (args.get("slots") or [])):
-            raise RuntimeError("웰라이프 업체는 '전체' 시각만 쓸 수 있습니다")
+        # 줄의 모듈은 업체 종류에 맞게 - 웰라이프 업체는 물류관리·운송장 없이 SAP 연동·WMS 이관, 그 밖의 업체는 반대 (limits() 가 정책을 새로 적은 뒤에 본다)
+        wl = st.wellife_policy()
+        wrong = set(WELLIFE_BLOCKED) if wl else set(dash.WELLIFE_ONLY_KEYS)
+        if isinstance(args, dict) and args.get("enabled") is not False and any(
+                isinstance(s, dict) and isinstance(s.get("run"), list) and wrong & {k for k in s["run"] if isinstance(k, str)} for s in (args.get("slots") or [])):
+            raise RuntimeError("웰라이프 업체는 물류관리·운송장을 쓰지 않습니다" if wl
+                               else "SAP 연동·WMS 이관은 웰라이프 업체만 씁니다")
         limit = got[0] if got else (st.read_settings()["schedule"].get("policy") or {}).get("limit")
         rows = (args.get("slots") if "slots" in args else args.get("times")) if isinstance(args, dict) else None
         if isinstance(rows, list) and args.get("enabled") is not False and isinstance(limit, int) and len(rows) > limit:

@@ -546,7 +546,7 @@ with sync_playwright() as pw:
     db_patch("meta/companies/c_demo/apps/rpa", {"modules": None})   # null 로 PATCH = 그 자리 지우기 (PUT 은 본문이 비면 400)
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     check(page.locator("#mod-list label").count() == 5, "정책을 지우면 다시 보인다")
-    # 웰라이프 업체 (설계 2026-10-07-wellife-gate): 모듈 다섯, '전체' 시각만. 줄 고르기는 v2 PC 에서만 보이니 v2 live 를 먼저 만든다
+    # 웰라이프 업체 (설계 2026-10-07-wellife-gate, 사용자 10-08): 모듈 다섯, 줄 고르기·반복. 줄 고르기는 v2 PC 에서만 보이니 v2 live 를 먼저 만든다
     rule = page.evaluate("import('./rpa-common.js').then(m => [m.wellifeOn('WELLIFE_x', null), m.wellifeOn('my_wellife', {}), m.wellifeOn('wel_life', null),"
                          "m.wellifeOn('c_demo', {rpa: {features: {wellife: true}}}), m.wellifeOn('c_demo', {rpa: {features: {wellife: false}}})])")
     check(rule == [True, True, False, True, False], f"웹 판정 규칙이 에이전트·관리 화면과 같다 ({rule})")
@@ -558,23 +558,26 @@ with sync_playwright() as pw:
     names = [x.strip() for x in page.locator("#mod-list label").all_text_contents()]
     check(len(names) == 5 and any("웰라이프 SAP 연동관리" in n for n in names) and any("웰라이프 WMS 이관관리" in n for n in names)
           and not any("물류관리" == n or "운송장" in n for n in names), f"웰라이프 업체: 모듈 다섯 (물류관리·운송장 없음) ({names})")
-    check(not page.is_visible("#sch-add-win") and page.locator("#sch-times select.mode").count() == 0,
-          "웰라이프 업체: '전체' 시각만 (고르기·반복 시간대 숨김)")
-    # PC 에 반복·고르기 줄이 올라와 있어도 보내는 값은 '전체' 줄뿐 (에이전트가 그런 줄을 거절한다), 모듈은 다섯 키만
+    check(page.is_visible("#sch-add-win") and page.locator("#sch-times select.mode").count() == 1,
+          "웰라이프 업체: 줄 고르기·반복 시간대도 쓴다 (사용자 10-08: ②③④⑤ 따로, ⑤ 는 반복)")
+    # 줄 단추는 물류관리·운송장 대신 SAP 연동·WMS 이관. 업체 종류가 바뀌기 전의 물류관리는 보내지 않는다 (에이전트가 거절한다)
     cmds0, mods0, sets0 = db_get(CMDS), db_get(f"{SETTINGS}/modules"), db_get(f"{SETTINGS}/schedule")
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 4}})
     db_patch(f"{LIVE}/schedule", {"enabled": True, "days": list(range(7)), "slots": [
-        {"at": "09:05"}, {"at": "10:00", "run": ["Login", "Logistics"]},
+        {"at": "09:05"}, {"at": "10:00", "run": ["Login", "Sap"]},
         {"at": "11:00", "until": "12:00", "rest_min": 3, "run": ["Login", "Logistics"]}]})
     reload_to(page, "settings"); page.wait_for_selector("#sch-times .t")
-    check(page.locator("#sch-times select").count() == 0 and page.locator("#sch-times .chips").count() == 0
-          and page.locator("#sch-times .t").count() == 3, "웰라이프 업체: PC 의 반복·고르기 줄도 '전체' 시각 줄로 보인다")
+    chips = page.locator("#sch-times .chips button").all_text_contents()
+    check(page.locator("#sch-times select.mode").count() == 2 and page.locator("#sch-times .chips").count() == 2
+          and "WMS 이관" in chips and "SAP 연동" in chips and "물류관리" not in chips and "운송장" not in chips,
+          f"웰라이프 업체: 고르기·반복 줄의 단추는 SAP 연동·WMS 이관 (물류관리·운송장 없음) ({chips})")
+    page.locator("#sch-times .t").nth(2).locator(".chips button[data-k='Wms']").click()
     first = page.query_selector_all("#sch-times input")[0]
     first.fill("09:10"); first.dispatch_event("change")
     page.click("#sch-apply"); time.sleep(1.5)
     saved = (db_get(f"{SETTINGS}/schedule") or {}).get("slots") or []
-    check([s.get("at") for s in saved] == ["09:10", "10:00", "11:00"] and not any("run" in s or "until" in s for s in saved),
-          f"웰라이프 업체: 보내는 줄에 run·until 이 없고 시각은 그대로 ({saved})")
+    check([(s.get("at"), s.get("run"), s.get("until")) for s in saved] == [("09:10", None, None), ("10:00", ["Sap"], None), ("11:00", ["Wms"], "12:00")],
+          f"웰라이프 업체: ④ 줄과 ⑤ 반복 시간대를 보낸다, 물류관리는 빠진다 ({saved})")
     for k, v in (db_get(CMDS) or {}).items():   # 보낸 명령을 닫아야 단추 잠금이 풀린다
         if v.get("state") == "queued": db_patch(f"{CMDS}/{k}", {"state": "done", "result": "ok", "started_at": 1, "ended_at": 2})
     page.wait_for_function("!document.getElementById('sch-apply')?.disabled || document.querySelector('#mod-list input')?.disabled === false", timeout=10000)

@@ -15,7 +15,8 @@
   모드와 상관없이 누르지 않는다 (마우스만). 선택주문 매출처리는 하지 않는다.
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
-  ⑤ 는 나중에 반복 실행(docs/wellife-rpa.md 7절)의 대상이 된다.
+모듈별 실행: 예약 줄이 모듈을 고르면(RPA_RUN_MODULES, Wellife 키) 그 모듈만 돈다 - ②③④⑤ 를 따로 띄울 수 있다.
+⑤ 는 SAP 에서 넘어온 건이 WMS 에 하나씩 들어오므로 반복 시간대(시작~끝, N분 쉬고 다시)로 돌린다 (docs/wellife-rpa.md 7절).
 
 run_routine 을 import 하지 않는다. exe 에서 run_routine 은 __main__ 이라 다시 import 하면 사본이 하나 더 생기고,
 그 사본이 결과 로그를 'w' 로 다시 열어 지운다. 그래서 run_routine 이 자기 모듈(rr)을 넘겨준다.
@@ -163,6 +164,10 @@ def run_main(rr):
         live, sales_live, error = load_mode(rr), load_mode(rr, SALES_MODE_KEY), None
     except Exception as e:
         live, sales_live, error = False, False, e
+    # 예약 줄이 모듈을 골라 띄웠으면(반복 시간대 포함) 섹션의 켬·끔 대신 그 모듈만 - 지금 루틴과 같은 규칙. 모드는 섹션 그대로
+    picked, picked_unknown = rr.run_modules_from_env([m[1] for m in MODULES])
+    if not error and picked is not None:
+        selected, unknown = picked, []
     tag, sales_tag = mode_tag(live), mode_tag(sales_live)
     # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다. ② 단계는 SalesMode 를 붙인다
     sales_steps = next(m[3] for m in MODULES if m[0] == "wellife_sales")
@@ -189,8 +194,18 @@ def run_main(rr):
     log("*" * 70)
     for k in unknown:
         log(f"경고: '{SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
-    log("실행할 모듈: " + " / ".join(
-        f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in MODULES))
+    if picked is not None:
+        for k in picked_unknown:
+            log(f"경고: 예약에서 넘긴 '{k}' 는 모르는 모듈이라 무시합니다.")
+        if not any(selected.values()):
+            log("이번 실행 모듈이 비었습니다 (예약에서 넘긴 값)")
+            status.finish("stopped", "이번 실행 모듈이 비었습니다")
+            log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+            return
+        log("이번 실행 모듈 (예약): " + " / ".join(label for _, cfg, label, _, _ in MODULES if selected[cfg]))
+    else:
+        log("실행할 모듈: " + " / ".join(
+            f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in MODULES))
     if rr.ec.screen_locked():   # 잠긴 화면에서는 클릭이 헛돌아 엉뚱한 실패가 난다 (10-07 실측)
         log("윈도우 화면이 잠겨 있어 실행하지 않았습니다.")
         status.finish("stopped", "윈도우 화면이 잠겨 있어 실행하지 않았습니다 (화면을 풀고 다시 실행)")
@@ -209,7 +224,13 @@ def run_main(rr):
              "wellife_sap": lambda ctx: module_sap(rr, ctx, live),
              "wellife_wms": lambda ctx: module_wms(rr, ctx, live)}
     result, reason = rr.run_modules(selected, MODULES, funcs, SECTION)
-    status.finish(result, reason)
+    # 반복 회차(⑤ 를 시간대 동안 N분마다)는 처리한 것이 없으면 이력에 남기지 않는다 - 지금 루틴 main 과 같은 규칙
+    if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
+            and not [k for k in (status.done_modules() or []) if k != "login"]:
+        log("반복 회차 - 처리한 것이 없어 기록에 남기지 않습니다")
+        status.finish(result, reason, record=False)
+    else:
+        status.finish(result, reason)
     log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} "
         f"({'성공' if result == 'success' else '중단'}) ===")
 
