@@ -228,10 +228,12 @@ function updText(u) {
 }
 function pcRowEl(d, p, rel) {
   const tag = (v) => (v === rel.stable ? " (안정본)" : v === rel.newest ? " (최신본)" : "");
-  const ver = p.version?.version ? `${p.version.version}${tag(p.version.version)}` : "모름";
+  const cur = p.version?.version;
+  const ver = cur ? `${cur}${tag(cur)}` : "버전 정보 없음";
   const busy = ["downloading", "waiting", "ready", "applying", "rolling_back"].includes(p.update?.state);
   const sel = el("select", { class: "upd-ver" }, rel.list.map((x) => el("option", { value: x.version }, `${x.version}${tag(x.version)}${x.memo ? ` - ${x.memo}` : ""}`)));
-  if (rel.stable) sel.value = rel.stable;
+  // 고르기 칸은 지금 버전부터 (목록에 없거나 모르면 안정본) - 새로 고쳐도 방금 올린 버전이 보이게 (사용자 2026-10-08)
+  sel.value = rel.list.some((x) => x.version === cur) ? cur : rel.stable ?? "";
   const go = el("button", { class: "upd-go", disabled: busy || !rel.list.length, onclick: () => act(go, async () => {
     if (!confirm(`${d.cid} / ${p.pcId} 를 ${sel.value} 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/update`, { version: sel.value });

@@ -336,6 +336,15 @@ with sync_playwright() as pw:
     open_company(page, CID)
     check(page.is_disabled(f"#pc-{PC} button.upd-go") and page.is_disabled(f"#pc-{PC} button.upd-back")
           and "업데이트 대기 중" in page.text_content(f"#pc-{PC}"), "진행 중이면 두 단추 잠금")
+    db_put(f"apps/rpa/live/{CID}/{PC}/version", {"version": "2026.10.07-5", "state": "ok"})
+    open_company(page, CID)
+    check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-5", "버전 고르기: 지금 버전이 있으면 지금 버전")
+    call("DELETE", f"{DB}/apps/rpa/live/{CID}/{PC}/version.json?ns={NS}", None, OWNER)
+    open_company(page, CID)
+    cells = [c.strip() for c in page.locator(f"#pc-{PC} td").all_text_contents()]
+    check(cells[2] == "버전 정보 없음" and page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4",
+          f"버전을 모르면 '버전 정보 없음'·안정본 ({cells[2]})")
+    db_put(f"apps/rpa/live/{CID}/{PC}/version", {"version": "2026.10.07-4", "state": "ok"})
     page.click("#releases-open")
     page.click("#releases button[data-stable='2026.10.07-5']")
     page.wait_for_timeout(800)
