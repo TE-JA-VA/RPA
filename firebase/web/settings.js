@@ -2,7 +2,7 @@
 // 앱이 둘이 되면 위에 앱 탭을 붙인다 - 지금은 앱 이름 머리 아래 그대로.
 export const key = "settings";
 export const label = "환경설정";
-export const icon = "⚙";
+export const icon = "⚙️";
 export const perPc = true;
 export const adminOnly = true;
 

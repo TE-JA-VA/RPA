@@ -6,7 +6,7 @@ import { ACCENTS, DEFAULT_ACCENT, applyAccent, getAccent, accentFor } from "./th
 
 export const key = "account";
 export const label = "계정";
-export const icon = "◎";
+export const icon = "👤";
 export const perPc = false;
 
 const HTML = `

@@ -233,6 +233,19 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('company')?.textContent === '시연 회사'", timeout=10000)
     check(True, "회사 이름 표시")
     check(page.text_content("#app-nav a[aria-current='page']").strip().endswith("RPA"), "사이드바에서 RPA 가 현재 페이지")
+    # 사이드바 (사용자 2026-10-08): 계정 줄·[밝게]·[로그아웃] 은 'AFTER MARKET / 업체명' 바로 아래, 메뉴 글자는 이모지
+    icons = page.evaluate("[...document.querySelectorAll('.nav a .ic')].map((e) => e.textContent)")
+    check(icons == ["🔄", "⚙️", "👤"], f"메뉴 이모지: RPA 새로고침 · 환경설정 톱니 · 계정 사람 ({icons})")
+    box = lambda sel: page.evaluate(f"(() => {{ const r = document.querySelector('{sel}').getBoundingClientRect(); return [r.left, r.top, r.bottom]; }})()")
+    check(box("#company")[2] <= box("#who")[1] and box("#logout-btn")[2] <= box(".nav a")[1],
+          f"계정·밝게·로그아웃이 업체명 아래, 메뉴 위 ({box('#company')}, {box('#who')}, {box('#logout-btn')}, {box('.nav a')})")
+    if os.environ.get("SHOT_DIR"): page.locator("aside.side").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "side.png"))
+    page.set_viewport_size({"width": 390, "height": 800}); page.wait_for_timeout(300)
+    check(box("#logout-btn")[0] > box("#admin-nav a:last-child")[0], "휴대폰 폭에선 지금처럼 메뉴 오른쪽 끝에")
+    check(page.evaluate("""[...document.querySelectorAll('.side .foot button')].every((b) => { const r = document.createRange();
+      r.selectNodeContents(b); return r.getClientRects().length === 1; })"""), "휴대폰 폭에서도 [밝게]·[로그아웃] 글자가 한 줄")
+    if os.environ.get("SHOT_DIR"): page.locator("aside.side").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "side_390.png"))
+    page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
     check(page.text_content("#page-title") == "RPA", "페이지 제목")
     check(page.is_hidden("#pc-pick"), "PC 가 하나면 고르기 숨김")
     check(page.evaluate("[...document.querySelectorAll('#admin-nav a')].map((a) => a.dataset.key).join()") == "settings,account"
