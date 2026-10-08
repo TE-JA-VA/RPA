@@ -12,7 +12,7 @@ export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 �
 
 export const key = "rpa";
 export const label = "RPA";
-export const icon = "▣";
+export const icon = "🔄";
 export const perPc = true;
 
 // 상태 이름은 세 가지로 통일 (2026-09-22): 성공 / 실패(단계 검사에서 스스로 멈춤, 사용자 중지 포함) / 오류(프로그램이 죽음).
