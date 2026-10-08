@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getDatabase } from "firebase-admin/database";
-import { getFirestore, AggregateField } from "firebase-admin/firestore";
+import { getFirestore, AggregateField, FieldValue } from "firebase-admin/firestore";
 
 export class Refused extends Error {}
 
@@ -289,12 +289,29 @@ export async function tokenStatus(cid) {
 export async function getPrices() {
   return { ...PRICE_BASE, ...((await store.doc("meta/prices").get()).data() ?? {}) };
 }
-export async function setPrice(key, value) {
-  checkKey("모듈 키", key);
+function priceValue(value) {
   const text = String(value ?? "").trim();
   if (!/^\d+$/.test(text)) throw new Refused(`토큰 배율은 0 이상 정수 (받은 값: ${text})`);
-  await store.doc("meta/prices").set({ [key]: Number(text) }, { merge: true });
+  return Number(text);
+}
+export async function setPrice(key, value) {
+  checkKey("모듈 키", key);
+  await store.doc("meta/prices").set({ [key]: priceValue(value) }, { merge: true });
   return getPrices();
+}
+// 업체 배율 prices/{cid} (2026-10-08) - 에이전트가 meta/prices 위에 덮는다. 웰라이프 업체면 웰라이프 모듈 줄을 보인다
+export async function companyPrices(cid) {
+  checkKey("cid", cid);
+  const v = await companyOf(cid, { removed: true });
+  return { cid, prices: (await store.doc(`prices/${cid}`).get()).data() ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features) };
+}
+// 값을 비우면 그 키를 지워 기본값을 따른다
+export async function setCompanyPrice(cid, key, value) {
+  checkKey("cid", cid); checkKey("모듈 키", key);
+  await companyOf(cid, { removed: true });
+  const blank = String(value ?? "").trim() === "";
+  await store.doc(`prices/${cid}`).set({ [key]: blank ? FieldValue.delete() : priceValue(value) }, { merge: true });
+  return companyPrices(cid);
 }
 // 우리 통계: 업체마다 남은 토큰 · 이번 달 쓴 토큰 (통장 시작이 이번 달이면 그때부터). 통장이 없어도 쓴 것은 센다
 export async function usageRows(cid) {

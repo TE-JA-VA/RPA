@@ -31,6 +31,12 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // 업체 배율 { 모듈 키: 수 } - meta/prices 위에 덮인다 (2026-10-08). 그 업체 에이전트·화면과 super 만 읽고, 쓰기는 관리 화면(Admin SDK)만
+    match /prices/{cid} {
+      allow read: if sameCompany(cid);
+      allow write: if false;
+    }
+
     // 토큰 통장 { granted } 와 넣은 내역 grants/{id}. 남은 토큰 = granted - 그 회사 runs 의 cost 합.
     // 쓰기는 setup.js(Admin SDK)만 - 에이전트·관리자·super 화면 어느 쪽도 늘리거나 고치지 못한다
     match /wallet/{cid} {

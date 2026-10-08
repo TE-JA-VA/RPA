@@ -253,6 +253,18 @@ code, r = api("POST", "/api/prices", {"key": "logistics", "value": "3"})
 check(code == 200 and r.get("logistics") == 3 and r.get("login") == 0, "토큰 배율 바꾸기", r)
 code, r = api("POST", "/api/prices", {"key": "logistics", "value": "-1"})
 check(code == 400 and "토큰 배율" in r.get("error", ""), "토큰 배율 음수는 거절", r)
+# 업체 배율 (사용자 2026-10-08): prices/{cid} 에, 비우면 그 키를 지워 기본값을 따른다
+code, r = api("POST", "/api/companies/t_new/prices", {"key": "sales", "value": "7"})
+check(code == 200 and (fs_doc("prices/t_new") or {}).get("sales") == 7 and r.get("prices") == {"sales": 7}
+      and (fs_doc("meta/prices") or {}).get("sales") is None, "업체 배율: 그 업체 문서에만 (기본값은 그대로)", r)
+code, r = api("GET", "/api/companies/my_wellife/prices")
+check(code == 200 and r.get("prices") == {} and r.get("wellife") is True, "업체 배율 읽기: 없으면 {}, 웰라이프 업체인지도", r)
+code, r = api("POST", "/api/companies/t_new/prices", {"key": "sales", "value": ""})
+check(code == 200 and "sales" not in (fs_doc("prices/t_new") or {}) and r.get("prices") == {}, "업체 배율 비우기 = 기본값을 따름", r)
+code, r = api("POST", "/api/companies/t_new/prices", {"key": "sales", "value": "-1"})
+check(code == 400 and "토큰 배율" in r.get("error", ""), "업체 배율도 음수는 거절", r)
+code, r = api("POST", "/api/companies/nobody/prices", {"key": "sales", "value": "1"})
+check(code == 400 and fs_doc("prices/nobody") is None, "없는 업체에는 쓰지 않는다", r)
 code, rows = api("GET", "/api/usage")
 check(code == 200 and any(x["cid"] == "t_new" and x["left"] == 600 for x in rows), "통계: 업체마다 남은 토큰", str(rows)[:200])
 code, r = api("GET", "/api/companies/Bad")
@@ -322,7 +334,17 @@ with sync_playwright() as pw:
     check(cells[1] == PC and cells[2] == "2026.10.07-4 (안정본)" and cells[3] == "업데이트됨 10/7 14:03", f"PC 줄 칸: 코드·버전·상태 ({cells})")
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4"
           and "(최신본)" in page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']"), "판 고르기: 처음은 안정본, 최신본 표시")
+    # 줄이 자연스럽게 (사용자 2026-10-08): 고르기 칸엔 버전만, 비고는 칸 아래 작은 글로. 머리·칸·단추는 한 줄
+    opt = page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']")
+    check(opt == "2026.10.07-5 (최신본)" and page.text_content(f"#pc-{PC} .upd-memo") == "안정",
+          f"고르기 칸은 버전만, 고른 버전의 비고는 아래에 ({opt!r}, {page.text_content(f'#pc-{PC} .upd-memo')!r})")
+    lines = lambda sel: page.evaluate(f"""[...document.querySelectorAll("{sel}")].map((el) => {{ const r = document.createRange();
+      r.selectNodeContents(el); return r.getClientRects().length; }})""")
+    check(set(lines("#detail table.pcs th") + lines(f"#pc-{PC} td:not(:last-child)") + lines(f"#pc-{PC} button")) == {1},
+          f"PC 표 머리·칸·단추가 한 줄 ({lines('#detail table.pcs th')}, {lines(f'#pc-{PC} td:not(:last-child)')}, {lines(f'#pc-{PC} button')})")
+    if os.environ.get("SHOT_DIR"): page.locator("#detail .sec").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "pc_row.png"))
     page.select_option(f"#pc-{PC} select.upd-ver", "2026.10.07-5")
+    check(page.text_content(f"#pc-{PC} .upd-memo") == "새", "다른 버전을 고르면 그 버전의 비고")
     dialogs.clear()   # 위쪽 page.on("dialog") 가 이미 모두 받아들인다
     page.click(f"#pc-{PC} button.upd-go")
     page.wait_for_timeout(800)
@@ -367,6 +389,8 @@ with sync_playwright() as pw:
     open_company(page, CID)
     check(page.is_disabled(f"#pc-{PC} button.upd-go") and page.is_disabled(f"#pc-{PC} button.upd-back")
           and "업데이트 대기 중" in page.text_content(f"#pc-{PC}"), "진행 중이면 두 단추 잠금")
+    check(page.text_content(f"#pc-{PC} button.upd-back") == "이전 버전으로 되돌리기",
+          f"진행 중엔 되돌리기 단추에 버전을 안 붙인다 (보관본은 끝나야 바뀐다) ({page.text_content(f'#pc-{PC} button.upd-back')})")
     db_put(f"apps/rpa/live/{CID}/{PC}/version", {"version": "2026.10.07-5", "state": "ok"})
     open_company(page, CID)
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-5", "버전 고르기: 지금 버전이 있으면 지금 버전")
@@ -502,11 +526,44 @@ with sync_playwright() as pw:
 
     page.click("nav button[data-view='rates']")
     page.wait_for_selector("#rates tr", timeout=15000)
-    rate = page.locator("#rates tr", has_text="주문매핑 매출처리")
+    groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
+    check(groups == ["프리페어 RPA", "루틴 RPA", "루틴 RPA · 웰라이프 업체", "그 밖"],
+          f"토큰 배율: 프리페어·루틴·웰라이프·그 밖으로 나눔 (사용자 2026-10-08) ({groups})")
+    names = [t.strip() for t in page.locator("#rates tr[data-key] td:first-child").all_text_contents()]
+    check("사이트 수집" in names and not any("쇼핑몰" in n for n in names) and "웰라이프 SAP 연동관리" in names
+          and "웰라이프 WMS 이관관리" in names, f"사이트 수집 이름·웰라이프 모듈 줄 ({names})")
+    if os.environ.get("SHOT_DIR"): page.locator("#view-rates .card").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "rates_base.png"))
+    rate = page.locator("#rates tr[data-key='sales']")
     rate.locator("input").fill("2")
     rate.locator("button").click()
     page.wait_for_function("document.getElementById('flash')?.textContent.includes('배율')", timeout=15000)
     check((fs_doc("meta/prices") or {}).get("sales") == 2, "토큰 배율 화면에서 바꾸기 (sales 2)")
+    # 업체를 고르면 기본값 옆에 그 업체 칸 - 넣으면 그 업체만, 비우면 기본값을 따름
+    page.select_option("#rate-cid", "t_new")
+    page.wait_for_selector("#rates tr[data-key='sales'] input[placeholder='2']", timeout=15000)
+    groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
+    check(groups == ["프리페어 RPA", "루틴 RPA", "그 밖"], f"보통 업체는 웰라이프 묶음 없음 ({groups})")
+    rate = page.locator("#rates tr[data-key='sales']")
+    check(rate.locator("td").nth(1).text_content().strip() == "2" and rate.locator("input").input_value() == "",
+          "업체 칸: 기본값 2 가 보이고 업체 칸은 비어 있다 (따로 정한 값 없음)")
+    rate.locator("input").fill("9")
+    rate.locator("button").click()
+    page.wait_for_function("document.querySelector(\"#rates tr[data-key='sales']\")?.classList.contains('own')", timeout=15000)
+    if os.environ.get("SHOT_DIR"): page.locator("#view-rates .card").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "rates_company.png"))
+    check((fs_doc("prices/t_new") or {}).get("sales") == 9 and (fs_doc("meta/prices") or {}).get("sales") == 2
+          and "이 업체만" in page.text_content("#rates tr[data-key='sales']"), "업체 배율 저장: 그 업체만 9, 표시가 붙는다")
+    rate.locator("input").fill("")
+    rate.locator("button").click()
+    page.wait_for_function("!document.querySelector(\"#rates tr[data-key='sales']\")?.classList.contains('own')", timeout=15000)
+    check("sales" not in (fs_doc("prices/t_new") or {}), "비우고 저장하면 기본값을 따른다")
+    page.select_option("#rate-cid", "my_wellife")
+    page.wait_for_function("[...document.querySelectorAll('#rates tr.grp')].some((g) => g.textContent.includes('웰라이프'))", timeout=15000)
+    keys = page.evaluate("[...document.querySelectorAll('#rates tr[data-key]')].map((r) => r.dataset.key)")
+    if os.environ.get("SHOT_DIR"): page.locator("#view-rates .card").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "rates_wellife.png"))
+    check("wellife_sap" in keys and "logistics" not in keys and "login" in keys,
+          f"웰라이프 업체: 루틴은 로그인 + 웰라이프 모듈 (업체 웹과 같은 다섯) ({keys})")
+    page.select_option("#rate-cid", "")
+    page.wait_for_function("document.querySelectorAll('#rates tr.grp').length === 4", timeout=15000)
     check(page.locator("#usage tr", has_text="t_new").count() == 1, "통계 표에 업체가 나온다")
     rh = [h.strip() for h in page.locator("#view-rates table").first.locator("th").all_text_contents()]
     uh = [h.strip() for h in page.locator("#view-rates table").nth(1).locator("th").all_text_contents()]

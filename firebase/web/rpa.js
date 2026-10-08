@@ -90,7 +90,7 @@ const HTML = `
       <h2><span id="hist-title">기록</span> <span class="row" style="gap:6px"><input type="date" id="hist-date" class="num" style="width:auto"><button id="hist-all">전체</button></span></h2>
       <div class="msg" id="hist-msg"></div>
       <div class="tbl"><table>
-        <thead><tr><th>시각</th><th>프로그램</th><th>결과</th><th>소요</th><th>처리</th></tr></thead>
+        <thead><tr><th>시각</th><th>프로그램</th><th>결과</th><th>소요</th><th>상세 정보</th><th>토큰 사용량</th></tr></thead>
         <tbody id="hist-rows"></tbody>
       </table></div>
     </div>
@@ -521,10 +521,10 @@ function histRow(r) {
   const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : r.state === "crashed" ? "crash" : "bad";
   const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
   const prog = (PROGRAM_SHORT[r.program] || r.program_label || r.program || "") + (payload.trigger === "repeat" ? " · 반복" : "");   // 표에선 'RPA' 를 뗀다. 처리한 반복 회차 (빈 회차는 기록에 없다)
-  tr.innerHTML = `<td class="num">${esc(t)}</td><td>${esc(prog)}</td><td><span class="pill ${cls}">${esc(STATE_LABEL[r.state] || r.state || "")}</span></td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td>`;
+  tr.innerHTML = `<td class="num">${esc(t)}</td><td>${esc(prog)}</td><td><span class="pill ${cls}">${esc(STATE_LABEL[r.state] || r.state || "")}</span></td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td><td class="num">${typeof r.cost === "number" ? r.cost.toLocaleString("ko-KR") : "-"}</td>`;   // 토큰 전 옛 기록은 cost 가 없다
   const detail = document.createElement("tr");
   detail.className = "hist-detail hide";
-  const td = document.createElement("td"); td.colSpan = 5;
+  const td = document.createElement("td"); td.colSpan = 6;
   td.append(stepList(payload.steps));
   const pre = document.createElement("pre"); pre.className = "num"; pre.textContent = (payload.log || []).join("\n");
   td.append(pre);

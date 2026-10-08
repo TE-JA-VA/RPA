@@ -245,6 +245,16 @@ test("meta/prices: 로그인한 사람은 읽고 아무도 못 쓴다 (값표는
   await assertFails(setDoc(doc(fsAgentA1(), "meta/prices"), { default: 0 }));
 });
 
+test("prices/{cid}: 업체 배율은 그 업체와 super 만 읽고 아무도 못 쓴다 (관리 화면만, 사용자 2026-10-08)", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "prices/ca"), { sales: 5 });
+  });
+  for (const who of [fsAgentA1(), fsAdminA(), fsSuper()]) await assertSucceeds(getDoc(doc(who, "prices/ca")));
+  await assertFails(getDoc(doc(fsAdminB(), "prices/ca")));
+  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), "prices/ca")));
+  for (const who of [fsAgentA1(), fsAdminA(), fsSuper()]) await assertFails(setDoc(doc(who, "prices/ca"), { sales: 0 }));
+});
+
 test("wallet: 같은 회사와 super 는 읽고 다른 회사는 거부, 아무도 못 쓴다 (넣기는 setup.js 만)", async () => {
   await env.withSecurityRulesDisabled(async (c) => {
     await setDoc(doc(c.firestore(), "wallet/ca"), { granted: 100 });
