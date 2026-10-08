@@ -1018,6 +1018,31 @@ with sync_playwright() as pw:
     page.click("#sch-add")
     row2 = "#sch-times .t:nth-child(2)"
     check(pressed(row2) == [True] * 5 + [False] * 2, "[+ 시각] 새 줄은 평일(월~금)로 시작")
+    page.click("#sch-add-win")
+    row3 = "#sch-times .t:nth-child(3)"
+    geo = page.evaluate("""() => [...document.querySelectorAll('#sch-times .t')].map(t => {
+        const b = [...t.querySelectorAll('.days-mini button')].map(x => x.getBoundingClientRect());
+        return { left: Math.round(b[0].left), oneLine: b.every(x => Math.abs(x.top - b[0].top) < 2),
+                 line: getComputedStyle(t).borderTopWidth, head: !!t.querySelector('.t-head .del') }; })""")
+    check(len({g["left"] for g in geo}) == 1 and all(g["oneLine"] for g in geo),
+          f"시각 줄·반복 줄 모두 요일 단추가 같은 자리에 한 줄로 (사용자 2026-10-08) ({geo})")
+    check(all(g["head"] for g in geo) and all(g["line"] != "0px" for g in geo[1:]), f"줄마다 같은 머리(시각·빼기) + 슬롯 사이 가로선 ({geo})")
+    vp = page.viewport_size
+    page.set_viewport_size({"width": 390, "height": 900}); page.wait_for_timeout(300)
+    mob = page.evaluate("""() => { const card = document.getElementById('sch-card');
+        const rows = [...document.querySelectorAll('#sch-times .t')].map(t => { const b = [...t.querySelectorAll('.days-mini button')].map(x => x.getBoundingClientRect());
+            return { left: Math.round(b[0].left), oneLine: b.every(x => Math.abs(x.top - b[0].top) < 2) }; });
+        const vals = [...document.querySelectorAll('#sch-times .t-line .t-val')].map(v => Math.round(v.firstElementChild.getBoundingClientRect().left));
+        return { rows, vals, fits: card.scrollWidth <= card.clientWidth + 1 }; }""")
+    check(len({r["left"] for r in mob["rows"]}) == 1 and all(r["oneLine"] for r in mob["rows"]) and mob["fits"] and len(set(mob["vals"])) == 1,
+          f"휴대폰 폭(390px)에서도 요일 단추가 같은 자리 한 줄·카드 밖으로 안 나감 ({mob})")
+    if os.environ.get("SHOT_DIR"): page.locator("#sch-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "slots_mobile.png"))
+    page.set_viewport_size(vp); page.wait_for_timeout(300)
+    if os.environ.get("SHOT_DIR"): page.locator("#sch-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "slots_desktop.png"))
+    lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
+    check("같은 시각이 두 번 있습니다" in lines and "반복 줄에 모듈을 하나 이상 고르세요" in lines and page.is_disabled("#sch-apply"),
+          f"막는 까닭은 하나씩이 아니라 모두, 한 줄에 하나씩 (사용자 2026-10-08) ({lines})")
+    page.click(f"{row3} button.del")
     el = page.query_selector(f"{row2} input[type=time]"); el.fill("09:00"); el.dispatch_event("change")
     check("같은 시각" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "요일이 겹치는 같은 시각은 막는다")
     for i in range(1, 6):

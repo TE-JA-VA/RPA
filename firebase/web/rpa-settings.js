@@ -330,55 +330,62 @@ function runChips(s) {
 function paintTimes() {
   const over = new Set(sortedForm().slice(limitOf()));      // 시각 순으로 한도를 넘는 줄 (PC 도 이 줄은 안 돌린다)
   $("sch-times").replaceChildren(...form.sch.slots.map((s, i) => {
+    // 슬롯마다 같은 틀 (사용자 2026-10-08): ① 시각 · [빼기] ② 요일 ③ 모듈 ④ 쉬는 시간(반복만). 슬롯 사이는 가로선
     const row = document.createElement("div"); row.className = "t" + (over.has(s) ? " over" : "");
-    row.append(timeInput(s.at, "시각", (v) => { s.at = v; }));
-    if (s.until !== undefined) {                     // 반복 시간대 줄: 시작 ~ 끝 · 모듈 (사이트 수집 포함 - 사용자 2026-10-08) · 쉬는 시간. 끝 시각을 지워도("") 반복 줄 그대로
+    const span = (cls, text) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
+    const line = (label, ...kids) => {             // 이름 칸 + 값 칸 - 값이 길면 값 칸 안에서만 줄바꿈 (휴대폰에서도 같은 자리에서 시작)
+      const l = document.createElement("div"); l.className = "t-line";
+      const v = document.createElement("div"); v.className = "t-val"; v.append(...kids);
+      l.append(span("t-lbl", label), v); return l;
+    };
+    const head = document.createElement("div"); head.className = "t-head";
+    head.append(timeInput(s.at, "시각", (v) => { s.at = v; }));
+    const win = s.until !== undefined;              // 반복 시간대 줄. 끝 시각을 지워도("") 반복 줄 그대로
+    if (win) head.append(span("", "~"), timeInput(s.until, "끝 시각", (v) => { s.until = v; }), span("t-kind", "반복"));
+    if (over.has(s)) head.append(span("rest", "미실행 (한도초과)"));
+    const del = document.createElement("button"); del.className = "del"; del.textContent = "빼기";
+    del.onclick = () => { form.sch.slots.splice(i, 1); paintTimes(); paintScheduleMeta(); };
+    head.append(del);
+    row.append(head);
+    if (isV3()) row.append(line("요일", dayChips(s)));   // 웰라이프 업체도 줄마다 요일
+    if (win) {                                     // 모듈 (사이트 수집 포함 - 사용자 2026-10-08) · 쉬는 시간
       const rest = document.createElement("input");
       Object.assign(rest, { type: "number", min: 1, max: 60, value: s.rest_min, className: "num rest-min" });
       rest.setAttribute("aria-label", "쉬는 시간 (분)");
       rest.onchange = () => { s.rest_min = Number(rest.value); paintScheduleMeta(); };
-      row.append(Object.assign(document.createElement("span"), { textContent: "~" }), timeInput(s.until, "끝 시각", (v) => { s.until = v; }));
-      if (isV3()) row.append(dayChips(s));
-      row.append(Object.assign(document.createElement("span"), { className: "muted", textContent: "반복" }), runChips(s),
-        rest, Object.assign(document.createElement("span"), { className: "muted", textContent: "분 쉬고" }));
+      row.append(line("모듈", runChips(s)), line("쉬는 시간", rest, span("muted", "분 쉬고 다시")));
     } else if (isV2() && !isWellife()) {
-      if (isV3()) row.append(dayChips(s));
       const mode = document.createElement("select"); mode.className = "mode"; mode.setAttribute("aria-label", "돌릴 모듈");
       mode.append(new Option("전체 모듈 실행", "all"), new Option("선택 모듈만 실행", "pick"));
       mode.value = s.run ? "pick" : "all";
       mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; paintTimes(); paintScheduleMeta(); };
-      row.append(mode);
-      if (s.run) row.append(runChips(s));
-    } else if (isV3()) row.append(dayChips(s));   // 웰라이프 업체도 줄마다 요일
-    const del = document.createElement("button"); del.className = "del"; del.textContent = "빼기";
-    del.onclick = () => { form.sch.slots.splice(i, 1); paintTimes(); paintScheduleMeta(); };
-    row.append(del);
-    if (over.has(s)) row.append(Object.assign(document.createElement("span"), { className: "rest", textContent: "미실행 (한도초과)" }));
+      row.append(line("모듈", mode, ...(s.run ? [runChips(s)] : [])));
+    }
     return row;
   }));
 }
-/** 적용을 막는 까닭 (없으면 ""). 줄 모양은 꺼도 지킨다 (PC 가 본다). 한도는 켤 때만 - 끄기는 언제나 된다 (에이전트도 같다) */
-function scheduleProblem() {
-  const lim = limitOf(), slots = form.sch.slots;
-  if (form.sch.enabled && slots.length > lim) return lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 ERPia에 문의해주세요.";
-  if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) return "시간을 확인하세요";
-  if (isV3() && slots.some((s) => !s.days.length)) return "요일을 하나 이상 고르세요";
-  for (const w of slots.filter((s) => s.until !== undefined)) {
-    if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) return `반복 끝 시각은 시작(${w.at})보다 늦어야 합니다`;
-    if (!(Number.isInteger(w.rest_min) && w.rest_min >= 1 && w.rest_min <= 60)) return "쉬는 시간은 1~60분입니다";
-    if (!w.run.length) return "반복 줄에 모듈을 하나 이상 고르세요";
-    for (const x of slots) {
-      if (x === w || !sameDay(w, x)) continue;
-      if (x.until && x.at < w.until && w.at < x.until) return `반복 시간대가 겹칩니다: ${w.at}~${w.until}, ${x.at}~${x.until}`;
-      if (!x.until && w.at <= x.at && x.at < w.until) return `${x.at} 은 반복 시간대(${w.at}~${w.until}) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오.`;
-    }
-  }
-  if (slots.some((a, i) => slots.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) return "같은 시각이 두 번 있습니다";
-  if (slots.some((s) => s.run && !s.run.length)) return "고르기 줄에 모듈을 하나 이상 고르세요";
-  if (!form.sch.enabled) return "";
-  if (!isV3() && !form.sch.days.length) return "요일을 하나 이상 고르세요";
-  if (!slots.length) return "시간을 하나 이상 넣으세요";
-  return "";
+/** 적용을 막는 까닭 모두 (없으면 []) - 하나 고치고 나서야 다음 까닭이 보이지 않게 한꺼번에 (사용자 2026-10-08). 줄 모양은 꺼도 지킨다 (PC 가 본다), 한도는 켤 때만 - 끄기는 언제나 된다 */
+function scheduleProblems() {
+  const lim = limitOf(), slots = form.sch.slots, out = [];
+  if (form.sch.enabled && slots.length > lim) out.push(lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 ERPia에 문의해주세요.");
+  if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) out.push("시간을 확인하세요");
+  if (isV3() && slots.some((s) => !s.days.length)) out.push("요일을 하나 이상 고르세요");
+  slots.forEach((w, wi) => {
+    if (w.until === undefined) return;
+    if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) { out.push(`반복 끝 시각은 시작(${w.at})보다 늦어야 합니다`); return; }
+    if (!(Number.isInteger(w.rest_min) && w.rest_min >= 1 && w.rest_min <= 60)) out.push("쉬는 시간은 1~60분입니다");
+    if (!w.run.length) out.push("반복 줄에 모듈을 하나 이상 고르세요");
+    slots.forEach((x, xi) => {
+      if (x === w || !sameDay(w, x)) return;
+      if (x.until && xi > wi && x.at < w.until && w.at < x.until) out.push(`반복 시간대가 겹칩니다: ${w.at}~${w.until}, ${x.at}~${x.until}`);
+      if (!x.until && w.at <= x.at && x.at < w.until) out.push(`${x.at} 은 반복 시간대(${w.at}~${w.until}) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오.`);
+    });
+  });
+  if (slots.some((a, i) => slots.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) out.push("같은 시각이 두 번 있습니다");
+  if (slots.some((s) => s.run && !s.run.length)) out.push("고르기 줄에 모듈을 하나 이상 고르세요");
+  if (form.sch.enabled && !isV3() && !form.sch.days.length) out.push("요일을 하나 이상 고르세요");
+  if (form.sch.enabled && !slots.length) out.push("시간을 하나 이상 넣으세요");
+  return [...new Set(out)];
 }
 function paintScheduleMeta() {
   const s = savedSch(), lim = limitOf(), n = form.sch.slots.length;
@@ -388,10 +395,10 @@ function paintScheduleMeta() {
   $("sch-add").disabled = dis || n >= lim;
   show($("sch-add-win"), isV2() && !isWellife()); $("sch-add-win").disabled = dis || n >= lim;
   $("sch-count").textContent = `${n}/${lim} 사용`;
-  const problem = scheduleProblem();
+  const problems = scheduleProblems(), problem = problems.length > 0;
   const full = n >= lim ? (lim ? `자동 실행 슬롯은 최대 ${lim}개까지입니다. 추가를 원하시면 ERPia에 문의해주세요.` : "자동 실행을 쓰려면 ERPia에 문의해주세요.") : "";
   // 글은 중요도 순으로 위에서 아래: 막는 까닭(빨강) > 사이트 수집 경고(호박색) > 한도 안내(초록) (사용자 2026-10-08)
-  $("sch-limit").textContent = problem;
+  $("sch-limit").replaceChildren(...problems.map((t) => Object.assign(document.createElement("div"), { textContent: t })));   // 한 줄에 하나씩
   $("sch-limit").className = "msg" + (problem ? " bad" : "");
   $("sch-full").textContent = full;
   show($("sch-full"), !!full && !(form.sch.enabled && n > lim));   // 넘친 채 켜 두면 빨간 글이 같은 말을 한다
@@ -423,7 +430,7 @@ function paintScheduleMeta() {
   }
   $("sch-info").textContent = info.join(" · ");
   $("sch-info").className = "msg" + cls;
-  $("sch-apply").disabled = dis || !scheduleDirty() || !!problem;
+  $("sch-apply").disabled = dis || !scheduleDirty() || problem;
 }
 function labelDays(days) {
   const d = [...new Set(days || [])].sort();
