@@ -127,20 +127,22 @@ def fs_fields(d):
     return out
 
 
-def seed_run(run_id, program, state, started, dur_sec, reason=None, steps=None, log=None, metrics=None, trigger=None):
+def seed_run(run_id, program, state, started, dur_sec, reason=None, steps=None, log=None, metrics=None, trigger=None, cost=None):
     payload = {"run_id": run_id, "program": program, "state": state, "started_at": started, "duration_sec": dur_sec,
                "reason": reason, "steps": steps or [], "log": log or [], "metrics": metrics or [], "trigger": trigger}
     doc = {"cid": "c_demo", "pcId": "pc_office", "run_id": run_id, "program": program,
            "program_label": "루틴 RPA" if program == "routine" else "프리페어 RPA", "state": state, "reason": reason,
            "started_at": started, "finished_at": None, "duration_sec": dur_sec, "date": started[:10], "payload": json.dumps(payload, ensure_ascii=False)}
+    if cost is not None:
+        doc["cost"] = cost      # 토큰 전 옛 기록에는 없다
     call("POST", f"{FS}/runs/c_demo/items?documentId={run_id}", {"fields": fs_fields(doc)}, OWNER)
 
 
 seed_run("r_0914_1355", "routine", "success", "2026-09-14T13:55:49", 153,
          steps=[{"key": "login", "label": "ERPia 로그인", "state": "done"}], log=["[13:55:49] 시작", "[13:58:22] 결과: 성공"],
-         metrics=[{"key": "bottom_selected", "label": "하단 선택", "value": 30}])
+         metrics=[{"key": "bottom_selected", "label": "하단 선택", "value": 30}], cost=3)
 seed_run("r_0914_1339", "routine", "stopped", "2026-09-14T13:39:05", 2, reason="물류 관리 저장 실패 - 주소를 입력하세요",
-         steps=[{"key": "save", "label": "물류 관리 저장", "state": "stopped", "note": "주소를 입력하세요"}], log=["[13:39:05] 주소를 입력하세요"])
+         steps=[{"key": "save", "label": "물류 관리 저장", "state": "stopped", "note": "주소를 입력하세요"}], log=["[13:39:05] 주소를 입력하세요"], cost=0)
 seed_run("r_0914_1338", "prepare", "success", "2026-09-14T13:38:41", 2, log=["[13:38:43] 완료"])
 seed_run("r_0913_0906", "routine", "stopped", "2026-09-13T09:06:00", 547, reason="물류 관리 저장 실패 - 주소를 입력하세요")
 seed_run("r_0912_0906", "routine", "success", "2026-09-12T09:06:00", 580)
@@ -1137,6 +1139,10 @@ with sync_playwright() as pw:
     check(rows.count() == 6, f"이 PC 기록 6건 (다른 PC 1건 제외) ({rows.count()})")
     check("09/14 13:55" in rows.nth(0).text_content() and "09/12" in rows.nth(4).text_content(), "최신순")
     check("주소를 입력하세요" in rows.nth(1).text_content(), "중단 사유가 처리 칸에")
+    heads = page.locator("#view-history thead th").all_text_contents()
+    cell = lambda i: (rows.nth(i).locator("td").all_text_contents() + [None] * 6)[5]
+    check(heads == ["시각", "프로그램", "결과", "소요", "상세 정보", "토큰 사용량"] and (cell(0), cell(1), cell(3)) == ("3", "0", "-"),
+          f"'처리' → '상세 정보', 토큰 사용량 칸: 쓴 토큰, 0 은 0, 토큰 전 옛 기록은 - (사용자 2026-10-08) ({heads}, {[cell(i) for i in (0, 1, 3)]})")
     # 열 너비: 시각·프로그램·결과·소요는 줄바꿈 없이 한 줄, 알약도 한 줄. 프로그램 이름은 'RPA' 를 뗀다
     # 줄 수는 글자 범위의 사각형 개수로 센다 (칸 높이는 여백 때문에 한 줄이어도 36px)
     one_line = lambda sel: page.evaluate(f"""(() => {{ const el = document.querySelector("{sel}"); const r = document.createRange();
@@ -1156,6 +1162,7 @@ with sync_playwright() as pw:
     check(rgb2hex(stop_pill) == token("--bad-bg"), "중단은 옅은 빨강 (구분됨)")
     page.set_viewport_size({"width": 420, "height": 900}); page.wait_for_timeout(300)
     check(one_line("#hist-rows .pill.crash") and one_line("#hist-rows tr.hist td:nth-child(2)"), "좁은 창에서도 알약·프로그램 칸이 한 줄")
+    check(one_line("#view-history thead th:nth-child(6)"), "좁은 창에서도 '토큰 사용량' 머리글이 한 줄")
     check(page.evaluate("document.querySelector('#hist-rows tr.hist td:nth-child(5)').getBoundingClientRect().width") >= 200,
           "좁은 창에서 처리 칸은 최소 폭을 지킨다 (표가 옆으로 스크롤)")
     if os.environ.get("SHOT_DIR"):

@@ -293,10 +293,10 @@
   }
 
   /* 기록 표 */
-  /* 기록 표: 시각·프로그램·결과·소요는 한 줄로 두고(줄바꿈 금지), 남는 폭은 전부 '처리' 칸이 쓴다. 좁으면 표가 옆으로 스크롤 */
+  /* 기록 표: 시각·프로그램·결과·소요는 한 줄로 두고(줄바꿈 금지), 남는 폭은 전부 '상세 정보' 칸이 쓴다. 좁으면 표가 옆으로 스크롤 */
   .tbl { overflow-x:auto; }
   tr.hist { cursor:pointer; }
-  tr.hist td:nth-child(-n+4), thead th:nth-child(-n+4) { white-space:nowrap; }
+  tr.hist td:nth-child(-n+4), thead th:nth-child(-n+4), tr.hist td:nth-child(6), #view-history thead th:nth-child(6) { white-space:nowrap; }
   tr.hist td:nth-child(5), thead th:nth-child(5) { width:100%; min-width:220px; }   /* 좁으면 한 글자씩 세로로 내려가지 않게 */
   tr.hist:hover td { background:var(--soft); }
   tr.hist-detail td { background:var(--soft); padding:10px 12px; }
