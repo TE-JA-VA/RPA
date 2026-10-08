@@ -253,6 +253,18 @@ code, r = api("POST", "/api/prices", {"key": "logistics", "value": "3"})
 check(code == 200 and r.get("logistics") == 3 and r.get("login") == 0, "토큰 배율 바꾸기", r)
 code, r = api("POST", "/api/prices", {"key": "logistics", "value": "-1"})
 check(code == 400 and "토큰 배율" in r.get("error", ""), "토큰 배율 음수는 거절", r)
+# 업체 배율 (사용자 2026-10-08): prices/{cid} 에, 비우면 그 키를 지워 기본값을 따른다
+code, r = api("POST", "/api/companies/t_new/prices", {"key": "sales", "value": "7"})
+check(code == 200 and (fs_doc("prices/t_new") or {}).get("sales") == 7 and r.get("prices") == {"sales": 7}
+      and (fs_doc("meta/prices") or {}).get("sales") is None, "업체 배율: 그 업체 문서에만 (기본값은 그대로)", r)
+code, r = api("GET", "/api/companies/my_wellife/prices")
+check(code == 200 and r.get("prices") == {} and r.get("wellife") is True, "업체 배율 읽기: 없으면 {}, 웰라이프 업체인지도", r)
+code, r = api("POST", "/api/companies/t_new/prices", {"key": "sales", "value": ""})
+check(code == 200 and "sales" not in (fs_doc("prices/t_new") or {}) and r.get("prices") == {}, "업체 배율 비우기 = 기본값을 따름", r)
+code, r = api("POST", "/api/companies/t_new/prices", {"key": "sales", "value": "-1"})
+check(code == 400 and "토큰 배율" in r.get("error", ""), "업체 배율도 음수는 거절", r)
+code, r = api("POST", "/api/companies/nobody/prices", {"key": "sales", "value": "1"})
+check(code == 400 and fs_doc("prices/nobody") is None, "없는 업체에는 쓰지 않는다", r)
 code, rows = api("GET", "/api/usage")
 check(code == 200 and any(x["cid"] == "t_new" and x["left"] == 600 for x in rows), "통계: 업체마다 남은 토큰", str(rows)[:200])
 code, r = api("GET", "/api/companies/Bad")
@@ -502,11 +514,44 @@ with sync_playwright() as pw:
 
     page.click("nav button[data-view='rates']")
     page.wait_for_selector("#rates tr", timeout=15000)
-    rate = page.locator("#rates tr", has_text="주문매핑 매출처리")
+    groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
+    check(groups == ["프리페어 RPA", "루틴 RPA", "루틴 RPA · 웰라이프 업체", "그 밖"],
+          f"토큰 배율: 프리페어·루틴·웰라이프·그 밖으로 나눔 (사용자 2026-10-08) ({groups})")
+    names = [t.strip() for t in page.locator("#rates tr[data-key] td:first-child").all_text_contents()]
+    check("사이트 수집" in names and not any("쇼핑몰" in n for n in names) and "웰라이프 SAP 연동관리" in names
+          and "웰라이프 WMS 이관관리" in names, f"사이트 수집 이름·웰라이프 모듈 줄 ({names})")
+    if os.environ.get("SHOT_DIR"): page.locator("#view-rates .card").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "rates_base.png"))
+    rate = page.locator("#rates tr[data-key='sales']")
     rate.locator("input").fill("2")
     rate.locator("button").click()
     page.wait_for_function("document.getElementById('flash')?.textContent.includes('배율')", timeout=15000)
     check((fs_doc("meta/prices") or {}).get("sales") == 2, "토큰 배율 화면에서 바꾸기 (sales 2)")
+    # 업체를 고르면 기본값 옆에 그 업체 칸 - 넣으면 그 업체만, 비우면 기본값을 따름
+    page.select_option("#rate-cid", "t_new")
+    page.wait_for_selector("#rates tr[data-key='sales'] input[placeholder='2']", timeout=15000)
+    groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
+    check(groups == ["프리페어 RPA", "루틴 RPA", "그 밖"], f"보통 업체는 웰라이프 묶음 없음 ({groups})")
+    rate = page.locator("#rates tr[data-key='sales']")
+    check(rate.locator("td").nth(1).text_content().strip() == "2" and rate.locator("input").input_value() == "",
+          "업체 칸: 기본값 2 가 보이고 업체 칸은 비어 있다 (따로 정한 값 없음)")
+    rate.locator("input").fill("9")
+    rate.locator("button").click()
+    page.wait_for_function("document.querySelector(\"#rates tr[data-key='sales']\")?.classList.contains('own')", timeout=15000)
+    if os.environ.get("SHOT_DIR"): page.locator("#view-rates .card").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "rates_company.png"))
+    check((fs_doc("prices/t_new") or {}).get("sales") == 9 and (fs_doc("meta/prices") or {}).get("sales") == 2
+          and "이 업체만" in page.text_content("#rates tr[data-key='sales']"), "업체 배율 저장: 그 업체만 9, 표시가 붙는다")
+    rate.locator("input").fill("")
+    rate.locator("button").click()
+    page.wait_for_function("!document.querySelector(\"#rates tr[data-key='sales']\")?.classList.contains('own')", timeout=15000)
+    check("sales" not in (fs_doc("prices/t_new") or {}), "비우고 저장하면 기본값을 따른다")
+    page.select_option("#rate-cid", "my_wellife")
+    page.wait_for_function("[...document.querySelectorAll('#rates tr.grp')].some((g) => g.textContent.includes('웰라이프'))", timeout=15000)
+    keys = page.evaluate("[...document.querySelectorAll('#rates tr[data-key]')].map((r) => r.dataset.key)")
+    if os.environ.get("SHOT_DIR"): page.locator("#view-rates .card").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "rates_wellife.png"))
+    check("wellife_sap" in keys and "logistics" not in keys and "login" in keys,
+          f"웰라이프 업체: 루틴은 로그인 + 웰라이프 모듈 (업체 웹과 같은 다섯) ({keys})")
+    page.select_option("#rate-cid", "")
+    page.wait_for_function("document.querySelectorAll('#rates tr.grp').length === 4", timeout=15000)
     check(page.locator("#usage tr", has_text="t_new").count() == 1, "통계 표에 업체가 나온다")
     rh = [h.strip() for h in page.locator("#view-rates table").first.locator("th").all_text_contents()]
     uh = [h.strip() for h in page.locator("#view-rates table").nth(1).locator("th").all_text_contents()]

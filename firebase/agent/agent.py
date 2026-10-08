@@ -129,25 +129,34 @@ def run_cost(used, prices):
     return sum(int(prices.get(k, prices.get("default", 1))) * n for k, n in used.items())
 
 
-class Prices:
-    """토큰 값표 Firestore meta/prices (우리만 고친다 - setup.js). 10분마다 다시 읽고, 못 읽으면 지난 값 (처음엔 PRICES) -
-    값표를 못 읽어도 기록 올리기는 막지 않는다."""
+def _price_table(got):
+    """값표 문서에서 0 이상 정수만."""
+    return {k: v for k, v in (got or {}).items() if isinstance(v, int) and not isinstance(v, bool) and v >= 0}
 
-    def __init__(self, client, every=PRICES_EVERY_SEC):
-        self._client, self._every, self._at, self._value = client, every, None, dict(PRICES)
+
+class Prices:
+    """토큰 값표: 업체 배율 prices/{cid} > 기본 meta/prices > PRICES (둘 다 관리 화면만 고친다, 업체 배율은 사용자 2026-10-08).
+    10분마다 다시 읽고, 못 읽은 쪽은 지난 값 (처음엔 비어 있음) - 값표를 못 읽어도 기록 올리기는 막지 않는다."""
+
+    def __init__(self, client, cid=None, every=PRICES_EVERY_SEC):
+        self._client, self._cid, self._every, self._at = client, cid, every, None
+        self._base, self._company = {}, {}
+
+    def _read(self, path, last):
+        try:
+            return _price_table(self._client.fs_get(path))
+        except fb.AuthError:
+            raise
+        except Exception:
+            return last
 
     def get(self):
         if self._at is None or time.time() - self._at >= self._every:
             self._at = time.time()
-            try:
-                got = self._client.fs_get("meta/prices") or {}
-                self._value = {**PRICES, **{k: v for k, v in got.items()
-                                            if isinstance(v, int) and not isinstance(v, bool) and v >= 0}}
-            except fb.AuthError:
-                raise
-            except Exception:
-                pass
-        return self._value
+            self._base = self._read("meta/prices", self._base)
+            if self._cid:
+                self._company = self._read(f"prices/{self._cid}", self._company)
+        return {**PRICES, **self._base, **self._company}
 
 
 def balance(client, cid):
@@ -857,7 +866,7 @@ def run(cfg):
     except Exception as e:
         log(f"첫 로그인을 못 했습니다 ({type(e).__name__}). 설정 값으로 시작하고 이어서 시도합니다")
     up = Uploader(client, cfg["cid"], cfg["pc_id"])
-    prices = Prices(client)            # 토큰 값표 - 기록을 올릴 때 쓴 토큰을 센다
+    prices = Prices(client, cfg["cid"])   # 토큰 값표 (업체 배율 먼저) - 기록을 올릴 때 쓴 토큰을 센다
     policy = Policy(client, cfg["cid"])         # 업체 정책 (자동 실행 개수·안 쓰는 모듈) - 10분마다 PC 설정에 적는다
     tokens = Tokens(client, cfg["cid"], prices, next_plan=next_plan)
     dash.TOKEN_GATE = tokens.gate      # 실행 단추·예약이 띄우기 직전에 남은 토큰을 본다 (0 이하면 거절)

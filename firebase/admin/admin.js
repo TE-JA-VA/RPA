@@ -77,6 +77,9 @@ const ROUTES = [
   ["GET", "/api/prices", () => ops.getPrices()],
   ["POST", "/api/prices", (b) => ops.setPrice(b.key, b.value), (b) => `토큰 배율 ${b.key} = ${b.value}`],
   ["GET", "/api/usage", () => ops.usageRows()],
+  ["GET", "/api/companies/:cid/prices", (b, p) => ops.companyPrices(p.cid)],
+  ["POST", "/api/companies/:cid/prices", (b, p) => ops.setCompanyPrice(p.cid, b.key, b.value),
+    (b, r, p) => `업체 토큰 배율 ${p.cid} ${b.key} = ${String(b.value ?? "").trim() || "(기본값)"}`],
 ].map(([method, pattern, run, note]) => {
   const names = [];
   const re = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, n) => { names.push(n); return "([a-z0-9_]+)"; })}$`);

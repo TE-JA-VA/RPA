@@ -333,6 +333,34 @@ check(pc.calls == 1, "10분 안에는 다시 읽지 않는다")
 check(ag.Prices(PriceClient(None)).get() == ag.PRICES, "서버에 값표가 없으면 처음 값표")
 check(ag.Prices(PriceClient(fb.HttpError(503, "끊김"))).get() == ag.PRICES, "못 읽으면 처음 값표 (기록 올리기를 막지 않는다)")
 
+
+class PathClient:
+    """경로별 값 - 값이 예외면 그 경로만 실패 (업체 배율 prices/{cid} 와 기본 meta/prices 를 따로)."""
+    def __init__(self, docs):
+        self.docs, self.calls = docs, []
+
+    def fs_get(self, path):
+        self.calls.append(path)
+        got = self.docs.get(path)
+        if isinstance(got, Exception):
+            raise got
+        return got
+
+
+cl = PathClient({"meta/prices": {"default": 2, "sales": 3}, "prices/c_demo": {"sales": 5, "wellife_sap": 4, "hold": -1}})
+check(ag.Prices(cl, "c_demo").get() == {"default": 2, "login": 0, "sales": 5, "wellife_sap": 4},
+      "업체 배율(prices/{cid})이 기본값 위에 - 업체 > 기본 > 처음 값표, 이상한 값은 버림 (사용자 2026-10-08)")
+check(sorted(cl.calls) == ["meta/prices", "prices/c_demo"], f"기본값과 그 업체 배율만 읽는다 ({cl.calls})")
+cl = PathClient({"meta/prices": {"default": 2, "sales": 3}, "prices/c_demo": fb.HttpError(403, "규칙")})
+check(ag.Prices(cl, "c_demo").get() == {"default": 2, "login": 0, "sales": 3}, "업체 배율을 못 읽어도 기본값은 쓴다 (규칙 배포 전 등)")
+cl = PathClient({"meta/prices": {"default": 2}, "prices/c_demo": {"sales": 5}})
+pr = ag.Prices(cl, "c_demo", every=0)
+pr.get()
+cl.docs = {"meta/prices": fb.HttpError(503, "끊김"), "prices/c_demo": fb.HttpError(503, "끊김")}
+check(pr.get() == {"default": 2, "login": 0, "sales": 5}, "둘 다 못 읽으면 지난 값 그대로")
+cl.docs = {"meta/prices": {"default": 2}, "prices/c_demo": None}
+check(pr.get() == {"default": 2, "login": 0}, "업체 배율을 지우면(문서 없음) 기본값으로 돌아간다")
+
 with tempfile.TemporaryDirectory() as d:
     fcl = FsClient()
     upl = ag.Uploader(fcl, "c_demo", "pc_office", os.path.join(d, "q.jsonl"))

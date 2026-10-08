@@ -51,7 +51,9 @@
   .secret { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--soft); }
   .secret pre { margin:6px 0; white-space:pre-wrap; font-family:ui-monospace, Consolas, monospace; font-size:13px; color:var(--strong); }
   .steps { padding-left:18px; } .steps li.ok { color:var(--good); } .steps li.bad { color:var(--bad); }
-  td.plus { color:var(--good); } td.minus { color:var(--bad); }   /* 토큰 내역: 넣음 초록 · 뺌 빨강 */
+  td.plus { color:var(--good); } td.minus { color:var(--bad); }
+  #rates tr.grp th { color:var(--strong); font-weight:600; font-size:14px; padding-top:16px; }   /* 토큰 배율 묶음 머리 */
+  #rates tr.own td:first-child { font-weight:600; }   /* 토큰 내역: 넣음 초록 · 뺌 빨강 */
   /* 업체 상세 항목마다 상자 - 표의 줄(--line) 보다 진한 테두리, 카드와 다른 바탕 (사용자 2026-10-07: 가로선은 표 줄과 같아 안 보임) */
   #detail .sec { border:1px solid color-mix(in srgb, var(--muted) 35%, var(--line)); border-radius:10px; background:color-mix(in srgb, var(--bg) 45%, var(--card)); padding:14px 16px; margin-top:14px; }
   #detail .sec.danger { border-color:var(--bad); }
@@ -124,8 +126,9 @@
   <section id="view-rates" class="hide">
     <div class="card">
       <h2>토큰 배율</h2>
-      <p class="muted">모듈을 한 번 쓸 때 빠지는 토큰 수입니다. 처음엔 모두 1, 로그인은 0. 바꿔도 지난 기록은 그때 값 그대로입니다. PC 는 10분 안에 새 배율을 씁니다.</p>
-      <table><thead><tr><th>모듈</th><th>배율</th><th></th></tr></thead><tbody id="rates"></tbody></table>
+      <p class="muted">모듈을 한 번 쓸 때 빠지는 토큰 수입니다. 처음엔 모두 1, 로그인은 0. 업체를 고르면 그 업체만 따로 정할 수 있습니다 (비우고 저장하면 기본값을 따릅니다). 바꿔도 지난 기록은 그때 값 그대로입니다. PC 는 10분 안에 새 배율을 씁니다 (업체별 배율은 2026.10.08-3 이상 버전 PC).</p>
+      <div class="row"><span class="muted">적용 대상</span><select id="rate-cid"><option value="">모든 업체 (기본값)</option></select></div>
+      <table><thead id="rates-head"></thead><tbody id="rates"></tbody></table>
     </div>
     <div class="card">
       <h2>통계</h2>
@@ -143,8 +146,15 @@ if (KEY) sessionStorage.setItem("k", KEY);
 history.replaceState(null, "", "/");
 const ROLE = { admin: "관리자", viewer: "유저", agent: "에이전트", super: "총괄" };
 const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 관리", Logistics: "물류관리", Output: "운송장 출력 / 엑셀 생성" };
-const RATE_NAMES = { default: "그 밖의 모듈 (기본)", login: "로그인", sales: "주문매핑 매출처리", hold: "물류대기 관리",
-  logistics: "물류관리", output: "운송장 출력 / 엑셀 생성", sites: "쇼핑몰·사이트 받기" };
+// 토큰 배율 묶음 (사용자 2026-10-08) - 키는 에이전트가 세는 모듈 키 (run_routine·wellife MODULES, 프리페어는 sites)
+const RATE_GROUPS = [
+  { title: "프리페어 RPA", rows: [["sites", "사이트 수집"]] },
+  { title: "루틴 RPA", plain: true, rows: [["login", "로그인"], ["sales", "주문매핑 매출처리"], ["hold", "물류대기 관리"],
+    ["logistics", "물류관리"], ["output", "운송장 출력 / 엑셀 생성"]] },
+  { title: "루틴 RPA · 웰라이프 업체", wellife: true, rows: [["login", "로그인"], ["wellife_sales", "주문매핑 매출처리"],
+    ["wellife_hold", "물류대기 관리"], ["wellife_sap", "웰라이프 SAP 연동관리"], ["wellife_wms", "웰라이프 WMS 이관관리"]] },
+  { title: "그 밖", rows: [["default", "그 밖의 모듈 (기본)"]] },
+];
 let info = { dashboard: "" };
 
 // 글은 모두 textContent 로 넣는다 - 업체 이름 등에 HTML 이 있어도 글자로만 보인다
@@ -457,19 +467,40 @@ function showSetupResult(plan, r) {
 }
 
 // --- ③ 토큰 배율·통계 ---------------------------------------------------------------
+$("rate-cid").onchange = () => loadRates();
 async function loadRates() {
-  const got = await act(null, () => Promise.all([api("GET", "/api/prices"), api("GET", "/api/usage")]));
+  const cid = $("rate-cid").value;
+  const got = await act(null, () => Promise.all([api("GET", "/api/prices"), api("GET", "/api/usage"),
+    cid ? api("GET", `/api/companies/${cid}/prices`) : null]));
   if (!got) return;
-  const [rates, usage] = got;
-  $("rates").replaceChildren(...[...new Set([...Object.keys(RATE_NAMES), ...Object.keys(rates)])].map((k) => {
-    const v = el("input", { value: rates[k] ?? rates.default ?? 1, size: 5, inputmode: "numeric", class: "num" });
+  const [rates, usage, mine] = got;
+  $("rate-cid").replaceChildren(el("option", { value: "" }, "모든 업체 (기본값)"),   // 업체 목록은 아래 통계 표와 같은 것
+    ...usage.map((u) => el("option", { value: u.cid }, `${u.cid}${u.name ? ` · ${u.name}` : ""}`)));
+  $("rate-cid").value = cid;
+  const base = (k) => rates[k] ?? rates.default ?? 1;
+  // 모든 업체: 묶음 넷 다. 업체: 웰라이프 업체는 웰라이프 묶음만, 아니면 보통 루틴만 (업체 웹이 보이는 모듈과 같다)
+  const groups = RATE_GROUPS.filter((g) => !mine || !(g.wellife || g.plain) || (g.wellife ? mine.wellife : !mine.wellife));
+  const known = new Set(RATE_GROUPS.flatMap((g) => g.rows.map(([k]) => k)));
+  const extra = Object.keys({ ...rates, ...(mine?.prices ?? {}) }).filter((k) => !known.has(k)).map((k) => [k, k]);   // 표에 없는 새 키는 '그 밖' 에
+  const row = ([k, name]) => {
+    const own = mine && mine.prices[k] !== undefined;
+    const v = el("input", { value: mine ? (own ? mine.prices[k] : "") : base(k), placeholder: mine ? String(base(k)) : null,
+      size: 5, inputmode: "numeric", class: "num" });
     const save = el("button", { onclick: () => act(save, async () => {
-      await api("POST", "/api/prices", { key: k, value: v.value.trim() });
-      flash(`${RATE_NAMES[k] || k} 토큰 배율을 ${v.value.trim()} 로 바꿨습니다`);
+      const text = v.value.trim();
+      await api("POST", mine ? `/api/companies/${cid}/prices` : "/api/prices", { key: k, value: text });
+      flash(mine && !text ? `${cid} 의 ${name} 토큰 배율은 기본값을 따릅니다` : `${mine ? `${cid} 의 ` : ""}${name} 토큰 배율을 ${text} 로 바꿨습니다`);
       loadRates();
     }) }, "저장");
-    return el("tr", {}, el("td", {}, RATE_NAMES[k] || k), el("td", {}, v), el("td", {}, save));
-  }));
+    return mine
+      ? el("tr", { "data-key": k, class: own ? "own" : null }, el("td", {}, name), el("td", { class: "num muted" }, String(base(k))),
+          el("td", {}, v), el("td", { class: "muted" }, own ? "이 업체만" : ""), el("td", {}, save))
+      : el("tr", { "data-key": k }, el("td", {}, name), el("td", {}, v), el("td", {}, save));
+  };
+  const cols = mine ? 5 : 3;
+  $("rates-head").replaceChildren(el("tr", {}, ...(mine ? ["모듈", "기본값", "이 업체", "", ""] : ["모듈", "배율", ""]).map((h) => el("th", {}, h))));
+  $("rates").replaceChildren(...groups.flatMap((g) => [el("tr", { class: "grp" }, el("th", { colspan: cols }, g.title)),
+    ...[...g.rows.filter(([k]) => mine || !g.wellife || k !== "login"), ...(g.title === "그 밖" ? extra : [])].map(row)]));   // 기본값 화면에선 로그인 줄을 한 번만
   $("usage").replaceChildren(...usage.map((u) => el("tr", {}, el("td", {}, u.cid), el("td", {}, u.name),
     el("td", { class: "num" }, u.left === null ? "토큰 정보 없음" : nf(u.left)), el("td", { class: "num" }, nf(u.month)), el("td", {}, local(u.since)))));
 }
