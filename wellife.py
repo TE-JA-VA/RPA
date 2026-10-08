@@ -2,17 +2,25 @@
 
 사용자 설정(RPA_UserConfig.json)에 "Wellife" 섹션이 있는 PC 에서만 run_routine.main 이 이리로 온다.
 섹션이 없는 PC(다른 업체)는 지금 루틴 그대로 돈다 - ROUTINE_MODULES 와 Routine 섹션은 건드리지 않는다.
-    예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y"}}
+    예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y",
+                     "SalesMode": "리허설", "Mode": "리허설"}}
 
-지금은 리허설이다.
-- ②③ 은 화면 이동만 한다 (주문수집·선택주문 매출처리·물류대기 저장은 팝업 문구를 실측한 뒤에).
-- ④⑤ 는 단계 조회·대상 고르기·체크까지 하고, 데이터를 바꾸는 단추(화살표)는 누르지 않고 마우스만 올린다.
-  [지정] 은 옆 ▼ 로 내림 메뉴만 열고 '선택 항목만' 에 마우스만 올린다. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
+모드 (사용자 10-08) - 데이터를 바꾸는 단추를 누를지 정한다. 빠지면 리허설.
+"SalesMode" 는 ② 주문매핑(엑셀 업로드)만, "Mode" 는 ③ 물류대기 저장·④⑤ 지정·화살표를 정한다.
+- "리허설": 데이터를 바꾸는 단추(엑셀 업로드·물류대기 저장·[지정]·화살표)는 누르지 않고 마우스만 올린다.
+- "실행": 실제로 누르고, 뜨는 팝업은 [예](없으면 [확인])를 누른다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
+  팝업 문구는 모두 로그와 모듈 사유에 남긴다.
+모드는 대시보드 단계 이름·실행 제목·모듈 사유 앞의 [리허설]/[실행] 과 시작 로그로 보인다.
+- ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집 [가져오기] 는
+  모드와 상관없이 누르지 않는다 (마우스만). 선택주문 매출처리는 하지 않는다.
+- ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
+- ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
   ⑤ 는 나중에 반복 실행(docs/wellife-rpa.md 7절)의 대상이 된다.
 
 run_routine 을 import 하지 않는다. exe 에서 run_routine 은 __main__ 이라 다시 import 하면 사본이 하나 더 생기고,
 그 사본이 결과 로그를 'w' 로 다시 열어 지운다. 그래서 run_routine 이 자기 모듈(rr)을 넘겨준다.
 """
+import os
 import re
 import time
 
@@ -33,15 +41,25 @@ DROPDOWN_WAIT_SECONDS = 5   # [지정▼] 를 누른 뒤 내림 메뉴가 뜨기
 SELECTED_ONLY = "선택 항목만"   # [지정▼] 내림 메뉴 항목
 MAX_PAGES = 200             # 그리드를 넘기는 최대 페이지 (끝을 못 알아챌 때의 안전장치)
 PAGE_WAIT_SECONDS = 5       # 페이지를 넘긴 뒤 그리드가 다 그려지기를 기다리는 최대 시간
-NAV_ONLY = "화면 이동만 함 (처리는 아직 없음)"
+QUERY_WAIT_SECONDS = 120    # 물류대기 조회가 끝나기를 기다리는 최대 시간
+CONFIRM_WAIT_SECONDS = 600  # 실행: 누른 뒤 처리(스피너·팝업)가 끝나기를 기다리는 최대 시간
+QUIET_SECONDS = 5           # 실행: 팝업도 스피너도 이만큼 없으면 처리가 끝난 것으로 본다
+MAX_POPUPS = 10             # 실행: 한 번 누른 뒤 이보다 많이 뜨면 멈춘다 (같은 팝업이 되풀이되는 경우)
+MODE_KEY = "Mode"              # ③ 물류대기 저장·④ 지정·화살표·⑤ 화살표
+SALES_MODE_KEY = "SalesMode"   # ② 주문매핑 엑셀 업로드 - 따로 정한다 (사용자 10-08)
+MODES = {"리허설": False, "실행": True}   # 설정 값 -> 실제로 누르는가
+YES_TEXTS = ("예(Y)", "예")
+OK_TEXTS = ("확인(O)", "확인")
 
-# 대시보드 단계 (rpa_status.step 키, 화면 이름). 순서가 곧 진행 순서다
+# 대시보드 단계 (rpa_status.step 키, 화면 이름). 순서가 곧 진행 순서다. 실행할 때 이름 앞에 [모드] 를 붙인다
 STEPS = (
     ("login", "ERPia 로그인"),
     ("wl_order_screen", "주문매핑 화면 이동"),
+    ("wl_order_collect", "주문 수집 (엑셀 / 자동)"),
     ("wl_hold_screen", "물류대기 화면 이동"),
+    ("wl_hold_save", "물류대기 조회 → 전체선택 → 저장"),
     ("wl_sap_screen", "웰라이프 SAP 연동관리 화면 열기"),
-    ("wl_sap_slip", "4-1 매출전표 지정"),
+    ("wl_sap_slip", "4-1 매출전표 지정 → 4-2 넘기기"),
     ("wl_sap_shipping", "4-3 선분할 배송정보"),
     ("wl_sap_so", "4-4 SO생성"),
     ("wl_wms_screen", "웰라이프 WMS 이관관리 화면 열기"),
@@ -53,8 +71,8 @@ STEPS = (
 # run_routine.ROUTINE_MODULES 와 같은 모양 (모듈 키, 설정 키, 이름, 단계, module_flags 비트). 비트 32 부터는 웰라이프
 MODULES = (
     ("login", "Login", "로그인", ("login",), 1),
-    ("wellife_sales", "Sales", "웰라이프 주문매핑", ("wl_order_screen",), 32),
-    ("wellife_hold", "Hold", "웰라이프 물류대기", ("wl_hold_screen",), 64),
+    ("wellife_sales", "Sales", "웰라이프 주문매핑", ("wl_order_screen", "wl_order_collect"), 32),
+    ("wellife_hold", "Hold", "웰라이프 물류대기", ("wl_hold_screen", "wl_hold_save"), 64),
     ("wellife_sap", "Sap", "웰라이프 SAP 연동관리", ("wl_sap_screen", "wl_sap_slip", "wl_sap_shipping", "wl_sap_so"), 128),
     ("wellife_wms", "Wms", "웰라이프 WMS 이관관리",
      ("wl_wms_screen", "wl_wms_so", "wl_wms_prepack", "wl_wms_invoice", "wl_wms_api"), 256),
@@ -117,28 +135,58 @@ def load_switches(rr):
     if bad:
         raise RuntimeError(
             f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")
-    return selected, sorted(k for k in section if k not in keys)
+    return selected, sorted(k for k in section if k not in keys and k not in (MODE_KEY, SALES_MODE_KEY))
+
+
+def load_mode(rr, key=MODE_KEY):
+    """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 리허설 - 잘 모르면 누르지 않는 쪽.
+    key: MODE_KEY(③④⑤) 또는 SALES_MODE_KEY(② 주문매핑 - 따로 정한다, 사용자 10-08. 빠지면 Mode 를 따르지 않고 리허설).
+    "리허설"/"실행" 이 아닌 값은 RuntimeError (load_switches 뒤에 부른다 - 섹션 모양은 거기서 본다)."""
+    raw = rr.pl.load_settings()[SECTION].get(key, "리허설")
+    value = str(raw).strip()
+    if value not in MODES:
+        raise RuntimeError(f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 {key} 값은 "
+                           f"{' 또는 '.join(repr(m) for m in MODES)} 이어야 합니다: {raw!r}")
+    return MODES[value]
+
+
+def mode_tag(live):
+    return "실행" if live else "리허설"
 
 
 def run_main(rr):
     """웰라이프 본 실행. run_routine.main 이 부른다. 기록은 지금 루틴과 같은 program "routine" 으로 남는다
     (실행 잠금·웹 현황·이력·토큰이 지금 규칙 그대로 동작한다)."""
     status, log = rr.status, rr.log
-    status.start("routine", STEPS, title="웰라이프 실행")
-    status.set_modules([(k, label, steps, bit) for k, _, label, steps, bit in MODULES])
+    try:
+        selected, unknown = load_switches(rr)
+        live, sales_live, error = load_mode(rr), load_mode(rr, SALES_MODE_KEY), None
+    except Exception as e:
+        live, sales_live, error = False, False, e
+    tag, sales_tag = mode_tag(live), mode_tag(sales_live)
+    # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다. ② 단계는 SalesMode 를 붙인다
+    sales_steps = next(m[3] for m in MODULES if m[0] == "wellife_sales")
+    steps = STEPS if error else tuple(
+        (k, f"[{sales_tag if k in sales_steps else tag}] {label}") for k, label in STEPS)
+    status.start("routine", steps, title="웰라이프 실행" if error else f"웰라이프 실행 [주문매핑 {sales_tag} / 그 밖 {tag}]")
+    status.set_modules([(k, label, steps_, bit) for k, _, label, steps_, bit in MODULES])
     log(f"=== 웰라이프 실행 시작 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
 
     account = status.read_account()
     if account and (account.get("admin_code") or account.get("user_id")):
         status.account(account.get("admin_code"), account.get("user_id"))
 
-    try:
-        selected, unknown = load_switches(rr)
-    except Exception as e:
-        log(f"설정 오류: {e}")
-        status.finish("stopped", f"설정 파일 오류: {e}")
+    if error:
+        log(f"설정 오류: {error}")
+        status.finish("stopped", f"설정 파일 오류: {error}")
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
+    log("*" * 70)
+    log(f"*  ② 주문매핑 모드({SALES_MODE_KEY}): [{sales_tag}] - " + (
+        "미리 둔 엑셀을 실제로 업로드" if sales_live else "엑셀 업로드는 누르지 않고 마우스만"))
+    log(f"*  ③④⑤ 모드({MODE_KEY}): [{tag}] - " + (
+        "저장·지정·화살표를 실제로 누르고, 팝업은 [예]/[확인]" if live else "저장·지정·화살표는 누르지 않고 마우스만"))
+    log("*" * 70)
     for k in unknown:
         log(f"경고: '{SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
     log("실행할 모듈: " + " / ".join(
@@ -156,10 +204,10 @@ def run_main(rr):
         return
 
     funcs = {"login": rr.module_login,
-             "wellife_sales": lambda ctx: module_sales(rr, ctx),
-             "wellife_hold": lambda ctx: module_hold(rr, ctx),
-             "wellife_sap": lambda ctx: module_sap(rr, ctx),
-             "wellife_wms": lambda ctx: module_wms(rr, ctx)}
+             "wellife_sales": lambda ctx: module_sales(rr, ctx, sales_live),
+             "wellife_hold": lambda ctx: module_hold(rr, ctx, live),
+             "wellife_sap": lambda ctx: module_sap(rr, ctx, live),
+             "wellife_wms": lambda ctx: module_wms(rr, ctx, live)}
     result, reason = rr.run_modules(selected, MODULES, funcs, SECTION)
     status.finish(result, reason)
     log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} "
@@ -167,22 +215,77 @@ def run_main(rr):
 
 
 # ---------------------------------------------------------------------------
-# 모듈. run_routine 의 모듈 함수와 같이 (결과, 사유) 를 돌려준다. 지금은 화면 이동만 해서 성공해도 "skipped".
+# 모듈. run_routine 의 모듈 함수와 같이 (결과, 사유) 를 돌려준다. 사유 앞에는 [모드] 를 붙인다.
+# 실제로 누른 것이 있으면 "done", 리허설·할 것 없음은 "skipped"(토큰 0).
 # ---------------------------------------------------------------------------
 
-def module_sales(rr, ctx):
-    """② 주문매핑 - 지금은 화면 이동만 (주문수집·선택주문 매출처리는 팝업 문구를 실측한 뒤)."""
+def module_sales(rr, ctx, live=False):
+    """② 주문매핑: 화면 이동 -> 주문 수집 (collect_orders). 선택주문 매출처리는 하지 않는다 (사용자 10-08 범위 밖)."""
     rr.status.step("wl_order_screen")
     try:
         front(rr, ctx, "주문매핑 화면 이동")
     except Stop as e:
         return e.result, str(e)
     ok, reason = rr.goto_order_screen(ctx)
-    return ("skipped", NAV_ONLY) if ok else ("failed", reason)
+    if not ok:
+        return "failed", reason
+    try:
+        return collect_orders(rr, ctx, live)
+    except Stop as e:
+        return e.result, str(e)
+    except Exception as e:
+        return ui_error(rr, e)
 
 
-def module_hold(rr, ctx):
-    """③ 물류대기 - 지금은 화면 이동만 (일반 탭 조회·전체선택·저장은 뒤에, 보류는 하지 않는다).
+def collect_orders(rr, ctx, live):
+    """주문 수집 (사용자 10-08).
+    - 엑셀: 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
+      (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만.
+    - 자동 수집 [가져오기] 는 모드와 상관없이 누르지 않는다 - 마우스만."""
+    rr.status.step("wl_order_collect")
+    win = ctx.window()
+    files = excel_files(rr)
+    notes, uploaded = [], 0
+    if not files:
+        notes.append("엑셀: 올릴 파일 없음")
+    else:
+        tables = rr.get_onscreen_tables(win)
+        if not tables:
+            raise Stop("failed", "주문매핑 사이트 그리드를 찾지 못했습니다.")
+        sites = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
+        names = ", ".join(sorted(files))
+        if live:
+            no_popup(rr, ctx, "엑셀 업로드 전")
+            front(rr, ctx, "엑셀 업로드")
+            rr.log(f"  [실행] 엑셀 업로드: 사이트 {names}")
+            uploaded, errors = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites)
+            notes.append(f"엑셀 {len(files)}건 중 {uploaded}건 업로드"
+                         + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
+        else:
+            code = sorted(files)[0]
+            cell, _ = rr.find_site_upload_cell(ctx.hwnd, sites, code)
+            if cell is not None:
+                hover(rr, ctx, cell, f"엑셀 업로드 칸 (사이트 {code})", True)
+            notes.append(f"엑셀 {len(files)}건 있음 (사이트 {names}) - 올리지 않음")
+    imp = onscreen_button(win, rr.IMPORT_BUTTON_NAME)
+    if imp is None:
+        notes.append("자동 수집 단추 없음")
+    else:
+        hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}] (모드와 상관없이 누르지 않음)", None)
+        notes.append("자동 수집은 누르지 않음")
+    return ("done" if uploaded else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
+
+
+def excel_files(rr):
+    """미리 둔 엑셀 {사이트코드: 경로} - 기존 업로드와 같은 폴더·이름 규칙. 폴더가 없으면 {}."""
+    folder = rr.excel_upload_dir()
+    if not os.path.isdir(folder):
+        return {}
+    return rr.collect_upload_files(folder)[0]
+
+
+def module_hold(rr, ctx, live=False):
+    """③ 물류대기: 화면 이동 -> 일반 탭 조회 -> 전체선택 -> 저장 (hold_save). 보류는 하지 않는다.
     웰라이프는 물류대기가 꼭 있어야 하므로 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (기존 module_hold 와 다름)."""
     rr.status.step("wl_hold_screen")
     try:
@@ -190,44 +293,94 @@ def module_hold(rr, ctx):
     except Stop as e:
         return e.result, str(e)
     r = rr.goto_hold_screen(ctx)
-    if r == "ok":
-        return "skipped", NAV_ONLY
     if r == "absent":
         return "failed", "물류대기 아이콘(lcg_HoldLogistics)이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
-    return "failed", "물류대기 화면으로 이동하지 못했습니다."
+    if r != "ok":
+        return "failed", "물류대기 화면으로 이동하지 못했습니다."
+    try:
+        return hold_save(rr, ctx, live)
+    except Stop as e:
+        return e.result, str(e)
+    except Exception as e:
+        return ui_error(rr, e)
 
 
-def module_sap(rr, ctx):
-    """④ 웰라이프 SAP 연동관리 (docs/wellife-rpa.md 2절 4-1·4-3·4-4) - 리허설: 지정·화살표는 누르지 않고 마우스만 올린다."""
+def hold_save(rr, ctx, live):
+    """일반 탭 '조회(F)' -> 머리글로 전체선택 -> '저장(S)'. 기존 run_hold_save 는 예/아니오 팝업에 [아니오] 를 누르는
+    도우미를 거쳐서 쓰지 않는다 (웰라이프는 [예] - 사용자 10-08). 0건이면 저장하지 않는다."""
+    rr.status.step("wl_hold_save")
+    tag = mode_tag(live)
+    front(rr, ctx, "물류대기 일반 탭")
+    rr.click_subtab(ctx.app, ctx.hwnd, rr.STOCK_GENERAL_TAB_NAME)
+    win = ctx.window()
+    query, tables = onscreen_button(win, "조회(F)"), rr.get_onscreen_tables(win)
+    if query is None or not tables:
+        raise Stop("failed", "물류대기 '조회(F)' 단추나 그리드를 찾지 못했습니다.")
+    grid = max(tables, key=lambda t: t.rectangle().width() * t.rectangle().height())
+    idle = rr.grid_overlay_count(ctx.hwnd, grid)
+    no_popup(rr, ctx, "물류대기 조회 전")
+    click(rr, ctx, query, "물류대기 '조회(F)'")
+    time.sleep(2)     # 스피너가 뜨기 전에 '끝' 으로 보지 않게 (기존 일반 탭 조회와 같다)
+    if not rr.wait_grid_spinner_gone(ctx.hwnd, grid, idle, label="물류대기", max_wait=QUERY_WAIT_SECONDS):
+        raise Stop("failed", f"물류대기 조회가 {QUERY_WAIT_SECONDS}초 안에 끝나지 않았습니다.")
+    no_popup(rr, ctx, "물류대기 조회")
+    if not grid.descendants(control_type="DataItem"):
+        rr.log("  물류대기 0건 - 저장하지 않음")
+        return "no_target", f"[{tag}] 물류대기 0건 - 저장할 것 없음"
+    front(rr, ctx, "물류대기 전체선택")
+    if not rr.select_all_by_header_checkbox(ctx.hwnd, grid):
+        raise Stop("failed", "물류대기 전체선택(머리글 체크)에 실패했습니다.")
+    no_popup(rr, ctx, "물류대기 전체선택")
+    save = onscreen_button(ctx.window(), "저장(S)")
+    if save is None:
+        raise Stop("failed", "물류대기 '저장(S)' 단추를 찾지 못했습니다.")
+    if not live:
+        hover(rr, ctx, save, "물류대기 '저장(S)'", True)
+        return "skipped", f"[{tag}] 물류대기 조회 -> 전체선택 (저장은 누르지 않음)"
+    before = popup_windows(rr, ctx)
+    rr.log("  [실행] 물류대기 '저장(S)' 누름")
+    click(rr, ctx, save, "물류대기 '저장(S)'")
+    texts = confirm_popups(rr, ctx, "물류대기 저장", grid, idle, before)
+    return "done", f"[{tag}] 물류대기 조회 -> 전체선택 -> 저장" + popup_note(texts)
+
+
+def module_sap(rr, ctx, live=False):
+    """④ 웰라이프 SAP 연동관리 (docs/wellife-rpa.md 2절 4-1·4-2·4-3·4-4). 리허설이면 지정·화살표는 마우스만."""
     rr.status.step("wl_sap_screen")
     ok, reason = goto_screen_by_menu(rr, ctx, SAP_MENU)
     if not ok:
         return "failed", reason
     try:
         rr.status.step("wl_sap_slip")
-        notes = [sales_slip_stage(rr, ctx)]
+        done = [sales_slip_stage(rr, ctx, live)]
         for stage in SAP_SIMPLE_STAGES:
-            notes.append(simple_stage(rr, ctx, SAP_FORM, *stage))
+            done.append(simple_stage(rr, ctx, SAP_FORM, *stage, live=live))
     except Stop as e:
         return e.result, str(e)
     except Exception as e:
         return ui_error(rr, e)
-    return "skipped", "리허설 (누르지 않음): " + " / ".join(notes)
+    return stage_result(live, done)
 
 
-def module_wms(rr, ctx):
-    """⑤ 웰라이프 WMS 이관관리 (docs/wellife-rpa.md 2절 5-1~5-4) - 리허설: 화살표는 누르지 않고 마우스만 올린다."""
+def module_wms(rr, ctx, live=False):
+    """⑤ 웰라이프 WMS 이관관리 (docs/wellife-rpa.md 2절 5-1~5-4). 리허설이면 화살표는 마우스만."""
     rr.status.step("wl_wms_screen")
     ok, reason = goto_screen_by_menu(rr, ctx, WMS_MENU)
     if not ok:
         return "failed", reason
     try:
-        notes = [simple_stage(rr, ctx, WMS_FORM, *stage) for stage in WMS_STAGES]
+        done = [simple_stage(rr, ctx, WMS_FORM, *stage, live=live) for stage in WMS_STAGES]
     except Stop as e:
         return e.result, str(e)
     except Exception as e:
         return ui_error(rr, e)
-    return "skipped", "리허설 (누르지 않음): " + " / ".join(notes)
+    return stage_result(live, done)
+
+
+def stage_result(live, done):
+    """[(사유, 눌렀는가)] -> (결과, 사유). 하나라도 실제로 눌렀으면 done."""
+    head = f"[{mode_tag(live)}] " + ("" if live else "누르지 않음: ")
+    return ("done" if any(p for _, p in done) else "skipped"), head + " / ".join(n for n, _ in done)
 
 
 def ui_error(rr, e):
@@ -237,46 +390,98 @@ def ui_error(rr, e):
     return "failed", f"UI 오류: {type(e).__name__}"
 
 
-def sales_slip_stage(rr, ctx):
-    """4-1 매출전표 지정. 사유 한 줄을 돌려준다.
-    검토 칸에 '택배X' 가 없는 줄을 체크 -> [지정] 옆 ▼ 로 내림 메뉴를 열고 '선택 항목만' 에 마우스만 올린다
-    (납품예정일은 기본값 그대로). 체크된 줄이 없으면 실제 실행에서는 메뉴를 열지 않는 자리지만,
-    리허설은 자리를 보여 주려고 연다 (여는 것은 데이터를 바꾸지 않는다). 0건이면 [지정] 이 꺼져 있어 열지 않는다."""
+SLIP_SEND = "4-2 매출전표 → 넘기기"
+
+
+def sales_slip_stage(rr, ctx, live=False):
+    """4-1 매출전표 지정 -> 4-2 넘기기 (사용자 10-08). (사유 한 줄, 눌렀는가).
+    머리글로 전체 체크 -> [지정] 옆 ▼ '선택 항목만' (납품예정일은 기본값 그대로) -> 검토 칸이 빈 줄만 체크 -> 화살표(btn_FirstSend).
+    리허설은 '선택 항목만'·화살표에 마우스만 (전체 체크가 안 됐어도 자리를 보여 주려고 메뉴는 연다 - 여는 것은 데이터를 바꾸지 않는다).
+    실행은 전체 체크가 됐을 때만 지정을 누르고, 지정을 눌렀고 모든 줄의 체크를 맞췄을 때만 화살표를 누른다
+    (못 맞춘 줄이 있으면 검토에 문제가 있는 전표가 넘어갈 수 있다)."""
     count, ctl = open_stage(rr, ctx, SAP_FORM, "dashBtn_SalesSlip")
     if not count:
-        return "4-1 매출전표 0건"
-    rows = read_rows(rr, ctx, ctl["gridCtrl_List"], ("검토", "전표번호"), count)
-    targets = slip_targets(rows)
-    rr.log(f"  매출전표: 단추 {count}건 / 그리드 {len(rows)}줄 - 지정 대상(택배X 없음) {len(targets)}줄")
-    rr.status.note(f"매출전표 {count}건 / {len(rows)}줄 - 지정 대상 {len(targets)}")
-    done = set_checks(rr, ctx, ctl["gridCtrl_List"], targets, "선택") if targets else set()
-    if len(done) != len(targets):
-        rr.log(f"  확인할 것: 4-1 지정 - 대상 {len(targets)}줄 중 {len(done)}줄만 체크됐습니다")
-    note = hover_menu_item(rr, ctx, ctl.get("btn_CopyInsert"), SELECTED_ONLY, "4-1 [지정▼]", bool(done))
-    return f"매출전표 {count}건/{len(rows)}줄 (지정 대상 {len(targets)}, 체크 {len(done)}){note}"
+        return "4-1 매출전표 0건", False
+    checked = check_all_rows(rr, ctx, ctl["gridCtrl_List"], "4-1 매출전표")
+    head = f"매출전표 {count}건"
+    if not live:
+        head += hover_menu_item(rr, ctx, ctl.get("btn_CopyInsert"), SELECTED_ONLY, "4-1 [지정▼]", checked)
+        pressed = False
+    elif not checked:
+        return head + " - 전체 체크가 안 돼 지정하지 않음 (확인할 것)", False
+    else:
+        note, pressed = press_menu_item(rr, ctx, ctl.get("btn_CopyInsert"), SELECTED_ONLY, "4-1 [지정▼]",
+                                        ctl.get("gridCtrl_List"))
+        head += note
+        if not pressed:
+            return head, False
+        ctl = controls(rr, ctx, SAP_FORM)    # 지정 뒤 그리드가 다시 그려진다 - 컨트롤을 새로 잡는다
+    marks, bad = mark_rows(rr, ctx, ctl["gridCtrl_List"], count, slip_target)
+    targets = sum(1 for v in marks.values() if v == "선택")
+    rr.log(f"  매출전표: 그리드 {len(marks)}줄 - 넘길 줄(검토 빈 칸) {targets}줄{f', 못 맞춘 줄 {len(bad)}' if bad else ''}")
+    rr.status.note(f"매출전표 {count}건 / {len(marks)}줄 - 넘길 줄 {targets}")
+    head += f" / 넘길 줄 {targets}" + (f" (못 맞춘 줄 {len(bad)} - 넘기지 않음)" if bad else "")
+    note, sent = press_arrow(rr, ctx, ctl, "btn_FirstSend", SLIP_SEND, bool(targets) and not bad, targets, live)
+    return head + note, pressed or sent
 
 
-def simple_stage(rr, ctx, form_id, step, dash_id, arrow_id, check_all, what):
-    """단계 하나: 조회 -> (건수가 있으면) 머리글로 전체 체크 -> 화살표 위에 마우스만. 사유 한 줄.
+def simple_stage(rr, ctx, form_id, step, dash_id, arrow_id, check_all, what, live=False):
+    """단계 하나: 조회 -> (건수가 있으면) 머리글로 전체 체크 -> 화살표. (사유 한 줄, 눌렀는가).
+    리허설은 화살표에 마우스만. 실행은 대상이 있고(체크 칸이 있는 단계는 전체 체크가 됐고) 단추가 켜져 있을 때만 누른다.
     체크는 다음 단계를 조회하면 풀리므로 되돌리지 않는다."""
     rr.status.step(step)
     count, ctl = open_stage(rr, ctx, form_id, dash_id)
     label = what.split(" →")[0]
-    checked = False
-    if count and check_all:
-        grid = ctl["gridCtrl_List"]
-        header = next((h for h in grid.descendants(control_type="Header") if h.window_text() == CHECK_COL), None)
-        if header is None:
-            raise Stop("failed", f"{label}: 그리드 체크 칸 머리글('{CHECK_COL}')을 찾지 못했습니다.")
-        no_popup(rr, ctx, f"{label} 전체 체크 전")
-        front(rr, ctx, f"{label} 전체 체크")
-        clear_point(rr, ctx, header, f"{label} 머리글 체크 칸")   # 머리글 클릭은 rr 도우미가 한다 - 자리만 여기서 본다
-        checked = rr.select_all_by_header_checkbox(ctx.hwnd, grid)
-        no_popup(rr, ctx, f"{label} 전체 체크")
-        if not checked:
-            rr.log(f"  확인할 것: {label} - 머리글로 전체 체크하지 못했습니다")
-    hover(rr, ctx, ctl.get(arrow_id), what, bool(count) and (checked or not check_all))
-    return f"{label} {count}건"
+    checked = bool(count and check_all) and check_all_rows(rr, ctx, ctl["gridCtrl_List"], label)
+    want = bool(count) and (checked or not check_all)
+    note, pressed = press_arrow(rr, ctx, ctl, arrow_id, what, want, count, live)
+    return f"{label} {count}건" + note, pressed
+
+
+def check_all_rows(rr, ctx, grid, label):
+    """머리글 체크 칸으로 그리드 전체 체크. 됐는가."""
+    header = check_header(grid, label)
+    no_popup(rr, ctx, f"{label} 전체 체크 전")
+    front(rr, ctx, f"{label} 전체 체크")
+    clear_point(rr, ctx, header, f"{label} 머리글 체크 칸")   # 머리글 클릭은 rr 도우미가 한다 - 자리만 여기서 본다
+    checked = rr.select_all_by_header_checkbox(ctx.hwnd, grid)
+    no_popup(rr, ctx, f"{label} 전체 체크")
+    if not checked:
+        rr.log(f"  확인할 것: {label} - 머리글로 전체 체크하지 못했습니다")
+    return checked
+
+
+def check_header(grid, label="그리드"):
+    """그리드 체크 칸 머리글. 없으면 멈춘다."""
+    header = next((h for h in grid.descendants(control_type="Header") if h.window_text() == CHECK_COL), None)
+    if header is None:
+        raise Stop("failed", f"{label}: 그리드 체크 칸 머리글('{CHECK_COL}')을 찾지 못했습니다.")
+    return header
+
+
+def press_arrow(rr, ctx, ctl, arrow_id, what, want, count, live):
+    """화살표. 리허설은 마우스만. 실행은 want 이고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다.
+    (사유에 덧붙일 글, 눌렀는가)."""
+    arrow = ctl.get(arrow_id)
+    if not live:
+        hover(rr, ctx, arrow, what, want)
+        return "", False
+    if not want:
+        rr.log(f"  [실행] {what}: 누를 대상이 없어 누르지 않음 ({count}건)")
+        return "", False
+    if arrow is None:
+        raise Stop("failed", f"{what} 단추({arrow_id})를 찾지 못했습니다.")
+    if not arrow.is_enabled():
+        rr.log(f"  확인할 것: {what} - 대상이 있는데 단추가 꺼져 있어 누르지 않음")
+        return " (단추 꺼짐 - 확인할 것)", False
+    grid = ctl.get("gridCtrl_List")
+    idle = rr.grid_overlay_count(ctx.hwnd, grid) if grid is not None else 0
+    no_popup(rr, ctx, f"{what} 누르기 전")
+    before = popup_windows(rr, ctx)
+    rr.log(f"  [실행] {what}: 누름 ({count}건)")
+    click(rr, ctx, arrow, what)
+    texts = confirm_popups(rr, ctx, what, grid, idle, before)
+    return " -> 누름" + popup_note(texts), True
 
 
 # ---------------------------------------------------------------------------
@@ -306,11 +511,9 @@ def review_tokens(value):
     return [t.strip() for t in (value or "").split("/") if t.strip()]
 
 
-def slip_targets(rows):
-    """{행: {'검토': …}} -> 4-1 지정 대상 행 번호 목록: '택배X' 가 없는 줄 (다른 X 는 따지지 않는다).
-    검토 값을 못 읽은 줄(None)은 대상이 아니다 - '택배X 없음' 으로 보면 택배X 전표가 지정된다 (빈 칸은 '')."""
-    return sorted(n for n, v in rows.items()
-                  if v.get("검토") is not None and "택배X" not in review_tokens(v["검토"]))
+def slip_target(value):
+    """검토 칸 값 -> 4-2 로 넘길 줄인가: 빈 칸만 (사용자 10-08). 못 읽은 값(None)은 아니다 - 문제 있는 전표가 넘어가지 않게."""
+    return value is not None and not review_tokens(value)
 
 
 def controls(rr, ctx, form_id):
@@ -398,34 +601,75 @@ def no_popup(rr, ctx, after):
         raise Stop("stopped", f"{after} 뒤 팝업이 떠서 멈춤 (누르지 않음): {text[:200]}")
 
 
-def read_rows(rr, ctx, grid, cols, expected):
-    """그리드 전체를 위에서부터 스크롤바로 넘기며 {행 번호: {컬럼: 값}}. 행 번호는 스크롤해도 이어지는 절대
-    번호다 (10-07 실측: 1~24 -> 페이지 아래로 -> 24~47). 키보드는 쓰지 않는다 (행이 선택되면 아래 그리드가 다시 조회된다)."""
+def mark_rows(rr, ctx, grid, expected, want):
+    """그리드를 위에서부터 한 번만 내려가며, 줄마다 검토 칸을 읽는 대로 체크 칸을 맞춘다 - want(검토 값) 면 '선택',
+    아니면 '선택안됨'. 다 읽고 다시 올라가 체크하지 않는다 (사용자 10-08). 행 번호는 스크롤해도 이어지는 절대 번호다
+    (10-07 실측: 1~24 -> 페이지 아래로 -> 24~47). 칸 전체가 그리드 안에 보일 때만 누르고(잘린 칸을 누르면 스크롤바에
+    떨어진다) 잘린 줄은 다음 페이지에서 맞춘다. 키보드는 쓰지 않는다 (행이 선택되면 아래 그리드가 다시 조회된다).
+    ({행: 맞춘 값}, 못 맞춘 행 목록) - 못 맞춘 행 = 눌러도 바뀌지 않았거나 중간에 못 읽고 지나간 행."""
     deadline = time.time() + STAGE_WAIT_SECONDS
     while expected and not rr.grid_rows(grid) and time.time() < deadline:
         time.sleep(0.3)     # 건수가 있는데 그리드가 아직 비었다 - 채워질 때까지
+    header = check_header(grid)
+    # 아래 끝은 가로 스크롤바에 가려지는 부분만 뺀다 (grid_usable_bottom 은 행 하나를 통째로 빼서 페이지마다 마지막 행을 못 누른다)
+    top, bottom = header.rectangle().bottom, rr.grid_click_bottom(grid)
     front(rr, ctx, "그리드 스크롤")     # 스크롤 단추는 rr 도우미가 누른다 (잠김·포커스는 여기서 한 번 본다)
     rr.grid_scroll_to_top(ctx.hwnd, grid)
-    out = {}
     rows = settled_rows(rr, grid, first=1)
+    clear_all_checks(rr, ctx, grid, header, rows)
+    out, failed, seen = {}, set(), set()
     for _ in range(MAX_PAGES):
-        for n, cells in rows.items():
-            if n not in out and all(c in cells for c in cols):
-                vals = {c: rr.legacy_value(cells[c]) for c in cols}
-                if None not in vals.values():     # 못 읽은 값(None)은 적지 않는다 - 빠진 행으로 남는다
-                    out[n] = vals
+        seen.update(rows)
+        for n, cells in sorted(rows.items()):
+            if n in out or "검토" not in cells or CHECK_COL not in cells:
+                continue
+            cell = cells[CHECK_COL]
+            r = cell.rectangle()
+            if r.top < top or r.bottom > bottom:
+                continue
+            value = "선택" if want(rr.legacy_value(cells["검토"])) else "선택안됨"
+            if rr.legacy_value(cell) != value:
+                no_popup(rr, ctx, f"{n}행 체크 전")   # 앞 클릭으로 뜬 팝업도 여기서 잡힌다
+                click(rr, ctx, cell, f"{n}행 체크 칸")
+                deadline = time.time() + CHECK_WAIT_SECONDS
+                while rr.legacy_value(cell) != value and time.time() < deadline:
+                    time.sleep(0.2)
+            if rr.legacy_value(cell) == value:
+                out[n] = value
+                failed.discard(n)
+            else:
+                failed.add(n)
+                rr.log(f"  {n}행 체크 칸이 '{value}' 가 되지 않았습니다 (지금 {rr.legacy_value(cell)!r})")
         rows = next_page(rr, ctx, grid, rows)
         if rows is None:
             break
-    rr.grid_scroll_to_top(ctx.hwnd, grid)
-    # 중간에 빠진 번호 = 못 읽은 줄 (대상에서 빠진다). 끝까지 이어져 있으면 그리드가 거기서 끝난 것이다 - 단추 건수와
-    # 달라도 그리드 기준으로 한다 (10-07 실측: 매출전표 단추 201건, 그리드 198행에서 끝. 차이는 무시 - 사용자 결정)
-    gaps = sorted(set(range(1, max(out, default=0) + 1)) - set(out))
-    if gaps:
-        rr.log(f"  확인할 것: 그리드를 읽다 중간 행을 못 읽었습니다 {gaps[:20]}{' …' if len(gaps) > 20 else ''}")
+    else:
+        raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 못 맞춤")
+    # 본 줄 중 못 맞춘 줄(잘린 칸·칸 없음·안 바뀜)과 중간에 빠진 번호. 끝까지 이어져 있으면 그리드가 거기서 끝난 것이다 -
+    # 단추 건수와 달라도 그리드 기준으로 한다 (10-07 실측: 매출전표 단추 201건, 그리드 198행에서 끝. 차이는 무시 - 사용자 결정)
+    bad = sorted(failed | (set(range(1, max(seen, default=0) + 1)) - set(out)))
+    if bad:
+        rr.log(f"  확인할 것: 체크를 맞추지 못한 줄 {bad[:20]}{' …' if len(bad) > 20 else ''}")
     elif expected and len(out) != expected:
-        rr.log(f"  그리드 {len(out)}줄을 끝까지 읽음 (단추 {expected}건과 다름 - 그리드 기준)")
-    return out
+        rr.log(f"  그리드 {len(out)}줄을 끝까지 맞춤 (단추 {expected}건과 다름 - 그리드 기준)")
+    return out, bad
+
+
+def clear_all_checks(rr, ctx, grid, header, rows):
+    """보이는 줄이 모두 체크돼 있으면 머리글을 한 번 눌러 전체를 푼다 (머리글은 토글) - 넘기지 않을 줄을 하나씩
+    풀지 않게 (10-07 실측: 개발기 매출전표 198줄이 모두 검토에 값이 있다). 못 풀어도 mark_rows 가 줄마다 맞춘다."""
+    states = [rr.legacy_value(c[CHECK_COL]) for c in rows.values() if CHECK_COL in c]
+    if not states or any(s != "선택" for s in states):
+        return
+    no_popup(rr, ctx, "머리글 체크 칸 (전체 풀기) 전")
+    click(rr, ctx, header, "머리글 체크 칸 (전체 풀기)")
+    deadline = time.time() + CHECK_WAIT_SECONDS
+    while time.time() < deadline:
+        if all(rr.legacy_value(c[CHECK_COL]) == "선택안됨" for c in rows.values() if CHECK_COL in c):
+            rr.log("  머리글로 전체 체크를 풀었습니다")
+            return
+        time.sleep(0.2)
+    rr.log("  머리글로 전체 체크를 다 풀지 못해 줄마다 맞춥니다")
 
 
 def settled_rows(rr, grid, moved_from=None, first=None):
@@ -449,7 +693,8 @@ def settled_rows(rr, grid, moved_from=None, first=None):
 
 def next_page(rr, ctx, grid, rows):
     """한 페이지 내리고 다 그려진 새 행들. 끝이면 None (내릴 단추가 없거나, 내렸는데 첫 행이 그대로).
-    내렸는데 그대로인데 '페이지 아래로' 가 아직 있으면 끝이 아니다 - 조용히 끝내지 않고 '확인할 것' 으로 남긴다."""
+    내렸는데 그대로인데 '페이지 아래로' 가 아직 있으면 끝이 아니다 - 뒤 줄의 체크를 모르므로 멈춘다
+    (전체 체크된 채 남은 줄이 4-2 로 넘어가지 않게)."""
     first = min(rows, default=None)
     if not rr.grid_page_down(ctx.hwnd, grid):
         return None
@@ -462,47 +707,8 @@ def next_page(rr, ctx, grid, rows):
     except Exception:
         more = False
     if more:
-        rr.log("  확인할 것: 페이지를 내렸는데 그리드가 움직이지 않아 여기서 읽기를 멈춥니다 (뒤 행은 못 읽음)")
+        raise Stop("failed", "페이지를 내렸는데 그리드가 움직이지 않아 멈춤 (뒤 줄은 못 맞춤)")
     return None
-
-
-def set_checks(rr, ctx, grid, targets, value):
-    """targets(행 번호)의 체크 칸을 value('선택'/'선택안됨')로. 위에서부터 페이지를 넘기며, 칸 전체가 그리드 안에
-    보일 때만 누르고(잘린 칸을 누르면 스크롤바에 떨어진다) 값이 바뀌었는지 다시 읽는다. 바뀐(또는 이미 그 값인) 행 집합."""
-    want, done = set(targets), set()
-    header = next((h for h in grid.descendants(control_type="Header") if h.window_text() == CHECK_COL), None)
-    if header is None:
-        raise Stop("failed", f"그리드 체크 칸 머리글('{CHECK_COL}')을 찾지 못했습니다.")
-    # 아래 끝은 가로 스크롤바에 가려지는 부분만 뺀다 (grid_usable_bottom 은 행 하나를 통째로 빼서 페이지마다 마지막 행을 못 누른다)
-    top, bottom = header.rectangle().bottom, rr.grid_click_bottom(grid)
-    front(rr, ctx, "그리드 스크롤")
-    rr.grid_scroll_to_top(ctx.hwnd, grid)
-    rows = settled_rows(rr, grid, first=1)
-    for _ in range(MAX_PAGES):
-        for n in sorted(want - done):
-            cell = rows.get(n, {}).get(CHECK_COL)
-            if cell is None:
-                continue
-            r = cell.rectangle()
-            if r.top < top or r.bottom > bottom:
-                continue
-            if rr.legacy_value(cell) != value:
-                no_popup(rr, ctx, f"{n}행 체크 전")   # 앞 클릭으로 뜬 팝업도 여기서 잡힌다
-                click(rr, ctx, cell, f"{n}행 체크 칸")
-                deadline = time.time() + CHECK_WAIT_SECONDS
-                while rr.legacy_value(cell) != value and time.time() < deadline:
-                    time.sleep(0.2)
-            if rr.legacy_value(cell) == value:
-                done.add(n)
-            else:
-                rr.log(f"  {n}행 체크 칸이 '{value}' 가 되지 않았습니다 (지금 {rr.legacy_value(cell)!r})")
-        if done >= want:
-            break
-        rows = next_page(rr, ctx, grid, rows)
-        if rows is None:
-            break
-    rr.grid_scroll_to_top(ctx.hwnd, grid)
-    return done
 
 
 def split_open_button(split):
@@ -523,7 +729,63 @@ def split_open_button(split):
 
 def hover_menu_item(rr, ctx, split, item_text, what, would_press):
     """리허설: [지정] 옆 ▼ 를 눌러 내림 메뉴를 열고 item_text 에 마우스만 올린 뒤 ESC 로 닫는다 - 항목은 누르지 않는다.
-    사유에 덧붙일 글을 돌려준다 (문제 없으면 "").
+    사유에 덧붙일 글을 돌려준다 (문제 없으면 "")."""
+    item, menu = _open_menu(rr, ctx, split, item_text, what, would_press)
+    if item is None:
+        return menu     # 열지 못했다 - 사유 글
+    if rr.ec.screen_locked():   # front() 는 쓰지 않는다 - 메인 창을 앞으로 가져오면 메뉴가 닫힌다
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 멈춤 (메뉴가 열려 있을 수 있음)")
+    r = item.rectangle()
+    mouse.move(coords=((r.left + r.right) // 2, (r.top + r.bottom) // 2))
+    try:
+        active = item.is_enabled()
+    except Exception:
+        active = None
+    rr.log(f"  [리허설] {what}: 내림 메뉴를 열고 '{item.window_text()}' 에 마우스만 올림 (누르지 않음, 활성={active}"
+           f"{'' if would_press else ', 전체 체크가 안 돼 실제 실행에서는 지정하지 않는 자리'})")
+    time.sleep(HOVER_SECONDS)
+    _close_menu(rr, ctx, {menu}, what)
+    return ""
+
+
+def press_menu_item(rr, ctx, split, item_text, what, grid=None):
+    """실행: [지정] 옆 ▼ 로 내림 메뉴를 열고 item_text 를 누른 뒤 팝업을 [예]/[확인] 으로 넘긴다. (사유 글, 눌렀는가).
+    누를 점의 맨 위 창이 그 메뉴 창일 때만 누른다 (다른 창이 덮고 있으면 그것이 눌린다). 항목이 꺼져 있으면 닫고 넘어간다."""
+    item, menu = _open_menu(rr, ctx, split, item_text, what, True)
+    if item is None:
+        return menu, False
+    if rr.ec.screen_locked():
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 멈춤 (메뉴가 열려 있을 수 있음)")
+    try:
+        active = item.is_enabled()
+    except Exception:
+        active = None
+    if active is False:
+        rr.log(f"  확인할 것: {what} - '{item.window_text()}' 가 꺼져 있어 누르지 않음")
+        _close_menu(rr, ctx, {menu}, what)
+        return f" (확인할 것: '{item_text}' 꺼짐 - 누르지 않음)", False
+    r = item.rectangle()
+    pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    mouse.move(coords=pt)
+    top = _top_window(rr, pt)
+    if top != menu:
+        _close_menu(rr, ctx, {menu}, what)
+        raise Stop("failed", f"{what}: '{item_text}' 자리를 다른 창({top})이 덮고 있어 누르지 않고 멈춤")
+    idle = rr.grid_overlay_count(ctx.hwnd, grid) if grid is not None else 0
+    before = popup_windows(rr, ctx) - {menu}
+    rr.log(f"  [실행] {what}: '{item.window_text()}' 누름")
+    item.click_input(coords=pt, absolute=True)
+    deadline = time.time() + DROPDOWN_WAIT_SECONDS
+    while _shown(rr, menu):
+        if time.time() > deadline:
+            raise Stop("failed", f"{what}: '{item_text}' 를 눌렀는데 메뉴가 닫히지 않아 멈춤")
+        time.sleep(0.2)
+    texts = confirm_popups(rr, ctx, what, grid, idle, before)
+    return f" -> '{item_text}' 누름" + popup_note(texts), True
+
+
+def _open_menu(rr, ctx, split, item_text, what, would_press):
+    """[지정] 옆 ▼ 를 눌러 내림 메뉴를 열고 (항목, 메뉴 창) 을 돌려준다. 열지 못했으면 (None, 사유 글) - 메뉴는 닫아 둔다.
     - ▼ 는 split_open_button 이 고른 자리만 누른다. 못 고르거나 ▼ 가 꺼져 있으면 누르지 않고 마우스만 올린다.
     - 메뉴는 ERPia 의 별도 최상위 창으로 뜬다. 닫혔는지는 그 창이 화면에서 사라졌는지로 보고, 못 읽으면 열린 것으로
       보고 멈춘다 - 열린 채면 다음 클릭이 메뉴 항목에 떨어질 수 있다.
@@ -539,14 +801,14 @@ def hover_menu_item(rr, ctx, split, item_text, what, would_press):
         except Exception:
             pass
         hover(rr, ctx, split, f"{what} (▼ 자리를 확인하지 못해 열지 않음)", would_press)
-        return " (확인할 것: ▼ 자리를 확인하지 못해 메뉴를 열지 않음)"
+        return None, " (확인할 것: ▼ 자리를 확인하지 못해 메뉴를 열지 않음)"
     try:
         arrow_on = arrow.is_enabled()
     except Exception:
         arrow_on = False
     if not arrow_on:
         hover(rr, ctx, arrow, f"{what} ▼ (꺼져 있어 열지 않음)", would_press)
-        return " (▼ 꺼짐)"
+        return None, " (▼ 꺼짐)"
 
     no_popup(rr, ctx, f"{what} ▼ 를 누르기 전")
     before = _menu_windows(rr, ctx)
@@ -566,25 +828,12 @@ def hover_menu_item(rr, ctx, split, item_text, what, would_press):
         no_popup(rr, ctx, f"{what} ▼ 를 누른 뒤")
         menus = {h for h in opened if _has_buttons(rr, h)}   # 툴팁 같은 창은 메뉴가 아니다 - ESC 를 보낼 까닭이 없다
         if not menus:
-            return " (확인할 것: ▼ 를 눌렀으나 메뉴가 뜨지 않음)"
+            return None, " (확인할 것: ▼ 를 눌렀으나 메뉴가 뜨지 않음)"
         _close_menu(rr, ctx, menus, what)
-        return f" (확인할 것: 메뉴에 '{item_text}' 가 없음 - 로그의 실측 글자 참고)"
+        return None, f" (확인할 것: 메뉴에 '{item_text}' 가 없음 - 로그의 실측 글자 참고)"
     if menu not in opened:   # 누르기 전부터 떠 있던 메뉴 창 - 무엇이 열렸는지 모르니 멈춘다
         raise Stop("failed", f"{what}: ▼ 를 누르기 전부터 떠 있던 메뉴에서 항목이 잡혀 멈춤 (창 {menu})")
-
-    if rr.ec.screen_locked():   # front() 는 쓰지 않는다 - 메인 창을 앞으로 가져오면 메뉴가 닫힌다
-        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 멈춤 (메뉴가 열려 있을 수 있음)")
-    r = item.rectangle()
-    mouse.move(coords=((r.left + r.right) // 2, (r.top + r.bottom) // 2))
-    try:
-        active = item.is_enabled()
-    except Exception:
-        active = None
-    rr.log(f"  [리허설] {what}: 내림 메뉴를 열고 '{item.window_text()}' 에 마우스만 올림 (누르지 않음, 활성={active}"
-           f"{'' if would_press else ', 체크된 줄이 없어 실제 실행에서는 열지 않는 자리'})")
-    time.sleep(HOVER_SECONDS)
-    _close_menu(rr, ctx, {menu}, what)
-    return ""
+    return item, menu
 
 
 def _close_menu(rr, ctx, windows, what):
@@ -690,7 +939,8 @@ def _top_window(rr, pt):
 
 
 def hover(rr, ctx, el, what, would_press):
-    """리허설: 누를 자리에 마우스만 올리고 잠깐 머문다 - 클릭하지 않는다."""
+    """누를 자리에 마우스만 올리고 잠깐 머문다 - 클릭하지 않는다 (리허설, 또는 늘 누르지 않는 자동 수집).
+    would_press: True=실행이면 누를 자리, False=대상이 없어 실행에서도 안 누름, None=따지지 않음."""
     if el is None:
         raise Stop("failed", f"{what} 단추를 찾지 못했습니다.")
     r = el.rectangle()
@@ -700,11 +950,102 @@ def hover(rr, ctx, el, what, would_press):
         active = el.is_enabled()
     except Exception:
         active = None
-    rr.log(f"  [리허설] {what}: 누르지 않고 마우스만 올림 (활성={active}"
-           f"{'' if would_press else ', 대상이 없어 실제 실행에서도 누르지 않는 자리'})")
+    rr.log(f"  [마우스만] {what}: 누르지 않고 마우스만 올림 (활성={active}"
+           f"{', 대상이 없어 실제 실행에서도 누르지 않는 자리' if would_press is False else ''})")
     if would_press and active is False:
         rr.log(f"  확인할 것: {what} - 대상이 있는데 단추가 비활성입니다")
     time.sleep(HOVER_SECONDS)
+
+
+def onscreen_button(win, text):
+    """지금 창 안에 보이는 그 이름의 단추 (숨은 화면의 같은 이름 단추는 창 밖 좌표라 뺀다). 없으면 None."""
+    wr = win.rectangle()
+    for b in win.descendants(control_type="Button"):
+        try:
+            if b.window_text() != text:
+                continue
+            r = b.rectangle()
+            if r.width() > 0 and wr.left <= r.left and wr.top <= r.top and r.right <= wr.right and r.bottom <= wr.bottom:
+                return b
+        except Exception:
+            continue
+    return None
+
+
+def popup_windows(rr, ctx):
+    """ERPia 가 따로 띄운 보이는 창들 (팝업 후보). 누르기 전에 재 두고, 그 뒤 새로 뜬 것만 팝업으로 본다."""
+    return set(rr.find_popup_windows(ctx.pid, ctx.hwnd))
+
+
+def confirm_popups(rr, ctx, what, grid=None, idle=0, before=frozenset()):
+    """실행: 누른 뒤 처리가 끝날 때까지 팝업을 [예](없으면 [확인]) 로 넘긴다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
+    메인 창 안 팝업과, 누른 뒤 새로 뜬 별도 창 팝업을 본다. 팝업도 스피너(grid 의 오버레이가 idle 보다 많음)도
+    QUIET_SECONDS 동안 없으면 끝이다. 넘긴 팝업 문구 목록을 돌려준다 (로그에도 하나씩 남긴다).
+    [예]/[확인] 이 없는 팝업, MAX_POPUPS 를 넘는 팝업, CONFIRM_WAIT_SECONDS 안에 안 끝나는 처리는 멈춘다."""
+    texts = []
+    deadline = time.time() + CONFIRM_WAIT_SECONDS
+    calm = None
+    while time.time() < deadline:
+        found = _next_popup(rr, ctx, before)
+        if found is not None:
+            text, button = found
+            if button is None:
+                raise Stop("stopped", f"{what}: [예]/[확인] 이 없는 팝업이라 멈춤: {text[:200]}")
+            if len(texts) >= MAX_POPUPS:
+                raise Stop("stopped", f"{what}: 팝업이 {MAX_POPUPS}개를 넘어 멈춤 (마지막: {text[:200]})")
+            front(rr, ctx, f"{what} 팝업")    # 잠김·포커스 - 좌표 클릭이 다른 프로그램 창에 떨어지지 않게
+            r = button.rectangle()
+            pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+            top = _top_window(rr, pt)
+            if top != ctx.hwnd and top not in popup_windows(rr, ctx):
+                raise Stop("failed", f"{what}: 팝업 단추 자리를 다른 창({top})이 덮고 있어 누르지 않고 멈춤: {text[:200]}")
+            name = button.window_text()
+            rr.log(f"  [실행] {what} 팝업: {text[:300]} -> [{name}] 누름")
+            button.click_input(coords=pt, absolute=True)
+            texts.append(text)
+            calm = None
+            time.sleep(0.5)
+            continue
+        busy = grid is not None and rr.grid_overlay_count(ctx.hwnd, grid) > idle
+        if busy:
+            calm = None
+        elif calm is None:
+            calm = time.time()
+        elif time.time() - calm >= QUIET_SECONDS:
+            failed = [t for t in texts if any(k in t for k in ("실패", "오류", "에러"))]
+            if failed:     # 넘기기는 했지만 처리가 잘못됐을 수 있다 - 뒤 단계(지정 뒤 4-2 화살표 등)로 가지 않는다
+                raise Stop("stopped", f"{what}: 팝업에 실패/오류 문구가 있어 뒤 단계는 하지 않고 멈춤: {failed[0][:200]}")
+            return texts
+        time.sleep(0.3)
+    raise Stop("failed", f"{what}: {CONFIRM_WAIT_SECONDS}초 안에 처리가 끝나지 않았습니다 (넘긴 팝업 {len(texts)}개)")
+
+
+def _next_popup(rr, ctx, before):
+    """떠 있는 팝업 하나 (문구, 누를 단추) - 누를 단추가 없으면 (문구, None). 팝업이 없으면 None."""
+    buttons = rr.find_popup_buttons(ctx.window())
+    if buttons:
+        return rr.collect_popup_text(buttons[0]), _yes_button(buttons)
+    for h in sorted(popup_windows(rr, ctx) - set(before)):
+        try:
+            w = rr.Desktop(backend="uia").window(handle=h)
+            return rr.popup_window_text(w), _yes_button(w.descendants(control_type="Button"))
+        except Exception:
+            continue    # 그새 닫힌 창
+    return None
+
+
+def _yes_button(buttons):
+    """[예] 가 있으면 [예], 없으면 [확인]. 둘 다 없으면 None."""
+    for names in (YES_TEXTS, OK_TEXTS):
+        b = next((b for b in buttons if b.window_text() in names), None)
+        if b is not None:
+            return b
+    return None
+
+
+def popup_note(texts):
+    """모듈 사유에 덧붙일 팝업 문구 요약."""
+    return f" (팝업 {len(texts)}개: {' / '.join(t[:60] for t in texts)})" if texts else ""
 
 
 # ---------------------------------------------------------------------------
