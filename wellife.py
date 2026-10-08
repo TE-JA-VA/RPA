@@ -617,7 +617,7 @@ def mark_rows(rr, ctx, grid, expected, want):
     rr.grid_scroll_to_top(ctx.hwnd, grid)
     rows = settled_rows(rr, grid, first=1)
     clear_all_checks(rr, ctx, grid, header, rows)
-    out, failed, seen = {}, set(), set()
+    out, failed, seen, reviews = {}, set(), set(), {}
     for _ in range(MAX_PAGES):
         seen.update(rows)
         for n, cells in sorted(rows.items()):
@@ -627,7 +627,8 @@ def mark_rows(rr, ctx, grid, expected, want):
             r = cell.rectangle()
             if r.top < top or r.bottom > bottom:
                 continue
-            value = "선택" if want(rr.legacy_value(cells["검토"])) else "선택안됨"
+            review = rr.legacy_value(cells["검토"])
+            value = "선택" if want(review) else "선택안됨"
             if rr.legacy_value(cell) != value:
                 no_popup(rr, ctx, f"{n}행 체크 전")   # 앞 클릭으로 뜬 팝업도 여기서 잡힌다
                 click(rr, ctx, cell, f"{n}행 체크 칸")
@@ -637,6 +638,7 @@ def mark_rows(rr, ctx, grid, expected, want):
             if rr.legacy_value(cell) == value:
                 out[n] = value
                 failed.discard(n)
+                reviews[review] = reviews.get(review, 0) + 1
             else:
                 failed.add(n)
                 rr.log(f"  {n}행 체크 칸이 '{value}' 가 되지 않았습니다 (지금 {rr.legacy_value(cell)!r})")
@@ -648,6 +650,8 @@ def mark_rows(rr, ctx, grid, expected, want):
     # 본 줄 중 못 맞춘 줄(잘린 칸·칸 없음·안 바뀜)과 중간에 빠진 번호. 끝까지 이어져 있으면 그리드가 거기서 끝난 것이다 -
     # 단추 건수와 달라도 그리드 기준으로 한다 (10-07 실측: 매출전표 단추 201건, 그리드 198행에서 끝. 차이는 무시 - 사용자 결정)
     bad = sorted(failed | (set(range(1, max(seen, default=0) + 1)) - set(out)))
+    # 검토 값별 줄 수 - 고른 줄이 맞는지 로그로 확인하게 (빈 칸은 '' 로 보인다)
+    rr.log(f"  검토 값: {', '.join(f'{v!r} {c}줄' for v, c in sorted(reviews.items(), key=lambda x: -x[1]))}")
     if bad:
         rr.log(f"  확인할 것: 체크를 맞추지 못한 줄 {bad[:20]}{' …' if len(bad) > 20 else ''}")
     elif expected and len(out) != expected:
