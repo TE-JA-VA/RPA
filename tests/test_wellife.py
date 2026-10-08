@@ -116,7 +116,9 @@ rr.status = rec
 rr.run_modules = fake_run_modules
 settings(ALL_Y)
 wellife.run_main(rr)
-check("기록은 program 'routine' 에 웰라이프 단계로 시작", rec.of("start") and rec.of("start")[0][:2] == ("routine", wellife.STEPS))
+check("기록은 program 'routine' 에 웰라이프 단계로 시작 (모드가 없으면 단계 이름 앞에 [리허설])",
+      rec.of("start") and rec.of("start")[0][0] == "routine"
+      and rec.of("start")[0][1] == tuple((k, "[리허설] " + v) for k, v in wellife.STEPS), str(rec.of("start")[:1]))
 check("웰라이프 모듈 표를 등록", rec.of("set_modules") and [m[0] for m in rec.of("set_modules")[0][0]] == [m[0] for m in wellife.MODULES])
 check("run_modules 에 웰라이프 표·섹션을 넘김", got.get("modules") is wellife.MODULES and got.get("section") == "Wellife")
 check("함수 표의 키 = 모듈 키", set(got.get("funcs") or ()) == {m[0] for m in wellife.MODULES})
@@ -213,13 +215,17 @@ print("=== 5. 화면 이동 모듈 ===")
 fr = types.SimpleNamespace(status=Rec(), log=lambda m: None,
                            ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
 nctx = types.SimpleNamespace(hwnd=1)
+_saved = wellife.collect_orders, wellife.hold_save
+wellife.collect_orders = lambda rr_, ctx_, live: ("skipped", f"수집 live={live}")
+wellife.hold_save = lambda rr_, ctx_, live: ("skipped", f"저장 live={live}")
 fr.goto_order_screen = lambda ctx: (True, None)
-check("② 화면 이동 성공 -> skipped (처리는 아직 없음)", wellife.module_sales(fr, nctx) == ("skipped", wellife.NAV_ONLY))
+check("② 화면 이동 성공 -> 주문 수집으로 (모드를 넘긴다)", wellife.module_sales(fr, nctx, True) == ("skipped", "수집 live=True"))
 fr.goto_order_screen = lambda ctx: (False, "아이콘 없음")
 check("② 이동 실패 -> failed", wellife.module_sales(fr, nctx) == ("failed", "아이콘 없음"))
 for r, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")):
     fr.goto_hold_screen = lambda ctx, r=r: r
     check(f"③ 물류대기 '{r}' -> {want} (아이콘이 없어도 건너뛰지 않음)", wellife.module_hold(fr, nctx)[0] == want)
+wellife.collect_orders, wellife.hold_save = _saved
 check("모듈은 자기 단계만 찍는다", [a[0] for a in fr.status.of("step")] == ["wl_order_screen"] * 2 + ["wl_hold_screen"] * 3)
 
 # ---------------------------------------------------------------------------
@@ -389,11 +395,9 @@ check("다른 단계·빈 값은 같은 단계가 아니다",
       and not wellife.same_stage(wellife.stage_name("단계 : 매출전표"), "선분할 배송정보")
       and not wellife.same_stage("", "매출전표") and not wellife.same_stage(wellife.stage_name(None), "x"))
 check("검토 칸 나누기", wellife.review_tokens("예정일X/택배X") == ["예정일X", "택배X"] and wellife.review_tokens(" ") == [])
-rows = {1: {"검토": "예정일X/택배X/거래처X"}, 2: {"검토": "/택배X"}, 3: {"검토": "예정일X"},
-        4: {"검토": ""}, 5: {"검토": None}, 6: {"검토": "거래처X/플랜트X"}, 7: {"검토": "택배X2"}}
-t41 = wellife.slip_targets(rows)
-check("4-1 지정 대상 = 검토에 '택배X' 가 없는 줄 (다른 X 는 따지지 않음)", t41 == [3, 4, 6, 7], str(t41))
-check("검토 값을 못 읽은 줄(None)은 대상이 아니다 - 택배X 전표가 지정되지 않게", 5 not in t41, str(t41))
+t42 = [v for v in ("예정일X/택배X", "/택배X", "예정일X", "", " ", None, "거래처X") if wellife.slip_target(v)]
+check("4-2 넘길 줄 = 검토 칸이 빈 줄만 (사용자 10-08)", t42 == ["", " "], str(t42))
+check("검토 값을 못 읽은 줄(None)은 넘기지 않는다", not wellife.slip_target(None))
 
 
 class Split(El):
@@ -433,8 +437,19 @@ class Arrow(El):
             WIN["open"].add(7)
 
 
+class Click(El):
+    """누르면 on_click 도 부르는 요소."""
+    def __init__(self, name, rect=None, on_click=lambda: None):
+        super().__init__(name, rect)
+        self.on_click = on_click
+
+    def click_input(self, **kw):
+        acts.append(("click", self.name))
+        self.on_click()
+
+
 def drop_rr(found=True, closes=True, popup=None, fg_pid=1):
-    item = El(wellife.SELECTED_ONLY, Rect(80, 30, 180, 50))
+    item = Click(wellife.SELECTED_ONLY, Rect(80, 30, 180, 50), lambda: WIN["open"].clear())   # 누르면 메뉴가 닫힌다
 
     def esc(k):
         acts.append(("keys", k))
@@ -448,6 +463,7 @@ def drop_rr(found=True, closes=True, popup=None, fg_pid=1):
         log=lambda m: None, send_keys=esc, find_popup_buttons=popups, collect_popup_text=lambda b: "질문",
         _find_menu_item=lambda pid, hwnd, text: (item, 7) if found and 7 in WIN["open"] and text == item.name
         else (None, None),
+        find_popup_windows=lambda pid, hwnd: [], grid_overlay_count=lambda h, g: 0,
         win32gui=types.SimpleNamespace(GetForegroundWindow=lambda: 5),
         win32process=types.SimpleNamespace(GetWindowThreadProcessId=lambda h: (0, fg_pid)),
         ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
@@ -511,7 +527,7 @@ _saved = wellife.goto_screen_by_menu, wellife.sales_slip_stage
 wellife.goto_screen_by_menu = lambda rr_, ctx_, menu: (True, None)
 
 
-def _ui_boom(rr_, ctx_):
+def _ui_boom(*_):
     raise RuntimeError("COMError 흉내")
 
 
@@ -522,10 +538,39 @@ wellife.goto_screen_by_menu, wellife.sales_slip_stage = _saved
 
 
 # 그리드 넘기기: 페이지를 넘긴 직후에는 앞 페이지가 그대로 읽힌다 (10-07 실측: 201건 중 140~161·끝 3줄을 못 읽음)
+class Cell:
+    def __init__(self, v, top=0):
+        self.v, self.rect = v, Rect(0, top, 10, top + 10)
+
+    def rectangle(self):
+        return self.rect
+
+
 class FakeGrid:
-    def __init__(self, ranges, stale=2):
-        self.pages = [{n: {"검토": n, "전표번호": n} for n in r} for r in ranges]
-        self.page, self.stale, self.stale_left = 0, stale, 0
+    """review(n) = 검토 값, stuck = 눌러도 체크가 안 바뀌는 줄. 체크 칸은 전체 체크된 채로 시작한다."""
+    def __init__(self, ranges, stale=2, review=lambda n: "택배X", stuck=()):
+        self.cells = {}
+        for r in ranges:
+            for n in r:
+                self.cells[n] = {"검토": Cell(review(n)), wellife.CHECK_COL: Cell("선택")}
+        self.pages = [{n: self.cells[n] for n in r} for r in ranges]
+        self.page, self.stale, self.stale_left, self.tops, self.stuck = 0, stale, 0, 0, set(stuck)
+        self.header = El(wellife.CHECK_COL)
+        self.header.rect = Rect(0, -10, 10, -1)
+
+    def descendants(self, control_type=None):
+        return [self.header]
+
+    def toggle(self, el):
+        checks = [c[wellife.CHECK_COL] for c in self.cells.values()]
+        if el is self.header:
+            v = "선택안됨" if all(c.v == "선택" for c in checks) else "선택"
+            for c in checks:
+                c.v = v
+            return
+        n = next(n for n, c in self.cells.items() if c[wellife.CHECK_COL] is el)
+        if n not in self.stuck:
+            el.v = "선택안됨" if el.v == "선택" else "선택"
 
     def rows(self):
         if self.stale_left:
@@ -542,27 +587,61 @@ class FakeGrid:
 
     def top(self):
         self.page, self.stale_left = 0, 0
+        self.tops += 1
 
 
 def grid_rr(g):
     return types.SimpleNamespace(
         grid_rows=lambda grid: g.rows(), grid_page_down=lambda h, grid: g.down(),
-        grid_scroll_to_top=lambda h, grid: g.top(), legacy_value=lambda el: el, log=lambda m: None,
+        grid_scroll_to_top=lambda h, grid: g.top(), legacy_value=lambda el: el.v, log=lambda m: None,
+        grid_click_bottom=lambda grid: 100,
         ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
 
 
+def run_marks(g, expected):
+    _saved = wellife.click, wellife.no_popup
+    wellife.click = lambda rr_, ctx, el, what: (g.clicks.append(el), g.toggle(el))
+    wellife.no_popup = lambda *a: None
+    g.clicks = []
+    try:
+        return wellife.mark_rows(grid_rr(g), actx, g, expected, wellife.slip_target)
+    finally:
+        wellife.click, wellife.no_popup = _saved
+
+
 wellife.PAGE_WAIT_SECONDS = 1
-out = wellife.read_rows(grid_rr(FakeGrid((range(1, 25), range(24, 48), range(47, 60)))), actx, None,
-                        ("검토", "전표번호"), 59)
-check("넘긴 직후 앞 페이지가 읽혀도 페이지를 건너뛰지 않고 끝 줄까지 읽는다", sorted(out) == list(range(1, 60)),
-      f"{len(out)}줄")
-out = wellife.read_rows(grid_rr(FakeGrid((range(1, 25), range(1, 25)), stale=0)), actx, None, ("검토", "전표번호"), 24)
+wellife.CHECK_WAIT_SECONDS = 0.3
+g = FakeGrid((range(1, 25), range(24, 48), range(47, 60)), review=lambda n: "" if n % 5 == 0 else "택배X")
+out, bad = run_marks(g, 59)
+check("넘긴 직후 앞 페이지가 읽혀도 페이지를 건너뛰지 않고 끝 줄까지 맞춘다", sorted(out) == list(range(1, 60)) and not bad,
+      f"{len(out)}줄 bad={bad}")
+check("검토 빈 줄만 체크, 나머지는 풀림",
+      all(v == ("선택" if n % 5 == 0 else "선택안됨") for n, v in out.items())
+      and all(c[wellife.CHECK_COL].v == out[n] for n, c in g.cells.items()))
+check("한 번만 내려간다 - 맨 위로 올리기는 처음 한 번 (아래로 → 위로 → 아래로 하지 않음)", g.tops == 1 and g.page == 2,
+      f"맨 위로 {g.tops}번")
+check("전체 체크된 채면 머리글 한 번으로 풀고, 넘길 줄만 하나씩 누른다",
+      g.clicks[0] is g.header and len(g.clicks) == 1 + 11, f"{len(g.clicks)}번 누름")
+out, _ = run_marks(FakeGrid((range(1, 25), range(1, 25)), stale=0), 24)
 check("내렸는데 첫 행이 그대로면 끝으로 본다 (같은 페이지를 끝없이 돌지 않음)", sorted(out) == list(range(1, 25)), f"{len(out)}줄")
-g_none = grid_rr(FakeGrid((range(1, 25),), stale=0))
-g_none.legacy_value = lambda el: None if el == 5 else el
-out = wellife.read_rows(g_none, actx, None, ("검토", "전표번호"), 24)
-check("값을 못 읽은 줄(None)은 적지 않는다 - 대상에서 빠지고 '중간에 못 읽은 행' 으로 남는다", 5 not in out and len(out) == 23,
-      f"{sorted(out)[:6]}")
+g = FakeGrid((range(1, 25),), stale=0, review=lambda n: None if n == 5 else "", stuck=(7,))
+out, bad = run_marks(g, 24)
+check("검토를 못 읽은 줄(None)은 체크하지 않는다", out.get(5) == "선택안됨", str(out.get(5)))
+check("눌러도 안 바뀐 줄은 '못 맞춘 줄' 로 남는다 (4-2 를 누르지 않는 근거)", bad == [7], str(bad))
+g = FakeGrid((range(1, 25),), stale=0)
+g.cells[24][wellife.CHECK_COL].rect = Rect(0, 95, 10, 105)     # 마지막 줄 체크 칸이 아래로 잘림
+out, bad = run_marks(g, 24)
+check("끝 줄이 잘려 못 눌렀으면 '못 맞춘 줄' (전체 체크된 채 넘어가지 않게)", bad == [24], str(bad))
+g = FakeGrid((range(1, 25), range(1, 25)), stale=0)
+_grr = grid_rr
+grid_rr = lambda g_: types.SimpleNamespace(**vars(_grr(g_)), grid_vertical_scrollbar=lambda grid: Nav([El("페이지 아래로")]))
+try:
+    run_marks(g, 24)
+    res = None
+except wellife.Stop as e:
+    res = e.result
+grid_rr = _grr
+check("페이지를 내렸는데 그리드가 그대로인데 '페이지 아래로' 가 있으면 멈춘다 (뒤 줄을 모름)", res == "failed", str(res))
 check("SAP전송전체 이후·송장X·API실패 등 사람이 보는 단추는 단계 표에 없다",
       not {s[1] for s in wellife.SAP_SIMPLE_STAGES + wellife.WMS_STAGES}
       & {"dashBtn_SendSAP_All", "dashBtn_SendSAP_Success", "dashBtn_SendSAP_Fail", "dashBtn_SAP_Complate",
@@ -619,5 +698,244 @@ check("숨은 로그인 잔재 창은 로그인 창으로 보지 않는다 (이�
 rr.win32gui = types.SimpleNamespace(IsWindowVisible=lambda h: True)
 check("보이는 로그인 창이면 로그인 창", rr.wait_login_or_main(1)[0] == "login_window")
 rr.pl.find_login_window, rr.ec.find_main_hwnd, rr.is_main_app_window, rr.win32gui = _saved
+
+print("=== 11. 모드 (리허설 / 실행) 와 실제로 누르기 ===")
+settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
+_, unknown = wellife.load_switches(rr)
+check("Mode 는 모르는 키가 아니다", unknown == [], str(unknown))
+check("Mode '실행' -> 실제로 누름", wellife.load_mode(rr) is True)
+settings({"Wellife": {"Login": "Y"}})
+check("Mode 가 없으면 리허설 (누르지 않는 쪽)", wellife.load_mode(rr) is False)
+settings({"Wellife": {"Login": "Y", "Mode": "run"}})
+try:
+    wellife.load_mode(rr)
+    raised = False
+except RuntimeError:
+    raised = True
+check("Mode 가 '리허설'/'실행' 이 아니면 설정 오류", raised)
+settings({"Wellife": {"Login": "Y", "Mode": "실행", "SalesMode": "리허설"}})
+check("SalesMode 는 Mode 와 따로 읽는다",
+      wellife.load_mode(rr) is True and wellife.load_mode(rr, wellife.SALES_MODE_KEY) is False
+      and wellife.load_switches(rr)[1] == [])
+settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
+check("SalesMode 가 없으면 Mode 를 따르지 않고 리허설", wellife.load_mode(rr, wellife.SALES_MODE_KEY) is False)
+
+rec = Rec()
+rr.status = rec
+got.clear()
+rr.run_modules = fake_run_modules
+settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
+wellife.run_main(rr)
+start = rec.of("start")[0]
+sales_keys = {"wl_order_screen", "wl_order_collect"}
+check("단계 이름 앞에 모드 - ② 는 SalesMode(빠져서 [리허설]), 나머지는 Mode([실행])",
+      all(label.startswith("[리허설] " if k in sales_keys else "[실행] ") for k, label in start[1]), str(start[1][:4]))
+settings({"Wellife": {"Login": "Y", "Mode": "run"}})
+rec = Rec()
+rr.status = rec
+got.clear()
+wellife.run_main(rr)
+fin = rec.of("finish")
+check("Mode 가 잘못되면 아무것도 돌리지 않고 설정 파일 오류", not got and fin and "설정 파일 오류" in fin[-1][1], str(fin))
+rr.run_modules = orig_run_modules
+
+# 팝업 넘기기: [아니오] 가 함께 있어도 [예]
+wellife.QUIET_SECONDS = 0.05
+POP = []
+
+
+def pop_rr(**kw):
+    base = dict(log=lambda m: None, find_popup_buttons=lambda win: list(POP), collect_popup_text=lambda b: "저장하시겠습니까?",
+                find_popup_windows=lambda pid, hwnd: [], grid_overlay_count=lambda h, g: 0,
+                ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+TOP[0] = actx.hwnd               # 팝업 단추 자리의 맨 위 창 = ERPia 메인 창
+acts.clear()
+POP[:] = [El("아니오"), Click("예", on_click=POP.clear)]
+texts = wellife.confirm_popups(pop_rr(), actx, "시험")
+check("팝업은 [아니오] 가 함께 있어도 [예] 를 누르고 문구를 남긴다",
+      acts == [("click", "예")] and texts == ["저장하시겠습니까?"], f"{acts} {texts}")
+acts.clear()
+POP[:] = [Click("확인", on_click=POP.clear)]
+check("[예] 가 없으면 [확인]", wellife.confirm_popups(pop_rr(), actx, "시험") and acts == [("click", "확인")], str(acts))
+acts.clear()
+POP[:] = [El("아니오")]
+try:
+    wellife.confirm_popups(pop_rr(), actx, "시험")
+    res = None
+except wellife.Stop as e:
+    res = e.result
+check("[예]/[확인] 이 없는 팝업은 누르지 않고 멈춘다", res == "stopped" and acts == [], f"{res} {acts}")
+POP[:] = [El("예")]            # 눌러도 안 닫히는 팝업
+_sleep = wellife.time.sleep
+wellife.time.sleep = lambda s: None
+try:
+    wellife.confirm_popups(pop_rr(), actx, "시험")
+    res = None
+except wellife.Stop as e:
+    res = str(e)
+check(f"팝업이 {wellife.MAX_POPUPS}개를 넘으면 멈춘다 (끝없이 누르지 않게)", res and "넘어" in res, str(res))
+wellife.time.sleep = _sleep
+acts.clear()
+POP[:] = [Click("확인", on_click=POP.clear)]
+try:
+    wellife.confirm_popups(pop_rr(collect_popup_text=lambda b: "지정 실패: 납품예정일"), actx, "시험")
+    res = None
+except wellife.Stop as e:
+    res = e.result
+check("실패/오류 문구 팝업은 넘긴 뒤 멈춘다 (지정 실패 뒤 4-2 를 누르지 않게)", res == "stopped" and acts == [("click", "확인")],
+      f"{res} {acts}")
+acts.clear()
+POP[:] = [Click("예", on_click=POP.clear)]
+TOP[0] = 99                      # 다른 프로그램 창이 덮고 있다
+try:
+    wellife.confirm_popups(pop_rr(), actx, "시험")
+    res = None
+except wellife.Stop as e:
+    res = e.result
+check("팝업 단추 자리를 다른 창이 덮고 있으면 누르지 않고 멈춘다", res == "failed" and acts == [], f"{res} {acts}")
+TOP[0] = 1
+POP.clear()
+
+# 화살표 단계: 실행이면 누르고, 리허설이면 마우스만
+_saved_open = wellife.open_stage
+arrow_btn = Click("btn_ThirdSend", on_click=lambda: POP.extend([Click("예", on_click=POP.clear)]))
+
+
+def stage_with(count, enabled=True):
+    arrow_btn.on = enabled
+    wellife.open_stage = lambda rr_, ctx_, form, dash: (count, {"btn_ThirdSend": arrow_btn})
+
+
+TOP[0] = actx.hwnd
+stage = ("wl_sap_so", "dashBtn_Create_SO", "btn_ThirdSend", False, "4-4 SO생성 → SAP 전송")
+srr = pop_rr(status=Rec())
+for live, count, enabled, want_click in ((False, 3, True, False), (True, 3, True, True),
+                                         (True, 0, True, False), (True, 3, False, False)):
+    acts.clear(); moves.clear(); POP.clear()
+    stage_with(count, enabled)
+    note, pressed = wellife.simple_stage(srr, actx, wellife.SAP_FORM, *stage, live=live)
+    clicked = ("click", "btn_ThirdSend") in acts
+    check(f"화살표 live={live} {count}건 단추{'켜짐' if enabled else '꺼짐'} -> {'누름 + 팝업 [예]' if want_click else '안 누름'}",
+          clicked == want_click and pressed == want_click and (not want_click or ("click", "예") in acts),
+          f"{note} {acts}")
+wellife.open_stage = _saved_open
+r = wellife.stage_result(True, [("a", False), ("b", True)])
+check("실제로 누른 단계가 있으면 모듈 결과 done, 사유 앞에 [실행]", r[0] == "done" and r[1].startswith("[실행] "), str(r))
+r = wellife.stage_result(False, [("a", False)])
+check("리허설은 skipped, 사유 앞에 [리허설]", r[0] == "skipped" and r[1].startswith("[리허설] "), str(r))
+
+# [지정▼] 실행: ▼ 로 열고 '선택 항목만' 을 누른다 (그 자리의 맨 위 창이 메뉴일 때만)
+_saved_top = wellife._top_window
+wellife._top_window = lambda rr_, pt: 7 if pt == (130, 40) else actx.hwnd
+acts.clear(); moves.clear(); WIN["open"].clear()
+note, pressed = wellife.press_menu_item(drop_rr(), actx, Split([El("지정"), Arrow()]), wellife.SELECTED_ONLY, "4-1 [지정▼]")
+check("실행: ▼ 를 누르고 '선택 항목만' 을 누른다 (ESC 는 보내지 않는다)",
+      pressed and acts == [("click", "오픈"), ("click", wellife.SELECTED_ONLY)], f"{note} {acts}")
+wellife._top_window = lambda rr_, pt: 99 if pt == (130, 40) else actx.hwnd
+acts.clear(); WIN["open"].clear()
+try:
+    wellife.press_menu_item(drop_rr(), actx, Split([El("지정"), Arrow()]), wellife.SELECTED_ONLY, "4-1 [지정▼]")
+    res = None
+except wellife.Stop as e:
+    res = e.result
+check("항목 자리를 다른 창이 덮고 있으면 누르지 않고 메뉴를 닫은 뒤 멈춘다",
+      res == "failed" and ("click", wellife.SELECTED_ONLY) not in acts and ("keys", "{ESC}") in acts, f"{res} {acts}")
+wellife._top_window = _saved_top
+
+
+# 물류대기: 조회 -> 전체선택 -> 저장
+def hold_rr(rows=1):
+    grid = types.SimpleNamespace(rectangle=lambda: Rect(0, 50, 200, 300),
+                                 descendants=lambda control_type=None: [1] * rows)
+    return pop_rr(status=Rec(), click_subtab=lambda app, hwnd, name: acts.append(("tab", name)),
+                  STOCK_GENERAL_TAB_NAME="일반", get_onscreen_tables=lambda win: [grid],
+                  wait_grid_spinner_gone=lambda *a, **k: True,
+                  select_all_by_header_checkbox=lambda hwnd, g: acts.append(("select_all",)) or True)
+
+
+save_btn = Click("저장(S)", on_click=lambda: POP.extend([El("아니오"), Click("예(Y)", on_click=POP.clear)]))
+hctx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([El("조회(F)"), save_btn]))
+TOP[0] = hctx.hwnd
+_sleep = wellife.time.sleep
+wellife.time.sleep = lambda s: _sleep(min(s, 0.01))
+for live in (False, True):
+    acts.clear(); POP.clear()
+    res = wellife.hold_save(hold_rr(), hctx, live)
+    want = [("tab", "일반"), ("click", "조회(F)"), ("select_all",)] + (
+        [("click", "저장(S)"), ("click", "예(Y)")] if live else [])
+    check(f"물류대기 live={live}: 일반 탭 조회 -> 전체선택 -> {'저장 + 팝업 [예]' if live else '저장은 마우스만'}",
+          acts == want and res[0] == ("done" if live else "skipped") and res[1].startswith(f"[{wellife.mode_tag(live)}]"),
+          f"{res} {acts}")
+acts.clear()
+res = wellife.hold_save(hold_rr(rows=0), hctx, True)
+check("물류대기 0건이면 저장하지 않는다", res[0] == "no_target" and ("click", "저장(S)") not in acts, f"{res} {acts}")
+
+# 주문 수집: 엑셀이 있을 때만 올리고, 자동 수집 [가져오기] 는 누르지 않는다
+xdir = tempfile.mkdtemp(prefix="rpa_wl_xl_")
+uploads = []
+
+
+def order_rr(files):
+    return pop_rr(status=Rec(), excel_upload_dir=lambda: xdir,
+                  collect_upload_files=lambda folder: (files, [], []),
+                  get_onscreen_tables=lambda win: [El("사이트", Rect(0, 50, 200, 100))],
+                  run_excel_upload_step=lambda app, pid, hwnd, grid: uploads.append(grid.name) or (len(files), 0),
+                  find_site_upload_cell=lambda hwnd, grid, code: (El(f"업로드 {code}"), "1"),
+                  IMPORT_BUTTON_NAME="가져오기")
+
+
+octx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([El("가져오기")]))
+for live, files, want_res, want_up in ((True, {}, "skipped", []), (False, {"101": "x"}, "skipped", []),
+                                       (True, {"101": "x"}, "done", ["사이트"])):
+    acts.clear(); uploads.clear()
+    res = wellife.collect_orders(order_rr(files), octx, live)
+    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름",
+          res[0] == want_res and uploads == want_up and ("click", "가져오기") not in acts, f"{res} {uploads} {acts}")
+wellife.time.sleep = _sleep
+TOP[0] = 1
+
+
+# 4-1 → 4-2 순서 (사용자 10-08): 전체 체크 → [지정▼] 선택 항목만 → 검토 빈 줄만 체크 → 화살표
+def run_slip(live, checked=True, pressed=True, marks=None, bad=()):
+    names = ("open_stage", "check_all_rows", "hover_menu_item", "press_menu_item", "controls", "mark_rows", "press_arrow")
+    saved = {n: getattr(wellife, n) for n in names}
+    seq = []
+    wellife.open_stage = lambda *a: (seq.append("조회"), (3, {"gridCtrl_List": "g"}))[1]
+    wellife.check_all_rows = lambda *a: (seq.append("전체 체크"), checked)[1]
+    wellife.hover_menu_item = lambda *a: (seq.append("지정 마우스만"), "")[1]
+    wellife.press_menu_item = lambda *a: (seq.append("지정 누름"), ("", pressed))[1]
+    wellife.controls = lambda *a: (seq.append("다시 잡기"), {"gridCtrl_List": "g2"})[1]
+    wellife.mark_rows = lambda rr_, ctx, grid, n, want: (seq.append(f"줄 맞추기 {grid}"),
+                                                         (marks if marks is not None else {1: "선택", 2: "선택안됨"}, list(bad)))[1]
+    wellife.press_arrow = lambda rr_, ctx, ctl, aid, what, want, n, lv: (seq.append(f"화살표 {aid} want={want} live={lv}"),
+                                                                        ("", lv and want))[1]
+    try:
+        return wellife.sales_slip_stage(types.SimpleNamespace(log=lambda m: None, status=Rec()), actx, live), seq
+    finally:
+        for n, f in saved.items():
+            setattr(wellife, n, f)
+
+
+res, seq = run_slip(True)
+check("실행: 조회 → 전체 체크 → 지정 누름 → 다시 잡고 줄 맞추기 → 화살표(btn_FirstSend)",
+      seq == ["조회", "전체 체크", "지정 누름", "다시 잡기", "줄 맞추기 g2", "화살표 btn_FirstSend want=True live=True"]
+      and res[1] is True, f"{seq} {res}")
+res, seq = run_slip(False)
+check("리허설: 지정·화살표는 마우스만", seq == ["조회", "전체 체크", "지정 마우스만", "줄 맞추기 g",
+                                     "화살표 btn_FirstSend want=True live=False"] and res[1] is False, f"{seq}")
+res, seq = run_slip(True, bad=(2,))
+check("실행: 못 맞춘 줄이 있으면 화살표를 누르지 않는다", seq[-1].endswith("want=False live=True") and "넘기지 않음" in res[0],
+      f"{seq} {res}")
+res, seq = run_slip(True, marks={1: "선택안됨"})
+check("실행: 넘길 줄(검토 빈 칸)이 없으면 화살표를 누르지 않는다", seq[-1].endswith("want=False live=True"), f"{seq}")
+res, seq = run_slip(True, checked=False)
+check("실행: 전체 체크가 안 되면 지정도 화살표도 누르지 않는다", seq == ["조회", "전체 체크"] and res[1] is False, f"{seq}")
+res, seq = run_slip(True, pressed=False)
+check("실행: 지정을 못 눌렀으면 줄 맞추기·화살표로 가지 않는다", seq == ["조회", "전체 체크", "지정 누름"] and res[1] is False,
+      f"{seq}")
 
 finish()
