@@ -91,17 +91,21 @@ check("wellife" not in called and finished and finished[-1][0] == "stopped" and 
       f"main: 정책 켬·섹션 없음 → 보통 루틴 안 돌고 멈춤 ({called}, {finished})")
 dash.set_policy(2, [], wellife=False)
 
-print("=== 4. 웰라이프 업체는 '전체' 줄만 (옛 run·until 줄은 읽을 때 거른다) ===")
+print("=== 4. 웰라이프 업체도 모듈별 줄·반복 시간대 (사용자 10-08: ②③④⑤ 따로, ⑤ 는 반복) ===")
 import datetime as _dt  # noqa: E402
-_rows = [{"at": "09:00", "run": ["Sales"]}, {"at": "13:00", "until": "17:00", "rest_min": 10}]
-_sch = {"enabled": True, "days": list(range(7)), "slots": _rows, "policy": {"limit": None, "off": [], "wellife": True}}
-check(dash.active_slots(_sch) == [{"at": "09:00"}, {"at": "13:00"}], f"wellife 켬: 줄은 {{at}} 만 ({dash.active_slots(_sch)})")
+_rows = [{"at": "09:00", "run": ["Login", "Sales", "Hold", "Sap"]}, {"at": "13:00", "until": "17:00", "rest_min": 10, "run": ["Login", "Wms"]}]
+_sch = {"enabled": True, "days": list(range(7)), "slots": _rows, "policy": {"limit": None, "off": ["Logistics", "Output"], "wellife": True}}
+check(dash.active_slots(_sch) == _rows, f"wellife 켬: 줄 그대로 ({dash.active_slots(_sch)})")
 _noon = _dt.datetime(2026, 10, 7, 14, 0)
-check(dash.open_window(_sch, _noon) is None, "wellife 켬: until 시간대 안이어도 반복 시간대 없음")
-check(_sch["slots"] == _rows and "run" in _rows[0], "저장된 줄은 고쳐 쓰지 않는다")
-_sch["policy"]["wellife"] = False
-check(dash.active_slots(_sch) == _rows, "wellife 끔: 줄 그대로")
-check((dash.open_window(_sch, _noon) or {}).get("at") == "13:00", "wellife 끔: 반복 시간대 그대로")
+check((dash.open_window(_sch, _noon) or {}).get("at") == "13:00", "wellife 켬: 반복 시간대가 열린다")
+check(dash.slot_target(_rows[1], dash.slot_off(_sch)) == ("routine", {"RPA_RUN_MODULES": "Login,Wms"}), "⑤ 반복 회차는 루틴으로 Login,Wms 만")
+check(dash.slot_target(_rows[0], dash.slot_off(_sch)) == ("routine", {"RPA_RUN_MODULES": "Login,Sales,Hold,Sap"}), "②③④ 줄")
+check(dash.slot_target({"at": "10:00", "run": ["Login", "Logistics", "Wms"]}, dash.slot_off(_sch))[1] == {"RPA_RUN_MODULES": "Login,Wms"},
+      "웰라이프 업체 줄의 물류관리는 뺀다 (업체 정책)")
+check(dash.normalize_run(["Wms"]) == ["Login", "Wms"], "⑤ 만 골라도 로그인이 붙는다")
+_sch["policy"] = {"limit": None, "off": [], "wellife": False}
+check(dash.slot_off(_sch) == ["Sap", "Wms"], "보통 업체는 SAP 연동·WMS 이관을 뺀다")
+check(dash.slot_target(_rows[1], dash.slot_off(_sch)) == (None, {}), "보통 업체에 ⑤ 만 있는 줄은 띄우지 않는다")
 
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

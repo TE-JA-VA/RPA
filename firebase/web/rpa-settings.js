@@ -1,7 +1,7 @@
 // RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 프리페어 RPA(사이트 수집: 쇼핑몰 프리셋) · 루틴 RPA(실행 모듈) · 자동 실행 (PC 마다).
 // 값의 기준은 PC 가 올린 live. 적용 = settings 에 쓰고 명령을 넣는다 - PC 가 반영해 live 로 돌려준다
 import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
+import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
 
 export const title = "RPA";
 
@@ -255,14 +255,16 @@ const savedSch = () => live?.schedule || { enabled: false, days: [] };
 function savedSlots() {
   const s = savedSch();
   if (!isV2()) return (s.times || []).map((t) => ({ at: t, run: null }));
-  return (Array.isArray(s.slots) ? s.slots : []).filter((x) => x && typeof x.at === "string").map((x) => wellifySlot({
+  return (Array.isArray(s.slots) ? s.slots : []).filter((x) => x && typeof x.at === "string").map((x) => fitSlot({
     at: x.at, run: Array.isArray(x.run) ? x.run.filter((k) => k !== "Login") : null,
     ...(x.until ? { until: x.until, rest_min: x.rest_min ?? 2 } : {}),
     ...(isV3() ? { days: [...(Array.isArray(x.days) ? x.days : s.days || [])].sort() } : {}),
   }));
 }
-/** 웰라이프 업체는 '전체' 시각만 - 반복·고르기 줄은 시작 시각만 남긴 '전체' 줄로 (에이전트가 그런 줄을 거절한다). 폼 줄과 보내는 값이 같은 곳을 지난다 */
-const wellifySlot = (s) => (isWellife() ? { at: s.at, run: null, ...(s.days ? { days: s.days } : {}) } : s);
+/** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관 (사용자 10-08: ②③④⑤ 따로, ⑤ 는 반복) */
+const runChipList = () => (isWellife() ? WELLIFE_RUN_CHIPS : RUN_CHIPS);
+/** 줄의 모듈은 이 업체 단추에 있는 것만 (업체 종류가 바뀌기 전에 저장한 줄 - 에이전트가 맞지 않는 모듈을 거절한다). 폼 줄과 보내는 값이 같은 곳을 지난다 */
+const fitSlot = (s) => (s.run ? { ...s, run: s.run.filter((k) => runChipList().some(([x]) => x === k)) } : s);
 function resetSchedule() {
   const s = savedSch();
   form.sch = { enabled: !!s.enabled, days: [...(s.days || [])], slots: savedSlots() };
@@ -311,7 +313,7 @@ function dayChips(s) {
 /** 줄의 모듈 단추. 업체가 안 쓰는 모듈은 없다. 운송장은 물류관리를 고르기 전엔 잠김 (실행 모듈 카드와 같은 규칙) */
 function runChips(s) {
   const box = document.createElement("span"); box.className = "seg chips";
-  for (const [k, text] of RUN_CHIPS) {
+  for (const [k, text] of runChipList()) {
     if (k !== "Prepare" && offByCompany(k)) continue;
     const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.dataset.k = k;
     b.setAttribute("aria-pressed", s.run.includes(k));
@@ -354,7 +356,7 @@ function paintTimes() {
       rest.setAttribute("aria-label", "쉬는 시간 (분)");
       rest.onchange = () => { s.rest_min = Number(rest.value); paintScheduleMeta(); };
       row.append(line("모듈", runChips(s)), line("쉬는 시간", rest, span("muted", "분 쉬고 다시")));
-    } else if (isV2() && !isWellife()) {
+    } else if (isV2()) {
       const mode = document.createElement("select"); mode.className = "mode"; mode.setAttribute("aria-label", "돌릴 모듈");
       mode.append(new Option("전체 모듈 실행", "all"), new Option("선택 모듈만 실행", "pick"));
       mode.value = s.run ? "pick" : "all";
@@ -394,7 +396,7 @@ function paintScheduleMeta() {
   $("sch-enabled").disabled = dis;
   for (const el of $("sch-form").querySelectorAll("button, input, select")) if (!el.closest(".chips")) el.disabled = dis;
   $("sch-add").disabled = dis || n >= lim;
-  show($("sch-add-win"), isV2() && !isWellife()); $("sch-add-win").disabled = dis || n >= lim;
+  show($("sch-add-win"), isV2()); $("sch-add-win").disabled = dis || n >= lim;
   $("sch-count").textContent = `${n}/${lim} 사용`;
   const problems = scheduleProblems(), problem = problems.length > 0;
   const full = n >= lim ? (lim ? `자동 실행 슬롯은 최대 ${lim}개까지입니다. 추가를 원하시면 ERPia에 문의해주세요.` : "자동 실행을 쓰려면 ERPia에 문의해주세요.") : "";
@@ -451,7 +453,7 @@ function payloadOf() {
   // 판 3 은 공통 요일 = 줄 요일을 모두 합친 것 (옛 판 에이전트가 읽어도 그 요일만 돈다)
   const base = { enabled: form.sch.enabled, days: [...new Set(isV3() ? form.sch.slots.flatMap((s) => s.days) : form.sch.days)].sort() };
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
-  return { ...base, slots: sortedForm().map(wellifySlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}) })) };
+  return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}) })) };
 }
 async function applySchedule() {
   const payload = payloadOf();

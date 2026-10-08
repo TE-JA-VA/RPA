@@ -685,14 +685,21 @@ with tempfile.TemporaryDirectory() as d:
         check(st.read_wellife_modules()[0]["Hold"] is False and st.read_wellife_modules()[0]["Sales"] is True, "웰라이프 업체도 업체 정책(안 쓰는 모듈)을 따른다")
         check(acts["set_schedule"]({"enabled": False, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]}) == "자동 실행을 껐습니다",
           "웰라이프 업체: 끄는 요청은 고르기 줄이 있어도 된다")
-        for bad in ({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]},
-                    {"enabled": True, "days": [0], "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5}]}):
-            try:
-                acts["set_schedule"](bad); check(False, f"웰라이프 업체 고르기·반복 줄 거절 {bad}")
-            except RuntimeError as e:
-                check("'전체' 시각만" in str(e), f"웰라이프 업체: 고르기·반복 줄 거절 ({e})")
-        check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": None}]}), "웰라이프 업체: '전체' 줄은 된다")
+        check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [
+            {"at": "09:00", "run": ["Sales", "Hold", "Sap"]}, {"at": "10:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]}),
+              "웰라이프 업체: 모듈별 줄과 ⑤ 반복 시간대가 된다")
+        try:
+            acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Logistics"]}]})
+            check(False, "웰라이프 업체 줄에 물류관리 거절")
+        except RuntimeError as e:
+            check("물류관리" in str(e), f"웰라이프 업체: 줄에 물류관리·운송장 거절 ({e})")
+        check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": None}]}), "웰라이프 업체: '전체' 줄도 된다")
         dash.set_policy(2, [], wellife=False)
+        try:
+            acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Wms"]}]})
+            check(False, "보통 업체 줄에 WMS 이관 거절")
+        except RuntimeError as e:
+            check("웰라이프 업체만" in str(e), f"보통 업체: 줄에 SAP 연동·WMS 이관 거절 ({e})")
         check(acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True}) and st.read_routine_modules()[0]["Logistics"] is True,
               "보통 업체는 그대로 Routine 섹션")
     finally:

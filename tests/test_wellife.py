@@ -145,6 +145,51 @@ check("ERPia 가 둘 이상이면 아무것도 누르지 않고 finish(stopped) 
       not got and fin and fin[-1][0] == "stopped" and "2개" in fin[-1][1], str(fin))
 rr.ec.erpia_pids = lambda: []
 
+# 모듈별 실행: 예약 줄이 고른 모듈(RPA_RUN_MODULES) - 섹션의 켬·끔 대신 그 모듈만 (지금 루틴과 같은 규칙)
+fins = []
+
+
+def picked_run(env, done=(), section=ALL_Y, trigger=None):
+    global rec
+    rec, got_ = Rec(), got
+    got_.clear()
+    fins.clear()
+    rec.finish = lambda *a, **k: fins.append((a, k))
+    rec.done_modules = lambda: list(done)
+    rr.status = rec
+    settings(section)
+    os.environ["RPA_RUN_MODULES"] = env
+    if trigger:
+        os.environ["RPA_RUN_TRIGGER"] = trigger
+    try:
+        wellife.run_main(rr)
+    finally:
+        os.environ.pop("RPA_RUN_MODULES", None)
+        os.environ.pop("RPA_RUN_TRIGGER", None)
+
+
+picked_run("Wms")
+check("예약 줄이 ⑤ 만 고르면 로그인 + ⑤ 만 (섹션에서 켠 ②③④ 는 안 돈다)",
+      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": False, "Wms": True}, str(got.get("selected")))
+picked_run("Login,Sap", section={"Wellife": {"Login": "Y"}})
+check("섹션에서 끈 모듈도 예약 줄이 고르면 돈다 (④ 따로 실행)",
+      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": True, "Wms": False}, str(got.get("selected")))
+picked_run("Logistics,Output")
+check("웰라이프에 없는 모듈만 넘어오면 run_modules 를 부르지 않고 '비었습니다' 로 멈춤",
+      not got and fins and fins[-1][0][0] == "stopped" and "비었습니다" in fins[-1][0][1], str(fins))
+picked_run("Wms", section={"Wellife": {"Mode": "실험"}})
+check("예약 줄이 골라도 섹션 값이 틀리면 설정 파일 오류 (모드는 섹션에서 읽는다)",
+      not got and fins and "설정 파일 오류" in fins[-1][0][1], str(fins))
+picked_run("Wms", trigger="repeat")
+check("반복 회차가 처리한 것이 없으면 이력에 남기지 않는다 (record=False)",
+      fins and fins[-1][0][0] == "success" and fins[-1][1].get("record") is False, str(fins))
+picked_run("Wms", done=["login", "wellife_wms"], trigger="repeat")
+check("반복 회차가 실제로 넘긴 것이 있으면 이력에 남긴다",
+      fins and fins[-1][0][0] == "success" and fins[-1][1].get("record", True) is True, str(fins))
+picked_run("Wms", trigger="auto")
+check("반복이 아닌 예약 실행은 처리한 것이 없어도 이력에 남긴다",
+      fins and fins[-1][1].get("record", True) is True, str(fins))
+
 # ---------------------------------------------------------------------------
 print("=== 3. main 갈래 ===")
 orig_run_main = wellife.run_main

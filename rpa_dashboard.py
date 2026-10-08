@@ -514,8 +514,10 @@ def launch_run_all(by):
 #   run 이 없는 줄은 '전체' (사이트 수집 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
 # ---------------------------------------------------------------------------
 ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Sales, Hold, Logistics, Output
-RUN_KEYS = ("Prepare",) + ROUTINE_KEYS                             # 줄의 run 에 쓰는 키. 이 순서로 저장한다
-SLOT_NAMES = {"Prepare": "사이트 수집", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장"}   # 화면 단추와 같은 말
+WELLIFE_ONLY_KEYS = ("Sap", "Wms")                                 # 웰라이프 업체만 (Wellife 섹션 키 - Login·Sales·Hold 는 루틴과 같은 키)
+RUN_KEYS = ("Prepare",) + ROUTINE_KEYS + WELLIFE_ONLY_KEYS         # 줄의 run 에 쓰는 키. 이 순서로 저장한다
+SLOT_NAMES = {"Prepare": "사이트 수집", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장",
+              "Sap": "SAP 연동", "Wms": "WMS 이관"}   # 화면 단추와 같은 말
 REST_MIN_DEFAULT = 2
 REST_MIN_RANGE = (1, 60)   # 반복 시간대 쉬는 시간 (분)
 
@@ -564,7 +566,7 @@ def normalize_run(run):
     if len(set(run)) != len(run):
         raise ValueError("같은 모듈이 두 번 있습니다")
     picked = set(run)
-    if picked & {k for k in ROUTINE_KEYS if k != "Login"}:
+    if picked - {"Prepare", "Login"}:
         picked.add("Login")          # 루틴을 돌리면 로그인은 늘 (실행 모듈 카드처럼 못 끈다)
     else:
         picked.discard("Login")      # 루틴 모듈이 없으면 로그인만 돌릴 까닭이 없다
@@ -657,8 +659,6 @@ def active_slots(sch):
     """도는 줄 (시각 순). 업체 한도(policy.limit - 에이전트가 적는다)를 넘는 줄은 뺀다: 시각 순으로 앞 N줄만 (설계 5-3).
     한도를 모르면 (에이전트가 한 번도 못 읽었으면) 자르지 않는다 - PC 상한 12 는 저장할 때 지킨다."""
     out = sorted_slots(sch)
-    if (sch.get("policy") or {}).get("wellife") is True:     # 웰라이프 업체는 '전체' 줄만 - 웰라이프 순서는 run·반복을 안 따른다 (옛 줄은 지우지 않고 읽을 때만 거른다)
-        out = [{"at": s["at"], **({"days": s["days"]} if s.get("days") else {})} for s in out]
     limit = (sch.get("policy") or {}).get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 0:
         return out[:limit]
@@ -725,7 +725,7 @@ def slot_target(slot, off=()):
     if run is None:
         return "all", {}
     keys = [k for k in run if k not in set(off)]
-    routine = [k for k in keys if k in ROUTINE_KEYS]
+    routine = [k for k in keys if k in ROUTINE_KEYS + WELLIFE_ONLY_KEYS]
     if "Output" in routine and "Logistics" not in routine:
         routine.remove("Output")            # 물류관리가 빠지면 출력도 (루틴과 같은 규칙)
     if not set(routine) - {"Login"}:
@@ -736,10 +736,16 @@ def slot_target(slot, off=()):
     return ("all" if prepare else "routine"), {"RPA_RUN_MODULES": ",".join(routine)}
 
 
+def slot_off(sch):
+    """줄에서 뺄 모듈 - 업체가 안 쓰는 모듈(policy.off, 웰라이프 업체는 물류관리·운송장 포함)과,
+    웰라이프 업체가 아니면 웰라이프 모듈(SAP 연동·WMS 이관)."""
+    policy = sch.get("policy") or {}
+    return list(policy.get("off") or []) + ([] if policy.get("wellife") is True else list(WELLIFE_ONLY_KEYS))
+
+
 def launch_slot(slot, by="auto", trigger="auto"):
     """예약 줄 하나를 띄운다. 업체가 안 쓰는 모듈만 남으면 RuntimeError (사람에게 보일 글 - 예약 칸의 까닭이 된다)."""
-    off = (st.read_settings()["schedule"].get("policy") or {}).get("off") or []
-    target, env = slot_target(slot, off)
+    target, env = slot_target(slot, slot_off(st.read_settings()["schedule"]))
     if target is None:
         raise RuntimeError("업체가 쓰지 않는 모듈만 남아 건너뜁니다")
     return launch(target, by, dict(env, RPA_RUN_TRIGGER=trigger))
@@ -980,7 +986,7 @@ class Scheduler(threading.Thread):
         sch0 = st.read_settings()["schedule"]
         win = window_at(sch0, (sch0.get("repeat") or {}).get("at"), now)
         # 사이트 수집만 고른 반복 회차는 프리페어가 돈다 - 그 상태로 센다 (사용자 2026-10-08: 반복에도 사이트 수집)
-        program = "prepare" if win and slot_target(win, (sch0.get("policy") or {}).get("off") or [])[0] == "prepare" else "routine"
+        program = "prepare" if win and slot_target(win, slot_off(sch0))[0] == "prepare" else "routine"
         v = st.read_json(st.status_path(program)) or {}
         if v.get("state") == "running":
             return
