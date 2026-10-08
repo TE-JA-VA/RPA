@@ -45,7 +45,7 @@ const HTML = `
           <div class="msg warn hide" id="sch-warn">너무 잦은 사이트 수집은 2차인증을 요구할 수도 있습니다.</div>
           <div class="msg good hide" id="sch-full"></div>
         </div>
-        <div class="msg" id="sch-old" hidden>이 PC 는 새 판을 깔아야 시각별 모듈·반복을 쓸 수 있습니다</div>
+        <div class="msg" id="sch-old" hidden>이 PC 를 새 버전으로 업데이트하면 시각별 모듈·반복을 쓸 수 있습니다</div>
         <div class="msg" id="sch-info"></div>
         <button class="apply" id="sch-apply" disabled>적용</button>
       </div>
@@ -381,10 +381,11 @@ function scheduleProblems() {
       if (!x.until && w.at <= x.at && x.at < w.until) out.push(`${x.at} 은 반복 시간대(${w.at}~${w.until}) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오.`);
     });
   });
-  if (slots.some((a, i) => slots.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) out.push("같은 시각이 두 번 있습니다");
+  const plain = slots.filter((s) => s.until === undefined);   // 반복 시간대가 끼면 위의 '겹칩니다' 가 이미 말한다
+  if (plain.some((a, i) => plain.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) out.push("같은 시각이 두 번 있습니다");
   if (slots.some((s) => s.until === undefined && s.run && !s.run.length)) out.push("'선택 모듈만 실행' 줄에 모듈을 하나 이상 고르세요");   // 반복 줄은 위에서 따로
   if (form.sch.enabled && !isV3() && !form.sch.days.length) out.push("요일을 하나 이상 고르세요");
-  if (form.sch.enabled && !slots.length) out.push("시간을 하나 이상 넣으세요");
+  if (form.sch.enabled && !slots.length && lim) out.push("시간을 하나 이상 넣으세요");   // 슬롯 0개 업체는 초록 'ERPia 문의' 만
   return [...new Set(out)];
 }
 function paintScheduleMeta() {
@@ -415,15 +416,21 @@ function paintScheduleMeta() {
     info.push(`다음 ${when(s.next_run_at)}${names ? ` (${names})` : ""}`);
   }
   if (s.last_launch_at) info.push(`마지막 ${when(s.last_launch_at)}${s.last_launch_by === "auto" ? " (자동)" : ""}`);
-  if (s.last_error) info.push(`오류: ${s.last_error}`);
-  let cls = s.last_error ? " bad" : "";
+  // PC 의 토큰 거절 글은 아래 토큰 글과 같은 말이고, 충전한 뒤엔 지난 일이다 - 토큰을 아는 PC 면 보이지 않는다
+  const t = live?.tokens, knowTokens = typeof t?.balance === "number";
+  const tokenErr = (x) => knowTokens && /^(\d\d:\d\d )?토큰이 없습니다/.test(x || "");
+  const err = s.last_error && !tokenErr(s.last_error) ? s.last_error : null;
+  if (err) info.push(`오류: ${err}`);
+  let cls = err ? " bad" : "";
   const rep = s.repeat;                                  // 반복 상태 (PC 가 적는다) - 오늘 것만
   if (rep && rep.date === isoDay(new Date())) {
     info.push(`오늘 반복 ${rep.runs || 0}회 · 처리 ${rep.done || 0}회`);
-    if (rep.stopped) { info.push(rep.stopped.reason || "반복을 멈췄습니다"); cls = " bad"; }
+    if (rep.stopped) {
+      const why = rep.stopped.reason || "반복을 멈췄습니다";
+      info.push(tokenErr(why) && t.balance <= 0 ? "반복을 멈췄습니다" : why); cls = " bad";
+    }
   }
-  const t = live?.tokens;                                // 예약 실행은 지켜볼 사람이 없다 - 토큰이 모자라면 여기에도 (토큰 2부)
-  if (s.enabled && typeof t?.balance === "number") {
+  if (s.enabled && knowTokens) {                         // 예약 실행은 지켜볼 사람이 없다 - 토큰이 모자라면 여기에도 (토큰 2부)
     const need = t.cost?.next ?? t.cost?.all ?? 0;       // 다음 줄이 '고르기' 면 그 줄의 토큰 (에이전트가 cost.next)
     if (t.balance <= 0) { info.push("토큰이 없어 예약 실행을 건너뜁니다"); cls = " bad"; }
     else if (t.balance < need) { info.push(`다음 예약 실행에 ${need}개 · 남은 ${t.balance}개 - 마이너스로 떨어질 수 있습니다`); cls = cls || " warn"; }

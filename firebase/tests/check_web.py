@@ -703,10 +703,16 @@ with sync_playwright() as pw:
           and "bad" in page.get_attribute("#token-line", "class")
           and all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")) and not page.is_disabled("#stop-erpia"),
           "0 이하면 빨간 글, 실행 단추 셋 잠김 (ERPia 종료는 그대로)")
+    db_patch(f"{LIVE}/schedule", {"last_error": "토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요"})   # PC 의 예약기가 토큰 0 으로 거절했다
     goto(page, "settings")
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('토큰이 없어')", timeout=10000)
     check("토큰이 없어 예약 실행을 건너뜁니다" in page.text_content("#sch-info") and "bad" in page.get_attribute("#sch-info", "class"),
           f"예약 칸: 건너뛴다고 빨간 글 ({page.text_content('#sch-info')})")
+    check("오류: 토큰이 없습니다" not in page.text_content("#sch-info"), f"PC 의 토큰 오류는 같은 말이라 한 번만 ({page.text_content('#sch-info')})")
+    db_patch(LIVE, {"tokens": {"balance": 50, "cost": cost}})
+    page.wait_for_function("!(document.getElementById('sch-info')?.textContent || '').includes('토큰이 없어')", timeout=10000)
+    check("토큰이 없습니다" not in page.text_content("#sch-info"), f"충전하면 지난 토큰 오류도 사라진다 ({page.text_content('#sch-info')})")
+    db_patch(f"{LIVE}/schedule", {"last_error": None})
     goto(page, "rpa")
     db_patch(LIVE, {"tokens": None})                   # PATCH 의 null 이 그 칸을 지운다 (call 은 None 이면 본문 없이 보낸다)
     page.wait_for_function("document.getElementById('token-line')?.hidden === true", timeout=10000)
@@ -774,6 +780,7 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"days": [0, 1, 2, 3, 4, 5, 6], "times": ["09:05", "13:30"]})
     page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30'", timeout=10000)
     check(page.is_disabled("#sch-apply"), "PC 값이 돌아오면 요약 갱신·적용 비활성")
+    check(page.text_content("#sch-old") == "이 PC 를 새 버전으로 업데이트하면 시각별 모듈·반복을 쓸 수 있습니다", "옛 버전 PC 안내는 '버전' 으로")
     check(page.is_visible("#sch-old") and page.locator("#sch-times select").count() == 0,
           "옛 판 PC (live.schedule 에 version 없음): 시각만, 새 판 안내가 보인다 (Review Focus 4)")
     # 새 판 PC (2부): 줄마다 전체/고르기
@@ -1043,6 +1050,10 @@ with sync_playwright() as pw:
     check("같은 시각이 두 번 있습니다" in lines and "반복 줄에 모듈을 하나 이상 고르세요" in lines and page.is_disabled("#sch-apply"),
           f"막는 까닭은 하나씩이 아니라 모두, 한 줄에 하나씩 (사용자 2026-10-08) ({lines})")
     check(len(lines) == 2, f"반복 줄의 모듈 미선택은 한 번만 ('선택 모듈만 실행' 줄 글과 겹치지 않는다) ({lines})")
+    el = page.query_selector(f"{row2} input[type=time]"); el.fill("10:00"); el.dispatch_event("change")
+    lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
+    check(any("10:00 은 반복 시간대(10:00~11:00) 와 겹칩니다" in x for x in lines) and "같은 시각이 두 번 있습니다" not in lines,
+          f"반복 시간대와 같은 시각에 시작하면 '겹칩니다' 하나만 ('같은 시각' 은 시각 줄끼리) ({lines})")
     page.click(f"{row3} button.del")
     el = page.query_selector(f"{row2} input[type=time]"); el.fill("09:00"); el.dispatch_event("change")
     check("같은 시각" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "요일이 겹치는 같은 시각은 막는다")
@@ -1064,6 +1075,12 @@ with sync_playwright() as pw:
                                   "next_run_at": "2026-10-11T09:00:00", "next_slot": "09:00"})   # 2026-10-11 은 일요일
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('다음')", timeout=10000)
     check("(물류관리)" in page.text_content("#sch-info"), f"다음 실행 글은 그날 요일 줄의 모듈 ({page.text_content('#sch-info')})")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 0}})
+    db_patch(f"{LIVE}/schedule", {"slots": None})   # PC 에 줄이 없다 (화면에서 지우면 '적용 안 한 변경' 이 남아 다음 절이 막힌다)
+    page.wait_for_function("document.getElementById('sch-count')?.textContent === '0/0 사용'", timeout=10000)
+    lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
+    check("시간을 하나 이상 넣으세요" not in lines and page.text_content("#sch-full") == "자동 실행을 쓰려면 ERPia에 문의해주세요." and page.is_visible("#sch-full"),
+          f"슬롯이 0개인 업체는 'ERPia 문의' 만 (시각을 넣으라는 글 없음) ({lines})")
     db_patch(f"{LIVE}/schedule", {"version": 2, "days": [0, 1, 2, 3, 4, 5, 6], "slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}]})
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
     goto(page, "settings")
