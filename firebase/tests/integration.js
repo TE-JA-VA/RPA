@@ -41,6 +41,8 @@ console.log("시험 계정 생성");
 const work = mkdtempSync(join(tmpdir(), "rpa-agent-it-"));
 const cfgPath = join(work, "agent_config.json");
 const queuePath = join(work, "queue.jsonl");
+// 위치 파일이 없으면 에이전트는 그 전 기록을 안 올린다 (2026-10-12) - 이 계정이 처음부터 올리던 PC 로 둔다
+writeFileSync(join(work, "history_pos.txt"), "0 c_demo/pc_office");
 // launch() 가 settings.json 에 마지막 실행 시각을 쓰므로, 저장소의 status_sim 을 직접 쓰지 않고 복사본을 쓴다
 const statusDir = join(work, "status_sim");
 cpSync(STATUS_SIM, statusDir, { recursive: true });

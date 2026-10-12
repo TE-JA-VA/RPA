@@ -285,17 +285,25 @@ def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH, prices=Non
     """history.jsonl 에서 아직 안 올린 줄을 Firestore 로. 읽은 바이트 위치를 파일에 남긴다.
 
     파일이 줄었으면(회전) 처음부터 다시 본다 - 같은 run_id 는 Firestore 가 409 로 거절하니 겹쳐도 안전하다.
+    위치 파일에는 어느 업체/PC 의 위치인지도 적는다. 없거나 다른 계정 것이면 그 전 기록은 올리지 않고 끝에서 시작한다
+    (2026-10-12 사용자: PC 가 업체를 옮기면 옛 업체의 기록·토큰이 새 업체로 가던 것). 옛 버전의 숫자만 적힌 파일은 지금 계정 것.
     prices 는 값표를 돌려주는 함수 (Prices.get) - 올릴 줄이 있을 때만 부른다.
     """
     try:
         size = os.path.getsize(hist_path)
     except OSError:
         return 0
+    account = f"{cfg['cid']}/{cfg['pc_id']}"
     try:
         with open(pos_path, encoding="utf-8") as f:
-            pos = int(f.read().strip() or 0)
+            got = f.read().split()
+        pos = int(got[0]) if got else 0
+        mine = len(got) < 2 or got[1] == account
     except Exception:
-        pos = 0
+        pos, mine = 0, False
+    if not mine:
+        _write_pos(pos_path, size, account)
+        return 0
     if pos > size:
         pos = 0
     if pos == size:
@@ -319,13 +327,16 @@ def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH, prices=Non
                 table = prices() if prices else PRICES
             up.push_run(run_doc(rec, cfg["cid"], cfg["pc_id"], table))
             sent += 1
-    new_pos = size - len(tail)
+    _write_pos(pos_path, size - len(tail), account)
+    return sent
+
+
+def _write_pos(pos_path, pos, account):
     try:
         with open(pos_path, "w", encoding="utf-8") as f:
-            f.write(str(new_pos))
+            f.write(f"{pos} {account}")
     except Exception:
         pass
-    return sent
 
 
 class Uploader:

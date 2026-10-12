@@ -282,6 +282,8 @@ with tempfile.TemporaryDirectory() as d:
 
     hist = os.path.join(d, "history.jsonl")
     pos = os.path.join(d, "history_pos.txt")
+    open(hist, "w", encoding="utf-8").close()
+    ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
     with open(hist, "w", encoding="utf-8") as f:
         f.write(json.dumps(dict(rec, run_id="h1")) + "\n" + json.dumps(dict(rec, run_id="h2")) + "\n" + '{"run_id": "h3", "st')
     n = ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
@@ -291,6 +293,34 @@ with tempfile.TemporaryDirectory() as d:
     n = ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
     check(n == 1 and fcl.docs[-1][1] == "h3", "이어서 쓴 줄을 다음에 올린다")
     check(ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos) == 0, "바뀐 게 없으면 안 올린다")
+
+print("기록 올리기: 다른 업체·PC 의 기록은 안 올린다 (2026-10-12 사용자 - PC 가 업체를 옮기면 옛 기록이 새 업체로 가던 것)")
+with tempfile.TemporaryDirectory() as d:
+    fcl = FsClient()
+    upl = ag.Uploader(fcl, "c_new", "pc_new", os.path.join(d, "q.jsonl"))
+    hist, pos = os.path.join(d, "history.jsonl"), os.path.join(d, "history_pos.txt")
+    new = {"cid": "c_new", "pc_id": "pc_new"}
+    with open(hist, "w", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="old1")) + "\n")
+    check(ag.upload_new_history(hist, upl, new, pos) == 0 and not fcl.docs, "위치 파일이 없으면 (처음 띄운 에이전트) 그 전 기록은 안 올린다")
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="new1")) + "\n")
+    check(ag.upload_new_history(hist, upl, new, pos) == 1 and fcl.docs[-1][1] == "new1", "그 뒤에 쓴 기록은 올린다")
+
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="unsent")) + "\n")       # 옛 계정이 못 올리고 남긴 줄
+    other = {"cid": "c_other", "pc_id": "pc_x"}
+    upl2 = ag.Uploader(fcl, "c_other", "pc_x", os.path.join(d, "q2.jsonl"))
+    n0 = len(fcl.docs)
+    check(ag.upload_new_history(hist, upl2, other, pos) == 0 and len(fcl.docs) == n0,
+          "위치 파일이 다른 업체·PC 것이면 (계정을 옮김) 남은 옛 기록도 안 올린다")
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="other1")) + "\n")
+    check(ag.upload_new_history(hist, upl2, other, pos) == 1 and fcl.docs[-1][1] == "other1", "옮긴 뒤 기록은 새 계정으로 올린다")
+
+    with open(pos, "w", encoding="utf-8") as f:                       # 옛 버전의 위치 파일 - 숫자만
+        f.write("0")
+    check(ag.upload_new_history(hist, upl2, other, pos) == 4, "옛 위치 파일(숫자만)은 지금 계정 것으로 보고 그 자리부터 올린다 (업데이트한 PC)")
 
 print("토큰: 실행 기록 한 건이 쓴 것·쓴 토큰 (2026-10-07 바꿈 - '완료' 만 쓰고 대상 없음·실패·건너뜀·중단은 안 쓴다)")
 mods = [{"key": "login", "state": "done"}, {"key": "sales", "state": "done"}, {"key": "hold", "state": "no_target"},
