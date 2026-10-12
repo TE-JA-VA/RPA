@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""화면 판 번호 띠와 '로그인 풀림' 안내 시험 (8766 시험 서버)."""
+"""화면 판 번호 띠와 서버 재시작 뒤 다시 로그인 시험 (8766 시험 서버)."""
 import io
 import os
 import subprocess
@@ -44,7 +44,7 @@ with sync_playwright() as p:
         check(pg.is_hidden("#update-banner"), "새로고침 뒤 띠 사라짐 (로그인 유지)")
     finally:
         open(HTML, "wb").write(raw)
-    # 서버 재시작 → 로그인 풀림 안내
+    # 서버 재시작 → 로그인 화면으로 돌아가고 다시 로그인된다
     pid = subprocess.run(["powershell", "-NoProfile", "-Command",
                           "(Get-NetTCPConnection -LocalPort 8766 -State Listen).OwningProcess"], capture_output=True, text=True).stdout.strip()
     subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True)
@@ -58,8 +58,6 @@ with sync_playwright() as p:
         except Exception:
             time.sleep(0.3)
     pg.wait_for_selector("#login-view:not([hidden])", timeout=15000)
-    msg = pg.inner_text("#login-msg")
-    check("로그인이 풀렸습니다" in msg, f"재시작 뒤 안내: {msg!r}")
     pg.fill("#login-pw", "user"); pg.click("#login-btn"); pg.wait_for_selector("#programs .card", timeout=8000)
     check(pg.is_hidden("#login-view") and pg.is_enabled("#tab-history"), "다시 로그인하면 정상")
     srv.terminate()

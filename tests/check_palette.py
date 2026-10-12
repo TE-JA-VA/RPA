@@ -49,17 +49,17 @@ with sync_playwright() as p:
     pg.reload(); pg.wait_for_selector("#programs .card"); pg.wait_for_timeout(500)
     check(prepare_var() == "#dc322f", "새로고침 뒤에도 유지")
 
-    # 이력·환경설정에도 반영
-    pg.goto(BASE + "/#history"); pg.wait_for_selector("#hist-body tr"); pg.wait_for_timeout(300)
+    # 이력에도 반영 (시험 기록은 2026-09 것이라 기본 '최근 7일' 이면 표가 빈다 - '전체' 로)
+    pg.evaluate("localStorage.setItem('rpa.hist.period', 'all')")
+    pg.goto(BASE + "/#history"); pg.reload(); pg.wait_for_selector("#hist-body tr"); pg.wait_for_timeout(300)
     k = pg.evaluate("getComputedStyle(document.querySelector('#hist-body .hue-prepare .key')).backgroundColor")
     check(k == "rgb(220, 50, 47)", f"이력 표 색 반영 {k}")
-    pg.goto(BASE + "/#settings"); pg.wait_for_selector("#prog-colors .key-btn"); pg.wait_for_timeout(300)
-    check("빨강" in pg.inner_text("#prog-colors"), "환경설정 화면 카드에 현재 색 이름")
-    pg.click("#prog-colors .key-btn >> nth=0"); pg.wait_for_selector(".popover")
+    # 되돌리기는 현황 카드의 팔레트에서 (환경설정의 '프로그램 색' 항목은 없앴다 - check_settings_trim)
+    pg.goto(BASE + "/#now"); pg.wait_for_selector("article.hue-prepare .key-btn")
+    pg.click("article.hue-prepare .key-btn"); pg.wait_for_selector(".popover")
     pg.click(".popover button:has-text('기본색으로')"); pg.wait_for_timeout(200)
     check(prepare_var() == "#268bd2" and pg.evaluate("localStorage.getItem('rpa.color.prepare')") is None, "기본색으로 되돌림")
-    pg.click(".popover button:has-text('닫기')"); pg.wait_for_timeout(100)
-    pg.screenshot(path=os.path.join(OUT, "v4_settings_look.png"), full_page=True)
+    pg.keyboard.press("Escape"); pg.wait_for_timeout(100)
 
     # 휴대폰 폭에서 팔레트가 화면 안에 들어오는지
     m = b.new_page(viewport={"width": 400, "height": 820})

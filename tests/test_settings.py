@@ -314,8 +314,8 @@ finally:
     urllib.request._opener = None
 
 print("=== 7. 작업 XML ===")
-prog = r"C:\Program Files\AFTER MARKET\RPA"
-ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+prog = os.path.join(tempfile.mkdtemp(), "AFTER MARKET", "RPA")    # 없는 자리 - 진짜 설치본이 있는 PC 에서도 '사본 없음' 갈래
+ns ={"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 x = ET.fromstring(rs.task_xml("PC\\me & you", prog).encode("utf-16"))
 
 

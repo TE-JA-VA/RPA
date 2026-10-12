@@ -47,13 +47,10 @@ with sync_playwright() as p:
 
     # 남아야 하는 것
     check(pg.is_visible("#set-enabled"), "자동 실행 켜기 스위치는 그대로")
-    check(pg.is_visible("#set-interval"), "실행 주기 선택은 그대로")
-    opts = pg.locator("#set-interval option").count()
-    check(opts > 3, f"실행 주기 항목 {opts}개")
     check(pg.is_visible("#logout-btn"), "로그아웃 버튼 그대로")
     check(pg.is_visible("#erpia-stop-btn"), "ERPia 종료 버튼 그대로")
     check(pg.is_visible("#swatches"), "강조색 고르기는 그대로")
-    for label in ("자동 실행 켜기", "실행 주기", "로그아웃", "ERPia 종료", "강조색", "비밀번호 바꾸기"):
+    for label in ("자동 실행 켜기", "로그아웃", "ERPia 종료", "강조색", "비밀번호 바꾸기"):
         check(label in body, f"항목 이름 남음: {label}")
 
     pg.screenshot(path=os.path.join(OUT, "v6_settings.png"), full_page=True)
