@@ -482,7 +482,31 @@ with open(R["agent_config"], "w", encoding="utf-8") as f:
 check("기계 계정 비밀번호가 안 풀리면 판 올림이 아니다 (창을 띄운다)", not rs.configured(R))
 rec = Recorder()
 rs.finish_upgrade(P, run=rec, running=Running(False), user="PC\\me")
-check("판 올림: 작업 다시 등록 → 켜기", rec.verbs() == ["/Create", "/End", "/Run"], rec.verbs())
+check("판 올림: 파일 권한 되돌리기 → 작업 다시 등록 → 켜기",
+      rec.calls[0] == ["icacls", os.path.join(P["program_dir"], "*"), "/reset", "/T", "/C", "/Q"]
+      and rec.verbs()[1:] == ["/Create", "/End", "/Run"], rec.calls)
+
+
+def acl(path):
+    import subprocess
+    out = subprocess.run(["icacls", path], capture_output=True).stdout.decode("mbcs", "replace")
+    return sorted(l.replace(path, "").strip() for l in out.splitlines() if l.strip() and "파일을 처리" not in l and "Successfully" not in l)
+
+
+# 업데이트는 관리자만 여는 ProgramData 에서 파일을 옮겨 온다 - 옮긴 파일이 그 권한을 들고 와 사용자가 옵저버를 못 켰다 (2026-10-12)
+import subprocess  # noqa: E402
+locked, prog = os.path.join(TMP, "acl_locked"), os.path.join(TMP, "acl_prog", "sub")
+os.makedirs(locked); os.makedirs(prog)
+subprocess.run(["icacls", locked, "/inheritance:r", "/grant:r", os.environ["USERDOMAIN"] + "\\" + os.environ["USERNAME"] + ":(OI)(CI)F"],
+               capture_output=True)
+open(os.path.join(locked, "moved.exe"), "w").close()
+open(os.path.join(prog, "fresh.txt"), "w").close()
+os.replace(os.path.join(locked, "moved.exe"), os.path.join(prog, "moved.exe"))
+before = acl(os.path.join(prog, "moved.exe"))
+rs.inherit_acl(os.path.dirname(prog))
+check("옮겨 온 파일의 권한을 프로그램 폴더 것으로 되돌린다 (하위 폴더까지)",
+      before != acl(os.path.join(prog, "fresh.txt")) and acl(os.path.join(prog, "moved.exe")) == acl(os.path.join(prog, "fresh.txt")),
+      (before, acl(os.path.join(prog, "moved.exe")), acl(os.path.join(prog, "fresh.txt"))))
 
 print("=== 13-2. 이름: '기계 계정' → '에이전트 계정' (2026-10-06 사용자) ===")
 PC_SIDE = [ROOT / "rpa_settings.py", ROOT / "firebase" / "agent" / "agent.py", ROOT / "firebase" / "agent" / "secret.py",

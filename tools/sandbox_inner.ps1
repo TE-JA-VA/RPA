@@ -220,6 +220,8 @@ if (Test-Path "$T\site") {
   Check "판 B 로 업데이트 → done" ($s -eq "done") "$s $(Get-Content "$PD\update\state.json" -Raw)"
   Check "판 점검 ok · 판 B" ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $B)
   Check "제거 목록의 판 번호도 B" ((Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}_is1").DisplayVersion -eq $B)
+  $uacl = (icacls "$App\rpa_dashboard.py") -join " "      # 바뀐 파일이 ProgramData 권한(관리자 전용)을 들고 와 옵저버가 안 열렸다 (2026-10-12)
+  Check "업데이트로 바뀐 파일도 사용자가 읽고 실행할 수 있다 (Users)" ($uacl -match "Users") $uacl
   # 도우미는 done 을 적고 뒷정리를 한 뒤에야 작업을 지운다 - 지워질 때까지 30초 기다린다
   for ($i = 0; $i -lt 30; $i++) { schtasks /Query /TN "\AFTER MARKET\RPA Update" *> $null; if ($LASTEXITCODE -ne 0) { break }; Start-Sleep 1 }
   Check "도우미 작업은 끝나면 지운다" ($LASTEXITCODE -ne 0)

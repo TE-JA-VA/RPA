@@ -493,8 +493,16 @@ def configured(paths):
         return False
 
 
+def inherit_acl(program_dir, run=run_quiet):
+    """프로그램 폴더 파일 권한을 폴더 것으로 되돌린다. 업데이트 도우미는 관리자만 여는 ProgramData 에서 파일을 옮겨 와서
+    바뀐 파일만 관리자 전용이 되어 사용자가 옵저버를 못 켰다 (2026-10-12). 도우미는 옛 판 것이 돌지만 이것은 새 판 것이
+    돈다 - 폴더 전체라 그 전에 막힌 파일도 같이 낫는다."""
+    return run(["icacls", os.path.join(program_dir, "*"), "/reset", "/T", "/C", "/Q"], timeout=300)
+
+
 def finish_upgrade(paths, run=run_quiet, running=None, user=None):
-    """판 올림 (--after-install 인데 설정이 이미 있다): 창 없이 작업을 다시 등록하고 에이전트를 켠다."""
+    """판 올림 (--after-install 인데 설정이 이미 있다): 파일 권한을 되돌리고 창 없이 작업을 다시 등록하고 에이전트를 켠다."""
+    inherit_acl(paths["program_dir"], run)
     register_task(task_xml(user or process_user(), paths["program_dir"]), paths["config_dir"], run)
     restart_agent(run, running)
 
