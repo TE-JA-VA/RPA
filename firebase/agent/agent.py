@@ -185,7 +185,7 @@ def local_plan():
         sites = (st.read_user_config() or {}).get(st.SITES_SECTION) or {}
     except Exception:
         sites = {}
-    return mods, sum(1 for s in sites.values() if isinstance(s, dict) and str(s.get("Stts")).strip() == "0")
+    return mods, sum(1 for k, s in sites.items() if st.is_preset_site(k) and isinstance(s, dict) and str(s.get("Stts")).strip() == "0")
 
 
 def next_plan():

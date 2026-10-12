@@ -9,9 +9,9 @@ ERPia 루틴(run_routine.py), 문자 감시(sms_watch.py) 와 별개로 도는 �
 사용법
     python web_runner.py --check            설정 파일 점검 (비밀번호는 가림)
     python web_runner.py --selftest         내장 테스트 폼으로 동작 확인 (사이트 불필요)
-    python web_runner.py --site SITE1       한 사이트만 실행
+    python web_runner.py --site PRESET1      한 사이트만 실행
     python web_runner.py --all              Stts=0 인 사이트를 모두 실행
-    python web_runner.py --site SITE1 --headless   창을 띄우지 않고 실행
+    python web_runner.py --site PRESET1 --headless   창을 띄우지 않고 실행
 
 새 작업을 추가하려면
     아래 ACTIONS 에 이름과 함수를 등록하고, 설정 파일의 Action 에 그 이름을 적는다.
@@ -178,7 +178,7 @@ def load_config(path=None):
         raise RuntimeError(f"사이트 설정이 없습니다: {path or status.user_config_path()} 의 '{status.SITES_SECTION}'")
     out = {}
     for name, site in sites.items():
-        if name.startswith("_"):      # '_' 로 시작하는 키는 주석이므로 걷어낸다
+        if not status.is_preset_site(name):   # 프리셋 칸만 - 주석('_')과 옛 SITEn(설치 틀의 빈 예시가 켜진 채 남아 실행을 막았다)은 안 본다
             continue
         if isinstance(site, dict) and site.get("PW"):
             site = dict(site, PW=status.unseal(site["PW"]))
@@ -1193,9 +1193,8 @@ def cmd_check():
         log(f"  읽기 실패: {e}")
         return 1
 
-    if not cfg:
-        log("  등록된 사이트가 없습니다.")
-        return 1
+    if not cfg:   # 새로 깐 PC 는 프리셋이 없다 - 오류가 아니다 (빌드가 끝 줄로 점검한다)
+        log("  프리셋이 아직 없습니다 (옵저버에서 쇼핑몰 프리셋을 저장하면 생깁니다).")
 
     all_problems = []
     for name, site in cfg.items():

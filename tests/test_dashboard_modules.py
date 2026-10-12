@@ -290,8 +290,8 @@ cred_old = os.path.join(mig, "ERPIA_AI.txt")
 web_old = os.path.join(mig, "WebManageConfig.json")
 json.dump(BASE + [{"Routine": [{"Login": "Y"}, {"Hold": "N"}]}], open(cred_old, "w", encoding="utf-8"), ensure_ascii=False)
 json.dump({"_주석": ["Stts 0 실행, 9 보관"],
-           "SITE1": {"URL": "https://a.example.com", "ID": "u1", "PW": SITE_PW, "Action": ["login"], "Stts": 0},
-           "SITE2": {"URL": "https://b.example.com", "ID": "u2", "PW": "둘째-비번", "Action": "login", "Stts": 9}},
+           "PRESET1": {"URL": "https://a.example.com", "ID": "u1", "PW": SITE_PW, "Action": ["login"], "Stts": 0},
+           "PRESET2": {"URL": "https://b.example.com", "ID": "u2", "PW": "둘째-비번", "Action": "login", "Stts": 9}},
           open(web_old, "w", encoding="utf-8"), ensure_ascii=False)
 fake_exe = os.path.join(mig, "OneZeroSoft", "ERPiaNet", "ERPiaMain.exe")      # 가짜 ERPia (빈 파일)
 os.makedirs(os.path.dirname(fake_exe))
@@ -300,14 +300,14 @@ lm_old = os.path.join(mig, "login_manager_config.json")
 json.dump({"admin_code": "erpiatest2", "id": "admin", "exe_path": fake_exe.replace("\\", "/")}, open(lm_old, "w", encoding="utf-8"))
 
 cfg = st.read_user_config()
-check("새 파일이 없으면 옛 파일들을 합쳐 읽는다", cfg["LogIn"]["AdminCode"] == "erpiatest2" and cfg["Sites"]["SITE1"]["URL"] == "https://a.example.com"
+check("새 파일이 없으면 옛 파일들을 합쳐 읽는다", cfg["LogIn"]["AdminCode"] == "erpiatest2" and cfg["Sites"]["PRESET1"]["URL"] == "https://a.example.com"
       and cfg["Routine"] == {"Login": "Y", "Hold": "N"} and cfg["ERPia"] == {"ExePath": fake_exe.replace("\\", "/")})
 check("옮기기 전에도 ERPia 위치를 읽는다 (옛 login_manager_config.json)", st.find_erpia_exe()[0] == os.path.normpath(fake_exe))
 pl.CONFIG_FILE = None
 check("옮기기 전에도 루틴은 옛 파일로 로그인 정보를 읽는다", pl.load_credentials() == ("erpiatest2", "admin", PW))
 import web_runner as wr  # noqa: E402
 sites = wr.load_config()
-check("옮기기 전에도 프리페어는 옛 파일로 사이트를 읽는다 (주석 키는 빠진다)", list(sites) == ["SITE1", "SITE2"] and sites["SITE1"]["PW"] == SITE_PW)
+check("옮기기 전에도 프리페어는 옛 파일로 사이트를 읽는다 (주석 키는 빠진다)", list(sites) == ["PRESET1", "PRESET2"] and sites["PRESET1"]["PW"] == SITE_PW)
 
 msg = st.migrate_user_config()
 check("옮기면 한 문장으로 알린다 (비밀번호 3개 잠금, 옛 파일 .old)", msg and "만들었습니다" in msg and "3개" in msg and ".old" in msg, str(msg))
@@ -318,14 +318,14 @@ check("새 파일 한 개에 로그인·물류·모듈·사이트·ERPia 위치�
 check("ERPia 위치는 옛 exe_path 그대로 (업체코드·아이디는 LogIn 에 이미 있어 안 가져온다)", data["ERPia"] == {"ExePath": fake_exe.replace("\\", "/")})
 check("평문 비밀번호가 하나도 없다", PW not in text and SITE_PW not in text and "둘째-비번" not in text)
 check("비밀번호 자리는 모두 dpapi:", all(v.startswith(st.SEALED_PREFIX) for v in
-                                      (data["LogIn"]["PW"], data["Sites"]["SITE1"]["PW"], data["Sites"]["SITE2"]["PW"])))
+                                      (data["LogIn"]["PW"], data["Sites"]["PRESET1"]["PW"], data["Sites"]["PRESET2"]["PW"])))
 check("사이트 주석은 그대로 남는다", data["Sites"]["_주석"] == ["Stts 0 실행, 9 보관"])
 check("옛 세 파일은 .old 로 바뀌었다", not any(os.path.exists(x) for x in (cred_old, web_old, lm_old))
       and all(os.path.isfile(x + ".old") for x in (cred_old, web_old, lm_old)))
 check("옮긴 뒤 루틴은 잠긴 비밀번호를 풀어 로그인한다", pl.load_credentials() == ("erpiatest2", "admin", PW))
 sites = wr.load_config()
-check("옮긴 뒤 프리페어도 사이트 비밀번호를 풀어 쓴다", sites["SITE1"]["PW"] == SITE_PW and sites["SITE2"]["PW"] == "둘째-비번")
-check("검사(validate_site)도 예전처럼 통과", wr.validate_site("SITE1", sites["SITE1"]) == [], str(wr.validate_site("SITE1", sites["SITE1"])))
+check("옮긴 뒤 프리페어도 사이트 비밀번호를 풀어 쓴다", sites["PRESET1"]["PW"] == SITE_PW and sites["PRESET2"]["PW"] == "둘째-비번")
+check("검사(validate_site)도 예전처럼 통과", wr.validate_site("PRESET1", sites["PRESET1"]) == [], str(wr.validate_site("PRESET1", sites["PRESET1"])))
 check("다시 켜면 할 일이 없다", st.migrate_user_config() is None)
 
 data["LogIn"]["PW"] = "새로-적은-평문"
@@ -336,7 +336,7 @@ check("에이전트가 켤 때 평문을 잠근다", msg and "1개를 잠갔습�
 check("잠근 뒤에도 같은 값", pl.load_credentials()[2] == "새로-적은-평문")
 
 st.write_routine_modules({"Hold": True})
-check("모듈을 바꿔 써도 사이트·비밀번호는 그대로", wr.load_config()["SITE1"]["PW"] == SITE_PW and pl.load_credentials()[2] == "새로-적은-평문")
+check("모듈을 바꿔 써도 사이트·비밀번호는 그대로", wr.load_config()["PRESET1"]["PW"] == SITE_PW and pl.load_credentials()[2] == "새로-적은-평문")
 check("옛 .old 파일은 다시 건드리지 않는다", os.path.isfile(cred_old + ".old") and not os.path.exists(cred_old + ".old.old"))
 check(".bak 도 임시 파일도 남지 않는다", not [f for f in os.listdir(mig) if f.endswith((".bak", ".tmp"))], str(os.listdir(mig)))
 

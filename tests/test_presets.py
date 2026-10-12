@@ -136,6 +136,26 @@ import web_runner as wr  # noqa: E402
 from test_web_replay import hclick  # noqa: E402
 
 TODAY = datetime.date.today()
+# 프리페어는 PRESETn 만 본다 (사용자 2026-10-12: SITEn 방식을 쓰는 업체 없음). 설치 틀에 딸려 온 빈 예시 SITE1(켜짐)이
+# 켜진 프리셋까지 막았다 - 옛 SITEn 칸은 지우지 않고 읽지만 않는다
+cfg = st.read_user_config()
+cfg["Sites"]["SITE1"] = {"URL": "https://ezsso.example.com", "ID": "", "PW": "", "Action": ["login"], "Stts": 0}
+st.write_user_config(cfg)
+check("프리페어 사이트 목록은 PRESETn 만 (빈 예시 SITE1 이 켜져 있어도 안 본다)", list(wr.load_config()) == ["PRESET1"], str(list(wr.load_config())))
+check("옛 SITEn 칸은 설정에 그대로 남는다", "SITE1" in st.read_user_config()["Sites"])
+# 새로 깐 PC 는 프리셋이 없다 - 점검(--check, 빌드가 끝 줄로 본다)은 오류가 아니라 끝까지 간다 (2026-10-12 빌드에서 걸림)
+saved_cfg = st.read_user_config()
+st.write_user_config(dict(saved_cfg, Sites={"_주석": ["안내"], "SITE1": saved_cfg["Sites"]["SITE1"]}))
+lines = []
+orig_log = wr.log
+wr.log = lambda m="": lines.append(str(m))
+try:
+    rc = wr.cmd_check()
+finally:
+    wr.log = orig_log
+st.write_user_config(saved_cfg)
+check("프리셋이 없어도 점검은 0 으로 끝까지 (끝 줄 '쓸 수 있는 Action')",
+      rc == 0 and any("쓸 수 있는 Action" in x for x in lines) and any("프리셋이 아직 없습니다" in x for x in lines), f"{rc} {lines}")
 site = dict(st.read_user_config()["Sites"]["PRESET1"])
 check("점검: 기록·코드가 있으면 문제 없음", wr.validate_site("PRESET1", site) == [], str(wr.validate_site("PRESET1", site)))
 check("점검: 없는 프리셋 번호는 문제", any("기록이 없습니다" in x for x in wr.validate_site("PRESET1", dict(site, Preset=5))))

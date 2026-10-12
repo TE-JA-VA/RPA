@@ -819,6 +819,10 @@ with tempfile.TemporaryDirectory() as d:
             dash.set_policy(3, ["Logistics", "Output"], wellife=True)
             st.ensure_wellife_section()                                   # 로그인·주문매핑만 켬
             check(ag.local_plan()[0] == ["login", "wellife_sales"], f"웰라이프 업체의 실행 1번 = Wellife 섹션에서 켠 모듈, 이력 키로 ({ag.local_plan()})")
+            c = st.read_user_config()
+            c["Sites"] = {"SITE1": {"Stts": 0}, "PRESET1": {"Stts": 0}, "PRESET2": {"Stts": 9}}
+            st.write_user_config(c)
+            check(ag.local_plan()[1] == 1, f"사이트 수집 토큰은 켜진 PRESETn 만 센다 (옛 SITEn 은 안 돈다 - 2026-10-12) ({ag.local_plan()})")
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
             check(ag.next_plan() == (["login", "wellife_wms"], False), f"웰라이프 줄도 이력 키로 ({ag.next_plan()})")
             wk = ag.Tokens(wc, "c_demo", ag.Prices(wc, "c_demo"), ag.local_plan, next_plan=ag.next_plan)

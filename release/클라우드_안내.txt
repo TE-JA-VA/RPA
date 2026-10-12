@@ -27,7 +27,8 @@
        ERPia 로그인(LogIn) · 물류(Logistic) · 실행 모듈(Routine) · 프리페어 사이트(Sites) · ERPia 위치(ERPia) 가
        이 파일 하나에 다 있다. 비밀번호(PW)는 평문으로 적는다 - 에이전트가 처음 켤 때
        이 PC·이 윈도우 계정에서만 풀리게 잠근다 ("dpapi:..." 로 바뀐다).
-       Sites 의 SITE1 비밀번호가 비어 있으면 프리페어가 돌지 않는다. 꼭 채울 것.
+       프리페어 사이트(Sites)는 손으로 적지 않는다 - 옵저버에서 쇼핑몰 프리셋을 저장하면 PRESET1, PRESET2 ... 칸이
+       생기고, 켜기·끄기는 업체 웹 환경설정에서 한다. 옛 SITE1 같은 칸이 있어도 프리페어는 읽지 않는다.
     3) ERPia 위치는 에이전트가 켤 때 알아서 찾는다 (설치 기록 → 기본 설치 폴더).
        못 찾으면 파일 고르는 창이 뜬다. ERPia 설치 폴더의 ERPiaMain.exe 를 고르면 된다.
        (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json 은 이제 쓰지 않는다)

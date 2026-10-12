@@ -199,7 +199,7 @@ def read_account():
 #   {"LogIn":    {"AdminCode": …, "ID": …, "PW": …},
 #    "Routine":  {"Login": "Y", "Sales": "Y", "Hold": "N", …},
 #    "Logistic": {"cboBS_Auto_YN": …, "Printer": …, …},
-#    "Sites":    {"SITE1": {"URL": …, "ID": …, "PW": …, "Action": […], "Stts": 0, …}, …},
+#    "Sites":    {"PRESET1": {"URL": …, "ID": …, "PW": …, "Action": ["replay"], "Stts": 0, …}, …},   (프리셋 칸만 - 옵저버가 쓴다)
 #    "ERPia":    {"ExePath": "C:/Program Files (x86)/OneZeroSoft/ERPiaNet/ERPiaMain.exe"}}
 #
 # 예전의 ERPIA_AI.txt(바탕화면, LogIn·Logistic·Routine), WebManageConfig.json(exe 옆, 사이트),
@@ -952,6 +952,11 @@ def preset_site_key(no):
     return f"PRESET{no}"
 
 
+def is_preset_site(key):
+    """Sites 의 프리셋 칸(PRESETn)인가. 프리페어는 이 칸만 돌린다 - 옛 SITEn 방식은 쓰는 업체가 없다 (사용자 2026-10-12)."""
+    return bool(re.fullmatch(r"PRESET\d+", str(key)))
+
+
 def save_preset_sites(presets, logins, fresh=()):
     """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
     presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
@@ -962,7 +967,7 @@ def save_preset_sites(presets, logins, fresh=()):
     if not data:
         raise FileNotFoundError(user_config_path())
     sites = data.get(SITES_SECTION) if isinstance(data.get(SITES_SECTION), dict) else {}
-    others = {k: v for k, v in sites.items() if not re.fullmatch(r"PRESET\d+", k)}
+    others = {k: v for k, v in sites.items() if not is_preset_site(k)}
     mine = {}
     for p in presets:
         if not p.get("record"):
