@@ -251,7 +251,7 @@ class Tokens:
         결과 글과 예약 칸의 까닭이 된다."""
         left = self.refresh(force=True)
         if left is not None and left <= 0:
-            raise RuntimeError(f"토큰이 없습니다 (남은 {left}개). 충전한 뒤 실행하세요")
+            raise RuntimeError(f"잔여 토큰이 없습니다 (남은 토큰 수 : {left}개).\n토큰을 충전해주십시오.")
 
     def view(self):
         """현황 live.tokens - {balance, cost: {routine, prepare, all}}. 통장이 없거나 아직 모르면 None (화면은 줄을 숨긴다)."""
@@ -475,7 +475,7 @@ def decide(cmd, now):
     if not isinstance(expires, (int, float)):
         return "bad", "만료 시각이 없습니다"
     if expires < now:
-        return "expired", "만료된 명령입니다 (PC 가 꺼져 있었을 수 있습니다)"
+        return "expired", "만료된 명령입니다. PC에 도달하지 못했습니다."
     return "run", None
 
 
@@ -601,9 +601,9 @@ def real_actions(policy=None, limits=None, start_update=None):
         target = (args or {}).get("target") if isinstance(args, dict) else None
         target = target or "routine"
         if target not in dash.TARGETS:
-            raise RuntimeError(f"실행 대상이 잘못되었습니다 ({target})")
+            raise RuntimeError(f"메뉴를 찾을 수 없습니다. ({target})")
         dash.launch(target, "cloud")         # 1PC 1프로그램 잠금·중복 방지는 launch 안에 있다
-        return f"{dash.TARGETS[target][0]} 을(를) 띄웠습니다"
+        return f"{dash.TARGETS[target][0]} 을(를) 실행합니다."
 
     def do_stop(args):
         status, body = dash.stop_erpia()
@@ -619,23 +619,23 @@ def real_actions(policy=None, limits=None, start_update=None):
 
     def do_modules(args):
         if not isinstance(args, dict) or not args:
-            raise RuntimeError("모듈 값이 없습니다")
+            raise RuntimeError("알 수 없는 모듈입니다.")
         if st.wellife_policy():                       # 웰라이프 업체 - Wellife 섹션 (설계 4.2)
             blocked = [dict(st.ROUTINE_CONFIG_MODULES).get(k, k) for k, v in args.items() if v and k in WELLIFE_BLOCKED]
             if blocked:
-                raise RuntimeError(f"{', '.join(blocked)}: 웰라이프 업체는 쓰지 않음")
+                raise RuntimeError("현재 접속한 업체는 사용할 수 없는 모듈입니다.")
             wanted = {k: bool(v) for k, v in args.items() if k in dict(st.WELLIFE_CONFIG_MODULES)}
             if not wanted:
-                raise RuntimeError("아는 모듈이 없습니다")
+                raise RuntimeError("알 수 없는 모듈입니다.")
             for k in (policy() if policy else {}):
                 if k in dict(st.WELLIFE_CONFIG_MODULES):
                     wanted[k] = False        # 이 업체가 안 쓰는 모듈 (총괄이 정한다)
-            final = st.write_wellife_modules(wanted)
-            return f"실행 모듈을 바꿨습니다 (켬: {', '.join(k for k, v in final.items() if v)})"
+            st.write_wellife_modules(wanted)
+            return "모듈 수정 사항을 저장했습니다."
         wanted = {k: bool(v) for k, v in args.items()
                   if k in dict(st.ROUTINE_CONFIG_MODULES)}
         if not wanted:
-            raise RuntimeError("아는 모듈이 없습니다")
+            raise RuntimeError("알 수 없는 모듈입니다.")
         for k in (policy() if policy else {}):
             if k in dict(st.ROUTINE_CONFIG_MODULES):
                 wanted[k] = False        # 이 업체가 안 쓰는 모듈 (총괄이 정한다)
@@ -643,12 +643,11 @@ def real_actions(policy=None, limits=None, start_update=None):
         if wanted.get("Logistics") is False:
             wanted["Output"] = False     # 운송장 출력은 물류관리가 꺼져 있으면 돌 수 없다 (빠진 키는 Y 로 쓰이므로 여기서 못 박는다)
         st.write_routine_modules(wanted)
-        on = [k for k, v in wanted.items() if v]
-        return f"실행 모듈을 바꿨습니다 (켬: {', '.join(on)})"
+        return "모듈 수정 사항을 저장했습니다."
 
     def do_presets(args):
         if not isinstance(args, dict) or not args:
-            raise RuntimeError("프리셋 값이 없습니다")
+            raise RuntimeError("프리셋이 비어있거나 알 수 없는 프리셋입니다.")
         try:
             final = st.set_preset_switches(args)
         except FileNotFoundError:
@@ -657,7 +656,7 @@ def real_actions(policy=None, limits=None, start_update=None):
             raise RuntimeError(str(e)) from None
         names = {p["no"]: p["name"] for p in (st.preset_summary() or [])}
         on = [f"{chr(0x2460 + no - 1)} {names.get(no, no)}" for no, v in sorted(final.items()) if v]
-        return f"프리셋을 바꿨습니다 (켬: {', '.join(on) or '없음'})"
+        return f"프리셋을 변경하였습니다. ({', '.join(on) or '없음'})"
 
     def do_schedule(args):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
@@ -668,12 +667,11 @@ def real_actions(policy=None, limits=None, start_update=None):
         wrong = set(WELLIFE_BLOCKED) if wl else set(dash.WELLIFE_ONLY_KEYS)
         if isinstance(args, dict) and args.get("enabled") is not False and any(
                 isinstance(s, dict) and isinstance(s.get("run"), list) and wrong & {k for k in s["run"] if isinstance(k, str)} for s in (args.get("slots") or [])):
-            raise RuntimeError("웰라이프 업체는 물류관리·운송장을 쓰지 않습니다" if wl
-                               else "SAP 연동·WMS 이관은 웰라이프 업체만 씁니다")
+            raise RuntimeError("현재 접속한 업체는 사용할 수 없는 모듈입니다.")
         limit = got[0] if got else (st.read_settings()["schedule"].get("policy") or {}).get("limit")
         rows = (args.get("slots") if "slots" in args else args.get("times")) if isinstance(args, dict) else None
         if isinstance(rows, list) and args.get("enabled") is not False and isinstance(limit, int) and len(rows) > limit:
-            raise RuntimeError(f"자동 실행은 {limit}개까지입니다")
+            raise RuntimeError(f"최대 자동 실행 슬롯은 {limit}개입니다")
         changed = dash.apply_schedule(args)
         sch = st.read_settings()["schedule"]
         if not sch.get("enabled"):

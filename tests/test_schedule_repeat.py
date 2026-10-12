@@ -133,17 +133,17 @@ check("멈췄습니다" in (sched.waiting_reason or ""), "예약기도 멈춤으
 
 print("\n=== 5. [반복 다시 시작] ===")
 CLOCK[0] = at("11:16")
-check(d.resume_repeat() == "반복을 다시 시작했습니다 (12:00까지)" and rep().get("stopped") is None, "멈춤을 푼다")
+check(d.resume_repeat() == "반복 작업을 다시 시작했습니다 (12:00까지)" and rep().get("stopped") is None, "멈춤을 푼다")
 try:
     d.resume_repeat(); check(False, "멈추지 않았는데 다시 시작")
 except RuntimeError as e:
-    check(str(e) == "지금은 멈춘 반복이 없습니다", "두 번 눌러도 한 번만 (두 번째는 '멈춘 반복이 없습니다')")
+    check(str(e) == "중단된 반복 작업이 없습니다", "두 번 눌러도 한 번만 (두 번째는 '멈춘 반복이 없습니다')")
 sched.tick()
 check(len(d.LAUNCHED) == 4, "바로 다음 회차 (11:10 + 2분이 지났다)")
 
 print("\n=== 6. 토큰이 없으면 멈춘다 ===")
 put_status("routine", "success", at("11:16", sec=5), at("11:17"), [LOGIN, NO_TARGET]); ended()
-d.TOKEN_GATE = lambda target: (_ for _ in ()).throw(RuntimeError("토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요"))
+d.TOKEN_GATE = lambda target: (_ for _ in ()).throw(RuntimeError("잔여 토큰이 없습니다 (남은 토큰 수 : 0개).\n토큰을 충전해주십시오."))
 try:
     CLOCK[0] = at("11:20")
     sched.tick()

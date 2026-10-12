@@ -489,11 +489,11 @@ tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan)
 check(refused(tk) is None and tk.view() == {"balance": 3, "cost": {"routine": 2, "prepare": 2, "all": 4}},
       "남은 3: 실행하고, 현황에 남은 토큰·실행 1번에 드는 토큰 (켠 모듈 × 값표, 로그인 0, 사이트 × 값표, 전체 = 둘의 합)")
 tc.spent = 5
-check(refused(tk) == "토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요", "남은 0: 실행 직전에 다시 확인해 거절 (사람에게 보일 글)")
+check(refused(tk) == "잔여 토큰이 없습니다 (남은 토큰 수 : 0개).\n토큰을 충전해주십시오.", "남은 0: 실행 직전에 다시 확인해 거절 (사람에게 보일 글)")
 tc.spent = 7
-check(refused(tk, "all") == "토큰이 없습니다 (남은 -2개). 충전한 뒤 실행하세요", "마이너스도 거절")
+check(refused(tk, "all") == "잔여 토큰이 없습니다 (남은 토큰 수 : -2개).\n토큰을 충전해주십시오.", "마이너스도 거절")
 tc.spent, tc.fail = 2, True
-check(refused(tk) == "토큰이 없습니다 (남은 -2개). 충전한 뒤 실행하세요" and tk.view()["balance"] == -2,
+check(refused(tk) == "잔여 토큰이 없습니다 (남은 토큰 수 : -2개).\n토큰을 충전해주십시오." and tk.view()["balance"] == -2,
       "확인을 못 하면 마지막으로 확인한 값으로 판단 (그 값이 0 이하면 막는다)")
 tc.fail = False
 reads = tc.reads
@@ -691,17 +691,17 @@ with tempfile.TemporaryDirectory() as d:
         import rpa_dashboard as dash
         sel = st.read_routine_modules()[0]
         check(sel["Login"] is True and sel["Sales"] is False and sel["Hold"] is True, f"로그인은 꺼 달라고 해도 켜진 채 저장 ({sel})")
-        check("Login" in msg, "결과 문장에 로그인 포함")
+        check(msg == "모듈 수정 사항을 저장했습니다.", "결과 문장 (사용자 검수 2026-10-12)")
         # [RPA 중단] (2026-10-12) - 업체 웹에서 보내는 명령, 끄는 일은 dash.stop_rpa (tests/test_stop_rpa.py 가 진짜 프로세스로 본다)
         check("stop_rpa" in ag.KNOWN_TYPES and "stop_rpa" not in ag.ADMIN_ONLY_TYPES, "RPA 중단은 업체 웹 명령")
-        check(acts["stop_rpa"](None) == "도는 RPA 가 없습니다.", "도는 RPA 가 없으면 그렇게 알린다")
+        check(acts["stop_rpa"](None) == "이미 완료되어 중단할 수 없었습니다.", "도는 RPA 가 없으면 그렇게 알린다")
         orig_stop = dash.stop_rpa
-        dash.stop_rpa = lambda: (500, {"ok": False, "error": "RPA 를 끄지 못했습니다 (남은 프로세스 1개)"})
+        dash.stop_rpa = lambda: (500, {"ok": False, "error": "중단 명령이 실패했습니다. (남은 프로세스 1개)"})
         try:
             acts["stop_rpa"](None)
             check(False, "못 끄면 실패로 끝난다")
         except RuntimeError as e:
-            check(str(e) == "RPA 를 끄지 못했습니다 (남은 프로세스 1개)", f"못 끄면 까닭 그대로 실패 ({e})")
+            check(str(e) == "중단 명령이 실패했습니다. (남은 프로세스 1개)", f"못 끄면 까닭 그대로 실패 ({e})")
         finally:
             dash.stop_rpa = orig_stop
         # 처음 쓰면 옛 파일을 합쳐 RPA_UserConfig.json 을 만든다 (RPA_CRED_FILE 옆 = 임시 폴더)
@@ -728,19 +728,19 @@ with tempfile.TemporaryDirectory() as d:
         try:
             acts["set_modules"]({"Nope": True}); check(False, "모르는 모듈만 있으면 거부")
         except RuntimeError as e:
-            check("아는 모듈" in str(e), "모르는 모듈만 있으면 거부")
+            check(str(e) == "알 수 없는 모듈입니다.", "모르는 모듈만 있으면 거부")
         dash.set_policy(2, ["Logistics", "Output"], wellife=True)
         msg = acts["set_modules"]({"Login": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False})
-        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False} and "켬" in msg,
+        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False} and msg == "모듈 수정 사항을 저장했습니다.",
               f"웰라이프 업체: set_modules 는 Wellife 섹션에 쓴다 ({msg})")
         try:
             acts["set_modules"]({"Logistics": True}); check(False, "웰라이프 업체에 물류관리 거절")
         except RuntimeError as e:
-            check("웰라이프 업체는 쓰지 않음" in str(e) and "물류관리" in str(e), f"웰라이프 업체: 물류관리·운송장은 거절 ({e})")
+            check(str(e) == "현재 접속한 업체는 사용할 수 없는 모듈입니다.", f"웰라이프 업체: 물류관리·운송장은 거절 ({e})")
         try:
             acts["set_modules"]({"Output": True}); check(False, "웰라이프 업체에 운송장 거절")
         except RuntimeError as e:
-            check(str(e) == "운송장 출력 / 엑셀 생성: 웰라이프 업체는 쓰지 않음", f"거절 글은 한국어 이름 ({e})")
+            check(str(e) == "현재 접속한 업체는 사용할 수 없는 모듈입니다.", f"웰라이프 업체: 운송장도 같은 글로 거절 ({e})")
         ag.real_actions(lambda: {"Hold": False})["set_modules"]({"Hold": True, "Sales": True})
         check(st.read_wellife_modules()[0]["Hold"] is False and st.read_wellife_modules()[0]["Sales"] is True, "웰라이프 업체도 업체 정책(안 쓰는 모듈)을 따른다")
         check(acts["set_schedule"]({"enabled": False, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]}) == "자동 실행을 껐습니다",
@@ -752,14 +752,14 @@ with tempfile.TemporaryDirectory() as d:
             acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Logistics"]}]})
             check(False, "웰라이프 업체 줄에 물류관리 거절")
         except RuntimeError as e:
-            check("물류관리" in str(e), f"웰라이프 업체: 줄에 물류관리·운송장 거절 ({e})")
+            check(str(e) == "현재 접속한 업체는 사용할 수 없는 모듈입니다.", f"웰라이프 업체: 줄에 물류관리·운송장 거절 ({e})")
         check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": None}]}), "웰라이프 업체: '전체' 줄도 된다")
         dash.set_policy(2, [], wellife=False)
         try:
             acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00", "run": ["Wms"]}]})
             check(False, "보통 업체 줄에 WMS 이관 거절")
         except RuntimeError as e:
-            check("웰라이프 업체만" in str(e), f"보통 업체: 줄에 SAP 연동·WMS 이관 거절 ({e})")
+            check(str(e) == "현재 접속한 업체는 사용할 수 없는 모듈입니다.", f"보통 업체: 줄에 SAP 연동·WMS 이관 거절 ({e})")
         check(acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True}) and st.read_routine_modules()[0]["Logistics"] is True,
               "보통 업체는 그대로 Routine 섹션")
     finally:
@@ -822,7 +822,7 @@ with tempfile.TemporaryDirectory() as d:
         try:
             acts["set_schedule"](three); check(False, "한도를 넘는 줄 수는 거절")
         except RuntimeError as e:
-            check(str(e) == "자동 실행은 2개까지입니다" and st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], f"한도를 넘으면 저장 전에 거절 ({e})")
+            check(str(e) == "최대 자동 실행 슬롯은 2개입니다" and st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], f"한도를 넘으면 저장 전에 거절 ({e})")
         msg = acts["set_schedule"]({**three, "enabled": False})
         check(msg == "자동 실행을 껐습니다" and len(st.read_settings()["schedule"]["slots"]) == 3, f"끄기는 한도를 넘어도 된다 - 줄은 그대로 ({msg})")
         msg = acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00"}, {"at": "11:00", "run": ["Logistics"]}]})
@@ -831,7 +831,7 @@ with tempfile.TemporaryDirectory() as d:
         try:
             ag.real_actions(limits=lambda: None)["set_schedule"](three); check(False, "못 읽어도 적힌 한도로 거절")
         except RuntimeError as e:
-            check("1개까지" in str(e), "못 읽으면 PC 에 적힌 마지막 한도로")
+            check("슬롯은 1개" in str(e), "못 읽으면 PC 에 적힌 마지막 한도로")
         st.write_settings({"schedule": {}})       # policy 없음 = 한 번도 못 읽음
         ag.real_actions(limits=lambda: None)["set_schedule"](three)
         check(len(st.read_settings()["schedule"]["slots"]) == 3, "한 번도 못 읽었으면 자르지 않는다 (PC 상한 12 까지만)")
@@ -895,7 +895,7 @@ with tempfile.TemporaryDirectory() as d:
         try:
             ag.real_actions()["resume_repeat"](None); check(False, "멈춘 반복이 없는데 다시 시작")
         except RuntimeError as e:
-            check(str(e) == "지금은 멈춘 반복이 없습니다", "resume_repeat: 멈춘 반복이 없으면 그 글로 실패")
+            check(str(e) == "중단된 반복 작업이 없습니다", "resume_repeat: 멈춘 반복이 없으면 그 글로 실패")
     finally:
         os.environ.pop("RPA_STATUS_DIR", None)
         os.environ.pop("RPA_DASHBOARD_DRY_RUN", None)
@@ -1139,7 +1139,7 @@ with tempfile.TemporaryDirectory() as d:
         check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 0 and "① 지마켓" in msg, f"켜면 Stts 0, 결과에 이름 ({msg})")
         acts["set_presets"]({"PRESET1": False})
         check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 9, "끄면 Stts 9")
-        for args, why in (({"PRESET7": True}, "아는 프리셋"), ({"PRESET2": True}, "켤 수 없")):
+        for args, why in (({"PRESET7": True}, "알 수 없는 프리셋"), ({"PRESET2": True}, "아이디·비밀번호가 없습니다")):
             try:
                 acts["set_presets"](args)
                 check(False, f"거부: {why}")

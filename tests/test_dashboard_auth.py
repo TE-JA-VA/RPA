@@ -96,7 +96,7 @@ check(st.read_settings()["schedule"]["next_run_at"] == before, "수동 실행은
 try:
     d.launch("prepare", "manual:admin"); check(False, "전체 실행이 살아 있으면 개별 실행 거부")
 except RuntimeError as e:
-    check("진행 중" in str(e), f"전체 실행이 살아 있으면 개별 실행 거부: {e}")
+    check("실행중" in str(e), f"전체 실행이 살아 있으면 개별 실행 거부: {e}")
 d._active["until"] = 0
 nb = st.read_settings()["schedule"]["next_run_at"]
 d.launch("prepare", "manual:admin"); d._active["until"] = 0

@@ -1018,11 +1018,11 @@ def set_preset_switches(wanted):
         if m and isinstance(sites.get(preset_site_key(int(m.group(1)))), dict):
             final[int(m.group(1))] = bool(v)
     if not final:
-        raise ValueError("아는 프리셋이 없습니다")
+        raise ValueError("프리셋이 비어있거나 알 수 없는 프리셋입니다.")
     ready = {s["no"] for s in (preset_summary() or []) if s["steps"] and s["has_login"]}
     blocked = sorted(no for no, on in final.items() if on and no not in ready)
     if blocked:
-        raise ValueError(f"기록이나 아이디·비밀번호가 없어 켤 수 없습니다: {', '.join(str(n) for n in blocked)}번")
+        raise ValueError(f"프리셋에 기록된 아이디·비밀번호가 없습니다: {', '.join(str(n) for n in blocked)}번")
     for no, on in final.items():
         sites[preset_site_key(no)]["Stts"] = 0 if on else 9
     write_user_config(data)

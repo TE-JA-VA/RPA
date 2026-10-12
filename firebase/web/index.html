@@ -176,6 +176,7 @@
   /* --- 토스트 알림: 카드 안에 상자를 남기지 않고 오른쪽 아래에 잠깐 뜬다 ---- */
   .toasts { position:fixed; right:18px; bottom:18px; z-index:60; display:grid; gap:8px;
             width:min(360px, calc(100vw - 36px)); }
+  .toast p { white-space:pre-line; }   /* PC 결과 글의 줄바꿈 (토큰 없음) */
   .toast { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:10px;
            border:1px solid var(--line); border-left:4px solid var(--tone); background:var(--tone-bg);
            color:var(--strong); font-size:13px; font-weight:600; line-height:1.45; cursor:pointer;

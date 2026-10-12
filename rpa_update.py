@@ -27,7 +27,7 @@ HEALTH_WAIT_SEC = 180
 DISK_MARGIN = 200 * 1024 * 1024
 BUSY_STATES = ("waiting", "ready", "applying", "rolling_back")
 ACTIVE_STATES = ("downloading",) + BUSY_STATES
-BUSY_TEXT = "업데이트 중이라 잠시 실행할 수 없습니다"
+BUSY_TEXT = "업데이트 중입니다. 잠시 후 다시 실행해주십시오."
 
 
 class UpdateError(Exception):

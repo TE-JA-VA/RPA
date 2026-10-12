@@ -62,7 +62,7 @@ def alive(pid):
 
 print("=== 1. 도는 RPA 가 없으면 ===")
 code, body = d.stop_rpa()
-check(code == 200 and body.get("message") == "도는 RPA 가 없습니다.", "할 일 없음 - 성공으로 알림", str(body))
+check(code == 200 and body.get("message") == "이미 완료되어 중단할 수 없었습니다.", "할 일 없음 - 성공으로 알림", str(body))
 
 print("=== 2. 대시보드가 띄운 루틴을 중단 ===")
 proc = subprocess.Popen([sys.executable, child_py], env=dict(os.environ))
@@ -97,7 +97,7 @@ check("대시보드에서 중단" in why and "실패" not in why, "까닭에 '�
 
 print("=== 4. 다시 누르면 ===")
 code, body = d.stop_rpa()
-check(code == 200 and body.get("message") == "도는 RPA 가 없습니다.", "이미 멈췄으면 할 일 없음", str(body))
+check(code == 200 and body.get("message") == "이미 완료되어 중단할 수 없었습니다.", "이미 멈췄으면 할 일 없음", str(body))
 
 d.terminate_pid(erpia_pid)
 shutil.rmtree(tmp, ignore_errors=True)

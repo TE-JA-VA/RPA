@@ -109,7 +109,7 @@ async function waitFor(label, fn, ms = 20000) {
 
 await waitFor("명령이 done 이 된다", async () => (await cmdRef.child("state").get()).val() === "done");
 const done = (await cmdRef.get()).val();
-check(typeof done.result === "string" && done.result.includes("띄웠"), "결과 문장이 남는다");
+check(typeof done.result === "string" && done.result.includes("실행합니다"), "결과 문장이 남는다");
 check(typeof done.started_at === "number" && typeof done.ended_at === "number", "시작·종료 시각이 남는다");
 await waitFor("만료된 명령은 expired 로 닫힌다", async () => (await expiredRef.child("state").get()).val() === "expired");
 await waitFor("live 에 현황이 올라온다", async () => {
@@ -135,7 +135,7 @@ const secondRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
 });
 await waitFor("연달아 실행하면 잠금이 거절한다 (failed + 사유)", async () => {
   const v = (await secondRef.get()).val();
-  return v.state === "failed" && /진행 중|돌고/.test(v.result || "");
+  return v.state === "failed" && /실행중/.test(v.result || "");
 });
 
 // 사용자 설정 한 파일: 켤 때 옮기기·잠그기, set_modules 는 그 파일의 Routine 에 쓴다 (임시 폴더라 실제 설정은 안 건드린다)
@@ -223,7 +223,7 @@ const tokenCmd = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
 });
 await waitFor("토큰이 없으면 실행 명령이 실패로 끝난다", async () => (await tokenCmd.child("state").get()).val() === "failed");
 const refusedCmd = (await tokenCmd.get()).val();
-check(refusedCmd.result === "토큰이 없습니다 (남은 -6개). 충전한 뒤 실행하세요", `까닭을 그대로 (${refusedCmd.result})`);
+check(refusedCmd.result === "잔여 토큰이 없습니다 (남은 토큰 수 : -6개).\n토큰을 충전해주십시오.", `까닭을 그대로 (${refusedCmd.result})`);
 await waitFor("현황에 남은 토큰·실행 1번에 드는 토큰", async () => {
   const t = (await db.ref("apps/rpa/live/c_demo/pc_office/tokens").get()).val();
   return t?.balance === -6 && Number.isInteger(t?.cost?.all) && t.cost.all === t.cost.routine + t.cost.prepare;

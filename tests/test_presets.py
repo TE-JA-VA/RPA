@@ -103,7 +103,7 @@ cfg = st.read_user_config()
 cfg["Sites"]["PRESET1"]["PW"] = ""
 st.write_user_config(cfg)
 e = raises(ValueError, st.set_preset_switches, {"PRESET1": True})
-check("비밀번호가 없는 프리셋은 켜지 않는다", e is not None and "켤 수 없" in str(e), str(e))
+check("비밀번호가 없는 프리셋은 켜지 않는다", e is not None and "아이디·비밀번호가 없습니다" in str(e), str(e))
 check("끄기는 비밀번호가 없어도 된다", st.set_preset_switches({"PRESET1": False}) == {1: False})
 st.save_preset_sites([dict(ps[0], record=None), ps[1], ps[2]], {})
 check("기록을 지운 프리셋의 칸은 지운다", "PRESET1" not in st.read_user_config()["Sites"])

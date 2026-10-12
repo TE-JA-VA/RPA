@@ -158,7 +158,7 @@ for s in ("downloading", "done", "failed", "rolled_back"):
     check(up.busy_reason() is None, f"{s} 는 실행을 막지 않는다")
 for s in up.BUSY_STATES:
     up.write_state({"state": s})
-    check(up.busy_reason() == "업데이트 중이라 잠시 실행할 수 없습니다", f"{s} 는 실행을 막는다")
+    check(up.busy_reason() == "업데이트 중입니다. 잠시 후 다시 실행해주십시오.", f"{s} 는 실행을 막는다")
 up.write_state({"state": "done", "target": "2026.10.07-2", "from": "2026.10.07-1", "at": "2026-10-07T14:03:00", "reason": None})
 os.makedirs(up.path("backup"), exist_ok=True)
 with open(up.path("backup", "manifest.json"), "w", encoding="utf-8") as f:

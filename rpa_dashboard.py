@@ -355,7 +355,7 @@ def terminate_pid(pid):
         err = ctypes.get_last_error()
         if err == ERROR_ACCESS_DENIED:
             return "접근 거부 - 대시보드가 관리자 권한이 아닙니다"
-        return f"프로세스를 열 수 없습니다 (오류 {err})"
+        return f"실행할 수 없습니다 (오류 {err})"
     try:
         if not k.TerminateProcess(h, 1):
             return f"종료 실패 (오류 {ctypes.get_last_error()})"
@@ -476,10 +476,10 @@ def launch(target, by, env=None):
         running = any_rpa_running()
         if running:
             names = ", ".join(st.PROGRAMS.get(p, p) for p in running)
-            raise RuntimeError(f"{names} 가 이미 돌고 있습니다")
+            raise RuntimeError(f"{names} 가 이미 실행중입니다.")
         ls = launch_state()
         if ls:
-            raise RuntimeError(f"{TARGETS[ls['target']][0]} 이(가) 아직 진행 중입니다 ({ls['sec']}초째)")
+            raise RuntimeError(f"{TARGETS[ls['target']][0]} 이(가) 아직 실행중입니다 ({ls['sec']}초째)")
         if st.observer_open():
             raise RuntimeError("옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 실행하세요")
         if TOKEN_GATE is not None:
@@ -546,7 +546,7 @@ REST_MIN_RANGE = (1, 60)   # 반복 시간대 쉬는 시간 (분)
 def normalize_days(days):
     """요일 목록 [0..6] (월=0) 을 검증해 중복 없이 정렬한다. 틀리면 ValueError."""
     if not isinstance(days, list) or not days:
-        raise ValueError("요일을 하나 이상 고르세요")
+        raise ValueError("반복할 요일을 하루 이상 골라주십시오")
     out = set()
     for v in days:
         if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 6:
@@ -568,7 +568,7 @@ def _check_time(t):
 def normalize_times(times):
     """옛 모양의 시각 목록 ["HH:MM", ...] (옛 8765 화면·옛 웹이 보낸다) 을 검증해 중복 없이 정렬한다."""
     if not isinstance(times, list) or not times:
-        raise ValueError("실행 시간을 하나 이상 넣으세요")
+        raise ValueError("실행 시간을 하나 이상 골라주십시오")
     out = sorted({_check_time(t) for t in times})
     if len(out) > st.SCHEDULE_MAX_SLOTS:
         raise ValueError(f"실행 시간은 {st.SCHEDULE_MAX_SLOTS}개까지 넣을 수 있습니다")
@@ -592,18 +592,18 @@ def normalize_run(run):
     else:
         picked.discard("Login")      # 루틴 모듈이 없으면 로그인만 돌릴 까닭이 없다
     if "Output" in picked and "Logistics" not in picked:
-        raise ValueError("운송장 출력은 물류관리와 같이 골라야 합니다")
+        raise ValueError("운송장 출력 모듈은 물류관리 모듈과 함께 선택해야만 합니다")
     if not picked:
-        raise ValueError("모듈을 하나 이상 고르세요")
+        raise ValueError("현재 반복 실행 슬롯에서 사용할 모듈을 하나 이상 골라주십시오.")
     return [k for k in RUN_KEYS if k in picked]
 
 
 def normalize_slots(slots):
     """줄 목록 검사 → 시각 순으로 정렬한 새 목록. 틀리면 ValueError (사람에게 보일 글)."""
     if not isinstance(slots, list) or not slots:
-        raise ValueError("실행 시간을 하나 이상 넣으세요")
+        raise ValueError("실행 시간을 하나 이상 골라주십시오")
     if len(slots) > st.SCHEDULE_MAX_SLOTS:
-        raise ValueError(f"자동 실행은 {st.SCHEDULE_MAX_SLOTS}개까지 넣을 수 있습니다")
+        raise ValueError(f"최대 자동 실행 슬롯은 {st.SCHEDULE_MAX_SLOTS}개입니다")
     out = []
     for s in slots:
         if not isinstance(s, dict):
@@ -618,11 +618,11 @@ def normalize_slots(slots):
                 raise ValueError(f"반복 끝 시각은 시작({item['at']})보다 늦어야 합니다")
             rest = s.get("rest_min", REST_MIN_DEFAULT)
             if not isinstance(rest, int) or isinstance(rest, bool) or not REST_MIN_RANGE[0] <= rest <= REST_MIN_RANGE[1]:
-                raise ValueError("쉬는 시간은 1~60분 정수여야 합니다")
+                raise ValueError("반복 작업 간 쉬는 시간은 1~60분 사이의 값이어야 합니다")
             if s.get("on_fail", "stop") != "stop":
                 raise ValueError("실패하면 '멈춤' 만 됩니다")
             if run is None:
-                raise ValueError("반복에는 '전체' 를 쓸 수 없습니다 - 모듈을 고르세요")
+                raise ValueError("반복 실행에서는 '전체' 모듈을 사용할 수 없습니다 - 모듈을 선택해 주십시오")
             item.update(rest_min=rest, on_fail="stop")
         if run is not None:
             item["run"] = run
@@ -850,10 +850,10 @@ def resume_repeat():
         win = open_window(sch, now)
         rep = sch.get("repeat") or {}
         if win is None or not rep.get("stopped") or (rep.get("date"), rep.get("at")) != (now.date().isoformat(), win["at"]):
-            raise RuntimeError("지금은 멈춘 반복이 없습니다")
+            raise RuntimeError("중단된 반복 작업이 없습니다")
         rep.update(stopped=None, next_at=None, resumed_at=now.isoformat(timespec="seconds"))   # 쉬는 시간을 안 기다리고 바로 (tick_repeat)
         st.write_settings(cfg)
-    return f"반복을 다시 시작했습니다 ({win['until']}까지)"
+    return f"반복 작업을 다시 시작했습니다 ({win['until']}까지)"
 
 
 def days_label(days):
@@ -1164,7 +1164,7 @@ def validate_routine_modules(payload):
             raise ValueError(f"{k} 는 true/false 여야 합니다")
     before, _ = st.read_routine_modules()
     if not any(_wanted_routine_modules(payload, before).values()):
-        raise ValueError("최소 한 모듈은 켜야 합니다")
+        raise ValueError("최소 하나 이상의 모듈을 선택해야 합니다")
     return payload
 
 
@@ -1180,7 +1180,7 @@ def apply_routine_modules(payload):
         before, _ = st.read_routine_modules()
         wanted = _wanted_routine_modules(payload, before)
         if not any(wanted.values()):
-            raise ValueError("최소 한 모듈은 켜야 합니다")
+            raise ValueError("최소 하나 이상의 모듈을 선택해야 합니다")
         changed = any(before.get(k) != wanted[k] for k in keys)
         if changed:
             try:
@@ -1195,12 +1195,12 @@ def stop_erpia():
     running = any_rpa_running()
     if running:
         names = ", ".join(st.PROGRAMS.get(p, p) for p in running)
-        return 409, {"ok": False, "error": f"{names} 가 진행 중입니다. 끝난 뒤에 다시 하세요."}
+        return 409, {"ok": False, "error": f"{names} 가 실행중입니다. 잠시 후 다시 실행해주십시오."}
     if launch_state():
-        return 409, {"ok": False, "error": "대시보드가 띄운 실행이 아직 진행 중입니다. 끝난 뒤에 다시 하세요."}
+        return 409, {"ok": False, "error": "잠시 후 다시 실행해주십시오."}
     pids = find_pids(ERPIA_EXE)
     if not pids:
-        return 200, {"ok": True, "killed": 0, "message": "ERPia 가 이미 꺼져 있습니다."}
+        return 200, {"ok": True, "killed": 0, "message": "ERPia는 이미 종료되었습니다."}
     errors = [e for e in (terminate_pid(p) for p in pids) if e]
     if errors:
         return 500, {"ok": False, "error": errors[0]}
@@ -1220,7 +1220,7 @@ def stop_rpa():
     proc = _active["proc"] if launch_state() else None
     roots = ([proc.pid] if proc is not None else []) + [snap["programs"][p]["pid"] for p in running if snap["programs"][p].get("pid")]
     if not roots:
-        return 200, {"ok": True, "message": "도는 RPA 가 없습니다."}
+        return 200, {"ok": True, "message": "이미 완료되어 중단할 수 없었습니다."}
     _active["checked"] = True                 # 끈 것을 '시작하지 못함' 으로 남기지 않게 (전체 실행의 안 띄운 루틴)
     victims = process_tree(roots, keep_name=ERPIA_EXE)
     for pid in victims:
@@ -1230,7 +1230,7 @@ def stop_rpa():
         time.sleep(0.2)
     left = [p for p in victims if st.process_alive(p)]
     if left:
-        return 500, {"ok": False, "error": f"RPA 를 끄지 못했습니다 (남은 프로세스 {len(left)}개)"}
+        return 500, {"ok": False, "error": f"중단 명령이 실패했습니다. (남은 프로세스 {len(left)}개)"}
     if proc is not None:
         proc.wait(timeout=5)
     for p in running:

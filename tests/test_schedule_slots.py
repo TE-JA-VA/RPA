@@ -114,7 +114,7 @@ check(d.normalize_run(None) is None, "run 이 없으면 '전체'")
 check(d.normalize_run(["Logistics"]) == ["Login", "Logistics"], "루틴 모듈을 고르면 로그인은 늘 붙는다")
 check(d.normalize_run(["Output", "Logistics", "Prepare"]) == ["Prepare", "Login", "Logistics", "Output"], "정한 순서로 (사이트 수집 → 루틴)")
 check(d.normalize_run(["Prepare", "Login"]) == ["Prepare"], "사이트 수집만이면 로그인은 뺀다")
-for bad, why in ((["Output"], "물류관리와 같이"), (["Login"], "하나 이상"), ([], "하나 이상"), (["Nope"], "모르는 모듈"),
+for bad, why in ((["Output"], "물류관리 모듈과 함께"), (["Login"], "하나 이상"), ([], "하나 이상"), (["Nope"], "모르는 모듈"),
                  (["Sales", "Sales"], "두 번"), ("Sales", "잘못")):
     try:
         d.normalize_run(bad); check(False, f"run 거부 {bad!r}")
@@ -207,7 +207,7 @@ d._active["proc"] = None
 
 print("\n=== 6-3. 토큰이 없으면 (2026-10-06 - 에이전트가 TOKEN_GATE 를 단다) ===")
 saved, asked = list(d.LAUNCHED), []
-NO_TOKENS = "토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요"
+NO_TOKENS = "잔여 토큰이 없습니다 (남은 토큰 수 : 0개).\n토큰을 충전해주십시오."
 
 
 def no_tokens(target):
@@ -303,8 +303,8 @@ for state in up.BUSY_STATES:
     try:
         d.launch("routine", "manual:admin"); check(False, f"{state}: 띄움")
     except RuntimeError as e:
-        check(str(e) == "업데이트 중이라 잠시 실행할 수 없습니다", f"{state}: 단추 실행 거절 ({e})")
-    check(sched.busy() == "업데이트 중이라 잠시 실행할 수 없습니다", f"{state}: 예약·반복도 기다린다")
+        check(str(e) == "업데이트 중입니다. 잠시 후 다시 실행해주십시오.", f"{state}: 단추 실행 거절 ({e})")
+    check(sched.busy() == "업데이트 중입니다. 잠시 후 다시 실행해주십시오.", f"{state}: 예약·반복도 기다린다")
 up.write_state({"state": "done"})
 check(sched.busy() is None, "done 이면 다시 띄울 수 있다")
 os.environ.pop("RPA_PROGRAMDATA")
@@ -313,7 +313,7 @@ print("\n=== 줄마다 요일 (사용자 2026-10-08) ===")
 one = d.normalize_slots([{"at": "09:00", "days": [4, 0, 0]}, {"at": "09:00", "days": [5], "run": ["Logistics"]}])
 check(one == [{"at": "09:00", "days": [0, 4]}, {"at": "09:00", "days": [5], "run": ["Login", "Logistics"]}],
       f"줄마다 요일을 저장 - 요일이 다르면 같은 시각도 된다 ({one})")
-for bad, why in (([{"at": "09:00", "days": []}], "요일을 하나 이상"),
+for bad, why in (([{"at": "09:00", "days": []}], "요일을 하루 이상"),
                  ([{"at": "09:00", "days": [0, 1]}, {"at": "09:00", "days": [1]}], "같은 시각"),
                  ([{"at": "10:00", "until": "11:00", "run": ["Hold"], "days": [0]}, {"at": "10:30", "days": [0, 6]}], "겹칩니다")):
     try:

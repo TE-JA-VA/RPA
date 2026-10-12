@@ -504,8 +504,10 @@ with sync_playwright() as pw:
     check(590 <= c.get("expires_at", 0) - c.get("created_at", 0) <= 610, "만료 10분")
     check(page.is_disabled("#run-routine") and page.is_disabled("#run-all"), "응답 대기 중 버튼 잠금")
     key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "launch")
-    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "루틴 RPA 을(를) 띄웠습니다", "started_at": 1, "ended_at": 2})
-    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('띄웠습니다')", timeout=10000)
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "루틴 RPA 을(를) 실행합니다.", "started_at": 1, "ended_at": 2})
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('실행합니다')", timeout=10000)
+    check(page.evaluate("getComputedStyle(document.querySelector('#toasts .toast p')).whiteSpace") == "pre-line",
+          "PC 결과 글의 줄바꿈을 그대로 보인다 (토큰 없음 글, 사용자 검수 2026-10-12)")
     check(page.locator('#toasts [data-id="act"]').count() == 1, "명령 안내는 쌓이지 않고 그 자리에서 바뀐다")
     check(page.locator('#toasts [data-id="act"].ok').count() == 1, "done 이면 초록 토스트")
     page.wait_for_function("document.querySelectorAll('#toasts .toast').length === 0", timeout=10000)
