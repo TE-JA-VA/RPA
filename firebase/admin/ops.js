@@ -294,9 +294,16 @@ function priceValue(value) {
   if (!/^\d+$/.test(text)) throw new Refused(`토큰 배율은 0 이상 정수 (받은 값: ${text})`);
   return Number(text);
 }
-export async function setPrice(key, value) {
-  checkKey("모듈 키", key);
-  await store.doc("meta/prices").set({ [key]: priceValue(value) }, { merge: true });
+// 일괄 저장 (사용자 2026-10-12): 바꾼 줄 { 키: 값 } 을 한 번에 - 하나라도 틀리면 아무것도 안 쓴다 (문서 하나라 쓰기도 한 번)
+function priceMap(values, blankDeletes) {
+  if (!values || typeof values !== "object" || Array.isArray(values) || !Object.keys(values).length) throw new Refused("바꾼 토큰 배율이 없습니다");
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => {
+    checkKey("모듈 키", key);
+    return [key, blankDeletes && String(value ?? "").trim() === "" ? FieldValue.delete() : priceValue(value)];
+  }));
+}
+export async function setPrices(values) {
+  await store.doc("meta/prices").set(priceMap(values, false), { merge: true });
   return getPrices();
 }
 // 업체 배율 prices/{cid} (2026-10-08) - 에이전트가 meta/prices 위에 덮는다. 웰라이프 업체면 웰라이프 모듈 줄을 보인다
@@ -306,11 +313,11 @@ export async function companyPrices(cid) {
   return { cid, prices: (await store.doc(`prices/${cid}`).get()).data() ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features) };
 }
 // 값을 비우면 그 키를 지워 기본값을 따른다
-export async function setCompanyPrice(cid, key, value) {
-  checkKey("cid", cid); checkKey("모듈 키", key);
+export async function setCompanyPrices(cid, values) {
+  checkKey("cid", cid);
+  const data = priceMap(values, true);
   await companyOf(cid, { removed: true });
-  const blank = String(value ?? "").trim() === "";
-  await store.doc(`prices/${cid}`).set({ [key]: blank ? FieldValue.delete() : priceValue(value) }, { merge: true });
+  await store.doc(`prices/${cid}`).set(data, { merge: true });
   return companyPrices(cid);
 }
 // 우리 통계: 업체마다 남은 토큰 · 이번 달 쓴 토큰 (통장 시작이 이번 달이면 그때부터). 통장이 없어도 쓴 것은 센다

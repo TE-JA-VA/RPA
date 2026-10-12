@@ -150,13 +150,20 @@ class Prices:
         except Exception:
             return last
 
-    def get(self):
-        if self._at is None or time.time() - self._at >= self._every:
+    def get(self, fresh=False):
+        """fresh 면 10분을 기다리지 않고 새로 읽는다 - 기록에 쓴 토큰을 셀 때 (fresh_prices)."""
+        if fresh or self._at is None or time.time() - self._at >= self._every:
             self._at = time.time()
             self._base = self._read("meta/prices", self._base)
             if self._cid:
                 self._company = self._read(f"prices/{self._cid}", self._company)
         return {**PRICES, **self._base, **self._company}
+
+
+def fresh_prices(prices):
+    """기록을 올릴 때 쓰는 값표 - 그때마다 새로 읽는다 (2026-10-12 사용자: 배율을 저장하고 바로 돌린 실행이 옛 배율로 셌다).
+    올릴 기록이 있을 때만 불리니 읽기는 실행 한 번에 두 번 (기본·업체)."""
+    return lambda: prices.get(fresh=True)
 
 
 def balance(client, cid):
@@ -973,7 +980,7 @@ def run(cfg):
                 snap["version"] = install      # 켤 때 한 번 잰 판 (바뀌지 않으니 비교 body 에는 안 넣는다)
                 snap["update"] = upd.live_view()
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
-                sent = upload_new_history(hist_path, up, cfg, prices=prices.get)
+                sent = upload_new_history(hist_path, up, cfg, prices=fresh_prices(prices))
                 tokens.refresh(force=bool(sent))           # 방금 올린 기록만큼 줄었다 - 아니면 10분마다 (우리가 넣은 것)
                 snap["tokens"] = tokens.view()
                 body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("schedule"), snap.get("recent"),

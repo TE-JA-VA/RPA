@@ -38,6 +38,8 @@ const log = (line) => { try { appendFileSync(LOG, `${ops.nowKst()}  ${line}\n`, 
 // 화면 테마 (밝게/어둡게) - 켤 때마다 포트가 바뀌어 브라우저 저장소로는 안 남는다 → 이 폴더의 파일에
 const PREFS = here("./admin_prefs.json");
 const readPrefs = () => { try { return JSON.parse(readFileSync(PREFS, "utf8")); } catch { return {}; } };
+// 관리 기록 한 줄: 'sales = 2, hold = (기본값)'
+const priceNote = (values) => Object.entries(values ?? {}).map(([k, v]) => `${k} = ${String(v ?? "").trim() || "(기본값)"}`).join(", ");
 const ROUTES = [
   ["GET", "/api/info", () => ({ emulator: ops.onEmulator(), project: ops.PROJECT, dashboard: ops.DASHBOARD_URL })],
   ["GET", "/api/prefs", () => readPrefs()],
@@ -75,11 +77,11 @@ const ROUTES = [
   ["POST", "/api/companies/:cid/pcs/:pcId/update", (b, p) => ops.sendUpdate(p.cid, p.pcId, b.version), (b, r, p) => `업데이트 ${p.cid}/${p.pcId} → ${b.version}`],
   ["POST", "/api/companies/:cid/pcs/:pcId/rollback", (b, p) => ops.sendRollback(p.cid, p.pcId), (b, r, p) => `이전 판으로 되돌리기 ${p.cid}/${p.pcId}`],
   ["GET", "/api/prices", () => ops.getPrices()],
-  ["POST", "/api/prices", (b) => ops.setPrice(b.key, b.value), (b) => `토큰 배율 ${b.key} = ${b.value}`],
+  ["POST", "/api/prices", (b) => ops.setPrices(b.values), (b) => `토큰 배율 ${priceNote(b.values)}`],
   ["GET", "/api/usage", () => ops.usageRows()],
   ["GET", "/api/companies/:cid/prices", (b, p) => ops.companyPrices(p.cid)],
-  ["POST", "/api/companies/:cid/prices", (b, p) => ops.setCompanyPrice(p.cid, b.key, b.value),
-    (b, r, p) => `업체 토큰 배율 ${p.cid} ${b.key} = ${String(b.value ?? "").trim() || "(기본값)"}`],
+  ["POST", "/api/companies/:cid/prices", (b, p) => ops.setCompanyPrices(p.cid, b.values),
+    (b, r, p) => `업체 토큰 배율 ${p.cid} ${priceNote(b.values)}`],
 ].map(([method, pattern, run, note]) => {
   const names = [];
   const re = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, n) => { names.push(n); return "([a-z0-9_]+)"; })}$`);

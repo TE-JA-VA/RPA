@@ -390,6 +390,24 @@ cl.docs = {"meta/prices": fb.HttpError(503, "끊김"), "prices/c_demo": fb.HttpE
 check(pr.get() == {"default": 2, "login": 0, "sales": 5}, "둘 다 못 읽으면 지난 값 그대로")
 cl.docs = {"meta/prices": {"default": 2}, "prices/c_demo": None}
 check(pr.get() == {"default": 2, "login": 0}, "업체 배율을 지우면(문서 없음) 기본값으로 돌아간다")
+# 기록을 올릴 때는 10분을 기다리지 않고 새로 읽는다 (2026-10-12 사용자: 배율을 저장하고 바로 돌린 실행이 옛 배율 0 으로 셌다)
+cl = PathClient({"meta/prices": {"default": 1}, "prices/c_demo": {}})
+pr = ag.Prices(cl, "c_demo")
+pr.get()
+cl.docs["prices/c_demo"] = {"login": 2500}
+check(pr.get()["login"] == 0, "보통은 10분 안에 다시 읽지 않는다 (화면 어림·막기)")
+check(pr.get(fresh=True)["login"] == 2500, "fresh 면 바로 새로 읽는다 (기록에 쓴 토큰을 셀 때)")
+with tempfile.TemporaryDirectory() as d:
+    fcl = FsClient()
+    upl = ag.Uploader(fcl, "c_demo", "pc_office", os.path.join(d, "q.jsonl"))
+    hist, pos = os.path.join(d, "history.jsonl"), os.path.join(d, "history_pos.txt")
+    open(hist, "w", encoding="utf-8").close()
+    ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="fresh1", modules=[{"key": "login", "state": "done"}]), ensure_ascii=False) + "\n")
+    cl.docs["prices/c_demo"] = {"login": 7}
+    ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos, prices=ag.fresh_prices(pr))
+    check(fcl.docs[-1][2]["cost"] == {"integerValue": "7"}, f"기록을 올릴 때 방금 저장한 업체 배율로 센다 ({fcl.docs[-1][2]['cost']})")
 
 with tempfile.TemporaryDirectory() as d:
     fcl = FsClient()

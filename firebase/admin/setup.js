@@ -108,7 +108,7 @@ try {
       console.table(w.grants.map((g) => ({ 언제: g.at, 얼마: g.amount, 메모: g.memo || "-" })));
     }
   } else if (cmdName === "price") {
-    const t = rest.length ? await ops.setPrice(rest[0], rest[1]) : await ops.getPrices();
+    const t = rest.length ? await ops.setPrices({ [rest[0]]: rest[1] }) : await ops.getPrices();
     console.log("토큰 배율 (모듈을 한 번 쓸 때 빠지는 토큰 - 여기 없는 모듈은 default):", t);
   } else if (cmdName === "usage") {
     console.table((await ops.usageRows(rest[0])).map((r) => ({ cid: r.cid, 이름: r.name, 남은: r.left ?? "-", 이번달: r.month, "토큰 정보": r.since ? `${r.since} 부터` : "없음" })));
