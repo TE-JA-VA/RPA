@@ -57,10 +57,10 @@ check(deployed == [1] and lists[-1][0]["version"] == "2026.10.01-1" and lists[-1
 for n in range(2, 8):
     d, _ = make_release(n, True)
     pr.publish(f"2026.10.0{n}-1", d, SITE, KEY, deploy=lambda: None, set_releases=lambda l: lists.append(l),
-               stable="2026.10.02-1" if n == 7 else None)
+               stable="2026.10.03-1" if n == 7 else None)
 kept = sorted(os.listdir(os.path.join(SITE, "releases")))
-check(kept == ["2026.10.02-1", "2026.10.03-1", "2026.10.04-1", "2026.10.05-1", "2026.10.06-1", "2026.10.07-1"],
-      f"최근 5개 + 안정본(10.02-1)만 남는다 ({kept})")
+check(pr.KEEP == 4 and kept == ["2026.10.03-1", "2026.10.04-1", "2026.10.05-1", "2026.10.06-1", "2026.10.07-1"],
+      f"최근 4개(최신 + 이전 3, 사용자 2026-10-12) + 안정본(10.03-1)만 남는다 ({kept})")
 blob_names = set(os.listdir(os.path.join(SITE, "blobs")))
 used = set()
 for v in kept:
@@ -81,7 +81,7 @@ for n in range(1, 8):
     pr.publish(f"2026.10.0{n}-1", d, SITE2, KEY, deploy=lambda: None, set_releases=lambda l: None,
                get_stable=lambda: "2026.10.01-1", set_stable=lambda v: set_calls.append(v))
 kept2 = sorted(os.listdir(os.path.join(SITE2, "releases")))
-check("2026.10.01-1" in kept2 and len(kept2) == 6, f"DB 의 안정본은 오래돼도 안 지운다 ({kept2})")
+check("2026.10.01-1" in kept2 and len(kept2) == pr.KEEP + 1, f"DB 의 안정본은 오래돼도 안 지운다 ({kept2})")
 b1 = {f["sha256"] for f in json.load(open(os.path.join(SITE2, "releases", "2026.10.01-1", "manifest.json")))["files"].values()}
 check(b1 <= set(os.listdir(os.path.join(SITE2, "blobs"))), "안정본의 파일도 남는다")
 check(set_calls == [], "--stable 이 없으면 DB 안정본을 안 건드린다")
@@ -113,6 +113,23 @@ open(os.path.join(SITE3, "blobs", sha_a), "wb").write(b"")
 pr.publish("2026.10.03-1", d, SITE3, KEY, deploy=None, set_releases=None, get_stable=lambda: None)
 check(open(os.path.join(SITE3, "blobs", sha_a), "rb").read() == b"A3", "잘린 blob 을 고쳐 놓는다")
 check(not [x for x in os.listdir(os.path.join(SITE3, "blobs")) if x.endswith(".tmp")], ".tmp 가 안 남는다")
+
+# --- 남길 판만 (keep_only, 2026-10-12 사용자: 옛 판 정리) - 고른 판만 남기고 배포가 먼저, DB 목록도
+n_before = len(os.listdir(os.path.join(SITE, "releases")))
+for bad, why in ((["2026.10.07-1"], "안정본"), (["2099.01.01-1"], "없는 판")):
+    try:
+        pr.keep_only(bad, SITE, deploy=lambda: None, set_releases=lambda l: None, get_stable=lambda: "2026.10.02-1")
+        check(False, f"{why}: 멈춰야 한다")
+    except ValueError as e:
+        check(len(os.listdir(os.path.join(SITE, "releases"))) == n_before, f"{why}이면 아무것도 안 지우고 멈춘다 ({e})")
+calls = []
+r = pr.keep_only(["2026.10.07-1"], SITE, deploy=lambda: calls.append("deploy"), set_releases=lambda l: calls.append([x["version"] for x in l]),
+                 get_stable=lambda: "2026.10.07-1")
+left = sorted(os.listdir(os.path.join(SITE, "releases")))
+check(left == ["2026.10.07-1"] and len(r["removed"]) == n_before - 1, f"고른 판만 남는다 ({left}, 지운 {r['removed']})")
+m7 = {f["sha256"] for f in json.load(open(os.path.join(SITE, "releases", "2026.10.07-1", "manifest.json")))["files"].values()}
+check(set(os.listdir(os.path.join(SITE, "blobs"))) == m7, "남은 판이 안 쓰는 파일은 지운다")
+check(calls == ["deploy", ["2026.10.07-1"]], f"배포 다음에 DB 목록 ({calls})")
 
 # --- 열쇠가 없는 PC (다른 작업자) - 내보내기는 저장소 관리자에게
 orig_key, pr.KEY_PATH = pr.KEY_PATH, os.path.join(tmp, "없는_열쇠.txt")

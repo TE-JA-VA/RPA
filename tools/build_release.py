@@ -114,6 +114,29 @@ def next_version(out_root, today):
     return f"{day}-{max(used, default=0) + 1}"
 
 
+LOCAL_KEEP = 4   # D:\AX 에 남길 판 - 최신 + 이전 3개 (사용자 2026-10-12, publish_release.KEEP 과 같다)
+_VER = r"(\d{4}\.\d\d\.\d\d)-(\d+)"
+
+
+def prune_local(out_root, keep=LOCAL_KEEP, protect=()):
+    """out_root 의 판 묶음(배포_<판> 폴더·zip·설치 파일)을 최신 keep 개만 남기고 지운다. protect 는 남길 판 폴더
+    (--exes-from 이 가져온 판). 지운 판 목록 (오래된 것부터). 판이 아닌 파일·폴더는 안 건드린다."""
+    found = {}
+    for name in os.listdir(out_root) if os.path.isdir(out_root) else []:
+        m = re.fullmatch(rf"배포_{_VER}(?:\.zip)?", name) or re.fullmatch(rf"AFTER_MARKET_RPA_Setup_{_VER}\.exe", name)
+        if m:
+            found[f"{m.group(1)}-{m.group(2)}"] = (m.group(1), int(m.group(2)))
+    order = sorted(found, key=found.get)
+    kept = set(order[-keep:]) | {os.path.basename(os.path.normpath(p)).removeprefix("배포_") for p in protect if p}
+    removed = [v for v in order if v not in kept]
+    for v in removed:
+        shutil.rmtree(os.path.join(out_root, f"배포_{v}"), ignore_errors=True)
+        for f in (f"배포_{v}.zip", setup_name(v)):
+            if os.path.exists(os.path.join(out_root, f)):
+                os.remove(os.path.join(out_root, f))
+    return removed
+
+
 def _copy(src, out_dir, rel):
     dst = os.path.join(out_dir, *rel.split("/"))
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -463,6 +486,8 @@ def main(argv=None):
             shutil.copy2(os.path.join(out_dir, exe), os.path.join(REPO, "dist", exe))
         print("  dist 에 exe 셋을 복사했습니다 (설정 파일은 그대로)")
     print(f"판 {version}  {zip_path}  ({os.path.getsize(zip_path) // 2 ** 20}MB)")
+    removed = prune_local(OUT_ROOT, protect=[args.exes_from])      # 새 판이 다 만들어진 뒤에만 옛 판을 찾아 지운다
+    print(f"  {OUT_ROOT} 의 옛 판을 지웠습니다: {', '.join(removed)}" if removed else f"  {OUT_ROOT} 에 지울 옛 판이 없습니다 (최신 {LOCAL_KEEP}개)")
     return 0
 
 

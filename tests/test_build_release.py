@@ -344,4 +344,23 @@ try:
 finally:
     _us.PUBLIC_KEY_HEX = _hex
 
+print("옛 판 정리 (사용자 2026-10-12: D:/AX 에 최신 + 이전 3개만, 빌드할 때마다)")
+with tempfile.TemporaryDirectory() as d:
+    vs = ["2026.10.07-8", "2026.10.08-1", "2026.10.08-10", "2026.10.08-2", "2026.10.12-1", "2026.10.12-2"]
+    for v in vs:
+        os.makedirs(os.path.join(d, f"배포_{v}", "python"))
+        open(os.path.join(d, f"배포_{v}.zip"), "wb").close()
+        open(os.path.join(d, br.setup_name(v)), "wb").close()
+    os.makedirs(os.path.join(d, "runtime"))
+    open(os.path.join(d, "RPA_점검.ps1"), "w").close()
+    removed = br.prune_local(d, keep=4, protect=[os.path.join(d, "배포_2026.10.07-8")])
+    left = sorted(os.listdir(d))
+    check(f"최신 4개(08-10 은 08-2 보다 뒤)와 --exes-from 판만 남기고 지운다 ({removed})", removed == ["2026.10.08-1"])
+    check(f"지운 판은 폴더·zip·설치 파일 셋 다 ({left})",
+          not any("2026.10.08-1." in n or n.endswith("2026.10.08-1") for n in left)
+          and all(os.path.exists(os.path.join(d, f"배포_{v}")) for v in vs if v != "2026.10.08-1"))
+    check("판이 아닌 것은 안 건드린다", "runtime" in left and "RPA_점검.ps1" in left)
+    check("지켜 줄 판이 없으면 그것도 지운다", br.prune_local(d, keep=4) == ["2026.10.07-8"])
+    check("지운 뒤에도 다음 판 번호는 이어진다", br.next_version(d, datetime.date(2026, 10, 12)) == "2026.10.12-3")
+
 finish()

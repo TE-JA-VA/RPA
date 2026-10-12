@@ -3,6 +3,7 @@ r"""판 내보내기 (자동 업데이트 설계 4절). 판을 빌드·샌드박
     .venv\Scripts\python.exe tools\publish_release.py --keygen                  (처음 한 번 - 비밀 열쇠 파일을 만들고 공개 열쇠를 알려 준다)
     .venv\Scripts\python.exe tools\publish_release.py 2026.10.07-5 "메모"        (서명·사이트 폴더·DB 목록·배포)
     .venv\Scripts\python.exe tools\publish_release.py 2026.10.07-5 --stable     (그 판을 안정본으로도)
+    .venv\Scripts\python.exe tools\publish_release.py --keep-only 2026.10.12-3 (그 판들만 남기고 지운다 - 안정본은 먼저 남길 판으로)
 
 배포(firebase deploy)는 사람이 확인한 뒤에 돈다 - 묻고 '예' 여야 한다. 비밀 열쇠는 firebase/admin/update_signing_key.txt 에만.
 """
@@ -21,7 +22,7 @@ import update_sign  # noqa: E402
 KEY_PATH = os.path.join(REPO, "firebase", "admin", "update_signing_key.txt")
 SITE_DIR = os.path.join(REPO, "firebase", "releases_site")
 OUT_ROOT = r"D:\AX"
-KEEP = 5
+KEEP = 4      # 최신 + 이전 3개 (사용자 2026-10-12, 그 전엔 5). 안정본은 오래돼도 따로 남긴다
 
 
 def keygen(key_path=KEY_PATH):
@@ -66,7 +67,15 @@ def publish(version, release_dir, site_dir, key_path, memo="", stable=None, depl
     order = sorted(info, key=lambda v: (info[v]["published_at"], v))
     db_stable = get_stable() if get_stable else None                # 안정본은 DB 가 기준 (오래돼도 안 지운다)
     keep = set(order[-KEEP:]) | {x for x in (stable, db_stable) if x}
-    removed = [v for v in order if v not in keep]
+    listing, removed = _prune(site_dir, info, keep, deploy, set_releases)
+    if stable and set_stable:
+        set_stable(stable)
+    return {"version": version, "kept": [x["version"] for x in listing], "removed": removed, "bytes": total}
+
+
+def _prune(site_dir, info, keep, deploy, set_releases):
+    """keep 에 없는 판을 사이트 폴더에서 지우고, 아무 판도 안 쓰는 파일도 지운 뒤 배포 → DB 목록. (남은 목록, 지운 판)"""
+    removed = [v for v in sorted(info, key=lambda v: (info[v]["published_at"], v)) if v not in keep]
     for v in removed:
         shutil.rmtree(os.path.join(site_dir, "releases", v), ignore_errors=True)
         info.pop(v, None)
@@ -77,16 +86,29 @@ def publish(version, release_dir, site_dir, key_path, memo="", stable=None, depl
     for name in os.listdir(os.path.join(site_dir, "blobs")):
         if name not in used:
             os.remove(os.path.join(site_dir, "blobs", name))
-    with open(info_path, "w", encoding="utf-8") as f:
+    with open(os.path.join(site_dir, "published.json"), "w", encoding="utf-8") as f:
         json.dump(info, f, ensure_ascii=False, indent=1)
     listing = [info[v] for v in sorted(info, key=lambda v: (info[v]["published_at"], v))]
     if deploy:
         deploy()                                                 # 배포가 먼저 - 실패하면 DB 목록은 그대로
     if set_releases:
         set_releases(listing)
-    if stable and set_stable:
-        set_stable(stable)
-    return {"version": version, "kept": [x["version"] for x in listing], "removed": removed, "bytes": total}
+    return listing, removed
+
+
+def keep_only(versions, site_dir, deploy=None, set_releases=None, get_stable=None):
+    """사이트에 고른 판만 남긴다 (사용자 2026-10-12: 옛 판 정리). 없는 판을 고르거나 안정본이 지워지면 아무것도 안 하고 멈춘다
+    - 안정본은 먼저 남길 판으로 바꾼다 (setup.js stable). 서명 열쇠는 안 쓴다."""
+    info_path = os.path.join(site_dir, "published.json")
+    info = json.load(open(info_path, encoding="utf-8")) if os.path.isfile(info_path) else {}
+    missing = [v for v in versions if v not in info]
+    if missing:
+        raise ValueError(f"사이트에 없는 판입니다: {', '.join(missing)}")
+    stable = get_stable() if get_stable else None
+    if stable and stable not in versions:
+        raise ValueError(f"안정본 {stable} 이 지워집니다 - 먼저 안정본을 남길 판으로 바꾸세요 (setup.js stable <판>)")
+    listing, removed = _prune(site_dir, info, set(versions), deploy, set_releases)
+    return {"kept": [x["version"] for x in listing], "removed": removed}
 
 
 def _node(*args):
@@ -129,6 +151,10 @@ def main(argv=None):
     if not args:
         print(__doc__)
         return 2
+    if args[0] == "--keep-only":
+        r = keep_only(args[1:], SITE_DIR, deploy=_deploy, set_releases=_set_releases, get_stable=_get_stable)
+        print(f"남은 판 {', '.join(r['kept'])}" + (f" · 지운 판 {', '.join(r['removed'])}" if r["removed"] else " · 지운 판 없음"))
+        return 0
     if not os.path.isfile(KEY_PATH):
         print("서명 열쇠가 이 PC 에 없습니다 - 버전 내보내기(자동 업데이트)는 저장소 관리자만 합니다. 저장소 관리자에게 요청하세요.")
         return 3
