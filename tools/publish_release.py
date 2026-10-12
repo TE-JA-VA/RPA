@@ -167,5 +167,13 @@ def main(argv=None):
     return 0
 
 
+def _utf8_stdio():
+    """묻는 말의 '예' 를 파이프(echo 예 | ...)로 줘도 읽고 한글을 깨지 않고 찍는다 - 윈도우 기본(CP949)이면 Git Bash 의 UTF-8 '예' 가
+    다른 글자로 읽혀 거절됐다 (2026-10-12). 콘솔에서 직접 치는 것은 원래 UTF-8 이라 그대로다."""
+    for f in (sys.stdin, sys.stdout, sys.stderr):
+        f.reconfigure(encoding="utf-8", errors="replace")
+
+
 if __name__ == "__main__":
+    _utf8_stdio()
     sys.exit(main())

@@ -141,6 +141,13 @@ finally:
     sys.stdout, pr.KEY_PATH = old_stdout, orig_key
 check(code != 0 and "저장소 관리자" in out.getvalue(), f"열쇠가 없으면 멈추고 저장소 관리자에게 가라고 알린다 ({out.getvalue().strip()})")
 
+# --- 한글 '예' 를 파이프로 줘도 읽는다 (2026-10-12 Git Bash echo 예 | ... 가 PYTHONIOENCODING 없이 거절됨)
+import subprocess  # noqa: E402
+env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, r'" + os.path.join(REPO, "tools") + "'); import publish_release as pr; "
+                    "pr._utf8_stdio(); print(input() == '예', '한글')"], input="예\n".encode("utf-8"), capture_output=True, env=env)
+check(r.stdout.decode("utf-8", "replace").split() == ["True", "한글"], f"파이프로 받은 '예' 와 찍는 글이 UTF-8 ({r.stdout!r} {r.stderr[-200:]!r})")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
