@@ -88,6 +88,9 @@
   .nav a { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; color:var(--ink); text-decoration:none; cursor:pointer; }
   .nav a[aria-current="page"] { background:var(--accent); color:var(--accent-ink); font-weight:500; }
   .nav a .ic { width:18px; text-align:center; }
+  .nav a .ic svg { display:block; width:18px; height:18px; }
+  /* 아이콘(Lucide, icons.js)은 글자색 선 그림. 사이드바 아래 단추는 글자 앞에 작게 */
+  #theme .lu, #logout-btn .lu { width:14px; height:14px; vertical-align:-2px; margin-right:6px; }
   .side .foot { display:grid; gap:8px; padding:0 4px; font-size:13px; }   /* 업체명 바로 아래 (사용자 2026-10-08) */
   .side .foot .who { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .side .foot .row { display:flex; gap:8px; }
@@ -101,7 +104,7 @@
   .pc-pick::after { content:""; position:absolute; left:0; right:0; top:100%; height:8px; }   /* 알약과 목록 사이 틈을 건너도 hover 가 안 끊기게 */
   .pc-pick .selected { display:flex; align-items:center; gap:10px; padding:6px 10px 6px 12px; border:1px solid var(--line); border-radius:10px;
     background:var(--card); color:var(--strong); cursor:pointer; font:inherit; }
-  .pc-pick .chev { width:12px; height:12px; fill:currentColor; transform:rotate(-90deg); transition:transform .3s; }
+  .pc-pick .chev { width:14px; height:14px; transform:rotate(-90deg); transition:transform .3s; }
   .pc-pick .options { position:absolute; right:0; top:calc(100% + 6px); min-width:100%; display:flex; flex-direction:column; gap:2px; padding:5px;
     border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 10px 24px rgba(0,0,0,.14);
     opacity:0; transform:translateY(-8px); pointer-events:none; transition:opacity .3s, transform .3s; z-index:20; }
@@ -180,7 +183,9 @@
   .toast:hover { transform:translateY(-1px); }
   .toast.out { animation:toast-out .2s ease-in forwards; }
   .toast svg { width:18px; height:18px; flex:none; color:var(--tone); }
-  .toast .x { margin-left:auto; color:var(--muted); font-size:14px; }
+  .toast .tic { display:flex; }
+  .toast .x { margin-left:auto; display:flex; }
+  .toast .x svg { width:14px; height:14px; color:var(--muted); }
   /* 알약·상태 칸이 쓰는 바탕색 토큰을 그대로 쓴다 (밝음·어두움이 이미 맞춰져 있다) */
   .toast.ok   { --tone:var(--good); --tone-bg:var(--good-bg); }
   .toast.info { --tone:var(--run);  --tone-bg:var(--run-bg); }
@@ -199,7 +204,7 @@
 
   details summary { cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:14px; color:var(--strong); }
   details summary::-webkit-details-marker { display:none; }
-  details summary .chev { color:var(--muted); font-size:12px; transition:transform .15s; }
+  details summary .chev { width:14px; height:14px; vertical-align:-2px; color:var(--muted); transition:transform .15s; }
   details[open] summary .chev { transform:rotate(90deg); }
   @media (prefers-reduced-motion: reduce) { details summary .chev, .switch span.knob, .switch span.knob::after { transition:none; } }
   ul.steps { list-style:none; margin:10px 0 0; padding:0; }
@@ -220,7 +225,7 @@
 
   /* 실행 버튼: 초록으로 채운 네모. 마우스를 올리면 글자는 오른쪽으로 밀려 사라지고
      표시가 버튼 한가운데로 옮겨 간다 (Uiverse 'Send' 꼴에서 흔들림·회전은 뺐다).
-     표시는 자리로 잡아 두어 네 버튼(화살표·전원 ⏼) 모두 같은 자리에 선다 */
+     표시는 자리로 잡아 두어 네 버튼(실행 play·전원 power·중단 square) 모두 같은 자리에 선다 */
   .actions { display:grid; gap:8px; }
   .actions button { --fill:var(--good-fill); --ink:var(--on-fill);
     position:relative; display:flex; align-items:center; width:100%;
@@ -229,16 +234,12 @@
     text-align:left; overflow:hidden; transition:background-color .2s, transform .1s; }
   .actions button .fly { position:absolute; left:.9em; top:50%; translate:0 -50%;
     transition:left .3s ease-in-out, translate .3s ease-in-out; }
-  /* 전원 글자(⏼ U+23FC)는 본문 글꼴에 없어서 기호 글꼴이 그린다. 윈도우 Segoe UI Symbol, 안드로이드 Noto, 애플 Apple Symbols */
-  .actions button svg, .actions button .ic { display:block; width:18px; height:18px;
-    font-size:16px; line-height:18px; text-align:center;
-    font-family:"Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",sans-serif;
-    transform-origin:center; transition:transform .3s ease-in-out; }
+  .actions button svg { display:block; width:18px; height:18px; transform-origin:center; transition:transform .3s ease-in-out; }
   .actions button .t { display:block; color:inherit; line-height:1.5;
     transition:transform .3s ease-in-out, opacity .3s ease-in-out; }
   .actions button:hover:not(:disabled) { background:color-mix(in srgb, var(--fill) 85%, #000); }
   .actions button:hover:not(:disabled) .fly { left:50%; translate:-50% -50%; }
-  .actions button:hover:not(:disabled) svg, .actions button:hover:not(:disabled) .ic { transform:scale(1.12); }
+  .actions button:hover:not(:disabled) svg { transform:scale(1.12); }
   .actions button:hover:not(:disabled) .t { transform:translateX(9em); opacity:0; }
   .actions button:active:not(:disabled) { transform:scale(.97); }
   .actions button:disabled { opacity:.45; cursor:default; }
@@ -249,7 +250,7 @@
   .actions button.primary { --fill:color-mix(in srgb, var(--good-fill) 62%, #06231f); }
   .actions button.danger { --fill:var(--bad-fill); margin-top:6px; }
   @media (prefers-reduced-motion: reduce) {
-    .actions button .fly, .actions button svg, .actions button .ic, .actions button .t { transition:none; } }
+    .actions button .fly, .actions button svg, .actions button .t { transition:none; } }
   .switch { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--line); gap:10px; margin:0; }
   .switch.first { border-top:0; }
   .switch input { position:absolute; opacity:0; width:0; height:0; }
@@ -389,7 +390,7 @@
     <div class="brand"><h1>AFTER MARKET</h1><div class="co" id="company"></div></div>
     <div class="foot">
       <div class="who" id="who"></div>
-      <div class="row"><button id="theme">☾ 어둡게</button><button id="logout-btn">로그아웃</button></div>
+      <div class="row"><button id="theme">어둡게</button><button id="logout-btn">로그아웃</button></div>
     </div>
     <nav class="nav" aria-label="메뉴">
       <div class="sec">앱</div>

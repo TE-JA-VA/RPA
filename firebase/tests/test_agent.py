@@ -674,6 +674,18 @@ with tempfile.TemporaryDirectory() as d:
         sel = st.read_routine_modules()[0]
         check(sel["Login"] is True and sel["Sales"] is False and sel["Hold"] is True, f"로그인은 꺼 달라고 해도 켜진 채 저장 ({sel})")
         check("Login" in msg, "결과 문장에 로그인 포함")
+        # [RPA 중단] (2026-10-12) - 업체 웹에서 보내는 명령, 끄는 일은 dash.stop_rpa (tests/test_stop_rpa.py 가 진짜 프로세스로 본다)
+        check("stop_rpa" in ag.KNOWN_TYPES and "stop_rpa" not in ag.ADMIN_ONLY_TYPES, "RPA 중단은 업체 웹 명령")
+        check(acts["stop_rpa"](None) == "도는 RPA 가 없습니다.", "도는 RPA 가 없으면 그렇게 알린다")
+        orig_stop = dash.stop_rpa
+        dash.stop_rpa = lambda: (500, {"ok": False, "error": "RPA 를 끄지 못했습니다 (남은 프로세스 1개)"})
+        try:
+            acts["stop_rpa"](None)
+            check(False, "못 끄면 실패로 끝난다")
+        except RuntimeError as e:
+            check(str(e) == "RPA 를 끄지 못했습니다 (남은 프로세스 1개)", f"못 끄면 까닭 그대로 실패 ({e})")
+        finally:
+            dash.stop_rpa = orig_stop
         # 처음 쓰면 옛 파일을 합쳐 RPA_UserConfig.json 을 만든다 (RPA_CRED_FILE 옆 = 임시 폴더)
         new = os.path.join(d, "RPA_UserConfig.json")
         raw = open(new, encoding="utf-8").read()

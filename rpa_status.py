@@ -1807,29 +1807,41 @@ def flush():
 _reap_lock = threading.Lock()
 
 
-def _mark_vanished(path, seen):
-    """'진행 중'으로 남은 채 프로세스가 사라진 실행을 '비정상 종료'로 닫고 이력에 남긴다."""
+def _close_dead(path, seen, state, reason, part_state, part_note, end=None):
+    """'진행 중'으로 남은 채 프로세스가 사라진 실행을 state 로 닫고 이력에 남긴다 (하던 단계·모듈은 part_state)."""
     with _reap_lock:
         cur = read_json(path)
         if not cur or cur.get("run_id") != seen.get("run_id") or cur.get("state") != "running":
             return cur or seen
         if process_alive(cur.get("pid"), cur.get("pid_created")) is not False:
             return cur
-        end = cur.get("updated_at") or now_iso()   # 마지막으로 살아 있던 시각
+        end = end or cur.get("updated_at") or now_iso()
         for s in cur.get("steps") or []:
             if s.get("state") == "running":
-                s["state"] = "failed"
+                s["state"] = part_state
                 s["finished_at"] = end
-                s["note"] = s.get("note") or "여기서 멈췄습니다"
+                s["note"] = s.get("note") or part_note
         for m in cur.get("modules") or []:
             if m.get("state") == "running":
-                m["state"] = "failed"
+                m["state"] = part_state
                 m["finished_at"] = end
-                m["reason"] = m.get("reason") or "여기서 멈췄습니다"
-        cur.update(state="crashed", reason=VANISHED_REASON, finished_at=end, current_module=None)
+                m["reason"] = m.get("reason") or part_note
+        cur.update(state=state, reason=reason, finished_at=end, current_module=None)
         write_json_atomic(path, cur)
         append_history(history_record(cur))
         return cur
+
+
+def _mark_vanished(path, seen):
+    """'진행 중'으로 남은 채 프로세스가 사라진 실행을 '비정상 종료'로 (끝 시각은 마지막으로 살아 있던 때)."""
+    return _close_dead(path, seen, "crashed", VANISHED_REASON, "failed", "여기서 멈췄습니다")
+
+
+def mark_stopped(program, reason):
+    """대시보드가 끈 실행을 '중단'으로 닫는다 - 프로세스가 죽은 뒤에 부른다 (살아 있으면 그대로 둔다)."""
+    path = status_path(program)
+    cur = read_json(path) or {}
+    return _close_dead(path, cur, "stopped", reason, "stopped", reason, end=now_iso())
 
 
 def decorate(state):

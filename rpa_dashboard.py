@@ -302,26 +302,47 @@ def _k32():
     return _K32
 
 
-def find_pids(exe_name):
-    """이름이 같은 프로세스 번호 목록."""
+def processes():
+    """지금 도는 프로세스 [(번호, 부모 번호, exe 이름)]."""
     k = _k32()
     if k is None:
         return []
     snap = k.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if not snap or snap == INVALID_HANDLE_VALUE:
         return []
-    pids = []
+    out = []
     try:
         entry = _PROCESSENTRY32W()
         entry.dwSize = ctypes.sizeof(entry)
         ok = k.Process32FirstW(snap, ctypes.byref(entry))
         while ok:
-            if entry.szExeFile.lower() == exe_name.lower():
-                pids.append(int(entry.th32ProcessID))
+            out.append((int(entry.th32ProcessID), int(entry.th32ParentProcessID), entry.szExeFile))
             ok = k.Process32NextW(snap, ctypes.byref(entry))
     finally:
         k.CloseHandle(snap)
-    return pids
+    return out
+
+
+def find_pids(exe_name):
+    """이름이 같은 프로세스 번호 목록."""
+    return [pid for pid, _, name in processes() if name.lower() == exe_name.lower()]
+
+
+def process_tree(roots, keep_name=None):
+    """roots 와 그 자손 번호 (부모가 먼저). keep_name 인 프로세스와 그 밑은 뺀다. 윈도우는 번호를 다시 쓰므로
+    부모가 자식보다 늦게 생긴 번호(옛 부모의 재사용)는 걸러지지 않는다 - 끄기 직전에 바로 찍은 목록이라 그 틈은 짧다."""
+    procs = processes()
+    kids = {}
+    for pid, ppid, name in procs:
+        kids.setdefault(ppid, []).append((pid, name))
+    out, todo = [], [int(p) for p in roots]
+    while todo:
+        pid = todo.pop(0)
+        if pid in out:
+            continue
+        out.append(pid)
+        todo += [c for c, name in kids.get(pid, []) if c != pid and not (keep_name and name.lower() == keep_name.lower())]
+    return out
 
 
 def terminate_pid(pid):
@@ -795,6 +816,8 @@ def locked_round(status):
 def stop_reason(status):
     """멈춘 회차의 까닭 한 줄: '10:23 물류관리 실패로 반복을 멈췄습니다: <사유>'."""
     bad = next((m for m in status.get("modules") or [] if m.get("state") in ("failed", "stopped")), None) or {}
+    if status.get("reason") == STOPPED_TEXT:
+        return f"{(status.get('finished_at') or '')[11:16]} {STOPPED_TEXT} - 반복을 멈췄습니다".strip()
     word = "오류" if status.get("state") == "crashed" else "실패"
     why = status.get("reason") or bad.get("reason") or "까닭 없음"
     return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or '루틴'} {word}로 반복을 멈췄습니다: {why}".strip()
@@ -1182,6 +1205,38 @@ def stop_erpia():
     if errors:
         return 500, {"ok": False, "error": errors[0]}
     return 200, {"ok": True, "killed": len(pids), "message": f"ERPia 를 종료했습니다 ({len(pids)}개)."}
+
+
+STOPPED_TEXT = "대시보드에서 중단했습니다"
+
+
+def stop_rpa():
+    """도는 RPA 를 바로 끈다 (사용자 2026-10-12: 하던 단계를 기다리지 않음, ERPia 는 그대로 - 사람이 보고 [ERPia 종료]).
+    띄운 프로그램과 그 밑을 부모부터 끈다 (Run_All.bat 이 다음 차례를 못 띄우게, 프리페어의 Edge 까지). 기록은 '중단' -
+    끝난 모듈만 토큰을 쓴다. 반복 회차였으면 check_repeat_result 가 그 시간대 반복을 멈춘다.
+    ponytail: 에이전트를 다시 켜 손잡이를 잃은 전체 실행은 Run_All.bat(cmd) 을 모른다 - 프로그램만 끄면 bat 이 다음 차례를 띄울 수 있다"""
+    snap = st.dashboard_snapshot()
+    running = st.running_programs(snap)
+    proc = _active["proc"] if launch_state() else None
+    roots = ([proc.pid] if proc is not None else []) + [snap["programs"][p]["pid"] for p in running if snap["programs"][p].get("pid")]
+    if not roots:
+        return 200, {"ok": True, "message": "도는 RPA 가 없습니다."}
+    _active["checked"] = True                 # 끈 것을 '시작하지 못함' 으로 남기지 않게 (전체 실행의 안 띄운 루틴)
+    victims = process_tree(roots, keep_name=ERPIA_EXE)
+    for pid in victims:
+        terminate_pid(pid)                    # 그사이 스스로 끝난 것은 못 연다 - 아래에서 살아 있는지로 본다
+    end = time.time() + 5
+    while time.time() < end and any(st.process_alive(p) for p in victims):
+        time.sleep(0.2)
+    left = [p for p in victims if st.process_alive(p)]
+    if left:
+        return 500, {"ok": False, "error": f"RPA 를 끄지 못했습니다 (남은 프로세스 {len(left)}개)"}
+    if proc is not None:
+        proc.wait(timeout=5)
+    for p in running:
+        st.mark_stopped(p, STOPPED_TEXT)
+    names = ", ".join(st.PROGRAMS.get(p, p) for p in running) or TARGETS[_active["target"]][0]
+    return 200, {"ok": True, "message": f"{names} 을(를) 중단했습니다."}
 
 
 # ---------------------------------------------------------------------------

@@ -7,12 +7,13 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
+import { icon as lucide } from "./icons.js";
 import { P, esc, MODULES, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf } from "./rpa-common.js";
 export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 이 앱의 설정 화면을 붙인다 (settings.js)
 
 export const key = "rpa";
 export const label = "RPA";
-export const icon = "🔄";
+export const icon = "calendar-sync";   // Lucide 이름 (icons.js)
 export const perPc = true;
 
 // 상태 이름은 세 가지로 통일 (2026-09-22): 성공 / 실패(단계 검사에서 스스로 멈춤, 사용자 중지 포함) / 오류(프로그램이 죽음).
@@ -22,14 +23,12 @@ const PROGRAM_SHORT = { routine: "루틴", prepare: "프리페어", observer: "�
 const HERO_TITLE = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류" };
 const HISTORY_LIMIT = 100;
 
-// 실행 버튼 아이콘 (heroicons 선 아이콘, 글자색을 따라간다)
-const ARROW = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75"/></svg>`;
-// 전원은 유니코드 ⏼ (U+23FC POWER ON-OFF SYMBOL) 글자 그대로. 글꼴 대체 목록은 index.html 의 .ic 에 있다
-const POWER = `<span class="ic" aria-hidden="true">&#x23FC;</span>`;
+// 실행 버튼 아이콘 (Lucide, 글자색을 따라간다): 실행 play, ERPia 종료 power, RPA 중단 square
+const PLAY = lucide("play"), POWER = lucide("power"), STOP = lucide("square");
 
 // 실행 버튼: 표시(.fly)는 왼쪽에 떠 있고 글자는 그 오른쪽. 마우스를 올리면 표시가 가운데로 간다
-const runBtn = (id, icon, text, cls = "") =>
-  `<button id="${id}"${cls ? ` class="${cls}"` : ""}><span class="fly" aria-hidden="true">${icon}</span><span class="t">${text}</span></button>`;
+const runBtn = (id, ic, text, cls = "") =>
+  `<button id="${id}"${cls ? ` class="${cls}"` : ""}><span class="fly" aria-hidden="true">${ic}</span><span class="t">${text}</span></button>`;
 
 const HTML = `
   <div class="subnav" role="tablist">
@@ -61,15 +60,15 @@ const HTML = `
           <div class="card" id="steps-prepare"><h2>프리페어 RPA <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
           <div class="card" id="steps-routine"><h2>루틴 RPA <span class="muted" id="meta-routine"></span></h2><ul class="steps" id="list-routine"></ul></div>
         </div>
-        <div class="card"><details id="log-box"><summary>로그 <span><span class="muted" id="log-meta"></span> &nbsp;<span class="chev">▶</span></span></summary><pre class="num" id="log" style="font-size:12px;white-space:pre-wrap;margin:10px 0 0;color:var(--muted)"></pre></details></div>
+        <div class="card"><details id="log-box"><summary>로그 <span><span class="muted" id="log-meta"></span> &nbsp;${lucide("chevron-right", "chev")}</span></summary><pre class="num" id="log" style="font-size:12px;white-space:pre-wrap;margin:10px 0 0;color:var(--muted)"></pre></details></div>
       </div>
       <div id="sidecol">
         <div class="card" id="act-card">
           <h2>실행</h2>
           <div class="actions">
-            ${runBtn("run-all", ARROW, "전체 실행", "primary")}
-            ${runBtn("run-prepare", ARROW, "프리페어 RPA")}
-            ${runBtn("run-routine", ARROW, "루틴 RPA")}
+            ${runBtn("run-all", PLAY, "전체 실행", "primary")}
+            ${runBtn("run-prepare", PLAY, "프리페어 RPA")}
+            ${runBtn("run-routine", PLAY, "루틴 RPA")}
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
           <div class="msg" id="token-line" hidden></div>
@@ -104,6 +103,7 @@ let live = null;
 let fs = null;
 let resizeObs = null;
 let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 - 진행 시간이 올라가고, 에이전트가 죽어도(값이 안 바뀜) 끊김이 보이게
+const STOPPED_TEXT = "대시보드에서 중단했습니다";   // rpa_dashboard.STOPPED_TEXT 와 같다
 let seenRun = {};  // 프로그램별로 마지막에 본 "run_id:상태" (토스트를 두 번 울리지 않게)
 let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 다시 안 그린다 - 스크롤이 튀지 않게)
 
@@ -128,7 +128,11 @@ export function mount(el, context) {
   $("run-routine").onclick = () => send("launch", { target: "routine" }, "루틴 RPA");
   $("run-prepare").onclick = () => send("launch", { target: "prepare" }, "프리페어 RPA");
   $("run-all").onclick = () => send("launch", { target: "all" }, "전체 실행");
-  $("stop-erpia").onclick = () => { if (confirm("ERPia 를 종료할까요?")) send("stop_erpia", null, "ERPia 종료"); };
+  // RPA 가 도는 동안엔 같은 자리가 [RPA 중단] (2026-10-12 사용자: 하던 단계를 기다리지 않고 바로 끔, ERPia 는 그대로)
+  $("stop-erpia").onclick = () => {
+    if (rpaRunning()) { if (confirm("실행 중인 RPA 를 중단할까요? 하던 단계는 끝까지 가지 않습니다.")) send("stop_rpa", null, "RPA 중단"); }
+    else if (confirm("ERPia 를 종료할까요?")) send("stop_erpia", null, "ERPia 종료");
+  };
   $("repeat-resume").onclick = () => send("resume_repeat", null, "반복 다시 시작");
   show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
   paintedRecent = null;
@@ -182,6 +186,7 @@ function runToasts(first) {
     if (v.state === "running") toast("info", `${label} 를 시작했습니다`);
     else if (v.state === "success") toast("ok", [`${label} 성공`, dur(v.duration_sec)].filter(Boolean).join(" · "));
     else if (v.state === "crashed") toast("warn", `${label} 오류 · ${v.reason || "프로그램이 도중에 멈췄습니다"}`);
+    else if (v.state === "stopped" && v.reason === STOPPED_TEXT) toast("info", `${label} 중단 · ${v.reason}`);   // 사람이 멈춘 것 - 실패 아님
     else if (["failed", "stopped"].includes(v.state)) {
       const at = (v.steps || []).find((s) => s.state === "stopped" || s.state === "failed");
       toast("bad", `${label} 실패` + (at ? ` · ${at.label}에서 멈춤` : v.reason ? ` · ${v.reason}` : ""));
@@ -564,7 +569,9 @@ function paintButtons() {
     $(id).querySelector(".fly").hidden = on;
     $(id).classList.toggle("busy", on);
   }
-  $("stop-erpia").disabled = off;                        // 종료는 도는 중에도 눌러야 한다
+  $("stop-erpia").disabled = off;                        // 도는 중에도 눌러야 한다 - 그때는 [RPA 중단]
+  $("stop-erpia").querySelector(".t").textContent = running ? "RPA 중단" : "ERPia 종료";
+  $("stop-erpia").querySelector(".fly").innerHTML = running ? STOP : POWER;
   paintTokens(); paintRepeat();
 }
 

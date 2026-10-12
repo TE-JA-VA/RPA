@@ -7,6 +7,7 @@ import {
   getDatabase, ref, get, connectDatabaseEmulator,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import { firebaseConfig } from "./firebase-config.js";
+import { icon } from "./icons.js";
 import { applyTheme, getTheme, isDark, applyAccent, getAccent } from "./theme.js";
 import * as rpa from "./rpa.js";
 import * as account from "./account.js";
@@ -34,7 +35,8 @@ let pcId = null;
 let current = null;     // 떠 있는 모듈
 
 // --- 테마·강조색: 고른 값은 이 브라우저에만 남는다 ----------------------
-function paintThemeButton() { $("theme").textContent = isDark() ? "☀ 밝게" : "☾ 어둡게"; }
+function paintThemeButton() { $("theme").innerHTML = isDark() ? `${icon("sun")}밝게` : `${icon("moon")}어둡게`; }
+$("logout-btn").innerHTML = `${icon("log-out")}로그아웃`;
 $("theme").onclick = () => { applyTheme(isDark() ? "light" : "dark"); paintThemeButton(); };
 applyTheme(getTheme());
 paintThemeButton();
@@ -119,7 +121,7 @@ async function loadCompany() {
   show($("pc-pick"), keys.length > 1);
 }
 
-const CHEV = `<svg class="chev" viewBox="0 0 512 512" aria-hidden="true"><path d="M233.4 406.6c12.5 12.5 32.8 12.5 45.3 0l192-192c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L256 338.7 86.6 169.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l192 192z"/></svg>`;
+const CHEV = icon("chevron-down", "chev");
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // PC 고르기: 알약에 지금 PC, 아래 목록엔 나머지 PC. 올리거나(마우스) 누르면(터치·키보드) 펼쳐진다
@@ -158,7 +160,7 @@ function leaveOk() {
 function navLink(mod) {
   const a = document.createElement("a");
   a.href = "#"; a.dataset.key = mod.key;
-  a.innerHTML = `<span class="ic">${mod.icon || "▣"}</span>`;
+  a.innerHTML = `<span class="ic">${icon(mod.icon || "square")}</span>`;   // mod.icon = Lucide 이름
   a.append(mod.label);
   a.onclick = (e) => { e.preventDefault(); if (leaveOk()) mount(mod); };
   return a;

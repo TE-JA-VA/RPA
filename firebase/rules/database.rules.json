@@ -6,7 +6,7 @@
     "meta": {
       "companies": {
         "$cid": {
-          ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
+          ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
           ".write": "auth != null && auth.token.role === 'super'"
         }
       }
@@ -17,7 +17,7 @@
         "live": {
           "$cid": {
             "$pcId": {
-              ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
+              ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
               ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId"
             }
           }
@@ -26,7 +26,7 @@
         "settings": {
           "$cid": {
             "$pcId": {
-              ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
+              ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
               ".write": "auth != null && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')"
             }
           }
@@ -35,7 +35,7 @@
         "commands": {
           "$cid": {
             "$pcId": {
-              ".read": "auth != null && (auth.token.cid === $cid || auth.token.role === 'super')",
+              ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
               ".indexOn": ["state"],
 
               "$cmdId": {
@@ -43,7 +43,7 @@
                 ".validate": "newData.hasChildren(['type', 'by', 'created_at', 'expires_at', 'state'])",
 
                 "type": {
-                  ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'set_modules' || newData.val() === 'set_schedule' || newData.val() === 'set_presets' || newData.val() === 'resume_repeat') && (!data.exists() || data.val() === newData.val())"
+                  ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'stop_rpa' ||newData.val() === 'set_modules' || newData.val() === 'set_schedule' || newData.val() === 'set_presets' || newData.val() === 'resume_repeat') && (!data.exists() || data.val() === newData.val())"
                 },
                 "by": {
                   ".validate": "newData.isString() && (data.exists() ? data.val() === newData.val() : newData.val() === auth.uid)"
@@ -63,6 +63,61 @@
                 "ended_at": { ".validate": "newData.isNumber() && auth.token.role === 'agent'" },
                 "$other": { ".validate": false }
               }
+            }
+          }
+        }
+      },
+
+      "otp": {
+        "requests": {
+          "$cid": {
+            "$phoneId": {
+              "current": {
+                ".read": "auth != null && ((auth.token.cid === $cid && (auth.token.role !== 'phone' || auth.token.phoneId === $phoneId)) || auth.token.role === 'super')",
+                ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && (!data.exists() || data.child('pcId').val() === auth.token.pcId || data.child('created_at').val() + 120000 < now)",
+                ".validate": "newData.hasChildren(['req_id', 'site', 'senders', 'pcId', 'created_at'])",
+                "req_id": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{8,64}$/)" },
+                "site": { ".validate": "newData.isString() && newData.val().length <= 100" },
+                "senders": {
+                  ".validate": "newData.hasChildren()",
+                  "$num": { ".validate": "$num.matches(/^[0-9]{3,15}$/) && newData.val() === true" }
+                },
+                "pcId": { ".validate": "newData.val() === auth.token.pcId" },
+                "created_at": { ".validate": "newData.val() === now" },
+                "$other": { ".validate": false }
+              }
+            }
+          }
+        },
+
+        "codes": {
+          "$cid": {
+            "$phoneId": {
+              "current": {
+                ".read": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/pcId').val() === auth.token.pcId",
+                ".write": "auth != null && ((auth.token.role === 'agent' && auth.token.cid === $cid && !newData.exists()) || (auth.token.role === 'phone' && auth.token.cid === $cid && auth.token.phoneId === $phoneId && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/created_at').val() + 120000 > now))",
+                ".validate": "newData.hasChildren(['req_id', 'code', 'sender', 'sms_at', 'written_at']) && newData.child('req_id').val() === root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/req_id').val() && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/senders/' + newData.child('sender').val()).val() === true",
+                "req_id": { ".validate": "newData.isString()" },
+                "code": { ".validate": "newData.isString() && newData.val().matches(/^[0-9]{4,8}$/)" },
+                "sender": { ".validate": "newData.isString() && newData.val().matches(/^[0-9]{3,15}$/)" },
+                "sms_at": { ".validate": "newData.isNumber()" },
+                "written_at": { ".validate": "newData.val() === now" },
+                "$other": { ".validate": false }
+              }
+            }
+          }
+        },
+
+        "phones": {
+          "$cid": {
+            "$phoneId": {
+              ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
+              ".write": "auth != null && auth.token.role === 'phone' && auth.token.cid === $cid && auth.token.phoneId === $phoneId",
+              ".validate": "newData.hasChildren(['os', 'app_version', 'last_seen'])",
+              "os": { ".validate": "newData.val() === 'android' || newData.val() === 'ios'" },
+              "app_version": { ".validate": "newData.isString() && newData.val().length <= 20" },
+              "last_seen": { ".validate": "newData.val() === now" },
+              "$other": { ".validate": false }
             }
           }
         }

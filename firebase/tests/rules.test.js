@@ -6,7 +6,7 @@ import test, { before, after, beforeEach } from "node:test";
 import {
   initializeTestEnvironment, assertFails, assertSucceeds,
 } from "@firebase/rules-unit-testing";
-import { ref, set, update, get } from "firebase/database";
+import { ref, set, update, get, remove, serverTimestamp } from "firebase/database";
 import { doc, setDoc, getDoc, updateDoc, deleteDoc, collection, getAggregateFromServer, sum } from "firebase/firestore";
 
 const rulesPath = fileURLToPath(new URL("../rules/database.rules.json", import.meta.url));
@@ -103,6 +103,10 @@ test("commands: resume_repeat 는 관리자가 만들 수 있다 (반복 다시 
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "resume_repeat", args: null })));
 });
 
+test("commands: stop_rpa 는 관리자가 만들 수 있다 (RPA 중단, 2026-10-12)", async () => {
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "stop_rpa", args: null })));
+});
+
 test("commands: update·rollback 명령은 업체 관리자도 총괄도 못 넣는다 (관리 화면 Admin SDK 만 - 자동 업데이트 10절)", async () => {
   for (const [who, uid] of [[asAdminA, "u_admin_a"], [asSuper, "u_super"]]) {
     for (const type of ["update", "rollback"]) {
@@ -164,6 +168,108 @@ test("settings: 관리자는 쓰고, 열람자는 못 쓰고, 그 PC 의 에이�
   await assertFails(set(ref(asViewerA(), "apps/rpa/settings/ca/pc1"), { modules: { Login: false } }));
   await assertSucceeds(get(ref(asAgentA1(), "apps/rpa/settings/ca/pc1")));
   await assertFails(get(ref(asAdminB(), "apps/rpa/settings/ca/pc1")));
+});
+
+// ---------------------------------------------------------------------------
+// 휴대폰 인증번호 중계 apps/otp (2026-10-12, specs/2026-10-12-phone-otp-relay-design.md)
+// ---------------------------------------------------------------------------
+const asPhoneA1 = () => env.authenticatedContext("u_phone_a1", { cid: "ca", phoneId: "ph1", role: "phone" }).database();
+const asPhoneA2 = () => env.authenticatedContext("u_phone_a2", { cid: "ca", phoneId: "ph2", role: "phone" }).database();
+const asPhoneB1 = () => env.authenticatedContext("u_phone_b1", { cid: "cb", phoneId: "ph1", role: "phone" }).database();
+const REQ = "apps/otp/requests/ca/ph1/current";
+const CODE = "apps/otp/codes/ca/ph1/current";
+const otpReq = (over = {}) => ({
+  req_id: "req_abcdef12", site: "가나몰", senders: { "15881234": true }, pcId: "pc1", created_at: serverTimestamp(), ...over,
+});
+const otpCode = (over = {}) => ({
+  req_id: "req_abcdef12", code: "123456", sender: "15881234", sms_at: 1000, written_at: serverTimestamp(), ...over,
+});
+const putReqRaw = (over = {}) => env.withSecurityRulesDisabled(async (c) => {
+  await set(ref(c.database(), REQ), { ...otpReq(), created_at: Date.now(), ...over });
+});
+
+test("otp: 휴대폰 계정은 cid 가 같아도 업체 자료(현황·설정·명령·업체 정보)를 못 읽는다", async () => {
+  for (const p of ["apps/rpa/live/ca/pc1", "apps/rpa/settings/ca/pc1", "apps/rpa/commands/ca/pc1", "meta/companies/ca", "apps/otp/phones/ca/ph1"]) {
+    await assertFails(get(ref(asPhoneA1(), p)));
+  }
+});
+
+test("otp: 휴대폰 계정은 Firestore 의 기록·통장·값표·배율도 못 읽는다", async () => {
+  const fsPhone = env.authenticatedContext("u_phone_a1", { cid: "ca", phoneId: "ph1", role: "phone" }).firestore();
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "runs/ca/items/r1"), run());
+    await setDoc(doc(c.firestore(), "wallet/ca"), { granted: 1 });
+    await setDoc(doc(c.firestore(), "meta/prices"), { default: 1 });
+    await setDoc(doc(c.firestore(), "prices/ca"), { sales: 1 });
+  });
+  for (const p of ["runs/ca/items/r1", "wallet/ca", "meta/prices", "prices/ca"]) await assertFails(getDoc(doc(fsPhone, p)));
+  await assertSucceeds(getDoc(doc(fsAgentA1(), "meta/prices")));      // 다른 계정은 그대로
+});
+
+test("otp 요청: 에이전트가 자기 PC 이름·서버 시각으로 연다, 휴대폰은 자기 것만 읽는다", async () => {
+  await assertSucceeds(set(ref(asAgentA1(), REQ), otpReq()));
+  await assertSucceeds(get(ref(asPhoneA1(), REQ)));
+  await assertSucceeds(get(ref(asViewerA(), REQ)));                     // 대시보드 STAND BY 표시
+  await assertFails(get(ref(asPhoneA2(), REQ)));                        // 같은 업체 다른 휴대폰
+  await assertFails(get(ref(asPhoneB1(), REQ)));                        // 다른 업체
+  await assertFails(get(ref(asAdminB(), REQ)));
+});
+
+test("otp 요청: 시각 위조·PC 위조·발신번호 없음·이상한 발신번호·모르는 칸은 거부, 관리자·휴대폰은 못 연다", async () => {
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq({ created_at: Date.now() })));
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq({ pcId: "pc2" })));
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq({ senders: null })));
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq({ senders: { "1588-1234": true } })));
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq({ body: "본문" })));
+  await assertFails(set(ref(asAdminA(), REQ), otpReq()));
+  await assertFails(set(ref(asPhoneA1(), REQ), otpReq()));
+});
+
+test("otp 요청: 남의 PC 가 연 요청은 2분 안에 덮거나 지우지 못하고, 지나면 된다. 자기 것은 언제든", async () => {
+  await assertSucceeds(set(ref(asAgentA1(), REQ), otpReq()));
+  await assertFails(set(ref(asAgentA2(), REQ), otpReq({ pcId: "pc2" })));
+  await assertFails(remove(ref(asAgentA2(), REQ)));
+  await assertSucceeds(set(ref(asAgentA1(), REQ), otpReq({ req_id: "req_again123" })));
+  await assertSucceeds(remove(ref(asAgentA1(), REQ)));
+  await putReqRaw({ created_at: Date.now() - 121000 });
+  await assertSucceeds(set(ref(asAgentA2(), REQ), otpReq({ pcId: "pc2" })));
+});
+
+test("otp 번호: 열린 요청·같은 req_id·발신번호 일치·숫자 4~8자리일 때만 자기 휴대폰이 쓴다", async () => {
+  await assertFails(set(ref(asPhoneA1(), CODE), otpCode()));                        // 요청 없음
+  await putReqRaw();
+  await assertFails(set(ref(asPhoneA1(), CODE), otpCode({ req_id: "req_other123" })));
+  await assertFails(set(ref(asPhoneA1(), CODE), otpCode({ sender: "16001111" })));   // 은행 등 다른 발신번호
+  for (const code of ["12a456", "123", "123456789", 123456]) await assertFails(set(ref(asPhoneA1(), CODE), otpCode({ code })));
+  await assertFails(set(ref(asPhoneA1(), CODE), otpCode({ written_at: Date.now() })));
+  await assertFails(set(ref(asPhoneA1(), CODE), otpCode({ body: "본문" })));
+  await assertFails(set(ref(asPhoneA2(), CODE), otpCode()));                        // 다른 휴대폰
+  await assertFails(set(ref(asPhoneB1(), "apps/otp/codes/ca/ph1/current"), otpCode()));   // 다른 업체
+  await assertFails(set(ref(asAgentA1(), CODE), otpCode()));                        // 에이전트는 지우기만
+  await assertSucceeds(set(ref(asPhoneA1(), CODE), otpCode()));
+});
+
+test("otp 번호: 2분 지난 요청엔 못 쓴다", async () => {
+  await putReqRaw({ created_at: Date.now() - 121000 });
+  await assertFails(set(ref(asPhoneA1(), CODE), otpCode()));
+});
+
+test("otp 번호: 요청을 연 PC 의 에이전트만 읽고, 같은 업체 에이전트는 지운다. 휴대폰·관리자는 못 읽는다", async () => {
+  await putReqRaw();
+  await assertSucceeds(set(ref(asPhoneA1(), CODE), otpCode()));
+  await assertSucceeds(get(ref(asAgentA1(), CODE)));
+  for (const who of [asAgentA2, asPhoneA1, asAdminA, asViewerA]) await assertFails(get(ref(who(), CODE)));
+  await assertSucceeds(remove(ref(asAgentA1(), CODE)));
+});
+
+test("otp 휴대폰 표시: 자기 것만 서버 시각으로 쓰고, 같은 업체 화면이 읽는다", async () => {
+  const me = { os: "android", app_version: "1", last_seen: serverTimestamp() };
+  await assertSucceeds(set(ref(asPhoneA1(), "apps/otp/phones/ca/ph1"), me));
+  await assertFails(set(ref(asPhoneA1(), "apps/otp/phones/ca/ph2"), me));
+  await assertFails(set(ref(asPhoneA1(), "apps/otp/phones/ca/ph1"), { ...me, last_seen: 1 }));
+  await assertFails(set(ref(asPhoneA1(), "apps/otp/phones/ca/ph1"), { ...me, os: "windows" }));
+  await assertSucceeds(get(ref(asViewerA(), "apps/otp/phones/ca/ph1")));
+  await assertFails(get(ref(asAdminB(), "apps/otp/phones/ca/ph1")));
 });
 
 test("meta: super 만 쓴다", async () => {

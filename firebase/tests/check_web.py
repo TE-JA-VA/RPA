@@ -234,16 +234,22 @@ with sync_playwright() as pw:
     check(True, "회사 이름 표시")
     check(page.text_content("#app-nav a[aria-current='page']").strip().endswith("RPA"), "사이드바에서 RPA 가 현재 페이지")
     # 사이드바 (사용자 2026-10-08): 계정 줄·[밝게]·[로그아웃] 은 'AFTER MARKET / 업체명' 바로 아래, 메뉴 글자는 이모지
-    icons = page.evaluate("[...document.querySelectorAll('.nav a .ic')].map((e) => e.textContent)")
-    check(icons == ["🔄", "⚙️", "👤"], f"메뉴 이모지: RPA 새로고침 · 환경설정 톱니 · 계정 사람 ({icons})")
+    # 아이콘은 Lucide 0.468.0 (사용자 2026-10-12, 이모지·기호 글자 대신) - data-icon 이 Lucide 이름
+    lu = lambda sel: page.evaluate(f"[...document.querySelectorAll({sel!r})].map((e) => e.dataset.icon)")
+    icons = lu(".nav a .ic svg.lu")
+    check(icons == ["calendar-sync", "settings", "circle-user"] and page.evaluate("document.querySelector('.nav a .ic').textContent.trim()") == "",
+          f"메뉴 아이콘: RPA calendar-sync · 환경설정 settings · 계정 circle-user, 이모지 없음 ({icons})")
+    check(lu("#logout-btn svg.lu") == ["log-out"] and "로그아웃" in page.text_content("#logout-btn"), "로그아웃 단추에 log-out 아이콘")
+    check(lu("#theme svg.lu") in (["moon"], ["sun"]) and not any(ch in page.text_content("#theme") for ch in "☀☾"), "테마 단추는 sun / moon 아이콘 (기호 글자 없음)")
     box = lambda sel: page.evaluate(f"(() => {{ const r = document.querySelector('{sel}').getBoundingClientRect(); return [r.left, r.top, r.bottom]; }})()")
     check(box("#company")[2] <= box("#who")[1] and box("#logout-btn")[2] <= box(".nav a")[1],
           f"계정·밝게·로그아웃이 업체명 아래, 메뉴 위 ({box('#company')}, {box('#who')}, {box('#logout-btn')}, {box('.nav a')})")
     if os.environ.get("SHOT_DIR"): page.locator("aside.side").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "side.png"))
     page.set_viewport_size({"width": 390, "height": 800}); page.wait_for_timeout(300)
     check(box("#logout-btn")[0] > box("#admin-nav a:last-child")[0], "휴대폰 폭에선 지금처럼 메뉴 오른쪽 끝에")
-    check(page.evaluate("""[...document.querySelectorAll('.side .foot button')].every((b) => { const r = document.createRange();
-      r.selectNodeContents(b); return r.getClientRects().length === 1; })"""), "휴대폰 폭에서도 [밝게]·[로그아웃] 글자가 한 줄")
+    check(page.evaluate("""[...document.querySelectorAll('.side .foot button')].every((b) => [...b.childNodes].filter((n) => n.nodeType === 3)
+      .every((n) => { const r = document.createRange(); r.selectNodeContents(n); return r.getClientRects().length === 1; }))"""),
+          "휴대폰 폭에서도 [밝게]·[로그아웃] 글자가 한 줄 (아이콘 옆 글자만 잰다)")
     if os.environ.get("SHOT_DIR"): page.locator("aside.side").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "side_390.png"))
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
     check(page.text_content("#page-title") == "RPA", "페이지 제목")
@@ -289,7 +295,7 @@ with sync_playwright() as pw:
     page.click("#theme")
     after = page.evaluate("getComputedStyle(document.body).backgroundColor")
     check(before != after and page.evaluate("document.documentElement.dataset.theme") == "dark", "어둡게 토글이 바탕색을 바꾼다")
-    check("밝게" in page.text_content("#theme"), "버튼 글자가 바뀐다")
+    check("밝게" in page.text_content("#theme") and lu("#theme svg.lu") == ["sun"], "버튼 글자가 바뀐다 (어두울 땐 sun 아이콘 + 밝게)")
     contrast_ok("어두움")
     if os.environ.get("SHOT_DIR"):   # 색 전환(.5s)이 끝난 뒤에 찍는다 - 도중엔 옛 글자색이 새 카드색과 같아 글자가 안 보인다
         page.wait_for_timeout(700)
@@ -623,12 +629,28 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('run-routine')?.disabled === true", timeout=10000)
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('시작했습니다')", timeout=10000)
     check(page.locator("#toasts .toast.info", has_text="시작했습니다").count() == 1, "RPA 가 시작되면 파란 토스트")
+    check(lu("#toasts .toast.info svg.lu")[:2] == ["info", "x"], f"토스트 아이콘: 안내 info + 닫기 x ({lu('#toasts .toast.info svg.lu')})")
+    check(lu(".pc-pick .chev") in ([], ["chevron-down"]) and lu("#log-box summary .chev") == ["chevron-right"], "접기 꺾쇠: PC 고르기 chevron-down, 로그 chevron-right")
     check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
     check("돌고 있어" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
     check(page.text_content("#run-routine .t") == "루틴 RPA 실행중" and page.is_hidden("#run-routine .fly")
           and page.text_content("#run-prepare .t") == "프리페어 RPA" and page.is_visible("#run-prepare .fly"),
           f"도는 RPA 의 단추는 '… 실행중' (화살표 없이), 다른 단추는 그대로 ({page.text_content('#run-routine .t')})")
+    # [RPA 중단] (2026-10-12 사용자): 도는 동안엔 [ERPia 종료] 자리가 [RPA 중단] - 묻고 나서 stop_rpa (바로 끔, ERPia 는 그대로)
+    check(page.text_content("#stop-erpia .t") == "RPA 중단" and lu("#stop-erpia svg") == ["square"],
+          f"도는 중에는 [ERPia 종료] 가 [RPA 중단] + 정지 네모 아이콘 ({page.text_content('#stop-erpia .t')}, {lu('#stop-erpia svg')})")
+    asked, n_erpia = [], len(cmds_of("stop_erpia"))
+    page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
+    page.click("#stop-erpia")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('RPA 중단 명령을 보냈습니다')", timeout=10000)
+    check(bool(asked) and "중단할까요" in asked[0], f"누르면 먼저 묻는다 ({asked})")
+    time.sleep(1.0)
+    stop_key = next((k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "stop_rpa"), None)
+    check(stop_key is not None and len(cmds_of("stop_erpia")) == n_erpia, "stop_rpa 명령을 넣는다 (ERPia 종료가 아니라)")
+    if stop_key:
+        db_patch(f"{CMDS}/{stop_key}", {"state": "done", "result": "루틴 RPA 을(를) 중단했습니다.", "started_at": 1, "ended_at": 2})
+    page.wait_for_function("document.getElementById('stop-erpia')?.disabled === false", timeout=10000)
     if os.environ.get("SHOT_DIR"): page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_busy.png"))
     # 진행 중 단계 점만 숨쉬고, 로그가 늘어도 애니메이션이 처음부터 다시 돌지 않는다 (목록을 제자리에서 고친다)
     anim = lambda sel: page.evaluate(f"getComputedStyle(document.querySelector({sel!r})).animationName")
@@ -651,6 +673,14 @@ with sync_playwright() as pw:
     page.wait_for_function("document.querySelectorAll('#list-routine li.done').length === 2", timeout=10000)
     check(anim("#list-routine li.running .mark") == "step-glow" and page.text_content("#list-routine li:nth-child(3) .note") == "진행 중",
           "단계가 넘어가면 다음 줄로 옮겨 간다")
+    db_patch(f"{LIVE}/programs/routine", {"state": "stopped", "reason": "대시보드에서 중단했습니다", "finished_at": f"{TODAY}T16:21:30"})
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('루틴 RPA 중단')", timeout=10000)
+    check(page.locator("#toasts .toast.info", has_text="루틴 RPA 중단 · 대시보드에서 중단했습니다").count() == 1
+          and page.locator("#toasts .toast.bad", has_text="루틴 RPA 실패").count() == 0, "대시보드에서 중단하면 '실패' 가 아니라 파란 '중단' 토스트")
+    page.wait_for_function("document.querySelector('#stop-erpia .t')?.textContent === 'ERPia 종료'", timeout=10000)
+    check(True, "멈추면 단추가 다시 [ERPia 종료]")
+    db_patch(f"{LIVE}/programs/routine", {"state": "running", "reason": None, "finished_at": None})
+    page.wait_for_function("document.querySelector('#stop-erpia .t')?.textContent === 'RPA 중단'", timeout=10000)
     db_patch(f"{LIVE}/programs/routine", {"state": "crashed", "reason": "프로그램이 사라졌습니다", "finished_at": f"{TODAY}T16:22:00"})
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('오류')", timeout=10000)
     check(page.locator("#toasts .toast.warn", has_text="오류").count() == 1, "죽으면 노란 토스트 (오류)")
@@ -897,8 +927,8 @@ with sync_playwright() as pw:
     page.wait_for_function("(document.querySelector('#hero .stats')?.textContent || '').includes('물류관리')", timeout=10000)
     check("13:30 · 물류관리" in page.text_content("#hero .stats"), f"상태 띠 다음 자동 실행에 그 줄의 모듈 ({page.text_content('#hero .stats')})")
     check("primary" in (page.get_attribute("#run-all", "class") or "") and "primary" not in (page.get_attribute("#run-routine", "class") or ""), "강조는 전체 실행에")
-    check(all(page.locator(f"#{i} svg").count() == 1 for i in ("run-all", "run-prepare", "run-routine")), "실행 버튼은 화살표 아이콘 하나")
-    check(page.text_content("#stop-erpia .ic") == "⏼" and page.locator("#stop-erpia svg").count() == 0, "ERPia 종료는 전원 글자 ⏼ (U+23FC)")
+    check(all(lu(f"#{i} svg") == ["play"] for i in ("run-all", "run-prepare", "run-routine")), "실행 버튼은 play 아이콘 하나")
+    check(lu("#stop-erpia svg") == ["power"] and "⏼" not in page.text_content("#stop-erpia"), "ERPia 종료는 power 아이콘 (⏼ 글자 아님)")
     # 표시는 넷 다 동그라미 안 같은 자리 (전원이 화살표보다 오른쪽으로 밀리던 것을 고쳤다)
     spots = page.evaluate("""() => ['run-all', 'run-prepare', 'run-routine', 'stop-erpia'].map((id) => {
       const b = document.getElementById(id), r = b.getBoundingClientRect();
@@ -908,8 +938,8 @@ with sync_playwright() as pw:
     radius = page.evaluate("""() => [getComputedStyle(document.getElementById('run-routine')).borderRadius,
       getComputedStyle(document.getElementById('act-card')).borderRadius]""")
     check(radius[0] == "12px", f"버튼 모서리는 카드처럼 둥근 네모 ({radius})")
-    ic_w = page.evaluate("document.querySelector('#stop-erpia .ic').getBoundingClientRect().width")
-    check(ic_w > 10, f"전원 글자가 실제로 그려진다 (폭 {ic_w:.0f}px)")
+    ic_w = page.evaluate("document.querySelector('#stop-erpia svg').getBoundingClientRect().width")
+    check(ic_w > 10, f"전원 아이콘이 실제로 그려진다 (폭 {ic_w:.0f}px)")
     check(not page.is_disabled("#stop-erpia"), "종료 버튼 활성")
     stop_bg = page.evaluate("getComputedStyle(document.getElementById('stop-erpia')).backgroundColor")
     check(rgb2hex(stop_bg) == token("--bad-fill"), f"종료 버튼은 빨강 ({stop_bg})")

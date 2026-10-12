@@ -5,7 +5,8 @@ service cloud.firestore {
 
     function claims() { return request.auth.token; }
     function signedIn() { return request.auth != null; }
-    function sameCompany(cid) { return signedIn() && (claims().cid == cid || claims().role == 'super'); }
+    // 휴대폰(phone, 인증번호 중계 2026-10-12) 계정은 cid 가 있어도 업체 자료를 못 본다 - apps/otp 의 자기 자리만
+    function sameCompany(cid) { return signedIn() && ((claims().cid == cid && claims().role != 'phone') || claims().role == 'super'); }
 
     // 토큰 (2026-10-06): 기록 한 장의 쓴 것(used, 모듈별 횟수)·쓴 토큰(cost). 없으면 옛 에이전트라 그대로 받는다
     function validUsage(d) {
@@ -27,7 +28,7 @@ service cloud.firestore {
 
     // 토큰 값표 { default, login, … } - 에이전트가 기록의 쓴 토큰을 셀 때 읽는다. 쓰기는 setup.js(Admin SDK)만
     match /meta/prices {
-      allow read: if signedIn();
+      allow read: if signedIn() && claims().role != 'phone';
       allow write: if false;
     }
 

@@ -447,7 +447,7 @@ class Uploader:
 # ---------------------------------------------------------------------------
 # 명령
 # ---------------------------------------------------------------------------
-KNOWN_TYPES = ("launch", "stop_erpia", "set_modules", "set_schedule", "set_presets", "resume_repeat", "update", "rollback")
+KNOWN_TYPES = ("launch", "stop_erpia", "stop_rpa","set_modules", "set_schedule", "set_presets", "resume_repeat", "update", "rollback")
 ADMIN_ONLY_TYPES = ("update", "rollback")   # 관리 화면(Admin SDK)만 - DB 규칙의 type 목록에도 없다 (자동 업데이트 10절)
 ADMIN_TOOL_BY = "admin-tool"
 VERSION_RE = re.compile(r"\d{4}\.\d{2}\.\d{2}-\d+")
@@ -604,6 +604,12 @@ def real_actions(policy=None, limits=None, start_update=None):
             raise RuntimeError(body.get("error") or "ERPia 를 종료하지 못했습니다")
         return body.get("message") or "ERPia 를 종료했습니다"
 
+    def do_stop_rpa(args):
+        status, body = dash.stop_rpa()        # 바로 끔·ERPia 는 그대로 (사용자 2026-10-12)
+        if status != 200:
+            raise RuntimeError(body.get("error") or "RPA 를 중단하지 못했습니다")
+        return body.get("message") or "RPA 를 중단했습니다"
+
     def do_modules(args):
         if not isinstance(args, dict) or not args:
             raise RuntimeError("모듈 값이 없습니다")
@@ -710,7 +716,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         start(back, "rollback")
         return f"이전 판으로 되돌리기를 예약했습니다 ({back}) - RPA 가 끝나면 바로 바뀝니다"
 
-    return {"launch": do_launch, "stop_erpia": do_stop, "set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets,
+    return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets,
             "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback}
 
 
