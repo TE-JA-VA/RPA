@@ -23,7 +23,10 @@ EDGE_MISSING = "Microsoft Edge 가 없습니다 - Edge 를 설치한 뒤 다시 
 def edge(launch, *args, **kw):
     """PC 에 깔린 Edge 로 띄운다 - 기록·재생·옵저버·프리페어가 모두 여기로 (2026-10-06 부터. 그 전에는 Playwright 의
     Chromium 713MB 를 배포판에 같이 실었다). launch 는 p.chromium.launch 나 launch_persistent_context.
-    Edge 가 없으면 사람 말로 멈춘다 (Playwright 는 'playwright install msedge' 하라는 개발자 말을 한다)."""
+    Edge 가 없으면 사람 말로 멈춘다 (Playwright 는 'playwright install msedge' 하라는 개발자 말을 한다).
+    navigator.webdriver 를 끈다 - 켜져 있으면 봇을 막는 사이트가 접근을 막는다 (2026-10-12 옵저버 기록 중 실측).
+    --test-type 은 그 옵션이 띄우는 '지원되지 않는 명령줄 플래그' 띠를 끈다 (기록 화면을 가린다)."""
+    kw["args"] = [*kw.get("args", []), "--disable-blink-features=AutomationControlled", "--test-type"]
     try:
         return launch(*args, channel="msedge", **kw)
     except Exception as e:

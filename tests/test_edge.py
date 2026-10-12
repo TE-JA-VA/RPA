@@ -76,6 +76,8 @@ def observer_browser():
         ctx, prof = rr.launch(Headless(p))
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page.goto("about:blank")
+            webdriver = page.evaluate("navigator.webdriver")
             page.goto("edge://version")
             about = page.inner_text("body")
         finally:
@@ -83,14 +85,17 @@ def observer_browser():
     with open(os.path.join(prof, "Default", "Preferences"), encoding="utf-8") as f:
         prefs = json.load(f)
     shutil.rmtree(prof, ignore_errors=True)
-    return about, prefs
+    return about, prefs, webdriver
 
 
 got, err = attempt(observer_browser)
-about, prefs = got or ("", {})
+about, prefs, webdriver = got or ("", {}, None)
 check("옵저버 브라우저는 깔린 Edge 이고, 경고 띠를 띄우는 명령줄(--no-sandbox·--enable-automation)이 없다",
       "Microsoft Edge" in about and "--no-sandbox" not in about and "--enable-automation" not in about,
       err or about[:600])
+check("옵저버 브라우저는 사이트에 자동 조종 브라우저라고 알리지 않는다 (navigator.webdriver - 2026-10-12 봇을 막는 사이트가 막았다), "
+      "그 옵션이 띄우는 '지원되지 않는 명령줄 플래그' 띠는 --test-type 으로 끈다",
+      webdriver is False and "--test-type" in about, err or f"webdriver={webdriver}")
 check("옵저버 프로필은 파일을 받을 때 Edge 다운로드 창을 띄우지 않는다 (기록 중 화면을 가린다)",
       prefs.get("browser", {}).get("show_hub_popup_on_download_start") is False, err or str(prefs.get("browser")))
 code, out = run(["rpa_observer.py", "--check"])
