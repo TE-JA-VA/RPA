@@ -275,12 +275,12 @@ check("아이디가 없으면 막는다", (rr.validate_presets([P(1, login=" ")]
 check("비밀번호가 저장돼 있지도 않고 치지도 않았으면 막는다", (rr.validate_presets([P(1, has_pw=False)]) or (0, ""))[0] == 1
       and rr.validate_presets([P(1, has_pw=False, pw="x")]) is None)
 check("다른 계정의 관리자 권한이면 멈춘다 (비밀번호가 그 계정으로 잠긴다)",
-      "PC\\b" in (rr.start_problem(me="PC\\a", session="PC\\b") or "") and rr.start_problem(me="PC\\a", session="pc\\A") is None)
+      "다른 사용자의 관리자 권한" in (rr.start_problem(me="PC\\a", session="PC\\b") or "") and rr.start_problem(me="PC\\a", session="pc\\A") is None)
 st.start("prepare", ["a"])
 st.flush()
 busy = rr.busy_problem()
 st.finish("success")
-check("RPA 가 돌고 있으면 옵저버를 안 연다 (RPA 가 화면·마우스를 쓴다)", "프리페어 RPA 가 돌고 있습니다" in (busy or ""), str(busy))
+check("RPA 가 돌고 있으면 옵저버를 안 연다 (RPA 가 화면·마우스를 쓴다)", "프리페어 RPA 이/가 돌고 있습니다" in (busy or ""), str(busy))
 check("켜면 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는 RPA 를 안 띄우고 자동 실행은 기다린다",
       rr.busy_problem() is None and st.observer_open())
 hold = st.hold_lock

@@ -56,8 +56,8 @@ GRAY_BTN = "#d1d5db"
 GUIDE = """<!doctype html><meta charset="utf-8"><title>AFTER MARKET 기록</title>
 <body style="margin:0;font-family:'Malgun Gothic',sans-serif;background:#f3f4f6;color:#111827">
 <div style="padding:28px 40px"><div style="font-size:40px;line-height:1">⬆</div>
-<h2 style="margin:10px 0 6px">위쪽 주소줄에 쇼핑몰 주소를 치고 Enter 를 누르세요</h2>
-<p style="margin:0 0 18px;font-size:15px">여기부터 하는 일이 모두 오른쪽 목록에 기록됩니다. 로그인하고 엑셀 파일을 받을 때까지 평소처럼 하세요.</p>
+<h2 style="margin:10px 0 6px">주소 표시줄에 쇼핑몰 주소를 입력해주십시오.</h2>
+<p style="margin:0 0 18px;font-size:15px">먼저 프리셋에 쇼핑몰 아이디와 비밀번호를 설정해 주십시오.<br>로그인부터 엑셀 파일을 받을 때까지의 행위를 기록하게 됩니다.</p>
 <p style="margin:0;color:#6b7280;font-size:14px">{hint}</p></div>"""
 
 
@@ -238,7 +238,7 @@ class Worker(threading.Thread):
             else:
                 if self.ctx:                            # 사람이 브라우저를 닫았다
                     self._close()
-                    self.ui.put(("status", "브라우저를 닫아 기록을 끝냈습니다", MUTED))
+                    self.ui.put(("status", "브라우저가 닫혔습니다. 마지막 작업까지 기록되었습니다.", MUTED))
                     self.ui.put(("recording_stopped",))
                 time.sleep(0.05)
 
@@ -293,7 +293,7 @@ class Worker(threading.Thread):
             self.page.set_content(GUIDE.format(hint=self.hint))
         self._send_viewport()
         self.ui.put(("recording", no))
-        self.ui.put(("status", f"● {circled(no + 1)} {name} 기록 중 - 왼쪽 브라우저에서 평소처럼 하세요", RED))
+        self.ui.put(("status", f"● {circled(no + 1)} {name} 기록 중", RED))
 
     def _send_viewport(self):
         """기록 창 브라우저의 안쪽 크기 - 기록에 넣어 프리페어가 같은 크기로 연다."""
@@ -306,7 +306,7 @@ class Worker(threading.Thread):
 
     def _do_stop(self):
         self._close()
-        self.ui.put(("status", "기록을 끝냈습니다 - 목록을 다듬고 [미리보기] 로 확인하세요", MUTED))
+        self.ui.put(("status", "기록했습니다. 목록에서 건너뛰거나 제외할 단계를 선택하실 수 있습니다.", MUTED))
         self.ui.put(("recording_stopped",))
 
     def _do_dock(self, b):
@@ -460,15 +460,15 @@ def validate_presets(presets):
             continue
         tag = f"{circled(p['no'])} {p['name']}"
         if not re.fullmatch(r"\d{3}", p.get("code") or ""):
-            return p["no"], f"{tag}: 사이트코드는 숫자 세 자리여야 합니다 (받은 파일 이름 앞에 붙어 루틴이 알아봅니다)"
+            return p["no"], f"{tag}: 사이트코드는 숫자 세 자리여야 합니다 (받은 엑셀파일 이름 앞에 붙어, 주문매핑 매출처리 단계에서 자동으로 처리하게 됩니다.)"
         if p["code"] in codes:
-            return p["no"], (f"{tag}: 사이트코드 {p['code']} 를 {codes[p['code']]} 도 씁니다 - "
-                             "루틴은 한 사이트코드에 파일 하나만 올립니다")
+            return p["no"], (f"{tag}: 사이트코드 {p['code']} 를 {codes[p['code']]} 도 사용합니다. "
+                             "다른 사이트코드를 입력하여 주십시오.")
         codes[p["code"]] = tag
         if not (p.get("id") or "").strip():
-            return p["no"], f"{tag}: 아이디를 넣으세요 (프리페어가 이 아이디로 로그인합니다)"
+            return p["no"], f"{tag}: 아이디가 필요합니다."
         if not (p.get("pw") or p.get("has_pw")):
-            return p["no"], f"{tag}: 비밀번호를 넣으세요"
+            return p["no"], f"{tag}: 비밀번호가 필요합니다."
     return None
 
 
@@ -531,7 +531,7 @@ class App:
         head = tk.Frame(root, bg=BG)
         head.pack(fill="x", padx=pad, pady=(pad, 6))
         tk.Label(head, text="사용자 행위 기록", font=(UI, 14, "bold"), bg=BG, fg=INK).pack(anchor="w")
-        tk.Label(head, text="쇼핑몰마다 프리셋 하나 - 로그인부터 엑셀 받기까지 한 번 해 보이면 RPA 가 따라 합니다",
+        tk.Label(head, text="각 프리셋마다 로그인부터 엑셀 파일 다운로드까지 보여주시면 다음 번부터 자동으로 엑셀파일을 수집합니다.",
                  font=F_SMALL, bg=BG, fg=MUTED, anchor="w", justify="left", wraplength=self.panel_w - 2 * pad).pack(fill="x")
 
         # 프리셋 줄
@@ -621,7 +621,7 @@ class App:
 
     def paint_buttons(self):
         rec_on = self.recording is not None
-        self.rec_btn.config(text="■  기록 끝" if rec_on else "●  기록 시작")
+        self.rec_btn.config(text="■  기록 완료" if rec_on else "●  기록 시작")
         enable(self.rec_btn, not self.previewing and (not rec_on or self.recording == self.cur))
         if self.previewing:         # 창을 닫는 대신 멈추는 단추 (2026-10-02 - 미리보기 중에는 창이 안 닫힌다)
             skin(self.prev_btn, "▶  계속" if self.paused else "Ⅱ  일시정지", BLUE, BLUE_D, self.toggle_pause)
@@ -644,8 +644,8 @@ class App:
         self.id_var.set(p["id"])
         self.pw_var.set(p["pw"])
         self._loading = False
-        self.pw_hint.config(text=("저장된 비밀번호가 있습니다 - 바꿀 때만 넣으세요. " if p["has_pw"] else "")
-                            + "아이디·비밀번호는 저장하면 이 PC 의 설정에 잠가서 넣습니다. 기록 파일·대시보드에는 안 갑니다.")
+        self.pw_hint.config(text=("저장된 비밀번호가 있습니다. " if p["has_pw"] else "")
+                            + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.")
 
     def _store_fields(self):
         p = self.presets[self.cur]
@@ -678,7 +678,7 @@ class App:
     def remove_preset(self):
         p = self.presets[-1]
         if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
-                "프리셋 지우기", f"{circled(len(self.presets))} {p['name']} 에 기록이 있습니다. 지울까요?"):
+                "프리셋 지우기", f"{circled(len(self.presets))} {p['name']} 에 기록이 있습니다. 프리셋을 지우시겠습니까?"):
             return
         self._store_fields()
         self.presets.pop()
@@ -728,16 +728,16 @@ class App:
                       ).pack(side="right", anchor="n", padx=6, pady=4)
             tk.Label(row, text=f"{n:2d}", font=F_SMALL, bg=CARD, fg=MUTED, width=3, anchor="e").pack(side="left", anchor="n", pady=6)
             text = re.sub(r" \(\d+단계 뒤에 새로 생긴 것\)", " (새로 생긴 것)", rec.describe(s))
-            warn = s["kind"] == "goto" and "깨질 수" in text
+            warn = s["kind"] == "goto" and "로그인 세션 값을 감지" in text
             lab = tk.Label(row, text=text, font=F, bg=CARD, anchor="w", justify="left",
                            fg=(RED_D if warn else INK) if on else "#9ca3af",
                            wraplength=self.panel_w - int(170 * self.scale))
             lab.pack(side="left", fill="x", expand=True, padx=(6, 0), pady=6)
             self.labels[sid], self.base[sid] = lab, text
         if not n:
-            tip = ("위 [● 기록 시작] 을 누르고, 왼쪽 브라우저 주소줄에 쇼핑몰 주소를 치세요.\n"
-                   "로그인부터 엑셀 받기까지 평소처럼 하면 여기에 단계가 쌓입니다.") if self.recording is None else \
-                "왼쪽 브라우저 주소줄에 쇼핑몰 주소를 치고 Enter 를 누르세요."
+            tip = ("[● 기록 시작] 을 누르고 쇼핑몰 사이트 주소를 입력하는 것부터 시작해주세요.\n"
+                   "모두 완료하였다면 [■ 기록 완료] 버튼을 누른 다음 저장해주세요.") if self.recording is None else \
+                "주소 표시줄에 쇼핑몰 주소를 입력해주십시오."
             tk.Label(self.inner, text=tip, font=F, bg=CARD, fg=MUTED, justify="left", anchor="w",
                      wraplength=self.panel_w - int(90 * self.scale)).pack(fill="x", padx=14, pady=14)
         self._title()
@@ -772,7 +772,7 @@ class App:
         self._store_fields()
         p = self.presets[self.cur]
         if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
-                "다시 기록", f"{circled(self.cur + 1)} {p['name']} 의 기록을 지우고 처음부터 다시 기록할까요?"):
+                "다시 기록", f"{circled(self.cur + 1)} {p['name']} 의 기록을 지우고 처음부터 다시 기록하시겠습니까?"):
             return
         p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set())
         self.recording, self.shown = self.cur, 0
@@ -785,13 +785,13 @@ class App:
         p = self.presets[self.cur]
         final = self._final(p)
         if not final:
-            return self.status.config(text="미리보기할 기록이 없습니다", fg=RED)
+            return self.status.config(text="기록된 단계가 없습니다.", fg=RED)
         kept = self._kept(p, final)
         if not kept:
-            return self.status.config(text="켜 둔 단계가 없습니다", fg=RED)
+            return self.status.config(text="실행할 단계가 없습니다.", fg=RED)
         pw = p["pw"] or (stored_password(self.cur + 1) if p["has_pw"] else "")
         if not p["id"].strip() or not pw:
-            return self.status.config(text="아이디·비밀번호를 넣어야 미리보기를 할 수 있습니다", fg=RED)
+            return self.status.config(text="프리셋에 아이디·비밀번호를 설정하신 후 미리보기를 진행해 주십시오.", fg=RED)
         r = rec.keep_steps(final, kept)
         ids = [s["id"] for s in r["steps"]]
         self.render()
@@ -799,7 +799,7 @@ class App:
         self.worker.pause.clear()
         self.previewing, self.paused, self.stopping = True, False, False
         self.paint_buttons()
-        self.status.config(text="미리보기 중 - 새 브라우저가 같은 자리에서 따라 합니다. 보기만 하세요", fg=BLUE)
+        self.status.config(text="미리보기 중", fg=BLUE)
         self.worker.cmd.put(("preview", r, ids, {"ID": p["id"].strip(), "PW": pw}, p["code"] or "000",
                              f"{circled(self.cur + 1)} {p['name']}"))
 
@@ -807,8 +807,8 @@ class App:
         """[Ⅱ 일시정지]: 지금 단계를 마치고 다음 단계 앞에서 기다린다. [▶ 계속] 이면 이어 간다."""
         self.paused = not self.paused
         (self.worker.pause.set if self.paused else self.worker.pause.clear)()
-        self.status.config(text="일시정지 - 지금 단계를 마치고 멈춥니다" if self.paused else
-                        "미리보기 중 - 새 브라우저가 같은 자리에서 따라 합니다. 보기만 하세요", fg=BLUE)
+        self.status.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하십시오" if self.paused else
+                        "미리보기 중", fg=BLUE)
         self.paint_buttons()
 
     def stop_preview(self):
@@ -858,12 +858,12 @@ class App:
             try:
                 pw = o["pw"] or (stored_password(o["no"]) if o["has_pw"] else "")
             except RuntimeError as e:
-                return self.status.config(text=f"{circled(o['no'])} 저장된 비밀번호를 풀지 못했습니다 ({e}) - 비밀번호를 다시 넣고 "
-                                            "저장하세요", fg=RED)
+                return self.status.config(text=f"{circled(o['no'])} 저장된 비밀번호가 일치하지 않습니다. ({e}) - 비밀번호를 다시 "
+                                            "설정해 주십시오.", fg=RED)
             if any(password_in_record(f["record"], pw) for f in files):    # 비밀번호 칸이 아닌 곳에 비밀번호를 친 경우
                 self.select(o["no"] - 1)
-                return self.status.config(text=f"{circled(o['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다 - "
-                                            "그 단계를 지우세요", fg=RED)
+                return self.status.config(text=f"{circled(o['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다. "
+                                            "해당 단계를 수정해주십시오.", fg=RED)
         fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh)
         if problem:
@@ -872,9 +872,7 @@ class App:
             if f["record"]:
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
         self._load_fields()
-        n = sum(1 for o in out if o["record"])
-        self.status.config(text=f"저장했습니다 - 기록 있는 프리셋 {n}개. 새로 기록한 프리셋은 꺼진 채입니다: 대시보드 환경설정 "
-                             "'쇼핑몰 프리셋' 에서 켜면 다음 프리페어부터 돕니다.", fg=GREEN_D)
+        self.status.config(text="저장했습니다.", fg=GREEN_D)
         return st.presets_path()
 
     def browser_bounds(self):
@@ -904,7 +902,7 @@ class App:
                 elif m[0] == "status":
                     self.status.config(text=m[1], fg=m[2])
                 elif m[0] == "ready":
-                    self.status.config(text="프리셋을 고르고 [● 기록 시작] 을 누르세요", fg=MUTED)
+                    self.status.config(text="프리셋을 고르고 [● 기록 시작] 을 누르십시오.", fg=MUTED)
                     self.render()
                     self.on_ready()
                 elif m[0] == "recording":
@@ -913,12 +911,12 @@ class App:
                     self.recording = None
                     dirty = True
                     if not self._has_kept(self.presets[self.cur]):     # 일꾼의 '[미리보기] 로 확인하세요' 대신
-                        self.status.config(text="기록된 단계가 없습니다 - 다시 [● 기록 시작] 을 누르세요", fg=MUTED)
+                        self.status.config(text="기록된 단계가 없습니다.", fg=MUTED)
                     self.on_stopped()
                 elif m[0] == "progress":
                     self._progress(*m[1:])
                 elif m[0] == "paused":
-                    self.status.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하세요. 지금은 창을 닫아도 됩니다",
+                    self.status.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하십시오",
                                     fg=BLUE)
                     self.on_paused()
                 elif m[0] == "preview_done":
@@ -933,7 +931,7 @@ class App:
                     elif stopped:
                         self.status.config(text="미리보기를 중단했습니다", fg=MUTED)
                     else:
-                        self.status.config(text=note or "미리보기가 멈췄습니다 - 빨간 단계를 끄거나 지운 뒤 다시 해 보세요", fg=RED)
+                        self.status.config(text=note or "미리보기 중 오류가 발생했습니다. - 문제의 단계를 확인하여 주십시오.", fg=RED)
                     self.on_preview_done(ok)
                 elif m[0] == "human_done":
                     self.on_human_done()
@@ -970,9 +968,9 @@ class App:
         if self.closing:
             return
         if self.previewing and not (self.paused or self.stopping):
-            return self.tell("미리보기 중", "미리보기 중에는 창을 닫을 수 없습니다.\n[Ⅱ 일시정지] 나 [■ 중단] 을 누른 뒤 닫으세요.")
+            return self.tell("미리보기 중", "미리보기 중에는 창을 닫을 수 없습니다.\n[Ⅱ 일시정지] 나 [■ 중단] 을 누른 후 다시 시도해 주십시오.")
         if any(p.get("fresh") for p in self.presets) and not self.ask(
-                "저장하지 않은 기록", "저장하지 않은 기록이 있습니다. 저장하지 않고 닫을까요?"):
+                "저장하지 않은 기록", "저장하지 않은 기록이 있습니다. 저장하지 않고 닫으시겠습니까?"):
             return
         if self.previewing:
             self.closing = True
@@ -1024,8 +1022,7 @@ def start_problem(me=None, session=None):
     me = me or st.process_user()
     session = st.session_user() if session is None else session
     if session and not st.same_account(me, session):
-        return (f"이 PC 에 로그인한 윈도우 계정({session})이 아니라 다른 계정({me})의 관리자 권한으로 옵저버가 떴습니다.\n"
-                f"비밀번호는 윈도우 계정마다 잠겨서 다른 계정으로 저장하면 RPA 가 풀지 못합니다. {session} 계정으로 다시 여세요.")
+        return "다른 사용자의 관리자 권한으로 실행되었습니다. 옵저버를 설치한 사용자로 로그인 하신 후, 관리자 권한으로 실행하여 주십시오."
     return None
 
 
@@ -1033,12 +1030,12 @@ def busy_problem():
     """다른 옵저버·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는
     RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
     if not st.hold_lock(st.OBSERVER_LOCK):
-        return "옵저버가 이미 켜져 있습니다. 작업 표시줄에서 그 창을 쓰세요."
+        return "옵저버가 이미 켜져 있습니다."
     # ponytail: 예약이 RPA 를 띄우고 RPA 가 '도는 중' 을 적기까지 몇 초 틈은 못 막는다 (그 사이 켜면 둘 다 뜬다)
     running = [st.PROGRAMS.get(p, p) for p in st.running_programs()]
     if running:
-        return (f"{', '.join(running)} 가 돌고 있습니다. 끝난 뒤 옵저버를 여세요.\n"
-                "RPA 가 화면·마우스를 쓰는 동안 기록하면 서로 부딪힙니다.")
+        names = ", ".join(running)
+        return f"{names} 이/가 돌고 있습니다. {names} 종료 후 다시 시도해 주십시오."
     return None
 
 
@@ -1098,7 +1095,7 @@ def main(argv=None):
         exe, params = self_command(argv)
         if st.run_as_admin(exe, params, os.path.dirname(exe)):
             return 0
-        show_error("관리자 권한이 있어야 기록을 저장할 수 있습니다. 다시 열고 '예' 를 누르세요.")
+        show_error("관리자 권한이 있어야 기록을 저장할 수 있습니다. 관리자 권한으로 실행하여 주십시오.")
         return 1
     problem = start_problem() or busy_problem()
     if problem:
@@ -1108,8 +1105,7 @@ def main(argv=None):
     try:
         presets = load_presets()
     except ValueError as e:
-        show_error(f"설정을 읽지 못해 옵저버를 열지 않습니다 (덮어쓰지 않게).\n{st.presets_path()}\n{e}\n"
-                   "고치거나 지운 뒤 다시 여세요.")
+        show_error("프리셋 파일에 문제가 있습니다. 관리자에게 문의해 주십시오.")
         return 1
     scale = dpi_scale()
     root = new_root()

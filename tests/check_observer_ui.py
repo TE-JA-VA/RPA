@@ -114,7 +114,7 @@ def main():
         result["status_select"] = app.status.cget("text")
         app.on_stopped = lambda: app.root.after(100, after_empty)
         app.recording = 1                    # ② 를 기록했는데 남은 단계가 없는 것처럼 - 일꾼이 보내는 두 알림 그대로
-        app.ui.put(("status", "기록을 끝냈습니다 - 목록을 다듬고 [미리보기] 로 확인하세요", rr.MUTED))
+        app.ui.put(("status", "기록했습니다. 목록에서 건너뛰거나 제외할 단계를 선택하실 수 있습니다.", rr.MUTED))
         app.ui.put(("recording_stopped",))
 
     def after_empty():
@@ -215,17 +215,17 @@ def main():
     closed_in = time.time() - result.get("t_close", time.time())
     srv.shutdown()
 
-    check("켜자마자 빈 ① 에서 기록을 시작하고, 주소줄에 친 주소가 첫 단계", result.get("first", "").startswith("주소줄에 http"),
+    check("켜자마자 빈 ① 에서 기록을 시작하고, 주소줄에 친 주소가 첫 단계", result.get("first", "").startswith("http") and "로 이동" in result.get("first", ""),
           str(result))
     check("기록 중에는 저장 단추가 잠긴다", result.get("save_while_rec") == "disabled", str(result.get("save_while_rec")))
     check("기록을 끝내고 켜 둔 단계가 있으면 저장할 수 있다, 단계가 없는 프리셋에서는 잠긴다",
           result.get("save_after_stop") == "normal" and result.get("save_empty") == "disabled",
           f"{result.get('save_after_stop')} {result.get('save_empty')}")
-    check("안내는 한 줄: 기록을 끝내면 '[미리보기] 로 확인', 프리셋을 바꾸면 비워진다 (다른 프리셋의 글이 안 남는다)",
-          "미리보기" in result.get("status_stop", "") and result.get("status_select") == "",
+    check("안내는 한 줄: 기록을 끝내면 '기록했습니다', 프리셋을 바꾸면 비워진다 (다른 프리셋의 글이 안 남는다)",
+          "기록했습니다" in result.get("status_stop", "") and result.get("status_select") == "",
           f"{result.get('status_stop')!r} {result.get('status_select')!r}")
     check("기록을 끝냈는데 남은 단계가 없으면 그렇다고 말하고, 미리보기·저장은 잠긴 채",
-          result.get("status_empty") == ("기록된 단계가 없습니다 - 다시 [● 기록 시작] 을 누르세요", "disabled", "disabled"),
+          result.get("status_empty") == ("기록된 단계가 없습니다.", "disabled", "disabled"),
           str(result.get("status_empty")))
     check("저장 안 한 기록이 있으면 닫을 때 묻고, '아니요' 면 안 닫힌다", result.get("asked") is True, str(asked))
     check("미리보기 중 단추는 [Ⅱ 일시정지]·[■ 중단]", result.get("btns") == ("Ⅱ  일시정지", "■  중단", "normal"),

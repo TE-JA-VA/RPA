@@ -406,9 +406,9 @@ def describe(s, hide_values=False):
     n = _cut(name_of(s), hide_values) if "target" in s else ""
     if k == "goto":
         href = s["href"].split("?", 1)[0] if hide_values else s["href"]
-        d = f"주소줄에 {href} 치고 이동"
+        d = f"{href}로 이동"
         if SESSION_Q.search(s["href"]):
-            d += " (주소에 로그인 세션 값이 있어 다음에 깨질 수 있음 - 메뉴로 가는 편이 안전)"
+            d += " (주소에 로그인 세션 값을 감지했습니다. 다음 회차부터 실행에 문제가 발생할 수 있습니다.)"
     elif k == "back":
         d = "뒤로 가기"
     elif k == "newtab":
