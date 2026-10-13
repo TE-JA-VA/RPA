@@ -160,16 +160,17 @@ def load_switches(rr):
     return selected, sorted(k for k in section if k not in keys and k not in MODE_NAMES)
 
 
-def load_mode(rr, key=MODE_KEY):
+def load_mode(rr, key=MODE_KEY, section=SECTION):
     """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 리허설 - 잘 모르면 누르지 않는 쪽.
     key: MODE_NAMES 의 키 하나 (모듈마다 따로 - 빠지면 Mode 를 따르지 않고 리허설). "1건" 이면 ONE (참 - 실행하되 한 줄만).
     ② SalesMode 는 줄이 없어 "1건" 을 못 쓴다.
+    section: 보통 PROCESS 의 운송장번호 전송은 Routine 섹션의 InvoiceMode (run_routine.module_invoice_send, 사용자 10-13).
     "리허설"/"실행" 이 아닌 값은 RuntimeError (load_switches 뒤에 부른다 - 섹션 모양은 거기서 본다)."""
-    raw = rr.pl.load_settings()[SECTION].get(key, "리허설")
+    raw = (rr.pl.load_settings().get(section) or {}).get(key, "리허설")
     value = str(raw).strip()
     allowed = [m for m in MODES if not (key == SALES_MODE_KEY and MODES[m] == ONE)]
     if value not in allowed:
-        raise RuntimeError(f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 {key} 값은 "
+        raise RuntimeError(f"{rr.pl.config_name()} 의 '{section}' 섹션 {key} 값은 "
                            f"{' 또는 '.join(repr(m) for m in allowed)} 이어야 합니다: {raw!r}")
     return MODES[value]
 

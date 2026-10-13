@@ -38,8 +38,9 @@ print("=== 1. Wellife 섹션 ===")
 write_cfg({"LogIn": {"AdminCode": "x"}, "Routine": {"Logistics": "Y"}})
 check(st.has_wellife_section() is False, "섹션이 없으면 False")
 check(st.ensure_wellife_section() is True and read_cfg()["Wellife"] == {"Login": "Y", "Sales": "Y", "Hold": "N", "Sap": "N", "Wms": "N",
-                                                                   "InvoiceSend": "N"},
-      "처음 열리면 로그인·주문매핑 매출처리만 켬")
+                                                                   "InvoiceSend": "N", "SalesMode": "리허설", "Mode": "리허설",
+                                                                   "SapMode": "리허설", "WmsMode": "리허설", "InvoiceMode": "리허설"},
+      "처음 열리면 로그인·주문매핑 매출처리만 켬, 모드는 모두 '리허설' 로 적음")
 check(read_cfg()["LogIn"] == {"AdminCode": "x"} and read_cfg()["Routine"] == {"Logistics": "Y"}, "다른 섹션은 그대로")
 check(st.ensure_wellife_section() is False, "있으면 안 바꾼다")
 got = st.write_wellife_modules({"Login": False, "Sales": True, "Hold": True, "Sap": True})

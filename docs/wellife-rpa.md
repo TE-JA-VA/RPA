@@ -188,6 +188,7 @@ set RPA_STATUS_DIR=<시험 폴더>\status
 ```
 
 - 모드 값: `"리허설"`·`"1건"`·`"실행"` (`SalesMode` 는 `"리허설"`·`"실행"` 만). 빠지면 리허설이다. 다른 값이면 설정 오류로 멈추고 아무것도 하지 않는다.
+- 모드는 기본 리허설이다 (사용자 10-13): 에이전트가 섹션을 만들거나 웹 '실행 모듈' 로 바꿔 쓸 때 빠진 모드 키를 `"리허설"` 로 적어 둔다 (`rpa_status._merge_routine_section`). 적혀 있던 값은 바꾸지 않는다.
 - 바꾸는 곳은 그 PC 의 `%ProgramData%\AFTER MARKET\RPA\config\RPA_UserConfig.json` 뿐이다 (관리자 권한 메모장, UTF-8 로 저장). 웹은 보기만 한다. 다음 실행부터 적용된다.
 - 대시보드 단계 이름 앞에 그 모듈의 모드 표시(`[리허설]`/`[1건]`/`[실행]`)가 붙는다. 로그인 단계는 `Mode` 를 따른다 (표시만).
 
@@ -428,6 +429,6 @@ SAP 에서 넘어온 건은 WMS 이관관리에 한꺼번에 들어오지 않고
 
 - 화면 코드(`module_invoice_send`·`invoice_send`·`count_rows`)는 웰라이프 고유 값을 쓰지 않는다. `wellife.py` 의 안전장치(잠김·앞 창·덮인 자리·팝업)를 함께 쓰려고 거기 둔다.
 - 모듈 키는 `invoicesend` (설정 키 `InvoiceSend` 의 소문자, `wellife_` 없음). `rpa_status.SHARED_MODULES` 에 있는 키는 `agent.history_key` 가 업체와 상관없이 같은 이력·토큰 키로 센다 - 나중에 모든 업체로 열어도 토큰 배율 키가 같다.
-- **2026-10-13 모든 업체로 열었다** (사용자): 보통 PROCESS 의 `run_routine.ROUTINE_MODULES` 맨 뒤에 같은 키·비트(`invoicesend`, 512)로, `MODULE_FUNCS["invoicesend"]` 는 `wellife.module_invoice_send(rr, ctx, True)` - 보통 PROCESS 는 모드가 없어 늘 실제로 [전송요청(S)] 을 누른다. `rpa_status.ROUTINE_CONFIG_MODULES` 에 `InvoiceSend`, `rpa_dashboard.WELLIFE_ONLY_KEYS` 에서 뺌, 웹 `MODULES`·`RUN_CHIPS`, 관리 화면 토큰 배율의 PROCESS 묶음에도 같은 키 (로그인처럼 두 묶음에 같이). 웰라이프 업체는 그대로 `Wellife` 섹션·`InvoiceMode`.
+- **2026-10-13 모든 업체로 열었다** (사용자): 보통 PROCESS 의 `run_routine.ROUTINE_MODULES` 맨 뒤에 같은 키·비트(`invoicesend`, 512)로, `MODULE_FUNCS["invoicesend"]` 는 `run_routine.module_invoice_send` → `wellife.module_invoice_send`. 보통 PROCESS 도 모드가 있다 - `Routine` 섹션의 `InvoiceMode` (`"리허설"`·`"1건"`·`"실행"`, **빠지면 리허설**, 사용자 10-13. 그 전 빌드 2026.10.13-6 은 모드 없이 늘 실제로 [전송요청(S)] 을 눌렀다). 설치 틀(`RPA_UserConfig.template.json`)과 웹 '실행 모듈' 로 쓸 때 `"InvoiceMode": "리허설"` 을 적어 둔다. `rpa_status.ROUTINE_CONFIG_MODULES` 에 `InvoiceSend`, `rpa_dashboard.WELLIFE_ONLY_KEYS` 에서 뺌, 웹 `MODULES`·`RUN_CHIPS`, 관리 화면 토큰 배율의 PROCESS 묶음에도 같은 키 (로그인처럼 두 묶음에 같이). 웰라이프 업체는 그대로 `Wellife` 섹션·`InvoiceMode`.
 - **칸이 없으면 끔** (`rpa_status.ROUTINE_OFF_BY_DEFAULT`, `perform_login.load_routine_modules(off_by_default=)`): Routine 섹션의 다른 모듈은 칸이 없으면 켬이지만, 운송장번호 전송은 택배사로 나가 되돌릴 수 없어 업데이트를 받자마자 모든 업체가 보내지 않게 했다. 업체 웹 환경설정 '실행 모듈' 에서 켠 PC 만 돈다.
 - 모드 보기 (시험 기간용): 에이전트가 `Wellife` 섹션의 `SalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode` 를 `live.modes` 로 올리고(`rpa_status.read_wellife_modes`), 웹 '실행 모듈' 카드가 보여 준다. 실행이 하나라도 있으면 경고 색. 바꾸는 길은 없다 (PC 설정 파일). 옛 에이전트는 값을 안 올려 줄이 숨는다. 걷어낼 때는 `read_wellife_modes`·`WELLIFE_MODES`, 에이전트의 `snap["modes"]`, 웹의 `mod-modes` 를 지운다.

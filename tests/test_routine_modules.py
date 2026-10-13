@@ -68,9 +68,18 @@ check("운송장번호 전송은 Y 일 때만 돈다", pl.load_routine_modules(A
 called = []
 orig_inv = _rr.wellife.module_invoice_send
 _rr.wellife.module_invoice_send = lambda rr, ctx, live: called.append(live) or ("done", None)
-_rr.MODULE_FUNCS["invoicesend"](object())
+for mode, want in ((None, False), ("리허설", False), ("실행", True), ("1건", _rr.wellife.ONE)):
+    called.clear()
+    with_settings({"Routine": {"InvoiceSend": "Y", **({"InvoiceMode": mode} if mode else {})}})
+    _rr.MODULE_FUNCS["invoicesend"](object())
+    check(f"보통 PROCESS 의 운송장번호 전송 모드: Routine.InvoiceMode {mode or '없음'} -> {want} (빠지면 리허설, 사용자 10-13)",
+          called == [want], f"{called}")
+called.clear()
+with_settings({"Routine": {"InvoiceSend": "Y", "InvoiceMode": "yes"}})
+got = _rr.MODULE_FUNCS["invoicesend"](object())
+check("모드 값이 틀리면 화면을 열지 않고 설정 오류", called == [] and got[0] == "failed" and "InvoiceMode" in got[1], f"{got}")
 _rr.wellife.module_invoice_send = orig_inv
-check("보통 PROCESS 의 운송장번호 전송은 실행으로 부른다 (웰라이프 화면 코드 그대로, 모드 없음)", called == [True], f"{called}")
+check("Routine 의 InvoiceMode 는 모르는 키 경고에서 빠진다", "InvoiceMode" in _rr.ROUTINE_MODE_KEYS)
 check("운송장번호 전송은 웰라이프와 같은 키·비트 512", ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512)
       in _rr.ROUTINE_MODULES and any(m[0] == "invoicesend" and m[4] == 512 for m in _rr.wellife.MODULES))
 

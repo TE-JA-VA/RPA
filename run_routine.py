@@ -213,6 +213,7 @@ ROUTINE_MODULES = (
     ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512),
 )
 ROUTINE_OFF_BY_DEFAULT = status.ROUTINE_OFF_BY_DEFAULT   # 칸이 없으면 끔 (운송장번호 전송) - 불러올 때 받아 둔다 (시험이 status 를 바꿔 끼운다)
+ROUTINE_MODE_KEYS = tuple(k for k, _ in status.ROUTINE_MODES)   # Routine 섹션의 모드 키 (모듈이 아니다 - '모르는 키' 경고 안 함)
 RUN_MODULES_ENV = "RPA_RUN_MODULES"   # 예약 줄이 고른 이번 실행 모듈 (rpa_dashboard.launch_slot) - 있으면 설정 파일 대신
 
 
@@ -5373,7 +5374,8 @@ def run_self_check():
         log("실행 모듈   : " + " / ".join(
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
         for k in unknown:
-            log(f"  -> 경고: '{pl.ROUTINE_SECTION}' 섹션의 '{k}' 는 모르는 키입니다 (무시됨)")
+            if k not in ROUTINE_MODE_KEYS:
+                log(f"  -> 경고: '{pl.ROUTINE_SECTION}' 섹션의 '{k}' 는 모르는 키입니다 (무시됨)")
     except Exception as e:
         log(f"실행 모듈   : 읽기 실패 - {e}")
 
@@ -5810,8 +5812,20 @@ MODULE_FUNCS = {
     "hold": module_hold,
     "logistics": module_logistics,
     "output": module_output,
-    "invoicesend": lambda ctx: wellife.module_invoice_send(sys.modules[__name__], ctx, True),   # 화면 코드는 wellife.py (안전장치 함께)
+    "invoicesend": lambda ctx: module_invoice_send(ctx),
 }
+
+
+def module_invoice_send(ctx):
+    """운송장번호 전송 (모든 업체용 - 화면 코드는 wellife.py, 안전장치 함께). 모드는 Routine 섹션 InvoiceMode
+    ('리허설'/'실행'/'1건', 빠지면 리허설 - 사용자 2026-10-13: 모드는 기본 리허설). 리허설은 [전송요청(S)] 에 마우스만."""
+    rr = sys.modules[__name__]
+    try:
+        live = wellife.load_mode(rr, wellife.INVOICE_MODE_KEY, pl.ROUTINE_SECTION)
+    except Exception as e:
+        return "failed", f"설정 오류: {e}"
+    log(f"운송장번호 전송 모드: {wellife.mode_tag(live)} ('{pl.ROUTINE_SECTION}' 섹션 {wellife.INVOICE_MODE_KEY} - 빠지면 리허설)")
+    return wellife.module_invoice_send(rr, ctx, live)
 
 
 def run_modules(selected, modules=None, funcs=None, section=None):
@@ -5917,6 +5931,8 @@ def main():
             log(f"=== PROCESS 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
             return
     for k in unknown:
+        if k in ROUTINE_MODE_KEYS and not from_env:
+            continue
         log(f"경고: 예약에서 넘긴 '{k}' 는 모르는 모듈이라 무시합니다." if from_env
             else f"경고: '{pl.ROUTINE_SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
     if from_env and not any(selected.values()):
