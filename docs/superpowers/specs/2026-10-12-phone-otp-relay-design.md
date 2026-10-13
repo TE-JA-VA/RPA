@@ -42,7 +42,7 @@
  RPA (PC, web_runner)                  Firebase RTDB                         휴대폰 (직원)
  ─────────────────────                 ─────────────                         ────────────
  ① 요청 열기 ───────────────▶  apps/otp/requests/{cid}/{phoneId}/current
-    { req_id, site, senders, created_at=서버시각, expires_at=+120초 }
+    { req_id, site, senders, created_at=서버시각 }  (열림 = created_at + 120초)
  ② 사이트의 [인증번호 받기] 클릭
                                                                        ③ 문자 도착 (OS 가 앱/단축어를 깨움)
                                                                           - '인증번호' 낱말 + 숫자 뽑기
@@ -108,11 +108,11 @@ meta/companies/{cid}/phones/{phoneId}  관리 화면(Admin SDK)이 씀
 ### 규칙 요지 (`firebase/rules/database.rules.json` 에 추가)
 
 - `requests/{cid}/{phoneId}/current`
-  - 쓰기: `auth.token.role === 'agent' && auth.token.cid === $cid`, 그리고 (지우기 이거나) (`!data.exists()` 또는 `data.child('expires_at').val() < now` 또는 `data.child('pcId').val() === auth.token.pcId`) - 남이 연 요청을 2분 안에 덮지 못한다.
-  - 검증: `created_at === now`, `expires_at === created_at + 120000`, `senders` 비어 있지 않음.
+  - 쓰기: `auth.token.role === 'agent' && auth.token.cid === $cid`, 그리고 (지우기 이거나) (`!data.exists()` 또는 `data.child('created_at').val() + 120000 < now` 또는 `data.child('pcId').val() === auth.token.pcId`) - 남이 연 요청을 2분 안에 덮지 못한다.
+  - 검증: `created_at === now`, `senders` 비어 있지 않음.
   - 읽기: 같은 cid 의 agent·admin·super, 그리고 `auth.token.role === 'phone' && auth.token.cid === $cid && auth.token.phoneId === $phoneId`.
 - `codes/{cid}/{phoneId}/current`
-  - phone 쓰기: 자기 cid·phoneId, `root.child('apps/otp/requests/'+$cid+'/'+$phoneId+'/current/expires_at').val() > now`, `newData.child('req_id').val() === 그 요청의 req_id`, `code` 가 `^[0-9]{4,8}$`.
+  - phone 쓰기: 자기 cid·phoneId, `root.child('apps/otp/requests/'+$cid+'/'+$phoneId+'/current/created_at').val() + 120000 > now`, `newData.child('req_id').val() === 그 요청의 req_id`, `code` 가 `^[0-9]{4,8}$`.
   - agent: 같은 cid 이면 읽기·지우기.
 - `phones/{cid}/{phoneId}`: phone 은 자기 것 쓰기, 같은 cid 는 읽기.
 - **1단계에서 실제로 만든 것 (2026-10-12):** 위 요지에 더해 ⓐ 번호 쓰기는 `sender` 가 요청의 `senders` 맵에 있어야 한다 (휴대폰 확인 + 서버 확인 2중) ⓑ 번호 읽기는 그 요청을 연 PC 의 에이전트만 (요청이 지워지면 아무도 못 읽음) ⓒ 남의 요청 지우기도 2분 안엔 거부 ⓓ **기존 규칙의 "같은 cid 면 읽기" 에서 phone 을 뺐다** (RTDB meta·live·settings·commands, Firestore sameCompany·meta/prices) - 안 빼면 휴대폰 계정이 업체 현황·기록·토큰 통장을 읽는다. 시험: `firebase/tests/rules.test.js` 의 otp 9건 + `firebase/tests/check_phone_relay.py` (에뮬레이터 끝에서 끝까지).
@@ -137,7 +137,7 @@ Firebase SDK 를 쓰지 않는다 (단축어는 SDK 가 없고, 앱도 REST 면 
 iOS 는 어떤 앱도 문자를 읽지 못한다. **단축어 → 자동화 → "메시지"** 트리거만 가능하다.
 
 - 트리거: 메시지 내용에 `인증번호` 포함 (+ 가능하면 발신자 지정 - 발신자는 연락처로 저장해야 고를 수 있다) → **"즉시 실행"** (확인 안 묻기).
-- 동작: 텍스트 일치(정규식)로 숫자 뽑기 → 5절 1~3 → `current` 가 있고 `expires_at` > 지금이고 발신번호가 `senders` 안이면 PUT. 아니면 아무것도 안 함.
+- 동작: 텍스트 일치(정규식)로 숫자 뽑기 → 5절 1~3 → `current` 가 있고 `created_at` + 120000 > 지금이고 발신번호가 `senders` 안이면 PUT. 아니면 아무것도 안 함.
 - 결과물: **만드는 안내서**(휴대폰 쪽 새 저장소의 `ios/단축어_만들기.md`, 화면 순서대로) + 사용자와 실기. `.shortcut` 파일은 서명 문제로 저장소에서 만들어 배포하기 어렵다 - 사용자가 한 대에서 만들고 **iCloud 공유 링크**로 나머지에 나눠 주는 길을 검토.
 - 알아둘 것: iOS 버전마다 메뉴 이름이 다르다. "즉시 실행" 이 없는 옛 버전이면 알림을 눌러야 돈다 - 실기에서 iOS 버전 확인.
 
