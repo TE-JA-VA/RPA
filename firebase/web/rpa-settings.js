@@ -25,6 +25,7 @@ const HTML = `
         <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
         <div class="msg">전체 실행과 '전체 모듈 실행' 예약이 이 모듈을 돌립니다</div>
         <div id="mod-list"></div>
+        <div class="msg hide" id="mod-modes"></div>
         <button class="apply" id="mod-apply" disabled>적용</button>
       </div>
     </div>
@@ -173,6 +174,11 @@ function paintModuleMeta() {
   const shown = shownModules();
   const on = shown.filter(([k]) => form.modules[k]).length;
   $("mod-meta").textContent = live ? `${on}/${shown.length} 켬` : "";
+  // 웰라이프 모드 - 보기만 (시험 기간용, 사용자 2026-10-13). 바꾸기는 PC 설정 파일. 옛 에이전트는 안 올려서 숨는다
+  const modes = isWellife() && Array.isArray(live?.modes) ? live.modes : [];
+  $("mod-modes").textContent = modes.length ? `모드 (PC 설정 파일에서 바꿈): ${modes.map(([k, v]) => `${k} ${v}`).join(" · ")}` : "";
+  $("mod-modes").classList.toggle("warn", modes.some(([, v]) => v !== "리허설"));
+  show($("mod-modes"), modes.length > 0);
   $("mod-apply").disabled = !c.isAdmin || busy || !modulesDirty() || on === 0;
 }
 async function applyModules() {

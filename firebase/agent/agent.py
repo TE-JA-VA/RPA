@@ -178,8 +178,10 @@ def balance(client, cid):
 
 def history_key(cfg, wellife):
     """설정 키 → 이력의 modules[].key. 루틴은 소문자 (run_routine.ROUTINE_MODULES: login·Login, sales·Sales …),
-    웰라이프는 로그인 말고 'wellife_' 를 붙인다 (wellife.MODULES: wellife_sap·Sap …) - 업체 배율이 같은 키에 걸리게."""
-    return cfg.lower() if not wellife or cfg == "Login" else f"wellife_{cfg.lower()}"
+    웰라이프는 로그인과 모든 업체용 모듈(st.SHARED_MODULES: invoicesend·InvoiceSend) 말고 'wellife_' 를 붙인다
+    (wellife.MODULES: wellife_sap·Sap …) - 업체 배율이 같은 키에 걸리게."""
+    import rpa_status as st
+    return cfg.lower() if not wellife or cfg == "Login" or cfg in st.SHARED_MODULES else f"wellife_{cfg.lower()}"
 
 
 def local_plan():
@@ -955,6 +957,10 @@ def run(cfg):
                     snap["modules"] = (st.read_wellife_modules() if st.wellife_policy() else st.read_routine_modules())[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)
                 except Exception:
                     snap["modules"] = None
+                try:
+                    snap["modes"] = st.read_wellife_modes() if st.wellife_policy() else None   # 웰라이프 모드 - 웹은 보기만 (시험 기간용)
+                except Exception:
+                    snap["modes"] = None
                 try:
                     snap["presets"] = st.preset_summary()   # 이름·코드·단계 수·켬 (기록 내용·아이디·비밀번호는 안 싣는다)
                 except Exception:

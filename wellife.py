@@ -1,12 +1,14 @@
-"""웰라이프 전용 실행: 로그인 → ② 주문매핑 → ③ 물류대기 → ④ 웰라이프 SAP 연동관리 → ⑤ 웰라이프 WMS 이관관리.
+"""웰라이프 전용 실행: 로그인 → ② 주문매핑 → ③ 물류대기 → ④ 웰라이프 SAP 연동관리 → ⑤ 웰라이프 WMS 이관관리
+→ ⑥ 운송장번호 전송.
 
 사용자 설정(RPA_UserConfig.json)에 "Wellife" 섹션이 있는 PC 에서만 run_routine.main 이 이리로 온다.
 섹션이 없는 PC(다른 업체)는 지금 루틴 그대로 돈다 - ROUTINE_MODULES 와 Routine 섹션은 건드리지 않는다.
-    예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y",
-                     "SalesMode": "리허설", "Mode": "리허설"}}
+    예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "InvoiceSend": "Y",
+                     "SalesMode": "리허설", "Mode": "리허설", "InvoiceMode": "리허설"}}
 
 모드 (사용자 10-08) - 데이터를 바꾸는 단추를 누를지 정한다. 빠지면 리허설.
-"SalesMode" 는 ② 주문매핑(엑셀 업로드)만, "Mode" 는 ③ 물류대기 저장·④⑤ 지정·화살표를 정한다.
+"SalesMode" 는 ② 주문매핑(엑셀 업로드)만, "Mode" 는 ③ 물류대기 저장·④⑤ 지정·화살표를,
+"InvoiceMode" 는 ⑥ 운송장번호 전송의 [전송요청(S)] 만 정한다 (사용자 10-13 - 택배사로 나가 되돌릴 수 없다).
 - "리허설": 데이터를 바꾸는 단추(엑셀 업로드·물류대기 저장·[지정]·화살표)는 누르지 않고 마우스만 올린다.
 - "실행": 실제로 누르고, 뜨는 팝업은 [예](없으면 [확인])를 누른다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
   팝업 문구는 모두 로그와 모듈 사유에 남긴다.
@@ -15,7 +17,9 @@
   모드와 상관없이 누르지 않는다 (마우스만). 선택주문 매출처리는 하지 않는다.
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
-모듈별 실행: 예약 줄이 모듈을 고르면(RPA_RUN_MODULES, Wellife 키) 그 모듈만 돈다 - ②③④⑤ 를 따로 띄울 수 있다.
+- ⑥ 운송장번호 전송: 조회 -> 전체 체크 -> [전송요청(S)]. 모든 업체용 패키지 화면이라(좌측 아이콘) 웰라이프 고유 값을
+  쓰지 않는다 - 지금은 웰라이프 실행만 부른다 (docs/wellife-rpa.md 9절).
+모듈별 실행: 예약 줄이 모듈을 고르면(RPA_RUN_MODULES, Wellife 키) 그 모듈만 돈다 - ②~⑥ 을 따로 띄울 수 있다.
 ⑤ 는 SAP 에서 넘어온 건이 WMS 에 하나씩 들어오므로 반복 시간대(시작~끝, N분 쉬고 다시)로 돌린다 (docs/wellife-rpa.md 7절).
 
 run_routine 을 import 하지 않는다. exe 에서 run_routine 은 __main__ 이라 다시 import 하면 사본이 하나 더 생기고,
@@ -48,6 +52,7 @@ QUIET_SECONDS = 5           # 실행: 팝업도 스피너도 이만큼 없으면
 MAX_POPUPS = 10             # 실행: 한 번 누른 뒤 이보다 많이 뜨면 멈춘다 (같은 팝업이 되풀이되는 경우)
 MODE_KEY = "Mode"              # ③ 물류대기 저장·④ 지정·화살표·⑤ 화살표
 SALES_MODE_KEY = "SalesMode"   # ② 주문매핑 엑셀 업로드 - 따로 정한다 (사용자 10-08)
+INVOICE_MODE_KEY = "InvoiceMode"   # ⑥ 운송장번호 [전송요청(S)] - 따로 정한다 (사용자 10-13, 택배사로 나가 되돌릴 수 없다)
 MODES = {"리허설": False, "실행": True}   # 설정 값 -> 실제로 누르는가
 YES_TEXTS = ("예(Y)", "예")
 OK_TEXTS = ("확인(O)", "확인")
@@ -68,6 +73,8 @@ STEPS = (
     ("wl_wms_prepack", "5-2 프리패키징"),
     ("wl_wms_invoice", "5-3 송장O"),
     ("wl_wms_api", "5-4 API대기"),
+    ("inv_send_screen", "운송장번호 전송 화면 이동"),
+    ("inv_send", "운송장번호 전송 조회 → 전체 체크 → 전송요청(S)"),
 )
 # run_routine.ROUTINE_MODULES 와 같은 모양 (모듈 키, 설정 키, 이름, 단계, module_flags 비트). 비트 32 부터는 웰라이프
 MODULES = (
@@ -77,7 +84,11 @@ MODULES = (
     ("wellife_sap", "Sap", "웰라이프 SAP 연동관리", ("wl_sap_screen", "wl_sap_slip", "wl_sap_shipping", "wl_sap_so"), 128),
     ("wellife_wms", "Wms", "웰라이프 WMS 이관관리",
      ("wl_wms_screen", "wl_wms_so", "wl_wms_prepack", "wl_wms_invoice", "wl_wms_api"), 256),
+    # 모든 업체용 (rpa_status.SHARED_MODULES) - 모듈 키에 wellife_ 를 붙이지 않는다 (= 설정 키 소문자, agent.history_key)
+    ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512),
 )
+# 모듈마다 따로 정하는 모드 키. 여기 없는 모듈은 MODE_KEY
+MODULE_MODES = {"wellife_sales": SALES_MODE_KEY, "invoicesend": INVOICE_MODE_KEY}
 # 단계 표 (단계 키, 대시보드 단추, 화살표, 머리글로 전체 체크하는가, 화살표가 하는 일). SAP전송전체 이후와
 # 송장X·API실패·WMS작업중·할당·출고완료·결품관리는 사람이 보는 화면이라 넣지 않는다 (docs/wellife-rpa.md 2절)
 SAP_SIMPLE_STAGES = (
@@ -136,12 +147,13 @@ def load_switches(rr):
     if bad:
         raise RuntimeError(
             f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")
-    return selected, sorted(k for k in section if k not in keys and k not in (MODE_KEY, SALES_MODE_KEY))
+    return selected, sorted(k for k in section if k not in keys and k not in (MODE_KEY, SALES_MODE_KEY, INVOICE_MODE_KEY))
 
 
 def load_mode(rr, key=MODE_KEY):
     """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 리허설 - 잘 모르면 누르지 않는 쪽.
-    key: MODE_KEY(③④⑤) 또는 SALES_MODE_KEY(② 주문매핑 - 따로 정한다, 사용자 10-08. 빠지면 Mode 를 따르지 않고 리허설).
+    key: MODE_KEY(③④⑤), SALES_MODE_KEY(② 주문매핑 - 따로 정한다, 사용자 10-08) 또는 INVOICE_MODE_KEY(⑥ 운송장번호 전송,
+    사용자 10-13). 따로 정하는 키는 빠지면 Mode 를 따르지 않고 리허설.
     "리허설"/"실행" 이 아닌 값은 RuntimeError (load_switches 뒤에 부른다 - 섹션 모양은 거기서 본다)."""
     raw = rr.pl.load_settings()[SECTION].get(key, "리허설")
     value = str(raw).strip()
@@ -161,19 +173,20 @@ def run_main(rr):
     status, log = rr.status, rr.log
     try:
         selected, unknown = load_switches(rr)
-        live, sales_live, error = load_mode(rr), load_mode(rr, SALES_MODE_KEY), None
+        modes, error = {k: load_mode(rr, k) for k in (MODE_KEY, SALES_MODE_KEY, INVOICE_MODE_KEY)}, None
     except Exception as e:
-        live, sales_live, error = False, False, e
+        modes, error = dict.fromkeys((MODE_KEY, SALES_MODE_KEY, INVOICE_MODE_KEY), False), e
+    live, sales_live, inv_live = modes[MODE_KEY], modes[SALES_MODE_KEY], modes[INVOICE_MODE_KEY]
     # 예약 줄이 모듈을 골라 띄웠으면(반복 시간대 포함) 섹션의 켬·끔 대신 그 모듈만 - 지금 루틴과 같은 규칙. 모드는 섹션 그대로
     picked, picked_unknown = rr.run_modules_from_env([m[1] for m in MODULES])
     if not error and picked is not None:
         selected, unknown = picked, []
-    tag, sales_tag = mode_tag(live), mode_tag(sales_live)
-    # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다. ② 단계는 SalesMode 를 붙인다
-    sales_steps = next(m[3] for m in MODULES if m[0] == "wellife_sales")
-    steps = STEPS if error else tuple(
-        (k, f"[{sales_tag if k in sales_steps else tag}] {label}") for k, label in STEPS)
-    status.start("routine", steps, title="웰라이프 실행" if error else f"웰라이프 실행 [주문매핑 {sales_tag} / 그 밖 {tag}]")
+    tag, sales_tag, inv_tag = mode_tag(live), mode_tag(sales_live), mode_tag(inv_live)
+    # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다. ② 는 SalesMode, ⑥ 은 InvoiceMode
+    step_mode = {k: MODULE_MODES.get(m[0], MODE_KEY) for m in MODULES for k in m[3]}
+    steps = STEPS if error else tuple((k, f"[{mode_tag(modes[step_mode[k]])}] {label}") for k, label in STEPS)
+    status.start("routine", steps, title="웰라이프 실행" if error else
+                 f"웰라이프 실행 [주문매핑 {sales_tag} / 운송장 전송 {inv_tag} / 그 밖 {tag}]")
     status.set_modules([(k, label, steps_, bit) for k, _, label, steps_, bit in MODULES])
     log(f"=== 웰라이프 실행 시작 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
 
@@ -191,6 +204,8 @@ def run_main(rr):
         "미리 둔 엑셀을 실제로 업로드" if sales_live else "엑셀 업로드는 누르지 않고 마우스만"))
     log(f"*  ③④⑤ 모드({MODE_KEY}): [{tag}] - " + (
         "저장·지정·화살표를 실제로 누르고, 팝업은 [예]/[확인]" if live else "저장·지정·화살표는 누르지 않고 마우스만"))
+    log(f"*  ⑥ 운송장번호 전송 모드({INVOICE_MODE_KEY}): [{inv_tag}] - " + (
+        "[전송요청(S)] 를 실제로 누르고, 팝업은 [예]/[확인]" if inv_live else "[전송요청(S)] 는 누르지 않고 마우스만"))
     log("*" * 70)
     for k in unknown:
         log(f"경고: '{SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
@@ -224,7 +239,8 @@ def run_main(rr):
              "wellife_sales": lambda ctx: module_sales(rr, ctx, sales_live),
              "wellife_hold": lambda ctx: module_hold(rr, ctx, live),
              "wellife_sap": lambda ctx: module_sap(rr, ctx, live),
-             "wellife_wms": lambda ctx: module_wms(rr, ctx, live)}
+             "wellife_wms": lambda ctx: module_wms(rr, ctx, live),
+             "invoicesend": lambda ctx: module_invoice_send(rr, ctx, inv_live)}
     result, reason = rr.run_modules(selected, MODULES, funcs, SECTION)
     # 반복 회차(⑤ 를 시간대 동안 N분마다)는 처리한 것이 없으면 이력에 남기지 않는다 - 지금 루틴 main 과 같은 규칙
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
@@ -505,6 +521,92 @@ def press_arrow(rr, ctx, ctl, arrow_id, what, want, count, live):
     click(rr, ctx, arrow, what)
     texts = confirm_popups(rr, ctx, what, grid, idle, before)
     return " -> 누름" + popup_note(texts), True
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 운송장번호 전송 - 모든 업체용 패키지 화면 (좌측 아이콘, 폼 이름에 업체가 없다 - docs/wellife-rpa.md 9절).
+# 웰라이프 고유 값을 쓰지 않는다. 지금은 웰라이프 실행만 부른다 (rpa_status.SHARED_MODULES)
+# ---------------------------------------------------------------------------
+INVOICE_TAB = "운송장번호 전송"
+INVOICE_FORM = "Frm_Send_TrackingNumber"
+INVOICE_ICON = "lcg_InvoiceSend"
+INVOICE_SEND = "운송장번호 [전송요청(S)]"
+
+
+def module_invoice_send(rr, ctx, live=False):
+    """⑥ 운송장번호 전송: 화면 열기 -> 조회 -> 전체 체크 -> [전송요청(S)] (invoice_send). 리허설은 [전송요청(S)] 에 마우스만.
+    [미전송 완료처리] 등 나머지 단추는 누르지 않는다. 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (물류대기와 같다)."""
+    rr.status.step("inv_send_screen")
+    try:
+        no_popup(rr, ctx, f"'{INVOICE_TAB}' 화면 이동 전")
+        front(rr, ctx, f"'{INVOICE_TAB}' 화면 이동")
+        tab = open_tab(rr, ctx, INVOICE_TAB)
+        if tab is not None:     # 이미 열린 화면은 그 탭을 누른다 (SAP·WMS 와 같다)
+            rr.log(f"'{INVOICE_TAB}' 화면이 이미 열려 있어 그 탭을 누릅니다: {tab.rectangle()}")
+            click(rr, ctx, tab, f"'{INVOICE_TAB}' 탭")
+            ok, active = rr.wait_for_active_main_tab(ctx.app, ctx.hwnd, INVOICE_TAB, ctx=ctx)
+            if not ok:
+                return "failed", f"'{INVOICE_TAB}' 탭을 눌렀으나 그 화면으로 바뀌지 않았습니다 (활성 메인탭='{active}')."
+        else:
+            r = rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB)
+            if r == "absent":
+                return "failed", f"'{INVOICE_TAB}' 아이콘({INVOICE_ICON})이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
+            if r != "ok":
+                return "failed", f"'{INVOICE_TAB}' 화면으로 이동하지 못했습니다."
+        rr.status.step("inv_send")
+        return invoice_send(rr, ctx, live)
+    except Stop as e:
+        return e.result, str(e)
+    except Exception as e:
+        return ui_error(rr, e)
+
+
+def invoice_send(rr, ctx, live):
+    """조회(F) -> (줄이 있으면) 머리글로 전체 체크 -> [전송요청(S)]. 조회 조건은 화면 기본값 그대로 (배송일 기간·미전송).
+    실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
+    체크는 되돌리지 않는다 (다음 조회로 풀린다). (결과, 사유)."""
+    tag = mode_tag(live)
+    ctl = controls(rr, ctx, INVOICE_FORM)
+    query, grid = ctl.get("btn_Search"), ctl.get("gridCtrl_List")
+    if query is None or grid is None:
+        raise Stop("failed", f"'{INVOICE_TAB}' 조회(F) 단추(btn_Search)나 그리드(gridCtrl_List)를 찾지 못했습니다.")
+    idle = rr.grid_overlay_count(ctx.hwnd, grid)
+    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회 전")
+    click(rr, ctx, query, f"'{INVOICE_TAB}' 조회(F)")
+    time.sleep(2)     # 스피너가 뜨기 전에 '끝' 으로 보지 않게 (물류대기 조회와 같다)
+    if not rr.wait_grid_spinner_gone(ctx.hwnd, grid, idle, label=INVOICE_TAB, max_wait=QUERY_WAIT_SECONDS):
+        raise Stop("failed", f"'{INVOICE_TAB}' 조회가 {QUERY_WAIT_SECONDS}초 안에 끝나지 않았습니다.")
+    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회")
+    count = count_rows(rr, ctx, grid)
+    rr.log(f"  {INVOICE_TAB}: 그리드 {count}줄")
+    rr.status.note(f"운송장 {count}건")
+    if not count:
+        return "no_target", f"[{tag}] 운송장 0건 - 전송할 것 없음"
+    checked = check_all_rows(rr, ctx, grid, INVOICE_TAB)
+    note, pressed = press_arrow(rr, ctx, controls(rr, ctx, INVOICE_FORM), "btn_SendRequest", INVOICE_SEND,
+                                checked, count, live)
+    head = f"[{tag}] 운송장 {count}건" + ("" if checked else " - 전체 체크가 안 돼 전송하지 않음 (확인할 것)")
+    if not live:
+        head += " - 전송요청은 누르지 않음"
+    return ("done" if pressed else "skipped"), head + note
+
+
+def count_rows(rr, ctx, grid):
+    """그리드 줄 수. UIA Grid 패턴이 없어(10-13 실측) 행 번호(스크롤해도 이어지는 절대 번호)로 센다 - 세로 스크롤바가
+    있으면 맨 위에서부터 페이지를 넘기며 (키보드는 쓰지 않는다)."""
+    if not rr.grid_rows(grid):
+        return 0
+    if rr.grid_vertical_scrollbar(grid) is None:
+        return max(settled_rows(rr, grid), default=0)
+    front(rr, ctx, "그리드 스크롤")     # 스크롤 단추는 rr 도우미가 누른다 (잠김·포커스는 여기서 한 번 본다)
+    rr.grid_scroll_to_top(ctx.hwnd, grid)
+    rows, last = settled_rows(rr, grid, first=1), 0
+    for _ in range(MAX_PAGES):
+        last = max(last, max(rows, default=0))
+        rows = next_page(rr, ctx, grid, rows)
+        if rows is None:
+            return last
+    raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 못 셈")
 
 
 # ---------------------------------------------------------------------------

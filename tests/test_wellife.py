@@ -86,7 +86,8 @@ check("설정을 못 읽으면 False (오류는 기존 main 이 알린다)", wel
 
 settings({"Wellife": {"Login": "Y", "Sales": " y ", "Hold": "N", "Extra": "Y"}})
 sel, unknown = wellife.load_switches(rr)
-check("적힌 Y 만 켬, 빠진 키(Sap·Wms)는 끔", sel == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False}, str(sel))
+check("적힌 Y 만 켬, 빠진 키(Sap·Wms·InvoiceSend)는 끔",
+      sel == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False, "InvoiceSend": False}, str(sel))
 check("모르는 키는 돌려준다", unknown == ["Extra"], str(unknown))
 settings({"Wellife": {}})
 sel, _ = wellife.load_switches(rr)
@@ -170,10 +171,12 @@ def picked_run(env, done=(), section=ALL_Y, trigger=None):
 
 picked_run("Wms")
 check("예약 줄이 ⑤ 만 고르면 로그인 + ⑤ 만 (섹션에서 켠 ②③④ 는 안 돈다)",
-      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": False, "Wms": True}, str(got.get("selected")))
+      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": False, "Wms": True, "InvoiceSend": False},
+      str(got.get("selected")))
 picked_run("Login,Sap", section={"Wellife": {"Login": "Y"}})
 check("섹션에서 끈 모듈도 예약 줄이 고르면 돈다 (④ 따로 실행)",
-      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": True, "Wms": False}, str(got.get("selected")))
+      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": True, "Wms": False, "InvoiceSend": False},
+      str(got.get("selected")))
 picked_run("Logistics,Output")
 check("웰라이프에 없는 모듈만 넘어오면 run_modules 를 부르지 않고 '비었습니다' 로 멈춤",
       not got and fins and fins[-1][0][0] == "stopped" and "비었습니다" in fins[-1][0][1], str(fins))
@@ -243,9 +246,11 @@ rr.RoutineContext.attach = no_attach
 rec = Rec()
 rr.status = rec
 funcs = {m[0]: fake(m[0]) for m in wellife.MODULES}
-out = rr.run_modules({"Login": True, "Sales": True, "Hold": False, "Sap": True, "Wms": False}, wellife.MODULES, funcs, "Wellife")
+out = rr.run_modules({"Login": True, "Sales": True, "Hold": False, "Sap": True, "Wms": False, "InvoiceSend": False},
+                     wellife.MODULES, funcs, "Wellife")
 check("켠 모듈만 차례대로", order == ["login", "wellife_sales", "wellife_sap"] and out == ("success", None), f"{order} {out}")
-check("끈 모듈은 module_off", [a[0] for a in rec.of("module_off")] == ["wellife_hold", "wellife_wms"], str(rec.of("module_off")))
+check("끈 모듈은 module_off", [a[0] for a in rec.of("module_off")] == ["wellife_hold", "wellife_wms", "invoicesend"],
+      str(rec.of("module_off")))
 
 order.clear()
 funcs["wellife_hold"] = fake("wellife_hold", "failed")
@@ -779,9 +784,9 @@ rr.run_modules = fake_run_modules
 settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
 wellife.run_main(rr)
 start = rec.of("start")[0]
-sales_keys = {"wl_order_screen", "wl_order_collect"}
-check("단계 이름 앞에 모드 - ② 는 SalesMode(빠져서 [리허설]), 나머지는 Mode([실행])",
-      all(label.startswith("[리허설] " if k in sales_keys else "[실행] ") for k, label in start[1]), str(start[1][:4]))
+own_keys = {"wl_order_screen", "wl_order_collect", "inv_send_screen", "inv_send"}
+check("단계 이름 앞에 모드 - ② 는 SalesMode·⑥ 은 InvoiceMode(빠져서 [리허설]), 나머지는 Mode([실행])",
+      all(label.startswith("[리허설] " if k in own_keys else "[실행] ") for k, label in start[1]), str(start[1][:4]))
 settings({"Wellife": {"Login": "Y", "Mode": "run"}})
 rec = Rec()
 rr.status = rec
@@ -989,5 +994,151 @@ check("실행: 전체 체크가 안 되면 지정도 화살표도 누르지 않�
 res, seq = run_slip(True, pressed=False)
 check("실행: 지정을 못 눌렀으면 줄 맞추기·화살표로 가지 않는다", seq == ["조회", "전체 체크", "지정 누름"] and res[1] is False,
       f"{seq}")
+
+# ---------------------------------------------------------------------------
+print("=== 9. ⑥ 운송장번호 전송 (모든 업체용 화면, 지금은 웰라이프만) ===")
+import rpa_status as st  # noqa: E402
+
+check("모드 키가 rpa_status.WELLIFE_MODES(웹 보기)와 같다",
+      [k for k, _ in st.WELLIFE_MODES] == [wellife.SALES_MODE_KEY, wellife.MODE_KEY, wellife.INVOICE_MODE_KEY])
+check("Wellife 설정 키가 rpa_status.WELLIFE_CONFIG_MODULES 와 같다",
+      [m[1] for m in wellife.MODULES] == [k for k, _ in st.WELLIFE_CONFIG_MODULES])
+check("모든 업체용 모듈 키 = 설정 키 소문자 (wellife_ 없음 - agent.history_key·토큰 배율이 같은 키)",
+      [(m[0], m[1]) for m in wellife.MODULES if m[1] in st.SHARED_MODULES] == [("invoicesend", "InvoiceSend")])
+check("모듈 비트가 겹치지 않는다", len({m[4] for m in wellife.MODULES} | {m[4] for m in rr.ROUTINE_MODULES})
+      == len(wellife.MODULES) + len(rr.ROUTINE_MODULES) - 1)   # login(1) 만 같다
+settings({"Wellife": {"Login": "Y", "Mode": "실행", "InvoiceMode": "리허설"}})
+check("InvoiceMode 는 Mode 와 따로 읽고 모르는 키가 아니다",
+      wellife.load_mode(rr) is True and wellife.load_mode(rr, wellife.INVOICE_MODE_KEY) is False
+      and wellife.load_switches(rr)[1] == [])
+settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
+check("InvoiceMode 가 없으면 Mode 를 따르지 않고 리허설", wellife.load_mode(rr, wellife.INVOICE_MODE_KEY) is False)
+
+rr.run_modules = fake_run_modules
+rec, starts, seen = Rec(), [], []
+rec.start = lambda *a, **k: starts.append((a, k))
+rr.status = rec
+got.clear()
+_saved_inv = wellife.module_invoice_send
+wellife.module_invoice_send = lambda rr_, ctx_, live: seen.append(live) or ("skipped", None)
+settings({"Wellife": {"Login": "Y", "InvoiceSend": "Y", "InvoiceMode": "실행"}})
+wellife.run_main(rr)
+got["funcs"]["invoicesend"](None)
+wellife.module_invoice_send = _saved_inv
+check("⑥ 은 InvoiceMode 로 돈다 (Mode 가 빠져 리허설이어도 실행)", seen == [True], str(seen))
+labels = dict(starts[0][0][1]) if starts else {}
+check("⑥ 단계 이름 앞은 [실행], 그 밖은 [리허설] / 제목에 운송장 전송 모드",
+      labels.get("inv_send", "").startswith("[실행] ") and labels.get("wl_wms_so", "").startswith("[리허설] ")
+      and "운송장 전송 실행" in starts[0][1].get("title", ""), f"{labels.get('inv_send')} {starts[:1]}")
+settings({"Wellife": {"Login": "Y", "InvoiceMode": "보냄"}})
+rec = Rec()
+rr.status = rec
+got.clear()
+wellife.run_main(rr)
+fin = rec.of("finish")
+check("InvoiceMode 가 잘못되면 아무것도 돌리지 않고 설정 파일 오류", not got and fin and "설정 파일 오류" in fin[-1][1], str(fin))
+picked_run("InvoiceSend")
+check("예약 줄이 운송장 전송만 고르면 로그인 + ⑥ 만 (반복 시간대도 같은 길)",
+      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": False, "Wms": False, "InvoiceSend": True},
+      str(got.get("selected")))
+picked_run("InvoiceSend", trigger="repeat")
+check("반복 회차가 보낸 것이 없으면 이력에 남기지 않는다", fins and fins[-1][1].get("record") is False, str(fins))
+rr.run_modules = orig_run_modules
+
+# 조회 -> 전체 체크 -> [전송요청(S)]: 실행이면 누르고 팝업 [예], 리허설이면 마우스만
+send_btn = Click("btn_SendRequest", on_click=lambda: POP.extend([Click("예", on_click=POP.clear)]))
+INV = {"rows": 3, "checked": True, "forms": []}
+_saved_inv = wellife.controls, wellife.count_rows, wellife.check_all_rows
+wellife.controls = lambda rr_, ctx_, form: INV["forms"].append(form) or {
+    "btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
+wellife.count_rows = lambda rr_, ctx_, grid: INV["rows"]
+wellife.check_all_rows = lambda rr_, ctx_, grid, label: acts.append(("check_all",)) or INV["checked"]
+_sleep = wellife.time.sleep
+wellife.time.sleep = lambda s: _sleep(min(s, 0.01))
+TOP[0] = actx.hwnd
+
+
+def inv_run(live, rows=3, checked=True, on=True, popup=()):
+    acts.clear(); moves.clear(); POP[:] = list(popup)
+    INV.update(rows=rows, checked=checked, forms=[])
+    send_btn.on = on
+    return wellife.invoice_send(pop_rr(status=Rec(), wait_grid_spinner_gone=lambda *a, **k: True), actx, live)
+
+
+res = inv_run(False)
+check("리허설: 조회 -> 전체 체크 -> [전송요청(S)] 에 마우스만 (누르지 않음)",
+      acts == [("click", "조회(F)"), ("check_all",)] and res[0] == "skipped" and res[1].startswith("[리허설] 운송장 3건")
+      and moves and set(INV["forms"]) == {wellife.INVOICE_FORM}, f"{res} {acts}")
+res = inv_run(True)
+check("실행: 조회 -> 전체 체크 -> [전송요청(S)] 누름 -> 팝업 [예]",
+      acts == [("click", "조회(F)"), ("check_all",), ("click", "btn_SendRequest"), ("click", "예")] and res[0] == "done",
+      f"{res} {acts}")
+res = inv_run(True, rows=0)
+check("실행: 0건이면 체크도 전송요청도 하지 않는다 (no_target)",
+      res[0] == "no_target" and acts == [("click", "조회(F)")], f"{res} {acts}")
+res = inv_run(True, checked=False)
+check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
+      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인할 것" in res[1], f"{res} {acts}")
+res = inv_run(True, on=False)
+check("실행: 단추가 꺼져 있으면 누르지 않는다", ("click", "btn_SendRequest") not in acts and res[0] == "skipped"
+      and "꺼짐" in res[1], f"{res} {acts}")
+try:
+    inv_run(True, popup=[El("예")])
+    res = None
+except wellife.Stop as e:
+    res = e.result
+check("조회 전에 팝업이 떠 있으면 누르지 않고 멈춘다", res == "stopped" and acts == [], f"{res} {acts}")
+wellife.controls = lambda rr_, ctx_, form: {"gridCtrl_List": "grid"}
+try:
+    inv_run(True)
+    res = None
+except wellife.Stop as e:
+    res = e.result
+check("조회(F) 단추가 없으면 멈춘다 (failed)", res == "failed" and acts == [], f"{res} {acts}")
+wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved_inv
+POP.clear()
+
+# 화면 열기: 이미 열린 탭이면 그 탭, 아니면 좌측 아이콘 (없으면 건너뛰지 않고 실패)
+_saved_inv = wellife.open_tab, wellife.invoice_send
+wellife.invoice_send = lambda rr_, ctx_, live: ("skipped", f"전송 live={live}")
+icons = []
+
+
+def nav_rr(icon="ok", tab_ok=True):
+    return pop_rr(status=Rec(), goto_screen_by_icon=lambda ctx_, key, label, tab: icons.append(key) or icon,
+                  wait_for_active_main_tab=lambda app, hwnd, kw, ctx=None: (tab_ok, kw if tab_ok else "메인페이지"))
+
+
+ictx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([]))
+wellife.open_tab = lambda rr_, ctx_, name: El(name)
+acts.clear(); icons.clear()
+res = wellife.module_invoice_send(nav_rr(), ictx, True)
+check("이미 열린 탭이면 그 탭을 누르고 아이콘은 안 누른다", acts == [("click", wellife.INVOICE_TAB)] and not icons
+      and res == ("skipped", "전송 live=True"), f"{res} {acts} {icons}")
+res = wellife.module_invoice_send(nav_rr(tab_ok=False), ictx, True)
+check("탭을 눌렀는데 바뀌지 않으면 failed", res[0] == "failed", str(res))
+wellife.open_tab = lambda rr_, ctx_, name: None
+for icon, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")):
+    icons.clear()
+    res = wellife.module_invoice_send(nav_rr(icon), ictx, False)
+    check(f"열린 탭이 없으면 아이콘 {wellife.INVOICE_ICON} -> '{icon}' 이면 {want}",
+          icons == [wellife.INVOICE_ICON] and res[0] == want, f"{res} {icons}")
+wellife.invoice_send = lambda rr_, ctx_, live: (_ for _ in ()).throw(RuntimeError("COMError 흉내"))
+res = wellife.module_invoice_send(nav_rr(), ictx, True)
+check("UI 오류는 ('failed', 'UI 오류: …')", res == ("failed", "UI 오류: RuntimeError"), str(res))
+wellife.open_tab, wellife.invoice_send = _saved_inv
+wellife.time.sleep = _sleep
+
+# 줄 세기: 세로 스크롤바가 있으면 맨 위에서부터 넘기며 행 번호로 (앞 페이지가 그대로 읽히는 경우 포함)
+g = FakeGrid((range(1, 25), range(24, 48), range(47, 60)))
+crr = grid_rr(g)
+crr.grid_vertical_scrollbar = lambda grid: "vsb"
+check("세로 스크롤바가 있으면 끝까지 넘겨 센다 (59줄)", wellife.count_rows(crr, actx, g) == 59 and g.tops == 1, str(g.tops))
+g = FakeGrid((range(1, 3),))
+crr = grid_rr(g)
+crr.grid_vertical_scrollbar = lambda grid: None
+check("스크롤바가 없으면 보이는 줄 (2줄)", wellife.count_rows(crr, actx, g) == 2 and g.tops == 0)
+crr.grid_rows = lambda grid: {}
+check("줄이 없으면 0", wellife.count_rows(crr, actx, g) == 0)
 
 finish()
