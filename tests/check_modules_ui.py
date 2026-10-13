@@ -179,17 +179,17 @@ try:
         # 이력 상세에 모듈 목록과 모듈 비트 (루틴), 프리페어 상세에는 모듈 비트 없음
         pg.click("#tab-history"); pg.wait_for_selector("#hist-body tr")
         rows = pg.query_selector_all("#hist-body tr")
-        routine_row = next((r for r in rows if "루틴" in r.inner_text()), None)
-        prepare_row = next((r for r in rows if "프리페어" in r.inner_text()), None)
-        check(routine_row is not None and prepare_row is not None, "이력 목록에 루틴·프리페어 행")
+        routine_row = next((r for r in rows if "PROCESS" in r.inner_text()), None)
+        prepare_row = next((r for r in rows if "옵저버" in r.inner_text()), None)
+        check(routine_row is not None and prepare_row is not None, "이력 목록에 PROCESS·옵저버 행")
         routine_row.click()
         pg.wait_for_function("document.body.innerText.includes('모듈 비트')")
         txt = pg.inner_text("body")
-        check("모듈 비트" in txt and "대상 없음" in txt, "루틴 이력 상세: 모듈 목록 + 모듈 비트")
+        check("모듈 비트" in txt and "대상 없음" in txt, "PROCESS 이력 상세: 모듈 목록 + 모듈 비트")
         pg.keyboard.press("Escape")
         prepare_row.click()
         pg.wait_for_timeout(600)
-        check("모듈 비트" not in pg.inner_text("body"), "프리페어 이력 상세에는 모듈 비트 없음")
+        check("모듈 비트" not in pg.inner_text("body"), "옵저버 이력 상세에는 모듈 비트 없음")
         pg.keyboard.press("Escape")
 
         # --- 일반 사용자: 잠김 ---

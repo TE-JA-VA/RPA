@@ -19,12 +19,12 @@ if (args.includes("--shortcut")) {
   const q = (s) => `'${s.replaceAll("'", "''")}'`;       // PowerShell 작은따옴표 글
   execFileSync("powershell", ["-NoProfile", "-Command", [
     "$w = New-Object -ComObject WScript.Shell",
-    `$l = $w.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) ${q("AFTER MARKET 관리.lnk")}))`,
+    `$l = $w.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) ${q("오토파일럿 관리.lnk")}))`,
     `$l.TargetPath = ${q(here("./AFTERMARKET_SETUP.bat"))}`,
     `$l.WorkingDirectory = ${q(here("./"))}`,
     `$l.IconLocation = ${q(here("../../release/AFTER_MARKET.ico"))}`,
     "$l.Save()"].join("; ")], { stdio: "inherit" });
-  console.log("바탕화면에 'AFTER MARKET 관리' 바로 가기를 만들었습니다");
+  console.log("바탕화면에 '오토파일럿 관리' 바로 가기를 만들었습니다");
   process.exit(0);
 }
 
@@ -119,7 +119,7 @@ async function handle(req, res) {
   if (!path.startsWith("/api/")) return path === "/" && req.method === "GET" ? send(200, PAGE, "text/html; charset=utf-8") : send(404, { error: "없는 주소입니다" });
   const got = Buffer.from(String(req.headers["x-admin-key"] ?? ""));
   if (got.length !== KEY.length || !timingSafeEqual(got, KEY)) {
-    return send(403, { error: "비밀 값이 맞지 않습니다 - 관리 화면을 다시 켜세요 (바탕화면 'AFTER MARKET 관리')" });
+    return send(403, { error: "비밀 값이 맞지 않습니다 - 관리 화면을 다시 켜세요 (바탕화면 '오토파일럿 관리')" });
   }
   if (req.method === "POST" && path === "/api/quit") {
     await serial(() => {});   // 하던 고치는 일을 끝낸 뒤 끈다 - 흐름 중간에 끊으면 claim 없는 반쪽 계정이 남고 다시 해도 '이미 있다' 로 건너뛴다
@@ -158,7 +158,7 @@ server.listen(at >= 0 ? Number(args[at + 1]) || 0 : 0, "127.0.0.1", () => {
   port = server.address().port;
   const url = `http://127.0.0.1:${port}/?k=${KEY}`;
   const where = ops.onEmulator() ? "에뮬레이터 (시험)" : `실제 서버 (${ops.PROJECT})`;
-  console.log(`AFTER MARKET 관리 화면 - ${where}`);
+  console.log(`오토파일럿 관리 화면 - ${where}`);
   console.log(`  ${url}`);
   console.log("  브라우저가 안 열리면 위 주소를 여세요. 끄려면 화면의 [끄기] 를 누르거나 이 창을 닫으세요");
   log(`관리 화면 켬 - ${where}`);

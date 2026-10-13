@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AFTER MARKET 관리</title>
+<title>오토파일럿 관리</title>
 <style>
   /* 색은 대시보드(firebase/web/index.html)와 같은 토큰. 밖에서 불러오는 것이 없다 */
   :root {
@@ -73,7 +73,7 @@
 </head>
 <body>
 <header>
-  <strong>AFTER MARKET 관리</strong>
+  <strong>오토파일럿 관리</strong>
   <span id="badge" class="badge">연결 확인 중</span>
   <nav>
     <button data-view="companies" class="on">업체</button>
@@ -153,10 +153,10 @@ const ROLE = { admin: "관리자", viewer: "유저", agent: "에이전트", supe
 const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 관리", Logistics: "물류관리", Output: "운송장 출력 / 엑셀 생성" };
 // 토큰 배율 묶음 (사용자 2026-10-08) - 키는 에이전트가 세는 모듈 키 (run_routine·wellife MODULES, 프리페어는 sites)
 const RATE_GROUPS = [
-  { title: "프리페어 RPA", rows: [["sites", "사이트 수집"]] },
-  { title: "루틴 RPA", plain: true, rows: [["login", "로그인"], ["sales", "주문매핑 매출처리"], ["hold", "물류대기 관리"],
+  { title: "옵저버", rows: [["sites", "사이트 수집"]] },
+  { title: "PROCESS 오토파일럿", plain: true, rows: [["login", "로그인"], ["sales", "주문매핑 매출처리"], ["hold", "물류대기 관리"],
     ["logistics", "물류관리"], ["output", "운송장 출력 / 엑셀 생성"]] },
-  { title: "루틴 RPA · 웰라이프 업체", wellife: true, rows: [["login", "로그인"], ["wellife_sales", "주문매핑 매출처리"],
+  { title: "PROCESS 오토파일럿 · 웰라이프 업체", wellife: true, rows: [["login", "로그인"], ["wellife_sales", "주문매핑 매출처리"],
     ["wellife_hold", "물류대기 관리"], ["wellife_sap", "웰라이프 SAP 연동관리"], ["wellife_wms", "웰라이프 WMS 이관관리"]] },
   { title: "그 밖", rows: [["default", "그 밖의 모듈 (기본)"]] },
 ];
@@ -288,12 +288,12 @@ function pcRowEl(d, p, rel) {
   sel.value = rel.list.some((x) => x.version === cur) ? cur : rel.stable ?? "";
   sel.onchange();
   const go = el("button", { class: "upd-go", disabled: busy || !rel.list.length, onclick: () => act(go, async () => {
-    if (!confirm(`${d.cid} / ${p.pcId} 를 ${sel.value} 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
+    if (!confirm(`${d.cid} / ${p.pcId} 를 ${sel.value} 로 바꿉니다. 오토파일럿이 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/update`, { version: sel.value });
     flash(`업데이트 명령을 보냈습니다 (${p.pcId} → ${sel.value})`); await refreshRow(d, p.pcId);
   }) }, "업데이트");
   const back = p.update?.backup ? el("button", { class: "upd-back", disabled: busy, onclick: () => act(back, async () => {
-    if (!confirm(`${d.cid} / ${p.pcId} 를 이전 버전 ${p.update.backup} 로 되돌립니다. RPA 가 끝나면 바로 바뀝니다.`)) return;
+    if (!confirm(`${d.cid} / ${p.pcId} 를 이전 버전 ${p.update.backup} 로 되돌립니다. 오토파일럿이 끝나면 바로 바뀝니다.`)) return;
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/rollback`, {});
     flash(`되돌리기 명령을 보냈습니다 (${p.pcId} → ${p.update.backup})`); await refreshRow(d, p.pcId);
   }) }, `이전 버전으로 되돌리기${busy ? "" : ` (${p.update.backup})`}`) : null;   // 진행 중엔 보관본이 아직 옛 값이다
@@ -544,7 +544,7 @@ $("quit").onclick = () => act($("quit"), async () => {
   await api("POST", "/api/quit");
   const note = el("p", { class: "muted" }, "3초 뒤 이 창을 닫습니다.");
   document.body.replaceChildren(el("main", {}, el("div", { class: "card" }, el("h2", {}, "관리 화면을 껐습니다"),
-    el("p", { class: "muted" }, "다시 쓰려면 바탕화면의 'AFTER MARKET 관리' 를 누르세요."), note)));
+    el("p", { class: "muted" }, "다시 쓰려면 바탕화면의 '오토파일럿 관리' 를 누르세요."), note)));
   // 3초 뒤 탭을 닫는다 (사용자 2026-10-08). 브라우저는 스크립트가 연 창이나 이동 기록이 하나뿐인 탭만 닫게 해 준다 - 막히면 알린다
   setTimeout(() => {
     window.close();

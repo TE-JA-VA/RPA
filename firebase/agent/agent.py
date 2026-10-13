@@ -603,7 +603,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         if target not in dash.TARGETS:
             raise RuntimeError(f"메뉴를 찾을 수 없습니다. ({target})")
         dash.launch(target, "cloud")         # 1PC 1프로그램 잠금·중복 방지는 launch 안에 있다
-        return f"{dash.TARGETS[target][0]} 을(를) 실행합니다."
+        return f"{dash.st.josa(dash.TARGETS[target][0])} 실행합니다."
 
     def do_stop(args):
         status, body = dash.stop_erpia()
@@ -614,8 +614,8 @@ def real_actions(policy=None, limits=None, start_update=None):
     def do_stop_rpa(args):
         status, body = dash.stop_rpa()        # 바로 끔·ERPia 는 그대로 (사용자 2026-10-12)
         if status != 200:
-            raise RuntimeError(body.get("error") or "RPA 를 중단하지 못했습니다")
-        return body.get("message") or "RPA 를 중단했습니다"
+            raise RuntimeError(body.get("error") or "오토파일럿을 중단하지 못했습니다")
+        return body.get("message") or "오토파일럿을 중단했습니다"
 
     def do_modules(args):
         if not isinstance(args, dict) or not args:
@@ -711,7 +711,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         if install.get("version") == version:
             raise RuntimeError("이미 최신 업데이트를 사용하고 있습니다")
         start(version, "update")
-        return f"업데이트를 예약했습니다 ({install.get('version')} → {version}) - RPA 가 끝나면 바로 바뀝니다"
+        return f"업데이트를 예약했습니다 ({install.get('version')} → {version}) - 오토파일럿이 끝나면 바로 바뀝니다"
 
     def do_rollback(args):
         back = upd.backup_version()
@@ -719,7 +719,7 @@ def real_actions(policy=None, limits=None, start_update=None):
             raise RuntimeError("되돌릴 이전 판이 없습니다")
         check_can_update()
         start(back, "rollback")
-        return f"이전 판으로 되돌리기를 예약했습니다 ({back}) - RPA 가 끝나면 바로 바뀝니다"
+        return f"이전 버전으로 되돌리기를 예약했습니다 ({back}) - 오토파일럿이 끝나면 바로 바뀝니다"
 
     return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets,
             "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback}
@@ -920,7 +920,7 @@ def run(cfg):
     try:
         exe = st.erpia_exe(ask=sys.stdin.isatty())
         log(f"ERPia 위치: {exe}" if exe else
-            "ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. 루틴 RPA 가 ERPia 를 켜지 못합니다 - "
+            "ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. PROCESS 오토파일럿이 ERPia 를 켜지 못합니다 - "
             "ERPia 를 설치했는지 보고 에이전트를 다시 켜서 위치를 고르세요")
     except Exception as e:
         log(f"ERPia 위치를 확인하지 못했습니다 ({type(e).__name__})")

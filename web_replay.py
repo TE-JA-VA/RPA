@@ -814,7 +814,7 @@ class Replayer:
     def run(self):
         if self.rec.get("version") != RECORD_VERSION:
             raise ValueError(f"모르는 기록 형식입니다 (version {self.rec.get('version')!r}) - "
-                             "옵저버와 프리페어를 같은 판으로 맞추세요")
+                             "ACTOR 오토파일럿과 옵저버를 같은 버전으로 맞추세요")
         page = self.first_page or self.context.new_page()
         if self.page_hook:
             self.page_hook(page)

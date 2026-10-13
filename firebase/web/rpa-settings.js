@@ -3,14 +3,14 @@
 import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
 
-export const title = "RPA";
+export const title = "오토파일럿";
 
 const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]], ["주말", [5, 6]]];
 
 const HTML = `
   <div class="settings-grid" id="settings-grid">
     <div>
-      <h3 class="grp">프리페어 RPA (사이트 수집)</h3>
+      <h3 class="grp">옵저버 (사이트 수집)</h3>
       <div class="msg grp-note">쇼핑몰 사이트에서 주문 엑셀을 받아 옵니다</div>
       <div class="card hide" id="shop-card">
         <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
@@ -19,7 +19,7 @@ const HTML = `
         <button class="apply" id="shop-apply" disabled>적용</button>
       </div>
       <div class="msg hide" id="shop-none">이 PC 는 아직 사이트 수집 정보를 보내지 않았습니다 (에이전트를 새 버전으로 업데이트하세요)</div>
-      <h3 class="grp">루틴 RPA</h3>
+      <h3 class="grp">PROCESS 오토파일럿</h3>
       <div class="msg grp-note">받아 온 주문을 ERPia 에서 처리합니다</div>
       <div class="card" id="mod-card">
         <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
@@ -30,7 +30,7 @@ const HTML = `
     </div>
     <div>
       <h3 class="grp">자동 실행</h3>
-      <div class="msg grp-note">시각마다 사이트 수집과 루틴을 함께 고를 수 있습니다</div>
+      <div class="msg grp-note">시각마다 사이트 수집과 PROCESS 를 함께 고를 수 있습니다</div>
       <div class="card" id="sch-card">
         <h2>자동 실행 <span class="muted" id="sch-meta"></span></h2>
         <label class="switch first"><span>활성화</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
@@ -213,12 +213,12 @@ function paintShops() {
     cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
     cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
     cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
-    const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
+    const why = ready ? "" : p.steps ? "ACTOR 오토파일럿에서 아이디·비밀번호를 넣고 저장하세요" : "ACTOR 오토파일럿에서 기록하고 저장하세요";
     cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
     row.append(switchText(shopLine(p), why), cb, Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
-  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '옵저버' 에서 기록하세요";
+  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 'ACTOR 오토파일럿' 에서 기록하세요";
   paintShopMeta();
 }
 function paintShopMeta() {

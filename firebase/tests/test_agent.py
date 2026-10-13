@@ -242,7 +242,7 @@ check(ff["f"] == {"mapValue": {"fields": {"k": {"integerValue": "2"}, "m": {"map
       "dict 는 Firestore map (서버가 칸마다 더할 수 있게 - 토큰)")
 check(json.loads(ff["g"]["stringValue"]) == [1], "목록은 JSON 문자열")
 
-rec = {"run_id": "r1", "program": "routine", "program_label": "루틴 RPA", "state": "stopped", "reason": "주소",
+rec = {"run_id": "r1", "program": "routine", "program_label": "PROCESS 오토파일럿", "state": "stopped", "reason": "주소",
        "started_at": "2026-09-14T13:39:00", "finished_at": "2026-09-14T13:39:02", "duration_sec": 2,
        "steps": [{"key": "a"}], "log_tail": [f"줄{i}" for i in range(100)]}
 doc = ag.run_doc(rec, "c_demo", "pc_office")
@@ -326,15 +326,15 @@ print("토큰: 실행 기록 한 건이 쓴 것·쓴 토큰 (2026-10-07 바꿈 -
 mods = [{"key": "login", "state": "done"}, {"key": "sales", "state": "done"}, {"key": "hold", "state": "no_target"},
         {"key": "logistics", "state": "failed"}, {"key": "output", "state": "skipped"}]
 check(ag.usage({"program": "routine", "modules": mods}) == {"login": 1, "sales": 1},
-      "루틴: 완료인 모듈만 (대상 없음·실패·건너뜀은 안 씀 - 반복이 빈 회차로 토큰을 먹지 않게)")
+      "PROCESS: 완료인 모듈만 (대상 없음·실패·건너뜀은 안 씀 - 반복이 빈 회차로 토큰을 먹지 않게)")
 check(ag.usage({"program": "routine", "modules": [{"key": "sales", "state": "stopped"}, {"key": "hold", "state": "pending"},
                                                   {"key": "logistics", "state": "off"}]}) == {}, "중단·안 돈 모듈·꺼진 모듈은 안 씀")
 check(ag.usage({"program": "prepare", "steps": [
     {"key": "PRESET1:replay", "state": "done"}, {"key": "PRESET2:replay", "state": "failed"},
     {"key": "SITE1:login", "state": "done"}, {"key": "SITE1:download", "state": "done"},
     {"key": "SITE2:login", "state": "done"}, {"key": "SITE2:download", "state": "skipped"}]}) == {"sites": 2},
-      "프리페어: 단계가 모두 완료인 사이트(프리셋) 하나가 1회")
-check(ag.usage({"program": "observer", "steps": [{"key": "PRESET1:replay", "state": "done"}]}) == {}, "옵저버 미리보기는 안 센다")
+      "옵저버: 단계가 모두 완료인 사이트(프리셋) 하나가 1회")
+check(ag.usage({"program": "observer", "steps": [{"key": "PRESET1:replay", "state": "done"}]}) == {}, "ACTOR 오토파일럿 미리보기는 안 센다")
 check(ag.usage({"program": "routine", "state": "crashed"}) == {}, "시작하지 못한 실행은 0")
 check(ag.run_cost({"login": 1, "sales": 1, "hold": 1}, ag.PRICES) == 2, "처음 값표: 모두 1, 로그인 0")
 check(ag.run_cost({"sales": 2, "invoice_send": 1}, {"default": 1, "login": 0, "sales": 3}) == 7,
@@ -470,7 +470,7 @@ class TokenClient(WalletClient):
 
 
 def plan():
-    return ["login", "sales", "hold"], 2       # 켠 루틴 모듈 키, 켠 사이트·프리셋 수
+    return ["login", "sales", "hold"], 2       # 켠 PROCESS 모듈 키, 켠 사이트·프리셋 수
 
 
 def refused(tk, target="routine"):
@@ -636,7 +636,7 @@ check("started_at" in cl.patches[0][1] and "ended_at" in cl.patches[1][1], "시�
 
 
 def boom(args):
-    raise RuntimeError("루틴 RPA 가 이미 돌고 있습니다")
+    raise RuntimeError("PROCESS 오토파일럿이 이미 돌고 있습니다")
 
 
 cl, cmds = make_cmds({"launch": boom})
@@ -693,8 +693,8 @@ with tempfile.TemporaryDirectory() as d:
         check(sel["Login"] is True and sel["Sales"] is False and sel["Hold"] is True, f"로그인은 꺼 달라고 해도 켜진 채 저장 ({sel})")
         check(msg == "모듈 수정 사항을 저장했습니다.", "결과 문장 (사용자 검수 2026-10-12)")
         # [RPA 중단] (2026-10-12) - 업체 웹에서 보내는 명령, 끄는 일은 dash.stop_rpa (tests/test_stop_rpa.py 가 진짜 프로세스로 본다)
-        check("stop_rpa" in ag.KNOWN_TYPES and "stop_rpa" not in ag.ADMIN_ONLY_TYPES, "RPA 중단은 업체 웹 명령")
-        check(acts["stop_rpa"](None) == "이미 완료되어 중단할 수 없었습니다.", "도는 RPA 가 없으면 그렇게 알린다")
+        check("stop_rpa" in ag.KNOWN_TYPES and "stop_rpa" not in ag.ADMIN_ONLY_TYPES, "오토파일럿 중단은 업체 웹 명령")
+        check(acts["stop_rpa"](None) == "이미 완료되어 중단할 수 없었습니다.", "도는 오토파일럿이 없으면 그렇게 알린다")
         orig_stop = dash.stop_rpa
         dash.stop_rpa = lambda: (500, {"ok": False, "error": "중단 명령이 실패했습니다. (남은 프로세스 1개)"})
         try:
@@ -1149,7 +1149,7 @@ with tempfile.TemporaryDirectory() as d:
         rows2 = [{"started_at": "2026-09-14T13:55:00", "state": "success", "program": "observer"},
                  {"started_at": "2026-09-14T13:56:00", "state": "stopped", "program": "prepare"}]
         check(ag.recent_summary(rows2, _dt.date(2026, 9, 14))[-1] == {"date": "2026-09-14", "success": 0, "failed": 1, "crashed": 0},
-              "옵저버 미리보기는 날짜별 도넛에 안 센다")
+              "ACTOR 오토파일럿 미리보기는 날짜별 도넛에 안 센다")
     finally:
         os.environ.pop("RPA_USER_CONFIG", None)
 

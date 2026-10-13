@@ -48,8 +48,10 @@ PROGRAM_FILES = [
     ("rpa_status.py", "rpa_status.py"),
     ("rpa_dashboard.py", "rpa_dashboard.py"),
     ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
-    ("AFTER_MARKET.ico", "release/AFTER_MARKET.ico"),                         # 설정 창·바로 가기 아이콘 (tools/make_icon.py)
-    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # 프리페어·옵저버 창의 주황 A (샌드박스가 exe 와 견준다)
+    ("AFTER_MARKET.ico", "release/AFTER_MARKET.ico"),                         # 오토파일럿: 설정 창·바로 가기·에이전트 (tools/make_icon.py)
+    ("AUTOPILOT_PROCESS.ico", "release/AUTOPILOT_PROCESS.ico"),               # PROCESS 오토파일럿 exe (샌드박스가 exe 와 견준다)
+    ("AUTOPILOT_OBSERVER.ico", "release/AUTOPILOT_OBSERVER.ico"),             # 옵저버 exe (Prepare_RPA)
+    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # ACTOR 오토파일럿 exe·창·바로 가기 (Prepare_Observer)
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
@@ -78,11 +80,13 @@ MFC_DLL = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", 
 NUITKA_YML = os.path.join(REPO, "tools", "nuitka-package.config.yml")   # comtypes typelib 시각 비교 끄기 (파일 안 설명)
 # 작업 관리자에 'Python' 대신 AFTER MARKET 으로 보이게 (2026-09-29 요청): 내장 파이썬 exe 를 이 이름으로 복사하고
 # 설명 칸(작업 관리자 '프로세스' 탭이 보여 주는 글자)을 바꾼다. 사본은 파이썬 재단 서명이 빠진다 (Defender 는 통과)
-BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "AFTER MARKET RPA 에이전트 감독"),
-           bg.AGENT_EXE: ("python.exe", "AFTER MARKET RPA 에이전트")}
+BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "오토파일럿 에이전트 감독"),
+           bg.AGENT_EXE: ("python.exe", "오토파일럿 에이전트")}
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
 ICON = os.path.join(REPO, "release", "AFTER_MARKET.ico")
-ICON_PREPARE = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")    # 작업 표시줄에서 루틴과 가르는 주황 A (2026-09-30)
+ICON_PROCESS = os.path.join(REPO, "release", "AUTOPILOT_PROCESS.ico")       # 프로그램마다 바탕색이 다르다 (2026-10-13 오토파일럿)
+ICON_OBSERVER = os.path.join(REPO, "release", "AUTOPILOT_OBSERVER.ico")
+ICON_PREPARE = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")    # ACTOR 오토파일럿 (옛 이름 그대로 - 설치된 바로 가기가 본다)
 NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--remove-output",
                   "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone",
                   f"--include-data-files={MFC_DLL}=mfc140u.dll", f"--user-package-configuration-file={NUITKA_YML}"]
@@ -95,8 +99,8 @@ PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright
 TK_PLUGIN = "--enable-plugin=tk-inter"
 # 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
 # --check 는 부른 쪽이 출력을 받는다)
-NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON}"],
-                "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_PREPARE}", *PLAYWRIGHT],
+NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_PROCESS}"],
+                "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_OBSERVER}", *PLAYWRIGHT],
                 "Prepare_Observer.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
                                          *PLAYWRIGHT, TK_PLUGIN]}
 ISS_PATH = os.path.join(REPO, "release", "installer.iss")
@@ -123,7 +127,7 @@ def prune_local(out_root, keep=LOCAL_KEEP, protect=()):
     (--exes-from 이 가져온 판). 지운 판 목록 (오래된 것부터). 판이 아닌 파일·폴더는 안 건드린다."""
     found = {}
     for name in os.listdir(out_root) if os.path.isdir(out_root) else []:
-        m = re.fullmatch(rf"배포_{_VER}(?:\.zip)?", name) or re.fullmatch(rf"AFTER_MARKET_RPA_Setup_{_VER}\.exe", name)
+        m = re.fullmatch(rf"배포_{_VER}(?:\.zip)?", name) or re.fullmatch(rf"AUTOPILOT_Setup_{_VER}\.exe", name)
         if m:
             found[f"{m.group(1)}-{m.group(2)}"] = (m.group(1), int(m.group(2)))
     order = sorted(found, key=found.get)
@@ -170,7 +174,7 @@ def brand_exe(src, dst, description, version, icon=None):
                      for n in win32api.EnumResourceNames(h, rt) for lang in win32api.EnumResourceLanguages(h, rt, n)]
     finally:
         win32api.FreeLibrary(h)
-    text = {"CompanyName": "AFTER MARKET", "FileDescription": description, "ProductName": "AFTER MARKET RPA",
+    text = {"CompanyName": "오토파일럿", "FileDescription": description, "ProductName": "오토파일럿",
             "FileVersion": version, "ProductVersion": version,
             "InternalName": os.path.basename(dst), "OriginalFilename": os.path.basename(dst)}
     vs = win32verstamp.VS_VERSION_INFO(*[int(x) for x in version.split(".")], text,
@@ -374,7 +378,7 @@ def reuse_exes(src_dir, work_dir):
     """exe 들을 새로 만들지 않고 src_dir(판 폴더)에서 work_dir 로 복사한다. 판 목록 builder 칸 글자를 돌려준다."""
     missing = [exe for exe in EXES if not os.path.isfile(os.path.join(src_dir, exe))]
     if missing:
-        raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (옵저버가 없던 옛 판) - "
+        raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (ACTOR 오토파일럿이 없던 옛 버전) - "
                                 "--exes-from 없이 새로 빌드하세요")
     os.makedirs(work_dir, exist_ok=True)
     for exe in EXES:
@@ -413,7 +417,7 @@ def num_version(version):
 
 
 def setup_name(version):
-    return f"AFTER_MARKET_RPA_Setup_{version}.exe"
+    return f"AUTOPILOT_Setup_{version}.exe"
 
 
 def iscc_command(iscc, out_dir, version, out_root=OUT_ROOT, iss=ISS_PATH):

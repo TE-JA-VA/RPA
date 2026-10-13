@@ -78,7 +78,7 @@ print("=== 2. 모으기와 판 목록 ===")
 out_dir = os.path.join(out_root, "배포_2026.09.29-3")
 program = br.collect(out_dir, exe_dir, repo=repo, runtime_root=runtime, version="2026.9.29.3")
 branded = {f"python/{name}" for name in br.BRANDED}
-check("판 목록 대상은 exe 둘과 프로그램 파일, AFTER MARKET 이름의 파이썬 둘",
+check("판 목록 대상은 exe 둘과 프로그램 파일, 오토파일럿 이름의 파이썬 둘",
       set(program) == set(br.EXES) | {rel for rel, _ in br.PROGRAM_FILES} | branded and len(branded) == 2, str(program))
 import win32api  # noqa: E402
 import win32con  # noqa: E402
@@ -97,8 +97,8 @@ def version_info(path):
 
 for name, (src, desc) in br.BRANDED.items():
     langs, got, company = version_info(os.path.join(out_dir, "python", name))
-    check(f"{name}: 작업 관리자 설명 '{desc}', 회사 AFTER MARKET, 버전 정보는 한 벌 (옛 'Python' 이 안 남는다)",
-          desc.startswith("AFTER MARKET") and got == desc and company == "AFTER MARKET" and len(langs) == 1,
+    check(f"{name}: 작업 관리자 설명 '{desc}', 회사 오토파일럿, 버전 정보는 한 벌 (옛 'Python' 이 안 남는다)",
+          desc.startswith("오토파일럿") and got == desc and company == "오토파일럿" and len(langs) == 1,
           (langs, got, company))
 
 
@@ -120,7 +120,7 @@ def icons(path):
 
 for name in br.BRANDED:
     groups, ids, imgs = icons(os.path.join(out_dir, "python", name))
-    check(f"{name}: 아이콘은 AFTER MARKET 한 벌 (작업 관리자·탐색기에 보이는 것, 파이썬 아이콘은 안 남는다)",
+    check(f"{name}: 아이콘은 오토파일럿 한 벌 (작업 관리자·탐색기에 보이는 것, 파이썬 아이콘은 안 남는다)",
           len(groups) == 1 and len(imgs) == int.from_bytes(ICO[4:6], "little")
           and all(data in ICO for _, data in imgs) and sorted(ids) == sorted(n for n, _ in imgs),
           (groups, ids, [n for n, _ in imgs]))
@@ -207,7 +207,7 @@ import rpa_settings as rs  # noqa: E402
 
 check("판 목록에 설정 창·감독", {"rpa_settings.py", "firebase/agent/background.py"} <= {rel for rel, _ in br.PROGRAM_FILES})
 check("파일 속성용 판 번호", br.num_version("2026.09.29-5") == "2026.9.29.5" and br.num_version("2026.10.01-12") == "2026.10.1.12")
-check("설치 파일 이름", br.setup_name("2026.09.29-5") == "AFTER_MARKET_RPA_Setup_2026.09.29-5.exe")
+check("설치 파일 이름", br.setup_name("2026.09.29-5") == "AUTOPILOT_Setup_2026.09.29-5.exe")
 with tempfile.TemporaryDirectory() as d:
     a, b = os.path.join(d, "a"), os.path.join(d, "b")
     os.makedirs(a)
@@ -217,7 +217,7 @@ with tempfile.TemporaryDirectory() as d:
 cmd = br.iscc_command("ISCC.exe", r"D:\AX\배포_2026.09.29-5", "2026.09.29-5", out_root=r"D:\AX")
 check("ISCC 명령", cmd[0] == "ISCC.exe" and "/DAppVersion=2026.09.29-5" in cmd and "/DNumVersion=2026.9.29.5" in cmd
       and r"/DSourceDir=D:\AX\배포_2026.09.29-5" in cmd and r"/OD:\AX" in cmd
-      and "/FAFTER_MARKET_RPA_Setup_2026.09.29-5" in cmd and cmd[-1] == br.ISS_PATH, cmd)
+      and "/FAUTOPILOT_Setup_2026.09.29-5" in cmd and cmd[-1] == br.ISS_PATH, cmd)
 iss = Path(br.ISS_PATH).read_bytes().decode("utf-8-sig")
 root_rel = "\\".join(st.PRODUCT_DIRS)
 check("설치 자리 = 1부 자리 규칙", f"DefaultDirName={{commonpf64}}\\{root_rel}" in iss)
@@ -257,13 +257,14 @@ check("두 exe 가 comtypes 의 typelib 시각 비교를 건너뛴다 (PyInstall
 icon_opts = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-icon-from-ico=")]
              for exe in br.EXES}
 prep = getattr(br, "ICON_PREPARE", "")
-check("아이콘: 루틴 exe 는 크림 A, 프리페어·옵저버 exe 는 주황 A 한 벌씩, 주황 ico 도 판에 들어간다 (2026-09-30 사용자가 고른 '나')",
-      icon_opts == {"ERPia_RPA.exe": [f"--windows-icon-from-ico={br.ICON}"],
-                    "Prepare_RPA.exe": [f"--windows-icon-from-ico={prep}"],
+icons = [br.ICON, getattr(br, "ICON_PROCESS", ""), getattr(br, "ICON_OBSERVER", ""), prep]
+check("아이콘: PROCESS·옵저버·ACTOR exe 는 각자 색 한 벌씩, 네 ico 가 모두 다르고 판에 들어간다 (2026-10-13 오토파일럿)",
+      icon_opts == {"ERPia_RPA.exe": [f"--windows-icon-from-ico={icons[1]}"],
+                    "Prepare_RPA.exe": [f"--windows-icon-from-ico={icons[2]}"],
                     "Prepare_Observer.exe": [f"--windows-icon-from-ico={prep}"]}
-      and os.path.isfile(prep) and br.icon_resources(prep)[1]
-      and open(prep, "rb").read() != open(br.ICON, "rb").read()
-      and ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico") in br.PROGRAM_FILES, icon_opts)
+      and all(os.path.isfile(p) and br.icon_resources(p)[1] for p in icons)
+      and len({open(p, "rb").read() for p in icons}) == 4
+      and all((os.path.basename(p), "release/" + os.path.basename(p)) in br.PROGRAM_FILES for p in icons), icon_opts)
 console = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-console-mode=")]
            for exe in br.EXES}
 check("콘솔: 루틴·프리페어는 늘 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창 없음)",
@@ -317,8 +318,8 @@ with tempfile.TemporaryDirectory() as d:
         check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", False)
     except FileNotFoundError as e:
         check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", "Prepare_Observer.exe" in str(e), str(e))
-check("설치 파일: 시작 메뉴 'RPA 옵저버' (주황 아이콘, 작업 표시줄 ID 가 옵저버와 같다)",
-      '"{group}\\RPA 옵저버"' in iss and 'Filename: "{app}\\Prepare_Observer.exe"' in iss
+check("설치 파일: 시작 메뉴 'ACTOR 오토파일럿' (보라 아이콘, 작업 표시줄 ID 가 그 창과 같다)",
+      '"{group}\\ACTOR 오토파일럿"' in iss and 'Filename: "{app}\\Prepare_Observer.exe"' in iss
       and 'IconFilename: "{app}\\AFTER_MARKET_PREPARE.ico"' in iss and 'AppUserModelID: "AFTERMARKET.RPA.Observer"' in iss)
 iscc = br.find_iscc()
 check("이 PC 에 Inno Setup (ISCC.exe)", iscc is not None)

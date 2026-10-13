@@ -42,10 +42,18 @@ try:
 except ImportError:  # 윈도우가 아닌 곳에서 대시보드 화면만 시험할 때
     winreg = None
 
-PROGRAMS = {"prepare": "프리페어 RPA", "routine": "루틴 RPA"}
+PROGRAMS = {"prepare": "옵저버", "routine": "PROCESS 오토파일럿"}
 # 이력(대시보드 '기록' 표)에만 남는 프로그램. 현황 카드·실행 단추·날짜별 도넛은 PROGRAMS 만 본다 (2026-09-30 옵저버 미리보기)
-HISTORY_ONLY = {"observer": "옵저버"}
+HISTORY_ONLY = {"observer": "ACTOR 오토파일럿"}
 LABELS = {**PROGRAMS, **HISTORY_ONLY}
+
+
+def josa(word, pair=("을", "를")):
+    """끝 글자 받침으로 조사 하나 (옵저버를 · PROCESS 오토파일럿을). 끝이 한글이 아니면 'X 을(를)'."""
+    c = ord(word[-1]) - 0xAC00 if word else -1
+    if 0 <= c < 11172:
+        return word + (pair[0] if c % 28 else pair[1])
+    return f"{word} {pair[0]}({pair[1]})"
 
 AI_DIR_NAME = "ERPIA_AI"
 STATUS_DIR_NAME = "RPA_STATUS"
@@ -547,7 +555,7 @@ def migrate_user_config():
     moved = write_user_config(data)
     if moved:
         parts.append(f"옛 파일 {' · '.join(os.path.basename(p) for p in moved)} 은 .old 로 바꿨습니다 - "
-                     "평문 비밀번호가 들어 있으니 RPA 가 잘 돌면 지우세요")
+                     "평문 비밀번호가 들어 있으니 오토파일럿이 잘 돌면 지우세요")
     head = USER_CONFIG_NAME if existed else f"{USER_CONFIG_NAME} 을 만들었습니다"
     return f"{head} ({', '.join(parts)})" if parts else head
 

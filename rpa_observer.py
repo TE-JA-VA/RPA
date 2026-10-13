@@ -40,7 +40,7 @@ RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
 MIN_PRESETS, MAX_PRESETS = st.PRESET_MIN, st.PRESET_MAX
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
-ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 주황 A (tools/make_icon.py)
+ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # ACTOR 오토파일럿 보라 AP (tools/make_icon.py)
 CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
 PROFILE_PREFIX = "rec_prof_"                            # 기록·미리보기 브라우저의 새 프로필 (로그인 쿠키가 든다 - 끝나면 지운다)
 UI = "맑은 고딕"
@@ -53,7 +53,7 @@ BLUE, BLUE_D, BLUE_L = "#2563eb", "#1d4ed8", "#dbeafe"
 GREEN, GREEN_D = "#16a34a", "#15803d"
 RED, RED_D, RED_L = "#dc2626", "#b91c1c", "#fee2e2"
 GRAY_BTN = "#d1d5db"
-GUIDE = """<!doctype html><meta charset="utf-8"><title>AFTER MARKET 기록</title>
+GUIDE = """<!doctype html><meta charset="utf-8"><title>오토파일럿 기록</title>
 <body style="margin:0;font-family:'Malgun Gothic',sans-serif;background:#f3f4f6;color:#111827">
 <div style="padding:28px 40px"><div style="font-size:40px;line-height:1">⬆</div>
 <h2 style="margin:10px 0 6px">주소 표시줄에 쇼핑몰 주소를 입력해주십시오.</h2>
@@ -506,7 +506,7 @@ class App:
         L, T, R, B = L + m, T + m, R - m, B - m
         self.panel_w = max(int((R - L) * 0.30), int(460 * scale))
         self.browser_w = (R - L) - self.panel_w
-        root.title("AFTER MARKET - 옵저버")
+        root.title("ACTOR 오토파일럿")
         root.configure(bg=BG)
         root.geometry(f"{self.panel_w}x{B - T - int(32 * scale)}+{L + self.browser_w}+{T}")
         self.name_var, self.code_var = tk.StringVar(root), tk.StringVar(root)
@@ -827,7 +827,7 @@ class App:
         except ValueError as e:
             return self.status.config(text=f"사용자 설정을 읽지 못했습니다: {e}", fg=RED)
         if not cfg:
-            return self.status.config(text="이 PC 의 사용자 설정이 없습니다 - 시작 메뉴 'RPA 설정' 에서 먼저 저장하세요", fg=RED)
+            return self.status.config(text="이 PC 의 사용자 설정이 없습니다 - 시작 메뉴 '오토파일럿 설정' 에서 먼저 저장하세요", fg=RED)
         now = datetime.datetime.now().isoformat(timespec="seconds")
         out = []
         for no, p in enumerate(self.presets, 1):
@@ -1022,7 +1022,7 @@ def start_problem(me=None, session=None):
     me = me or st.process_user()
     session = st.session_user() if session is None else session
     if session and not st.same_account(me, session):
-        return "다른 사용자의 관리자 권한으로 실행되었습니다. 옵저버를 설치한 사용자로 로그인 하신 후, 관리자 권한으로 실행하여 주십시오."
+        return "다른 사용자의 관리자 권한으로 실행되었습니다. ACTOR 오토파일럿을 설치한 사용자로 로그인 하신 후, 관리자 권한으로 실행하여 주십시오."
     return None
 
 
@@ -1030,17 +1030,17 @@ def busy_problem():
     """다른 옵저버·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는
     RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
     if not st.hold_lock(st.OBSERVER_LOCK):
-        return "옵저버가 이미 켜져 있습니다."
+        return "ACTOR 오토파일럿이 이미 켜져 있습니다."
     # ponytail: 예약이 RPA 를 띄우고 RPA 가 '도는 중' 을 적기까지 몇 초 틈은 못 막는다 (그 사이 켜면 둘 다 뜬다)
     running = [st.PROGRAMS.get(p, p) for p in st.running_programs()]
     if running:
         names = ", ".join(running)
-        return f"{names} 이/가 돌고 있습니다. {names} 종료 후 다시 시도해 주십시오."
+        return f"{st.josa(names, ('이', '가'))} 돌고 있습니다. {names} 종료 후 다시 시도해 주십시오."
     return None
 
 
 def show_error(text):
-    ctypes.windll.user32.MessageBoxW(None, text, "옵저버", 0x10)
+    ctypes.windll.user32.MessageBoxW(None, text, "ACTOR 오토파일럿", 0x10)
 
 
 def fix_std_handles():
@@ -1086,7 +1086,7 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if sys.stdout is not None:
         sys.stdout.reconfigure(encoding="utf-8")        # 콘솔 없는 exe 를 시작 메뉴로 켜면 stdout 이 없다
-    ap = argparse.ArgumentParser(description="옵저버")
+    ap = argparse.ArgumentParser(description="ACTOR 오토파일럿")
     ap.add_argument("--check", action="store_true", help="창 없이 확인 (빌드·샌드박스)")
     a = ap.parse_args(argv)
     if a.check:

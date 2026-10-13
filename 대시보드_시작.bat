@@ -17,7 +17,7 @@ if errorlevel 1 (
 )
 
 cd /d "%~dp0"
-title ERPia RPA 대시보드
+title 오토파일럿 대시보드
 if not exist ".venv\Scripts\python.exe" (
     echo [오류] .venv 가 없습니다. 이 파일은 D:\AX\RPA 안에서 실행해야 합니다.
     pause

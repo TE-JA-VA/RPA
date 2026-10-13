@@ -72,7 +72,7 @@ erpia_pid, kid_pid = map(int, open(pidfile).read().split())
 check(st.running_programs() == ["routine"], "중단 전: 루틴이 돈다", str(st.running_programs()))
 
 code, body = d.stop_rpa()
-check(code == 200 and body.get("message") == "루틴 RPA 을(를) 중단했습니다.", "결과 글", f"{code} {body}")
+check(code == 200 and body.get("message") == "PROCESS 오토파일럿을 중단했습니다.", "결과 글", f"{code} {body}")
 check(proc.poll() is not None, "루틴 프로그램이 꺼졌다")
 check(wait(lambda: not alive(kid_pid), 5), "딸린 프로그램도 꺼졌다")
 check(alive(erpia_pid), "ERPia 는 그대로 (사용자 2026-10-12)")

@@ -85,7 +85,7 @@ admin_uid = make_user("admin@t.local", "pw123456", {"cid": "c_demo", "role": "ad
 viewer_uid = make_user("viewer@t.local", "pw123456", {"cid": "c_demo", "role": "viewer"})
 db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}}})
 routine = {
-    "program": "routine", "program_label": "루틴 RPA", "state": "success",
+    "program": "routine", "program_label": "PROCESS 오토파일럿", "state": "success",
     "started_at": f"{TODAY}T13:55:49", "updated_at": f"{TODAY}T13:58:22", "finished_at": f"{TODAY}T13:58:22",
     "duration_sec": 153, "steps_done": 3, "steps_total": 3,
     "steps": [{"key": "login", "label": "ERPia 로그인", "state": "done",
@@ -97,7 +97,7 @@ routine = {
     "metrics": [{"key": "bottom_selected", "label": "하단 선택", "value": 30, "unit": "건"},
                 {"key": "stock_hold", "label": "재고검토 보류", "value": 8, "total": 8, "unit": "건"},
                 {"key": "abnormal_hold", "label": "비정상 보류", "value": 376, "unit": "건", "approx": True}],
-    "log_tail": ["[13:55:49] === 루틴 시작 ===", "[13:58:22] 결과: 성공"],
+    "log_tail": ["[13:55:49] === PROCESS 시작 ===", "[13:58:22] 결과: 성공"],
 }
 db_put(LIVE, {
     "host": "OFFICE-PC",
@@ -131,7 +131,7 @@ def seed_run(run_id, program, state, started, dur_sec, reason=None, steps=None, 
     payload = {"run_id": run_id, "program": program, "state": state, "started_at": started, "duration_sec": dur_sec,
                "reason": reason, "steps": steps or [], "log": log or [], "metrics": metrics or [], "trigger": trigger}
     doc = {"cid": "c_demo", "pcId": "pc_office", "run_id": run_id, "program": program,
-           "program_label": "루틴 RPA" if program == "routine" else "프리페어 RPA", "state": state, "reason": reason,
+           "program_label": "PROCESS 오토파일럿" if program == "routine" else "옵저버", "state": state, "reason": reason,
            "started_at": started, "finished_at": None, "duration_sec": dur_sec, "date": started[:10], "payload": json.dumps(payload, ensure_ascii=False)}
     if cost is not None:
         doc["cost"] = cost      # 토큰 전 옛 기록에는 없다
@@ -228,11 +228,11 @@ with sync_playwright() as pw:
     check(page.locator("#email").count() == 0 and "업체코드" in page.text_content("#login") and page.get_attribute("#cid", "placeholder") is None and page.get_attribute("#login-id", "placeholder") is None, "로그인은 업체코드·아이디·비밀번호 세 칸, 힌트 글 없음")
     page.fill("#password", "pw123456"); page.click("#login-btn")
     page.wait_for_selector("#main:not(.hide)", timeout=15000)
-    check(page.title() == "AFTER MARKET", "플랫폼 이름")
+    check(page.title() == "오토파일럿", "플랫폼 이름")
     check("(관리자)" in page.text_content("#who"), "관리자로 표시")
     page.wait_for_function("document.getElementById('company')?.textContent === '시연 회사'", timeout=10000)
     check(True, "회사 이름 표시")
-    check(page.text_content("#app-nav a[aria-current='page']").strip().endswith("RPA"), "사이드바에서 RPA 가 현재 페이지")
+    check(page.text_content("#app-nav a[aria-current='page']").strip().endswith("오토파일럿"), "사이드바에서 오토파일럿이 현재 페이지")
     # 사이드바 (사용자 2026-10-08): 계정 줄·[밝게]·[로그아웃] 은 'AFTER MARKET / 업체명' 바로 아래, 메뉴 글자는 이모지
     # 아이콘은 Lucide 0.468.0 (사용자 2026-10-12, 이모지·기호 글자 대신) - data-icon 이 Lucide 이름
     lu = lambda sel: page.evaluate(f"[...document.querySelectorAll({sel!r})].map((e) => e.dataset.icon)")
@@ -252,7 +252,7 @@ with sync_playwright() as pw:
           "휴대폰 폭에서도 [밝게]·[로그아웃] 글자가 한 줄 (아이콘 옆 글자만 잰다)")
     if os.environ.get("SHOT_DIR"): page.locator("aside.side").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "side_390.png"))
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
-    check(page.text_content("#page-title") == "RPA", "페이지 제목")
+    check(page.text_content("#page-title") == "오토파일럿", "페이지 제목")
     check(page.is_hidden("#pc-pick"), "PC 가 하나면 고르기 숨김")
     check(page.evaluate("[...document.querySelectorAll('#admin-nav a')].map((a) => a.dataset.key).join()") == "settings,account"
           and page.text_content("#admin-nav a[data-key='settings']").strip().endswith("환경설정"), "관리 메뉴: 환경설정 · 계정 (환경설정이 위)")
@@ -311,7 +311,7 @@ with sync_playwright() as pw:
     check(True, "성공 (오늘 없이 간단히)")
     check(page.get_attribute("#hero", "data-state") == "success", "헤더 색 상태")
     l1 = page.text_content("#h-line1")
-    check(l1 == "13:55 루틴 RPA · 2분 33초", f"헤더 한 줄 ({l1})")
+    check(l1 == "13:55 PROCESS 오토파일럿 · 2분 33초", f"헤더 한 줄 ({l1})")
     l2 = page.text_content("#h-line2")
     check(l2 == "수집 30건 · 재고검토 보류 8/8건 · 비정상 보류 ≈376건", f"요약 한 줄 ({l2})")
     check(page.query_selector("#hero button") is None, "상태 카드에 버튼 없음 (실행 카드와 중복)")
@@ -337,10 +337,10 @@ with sync_playwright() as pw:
     page.wait_for_function("!document.getElementById('tiles')?.classList.contains('hide')", timeout=10000)
     check(page.is_visible("#list-routine li"), "단계 목록은 항상 펼쳐져 있다")
     check("성공 · 3/3 · 2분 33초" in page.text_content("#meta-routine"), "단계 요약")
-    check("기록 없음" in page.text_content("#meta-prepare"), "프리페어 없음")
+    check("기록 없음" in page.text_content("#meta-prepare"), "옵저버 없음")
     pair = page.evaluate("""() => { const p = document.querySelector('.pair'); const [a, b] = p.children;
       return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
-    check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"프리페어가 왼쪽, 루틴이 오른쪽에 나란히 ({pair})")
+    check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"옵저버가 왼쪽, PROCESS 가 오른쪽에 나란히 ({pair})")
     log = page.text_content("#log")
     check("3줄" in page.text_content("#log-meta"), f"로그 줄 수는 단계 수 ({page.text_content('#log-meta')})")
     check(log.splitlines()[0] == "[13:56:30] ERPia 로그인 성공", f"단계마다 한 줄 ({log.splitlines()[0]})")
@@ -504,7 +504,7 @@ with sync_playwright() as pw:
     check(590 <= c.get("expires_at", 0) - c.get("created_at", 0) <= 610, "만료 10분")
     check(page.is_disabled("#run-routine") and page.is_disabled("#run-all"), "응답 대기 중 버튼 잠금")
     key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "launch")
-    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "루틴 RPA 을(를) 실행합니다.", "started_at": 1, "ended_at": 2})
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "PROCESS 오토파일럿을 실행합니다.", "started_at": 1, "ended_at": 2})
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('실행합니다')", timeout=10000)
     check(page.evaluate("getComputedStyle(document.querySelector('#toasts .toast p')).whiteSpace") == "pre-line",
           "PC 결과 글의 줄바꿈을 그대로 보인다 (토큰 없음 글, 사용자 검수 2026-10-12)")
@@ -517,7 +517,7 @@ with sync_playwright() as pw:
 
     print("5절 실행 모듈 (관리 > 환경설정)")
     goto(page, "settings")
-    check(page.text_content("#page-title") == "환경설정" and page.text_content(".app-settings .app-title") == "RPA",
+    check(page.text_content("#page-title") == "환경설정" and page.text_content(".app-settings .app-title") == "오토파일럿",
           "환경설정 페이지: 제목과 앱 이름 머리")
     page.wait_for_function("document.getElementById('mod-meta')?.textContent === '4/5 켬'", timeout=10000)
     check(page.is_disabled("#mod-apply"), "바뀐 게 없으면 적용 비활성")
@@ -630,28 +630,28 @@ with sync_playwright() as pw:
                                                     {"key": "top", "label": "상단 선택", "state": "pending"}]})
     page.wait_for_function("document.getElementById('run-routine')?.disabled === true", timeout=10000)
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('시작했습니다')", timeout=10000)
-    check(page.locator("#toasts .toast.info", has_text="시작했습니다").count() == 1, "RPA 가 시작되면 파란 토스트")
+    check(page.locator("#toasts .toast.info", has_text="시작했습니다").count() == 1, "오토파일럿이 시작되면 파란 토스트")
     check(lu("#toasts .toast.info svg.lu")[:2] == ["info", "x"], f"토스트 아이콘: 안내 info + 닫기 x ({lu('#toasts .toast.info svg.lu')})")
     check(lu(".pc-pick .chev") in ([], ["chevron-down"]) and lu("#log-box summary .chev") == ["chevron-right"], "접기 꺾쇠: PC 고르기 chevron-down, 로그 chevron-right")
     check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
     check("돌고 있어" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
-    check(page.text_content("#run-routine .t") == "루틴 RPA 실행중" and page.is_hidden("#run-routine .fly")
-          and page.text_content("#run-prepare .t") == "프리페어 RPA" and page.is_visible("#run-prepare .fly"),
+    check(page.text_content("#run-routine .t") == "PROCESS 오토파일럿 실행중" and page.is_hidden("#run-routine .fly")
+          and page.text_content("#run-prepare .t") == "옵저버" and page.is_visible("#run-prepare .fly"),
           f"도는 RPA 의 단추는 '… 실행중' (화살표 없이), 다른 단추는 그대로 ({page.text_content('#run-routine .t')})")
     # [RPA 중단] (2026-10-12 사용자): 도는 동안엔 [ERPia 종료] 자리가 [RPA 중단] - 묻고 나서 stop_rpa (바로 끔, ERPia 는 그대로)
-    check(page.text_content("#stop-erpia .t") == "RPA 중단" and lu("#stop-erpia svg") == ["square"],
-          f"도는 중에는 [ERPia 종료] 가 [RPA 중단] + 정지 네모 아이콘 ({page.text_content('#stop-erpia .t')}, {lu('#stop-erpia svg')})")
+    check(page.text_content("#stop-erpia .t") == "오토파일럿 중단" and lu("#stop-erpia svg") == ["square"],
+          f"도는 중에는 [ERPia 종료] 가 [오토파일럿 중단] + 정지 네모 아이콘 ({page.text_content('#stop-erpia .t')}, {lu('#stop-erpia svg')})")
     asked, n_erpia = [], len(cmds_of("stop_erpia"))
     page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
     page.click("#stop-erpia")
-    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('RPA 중단 명령을 보냈습니다')", timeout=10000)
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('오토파일럿 중단 명령을 보냈습니다')", timeout=10000)
     check(bool(asked) and "중단할까요" in asked[0], f"누르면 먼저 묻는다 ({asked})")
     time.sleep(1.0)
     stop_key = next((k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "stop_rpa"), None)
     check(stop_key is not None and len(cmds_of("stop_erpia")) == n_erpia, "stop_rpa 명령을 넣는다 (ERPia 종료가 아니라)")
     if stop_key:
-        db_patch(f"{CMDS}/{stop_key}", {"state": "done", "result": "루틴 RPA 을(를) 중단했습니다.", "started_at": 1, "ended_at": 2})
+        db_patch(f"{CMDS}/{stop_key}", {"state": "done", "result": "PROCESS 오토파일럿을 중단했습니다.", "started_at": 1, "ended_at": 2})
     page.wait_for_function("document.getElementById('stop-erpia')?.disabled === false", timeout=10000)
     if os.environ.get("SHOT_DIR"): page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_busy.png"))
     # 진행 중 단계 점만 숨쉬고, 로그가 늘어도 애니메이션이 처음부터 다시 돌지 않는다 (목록을 제자리에서 고친다)
@@ -676,22 +676,22 @@ with sync_playwright() as pw:
     check(anim("#list-routine li.running .mark") == "step-glow" and page.text_content("#list-routine li:nth-child(3) .note") == "진행 중",
           "단계가 넘어가면 다음 줄로 옮겨 간다")
     db_patch(f"{LIVE}/programs/routine", {"state": "stopped", "reason": "대시보드에서 중단했습니다", "finished_at": f"{TODAY}T16:21:30"})
-    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('루틴 RPA 중단')", timeout=10000)
-    check(page.locator("#toasts .toast.info", has_text="루틴 RPA 중단 · 대시보드에서 중단했습니다").count() == 1
-          and page.locator("#toasts .toast.bad", has_text="루틴 RPA 실패").count() == 0, "대시보드에서 중단하면 '실패' 가 아니라 파란 '중단' 토스트")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('PROCESS 오토파일럿 중단')", timeout=10000)
+    check(page.locator("#toasts .toast.info", has_text="PROCESS 오토파일럿 중단 · 대시보드에서 중단했습니다").count() == 1
+          and page.locator("#toasts .toast.bad", has_text="PROCESS 오토파일럿 실패").count() == 0, "대시보드에서 중단하면 '실패' 가 아니라 파란 '중단' 토스트")
     page.wait_for_function("document.querySelector('#stop-erpia .t')?.textContent === 'ERPia 종료'", timeout=10000)
     check(True, "멈추면 단추가 다시 [ERPia 종료]")
     db_patch(f"{LIVE}/programs/routine", {"state": "running", "reason": None, "finished_at": None})
-    page.wait_for_function("document.querySelector('#stop-erpia .t')?.textContent === 'RPA 중단'", timeout=10000)
+    page.wait_for_function("document.querySelector('#stop-erpia .t')?.textContent === '오토파일럿 중단'", timeout=10000)
     db_patch(f"{LIVE}/programs/routine", {"state": "crashed", "reason": "프로그램이 사라졌습니다", "finished_at": f"{TODAY}T16:22:00"})
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('오류')", timeout=10000)
     check(page.locator("#toasts .toast.warn", has_text="오류").count() == 1, "죽으면 노란 토스트 (오류)")
-    page.wait_for_function("document.querySelector('#run-routine .t')?.textContent === '루틴 RPA'", timeout=10000)
+    page.wait_for_function("document.querySelector('#run-routine .t')?.textContent === 'PROCESS 오토파일럿'", timeout=10000)
     check(not page.is_disabled("#run-routine") and page.is_visible("#run-routine .fly"),
-          "끝나면 (오류로 끝나도) '→ 루틴 RPA' 로 돌아와 다시 누를 수 있다")
+          "끝나면 (오류로 끝나도) '→ PROCESS 오토파일럿' 로 돌아와 다시 누를 수 있다")
     db_patch(f"{LIVE}/programs/routine", routine)
-    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('루틴 RPA 성공')", timeout=10000)
-    check(page.locator("#toasts .toast.ok", has_text="루틴 RPA 성공").count() == 1, "끝나면 초록 토스트 (성공 · 소요)")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('PROCESS 오토파일럿 성공')", timeout=10000)
+    check(page.locator("#toasts .toast.ok", has_text="PROCESS 오토파일럿 성공").count() == 1, "끝나면 초록 토스트 (성공 · 소요)")
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=10000)
     check(True, "끝나면 다시 눌린다")
     # 띄우자마자 상태 파일에 아직 running 이 안 찍힌 몇 초 (에이전트가 launching 으로 알려 준다)
@@ -785,7 +785,7 @@ with sync_playwright() as pw:
     check(page.text_content("#shop-list label:nth-child(2)").startswith("② <b>몰</b>")
           and page.locator("#shop-list b").count() == 0, "이름의 꺾쇠는 글자 그대로 (태그가 아니다 - Review Focus 5)")
     check(page.locator("#shop-list label:nth-child(2) input").is_disabled()
-          and "옵저버에서 기록하고 저장하세요" == (page.text_content("#shop-list label:nth-child(2) .why") or "")
+          and "ACTOR 오토파일럿에서 기록하고 저장하세요" == (page.text_content("#shop-list label:nth-child(2) .why") or "")
           and page.locator("#shop-list label:nth-child(1) .why").count() == 0,
           "기록이 없는 줄은 스위치가 잠기고 까닭이 줄 아래 글로 보인다 (준비된 줄에는 없다)")
     if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "shop_why.png"))
@@ -858,7 +858,7 @@ with sync_playwright() as pw:
     page.on("dialog", on_dialog)
     page.click("#app-nav a[data-key='rpa']"); page.wait_for_timeout(500)
     page.remove_listener("dialog", on_dialog)
-    check(asked == [] and page.text_content("#page-title") == "RPA", f"적용을 누른 뒤 PC 응답 전에 떠나도 '적용 안 한 변경' 으로 묻지 않는다 ({asked})")
+    check(asked == [] and page.text_content("#page-title") == "오토파일럿", f"적용을 누른 뒤 PC 응답 전에 떠나도 '적용 안 한 변경' 으로 묻지 않는다 ({asked})")
     goto(page, "settings")
     saved = db_get(f"{SETTINGS}/schedule") or {}
     check(saved.get("slots") == [{"at": "09:05"}, {"at": "13:30", "run": ["Logistics"]}] and "times" not in saved,
@@ -918,7 +918,7 @@ with sync_playwright() as pw:
     page.once("dialog", lambda dlg: dlg.accept())
     page.click("#app-nav a[data-key='rpa']")
     page.wait_for_selector("#hero")
-    check(page.text_content("#page-title") == "RPA", "예면 버리고 나간다")
+    check(page.text_content("#page-title") == "오토파일럿", "예면 버리고 나간다")
     check(page.evaluate("() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }") is False, "바뀐 것이 없으면 탭을 닫아도 안 묻는다")
     goto(page, "settings")
     page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30 물류관리'", timeout=10000)
@@ -956,7 +956,7 @@ with sync_playwright() as pw:
               Number(getComputedStyle(t).opacity), getComputedStyle(b.querySelector('.fly')).animationName]; }""")
     check(abs(fly[0] - fly[1]) <= 2 and fly[2] < 0.2, f"올리면 표시가 버튼 한가운데로 가고 글자는 사라진다 ({fly})")
     check(fly[3] == "none", "표시는 떠다니지 않는다 (흔들림 없음)")
-    if os.environ.get("SHOT_DIR"):   # 눈으로 볼 때: 실행 카드 (루틴에 올린 상태 / 종료에 올린 상태)
+    if os.environ.get("SHOT_DIR"):   # 눈으로 볼 때: 실행 카드 (PROCESS 에 올린 상태 / 종료에 올린 상태)
         page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_hover_run.png"))
         page.hover("#stop-erpia"); page.wait_for_timeout(800)
         page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_hover_stop.png"))
@@ -978,7 +978,7 @@ with sync_playwright() as pw:
     check(True, "자동 실행이 꺼져 있으면 '비활성화' (전 '꺼짐')")
     db_patch(f"{LIVE}/schedule", {"enabled": was_on})
     grps = [x.strip() for x in page.locator("#settings-grid h3.grp").all_text_contents()]
-    check(grps == ["프리페어 RPA (사이트 수집)", "루틴 RPA", "자동 실행"], f"환경설정 RPA 는 프리페어·루틴·자동 실행으로 나뉜다 (사용자 2026-10-08) ({grps})")
+    check(grps == ["옵저버 (사이트 수집)", "PROCESS 오토파일럿", "자동 실행"], f"환경설정 오토파일럿은 옵저버·PROCESS·자동 실행으로 나뉜다 (사용자 2026-10-08) ({grps})")
     check(page.evaluate("import('./rpa-common.js').then(m => m.RUN_NAMES.Prepare)") == "사이트 수집", "자동 실행 단추 이름 '사이트 수집' (전 '쇼핑몰 받기')")
     page.click("#sch-add-win")
     win = "#sch-times .t:nth-child(3)"
@@ -1183,7 +1183,7 @@ with sync_playwright() as pw:
     check(accent() == "#f29f67" and "기본" in page.text_content("#accent-now"), "기본값으로 되돌린다")
     page.click("#app-nav a[data-key='rpa']")
     page.wait_for_selector("#hero")
-    check(page.text_content("#page-title") == "RPA", "RPA 로 돌아온다")
+    check(page.text_content("#page-title") == "오토파일럿", "오토파일럿으로 돌아온다")
 
     print("7-2절 기록 탭")
     page.click("#tab-history")
@@ -1200,7 +1200,7 @@ with sync_playwright() as pw:
     # 줄 수는 글자 범위의 사각형 개수로 센다 (칸 높이는 여백 때문에 한 줄이어도 36px)
     one_line = lambda sel: page.evaluate(f"""(() => {{ const el = document.querySelector("{sel}"); const r = document.createRange();
       r.selectNodeContents(el); return r.getClientRects().length; }})()""") == 1
-    check(rows.nth(0).locator("td").nth(1).text_content() == "루틴" and rows.nth(2).locator("td").nth(1).text_content() == "프리페어", "프로그램 칸은 루틴/프리페어")
+    check(rows.nth(0).locator("td").nth(1).text_content() == "PROCESS" and rows.nth(2).locator("td").nth(1).text_content() == "옵저버", "프로그램 칸은 PROCESS/옵저버")
     check(one_line("#view-history thead th:nth-child(2)") and one_line("#hist-rows tr.hist td:nth-child(1)"), "시각·프로그램 칸이 한 줄")
     crash = rows.nth(5).locator(".pill")
     check("crash" in (crash.get_attribute("class") or "") and crash.text_content() == "오류", "죽은 실행은 '오류' 알약")
@@ -1311,11 +1311,11 @@ with sync_playwright() as pw:
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
     rows = page.locator("#hist-rows tr.hist")
     check(rows.count() == 7 and XSS in rows.nth(6).text_content(), "기록 표의 사유가 글자 그대로 보인다")
-    check(page.locator("#hist-rows img").count() == 0 and page.title() == "AFTER MARKET", "태그로 해석되지 않는다 (제목이 안 바뀜)")
+    check(page.locator("#hist-rows img").count() == 0 and page.title() == "오토파일럿", "태그로 해석되지 않는다 (제목이 안 바뀜)")
     page.click("#tab-status")
     db_patch(f"{LIVE}/programs/routine/metrics/0", {"unit": XSS})   # 숫자 타일의 단위도 에이전트 값
     page.wait_for_function("(document.getElementById('tiles')?.textContent || '').includes('<img')", timeout=10000)
-    check(page.locator("#tiles img").count() == 0 and page.title() == "AFTER MARKET", "숫자 타일의 단위도 글자 그대로")
+    check(page.locator("#tiles img").count() == 0 and page.title() == "오토파일럿", "숫자 타일의 단위도 글자 그대로")
     db_patch(f"{LIVE}/programs/routine/metrics/0", {"unit": "건"})
     # 회사 코드 t + 아이디 who → who@t.rpa-test-f02e0.firebaseapp.com (공유 계약)
     make_user("who@t.rpa-test-f02e0.firebaseapp.com", "pw123456", {"cid": "t", "role": "viewer"})
@@ -1430,19 +1430,19 @@ with sync_playwright() as pw:
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
     db_patch(LIVE, {"version": None})
 
-    print("11절 옵저버 미리보기 기록")
+    print("11절 ACTOR 오토파일럿 미리보기 기록")
     seed_run("r_rec_0909", "observer", "success", "2026-09-09T08:00:00", 27,
              log=["[08:00:00] === 미리보기: ① 지마켓 (12단계) ==="])
     page.click("#tab-history")
     page.fill("#hist-date", "2026-09-09"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-09'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
-    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "옵저버", "기록 표의 프로그램 칸이 '옵저버'")
+    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "ACTOR 오토파일럿", "기록 표의 프로그램 칸이 'ACTOR 오토파일럿'")
     seed_run("r_rep_0908", "routine", "success", "2026-09-08T10:24:00", 40, trigger="repeat")
     page.fill("#hist-date", "2026-09-08"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-08'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
-    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "루틴 · 반복", "처리한 반복 회차는 기록 표에 '루틴 · 반복'")
+    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "PROCESS · 반복", "처리한 반복 회차는 기록 표에 'PROCESS · 반복'")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")

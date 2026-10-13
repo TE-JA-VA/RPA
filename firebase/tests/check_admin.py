@@ -139,7 +139,7 @@ except urllib.error.URLError as e:
     code, r = None, e
 check(code == 200, "이상한 요청 줄(GET //[)을 받아도 서버가 죽지 않는다", (code, r))
 page_html = urllib.request.urlopen(BASE + "/", timeout=30).read().decode("utf-8")
-check("AFTER MARKET 관리" in page_html and (key or "?") not in page_html, "화면 파일은 비밀 값 없이 내려주고, 그 안에 비밀 값이 없다")
+check("오토파일럿 관리" in page_html and (key or "?") not in page_html, "화면 파일은 비밀 값 없이 내려주고, 그 안에 비밀 값이 없다")
 code, r = api("GET", "/api/info")
 check(code == 200 and r == {"emulator": True, "project": PROJECT, "dashboard": f"https://{PROJECT}.web.app"}, "에뮬레이터에 붙었다고 알린다", r)
 
@@ -358,7 +358,7 @@ with sync_playwright() as pw:
     page.click(f"#pc-{PC} button.upd-go")
     page.wait_for_timeout(800)
     cmd = [v for v in (db_get(f"apps/rpa/commands/{CID}/{PC}") or {}).values() if v.get("type") == "update"]
-    check(dialogs == [f"{CID} / {PC} 를 2026.10.07-5 로 바꿉니다. RPA 가 끝나면 바로 바뀝니다."], f"확인 창 ({dialogs})")
+    check(dialogs == [f"{CID} / {PC} 를 2026.10.07-5 로 바꿉니다. 오토파일럿이 끝나면 바로 바뀝니다."], f"확인 창 ({dialogs})")
     check(len(cmd) == 1 and cmd[0]["args"] == {"version": "2026.10.07-5"} and cmd[0]["by"] == "admin-tool" and cmd[0]["state"] == "queued"
           and cmd[0]["expires_at"] - cmd[0]["created_at"] == 600, f"update 명령 ({cmd})")
     # 누른 뒤 그 줄만 따라간다 (사용자 2026-10-08): 명령 보냄 → PC 상태 → 끝나면 단추가 풀린다
@@ -536,8 +536,8 @@ with sync_playwright() as pw:
     page.click("nav button[data-view='rates']")
     page.wait_for_selector("#rates tr", timeout=15000)
     groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
-    check(groups == ["프리페어 RPA", "루틴 RPA", "루틴 RPA · 웰라이프 업체", "그 밖"],
-          f"토큰 배율: 프리페어·루틴·웰라이프·그 밖으로 나눔 (사용자 2026-10-08) ({groups})")
+    check(groups == ["옵저버", "PROCESS 오토파일럿", "PROCESS 오토파일럿 · 웰라이프 업체", "그 밖"],
+          f"토큰 배율: 옵저버·PROCESS·웰라이프·그 밖으로 나눔 (사용자 2026-10-08) ({groups})")
     names = [t.strip() for t in page.locator("#rates tr[data-key] td:first-child").all_text_contents()]
     check("사이트 수집" in names and not any("쇼핑몰" in n for n in names) and "웰라이프 SAP 연동관리" in names
           and "웰라이프 WMS 이관관리" in names, f"사이트 수집 이름·웰라이프 모듈 줄 ({names})")
@@ -566,7 +566,7 @@ with sync_playwright() as pw:
     page.select_option("#rate-cid", "t_new")
     page.wait_for_selector("#rates tr[data-key='sales'] input[placeholder='2']", timeout=15000)
     groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
-    check(groups == ["프리페어 RPA", "루틴 RPA", "그 밖"], f"보통 업체는 웰라이프 묶음 없음 ({groups})")
+    check(groups == ["옵저버", "PROCESS 오토파일럿", "그 밖"], f"보통 업체는 웰라이프 묶음 없음 ({groups})")
     rate = page.locator("#rates tr[data-key='sales']")
     check(rate.locator("td").nth(1).text_content().strip() == "2" and rate.locator("input").input_value() == "",
           "업체 칸: 기본값 2 가 보이고 업체 칸은 비어 있다 (따로 정한 값 없음)")
@@ -594,7 +594,7 @@ with sync_playwright() as pw:
     keys = page.evaluate("[...document.querySelectorAll('#rates tr[data-key]')].map((r) => r.dataset.key)")
     if os.environ.get("SHOT_DIR"): page.locator("#view-rates .card").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "rates_wellife.png"))
     check("wellife_sap" in keys and "logistics" not in keys and "login" in keys,
-          f"웰라이프 업체: 루틴은 로그인 + 웰라이프 모듈 (업체 웹과 같은 다섯) ({keys})")
+          f"웰라이프 업체: PROCESS 는 로그인 + 웰라이프 모듈 (업체 웹과 같은 다섯) ({keys})")
     page.select_option("#rate-cid", "")
     page.wait_for_function("document.querySelectorAll('#rates tr.grp').length === 4", timeout=15000)
     check(page.locator("#usage tr", has_text="t_new").count() == 1, "통계 표에 업체가 나온다")
