@@ -278,6 +278,40 @@ check(code == 200 and any(x["cid"] == "t_new" and x["left"] == 600 for x in rows
 code, r = api("GET", "/api/companies/Bad")
 check(code == 404, "업체코드 꼴이 아닌 주소는 없는 요청", code)
 
+print("=== 3-2. 휴대폰 (인증번호 중계 5단계) ===")
+db_patch("meta/companies/t_phone", {"name": "휴대폰 시험", "stts": 0})
+code, r = api("POST", "/api/companies/t_phone/phones", {"phoneId": "kim", "label": "김OO 휴대폰", "owner": "김OO"})
+SECRETS.append(r.get("password", ""))
+kim = email("t_phone", "phone-kim")
+check(code == 200 and r.get("email") == kim and len(r.get("password", "")) == 24 and r.get("phoneId") == "kim",
+      "휴대폰 추가: 계정(phone-<휴대폰코드>)과 비밀번호를 한 번 돌려준다", r)
+check(claims(kim) == {"cid": "t_phone", "phoneId": "kim", "role": "phone"}, "휴대폰 계정 claim = cid·phoneId·role phone", claims(kim))
+check(db_get("meta/companies/t_phone/phones/kim") == {"label": "김OO 휴대폰", "owner": "김OO"}, "업체의 휴대폰 목록에 이름·주인",
+      db_get("meta/companies/t_phone/phones/kim"))
+code, r = api("POST", "/api/companies/t_phone/phones", {"phoneId": "kim", "label": "또"})
+check(code == 400 and "이미" in r.get("error", "") and db_get("meta/companies/t_phone/phones/kim/label") == "김OO 휴대폰",
+      "같은 휴대폰코드를 또 추가하면 거절 (목록 이름도 그대로)", r)
+for bad in ({"phoneId": "Kim!", "label": "x"}, {"phoneId": "", "label": "x"}, {"phoneId": "lee", "label": ""}):
+    code, r = api("POST", "/api/companies/t_phone/phones", bad)
+    check(code == 400 and not db_get(f"meta/companies/t_phone/phones/{bad['phoneId'] or 'x'}"), f"잘못된 값은 거절 ({bad})", r)
+code, r = api("POST", "/api/companies/nobody/phones", {"phoneId": "kim", "label": "x"})
+check(code == 400 and not account(email("nobody", "phone-kim")), "없는 업체에는 휴대폰을 못 넣는다", r)
+code, d = api("GET", "/api/companies/t_phone")
+ph = d.get("phones") if code == 200 else None
+check(ph and [{k: v for k, v in x.items() if k != "lastSignIn"} for x in ph] == [{"phoneId": "kim", "label": "김OO 휴대폰", "owner": "김OO", "email": kim, "disabled": False}] and "lastSignIn" in ph[0],
+      "상세에 휴대폰 목록 (계정 상태 함께)", ph)
+check(all(u["role"] != "phone" for u in d.get("users", [])), "휴대폰 계정은 '계정' 표에 섞이지 않는다 (휴대폰 칸에)", d.get("users"))
+pw_kim = SECRETS[-1]
+tok = call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake",
+           {"email": kim, "password": pw_kim, "returnSecureToken": True}).get("idToken")
+check(bool(tok), "만든 휴대폰 계정으로 로그인된다 (앱이 하는 대로)")
+code, r = api("POST", "/api/companies/t_phone/passwd", {"id": kim})
+SECRETS.append(r.get("password", ""))
+check(code == 200 and len(r.get("password", "")) == 24 and r.get("phone") is True, "휴대폰 계정 비밀번호 재발급", r)
+code, r = api("POST", "/api/companies/t_phone/disabled", {"id": kim, "disabled": True})
+check(code == 200 and account(kim).get("disabled") is True, "휴대폰 계정 사용중지")
+api("POST", "/api/companies/t_phone/disabled", {"id": kim, "disabled": False})
+
 print("=== 4. 화면 (Playwright headless) ===")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
@@ -603,6 +637,25 @@ with sync_playwright() as pw:
     check("키" not in rh and rh[:2] == ["모듈", "배율"], f"토큰 배율 표: 키 칸 없음 ({rh})")
     check("현재 토큰" in uh and "이번 달 사용한 토큰" in uh, f"통계 표 머리 ({uh})")
 
+    print("휴대폰 (5단계)")
+    page.click("nav button[data-view='companies']")
+    page.wait_for_timeout(1000)
+    page.evaluate("document.getElementById('detail').replaceChildren()")
+    page.click("#companies tr[data-cid='t_phone']")
+    page.wait_for_selector("#detail #phone-kim", timeout=15000)
+    cells = [c.strip() for c in page.locator("#phone-kim td").all_text_contents()]
+    check(cells[:4] == ["김OO 휴대폰", "kim", "김OO", "사용중"], f"휴대폰 표: 이름·휴대폰코드·주인·상태 ({cells})")
+    page.fill("#detail input[placeholder^='휴대폰코드']", "park")
+    page.fill("#detail input[placeholder^='휴대폰 이름']", "박OO 휴대폰")
+    page.fill("#detail input[placeholder^='주인']", "박OO")
+    page.click("#detail button:has-text('휴대폰 추가')")
+    page.wait_for_selector("#detail #phone-park", timeout=15000)
+    box = page.text_content("#detail .secret") or ""
+    m = re.search(r"비밀번호: (\S+)", box)
+    SECRETS.append(m.group(1) if m else "")
+    check(email("t_phone", "phone-park") in box and m and "오토파일럿 컨트롤타워" in box and claims(email("t_phone", "phone-park")).get("role") == "phone",
+          "화면에서 휴대폰 추가 → 앱에 넣을 이메일·비밀번호를 한 번 보여 준다", mask(box))
+
     old = browser.new_page()
     old.goto(f"{BASE}/?k={'x' * len(key)}")
     old.wait_for_function("document.getElementById('badge')?.textContent === '연결 안 됨'", timeout=15000)
@@ -636,6 +689,7 @@ if srv.poll() is None:
     code, r = api("POST", "/api/quit")
     srv.wait(timeout=15)
 text = open(LOG, "rb").read()[log_start:].decode("utf-8") if os.path.exists(LOG) else ""
+check("휴대폰 추가 t_phone/kim (김OO 휴대폰)" in text, "기록: 휴대폰 추가 한 줄", text[-400:])
 check("신규 업체 t_new" in text and "토큰 +100 t_new 추가" in text and "비밀번호 재발급 t_new" in text and "업체 비활성화 t_new" in text,
       "관리_기록.txt 에 한 일이 한 줄씩", text[-400:])
 check(SECRETS and all(SECRETS) and not any(s in text for s in SECRETS) and not any(s in "".join(out_lines) for s in SECRETS),

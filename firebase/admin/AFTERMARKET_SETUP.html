@@ -230,7 +230,7 @@ async function openDetail(cid, keep) {
   for (const tr of $("companies").children) tr.classList.toggle("on", tr.dataset.cid === cid);
   const box = $("detail");
   box.replaceChildren(el("h2", {}, `${d.name} (${d.cid})`, d.stts === 9 ? el("span", { class: "muted" }, " · 비활성화된 업체") : ""),
-    keep ?? "", pcSection(d), userSection(d), tokenSection(d), moduleSection(d), limitSection(d), dangerSection(d));
+    keep ?? "", pcSection(d), phoneSection(d), userSection(d), tokenSection(d), moduleSection(d), limitSection(d), dangerSection(d));
   box.classList.remove("hide");
 }
 const refresh = (cid, keep) => { openDetail(cid, keep); loadCompanies(); };
@@ -332,6 +332,35 @@ function pcSection(d) {
     d.pcs.length ? el("div", { style: "overflow-x:auto" }, el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"].map((h) => el("th", {}, h)))),
       el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases))))) : el("p", { class: "muted" }, "PC 가 없습니다"),
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
+}
+const phoneSecret = (title, r) => secretBox(title, `휴대폰 앱 '오토파일럿 컨트롤타워' 에 넣을 값\n이메일: ${r.email}\n비밀번호: ${r.password}`);
+function phoneSection(d) {     // 인증번호를 받아 PC 로 보내는 직원 휴대폰 (인증번호 중계 5단계)
+  const rows = d.phones.map((p) => {
+    const pw = el("button", { onclick: () => act(pw, async () => {
+      if (!confirm(`${p.label} 의 비밀번호를 새로 만들까요? 휴대폰 앱에 새 비밀번호를 다시 넣어야 합니다.`)) return;
+      openDetail(d.cid, phoneSecret(`새 비밀번호 - ${p.label}`, await api("POST", `/api/companies/${d.cid}/passwd`, { id: p.email })));
+    }) }, "비밀번호 재발급");
+    const lock = el("button", { onclick: () => act(lock, async () => {
+      if (!p.disabled && !confirm(`${p.label} 을(를) 사용중지할까요? 그 휴대폰은 인증번호를 보내지 못합니다.`)) return;
+      await api("POST", `/api/companies/${d.cid}/disabled`, { id: p.email, disabled: !p.disabled });
+      flash(p.disabled ? "휴대폰을 다시 사용할 수 있습니다" : "휴대폰을 사용중지했습니다");
+      openDetail(d.cid);
+    }) }, p.disabled ? "사용" : "사용중지");
+    return el("tr", { id: `phone-${p.phoneId}` }, el("td", {}, p.label), el("td", {}, p.phoneId), el("td", {}, p.owner || "-"),
+      el("td", { class: p.disabled ? "bad" : "" }, p.disabled === null ? "계정 없음" : p.disabled ? "사용중지" : "사용중"),
+      el("td", {}, when(p.lastSignIn)), el("td", {}, p.disabled === null ? "" : el("div", { class: "row" }, pw, lock)));
+  });
+  const id = el("input", { placeholder: "휴대폰코드 (예: kim)", size: 16 }), label = el("input", { placeholder: "휴대폰 이름 (예: 김OO 휴대폰)", size: 20 });
+  const owner = el("input", { placeholder: "주인 (예: 김OO)", size: 12 });
+  const add = el("button", { onclick: () => act(add, async () => {
+    const r = await api("POST", `/api/companies/${d.cid}/phones`, { phoneId: id.value.trim(), label: label.value.trim(), owner: owner.value.trim() });
+    flash(`휴대폰 ${r.label} 을(를) 추가했습니다`);
+    refresh(d.cid, phoneSecret(`새 휴대폰 - ${r.label}`, r));
+  }) }, "휴대폰 추가");
+  return el("div", { class: "sec" }, el("h3", {}, "휴대폰 (인증번호 받기)"),
+    d.phones.length ? el("table", {}, el("thead", {}, el("tr", {}, ...["휴대폰 이름", "휴대폰코드", "주인", "상태", "마지막 로그인", ""].map((h) => el("th", {}, h)))),
+      el("tbody", {}, rows)) : el("p", { class: "muted" }, "휴대폰이 없습니다"),
+    el("div", { class: "row" }, id, label, owner, add));
 }
 function userSection(d) {
   const rows = d.users.map((u) => {

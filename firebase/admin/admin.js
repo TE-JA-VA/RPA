@@ -56,6 +56,8 @@ const ROUTES = [
     const pc = await ops.addPc(p.cid, b.pcId, b.label);
     return { pc, agent: b.agent ? await ops.addAgent(p.cid, b.pcId) : null };
   }, (b, r, p) => `PC 추가 ${p.cid}/${r.pc.pcId}${r.agent ? " + 에이전트 계정" : ""}`],
+  ["POST", "/api/companies/:cid/phones", (b, p) => ops.addPhone(p.cid, String(b.phoneId ?? "").trim(), b.label, b.owner),
+    (b, r, p) => `휴대폰 추가 ${p.cid}/${r.phoneId} (${r.label})`],
   ["POST", "/api/companies/:cid/users", (b, p) => ops.addUser(p.cid, b.id, b.role, b.name), (b, r, p) => `계정 추가 ${p.cid} ${r.email} (${r.role})`],
   ["POST", "/api/companies/:cid/passwd", (b, p) => ops.resetPassword(p.cid, b.id), (b, r, p) => `비밀번호 재발급 ${p.cid} ${r.email}`],
   ["POST", "/api/companies/:cid/disabled", (b, p) => ops.setDisabled(p.cid, b.id, b.disabled === true),

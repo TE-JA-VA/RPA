@@ -129,12 +129,27 @@ export async function addAgent(cid, pcId) {
   } catch (e) { await auth.deleteUser(user.uid); throw e; }
   return { email, uid: user.uid, cid, pcId, password };
 }
+// 휴대폰 (인증번호 중계 5단계): 계정 phone-<휴대폰코드> + claim {cid, phoneId, role: phone} + 업체 휴대폰 목록 meta/companies/{cid}/phones.
+// 휴대폰 앱 '오토파일럿 컨트롤타워' 에 이메일·비밀번호를 넣는다. 실서버 계정은 사람이 이 화면에서 만든다 (Claude 도구로 만들지 않는다)
+export async function addPhone(cid, phoneId, label, owner) {
+  checkKey("cid", cid); checkKey("휴대폰코드", phoneId);
+  const clean = String(label ?? "").trim();
+  if (!clean) throw new Refused("휴대폰 이름을 넣으세요 (예: 김OO 휴대폰)");
+  if ((await companyOf(cid)).phones?.[phoneId]) throw new Refused(`휴대폰코드 ${phoneId} 는 이미 있다 - 비밀번호를 모르면 재발급`);
+  const email = emailFor(cid, `phone-${phoneId}`), password = randomPassword();
+  const user = await createAuthUser(email, password);
+  try {
+    await auth.setCustomUserClaims(user.uid, { cid, phoneId, role: "phone" });
+    await rtdb.ref(`meta/companies/${cid}/phones/${phoneId}`).set({ label: clean, owner: String(owner ?? "").trim() });
+  } catch (e) { await auth.deleteUser(user.uid); throw e; }   // 목록에 없는 반쪽 계정을 남기지 않는다
+  return { email, uid: user.uid, cid, phoneId, label: clean, password };
+}
 export async function resetPassword(cidArg, id) {
   const user = await userOf(cidArg, id);
   const password = randomPassword();
   await auth.updateUser(user.uid, { password });
   await auth.revokeRefreshTokens(user.uid);
-  return { email: user.email, password, agent: user.customClaims?.role === "agent" };
+  return { email: user.email, password, agent: user.customClaims?.role === "agent", phone: user.customClaims?.role === "phone" };
 }
 export async function setDisabled(cidArg, id, disabled) {
   const user = await userOf(cidArg, id);
@@ -348,11 +363,16 @@ export async function companyTable() {
 export async function companyDetail(cid) {
   checkKey("cid", cid);
   const v = await companyOf(cid, { removed: true });
-  const users = (await usersOf(cid)).map((u) => ({ email: u.email, id: u.email.split("@")[0], role: u.customClaims?.role ?? "-",
+  const all = await usersOf(cid);
+  const users = all.filter((u) => u.customClaims?.role !== "phone").map((u) => ({ email: u.email, id: u.email.split("@")[0], role: u.customClaims?.role ?? "-",
     pcId: u.customClaims?.pcId ?? null, disabled: u.disabled, lastSignIn: signedIn(u) }));
+  const phones = Object.entries(v.phones ?? {}).map(([phoneId, p]) => {      // 휴대폰은 계정 표가 아니라 휴대폰 칸에 (계정 상태 함께)
+    const email = emailFor(cid, `phone-${phoneId}`), u = all.find((x) => x.email === email);
+    return { phoneId, label: p.label ?? "", owner: p.owner ?? "", email, disabled: u ? u.disabled : null, lastSignIn: u ? signedIn(u) : null };
+  });
   return { cid, name: v.name, stts: v.stts ?? 0, pcs: await Promise.all(Object.entries(v.pcs ?? {}).map(async ([pcId, p]) =>
       ({ pcId, label: p.label ?? "", ...(await pcUpdateStatus(cid, pcId)) }))),
-    users, modules: v.apps?.rpa?.modules ?? {}, features: v.apps?.rpa?.features ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features),
+    users, phones, modules: v.apps?.rpa?.modules ?? {}, features: v.apps?.rpa?.features ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features),
     wellifeAuto: wellifeAuto(cid), scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null, tokens: (await tokenStatus(cid)).wallet };
 }
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.
