@@ -16,15 +16,17 @@
 
 [Setup]
 AppId={{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}
-AppName=AFTER MARKET RPA
+AppName=오토파일럿
 AppVersion={#AppVersion}
-AppVerName=AFTER MARKET RPA {#AppVersion}
-AppPublisher=AFTER MARKET
+AppVerName=오토파일럿 {#AppVersion}
+AppPublisher=오토파일럿
 VersionInfoVersion={#NumVersion}
 DefaultDirName={commonpf64}\AFTER MARKET\RPA
 DisableDirPage=yes
-DefaultGroupName=AFTER MARKET RPA
+DefaultGroupName=오토파일럿
 DisableProgramGroupPage=yes
+; 이름을 바꿨다 (2026-10-13 AFTER MARKET RPA → 오토파일럿) - 덮어 설치할 때 옛 시작 메뉴 묶음 이름을 물려받지 않는다
+UsePreviousGroup=no
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -35,12 +37,12 @@ WizardStyle=modern
 SetupLogging=yes
 CloseApplications=no
 RestartApplications=no
-UninstallDisplayName=AFTER MARKET RPA
+UninstallDisplayName=오토파일럿
 ; 아이콘: tools/make_icon.py 가 만든다. 설치 파일 아이콘은 이 스크립트 옆 것, 나머지는 판 폴더에 들어간 사본
 SetupIconFile=AFTER_MARKET.ico
 UninstallDisplayIcon={app}\AFTER_MARKET.ico
 OutputDir=.
-OutputBaseFilename=AFTER_MARKET_RPA_Setup_{#AppVersion}
+OutputBaseFilename=AUTOPILOT_Setup_{#AppVersion}
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
@@ -54,6 +56,8 @@ Name: "{group}"
 [InstallDelete]
 ; 2026-10-06 부터 브라우저는 깔린 Edge 를 쓴다 - 옛 판이 싣던 ms-playwright(713MB)는 판을 올릴 때 지운다
 Type: filesandordirs; Name: "{app}\ms-playwright"
+; 옛 이름의 시작 메뉴 묶음 (RPA 설정·RPA 옵저버·RPA 대시보드) - 새 이름 묶음을 만든다 (2026-10-13)
+Type: filesandordirs; Name: "{commonprograms}\AFTER MARKET RPA"
 
 [Files]
 ; 판 폴더 전부. 빈 틀은 template 이름으로 (프로그램 폴더에 진짜 설정처럼 보이는 파일을 두지 않는다), 안내 문서는 넣지 않는다
@@ -61,13 +65,13 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "\RPA_UserConfig.json,\배
 Source: "{#SourceDir}\RPA_UserConfig.json"; DestDir: "{app}"; DestName: "RPA_UserConfig.template.json"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\RPA 설정"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"""; WorkingDir: "{app}"; Comment: "RPA 설정 창 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET.ico"; AppUserModelID: "AFTERMARKET.RPA.Settings"
-Name: "{group}\RPA 옵저버"; Filename: "{app}\Prepare_Observer.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작을 기록해 프리페어가 따라 하게 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Observer"
+Name: "{group}\오토파일럿 설정"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"""; WorkingDir: "{app}"; Comment: "오토파일럿 설정 창 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET.ico"; AppUserModelID: "AFTERMARKET.RPA.Settings"
+Name: "{group}\ACTOR 오토파일럿"; Filename: "{app}\Prepare_Observer.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작을 기록해 옵저버가 따라 하게 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Observer"
 
 [INI]
-Filename: "{group}\RPA 대시보드.url"; Section: "InternetShortcut"; Key: "URL"; String: "https://rpa-test-f02e0.web.app"
-Filename: "{group}\RPA 대시보드.url"; Section: "InternetShortcut"; Key: "IconFile"; String: "{app}\AFTER_MARKET.ico"
-Filename: "{group}\RPA 대시보드.url"; Section: "InternetShortcut"; Key: "IconIndex"; String: "0"
+Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "URL"; String: "https://rpa-test-f02e0.web.app"
+Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "IconFile"; String: "{app}\AFTER_MARKET.ico"
+Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "IconIndex"; String: "0"
 
 [Run]
 ; 상속을 끊고 Administrators(S-1-5-32-544)·SYSTEM(S-1-5-18) 만 남긴다. 한글 윈도우의 그룹 이름 차이에 흔들리지 않게 SID 로.
@@ -81,7 +85,7 @@ Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"" --a
 Filename: "{app}\python\python.exe"; Parameters: """{app}\rpa_settings.py"" --after-install --no-window"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Check: WizardSilent
 
 [UninstallDelete]
-Type: files; Name: "{group}\RPA 대시보드.url"
+Type: files; Name: "{group}\오토파일럿 대시보드.url"
 ; 파이썬이 만든 __pycache__ 까지 남지 않게 프로그램 폴더를 통째로 (자리가 고정이라 안전하다)
 Type: filesandordirs; Name: "{app}"
 Type: dirifempty; Name: "{commonpf64}\AFTER MARKET"
@@ -92,7 +96,7 @@ const
   EXIT_STOP_FAILED = 6;
   // 옵저버가 켜 있는 동안 쥐는 잠금 (rpa_status.OBSERVER_LOCK 과 같아야 한다). 켜진 exe 는 덮지도 지우지도 못한다
   OBSERVER_LOCK = 'Local\AFTER_MARKET_RPA_OBSERVER';
-  OBSERVER_OPEN = '옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 다시 ';
+  OBSERVER_OPEN = 'ACTOR 오토파일럿이 켜져 있습니다. ACTOR 오토파일럿을 닫은 뒤 다시 ';
 
 // 설치돼 있는 rpa_settings.py 를 창 없이 돌린다. 처음 설치라 파일이 없으면 -1, 못 띄우면 -2
 function RunSettings(const Args: String): Integer;
@@ -127,7 +131,7 @@ begin
   end;
   Code := RunSettings('--stop');
   if Code = EXIT_RPA_RUNNING then
-    Result := 'RPA 가 돌고 있습니다. RPA 가 끝난 뒤 다시 설치하세요.'
+    Result := '오토파일럿이 돌고 있습니다. 오토파일럿이 끝난 뒤 다시 설치하세요.'
   else if (Code <> 0) and (Code <> -1) then
   begin
     // 6(에이전트가 안 멈춤)뿐 아니라 뜻밖의 코드(설정 창이 오류로 죽음 등)도 멈췄다고 믿지 않는다 - 도는 파일을 덮으면 잠김 오류
@@ -150,7 +154,7 @@ begin
   end;
   if RunSettings('--check-rpa') = EXIT_RPA_RUNNING then
   begin
-    SuppressibleMsgBox('RPA 가 돌고 있습니다. RPA 가 끝난 뒤 다시 지우세요.', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox('오토파일럿이 돌고 있습니다. 오토파일럿이 끝난 뒤 다시 지우세요.', mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;

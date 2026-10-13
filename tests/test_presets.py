@@ -120,7 +120,7 @@ st.step("s1")
 st.log_line("[10:00:00] 미리보기 성공")
 st.finish("success")
 rows = st.read_history(program="observer")
-check("옵저버 미리보기는 이력에 '옵저버' 로 남는다", bool(rows) and rows[0]["program_label"] == "옵저버", str(rows[:1]))
+check("옵저버 미리보기는 이력에 'ACTOR 오토파일럿' 으로 남는다", bool(rows) and rows[0]["program_label"] == "ACTOR 오토파일럿", str(rows[:1]))
 check("현황 카드(프로그램 목록)에는 안 나온다", "observer" not in st.dashboard_snapshot()["programs"])
 
 print("=== 3. 관리자·계정 확인 (설정 창과 같이 쓴다) ===")
@@ -280,7 +280,7 @@ st.start("prepare", ["a"])
 st.flush()
 busy = rr.busy_problem()
 st.finish("success")
-check("RPA 가 돌고 있으면 옵저버를 안 연다 (RPA 가 화면·마우스를 쓴다)", "프리페어 RPA 이/가 돌고 있습니다" in (busy or ""), str(busy))
+check("RPA 가 돌고 있으면 옵저버를 안 연다 (RPA 가 화면·마우스를 쓴다)", "옵저버가 돌고 있습니다" in (busy or ""), str(busy))
 check("켜면 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는 RPA 를 안 띄우고 자동 실행은 기다린다",
       rr.busy_problem() is None and st.observer_open())
 hold = st.hold_lock

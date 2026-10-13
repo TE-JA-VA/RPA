@@ -70,8 +70,8 @@ r = subprocess.run(["cmd.exe", "/c", os.path.join(tmp, "Run_All.bat")], cwd=tmp,
                    capture_output=True, creationflags=subprocess.CREATE_NEW_CONSOLE, timeout=60)
 shutil.rmtree(tmp, ignore_errors=True)
 text, errs = r.stdout.decode("cp949", "replace"), r.stderr.decode("cp949", "replace")   # CP949 명령 창은 CP949 로 찍는다
-for want in ("1/2  프리페어 RPA - 메일 첨부파일 내려받기", "[경고] 프리페어 RPA 가 정상 종료하지 않았습니다. 코드=",
-             "2/2  루틴 RPA - ERPia 처리", "끝났습니다.  프리페어="):     # 가짜 exe 의 종료 코드(1·2)는 보지 않는다
+for want in ("1/2  옵저버 - 메일 첨부파일 내려받기", "[경고] 옵저버가 정상 종료하지 않았습니다. 코드=",
+             "2/2  PROCESS 오토파일럿 - ERPia 처리", "끝났습니다.  옵저버="):     # 가짜 exe 의 종료 코드(1·2)는 보지 않는다
     check(f"한글 줄이 그대로 찍힌다: {want[:24]}…", want in text, text[-300:])
 check("명령 창 오류가 한 줄도 없다 (줄 조각이 명령으로 실행되면 여기 찍힌다)", errs.strip() == "", errs[-300:])
 

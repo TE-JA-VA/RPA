@@ -90,17 +90,17 @@ def start_problem(session=None, me=None, here=None):
     D:\\ 같은 곳의 폴더는 누구나 고칠 수 있어 그 파일이 관리자 권한으로 돌게 된다 (2026-09-29 검토)."""
     if not st.new_layout():
         return (f"설치 마법사로 설치한 PC 가 아닙니다 ({os.path.join(st.install_root(), 'config')} 이 없습니다).\n"
-                "AFTER_MARKET_RPA_Setup 으로 설치한 뒤 시작 메뉴의 'RPA 설정' 을 여세요.")
+                "AUTOPILOT_Setup 으로 설치한 뒤 시작 메뉴의 '오토파일럿 설정' 을 여세요.")
     here = here or HERE
     if os.path.normcase(os.path.normpath(here)) != os.path.normcase(INSTALL_DIR):
         return (f"이 설정 창은 설치 폴더({INSTALL_DIR})의 것이 아닙니다 ({here}).\n"
-                "시작 메뉴 → AFTER MARKET RPA → 'RPA 설정' 을 여세요.")
+                "시작 메뉴 → 오토파일럿 → '오토파일럿 설정' 을 여세요.")
     me = me or process_user()
     session = session_user() if session is None else session
     if session and not same_account(me, session):
         return (f"이 PC 에 로그인한 윈도우 계정({session})이 아니라 다른 계정({me})의 관리자 권한으로 이 창이 떴습니다.\n"
-                f"RPA 는 로그인한 계정으로 돕니다. {session} 계정을 관리자로 바꾼 뒤 그 계정으로 다시 설치하거나 "
-                "'RPA 설정' 을 여세요.")
+                f"오토파일럿은 로그인한 계정으로 돕니다. {session} 계정을 관리자로 바꾼 뒤 그 계정으로 다시 설치하거나 "
+                "'오토파일럿 설정' 을 여세요.")
     return None
 
 
@@ -233,8 +233,8 @@ def helper_task_xml(user, runner_dir):
     py = os.path.join(runner_dir, "python", "pythonw.exe")
     script = os.path.join(runner_dir, "update_helper.py")
     start = xml.index("<Actions")
-    return (xml[:start].replace("AFTER MARKET RPA 에이전트 - 윈도우 로그인 때 창 없이 켠다 (설치 마법사가 등록)",
-                                "AFTER MARKET RPA 업데이트 도우미 - 업데이트가 끝나면 스스로 지운다")
+    return (xml[:start].replace("오토파일럿 에이전트 - 윈도우 로그인 때 창 없이 켠다 (설치 마법사가 등록)",
+                                "오토파일럿 업데이트 도우미 - 업데이트가 끝나면 스스로 지운다")
             + f"""<Actions Context="Author">
     <Exec><Command>{escape(py)}</Command><Arguments>"{escape(script)}"</Arguments><WorkingDirectory>{escape(runner_dir)}</WorkingDirectory></Exec>
   </Actions>
@@ -467,7 +467,7 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None)
     st.write_user_config(merged, paths["user_config"])
     done.append("설정을 저장했습니다.")
     if not st._erpia_file(_section(merged, st.ERPIA_SECTION).get("ExePath")):
-        done.append("ERPia 는 아직 못 찾았습니다 - ERPia 를 설치한 뒤 'RPA 설정' 에서 위치를 고르세요.")
+        done.append("ERPia 는 아직 못 찾았습니다 - ERPia 를 설치한 뒤 '오토파일럿 설정' 에서 위치를 고르세요.")
     register_task(task_xml(user or process_user(), paths["program_dir"]), paths["config_dir"], run)
     running = running or agent_running
     if relogin or not running():
@@ -635,16 +635,16 @@ class Dialogs:
         self._m, self._f, self._p = messagebox, filedialog, parent
 
     def info(self, text):
-        self._m.showinfo("RPA 설정", text, parent=self._p)
+        self._m.showinfo("오토파일럿 설정", text, parent=self._p)
 
     def error(self, text):
-        self._m.showerror("RPA 설정", text, parent=self._p)
+        self._m.showerror("오토파일럿 설정", text, parent=self._p)
 
     def yesno(self, text):
-        return self._m.askyesno("RPA 설정", text, parent=self._p)
+        return self._m.askyesno("오토파일럿 설정", text, parent=self._p)
 
     def retry(self, text):
-        return self._m.askretrycancel("RPA 설정", text, parent=self._p)
+        return self._m.askretrycancel("오토파일럿 설정", text, parent=self._p)
 
     def folder(self, title):
         return self._f.askdirectory(title=title, mustexist=True, parent=self._p)
@@ -668,7 +668,7 @@ class SettingsWindow:
         self.printers = list_printers() if printers is None else list(printers)
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont"):
             font.nametofont(name).configure(family="Malgun Gothic", size=10)
-        root.title("AFTER MARKET RPA 설정")
+        root.title("오토파일럿 설정")
         root.resizable(False, False)
         self.vars = {k: tk.StringVar(master=root) for k in FORM_KEYS}
         self.status, self.msg = tk.StringVar(master=root), tk.StringVar(master=root)
@@ -829,7 +829,7 @@ class SettingsWindow:
             if not olds:
                 return True
             lines = "\n".join(f"    {exe or '?'}" for _, exe, _ in olds[:5])
-            if not self.dialogs.retry("옛 에이전트가 켜져 있습니다. 그 창(ERPia RPA 클라우드 에이전트)을 닫은 뒤 "
+            if not self.dialogs.retry("옛 에이전트가 켜져 있습니다. 그 창(오토파일럿 클라우드 에이전트)을 닫은 뒤 "
                                       f"[다시 시도] 를 누르세요.\n\n{lines}\n\n"
                                       "같이 켜 두면 에이전트 둘이 같은 PC 로 돌아 자동 실행이 두 번 될 수 있습니다."):
                 return False
@@ -895,7 +895,7 @@ class SettingsWindow:
                                        "보고 직접 바꾸거나 지우세요")
         if self.after_install:
             self.dialogs.info("설정을 마쳤습니다. 에이전트는 윈도우에 로그인할 때마다 창 없이 켜집니다.\n"
-                              "설정을 바꿀 때는 시작 메뉴의 'RPA 설정' 을 여세요.")
+                              "설정을 바꿀 때는 시작 메뉴의 '오토파일럿 설정' 을 여세요.")
             self.root.destroy()
 
     def on_import(self):
@@ -929,7 +929,7 @@ class SettingsWindow:
             return                                  # 저장하는 중
         if not self.saved and not configured(self.paths):
             if not self.dialogs.yesno("설정을 마치지 않으면 에이전트가 켜지지 않습니다.\n"
-                                      "시작 메뉴의 'RPA 설정' 에서 이어서 할 수 있습니다. 닫을까요?"):
+                                      "시작 메뉴의 '오토파일럿 설정' 에서 이어서 할 수 있습니다. 닫을까요?"):
                 return
         self.root.destroy()
 
@@ -947,7 +947,7 @@ def show_error_box(text):
     from tkinter import messagebox
     root = new_root()
     root.withdraw()
-    messagebox.showerror("RPA 설정", text, parent=root)
+    messagebox.showerror("오토파일럿 설정", text, parent=root)
     root.destroy()
 
 

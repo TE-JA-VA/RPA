@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" id="theme-color" content="#002b36">
 <meta name="page-version" content="">
-<title>ERPia RPA 현황</title>
+<title>오토파일럿 현황</title>
 <script>
 /* 화면이 그려지기 전에 테마와 강조색을 정한다 (번쩍임 방지). 저장값 > 기기 설정 순. */
 (function () {
@@ -370,7 +370,7 @@ tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 </head>
 <body class="logged-out">
 <header class="top">
-  <div class="brand"><span class="brand-mark" aria-hidden="true"></span>ERPia RPA 현황</div>
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span>오토파일럿 현황</div>
   <nav class="tabs" role="tablist" aria-label="보기">
     <a class="tab" id="tab-now" href="#now" role="tab" aria-selected="true">현황</a>
     <a class="tab" id="tab-history" href="#history" role="tab" aria-selected="false">이력</a>
@@ -383,7 +383,7 @@ tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 <section id="login-view" class="login" hidden aria-label="로그인">
   <form class="login-card" id="login-form" autocomplete="on">
     <h1><span class="brand-mark" aria-hidden="true"></span>로그인</h1>
-    <div class="login-sub">ERPia RPA 현황 대시보드</div>
+    <div class="login-sub">오토파일럿 현황 대시보드</div>
     <label for="login-code">업체코드</label>
     <input class="input" id="login-code" name="admin_code" autocomplete="organization" required maxlength="40" placeholder="예: erpiatest2">
     <label for="login-id">아이디</label>
@@ -431,8 +431,8 @@ tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
       <div class="filter"><span class="filter-label">프로그램</span>
       <div class="seg" id="f-program">
         <button type="button" data-v="all" aria-pressed="true">전체</button>
-        <button type="button" data-v="prepare" aria-pressed="false">프리페어</button>
-        <button type="button" data-v="routine" aria-pressed="false">루틴</button>
+        <button type="button" data-v="prepare" aria-pressed="false">옵저버</button>
+        <button type="button" data-v="routine" aria-pressed="false">PROCESS</button>
       </div></div>
       <div class="filter"><span class="filter-label">기간</span>
       <div class="seg" id="f-period">
@@ -562,7 +562,7 @@ const REFRESH_HIDDEN_MS = 10000;
 const HISTORY_REFRESH_MS = 30000;
 const STALE_WARN_SEC = 600;        // 이 시간 동안 진행 기록이 없으면 '멈췄는지 확인' 안내
 const PROGRAM_ORDER = ["prepare", "routine"];
-const PROGRAM_LABEL = {prepare: "프리페어 RPA", routine: "루틴 RPA"};
+const PROGRAM_LABEL = {prepare: "옵저버", routine: "PROCESS 오토파일럿"};
 const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];   // 서버와 같이 월=0
 const DAY_PRESETS = [["all", "매일", [0, 1, 2, 3, 4, 5, 6]], ["weekdays", "평일", [0, 1, 2, 3, 4]], ["weekend", "주말", [5, 6]]];
 const MINUTE_STEP = 5;
@@ -936,7 +936,7 @@ function setConn(ok) {
   const banner = $("offline-banner");
   if (ok) { banner.hidden = true; return; }
   const ago = lastOkAt ? ` 마지막 수신 ${fmtDur((Date.now() - lastOkAt) / 1000)} 전.` : "";
-  banner.replaceChildren(icon("plug"), h("span", {text: `대시보드 서버에 연결할 수 없습니다.${ago} RPA PC 의 대시보드 창이 켜져 있는지 확인하세요.`}));
+  banner.replaceChildren(icon("plug"), h("span", {text: `대시보드 서버에 연결할 수 없습니다.${ago} 오토파일럿 PC 의 대시보드 창이 켜져 있는지 확인하세요.`}));
   banner.hidden = false;
 }
 
@@ -1090,7 +1090,7 @@ function updateCard(prog, v) {
   else setAlert(r.alert, null);
 
   const mods = v.modules || [];
-  r.modulesTitle.hidden = r.modules.hidden = !mods.length;   // 프리페어 카드에는 모듈이 없다
+  r.modulesTitle.hidden = r.modules.hidden = !mods.length;   // 옵저버 카드에는 모듈이 없다
   r.modules.replaceChildren(...mods.map((m) => moduleItem(m, m.duration_sec)));
   r.steps.replaceChildren(...(v.steps || []).map((st) => stepItem(st, running, st.duration_sec)));
 
@@ -1155,7 +1155,7 @@ function paintNext() {
 
 let running_now = [];
 let launchNow = null;   // 대시보드가 띄운 실행이 살아 있으면 {target, by, sec}
-const TARGET_LABEL = {all: "전체 실행", prepare: "프리페어 RPA", routine: "루틴 RPA"};
+const TARGET_LABEL = {all: "전체 실행", prepare: "옵저버", routine: "PROCESS 오토파일럿"};
 function renderHero(snap) {
   const list = PROGRAM_ORDER.map((p) => [p, snap.programs[p]]).filter(([, v]) => v);
   const running = list.filter(([, v]) => v.state === "running");
@@ -1168,8 +1168,8 @@ function renderHero(snap) {
     heroIcon.className = "hero-icon tone-run";
     heroIcon.replaceChildren(icon("spin"));
     const started = list.some(([, v]) => v.finished_at && secsBetween(v.finished_at, snap.server_time) < 600);
-    title.replaceChildren(launchNow.target === "all" && started ? "다음 RPA 시작하는 중…" : "RPA 시작하는 중…");
-    sub.textContent = `${TARGET_LABEL[launchNow.target] || launchNow.target} · ${launchedBy(launchNow.by)} · ${fmtDur(launchNow.sec)} 전에 띄움. RPA 가 첫 기록을 남기면 여기에 나타납니다.`;
+    title.replaceChildren(launchNow.target === "all" && started ? "다음 오토파일럿 시작하는 중…" : "오토파일럿 시작하는 중…");
+    sub.textContent = `${TARGET_LABEL[launchNow.target] || launchNow.target} · ${launchedBy(launchNow.by)} · ${fmtDur(launchNow.sec)} 전에 띄움. 오토파일럿이 첫 기록을 남기면 여기에 나타납니다.`;
     return;
   }
   if (running.length) {
@@ -1186,7 +1186,7 @@ function renderHero(snap) {
     const meta = STATE_META[v.state] || STATE_META.stopped;
     heroIcon.className = `hero-icon tone-${meta.tone}`;
     heroIcon.replaceChildren(icon(meta.icon));
-    title.replaceChildren(`실행 중인 RPA 없음`);
+    title.replaceChildren(`실행 중인 오토파일럿 없음`);
     sub.textContent = `마지막 실행: ${PROGRAM_LABEL[p]} ${meta.label} · ${mdhm(v.finished_at || v.started_at)}${v.reason ? " · " + v.reason : ""}`;
     return;
   }
@@ -1198,7 +1198,7 @@ function renderHero(snap) {
 
 /* 실행 버튼 (관리자): 전체 / 프리페어 / 루틴. 어느 하나라도 도는 동안은 셋 다 잠근다. */
 let runBusy = false;
-const RUN_TITLES = {all: "Run_All.bat (프리페어 → 루틴) 을 지금 띄웁니다", prepare: "프리페어 RPA 만 띄웁니다 (메일 첨부 내려받기)", routine: "루틴 RPA 만 띄웁니다 (ERPia 처리)"};
+const RUN_TITLES = {all: "Run_All.bat (옵저버 → PROCESS) 을 지금 띄웁니다", prepare: "옵저버만 띄웁니다 (메일 첨부 내려받기)", routine: "PROCESS 오토파일럿만 띄웁니다 (ERPia 처리)"};
 function paintRunButtons() {
   const anyRunning = running_now.length > 0;
   const locked = anyRunning || !!launchNow || runBusy;
@@ -1207,20 +1207,20 @@ function paintRunButtons() {
   for (const btn of document.querySelectorAll(".run-btn[data-target]")) {
     const t = btn.dataset.target;
     const mine = activeTarget === t;
-    const label = t === "all" ? "전체 실행" : t === "prepare" ? "프리페어 실행" : "루틴 실행";
+    const label = t === "all" ? "전체 실행" : t === "prepare" ? "옵저버 실행" : "PROCESS 실행";
     btn.classList.toggle("is-running", mine);
     btn.classList.toggle("hue-prepare", mine && t === "prepare");
     btn.classList.toggle("hue-routine", mine && t === "routine");
     btn.replaceChildren(icon(mine ? "spin" : "play"), mine ? (launchNow && !anyRunning ? "시작하는 중…" : "실행 중…") : label);
     btn.disabled = locked;
-    btn.title = locked ? (mine ? "끝날 때까지 기다리세요" : "다른 RPA 가 끝날 때까지 기다리세요") : RUN_TITLES[t];
+    btn.title = locked ? (mine ? "끝날 때까지 기다리세요" : "다른 오토파일럿이 끝날 때까지 기다리세요") : RUN_TITLES[t];
   }
 }
 async function runTarget(target) {
   if (runBusy || running_now.length || launchNow) return;
   const what = TARGET_LABEL[target];
-  const detail = target === "all" ? "프리페어 → 루틴 순서로 이어서 돕니다." : target === "prepare" ? "메일에서 첨부를 내려받습니다." : "ERPia 처리를 합니다. 엑셀은 이미 받아 둔 것을 씁니다.";
-  if (!confirm(`${what}을(를) 지금 실행합니다. ${detail} RPA PC 의 마우스와 키보드를 RPA 가 사용합니다. 계속할까요?`)) return;
+  const detail = target === "all" ? "옵저버 → PROCESS 순서로 이어서 돕니다." : target === "prepare" ? "메일에서 첨부를 내려받습니다." : "ERPia 처리를 합니다. 엑셀은 이미 받아 둔 것을 씁니다.";
+  if (!confirm(`${what}을(를) 지금 실행합니다. ${detail} 오토파일럿 PC 의 마우스와 키보드를 오토파일럿이 사용합니다. 계속할까요?`)) return;
   runBusy = true; paintRunButtons();
   setMsg($("run-msg"), null, "띄우는 중…");
   try {
@@ -1574,7 +1574,7 @@ function renderSettingsInfo(view) {
   $("sch-info").replaceChildren(...rows.flatMap(([k, v]) => [h("b", {text: k}), h("span", {}, v)]));
   const adminBox = $("set-admin");
   if (admin && view.is_admin === false) {
-    setAlert(adminBox, "warning", "대시보드가 관리자 권한이 아닙니다", "ERPia 는 관리자 권한으로 돌기 때문에, 여기서 띄운 RPA 가 ERPia 를 조작하지 못하고 ERPia 종료도 거부될 수 있습니다. Run_All.bat 을 관리자 권한으로 실행해 대시보드를 띄우세요.");
+    setAlert(adminBox, "warning", "대시보드가 관리자 권한이 아닙니다", "ERPia 는 관리자 권한으로 돌기 때문에, 여기서 띄운 오토파일럿이 ERPia 를 조작하지 못하고 ERPia 종료도 거부될 수 있습니다. Run_All.bat 을 관리자 권한으로 실행해 대시보드를 띄우세요.");
   } else adminBox.hidden = true;
   const err = $("set-error");
   if (sch.last_error) setAlert(err, "critical", "지난 자동 실행에 실패했습니다", sch.last_error);
@@ -1598,10 +1598,10 @@ function renderSettingsInfo(view) {
     icon(erpia ? "check" : "dot"), erpia == null ? "알 수 없음" : erpia ? "실행 중 (로그인 상태)" : "꺼져 있음");
   $("erpia-info").replaceChildren(
     h("b", {text: "상태"}), erpiaEl,
-    h("b", {text: "RPA 계정"}), h("span", {text: accountText(view.erpia_account) || "ERPIA_AI.txt 에서 읽지 못했습니다"}),
-    h("b", {text: "RPA"}), h("span", {text: rpaRunning ? `${view.rpa_running.map((p) => PROGRAM_LABEL[p] || p).join(", ")} 진행 중` : "쉬는 중"}));
+    h("b", {text: "오토파일럿 계정"}), h("span", {text: accountText(view.erpia_account) || "ERPIA_AI.txt 에서 읽지 못했습니다"}),
+    h("b", {text: "오토파일럿"}), h("span", {text: rpaRunning ? `${view.rpa_running.map((p) => PROGRAM_LABEL[p] || p).join(", ")} 진행 중` : "쉬는 중"}));
   erpiaStopBtn.disabled = settings.busy || !erpia || rpaRunning || !admin;
-  erpiaStopBtn.title = rpaRunning ? "RPA 가 도는 중에는 종료할 수 없습니다" : (!erpia ? "ERPia 가 꺼져 있습니다" : "");
+  erpiaStopBtn.title = rpaRunning ? "오토파일럿이 도는 중에는 종료할 수 없습니다" : (!erpia ? "ERPia 가 꺼져 있습니다" : "");
 }
 function renderSettingsLive(snap) {
   // 2초 폴링으로 오는 값(다음 실행 시각, ERPia 상태)만 갱신한다. 입력 중인 폼은 건드리지 않는다.

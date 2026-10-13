@@ -139,15 +139,17 @@ def main():
         text = open(path_a, encoding="utf-8").read()
         check("기록에 비밀번호도 아이디도 없다", fake_mall.PASSWORD not in text and fake_mall.USER not in text)
         kinds = [s["kind"] for s in a["steps"]]
-        check("단계: 아이디·비밀번호·로그인·공지 닫기·메뉴·고르기·1주일·검색·요청·사유·요청·새로고침·다운로드 (제목·표 칸·빈 곳 누름은 안 적힘)",
-              kinds == ["fill", "secret", "click", "click", "click", "select", "click", "click", "click", "fill", "click",
+        check("단계: 아이디·비밀번호·로그인·공지 닫기·메뉴에 마우스·메뉴·고르기·1주일·검색·요청·사유·요청·새로고침·다운로드 (제목·표 칸·빈 곳 누름은 안 적힘)",
+              kinds == ["fill", "secret", "click", "click", "hover", "click", "select", "click", "click", "click", "fill", "click",
                         "click", "click"], str(kinds))
+        check("숨겨 둔 하위 메뉴(주문관리 > 발송처리 - CSS :hover)도 마우스 올리기가 들어간다 (2026-10-13 하위 메뉴 감지)",
+              a["steps"][4]["target"]["text"] == "주문관리", str(a["steps"][4].get("target", {}).get("text")))
         check("공지 닫기는 '떠 있을 때만'", any(s.get("optional") for s in a["steps"]))
-        check("엑셀 요청이 새 창을 연다, 요청에 알림창, 마지막에 파일", a["steps"][8].get("opens") == 1
-              and a["steps"][10].get("dialogs") and a["steps"][12].get("download"), json.dumps(a["steps"][8:], ensure_ascii=False)[:300])
-        check("1주일 더블클릭은 한 단계", a["steps"][6].get("double") is True, str(a["steps"][6]))
+        check("엑셀 요청이 새 창을 연다, 요청에 알림창, 마지막에 파일", a["steps"][9].get("opens") == 1
+              and a["steps"][11].get("dialogs") and a["steps"][13].get("download"), json.dumps(a["steps"][9:], ensure_ascii=False)[:300])
+        check("1주일 더블클릭은 한 단계", a["steps"][7].get("double") is True, str(a["steps"][7]))
         check("기록 때 파일도 받았다", mall.downloads == [3] and a["samples"], str(mall.downloads))
-        check("다운로드는 '11단계(요청) 뒤에 새로 생긴 것' - 그 뒤 새로고침을 눌러도", a["steps"][12].get("appearsAfter") == 10,
+        check("다운로드는 '12단계(요청) 뒤에 새로 생긴 것' - 그 뒤 새로고침을 눌러도", a["steps"][13].get("appearsAfter") == 11,
               str([s.get("appearsAfter") for s in a["steps"]]))
 
         for day, notice, label, settle, delay in ((DAY + datetime.timedelta(days=1), False, "A1_다음날_공지없음", 3000, 0),
@@ -168,9 +170,9 @@ def main():
                   and day.isoformat() in names[0], str(names))
 
         # ---------------- A 에서 단계를 뺀 기록 (검토 창에서 공지 닫기·새로고침을 끈 것) ----------------
-        d = rec.keep_steps(a, [i for i in range(len(a["steps"])) if i not in (3, 11)])
-        check("단계를 빼면 뒤 번호도 따라간다 (다운로드는 이제 10단계 뒤)", len(d["steps"]) == 11
-              and d["steps"][-1].get("appearsAfter") == 9, str([s.get("appearsAfter") for s in d["steps"]]))
+        d = rec.keep_steps(a, [i for i in range(len(a["steps"])) if i not in (3, 12)])
+        check("단계를 빼면 뒤 번호도 따라간다 (다운로드는 이제 11단계 뒤)", len(d["steps"]) == 12
+              and d["steps"][-1].get("appearsAfter") == 10, str([s.get("appearsAfter") for s in d["steps"]]))
         day = DAY + datetime.timedelta(days=4)
         ok, r, m = replay_check(srv, url, d, day, True, None, "D_단계뺀기록_공지뜸")
         check("D: 끝까지 (뺀 공지 닫기 대신 가로막힐 때 닫고)", ok, str(r.results[-1]))
@@ -218,7 +220,7 @@ def main():
         check("마우스 올리기가 저절로 들어간다 (로그인 → 배송관리에 마우스 → 송장전송 → 받기)",
               kinds == ["fill", "secret", "click", "hover", "click", "click"] and e["steps"][3]["target"]["text"] == "배송관리",
               str(kinds))
-        check("늘 있는 메뉴(주문관리 > 발송처리)에는 안 들어간다", "hover" not in [s["kind"] for s in a["steps"]])
+        check("마우스 올리기는 하위 메뉴마다 하나 (주문관리 하나뿐)", [s["target"]["text"] for s in a["steps"] if s["kind"] == "hover"] == ["주문관리"])
         day = DAY + datetime.timedelta(days=1)
         ok, r, m = replay_check(srv, url, e, day, False, None, "E1_다음날")
         check("E1: 끝까지, 그날 송장 파일", ok and m.ship_downloads == [day.isoformat()]

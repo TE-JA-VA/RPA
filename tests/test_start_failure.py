@@ -71,7 +71,7 @@ check(len(h) == 1 and r.get("program") == "routine" and r.get("state") == "crash
 check("시작하지 못했습니다" in (r.get("reason") or "") and "ImportError: Typelib different than module" in r["reason"],
       "까닭에 오류 출력 마지막 줄", r.get("reason"))
 check("line 108" in " ".join(r.get("log_tail") or []), "오류 출력을 로그 꼬리로", r.get("log_tail"))
-check(r.get("run_id") and r.get("started_at") and r.get("finished_at") and r.get("program_label") == "루틴 RPA", "이력 필수 칸", r)
+check(r.get("run_id") and r.get("started_at") and r.get("finished_at") and r.get("program_label") == "PROCESS 오토파일럿", "이력 필수 칸", r)
 d.launch_state()
 check(len(st.read_history()) == 1, "다시 물어도 한 번만 남긴다")
 

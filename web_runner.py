@@ -219,7 +219,7 @@ def _replay_problems(name, site):
     except ValueError as e:
         return [f"{name}: 프리셋 파일을 읽지 못했습니다 ({e})"]
     if p is None or not p.get("record"):
-        return [f"{name}: 프리셋 {no} 의 기록이 없습니다 (옵저버에서 기록하고 저장하세요)"]
+        return [f"{name}: 프리셋 {no} 의 기록이 없습니다 (ACTOR 오토파일럿에서 기록하고 저장하세요)"]
     if not re.fullmatch(r"\d{3}", p.get("code") or ""):
         return [f"{name}: 프리셋 {no} 의 사이트코드가 숫자 세 자리가 아닙니다 ({p.get('code')!r})"]
     return []
@@ -1194,7 +1194,7 @@ def cmd_check():
         return 1
 
     if not cfg:   # 새로 깐 PC 는 프리셋이 없다 - 오류가 아니다 (빌드가 끝 줄로 점검한다)
-        log("  프리셋이 아직 없습니다 (옵저버에서 쇼핑몰 프리셋을 저장하면 생깁니다).")
+        log("  프리셋이 아직 없습니다 (ACTOR 오토파일럿에서 쇼핑몰 프리셋을 저장하면 생깁니다).")
 
     all_problems = []
     for name, site in cfg.items():
@@ -1358,7 +1358,7 @@ def main():
                     help="작업이 끝나도 브라우저 창을 닫지 않고 대기 (Ctrl+C 로 종료)")
     ap.add_argument("--no-keep-open", action="store_true", dest="no_keep_open",
                     help="설정의 KeepOpen 을 무시하고 끝나면 바로 닫는다 "
-                         "(루틴 RPA 로 이어서 실행할 때 필요)")
+                         "(PROCESS 오토파일럿으로 이어서 실행할 때 필요)")
     args = ap.parse_args()
 
     if args.check:

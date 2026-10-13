@@ -1,92 +1,69 @@
-r"""AFTER MARKET 아이콘 둘을 만든다 (2026-09-30 사용자가 고른 시안).
+r"""오토파일럿 아이콘 넷을 만든다 (2026-10-13 사용자가 고른 'AP 나' - 바탕 + Cloud Dancer 글자).
 
-    release/AFTER_MARKET.ico          크림 A - '크림 반투명 잔상'. 설치 파일·설정 창·바로 가기·루틴 exe·에이전트
-    release/AFTER_MARKET_PREPARE.ico  주황 A - '나. 주황 A'. 프리페어 exe·옵저버 (작업 표시줄에서 루틴과 가른다)
+    release/AFTER_MARKET.ico          오토파일럿 (Blue Fusion)   설치 파일·설정 창·바로 가기·에이전트·감독
+    release/AUTOPILOT_PROCESS.ico     PROCESS 오토파일럿 (Hematite)      ERPia_RPA.exe
+    release/AUTOPILOT_OBSERVER.ico    옵저버 (Cloud Cover)               Prepare_RPA.exe
+    release/AFTER_MARKET_PREPARE.ico  ACTOR 오토파일럿 (Quiet Violet)    Prepare_Observer.exe·그 창·시작 메뉴 바로 가기
 
     .venv\Scripts\python.exe tools\make_icon.py
 
-짙은 청록 둥근 사각형 위에 앞으로 기운 A, 그 뒤를 흐린 크림색 M 이 따라온다 (AFTER = 뒤따르는). 둘은 A 색만 다르다.
-글자는 글꼴 없이 다각형으로 그린다 (글꼴 라이선스와 무관). 16·20·24px 은 M 이 뭉개져서 A 만 넣는다.
-쓰는 곳: build_release.PROGRAM_FILES·ICON·ICON_PREPARE·NUITKA_EXTRA, release/installer.iss.
+글자 모양은 사용자가 준 그림에서 뽑은 tools/make_icon_AP.png (회색조 = 덮는 정도). 바탕색은 사용자가 준 팬톤 표
+(PANTONE 18-4218 Blue Fusion·17-5800 Hematite·16-1523 Cloud Cover·16-3610 Quiet Violet)에서 뽑았고, 흰 글씨 대비가
+3:1 이 되게 Cloud Cover 는 7%, Quiet Violet 은 9% 짙게 했다. 파일 이름은 옛 것(AFTER_MARKET*)을 그대로 둔다 -
+설치된 PC·바로 가기·시험이 그 이름을 본다.
+쓰는 곳: build_release.PROGRAM_FILES·ICON*·NUITKA_EXTRA, release/installer.iss, rpa_settings·rpa_observer 의 ICON_NAME.
 """
 import os
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ICO_PATH = os.path.join(REPO, "release", "AFTER_MARKET.ico")
-PREPARE_ICO_PATH = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")
-
-N = 1024                       # 그리는 해상도
-BG = (0x00, 0x2B, 0x36)        # 웹 대시보드 다크 바탕
-CREAM = (0xFD, 0xF6, 0xE3)     # 웹 대시보드 밝은 바탕
-ORANGE = (0xF5, 0x8A, 0x1F)    # 프리페어의 A (16px 에서도 보이게 A 자체를 칠한다 - 띠·잔상만 칠하면 작은 크기에서 사라진다)
-M_ALPHA = 0.30                 # M 잔상 농도
-SHEAR = 0.21                   # 약 12도 앞으로
-FILL = 0.70                    # 글자 묶음이 네모에서 차지하는 비율
-M_SHIFT = -190                 # A 기준 M 이 뒤로 물러난 거리 (글자 높이 480 기준)
-SMALL = (16, 20, 24)           # A 만
-LARGE = (32, 40, 48, 64, 128, 256)
-
-# 똑바로 선 글자 (글자 왼쪽 위 기준, 높이 480)
-A_OUT = [(0, 480), (170, 0), (250, 0), (420, 480), (310, 480), (271, 370), (149, 370), (110, 480)]
-A_HOLE = [(184, 270), (210, 198), (236, 270)]
-A_HULL = [(0, 480), (170, 0), (250, 0), (420, 480)]      # M 을 가리는 A 의 겉윤곽
-M_OUT = [(0, 480), (0, 0), (110, 0), (240, 230), (370, 0), (480, 0), (480, 480),
-         (380, 480), (380, 190), (270, 380), (210, 380), (100, 190), (100, 480)]
-_k = (420 - 250) / 480                                    # A 오른쪽 바깥 선 기울기
-RIGHT_OF_A = [(250 - 2000 * _k, -2000), (250 + 3000 * _k, 3000), (9000, 3000), (9000, -2000)]  # M 이 A 앞으로 삐지지 않게
+LETTERS = os.path.join(REPO, "tools", "make_icon_AP.png")
+DANCER = (0xF0, 0xEF, 0xEB)            # PANTONE 11-4201 Cloud Dancer - 글자
+ICONS = {                              # 파일 → 바탕
+    "AFTER_MARKET.ico": (0x49, 0x62, 0x76),          # Blue Fusion
+    "AUTOPILOT_PROCESS.ico": (0x74, 0x6F, 0x69),     # Hematite
+    "AUTOPILOT_OBSERVER.ico": (0x8E, 0x88, 0x88),    # Cloud Cover 7% 짙게
+    "AFTER_MARKET_PREPARE.ico": (0x99, 0x82, 0x9F),  # Quiet Violet 9% 짙게
+}
+N = 1024                               # 그리는 해상도
+FILL = 0.74                            # 글자 폭이 네모에서 차지하는 비율
+SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
 
-def _shear(poly, dx=0):
-    return [(x + dx + SHEAR * (240 - y), y) for x, y in poly]
-
-
-def _mask(polys, holes=()):
-    m = Image.new("L", (N, N), 0)
-    d = ImageDraw.Draw(m)
-    for p in polys:
-        d.polygon(p, fill=255)
-    for h in holes:
-        d.polygon(h, fill=0)
-    return m
-
-
-def draw(with_m=True, a_color=CREAM):
-    """N×N RGBA 아이콘 한 장. M 잔상은 늘 크림색."""
-    polys = {"a": _shear(A_OUT), "hole": _shear(A_HOLE), "hull": _shear(A_HULL),
-             "m": _shear(M_OUT, M_SHIFT), "clip": _shear(RIGHT_OF_A)}
-    pts = [p for k in (("a", "m") if with_m else ("a",)) for p in polys[k]]
-    x0, x1 = min(p[0] for p in pts), max(p[0] for p in pts)
-    y0, y1 = min(p[1] for p in pts), max(p[1] for p in pts)
-    s = FILL * N / max(x1 - x0, y1 - y0)
-    ox, oy = N / 2 - (x0 + x1) / 2 * s, N / 2 - (y0 + y1) / 2 * s
-    P = {k: [(x * s + ox, y * s + oy) for x, y in v] for k, v in polys.items()}
-
+def draw(bg):
+    """N×N RGBA 한 장: 둥근 네모 (위가 6% 밝고 아래가 6% 짙은 결) + 가운데 글자."""
+    top, bot = tuple(min(255, int(v * 1.06)) for v in bg), tuple(int(v * 0.94) for v in bg)
+    grad = Image.new("RGBA", (N, N))
+    d = ImageDraw.Draw(grad)
+    for y in range(N):
+        k = y / (N - 1)
+        d.line([(0, y), (N, y)], fill=tuple(int(a + (b - a) * k) for a, b in zip(top, bot)) + (255,))
+    mask = Image.new("L", (N, N), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, N - 1, N - 1), radius=int(N * 0.22), fill=255)
     img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
-    base = Image.new("L", (N, N), 0)
-    ImageDraw.Draw(base).rounded_rectangle((0, 0, N - 1, N - 1), radius=int(N * 0.22), fill=255)
-    img.paste(Image.new("RGBA", (N, N), BG + (255,)), (0, 0), base)
-    if with_m:
-        cover = _mask([P["hull"], P["clip"]]).filter(ImageFilter.MaxFilter(int(N * 0.03) | 1))   # A 둘레에 틈
-        m = ImageChops.subtract(_mask([P["m"]]), cover).point(lambda v: int(v * M_ALPHA))
-        img.paste(Image.new("RGBA", (N, N), CREAM + (255,)), (0, 0), m)
-    img.paste(Image.new("RGBA", (N, N), a_color + (255,)), (0, 0), _mask([P["a"]], [P["hole"]]))
+    img.paste(grad, (0, 0), mask)
+    a = Image.open(LETTERS).convert("L")
+    s = FILL * N / a.width
+    a = a.resize((round(a.width * s), round(a.height * s)), Image.LANCZOS)
+    img.paste(Image.new("RGBA", a.size, DANCER + (255,)), ((N - a.width) // 2, (N - a.height) // 2), a)
     return img
 
 
-def build(path=ICO_PATH, a_color=CREAM):
+def build(path, bg):
     """크기별 그림을 담은 .ico 를 쓴다. 크기별로 쓴 그림을 돌려준다 (시험용)."""
-    full, a_only = draw(True, a_color), draw(False, a_color)
-    frames = {s: (a_only if s in SMALL else full).resize((s, s), Image.LANCZOS) for s in SMALL + LARGE}
+    big = draw(bg)
+    frames = {s: big.resize((s, s), Image.LANCZOS) for s in SIZES}
     frames[256].save(path, format="ICO", sizes=[(s, s) for s in frames],
                      append_images=[im for s, im in frames.items() if s != 256])
     return frames
 
 
 if __name__ == "__main__":
-    for path, color in ((ICO_PATH, CREAM), (PREPARE_ICO_PATH, ORANGE)):
-        frames = build(path, color)
+    from PIL import ImageChops
+    for name, bg in ICONS.items():
+        path = os.path.join(REPO, "release", name)
+        frames = build(path, bg)
         # 자체 점검: 모든 크기가 들어갔고, 크기마다 우리가 그린 그림이 그대로 들어갔다 (Pillow 가 다시 줄이지 않았다)
         ico = Image.open(path)
         assert set(ico.info["sizes"]) == {(s, s) for s in frames}, ico.info["sizes"]

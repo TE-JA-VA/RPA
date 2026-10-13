@@ -88,40 +88,64 @@ JS = r"""
   }
   // 누를 것마다 이 문서에 처음 나타난 시각. 재생은 '몇 단계 뒤에 나타난 것' 을 새로 생긴 것 중에서 고른다
   // (요청한 파일이 목록에 새 줄로 올라오는 것 - 그 사이 다른 곳을 눌러도 흔들리지 않게 '직전 조작' 이 아니라 나타난 시각으로)
-  // appeared: 없다가 나타난 가장 최근 시각 (마우스를 올리면 만들어졌다 떼면 지워지는 메뉴를 알아챈다).
-  // 1초마다 innerHTML 로 다시 그리는 목록은 훑을 때마다 늘 있어서 appeared 가 바뀌지 않는다
+  // appeared: 안 보이다가 보이게 된 가장 최근 시각 - 하위 메뉴 감지. 마우스를 올리면 새로 만들어지는 메뉴도, 처음부터 숨겨
+  // 두었다가 보여 주는 메뉴(CSS :hover, class 'show' - 대부분의 쇼핑몰)도 알아챈다 (2026-10-13: 전에는 새로 만들어진 것만 봐서
+  // 숨겨 둔 메뉴는 마우스 올리기를 적지 않았고, 재생이 짐작으로 위 칸에 마우스를 올렸다).
+  // 1초마다 innerHTML 로 다시 그리는 목록은 훑을 때마다 늘 보여서 appeared 가 바뀌지 않는다
   const firstSeen = new Map(), appeared = new Map();
-  let present = new Set();
+  let shown = new Set(), base = false;    // base: 화면이 다 그려진 때의 보이는 것들을 적었다 - 그 뒤 보이게 된 것만 '나타남'
+  const visible = el => el.checkVisibility ? el.checkVisibility({opacityProperty: true, visibilityProperty: true})
+                                           : el.getClientRects().length > 0;
   function scan() {
     const now = Date.now(), cur = new Set();
     for (const el of document.querySelectorAll(CLICKABLE)) {
-      const g = sig(el); cur.add(g);
+      const g = sig(el);
       if (!firstSeen.has(g)) firstSeen.set(g, now);
-      if (!present.has(g)) appeared.set(g, now);
+      if (!visible(el)) continue;
+      cur.add(g);
+      if (!shown.has(g) && base) appeared.set(g, now);
     }
-    present = cur;
+    shown = cur;
+  }
+  const ready = () => { scan(); base = true; };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready); else ready();
+  let soon = 0, settle = 0;
+  function rescan() {             // 곧 한 번, 펼침 움직임이 끝난 뒤 한 번
+    if (!soon) soon = setTimeout(() => { soon = 0; scan(); }, 50);
+    clearTimeout(settle); settle = setTimeout(scan, 350);
   }
   // 마우스가 올라간 누를 만한 것들 (최근 20개) - 올리자마자 새로 나타난 것을 누르면 그 올린 것을 '마우스 올리기' 단계로
   const hovers = [];
   document.addEventListener('mouseover', e => {
     if (!e.isTrusted) return;
+    rescan();                     // CSS :hover 로 열리는 메뉴는 화면 글이 안 바뀌어 아래 MutationObserver 가 모른다
     const h = e.target.closest(ACT + ',li,[role=menuitem]') || (getComputedStyle(e.target).cursor === 'pointer' ? e.target : null);
     if (!h || (hovers.length && hovers[hovers.length - 1].el === h)) return;
     hovers.push({el: h, t: Date.now()});
     if (hovers.length > 20) hovers.shift();
   }, true);
   function hoverBefore(el, ap) {
-    for (let i = hovers.length - 1; ap && i >= 0; i--) {
+    if (!ap) return null;         // 처음부터 보이던 것 (화면이 뜰 때 마우스가 지나간 칸을 적지 않는다)
+    for (let i = hovers.length - 1; i >= 0; i--) {
       const hv = hovers[i];
-      if (hv.el === el || el.contains(hv.el) || !hv.el.isConnected) continue;
-      if (hv.t <= ap && ap - hv.t < 1500) return {target: describe(hv.el), t: hv.t};
+      if (hv.el === el || el.contains(hv.el) || hv.el.contains(el) || !hv.el.isConnected) continue;
+      if (hv.t <= ap && ap - hv.t < 1500) return {el: hv.el, target: describe(hv.el), t: hv.t};
       if (hv.t < ap - 1500) break;
     }
     return null;
   }
-  let pending = 0;
-  new MutationObserver(() => { if (!pending) pending = setTimeout(() => { pending = 0; scan(); }, 50); })
-    .observe(document, {childList: true, subtree: true});
+  function hoverChain(el) {       // 누른 것을 보이게 한 마우스 올리기, 그것을 보이게 한 것 … (두 단·세 단 메뉴), 위 단부터
+    const out = [];
+    for (let cur = el; out.length < 3;) {
+      const c = cur.matches(CLICKABLE) ? cur : cur.closest(CLICKABLE);
+      const h = c && hoverBefore(cur, appeared.get(sig(c)));
+      if (!h || out.some(o => o.el === h.el)) break;
+      out.unshift(h); cur = h.el;
+    }
+    return out.map(h => ({target: h.target, t: h.t}));
+  }
+  new MutationObserver(rescan).observe(document, {childList: true, subtree: true, attributes: true,
+                                                  attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-expanded']});
   scan();
   let lastEnter = 0;
   document.addEventListener('click', e => {
@@ -132,9 +156,9 @@ JS = r"""
     const tag = el.tagName, type = (el.type || '').toLowerCase();
     if (tag === 'SELECT' || tag === 'OPTION' || tag === 'TEXTAREA') return;   // 값 바뀜으로 적는다
     if (tag === 'INPUT' && !BTN.includes(type) && type !== 'image') return;  // 글자 칸·체크 상자도
-    let seen = null, hover = null;
-    if (el.matches(CLICKABLE)) { scan(); const g = sig(el); seen = firstSeen.get(g) || null; hover = hoverBefore(el, appeared.get(g)); }
-    send('click', el, {detail: e.detail, firstSeen: seen, hover});
+    let seen = null;
+    if (el.matches(CLICKABLE)) { scan(); seen = firstSeen.get(sig(el)) || null; }
+    send('click', el, {detail: e.detail, firstSeen: seen, hovers: hoverChain(el)});
   }, true);
   document.addEventListener('input', e => {
     const el = e.target;
@@ -286,11 +310,11 @@ class Recorder:
         if last and step["kind"] in KINDS_MERGE and last["kind"] == step["kind"] and same_target(last, step):
             last.update({k: step[k] for k in ("value", "option", "t") if k in step})
             return
-        hv = ev.get("hover")
-        if step["kind"] == "click" and hv and (last is None or last["t"] < hv["t"]):
-            # 마우스를 올리자 새로 나타난 것을 눌렀다 (그 사이 다른 조작 없음) - 재생 때 먼저 올려 메뉴를 만들게 한다
-            self.steps.append({"kind": "hover", "page": step["page"], "frame": step["frame"], "url": step["url"],
-                               "target": hv["target"], "t": hv["t"]})
+        for hv in (ev.get("hovers") or []) if step["kind"] == "click" else []:
+            if last is None or last["t"] < hv["t"]:
+                # 마우스를 올리자 보이게 된 것을 눌렀다 (그 사이 다른 조작 없음) - 재생 때 먼저 올려 메뉴를 열게 한다 (두 단이면 차례로)
+                self.steps.append({"kind": "hover", "page": step["page"], "frame": step["frame"], "url": step["url"],
+                                   "target": hv["target"], "t": hv["t"]})
         self.steps.append(step)
 
 
@@ -303,6 +327,23 @@ def parse_date(s):
     return None
 
 
+def navigated(before, s):
+    """before 단계가 s 의 창(같은 틀)을 다른 주소로 넘겼다 (로그인 → 메인). 그러면 s 의 화면 것은 모두 그 뒤에 '새로 생긴 것' 이라
+    그것으로 거르면 안 된다 - 재생은 before 앞의 화면을 적어 두는데, 머리 띠 아이콘처럼 두 화면에 같은 것이 있으면 '원래 있던 것' 으로
+    빠져 못 찾는다 (2026-10-02 erpia.net 로그인 뒤 글자 없는 'a', 2026-10-13 찾음)."""
+    fid = lambda st: ((st.get("frame") or {}).get("main", True), (st.get("frame") or {}).get("name", ""))   # noqa: E731 - 틀 주소는 넘어가며 바뀐다
+    same_frame = before["kind"] in NAV_KINDS or fid(before) == fid(s)
+    return before.get("page") == s.get("page") and same_frame and before.get("url") != s.get("url")
+
+
+def appears_after(steps, j):
+    """j 단계가 '몇 단계 뒤에 새로 생긴 것' 으로 골라야 하면 그 단계 번호, 아니면 None (옛 기록도 navigated 로 거른다)."""
+    s, k = steps[j], steps[j].get("appearsAfter")
+    if k is None or not ambiguous(s) or navigated(steps[k], s):
+        return None
+    return k
+
+
 def finalize(steps, record_date, start_url, viewport=None):
     """기록을 다듬는다: 기다린 시간, 날짜는 오늘 기준, 공지 닫기는 '있을 때만', 아이디·비밀번호는 설정 값."""
     out, prev = [], None
@@ -312,7 +353,7 @@ def finalize(steps, record_date, start_url, viewport=None):
         seen = s.pop("firstSeen", None)
         if seen is not None:              # 몇 번째 단계를 한 뒤에 나타났나 (그 단계 전에는 없었다)
             k = max((j for j in range(i) if ts[j] < seen), default=None)
-            if k is not None:
+            if k is not None and not navigated(steps[k], s):
                 s["appearsAfter"] = k
         s["gap"] = s["t"] - prev if prev else 0
         prev = s.pop("t")
@@ -487,6 +528,9 @@ def candidates(t):
             out.append((attr, f"{tag}[{attr}={q(t[key])}]", None))
     if t["label"] and t["labelKind"] == "th" and '"' not in t["label"]:
         out.append(("칸 이름", f'xpath=(//tr[th[normalize-space(.)="{t["label"]}"]]//{tag})[{t["labelIndex"]}]', None))
+    href = t.get("href") or ""
+    if tag == "a" and href not in ("", "#") and not href.lower().startswith("javascript:"):
+        out.append(("링크 주소", f"a[href={q(href)}]", None))     # 글자 없는 아이콘 링크 (2026-10-13). 세션 값이 든 주소면 안 맞아 다음 단서로
     out.append(("위치", t["css"], None))
     if t["text"] and t["textCount"] > 1:
         sel = f"input[value={q(t['text'])}]" if tag == "input" else f"{tag}:text-is({q(t['text'])})"
@@ -634,7 +678,8 @@ class Replayer:
     def _find(self, page, s, prev):
         t = s["target"]
         cands = candidates(t)
-        deadline = time.time() + (OPTIONAL_WAIT if s.get("optional") else self.step_timeout)
+        optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
+        deadline = time.time() + (OPTIONAL_WAIT if optional else self.step_timeout)
         while True:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
@@ -648,7 +693,7 @@ class Replayer:
                     if loc is not None and self._same(loc, t):
                         return frame, loc, how + (", 새로 생긴 것" if prev is not None else "")
             if time.time() > deadline:
-                if s.get("optional"):
+                if optional:
                     raise Skip("화면에 없음")
                 raise NotFound(f"{self.step_timeout:.0f}초 안에 못 찾음 (단서: {', '.join(c[0] for c in cands)})")
             page.wait_for_timeout(250)
@@ -716,7 +761,7 @@ class Replayer:
             if "not visible" in msg and self._reveal(page, loc):
                 continue
             break
-        raise NotFound("마우스를 올리지 못함")
+        raise Skip("마우스를 올리지 못함")
 
     def _fill(self, loc, value):
         try:
@@ -814,7 +859,7 @@ class Replayer:
     def run(self):
         if self.rec.get("version") != RECORD_VERSION:
             raise ValueError(f"모르는 기록 형식입니다 (version {self.rec.get('version')!r}) - "
-                             "옵저버와 프리페어를 같은 판으로 맞추세요")
+                             "ACTOR 오토파일럿과 옵저버를 같은 버전으로 맞추세요")
         page = self.first_page or self.context.new_page()
         if self.page_hook:
             self.page_hook(page)
@@ -827,9 +872,10 @@ class Replayer:
         if not (steps and steps[0]["kind"] == "goto"):         # 주소줄로 시작한 기록은 그 단계가 곧 시작 주소
             page.goto(self.rec["start_url"], wait_until="domcontentloaded")
         self.needs = {}
-        for j, s in enumerate(steps):
-            if ambiguous(s) and s.get("appearsAfter") is not None:
-                self.needs.setdefault(s["appearsAfter"], []).append(j)
+        for j in range(len(steps)):
+            k = appears_after(steps, j)
+            if k is not None:
+                self.needs.setdefault(k, []).append(j)
         started = time.time()
         for i, s in enumerate(steps, 1):
             text = describe(s, self.hide_values)

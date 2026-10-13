@@ -27,7 +27,7 @@ set DASHBOARD_PORT=8765
 if exist "%~dp0RPA_Dashboard.exe" (
     netsh advfirewall firewall show rule name="ERPIA_RPA_Dashboard" >nul 2>&1
     if errorlevel 1 netsh advfirewall firewall add rule name="ERPIA_RPA_Dashboard" dir=in action=allow protocol=TCP localport=%DASHBOARD_PORT% profile=private,domain >nul
-    start "ERPia RPA 대시보드" /min "%~dp0RPA_Dashboard.exe" --port %DASHBOARD_PORT%
+    start "오토파일럿 대시보드" /min "%~dp0RPA_Dashboard.exe" --port %DASHBOARD_PORT%
     echo.
     echo  대시보드: http://localhost:%DASHBOARD_PORT%  ^(다른 PC/휴대폰 주소는 대시보드 창에 나옵니다^)
 ) else (
@@ -36,7 +36,7 @@ if exist "%~dp0RPA_Dashboard.exe" (
 
 echo.
 echo ============================================================
-echo  1/2  프리페어 RPA - 메일 첨부파일 내려받기
+echo  1/2  옵저버 - 메일 첨부파일 내려받기
 echo ============================================================
 rem --no-keep-open : 브라우저를 닫아야 다음 단계로 넘어간다
 "%~dp0Prepare_RPA.exe" --all --no-keep-open
@@ -44,21 +44,21 @@ set PREPARE_RC=%ERRORLEVEL%
 
 if not "%PREPARE_RC%"=="0" (
     echo.
-    echo [경고] 프리페어 RPA 가 정상 종료하지 않았습니다. 코드=%PREPARE_RC%
-    echo        내려받은 엑셀이 없을 수 있지만 루틴 RPA 는 그대로 진행합니다.
+    echo [경고] 옵저버가 정상 종료하지 않았습니다. 코드=%PREPARE_RC%
+    echo        내려받은 엑셀이 없을 수 있지만 PROCESS 오토파일럿은 그대로 진행합니다.
     echo        엑셀업로드 단계는 파일이 없으면 알아서 건너뜁니다.
     echo.
 )
 
 echo.
 echo ============================================================
-echo  2/2  루틴 RPA - ERPia 처리
+echo  2/2  PROCESS 오토파일럿 - ERPia 처리
 echo ============================================================
 "%~dp0ERPia_RPA.exe"
 set ROUTINE_RC=%ERRORLEVEL%
 
 echo.
 echo ============================================================
-echo  끝났습니다.  프리페어=%PREPARE_RC%  루틴=%ROUTINE_RC%
+echo  끝났습니다.  옵저버=%PREPARE_RC%  PROCESS=%ROUTINE_RC%
 echo ============================================================
 endlocal

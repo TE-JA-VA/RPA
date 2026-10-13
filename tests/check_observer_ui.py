@@ -71,7 +71,7 @@ def main():
         ImageGrab.grab(bbox=(l - app.browser_w, t, r, b), all_screens=True).save(os.path.join(SHOTS, name))
 
     def type_url_then_human(page):
-        w = Desktop(backend="win32").window(title_re="AFTER MARKET 기록.*")
+        w = Desktop(backend="win32").window(title_re="오토파일럿 기록.*")
         w.wait("exists visible", timeout=15)
         hw = w.wrapper_object()
         hw.set_focus()
@@ -248,7 +248,7 @@ def main():
     rows = st.read_history(program="observer")
     row = next((r for r in rows if r.get("state") == "success"), {})
     logs = "\n".join(row.get("log_tail") or [])
-    check("대시보드 기록에 '옵저버' 미리보기 한 줄 (성공)", row.get("program_label") == "옵저버", str(rows[:1])[:300])
+    check("대시보드 기록에 'ACTOR 오토파일럿' 미리보기 한 줄 (성공)", row.get("program_label") == "ACTOR 오토파일럿", str(rows[:1])[:300])
     check("그 로그에는 칸에 친 값·아이디·비밀번호가 없다", "주문 처리" not in logs and fake_mall.USER not in logs
           and fake_mall.PASSWORD not in logs, logs[-500:])
     pv = os.path.join(st.data_dir(), "옵저버", "미리보기")

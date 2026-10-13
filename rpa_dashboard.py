@@ -384,9 +384,9 @@ LAUNCHED_ENV = []   # 시험용(DRY_RUN): 띄울 때 더한 환경 변수 (LAUNC
 LAUNCH_GRACE_SEC = 90   # 프로세스 손잡이를 잃었을 때(대시보드 재시작 등)를 대비한 최소 잠금 시간
 TARGETS = {
     # target: (설명, 파일 이름, 추가 인자). 파일은 Run_All.bat 과 같은 폴더에 있다.
-    "all": ("전체 실행 (프리페어 → 루틴)", RUN_BAT, ()),
-    "prepare": ("프리페어 RPA", "Prepare_RPA.exe", ("--all", "--no-keep-open")),
-    "routine": ("루틴 RPA", "ERPia_RPA.exe", ()),
+    "all": ("전체 실행 (옵저버 → PROCESS)", RUN_BAT, ()),
+    "prepare": ("옵저버", "Prepare_RPA.exe", ("--all", "--no-keep-open")),
+    "routine": ("PROCESS 오토파일럿", "ERPia_RPA.exe", ()),
 }
 _active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
 # 토큰 확인 (2026-10-06): 에이전트가 agent.Tokens.gate 를 단다 - 띄우기 직전에 target 으로 부르고, 남은 토큰이 없으면
@@ -481,7 +481,7 @@ def launch(target, by, env=None):
         if ls:
             raise RuntimeError(f"{TARGETS[ls['target']][0]} 이(가) 아직 실행중입니다 ({ls['sec']}초째)")
         if st.observer_open():
-            raise RuntimeError("옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 실행하세요")
+            raise RuntimeError("ACTOR 오토파일럿이 켜져 있습니다. ACTOR 오토파일럿을 닫은 뒤 실행하세요")
         if TOKEN_GATE is not None:
             TOKEN_GATE(target)             # 실행 단추·예약 모두 여기를 지난다
         proc = None
@@ -822,7 +822,7 @@ def stop_reason(status):
         return f"{(status.get('finished_at') or '')[11:16]} {STOPPED_TEXT} - 반복을 멈췄습니다".strip()
     word = "오류" if status.get("state") == "crashed" else "실패"
     why = status.get("reason") or bad.get("reason") or "까닭 없음"
-    return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or '루틴'} {word}로 반복을 멈췄습니다: {why}".strip()
+    return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or 'PROCESS'} {word}로 반복을 멈췄습니다: {why}".strip()
 
 
 def repeat_state(sch, win, now):
@@ -951,11 +951,11 @@ class Scheduler(threading.Thread):
         if upd:
             return upd
         if any_rpa_running():
-            return "RPA 가 아직 돌고 있어 끝나기를 기다립니다"
+            return "오토파일럿이 아직 돌고 있어 끝나기를 기다립니다"
         if launch_state() is not None:
             return "대시보드가 띄운 실행이 끝나기를 기다립니다"
         if st.observer_open():
-            return "옵저버가 켜져 있어 닫히기를 기다립니다"
+            return "ACTOR 오토파일럿이 켜져 있어 닫히기를 기다립니다"
         return None
 
     def tick(self):
@@ -1238,7 +1238,7 @@ def stop_rpa():
     for p in running:
         st.mark_stopped(p, STOPPED_TEXT)
     names = ", ".join(st.PROGRAMS.get(p, p) for p in running) or TARGETS[_active["target"]][0]
-    return 200, {"ok": True, "message": f"{names} 을(를) 중단했습니다."}
+    return 200, {"ok": True, "message": f"{st.josa(names)} 중단했습니다."}
 
 
 # ---------------------------------------------------------------------------
@@ -1570,7 +1570,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except FileNotFoundError as e:
                     self._json({"ok": False, "error": str(e)}, 500)
                     return
-                self._json({"ok": True, "message": f"{TARGETS[target][0]} 을(를) 띄웠습니다. 잠시 뒤 현황에 나타납니다.",
+                self._json({"ok": True, "message": f"{st.josa(TARGETS[target][0])} 띄웠습니다. 잠시 뒤 현황에 나타납니다.",
                             "command": cmd, "schedule": schedule_view()})
 
             elif path == "/api/erpia/stop":
@@ -1638,7 +1638,7 @@ def already_running(port):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="ERPia RPA 현황 대시보드")
+    ap = argparse.ArgumentParser(description="오토파일럿 현황 대시보드")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help="포트 (기본 8765)")
     ap.add_argument("--host", default="0.0.0.0",
                     help="0.0.0.0 = 사내망에서 접속 허용(기본), 127.0.0.1 = 이 PC 에서만")
@@ -1668,7 +1668,7 @@ def main():
     sch = st.read_settings()["schedule"]
     line = "=" * 60
     print(line)
-    print(" ERPia RPA 현황 대시보드")
+    print(" 오토파일럿 현황 대시보드")
     print(line)
     print(f"  이 PC       : http://localhost:{args.port}")
     if args.host in ("0.0.0.0", ""):
@@ -1691,7 +1691,7 @@ def main():
         print("  자동 실행   : 꺼짐 (환경설정 화면에서 켤 수 있습니다)")
     if DRY_RUN:
         print("  ** 시험 모드: Run_All.bat 을 실제로 띄우지 않습니다 **")
-    print("  이 창을 닫으면 대시보드와 자동 실행만 꺼집니다. 돌고 있는 RPA 에는 영향이 없습니다.")
+    print("  이 창을 닫으면 대시보드와 자동 실행만 꺼집니다. 돌고 있는 오토파일럿에는 영향이 없습니다.")
     print(line, flush=True)
 
     try:

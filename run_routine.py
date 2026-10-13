@@ -262,7 +262,7 @@ def load_exe_path():
     path = status.erpia_exe(ask=not os.environ.get("RPA_UNATTENDED"))
     if not path:
         raise RuntimeError("ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. ERPia 가 설치되어 있는지 보고, "
-                           "에이전트를 다시 켜거나 루틴 RPA 를 직접 실행하면 위치를 고르는 창이 뜹니다")
+                           "에이전트를 다시 켜거나 PROCESS 오토파일럿을 직접 실행하면 위치를 고르는 창이 뜹니다")
     return path
 
 
@@ -3868,7 +3868,7 @@ def run_logistics_save_step(app, hwnd):
         hit = find_validation_error(text)
         if hit:
             log(f"  검증 오류 팝업입니다: '{hit}'")
-            log("  -> 규칙에 따라 루틴을 여기서 종료합니다. (팝업은 닫지 않고 그대로 둡니다)")
+            log("  -> 규칙에 따라 PROCESS 를 여기서 종료합니다. (팝업은 닫지 않고 그대로 둡니다)")
             return False, f"저장 검증 오류: {hit}"
 
         yes_btn = next((b for b in buttons if b.window_text() in YES_BUTTON_TEXTS), None)
@@ -4039,7 +4039,7 @@ def handle_print_popups(app, pid, hwnd, rounds=3, wait=2.0, already_printed="con
             log(f"  출력 중단 팝업입니다: '{hit}'")
             log(f"      내용: {text}")
             if btn is not None:
-                log(f"  -> '{want}' 클릭 후 루틴을 종료합니다.")
+                log(f"  -> '{want}' 클릭 후 PROCESS 를 종료합니다.")
                 ec.ensure_foreground(hwnd)
                 btn.click_input()
                 time.sleep(1.5)
@@ -4508,7 +4508,7 @@ def run_print_step(app, pid, hwnd, options=None, already_printed="continue"):
     # 이 경우 확인만 누르고 여기서 루틴을 끝낸다.
     r = handle_print_popups(app, pid, hwnd, rounds=3, wait=1.5, already_printed=already_printed)
     if r == "abort":
-        log("주소정제 등 출력 전 검증에 걸려 루틴을 종료합니다.")
+        log("주소정제 등 출력 전 검증에 걸려 PROCESS 를 종료합니다.")
         return "failed"
     if r in ("stuck", "already_printed"):
         return r
@@ -4565,7 +4565,7 @@ def check_excel_open_prompt(app, hwnd, rounds=3, wait=1.5):
             log(f"  '엑셀 파일 열기' 안내 팝업이 떴습니다 "
                 f"(버튼: {[b.window_text() for b in buttons]})")
             log(f"      내용: {text}")
-            log("  -> 누르지 않고 그대로 둔 채 루틴을 끝냅니다.")
+            log("  -> 누르지 않고 그대로 둔 채 PROCESS 를 끝냅니다.")
             return True
 
         if any(k in text for k in EXCEL_PATH_NOTICE_KEYWORDS):
@@ -5377,7 +5377,7 @@ def run_self_check():
         elif found:
             log(f"프로그램    : {found}  있음 (적힌 값 '{configured or '없음'}' 은 틀려서 찾아냄 - 실행하면 고쳐 적는다)")
         else:
-            log(f"프로그램    : 못 찾음! (적힌 값 '{configured or '없음'}'. 루틴을 직접 실행하면 고르는 창이 뜬다)")
+            log(f"프로그램    : 못 찾음! (적힌 값 '{configured or '없음'}'. PROCESS 를 직접 실행하면 고르는 창이 뜬다)")
     except Exception as e:
         log(f"프로그램    : 찾기 실패 - {e}")
 
@@ -5386,7 +5386,7 @@ def run_self_check():
     except Exception:
         log("실행 상태   : ERPiaMain.exe 실행되어 있지 않음")
 
-    log("=== 점검 끝 (루틴은 실행하지 않았습니다) ===")
+    log("=== 점검 끝 (PROCESS 는 실행하지 않았습니다) ===")
 
 
 def run_uia_check():
@@ -5643,7 +5643,7 @@ def module_sales(ctx):
             log(f"매출처리 실패 팝업이 떴습니다: {failure}")
             ec.ensure_foreground(hwnd)
             confirm_btn.click_input()
-            log("이후 단계를 진행하지 않고 루틴을 중단합니다.")
+            log("이후 단계를 진행하지 않고 PROCESS 를 중단합니다.")
             return "stopped", f"매출처리 실패: {failure}"
         label = confirm_btn.window_text()
         log(f"확인 팝업 감지 -> '{label}' 클릭")
@@ -5658,7 +5658,7 @@ def module_sales(ctx):
     result = wait_async_then_confirm(app, hwnd, baseline_children)
     if result == "sales_failed":
         log("정상매출이 실패했습니다.")
-        log("이후 단계(물류대기/물류 관리)를 진행하지 않고 루틴을 중단합니다.")
+        log("이후 단계(물류대기/물류 관리)를 진행하지 않고 PROCESS 를 중단합니다.")
         return "stopped", "정상매출이 실패했습니다"
     if result == "clicked":
         log("완료 팝업의 '예/확인'을 눌렀습니다.")
@@ -5672,7 +5672,7 @@ def module_sales(ctx):
     failure, _ = handle_sales_popups(pid, hwnd, {})
     if failure:
         log(f"매출처리 실패 팝업이 떴습니다: {failure}")
-        log("이후 단계를 진행하지 않고 루틴을 중단합니다.")
+        log("이후 단계를 진행하지 않고 PROCESS 를 중단합니다.")
         return "stopped", f"매출처리 실패: {failure}"
     win = app.window(handle=hwnd)
     extra_btn = find_popup_ok_button(win)
@@ -5682,7 +5682,7 @@ def module_sales(ctx):
         extra_btn.click_input()
         if failure:
             log(f"매출처리 실패 팝업이 떴습니다: {failure}")
-            log("이후 단계를 진행하지 않고 루틴을 중단합니다.")
+            log("이후 단계를 진행하지 않고 PROCESS 를 중단합니다.")
             return "stopped", f"매출처리 실패: {failure}"
         log(f"추가 팝업 감지 -> '{extra_btn.window_text()}' 클릭")
     return "done", None
@@ -5889,7 +5889,7 @@ def main():
 
     status.start("routine", ROUTINE_STEPS)
     status.set_modules([(k, label, steps, bit) for k, _, label, steps, bit in ROUTINE_MODULES])
-    log(f"=== 루틴 시작 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+    log(f"=== PROCESS 시작 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
 
     # 대시보드에 '업체코드 · 아이디' 로 보인다 (비밀번호는 읽지 않는다). 로그인 모듈을 꺼도 보이게 여기서.
     account = status.read_account()
@@ -5905,7 +5905,7 @@ def main():
         except Exception as e:
             log(f"설정 오류: {e}")
             status.finish("stopped", f"설정 파일 오류: {e}")
-            log(f"=== 루틴 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+            log(f"=== PROCESS 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
             return
     for k in unknown:
         log(f"경고: 예약에서 넘긴 '{k}' 는 모르는 모듈이라 무시합니다." if from_env
@@ -5913,7 +5913,7 @@ def main():
     if from_env and not any(selected.values()):
         log("이번 실행 모듈이 비었습니다 (예약에서 넘긴 값)")
         status.finish("stopped", "이번 실행 모듈이 비었습니다")
-        log(f"=== 루틴 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+        log(f"=== PROCESS 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
     if from_env:
         log("이번 실행 모듈 (예약): " + " / ".join(label for _, cfg, label, _, _ in ROUTINE_MODULES if selected[cfg]))
@@ -5928,7 +5928,7 @@ def main():
         status.finish(result, reason, record=False)
     else:
         status.finish(result, reason)
-    log(f"=== 루틴 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ({'성공' if result == 'success' else '중단'}) ===")
+    log(f"=== PROCESS 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ({'성공' if result == 'success' else '중단'}) ===")
 
 
 if __name__ == "__main__":
