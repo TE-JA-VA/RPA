@@ -644,10 +644,10 @@ with sync_playwright() as pw:
     page.click("#companies tr[data-cid='t_phone']")
     page.wait_for_selector("#detail #phone-kim", timeout=15000)
     cells = [c.strip() for c in page.locator("#phone-kim td").all_text_contents()]
-    check(cells[:4] == ["김OO 휴대폰", "kim", "김OO", "사용중"], f"휴대폰 표: 이름·휴대폰코드·주인·상태 ({cells})")
+    check(cells[:4] == ["김OO 휴대폰", "kim", "김OO", "사용중"], f"휴대폰 표: 이름·휴대폰코드·사용자 이름·상태 ({cells})")
     page.fill("#detail input[placeholder^='휴대폰코드']", "park")
     page.fill("#detail input[placeholder^='휴대폰 이름']", "박OO 휴대폰")
-    page.fill("#detail input[placeholder^='주인']", "박OO")
+    page.fill("#detail input[placeholder^='사용자 이름']", "박OO")
     page.click("#detail button:has-text('휴대폰 추가')")
     page.wait_for_selector("#detail #phone-park", timeout=15000)
     box = page.text_content("#detail .secret") or ""

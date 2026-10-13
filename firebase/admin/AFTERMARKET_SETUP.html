@@ -33,7 +33,9 @@
   input, select { font:inherit; padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--strong); }
   input[type=checkbox], input[type=radio] { width:auto; }
   button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  main { max-width:1100px; margin:0 auto; padding:18px 16px 60px; }
+  main { max-width:1500px; margin:0 auto; padding:18px 16px 60px; }   /* FHD 에서 양옆에 조금 남게 (사용자 2026-10-13) */
+  #releases th, #releases td { white-space:nowrap; }                  /* 버전·날짜·단추가 두 줄로 꺾이지 않게 - 비고만 줄바꿈 */
+  #releases td:nth-child(4) { white-space:normal; width:100%; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:16px; }
   h2 { margin:0 0 12px; font-size:17px; color:var(--strong); }
   h3 { margin:18px 0 6px; font-size:15px; color:var(--strong); }
@@ -350,15 +352,15 @@ function phoneSection(d) {     // 인증번호를 받아 PC 로 보내는 직원
       el("td", { class: p.disabled ? "bad" : "" }, p.disabled === null ? "계정 없음" : p.disabled ? "사용중지" : "사용중"),
       el("td", {}, when(p.lastSignIn)), el("td", {}, p.disabled === null ? "" : el("div", { class: "row" }, pw, lock)));
   });
-  const id = el("input", { placeholder: "휴대폰코드 (예: kim)", size: 16 }), label = el("input", { placeholder: "휴대폰 이름 (예: 김OO 휴대폰)", size: 20 });
-  const owner = el("input", { placeholder: "주인 (예: 김OO)", size: 12 });
+  const id = el("input", { placeholder: "휴대폰코드 (예: kim)", size: 16 }), label = el("input", { placeholder: "휴대폰 이름", size: 16 });
+  const owner = el("input", { placeholder: "사용자 이름", size: 12 });
   const add = el("button", { onclick: () => act(add, async () => {
     const r = await api("POST", `/api/companies/${d.cid}/phones`, { phoneId: id.value.trim(), label: label.value.trim(), owner: owner.value.trim() });
     flash(`휴대폰 ${r.label} 을(를) 추가했습니다`);
     refresh(d.cid, phoneSecret(`새 휴대폰 - ${r.label}`, r));
   }) }, "휴대폰 추가");
   return el("div", { class: "sec" }, el("h3", {}, "휴대폰 (인증번호 받기)"),
-    d.phones.length ? el("table", {}, el("thead", {}, el("tr", {}, ...["휴대폰 이름", "휴대폰코드", "주인", "상태", "마지막 로그인", ""].map((h) => el("th", {}, h)))),
+    d.phones.length ? el("table", {}, el("thead", {}, el("tr", {}, ...["휴대폰 이름", "휴대폰코드", "사용자 이름", "상태", "마지막 로그인", ""].map((h) => el("th", {}, h)))),
       el("tbody", {}, rows)) : el("p", { class: "muted" }, "휴대폰이 없습니다"),
     el("div", { class: "row" }, id, label, owner, add));
 }
