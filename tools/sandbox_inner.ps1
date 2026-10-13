@@ -47,8 +47,8 @@ $lnkIcon = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\오토파�
 $urlIcon = Select-String -Path "$SM\오토파일럿 대시보드.url" -Pattern "^IconFile=(.*)$" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches[0].Groups[1].Value }
 $unIcon = if ($un) { $un.GetValue("DisplayIcon") }
 Check "아이콘: 설정·대시보드 바로 가기, 앱 및 기능 목록" ((Test-Path $Ico) -and ($lnkIcon -like "$Ico*") -and ($urlIcon -eq $Ico) -and ($unIcon -eq $Ico)) "lnk=$lnkIcon url=$urlIcon un=$unIcon"
-$recLnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\ACTOR 오토파일럿.lnk")
-Check "시작 메뉴 'ACTOR 오토파일럿' (ACTOR 오토파일럿 exe, 보라 아이콘)" (($recLnk.TargetPath -eq "$App\Prepare_Observer.exe") -and ($recLnk.IconLocation -like "$App\AFTER_MARKET_PREPARE.ico*")) "target=$($recLnk.TargetPath) icon=$($recLnk.IconLocation)"
+$recLnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\옵저버.lnk")
+Check "시작 메뉴 '옵저버' (옵저버 exe, 회색 아이콘)" (($recLnk.TargetPath -eq "$App\Prepare_Observer.exe") -and ($recLnk.IconLocation -like "$App\AFTER_MARKET_PREPARE.ico*")) "target=$($recLnk.TargetPath) icon=$($recLnk.IconLocation)"
 $tk = & $Py -c "import tkinter; r = tkinter.Tk(); r.destroy(); print('tk ok')"
 Check "내장 파이썬 tkinter" ("$tk" -eq "tk ok") "$tk"
 # exe 가 새 윈도우에서 켜지는가 (2026-09-29 노트북: System32 에만 있던 mfc140u.dll 이 exe 에 안 들어가 win32ui 에서 죽었다).
@@ -76,8 +76,8 @@ foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝"), @("Prepare_RPA
     Check "$n 가 켜져 끝까지 간다" ($done -and ($u8.Contains($e[2]) -or $ks.Contains($e[2]))) ($u8.Substring([Math]::Max(0, $u8.Length - 300)))
 }
 # 브라우저는 깔린 Edge (2026-10-06 - 같이 싣던 Chromium 713MB 를 뺐다). 프리페어 --selftest 는 위에서 Edge 로 내장 로그인 폼을 채웠다
-Check "옵저버·ACTOR exe 가 인증번호 중계 모듈을 불러온다 (fb·secret 을 exe 에 실음 - 설계 13절)" (($outs["Prepare_RPA.exe --check"] -match "인증번호 중계: 준비됨") -and ($outs["Prepare_Observer.exe --check"] -match "인증번호 중계: 준비됨")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
-Check "ACTOR 오토파일럿 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: Microsoft Edge …')" ($outs["Prepare_Observer.exe --check"] -match "브라우저: Microsoft Edge \d") (($outs["Prepare_Observer.exe --check"] -split "`n" | Where-Object { $_ -match "브라우저" }) -join " / ")
+Check "ACTOR 오토파일럿·ACTOR exe 가 인증번호 중계 모듈을 불러온다 (fb·secret 을 exe 에 실음 - 설계 13절)" (($outs["Prepare_RPA.exe --check"] -match "인증번호 중계: 준비됨") -and ($outs["Prepare_Observer.exe --check"] -match "인증번호 중계: 준비됨")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
+Check "옵저버 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: Microsoft Edge …')" ($outs["Prepare_Observer.exe --check"] -match "브라우저: Microsoft Edge \d") (($outs["Prepare_Observer.exe --check"] -split "`n" | Where-Object { $_ -match "브라우저" }) -join " / ")
 # 옵저버를 시작 메뉴처럼 붙을 콘솔 없이 켠다 (2026-10-02 첫 실행: 표준 핸들이 못 쓰는 값이라 Playwright 가 WinError 6 -
 # --check 는 콘솔에서 불러 못 잡았다). 콘솔 없는 pythonw 가 띄우고 관리자 권한은 이 스크립트에서 물려받는다 (UAC 창 없음).
 # 일꾼이 Playwright 드라이버(node.exe run-driver)를 띄우고 드라이버가 깔린 Edge 를 창으로 띄우면 통과 (2026-10-06 - 드라이버만 보고
@@ -90,7 +90,7 @@ for ($i = 0; $i -lt 120 -and -not $edge; $i++) {
     if (-not $drv) { $drv = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match "run-driver" } }
     $edge = Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { ($_.CommandLine -match "remote-debugging-pipe") -and ($_.CommandLine -notmatch "--headless") }
 }
-Start-Sleep 5                                       # Edge 창이 다 그려지고 ACTOR 오토파일럿 글이 '기록 중' 으로 바뀔 때까지
+Start-Sleep 5                                       # Edge 창이 다 그려지고 옵저버 글이 '기록 중' 으로 바뀔 때까지
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
@@ -99,7 +99,7 @@ $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
 $bmp.Save("$O\observer.png")
 $g.Dispose(); $bmp.Dispose()
 $obs = @(Get-CimInstance Win32_Process -Filter "Name='Prepare_Observer.exe'")
-Check "ACTOR 오토파일럿을 붙을 콘솔 없이 (시작 메뉴처럼) 켜도 Playwright 드라이버가 깔린 Edge 창을 띄운다 (사진 observer.png)" ($null -ne $edge) "ACTOR 오토파일럿 프로세스 $($obs.Count)개, 드라이버 $(if ($drv) { '있음' } else { '없음' }), Edge 창 없음"
+Check "옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜도 Playwright 드라이버가 깔린 Edge 창을 띄운다 (사진 observer.png)" ($null -ne $edge) "옵저버 프로세스 $($obs.Count)개, 드라이버 $(if ($drv) { '있음' } else { '없음' }), Edge 창 없음"
 $obs | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }
 Remove-Item Env:RPA_USER_CONFIG, Env:RPA_PROGRAMDATA, Env:RPA_STATUS_DIR, Env:RPA_UNATTENDED
 
@@ -133,11 +133,11 @@ Check "오토파일럿 사본 설명 둘 (작업 관리자 '프로세스' 탭 �
 Add-Type -AssemblyName System.Drawing
 function IconPng($path) { $ms = New-Object IO.MemoryStream; [Drawing.Icon]::ExtractAssociatedIcon($path).ToBitmap().Save($ms, [Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()) }
 $IcoPrep = "$App\AFTER_MARKET_PREPARE.ico"
-$IcoProc = "$App\AUTOPILOT_PROCESS.ico"; $IcoObs = "$App\AUTOPILOT_OBSERVER.ico"
+$IcoProc = "$App\AUTOPILOT_PROCESS.ico"; $IcoObs = "$App\AUTOPILOT_ACTOR.ico"
 $want = @{ "ERPia_RPA.exe" = $IcoProc; "Prepare_RPA.exe" = $IcoObs; "Prepare_Observer.exe" = $IcoPrep }
 $Brand.Keys | ForEach-Object { $want["python\$_"] = $Ico }
 $plain = @($want.Keys | Where-Object { (-not (Test-Path "$App\$_")) -or (-not (Test-Path $want[$_])) -or ((IconPng "$App\$_") -ne (IconPng $want[$_])) })
-Check "exe 다섯의 아이콘: PROCESS·옵저버·ACTOR 는 각자 색, 감독·에이전트는 오토파일럿 색" (($plain.Count -eq 0) -and (@($Ico, $IcoProc, $IcoObs, $IcoPrep | ForEach-Object { IconPng $_ } | Select-Object -Unique).Count -eq 4)) ($plain -join ", ")
+Check "exe 다섯의 아이콘: PROCESS·ACTOR 오토파일럿·옵저버 는 각자 색, 감독·에이전트는 오토파일럿 색" (($plain.Count -eq 0) -and (@($Ico, $IcoProc, $IcoObs, $IcoPrep | ForEach-Object { IconPng $_ } | Select-Object -Unique).Count -eq 4)) ($plain -join ", ")
 
 # 3. 감독 → 에이전트. 인터넷이 있으면: 가짜 비밀번호라 로그인이 거부되고(3) 감독도 같이 끝난다 (틀린 비밀번호로
 #    되풀이하지 않는다). 없으면 (2026-09-29 첫 시험의 샌드박스가 그랬다): 에이전트는 죽지 않고 다시 붙으려 한다
@@ -178,7 +178,7 @@ Copy-Item "$PD\data\에이전트_오류.txt" "$O\agent_err1.txt" -ErrorAction Si
 $obs = New-Object System.Threading.Mutex($false, "Local\AFTER_MARKET_RPA_OBSERVER")
 $p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup_observer.log`"" -Wait -PassThru
 $lo = Get-Content "$O\setup_observer.log" -Raw
-Check "ACTOR 오토파일럿이 켜져 있으면 설치를 시작 전에 멈춘다 (코드 7, 에이전트는 안 멈춤)" (($p.ExitCode -eq 7) -and -not ($lo -match "rpa_settings --stop")) "코드 $($p.ExitCode)"
+Check "옵저버가 켜져 있으면 설치를 시작 전에 멈춘다 (코드 7, 에이전트는 안 멈춤)" (($p.ExitCode -eq 7) -and -not ($lo -match "rpa_settings --stop")) "코드 $($p.ExitCode)"
 $obs.Dispose()
 # 이제 정말로: 먼저 --stop, 끝나면 창 없이 작업 등록·켜기. 옛 판(2026.10.02-4 까지)이 싣던 브라우저 폴더가 있는 것처럼 해 둔다
 New-Item -ItemType Directory -Force "$App\ms-playwright\chromium-1234" | Out-Null
@@ -222,7 +222,7 @@ if (Test-Path "$T\site") {
   Check "판 B 로 업데이트 → done" ($s -eq "done") "$s $(Get-Content "$PD\update\state.json" -Raw)"
   Check "판 점검 ok · 판 B" ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $B)
   Check "제거 목록의 판 번호도 B" ((Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}_is1").DisplayVersion -eq $B)
-  $uacl = (icacls "$App\rpa_dashboard.py") -join " "      # 바뀐 파일이 ProgramData 권한(관리자 전용)을 들고 와 ACTOR 오토파일럿이 안 열렸다 (2026-10-12)
+  $uacl = (icacls "$App\rpa_dashboard.py") -join " "      # 바뀐 파일이 ProgramData 권한(관리자 전용)을 들고 와 옵저버가 안 열렸다 (2026-10-12)
   Check "업데이트로 바뀐 파일도 사용자가 읽고 실행할 수 있다 (Users)" ($uacl -match "Users") $uacl
   # 도우미는 done 을 적고 뒷정리를 한 뒤에야 작업을 지운다 - 지워질 때까지 30초 기다린다
   for ($i = 0; $i -lt 30; $i++) { schtasks /Query /TN "\AFTER MARKET\RPA Update" *> $null; if ($LASTEXITCODE -ne 0) { break }; Start-Sleep 1 }

@@ -42,9 +42,9 @@ try:
 except ImportError:  # 윈도우가 아닌 곳에서 대시보드 화면만 시험할 때
     winreg = None
 
-PROGRAMS = {"prepare": "옵저버", "routine": "PROCESS 오토파일럿"}
+PROGRAMS = {"prepare": "ACTOR 오토파일럿", "routine": "PROCESS 오토파일럿"}
 # 이력(대시보드 '기록' 표)에만 남는 프로그램. 현황 카드·실행 단추·날짜별 도넛은 PROGRAMS 만 본다 (2026-09-30 옵저버 미리보기)
-HISTORY_ONLY = {"observer": "ACTOR 오토파일럿"}
+HISTORY_ONLY = {"observer": "옵저버"}
 LABELS = {**PROGRAMS, **HISTORY_ONLY}
 
 

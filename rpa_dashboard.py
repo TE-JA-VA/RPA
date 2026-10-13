@@ -384,8 +384,8 @@ LAUNCHED_ENV = []   # 시험용(DRY_RUN): 띄울 때 더한 환경 변수 (LAUNC
 LAUNCH_GRACE_SEC = 90   # 프로세스 손잡이를 잃었을 때(대시보드 재시작 등)를 대비한 최소 잠금 시간
 TARGETS = {
     # target: (설명, 파일 이름, 추가 인자). 파일은 Run_All.bat 과 같은 폴더에 있다.
-    "all": ("전체 실행 (옵저버 → PROCESS)", RUN_BAT, ()),
-    "prepare": ("옵저버", "Prepare_RPA.exe", ("--all", "--no-keep-open")),
+    "all": ("전체 실행 (ACTOR 오토파일럿 → PROCESS)", RUN_BAT, ()),
+    "prepare": ("ACTOR 오토파일럿", "Prepare_RPA.exe", ("--all", "--no-keep-open")),
     "routine": ("PROCESS 오토파일럿", "ERPia_RPA.exe", ()),
 }
 _active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
@@ -481,7 +481,7 @@ def launch(target, by, env=None):
         if ls:
             raise RuntimeError(f"{TARGETS[ls['target']][0]} 이(가) 아직 실행중입니다 ({ls['sec']}초째)")
         if st.observer_open():
-            raise RuntimeError("ACTOR 오토파일럿이 켜져 있습니다. ACTOR 오토파일럿을 닫은 뒤 실행하세요")
+            raise RuntimeError("옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 실행하세요")
         if TOKEN_GATE is not None:
             TOKEN_GATE(target)             # 실행 단추·예약 모두 여기를 지난다
         proc = None
@@ -955,7 +955,7 @@ class Scheduler(threading.Thread):
         if launch_state() is not None:
             return "대시보드가 띄운 실행이 끝나기를 기다립니다"
         if st.observer_open():
-            return "ACTOR 오토파일럿이 켜져 있어 닫히기를 기다립니다"
+            return "옵저버가 켜져 있어 닫히기를 기다립니다"
         return None
 
     def tick(self):

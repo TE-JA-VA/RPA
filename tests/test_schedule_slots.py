@@ -188,12 +188,12 @@ check(st.observer_open() is True, "잠금이 있으면 옵저버가 떠 있다")
 check(st.hold_lock(st.OBSERVER_LOCK) is False, "옵저버는 둘이 못 뜬다")
 set_next(-3)
 sched.tick()
-check(d.LAUNCHED == saved and "ACTOR 오토파일럿" in (sched.waiting_reason or ""), f"예약 시각이 와도 기다림: {sched.waiting_reason}")
+check(d.LAUNCHED == saved and "옵저버" in (sched.waiting_reason or ""), f"예약 시각이 와도 기다림: {sched.waiting_reason}")
 try:
     d.launch_run_all("cloud")
     check(False, "옵저버가 떠 있는데 실행 단추가 띄움")
 except RuntimeError as e:
-    check("ACTOR 오토파일럿" in str(e) and d.LAUNCHED == saved, f"실행 단추는 까닭과 함께 거절: {e}")
+    check("옵저버" in str(e) and d.LAUNCHED == saved, f"실행 단추는 까닭과 함께 거절: {e}")
 if pid != "0":
     os.kill(int(pid), signal.SIGTERM)   # 잠금을 쥔 파이썬을 바로 죽인다 (venv 의 python.exe 는 진짜 파이썬을 자식으로 띄운다)
 holder.stdin.close()

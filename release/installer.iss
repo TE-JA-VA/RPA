@@ -58,6 +58,8 @@ Name: "{group}"
 Type: filesandordirs; Name: "{app}\ms-playwright"
 ; 옛 이름의 시작 메뉴 묶음 (RPA 설정·RPA 옵저버·RPA 대시보드) - 새 이름 묶음을 만든다 (2026-10-13)
 Type: filesandordirs; Name: "{commonprograms}\AFTER MARKET RPA"
+; 2026.10.13-2~-6 이 기록하는 창에 붙인 이름 - 그 저녁 '옵저버' 와 맞바꿨다 (사용자 2026-10-13)
+Type: files; Name: "{group}\ACTOR 오토파일럿.lnk"
 
 [Files]
 ; 판 폴더 전부. 빈 틀은 template 이름으로 (프로그램 폴더에 진짜 설정처럼 보이는 파일을 두지 않는다), 안내 문서는 넣지 않는다
@@ -66,7 +68,7 @@ Source: "{#SourceDir}\RPA_UserConfig.json"; DestDir: "{app}"; DestName: "RPA_Use
 
 [Icons]
 Name: "{group}\오토파일럿 설정"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"""; WorkingDir: "{app}"; Comment: "오토파일럿 설정 창 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET.ico"; AppUserModelID: "AFTERMARKET.RPA.Settings"
-Name: "{group}\ACTOR 오토파일럿"; Filename: "{app}\Prepare_Observer.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작을 기록해 옵저버가 따라 하게 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Observer"
+Name: "{group}\옵저버"; Filename: "{app}\Prepare_Observer.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작을 기록해 ACTOR 오토파일럿이 따라 하게 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Observer"
 
 [INI]
 Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "URL"; String: "https://rpa-test-f02e0.web.app"
@@ -96,7 +98,7 @@ const
   EXIT_STOP_FAILED = 6;
   // 옵저버가 켜 있는 동안 쥐는 잠금 (rpa_status.OBSERVER_LOCK 과 같아야 한다). 켜진 exe 는 덮지도 지우지도 못한다
   OBSERVER_LOCK = 'Local\AFTER_MARKET_RPA_OBSERVER';
-  OBSERVER_OPEN = 'ACTOR 오토파일럿이 켜져 있습니다. ACTOR 오토파일럿을 닫은 뒤 다시 ';
+  OBSERVER_OPEN = '옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 다시 ';
 
 // 설치돼 있는 rpa_settings.py 를 창 없이 돌린다. 처음 설치라 파일이 없으면 -1, 못 띄우면 -2
 function RunSettings(const Args: String): Integer;

@@ -871,7 +871,7 @@ class Replayer:
 
     def _otp_code(self, page, loc):
         if self.otp is None:
-            raise NotFound("인증 휴대폰이 정해지지 않았습니다 - ACTOR 오토파일럿 저장 화면에서 인증 휴대폰을 고르세요")
+            raise NotFound("인증 휴대폰이 정해지지 않았습니다 - 옵저버 저장 화면에서 인증 휴대폰을 고르세요")
         if self.otp_req is None:
             self._otp_open()            # '인증번호 받기' 를 못 알아본 기록 - 지금이라도 연다
         self.log(f"      인증번호 문자를 기다립니다 ({self.otp_try}/{OTP_TRIES}, 최대 {self.otp_wait:.0f}초)")
@@ -961,7 +961,7 @@ class Replayer:
     def run(self):
         if self.rec.get("version") != RECORD_VERSION:
             raise ValueError(f"모르는 기록 형식입니다 (version {self.rec.get('version')!r}) - "
-                             "ACTOR 오토파일럿과 옵저버를 같은 버전으로 맞추세요")
+                             "옵저버와 ACTOR 오토파일럿을 같은 버전으로 맞추세요")
         page = self.first_page or self.context.new_page()
         if self.page_hook:
             self.page_hook(page)

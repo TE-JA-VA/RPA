@@ -36,7 +36,7 @@ if exist "%~dp0RPA_Dashboard.exe" (
 
 echo.
 echo ============================================================
-echo  1/2  옵저버 - 메일 첨부파일 내려받기
+echo  1/2  ACTOR 오토파일럿 - 메일 첨부파일 내려받기
 echo ============================================================
 rem --no-keep-open : 브라우저를 닫아야 다음 단계로 넘어간다
 "%~dp0Prepare_RPA.exe" --all --no-keep-open
@@ -44,7 +44,7 @@ set PREPARE_RC=%ERRORLEVEL%
 
 if not "%PREPARE_RC%"=="0" (
     echo.
-    echo [경고] 옵저버가 정상 종료하지 않았습니다. 코드=%PREPARE_RC%
+    echo [경고] ACTOR 오토파일럿이 정상 종료하지 않았습니다. 코드=%PREPARE_RC%
     echo        내려받은 엑셀이 없을 수 있지만 PROCESS 오토파일럿은 그대로 진행합니다.
     echo        엑셀업로드 단계는 파일이 없으면 알아서 건너뜁니다.
     echo.
@@ -59,6 +59,6 @@ set ROUTINE_RC=%ERRORLEVEL%
 
 echo.
 echo ============================================================
-echo  끝났습니다.  옵저버=%PREPARE_RC%  PROCESS=%ROUTINE_RC%
+echo  끝났습니다.  ACTOR 오토파일럿=%PREPARE_RC%  PROCESS=%ROUTINE_RC%
 echo ============================================================
 endlocal

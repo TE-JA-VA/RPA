@@ -431,7 +431,7 @@ tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
       <div class="filter"><span class="filter-label">프로그램</span>
       <div class="seg" id="f-program">
         <button type="button" data-v="all" aria-pressed="true">전체</button>
-        <button type="button" data-v="prepare" aria-pressed="false">옵저버</button>
+        <button type="button" data-v="prepare" aria-pressed="false">ACTOR 오토파일럿</button>
         <button type="button" data-v="routine" aria-pressed="false">PROCESS</button>
       </div></div>
       <div class="filter"><span class="filter-label">기간</span>
@@ -562,7 +562,7 @@ const REFRESH_HIDDEN_MS = 10000;
 const HISTORY_REFRESH_MS = 30000;
 const STALE_WARN_SEC = 600;        // 이 시간 동안 진행 기록이 없으면 '멈췄는지 확인' 안내
 const PROGRAM_ORDER = ["prepare", "routine"];
-const PROGRAM_LABEL = {prepare: "옵저버", routine: "PROCESS 오토파일럿"};
+const PROGRAM_LABEL = {prepare: "ACTOR 오토파일럿", routine: "PROCESS 오토파일럿"};
 const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];   // 서버와 같이 월=0
 const DAY_PRESETS = [["all", "매일", [0, 1, 2, 3, 4, 5, 6]], ["weekdays", "평일", [0, 1, 2, 3, 4]], ["weekend", "주말", [5, 6]]];
 const MINUTE_STEP = 5;
@@ -1090,7 +1090,7 @@ function updateCard(prog, v) {
   else setAlert(r.alert, null);
 
   const mods = v.modules || [];
-  r.modulesTitle.hidden = r.modules.hidden = !mods.length;   // 옵저버 카드에는 모듈이 없다
+  r.modulesTitle.hidden = r.modules.hidden = !mods.length;   // ACTOR 오토파일럿 카드에는 모듈이 없다
   r.modules.replaceChildren(...mods.map((m) => moduleItem(m, m.duration_sec)));
   r.steps.replaceChildren(...(v.steps || []).map((st) => stepItem(st, running, st.duration_sec)));
 
@@ -1155,7 +1155,7 @@ function paintNext() {
 
 let running_now = [];
 let launchNow = null;   // 대시보드가 띄운 실행이 살아 있으면 {target, by, sec}
-const TARGET_LABEL = {all: "전체 실행", prepare: "옵저버", routine: "PROCESS 오토파일럿"};
+const TARGET_LABEL = {all: "전체 실행", prepare: "ACTOR 오토파일럿", routine: "PROCESS 오토파일럿"};
 function renderHero(snap) {
   const list = PROGRAM_ORDER.map((p) => [p, snap.programs[p]]).filter(([, v]) => v);
   const running = list.filter(([, v]) => v.state === "running");
@@ -1198,7 +1198,7 @@ function renderHero(snap) {
 
 /* 실행 버튼 (관리자): 전체 / 프리페어 / 루틴. 어느 하나라도 도는 동안은 셋 다 잠근다. */
 let runBusy = false;
-const RUN_TITLES = {all: "Run_All.bat (옵저버 → PROCESS) 을 지금 띄웁니다", prepare: "옵저버만 띄웁니다 (메일 첨부 내려받기)", routine: "PROCESS 오토파일럿만 띄웁니다 (ERPia 처리)"};
+const RUN_TITLES = {all: "Run_All.bat (ACTOR 오토파일럿 → PROCESS) 을 지금 띄웁니다", prepare: "ACTOR 오토파일럿만 띄웁니다 (메일 첨부 내려받기)", routine: "PROCESS 오토파일럿만 띄웁니다 (ERPia 처리)"};
 function paintRunButtons() {
   const anyRunning = running_now.length > 0;
   const locked = anyRunning || !!launchNow || runBusy;
@@ -1207,7 +1207,7 @@ function paintRunButtons() {
   for (const btn of document.querySelectorAll(".run-btn[data-target]")) {
     const t = btn.dataset.target;
     const mine = activeTarget === t;
-    const label = t === "all" ? "전체 실행" : t === "prepare" ? "옵저버 실행" : "PROCESS 실행";
+    const label = t === "all" ? "전체 실행" : t === "prepare" ? "ACTOR 오토파일럿 실행" : "PROCESS 실행";
     btn.classList.toggle("is-running", mine);
     btn.classList.toggle("hue-prepare", mine && t === "prepare");
     btn.classList.toggle("hue-routine", mine && t === "routine");
@@ -1219,7 +1219,7 @@ function paintRunButtons() {
 async function runTarget(target) {
   if (runBusy || running_now.length || launchNow) return;
   const what = TARGET_LABEL[target];
-  const detail = target === "all" ? "옵저버 → PROCESS 순서로 이어서 돕니다." : target === "prepare" ? "메일에서 첨부를 내려받습니다." : "ERPia 처리를 합니다. 엑셀은 이미 받아 둔 것을 씁니다.";
+  const detail = target === "all" ? "ACTOR 오토파일럿 → PROCESS 순서로 이어서 돕니다." : target === "prepare" ? "메일에서 첨부를 내려받습니다." : "ERPia 처리를 합니다. 엑셀은 이미 받아 둔 것을 씁니다.";
   if (!confirm(`${what}을(를) 지금 실행합니다. ${detail} 오토파일럿 PC 의 마우스와 키보드를 오토파일럿이 사용합니다. 계속할까요?`)) return;
   runBusy = true; paintRunButtons();
   setMsg($("run-msg"), null, "띄우는 중…");

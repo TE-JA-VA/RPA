@@ -257,8 +257,8 @@ check("두 exe 가 comtypes 의 typelib 시각 비교를 건너뛴다 (PyInstall
 icon_opts = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-icon-from-ico=")]
              for exe in br.EXES}
 prep = getattr(br, "ICON_PREPARE", "")
-icons = [br.ICON, getattr(br, "ICON_PROCESS", ""), getattr(br, "ICON_OBSERVER", ""), prep]
-check("아이콘: PROCESS·옵저버·ACTOR exe 는 각자 색 한 벌씩, 네 ico 가 모두 다르고 판에 들어간다 (2026-10-13 오토파일럿)",
+icons = [br.ICON, getattr(br, "ICON_PROCESS", ""), getattr(br, "ICON_ACTOR", ""), prep]
+check("아이콘: PROCESS·ACTOR 오토파일럿·옵저버 exe 는 각자 색 한 벌씩, 네 ico 가 모두 다르고 판에 들어간다 (2026-10-13 오토파일럿)",
       icon_opts == {"ERPia_RPA.exe": [f"--windows-icon-from-ico={icons[1]}"],
                     "Prepare_RPA.exe": [f"--windows-icon-from-ico={icons[2]}"],
                     "Prepare_Observer.exe": [f"--windows-icon-from-ico={prep}"]}
@@ -318,8 +318,8 @@ with tempfile.TemporaryDirectory() as d:
         check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", False)
     except FileNotFoundError as e:
         check("--exes-from: 옵저버 exe 가 없는 옛 판이면 무엇이 없는지 말하고 멈춘다", "Prepare_Observer.exe" in str(e), str(e))
-check("설치 파일: 시작 메뉴 'ACTOR 오토파일럿' (보라 아이콘, 작업 표시줄 ID 가 그 창과 같다)",
-      '"{group}\\ACTOR 오토파일럿"' in iss and 'Filename: "{app}\\Prepare_Observer.exe"' in iss
+check("설치 파일: 시작 메뉴 '옵저버' (회색 아이콘, 작업 표시줄 ID 가 그 창과 같다)",
+      '"{group}\\옵저버"' in iss and 'Filename: "{app}\\Prepare_Observer.exe"' in iss
       and 'IconFilename: "{app}\\AFTER_MARKET_PREPARE.ico"' in iss and 'AppUserModelID: "AFTERMARKET.RPA.Observer"' in iss)
 iscc = br.find_iscc()
 check("이 PC 에 Inno Setup (ISCC.exe)", iscc is not None)

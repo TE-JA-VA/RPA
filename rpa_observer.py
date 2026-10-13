@@ -41,7 +41,7 @@ RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
 MIN_PRESETS, MAX_PRESETS = st.PRESET_MIN, st.PRESET_MAX
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
-ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # ACTOR 오토파일럿 보라 AP (tools/make_icon.py)
+ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 옵저버 회색 AP (tools/make_icon.py)
 CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
 PROFILE_PREFIX = "rec_prof_"                            # 기록·미리보기 브라우저의 새 프로필 (로그인 쿠키가 든다 - 끝나면 지운다)
 UI = "맑은 고딕"
@@ -423,8 +423,8 @@ def load_presets():
 
 
 def senders_list(text):
-    """'1588-1234, 02 123 4567' → ['15881234', '021234567'] (숫자만)."""
-    return [d for d in (otp_relay.digits(x) for x in re.split(r"[,;/]+", text or "")) if d]
+    """'1588-1234, 02 123 4567, +82 90-258-0002' → ['15881234', '021234567', '0902580002'] (숫자만, +82 는 0 으로 - 휴대폰과 같은 꼴)."""
+    return [d for d in (otp_relay.sender_number(x) for x in re.split(r"[,;/]+", text or "")) if d]
 
 
 def has_otp(record):
@@ -532,7 +532,7 @@ class App:
         L, T, R, B = L + m, T + m, R - m, B - m
         self.panel_w = max(int((R - L) * 0.30), int(460 * scale))
         self.browser_w = (R - L) - self.panel_w
-        root.title("ACTOR 오토파일럿")
+        root.title("옵저버")
         root.configure(bg=BG)
         root.geometry(f"{self.panel_w}x{B - T - int(32 * scale)}+{L + self.browser_w}+{T}")
         self.name_var, self.code_var = tk.StringVar(root), tk.StringVar(root)
@@ -576,17 +576,18 @@ class App:
                                                              ("아이디", self.id_var, "비밀번호", self.pw_var, "•"))):
             y = (6 if r else 0, 0)
             tk.Label(form, text=left, font=F, bg=CARD, fg=MUTED).grid(row=r, column=0, sticky="w", pady=y)
-            self._entry(form, lvar, 18).grid(row=r, column=1, sticky="we", padx=(6, 12), pady=y, ipady=3)
-            tk.Label(form, text=right, font=F, bg=CARD, fg=MUTED).grid(row=r, column=2, sticky="w", pady=y)
+            self._entry(form, lvar, 12).grid(row=r, column=1, sticky="we", padx=(6, 0), pady=y, ipady=3)
+            tk.Label(form, text=right, font=F, bg=CARD, fg=MUTED).grid(row=r, column=2, sticky="w", padx=(12, 0), pady=y)
             self._entry(form, rvar, 12, show=show).grid(row=r, column=3, sticky="we", padx=(6, 0), pady=y, ipady=3)
         tk.Label(form, text="인증 휴대폰", font=F, bg=CARD, fg=MUTED).grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.phone_box = ttk.Combobox(form, state="readonly", width=16, font=F, values=["(없음)"])
-        self.phone_box.grid(row=2, column=1, sticky="we", padx=(6, 12), pady=(6, 0))
+        self.phone_box = ttk.Combobox(form, state="readonly", width=10, font=F, values=["(없음)"])
+        self.phone_box.grid(row=2, column=1, sticky="we", padx=(6, 0), pady=(6, 0))
         self.phone_box.bind("<<ComboboxSelected>>", lambda e: self._field_changed())
-        tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", pady=(6, 0))
+        tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(6, 0))
         self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
         self.senders_var.trace_add("write", lambda *a: self._field_changed())
-        form.columnconfigure(1, weight=1)
+        for col in (1, 3):              # 왼쪽(이름·아이디·인증 휴대폰)·오른쪽(사이트코드·비밀번호·발신번호) 칸을 같은 너비로 (사용자 2026-10-13)
+            form.columnconfigure(col, weight=1, uniform="field")
         self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
                                 wraplength=self.panel_w - 2 * pad - 26)
         self.pw_hint.pack(fill="x", pady=(6, 0))
@@ -1099,7 +1100,7 @@ def start_problem(me=None, session=None):
     me = me or st.process_user()
     session = st.session_user() if session is None else session
     if session and not st.same_account(me, session):
-        return "다른 사용자의 관리자 권한으로 실행되었습니다. ACTOR 오토파일럿을 설치한 사용자로 로그인 하신 후, 관리자 권한으로 실행하여 주십시오."
+        return "다른 사용자의 관리자 권한으로 실행되었습니다. 옵저버를 설치한 사용자로 로그인 하신 후, 관리자 권한으로 실행하여 주십시오."
     return None
 
 
@@ -1107,7 +1108,7 @@ def busy_problem():
     """다른 옵저버·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는
     RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
     if not st.hold_lock(st.OBSERVER_LOCK):
-        return "ACTOR 오토파일럿이 이미 켜져 있습니다."
+        return "옵저버가 이미 켜져 있습니다."
     # ponytail: 예약이 RPA 를 띄우고 RPA 가 '도는 중' 을 적기까지 몇 초 틈은 못 막는다 (그 사이 켜면 둘 다 뜬다)
     running = [st.PROGRAMS.get(p, p) for p in st.running_programs()]
     if running:
@@ -1117,7 +1118,7 @@ def busy_problem():
 
 
 def show_error(text):
-    ctypes.windll.user32.MessageBoxW(None, text, "ACTOR 오토파일럿", 0x10)
+    ctypes.windll.user32.MessageBoxW(None, text, "옵저버", 0x10)
 
 
 def fix_std_handles():
@@ -1164,7 +1165,7 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if sys.stdout is not None:
         sys.stdout.reconfigure(encoding="utf-8")        # 콘솔 없는 exe 를 시작 메뉴로 켜면 stdout 이 없다
-    ap = argparse.ArgumentParser(description="ACTOR 오토파일럿")
+    ap = argparse.ArgumentParser(description="옵저버")
     ap.add_argument("--check", action="store_true", help="창 없이 확인 (빌드·샌드박스)")
     a = ap.parse_args(argv)
     if a.check:

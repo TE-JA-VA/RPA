@@ -128,7 +128,7 @@ st.step("s1")
 st.log_line("[10:00:00] 미리보기 성공")
 st.finish("success")
 rows = st.read_history(program="observer")
-check("옵저버 미리보기는 이력에 'ACTOR 오토파일럿' 으로 남는다", bool(rows) and rows[0]["program_label"] == "ACTOR 오토파일럿", str(rows[:1]))
+check("ACTOR 오토파일럿 미리보기는 이력에 '옵저버' 으로 남는다", bool(rows) and rows[0]["program_label"] == "옵저버", str(rows[:1]))
 check("현황 카드(프로그램 목록)에는 안 나온다", "observer" not in st.dashboard_snapshot()["programs"])
 
 print("=== 3. 관리자·계정 확인 (설정 창과 같이 쓴다) ===")
@@ -285,7 +285,11 @@ check("인증번호 단계가 있는데 인증 휴대폰이나 발신번호가 �
       (rr.validate_presets([P(1, record=OTP_R)]) or (0, ""))[0] == 1
       and "인증 휴대폰" in (rr.validate_presets([dict(P(1, record=OTP_R), phone="kim", senders=" , ")]) or (0, ""))[1]
       and rr.validate_presets([dict(P(1, record=OTP_R), phone="kim", senders="1588-1234")]) is None)
-check("발신번호는 숫자만, 쉼표로 여러 개", rr.senders_list("1588-1234, 02 123 4567;") == ["15881234", "021234567"])
+check("발신번호는 숫자만, 쉼표로 여러 개, +82 는 0 으로 (휴대폰과 같은 꼴)",
+      rr.senders_list("1588-1234, 02 123 4567; +82 90-258-0002") == ["15881234", "021234567", "0902580002"], rr.senders_list("+82 90-258-0002"))
+check("휴대폰 앱·단축어와 같은 꼴 다섯 (맥 세션이 돌려 본 것, 2026-10-13)",
+      rr.senders_list("+82 90-258-0002, +82902580002, +82 090-258-0002, 090-258-0002, 0902580002") == ["0902580002"] * 5,
+      rr.senders_list("+82 90-258-0002, +82902580002, +82 090-258-0002, 090-258-0002, 0902580002"))
 check("비밀번호가 저장돼 있지도 않고 치지도 않았으면 막는다", (rr.validate_presets([P(1, has_pw=False)]) or (0, ""))[0] == 1
       and rr.validate_presets([P(1, has_pw=False, pw="x")]) is None)
 check("다른 계정의 관리자 권한이면 멈춘다 (비밀번호가 그 계정으로 잠긴다)",
@@ -294,7 +298,7 @@ st.start("prepare", ["a"])
 st.flush()
 busy = rr.busy_problem()
 st.finish("success")
-check("RPA 가 돌고 있으면 옵저버를 안 연다 (RPA 가 화면·마우스를 쓴다)", "옵저버가 돌고 있습니다" in (busy or ""), str(busy))
+check("RPA 가 돌고 있으면 ACTOR 오토파일럿을 안 연다 (RPA 가 화면·마우스를 쓴다)", "ACTOR 오토파일럿이 돌고 있습니다" in (busy or ""), str(busy))
 check("켜면 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는 RPA 를 안 띄우고 자동 실행은 기다린다",
       rr.busy_problem() is None and st.observer_open())
 hold = st.hold_lock
@@ -476,7 +480,7 @@ wr.status.read_presets = lambda: [{"no": 7, "code": "012", "record": OTP_R}]
 no_phone = wr._replay_problems("PRESET7", {"Preset": 7})
 with_phone = wr._replay_problems("PRESET7", {"Preset": 7, "Phone": "kim", "SmsSenders": ["15881234"]})
 wr.status.read_presets = orig_read
-check("옵저버는 인증 휴대폰이 없는 인증번호 프리셋을 시작하지 않는다 (까닭을 남김)", no_phone and "인증 휴대폰" in no_phone[0] and with_phone == [],
+check("ACTOR 오토파일럿은 인증 휴대폰이 없는 인증번호 프리셋을 시작하지 않는다 (까닭을 남김)", no_phone and "인증 휴대폰" in no_phone[0] and with_phone == [],
       (no_phone, with_phone))
 
 print()

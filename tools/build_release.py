@@ -50,8 +50,8 @@ PROGRAM_FILES = [
     ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
     ("AFTER_MARKET.ico", "release/AFTER_MARKET.ico"),                         # 오토파일럿: 설정 창·바로 가기·에이전트 (tools/make_icon.py)
     ("AUTOPILOT_PROCESS.ico", "release/AUTOPILOT_PROCESS.ico"),               # PROCESS 오토파일럿 exe (샌드박스가 exe 와 견준다)
-    ("AUTOPILOT_OBSERVER.ico", "release/AUTOPILOT_OBSERVER.ico"),             # 옵저버 exe (Prepare_RPA)
-    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # ACTOR 오토파일럿 exe·창·바로 가기 (Prepare_Observer)
+    ("AUTOPILOT_ACTOR.ico", "release/AUTOPILOT_ACTOR.ico"),                   # ACTOR 오토파일럿 exe (Prepare_RPA)
+    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # 옵저버 exe·창·바로 가기 (Prepare_Observer)
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
@@ -85,8 +85,8 @@ BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "오토파일럿 에이전트 감�
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
 ICON = os.path.join(REPO, "release", "AFTER_MARKET.ico")
 ICON_PROCESS = os.path.join(REPO, "release", "AUTOPILOT_PROCESS.ico")       # 프로그램마다 바탕색이 다르다 (2026-10-13 오토파일럿)
-ICON_OBSERVER = os.path.join(REPO, "release", "AUTOPILOT_OBSERVER.ico")
-ICON_PREPARE = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")    # ACTOR 오토파일럿 (옛 이름 그대로 - 설치된 바로 가기가 본다)
+ICON_ACTOR = os.path.join(REPO, "release", "AUTOPILOT_ACTOR.ico")          # ACTOR 오토파일럿 (Prepare_RPA)
+ICON_PREPARE = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")    # 옵저버 = Prepare_Observer (옛 파일 이름 그대로 - 설치된 바로 가기가 본다)
 NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--remove-output",
                   "--include-package=comtypes", "--include-package=pywinauto", "--include-module=win32timezone",
                   f"--include-data-files={MFC_DLL}=mfc140u.dll", f"--user-package-configuration-file={NUITKA_YML}"]
@@ -103,7 +103,7 @@ TK_PLUGIN = "--enable-plugin=tk-inter"
 # 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
 # --check 는 부른 쪽이 출력을 받는다)
 NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_PROCESS}"],
-                "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_OBSERVER}", *PLAYWRIGHT,
+                "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_ACTOR}", *PLAYWRIGHT,
                                     *AGENT_MODULES],
                 "Prepare_Observer.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
                                          *PLAYWRIGHT, TK_PLUGIN, *AGENT_MODULES]}
@@ -383,7 +383,7 @@ def reuse_exes(src_dir, work_dir):
     """exe 들을 새로 만들지 않고 src_dir(판 폴더)에서 work_dir 로 복사한다. 판 목록 builder 칸 글자를 돌려준다."""
     missing = [exe for exe in EXES if not os.path.isfile(os.path.join(src_dir, exe))]
     if missing:
-        raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (ACTOR 오토파일럿이 없던 옛 버전) - "
+        raise FileNotFoundError(f"{src_dir} 에 {', '.join(missing)} 가 없습니다 (옵저버가 없던 옛 버전) - "
                                 "--exes-from 없이 새로 빌드하세요")
     os.makedirs(work_dir, exist_ok=True)
     for exe in EXES:

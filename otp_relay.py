@@ -22,6 +22,16 @@ def digits(s):
     return re.sub(r"\D", "", str(s or ""))
 
 
+def sender_number(s):
+    """발신번호를 휴대폰 앱·단축어와 같은 꼴로: 숫자만, '+82' 로 시작하면 국내식 '0…' (+82 90-258-0002 → 0902580002).
+    휴대폰은 받은 문자의 발신번호를 이렇게 바꿔 요청의 senders 와 견준다 - 다르면 번호를 보내지 않는다 (2026-10-13 실서버 시험 준비)."""
+    d = digits(s)
+    if str(s or "").strip().startswith("+82") and len(d) > 2:
+        rest = d[2:]
+        return rest if rest.startswith("0") else "0" + rest     # +82 090-… 도 090… (단축어 ^\+820? → 0, 안드로이드와 같다)
+    return d
+
+
 def _agent_modules():
     """에이전트의 fb(서버 REST)·secret(잠근 설정). exe 에는 빌드가 넣어 두고 (build_release AGENT_MODULES), 소스로 돌 때는 firebase/agent 에서."""
     try:
@@ -51,7 +61,7 @@ class PhoneRelay:
 
     def __init__(self, client, cid, pc_id, phone_id, senders, site):
         self.client, self.cid, self.pc_id, self.phone_id, self.site = client, cid, pc_id, phone_id, site
-        self.senders = {digits(x): True for x in senders if digits(x)}
+        self.senders = {sender_number(x): True for x in senders if sender_number(x)}
         self.req_path = f"apps/otp/requests/{cid}/{phone_id}/current"
         self.code_path = f"apps/otp/codes/{cid}/{phone_id}/current"
 
