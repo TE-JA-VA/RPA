@@ -583,12 +583,23 @@ def invoice_send(rr, ctx, live):
     if not count:
         return "no_target", f"[{tag}] 운송장 0건 - 전송할 것 없음"
     checked = check_all_rows(rr, ctx, grid, INVOICE_TAB)
-    note, pressed = press_arrow(rr, ctx, controls(rr, ctx, INVOICE_FORM), "btn_SendRequest", INVOICE_SEND,
-                                checked, count, live)
+    ctl = controls(rr, ctx, INVOICE_FORM)
+    # 누르기 직전에 체크를 다시 본다 - 스피너가 늦게 떠 조회가 이제 끝났으면 그리드가 새로 그려져 체크가 풀린다
+    # (조회하면 체크가 모두 풀린다, 10-13 실측). 풀린 채로 되돌릴 수 없는 [전송요청(S)] 를 누르지 않게
+    if checked and not rows_checked(rr, grid):
+        rr.log(f"  확인할 것: {INVOICE_TAB} - 전체 체크 뒤 다시 보니 체크가 풀려 있어 전송하지 않음 (조회가 늦게 끝났을 수 있음)")
+        checked = False
+    note, pressed = press_arrow(rr, ctx, ctl, "btn_SendRequest", INVOICE_SEND, checked, count, live)
     head = f"[{tag}] 운송장 {count}건" + ("" if checked else " - 전체 체크가 안 돼 전송하지 않음 (확인할 것)")
     if not live:
         head += " - 전송요청은 누르지 않음"
     return ("done" if pressed else "skipped"), head + note
+
+
+def rows_checked(rr, grid):
+    """보이는 줄이 있고 모두 체크돼 있는가 (칸 값 '선택')."""
+    states = [rr.legacy_value(c[CHECK_COL]) for c in rr.grid_rows(grid).values() if CHECK_COL in c]
+    return bool(states) and all(s == "선택" for s in states)
 
 
 def count_rows(rr, ctx, grid):

@@ -996,7 +996,7 @@ check("실행: 지정을 못 눌렀으면 줄 맞추기·화살표로 가지 않
       f"{seq}")
 
 # ---------------------------------------------------------------------------
-print("=== 9. ⑥ 운송장번호 전송 (모든 업체용 화면, 지금은 웰라이프만) ===")
+print("=== 12. ⑥ 운송장번호 전송 (모든 업체용 화면, 지금은 웰라이프만) ===")
 import rpa_status as st  # noqa: E402
 
 check("모드 키가 rpa_status.WELLIFE_MODES(웹 보기)와 같다",
@@ -1058,11 +1058,14 @@ wellife.time.sleep = lambda s: _sleep(min(s, 0.01))
 TOP[0] = actx.hwnd
 
 
-def inv_run(live, rows=3, checked=True, on=True, popup=()):
+def inv_run(live, rows=3, checked=True, on=True, popup=(), later="선택"):
+    """later: 누르기 직전에 다시 읽는 체크 값 (조회가 늦게 끝나면 '선택안됨' 으로 풀린다)."""
     acts.clear(); moves.clear(); POP[:] = list(popup)
     INV.update(rows=rows, checked=checked, forms=[])
     send_btn.on = on
-    return wellife.invoice_send(pop_rr(status=Rec(), wait_grid_spinner_gone=lambda *a, **k: True), actx, live)
+    return wellife.invoice_send(pop_rr(status=Rec(), wait_grid_spinner_gone=lambda *a, **k: True,
+                                       grid_rows=lambda g: {1: {wellife.CHECK_COL: Cell(later)}, 2: {"마켓명": Cell("x")}},
+                                       legacy_value=lambda el: el.v), actx, live)
 
 
 res = inv_run(False)
@@ -1078,6 +1081,9 @@ check("실행: 0건이면 체크도 전송요청도 하지 않는다 (no_target)
       res[0] == "no_target" and acts == [("click", "조회(F)")], f"{res} {acts}")
 res = inv_run(True, checked=False)
 check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
+      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인할 것" in res[1], f"{res} {acts}")
+res = inv_run(True, later="선택안됨")
+check("실행: 누르기 직전에 다시 보니 체크가 풀려 있으면 누르지 않는다 (조회가 늦게 끝난 경우)",
       ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인할 것" in res[1], f"{res} {acts}")
 res = inv_run(True, on=False)
 check("실행: 단추가 꺼져 있으면 누르지 않는다", ("click", "btn_SendRequest") not in acts and res[0] == "skipped"
@@ -1140,5 +1146,15 @@ crr.grid_vertical_scrollbar = lambda grid: None
 check("스크롤바가 없으면 보이는 줄 (2줄)", wellife.count_rows(crr, actx, g) == 2 and g.tops == 0)
 crr.grid_rows = lambda grid: {}
 check("줄이 없으면 0", wellife.count_rows(crr, actx, g) == 0)
+
+# 스크롤바 캐시: 같은 자리에 그리드가 있던 다른 화면(숨으면 창 밖)의 스크롤바는 돌려주지 않고 새로 찾는다
+own_bar, other_bar = El("bar", Rect(480, 100, 500, 600)), El("bar", Rect(-1440, 100, -1420, 600))
+sgrid = types.SimpleNamespace(rectangle=lambda: Rect(0, 100, 500, 600),
+                              descendants=lambda control_type=None: [own_bar],
+                              parent=lambda: types.SimpleNamespace(descendants=lambda control_type=None: []))
+rr._GRID_SCROLLBAR_CACHE[(0, 100, 500, 600)] = other_bar
+check("스크롤바 캐시가 그리드 밖 스크롤바면 새로 찾는다", rr.grid_vertical_scrollbar(sgrid) is own_bar)
+check("그리드 안 스크롤바는 캐시에서 그대로", rr.grid_vertical_scrollbar(sgrid) is own_bar
+      and rr._GRID_SCROLLBAR_CACHE[(0, 100, 500, 600)] is own_bar)
 
 finish()

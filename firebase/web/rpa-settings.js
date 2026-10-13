@@ -267,7 +267,7 @@ function savedSlots() {
     ...(isV3() ? { days: [...(Array.isArray(x.days) ? x.days : s.days || [])].sort() } : {}),
   }));
 }
-/** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관 (사용자 10-08: ②③④⑤ 따로, ⑤ 는 반복) */
+/** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관·운송장 전송 (사용자 10-08: ②~⑥ 따로, ⑤⑥ 은 반복도) */
 const runChipList = () => (isWellife() ? WELLIFE_RUN_CHIPS : RUN_CHIPS);
 /** 줄의 모듈은 이 업체 단추에 있는 것만 (업체 종류가 바뀌기 전에 저장한 줄 - 에이전트가 맞지 않는 모듈을 거절한다). 폼 줄과 보내는 값이 같은 곳을 지난다 */
 const fitSlot = (s) => (s.run ? { ...s, run: s.run.filter((k) => runChipList().some(([x]) => x === k)) } : s);

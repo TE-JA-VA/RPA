@@ -1738,7 +1738,9 @@ def grid_vertical_scrollbar(grid):
     if cached is not None:
         try:
             cr = cached.rectangle()
-            if cr.width() > 0 and cr.height() > 0:
+            # 그리드 사각형 안에 있을 때만 - 같은 자리에 그리드가 있던 다른 화면(숨으면 창 밖으로 간다)의 스크롤바를 돌려주지 않게
+            if (cr.width() > 0 and cr.height() > 0 and key[0] - 5 <= cr.left and cr.right <= key[2] + 5
+                    and key[1] - 5 <= cr.top and cr.bottom <= key[3] + 5):
                 return cached
         except Exception:
             pass
