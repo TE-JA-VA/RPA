@@ -359,7 +359,8 @@ def hold_save(rr, ctx, live):
     rr.status.step("wl_hold_save")
     tag = mode_tag(live)
     front(rr, ctx, "물류대기 일반 탭")
-    rr.click_subtab(ctx.app, ctx.hwnd, rr.STOCK_GENERAL_TAB_NAME)
+    if not rr.click_subtab(ctx.app, ctx.hwnd, rr.STOCK_GENERAL_TAB_NAME):   # 못 가면 다른 서브탭('상품별 재고검토')의 조회·저장을 누르게 된다
+        raise Stop("failed", f"물류대기 '{rr.STOCK_GENERAL_TAB_NAME}' 탭을 찾지 못해 조회·저장하지 않습니다.")
     win = ctx.window()
     query, tables = onscreen_button(win, "조회(F)"), rr.get_onscreen_tables(win)
     if query is None or not tables:
@@ -383,9 +384,12 @@ def hold_save(rr, ctx, live):
     save = onscreen_button(ctx.window(), "저장(S)")
     if save is None:
         raise Stop("failed", "물류대기 '저장(S)' 단추를 찾지 못했습니다.")
+    again = recheck(rr, grid, "물류대기", live)
+    if live and not again:
+        raise Stop("failed", "물류대기 저장 직전 다시 보니 체크가 맞지 않아 저장하지 않음 (확인할 것).")
     if not live:
         hover(rr, ctx, save, "물류대기 '저장(S)'", True)
-        return "skipped", f"[{tag}] 물류대기 조회 -> 전체선택 (저장은 누르지 않음)"
+        return "skipped", f"[{tag}] 물류대기 조회 -> 전체선택 (저장은 누르지 않음)" + ("" if again else RECHECK_NOTE)
     before = popup_windows(rr, ctx)
     rr.log("  [실행] 물류대기 '저장(S)' 누름")
     click(rr, ctx, save, "물류대기 '저장(S)'")
@@ -452,7 +456,8 @@ def sales_slip_stage(rr, ctx, live=False):
     count, ctl = open_stage(rr, ctx, SAP_FORM, "dashBtn_SalesSlip")
     if not count:
         return "4-1 매출전표 0건", False
-    checked = check_rows(rr, ctx, ctl["gridCtrl_List"], "4-1 매출전표", live)
+    checked = (check_rows(rr, ctx, ctl["gridCtrl_List"], "4-1 매출전표", live)
+               and recheck(rr, ctl["gridCtrl_List"], "4-1 매출전표", live))
     head = f"매출전표 {count}건"
     if not live:
         head += hover_menu_item(rr, ctx, ctl.get("btn_CopyInsert"), SELECTED_ONLY, "4-1 [지정▼]", checked)
@@ -471,7 +476,9 @@ def sales_slip_stage(rr, ctx, live=False):
     rr.log(f"  매출전표: 그리드 {len(marks)}줄 - 넘길 줄(검토 빈 칸) {targets}줄{f', 못 맞춘 줄 {len(bad)}' if bad else ''}")
     rr.status.note(f"매출전표 {count}건 / {len(marks)}줄 - 넘길 줄 {targets}")
     head += f" / 넘길 줄 {targets}" + (f" (못 맞춘 줄 {len(bad)} - 넘기지 않음)" if bad else "")
-    note, sent = press_arrow(rr, ctx, ctl, "btn_FirstSend", SLIP_SEND, bool(targets) and not bad, targets, live)
+    held = bool(not targets or bad) or marks_held(rr, ctl["gridCtrl_List"], marks, SLIP_SEND)   # 화살표 직전 다시 보기
+    head += "" if held else RECHECK_NOTE
+    note, sent = press_arrow(rr, ctx, ctl, "btn_FirstSend", SLIP_SEND, bool(targets) and not bad and held, targets, live)
     return head + note, pressed or sent
 
 
@@ -482,7 +489,8 @@ def simple_stage(rr, ctx, form_id, step, dash_id, arrow_id, check_all, what, liv
     rr.status.step(step)
     count, ctl = open_stage(rr, ctx, form_id, dash_id)
     label = what.split(" →")[0]
-    checked = bool(count and check_all) and check_rows(rr, ctx, ctl["gridCtrl_List"], label, live)
+    checked = (bool(count and check_all) and check_rows(rr, ctx, ctl["gridCtrl_List"], label, live)
+               and recheck(rr, ctl["gridCtrl_List"], label, live))
     want = bool(count) and (checked or not check_all)
     # 실행 '1건' 은 체크 칸이 있는 단계만 한 줄 - 체크 칸이 없는 4-4·5-4 는 그 단계 건을 모두 넘긴다 (사용자 10-13)
     one = live == ONE and check_all
@@ -504,8 +512,9 @@ def check_one_row(rr, ctx, grid, label):
     rr.grid_scroll_to_top(ctx.hwnd, grid)
     rows = settled_rows(rr, grid, first=1)
     states = {n: rr.legacy_value(c[CHECK_COL]) for n, c in rows.items() if CHECK_COL in c}
-    if not states or "선택" in states.values():
-        rr.log(f"  확인할 것: {label} - 첫 줄만 체크하려는데 줄이 없거나 이미 체크된 줄이 있어 누르지 않음 ({states})")
+    # 보이는 줄 중 가장 위 (사용자 10-13). 못 읽은 체크 값이 있으면 이미 체크된 줄인지 몰라 누르지 않는다
+    if not states or any(v != "선택안됨" for v in states.values()):
+        rr.log(f"  확인할 것: {label} - 첫 줄만 체크하려는데 줄이 없거나, 이미 체크됐거나 못 읽은 줄이 있어 누르지 않음 ({states})")
         return False
     first = min(states)
     cell = rows[first][CHECK_COL]
@@ -629,11 +638,8 @@ def invoice_send(rr, ctx, live):
         return "no_target", f"[{tag}] 운송장 0건 - 전송할 것 없음"
     checked = check_rows(rr, ctx, grid, INVOICE_TAB, live)
     ctl = controls(rr, ctx, INVOICE_FORM)
-    # 누르기 직전에 체크를 다시 본다 - 스피너가 늦게 떠 조회가 이제 끝났으면 그리드가 새로 그려져 체크가 풀린다
-    # (조회하면 체크가 모두 풀린다, 10-13 실측). 풀린 채로 되돌릴 수 없는 [전송요청(S)] 를 누르지 않게
-    if checked and not rows_checked(rr, grid, one=live == ONE):
-        rr.log(f"  확인할 것: {INVOICE_TAB} - 전체 체크 뒤 다시 보니 체크가 풀려 있어 전송하지 않음 (조회가 늦게 끝났을 수 있음)")
-        checked = False
+    # 누르기 직전에 체크를 다시 본다 - 새로 잡은 그리드로 (조회가 늦게 끝나 그리드가 새로 그려지면 체크가 풀린다)
+    checked = checked and recheck(rr, ctl.get("gridCtrl_List") or grid, INVOICE_TAB, live)
     note, pressed = press_arrow(rr, ctx, ctl, "btn_SendRequest", INVOICE_SEND, checked, 1 if live == ONE else count, live)
     head = f"[{tag}] 운송장 {count}건" + (" 중 첫 줄 1건" if live == ONE and pressed else "") + (
         "" if checked else " - 체크가 안 돼 전송하지 않음 (확인할 것)")
@@ -648,6 +654,28 @@ def rows_checked(rr, grid, one=False):
     if one:
         return states.count("선택") == 1
     return bool(states) and all(s == "선택" for s in states)
+
+
+RECHECK_NOTE = " (누르기 직전 다시 보니 체크가 맞지 않음 - 확인할 것)"
+
+
+def recheck(rr, grid, label, live):
+    """누르기 직전 다시 보기 (사용자 10-13: 누르는 곳 모두). 체크한 뒤 조회가 늦게 끝나 그리드가 새로 그려지면 체크가
+    풀린다 - 풀린 채로 저장·화살표·전송을 누르지 않게. 리허설도 같은 것을 읽어 '실행이었다면 누르지 않음' 을 남긴다."""
+    ok = rows_checked(rr, grid, one=live == ONE)
+    if not ok:
+        rr.log(f"  확인할 것: {label} - 누르기 직전 다시 보니 체크가 맞지 않음"
+               f" ({'누르지 않음' if live else '리허설 - 실행이었다면 누르지 않음'})")
+    return ok
+
+
+def marks_held(rr, grid, marks, label):
+    """4-2: 화살표 직전, 보이는 줄의 체크가 맞춘 값(marks: {행 번호: '선택'/'선택안됨'}) 그대로인가."""
+    seen = {n: rr.legacy_value(c[CHECK_COL]) for n, c in rr.grid_rows(grid).items() if CHECK_COL in c and n in marks}
+    off = sorted(n for n, v in seen.items() if v != marks[n])
+    if not seen or off:
+        rr.log(f"  확인할 것: {label} - 누르기 직전 다시 보니 체크가 맞춘 값과 다름 (행 {off or '못 읽음'})")
+    return bool(seen) and not off
 
 
 def count_rows(rr, ctx, grid):
@@ -891,11 +919,15 @@ def next_page(rr, ctx, grid, rows):
     rows = settled_rows(rr, grid, moved_from=first)
     if min(rows, default=None) != first:
         return rows
+    # 방금 내렸으니 스크롤바가 있었다 - 지금 못 읽으면(None·예외) 끝인지 모른다. 끝으로 보면 뒤 줄을 못 본 채
+    # 4-2 화살표가 눌릴 수 있어 멈춘다 (사용자 10-13). 스크롤바를 읽었고 '페이지 아래로' 가 없을 때만 끝이다
     try:
         vsb = rr.grid_vertical_scrollbar(grid)
-        more = vsb is not None and any(c.window_text() == "페이지 아래로" for c in vsb.descendants())
+        more = None if vsb is None else any(c.window_text() == "페이지 아래로" for c in vsb.descendants())
     except Exception:
-        more = False
+        more = None
+    if more is None:
+        raise Stop("failed", "페이지를 내렸는데 그리드가 움직이지 않았고 스크롤바도 읽지 못해 멈춤 (끝인지 모름 - 뒤 줄은 못 맞춤)")
     if more:
         raise Stop("failed", "페이지를 내렸는데 그리드가 움직이지 않아 멈춤 (뒤 줄은 못 맞춤)")
     return None

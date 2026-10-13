@@ -648,8 +648,10 @@ class FakeGrid:
 
 
 def grid_rr(g):
+    vsb = types.SimpleNamespace(descendants=lambda: [El("페이지 위로")] + ([El("페이지 아래로")] if g.page + 1 < len(g.pages) else []))
     return types.SimpleNamespace(
         grid_rows=lambda grid: g.rows(), grid_page_down=lambda h, grid: g.down(),
+        grid_vertical_scrollbar=lambda grid: getattr(g, "vsb", vsb),     # 끝 페이지면 '페이지 아래로' 가 없다
         grid_scroll_to_top=lambda h, grid: g.top(), legacy_value=lambda el: el.v, log=lambda m: None,
         grid_click_bottom=lambda grid: 100,
         ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
@@ -681,6 +683,15 @@ check("전체 체크된 채면 머리글 한 번으로 풀고, 넘길 줄만 하
       g.clicks[0] is g.header and len(g.clicks) == 1 + 11, f"{len(g.clicks)}번 누름")
 out, _ = run_marks(FakeGrid((range(1, 25), range(1, 25)), stale=0), 24)
 check("내렸는데 첫 행이 그대로면 끝으로 본다 (같은 페이지를 끝없이 돌지 않음)", sorted(out) == list(range(1, 25)), f"{len(out)}줄")
+for why, vsb in (("None", None), ("예외", types.SimpleNamespace(descendants=lambda: 1 / 0))):
+    g = FakeGrid((range(1, 25), range(1, 25)), stale=0)
+    g.vsb = vsb
+    try:
+        run_marks(g, 24)
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"내렸는데 그대로고 스크롤바를 못 읽으면({why}) 끝으로 보지 않고 멈춘다 (사용자 10-13 - 뒤 줄을 모름)", res == "failed", str(res))
 g = FakeGrid((range(1, 25),), stale=0, review=lambda n: None if n == 5 else "", stuck=(7,))
 out, bad = run_marks(g, 24)
 check("검토를 못 읽은 줄(None)은 체크하지 않는다", out.get(5) == "선택안됨", str(out.get(5)))
@@ -690,14 +701,12 @@ g.cells[24][wellife.CHECK_COL].rect = Rect(0, 95, 10, 105)     # 마지막 줄 �
 out, bad = run_marks(g, 24)
 check("끝 줄이 잘려 못 눌렀으면 '못 맞춘 줄' (전체 체크된 채 넘어가지 않게)", bad == [24], str(bad))
 g = FakeGrid((range(1, 25), range(1, 25)), stale=0)
-_grr = grid_rr
-grid_rr = lambda g_: types.SimpleNamespace(**vars(_grr(g_)), grid_vertical_scrollbar=lambda grid: Nav([El("페이지 아래로")]))
+g.vsb = Nav([El("페이지 아래로")])
 try:
     run_marks(g, 24)
     res = None
 except wellife.Stop as e:
     res = e.result
-grid_rr = _grr
 check("페이지를 내렸는데 그리드가 그대로인데 '페이지 아래로' 가 있으면 멈춘다 (뒤 줄을 모름)", res == "failed", str(res))
 check("SAP전송전체 이후·송장X·API실패 등 사람이 보는 단추는 단계 표에 없다",
       not {s[1] for s in wellife.SAP_SIMPLE_STAGES + wellife.WMS_STAGES}
@@ -869,7 +878,8 @@ def stage_with(count, enabled=True):
 
 TOP[0] = actx.hwnd
 stage = ("wl_sap_so", "dashBtn_Create_SO", "btn_ThirdSend", False, "4-4 SO생성 → SAP 전송")
-srr = pop_rr(status=Rec())
+AGAIN = ["선택"]      # 누르기 직전 다시 읽는 체크 값
+srr = pop_rr(status=Rec(), grid_rows=lambda g: {1: {wellife.CHECK_COL: AGAIN[0]}}, legacy_value=lambda v: v)
 for live, count, enabled, want_click in ((False, 3, True, False), (True, 3, True, True),
                                          (True, 0, True, False), (True, 3, False, False)):
     acts.clear(); moves.clear(); POP.clear()
@@ -879,6 +889,19 @@ for live, count, enabled, want_click in ((False, 3, True, False), (True, 3, True
     check(f"화살표 live={live} {count}건 단추{'켜짐' if enabled else '꺼짐'} -> {'누름 + 팝업 [예]' if want_click else '안 누름'}",
           clicked == want_click and pressed == want_click and (not want_click or ("click", "예") in acts),
           f"{note} {acts}")
+_saved_ca = wellife.check_all_rows
+wellife.check_all_rows = lambda *a: True
+check_stage = ("wl_sap_shipping", "dashBtn_ShippingInfo", "btn_ThirdSend", True, "4-3 선분할 배송정보 → S/O 생성요청")
+for again, want_click in (("선택", True), ("선택안됨", False)):
+    acts.clear(); POP.clear()
+    stage_with(3)
+    wellife.open_stage = lambda rr_, ctx_, form, dash: (3, {"btn_ThirdSend": arrow_btn, "gridCtrl_List": "g"})
+    AGAIN[0] = again
+    note, pressed = wellife.simple_stage(srr, actx, wellife.SAP_FORM, *check_stage, live=True)
+    check(f"체크 칸이 있는 단계: 화살표 직전 다시 본 체크 '{again}' -> {'누름' if want_click else '안 누름 (재확인, 사용자 10-13)'}",
+          (("click", "btn_ThirdSend") in acts) == want_click and pressed == want_click, f"{note} {acts}")
+AGAIN[0] = "선택"
+wellife.check_all_rows = _saved_ca
 wellife.open_stage = _saved_open
 r = wellife.stage_result(True, [("a", False), ("b", True)])
 check("실제로 누른 단계가 있으면 모듈 결과 done, 사유 앞에 [실행]", r[0] == "done" and r[1].startswith("[실행] "), str(r))
@@ -905,13 +928,16 @@ wellife._top_window = _saved_top
 
 
 # 물류대기: 조회 -> 전체선택 -> 저장
-def hold_rr(rows=1):
+def hold_rr(rows=1, tab=True, again="선택"):
+    """tab: '일반' 탭을 찾았는가. again: 저장 직전 다시 읽은 체크 값 (조회가 늦게 끝나 풀렸으면 '선택안됨')."""
     grid = types.SimpleNamespace(rectangle=lambda: Rect(0, 50, 200, 300),     # 머리글 체크 칸 + 줄 rows 개
                                  descendants=lambda control_type=None: [El(wellife.CHECK_COL)] if control_type == "Header"
                                  else [1] * rows)
-    return pop_rr(status=Rec(), click_subtab=lambda app, hwnd, name: acts.append(("tab", name)),
+    return pop_rr(status=Rec(), click_subtab=lambda app, hwnd, name: acts.append(("tab", name)) or tab,
                   STOCK_GENERAL_TAB_NAME="일반", get_onscreen_tables=lambda win: [grid],
                   wait_grid_spinner_gone=lambda *a, **k: True,
+                  grid_rows=lambda g: {n: {wellife.CHECK_COL: again} for n in range(1, rows + 1)},
+                  legacy_value=lambda v: v,
                   select_all_by_header_checkbox=lambda hwnd, g: acts.append(("select_all",)) or True)
 
 
@@ -931,6 +957,19 @@ for live in (False, True):
 acts.clear()
 res = wellife.hold_save(hold_rr(rows=0), hctx, True)
 check("물류대기 0건이면 저장하지 않는다", res[0] == "no_target" and ("click", "저장(S)") not in acts, f"{res} {acts}")
+for what, kw in (("'일반' 탭을 못 찾으면 조회·저장하지 않고 멈춘다 (다른 서브탭의 단추를 누르지 않게)", {"tab": False}),
+                 ("저장 직전 다시 보니 체크가 풀려 있으면 저장하지 않는다 (사용자 10-13 - 재확인)", {"again": "선택안됨"})):
+    acts.clear(); POP.clear()
+    try:
+        wellife.hold_save(hold_rr(**kw), hctx, True)
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"물류대기: {what}", res == "failed" and ("click", "저장(S)") not in acts, f"{res} {acts}")
+acts.clear(); POP.clear()
+res = wellife.hold_save(hold_rr(again="선택안됨"), hctx, False)
+check("물류대기 리허설: 다시 보니 풀려 있으면 '확인할 것' 을 사유에 남긴다 (실행이었다면 누르지 않음)",
+      res[0] == "skipped" and wellife.RECHECK_NOTE in res[1], str(res))
 
 # 주문 수집: 엑셀이 있을 때만 올리고, 자동 수집 [가져오기] 는 누르지 않는다
 xdir = tempfile.mkdtemp(prefix="rpa_wl_xl_")
@@ -958,12 +997,16 @@ TOP[0] = 1
 
 
 # 4-1 → 4-2 순서 (사용자 10-08): 전체 체크 → [지정▼] 선택 항목만 → 검토 빈 줄만 체크 → 화살표
-def run_slip(live, checked=True, pressed=True, marks=None, bad=()):
-    names = ("open_stage", "check_all_rows", "hover_menu_item", "press_menu_item", "controls", "mark_rows", "press_arrow")
+def run_slip(live, checked=True, pressed=True, marks=None, bad=(), again=True, held=True):
+    """again: 지정 직전 다시 본 체크가 맞는가, held: 화살표 직전 다시 본 체크가 맞춘 값 그대로인가 (사용자 10-13 재확인)."""
+    names = ("open_stage", "check_all_rows", "hover_menu_item", "press_menu_item", "controls", "mark_rows", "press_arrow",
+             "recheck", "marks_held")
     saved = {n: getattr(wellife, n) for n in names}
     seq = []
     wellife.open_stage = lambda *a: (seq.append("조회"), (3, {"gridCtrl_List": "g"}))[1]
     wellife.check_all_rows = lambda *a: (seq.append("전체 체크"), checked)[1]
+    wellife.recheck = lambda *a: again
+    wellife.marks_held = lambda *a: held
     wellife.hover_menu_item = lambda *a: (seq.append("지정 마우스만"), "")[1]
     wellife.press_menu_item = lambda *a: (seq.append("지정 누름"), ("", pressed))[1]
     wellife.controls = lambda *a: (seq.append("다시 잡기"), {"gridCtrl_List": "g2"})[1]
@@ -995,6 +1038,12 @@ check("실행: 전체 체크가 안 되면 지정도 화살표도 누르지 않�
 res, seq = run_slip(True, pressed=False)
 check("실행: 지정을 못 눌렀으면 줄 맞추기·화살표로 가지 않는다", seq == ["조회", "전체 체크", "지정 누름"] and res[1] is False,
       f"{seq}")
+res, seq = run_slip(True, again=False)
+check("실행: 지정 직전 다시 보니 체크가 풀려 있으면 지정도 화살표도 누르지 않는다 (재확인)", seq == ["조회", "전체 체크"] and res[1] is False,
+      f"{seq}")
+res, seq = run_slip(True, held=False)
+check("실행: 화살표 직전 다시 보니 맞춘 체크가 바뀌어 있으면 화살표를 누르지 않는다 (재확인)",
+      seq[-1].endswith("want=False live=True") and wellife.RECHECK_NOTE in res[0], f"{seq} {res}")
 
 # ---------------------------------------------------------------------------
 print("=== 12. ⑥ 운송장번호 전송 (모든 업체용 화면, 지금은 웰라이프만) ===")
@@ -1228,6 +1277,10 @@ g = one_grid(checked=(3,))
 check("'1건': 이미 체크된 줄이 보이면 누르지 않는다 (그 줄도 넘어가지 않게)", one_run(g) is False and g.clicks == [])
 g = one_grid(stuck=(1,))
 check("'1건': 눌러도 체크가 안 되면 실패", one_run(g) is False)
+g = one_grid()
+g.cells[2][wellife.CHECK_COL].v = None
+check("'1건': 체크 값을 못 읽은 줄이 보이면 누르지 않는다 (이미 체크된 줄인지 몰라서 - 사용자 10-13)",
+      one_run(g) is False and g.clicks == [])
 check("다시 확인(1건): 보이는 줄 중 꼭 하나만 체크", wellife.rows_checked(
     types.SimpleNamespace(grid_rows=lambda g_: {1: {wellife.CHECK_COL: Cell("선택")}, 2: {wellife.CHECK_COL: Cell("선택안됨")}},
                           legacy_value=lambda el: el.v), None, one=True)
