@@ -784,8 +784,8 @@ rr.run_modules = fake_run_modules
 settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
 wellife.run_main(rr)
 start = rec.of("start")[0]
-own_keys = {"wl_order_screen", "wl_order_collect", "inv_send_screen", "inv_send"}
-check("단계 이름 앞에 모드 - ② 는 SalesMode·⑥ 은 InvoiceMode(빠져서 [리허설]), 나머지는 Mode([실행])",
+own_keys = {k for m in wellife.MODULES if m[0] in wellife.MODULE_MODES for k in m[3]}
+check("단계 이름 앞에 모드 - ②④⑤⑥ 은 제 키(빠져서 [리허설]), 로그인·③ 은 Mode([실행])",
       all(label.startswith("[리허설] " if k in own_keys else "[실행] ") for k, label in start[1]), str(start[1][:4]))
 settings({"Wellife": {"Login": "Y", "Mode": "run"}})
 rec = Rec()
@@ -966,7 +966,7 @@ def run_slip(live, checked=True, pressed=True, marks=None, bad=()):
     wellife.hover_menu_item = lambda *a: (seq.append("지정 마우스만"), "")[1]
     wellife.press_menu_item = lambda *a: (seq.append("지정 누름"), ("", pressed))[1]
     wellife.controls = lambda *a: (seq.append("다시 잡기"), {"gridCtrl_List": "g2"})[1]
-    wellife.mark_rows = lambda rr_, ctx, grid, n, want: (seq.append(f"줄 맞추기 {grid}"),
+    wellife.mark_rows = lambda rr_, ctx, grid, n, want, limit=None: (seq.append(f"줄 맞추기 {grid}" + (f" 최대 {limit}" if limit else "")),
                                                          (marks if marks is not None else {1: "선택", 2: "선택안됨"}, list(bad)))[1]
     wellife.press_arrow = lambda rr_, ctx, ctl, aid, what, want, n, lv: (seq.append(f"화살표 {aid} want={want} live={lv}"),
                                                                         ("", lv and want))[1]
@@ -999,8 +999,7 @@ check("실행: 지정을 못 눌렀으면 줄 맞추기·화살표로 가지 않
 print("=== 12. ⑥ 운송장번호 전송 (모든 업체용 화면, 지금은 웰라이프만) ===")
 import rpa_status as st  # noqa: E402
 
-check("모드 키가 rpa_status.WELLIFE_MODES(웹 보기)와 같다",
-      [k for k, _ in st.WELLIFE_MODES] == [wellife.SALES_MODE_KEY, wellife.MODE_KEY, wellife.INVOICE_MODE_KEY])
+check("모드 키가 rpa_status.WELLIFE_MODES(웹 보기)와 같은 키·순서", [k for k, _ in st.WELLIFE_MODES] == list(wellife.MODE_NAMES))
 check("Wellife 설정 키가 rpa_status.WELLIFE_CONFIG_MODULES 와 같다",
       [m[1] for m in wellife.MODULES] == [k for k, _ in st.WELLIFE_CONFIG_MODULES])
 check("모든 업체용 모듈 키 = 설정 키 소문자 (wellife_ 없음 - agent.history_key·토큰 배율이 같은 키)",
@@ -1156,5 +1155,132 @@ rr._GRID_SCROLLBAR_CACHE[(0, 100, 500, 600)] = other_bar
 check("스크롤바 캐시가 그리드 밖 스크롤바면 새로 찾는다", rr.grid_vertical_scrollbar(sgrid) is own_bar)
 check("그리드 안 스크롤바는 캐시에서 그대로", rr.grid_vertical_scrollbar(sgrid) is own_bar
       and rr._GRID_SCROLLBAR_CACHE[(0, 100, 500, 600)] is own_bar)
+
+# ---------------------------------------------------------------------------
+print("=== 13. SAP·WMS 모드 따로, 실행 '1건' (사용자 10-13) ===")
+ONE = wellife.ONE
+settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
+check("SapMode·WmsMode 가 빠지면 Mode(실행)를 따르지 않고 리허설",
+      wellife.load_mode(rr) is True and wellife.load_mode(rr, wellife.SAP_MODE_KEY) is False
+      and wellife.load_mode(rr, wellife.WMS_MODE_KEY) is False)
+settings({"Wellife": {"Login": "Y", "SapMode": "실행", "WmsMode": "1건", "InvoiceMode": "1건"}})
+check("SapMode·WmsMode 는 따로 읽고, '1건' 은 ONE(참) - 모르는 키가 아니다",
+      wellife.load_mode(rr, wellife.SAP_MODE_KEY) is True and wellife.load_mode(rr, wellife.WMS_MODE_KEY) == ONE
+      and bool(ONE) and wellife.load_switches(rr)[1] == [] and wellife.mode_tag(ONE) == "1건")
+settings({"Wellife": {"Login": "Y", "SalesMode": "1건"}})
+try:
+    wellife.load_mode(rr, wellife.SALES_MODE_KEY)
+    raised = False
+except RuntimeError:
+    raised = True
+check("② SalesMode 는 줄이 없어 '1건' 을 못 쓴다 (설정 오류)", raised)
+
+rr.run_modules = fake_run_modules
+rec, starts, seen = Rec(), [], {}
+rec.start = lambda *a, **k: starts.append((a, k))
+rr.status = rec
+got.clear()
+_saved_mods = wellife.module_hold, wellife.module_sap, wellife.module_wms
+wellife.module_hold = lambda rr_, ctx_, live: seen.update(hold=live) or ("skipped", None)
+wellife.module_sap = lambda rr_, ctx_, live: seen.update(sap=live) or ("skipped", None)
+wellife.module_wms = lambda rr_, ctx_, live: seen.update(wms=live) or ("skipped", None)
+settings({"Wellife": {"Login": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "Mode": "실행", "SapMode": "1건"}})
+wellife.run_main(rr)
+for k in ("wellife_hold", "wellife_sap", "wellife_wms"):
+    got["funcs"][k](None)
+wellife.module_hold, wellife.module_sap, wellife.module_wms = _saved_mods
+rr.run_modules = orig_run_modules
+labels = dict(starts[0][0][1]) if starts else {}
+check("③ 은 Mode, ④ 는 SapMode, ⑤ 는 WmsMode 로 돈다", seen == {"hold": True, "sap": ONE, "wms": False}, str(seen))
+check("단계 이름·제목에 모듈마다 모드 ([실행] 물류대기 / [1건] SAP / [리허설] WMS)",
+      labels.get("wl_hold_save", "").startswith("[실행] ") and labels.get("wl_sap_slip", "").startswith("[1건] ")
+      and labels.get("wl_wms_so", "").startswith("[리허설] ") and "SAP 연동 1건" in starts[0][1].get("title", ""),
+      f"{labels.get('wl_sap_slip')} {starts[0][1] if starts else None}")
+
+# 첫 줄 하나만 체크: 조회 직후(모두 풀림)에서 맨 위 첫 줄만 누르고, 그 줄만 '선택' 인지 다시 본다
+_saved_cn = wellife.click, wellife.no_popup
+
+
+def one_grid(checked=(), stuck=()):
+    g = FakeGrid((range(1, 25), range(24, 48)), stuck=stuck)
+    for n, c in g.cells.items():
+        c[wellife.CHECK_COL].v = "선택" if n in checked else "선택안됨"
+    g.clicks = []
+    return g
+
+
+def one_run(g):
+    wellife.click = lambda rr_, ctx, el, what: (g.clicks.append(el), g.toggle(el))
+    wellife.no_popup = lambda *a: None
+    try:
+        return wellife.check_one_row(grid_rr(g), actx, g, "시험")
+    finally:
+        wellife.click, wellife.no_popup = _saved_cn
+
+
+g = one_grid()
+ok = one_run(g)
+check("'1건': 맨 위로 올리고 첫 줄만 체크 (다른 줄은 그대로)",
+      ok and g.tops == 1 and g.clicks == [g.cells[1][wellife.CHECK_COL]]
+      and [n for n, c in g.cells.items() if c[wellife.CHECK_COL].v == "선택"] == [1], str(g.clicks))
+g = one_grid(checked=(3,))
+check("'1건': 이미 체크된 줄이 보이면 누르지 않는다 (그 줄도 넘어가지 않게)", one_run(g) is False and g.clicks == [])
+g = one_grid(stuck=(1,))
+check("'1건': 눌러도 체크가 안 되면 실패", one_run(g) is False)
+check("다시 확인(1건): 보이는 줄 중 꼭 하나만 체크", wellife.rows_checked(
+    types.SimpleNamespace(grid_rows=lambda g_: {1: {wellife.CHECK_COL: Cell("선택")}, 2: {wellife.CHECK_COL: Cell("선택안됨")}},
+                          legacy_value=lambda el: el.v), None, one=True)
+      and not wellife.rows_checked(
+    types.SimpleNamespace(grid_rows=lambda g_: {1: {wellife.CHECK_COL: Cell("선택")}, 2: {wellife.CHECK_COL: Cell("선택")}},
+                          legacy_value=lambda el: el.v), None, one=True))
+
+# 4-2 '1건': 검토 빈 줄 중 위에서 처음 만난 한 줄만 넘긴다
+g = FakeGrid((range(1, 25), range(24, 48), range(47, 60)), review=lambda n: "" if n % 5 == 0 else "택배X")
+wellife.click = lambda rr_, ctx, el, what: (g.clicks.append(el), g.toggle(el))
+wellife.no_popup = lambda *a: None
+g.clicks = []
+try:
+    out, bad = wellife.mark_rows(grid_rr(g), actx, g, 59, wellife.slip_target, limit=1)
+finally:
+    wellife.click, wellife.no_popup = _saved_cn
+check("4-2 '1건': 넘길 줄(검토 빈 칸) 중 첫 줄(5행)만 '선택', 나머지는 '선택안됨'",
+      [n for n, v in out.items() if v == "선택"] == [5] and not bad and len(out) == 59, f"{[n for n, v in out.items() if v == '선택']} {bad}")
+
+# 단계·물류대기·운송장: '1건' 이면 전체 체크 대신 첫 줄만, 체크 칸이 없는 단계는 그대로 누른다
+_saved_chk = wellife.check_one_row, wellife.check_all_rows, wellife.open_stage
+wellife.check_one_row = lambda *a: acts.append(("check_one",)) or True
+wellife.check_all_rows = lambda *a: acts.append(("check_all",)) or True
+TOP[0] = actx.hwnd
+for stage, want in ((("wl_sap_shipping", "dashBtn_ShippingInfo", "btn_ThirdSend", True, "4-3 선분할 배송정보 → S/O 생성요청"),
+                     [("check_one",), ("click", "btn_ThirdSend"), ("click", "예")]),
+                    (("wl_sap_so", "dashBtn_Create_SO", "btn_ThirdSend", False, "4-4 SO생성 → SAP 전송"),
+                     [("click", "btn_ThirdSend"), ("click", "예")])):
+    acts.clear(); POP.clear()
+    arrow_btn.on = True
+    wellife.open_stage = lambda rr_, ctx_, form, dash: (3, {"btn_ThirdSend": arrow_btn, "gridCtrl_List": "g"})
+    note, pressed = wellife.simple_stage(srr, actx, wellife.SAP_FORM, *stage, live=ONE)
+    check(f"'1건' {stage[4].split(' →')[0]}: {'첫 줄만 체크 -> 화살표' if stage[3] else '체크 칸 없음 -> 건수와 상관없이 화살표 (사용자 10-13)'}",
+          acts == want and pressed, f"{note} {acts}")
+wellife.check_one_row, wellife.check_all_rows, wellife.open_stage = _saved_chk
+_saved_chk = wellife.check_one_row
+wellife.check_one_row = lambda *a: acts.append(("check_one",)) or True
+acts.clear(); POP.clear()
+res = wellife.hold_save(hold_rr(), hctx, ONE)
+check("물류대기 '1건': 전체선택 대신 첫 줄만 -> 저장",
+      ("check_one",) in acts and ("select_all",) not in acts and ("click", "저장(S)") in acts and res[0] == "done"
+      and "첫 줄만" in res[1], f"{res} {acts}")
+wellife.check_one_row = _saved_chk
+
+_saved_inv1 = wellife.controls, wellife.count_rows, wellife.check_all_rows, wellife.check_one_row
+wellife.controls = lambda rr_, ctx_, form: {"btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
+wellife.count_rows = lambda rr_, ctx_, grid: INV["rows"]
+wellife.check_all_rows = lambda *a: acts.append(("check_all",)) or True
+wellife.check_one_row = lambda *a: acts.append(("check_one",)) or True
+res = inv_run(ONE, rows=64)
+check("⑥ '1건': 조회 -> 첫 줄만 체크 -> 다시 확인(한 줄) -> [전송요청(S)] 누름",
+      acts == [("click", "조회(F)"), ("check_one",), ("click", "btn_SendRequest"), ("click", "예")] and res[0] == "done"
+      and "64건 중 첫 줄 1건" in res[1], f"{res} {acts}")
+wellife.controls, wellife.count_rows, wellife.check_all_rows, wellife.check_one_row = _saved_inv1
+POP.clear()
 
 finish()

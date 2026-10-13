@@ -53,11 +53,12 @@ except ValueError:
 write_cfg({"LogIn": {}, "Wellife": {"Sales": "Y", "Hold": "maybe"}})
 sel, problems = st.read_wellife_modules()
 check(sel["Hold"] is None and problems and sel["Sap"] is False, f"Y/N 아닌 값은 None·문제, 빠진 키는 끔 ({sel}, {problems})")
-check(st.read_wellife_modes() == [["주문매핑", "리허설"], ["물류대기·SAP 연동·WMS 이관", "리허설"], ["운송장번호 전송", "리허설"]],
-      f"모드(웹 보기): 빠지면 리허설 ({st.read_wellife_modes()})")
-write_cfg({"LogIn": {}, "Wellife": {"Mode": " 실행 ", "InvoiceMode": "보냄"}})
-check(st.read_wellife_modes() == [["주문매핑", "리허설"], ["물류대기·SAP 연동·WMS 이관", "실행"], ["운송장번호 전송", "설정 오류 (보냄)"]],
-      f"모드(웹 보기): 실행·잘못된 값 ({st.read_wellife_modes()})")
+check(st.read_wellife_modes() == [["주문매핑", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "리허설"], ["WMS 이관", "리허설"],
+                                  ["운송장번호 전송", "리허설"]], f"모드(웹 보기): 빠지면 리허설 ({st.read_wellife_modes()})")
+write_cfg({"LogIn": {}, "Wellife": {"Mode": " 실행 ", "SapMode": "1건", "SalesMode": "1건", "InvoiceMode": "보냄"}})
+check(st.read_wellife_modes() == [["주문매핑", "설정 오류 (1건)"], ["물류대기", "실행"], ["SAP 연동", "1건"], ["WMS 이관", "리허설"],
+                                  ["운송장번호 전송", "설정 오류 (보냄)"]],
+      f"모드(웹 보기): 실행·1건·잘못된 값 (주문매핑은 1건을 못 쓴다) ({st.read_wellife_modes()})")
 write_cfg({"LogIn": {}})
 check(st.read_wellife_modes() is None, "Wellife 섹션이 없으면 모드 None (웹에 안 보인다)")
 
