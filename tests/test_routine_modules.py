@@ -55,6 +55,25 @@ sel, unknown = pl.load_routine_modules(KEYS)
 check("Y/N 대소문자·공백 무시", sel == {"Login": True, "Sales": False, "Hold": False, "Logistics": True, "Output": True}, f"{sel}")
 check("키가 없으면 켬 (Output)", sel["Output"] is True)
 
+# 운송장번호 전송 (모든 업체용, 2026-10-13): 되돌릴 수 없는 전송이라 칸이 없으면 끔 - 켠 PC 만
+import rpa_status as _st  # noqa: E402
+import run_routine as _rr  # noqa: E402
+ALL = [m[1] for m in _rr.ROUTINE_MODULES]
+with_settings({"Routine": {"Login": "Y"}})
+sel, _ = pl.load_routine_modules(ALL, _st.ROUTINE_OFF_BY_DEFAULT)
+check("운송장번호 전송은 칸이 없으면 끔, 나머지는 켬", "InvoiceSend" in ALL and sel["InvoiceSend"] is False
+      and all(v for k, v in sel.items() if k != "InvoiceSend"), f"{sel}")
+with_settings({"Routine": {"InvoiceSend": "Y"}})
+check("운송장번호 전송은 Y 일 때만 돈다", pl.load_routine_modules(ALL, _st.ROUTINE_OFF_BY_DEFAULT)[0]["InvoiceSend"] is True)
+called = []
+orig_inv = _rr.wellife.module_invoice_send
+_rr.wellife.module_invoice_send = lambda rr, ctx, live: called.append(live) or ("done", None)
+_rr.MODULE_FUNCS["invoicesend"](object())
+_rr.wellife.module_invoice_send = orig_inv
+check("보통 PROCESS 의 운송장번호 전송은 실행으로 부른다 (웰라이프 화면 코드 그대로, 모드 없음)", called == [True], f"{called}")
+check("운송장번호 전송은 웰라이프와 같은 키·비트 512", ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512)
+      in _rr.ROUTINE_MODULES and any(m[0] == "invoicesend" and m[4] == 512 for m in _rr.wellife.MODULES))
+
 with_settings({"Routine": {"Login": "Y", "Extra": "N"}})
 sel, unknown = pl.load_routine_modules(KEYS)
 check("모르는 키는 unknown 으로 돌려준다", unknown == ["Extra"], f"{unknown}")
@@ -212,8 +231,8 @@ def make_ctx():
     return ctx
 
 
-check("ROUTINE_MODULES 는 5개", [m[0] for m in rr.ROUTINE_MODULES] == ["login", "sales", "hold", "logistics", "output"])
-check("비트는 1/2/4/8/16 고정", [m[4] for m in rr.ROUTINE_MODULES] == [1, 2, 4, 8, 16], str([m[4] for m in rr.ROUTINE_MODULES]))
+check("ROUTINE_MODULES 는 6개 (운송장번호 전송은 2026-10-13 모든 업체로)", [m[0] for m in rr.ROUTINE_MODULES] == ["login", "sales", "hold", "logistics", "output", "invoicesend"])
+check("비트는 1/2/4/8/16 고정 + 운송장번호 전송 512 (웰라이프와 같은 비트)", [m[4] for m in rr.ROUTINE_MODULES] == [1, 2, 4, 8, 16, 512], str([m[4] for m in rr.ROUTINE_MODULES]))
 steps_keys = [k for k, _ in rr.ROUTINE_STEPS]
 check("logistics_screen 단계가 logistics 앞에", steps_keys.index("logistics_screen") + 1 == steps_keys.index("logistics"))
 check("모듈 단계 키를 모두 합치면 ROUTINE_STEPS 와 같다", sorted(k for m in rr.ROUTINE_MODULES for k in m[3]) == sorted(steps_keys))
@@ -379,9 +398,9 @@ check("로그인이 켜져 있으면 attach 안 부름", ac == [])
 
 out, called, rec, ac = run({**ALL_ON, "Sales": False, "Hold": False}, {})
 check("끈 모듈은 부르지 않는다", called == ["login", "logistics", "output"], str(called))
-check("끈 모듈은 module_off", [r[0] for r in rec.of("module_off")] == ["sales", "hold"])
+check("끈 모듈은 module_off (칸이 없는 운송장번호 전송도 끔)", [r[0] for r in rec.of("module_off")] == ["sales", "hold", "invoicesend"])
 skipped = rec.of("skip")
-check("끈 모듈의 단계는 '설정에서 끔' 으로 skip", len(skipped) == 9 and all(s[1] == "설정에서 끔" for s in skipped), str(skipped))
+check("끈 모듈의 단계는 '설정에서 끔' 으로 skip", len(skipped) == 11 and all(s[1] == "설정에서 끔" for s in skipped), str(skipped))
 logged = []
 rr.log = lambda msg="": logged.append(msg)
 os.environ["RPA_RUN_MODULES"] = "Logistics,Output"
@@ -392,8 +411,8 @@ finally:
     rr.log = lambda msg="": None
 skipped = rec.of("skip")
 check("예약이 고른 실행이면 안 고른 모듈은 '이번 실행에서 안 고름' (설정과 상관없다)",
-      len(skipped) == 9 and all(s[1] == "이번 실행에서 안 고름" for s in skipped)
-      and [r[1] for r in rec.of("module_off")] == ["이번 실행에서 안 고름"] * 2, str(skipped))
+      len(skipped) == 11 and all(s[1] == "이번 실행에서 안 고름" for s in skipped)
+      and [r[1] for r in rec.of("module_off")] == ["이번 실행에서 안 고름"] * 3, str(skipped))
 check("로그도 '이번 실행에서 고르지 않아 건너뜁니다'",
       any("[주문매핑 매출처리] 이번 실행에서 고르지 않아 건너뜁니다" in m for m in logged) and not any("설정에서 꺼져" in m for m in logged), str(logged[:3]))
 
@@ -418,7 +437,7 @@ check("skipped 도 계속 간다", len(called) == 5 and out[0] == "success")
 
 out, called, rec, ac = run({k: False for k in ALL_ON}, {})
 check("전부 끄면 아무것도 안 돌고 stopped", called == [] and out[0] == "stopped" and "켜진 모듈" in out[1], str(out))
-check("전부 끄면 다섯 모듈이 off 로 표시된다", len(rec.of("module_off")) == 5 and len(rec.of("skip")) == 15, str(len(rec.of("skip"))))
+check("전부 끄면 여섯 모듈이 off 로 표시된다", len(rec.of("module_off")) == 6 and len(rec.of("skip")) == 17, str(len(rec.of("skip"))))
 
 out, called, rec, ac = run(ALL_ON, {"hold": ("failed", None)})
 check("사유 없는 failed 는 last_problem 으로 채우려 한다", ("last_problem",) in rec.calls, str(rec.calls[-3:]))
@@ -621,12 +640,12 @@ print("=== 10. main 의 설정 오류 처리 ===")
 rec = StatusRec()
 rr.status = rec
 sys.argv = [sys.argv[0]]
-rr.pl.load_routine_modules = lambda keys: (_ for _ in ()).throw(RuntimeError("Hold='yes'"))
+rr.pl.load_routine_modules = lambda keys, *a: (_ for _ in ()).throw(RuntimeError("Hold='yes'"))
 rr.run_modules = lambda selected: check("설정 오류면 run_modules 를 부르지 않는다", False) or ("success", None)
 rr.main()
 fin = rec.of("finish")
 check("설정 오류면 finish(stopped, '설정 파일 오류: …')", bool(fin) and fin[-1][0] == "stopped" and "설정 파일 오류" in fin[-1][1] and "Hold" in fin[-1][1], str(fin))
-rr.pl.load_routine_modules = lambda keys: (_ for _ in ()).throw(FileNotFoundError("ERPIA_AI.txt"))
+rr.pl.load_routine_modules = lambda keys, *a: (_ for _ in ()).throw(FileNotFoundError("ERPIA_AI.txt"))
 rec = StatusRec()
 rr.status = rec
 rr.main()
@@ -635,12 +654,12 @@ check("파일 없음도 stopped + 사유", bool(rec.of("finish")) and rec.of("fi
 # 정상 설정이면 set_modules(5개, 비트 명시) 뒤 run_modules 로 간다
 rec = StatusRec()
 rr.status = rec
-rr.pl.load_routine_modules = lambda keys: ({k: True for k in keys}, ["Extra"])
+rr.pl.load_routine_modules = lambda keys, *a: ({k: True for k in keys}, ["Extra"])
 ran = []
 rr.run_modules = lambda selected: ran.append(selected) or ("success", None)
 rr.main()
 sm = rec.of("set_modules")
-check("정상이면 set_modules 에 (키, 이름, 단계, 비트) 5개", bool(sm) and [m[3] for m in sm[0][0]] == [1, 2, 4, 8, 16], str(sm))
+check("정상이면 set_modules 에 (키, 이름, 단계, 비트) 6개", bool(sm) and [m[3] for m in sm[0][0]] == [1, 2, 4, 8, 16, 512], str(sm))
 check("정상이면 run_modules 로 간다 + finish(success)", ran and rec.of("finish")[-1] == ("success", None), str(rec.of("finish")))
 
 print()
@@ -657,12 +676,13 @@ os.environ["RPA_RUN_MODULES"] = "Sales,Nope"
 sel, unknown = rr.run_modules_from_env(KEYS)
 check("모르는 키는 돌려주고 무시", unknown == ["Nope"] and sel["Sales"] and sel["Login"], f"{sel} {unknown}")
 rec = StatusRec(); rr.status = rec
-rr.pl.load_routine_modules = lambda keys: check("변수가 있으면 설정 파일을 안 읽는다", False) or ({k: True for k in keys}, [])
+rr.pl.load_routine_modules = lambda keys, *a: check("변수가 있으면 설정 파일을 안 읽는다", False) or ({k: True for k in keys}, [])
 ran = []
 rr.run_modules = lambda selected: ran.append(selected) or ("success", None)
 os.environ["RPA_RUN_MODULES"] = "Hold"
 rr.main()
-check("main 이 넘긴 모듈로 돈다", ran and ran[-1] == {"Login": True, "Sales": False, "Hold": True, "Logistics": False, "Output": False}, f"{ran}")
+check("main 이 넘긴 모듈로 돈다", ran and ran[-1] == {"Login": True, "Sales": False, "Hold": True, "Logistics": False, "Output": False,
+                                                  "InvoiceSend": False}, f"{ran}")
 os.environ["RPA_RUN_MODULES"] = "Login"
 rec = StatusRec(); rr.status = rec; ran.clear()
 rr.main()
@@ -682,7 +702,7 @@ class DoneRec(StatusRec):
         return self._done
 
 
-rr.pl.load_routine_modules = lambda keys: ({k: True for k in keys}, [])
+rr.pl.load_routine_modules = lambda keys, *a: ({k: True for k in keys}, [])
 rr.run_modules = lambda selected: ("success", None)
 os.environ["RPA_RUN_TRIGGER"] = "repeat"
 for done, keep, what in ((["login"], False, "로그인만 완료 (대상 없음) → 기록 안 남김"), (["login", "logistics"], True, "처리한 모듈이 있으면 남김")):

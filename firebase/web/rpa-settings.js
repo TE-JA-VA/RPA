@@ -134,7 +134,10 @@ async function send(type, args, label) {
 const isWellife = () => wellifeOn(c?.me?.cid, c?.policy);
 const modList = () => (isWellife() ? WELLIFE_MODULES : MODULES);
 const offByCompany = (k) => c?.policy?.rpa?.modules?.[k] === false;
-const shownModules = () => modList().filter(([k]) => !offByCompany(k));
+// PC 가 보고한 모듈만 (옛 버전 PC 는 새 모듈 - 운송장번호 전송 - 을 모른다: 보이면 켜진 것처럼 보이고 [적용] 을 PC 가 거절한다)
+const reported = (k) => !live?.modules || k in live.modules;
+const ownModules = () => modList().filter(([k]) => reported(k));
+const shownModules = () => ownModules().filter(([k]) => !offByCompany(k));
 
 /** 딸린 모듈과 업체 정책을 규칙대로 끈다. 켜는 것은 사람이 직접 한다 (물류관리를 켜도 출력은 꺼진 채로 둘 수 있다) */
 function applyNeeds(mods) {
@@ -144,11 +147,11 @@ function applyNeeds(mods) {
 }
 const savedModules = () => live?.modules || {};
 function resetModules() {
-  form.modules = applyNeeds(Object.fromEntries(modList().map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false])));
+  form.modules = applyNeeds(Object.fromEntries(ownModules().map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false])));
   paintModules();
 }
 function modulesDirty() {
-  return modList().some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
+  return ownModules().some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
 }
 function paintModules() {
   $("mod-list").replaceChildren(...shownModules().map(([k, text], i) => {
@@ -182,7 +185,7 @@ function paintModuleMeta() {
   $("mod-apply").disabled = !c.isAdmin || busy || !modulesDirty() || on === 0;
 }
 async function applyModules() {
-  const wanted = applyNeeds(Object.fromEntries(modList().map(([k]) => [k, !!form.modules[k]])));
+  const wanted = applyNeeds(Object.fromEntries(ownModules().map(([k]) => [k, !!form.modules[k]])));
   if (!Object.values(wanted).some(Boolean)) { notify("warn", "최소 하나 이상의 모듈을 선택해야 합니다"); return; }
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
@@ -268,7 +271,8 @@ function savedSlots() {
   }));
 }
 /** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관·운송장 전송 (사용자 10-08: ②~⑥ 따로, ⑤⑥ 은 반복도) */
-const runChipList = () => (isWellife() ? WELLIFE_RUN_CHIPS : RUN_CHIPS);
+// PC 가 보고한 모듈만 (옛 PC 는 운송장 전송을 몰라 그 줄을 거절한다 - 실행 모듈 카드와 같은 규칙)
+const runChipList = () => (isWellife() ? WELLIFE_RUN_CHIPS : RUN_CHIPS).filter(([k]) => k === "Prepare" || reported(k));
 /** 줄의 모듈은 이 업체 단추에 있는 것만 (업체 종류가 바뀌기 전에 저장한 줄 - 에이전트가 맞지 않는 모듈을 거절한다). 폼 줄과 보내는 값이 같은 곳을 지난다 */
 const fitSlot = (s) => (s.run ? { ...s, run: s.run.filter((k) => runChipList().some(([x]) => x === k)) } : s);
 function resetSchedule() {

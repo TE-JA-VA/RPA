@@ -557,6 +557,15 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/modules", {"Sales": True})
     page.wait_for_function("document.getElementById('mod-apply')?.disabled === true", timeout=10000)
     check("5/5 켬" in page.text_content("#mod-meta"), "PC 값이 돌아오면 기준값 갱신")
+    inv_sel = "#mod-list input[aria-label='운송장번호 전송']"
+    check(page.locator(inv_sel).count() == 0 and "InvoiceSend" not in mods[0]["args"],
+          "옛 PC (운송장번호 전송을 보고하지 않음) 에는 그 스위치가 없고 [적용] 에도 안 실린다 - PC 가 모르는 키라 거절한다")
+    db_patch(f"{LIVE}/modules", {"InvoiceSend": False})
+    page.wait_for_function(f"document.querySelector(\"{inv_sel}\") !== null", timeout=10000)
+    check(not page.locator(inv_sel).is_checked() and "5/6 켬" in page.text_content("#mod-meta"),
+          f"새 PC 는 운송장번호 전송 스위치가 보이고 꺼진 채 (모든 업체용, 칸이 없으면 끔 - 2026-10-13) ({page.text_content('#mod-meta')})")
+    db_patch(f"{LIVE}/modules", {"InvoiceSend": None})      # 뒤 시험이 보던 그대로
+    page.wait_for_function(f"document.querySelector(\"{inv_sel}\") === null", timeout=10000)
     # 업체가 안 쓰는 모듈 (총괄이 meta 에 false 로 적는다) 은 목록에서 숨는다
     db_patch("meta/companies/c_demo/apps/rpa/modules", {"Hold": False})
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
@@ -577,6 +586,7 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"version": 2, "slots": [{"at": "09:05"}], "times": None})
     reload_to(page, "settings"); page.wait_for_selector("#sch-times select.mode")
     db_patch("meta/companies/c_demo/apps/rpa", {"features": {"wellife": True}})
+    db_patch(f"{LIVE}/modules", {"Sap": False, "Wms": False, "InvoiceSend": False})   # 웰라이프 PC 는 Wellife 섹션 키를 보고한다
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     names = [x.strip() for x in page.locator("#mod-list label").all_text_contents()]
     check(len(names) == 6 and any("웰라이프 SAP 연동관리" in n for n in names) and any("웰라이프 WMS 이관관리" in n for n in names)
@@ -624,6 +634,7 @@ with sync_playwright() as pw:
         if old: db_put(path, old)
         else: db_patch(path, {k: None for k in (db_get(path) or {})})
     db_patch("meta/companies/c_demo/apps/rpa", {"features": None})
+    db_patch(f"{LIVE}/modules", {"Sap": None, "Wms": None, "InvoiceSend": None})      # 보통 업체 PC (옛 버전 - 운송장번호 전송을 보고 안 함)
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     check(page.locator("#mod-list label").count() == 5 and page.locator("#mod-list input[aria-label='물류관리']").count() == 1,
           "보통 업체로 돌아오면 지금 그대로")

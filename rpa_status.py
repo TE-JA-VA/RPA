@@ -722,7 +722,11 @@ ROUTINE_CONFIG_MODULES = (
     ("Hold", "물류대기 관리"),
     ("Logistics", "물류관리"),
     ("Output", "운송장 출력 / 엑셀 생성"),
+    ("InvoiceSend", "운송장번호 전송"),
 )
+# 칸이 없으면 끔인 모듈 (나머지는 칸이 없으면 켬 - 예전 파일 그대로 돌게). 운송장번호 전송은 택배사로 나가 되돌릴 수 없어
+# 업데이트를 받자마자 모든 업체가 보내지 않게 한다 - 업체 웹 환경설정에서 켠 PC 만 (사용자 2026-10-13)
+ROUTINE_OFF_BY_DEFAULT = ("InvoiceSend",)
 WELLIFE_SECTION = "Wellife"    # 웰라이프 업체 PC 만 (설계 2026-10-07-wellife-gate). 키 이름은 wellife.MODULES 와 같다 - 바꾸면 둘 다
 WELLIFE_CONFIG_MODULES = (
     ("Login", "로그인"),
@@ -735,7 +739,7 @@ WELLIFE_CONFIG_MODULES = (
 WELLIFE_DEFAULT = {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
                    "InvoiceSend": False}   # 처음 열릴 때 (사용자 2026-10-07)
 # 모든 업체용 모듈 (패키지 공용 화면 - 운송장번호 전송, 2026-10-13). 이력·토큰 키에 wellife_ 를 붙이지 않아
-# 나중에 모든 업체로 열어도 같은 키다 (agent.history_key). 지금은 웰라이프만 연다 (rpa_dashboard.WELLIFE_ONLY_KEYS)
+# 보통 PROCESS(Routine 섹션)와 웰라이프(Wellife 섹션)가 같은 키로 센다 (agent.history_key). 2026-10-13 모든 업체로 열었다
 SHARED_MODULES = ("InvoiceSend",)
 # Wellife 섹션의 모드 키와 웹에 보이는 이름 - wellife.MODE_NAMES 와 같은 키·순서 (시험이 대조한다).
 # 웹은 보기만 한다 (시험 기간용, 사용자 2026-10-13 - 바꾸기는 PC 설정 파일에서)
@@ -773,7 +777,7 @@ def _merge_routine_section(existing, final):
 def read_routine_modules(path=None):
     """Routine 섹션을 {설정 키: True/False/None} 으로 읽는다. (선택, 문제 목록)
 
-    키가 없으면 True(켬). 값이 Y/N 이 아니면 None 으로 두고 문제 목록에 적는다
+    키가 없으면 True(켬) - ROUTINE_OFF_BY_DEFAULT 는 False(끔). 값이 Y/N 이 아니면 None 으로 두고 문제 목록에 적는다
     (루틴은 그런 값이면 돌지 않는다 - 화면에서 '잘못됨' 으로 보여 주기 위해).
     파일이 없거나 못 읽으면 전부 None 과 문제 한 줄. path 를 안 주면 사용자 설정 (없으면 옛 파일).
     """
@@ -795,7 +799,7 @@ def read_routine_modules(path=None):
     for k in keys:
         raw = section.get(k)
         if raw is None:
-            selected[k] = True
+            selected[k] = k not in ROUTINE_OFF_BY_DEFAULT
             continue
         v = str(raw).strip().upper()
         if v in ("Y", "N"):
@@ -817,7 +821,7 @@ def write_routine_modules(selected, path=None):
     unknown = sorted(set(selected) - set(keys))
     if unknown:
         raise ValueError(f"모르는 모듈 키: {', '.join(unknown)}")
-    final = {k: bool(selected.get(k, True)) for k in keys}
+    final = {k: bool(selected.get(k, k not in ROUTINE_OFF_BY_DEFAULT)) for k in keys}
     data = read_user_config(path)
     if not data:
         raise FileNotFoundError(path or user_config_path())

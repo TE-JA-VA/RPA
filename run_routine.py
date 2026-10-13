@@ -192,6 +192,7 @@ ROUTINE_STEPS = (
     ("shipping_setup", "배송정보 설정"),
     ("logistics_save", "물류 관리 저장"),
     ("output", "운송장 출력 / 엑셀 생성"),
+    *[s for s in wellife.STEPS if s[0] in ("inv_send_screen", "inv_send")],   # 운송장번호 전송 (모든 업체용, 웰라이프와 같은 단계)
 )
 
 # 화면 단위 모듈. 사용자 설정(RPA_UserConfig.json 의 "Routine" 섹션)으로 골라 돌린다.
@@ -207,7 +208,11 @@ ROUTINE_MODULES = (
     ("hold",      "Hold",      "물류대기 관리",         ("hold_screen", "stock_review", "abnormal_hold", "hold_save"), 4),
     ("logistics", "Logistics", "물류관리",             ("logistics_screen", "logistics", "shipping_setup", "logistics_save"), 8),
     ("output",    "Output",    "운송장 출력 / 엑셀 생성", ("output",), 16),
+    # 모든 업체용 (패키지 공용 화면, 2026-10-13). 웰라이프 실행과 같은 키·비트 (wellife.MODULES) - 이력 module_flags 가 같은 뜻.
+    # 보통 PROCESS 는 모드가 없어 늘 실제로 [전송요청(S)] 을 누른다. 칸이 없으면 끔 (status.ROUTINE_OFF_BY_DEFAULT)
+    ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512),
 )
+ROUTINE_OFF_BY_DEFAULT = status.ROUTINE_OFF_BY_DEFAULT   # 칸이 없으면 끔 (운송장번호 전송) - 불러올 때 받아 둔다 (시험이 status 를 바꿔 끼운다)
 RUN_MODULES_ENV = "RPA_RUN_MODULES"   # 예약 줄이 고른 이번 실행 모듈 (rpa_dashboard.launch_slot) - 있으면 설정 파일 대신
 
 
@@ -5364,7 +5369,7 @@ def run_self_check():
         log(f"물류 설정   : 읽기 실패 - {e}")
 
     try:
-        selected, unknown = pl.load_routine_modules([m[1] for m in ROUTINE_MODULES])
+        selected, unknown = pl.load_routine_modules([m[1] for m in ROUTINE_MODULES], ROUTINE_OFF_BY_DEFAULT)
         log("실행 모듈   : " + " / ".join(
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
         for k in unknown:
@@ -5805,6 +5810,7 @@ MODULE_FUNCS = {
     "hold": module_hold,
     "logistics": module_logistics,
     "output": module_output,
+    "invoicesend": lambda ctx: wellife.module_invoice_send(sys.modules[__name__], ctx, True),   # 화면 코드는 wellife.py (안전장치 함께)
 }
 
 
@@ -5820,7 +5826,8 @@ def run_modules(selected, modules=None, funcs=None, section=None):
     modules = ROUTINE_MODULES if modules is None else modules
     funcs = MODULE_FUNCS if funcs is None else funcs
     section = section or pl.ROUTINE_SECTION
-    if not any(selected.get(cfg, True) for _, cfg, _, _, _ in modules):
+    on = lambda cfg: selected.get(cfg, cfg not in ROUTINE_OFF_BY_DEFAULT)   # noqa: E731 - 칸이 없으면 켬, 운송장번호 전송만 끔
+    if not any(on(cfg) for _, cfg, _, _, _ in modules):
         for key, _cfg, _label, steps, _bit in modules:
             status.module_off(key, status.OFF_NOTE)
             for s in steps:
@@ -5830,7 +5837,7 @@ def run_modules(selected, modules=None, funcs=None, section=None):
     ctx = RoutineContext()
     picked = os.environ.get(RUN_MODULES_ENV) is not None    # 예약 줄이 모듈을 골라 띄웠다 - 안 고른 모듈은 설정과 상관없다
     for key, cfg_key, label, steps, _bit in modules:
-        if not selected.get(cfg_key, True):
+        if not on(cfg_key):
             note = status.PICK_NOTE if picked else status.OFF_NOTE
             log(f"\n=== [{label}] 이번 실행에서 고르지 않아 건너뜁니다 ===" if picked
                 else f"\n=== [{label}] 설정에서 꺼져 있어 건너뜁니다 ({cfg_key}=N) ===")
@@ -5903,7 +5910,7 @@ def main():
     from_env = selected is not None
     if not from_env:
         try:
-            selected, unknown = pl.load_routine_modules(keys)
+            selected, unknown = pl.load_routine_modules(keys, ROUTINE_OFF_BY_DEFAULT)
         except Exception as e:
             log(f"설정 오류: {e}")
             status.finish("stopped", f"설정 파일 오류: {e}")

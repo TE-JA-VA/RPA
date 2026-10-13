@@ -1005,7 +1005,7 @@ check("Wellife 설정 키가 rpa_status.WELLIFE_CONFIG_MODULES 와 같다",
 check("모든 업체용 모듈 키 = 설정 키 소문자 (wellife_ 없음 - agent.history_key·토큰 배율이 같은 키)",
       [(m[0], m[1]) for m in wellife.MODULES if m[1] in st.SHARED_MODULES] == [("invoicesend", "InvoiceSend")])
 check("모듈 비트가 겹치지 않는다", len({m[4] for m in wellife.MODULES} | {m[4] for m in rr.ROUTINE_MODULES})
-      == len(wellife.MODULES) + len(rr.ROUTINE_MODULES) - 1)   # login(1) 만 같다
+      == len(wellife.MODULES) + len(rr.ROUTINE_MODULES) - 2)   # login(1)·운송장번호 전송(512, 모든 업체용 - 2026-10-13) 만 같다
 settings({"Wellife": {"Login": "Y", "Mode": "실행", "InvoiceMode": "리허설"}})
 check("InvoiceMode 는 Mode 와 따로 읽고 모르는 키가 아니다",
       wellife.load_mode(rr) is True and wellife.load_mode(rr, wellife.INVOICE_MODE_KEY) is False

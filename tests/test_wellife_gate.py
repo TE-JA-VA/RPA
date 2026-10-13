@@ -118,7 +118,7 @@ check(dash.slot_target({"at": "10:00", "until": "18:00", "rest_min": 5, "run": [
 check(dash.slot_text({"at": "10:00", "run": ["Login", "InvoiceSend"]}).endswith("운송장 전송"),
       f"줄 이름에 운송장 전송 ({dash.slot_text({'at': '10:00', 'run': ['Login', 'InvoiceSend']})})")
 _sch["policy"] = {"limit": None, "off": [], "wellife": False}
-check(dash.slot_off(_sch) == ["Sap", "Wms", "InvoiceSend"], "보통 업체는 SAP 연동·WMS 이관·운송장 전송(지금은 웰라이프만)을 뺀다")
+check(dash.slot_off(_sch) == ["Sap", "Wms"], "보통 업체는 SAP 연동·WMS 이관을 뺀다 (운송장 전송은 2026-10-13 모든 업체로)")
 check(dash.slot_target(_rows[1], dash.slot_off(_sch)) == (None, {}), "보통 업체에 ⑤ 만 있는 줄은 띄우지 않는다")
 
 print("\n실패:", fails if fails else "없음")

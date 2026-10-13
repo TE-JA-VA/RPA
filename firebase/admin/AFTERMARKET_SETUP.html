@@ -157,10 +157,10 @@ const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 �
 const RATE_GROUPS = [
   { title: "옵저버", rows: [["sites", "사이트 수집"]] },
   { title: "PROCESS 오토파일럿", plain: true, rows: [["login", "로그인"], ["sales", "주문매핑 매출처리"], ["hold", "물류대기 관리"],
-    ["logistics", "물류관리"], ["output", "운송장 출력 / 엑셀 생성"]] },
+    ["logistics", "물류관리"], ["output", "운송장 출력 / 엑셀 생성"], ["invoicesend", "운송장번호 전송"]] },
   { title: "PROCESS 오토파일럿 · 웰라이프 업체", wellife: true, rows: [["login", "로그인"], ["wellife_sales", "주문매핑 매출처리"],
     ["wellife_hold", "물류대기 관리"], ["wellife_sap", "웰라이프 SAP 연동관리"], ["wellife_wms", "웰라이프 WMS 이관관리"],
-    ["invoicesend", "운송장번호 전송"]] },   // 운송장번호 전송은 모든 업체용 키 (wellife_ 없음) - 지금은 웰라이프만 쓴다
+    ["invoicesend", "운송장번호 전송"]] },   // 운송장번호 전송은 모든 업체용 키 (wellife_ 없음) - 두 묶음에 같은 키 (로그인처럼)
   { title: "그 밖", rows: [["default", "그 밖의 모듈 (기본)"]] },
 ];
 let info = { dashboard: "" };

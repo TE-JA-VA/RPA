@@ -535,9 +535,9 @@ def launch_run_all(by):
 #   run 이 없는 줄은 '전체' (사이트 수집 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
 # ---------------------------------------------------------------------------
 ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Sales, Hold, Logistics, Output
-# 웰라이프 업체만 (Wellife 섹션 키 - Login·Sales·Hold 는 루틴과 같은 키). InvoiceSend 는 모든 업체용 화면이지만
-# 지금은 웰라이프만 연다 (st.SHARED_MODULES - 모든 업체로 열 때 여기서 빼고 ROUTINE 쪽에 넣는다)
-WELLIFE_ONLY_KEYS = ("Sap", "Wms", "InvoiceSend")
+# 웰라이프 업체만 (Wellife 섹션 키 - Login·Sales·Hold 는 PROCESS 와 같은 키). InvoiceSend 는 2026-10-13 모든 업체로 열어
+# ROUTINE_KEYS 에 있다 (웰라이프는 Wellife 섹션의 같은 키)
+WELLIFE_ONLY_KEYS = ("Sap", "Wms")
 RUN_KEYS = ("Prepare",) + ROUTINE_KEYS + WELLIFE_ONLY_KEYS         # 줄의 run 에 쓰는 키. 이 순서로 저장한다
 SLOT_NAMES = {"Prepare": "사이트 수집", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장",
               "Sap": "SAP 연동", "Wms": "WMS 이관", "InvoiceSend": "운송장 전송"}   # 화면 단추와 같은 말
@@ -1149,7 +1149,7 @@ def _wanted_routine_modules(payload, before):
     wanted = {}
     for k in keys:
         cur = before.get(k)
-        wanted[k] = bool(payload.get(k, True if cur is None else cur))
+        wanted[k] = bool(payload.get(k, (k not in st.ROUTINE_OFF_BY_DEFAULT) if cur is None else cur))
     return wanted
 
 

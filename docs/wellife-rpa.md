@@ -424,10 +424,10 @@ SAP 에서 넘어온 건은 WMS 이관관리에 한꺼번에 들어오지 않고
 
 사유 예: `[리허설] 운송장 3건 - 전송요청은 누르지 않음`, `[실행] 운송장 0건 - 전송할 것 없음`.
 
-### 9.3 '모든 업체용' 분류와 지금 여는 곳
+### 9.3 '모든 업체용' 분류와 여는 곳
 
 - 화면 코드(`module_invoice_send`·`invoice_send`·`count_rows`)는 웰라이프 고유 값을 쓰지 않는다. `wellife.py` 의 안전장치(잠김·앞 창·덮인 자리·팝업)를 함께 쓰려고 거기 둔다.
 - 모듈 키는 `invoicesend` (설정 키 `InvoiceSend` 의 소문자, `wellife_` 없음). `rpa_status.SHARED_MODULES` 에 있는 키는 `agent.history_key` 가 업체와 상관없이 같은 이력·토큰 키로 센다 - 나중에 모든 업체로 열어도 토큰 배율 키가 같다.
-- 지금 여는 곳은 웰라이프만이다: `Wellife` 섹션 키(처음 값 끔), `wellife.MODULES`, `rpa_dashboard.WELLIFE_ONLY_KEYS`(다른 업체 줄에서 뺌·에이전트가 거절), 웹 `WELLIFE_MODULES`·`WELLIFE_RUN_CHIPS`, 관리 화면 토큰 배율의 웰라이프 묶음. 보통 루틴(`Routine` 섹션·`ROUTINE_MODULES`)에는 없다.
-- 모든 업체로 열 때 할 일: `run_routine.ROUTINE_MODULES`·`MODULE_FUNCS` 에 같은 키로 넣고(모드가 없는 보통 루틴은 실행 고정 - 부를 때 `live=True`), `rpa_status.ROUTINE_CONFIG_MODULES`, `WELLIFE_ONLY_KEYS` 에서 빼기, 웹 `MODULES`·`RUN_CHIPS`, 관리 화면 '루틴 RPA' 묶음에 같은 키 (로그인처럼 두 묶음에 같이).
+- **2026-10-13 모든 업체로 열었다** (사용자): 보통 PROCESS 의 `run_routine.ROUTINE_MODULES` 맨 뒤에 같은 키·비트(`invoicesend`, 512)로, `MODULE_FUNCS["invoicesend"]` 는 `wellife.module_invoice_send(rr, ctx, True)` - 보통 PROCESS 는 모드가 없어 늘 실제로 [전송요청(S)] 을 누른다. `rpa_status.ROUTINE_CONFIG_MODULES` 에 `InvoiceSend`, `rpa_dashboard.WELLIFE_ONLY_KEYS` 에서 뺌, 웹 `MODULES`·`RUN_CHIPS`, 관리 화면 토큰 배율의 PROCESS 묶음에도 같은 키 (로그인처럼 두 묶음에 같이). 웰라이프 업체는 그대로 `Wellife` 섹션·`InvoiceMode`.
+- **칸이 없으면 끔** (`rpa_status.ROUTINE_OFF_BY_DEFAULT`, `perform_login.load_routine_modules(off_by_default=)`): Routine 섹션의 다른 모듈은 칸이 없으면 켬이지만, 운송장번호 전송은 택배사로 나가 되돌릴 수 없어 업데이트를 받자마자 모든 업체가 보내지 않게 했다. 업체 웹 환경설정 '실행 모듈' 에서 켠 PC 만 돈다.
 - 모드 보기 (시험 기간용): 에이전트가 `Wellife` 섹션의 `SalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode` 를 `live.modes` 로 올리고(`rpa_status.read_wellife_modes`), 웹 '실행 모듈' 카드가 보여 준다. 실행이 하나라도 있으면 경고 색. 바꾸는 길은 없다 (PC 설정 파일). 옛 에이전트는 값을 안 올려 줄이 숨는다. 걷어낼 때는 `read_wellife_modes`·`WELLIFE_MODES`, 에이전트의 `snap["modes"]`, 웹의 `mod-modes` 를 지운다.

@@ -67,7 +67,8 @@ print()
 print("=== 2. read_routine_modules ===")
 p = write_file("a.txt", BASE)
 sel, prob = st.read_routine_modules(p)
-check("섹션 없음 -> 전부 켬, 문제 없음", sel == {k: True for k in KEYS} and prob == [], str((sel, prob)))
+check("섹션 없음 -> 전부 켬 (운송장번호 전송만 끔 - 되돌릴 수 없는 전송, 2026-10-13), 문제 없음",
+      sel == {k: k != "InvoiceSend" for k in KEYS} and "InvoiceSend" in KEYS and prob == [], str((sel, prob)))
 
 p = write_file("b.txt", BASE + [{"Routine": [{"Login": "Y"}, {"Sales": "n"}, {"Hold": "x"}]}])
 sel, prob = st.read_routine_modules(p)
@@ -86,11 +87,13 @@ print()
 print("=== 3. write_routine_modules ===")
 p = write_file("d.txt", BASE)
 out = st.write_routine_modules({"Sales": False, "Hold": True}, p)
-check("돌려주는 값은 5개 전부 (빠진 키는 켬)", out == {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True}, str(out))
+check("돌려주는 값은 6개 전부 (빠진 키는 켬, 운송장번호 전송은 끔)", out == {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True,
+                                                       "InvoiceSend": False}, str(out))
 text = open(p, encoding="utf-8").read()
 data = json.loads(text)
 check("옛 형식은 섹션 dict 로 풀려 쓰이고, 없던 Routine 은 끝에 붙는다", list(data) == ["LogIn", "Logistic", "Routine"], str(list(data)))
-check("Routine 은 {키: Y/N}", data["Routine"] == {"Login": "Y", "Sales": "N", "Hold": "Y", "Logistics": "Y", "Output": "Y"}, str(data["Routine"]))
+check("Routine 은 {키: Y/N}", data["Routine"] == {"Login": "Y", "Sales": "N", "Hold": "Y", "Logistics": "Y", "Output": "Y", "InvoiceSend": "N"},
+      str(data["Routine"]))
 check("비밀번호는 잠겨서 들어간다 (파일에 평문이 없다)", PW not in text and data["LogIn"]["PW"].startswith(st.SEALED_PREFIX))
 check("잠긴 비밀번호를 풀면 원래 값", st.unseal(data["LogIn"]["PW"]) == PW)
 check("나머지는 그대로", data["LogIn"]["AdminCode"] == "erpiatest2" and data["LogIn"]["ID"] == "admin"
@@ -114,7 +117,7 @@ st.write_routine_modules({"Login": False}, p)
 data = json.loads(open(p, encoding="utf-8").read())
 check("Routine 뒤의 다른 섹션도 순서 그대로", list(data) == ["LogIn", "Logistic", "Routine", "Etc"], str(list(data)))
 check("아는 키는 제자리에서 바뀌고 모르는 키(Extra)는 보존된다 (루틴이 경고를 내 주도록)",
-      list(data["Routine"].items())[:2] == [("Login", "N"), ("Extra", "Y")] and list(data["Routine"]) == ["Login", "Extra", "Sales", "Hold", "Logistics", "Output"], str(data["Routine"]))
+      list(data["Routine"].items())[:2] == [("Login", "N"), ("Extra", "Y")] and list(data["Routine"]) == ["Login", "Extra", "Sales", "Hold", "Logistics", "Output", "InvoiceSend"], str(data["Routine"]))
 
 p = write_file("e2.txt", BASE + [{"Routine": [{"Login": "N"}]}, {"Routine": [{"Login": "Y"}, {"Hold": "N"}]}])
 sel, _ = st.read_routine_modules(p)
@@ -136,7 +139,7 @@ pl.CONFIG_FILE = None
 p = write_file("g.txt", {"LogIn": {"PW": PW}})
 st.write_routine_modules({"Hold": False}, p)
 data = json.loads(open(p, encoding="utf-8").read())
-check("최상위 dict 형식은 키로 넣는다", data["Routine"] == {"Login": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y"}
+check("최상위 dict 형식은 키로 넣는다", data["Routine"] == {"Login": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y", "InvoiceSend": "N"}
       and st.unseal(data["LogIn"]["PW"]) == PW)
 
 try:
@@ -171,7 +174,8 @@ check("read_account 도 같은 파일을 본다 (비밀번호는 안 나옴)", s
 sess = {"user_id": "admin", "role": "admin", "admin_code": "e"}
 v = d.settings_view(sess)
 rm = v["routine_modules"]
-check("settings_view 에 routine_modules 5개, 전부 켬", [it["key"] for it in rm["items"]] == KEYS and all(it["enabled"] is True for it in rm["items"]), str(rm))
+check("settings_view 에 routine_modules 6개, 운송장번호 전송만 끔", [it["key"] for it in rm["items"]] == KEYS
+      and all(it["enabled"] is (it["key"] != "InvoiceSend") for it in rm["items"]), str(rm))
 check("응답 어디에도 비밀번호가 없다", PW not in json.dumps(v, ensure_ascii=False))
 
 changed = d.apply_routine_modules({"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True})

@@ -109,12 +109,12 @@ def load_logistic_options():
 ROUTINE_SECTION = "Routine"
 
 
-def load_routine_modules(module_keys):
+def load_routine_modules(module_keys, off_by_default=()):
     """어떤 모듈을 돌릴지. ({설정 키: True/False}, 모르는 키 목록) 을 돌려준다.
 
     사용자 설정의 "Routine" 섹션에 모듈 키마다 "Y"(켬) / "N"(끔) 을 적는다.
       예: {"Routine": {"Login": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y"}}
-    섹션이나 키가 없으면 켠 것으로 본다 (예전 파일 그대로 돌아가게).
+    섹션이나 키가 없으면 켠 것으로 본다 (예전 파일 그대로 돌아가게). off_by_default 의 키만 없으면 끔 (운송장번호 전송).
     그 밖의 값이면 RuntimeError - 사용자가 고치기 전에는 아무것도 돌리지 않는다.
     (어떤 모듈을 돌릴지는 사용자 설정이 정확히 지켜져야 하는 것이라, 어중간한 값을
      '켬'이나 '끔' 어느 쪽으로도 짐작하지 않는다.)
@@ -134,7 +134,7 @@ def load_routine_modules(module_keys):
     for key in module_keys:
         raw = section.get(key)
         if raw is None:
-            selected[key] = True
+            selected[key] = key not in off_by_default
             continue
         value = str(raw).strip().upper()
         if value == "Y":

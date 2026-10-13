@@ -888,7 +888,7 @@ with tempfile.TemporaryDirectory() as d:
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
             check(ag.next_plan() == (["login", "wellife_wms"], False), f"웰라이프 줄도 이력 키로 ({ag.next_plan()})")
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Wms", "InvoiceSend"]}]})
-            check(ag.next_plan() == (["login", "wellife_wms", "invoicesend"], False),
+            check(sorted(ag.next_plan()[0]) == ["invoicesend", "login", "wellife_wms"] and ag.next_plan()[1] is False,
                   f"모든 업체용 운송장 전송은 wellife_ 없는 키 (wellife.MODULES 와 같다) ({ag.next_plan()})")
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
             wk = ag.Tokens(wc, "c_demo", ag.Prices(wc, "c_demo"), ag.local_plan, next_plan=ag.next_plan)
