@@ -730,8 +730,17 @@ WELLIFE_CONFIG_MODULES = (
     ("Hold", "물류대기 관리"),
     ("Sap", "웰라이프 SAP 연동관리"),
     ("Wms", "웰라이프 WMS 이관관리"),
+    ("InvoiceSend", "운송장번호 전송"),
 )
-WELLIFE_DEFAULT = {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False}   # 처음 열릴 때 (사용자 2026-10-07)
+WELLIFE_DEFAULT = {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
+                   "InvoiceSend": False}   # 처음 열릴 때 (사용자 2026-10-07)
+# 모든 업체용 모듈 (패키지 공용 화면 - 운송장번호 전송, 2026-10-13). 이력·토큰 키에 wellife_ 를 붙이지 않아
+# 나중에 모든 업체로 열어도 같은 키다 (agent.history_key). 지금은 웰라이프만 연다 (rpa_dashboard.WELLIFE_ONLY_KEYS)
+SHARED_MODULES = ("InvoiceSend",)
+# Wellife 섹션의 모드 키와 웹에 보이는 이름 - wellife.MODE_NAMES 와 같은 키·순서 (시험이 대조한다).
+# 웹은 보기만 한다 (시험 기간용, 사용자 2026-10-13 - 바꾸기는 PC 설정 파일에서)
+WELLIFE_MODES = (("SalesMode", "주문매핑"), ("Mode", "물류대기"), ("SapMode", "SAP 연동"), ("WmsMode", "WMS 이관"),
+                 ("InvoiceMode", "운송장번호 전송"))
 
 
 def cred_file_path():
@@ -837,6 +846,23 @@ def read_wellife_modules(path=None):
             selected[k] = None
             problems.append(f"{k} 값이 Y/N 이 아닙니다 ({raw!r})")
     return selected, problems
+
+
+def read_wellife_modes(path=None):
+    """Wellife 섹션의 모드를 [[이름, 값]] 으로 (웹에 보기만 - 시험 기간용). 빠지면 '리허설' (wellife.load_mode 와 같다),
+    '리허설'/'실행'/'1건' 이 아니면 '설정 오류' (SalesMode 는 '1건' 도 오류). 섹션이 없거나 설정을 못 읽으면 None."""
+    try:
+        section = (read_user_config(path) or {}).get(WELLIFE_SECTION)
+    except Exception:
+        return None
+    if not isinstance(section, dict):
+        return None
+    out = []
+    for key, label in WELLIFE_MODES:
+        value = str(section.get(key, "리허설")).strip()
+        ok = ("리허설", "실행") if key == "SalesMode" else ("리허설", "실행", "1건")
+        out.append([label, value if value in ok else f"설정 오류 ({value})"])
+    return out
 
 
 def write_wellife_modules(selected, path=None):

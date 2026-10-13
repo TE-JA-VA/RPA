@@ -731,7 +731,8 @@ with tempfile.TemporaryDirectory() as d:
             check(str(e) == "알 수 없는 모듈입니다.", "모르는 모듈만 있으면 거부")
         dash.set_policy(2, ["Logistics", "Output"], wellife=True)
         msg = acts["set_modules"]({"Login": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False})
-        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False} and msg == "모듈 수정 사항을 저장했습니다.",
+        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False, "InvoiceSend": False}
+              and msg == "모듈 수정 사항을 저장했습니다.",
               f"웰라이프 업체: set_modules 는 Wellife 섹션에 쓴다 ({msg})")
         try:
             acts["set_modules"]({"Logistics": True}); check(False, "웰라이프 업체에 물류관리 거절")
@@ -846,7 +847,8 @@ with tempfile.TemporaryDirectory() as d:
             json.dump({"LogIn": {"AdminCode": "x"}}, f)
         wl = ag.Policy(AppClient({"features": {"wellife": True}}), "c_demo")
         check(wl.refresh(force=True) == (2, ["Logistics", "Output"], True) and st.wellife_policy() is True, "정책을 PC 에 적는다 (wellife)")
-        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False},
+        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
+                                               "InvoiceSend": False},
               "처음 열리면 섹션을 기본값(로그인·매출처리만)으로 만든다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_demo").refresh(force=True) is None and st.wellife_policy() is True,
               "정책을 못 읽으면 PC 에 적힌 마지막 값 (웰라이프 그대로)")
@@ -885,6 +887,10 @@ with tempfile.TemporaryDirectory() as d:
             check(ag.local_plan()[1] == 1, f"사이트 수집 토큰은 켜진 PRESETn 만 센다 (옛 SITEn 은 안 돈다 - 2026-10-12) ({ag.local_plan()})")
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
             check(ag.next_plan() == (["login", "wellife_wms"], False), f"웰라이프 줄도 이력 키로 ({ag.next_plan()})")
+            dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Wms", "InvoiceSend"]}]})
+            check(ag.next_plan() == (["login", "wellife_wms", "invoicesend"], False),
+                  f"모든 업체용 운송장 전송은 wellife_ 없는 키 (wellife.MODULES 와 같다) ({ag.next_plan()})")
+            dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
             wk = ag.Tokens(wc, "c_demo", ag.Prices(wc, "c_demo"), ag.local_plan, next_plan=ag.next_plan)
             wk.refresh(force=True)
             check(wk.view()["cost"]["routine"] == 3 and wk.view()["cost"]["next"] == 4,

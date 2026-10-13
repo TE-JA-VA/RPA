@@ -1,21 +1,27 @@
-"""웰라이프 전용 실행: 로그인 → ② 주문매핑 → ③ 물류대기 → ④ 웰라이프 SAP 연동관리 → ⑤ 웰라이프 WMS 이관관리.
+"""웰라이프 전용 실행: 로그인 → ② 주문매핑 → ③ 물류대기 → ④ 웰라이프 SAP 연동관리 → ⑤ 웰라이프 WMS 이관관리
+→ ⑥ 운송장번호 전송.
 
 사용자 설정(RPA_UserConfig.json)에 "Wellife" 섹션이 있는 PC 에서만 run_routine.main 이 이리로 온다.
 섹션이 없는 PC(다른 업체)는 지금 루틴 그대로 돈다 - ROUTINE_MODULES 와 Routine 섹션은 건드리지 않는다.
-    예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y",
-                     "SalesMode": "리허설", "Mode": "리허설"}}
+    예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "InvoiceSend": "Y",
+                     "SalesMode": "리허설", "Mode": "리허설", "SapMode": "리허설", "WmsMode": "리허설", "InvoiceMode": "리허설"}}
 
 모드 (사용자 10-08) - 데이터를 바꾸는 단추를 누를지 정한다. 빠지면 리허설.
-"SalesMode" 는 ② 주문매핑(엑셀 업로드)만, "Mode" 는 ③ 물류대기 저장·④⑤ 지정·화살표를 정한다.
+모듈마다 키가 따로다: "SalesMode" ② 주문매핑(엑셀 업로드), "Mode" ③ 물류대기 저장, "SapMode" ④ 지정·화살표,
+"WmsMode" ⑤ 화살표, "InvoiceMode" ⑥ [전송요청(S)] (사용자 10-13 - 넷 다 빠지면 리허설, Mode 를 따르지 않는다).
 - "리허설": 데이터를 바꾸는 단추(엑셀 업로드·물류대기 저장·[지정]·화살표)는 누르지 않고 마우스만 올린다.
 - "실행": 실제로 누르고, 뜨는 팝업은 [예](없으면 [확인])를 누른다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
   팝업 문구는 모두 로그와 모듈 사유에 남긴다.
+- "1건": 실행과 같되 전체 체크 대신 첫 줄 하나만 체크해서 넘긴다 (실데이터 시험용 - 전체를 넘기면 다음 시험까지
+  데이터가 다시 쌓이기를 오래 기다려야 한다, 사용자 10-13). 체크 칸이 없는 4-4·5-4 는 실행처럼 누른다. ② 는 줄이 없어 못 쓴다.
 모드는 대시보드 단계 이름·실행 제목·모듈 사유 앞의 [리허설]/[실행] 과 시작 로그로 보인다.
 - ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집 [가져오기] 는
   모드와 상관없이 누르지 않는다 (마우스만). 선택주문 매출처리는 하지 않는다.
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
-모듈별 실행: 예약 줄이 모듈을 고르면(RPA_RUN_MODULES, Wellife 키) 그 모듈만 돈다 - ②③④⑤ 를 따로 띄울 수 있다.
+- ⑥ 운송장번호 전송: 조회 -> 전체 체크 -> [전송요청(S)]. 모든 업체용 패키지 화면이라(좌측 아이콘) 웰라이프 고유 값을
+  쓰지 않는다 - 지금은 웰라이프 실행만 부른다 (docs/wellife-rpa.md 9절).
+모듈별 실행: 예약 줄이 모듈을 고르면(RPA_RUN_MODULES, Wellife 키) 그 모듈만 돈다 - ②~⑥ 을 따로 띄울 수 있다.
 ⑤ 는 SAP 에서 넘어온 건이 WMS 에 하나씩 들어오므로 반복 시간대(시작~끝, N분 쉬고 다시)로 돌린다 (docs/wellife-rpa.md 7절).
 
 run_routine 을 import 하지 않는다. exe 에서 run_routine 은 __main__ 이라 다시 import 하면 사본이 하나 더 생기고,
@@ -46,9 +52,17 @@ QUERY_WAIT_SECONDS = 120    # 물류대기 조회가 끝나기를 기다리는 �
 CONFIRM_WAIT_SECONDS = 600  # 실행: 누른 뒤 처리(스피너·팝업)가 끝나기를 기다리는 최대 시간
 QUIET_SECONDS = 5           # 실행: 팝업도 스피너도 이만큼 없으면 처리가 끝난 것으로 본다
 MAX_POPUPS = 10             # 실행: 한 번 누른 뒤 이보다 많이 뜨면 멈춘다 (같은 팝업이 되풀이되는 경우)
-MODE_KEY = "Mode"              # ③ 물류대기 저장·④ 지정·화살표·⑤ 화살표
+MODE_KEY = "Mode"              # ③ 물류대기 저장 (④⑤ 는 10-13 부터 따로 - SapMode·WmsMode)
 SALES_MODE_KEY = "SalesMode"   # ② 주문매핑 엑셀 업로드 - 따로 정한다 (사용자 10-08)
-MODES = {"리허설": False, "실행": True}   # 설정 값 -> 실제로 누르는가
+SAP_MODE_KEY = "SapMode"       # ④ 지정·화살표 (사용자 10-13)
+WMS_MODE_KEY = "WmsMode"       # ⑤ 화살표 (사용자 10-13)
+INVOICE_MODE_KEY = "InvoiceMode"   # ⑥ 운송장번호 [전송요청(S)] - 따로 정한다 (사용자 10-13, 택배사로 나가 되돌릴 수 없다)
+# 모드 키 -> (시작 로그·제목 이름, 누르는 것). 이 순서로 보인다 (rpa_status.WELLIFE_MODES 와 같은 순서)
+MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드"), MODE_KEY: ("③ 물류대기", "저장"),
+              SAP_MODE_KEY: ("④ SAP 연동", "지정·화살표"), WMS_MODE_KEY: ("⑤ WMS 이관", "화살표"),
+              INVOICE_MODE_KEY: ("⑥ 운송장 전송", "[전송요청(S)]")}
+ONE = "1건"   # 실행하되 체크는 첫 줄 하나만 (실데이터 시험용, 사용자 10-13). 참으로 읽혀 실행 경로를 그대로 탄다
+MODES = {"리허설": False, "실행": True, "1건": ONE}   # 설정 값 -> 실제로 누르는가
 YES_TEXTS = ("예(Y)", "예")
 OK_TEXTS = ("확인(O)", "확인")
 
@@ -68,6 +82,8 @@ STEPS = (
     ("wl_wms_prepack", "5-2 프리패키징"),
     ("wl_wms_invoice", "5-3 송장O"),
     ("wl_wms_api", "5-4 API대기"),
+    ("inv_send_screen", "운송장번호 전송 화면 이동"),
+    ("inv_send", "운송장번호 전송 조회 → 전체 체크 → 전송요청(S)"),
 )
 # run_routine.ROUTINE_MODULES 와 같은 모양 (모듈 키, 설정 키, 이름, 단계, module_flags 비트). 비트 32 부터는 웰라이프
 MODULES = (
@@ -77,7 +93,12 @@ MODULES = (
     ("wellife_sap", "Sap", "웰라이프 SAP 연동관리", ("wl_sap_screen", "wl_sap_slip", "wl_sap_shipping", "wl_sap_so"), 128),
     ("wellife_wms", "Wms", "웰라이프 WMS 이관관리",
      ("wl_wms_screen", "wl_wms_so", "wl_wms_prepack", "wl_wms_invoice", "wl_wms_api"), 256),
+    # 모든 업체용 (rpa_status.SHARED_MODULES) - 모듈 키에 wellife_ 를 붙이지 않는다 (= 설정 키 소문자, agent.history_key)
+    ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512),
 )
+# 모듈마다 따로 정하는 모드 키. 여기 없는 모듈(로그인·③ 물류대기)은 MODE_KEY
+MODULE_MODES = {"wellife_sales": SALES_MODE_KEY, "wellife_sap": SAP_MODE_KEY, "wellife_wms": WMS_MODE_KEY,
+                "invoicesend": INVOICE_MODE_KEY}
 # 단계 표 (단계 키, 대시보드 단추, 화살표, 머리글로 전체 체크하는가, 화살표가 하는 일). SAP전송전체 이후와
 # 송장X·API실패·WMS작업중·할당·출고완료·결품관리는 사람이 보는 화면이라 넣지 않는다 (docs/wellife-rpa.md 2절)
 SAP_SIMPLE_STAGES = (
@@ -136,23 +157,25 @@ def load_switches(rr):
     if bad:
         raise RuntimeError(
             f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")
-    return selected, sorted(k for k in section if k not in keys and k not in (MODE_KEY, SALES_MODE_KEY))
+    return selected, sorted(k for k in section if k not in keys and k not in MODE_NAMES)
 
 
 def load_mode(rr, key=MODE_KEY):
     """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 리허설 - 잘 모르면 누르지 않는 쪽.
-    key: MODE_KEY(③④⑤) 또는 SALES_MODE_KEY(② 주문매핑 - 따로 정한다, 사용자 10-08. 빠지면 Mode 를 따르지 않고 리허설).
+    key: MODE_NAMES 의 키 하나 (모듈마다 따로 - 빠지면 Mode 를 따르지 않고 리허설). "1건" 이면 ONE (참 - 실행하되 한 줄만).
+    ② SalesMode 는 줄이 없어 "1건" 을 못 쓴다.
     "리허설"/"실행" 이 아닌 값은 RuntimeError (load_switches 뒤에 부른다 - 섹션 모양은 거기서 본다)."""
     raw = rr.pl.load_settings()[SECTION].get(key, "리허설")
     value = str(raw).strip()
-    if value not in MODES:
+    allowed = [m for m in MODES if not (key == SALES_MODE_KEY and MODES[m] == ONE)]
+    if value not in allowed:
         raise RuntimeError(f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 {key} 값은 "
-                           f"{' 또는 '.join(repr(m) for m in MODES)} 이어야 합니다: {raw!r}")
+                           f"{' 또는 '.join(repr(m) for m in allowed)} 이어야 합니다: {raw!r}")
     return MODES[value]
 
 
 def mode_tag(live):
-    return "실행" if live else "리허설"
+    return ONE if live == ONE else "실행" if live else "리허설"
 
 
 def run_main(rr):
@@ -161,19 +184,18 @@ def run_main(rr):
     status, log = rr.status, rr.log
     try:
         selected, unknown = load_switches(rr)
-        live, sales_live, error = load_mode(rr), load_mode(rr, SALES_MODE_KEY), None
+        modes, error = {k: load_mode(rr, k) for k in MODE_NAMES}, None
     except Exception as e:
-        live, sales_live, error = False, False, e
+        modes, error = dict.fromkeys(MODE_NAMES, False), e
     # 예약 줄이 모듈을 골라 띄웠으면(반복 시간대 포함) 섹션의 켬·끔 대신 그 모듈만 - 지금 루틴과 같은 규칙. 모드는 섹션 그대로
     picked, picked_unknown = rr.run_modules_from_env([m[1] for m in MODULES])
     if not error and picked is not None:
         selected, unknown = picked, []
-    tag, sales_tag = mode_tag(live), mode_tag(sales_live)
-    # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다. ② 단계는 SalesMode 를 붙인다
-    sales_steps = next(m[3] for m in MODULES if m[0] == "wellife_sales")
-    steps = STEPS if error else tuple(
-        (k, f"[{sales_tag if k in sales_steps else tag}] {label}") for k, label in STEPS)
-    status.start("routine", steps, title="웰라이프 실행" if error else f"웰라이프 실행 [주문매핑 {sales_tag} / 그 밖 {tag}]")
+    # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다 - 단계마다 그 모듈의 모드
+    step_mode = {k: MODULE_MODES.get(m[0], MODE_KEY) for m in MODULES for k in m[3]}
+    steps = STEPS if error else tuple((k, f"[{mode_tag(modes[step_mode[k]])}] {label}") for k, label in STEPS)
+    status.start("routine", steps, title="웰라이프 실행" if error else "웰라이프 실행 [" + " / ".join(
+        f"{name[2:]} {mode_tag(modes[k])}" for k, (name, _) in MODE_NAMES.items()) + "]")
     status.set_modules([(k, label, steps_, bit) for k, _, label, steps_, bit in MODULES])
     log(f"=== 웰라이프 실행 시작 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
 
@@ -187,10 +209,11 @@ def run_main(rr):
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
     log("*" * 70)
-    log(f"*  ② 주문매핑 모드({SALES_MODE_KEY}): [{sales_tag}] - " + (
-        "미리 둔 엑셀을 실제로 업로드" if sales_live else "엑셀 업로드는 누르지 않고 마우스만"))
-    log(f"*  ③④⑤ 모드({MODE_KEY}): [{tag}] - " + (
-        "저장·지정·화살표를 실제로 누르고, 팝업은 [예]/[확인]" if live else "저장·지정·화살표는 누르지 않고 마우스만"))
+    for k, (name, what) in MODE_NAMES.items():
+        v = modes[k]
+        log(f"*  {name} 모드({k}): [{mode_tag(v)}] - " + (
+            f"{what} 누르지 않고 마우스만" if not v else f"{what} 실제로 누르고, 팝업은 [예]/[확인]"
+            + (" - 체크는 첫 줄 하나만" if v == ONE else "")))
     log("*" * 70)
     for k in unknown:
         log(f"경고: '{SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
@@ -221,10 +244,11 @@ def run_main(rr):
         return
 
     funcs = {"login": rr.module_login,
-             "wellife_sales": lambda ctx: module_sales(rr, ctx, sales_live),
-             "wellife_hold": lambda ctx: module_hold(rr, ctx, live),
-             "wellife_sap": lambda ctx: module_sap(rr, ctx, live),
-             "wellife_wms": lambda ctx: module_wms(rr, ctx, live)}
+             "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[SALES_MODE_KEY]),
+             "wellife_hold": lambda ctx: module_hold(rr, ctx, modes[MODE_KEY]),
+             "wellife_sap": lambda ctx: module_sap(rr, ctx, modes[SAP_MODE_KEY]),
+             "wellife_wms": lambda ctx: module_wms(rr, ctx, modes[WMS_MODE_KEY]),
+             "invoicesend": lambda ctx: module_invoice_send(rr, ctx, modes[INVOICE_MODE_KEY])}
     result, reason = rr.run_modules(selected, MODULES, funcs, SECTION)
     # 반복 회차(⑤ 를 시간대 동안 N분마다)는 처리한 것이 없으면 이력에 남기지 않는다 - 지금 루틴 main 과 같은 규칙
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
@@ -351,7 +375,10 @@ def hold_save(rr, ctx, live):
         rr.log("  물류대기 0건 - 저장하지 않음")
         return "no_target", f"[{tag}] 물류대기 0건 - 저장할 것 없음"
     front(rr, ctx, "물류대기 전체선택")
-    if not rr.select_all_by_header_checkbox(ctx.hwnd, grid):
+    if live == ONE:
+        if not check_one_row(rr, ctx, grid, "물류대기"):
+            raise Stop("failed", "물류대기 첫 줄만 체크하지 못했습니다 (1건) - 저장하지 않음.")
+    elif not rr.select_all_by_header_checkbox(ctx.hwnd, grid):
         raise Stop("failed", "물류대기 전체선택(머리글 체크)에 실패했습니다.")
     no_popup(rr, ctx, "물류대기 전체선택")
     save = onscreen_button(ctx.window(), "저장(S)")
@@ -364,7 +391,7 @@ def hold_save(rr, ctx, live):
     rr.log("  [실행] 물류대기 '저장(S)' 누름")
     click(rr, ctx, save, "물류대기 '저장(S)'")
     texts = confirm_popups(rr, ctx, "물류대기 저장", grid, idle, before)
-    return "done", f"[{tag}] 물류대기 조회 -> 전체선택 -> 저장" + popup_note(texts)
+    return "done", f"[{tag}] 물류대기 조회 -> {'첫 줄만 체크' if live == ONE else '전체선택'} -> 저장" + popup_note(texts)
 
 
 def module_sap(rr, ctx, live=False):
@@ -425,7 +452,7 @@ def sales_slip_stage(rr, ctx, live=False):
     count, ctl = open_stage(rr, ctx, SAP_FORM, "dashBtn_SalesSlip")
     if not count:
         return "4-1 매출전표 0건", False
-    checked = check_all_rows(rr, ctx, ctl["gridCtrl_List"], "4-1 매출전표")
+    checked = check_rows(rr, ctx, ctl["gridCtrl_List"], "4-1 매출전표", live)
     head = f"매출전표 {count}건"
     if not live:
         head += hover_menu_item(rr, ctx, ctl.get("btn_CopyInsert"), SELECTED_ONLY, "4-1 [지정▼]", checked)
@@ -439,7 +466,7 @@ def sales_slip_stage(rr, ctx, live=False):
         if not pressed:
             return head, False
         ctl = controls(rr, ctx, SAP_FORM)    # 지정 뒤 그리드가 다시 그려진다 - 컨트롤을 새로 잡는다
-    marks, bad = mark_rows(rr, ctx, ctl["gridCtrl_List"], count, slip_target)
+    marks, bad = mark_rows(rr, ctx, ctl["gridCtrl_List"], count, slip_target, limit=1 if live == ONE else None)
     targets = sum(1 for v in marks.values() if v == "선택")
     rr.log(f"  매출전표: 그리드 {len(marks)}줄 - 넘길 줄(검토 빈 칸) {targets}줄{f', 못 맞춘 줄 {len(bad)}' if bad else ''}")
     rr.status.note(f"매출전표 {count}건 / {len(marks)}줄 - 넘길 줄 {targets}")
@@ -455,10 +482,44 @@ def simple_stage(rr, ctx, form_id, step, dash_id, arrow_id, check_all, what, liv
     rr.status.step(step)
     count, ctl = open_stage(rr, ctx, form_id, dash_id)
     label = what.split(" →")[0]
-    checked = bool(count and check_all) and check_all_rows(rr, ctx, ctl["gridCtrl_List"], label)
+    checked = bool(count and check_all) and check_rows(rr, ctx, ctl["gridCtrl_List"], label, live)
     want = bool(count) and (checked or not check_all)
-    note, pressed = press_arrow(rr, ctx, ctl, arrow_id, what, want, count, live)
-    return f"{label} {count}건" + note, pressed
+    # 실행 '1건' 은 체크 칸이 있는 단계만 한 줄 - 체크 칸이 없는 4-4·5-4 는 그 단계 건을 모두 넘긴다 (사용자 10-13)
+    one = live == ONE and check_all
+    note, pressed = press_arrow(rr, ctx, ctl, arrow_id, what, want, 1 if one else count, live)
+    return f"{label} {count}건" + (" 중 첫 줄 1건" if one and pressed else "") + note, pressed
+
+
+def check_rows(rr, ctx, grid, label, live):
+    """실행 '1건' 이면 첫 줄 하나만, 아니면(리허설 포함) 머리글로 전체 체크. 됐는가."""
+    return check_one_row(rr, ctx, grid, label) if live == ONE else check_all_rows(rr, ctx, grid, label)
+
+
+def check_one_row(rr, ctx, grid, label):
+    """실행 '1건' (실데이터 시험, 사용자 10-13): 맨 위로 올려 첫 줄 하나만 체크한다. 됐는가.
+    조회 직후라 체크가 모두 풀려 있어야 한다 (조회하면 풀린다 - 10-13 실측). 보이는 줄에 이미 체크된 것이 있으면
+    누르지 않는다 - 그 줄도 함께 넘어간다. 누른 뒤 그 줄만 '선택' 인지 다시 읽어 본다."""
+    check_header(grid, label)       # 체크 칸이 있는 그리드인지 (없으면 멈춘다)
+    front(rr, ctx, f"{label} 그리드 스크롤")     # 스크롤 단추는 rr 도우미가 누른다 (잠김·포커스는 여기서 한 번 본다)
+    rr.grid_scroll_to_top(ctx.hwnd, grid)
+    rows = settled_rows(rr, grid, first=1)
+    states = {n: rr.legacy_value(c[CHECK_COL]) for n, c in rows.items() if CHECK_COL in c}
+    if not states or "선택" in states.values():
+        rr.log(f"  확인할 것: {label} - 첫 줄만 체크하려는데 줄이 없거나 이미 체크된 줄이 있어 누르지 않음 ({states})")
+        return False
+    first = min(states)
+    cell = rows[first][CHECK_COL]
+    no_popup(rr, ctx, f"{label} {first}행 체크 전")
+    click(rr, ctx, cell, f"{label} {first}행 체크 칸")
+    deadline = time.time() + CHECK_WAIT_SECONDS
+    while rr.legacy_value(cell) != "선택" and time.time() < deadline:
+        time.sleep(0.2)
+    no_popup(rr, ctx, f"{label} {first}행 체크")
+    others = [n for n, c in rows.items() if n != first and CHECK_COL in c and rr.legacy_value(c[CHECK_COL]) == "선택"]
+    ok = rr.legacy_value(cell) == "선택" and not others
+    rr.log(f"  [1건] {label}: {first}행만 체크 - {'됨' if ok else '실패 (확인할 것)'}"
+           + (f", 다른 줄도 체크됨 {others}" if others else ""))
+    return ok
 
 
 def check_all_rows(rr, ctx, grid, label):
@@ -505,6 +566,106 @@ def press_arrow(rr, ctx, ctl, arrow_id, what, want, count, live):
     click(rr, ctx, arrow, what)
     texts = confirm_popups(rr, ctx, what, grid, idle, before)
     return " -> 누름" + popup_note(texts), True
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 운송장번호 전송 - 모든 업체용 패키지 화면 (좌측 아이콘, 폼 이름에 업체가 없다 - docs/wellife-rpa.md 9절).
+# 웰라이프 고유 값을 쓰지 않는다. 지금은 웰라이프 실행만 부른다 (rpa_status.SHARED_MODULES)
+# ---------------------------------------------------------------------------
+INVOICE_TAB = "운송장번호 전송"
+INVOICE_FORM = "Frm_Send_TrackingNumber"
+INVOICE_ICON = "lcg_InvoiceSend"
+INVOICE_SEND = "운송장번호 [전송요청(S)]"
+
+
+def module_invoice_send(rr, ctx, live=False):
+    """⑥ 운송장번호 전송: 화면 열기 -> 조회 -> 전체 체크 -> [전송요청(S)] (invoice_send). 리허설은 [전송요청(S)] 에 마우스만.
+    [미전송 완료처리] 등 나머지 단추는 누르지 않는다. 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (물류대기와 같다)."""
+    rr.status.step("inv_send_screen")
+    try:
+        no_popup(rr, ctx, f"'{INVOICE_TAB}' 화면 이동 전")
+        front(rr, ctx, f"'{INVOICE_TAB}' 화면 이동")
+        tab = open_tab(rr, ctx, INVOICE_TAB)
+        if tab is not None:     # 이미 열린 화면은 그 탭을 누른다 (SAP·WMS 와 같다)
+            rr.log(f"'{INVOICE_TAB}' 화면이 이미 열려 있어 그 탭을 누릅니다: {tab.rectangle()}")
+            click(rr, ctx, tab, f"'{INVOICE_TAB}' 탭")
+            ok, active = rr.wait_for_active_main_tab(ctx.app, ctx.hwnd, INVOICE_TAB, ctx=ctx)
+            if not ok:
+                return "failed", f"'{INVOICE_TAB}' 탭을 눌렀으나 그 화면으로 바뀌지 않았습니다 (활성 메인탭='{active}')."
+        else:
+            r = rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB)
+            if r == "absent":
+                return "failed", f"'{INVOICE_TAB}' 아이콘({INVOICE_ICON})이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
+            if r != "ok":
+                return "failed", f"'{INVOICE_TAB}' 화면으로 이동하지 못했습니다."
+        rr.status.step("inv_send")
+        return invoice_send(rr, ctx, live)
+    except Stop as e:
+        return e.result, str(e)
+    except Exception as e:
+        return ui_error(rr, e)
+
+
+def invoice_send(rr, ctx, live):
+    """조회(F) -> (줄이 있으면) 머리글로 전체 체크 -> [전송요청(S)]. 조회 조건은 화면 기본값 그대로 (배송일 기간·미전송).
+    실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
+    체크는 되돌리지 않는다 (다음 조회로 풀린다). (결과, 사유)."""
+    tag = mode_tag(live)
+    ctl = controls(rr, ctx, INVOICE_FORM)
+    query, grid = ctl.get("btn_Search"), ctl.get("gridCtrl_List")
+    if query is None or grid is None:
+        raise Stop("failed", f"'{INVOICE_TAB}' 조회(F) 단추(btn_Search)나 그리드(gridCtrl_List)를 찾지 못했습니다.")
+    idle = rr.grid_overlay_count(ctx.hwnd, grid)
+    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회 전")
+    click(rr, ctx, query, f"'{INVOICE_TAB}' 조회(F)")
+    time.sleep(2)     # 스피너가 뜨기 전에 '끝' 으로 보지 않게 (물류대기 조회와 같다)
+    if not rr.wait_grid_spinner_gone(ctx.hwnd, grid, idle, label=INVOICE_TAB, max_wait=QUERY_WAIT_SECONDS):
+        raise Stop("failed", f"'{INVOICE_TAB}' 조회가 {QUERY_WAIT_SECONDS}초 안에 끝나지 않았습니다.")
+    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회")
+    count = count_rows(rr, ctx, grid)
+    rr.log(f"  {INVOICE_TAB}: 그리드 {count}줄")
+    rr.status.note(f"운송장 {count}건")
+    if not count:
+        return "no_target", f"[{tag}] 운송장 0건 - 전송할 것 없음"
+    checked = check_rows(rr, ctx, grid, INVOICE_TAB, live)
+    ctl = controls(rr, ctx, INVOICE_FORM)
+    # 누르기 직전에 체크를 다시 본다 - 스피너가 늦게 떠 조회가 이제 끝났으면 그리드가 새로 그려져 체크가 풀린다
+    # (조회하면 체크가 모두 풀린다, 10-13 실측). 풀린 채로 되돌릴 수 없는 [전송요청(S)] 를 누르지 않게
+    if checked and not rows_checked(rr, grid, one=live == ONE):
+        rr.log(f"  확인할 것: {INVOICE_TAB} - 전체 체크 뒤 다시 보니 체크가 풀려 있어 전송하지 않음 (조회가 늦게 끝났을 수 있음)")
+        checked = False
+    note, pressed = press_arrow(rr, ctx, ctl, "btn_SendRequest", INVOICE_SEND, checked, 1 if live == ONE else count, live)
+    head = f"[{tag}] 운송장 {count}건" + (" 중 첫 줄 1건" if live == ONE else "") + (
+        "" if checked else " - 체크가 안 돼 전송하지 않음 (확인할 것)")
+    if not live:
+        head += " - 전송요청은 누르지 않음"
+    return ("done" if pressed else "skipped"), head + note
+
+
+def rows_checked(rr, grid, one=False):
+    """보이는 줄이 있고 모두 체크돼 있는가 (칸 값 '선택'). one 이면 보이는 줄 중 꼭 하나만 체크돼 있는가 (실행 '1건')."""
+    states = [rr.legacy_value(c[CHECK_COL]) for c in rr.grid_rows(grid).values() if CHECK_COL in c]
+    if one:
+        return states.count("선택") == 1
+    return bool(states) and all(s == "선택" for s in states)
+
+
+def count_rows(rr, ctx, grid):
+    """그리드 줄 수. UIA Grid 패턴이 없어(10-13 실측) 행 번호(스크롤해도 이어지는 절대 번호)로 센다 - 세로 스크롤바가
+    있으면 맨 위에서부터 페이지를 넘기며 (키보드는 쓰지 않는다)."""
+    if not rr.grid_rows(grid):
+        return 0
+    if rr.grid_vertical_scrollbar(grid) is None:
+        return max(settled_rows(rr, grid), default=0)
+    front(rr, ctx, "그리드 스크롤")     # 스크롤 단추는 rr 도우미가 누른다 (잠김·포커스는 여기서 한 번 본다)
+    rr.grid_scroll_to_top(ctx.hwnd, grid)
+    rows, last = settled_rows(rr, grid, first=1), 0
+    for _ in range(MAX_PAGES):
+        last = max(last, max(rows, default=0))
+        rows = next_page(rr, ctx, grid, rows)
+        if rows is None:
+            return last
+    raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 못 셈")
 
 
 # ---------------------------------------------------------------------------
@@ -624,11 +785,12 @@ def no_popup(rr, ctx, after):
         raise Stop("stopped", f"{after} 뒤 팝업이 떠서 멈춤 (누르지 않음): {text[:200]}")
 
 
-def mark_rows(rr, ctx, grid, expected, want):
+def mark_rows(rr, ctx, grid, expected, want, limit=None):
     """그리드를 위에서부터 한 번만 내려가며, 줄마다 검토 칸을 읽는 대로 체크 칸을 맞춘다 - want(검토 값) 면 '선택',
     아니면 '선택안됨'. 다 읽고 다시 올라가 체크하지 않는다 (사용자 10-08). 행 번호는 스크롤해도 이어지는 절대 번호다
     (10-07 실측: 1~24 -> 페이지 아래로 -> 24~47). 칸 전체가 그리드 안에 보일 때만 누르고(잘린 칸을 누르면 스크롤바에
     떨어진다) 잘린 줄은 다음 페이지에서 맞춘다. 키보드는 쓰지 않는다 (행이 선택되면 아래 그리드가 다시 조회된다).
+    limit: '선택' 으로 맞출 줄의 최대 수 (실행 '1건' 은 1 - 위에서부터 먼저 만난 줄). 나머지 대상 줄은 '선택안됨'.
     ({행: 맞춘 값}, 못 맞춘 행 목록) - 못 맞춘 행 = 눌러도 바뀌지 않았거나 중간에 못 읽고 지나간 행."""
     deadline = time.time() + STAGE_WAIT_SECONDS
     while expected and not rr.grid_rows(grid) and time.time() < deadline:
@@ -651,7 +813,8 @@ def mark_rows(rr, ctx, grid, expected, want):
             if r.top < top or r.bottom > bottom:
                 continue
             review = rr.legacy_value(cells["검토"])
-            value = "선택" if want(review) else "선택안됨"
+            picked = sum(1 for v in out.values() if v == "선택")
+            value = "선택" if want(review) and (limit is None or picked < limit) else "선택안됨"
             if rr.legacy_value(cell) != value:
                 no_popup(rr, ctx, f"{n}행 체크 전")   # 앞 클릭으로 뜬 팝업도 여기서 잡힌다
                 click(rr, ctx, cell, f"{n}행 체크 칸")

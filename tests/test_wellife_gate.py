@@ -37,12 +37,14 @@ def read_cfg():
 print("=== 1. Wellife 섹션 ===")
 write_cfg({"LogIn": {"AdminCode": "x"}, "Routine": {"Logistics": "Y"}})
 check(st.has_wellife_section() is False, "섹션이 없으면 False")
-check(st.ensure_wellife_section() is True and read_cfg()["Wellife"] == {"Login": "Y", "Sales": "Y", "Hold": "N", "Sap": "N", "Wms": "N"},
+check(st.ensure_wellife_section() is True and read_cfg()["Wellife"] == {"Login": "Y", "Sales": "Y", "Hold": "N", "Sap": "N", "Wms": "N",
+                                                                   "InvoiceSend": "N"},
       "처음 열리면 로그인·주문매핑 매출처리만 켬")
 check(read_cfg()["LogIn"] == {"AdminCode": "x"} and read_cfg()["Routine"] == {"Logistics": "Y"}, "다른 섹션은 그대로")
 check(st.ensure_wellife_section() is False, "있으면 안 바꾼다")
 got = st.write_wellife_modules({"Login": False, "Sales": True, "Hold": True, "Sap": True})
-check(got == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False}, f"쓰기: 로그인은 늘 켬, 빠진 키는 끔 ({got})")
+check(got == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False, "InvoiceSend": False},
+      f"쓰기: 로그인은 늘 켬, 빠진 키는 끔 ({got})")
 check(st.read_wellife_modules() == (got, []), "읽기는 쓴 값 그대로")
 try:
     st.write_wellife_modules({"Logistics": True}); check(False, "모르는 키 거절")
@@ -51,6 +53,14 @@ except ValueError:
 write_cfg({"LogIn": {}, "Wellife": {"Sales": "Y", "Hold": "maybe"}})
 sel, problems = st.read_wellife_modules()
 check(sel["Hold"] is None and problems and sel["Sap"] is False, f"Y/N 아닌 값은 None·문제, 빠진 키는 끔 ({sel}, {problems})")
+check(st.read_wellife_modes() == [["주문매핑", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "리허설"], ["WMS 이관", "리허설"],
+                                  ["운송장번호 전송", "리허설"]], f"모드(웹 보기): 빠지면 리허설 ({st.read_wellife_modes()})")
+write_cfg({"LogIn": {}, "Wellife": {"Mode": " 실행 ", "SapMode": "1건", "SalesMode": "1건", "InvoiceMode": "보냄"}})
+check(st.read_wellife_modes() == [["주문매핑", "설정 오류 (1건)"], ["물류대기", "실행"], ["SAP 연동", "1건"], ["WMS 이관", "리허설"],
+                                  ["운송장번호 전송", "설정 오류 (보냄)"]],
+      f"모드(웹 보기): 실행·1건·잘못된 값 (주문매핑은 1건을 못 쓴다) ({st.read_wellife_modes()})")
+write_cfg({"LogIn": {}})
+check(st.read_wellife_modes() is None, "Wellife 섹션이 없으면 모드 None (웹에 안 보인다)")
 
 write_cfg({"LogIn": {}})
 check(st.remove_wellife_section() is False, "지울 섹션이 없으면 False")
@@ -103,8 +113,12 @@ check(dash.slot_target(_rows[0], dash.slot_off(_sch)) == ("routine", {"RPA_RUN_M
 check(dash.slot_target({"at": "10:00", "run": ["Login", "Logistics", "Wms"]}, dash.slot_off(_sch))[1] == {"RPA_RUN_MODULES": "Login,Wms"},
       "웰라이프 업체 줄의 물류관리는 뺀다 (업체 정책)")
 check(dash.normalize_run(["Wms"]) == ["Login", "Wms"], "⑤ 만 골라도 로그인이 붙는다")
+check(dash.slot_target({"at": "10:00", "until": "18:00", "rest_min": 5, "run": ["Login", "InvoiceSend"]}, dash.slot_off(_sch))
+      == ("routine", {"RPA_RUN_MODULES": "Login,InvoiceSend"}), "⑥ 운송장 전송만 고른 반복 줄 (웰라이프 업체)")
+check(dash.slot_text({"at": "10:00", "run": ["Login", "InvoiceSend"]}).endswith("운송장 전송"),
+      f"줄 이름에 운송장 전송 ({dash.slot_text({'at': '10:00', 'run': ['Login', 'InvoiceSend']})})")
 _sch["policy"] = {"limit": None, "off": [], "wellife": False}
-check(dash.slot_off(_sch) == ["Sap", "Wms"], "보통 업체는 SAP 연동·WMS 이관을 뺀다")
+check(dash.slot_off(_sch) == ["Sap", "Wms", "InvoiceSend"], "보통 업체는 SAP 연동·WMS 이관·운송장 전송(지금은 웰라이프만)을 뺀다")
 check(dash.slot_target(_rows[1], dash.slot_off(_sch)) == (None, {}), "보통 업체에 ⑤ 만 있는 줄은 띄우지 않는다")
 
 print("\n실패:", fails if fails else "없음")

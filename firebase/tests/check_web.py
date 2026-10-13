@@ -579,8 +579,16 @@ with sync_playwright() as pw:
     db_patch("meta/companies/c_demo/apps/rpa", {"features": {"wellife": True}})
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     names = [x.strip() for x in page.locator("#mod-list label").all_text_contents()]
-    check(len(names) == 5 and any("웰라이프 SAP 연동관리" in n for n in names) and any("웰라이프 WMS 이관관리" in n for n in names)
-          and not any("물류관리" == n or "운송장" in n for n in names), f"웰라이프 업체: 모듈 다섯 (물류관리·운송장 없음) ({names})")
+    check(len(names) == 6 and any("웰라이프 SAP 연동관리" in n for n in names) and any("웰라이프 WMS 이관관리" in n for n in names)
+          and any("운송장번호 전송" in n for n in names) and not any("물류관리" == n or "운송장 출력" in n for n in names),
+          f"웰라이프 업체: 모듈 여섯 (물류관리·운송장 출력 없음, 운송장번호 전송 있음) ({names})")
+    # 웰라이프 모드는 보기만 (시험 기간용, 사용자 2026-10-13) - PC 가 올린 값을 그대로, 실행이 있으면 경고 색
+    db_patch(LIVE, {"modes": [["주문매핑", "리허설"], ["물류대기·SAP 연동·WMS 이관", "실행"], ["운송장번호 전송", "리허설"]]})
+    page.wait_for_function("(document.getElementById('mod-modes')?.textContent || '').includes('운송장번호 전송')", timeout=10000)
+    check(page.is_visible("#mod-modes") and "물류대기·SAP 연동·WMS 이관 실행" in page.text_content("#mod-modes")
+          and "warn" in (page.get_attribute("#mod-modes", "class") or ""), f"웰라이프 업체: 모드 보기 ({page.text_content('#mod-modes')})")
+    db_patch(LIVE, {"modes": None})
+    page.wait_for_function("document.getElementById('mod-modes')?.classList.contains('hide')", timeout=10000)
     check(page.is_visible("#sch-add-win") and page.locator("#sch-times select.mode").count() == 1,
           "웰라이프 업체: 줄 고르기·반복 시간대도 쓴다 (사용자 10-08: ②③④⑤ 따로, ⑤ 는 반복)")
     # 줄 단추는 물류관리·운송장 대신 SAP 연동·WMS 이관. 업체 종류가 바뀌기 전의 물류관리는 보내지 않는다 (에이전트가 거절한다)
@@ -592,8 +600,8 @@ with sync_playwright() as pw:
     reload_to(page, "settings"); page.wait_for_selector("#sch-times .t")
     chips = page.locator("#sch-times .chips button").all_text_contents()
     check(page.locator("#sch-times select.mode").count() == 2 and page.locator("#sch-times .chips").count() == 2
-          and "WMS 이관" in chips and "SAP 연동" in chips and "물류관리" not in chips and "운송장" not in chips,
-          f"웰라이프 업체: 고르기·반복 줄의 단추는 SAP 연동·WMS 이관 (물류관리·운송장 없음) ({chips})")
+          and "WMS 이관" in chips and "SAP 연동" in chips and "운송장 전송" in chips and "물류관리" not in chips and "운송장" not in chips,
+          f"웰라이프 업체: 고르기·반복 줄의 단추는 SAP 연동·WMS 이관·운송장 전송 (물류관리·운송장 없음) ({chips})")
     page.locator("#sch-times .t").nth(2).locator(".chips button[data-k='Wms']").click()
     first = page.query_selector_all("#sch-times input")[0]
     first.fill("09:10"); first.dispatch_event("change")
@@ -606,10 +614,10 @@ with sync_playwright() as pw:
     page.wait_for_function("!document.getElementById('sch-apply')?.disabled || document.querySelector('#mod-list input')?.disabled === false", timeout=10000)
     page.click("#mod-list label:nth-child(2)"); page.click("#mod-apply"); time.sleep(1.5)
     keys =sorted((db_get(f"{SETTINGS}/modules") or {}).keys())
-    check(keys == ["Hold", "Login", "Sales", "Sap", "Wms"], f"웰라이프 업체: 모듈은 다섯 키만 저장 ({keys})")
+    check(keys == ["Hold", "InvoiceSend", "Login", "Sales", "Sap", "Wms"], f"웰라이프 업체: 모듈은 여섯 키만 저장 ({keys})")
     db_patch("meta/companies/c_demo/apps/rpa", {"modules": {"Hold": False}})   # 업체가 끈 모듈은 웰라이프 업체에서도 스위치가 없다 (에이전트가 꺼진 값으로 강제한다)
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
-    check(page.locator("#mod-list label").count() == 4 and page.locator("#mod-list input[aria-label='물류대기 관리']").count() == 0,
+    check(page.locator("#mod-list label").count() == 5 and page.locator("#mod-list input[aria-label='물류대기 관리']").count() == 0,
           "웰라이프 업체: 업체가 끈 모듈(물류대기 관리)은 스위치가 없다")
     db_patch("meta/companies/c_demo/apps/rpa", {"modules": None, "limits": None})
     for path, old in ((CMDS, cmds0), (f"{SETTINGS}/modules", mods0), (f"{SETTINGS}/schedule", sets0)):   # 이 블록이 쓴 것을 되돌린다

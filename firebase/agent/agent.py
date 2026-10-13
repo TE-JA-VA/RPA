@@ -178,8 +178,10 @@ def balance(client, cid):
 
 def history_key(cfg, wellife):
     """설정 키 → 이력의 modules[].key. 루틴은 소문자 (run_routine.ROUTINE_MODULES: login·Login, sales·Sales …),
-    웰라이프는 로그인 말고 'wellife_' 를 붙인다 (wellife.MODULES: wellife_sap·Sap …) - 업체 배율이 같은 키에 걸리게."""
-    return cfg.lower() if not wellife or cfg == "Login" else f"wellife_{cfg.lower()}"
+    웰라이프는 로그인과 모든 업체용 모듈(st.SHARED_MODULES: invoicesend·InvoiceSend) 말고 'wellife_' 를 붙인다
+    (wellife.MODULES: wellife_sap·Sap …) - 업체 배율이 같은 키에 걸리게."""
+    import rpa_status as st
+    return cfg.lower() if not wellife or cfg == "Login" or cfg in st.SHARED_MODULES else f"wellife_{cfg.lower()}"
 
 
 def local_plan():
@@ -204,7 +206,7 @@ def next_plan():
     slot = dash.slot_of(sch) if sch.get("enabled") and sch.get("next_run_at") else None
     if not slot or slot.get("run") is None:
         return None
-    off = set(dash.slot_off(sch))                 # 업체가 안 쓰는 모듈 + (웰라이프가 아니면) SAP 연동·WMS 이관 - 띄울 때와 같다
+    off = set(dash.slot_off(sch))                 # 업체가 안 쓰는 모듈 + (웰라이프가 아니면) SAP 연동·WMS 이관·운송장 전송 - 띄울 때와 같다
     run = [k for k in slot["run"] if k not in off]
     if "Logistics" not in run:                    # 물류관리가 없으면 운송장도 안 돈다 (run_routine.run_modules_from_env)
         run = [k for k in run if k != "Output"]
@@ -662,7 +664,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
         # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
         got = limits() if limits else None
-        # 줄의 모듈은 업체 종류에 맞게 - 웰라이프 업체는 물류관리·운송장 없이 SAP 연동·WMS 이관, 그 밖의 업체는 반대 (limits() 가 정책을 새로 적은 뒤에 본다)
+        # 줄의 모듈은 업체 종류에 맞게 - 웰라이프 업체는 물류관리·운송장 없이 SAP 연동·WMS 이관·운송장 전송, 그 밖의 업체는 반대 (limits() 가 정책을 새로 적은 뒤에 본다)
         wl = st.wellife_policy()
         wrong = set(WELLIFE_BLOCKED) if wl else set(dash.WELLIFE_ONLY_KEYS)
         if isinstance(args, dict) and args.get("enabled") is not False and any(
@@ -955,6 +957,10 @@ def run(cfg):
                     snap["modules"] = (st.read_wellife_modules() if st.wellife_policy() else st.read_routine_modules())[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)
                 except Exception:
                     snap["modules"] = None
+                try:
+                    snap["modes"] = st.read_wellife_modes() if st.wellife_policy() else None   # 웰라이프 모드 - 웹은 보기만 (시험 기간용)
+                except Exception:
+                    snap["modes"] = None
                 try:
                     snap["presets"] = st.preset_summary()   # 이름·코드·단계 수·켬 (기록 내용·아이디·비밀번호는 안 싣는다)
                 except Exception:

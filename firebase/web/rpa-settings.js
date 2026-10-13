@@ -25,6 +25,7 @@ const HTML = `
         <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
         <div class="msg">전체 실행과 '전체 모듈 실행' 예약이 이 모듈을 돌립니다</div>
         <div id="mod-list"></div>
+        <div class="msg hide" id="mod-modes"></div>
         <button class="apply" id="mod-apply" disabled>적용</button>
       </div>
     </div>
@@ -173,6 +174,11 @@ function paintModuleMeta() {
   const shown = shownModules();
   const on = shown.filter(([k]) => form.modules[k]).length;
   $("mod-meta").textContent = live ? `${on}/${shown.length} 켬` : "";
+  // 웰라이프 모드 - 보기만 (시험 기간용, 사용자 2026-10-13). 바꾸기는 PC 설정 파일. 옛 에이전트는 안 올려서 숨는다
+  const modes = isWellife() && Array.isArray(live?.modes) ? live.modes : [];
+  $("mod-modes").textContent = modes.length ? `모드 (PC 설정 파일에서 바꿈): ${modes.map(([k, v]) => `${k} ${v}`).join(" · ")}` : "";
+  $("mod-modes").classList.toggle("warn", modes.some(([, v]) => v !== "리허설"));
+  show($("mod-modes"), modes.length > 0);
   $("mod-apply").disabled = !c.isAdmin || busy || !modulesDirty() || on === 0;
 }
 async function applyModules() {
@@ -261,7 +267,7 @@ function savedSlots() {
     ...(isV3() ? { days: [...(Array.isArray(x.days) ? x.days : s.days || [])].sort() } : {}),
   }));
 }
-/** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관 (사용자 10-08: ②③④⑤ 따로, ⑤ 는 반복) */
+/** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관·운송장 전송 (사용자 10-08: ②~⑥ 따로, ⑤⑥ 은 반복도) */
 const runChipList = () => (isWellife() ? WELLIFE_RUN_CHIPS : RUN_CHIPS);
 /** 줄의 모듈은 이 업체 단추에 있는 것만 (업체 종류가 바뀌기 전에 저장한 줄 - 에이전트가 맞지 않는 모듈을 거절한다). 폼 줄과 보내는 값이 같은 곳을 지난다 */
 const fitSlot = (s) => (s.run ? { ...s, run: s.run.filter((k) => runChipList().some(([x]) => x === k)) } : s);
