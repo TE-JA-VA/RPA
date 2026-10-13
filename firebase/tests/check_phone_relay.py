@@ -120,6 +120,32 @@ def demo():
                                                  "sms_at": 1, "written_at": {".sv": "timestamp"}}))
     print("통과: 휴대폰 중계 끝에서 끝까지 (에뮬레이터)")
 
+    # PC 쪽 중계 (설계 13절 - 옵저버·ACTOR 가 쓰는 otp_relay.PhoneRelay): 열기 → 휴대폰이 쓴 번호 받기 → 지우기
+    import threading
+    import otp_relay
+    relay = otp_relay.PhoneRelay(agent, "ca", "pc1", "ph1", ["1588-1234"], "가나몰")
+    req = relay.open()
+    opened = agent.get(req_path)
+    assert opened["req_id"] == req and opened["senders"] == {"15881234": True} and opened["pcId"] == "pc1", opened
+    assert relay.wait(req, 0.5, time.sleep) is None                         # 아직 문자 없음
+    threading.Timer(1.0, lambda: on_sms(phone, "ca", "ph1", "1588-1234", sms)).start()
+    assert relay.wait(req, 10, time.sleep) == "482913"
+    relay.close(req)
+    assert agent.get(req_path) is None
+    stale = relay.open()                                                    # 남은 번호가 있어도 새 요청의 것만
+    agent_put_code = {"req_id": "old", "code": "999999", "sender": "15881234", "sms_at": 1, "written_at": {".sv": "timestamp"}}
+    assert _denied(lambda: agent.put(code_path, agent_put_code))          # PC 는 번호를 쓰지 못한다 (휴대폰만)
+    assert relay.wait(stale, 0.5, time.sleep) is None
+    relay.close(stale)
+    # ACTOR 저장 화면의 휴대폰 목록 - 에이전트 계정으로 업체의 meta/companies/{cid}/phones 를 읽는다, 휴대폰 계정은 못 읽는다
+    req_o = urllib.request.Request(f"http://127.0.0.1:9000/meta/companies/ca/phones.json?ns={PROJECT}-default-rtdb",
+                                   json.dumps({"ph1": {"label": "김OO 휴대폰", "owner": "김OO"}}).encode(), method="PUT",
+                                   headers={"Authorization": "Bearer owner"})
+    urllib.request.urlopen(req_o).read()
+    assert agent.get("meta/companies/ca/phones") == {"ph1": {"label": "김OO 휴대폰", "owner": "김OO"}}
+    assert _denied(lambda: phone.get("meta/companies/ca/phones"))
+    print("통과: PC 쪽 중계 (otp_relay) - 열기·받기·지우기, 휴대폰 목록")
+
 
 if __name__ == "__main__":
     demo()

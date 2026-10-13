@@ -27,10 +27,11 @@ import threading
 import time
 import tkinter as tk
 from ctypes import wintypes
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 from playwright.sync_api import sync_playwright
 
+import otp_relay
 import rpa_status as st
 import web_replay as rec
 
@@ -319,6 +320,16 @@ class Worker(threading.Thread):
         self.human(self.page)
         self.ui.put(("human_done",))
 
+    def _otp_relay(self, creds, label, stamp):
+        """미리보기의 인증번호: 인증 휴대폰을 정했으면 휴대폰 중계, 아니면 (또는 서버에 못 붙으면) 사람이 미리보기 창 칸에 칠 때까지."""
+        if creds.get("Phone") and creds.get("SmsSenders"):
+            try:
+                return otp_relay.agent_relay(creds["Phone"], creds["SmsSenders"], label)
+            except RuntimeError as e:
+                st.log_line(f"{stamp()} {e} - 미리보기 창에 직접 넣는 것으로 기다립니다")
+        return otp_relay.ManualOtp(on_wait=lambda: self.ui.put(
+            ("status", "미리보기 창의 인증번호 칸에 휴대폰으로 받은 번호를 넣어 주십시오 (2분 안).", BLUE)))
+
     def _do_preview(self, record, ids, creds, code, label):
         """새 프로필 브라우저로 켜 둔 단계를 따라 한다. 한 번 할 때마다 상태 기록 'observer' 한 건 (대시보드 '기록').
         로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다. 끝나면 (못 띄웠어도·중단해도) 늘 preview_done 과 프로필 지우기."""
@@ -341,6 +352,8 @@ class Worker(threading.Thread):
             rp.first_page = ctx.pages[0] if ctx.pages else None
             rp.page_hook = lambda pg: self._set_bounds(pg, where)               # 기록 창 자리에 겹쳐 띄운다
             rp.cancel, rp.pause = self.cancel, self.pause
+            if any(s["kind"] == "otp" for s in steps):
+                rp.otp = self._otp_relay(creds, label, stamp)
 
             def progress(i, state, how):
                 if state == "paused":
@@ -385,6 +398,7 @@ def new_preset(no, name=None, code=""):
     """화면이 들고 있는 프리셋 하나. raw = 이번에 기록한 단계, loaded = 저장돼 있던 기록 (둘 중 하나)."""
     return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "start_url": None,
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
+            "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
 
 
@@ -403,8 +417,18 @@ def load_presets():
         site = sites.get(st.preset_site_key(p["no"])) if isinstance(sites, dict) else None
         if isinstance(site, dict):
             q["id"], q["has_pw"] = site.get("ID") or "", bool(site.get("PW"))
+            q["phone"], q["senders"] = site.get("Phone") or "", ", ".join(site.get("SmsSenders") or [])
         out.append(q)
     return out
+
+
+def senders_list(text):
+    """'1588-1234, 02 123 4567' → ['15881234', '021234567'] (숫자만)."""
+    return [d for d in (otp_relay.digits(x) for x in re.split(r"[,;/]+", text or "")) if d]
+
+
+def has_otp(record):
+    return any(s.get("kind") == "otp" for s in (record or {}).get("steps") or [])
 
 
 def stored_password(no):
@@ -441,11 +465,11 @@ def keep_dates(files, old, logins_changed, now):
     return files
 
 
-def store(files, logins, fresh=()):
+def store(files, logins, fresh=(), phones=None):
     """프리셋 파일과 Sites 의 PRESETn 을 쓴다. 못 쓰면 화면에 보일 문장 (콘솔 없는 exe 라 조용히 넘어가면 안 된다), 되면 None."""
     try:
         st.write_presets(files)
-        st.save_preset_sites(files, logins, fresh=fresh)
+        st.save_preset_sites(files, logins, fresh=fresh, phones=phones)
     except (OSError, ValueError, RuntimeError) as e:
         return f"저장하지 못했습니다: {e} - 잠시 뒤 다시 저장하세요"
     return None
@@ -465,6 +489,8 @@ def validate_presets(presets):
             return p["no"], (f"{tag}: 사이트코드 {p['code']} 를 {codes[p['code']]} 도 사용합니다. "
                              "다른 사이트코드를 입력하여 주십시오.")
         codes[p["code"]] = tag
+        if has_otp(p["record"]) and not (p.get("phone") and senders_list(p.get("senders"))):
+            return p["no"], f"{tag}: 인증번호 단계가 있습니다. 인증 휴대폰과 발신번호를 정해 주십시오."
         if not (p.get("id") or "").strip():
             return p["no"], f"{tag}: 아이디가 필요합니다."
         if not (p.get("pw") or p.get("has_pw")):
@@ -511,7 +537,9 @@ class App:
         root.geometry(f"{self.panel_w}x{B - T - int(32 * scale)}+{L + self.browser_w}+{T}")
         self.name_var, self.code_var = tk.StringVar(root), tk.StringVar(root)
         self.id_var, self.pw_var = tk.StringVar(root), tk.StringVar(root)
+        self.senders_var, self.phones, self.phone_ids = tk.StringVar(root), None, [""]
         self._build()
+        threading.Thread(target=self._load_phones, daemon=True).start()
         self._load_fields()
         root.update()
         self.worker = Worker(self.browser_bounds(), self.ui, hint)
@@ -551,6 +579,13 @@ class App:
             self._entry(form, lvar, 18).grid(row=r, column=1, sticky="we", padx=(6, 12), pady=y, ipady=3)
             tk.Label(form, text=right, font=F, bg=CARD, fg=MUTED).grid(row=r, column=2, sticky="w", pady=y)
             self._entry(form, rvar, 12, show=show).grid(row=r, column=3, sticky="we", padx=(6, 0), pady=y, ipady=3)
+        tk.Label(form, text="인증 휴대폰", font=F, bg=CARD, fg=MUTED).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.phone_box = ttk.Combobox(form, state="readonly", width=16, font=F, values=["(없음)"])
+        self.phone_box.grid(row=2, column=1, sticky="we", padx=(6, 12), pady=(6, 0))
+        self.phone_box.bind("<<ComboboxSelected>>", lambda e: self._field_changed())
+        tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", pady=(6, 0))
+        self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
+        self.senders_var.trace_add("write", lambda *a: self._field_changed())
         form.columnconfigure(1, weight=1)
         self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
                                 wraplength=self.panel_w - 2 * pad - 26)
@@ -643,14 +678,36 @@ class App:
         self.code_var.set(p["code"])
         self.id_var.set(p["id"])
         self.pw_var.set(p["pw"])
+        self.senders_var.set(p["senders"])
+        self._fill_phone_box()
         self._loading = False
         self.pw_hint.config(text=("저장된 비밀번호가 있습니다. " if p["has_pw"] else "")
-                            + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.")
+                            + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.\n"
+                            + "문자 인증번호를 받는 사이트면 인증 휴대폰과 발신번호(여러 개면 쉼표로)를 정해 주십시오."
+                            + (" (휴대폰 목록을 불러오지 못했습니다)" if self.phones == [] and getattr(self, "phones_failed", False) else ""))
+
+    def _load_phones(self):
+        """업체 휴대폰 목록 (관리 화면 '휴대폰 추가') - 에이전트 계정으로. 못 읽으면 빈 목록 (저장된 값은 그대로 보인다)."""
+        try:
+            self.ui.put(("phones", otp_relay.phone_list()))
+        except Exception:
+            self.ui.put(("phones", None))
+
+    def _fill_phone_box(self):
+        p = self.presets[self.cur]
+        pairs = list(self.phones or [])
+        if p["phone"] and p["phone"] not in [k for k, _ in pairs]:
+            pairs.append((p["phone"], p["phone"]))         # 목록에 없는 (못 불러온·지운) 휴대폰도 저장된 값은 보인다
+        self.phone_ids = [""] + [k for k, _ in pairs]
+        self.phone_box.config(values=["(없음)"] + [label for _, label in pairs])
+        self.phone_box.current(self.phone_ids.index(p["phone"]) if p["phone"] in self.phone_ids else 0)
 
     def _store_fields(self):
         p = self.presets[self.cur]
+        i = self.phone_box.current()
         p.update(name=self.name_var.get().strip() or p["name"], code=self.code_var.get().strip(),
-                 id=self.id_var.get(), pw=self.pw_var.get())
+                 id=self.id_var.get(), pw=self.pw_var.get(), senders=self.senders_var.get(),
+                 phone=self.phone_ids[i] if 0 <= i < len(self.phone_ids) else p["phone"])
 
     def _field_changed(self):
         if not getattr(self, "_loading", False) and hasattr(self, "list_title"):
@@ -691,8 +748,18 @@ class App:
     def _final(self, p):
         if p["raw"]:
             start = p["start_url"] or next((s["href"] for s in p["raw"] if s["kind"] == "goto"), "")
-            return rec.finalize(json.loads(json.dumps(p["raw"])), datetime.date.today(), start, viewport=p["viewport"])
-        return p["loaded"]
+            final = rec.finalize(json.loads(json.dumps(p["raw"])), datetime.date.today(), start, viewport=p["viewport"])
+        else:
+            final = p["loaded"]
+        for sid, on in p["otp"].items():          # 단계 목록에서 바꾼 인증번호 칸 (기록이 못 알아본 것·잘못 알아본 것)
+            i = next((k for k, s in enumerate(final["steps"]) if s["id"] == sid), None) if final else None
+            if i is not None and (final["steps"][i]["kind"] == "otp") != on:
+                rec.set_otp(final["steps"], i, on)
+        return final
+
+    def toggle_otp(self, sid, on):
+        self.presets[self.cur]["otp"][sid] = on
+        self.render()
 
     def _var(self, p, sid):
         return p["enabled"].setdefault(sid, tk.BooleanVar(self.root, value=True))
@@ -726,6 +793,11 @@ class App:
             tk.Button(row, text="✕", font=(UI, 10), fg="#9ca3af", bg=CARD, activebackground=RED_L, activeforeground=RED,
                       relief="flat", bd=0, cursor="hand2", command=lambda sid=sid: self.delete(sid)
                       ).pack(side="right", anchor="n", padx=6, pady=4)
+            if s["kind"] in ("fill", "otp"):        # 글자 칸 - 문자로 받는 인증번호 칸인지 사람이 바꿀 수 있다
+                is_otp = s["kind"] == "otp"
+                tk.Button(row, text="인증번호 칸 해제" if is_otp else "인증번호 칸", font=F_SMALL, fg=BLUE if is_otp else MUTED,
+                          bg=CARD, activebackground=BLUE_L, relief="flat", bd=0, cursor="hand2",
+                          command=lambda sid=sid, on=not is_otp: self.toggle_otp(sid, on)).pack(side="right", anchor="n", padx=2, pady=4)
             tk.Label(row, text=f"{n:2d}", font=F_SMALL, bg=CARD, fg=MUTED, width=3, anchor="e").pack(side="left", anchor="n", pady=6)
             text = re.sub(r" \(\d+단계 뒤에 새로 생긴 것\)", " (새로 생긴 것)", rec.describe(s))
             warn = s["kind"] == "goto" and "로그인 세션 값을 감지" in text
@@ -800,7 +872,8 @@ class App:
         self.previewing, self.paused, self.stopping = True, False, False
         self.paint_buttons()
         self.status.config(text="미리보기 중", fg=BLUE)
-        self.worker.cmd.put(("preview", r, ids, {"ID": p["id"].strip(), "PW": pw}, p["code"] or "000",
+        self.worker.cmd.put(("preview", r, ids, {"ID": p["id"].strip(), "PW": pw, "Phone": p["phone"],
+                                                  "SmsSenders": senders_list(p["senders"])}, p["code"] or "000",
                              f"{circled(self.cur + 1)} {p['name']}"))
 
     def toggle_pause(self):
@@ -837,7 +910,7 @@ class App:
                 for s in r["steps"]:
                     s.pop("id", None)
             out.append({"no": no, "name": p["name"], "code": p["code"], "record": r,
-                        "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"]})
+                        "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"]})
         problem = validate_presets(out)
         if problem:
             self.select(problem[0] - 1)
@@ -865,7 +938,8 @@ class App:
                 return self.status.config(text=f"{circled(o['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다. "
                                             "해당 단계를 수정해주십시오.", fg=RED)
         fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
-        problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh)
+        problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh,
+                        phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]})
         if problem:
             return self.status.config(text=problem, fg=RED)
         for p, f in zip(self.presets, files):
@@ -899,6 +973,9 @@ class App:
                     dirty = dirty or m[1] == self.cur
                 elif m[0] == "viewport":
                     self.presets[m[1]]["viewport"] = m[2]
+                elif m[0] == "phones":
+                    self.phones, self.phones_failed = m[1] or [], m[1] is None
+                    self._load_fields()
                 elif m[0] == "status":
                     self.status.config(text=m[1], fg=m[2])
                 elif m[0] == "ready":
@@ -1077,6 +1154,7 @@ def check():
         root.destroy()
     except Exception as e:
         print(f"문제: Tcl/Tk 를 불러오지 못했습니다 ({type(e).__name__}: {e})")
+    print(otp_relay.check_line())
     print(CHECK_DONE, flush=True)
     return 0
 

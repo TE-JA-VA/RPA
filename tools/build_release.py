@@ -96,13 +96,17 @@ NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--remove-output",
 # (2026-10-02 시연 노트북. 샌드박스는 이 PC 의 CPU 를 그대로 써서 못 잡는다). Nuitka 가 LDFLAGS 를 링크에 붙인다
 NUITKA_ENV = {"LDFLAGS": "-march=x86_64"}
 PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright"]
+# 문자 2차인증 중계(otp_relay)가 쓰는 에이전트 모듈 - firebase/agent 에 있어 빌드 때 PYTHONPATH 로 찾게 한다 (설계 13절)
+AGENT_DIR = os.path.join(REPO, "firebase", "agent")
+AGENT_MODULES = ["--include-module=fb", "--include-module=secret"]
 TK_PLUGIN = "--enable-plugin=tk-inter"
 # 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
 # --check 는 부른 쪽이 출력을 받는다)
 NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_PROCESS}"],
-                "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_OBSERVER}", *PLAYWRIGHT],
+                "Prepare_RPA.exe": ["--windows-console-mode=force", f"--windows-icon-from-ico={ICON_OBSERVER}", *PLAYWRIGHT,
+                                    *AGENT_MODULES],
                 "Prepare_Observer.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
-                                         *PLAYWRIGHT, TK_PLUGIN]}
+                                         *PLAYWRIGHT, TK_PLUGIN, *AGENT_MODULES]}
 ISS_PATH = os.path.join(REPO, "release", "installer.iss")
 # Inno Setup 6 의 ISCC.exe 를 찾는 자리 (이 PC 는 winget 사용자 설치 → LOCALAPPDATA)
 ISCC_DIRS = (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6"),
@@ -369,7 +373,8 @@ def build_exes(work_dir, only=None):
     for exe in (only or EXES):
         if TK_PLUGIN in NUITKA_EXTRA[exe] and tk_dirs is None:
             tk_dirs = tcl_tk_dirs(work_dir)
-        subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True, env=dict(os.environ, **NUITKA_ENV))
+        env = dict(os.environ, **NUITKA_ENV, PYTHONPATH=os.pathsep.join(filter(None, [AGENT_DIR, os.environ.get("PYTHONPATH")])))
+        subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True, env=env)
     ver = subprocess.run([py, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
     return f"nuitka {ver} · python {platform.python_version()}"
 

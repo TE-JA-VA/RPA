@@ -222,6 +222,9 @@ def _replay_problems(name, site):
         return [f"{name}: 프리셋 {no} 의 기록이 없습니다 (ACTOR 오토파일럿에서 기록하고 저장하세요)"]
     if not re.fullmatch(r"\d{3}", p.get("code") or ""):
         return [f"{name}: 프리셋 {no} 의 사이트코드가 숫자 세 자리가 아닙니다 ({p.get('code')!r})"]
+    if any(s.get("kind") == "otp" for s in p["record"].get("steps") or []) and not (site.get("Phone") and site.get("SmsSenders")):
+        return [f"{name}: 프리셋 {no} 에 인증번호 단계가 있는데 인증 휴대폰·발신번호가 정해지지 않았습니다 "
+                "(ACTOR 오토파일럿 저장 화면에서 정하세요)"]
     return []
 
 
@@ -1042,6 +1045,10 @@ def action_replay(page, name, site):
                              log=log, hide_values=True, shot_dir=BASE_DIR)
     rp.first_page = page
     rp.fit_viewport = True
+    if any(s.get("kind") == "otp" for s in p["record"]["steps"]):     # 2차인증 - 휴대폰 중계 (설계 13절, 에이전트 계정으로)
+        import otp_relay
+        rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
+        log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']} 으로 받습니다")
     # 알림창은 재생기 하나만 받는다 - 둘이 받으면 로그가 두 줄이고, 대시보드로 가는 글이 줄지 않았다 (2026-10-01 검토)
     page.remove_listener("dialog", on_dialog)
     try:
@@ -1193,6 +1200,8 @@ def cmd_check():
         log(f"  읽기 실패: {e}")
         return 1
 
+    import otp_relay
+    log(f"  {otp_relay.check_line()}")
     if not cfg:   # 새로 깐 PC 는 프리셋이 없다 - 오류가 아니다 (빌드가 끝 줄로 점검한다)
         log("  프리셋이 아직 없습니다 (ACTOR 오토파일럿에서 쇼핑몰 프리셋을 저장하면 생깁니다).")
 

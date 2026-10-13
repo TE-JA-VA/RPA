@@ -965,11 +965,12 @@ def is_preset_site(key):
     return bool(re.fullmatch(r"PRESET\d+", str(key)))
 
 
-def save_preset_sites(presets, logins, fresh=()):
+def save_preset_sites(presets, logins, fresh=(), phones=None):
     """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
     presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
     기록이 있는 프리셋만 칸을 둔다 - 새 칸과 fresh (이번에 다시 기록한 번호) 는 꺼짐(Stts 9), 나머지 있던 칸의 켬/끔은 그대로
     (확인 안 한 기록이 다음 자동 실행에 끼지 않게 - 2026-10-01 검토). 기록이 없거나 빠진 번호의 칸은 지운다.
+    phones: {번호: (인증 휴대폰 phoneId, [발신번호])} - 문자 2차인증 (휴대폰 중계 설계 13절). 없는 번호는 있던 값 그대로.
     사용자 설정이 아예 없으면 FileNotFoundError (자격증명 없는 설정을 새로 만들지 않는다 - write_routine_modules 와 같다)."""
     data = read_user_config()
     if not data:
@@ -986,6 +987,9 @@ def save_preset_sites(presets, logins, fresh=()):
         mine[key] = {"URL": p["record"].get("start_url") or old.get("URL", ""), "ID": (login_id or "").strip(),
                      "PW": pw or old.get("PW", ""), "Action": [REPLAY_ACTION],
                      "Stts": 9 if (not old or p["no"] in fresh) else old.get("Stts", 9), "Preset": p["no"], "note": p["name"]}
+        phone, senders = (phones or {}).get(p["no"]) or (old.get("Phone"), old.get("SmsSenders"))
+        if phone and senders:
+            mine[key].update(Phone=phone, SmsSenders=list(senders))
     data[SITES_SECTION] = {**others, **mine}       # 프리페어는 이 순서로 돈다 (번호 순)
     write_user_config(data)
 

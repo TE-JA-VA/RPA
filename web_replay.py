@@ -194,6 +194,12 @@ QUIET_JS = """() => new Promise(res => {
 })"""
 
 KINDS_MERGE = ("fill", "secret", "select")        # 같은 칸에 잇달아 온 것은 마지막 값 하나로
+# 2차인증 (휴대폰 중계 설계 13절): 숫자 4~8자리를 친 칸이고 단서에 이런 말이 있으면 '인증번호 칸' - 값은 남기지 않는다 (한 번 쓰는 번호)
+OTP_VALUE = re.compile(r"^\d{4,8}$")
+OTP_HINT = re.compile(r"인증|otp|auth|cert|verif", re.I)
+OTP_REJECT = re.compile(r"인증.*(틀|일치|잘못|만료|다시|실패)|(틀|일치하지|잘못|만료).*인증")
+OTP_TRIES = 3                # 모두 합쳐 (처음 + 2번 더, 사용자 2026-10-13)
+OTP_WAIT = 120               # 번호 하나를 기다리는 초 (요청이 열려 있는 2분)
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
 OPTIONAL_WAIT = 3.0
@@ -344,6 +350,32 @@ def appears_after(steps, j):
     return k
 
 
+def otp_like(s):
+    """사람이 문자로 받은 인증번호를 친 칸으로 보인다 (숫자 4~8자리 + 칸 단서에 '인증'·OTP 같은 말)."""
+    t = s.get("target") or {}
+    hints = " ".join(str(t.get(k) or "") for k in ("placeholder", "label", "name", "id", "aria", "title"))
+    return s["kind"] == "fill" and bool(OTP_VALUE.match(str(s.get("value", "")).strip())) and bool(OTP_HINT.search(hints))
+
+
+def set_otp(steps, i, on):
+    """i 단계를 인증번호 칸으로 (값을 지우고, 바로 앞 같은 창 누르기를 '인증번호 받기' 로) 또는 되돌린다 (되돌리면 값은 빈 칸).
+    ACTOR 단계 목록의 [인증번호 칸] 단추와 기록 다듬기가 쓴다. steps 를 고친다."""
+    s = steps[i]
+    send = next((j for j in range(i - 1, -1, -1) if steps[j]["kind"] == "click" and steps[j].get("page") == s.get("page")), None)
+    if on:
+        s["kind"] = "otp"
+        s.pop("value", None)
+        s.pop("date", None)
+        if send is not None:
+            steps[send]["otpSend"] = True
+    else:
+        s["kind"] = "fill"
+        s.setdefault("value", "")
+        if send is not None and not any(x["kind"] == "otp" for x in steps[send + 1:i] + steps[i + 1:]):
+            steps[send].pop("otpSend", None)
+    return steps
+
+
 def finalize(steps, record_date, start_url, viewport=None):
     """기록을 다듬는다: 기다린 시간, 날짜는 오늘 기준, 공지 닫기는 '있을 때만', 아이디·비밀번호는 설정 값."""
     out, prev = [], None
@@ -357,6 +389,10 @@ def finalize(steps, record_date, start_url, viewport=None):
                 s["appearsAfter"] = k
         s["gap"] = s["t"] - prev if prev else 0
         prev = s.pop("t")
+        if otp_like(s):
+            set_otp(out + [s], len(out), True)
+            out.append(s)
+            continue
         if s["kind"] == "fill" and parse_date(s.get("value", "")):
             d, fmt = parse_date(s["value"])
             s["date"] = {"offset": (d - record_date).days, "fmt": fmt}
@@ -475,8 +511,12 @@ def describe(s, hide_values=False):
         d = f"'{n}' 에서 Enter"
     elif k == "hover":
         d = f"'{n}' 에 마우스 올리기 (하위 메뉴 열기)"
+    elif k == "otp":
+        d = f"'{n}' 칸에 문자로 받은 인증번호 넣기"
     else:
         d = k
+    if s.get("otpSend"):
+        d += " (인증번호 문자 요청)"
     if s.get("optional"):
         d += " (떠 있을 때만)"
     if s.get("double"):
@@ -538,6 +578,14 @@ def candidates(t):
     return out
 
 
+class OtpRetry(Exception):
+    """인증번호를 못 받았거나 사이트가 거절했다 - '인증번호 받기' 부터 다시 (모두 OTP_TRIES 번)."""
+
+    def __init__(self, why, rejected=False):
+        super().__init__(why)
+        self.rejected = rejected
+
+
 class Replayer:
     def __init__(self, context, rec, creds, out_dir, code, today=None, review=False, log=print, step_timeout=30.0,
                  hide_values=False, shot_dir=None):
@@ -556,6 +604,10 @@ class Replayer:
         self.download_timeout_ms = DOWNLOAD_TIMEOUT_MS
         self.downloads = []         # 지금 단계에서 온 파일 - 어느 창에서 왔든 (누른 창 말고 팝업이 내려 줄 때가 있다)
         self.elapsed = 0.0
+        # 2차인증 (설계 13절): otp = 휴대폰 중계 (open() → 요청, wait(요청, 초, tick, field) → 번호|None, close(요청)). 없으면 인증번호 칸에서 멈춘다
+        self.otp, self.otp_wait = None, OTP_WAIT
+        self.otp_req, self.otp_try, self.otp_send, self.otp_check, self.otp_mark = None, 0, None, None, 0
+        self.dialogs = []           # 재생 중 뜬 알림창 글 (사이트가 인증번호를 거절했나 본다)
 
     def _watch(self, page):
         if page in self.watched:
@@ -563,6 +615,7 @@ class Replayer:
         self.watched.add(page)
 
         def on_dialog(d):
+            self.dialogs.append(d.message)
             self.log(f"      알림창 '{_cut(d.message, self.hide_values)}' -> 확인")
             try:
                 d.accept()
@@ -788,6 +841,8 @@ class Replayer:
             self._fill(loc, v)
         elif k == "secret":
             self._fill(loc, self.creds["PW"])
+        elif k == "otp":
+            self._fill(loc, self._otp_code(page, loc))
         elif k == "select":
             try:
                 loc.select_option(label=s["option"], timeout=5000)
@@ -797,6 +852,53 @@ class Replayer:
             loc.set_checked(bool(s["checked"]), timeout=5000)
         elif k == "enter":
             loc.press("Enter", timeout=5000)
+
+    # --- 2차인증 (설계 13절) ---
+    def _otp_open(self):
+        """요청을 연다 ('인증번호 받기' 누르기 전 - 문자가 요청보다 먼저 오면 휴대폰이 보내지 않는다)."""
+        self._otp_close()
+        self.otp_try += 1
+        self.otp_req = self.otp.open()
+        self.log(f"      인증번호 요청을 열었습니다 ({self.otp_try}/{OTP_TRIES})")
+
+    def _otp_close(self):
+        if self.otp is not None and self.otp_req is not None:
+            try:
+                self.otp.close(self.otp_req)
+            except Exception as e:
+                self.log(f"      (인증번호 요청을 지우지 못했습니다: {type(e).__name__})")
+        self.otp_req = None
+
+    def _otp_code(self, page, loc):
+        if self.otp is None:
+            raise NotFound("인증 휴대폰이 정해지지 않았습니다 - ACTOR 오토파일럿 저장 화면에서 인증 휴대폰을 고르세요")
+        if self.otp_req is None:
+            self._otp_open()            # '인증번호 받기' 를 못 알아본 기록 - 지금이라도 연다
+        self.log(f"      인증번호 문자를 기다립니다 ({self.otp_try}/{OTP_TRIES}, 최대 {self.otp_wait:.0f}초)")
+        code = self.otp.wait(self.otp_req, self.otp_wait, lambda sec: self._wait(page, sec * 1000), field=loc)
+        if not code:
+            raise OtpRetry("문자가 오지 않았습니다")
+        self.otp_mark = len(self.dialogs)
+        return code
+
+    def _otp_rejected(self, page, otp_step):
+        """인증번호를 넣고 [확인] 한 뒤: 사이트가 거절했나 - 알림창에 '인증 … 틀림·일치·만료' 가 떴거나, 3초 뒤에도 같은 주소에 그 칸이 그대로."""
+        if any(OTP_REJECT.search(m) for m in self.dialogs[self.otp_mark:]):
+            return True
+        self._wait(page, 3000)
+        if self.dialogs[self.otp_mark:] and any(OTP_REJECT.search(m) for m in self.dialogs[self.otp_mark:]):
+            return True
+        frame = self._frame(page, otp_step["frame"])
+        if frame is None or url_path(frame.url) != otp_step["url"]:
+            return False
+        for how, sel, nth in candidates(otp_step["target"]):
+            try:
+                loc = frame.locator(sel)
+                if loc.count() == 1 and loc.first.is_visible() and not (loc.first.input_value() or "").strip():
+                    return True         # 칸이 비워진 채 그대로 (틀린 번호를 지우고 다시 받으라는 사이트)
+            except Exception:
+                continue
+        return False
 
     def _save(self, dl):
         os.makedirs(self.out_dir, exist_ok=True)
@@ -877,15 +979,54 @@ class Replayer:
             if k is not None:
                 self.needs.setdefault(k, []).append(j)
         started = time.time()
-        for i, s in enumerate(steps, 1):
+        try:
+            self._run_steps(steps)
+        finally:
+            self._otp_close()           # 성공·실패·중단 모두 - 요청·번호를 서버에 남기지 않는다
+        self.elapsed = time.time() - started
+        return all(r[1] != "fail" for r in self.results) and len(self.results) == len(steps)
+
+    def _run_steps(self, steps):
+        i = 0
+        while i < len(steps):
+            i += 1
+            s = steps[i - 1]
             text = describe(s, self.hide_values)
             try:
                 self._hold(i)
                 if self.progress:
                     self.progress(i, "run", "")
+                if s.get("otpSend") and self.otp is not None:
+                    self.otp_send = i
+                    self._otp_open()
                 how = self._step(i - 1, s)
+                if s["kind"] == "otp":
+                    self.otp_check = i + 1          # 다음 누르기([확인]) 뒤에 사이트가 받았나 본다
+                elif self.otp_check == i:
+                    self.otp_check = None
+                    otp_i = next(j for j in range(i - 1, 0, -1) if steps[j - 1]["kind"] == "otp")
+                    if self._otp_rejected(self.pages.get(s["page"]), steps[otp_i - 1]):
+                        raise OtpRetry("사이트가 인증번호를 받지 않았습니다", rejected=True)
+                    self._otp_close()               # 통과 - 요청·번호를 지운다
                 self.results.append((i, "ok", how))
                 self.log(f"  {i:2d}/{len(steps)} {text}  [{how}]")
+            except OtpRetry as e:
+                self.results.append((i, "ok" if e.rejected else "fail", str(e)))
+                if self.otp_try < OTP_TRIES:
+                    back = self.otp_send or next(j for j in range(i, 0, -1) if steps[j - 1]["kind"] == "otp")
+                    self.log(f"  {i:2d}/{len(steps)} {text}  - {e}. {back}단계부터 다시 ({self.otp_try + 1}/{OTP_TRIES})")
+                    del self.results[back - 1:]
+                    self.otp_check = None
+                    self._otp_close()               # 다시 열 때 새 요청 (받기 단추가 없는 기록이면 인증번호 칸에서 연다)
+                    i = back - 1
+                    continue
+                why = (f"사이트가 인증번호를 {OTP_TRIES}번 거절했습니다" if e.rejected
+                       else f"인증번호를 {OTP_TRIES}번 받지 못했습니다 ({e})")
+                self.results[-1] = (i, "fail", why)
+                self.log(f"  {i:2d}/{len(steps)} {text}  - 실패: {why}")
+                if self.progress:
+                    self.progress(*self.results[-1])
+                break
             except Cancelled:
                 self.results.append((i, "fail", STOPPED))
                 self.log(f"  {i:2d}/{len(steps)} {text}  - {STOPPED}")
@@ -908,15 +1049,13 @@ class Replayer:
                 try:
                     os.makedirs(self.shot_dir, exist_ok=True)
                     shot = os.path.join(self.shot_dir, f"실패_{i}단계.png")
-                    self.pages.get(s["page"], page).screenshot(path=shot)
+                    self.pages.get(s["page"], self.pages[0]).screenshot(path=shot)
                     self.log(f"      화면 사진: {shot}")
                 except Exception:
                     pass
                 break
             if self.progress:
                 self.progress(*self.results[-1])
-        self.elapsed = time.time() - started
-        return all(r[1] != "fail" for r in self.results) and len(self.results) == len(steps)
 
 
 def replay(rec, creds, out_dir, code, today=None, review=False, headless=True, log=print, step_timeout=30.0):

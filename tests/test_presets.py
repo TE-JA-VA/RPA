@@ -108,6 +108,14 @@ check("끄기는 비밀번호가 없어도 된다", st.set_preset_switches({"PRE
 st.save_preset_sites([dict(ps[0], record=None), ps[1], ps[2]], {})
 check("기록을 지운 프리셋의 칸은 지운다", "PRESET1" not in st.read_user_config()["Sites"])
 st.save_preset_sites(ps, {1: ("seller01", PW)})
+st.save_preset_sites(ps, {1: ("seller01", None)}, phones={1: ("kim", ["15881234", "0212345678"])})
+s1 = st.read_user_config()["Sites"]["PRESET1"]
+check("인증 휴대폰·발신번호를 PRESETn 칸에 (휴대폰 중계 설계 13절)", s1.get("Phone") == "kim"
+      and s1.get("SmsSenders") == ["15881234", "0212345678"] and s1.get("PW"), str({k: v for k, v in s1.items() if k != "PW"}))
+st.save_preset_sites(ps, {1: ("seller01", None)})
+check("휴대폰을 안 넘기면 있던 값 그대로", st.read_user_config()["Sites"]["PRESET1"].get("Phone") == "kim")
+st.save_preset_sites(ps, {1: ("seller01", None)}, phones={1: ("", [])})
+check("'(없음)' 으로 바꾸면 휴대폰 칸을 지운다", "Phone" not in st.read_user_config()["Sites"]["PRESET1"])
 with open(st.presets_path(), "w", encoding="utf-8") as f:
     f.write("{깨진")
 check("깨진 프리셋 파일은 ValueError (덮어쓰지 않게)", raises(ValueError, st.read_presets))
@@ -272,6 +280,12 @@ dup = rr.validate_presets([P(1), P(2, code="012")])
 check("두 프리셋이 같은 사이트코드면 막는다 (루틴은 한 코드에 파일 하나 - Review Focus 2)", bool(dup) and dup[0] == 2
       and "012" in dup[1], str(dup))
 check("아이디가 없으면 막는다", (rr.validate_presets([P(1, login=" ")]) or (0, ""))[0] == 1)
+OTP_R = {"steps": [{"kind": "click", "otpSend": True}, {"kind": "otp"}]}
+check("인증번호 단계가 있는데 인증 휴대폰이나 발신번호가 없으면 막는다 (설계 13절)",
+      (rr.validate_presets([P(1, record=OTP_R)]) or (0, ""))[0] == 1
+      and "인증 휴대폰" in (rr.validate_presets([dict(P(1, record=OTP_R), phone="kim", senders=" , ")]) or (0, ""))[1]
+      and rr.validate_presets([dict(P(1, record=OTP_R), phone="kim", senders="1588-1234")]) is None)
+check("발신번호는 숫자만, 쉼표로 여러 개", rr.senders_list("1588-1234, 02 123 4567;") == ["15881234", "021234567"])
 check("비밀번호가 저장돼 있지도 않고 치지도 않았으면 막는다", (rr.validate_presets([P(1, has_pw=False)]) or (0, ""))[0] == 1
       and rr.validate_presets([P(1, has_pw=False, pw="x")]) is None)
 check("다른 계정의 관리자 권한이면 멈춘다 (비밀번호가 그 계정으로 잠긴다)",
@@ -456,6 +470,14 @@ got = {m: subprocess.run([sys.executable, "-c", NO_CONSOLE, m], cwd=ROOT, captur
        for m in ("as_is", "fix")}
 check("표준 핸들이 못 쓰는 값이면 그대로는 WinError 6, fix_std_handles 뒤에는 Playwright 드라이버가 뜬다",
       got["as_is"].endswith("WinError 6") and got["fix"].endswith("드라이버 뜸"), str(got))
+
+orig_read = wr.status.read_presets
+wr.status.read_presets = lambda: [{"no": 7, "code": "012", "record": OTP_R}]
+no_phone = wr._replay_problems("PRESET7", {"Preset": 7})
+with_phone = wr._replay_problems("PRESET7", {"Preset": 7, "Phone": "kim", "SmsSenders": ["15881234"]})
+wr.status.read_presets = orig_read
+check("옵저버는 인증 휴대폰이 없는 인증번호 프리셋을 시작하지 않는다 (까닭을 남김)", no_phone and "인증 휴대폰" in no_phone[0] and with_phone == [],
+      (no_phone, with_phone))
 
 print()
 print(f"실패: {'없음' if not fails else fails}")

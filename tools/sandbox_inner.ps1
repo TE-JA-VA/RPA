@@ -76,6 +76,7 @@ foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝"), @("Prepare_RPA
     Check "$n 가 켜져 끝까지 간다" ($done -and ($u8.Contains($e[2]) -or $ks.Contains($e[2]))) ($u8.Substring([Math]::Max(0, $u8.Length - 300)))
 }
 # 브라우저는 깔린 Edge (2026-10-06 - 같이 싣던 Chromium 713MB 를 뺐다). 프리페어 --selftest 는 위에서 Edge 로 내장 로그인 폼을 채웠다
+Check "옵저버·ACTOR exe 가 인증번호 중계 모듈을 불러온다 (fb·secret 을 exe 에 실음 - 설계 13절)" (($outs["Prepare_RPA.exe --check"] -match "인증번호 중계: 준비됨") -and ($outs["Prepare_Observer.exe --check"] -match "인증번호 중계: 준비됨")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
 Check "ACTOR 오토파일럿 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: Microsoft Edge …')" ($outs["Prepare_Observer.exe --check"] -match "브라우저: Microsoft Edge \d") (($outs["Prepare_Observer.exe --check"] -split "`n" | Where-Object { $_ -match "브라우저" }) -join " / ")
 # 옵저버를 시작 메뉴처럼 붙을 콘솔 없이 켠다 (2026-10-02 첫 실행: 표준 핸들이 못 쓰는 값이라 Playwright 가 WinError 6 -
 # --check 는 콘솔에서 불러 못 잡았다). 콘솔 없는 pythonw 가 띄우고 관리자 권한은 이 스크립트에서 물려받는다 (UAC 창 없음).
