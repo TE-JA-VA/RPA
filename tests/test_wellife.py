@@ -590,7 +590,7 @@ def _ui_boom(*_):
 
 wellife.sales_slip_stage = _ui_boom
 res = wellife.module_sap(types.SimpleNamespace(status=Rec(), log=lambda m: None), actx)
-check("SAP 화면의 UIA 오류는 ('failed', 'UI 오류: …')", res == ("failed", "UI 오류: RuntimeError"), str(res))
+check("SAP 화면의 UIA 오류는 ('failed', 'UI 오류: … - 문구')", res == ("failed", "UI 오류: RuntimeError - COMError 흉내"), str(res))
 wellife.goto_screen_by_menu, wellife.sales_slip_stage = _saved
 
 
@@ -906,8 +906,9 @@ wellife._top_window = _saved_top
 
 # 물류대기: 조회 -> 전체선택 -> 저장
 def hold_rr(rows=1):
-    grid = types.SimpleNamespace(rectangle=lambda: Rect(0, 50, 200, 300),
-                                 descendants=lambda control_type=None: [1] * rows)
+    grid = types.SimpleNamespace(rectangle=lambda: Rect(0, 50, 200, 300),     # 머리글 체크 칸 + 줄 rows 개
+                                 descendants=lambda control_type=None: [El(wellife.CHECK_COL)] if control_type == "Header"
+                                 else [1] * rows)
     return pop_rr(status=Rec(), click_subtab=lambda app, hwnd, name: acts.append(("tab", name)),
                   STOCK_GENERAL_TAB_NAME="일반", get_onscreen_tables=lambda win: [grid],
                   wait_grid_spinner_gone=lambda *a, **k: True,
@@ -1130,7 +1131,7 @@ for icon, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")
           icons == [wellife.INVOICE_ICON] and res[0] == want, f"{res} {icons}")
 wellife.invoice_send = lambda rr_, ctx_, live: (_ for _ in ()).throw(RuntimeError("COMError 흉내"))
 res = wellife.module_invoice_send(nav_rr(), ictx, True)
-check("UI 오류는 ('failed', 'UI 오류: …')", res == ("failed", "UI 오류: RuntimeError"), str(res))
+check("UI 오류는 ('failed', 'UI 오류: … - 문구')", res == ("failed", "UI 오류: RuntimeError - COMError 흉내"), str(res))
 wellife.open_tab, wellife.invoice_send = _saved_inv
 wellife.time.sleep = _sleep
 

@@ -9,7 +9,7 @@
 모드 (사용자 10-08) - 데이터를 바꾸는 단추를 누를지 정한다. 빠지면 리허설.
 모듈마다 키가 따로다: "SalesMode" ② 주문매핑(엑셀 업로드), "Mode" ③ 물류대기 저장, "SapMode" ④ 지정·화살표,
 "WmsMode" ⑤ 화살표, "InvoiceMode" ⑥ [전송요청(S)] (사용자 10-13 - 넷 다 빠지면 리허설, Mode 를 따르지 않는다).
-- "리허설": 데이터를 바꾸는 단추(엑셀 업로드·물류대기 저장·[지정]·화살표)는 누르지 않고 마우스만 올린다.
+- "리허설": 데이터를 바꾸는 단추(엑셀 업로드·물류대기 저장·[지정]·화살표·[전송요청(S)])는 누르지 않고 마우스만 올린다.
 - "실행": 실제로 누르고, 뜨는 팝업은 [예](없으면 [확인])를 누른다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
   팝업 문구는 모두 로그와 모듈 사유에 남긴다.
 - "1건": 실행과 같되 전체 체크 대신 첫 줄 하나만 체크해서 넘긴다 (실데이터 시험용 - 전체를 넘기면 다음 시험까지
@@ -20,7 +20,7 @@
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
 - ⑥ 운송장번호 전송: 조회 -> 전체 체크 -> [전송요청(S)]. 모든 업체용 패키지 화면이라(좌측 아이콘) 웰라이프 고유 값을
-  쓰지 않는다 - 지금은 웰라이프 실행만 부른다 (docs/wellife-rpa.md 9절).
+  쓰지 않는다 - 보통 PROCESS 도 부른다 (run_routine.module_invoice_send, Routine 섹션 InvoiceMode. docs/wellife-rpa.md 9절).
 모듈별 실행: 예약 줄이 모듈을 고르면(RPA_RUN_MODULES, Wellife 키) 그 모듈만 돈다 - ②~⑥ 을 따로 띄울 수 있다.
 ⑤ 는 SAP 에서 넘어온 건이 WMS 에 하나씩 들어오므로 반복 시간대(시작~끝, N분 쉬고 다시)로 돌린다 (docs/wellife-rpa.md 7절).
 
@@ -145,7 +145,7 @@ def load_switches(rr):
     section = rr.pl.load_settings().get(SECTION)
     if not isinstance(section, dict):
         raise RuntimeError(f"{rr.pl.config_name()} 의 '{SECTION}' 은 값이 아니라 섹션이어야 합니다. "
-                           f'예: {{"{SECTION}": {{"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y"}}}}')
+                           f'예: {{"{SECTION}": {{"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "InvoiceSend": "Y"}}}}')
     keys = [m[1] for m in MODULES]
     selected, bad = {}, []
     for key in keys:
@@ -376,11 +376,9 @@ def hold_save(rr, ctx, live):
         rr.log("  물류대기 0건 - 저장하지 않음")
         return "no_target", f"[{tag}] 물류대기 0건 - 저장할 것 없음"
     front(rr, ctx, "물류대기 전체선택")
-    if live == ONE:
-        if not check_one_row(rr, ctx, grid, "물류대기"):
-            raise Stop("failed", "물류대기 첫 줄만 체크하지 못했습니다 (1건) - 저장하지 않음.")
-    elif not rr.select_all_by_header_checkbox(ctx.hwnd, grid):
-        raise Stop("failed", "물류대기 전체선택(머리글 체크)에 실패했습니다.")
+    if not check_rows(rr, ctx, grid, "물류대기", live):    # 머리글 자리 확인·팝업 확인은 다른 단계와 같다
+        raise Stop("failed", "물류대기 첫 줄만 체크하지 못했습니다 (1건) - 저장하지 않음." if live == ONE
+                   else "물류대기 전체선택(머리글 체크)에 실패했습니다.")
     no_popup(rr, ctx, "물류대기 전체선택")
     save = onscreen_button(ctx.window(), "저장(S)")
     if save is None:
@@ -438,7 +436,8 @@ def ui_error(rr, e):
     """Stop 이 아닌 예외(UIA COMError 등) - 실행 전체를 죽이지 않고 이 화면의 실패로 남긴다. 키·클릭은 더 하지 않는다
     (run_modules 가 failed 에서 뒤 모듈을 멈춘다)."""
     rr.log(f"  UI 오류: {type(e).__name__}: {e}")
-    return "failed", f"UI 오류: {type(e).__name__}"
+    detail = str(e).strip().splitlines()[0][:120] if str(e).strip() else ""
+    return "failed", f"UI 오류: {type(e).__name__}" + (f" - {detail}" if detail else "")   # 웹에도 원인이 보이게
 
 
 SLIP_SEND = "4-2 매출전표 → 넘기기"
@@ -636,7 +635,7 @@ def invoice_send(rr, ctx, live):
         rr.log(f"  확인할 것: {INVOICE_TAB} - 전체 체크 뒤 다시 보니 체크가 풀려 있어 전송하지 않음 (조회가 늦게 끝났을 수 있음)")
         checked = False
     note, pressed = press_arrow(rr, ctx, ctl, "btn_SendRequest", INVOICE_SEND, checked, 1 if live == ONE else count, live)
-    head = f"[{tag}] 운송장 {count}건" + (" 중 첫 줄 1건" if live == ONE else "") + (
+    head = f"[{tag}] 운송장 {count}건" + (" 중 첫 줄 1건" if live == ONE and pressed else "") + (
         "" if checked else " - 체크가 안 돼 전송하지 않음 (확인할 것)")
     if not live:
         head += " - 전송요청은 누르지 않음"
