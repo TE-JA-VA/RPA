@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 import urllib.parse
 
 from playwright.sync_api import TimeoutError as PWTimeout
@@ -101,8 +102,9 @@ JS = r"""
     if (rows.length < 2 || rows.indexOf(row) < 0) return null;
     const segs = []; for (let e = el; e && e !== row; e = e.parentElement) segs.unshift(e.tagName.toLowerCase() + clsOf(e));
     const inner = segs.join(' ');
-    const title = r => { const t = inner ? r.querySelector(inner) : null; return norm((t || r).textContent).slice(0, 120); };
-    return {sel, inner, key: rowKey(row), list: rows.slice(0, 200).map(r => ({k: rowKey(r), t: title(r)}))};
+    __SEEN__
+    const cell = r => (inner ? r.querySelector(inner) : null) || r;
+    return {sel, inner, key: rowKey(row), list: rows.slice(0, 200).map(r => ({k: rowKey(r), t: norm(cell(r).textContent).slice(0, 120), s: seenText(cell(r))}))};
   }
   function send(kind, el, extra) {
     try { window.__rec(J(Object.assign({kind, url: location.href, target: describe(el), t: Date.now()}, extra || {}))); } catch (e) {}
@@ -198,11 +200,21 @@ JS = r"""
 })();
 """
 
+# 보이는 글자만 - 숨은 글자(span.blind 등 화면 낭독용·숨김)와 아이콘은 뺀다. 메일 제목 칸 앞의 중요·전달 표시 (2026-10-14).
+# 옵저버(JS 의 rowInfo)와 재생(ROWS_JS)이 같은 것을 쓴다
+SEEN_JS = r"""const seenText = (top) => {   // 보이는 글자만 - 숨은 글자(span.blind 등 화면 낭독용·숨김)와 아이콘은 뺀다 (중요·전달 표시, 2026-10-14)
+  const out = [], hid = e => { if (/(^|[\s_-])(blind|sr-only|screen-?reader|hidden|hide|a11y|ir)([\s_-]|$)/i.test(e.className || '')) return true;
+    const cs = getComputedStyle(e); if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.fontSize) === 0) return true;
+    const r = e.getBoundingClientRect(); return cs.position === 'absolute' && (r.width <= 1 || r.height <= 1); };
+  const w = document.createTreeWalker(top, NodeFilter.SHOW_TEXT);
+  for (let n; (n = w.nextNode());) { let ok = true; for (let e = n.parentElement; e && ok; e = e === top ? null : e.parentElement) if (hid(e)) ok = false;
+    if (ok) out.push(n.textContent); }
+  return out.join(' ').replace(/\s+/g, ' ').trim().slice(0, 120); };"""
 # '새로 생긴 것' 을 가리는 표시: 주소(또는 onclick) + 그 줄의 글자. 옵저버와 재생기가 같은 것을 쓴다
 CLICKABLE = "a,button,input[type=button],input[type=submit],[onclick],[role=button],[role=link]"
 SIG = ("el => (el.getAttribute('href') || el.getAttribute('onclick') || '') + '|' + "
        "(((el.closest('tr,li') || el).textContent) || '').replace(/\\s+/g, ' ').trim().slice(0, 120)")
-JS = JS.replace("__CLICKABLE__", json.dumps(CLICKABLE)).replace("__SIG__", SIG)
+JS = JS.replace("__CLICKABLE__", json.dumps(CLICKABLE)).replace("__SIG__", SIG).replace("__SEEN__", SEEN_JS)
 # 목록은 JSON 글자로 돌려받는다 - 묶음 값은 사이트가 Map 을 바꿔치기하면 Playwright 가 못 옮긴다 (2026-10-14 비즈메카 메일, 옵저버의 send 와 같다)
 SNAP_JS = f"() => JSON.stringify([...document.querySelectorAll({json.dumps(CLICKABLE)})].map({SIG}))"
 SIGS_JS = f"els => JSON.stringify(els.map({SIG}))"
@@ -401,10 +413,18 @@ def mail_key(key, title):
     return key or "제목:" + title
 
 
+def title_starts(prefix, *titles):
+    """제목이 prefix 로 시작하나 - 보이는 제목·칸 글자 전체 중 하나라도. 전각 ＞ 처럼 모양만 다른 글자는 같게 본다 (NFKC)."""
+    want = unicodedata.normalize("NFKC", prefix or "").strip()
+    return bool(want) and any(unicodedata.normalize("NFKC", t or "").strip().startswith(want) for t in titles)
+
+
 def pick_seed(s):
-    """기록할 때 목록에 보이던 메일 중 제목이 정한 글자로 시작하는 것 (저장하면 '이미 처리' 로 - 사용자 2026-10-14 (나))."""
+    """기록할 때 목록에 보이던 메일 중 제목이 정한 글자로 시작하는 것 (저장하면 '이미 처리' 로 - 사용자 2026-10-14 (나)).
+    목록의 s = 보이는 제목 (중요·전달 같은 숨은 표시를 뺀 것, 옛 기록에는 없다), t = 칸 글자 전체."""
     prefix = (s.get("pick") or {}).get("prefix") or ""
-    return [mail_key(x["k"], x["t"]) for x in (s.get("row") or {}).get("list", []) if prefix and x["t"].startswith(prefix)]
+    return [mail_key(x["k"], x.get("s") or x["t"]) for x in (s.get("row") or {}).get("list", [])
+            if title_starts(prefix, x.get("s"), x["t"])]
 
 
 class MailMemory:
@@ -438,10 +458,11 @@ class MailMemory:
 
 
 # 목록 줄들 (key, 제목) - JSON 글자로 주고받는다 (사이트가 Map 을 바꿔치기해도, SNAP_JS 와 같다)
-ROWS_JS = """a => { const o = JSON.parse(a), n = s => (s || '').replace(/\\s+/g, ' ').trim();
+ROWS_JS = r"""a => { const o = JSON.parse(a), n = s => (s || '').replace(/\s+/g, ' ').trim();
   const key = r => r.getAttribute('data-key') || r.getAttribute('data-id') || r.getAttribute('data-uid') || r.id || '';
-  return JSON.stringify([...document.querySelectorAll(o.sel)].map(r => { const t = o.inner ? r.querySelector(o.inner) : null;
-    return [key(r), n((t || r).textContent).slice(0, 120)]; })); }"""
+  __SEEN__
+  return JSON.stringify([...document.querySelectorAll(o.sel)].map(r => { const c = (o.inner ? r.querySelector(o.inner) : null) || r;
+    return [key(r), n(c.textContent).slice(0, 120), seenText(c)]; })); }""".replace("__SEEN__", SEEN_JS)
 
 
 def otp_like(s):
@@ -1123,7 +1144,7 @@ class Replayer:
         frame, rows = self._mail_rows(page, s, self.step_timeout)
         if frame is None or not rows:
             raise NotFound(f"{self.step_timeout:.0f}초 안에 메일 목록을 못 찾음")
-        hits = [(k, t) for k, t in rows if t.startswith(prefix)]
+        hits = [(k, seen or t) for k, t, seen in rows if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
         mem = None if self.pick_preview else self.mail_memory
         todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or mail_key(*h) not in mem.keys]
         self.log(f"      제목이 '{prefix}' 로 시작하는 메일 {len(hits)}통 중 새 메일 {len(todo)}통")
@@ -1146,7 +1167,7 @@ class Replayer:
                 if not rows:
                     raise NotFound("메일 목록으로 돌아가던 중 문제가 발생했습니다.")
             self.log(f"      [{n}/{len(todo)}] 메일 열기: {t[:CUT] if self.hide_values else t}")
-            idx = next((x for x, r in enumerate(rows) if (r[0] == k if k else r[1] == t)), None)
+            idx = next((x for x, r in enumerate(rows) if (r[0] == k if k else (r[2] or r[1]) == t)), None)
             if idx is None:
                 raise NotFound(f"메일을 목록에서 다시 찾지 못함: {t[:40]}")
             loc = frame.locator(s["row"]["sel"]).nth(idx)

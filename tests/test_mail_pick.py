@@ -32,9 +32,12 @@ window.addEventListener('hashchange', show); show();
 </script>"""
 
 
+MARKS = {}        # key → 제목 칸 앞에 붙는 것 (비즈메카: 아이콘·숨은 글자 span.blind '중요'·'전달')
+
+
 def rows():
     return "".join(f'<li class="m_data unread" data-key="{k}" onclick="location.hash=\'act=VIEW&ukey={k}\'">'
-                   f'<span class="m_write">보낸이</span> <p class="m_subject">{t}</p></li>' for k, t in MAILS)
+                   f'<span class="m_write">보낸이</span> <p class="m_subject">{MARKS.get(k, "")}{t}</p></li>' for k, t in MAILS)
 
 
 class H(BaseHTTPRequestHandler):
@@ -144,6 +147,17 @@ MAILS.insert(2, ("k8", ">>> 주문 H"))      # 사이에 다른 메일 (공지 �
 ok, rp, lines = replay("two", rec.MailMemory(mem_path))
 check("한 번에 두 통 - 첫 메일을 받고 목록으로 돌아가 다음 메일", ok and sorted(os.path.basename(x) for x in rp.saved)
       == ["(013)file_k7.xlsx", "(013)file_k8.xlsx"] and any("[2/2] 메일 열기" in x for x in lines), (rp.saved, rp.results[-2:]))
+
+MAILS.insert(0, ("k9", ">>> 주문 I"))
+MARKS["k9"] = '<span class="ico_imp on"></span><span class="blind">중요</span><img alt="중요" src="data:,">'
+MAILS.insert(0, ("k10", ">>> 주문 J"))
+MARKS["k10"] = '<span class="blind">전달</span> '
+MAILS.insert(0, ("k11", "＞＞＞ 주문 K"))      # 전각 꺾쇠 - 사람이 보기엔 같은 글자
+ok, rp, lines = replay("marks", rec.MailMemory(mem_path))
+check("중요·전달 표시(아이콘·숨은 글자)가 제목 칸 앞에 있어도 '>>>' 로 알아본다", ok and sorted(os.path.basename(x) for x in rp.saved)
+      == ["(013)file_k10.xlsx", "(013)file_k11.xlsx", "(013)file_k9.xlsx"], (rp.saved, [x for x in lines if "메일" in x]))
+check("한 메일이 중요 표시를 두 군데 가져도 제목 기억은 같은 메일 하나", rec.pick_seed({"pick": {"prefix": ">>>"}, "row": {"list": [
+      {"k": "", "t": "중요 >>> 주문", "s": ">>> 주문"}]}}) == ["제목:>>> 주문"])
 
 rec.set_pick(steps, i, "[긴급]")
 ok, rp, lines = replay("prefix", rec.MailMemory(mem_path))
