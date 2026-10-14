@@ -898,8 +898,9 @@ for again, want_click in (("선택", True), ("선택안됨", False)):
     wellife.open_stage = lambda rr_, ctx_, form, dash: (3, {"btn_ThirdSend": arrow_btn, "gridCtrl_List": "g"})
     AGAIN[0] = again
     note, pressed = wellife.simple_stage(srr, actx, wellife.SAP_FORM, *check_stage, live=True)
-    check(f"체크 칸이 있는 단계: 화살표 직전 다시 본 체크 '{again}' -> {'누름' if want_click else '안 누름 (재확인, 사용자 10-13)'}",
-          (("click", "btn_ThirdSend") in acts) == want_click and pressed == want_click, f"{note} {acts}")
+    check(f"체크 칸이 있는 단계: 화살표 직전 다시 본 체크 '{again}' -> {'누름' if want_click else '안 누름 + 사유에 확인할 것 (재확인, 사용자 10-13)'}",
+          (("click", "btn_ThirdSend") in acts) == want_click and pressed == want_click
+          and (wellife.RECHECK_NOTE in note) == (not want_click), f"{note} {acts}")
 AGAIN[0] = "선택"
 wellife.check_all_rows = _saved_ca
 wellife.open_stage = _saved_open
@@ -1408,14 +1409,20 @@ class Kid(CondEl):
 
 
 crr = types.SimpleNamespace(legacy_value=lambda el: el.value)
-ctl14 = {"ccc_SendorNot": CondEl("미전송"), "cbo_delivery": CondEl("택배사 : (전체)"), "txt_SearchValue": CondEl(None),
+_empty = CondEl(None)
+_empty.iface_value = types.SimpleNamespace(CurrentValue="")            # 빈 글 칸: ValuePattern 은 '', Legacy Value 는 없다
+_typed = CondEl(None)
+_typed.iface_value = types.SimpleNamespace(CurrentValue="zz")
+ctl14 = {"ccc_SendorNot": CondEl("미전송"), "cbo_delivery": CondEl("택배사 : (전체)"), "txt_SearchValue": _empty,
+         "txt_typed": _typed, "txt_unread": CondEl(None),                 # iface_value 가 없으면(못 읽음) None
          "ccc_Sales": CondEl(None, [Kid("Edit", "매출구분 : 전체", "popEdit")]),
          "dateFrom": CondEl(None, [Kid("ComboBox", f"{_dt.date.today():%Y}년 {_dt.date.today().month}월 {_dt.date.today().day}일")])}
-check("지금 값 읽기: 콤보는 '택배사 : ' 를 떼고, 빈 검색어는 '', 매출구분은 안쪽 popEdit, 날짜는 오늘부터 일 수",
+check("지금 값 읽기: 콤보는 '택배사 : ' 를 떼고, 빈 검색어는 '', 못 읽은 검색어는 None (빈 칸으로 보지 않음), 매출구분은 안쪽 popEdit, 날짜는 오늘부터 일 수",
       [wellife.cond_value(crr, ctl14, a, k) for a, k in (("ccc_SendorNot", "combo"), ("cbo_delivery", "combo"),
-                                                         ("txt_SearchValue", "text"), ("ccc_Sales", "fixed"),
+                                                         ("txt_SearchValue", "text"), ("txt_typed", "text"),
+                                                         ("txt_unread", "text"), ("ccc_Sales", "fixed"),
                                                          ("dateFrom", "date"), ("없음", "combo"))]
-      == ["미전송", "(전체)", "", "매출구분 : 전체", 0, None])
+      == ["미전송", "(전체)", "", "zz", None, "매출구분 : 전체", 0, None])
 
 # ensure_query 흐름: 값은 STATE, 고치기는 set_cond, 화면 다시 열기는 fixed·체크를 기본값으로 되돌린다
 DEF = {aid: want for _, aid, _, want in wellife.query_defaults(rr, "InvoiceSend")}
@@ -1471,8 +1478,59 @@ check("다시 열어도 '전체' 가 아니면 조회하지 않고 멈춘다", e
 STUCK = {"ccc_SendorNot"}
 got, err = run14(ccc_SendorNot="전송완료")
 check("고쳤는데 다시 읽은 값이 다르면 조회하지 않고 멈춘다", err and err[0] == "failed" and "SendStatus" in err[1], f"{err}")
+STUCK = {"chk_UnstoringStand"}
+got, err = run14(chk_UnstoringStand="Y")
+check("체크 상자를 눌렀는데 그림이 그대로면 (그림을 잘못 읽는 PC) 켠 채 남기지 않게 화면을 다시 열고 멈춘다",
+      err and err[0] == "failed" and LOG14 == [("set", "UnstoringOnly"), ("close",), ("reopen",)], f"{err} {LOG14}")
 STUCK = set()
 wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen = _saved14
+
+# 입력 안전장치 그대로 (가짜로 바꿔 끼우지 않음): 날짜·글 칸은 포커스가 그 칸 안일 때만 키, 목록 항목은 목록 창이 맨 위일 때만
+typed = []
+_edit = types.SimpleNamespace(kind="Edit", type_keys=lambda keys, **kw: typed.append(keys))
+_box14 = types.SimpleNamespace(kind="ComboBox", descendants=lambda control_type=None: [_edit])
+_saved_in = wellife.click, wellife.no_popup, wellife._focus_in, wellife._focus_chain
+wellife.click = lambda rr_, ctx_, el, what: None
+wellife.no_popup = lambda *a: None
+wellife._focus_chain = lambda rr_, depth=8: [("x", "Edit", "")]
+for focus, want_typed in ((False, []), (True, ["^a2026-10-04{TAB}"])):
+    typed.clear()
+    wellife._focus_in = lambda rr_, aid, f=focus: f
+    _dt_today = wellife.datetime.date
+    try:
+        wellife.set_cond(types.SimpleNamespace(), actx, {"dateFrom": types.SimpleNamespace(
+            descendants=lambda control_type=None: [_box14])}, "DateFrom", "dateFrom", "date",
+            (_dt.date(2026, 10, 4) - _dt.date.today()).days)
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"날짜 칸: 포커스가 {'칸 안이면 ^a → 날짜 → Tab' if focus else '칸 밖이면 키를 보내지 않고 멈춘다'}",
+          typed == want_typed and (res is None if focus else res == "failed"), f"{typed} {res}")
+wellife.click, wellife.no_popup, wellife._focus_in, wellife._focus_chain = _saved_in
+
+pressed14 = []
+_item = types.SimpleNamespace(window_text=lambda: "미전송", rectangle=lambda: Rect(10, 10, 50, 30),
+                              click_input=lambda **kw: pressed14.append("미전송"))
+_list = types.SimpleNamespace(wrapper_object=lambda: types.SimpleNamespace(descendants=lambda control_type=None: [_item]))
+WIN14 = [set()]
+_saved_pick = wellife.click, wellife._menu_windows, wellife._top_window, wellife._close_menu, wellife._shown
+wellife.click = lambda rr_, ctx_, el, what: WIN14.__setitem__(0, {55})       # 콤보를 누르면 목록 창 55 가 뜬다
+wellife._menu_windows = lambda rr_, ctx_: set(WIN14[0])
+wellife._close_menu = lambda rr_, ctx_, wins, what: pressed14.append("ESC")
+wellife._shown = lambda rr_, h: False
+prr = types.SimpleNamespace(Desktop=lambda backend=None: types.SimpleNamespace(window=lambda handle=None: _list),
+                            ec=types.SimpleNamespace(screen_locked=lambda: False))
+for top, want in ((55, ["미전송", "ESC"]), (99, ["ESC"])):
+    WIN14[0] = set(); pressed14.clear()
+    wellife._top_window = lambda rr_, pt, t=top: t
+    try:
+        wellife.pick_item(prr, actx, object(), "미전송", "조회 조건 SendStatus")
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"목록 항목: 그 자리의 맨 위 창이 {'목록 창이면 누른다' if top == 55 else '다른 창이면 누르지 않고 목록을 닫고 멈춘다'}",
+          pressed14 == want and (res is None if top == 55 else res == "failed"), f"{pressed14} {res}")
+wellife.click, wellife._menu_windows, wellife._top_window, wellife._close_menu, wellife._shown = _saved_pick
 
 # ⑥·⑤ 에 붙었는가: 조회 전에 ensure_query, 고친 것은 사유에
 _saved14 = wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows

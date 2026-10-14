@@ -493,13 +493,14 @@ def simple_stage(rr, ctx, form_id, step, dash_id, arrow_id, check_all, what, liv
     rr.status.step(step)
     count, ctl = open_stage(rr, ctx, form_id, dash_id)
     label = what.split(" →")[0]
-    checked = (bool(count and check_all) and check_rows(rr, ctx, ctl["gridCtrl_List"], label, live)
-               and recheck(rr, ctl["gridCtrl_List"], label, live))
+    first = bool(count and check_all) and check_rows(rr, ctx, ctl["gridCtrl_List"], label, live)
+    checked = first and recheck(rr, ctl["gridCtrl_List"], label, live)
     want = bool(count) and (checked or not check_all)
     # 실행 '1건' 은 체크 칸이 있는 단계만 한 줄 - 체크 칸이 없는 4-4·5-4 는 그 단계 건을 모두 넘긴다 (사용자 10-13)
     one = live == ONE and check_all
     note, pressed = press_arrow(rr, ctx, ctl, arrow_id, what, want, 1 if one else count, live)
-    return f"{label} {count}건" + (" 중 첫 줄 1건" if one and pressed else "") + note, pressed
+    return (f"{label} {count}건" + (" 중 첫 줄 1건" if one and pressed else "")
+            + (RECHECK_NOTE if first and not checked else "") + note), pressed
 
 
 def check_rows(rr, ctx, grid, label, live):
@@ -809,6 +810,8 @@ def glyph_ratio(rr, el):
     import win32ui
     try:
         hwnd = el.element_info.handle
+        if ctypes.windll.user32.IsHungAppWindow(rr.win32gui.GetAncestor(hwnd, 2)):
+            return None     # 응답 없는 ERPia 에 PrintWindow 를 보내면 끝없이 기다린다 (제한 시간이 없다)
         l, t, r, b = rr.win32gui.GetWindowRect(hwnd)
         w, h = r - l, b - t
         mouse.move(coords=(r + 30, (t + b) // 2))     # 컨트롤 밖 (마우스만 - 누르지 않는다)
@@ -842,13 +845,18 @@ def cond_value(rr, ctl, aid, kind):
         return None if box is None else date_days(rr.legacy_value(box))
     if kind == "check":
         return check_state(glyph_ratio(rr, el))
+    if kind == "text":      # 빈 칸은 Legacy Value 가 아예 없어 못 읽은 것과 구분되지 않는다 - ValuePattern 은 빈 칸이 ''
+        try:
+            return el.iface_value.CurrentValue or ""
+        except Exception:
+            return None     # 못 읽음 -> 기본값으로 다시 써 보고 다시 읽어 확인한다
     value = rr.legacy_value(el)
     if not value and kind == "fixed":     # 매출구분·상품은 안쪽 popEdit 에 글자가 있다
         edit = next((d for d in el.descendants(control_type="Edit") if d.element_info.automation_id == "popEdit"), None)
         value = rr.legacy_value(edit) if edit is not None else None
     if kind == "combo" and value and " : " in value:      # '택배사 : (전체)' -> '(전체)'
         value = value.split(" : ", 1)[1]
-    return "" if kind == "text" and value is None else value
+    return value
 
 
 def ensure_query(rr, ctx, screen, form_id, reopen):
@@ -882,7 +890,11 @@ def ensure_query(rr, ctx, screen, form_id, reopen):
         ctl = controls(rr, ctx, form_id)
         got = cond_value(rr, ctl, aid, kind)
         if got != want:
-            raise Stop("failed", f"조회 조건 {key} 를 기본값({want!r})으로 맞추지 못해 조회하지 않음 (지금 {got!r}).")
+            if kind == "check":     # 눌렀는데 그림이 기대와 다르다 - 그림을 잘못 읽는 PC 일 수 있다. 켠 채 남기지 않게 화면을 다시 열어 둔다
+                close_screen(rr, ctx, ctl, form_id)
+                reopen()
+            raise Stop("failed", f"조회 조건 {key} 를 기본값({want!r})으로 맞추지 못해 조회하지 않음 (지금 {got!r}"
+                       + (" - 화면을 다시 열어 두었다, 체크 상자 그림을 이 PC 에서 확인할 것" if kind == "check" else "") + ").")
         changed.append(f"{key} {now!r}→{want!r}")
     rr.log(f"  조회 조건({screen}): " + ("기본값 그대로" if not changed else "기본값으로 고침 - " + ", ".join(changed)))
     return changed
@@ -937,6 +949,8 @@ def pick_item(rr, ctx, combo, item, what):
     h, hit = found
     r = hit.rectangle()
     pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    if rr.ec.screen_locked():           # 목록을 연 사이에 잠겼으면 누르지 않는다 (front() 는 목록을 닫을 수 있어 잠김만 본다)
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤")
     if _top_window(rr, pt) != h:        # 목록 창이 맨 위일 때만 (다른 창이 덮었으면 그것이 눌린다)
         _close_menu(rr, ctx, opened, what)
         raise Stop("failed", f"{what}: 목록 항목 자리를 다른 창이 덮고 있어 누르지 않고 멈춤")
