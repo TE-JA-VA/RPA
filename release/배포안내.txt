@@ -51,11 +51,11 @@
 ■ 1. 프로그램 폴더 - 통째로 복사해 간다
     (이름과 위치는 자유. 아래 파일들이 한 폴더에만 모여 있으면 된다)
 
-        Run_All.bat                옵저버 -> PROCESS 순서로 실행
-        Prepare_RPA.exe            옵저버
+        Run_All.bat                ACTOR 오토파일럿 -> PROCESS 순서로 실행
+        Prepare_RPA.exe            ACTOR 오토파일럿
         ERPia_RPA.exe              PROCESS 오토파일럿
         RPA_Dashboard.exe          현황 대시보드 (웹, 아래 8번)
-        RPA_UserConfig.json        사용자 설정 한 파일 (ERPia 로그인 · 물류 · 실행 모듈 · 옵저버 사이트 · ERPia 위치)
+        RPA_UserConfig.json        사용자 설정 한 파일 (ERPia 로그인 · 물류 · 실행 모듈 · ACTOR 오토파일럿 사이트 · ERPia 위치)
         manifest.json              버전 번호와 프로그램 파일 목록 (지우지 말 것)
         (브라우저는 그 PC 에 깔린 Microsoft Edge 를 쓴다 - 아래 2번)
 
@@ -63,7 +63,7 @@
 
 
 ■ 2. 브라우저 - 그 PC 에 깔린 Microsoft Edge (2026-10-06 부터)
-    옵저버와 ACTOR 오토파일럿은 윈도우에 기본으로 깔린 Edge 를 빈 프로필로 띄운다. 따로 옮길 것이 없다.
+    ACTOR 오토파일럿과 옵저버는 윈도우에 기본으로 깔린 Edge 를 빈 프로필로 띄운다. 따로 옮길 것이 없다.
     그 PC 사용자가 쓰는 Edge 의 로그인·쿠키와는 섞이지 않는다.
     (그 전 판은 ms-playwright 폴더(약 715MB)를 exe 옆에 두었다. 새 판을 설치하면 그 폴더는 지운다)
 
@@ -77,7 +77,7 @@
     프로그램이 쓰는 파일은 전부 여기 모인다. 없으면 알아서 만든다.
 
         바탕화면\ERPIA_AI\
-          ERPIA_AI_EXCEL\       옵저버가 받아 PROCESS 가 업로드 (자동 생성)
+          ERPIA_AI_EXCEL\       ACTOR 오토파일럿이 받아 PROCESS 가 업로드 (자동 생성)
           ERPIA_AI_JOBS\        운송장 출력 결과 (자동 생성)
           RPA_STATUS\           대시보드용 진행 기록 (자동 생성)
           AI 로그인 실패(...).txt  로그인 실패 기록 (생기면)
@@ -127,7 +127,7 @@
     로그는 전부 exe 와 같은 폴더에 생긴다. 한 줄씩 바로 기록되므로
     중간에 강제 종료해도 거기까지는 남는다.
 
-          prepare_result.txt      옵저버 (로그인 / 2차인증 / 메일)
+          prepare_result.txt      ACTOR 오토파일럿 (로그인 / 2차인증 / 메일)
           run_routine_result.txt  PROCESS 오토파일럿 (ERPia 전 과정)
           sms_watch_log.txt       문자 읽기 점검 기록
           shots\                  실패한 화면 사진 (생기면)
@@ -151,7 +151,7 @@
                       실제 주소는 대시보드 창에 찍혀 나온다. 같은 사내망(와이파이)이어야 한다.
 
     로그인 (화면을 열면 업체코드 / 아이디 / 비밀번호를 묻는다. 업체코드는 확인하지 않고 표시에만 쓴다)
-      관리자      admin / admin   현황·이력 보기 + 실행(전체/옵저버/PROCESS) + 자동 실행 설정 + ERPia 종료
+      관리자      admin / admin   현황·이력 보기 + 실행(전체/ACTOR 오토파일럿/PROCESS) + 자동 실행 설정 + ERPia 종료
       일반 사용자 user  / user    현황·이력 보기
       - 기본 비밀번호는 환경설정 > 계정에서 꼭 바꿀 것. 바꾸면 다른 기기의 그 계정 로그인은 풀린다.
       - 비밀번호를 잊었으면 RPA_STATUS\settings.json 의 "accounts" 부분을 지우고 대시보드를 다시 띄운다
@@ -160,8 +160,8 @@
 
     화면
       현황  지금 도는 프로그램, 몇 번째 단계인지, 처리 건수, 경과 시간, 최근 로그.
-            관리자에게는 맨 위 카드에 '전체 실행'(Run_All.bat = 옵저버 -> PROCESS), 각 프로그램 카드 제목 줄에
-            '옵저버 실행'(Prepare_RPA.exe 만) / 'PROCESS 실행'(ERPia_RPA.exe 만) 버튼이 있다. 어느 하나가 도는 동안은 셋 다 잠긴다.
+            관리자에게는 맨 위 카드에 '전체 실행'(Run_All.bat = ACTOR 오토파일럿 -> PROCESS), 각 프로그램 카드 제목 줄에
+            'ACTOR 오토파일럿 실행'(Prepare_RPA.exe 만) / 'PROCESS 실행'(ERPia_RPA.exe 만) 버튼이 있다. 어느 하나가 도는 동안은 셋 다 잠긴다.
             중단되거나 비정상 종료되면 사유가 함께 뜬다.
       이력  지난 실행 목록 (프로그램/기간으로 거르기). 한 줄을 누르면 단계와 로그가 펼쳐진다.
 
@@ -173,7 +173,7 @@
         netsh advfirewall firewall delete rule name="ERPIA_RPA_Dashboard"
 
     환경설정 (세 번째 탭)
-      자동 실행  [관리자] 켜면 정한 요일·시간에 Run_All.bat (옵저버 -> PROCESS) 을 띄운다.
+      자동 실행  [관리자] 켜면 정한 요일·시간에 Run_All.bat (ACTOR 오토파일럿 -> PROCESS) 을 띄운다.
                  - 요일은 매일/평일/주말 또는 하나씩 고르고, 시간은 5분 단위로 하루 3개까지 넣을 수 있다.
                  - 수동 실행은 예약 시각을 바꾸지 않는다. 대시보드를 다시 켜면 꺼져 있던 동안 지난 예약은 건너뛴다.
                  - 대시보드 창이 떠 있는 동안만 돈다. 창을 닫으면 자동 실행도 멈춘다.
@@ -184,7 +184,7 @@
       계정       로그아웃 (이 브라우저의 대시보드 로그인만 끝낸다), 비밀번호 바꾸기. 모든 계정.
       ERPia      [관리자] ERPia 종료 (ERPia 는 종료가 곧 로그아웃). 오토파일럿이 도는 중에는 눌리지 않는다.
       화면       강조색 (버튼·스위치), 밝은/어두운 화면. 보는 기기에만 저장된다.
-                 옵저버·PROCESS 를 구분하는 프로그램 색은 현황 카드 제목 앞의 색 표시를 누르면 고를 수 있다
+                 ACTOR 오토파일럿·PROCESS 를 구분하는 프로그램 색은 현황 카드 제목 앞의 색 표시를 누르면 고를 수 있다
                  (Solarized 8색, 두 프로그램은 서로 다른 색이어야 한다).
       권한       지금 실행·자동 실행·ERPia 종료는 ERPia(관리자 권한) 를 다루므로, Run_All.bat 을
                  관리자 권한으로 실행해 대시보드를 띄워야 한다. 아니면 환경설정 화면에 노란 경고가 뜬다.

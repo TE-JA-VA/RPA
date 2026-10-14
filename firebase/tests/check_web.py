@@ -131,7 +131,7 @@ def seed_run(run_id, program, state, started, dur_sec, reason=None, steps=None, 
     payload = {"run_id": run_id, "program": program, "state": state, "started_at": started, "duration_sec": dur_sec,
                "reason": reason, "steps": steps or [], "log": log or [], "metrics": metrics or [], "trigger": trigger}
     doc = {"cid": "c_demo", "pcId": "pc_office", "run_id": run_id, "program": program,
-           "program_label": "PROCESS 오토파일럿" if program == "routine" else "옵저버", "state": state, "reason": reason,
+           "program_label": "PROCESS 오토파일럿" if program == "routine" else "ACTOR 오토파일럿", "state": state, "reason": reason,
            "started_at": started, "finished_at": None, "duration_sec": dur_sec, "date": started[:10], "payload": json.dumps(payload, ensure_ascii=False)}
     if cost is not None:
         doc["cost"] = cost      # 토큰 전 옛 기록에는 없다
@@ -337,10 +337,10 @@ with sync_playwright() as pw:
     page.wait_for_function("!document.getElementById('tiles')?.classList.contains('hide')", timeout=10000)
     check(page.is_visible("#list-routine li"), "단계 목록은 항상 펼쳐져 있다")
     check("성공 · 3/3 · 2분 33초" in page.text_content("#meta-routine"), "단계 요약")
-    check("기록 없음" in page.text_content("#meta-prepare"), "옵저버 없음")
+    check("기록 없음" in page.text_content("#meta-prepare"), "ACTOR 오토파일럿 없음")
     pair = page.evaluate("""() => { const p = document.querySelector('.pair'); const [a, b] = p.children;
       return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
-    check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"옵저버가 왼쪽, PROCESS 가 오른쪽에 나란히 ({pair})")
+    check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"ACTOR 오토파일럿이 왼쪽, PROCESS 가 오른쪽에 나란히 ({pair})")
     log = page.text_content("#log")
     check("3줄" in page.text_content("#log-meta"), f"로그 줄 수는 단계 수 ({page.text_content('#log-meta')})")
     check(log.splitlines()[0] == "[13:56:30] ERPia 로그인 성공", f"단계마다 한 줄 ({log.splitlines()[0]})")
@@ -657,7 +657,7 @@ with sync_playwright() as pw:
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
     check("돌고 있어" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
     check(page.text_content("#run-routine .t") == "PROCESS 오토파일럿 실행중" and page.is_hidden("#run-routine .fly")
-          and page.text_content("#run-prepare .t") == "옵저버" and page.is_visible("#run-prepare .fly"),
+          and page.text_content("#run-prepare .t") == "ACTOR 오토파일럿" and page.is_visible("#run-prepare .fly"),
           f"도는 RPA 의 단추는 '… 실행중' (화살표 없이), 다른 단추는 그대로 ({page.text_content('#run-routine .t')})")
     # [RPA 중단] (2026-10-12 사용자): 도는 동안엔 [ERPia 종료] 자리가 [RPA 중단] - 묻고 나서 stop_rpa (바로 끔, ERPia 는 그대로)
     check(page.text_content("#stop-erpia .t") == "오토파일럿 중단" and lu("#stop-erpia svg") == ["square"],
@@ -805,7 +805,7 @@ with sync_playwright() as pw:
     check(page.text_content("#shop-list label:nth-child(2)").startswith("② <b>몰</b>")
           and page.locator("#shop-list b").count() == 0, "이름의 꺾쇠는 글자 그대로 (태그가 아니다 - Review Focus 5)")
     check(page.locator("#shop-list label:nth-child(2) input").is_disabled()
-          and "ACTOR 오토파일럿에서 기록하고 저장하세요" == (page.text_content("#shop-list label:nth-child(2) .why") or "")
+          and "옵저버에서 기록하고 저장하세요" == (page.text_content("#shop-list label:nth-child(2) .why") or "")
           and page.locator("#shop-list label:nth-child(1) .why").count() == 0,
           "기록이 없는 줄은 스위치가 잠기고 까닭이 줄 아래 글로 보인다 (준비된 줄에는 없다)")
     if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "shop_why.png"))
@@ -998,7 +998,7 @@ with sync_playwright() as pw:
     check(True, "자동 실행이 꺼져 있으면 '비활성화' (전 '꺼짐')")
     db_patch(f"{LIVE}/schedule", {"enabled": was_on})
     grps = [x.strip() for x in page.locator("#settings-grid h3.grp").all_text_contents()]
-    check(grps == ["옵저버 (사이트 수집)", "PROCESS 오토파일럿", "자동 실행"], f"환경설정 오토파일럿은 옵저버·PROCESS·자동 실행으로 나뉜다 (사용자 2026-10-08) ({grps})")
+    check(grps == ["ACTOR 오토파일럿 (사이트 수집)", "PROCESS 오토파일럿", "자동 실행"], f"환경설정 오토파일럿은 ACTOR 오토파일럿·PROCESS·자동 실행으로 나뉜다 (사용자 2026-10-08) ({grps})")
     check(page.evaluate("import('./rpa-common.js').then(m => m.RUN_NAMES.Prepare)") == "사이트 수집", "자동 실행 단추 이름 '사이트 수집' (전 '쇼핑몰 받기')")
     page.click("#sch-add-win")
     win = "#sch-times .t:nth-child(3)"
@@ -1220,7 +1220,7 @@ with sync_playwright() as pw:
     # 줄 수는 글자 범위의 사각형 개수로 센다 (칸 높이는 여백 때문에 한 줄이어도 36px)
     one_line = lambda sel: page.evaluate(f"""(() => {{ const el = document.querySelector("{sel}"); const r = document.createRange();
       r.selectNodeContents(el); return r.getClientRects().length; }})()""") == 1
-    check(rows.nth(0).locator("td").nth(1).text_content() == "PROCESS" and rows.nth(2).locator("td").nth(1).text_content() == "옵저버", "프로그램 칸은 PROCESS/옵저버")
+    check(rows.nth(0).locator("td").nth(1).text_content() == "PROCESS" and rows.nth(2).locator("td").nth(1).text_content() == "ACTOR 오토파일럿", "프로그램 칸은 PROCESS/ACTOR 오토파일럿")
     check(one_line("#view-history thead th:nth-child(2)") and one_line("#hist-rows tr.hist td:nth-child(1)"), "시각·프로그램 칸이 한 줄")
     crash = rows.nth(5).locator(".pill")
     check("crash" in (crash.get_attribute("class") or "") and crash.text_content() == "오류", "죽은 실행은 '오류' 알약")
@@ -1450,14 +1450,14 @@ with sync_playwright() as pw:
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
     db_patch(LIVE, {"version": None})
 
-    print("11절 ACTOR 오토파일럿 미리보기 기록")
+    print("11절 옵저버 미리보기 기록")
     seed_run("r_rec_0909", "observer", "success", "2026-09-09T08:00:00", 27,
              log=["[08:00:00] === 미리보기: ① 지마켓 (12단계) ==="])
     page.click("#tab-history")
     page.fill("#hist-date", "2026-09-09"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-09'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
-    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "ACTOR 오토파일럿", "기록 표의 프로그램 칸이 'ACTOR 오토파일럿'")
+    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "옵저버", "기록 표의 프로그램 칸이 '옵저버'")
     seed_run("r_rep_0908", "routine", "success", "2026-09-08T10:24:00", 40, trigger="repeat")
     page.fill("#hist-date", "2026-09-08"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-08'", timeout=15000)

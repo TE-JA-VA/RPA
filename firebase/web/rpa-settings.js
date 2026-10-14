@@ -10,7 +10,7 @@ const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]],
 const HTML = `
   <div class="settings-grid" id="settings-grid">
     <div>
-      <h3 class="grp">옵저버 (사이트 수집)</h3>
+      <h3 class="grp">ACTOR 오토파일럿 (사이트 수집)</h3>
       <div class="msg grp-note">쇼핑몰 사이트에서 주문 엑셀을 받아 옵니다</div>
       <div class="card hide" id="shop-card">
         <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
@@ -222,12 +222,12 @@ function paintShops() {
     cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
     cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
     cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
-    const why = ready ? "" : p.steps ? "ACTOR 오토파일럿에서 아이디·비밀번호를 넣고 저장하세요" : "ACTOR 오토파일럿에서 기록하고 저장하세요";
+    const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
     cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
     row.append(switchText(shopLine(p), why), cb, Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
-  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 'ACTOR 오토파일럿' 에서 기록하세요";
+  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '옵저버' 에서 기록하세요";
   paintShopMeta();
 }
 function paintShopMeta() {

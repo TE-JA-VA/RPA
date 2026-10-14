@@ -155,7 +155,7 @@ const ROLE = { admin: "관리자", viewer: "유저", agent: "에이전트", supe
 const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 관리", Logistics: "물류관리", Output: "운송장 출력 / 엑셀 생성" };
 // 토큰 배율 묶음 (사용자 2026-10-08) - 키는 에이전트가 세는 모듈 키 (run_routine·wellife MODULES, 프리페어는 sites)
 const RATE_GROUPS = [
-  { title: "옵저버", rows: [["sites", "사이트 수집"]] },
+  { title: "ACTOR 오토파일럿", rows: [["sites", "사이트 수집"]] },
   { title: "PROCESS 오토파일럿", plain: true, rows: [["login", "로그인"], ["sales", "주문매핑 매출처리"], ["hold", "물류대기 관리"],
     ["logistics", "물류관리"], ["output", "운송장 출력 / 엑셀 생성"], ["invoicesend", "운송장번호 전송"]] },
   { title: "PROCESS 오토파일럿 · 웰라이프 업체", wellife: true, rows: [["login", "로그인"], ["wellife_sales", "주문매핑 매출처리"],

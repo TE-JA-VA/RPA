@@ -19,7 +19,7 @@ export const perPc = true;
 // 상태 이름은 세 가지로 통일 (2026-09-22): 성공 / 실패(단계 검사에서 스스로 멈춤, 사용자 중지 포함) / 오류(프로그램이 죽음).
 // 상태 카드·도넛 범례·기록 표 알약이 모두 같은 말을 쓴다. done·skipped 는 단계 상태
 const STATE_LABEL = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류", done: "완료", skipped: "건너뜀" };
-const PROGRAM_SHORT = { routine: "PROCESS", prepare: "옵저버", observer: "ACTOR 오토파일럿" };   // 기록 표의 프로그램 칸. 오토파일럿인 건 아니까 '오토파일럿' 을 뗀다
+const PROGRAM_SHORT = { routine: "PROCESS", prepare: "ACTOR 오토파일럿", observer: "옵저버" };   // 기록 표의 프로그램 칸. 오토파일럿인 건 아니까 '오토파일럿' 을 뗀다
 const HERO_TITLE = { running: "진행 중", success: "성공", failed: "실패", stopped: "실패", crashed: "오류" };
 const HISTORY_LIMIT = 100;
 
@@ -57,7 +57,7 @@ const HTML = `
           </div>
         </div>
         <div class="pair">
-          <div class="card" id="steps-prepare"><h2>옵저버 <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
+          <div class="card" id="steps-prepare"><h2>ACTOR 오토파일럿 <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
           <div class="card" id="steps-routine"><h2>PROCESS 오토파일럿 <span class="muted" id="meta-routine"></span></h2><ul class="steps" id="list-routine"></ul></div>
         </div>
         <div class="card"><details id="log-box"><summary>로그 <span><span class="muted" id="log-meta"></span> &nbsp;${lucide("chevron-right", "chev")}</span></summary><pre class="num" id="log" style="font-size:12px;white-space:pre-wrap;margin:10px 0 0;color:var(--muted)"></pre></details></div>
@@ -67,7 +67,7 @@ const HTML = `
           <h2>실행</h2>
           <div class="actions">
             ${runBtn("run-all", PLAY, "전체 실행", "primary")}
-            ${runBtn("run-prepare", PLAY, "옵저버")}
+            ${runBtn("run-prepare", PLAY, "ACTOR 오토파일럿")}
             ${runBtn("run-routine", PLAY, "PROCESS 오토파일럿")}
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
@@ -126,7 +126,7 @@ export function mount(el, context) {
   $("hist-date").onchange = () => loadHistory($("hist-date").value || null);
   $("hist-all").onclick = () => { $("hist-date").value = ""; loadHistory(null); };
   $("run-routine").onclick = () => send("launch", { target: "routine" }, "PROCESS 오토파일럿");
-  $("run-prepare").onclick = () => send("launch", { target: "prepare" }, "옵저버");
+  $("run-prepare").onclick = () => send("launch", { target: "prepare" }, "ACTOR 오토파일럿");
   $("run-all").onclick = () => send("launch", { target: "all" }, "전체 실행");
   // RPA 가 도는 동안엔 같은 자리가 [RPA 중단] (2026-10-12 사용자: 하던 단계를 기다리지 않고 바로 끔, ERPia 는 그대로)
   $("stop-erpia").onclick = () => {
@@ -553,7 +553,7 @@ function rpaRunning() {
   return live?.launching === true || Object.values(live?.programs || {}).some((p) => p && p.state === "running");
 }
 // 도는 RPA 의 단추는 화살표 없이 '… 실행중' - 끝나면 (성공·실패·오류) 원래대로 (2026-10-02 요청)
-const RUN_LABELS = { "run-prepare": ["prepare", "옵저버"], "run-routine": ["routine", "PROCESS 오토파일럿"] };
+const RUN_LABELS = { "run-prepare": ["prepare", "ACTOR 오토파일럿"], "run-routine": ["routine", "PROCESS 오토파일럿"] };
 function paintButtons() {
   const off = !c.isAdmin || busy || !c.pcId;
   const running = rpaRunning();

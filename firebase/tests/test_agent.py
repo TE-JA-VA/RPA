@@ -333,8 +333,8 @@ check(ag.usage({"program": "prepare", "steps": [
     {"key": "PRESET1:replay", "state": "done"}, {"key": "PRESET2:replay", "state": "failed"},
     {"key": "SITE1:login", "state": "done"}, {"key": "SITE1:download", "state": "done"},
     {"key": "SITE2:login", "state": "done"}, {"key": "SITE2:download", "state": "skipped"}]}) == {"sites": 2},
-      "옵저버: 단계가 모두 완료인 사이트(프리셋) 하나가 1회")
-check(ag.usage({"program": "observer", "steps": [{"key": "PRESET1:replay", "state": "done"}]}) == {}, "ACTOR 오토파일럿 미리보기는 안 센다")
+      "ACTOR 오토파일럿: 단계가 모두 완료인 사이트(프리셋) 하나가 1회")
+check(ag.usage({"program": "observer", "steps": [{"key": "PRESET1:replay", "state": "done"}]}) == {}, "옵저버 미리보기는 안 센다")
 check(ag.usage({"program": "routine", "state": "crashed"}) == {}, "시작하지 못한 실행은 0")
 check(ag.run_cost({"login": 1, "sales": 1, "hold": 1}, ag.PRICES) == 2, "처음 값표: 모두 1, 로그인 0")
 check(ag.run_cost({"sales": 2, "invoice_send": 1}, {"default": 1, "login": 0, "sales": 3}) == 7,
@@ -1155,7 +1155,7 @@ with tempfile.TemporaryDirectory() as d:
         rows2 = [{"started_at": "2026-09-14T13:55:00", "state": "success", "program": "observer"},
                  {"started_at": "2026-09-14T13:56:00", "state": "stopped", "program": "prepare"}]
         check(ag.recent_summary(rows2, _dt.date(2026, 9, 14))[-1] == {"date": "2026-09-14", "success": 0, "failed": 1, "crashed": 0},
-              "ACTOR 오토파일럿 미리보기는 날짜별 도넛에 안 센다")
+              "옵저버 미리보기는 날짜별 도넛에 안 센다")
     finally:
         os.environ.pop("RPA_USER_CONFIG", None)
 

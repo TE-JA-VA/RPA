@@ -2,8 +2,9 @@ r"""오토파일럿 아이콘 넷을 만든다 (2026-10-13 사용자가 고른 '
 
     release/AFTER_MARKET.ico          오토파일럿 (Blue Fusion)   설치 파일·설정 창·바로 가기·에이전트·감독
     release/AUTOPILOT_PROCESS.ico     PROCESS 오토파일럿 (Hematite)      ERPia_RPA.exe
-    release/AUTOPILOT_OBSERVER.ico    옵저버 (Cloud Cover)               Prepare_RPA.exe
-    release/AFTER_MARKET_PREPARE.ico  ACTOR 오토파일럿 (Quiet Violet)    Prepare_Observer.exe·그 창·시작 메뉴 바로 가기
+    release/AUTOPILOT_ACTOR.ico       ACTOR 오토파일럿 (Quiet Violet)    Prepare_RPA.exe (기록대로 엑셀을 받는 쪽)
+    release/AFTER_MARKET_PREPARE.ico  옵저버 (Cloud Cover)               Prepare_Observer.exe·그 창·시작 메뉴 바로 가기 (기록하는 창)
+    (2026-10-13 저녁 이름을 맞바꿔 색도 이름을 따라갔다 - 옵저버 ↔ ACTOR 오토파일럿)
 
     .venv\Scripts\python.exe tools\make_icon.py
 
@@ -23,8 +24,8 @@ DANCER = (0xF0, 0xEF, 0xEB)            # PANTONE 11-4201 Cloud Dancer - 글자
 ICONS = {                              # 파일 → 바탕
     "AFTER_MARKET.ico": (0x49, 0x62, 0x76),          # Blue Fusion
     "AUTOPILOT_PROCESS.ico": (0x74, 0x6F, 0x69),     # Hematite
-    "AUTOPILOT_OBSERVER.ico": (0x8E, 0x88, 0x88),    # Cloud Cover 7% 짙게
-    "AFTER_MARKET_PREPARE.ico": (0x99, 0x82, 0x9F),  # Quiet Violet 9% 짙게
+    "AUTOPILOT_ACTOR.ico": (0x99, 0x82, 0x9F),       # Quiet Violet 9% 짙게 - ACTOR 오토파일럿
+    "AFTER_MARKET_PREPARE.ico": (0x8E, 0x88, 0x88),  # Cloud Cover 7% 짙게 - 옵저버 (파일 이름은 옛 것 그대로)
 }
 N = 1024                               # 그리는 해상도
 FILL = 0.74                            # 글자 폭이 네모에서 차지하는 비율

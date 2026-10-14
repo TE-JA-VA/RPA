@@ -570,8 +570,8 @@ with sync_playwright() as pw:
     page.click("nav button[data-view='rates']")
     page.wait_for_selector("#rates tr", timeout=15000)
     groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
-    check(groups == ["옵저버", "PROCESS 오토파일럿", "PROCESS 오토파일럿 · 웰라이프 업체", "그 밖"],
-          f"토큰 배율: 옵저버·PROCESS·웰라이프·그 밖으로 나눔 (사용자 2026-10-08) ({groups})")
+    check(groups == ["ACTOR 오토파일럿", "PROCESS 오토파일럿", "PROCESS 오토파일럿 · 웰라이프 업체", "그 밖"],
+          f"토큰 배율: ACTOR 오토파일럿·PROCESS·웰라이프·그 밖으로 나눔 (사용자 2026-10-08) ({groups})")
     names = [t.strip() for t in page.locator("#rates tr[data-key] td:first-child").all_text_contents()]
     check("사이트 수집" in names and not any("쇼핑몰" in n for n in names) and "웰라이프 SAP 연동관리" in names
           and "웰라이프 WMS 이관관리" in names, f"사이트 수집 이름·웰라이프 모듈 줄 ({names})")
@@ -600,7 +600,7 @@ with sync_playwright() as pw:
     page.select_option("#rate-cid", "t_new")
     page.wait_for_selector("#rates tr[data-key='sales'] input[placeholder='2']", timeout=15000)
     groups = [g.strip() for g in page.locator("#rates tr.grp").all_text_contents()]
-    check(groups == ["옵저버", "PROCESS 오토파일럿", "그 밖"], f"보통 업체는 웰라이프 묶음 없음 ({groups})")
+    check(groups == ["ACTOR 오토파일럿", "PROCESS 오토파일럿", "그 밖"], f"보통 업체는 웰라이프 묶음 없음 ({groups})")
     rate = page.locator("#rates tr[data-key='sales']")
     check(rate.locator("td").nth(1).text_content().strip() == "2" and rate.locator("input").input_value() == "",
           "업체 칸: 기본값 2 가 보이고 업체 칸은 비어 있다 (따로 정한 값 없음)")
