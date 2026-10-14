@@ -197,7 +197,8 @@ KINDS_MERGE = ("fill", "secret", "select")        # 같은 칸에 잇달아 온 
 # 2차인증 (휴대폰 중계 설계 13절): 숫자 4~8자리를 친 칸이고 단서에 이런 말이 있으면 '인증번호 칸' - 값은 남기지 않는다 (한 번 쓰는 번호)
 OTP_VALUE = re.compile(r"^\d{4,8}$")
 OTP_HINT = re.compile(r"인증|otp|auth|cert|verif", re.I)
-OTP_REJECT = re.compile(r"인증.*(틀|일치|잘못|만료|다시|실패)|(틀|일치하지|잘못|만료).*인증")
+# '일치' 만 보면 '인증번호가 일치합니다' (비즈메카 성공 알림창, 2026-10-14) 까지 거절로 읽는다
+OTP_REJECT = re.compile(r"인증.*(틀|일치하지|불일치|잘못|만료|다시|실패)|(틀|일치하지|불일치|잘못|만료).*인증")
 OTP_TRIES = 3                # 모두 합쳐 (처음 + 2번 더, 사용자 2026-10-13)
 OTP_WAIT = 120               # 번호 하나를 기다리는 초 (요청이 열려 있는 2분)
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
@@ -881,13 +882,20 @@ class Replayer:
         self.otp_mark = len(self.dialogs)
         return code
 
-    def _otp_rejected(self, page, otp_step):
-        """인증번호를 넣고 [확인] 한 뒤: 사이트가 거절했나 - 알림창에 '인증 … 틀림·일치·만료' 가 떴거나, 3초 뒤에도 같은 주소에 그 칸이 그대로."""
-        if any(OTP_REJECT.search(m) for m in self.dialogs[self.otp_mark:]):
-            return True
-        self._wait(page, 3000)
-        if self.dialogs[self.otp_mark:] and any(OTP_REJECT.search(m) for m in self.dialogs[self.otp_mark:]):
-            return True
+    def _otp_rejected(self, page, otp_step, check_step):
+        """인증번호를 넣고 [확인] 한 뒤: 사이트가 거절했나 - 알림창에 '인증 … 틀림·불일치·만료' 가 떴거나, 3초 뒤에도 같은 주소에 그 칸이 그대로.
+        기록 때 사람이 통과하며 본 알림창(check_step 의 dialogs)과 같은 글이 뜨면 통과 - 사이트마다 성공 말투가 달라서."""
+        passed = set(check_step.get("dialogs", ()))
+
+        def said():                 # 알림창으로 답했나: False 통과 / True 거절 / None 아직 모름
+            got = self.dialogs[self.otp_mark:]
+            if passed & set(got):
+                return False
+            return True if any(OTP_REJECT.search(m) for m in got) else None
+        if said() is None:
+            self._wait(page, 3000)
+        if said() is not None:
+            return said()
         frame = self._frame(page, otp_step["frame"])
         if frame is None or url_path(frame.url) != otp_step["url"]:
             return False
@@ -1005,7 +1013,7 @@ class Replayer:
                 elif self.otp_check == i:
                     self.otp_check = None
                     otp_i = next(j for j in range(i - 1, 0, -1) if steps[j - 1]["kind"] == "otp")
-                    if self._otp_rejected(self.pages.get(s["page"]), steps[otp_i - 1]):
+                    if self._otp_rejected(self.pages.get(s["page"]), steps[otp_i - 1], s):
                         raise OtpRetry("사이트가 인증번호를 받지 않았습니다", rejected=True)
                     self._otp_close()               # 통과 - 요청·번호를 지운다
                 self.results.append((i, "ok", how))

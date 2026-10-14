@@ -24,7 +24,7 @@ VERIFY = """<!doctype html><meta charset="utf-8"><title>본인 인증</title>
 <button type="button" id="send" onclick="fetch('/api/send',{method:'POST'}).then(()=>document.getElementById('msg').textContent='보냈습니다')">인증번호 받기</button>
 <input id="otp" placeholder="인증번호 6자리" autocomplete="off">
 <button type="button" onclick="fetch('/api/check?c='+document.getElementById('otp').value).then(r=>r.json()).then(j=>{
-  if (j.ok) location.href='/done'; else { alert('인증번호가 일치하지 않습니다. 다시 받아 주십시오'); document.getElementById('otp').value=''; } })">확인</button>
+  if (j.ok) { alert('인증번호가 일치합니다. 다시 로그인 해주세요.'); location.href='/done'; } else { alert('인증번호가 일치하지 않습니다. 다시 받아 주십시오'); document.getElementById('otp').value=''; } })">확인</button>
 <p id="msg"></p>"""
 
 
@@ -108,6 +108,11 @@ text = open(os.path.join(OUT, "rec.json"), encoding="utf-8").read()
 check("기록 파일에 인증번호 숫자가 없다 (한 번 쓰는 번호)", SENT[-1] not in text and "value" not in r["steps"][1])
 check("단계 설명", "문자로 받은 인증번호" in rec.describe(r["steps"][1]) and "인증번호 문자 요청" in rec.describe(r["steps"][0]),
       [rec.describe(s) for s in r["steps"]])
+
+
+for msg, rej in (("인증번호가 일치합니다. 로그인 해주세요.", False), ("인증번호가 일치하지 않습니다.", True),   # 비즈메카 2026-10-14
+                 ("인증번호가 확인되었습니다.", False), ("인증번호 불일치", True), ("인증 시간이 만료되었습니다", True)):
+    check(f"알림창 '{msg}' → {'거절' if rej else '통과'}", bool(rec.OTP_REJECT.search(msg)) == rej)
 
 
 def replay(label, relay, wait=2):
