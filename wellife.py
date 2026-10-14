@@ -16,7 +16,7 @@
   데이터가 다시 쌓이기를 오래 기다려야 한다, 사용자 10-13). 체크 칸이 없는 4-4·5-4 는 실행처럼 누른다. ② 는 줄이 없어 못 쓴다.
 모드는 대시보드 단계 이름·실행 제목·모듈 사유 앞의 [리허설]/[실행] 과 시작 로그로 보인다.
 - ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집 [가져오기] 는
-  모드와 상관없이 누르지 않는다 (마우스만). 선택주문 매출처리는 하지 않는다.
+  모드와 상관없이 누르지 않는다 (마우스만). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14).
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
 - ⑥ 운송장번호 전송: 조회 -> 전체 체크 -> [전송요청(S)]. 모든 업체용 패키지 화면이라(좌측 아이콘) 웰라이프 고유 값을
@@ -59,7 +59,7 @@ SAP_MODE_KEY = "SapMode"       # ④ 지정·화살표 (사용자 10-13)
 WMS_MODE_KEY = "WmsMode"       # ⑤ 화살표 (사용자 10-13)
 INVOICE_MODE_KEY = "InvoiceMode"   # ⑥ 운송장번호 [전송요청(S)] - 따로 정한다 (사용자 10-13, 택배사로 나가 되돌릴 수 없다)
 # 모드 키 -> (시작 로그·제목 이름, 누르는 것). 이 순서로 보인다 (rpa_status.WELLIFE_MODES 와 같은 순서)
-MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드"), MODE_KEY: ("③ 물류대기", "저장"),
+MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드·정상매출"), MODE_KEY: ("③ 물류대기", "저장"),
               SAP_MODE_KEY: ("④ SAP 연동", "지정·화살표"), WMS_MODE_KEY: ("⑤ WMS 이관", "화살표"),
               INVOICE_MODE_KEY: ("⑥ 운송장 전송", "[전송요청(S)]")}
 ONE = "1건"   # 실행하되 체크는 첫 줄 하나만 (실데이터 시험용, 사용자 10-13). 참으로 읽혀 실행 경로를 그대로 탄다
@@ -72,6 +72,7 @@ STEPS = (
     ("login", "ERPia 로그인"),
     ("wl_order_screen", "주문매핑 화면 이동"),
     ("wl_order_collect", "주문 수집 (엑셀 / 자동)"),
+    ("wl_order_sales", "하단 전체선택 → 매출처리 ▼ 정상매출"),
     ("wl_hold_screen", "물류대기 화면 이동"),
     ("wl_hold_save", "물류대기 조회 → 전체선택 → 저장"),
     ("wl_sap_screen", "웰라이프 SAP 연동관리 화면 열기"),
@@ -89,7 +90,7 @@ STEPS = (
 # run_routine.ROUTINE_MODULES 와 같은 모양 (모듈 키, 설정 키, 이름, 단계, module_flags 비트). 비트 32 부터는 웰라이프
 MODULES = (
     ("login", "Login", "로그인", ("login",), 1),
-    ("wellife_sales", "Sales", "웰라이프 주문매핑", ("wl_order_screen", "wl_order_collect"), 32),
+    ("wellife_sales", "Sales", "웰라이프 주문매핑", ("wl_order_screen", "wl_order_collect", "wl_order_sales"), 32),
     ("wellife_hold", "Hold", "웰라이프 물류대기", ("wl_hold_screen", "wl_hold_save"), 64),
     ("wellife_sap", "Sap", "웰라이프 SAP 연동관리", ("wl_sap_screen", "wl_sap_slip", "wl_sap_shipping", "wl_sap_so"), 128),
     ("wellife_wms", "Wms", "웰라이프 WMS 이관관리",
@@ -269,7 +270,7 @@ def run_main(rr):
 # ---------------------------------------------------------------------------
 
 def module_sales(rr, ctx, live=False):
-    """② 주문매핑: 화면 이동 -> 주문 수집 (collect_orders). 선택주문 매출처리는 하지 않는다 (사용자 10-08 범위 밖)."""
+    """② 주문매핑: 화면 이동 -> 주문 수집 (collect_orders) -> 하단 전체선택 -> 정상매출 (normal_sales, 사용자 10-14)."""
     rr.status.step("wl_order_screen")
     try:
         front(rr, ctx, "주문매핑 화면 이동")
@@ -290,7 +291,8 @@ def collect_orders(rr, ctx, live):
     """주문 수집 (사용자 10-08).
     - 엑셀: 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
       (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만.
-    - 자동 수집 [가져오기] 는 모드와 상관없이 누르지 않는다 - 마우스만."""
+    - 자동 수집 [가져오기] 는 모드와 상관없이 누르지 않는다 - 마우스만.
+    - 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (normal_sales, 사용자 10-14)."""
     rr.status.step("wl_order_collect")
     win = ctx.window()
     files = excel_files(rr)
@@ -322,7 +324,94 @@ def collect_orders(rr, ctx, live):
     else:
         hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}] (모드와 상관없이 누르지 않음)", None)
         notes.append("자동 수집은 누르지 않음")
-    return ("done" if uploaded else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
+    note, sold = normal_sales(rr, ctx, live)
+    notes.append(note)
+    return ("done" if uploaded or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
+
+
+SALES_SPLIT, SALES_ITEM = "매출처리", "정상매출"
+BOTTOM_ID_COLUMNS = ["주문번호", "마켓 상품명", "주문시간"]     # 원래 module_sales 의 하단 전체선택과 같다
+
+
+def normal_sales(rr, ctx, live):
+    """② 엑셀 업로드 뒤: 하단 그리드 전체선택 -> 매출처리 ▼ -> 정상매출 (원래 PROCESS module_sales 8~11 단계, 사용자 10-14).
+    (사유 글, 눌렀는가).
+    - 하단 전체선택은 원래 select_all_and_verify 그대로 - 리허설도 한다 (체크는 데이터를 바꾸지 않는다).
+    - 리허설은 ▼ 로 메뉴를 열어 '정상매출' 에 마우스만 올리고 ESC (hover_menu_item). 실행은 ▼ → '정상매출' 을 [지정▼] 와
+      같은 자리 확인으로 누르고, 뒤 팝업·비동기 대기는 원래 코드 그대로 (after_normal_sales - 사용자 10-14 '원래 규칙').
+    - 하단이 0줄이면 누르지 않는다 (원래는 0건이어도 누른다 - 웰라이프는 0건이면 누르지 않는다).
+    - 누르기 직전에 보이는 줄이 모두 체크인지 다시 본다 (recheck)."""
+    rr.status.step("wl_order_sales")
+    win = ctx.window()
+    tables = rr.get_onscreen_tables(win)
+    if len(tables) < 2:
+        raise Stop("failed", "주문매핑 하단 그리드를 찾지 못했습니다.")
+    bottom = max(tables, key=lambda t: t.rectangle().top)
+    if not rr.grid_rows(bottom):
+        rr.log("  주문매핑 하단 0줄 - 매출처리 하지 않음")
+        return "하단 0줄 - 매출처리 하지 않음", False
+    no_popup(rr, ctx, "하단 전체선택 전")
+    front(rr, ctx, "하단 전체선택")
+    clear_point(rr, ctx, check_header(bottom, "주문매핑 하단"), "주문매핑 하단 머리글 체크 칸")
+    n = rr.select_all_and_verify("하단", ctx.hwnd, bottom, BOTTOM_ID_COLUMNS)
+    no_popup(rr, ctx, "하단 전체선택")
+    checked = recheck(rr, bottom, "주문매핑 하단", live)
+    split = rr.find_by_text(ctx.window(), SALES_SPLIT, control_types=("SplitButton",))
+    if split is None:
+        raise Stop("failed", f"'{SALES_SPLIT}' 단추를 찾지 못했습니다.")
+    head = f"하단 {n or 0}줄 전체선택"
+    what = f"{SALES_SPLIT} ▼"
+    if not live:
+        return head + hover_menu_item(rr, ctx, split, SALES_ITEM, what, checked) + " - 정상매출은 누르지 않음", False
+    if not checked:
+        return head + " - 체크가 안 돼 매출처리하지 않음 (확인할 것)", False
+    baseline = rr.visible_child_windows(ctx.hwnd)      # 스피너 비교 기준 (원래 코드와 같이 누르기 전)
+    note, pressed = press_menu_item(rr, ctx, split, SALES_ITEM, what, confirm=False)
+    if not pressed:
+        return head + note, False
+    return head + note + after_normal_sales(rr, ctx, baseline), True
+
+
+def after_normal_sales(rr, ctx, baseline):
+    """'정상매출' 을 누른 뒤 - 원래 PROCESS module_sales 10~11 단계 그대로 (사용자 10-14: 매출처리 팝업은 원래 규칙).
+    메인 창 안 확인·완료 팝업은 [예]/[확인], 따로 뜬 창 팝업은 예/아니오면 [아니오]·그 밖은 [확인] (handle_sales_popups).
+    매출처리 실패 문구면 닫고 멈춘다 (뒤 모듈을 돌리지 않는다). 사유에 덧붙일 글."""
+    hwnd, notes = ctx.hwnd, []
+    time.sleep(1.5)
+    win = ctx.window()
+    btn = rr.find_popup_ok_button(win)
+    if btn is None:
+        rr.log("  확인 팝업이 뜨지 않았습니다. 비동기 대기 단계로 넘어갑니다.")
+    else:
+        failure = rr.find_popup_failure(win)
+        rr.ec.ensure_foreground(hwnd)
+        btn.click_input()
+        if failure:
+            raise Stop("stopped", f"매출처리 실패: {failure}")
+        rr.log(f"  확인 팝업 -> '{btn.window_text()}' 누름")
+        time.sleep(1.5)
+    rr.status.note("매출 처리가 끝나기를 기다리는 중")
+    rr.probe_spinner(hwnd, baseline)
+    result = rr.wait_async_then_confirm(ctx.app, hwnd, baseline)
+    if result == "sales_failed":
+        raise Stop("stopped", "정상매출이 실패했습니다")
+    if result == "timeout":
+        rr.log(f"  확인할 것: 정상매출 대기 시간({rr.ASYNC_MAX_WAIT_SECONDS}초)을 넘었습니다")
+        notes.append("대기 시간 초과 (확인할 것)")
+    time.sleep(2)
+    failure, _ = rr.handle_sales_popups(ctx.pid, hwnd, {})
+    if failure:
+        raise Stop("stopped", f"매출처리 실패: {failure}")
+    win = ctx.window()
+    extra = rr.find_popup_ok_button(win)
+    if extra is not None:
+        failure = rr.find_popup_failure(win)
+        rr.ec.ensure_foreground(hwnd)
+        extra.click_input()
+        if failure:
+            raise Stop("stopped", f"매출처리 실패: {failure}")
+        rr.log(f"  추가 팝업 -> '{extra.window_text()}' 누름")
+    return f" (완료{'' if result != 'no_popup' else ' - 팝업 없음'}{', ' + ', '.join(notes) if notes else ''})"
 
 
 def excel_files(rr):
@@ -1254,9 +1343,10 @@ def hover_menu_item(rr, ctx, split, item_text, what, would_press):
     return ""
 
 
-def press_menu_item(rr, ctx, split, item_text, what, grid=None):
+def press_menu_item(rr, ctx, split, item_text, what, grid=None, confirm=True):
     """실행: [지정] 옆 ▼ 로 내림 메뉴를 열고 item_text 를 누른 뒤 팝업을 [예]/[확인] 으로 넘긴다. (사유 글, 눌렀는가).
-    누를 점의 맨 위 창이 그 메뉴 창일 때만 누른다 (다른 창이 덮고 있으면 그것이 눌린다). 항목이 꺼져 있으면 닫고 넘어간다."""
+    누를 점의 맨 위 창이 그 메뉴 창일 때만 누른다 (다른 창이 덮고 있으면 그것이 눌린다). 항목이 꺼져 있으면 닫고 넘어간다.
+    confirm=False 면 누른 뒤 팝업은 부른 쪽이 본다 (② 정상매출 - 원래 PROCESS 의 팝업 규칙)."""
     item, menu = _open_menu(rr, ctx, split, item_text, what, True)
     if item is None:
         return menu, False
@@ -1286,6 +1376,8 @@ def press_menu_item(rr, ctx, split, item_text, what, grid=None):
         if time.time() > deadline:
             raise Stop("failed", f"{what}: '{item_text}' 를 눌렀는데 메뉴가 닫히지 않아 멈춤")
         time.sleep(0.2)
+    if not confirm:
+        return f" -> '{item_text}' 누름", True
     texts = confirm_popups(rr, ctx, what, grid, idle, before)
     return f" -> '{item_text}' 누름" + popup_note(texts), True
 

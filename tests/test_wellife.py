@@ -987,12 +987,96 @@ def order_rr(files):
 
 
 octx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([El("가져오기")]))
+_saved_ns = wellife.normal_sales
+SOLD = [False]
+wellife.normal_sales = lambda rr_, ctx_, live: (acts.append(("normal_sales", live)), ("매출처리 흉내", SOLD[0]))[1]
 for live, files, want_res, want_up in ((True, {}, "skipped", []), (False, {"101": "x"}, "skipped", []),
                                        (True, {"101": "x"}, "done", ["사이트"])):
     acts.clear(); uploads.clear()
     res = wellife.collect_orders(order_rr(files), octx, live)
-    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름",
-          res[0] == want_res and uploads == want_up and ("click", "가져오기") not in acts, f"{res} {uploads} {acts}")
+    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름, 그 뒤 매출처리 단계",
+          res[0] == want_res and uploads == want_up and ("click", "가져오기") not in acts
+          and acts[-1] == ("normal_sales", live), f"{res} {uploads} {acts}")
+SOLD[0] = True
+res = wellife.collect_orders(order_rr({}), octx, True)
+check("올린 엑셀이 없어도 정상매출을 눌렀으면 done", res[0] == "done" and "매출처리 흉내" in res[1], str(res))
+wellife.normal_sales = _saved_ns
+
+# ② 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS module_sales 8~11 단계, 사용자 10-14)
+_saved_n = {n: getattr(wellife, n) for n in ("front", "no_popup", "clear_point", "check_header", "recheck",
+                                               "hover_menu_item", "press_menu_item", "after_normal_sales")}
+NS = {"rows": {1: {}}, "again": True, "split": True}
+wellife.front = wellife.no_popup = lambda *a: None
+wellife.clear_point = lambda *a: (0, 0)
+wellife.check_header = lambda grid, label="": El("row Check Box")
+wellife.recheck = lambda rr_, grid, label, live: NS["again"]
+wellife.hover_menu_item = lambda rr_, ctx_, split, item, what, would: acts.append(("hover", item, would)) or ""
+wellife.press_menu_item = lambda rr_, ctx_, split, item, what, grid=None, confirm=True: (
+    acts.append(("press", item, confirm)), (f" -> '{item}' 누름", True))[1]
+wellife.after_normal_sales = lambda rr_, ctx_, base: acts.append(("after",)) or " (완료)"
+ns_top, ns_bottom = El("사이트", Rect(0, 50, 200, 100)), El("주문", Rect(0, 300, 200, 500))
+nrr = types.SimpleNamespace(status=Rec(), log=lambda m: None, visible_child_windows=lambda h: {},
+                            get_onscreen_tables=lambda win: [ns_top, ns_bottom],
+                            grid_rows=lambda g: NS["rows"] if g is ns_bottom else {},
+                            select_all_and_verify=lambda name, h, g, cols: acts.append(("select_all", g.name, tuple(cols))) or 3,
+                            find_by_text=lambda win, text, control_types=None: El(text) if NS["split"] else None)
+
+
+def run_ns(live, **kw):
+    NS.update({"rows": {1: {}}, "again": True, "split": True}); NS.update(kw); acts.clear()
+    try:
+        return wellife.normal_sales(nrr, octx, live), None
+    except wellife.Stop as e:
+        return None, e.result
+
+
+(note, sold), _ = run_ns(False)
+check("리허설: 하단 전체선택(원래 select_all_and_verify) -> ▼ 를 열어 '정상매출' 에 마우스만 (누르지 않음)",
+      acts == [("select_all", "주문", tuple(wellife.BOTTOM_ID_COLUMNS)), ("hover", "정상매출", True)] and sold is False
+      and "정상매출은 누르지 않음" in note, f"{note} {acts}")
+(note, sold), _ = run_ns(True)
+check("실행: 하단 전체선택 -> ▼ '정상매출' 누름 (팝업은 원래 코드가 - confirm=False) -> 원래 팝업·대기 처리",
+      acts == [("select_all", "주문", tuple(wellife.BOTTOM_ID_COLUMNS)), ("press", "정상매출", False), ("after",)] and sold,
+      f"{note} {acts}")
+(note, sold), _ = run_ns(True, rows={})
+check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원래는 0건이어도 누름 - 웰라이프는 안 누름)",
+      acts == [] and sold is False and "0줄" in note, f"{note} {acts}")
+(note, sold), _ = run_ns(True, again=False)
+check("실행: 누르기 직전 다시 보니 체크가 풀려 있으면 정상매출을 누르지 않는다",
+      ("press", "정상매출", False) not in acts and sold is False and "확인할 것" in note, f"{note} {acts}")
+_, err = run_ns(True, split=False)
+check("'매출처리' 단추가 없으면 멈춘다", err == "failed")
+for n, f in _saved_n.items():
+    setattr(wellife, n, f)
+
+# 정상매출 뒤 - 원래 module_sales 10~11 단계 그대로: 확인 팝업 [예]/[확인], 실패 문구면 멈춤
+AF = {"ok": None, "failure": None, "async": "clicked", "sep": (None, 0)}
+arr = types.SimpleNamespace(log=lambda m: None, status=Rec(), ASYNC_MAX_WAIT_SECONDS=600,
+                            find_popup_ok_button=lambda win: AF["ok"], find_popup_failure=lambda win: AF["failure"],
+                            ec=types.SimpleNamespace(ensure_foreground=lambda h: True),
+                            probe_spinner=lambda h, b: None, wait_async_then_confirm=lambda app, h, b: AF["async"],
+                            handle_sales_popups=lambda pid, h, tried: AF["sep"])
+
+
+def run_after(**kw):
+    AF.update({"ok": None, "failure": None, "async": "clicked", "sep": (None, 0)}); AF.update(kw); acts.clear()
+    try:
+        return wellife.after_normal_sales(arr, octx, {}), None
+    except wellife.Stop as e:
+        return None, (e.result, str(e))
+
+
+wellife.time.sleep = lambda s: None
+aft, err = run_after(ok=Click("예"))
+check("확인 팝업은 [예] 를 누르고, 완료까지 기다린다 (원래 규칙)", ("click", "예") in acts and err is None and "완료" in aft, f"{aft} {acts}")
+aft, err = run_after(ok=Click("확인"), failure="정상매출 실패")
+check("확인 팝업에 매출처리 실패 문구면 닫고 멈춘다 (뒤 모듈을 돌리지 않음)", err and err[0] == "stopped" and "실패" in err[1], str(err))
+aft, err = run_after(**{"async": "sales_failed"})
+check("기다리는 중 실패 팝업이면 멈춘다", err and err[0] == "stopped", str(err))
+aft, err = run_after(sep=("매출처리 실패", 1))
+check("따로 뜬 창의 실패 팝업이면 멈춘다", err and err[0] == "stopped", str(err))
+aft, err = run_after(**{"async": "timeout"})
+check("대기 시간 초과는 '확인할 것' 을 남기고 이어 간다 (원래와 같음)", err is None and "확인할 것" in aft, str(aft))
 wellife.time.sleep = _sleep
 TOP[0] = 1
 
