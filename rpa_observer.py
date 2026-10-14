@@ -301,7 +301,8 @@ class Worker(threading.Thread):
         """기록 창 브라우저의 안쪽 크기 - 기록에 넣어 프리페어가 같은 크기로 연다."""
         try:
             self.page.wait_for_timeout(200)          # 창 크기를 바꾼 뒤 그려질 틈
-            vp = self.page.evaluate("() => ({width: innerWidth, height: innerHeight})")
+            w, h = self.page.evaluate("() => innerWidth + 'x' + innerHeight").split("x")   # 글자로 (사이트가 Map 을 바꿔치기해도 - rec.SNAP_JS)
+            vp = {"width": int(w), "height": int(h)}
             self.ui.put(("viewport", self.rec_no, vp))
         except Exception:
             pass

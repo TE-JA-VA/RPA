@@ -40,6 +40,10 @@ JS = r"""
   // 문서마다 한 번. window 에 표시하면 안 된다: 새 창은 빈 페이지(about:blank)의 window 를 진짜 주소에서도 그대로 써서
   // 진짜 페이지에 귀를 달지 않고 넘어간다 (2026-09-30 시험에서 새 창의 조작이 통째로 빠졌다)
   if (document.__recOn) return; document.__recOn = true;
+  // 사이트가 기본 기능을 바꿔치기해도 (비즈메카 메일 jsmap.js 의 Map, 2026-10-14) 옵저버가 쓰는 것은 처음 것 그대로.
+  // 보고는 JSON 글자 하나로 보낸다 - Playwright 가 묶음 값을 옮길 때 쓰는 Map.set 이 바꿔치기된 Map 에 없어 보고가 모두 사라졌다.
+  // 이 스크립트는 사이트 스크립트보다 먼저 돈다 (add_init_script). 나중에 심을 때(_inject)는 이미 바뀐 뒤일 수 있다
+  const J = JSON.stringify, NoProto = () => Object.create(null);
   const norm = s => (s || '').replace(/\s+/g, ' ').trim();
   const ACT = 'a,button,input,select,textarea,label,summary,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]';
   const BTN = ['button', 'submit', 'reset'];
@@ -84,7 +88,7 @@ JS = r"""
             href: el.getAttribute('href') || '', css: cssPath(el), inOverlay: inOverlay(el)};
   }
   function send(kind, el, extra) {
-    try { window.__rec(Object.assign({kind, url: location.href, target: describe(el), t: Date.now()}, extra || {})); } catch (e) {}
+    try { window.__rec(J(Object.assign({kind, url: location.href, target: describe(el), t: Date.now()}, extra || {}))); } catch (e) {}
   }
   // 누를 것마다 이 문서에 처음 나타난 시각. 재생은 '몇 단계 뒤에 나타난 것' 을 새로 생긴 것 중에서 고른다
   // (요청한 파일이 목록에 새 줄로 올라오는 것 - 그 사이 다른 곳을 눌러도 흔들리지 않게 '직전 조작' 이 아니라 나타난 시각으로)
@@ -92,18 +96,18 @@ JS = r"""
   // 두었다가 보여 주는 메뉴(CSS :hover, class 'show' - 대부분의 쇼핑몰)도 알아챈다 (2026-10-13: 전에는 새로 만들어진 것만 봐서
   // 숨겨 둔 메뉴는 마우스 올리기를 적지 않았고, 재생이 짐작으로 위 칸에 마우스를 올렸다).
   // 1초마다 innerHTML 로 다시 그리는 목록은 훑을 때마다 늘 보여서 appeared 가 바뀌지 않는다
-  const firstSeen = new Map(), appeared = new Map();
-  let shown = new Set(), base = false;    // base: 화면이 다 그려진 때의 보이는 것들을 적었다 - 그 뒤 보이게 된 것만 '나타남'
+  const firstSeen = NoProto(), appeared = NoProto();       // Map·Set 대신 (사이트가 바꿔치기한다)
+  let shown = NoProto(), base = false;    // base: 화면이 다 그려진 때의 보이는 것들을 적었다 - 그 뒤 보이게 된 것만 '나타남'
   const visible = el => el.checkVisibility ? el.checkVisibility({opacityProperty: true, visibilityProperty: true})
                                            : el.getClientRects().length > 0;
   function scan() {
-    const now = Date.now(), cur = new Set();
+    const now = Date.now(), cur = NoProto();
     for (const el of document.querySelectorAll(CLICKABLE)) {
       const g = sig(el);
-      if (!firstSeen.has(g)) firstSeen.set(g, now);
+      if (!(g in firstSeen)) firstSeen[g] = now;
       if (!visible(el)) continue;
-      cur.add(g);
-      if (!shown.has(g) && base) appeared.set(g, now);
+      cur[g] = 1;
+      if (!(g in shown) && base) appeared[g] = now;
     }
     shown = cur;
   }
@@ -138,7 +142,7 @@ JS = r"""
     const out = [];
     for (let cur = el; out.length < 3;) {
       const c = cur.matches(CLICKABLE) ? cur : cur.closest(CLICKABLE);
-      const h = c && hoverBefore(cur, appeared.get(sig(c)));
+      const h = c && hoverBefore(cur, appeared[sig(c)]);
       if (!h || out.some(o => o.el === h.el)) break;
       out.unshift(h); cur = h.el;
     }
@@ -157,7 +161,7 @@ JS = r"""
     if (tag === 'SELECT' || tag === 'OPTION' || tag === 'TEXTAREA') return;   // 값 바뀜으로 적는다
     if (tag === 'INPUT' && !BTN.includes(type) && type !== 'image') return;  // 글자 칸·체크 상자도
     let seen = null;
-    if (el.matches(CLICKABLE)) { scan(); seen = firstSeen.get(sig(el)) || null; }
+    if (el.matches(CLICKABLE)) { scan(); seen = firstSeen[sig(el)] || null; }
     send('click', el, {detail: e.detail, firstSeen: seen, hovers: hoverChain(el)});
   }, true);
   document.addEventListener('input', e => {
@@ -182,8 +186,9 @@ CLICKABLE = "a,button,input[type=button],input[type=submit],[onclick],[role=butt
 SIG = ("el => (el.getAttribute('href') || el.getAttribute('onclick') || '') + '|' + "
        "(((el.closest('tr,li') || el).textContent) || '').replace(/\\s+/g, ' ').trim().slice(0, 120)")
 JS = JS.replace("__CLICKABLE__", json.dumps(CLICKABLE)).replace("__SIG__", SIG)
-SNAP_JS = f"() => [...document.querySelectorAll({json.dumps(CLICKABLE)})].map({SIG})"
-SIGS_JS = f"els => els.map({SIG})"
+# 목록은 JSON 글자로 돌려받는다 - 묶음 값은 사이트가 Map 을 바꿔치기하면 Playwright 가 못 옮긴다 (2026-10-14 비즈메카 메일, 옵저버의 send 와 같다)
+SNAP_JS = f"() => JSON.stringify([...document.querySelectorAll({json.dumps(CLICKABLE)})].map({SIG}))"
+SIGS_JS = f"els => JSON.stringify(els.map({SIG}))"
 # 화면이 0.4초 동안 안 바뀔 때까지 (최대 2.5초) - 늦게 그려지는 목록을 기다린다
 QUIET_JS = """() => new Promise(res => {
   let t, hard;
@@ -304,6 +309,8 @@ class Recorder:
             self.samples.append(path)
 
     def _event(self, source, ev):
+        if isinstance(ev, str):
+            ev = json.loads(ev)         # 페이지는 JSON 글자로 보낸다 (JS 의 send)
         step = {"kind": ev["kind"], "page": self._no(source["page"]), "frame": frame_info(source["frame"]),
                 "url": url_path(ev["url"]), "target": ev["target"], "t": ev["t"]}
         for k in ("value", "option", "checked", "firstSeen"):
@@ -691,7 +698,7 @@ class Replayer:
     def _same(self, loc, t):
         """찾은 것이 기록한 것과 모양이 같은가 (id·위치가 다른 것을 가리키게 된 경우를 거른다)."""
         try:
-            got = loc.evaluate("e => [e.tagName.toLowerCase(), (e.getAttribute('type') || '').toLowerCase()]")
+            got = loc.evaluate("e => e.tagName.toLowerCase() + '|' + (e.getAttribute('type') || '').toLowerCase()").split("|", 1)
             if got[0] != t["tag"] or (t["tag"] == "input" and got[1] != t["type"]):
                 return False
             return not t["text"] or loc.evaluate(TEXT_OF) == t["text"]
@@ -701,7 +708,7 @@ class Replayer:
     def _pick(self, loc, n, nth, prev):
         """단서가 가리키는 것들 중 하나. prev 가 있으면 (기록 때 새로 생긴 것을 눌렀으면) 그 뒤 새로 생긴 것만."""
         if prev is not None:
-            sigs = loc.evaluate_all(SIGS_JS)
+            sigs = json.loads(loc.evaluate_all(SIGS_JS))
             fresh = [i for i, g in enumerate(sigs) if g not in prev]
             if nth is not None:
                 i = nth if nth in fresh else (fresh[0] if fresh else None)
@@ -725,7 +732,7 @@ class Replayer:
             pass
         try:
             fr.evaluate(QUIET_JS)
-            return set(fr.evaluate(SNAP_JS))
+            return set(json.loads(fr.evaluate(SNAP_JS)))
         except Exception:
             return set()
 
