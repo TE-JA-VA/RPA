@@ -19,7 +19,7 @@ export const DASHBOARD_URL = `https://${PROJECT}.web.app`;
 const DOMAIN = `${PROJECT}.firebaseapp.com`;
 export const emailFor = (cid, local) => local.includes("@") ? local : `${local.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}${DOMAIN}`;
 const randomPassword = () => randomBytes(18).toString("base64url");   // 24자
-export const POLICY_KEYS = ["Sales", "Hold", "Logistics", "Output"];   // Login 은 언제나 켬이라 정책 대상이 아니다
+export const POLICY_KEYS = ["Sales", "Hold", "Logistics", "Output", "InvoiceSend"];   // Login 은 언제나 켬이라 정책 대상이 아니다. InvoiceSend 는 Routine·Wellife 같은 키
 export const SCHEDULE_LIMIT_DEFAULT = 2;   // 자동 실행 개수 - 값이 없을 때 (agent.SCHEDULE_LIMIT_DEFAULT 와 같다)
 export const SCHEDULE_LIMIT_MAX = 12;      // PC 쪽 절대 상한 (rpa_status.SCHEDULE_MAX_SLOTS)
 export const PRESET_LIMIT_MIN = 2, PRESET_LIMIT_MAX = 10;   // 옵저버 프리셋 수 (rpa_status.PRESET_MIN·PRESET_MAX - 더 열 때 둘을 함께)

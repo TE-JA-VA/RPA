@@ -152,7 +152,8 @@ const KEY = new URLSearchParams(location.search).get("k") || sessionStorage.getI
 if (KEY) sessionStorage.setItem("k", KEY);
 history.replaceState(null, "", "/");
 const ROLE = { admin: "관리자", viewer: "유저", agent: "에이전트", super: "총괄" };
-const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 관리", Logistics: "물류관리", Output: "운송장 출력 / 엑셀 생성" };
+const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 관리", Logistics: "물류관리", Output: "운송장 출력 / 엑셀 생성",
+  InvoiceSend: "운송장번호 전송" };
 // 토큰 배율 묶음 (사용자 2026-10-08) - 키는 에이전트가 세는 모듈 키 (run_routine·wellife MODULES, 프리페어는 sites)
 const RATE_GROUPS = [
   { title: "ACTOR 오토파일럿", rows: [["sites", "사이트 수집"]] },

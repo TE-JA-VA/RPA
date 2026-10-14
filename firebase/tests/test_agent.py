@@ -723,6 +723,8 @@ with tempfile.TemporaryDirectory() as d:
         strict["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True})
         sel = st.read_routine_modules()[0]
         check(sel["Hold"] is False and sel["Sales"] is True, f"업체가 안 쓰는 모듈은 켜 달라고 해도 꺼진다 ({sel})")
+        ag.real_actions(lambda: {"InvoiceSend": False})["set_modules"]({"Sales": True, "InvoiceSend": True})
+        check(st.read_routine_modules()[0]["InvoiceSend"] is False, "업체 정책으로 운송장번호 전송도 꺼진다 (관리 화면 모듈 정책, 2026-10-14)")
         check(ag.real_actions(lambda: {"Nope": False})["set_modules"]({"Sales": True}) and st.read_routine_modules()[0]["Sales"] is True,
               "정책에 모르는 키가 있어도 넘어간다")
         try:
