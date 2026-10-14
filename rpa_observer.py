@@ -27,7 +27,7 @@ import threading
 import time
 import tkinter as tk
 from ctypes import wintypes
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, ttk
 
 from playwright.sync_api import sync_playwright
 
@@ -39,6 +39,7 @@ import web_replay as rec
 REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
 RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
+MAIL_HINT = "엑셀파일을 받으려는 메일이 '메일 시작 문구'로 시작하는 경우, 그 글자로 시작하는 메일이 처리대상이 됩니다."   # 메일 첨부파일일 때 안내 (사용자 2026-10-14 검수)
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
 MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
 PRESETS_PER_ROW = 10                    # 프리셋 단추 한 줄에 10개, 11개부터 줄을 더한다 (사용자 2026-10-14)
@@ -405,7 +406,8 @@ def new_preset(no, name=None, code=""):
     return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "start_url": None,
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
-            "pick": {}, "pick_dirty": False,             # 메일 고르기 {sid: 제목 시작 글자 | None=해제}, dirty = 저장할 때 '이미 처리' 기억을 채운다
+            "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일), 메일 시작 문구
+            "pick_dirty": False,                         # 저장할 때 '이미 처리' 기억을 다시 채운다 (문구·경로를 바꿨거나 새로 기록)
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
 
 
@@ -421,6 +423,9 @@ def load_presets():
             for k, s in enumerate(r["steps"]):
                 s["id"] = k
             q["loaded"], q["viewport"] = r, r.get("viewport")
+            pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
+            if pick:
+                q["source"], q["prefix"] = "mail", pick["prefix"]
         site = sites.get(st.preset_site_key(p["no"])) if isinstance(sites, dict) else None
         if isinstance(site, dict):
             q["id"], q["has_pw"] = site.get("ID") or "", bool(site.get("PW"))
@@ -483,10 +488,19 @@ def store(files, logins, fresh=(), phones=None):
 
 
 def pick_problem(presets):
-    """메일 고르기 아래에 받기 단계가 없는 프리셋 (번호, 글) - 없으면 None."""
+    """메일 첨부파일 프리셋의 문제 (번호, 글) - 문구 없음 / 그 문구로 시작하는 메일을 연 단계 없음 / 그 아래 받기 단계 없음. 없으면 None."""
     for o in presets:
         steps = (o["record"] or {}).get("steps") or []
-        if any(x.get("pick") and rec.pick_body(steps, i) is None for i, x in enumerate(steps)):
+        if o.get("source") != "mail" or not steps:
+            continue
+        prefix = (o.get("prefix") or "").strip()
+        if not prefix:
+            return o["no"], "메일 시작 문구를 넣어 주십시오."
+        i = next((k for k, x in enumerate(steps) if x.get("pick")), None)
+        if i is None:
+            return o["no"], (f"메일 시작 문구로 지정한 '{prefix}'(으)로 시작하는 메일을 찾지 못했습니다. "
+                             f"'{prefix}'(으)로 시작하는 메일을 연 다음 첨부파일을 받는 것까지 기록해 주십시오.")
+        if rec.pick_body(steps, i) is None:
             return o["no"], "메일 고르기 아래에 파일 받기 단계가 없습니다. 첨부를 받는 단계까지 기록해 주십시오."
     return None
 
@@ -555,6 +569,7 @@ class App:
         self.name_var, self.code_var = tk.StringVar(root), tk.StringVar(root)
         self.id_var, self.pw_var = tk.StringVar(root), tk.StringVar(root)
         self.senders_var, self.phones, self.phone_ids = tk.StringVar(root), None, [""]
+        self.source_var, self.prefix_var = tk.StringVar(root, value="shop"), tk.StringVar(root)
         self._build()
         threading.Thread(target=self._load_phones, daemon=True).start()
         self._load_fields()
@@ -603,6 +618,15 @@ class App:
         tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(6, 0))
         self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
         self.senders_var.trace_add("write", lambda *a: self._field_changed())
+        src = tk.Frame(form, bg=CARD)               # 주문 수집용 엑셀파일 경로 (사용자 2026-10-14)
+        src.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        tk.Label(src, text="주문 수집용 엑셀파일 경로", font=F, bg=CARD, fg=MUTED).pack(side="left")
+        for value, label in (("shop", "쇼핑몰"), ("mail", "메일 첨부파일")):
+            tk.Radiobutton(src, text=label, value=value, variable=self.source_var, font=F, bg=CARD, activebackground=CARD,
+                           cursor="hand2", command=self._source_changed).pack(side="left", padx=(12, 0))
+        self.prefix_label = tk.Label(form, text="메일 시작 문구", font=F, bg=CARD, fg=MUTED)
+        self.prefix_entry = self._entry(form, self.prefix_var, 12)
+        self.prefix_var.trace_add("write", lambda *a: self._field_changed())
         for col in (1, 3):              # 왼쪽(이름·아이디·인증 휴대폰)·오른쪽(사이트코드·비밀번호·발신번호) 칸을 같은 너비로 (사용자 2026-10-13)
             form.columnconfigure(col, weight=1, uniform="field")
         self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
@@ -700,11 +724,15 @@ class App:
         self.id_var.set(p["id"])
         self.pw_var.set(p["pw"])
         self.senders_var.set(p["senders"])
+        self.source_var.set(p["source"])
+        self.prefix_var.set(p["prefix"])
         self._fill_phone_box()
         self._loading = False
+        self._show_prefix()
         self.pw_hint.config(text=("저장된 비밀번호가 있습니다. " if p["has_pw"] else "")
                             + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.\n"
                             + "문자 인증번호를 받는 사이트면 인증 휴대폰과 발신번호(여러 개면 쉼표로)를 정해 주십시오."
+                            + ("\n" + MAIL_HINT if p["source"] == "mail" else "")
                             + (" (휴대폰 목록을 불러오지 못했습니다)" if self.phones == [] and getattr(self, "phones_failed", False) else ""))
 
     def _load_phones(self):
@@ -726,14 +754,39 @@ class App:
     def _store_fields(self):
         p = self.presets[self.cur]
         i = self.phone_box.current()
+        source, prefix = self.source_var.get(), self.prefix_var.get().strip()
+        if (source, prefix) != (p["source"], p["prefix"]):
+            p["pick_dirty"] = True                  # 저장할 때 그 문구로 '이미 처리' 를 다시 채운다
         p.update(name=self.name_var.get().strip() or p["name"], code=self.code_var.get().strip(),
                  id=self.id_var.get(), pw=self.pw_var.get(), senders=self.senders_var.get(),
-                 phone=self.phone_ids[i] if 0 <= i < len(self.phone_ids) else p["phone"])
+                 phone=self.phone_ids[i] if 0 <= i < len(self.phone_ids) else p["phone"], source=source, prefix=prefix)
 
     def _field_changed(self):
         if not getattr(self, "_loading", False) and hasattr(self, "list_title"):
+            p = self.presets[self.cur]
+            before = (p["source"], p["prefix"])
             self._store_fields()
             self._title()
+            if (p["source"], p["prefix"]) != before:
+                self.render()                       # '메일마다' 단계가 바뀐다
+
+    def _show_prefix(self):
+        """메일 첨부파일일 때만 '메일 시작 문구' 칸 (쇼핑몰이면 감춘다)."""
+        if self.source_var.get() == "mail":
+            self.prefix_label.grid(row=4, column=0, sticky="w", pady=(6, 0))
+            self.prefix_entry.grid(row=4, column=1, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
+        else:
+            self.prefix_label.grid_remove()
+            self.prefix_entry.grid_remove()
+
+    def _source_changed(self):
+        """라디오: 메일 첨부파일로 처음 바꾸면 시작 문구는 '>>>' 부터."""
+        if self.source_var.get() == "mail" and not self.prefix_var.get().strip():
+            self._loading = True
+            self.prefix_var.set(rec.MAIL_PICK_DEFAULT)
+            self._loading = False
+        self._field_changed()
+        self._load_fields()                 # 칸 보이기·안내 줄
 
     def _title(self):
         p = self.presets[self.cur]
@@ -776,32 +829,16 @@ class App:
             i = next((k for k, s in enumerate(final["steps"]) if s["id"] == sid), None) if final else None
             if i is not None and (final["steps"][i]["kind"] == "otp") != on:
                 rec.set_otp(final["steps"], i, on)
-        for sid, prefix in p["pick"].items():     # 단계 목록에서 정한 메일 고르기
-            i = next((k for k, s in enumerate(final["steps"]) if s["id"] == sid), None) if final else None
+        if final:                                 # 메일 첨부파일 - 메일 시작 문구로 '메일마다' 단계를 스스로 찾는다 (사용자 2026-10-14)
+            for k in range(len(final["steps"])):
+                rec.set_pick(final["steps"], k, None)
+            i = rec.auto_pick(final["steps"], p["prefix"]) if p["source"] == "mail" else None
             if i is not None:
-                rec.set_pick(final["steps"], i, prefix)
+                rec.set_pick(final["steps"], i, p["prefix"])
         return final
 
     def toggle_otp(self, sid, on):
         self.presets[self.cur]["otp"][sid] = on
-        self.render()
-
-    def toggle_pick(self, sid):
-        """[메일 고르기]: 목록 줄 누르기를 '제목이 이 글자로 시작하는 메일마다' 로 (사용자 2026-10-14). 다시 누르면 해제."""
-        p = self.presets[self.cur]
-        s = next(x for x in self._final(p)["steps"] if x["id"] == sid)
-        if s.get("pick"):
-            p["pick"][sid] = None
-            return self.render()
-        if not s.get("row"):
-            return self.tell("메일 고르기", "메일 목록의 줄을 누른 단계에서만 쓸 수 있습니다.")
-        prefix = simpledialog.askstring("메일 고르기", "제목이 아래 글자로 시작하는 메일을 모두 받습니다.\n\n제목 시작 글자",
-                                        initialvalue=rec.MAIL_PICK_DEFAULT, parent=self.root)
-        if prefix is None:
-            return None                     # 취소
-        if not prefix.strip():
-            return self.tell("메일 고르기", "제목 시작 글자를 넣어 주십시오.")
-        p["pick"][sid], p["pick_dirty"] = prefix.strip(), True
         self.render()
 
     def clear_mail_memory(self):
@@ -853,11 +890,6 @@ class App:
                 tk.Button(row, text="인증번호 칸 해제" if is_otp else "인증번호 칸", font=F_SMALL, fg=BLUE if is_otp else MUTED,
                           bg=CARD, activebackground=BLUE_L, relief="flat", bd=0, cursor="hand2",
                           command=lambda sid=sid, on=not is_otp: self.toggle_otp(sid, on)).pack(side="right", anchor="n", padx=2, pady=4)
-            if s["kind"] == "click":                 # 메일 목록 줄 - 제목이 정한 글자로 시작하는 메일마다 (2026-10-14)
-                picked = bool(s.get("pick"))
-                tk.Button(row, text="메일 고르기 해제" if picked else "메일 고르기", font=F_SMALL, fg=BLUE if picked else MUTED,
-                          bg=CARD, activebackground=BLUE_L, relief="flat", bd=0, cursor="hand2",
-                          command=lambda sid=sid: self.toggle_pick(sid)).pack(side="right", anchor="n", padx=2, pady=4)
             tk.Label(row, text=f"{n:2d}", font=F_SMALL, bg=CARD, fg=MUTED, width=3, anchor="e").pack(side="left", anchor="n", pady=6)
             text = ("↳ " if k in body else "") + re.sub(r" \(\d+단계 뒤에 새로 생긴 것\)", " (새로 생긴 것)", rec.describe(s))
             warn = s["kind"] == "goto" and "로그인 세션 값을 감지" in text
@@ -909,7 +941,7 @@ class App:
         if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
                 "다시 기록", f"{circled(self.cur + 1)} {p['name']} 의 기록을 지우고 처음부터 다시 기록하시겠습니까?"):
             return
-        p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set(), pick={}, pick_dirty=False)
+        p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set(), pick_dirty=True)
         self.recording, self.shown = self.cur, 0
         self.status.config(text="브라우저를 여는 중…", fg=MUTED)
         self.render()
@@ -972,7 +1004,7 @@ class App:
                 r = rec.keep_steps(final, self._kept(p, final))
                 for s in r["steps"]:
                     s.pop("id", None)
-            out.append({"no": no, "name": p["name"], "code": p["code"], "record": r,
+            out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"],
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"]})
         problem = validate_presets(out) or pick_problem(out)
         if problem:

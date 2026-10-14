@@ -90,6 +90,8 @@ check("메일 줄 누르기에 목록 줄 정보가 붙는다 (같은 모양의 
       and steps[i]["row"]["sel"] == "li.m_data" and steps[i]["row"]["key"] == "k1"
       and [x["k"] for x in steps[i]["row"]["list"]] == ["k1", "k2", "k3"], steps[i].get("row") if i is not None else steps)
 check("받기 단계가 없으면 묶음이 없다 (저장을 막는 데 쓴다)", rec.pick_body(steps[:i + 1], i) is None)
+check("메일 시작 문구로 '메일마다' 단계를 스스로 찾는다 (프리셋 칸 - 사용자 2026-10-14)", rec.auto_pick(steps, ">>>") == i
+      and rec.auto_pick(steps, "[긴급]") is None and rec.auto_pick(steps, "") is None, rec.auto_pick(steps, ">>>"))
 rec.set_pick(steps, i, ">>>")
 check("설정한 줄의 설명", rec.describe(steps[i]) == "제목이 '>>>' 로 시작하는 메일마다 ↓", rec.describe(steps[i]))
 end = rec.pick_body(steps, i)

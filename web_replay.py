@@ -419,6 +419,21 @@ def title_starts(prefix, *titles):
     return bool(want) and any(unicodedata.normalize("NFKC", t or "").strip().startswith(want) for t in titles)
 
 
+def auto_pick(steps, prefix):
+    """메일 시작 문구(프리셋 칸)로 '메일마다' 로 바꿀 단계 - 목록 줄 누르기 중 연 메일의 제목이 prefix 로 시작하는 마지막 것.
+    없으면 None (옵저버가 저장을 막는다). 연 줄의 제목은 기록 때 목록에서 그 줄(key)의 보이는 제목, 아니면 누른 글자."""
+    for i in range(len(steps) - 1, -1, -1):
+        s = steps[i]
+        row = s.get("row") if s["kind"] == "click" else None
+        if not row:
+            continue
+        mine = [x for x in row.get("list", []) if row.get("key") and x["k"] == row["key"]]
+        titles = [t for x in mine for t in (x.get("s"), x["t"])] + [(s.get("target") or {}).get("text")]
+        if title_starts(prefix, *titles):
+            return i
+    return None
+
+
 def pick_seed(s):
     """기록할 때 목록에 보이던 메일 중 제목이 정한 글자로 시작하는 것 (저장하면 '이미 처리' 로 - 사용자 2026-10-14 (나)).
     목록의 s = 보이는 제목 (중요·전달 같은 숨은 표시를 뺀 것, 옛 기록에는 없다), t = 칸 글자 전체."""

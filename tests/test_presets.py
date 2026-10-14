@@ -305,11 +305,14 @@ def bad_cfg():
 
 
 _steps = [{"kind": "click", "pick": {"prefix": ">>>"}, "row": {}}, {"kind": "click"}]
-check("메일 고르기 아래에 받기 단계가 없으면 저장을 막는다 (2026-10-14)",
-      (rr.pick_problem([{"no": 3, "record": {"steps": _steps}}]) or (0, ""))[0] == 3
-      and "파일 받기 단계가 없습니다" in rr.pick_problem([{"no": 3, "record": {"steps": _steps}}])[1]
-      and rr.pick_problem([{"no": 3, "record": {"steps": _steps[:1] + [dict(_steps[1], download="a.xlsx")]}}]) is None
-      and rr.pick_problem([{"no": 1, "record": None}]) is None)
+_pp = lambda steps, source="mail", prefix=">>>": rr.pick_problem([{"no": 3, "record": {"steps": steps}, "source": source, "prefix": prefix}])  # noqa: E731
+check("메일 첨부파일: 저장 확인 - 문구 없음 / 그 문구 메일을 연 단계 없음 / 받기 단계 없음 (사용자 2026-10-14 문구)",
+      _pp(_steps, prefix="  ") == (3, "메일 시작 문구를 넣어 주십시오.")
+      and _pp([{"kind": "click"}]) == (3, "메일 시작 문구로 지정한 '>>>'(으)로 시작하는 메일을 찾지 못했습니다. "
+                                         "'>>>'(으)로 시작하는 메일을 연 다음 첨부파일을 받는 것까지 기록해 주십시오.")
+      and "파일 받기 단계가 없습니다" in (_pp(_steps) or (0, ""))[1]
+      and _pp(_steps[:1] + [dict(_steps[1], download="a.xlsx")]) is None
+      and _pp([{"kind": "click"}], source="shop") is None and rr.pick_problem([{"no": 1, "record": None, "source": "mail", "prefix": ""}]) is None)
 check("오토파일럿 설정(에이전트 계정)이 없거나 깨졌으면 알리고 켜지지 않는다 (사용자 2026-10-14)",
       all("오토파일럿 설정을 먼저 해 주십시오" in (rr.setup_problem(f) or "") for f in (no_cfg, bad_cfg))
       and rr.setup_problem(lambda: {"cid": "c"}) is None)
