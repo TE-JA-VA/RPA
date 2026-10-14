@@ -199,6 +199,18 @@ rr.ec.screen_locked = lambda: False
 picked_run("Wms", trigger="auto")
 check("반복이 아닌 예약 실행은 처리한 것이 없어도 이력에 남긴다",
       fins and fins[-1][1].get("record", True) is True, str(fins))
+# '1건' 은 한 번 실행에 1건 - 반복 회차면 회차마다 1건씩 계속 넘어가므로 돌지 않는다 (PR #6 검토)
+ONE_WMS = {"Wellife": {**ALL_Y["Wellife"], "WmsMode": "1건", "NormalSalesMode": "1건"}}
+picked_run("Wms", section=ONE_WMS, trigger="repeat")
+check("반복 회차에서 도는 모듈(⑤)이 '1건' 이면 run_modules 를 부르지 않고 '설정 확인' 으로 멈춘다 (이력에 남긴다)",
+      not got and fins and fins[-1][0][0] == "stopped" and "설정 확인" in fins[-1][0][1] and "WmsMode" in fins[-1][0][1]
+      and fins[-1][1].get("record", True) is True, str(fins))
+picked_run("Sales", section=ONE_WMS, trigger="repeat")
+check("② 를 반복하면 정상매출 '1건' 도 멈춘다", not got and fins and "NormalSalesMode" in fins[-1][0][1], str(fins))
+picked_run("Hold", section=ONE_WMS, trigger="repeat")
+check("이번 회차에 안 도는 모듈의 '1건' 은 보지 않는다 (③ 만 반복)", got.get("selected", {}).get("Hold") is True, str(fins))
+picked_run("Wms", section=ONE_WMS, trigger="auto")
+check("반복이 아닌 실행은 '1건' 이어도 돈다", got.get("selected", {}).get("Wms") is True, str(fins))
 
 # ---------------------------------------------------------------------------
 print("=== 3. main 갈래 ===")
@@ -273,10 +285,11 @@ fr = types.SimpleNamespace(status=Rec(), log=lambda m: None,
                            ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
 nctx = types.SimpleNamespace(hwnd=1)
 _saved = wellife.collect_orders, wellife.hold_save
-wellife.collect_orders = lambda rr_, ctx_, live: ("skipped", f"수집 live={live}")
+wellife.collect_orders = lambda rr_, ctx_, live, sell=None: ("skipped", f"수집 live={live} sell={sell}")
 wellife.hold_save = lambda rr_, ctx_, live: ("skipped", f"저장 live={live}")
 fr.goto_order_screen = lambda ctx: (True, None)
-check("② 화면 이동 성공 -> 주문 수집으로 (모드를 넘긴다)", wellife.module_sales(fr, nctx, True) == ("skipped", "수집 live=True"))
+check("② 화면 이동 성공 -> 주문 수집으로 (엑셀 업로드·정상매출 모드를 따로 넘긴다)",
+      wellife.module_sales(fr, nctx, True, wellife.ONE) == ("skipped", "수집 live=True sell=1건"))
 fr.goto_order_screen = lambda ctx: (False, "아이콘 없음")
 check("② 이동 실패 -> failed", wellife.module_sales(fr, nctx) == ("failed", "아이콘 없음"))
 for r, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")):
@@ -590,7 +603,7 @@ def _ui_boom(*_):
 
 wellife.sales_slip_stage = _ui_boom
 res = wellife.module_sap(types.SimpleNamespace(status=Rec(), log=lambda m: None), actx)
-check("SAP 화면의 UIA 오류는 ('failed', 'UI 오류: …')", res == ("failed", "UI 오류: RuntimeError"), str(res))
+check("SAP 화면의 UIA 오류는 ('failed', 'UI 오류: … - 문구')", res == ("failed", "UI 오류: RuntimeError - COMError 흉내"), str(res))
 wellife.goto_screen_by_menu, wellife.sales_slip_stage = _saved
 
 
@@ -648,8 +661,10 @@ class FakeGrid:
 
 
 def grid_rr(g):
+    vsb = types.SimpleNamespace(descendants=lambda: [El("페이지 위로")] + ([El("페이지 아래로")] if g.page + 1 < len(g.pages) else []))
     return types.SimpleNamespace(
         grid_rows=lambda grid: g.rows(), grid_page_down=lambda h, grid: g.down(),
+        grid_vertical_scrollbar=lambda grid: getattr(g, "vsb", vsb),     # 끝 페이지면 '페이지 아래로' 가 없다
         grid_scroll_to_top=lambda h, grid: g.top(), legacy_value=lambda el: el.v, log=lambda m: None,
         grid_click_bottom=lambda grid: 100,
         ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
@@ -681,6 +696,15 @@ check("전체 체크된 채면 머리글 한 번으로 풀고, 넘길 줄만 하
       g.clicks[0] is g.header and len(g.clicks) == 1 + 11, f"{len(g.clicks)}번 누름")
 out, _ = run_marks(FakeGrid((range(1, 25), range(1, 25)), stale=0), 24)
 check("내렸는데 첫 행이 그대로면 끝으로 본다 (같은 페이지를 끝없이 돌지 않음)", sorted(out) == list(range(1, 25)), f"{len(out)}줄")
+for why, vsb in (("None", None), ("예외", types.SimpleNamespace(descendants=lambda: 1 / 0))):
+    g = FakeGrid((range(1, 25), range(1, 25)), stale=0)
+    g.vsb = vsb
+    try:
+        run_marks(g, 24)
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"내렸는데 그대로고 스크롤바를 못 읽으면({why}) 끝으로 보지 않고 멈춘다 (사용자 10-13 - 뒤 줄을 모름)", res == "failed", str(res))
 g = FakeGrid((range(1, 25),), stale=0, review=lambda n: None if n == 5 else "", stuck=(7,))
 out, bad = run_marks(g, 24)
 check("검토를 못 읽은 줄(None)은 체크하지 않는다", out.get(5) == "선택안됨", str(out.get(5)))
@@ -690,14 +714,12 @@ g.cells[24][wellife.CHECK_COL].rect = Rect(0, 95, 10, 105)     # 마지막 줄 �
 out, bad = run_marks(g, 24)
 check("끝 줄이 잘려 못 눌렀으면 '못 맞춘 줄' (전체 체크된 채 넘어가지 않게)", bad == [24], str(bad))
 g = FakeGrid((range(1, 25), range(1, 25)), stale=0)
-_grr = grid_rr
-grid_rr = lambda g_: types.SimpleNamespace(**vars(_grr(g_)), grid_vertical_scrollbar=lambda grid: Nav([El("페이지 아래로")]))
+g.vsb = Nav([El("페이지 아래로")])
 try:
     run_marks(g, 24)
     res = None
 except wellife.Stop as e:
     res = e.result
-grid_rr = _grr
 check("페이지를 내렸는데 그리드가 그대로인데 '페이지 아래로' 가 있으면 멈춘다 (뒤 줄을 모름)", res == "failed", str(res))
 check("SAP전송전체 이후·송장X·API실패 등 사람이 보는 단추는 단계 표에 없다",
       not {s[1] for s in wellife.SAP_SIMPLE_STAGES + wellife.WMS_STAGES}
@@ -776,6 +798,12 @@ check("SalesMode 는 Mode 와 따로 읽는다",
       and wellife.load_switches(rr)[1] == [])
 settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
 check("SalesMode 가 없으면 Mode 를 따르지 않고 리허설", wellife.load_mode(rr, wellife.SALES_MODE_KEY) is False)
+settings({"Wellife": {"Login": "Y", "SalesMode": "실행"}})
+check("SalesMode '실행' 이어도 정상매출(NormalSalesMode)은 빠지면 리허설 - 업데이트만으로 매출처리를 시작하지 않는다 (PR #6 검토)",
+      wellife.load_mode(rr, wellife.SALES_MODE_KEY) is True and wellife.load_mode(rr, wellife.NORMAL_SALES_MODE_KEY) is False
+      and wellife.load_switches(rr)[1] == [])
+settings({"Wellife": {"Login": "Y", "NormalSalesMode": "1건"}})
+check("정상매출은 '1건'(하단 첫 줄)을 쓸 수 있다", wellife.load_mode(rr, wellife.NORMAL_SALES_MODE_KEY) == wellife.ONE)
 
 rec = Rec()
 rr.status = rec
@@ -787,6 +815,19 @@ start = rec.of("start")[0]
 own_keys = {k for m in wellife.MODULES if m[0] in wellife.MODULE_MODES for k in m[3]}
 check("단계 이름 앞에 모드 - ②④⑤⑥ 은 제 키(빠져서 [리허설]), 로그인·③ 은 Mode([실행])",
       all(label.startswith("[리허설] " if k in own_keys else "[실행] ") for k, label in start[1]), str(start[1][:4]))
+rec = Rec()
+rr.status = rec
+settings({"Wellife": {"Login": "Y", "SalesMode": "실행"}})
+wellife.run_main(rr)
+labels = dict(rec.of("start")[0][1])
+check("② 수집 단계는 SalesMode([실행]), 정상매출 단계는 NormalSalesMode([리허설])",
+      labels["wl_order_collect"].startswith("[실행] ") and labels["wl_order_sales"].startswith("[리허설] "), str(labels))
+sold_seen = []
+_saved_ms = wellife.module_sales
+wellife.module_sales = lambda rr_, ctx_, live, sell: sold_seen.append((live, sell)) or ("skipped", None)
+got["funcs"]["wellife_sales"](None)
+wellife.module_sales = _saved_ms
+check("② 모듈에 SalesMode·NormalSalesMode 를 따로 넘긴다", sold_seen == [(True, False)], str(sold_seen))
 settings({"Wellife": {"Login": "Y", "Mode": "run"}})
 rec = Rec()
 rr.status = rec
@@ -869,7 +910,8 @@ def stage_with(count, enabled=True):
 
 TOP[0] = actx.hwnd
 stage = ("wl_sap_so", "dashBtn_Create_SO", "btn_ThirdSend", False, "4-4 SO생성 → SAP 전송")
-srr = pop_rr(status=Rec())
+AGAIN = ["선택"]      # 누르기 직전 다시 읽는 체크 값
+srr = pop_rr(status=Rec(), grid_rows=lambda g: {1: {wellife.CHECK_COL: AGAIN[0]}}, legacy_value=lambda v: v)
 for live, count, enabled, want_click in ((False, 3, True, False), (True, 3, True, True),
                                          (True, 0, True, False), (True, 3, False, False)):
     acts.clear(); moves.clear(); POP.clear()
@@ -879,6 +921,20 @@ for live, count, enabled, want_click in ((False, 3, True, False), (True, 3, True
     check(f"화살표 live={live} {count}건 단추{'켜짐' if enabled else '꺼짐'} -> {'누름 + 팝업 [예]' if want_click else '안 누름'}",
           clicked == want_click and pressed == want_click and (not want_click or ("click", "예") in acts),
           f"{note} {acts}")
+_saved_ca = wellife.check_all_rows
+wellife.check_all_rows = lambda *a: True
+check_stage = ("wl_sap_shipping", "dashBtn_ShippingInfo", "btn_ThirdSend", True, "4-3 선분할 배송정보 → S/O 생성요청")
+for again, want_click in (("선택", True), ("선택안됨", False)):
+    acts.clear(); POP.clear()
+    stage_with(3)
+    wellife.open_stage = lambda rr_, ctx_, form, dash: (3, {"btn_ThirdSend": arrow_btn, "gridCtrl_List": "g"})
+    AGAIN[0] = again
+    note, pressed = wellife.simple_stage(srr, actx, wellife.SAP_FORM, *check_stage, live=True)
+    check(f"체크 칸이 있는 단계: 화살표 직전 다시 본 체크 '{again}' -> {'누름' if want_click else '안 누름 + 사유에 확인할 것 (재확인, 사용자 10-13)'}",
+          (("click", "btn_ThirdSend") in acts) == want_click and pressed == want_click
+          and (wellife.RECHECK_NOTE in note) == (not want_click), f"{note} {acts}")
+AGAIN[0] = "선택"
+wellife.check_all_rows = _saved_ca
 wellife.open_stage = _saved_open
 r = wellife.stage_result(True, [("a", False), ("b", True)])
 check("실제로 누른 단계가 있으면 모듈 결과 done, 사유 앞에 [실행]", r[0] == "done" and r[1].startswith("[실행] "), str(r))
@@ -905,12 +961,16 @@ wellife._top_window = _saved_top
 
 
 # 물류대기: 조회 -> 전체선택 -> 저장
-def hold_rr(rows=1):
-    grid = types.SimpleNamespace(rectangle=lambda: Rect(0, 50, 200, 300),
-                                 descendants=lambda control_type=None: [1] * rows)
-    return pop_rr(status=Rec(), click_subtab=lambda app, hwnd, name: acts.append(("tab", name)),
+def hold_rr(rows=1, tab=True, again="선택"):
+    """tab: '일반' 탭을 찾았는가. again: 저장 직전 다시 읽은 체크 값 (조회가 늦게 끝나 풀렸으면 '선택안됨')."""
+    grid = types.SimpleNamespace(rectangle=lambda: Rect(0, 50, 200, 300),     # 머리글 체크 칸 + 줄 rows 개
+                                 descendants=lambda control_type=None: [El(wellife.CHECK_COL)] if control_type == "Header"
+                                 else [1] * rows)
+    return pop_rr(status=Rec(), click_subtab=lambda app, hwnd, name: acts.append(("tab", name)) or tab,
                   STOCK_GENERAL_TAB_NAME="일반", get_onscreen_tables=lambda win: [grid],
                   wait_grid_spinner_gone=lambda *a, **k: True,
+                  grid_rows=lambda g: {n: {wellife.CHECK_COL: again} for n in range(1, rows + 1)},
+                  legacy_value=lambda v: v,
                   select_all_by_header_checkbox=lambda hwnd, g: acts.append(("select_all",)) or True)
 
 
@@ -930,6 +990,19 @@ for live in (False, True):
 acts.clear()
 res = wellife.hold_save(hold_rr(rows=0), hctx, True)
 check("물류대기 0건이면 저장하지 않는다", res[0] == "no_target" and ("click", "저장(S)") not in acts, f"{res} {acts}")
+for what, kw in (("'일반' 탭을 못 찾으면 조회·저장하지 않고 멈춘다 (다른 서브탭의 단추를 누르지 않게)", {"tab": False}),
+                 ("저장 직전 다시 보니 체크가 풀려 있으면 저장하지 않는다 (사용자 10-13 - 재확인)", {"again": "선택안됨"})):
+    acts.clear(); POP.clear()
+    try:
+        wellife.hold_save(hold_rr(**kw), hctx, True)
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"물류대기: {what}", res == "failed" and ("click", "저장(S)") not in acts, f"{res} {acts}")
+acts.clear(); POP.clear()
+res = wellife.hold_save(hold_rr(again="선택안됨"), hctx, False)
+check("물류대기 리허설: 다시 보니 풀려 있으면 '확인할 것' 을 사유에 남긴다 (실행이었다면 누르지 않음)",
+      res[0] == "skipped" and wellife.RECHECK_NOTE in res[1], str(res))
 
 # 주문 수집: 엑셀이 있을 때만 올리고, 자동 수집 [가져오기] 는 누르지 않는다
 xdir = tempfile.mkdtemp(prefix="rpa_wl_xl_")
@@ -946,23 +1019,120 @@ def order_rr(files):
 
 
 octx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([El("가져오기")]))
+_saved_ns = wellife.normal_sales
+SOLD = [False]
+wellife.normal_sales = lambda rr_, ctx_, live: (acts.append(("normal_sales", live)), ("매출처리 흉내", SOLD[0]))[1]
 for live, files, want_res, want_up in ((True, {}, "skipped", []), (False, {"101": "x"}, "skipped", []),
                                        (True, {"101": "x"}, "done", ["사이트"])):
     acts.clear(); uploads.clear()
     res = wellife.collect_orders(order_rr(files), octx, live)
-    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름",
-          res[0] == want_res and uploads == want_up and ("click", "가져오기") not in acts, f"{res} {uploads} {acts}")
+    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름, "
+          f"그 뒤 매출처리 단계는 정상매출 모드(빠지면 리허설)로",
+          res[0] == want_res and uploads == want_up and ("click", "가져오기") not in acts
+          and acts[-1] == ("normal_sales", False) and "정상매출 [리허설]" in res[1], f"{res} {uploads} {acts}")
+SOLD[0] = True
+res = wellife.collect_orders(order_rr({}), octx, False, True)
+check("올린 엑셀이 없어도(업로드 리허설) 정상매출을 눌렀으면 done", res[0] == "done" and acts[-1] == ("normal_sales", True)
+      and res[1].startswith("[리허설] ") and "정상매출 [실행] 매출처리 흉내" in res[1], str(res))
+wellife.normal_sales = _saved_ns
+
+# ② 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS module_sales 8~11 단계, 사용자 10-14)
+_saved_n = {n: getattr(wellife, n) for n in ("front", "no_popup", "clear_point", "check_header", "recheck",
+                                               "hover_menu_item", "press_menu_item", "after_normal_sales", "check_one_row")}
+NS = {"rows": {1: {}}, "again": True, "split": True, "one": True}
+wellife.check_one_row = lambda rr_, ctx_, grid, label: acts.append(("one", grid.name)) or NS["one"]
+wellife.front = wellife.no_popup = lambda *a: None
+wellife.clear_point = lambda *a: (0, 0)
+wellife.check_header = lambda grid, label="": El("row Check Box")
+wellife.recheck = lambda rr_, grid, label, live: NS["again"]
+wellife.hover_menu_item = lambda rr_, ctx_, split, item, what, would: acts.append(("hover", item, would)) or ""
+wellife.press_menu_item = lambda rr_, ctx_, split, item, what, grid=None, confirm=True: (
+    acts.append(("press", item, confirm)), (f" -> '{item}' 누름", True))[1]
+wellife.after_normal_sales = lambda rr_, ctx_, base: acts.append(("after",)) or " (완료)"
+ns_top, ns_bottom = El("사이트", Rect(0, 50, 200, 100)), El("주문", Rect(0, 300, 200, 500))
+nrr = types.SimpleNamespace(status=Rec(), log=lambda m: None, visible_child_windows=lambda h: {},
+                            get_onscreen_tables=lambda win: [ns_top, ns_bottom],
+                            grid_rows=lambda g: NS["rows"] if g is ns_bottom else {},
+                            select_all_and_verify=lambda name, h, g, cols: acts.append(("select_all", g.name, tuple(cols))) or 3,
+                            find_by_text=lambda win, text, control_types=None: El(text) if NS["split"] else None)
+
+
+def run_ns(live, **kw):
+    NS.update({"rows": {1: {}}, "again": True, "split": True, "one": True}); NS.update(kw); acts.clear()
+    try:
+        return wellife.normal_sales(nrr, octx, live), None
+    except wellife.Stop as e:
+        return None, e.result
+
+
+(note, sold), _ = run_ns(False)
+check("리허설: 하단 전체선택(원래 select_all_and_verify) -> ▼ 를 열어 '정상매출' 에 마우스만 (누르지 않음)",
+      acts == [("select_all", "주문", tuple(wellife.BOTTOM_ID_COLUMNS)), ("hover", "정상매출", True)] and sold is False
+      and "정상매출은 누르지 않음" in note, f"{note} {acts}")
+(note, sold), _ = run_ns(True)
+check("실행: 하단 전체선택 -> ▼ '정상매출' 누름 (팝업은 원래 코드가 - confirm=False) -> 원래 팝업·대기 처리",
+      acts == [("select_all", "주문", tuple(wellife.BOTTOM_ID_COLUMNS)), ("press", "정상매출", False), ("after",)] and sold,
+      f"{note} {acts}")
+(note, sold), _ = run_ns(True, rows={})
+check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원래는 0건이어도 누름 - 웰라이프는 안 누름)",
+      acts == [] and sold is False and "0줄" in note, f"{note} {acts}")
+(note, sold), _ = run_ns(True, again=False)
+check("실행: 누르기 직전 다시 보니 체크가 풀려 있으면 정상매출을 누르지 않는다",
+      ("press", "정상매출", False) not in acts and sold is False and "확인할 것" in note, f"{note} {acts}")
+_, err = run_ns(True, split=False)
+check("'매출처리' 단추가 없으면 멈춘다", err == "failed")
+(note, sold), _ = run_ns(wellife.ONE)
+check("1건: 하단 첫 줄만 체크(전체선택 안 함) -> 정상매출",
+      acts == [("one", "주문"), ("press", "정상매출", False), ("after",)] and sold and "첫 줄 1건" in note, f"{note} {acts}")
+(note, sold), _ = run_ns(wellife.ONE, one=False)
+check("1건: 첫 줄 체크를 못 했으면 다시 보기가 '한 줄 체크' 로 맞아도(이미 체크돼 있던 줄) 누르지 않는다",
+      ("press", "정상매출", False) not in acts and sold is False and "확인할 것" in note, f"{note} {acts}")
+for n, f in _saved_n.items():
+    setattr(wellife, n, f)
+
+# 정상매출 뒤 - 원래 module_sales 10~11 단계 그대로: 확인 팝업 [예]/[확인], 실패 문구면 멈춤
+AF = {"ok": None, "failure": None, "async": "clicked", "sep": (None, 0)}
+arr = types.SimpleNamespace(log=lambda m: None, status=Rec(), ASYNC_MAX_WAIT_SECONDS=600,
+                            find_popup_ok_button=lambda win: AF["ok"], find_popup_failure=lambda win: AF["failure"],
+                            ec=types.SimpleNamespace(ensure_foreground=lambda h: True),
+                            probe_spinner=lambda h, b: None, wait_async_then_confirm=lambda app, h, b: AF["async"],
+                            handle_sales_popups=lambda pid, h, tried: AF["sep"])
+
+
+def run_after(**kw):
+    AF.update({"ok": None, "failure": None, "async": "clicked", "sep": (None, 0)}); AF.update(kw); acts.clear()
+    try:
+        return wellife.after_normal_sales(arr, octx, {}), None
+    except wellife.Stop as e:
+        return None, (e.result, str(e))
+
+
+wellife.time.sleep = lambda s: None
+aft, err = run_after(ok=Click("예"))
+check("확인 팝업은 [예] 를 누르고, 완료까지 기다린다 (원래 규칙)", ("click", "예") in acts and err is None and "완료" in aft, f"{aft} {acts}")
+aft, err = run_after(ok=Click("확인"), failure="정상매출 실패")
+check("확인 팝업에 매출처리 실패 문구면 닫고 멈춘다 (뒤 모듈을 돌리지 않음)", err and err[0] == "stopped" and "실패" in err[1], str(err))
+aft, err = run_after(**{"async": "sales_failed"})
+check("기다리는 중 실패 팝업이면 멈춘다", err and err[0] == "stopped", str(err))
+aft, err = run_after(sep=("매출처리 실패", 1))
+check("따로 뜬 창의 실패 팝업이면 멈춘다", err and err[0] == "stopped", str(err))
+aft, err = run_after(**{"async": "timeout"})
+check("대기 시간 초과는 '확인할 것' 을 남기고 이어 간다 (원래와 같음)", err is None and "확인할 것" in aft, str(aft))
 wellife.time.sleep = _sleep
 TOP[0] = 1
 
 
 # 4-1 → 4-2 순서 (사용자 10-08): 전체 체크 → [지정▼] 선택 항목만 → 검토 빈 줄만 체크 → 화살표
-def run_slip(live, checked=True, pressed=True, marks=None, bad=()):
-    names = ("open_stage", "check_all_rows", "hover_menu_item", "press_menu_item", "controls", "mark_rows", "press_arrow")
+def run_slip(live, checked=True, pressed=True, marks=None, bad=(), again=True, held=True):
+    """again: 지정 직전 다시 본 체크가 맞는가, held: 화살표 직전 다시 본 체크가 맞춘 값 그대로인가 (사용자 10-13 재확인)."""
+    names = ("open_stage", "check_all_rows", "hover_menu_item", "press_menu_item", "controls", "mark_rows", "press_arrow",
+             "recheck", "marks_held")
     saved = {n: getattr(wellife, n) for n in names}
     seq = []
     wellife.open_stage = lambda *a: (seq.append("조회"), (3, {"gridCtrl_List": "g"}))[1]
     wellife.check_all_rows = lambda *a: (seq.append("전체 체크"), checked)[1]
+    wellife.recheck = lambda *a: again
+    wellife.marks_held = lambda *a: held
     wellife.hover_menu_item = lambda *a: (seq.append("지정 마우스만"), "")[1]
     wellife.press_menu_item = lambda *a: (seq.append("지정 누름"), ("", pressed))[1]
     wellife.controls = lambda *a: (seq.append("다시 잡기"), {"gridCtrl_List": "g2"})[1]
@@ -994,6 +1164,12 @@ check("실행: 전체 체크가 안 되면 지정도 화살표도 누르지 않�
 res, seq = run_slip(True, pressed=False)
 check("실행: 지정을 못 눌렀으면 줄 맞추기·화살표로 가지 않는다", seq == ["조회", "전체 체크", "지정 누름"] and res[1] is False,
       f"{seq}")
+res, seq = run_slip(True, again=False)
+check("실행: 지정 직전 다시 보니 체크가 풀려 있으면 지정도 화살표도 누르지 않는다 (재확인)", seq == ["조회", "전체 체크"] and res[1] is False,
+      f"{seq}")
+res, seq = run_slip(True, held=False)
+check("실행: 화살표 직전 다시 보니 맞춘 체크가 바뀌어 있으면 화살표를 누르지 않는다 (재확인)",
+      seq[-1].endswith("want=False live=True") and wellife.RECHECK_NOTE in res[0], f"{seq} {res}")
 
 # ---------------------------------------------------------------------------
 print("=== 12. ⑥ 운송장번호 전송 (모든 업체용 화면, 지금은 웰라이프만) ===")
@@ -1048,6 +1224,8 @@ rr.run_modules = orig_run_modules
 send_btn = Click("btn_SendRequest", on_click=lambda: POP.extend([Click("예", on_click=POP.clear)]))
 INV = {"rows": 3, "checked": True, "forms": []}
 _saved_inv = wellife.controls, wellife.count_rows, wellife.check_all_rows
+_saved_eq = wellife.ensure_query
+wellife.ensure_query = lambda *a: []          # 조회 조건 기본값은 아래 14절에서 따로
 wellife.controls = lambda rr_, ctx_, form: INV["forms"].append(form) or {
     "btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
 wellife.count_rows = lambda rr_, ctx_, grid: INV["rows"]
@@ -1101,6 +1279,7 @@ except wellife.Stop as e:
     res = e.result
 check("조회(F) 단추가 없으면 멈춘다 (failed)", res == "failed" and acts == [], f"{res} {acts}")
 wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved_inv
+wellife.ensure_query = _saved_eq
 POP.clear()
 
 # 화면 열기: 이미 열린 탭이면 그 탭, 아니면 좌측 아이콘 (없으면 건너뛰지 않고 실패)
@@ -1130,7 +1309,7 @@ for icon, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")
           icons == [wellife.INVOICE_ICON] and res[0] == want, f"{res} {icons}")
 wellife.invoice_send = lambda rr_, ctx_, live: (_ for _ in ()).throw(RuntimeError("COMError 흉내"))
 res = wellife.module_invoice_send(nav_rr(), ictx, True)
-check("UI 오류는 ('failed', 'UI 오류: …')", res == ("failed", "UI 오류: RuntimeError"), str(res))
+check("UI 오류는 ('failed', 'UI 오류: … - 문구')", res == ("failed", "UI 오류: RuntimeError - COMError 흉내"), str(res))
 wellife.open_tab, wellife.invoice_send = _saved_inv
 wellife.time.sleep = _sleep
 
@@ -1227,6 +1406,10 @@ g = one_grid(checked=(3,))
 check("'1건': 이미 체크된 줄이 보이면 누르지 않는다 (그 줄도 넘어가지 않게)", one_run(g) is False and g.clicks == [])
 g = one_grid(stuck=(1,))
 check("'1건': 눌러도 체크가 안 되면 실패", one_run(g) is False)
+g = one_grid()
+g.cells[2][wellife.CHECK_COL].v = None
+check("'1건': 체크 값을 못 읽은 줄이 보이면 누르지 않는다 (이미 체크된 줄인지 몰라서 - 사용자 10-13)",
+      one_run(g) is False and g.clicks == [])
 check("다시 확인(1건): 보이는 줄 중 꼭 하나만 체크", wellife.rows_checked(
     types.SimpleNamespace(grid_rows=lambda g_: {1: {wellife.CHECK_COL: Cell("선택")}, 2: {wellife.CHECK_COL: Cell("선택안됨")}},
                           legacy_value=lambda el: el.v), None, one=True)
@@ -1272,6 +1455,7 @@ check("물류대기 '1건': 전체선택 대신 첫 줄만 -> 저장",
 wellife.check_one_row = _saved_chk
 
 _saved_inv1 = wellife.controls, wellife.count_rows, wellife.check_all_rows, wellife.check_one_row
+wellife.ensure_query = lambda *a: []
 wellife.controls = lambda rr_, ctx_, form: {"btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
 wellife.count_rows = lambda rr_, ctx_, grid: INV["rows"]
 wellife.check_all_rows = lambda *a: acts.append(("check_all",)) or True
@@ -1281,6 +1465,215 @@ check("⑥ '1건': 조회 -> 첫 줄만 체크 -> 다시 확인(한 줄) -> [전
       acts == [("click", "조회(F)"), ("check_one",), ("click", "btn_SendRequest"), ("click", "예")] and res[0] == "done"
       and "64건 중 첫 줄 1건" in res[1], f"{res} {acts}")
 wellife.controls, wellife.count_rows, wellife.check_all_rows, wellife.check_one_row = _saved_inv1
+wellife.ensure_query = _saved_eq
+POP.clear()
+
+# ---------------------------------------------------------------------------
+print("=== 14. 조회 조건 기본값 (사용자 10-13·10-14: 반복 화면은 조회 전에 기본값인지 보고 고친다) ===")
+import datetime as _dt  # noqa: E402
+
+D14 = _dt.date(2026, 10, 14)
+check("날짜 칸 값 -> 오늘부터 일 수", wellife.date_days("2026년 10월 4일 일요일", D14) == -10
+      and wellife.date_days("2026-10-15", D14) == 1 and wellife.date_days("", D14) is None
+      and wellife.date_days("2026년 13월 1일", D14) is None)
+check("체크 상자 안쪽 색 비율 -> 체크(0.551)·안 체크(0.000)·애매(0.15)·못 읽음",
+      [wellife.check_state(v) for v in (0.551, 0.0, 0.15, None)] == ["Y", "N", None, None])
+
+
+def _box(check_px, w=77, h=20, border=(150, 150, 165)):
+    """흉내 그림 (BGRA): 흰 바탕, (1,3)~(13,15) 상자 테두리 2점, check_px 는 안쪽에 칠할 점들 (주황)."""
+    raw = bytearray([255, 255, 255, 255] * (w * h))
+    for y in range(h):
+        for x in range(w):
+            color = None
+            if 1 <= x <= 13 and 3 <= y <= 15 and (x <= 2 or x >= 12 or y <= 4 or y >= 14):
+                color = border
+            if (x, y) in check_px:
+                color = (240, 150, 30)
+            if color:
+                raw[(y * w + x) * 4:(y * w + x) * 4 + 3] = bytes((color[2], color[1], color[0]))
+    return bytes(raw), w, h
+
+
+_v = {(x, y) for x in range(4, 11) for y in range(6, 13) if abs((x - 4) - (y - 6)) <= 1 or abs((10 - x) - (y - 6)) <= 1}
+check("상자 안쪽만 잰다: 테두리(회색·주황)는 세지 않고, 체크(주황 V)는 센다",
+      wellife.box_ink(*_box(set())) == 0.0 and wellife.box_ink(*_box(set(), border=(240, 150, 30))) == 0.0
+      and wellife.check_state(wellife.box_ink(*_box(_v))) == "Y", str(wellife.box_ink(*_box(_v))))
+settings({"QueryDefaults": {"InvoiceSend": {"DateFrom": -30, "Sales": "매출구분 : 쿠팡", "SendStatus": "전체"}}})
+qd = {k: w for k, _, _, w in wellife.query_defaults(rr, "InvoiceSend")}
+check("설정 QueryDefaults 가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로)",
+      qd["DateFrom"] == -30 and qd["SendStatus"] == "전체" and qd["Sales"] == "매출구분 : 전체" and qd["DateTo"] == 0, str(qd))
+settings({})
+check("설정이 없으면 ERPia 를 새로 연 화면 값 (⑥ 10일 전~오늘·미전송, ⑤ 내일~내일·납품예정일)",
+      {k: w for k, _, _, w in wellife.query_defaults(rr, "InvoiceSend")}["DateFrom"] == -10
+      and {k: w for k, _, _, w in wellife.query_defaults(rr, "Wms")}["DateFrom"] == 1
+      and {k: w for k, _, _, w in wellife.query_defaults(rr, "Wms")}["DateBasis"] == "납품예정일")
+settings({"QueryDefaults": {"Wms": {"DateFrom": "내일"}}})
+try:
+    wellife.ensure_query(rr, actx, "Wms", wellife.WMS_FORM, lambda: None)
+    res = None
+except wellife.Stop as e:
+    res = (e.result, str(e))
+check("설정 값 모양이 틀리면 조회하지 않고 '설정 오류' 로 멈춘다", res and res[0] == "failed" and "설정 오류" in res[1], str(res))
+settings({})
+
+
+class CondEl:
+    def __init__(self, value, kids=()):
+        self.value, self.kids = value, list(kids)
+
+    def descendants(self, control_type=None):
+        return [k for k in self.kids if control_type is None or k.kind == control_type]
+
+
+class Kid(CondEl):
+    def __init__(self, kind, value, aid=""):
+        super().__init__(value)
+        self.kind = kind
+        self.element_info = types.SimpleNamespace(automation_id=aid)
+
+
+crr = types.SimpleNamespace(legacy_value=lambda el: el.value)
+_empty = CondEl(None)
+_empty.iface_value = types.SimpleNamespace(CurrentValue="")            # 빈 글 칸: ValuePattern 은 '', Legacy Value 는 없다
+_typed = CondEl(None)
+_typed.iface_value = types.SimpleNamespace(CurrentValue="zz")
+ctl14 = {"ccc_SendorNot": CondEl("미전송"), "cbo_delivery": CondEl("택배사 : (전체)"), "txt_SearchValue": _empty,
+         "txt_typed": _typed, "txt_unread": CondEl(None),                 # iface_value 가 없으면(못 읽음) None
+         "ccc_Sales": CondEl(None, [Kid("Edit", "매출구분 : 전체", "popEdit")]),
+         "dateFrom": CondEl(None, [Kid("ComboBox", f"{_dt.date.today():%Y}년 {_dt.date.today().month}월 {_dt.date.today().day}일")])}
+check("지금 값 읽기: 콤보는 '택배사 : ' 를 떼고, 빈 검색어는 '', 못 읽은 검색어는 None (빈 칸으로 보지 않음), 매출구분은 안쪽 popEdit, 날짜는 오늘부터 일 수",
+      [wellife.cond_value(crr, ctl14, a, k) for a, k in (("ccc_SendorNot", "combo"), ("cbo_delivery", "combo"),
+                                                         ("txt_SearchValue", "text"), ("txt_typed", "text"),
+                                                         ("txt_unread", "text"), ("ccc_Sales", "fixed"),
+                                                         ("dateFrom", "date"), ("없음", "combo"))]
+      == ["미전송", "(전체)", "", "zz", None, "매출구분 : 전체", 0, None])
+
+# ensure_query 흐름: 값은 STATE, 고치기는 set_cond, 화면 다시 열기는 fixed·체크를 기본값으로 되돌린다
+DEF = {aid: want for _, aid, _, want in wellife.query_defaults(rr, "InvoiceSend")}
+STATE, LOG14 = {}, []
+_saved14 = wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen
+wellife.controls = lambda rr_, ctx_, form: {"btn_Close": 1}
+wellife.cond_value = lambda rr_, ctl, aid, kind: STATE.get(aid)
+
+
+def _set(rr_, ctx_, ctl, key, aid, kind, want):
+    LOG14.append(("set", key))
+    if aid not in STUCK:
+        STATE[aid] = want
+
+
+def _reopen():
+    LOG14.append(("reopen",))
+    for _, aid, kind, want in wellife.QUERY_CONDITIONS["InvoiceSend"]:
+        if kind in ("fixed", "check") and aid not in STUCK:
+            STATE[aid] = want
+
+
+wellife.set_cond = _set
+wellife.close_screen = lambda rr_, ctx_, ctl, form: LOG14.append(("close",))
+STUCK = set()
+qrr = types.SimpleNamespace(log=lambda m: None, pl=rr.pl)
+
+
+def run14(**changes):
+    STATE.clear(); STATE.update(DEF); STATE.update(changes); LOG14.clear()
+    try:
+        return wellife.ensure_query(qrr, actx, "InvoiceSend", wellife.INVOICE_FORM, _reopen), None
+    except wellife.Stop as e:
+        return None, (e.result, str(e))
+
+
+got, err = run14()
+check("모두 기본값이면 아무것도 하지 않는다", got == [] and LOG14 == [] and err is None, f"{got} {LOG14}")
+got, err = run14(ccc_SendorNot="전체", dateFrom=-30, txt_SearchValue="홍길동")
+check("콤보·날짜·검색어가 다르면 그 칸만 기본값으로 고친다 (화면은 다시 열지 않음)",
+      LOG14 == [("set", "DateFrom"), ("set", "SendStatus"), ("set", "SearchValue")] and len(got) == 3
+      and STATE["ccc_SendorNot"] == "미전송", f"{got} {LOG14}")
+got, err = run14(ccc_Delivery="택배사 : 롯데연동 외 36개")
+check("택배사 체크 목록이 '전체' 가 아니면 화면을 닫고 다시 연다 (사용자 10-14 - 복잡한 조건)",
+      LOG14 == [("close",), ("reopen",)] and got and "화면 다시 열기(Delivery)" in got[0], f"{got} {LOG14}")
+got, err = run14(chk_UnstoringStand=None)
+check("'출고대기만' 을 못 읽으면(그림이 애매) 화면을 다시 연다", LOG14 == [("close",), ("reopen",)] and err is None, f"{LOG14}")
+got, err = run14(chk_UnstoringStand="Y")
+check("'출고대기만' 이 켜져 있으면 눌러 끈다 (화면을 다시 열지 않음)", LOG14 == [("set", "UnstoringOnly")], f"{LOG14}")
+STUCK = {"ccc_Sales"}
+got, err = run14(ccc_Sales="매출구분 : 옥션(zzata)")
+check("다시 열어도 '전체' 가 아니면 조회하지 않고 멈춘다", err and err[0] == "failed" and LOG14 == [("close",), ("reopen",)], f"{err} {LOG14}")
+STUCK = {"ccc_SendorNot"}
+got, err = run14(ccc_SendorNot="전송완료")
+check("고쳤는데 다시 읽은 값이 다르면 조회하지 않고 멈춘다", err and err[0] == "failed" and "SendStatus" in err[1], f"{err}")
+STUCK = {"chk_UnstoringStand"}
+got, err = run14(chk_UnstoringStand="Y")
+check("체크 상자를 눌렀는데 그림이 그대로면 (그림을 잘못 읽는 PC) 켠 채 남기지 않게 화면을 다시 열고 멈춘다",
+      err and err[0] == "failed" and LOG14 == [("set", "UnstoringOnly"), ("close",), ("reopen",)], f"{err} {LOG14}")
+STUCK = set()
+wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen = _saved14
+
+# 입력 안전장치 그대로 (가짜로 바꿔 끼우지 않음): 날짜·글 칸은 포커스가 그 칸 안일 때만 키, 목록 항목은 목록 창이 맨 위일 때만
+typed = []
+_edit = types.SimpleNamespace(kind="Edit", type_keys=lambda keys, **kw: typed.append(keys))
+_box14 = types.SimpleNamespace(kind="ComboBox", descendants=lambda control_type=None: [_edit])
+_saved_in = wellife.click, wellife.no_popup, wellife._focus_in, wellife._focus_chain
+wellife.click = lambda rr_, ctx_, el, what: None
+wellife.no_popup = lambda *a: None
+wellife._focus_chain = lambda rr_, depth=8: [("x", "Edit", "")]
+for focus, want_typed in ((False, []), (True, ["^a2026-10-04{TAB}"])):
+    typed.clear()
+    wellife._focus_in = lambda rr_, aid, f=focus: f
+    _dt_today = wellife.datetime.date
+    try:
+        wellife.set_cond(types.SimpleNamespace(), actx, {"dateFrom": types.SimpleNamespace(
+            descendants=lambda control_type=None: [_box14])}, "DateFrom", "dateFrom", "date",
+            (_dt.date(2026, 10, 4) - _dt.date.today()).days)
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"날짜 칸: 포커스가 {'칸 안이면 ^a → 날짜 → Tab' if focus else '칸 밖이면 키를 보내지 않고 멈춘다'}",
+          typed == want_typed and (res is None if focus else res == "failed"), f"{typed} {res}")
+wellife.click, wellife.no_popup, wellife._focus_in, wellife._focus_chain = _saved_in
+
+pressed14 = []
+_item = types.SimpleNamespace(window_text=lambda: "미전송", rectangle=lambda: Rect(10, 10, 50, 30),
+                              click_input=lambda **kw: pressed14.append("미전송"))
+_list = types.SimpleNamespace(wrapper_object=lambda: types.SimpleNamespace(descendants=lambda control_type=None: [_item]))
+WIN14 = [set()]
+_saved_pick = wellife.click, wellife._menu_windows, wellife._top_window, wellife._close_menu, wellife._shown
+wellife.click = lambda rr_, ctx_, el, what: WIN14.__setitem__(0, {55})       # 콤보를 누르면 목록 창 55 가 뜬다
+wellife._menu_windows = lambda rr_, ctx_: set(WIN14[0])
+wellife._close_menu = lambda rr_, ctx_, wins, what: pressed14.append("ESC")
+wellife._shown = lambda rr_, h: False
+prr = types.SimpleNamespace(Desktop=lambda backend=None: types.SimpleNamespace(window=lambda handle=None: _list),
+                            ec=types.SimpleNamespace(screen_locked=lambda: False))
+for top, want in ((55, ["미전송", "ESC"]), (99, ["ESC"])):
+    WIN14[0] = set(); pressed14.clear()
+    wellife._top_window = lambda rr_, pt, t=top: t
+    try:
+        wellife.pick_item(prr, actx, object(), "미전송", "조회 조건 SendStatus")
+        res = None
+    except wellife.Stop as e:
+        res = e.result
+    check(f"목록 항목: 그 자리의 맨 위 창이 {'목록 창이면 누른다' if top == 55 else '다른 창이면 누르지 않고 목록을 닫고 멈춘다'}",
+          pressed14 == want and (res is None if top == 55 else res == "failed"), f"{pressed14} {res}")
+wellife.click, wellife._menu_windows, wellife._top_window, wellife._close_menu, wellife._shown = _saved_pick
+
+# ⑥·⑤ 에 붙었는가: 조회 전에 ensure_query, 고친 것은 사유에
+_saved14 = wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows
+calls14 = []
+wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen: calls14.append(screen) or ["화면 다시 열기(Sales)"]
+wellife.controls = lambda rr_, ctx_, form: {"btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
+wellife.count_rows = lambda rr_, ctx_, grid: 0
+res = inv_run(False, rows=0)
+check("⑥: 조회 전에 조회 조건을 보고, 고친 것을 사유에 남긴다", calls14 == ["InvoiceSend"] and "조회 조건 기본값으로 고침" in res[1], str(res))
+calls14.clear()
+_saved_wms = wellife.goto_screen_by_menu, wellife.simple_stage
+wellife.goto_screen_by_menu = lambda rr_, ctx_, menu: (True, None)
+wellife.simple_stage = lambda rr_, ctx_, form, *stage, live=False: (f"{stage[4].split(' →')[0]} 0건", False)
+res = wellife.module_wms(types.SimpleNamespace(status=Rec(), log=lambda m: None), actx, False)
+check("⑤: 회차마다 단계 단추 전에 조회 조건을 보고, 고친 것을 사유 앞에 (괄호가 잘리지 않게)", calls14 == ["Wms"] and "조회 조건 기본값으로 고침: 화면 다시 열기(Sales) / 5-1" in res[1]
+      and res[1].index("조회 조건") < res[1].index("5-1"), str(res))
+wellife.goto_screen_by_menu, wellife.simple_stage = _saved_wms
+wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved14
 POP.clear()
 
 finish()
