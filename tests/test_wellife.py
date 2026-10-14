@@ -1098,6 +1098,8 @@ rr.run_modules = orig_run_modules
 send_btn = Click("btn_SendRequest", on_click=lambda: POP.extend([Click("예", on_click=POP.clear)]))
 INV = {"rows": 3, "checked": True, "forms": []}
 _saved_inv = wellife.controls, wellife.count_rows, wellife.check_all_rows
+_saved_eq = wellife.ensure_query
+wellife.ensure_query = lambda *a: []          # 조회 조건 기본값은 아래 14절에서 따로
 wellife.controls = lambda rr_, ctx_, form: INV["forms"].append(form) or {
     "btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
 wellife.count_rows = lambda rr_, ctx_, grid: INV["rows"]
@@ -1151,6 +1153,7 @@ except wellife.Stop as e:
     res = e.result
 check("조회(F) 단추가 없으면 멈춘다 (failed)", res == "failed" and acts == [], f"{res} {acts}")
 wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved_inv
+wellife.ensure_query = _saved_eq
 POP.clear()
 
 # 화면 열기: 이미 열린 탭이면 그 탭, 아니면 좌측 아이콘 (없으면 건너뛰지 않고 실패)
@@ -1326,6 +1329,7 @@ check("물류대기 '1건': 전체선택 대신 첫 줄만 -> 저장",
 wellife.check_one_row = _saved_chk
 
 _saved_inv1 = wellife.controls, wellife.count_rows, wellife.check_all_rows, wellife.check_one_row
+wellife.ensure_query = lambda *a: []
 wellife.controls = lambda rr_, ctx_, form: {"btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
 wellife.count_rows = lambda rr_, ctx_, grid: INV["rows"]
 wellife.check_all_rows = lambda *a: acts.append(("check_all",)) or True
@@ -1335,6 +1339,158 @@ check("⑥ '1건': 조회 -> 첫 줄만 체크 -> 다시 확인(한 줄) -> [전
       acts == [("click", "조회(F)"), ("check_one",), ("click", "btn_SendRequest"), ("click", "예")] and res[0] == "done"
       and "64건 중 첫 줄 1건" in res[1], f"{res} {acts}")
 wellife.controls, wellife.count_rows, wellife.check_all_rows, wellife.check_one_row = _saved_inv1
+wellife.ensure_query = _saved_eq
+POP.clear()
+
+# ---------------------------------------------------------------------------
+print("=== 14. 조회 조건 기본값 (사용자 10-13·10-14: 반복 화면은 조회 전에 기본값인지 보고 고친다) ===")
+import datetime as _dt  # noqa: E402
+
+D14 = _dt.date(2026, 10, 14)
+check("날짜 칸 값 -> 오늘부터 일 수", wellife.date_days("2026년 10월 4일 일요일", D14) == -10
+      and wellife.date_days("2026-10-15", D14) == 1 and wellife.date_days("", D14) is None
+      and wellife.date_days("2026년 13월 1일", D14) is None)
+check("체크 상자 안쪽 색 비율 -> 체크(0.551)·안 체크(0.000)·애매(0.15)·못 읽음",
+      [wellife.check_state(v) for v in (0.551, 0.0, 0.15, None)] == ["Y", "N", None, None])
+
+
+def _box(check_px, w=77, h=20, border=(150, 150, 165)):
+    """흉내 그림 (BGRA): 흰 바탕, (1,3)~(13,15) 상자 테두리 2점, check_px 는 안쪽에 칠할 점들 (주황)."""
+    raw = bytearray([255, 255, 255, 255] * (w * h))
+    for y in range(h):
+        for x in range(w):
+            color = None
+            if 1 <= x <= 13 and 3 <= y <= 15 and (x <= 2 or x >= 12 or y <= 4 or y >= 14):
+                color = border
+            if (x, y) in check_px:
+                color = (240, 150, 30)
+            if color:
+                raw[(y * w + x) * 4:(y * w + x) * 4 + 3] = bytes((color[2], color[1], color[0]))
+    return bytes(raw), w, h
+
+
+_v = {(x, y) for x in range(4, 11) for y in range(6, 13) if abs((x - 4) - (y - 6)) <= 1 or abs((10 - x) - (y - 6)) <= 1}
+check("상자 안쪽만 잰다: 테두리(회색·주황)는 세지 않고, 체크(주황 V)는 센다",
+      wellife.box_ink(*_box(set())) == 0.0 and wellife.box_ink(*_box(set(), border=(240, 150, 30))) == 0.0
+      and wellife.check_state(wellife.box_ink(*_box(_v))) == "Y", str(wellife.box_ink(*_box(_v))))
+settings({"QueryDefaults": {"InvoiceSend": {"DateFrom": -30, "Sales": "매출구분 : 쿠팡", "SendStatus": "전체"}}})
+qd = {k: w for k, _, _, w in wellife.query_defaults(rr, "InvoiceSend")}
+check("설정 QueryDefaults 가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로)",
+      qd["DateFrom"] == -30 and qd["SendStatus"] == "전체" and qd["Sales"] == "매출구분 : 전체" and qd["DateTo"] == 0, str(qd))
+settings({})
+check("설정이 없으면 ERPia 를 새로 연 화면 값 (⑥ 10일 전~오늘·미전송, ⑤ 내일~내일·납품예정일)",
+      {k: w for k, _, _, w in wellife.query_defaults(rr, "InvoiceSend")}["DateFrom"] == -10
+      and {k: w for k, _, _, w in wellife.query_defaults(rr, "Wms")}["DateFrom"] == 1
+      and {k: w for k, _, _, w in wellife.query_defaults(rr, "Wms")}["DateBasis"] == "납품예정일")
+settings({"QueryDefaults": {"Wms": {"DateFrom": "내일"}}})
+try:
+    wellife.ensure_query(rr, actx, "Wms", wellife.WMS_FORM, lambda: None)
+    res = None
+except wellife.Stop as e:
+    res = (e.result, str(e))
+check("설정 값 모양이 틀리면 조회하지 않고 '설정 오류' 로 멈춘다", res and res[0] == "failed" and "설정 오류" in res[1], str(res))
+settings({})
+
+
+class CondEl:
+    def __init__(self, value, kids=()):
+        self.value, self.kids = value, list(kids)
+
+    def descendants(self, control_type=None):
+        return [k for k in self.kids if control_type is None or k.kind == control_type]
+
+
+class Kid(CondEl):
+    def __init__(self, kind, value, aid=""):
+        super().__init__(value)
+        self.kind = kind
+        self.element_info = types.SimpleNamespace(automation_id=aid)
+
+
+crr = types.SimpleNamespace(legacy_value=lambda el: el.value)
+ctl14 = {"ccc_SendorNot": CondEl("미전송"), "cbo_delivery": CondEl("택배사 : (전체)"), "txt_SearchValue": CondEl(None),
+         "ccc_Sales": CondEl(None, [Kid("Edit", "매출구분 : 전체", "popEdit")]),
+         "dateFrom": CondEl(None, [Kid("ComboBox", f"{_dt.date.today():%Y}년 {_dt.date.today().month}월 {_dt.date.today().day}일")])}
+check("지금 값 읽기: 콤보는 '택배사 : ' 를 떼고, 빈 검색어는 '', 매출구분은 안쪽 popEdit, 날짜는 오늘부터 일 수",
+      [wellife.cond_value(crr, ctl14, a, k) for a, k in (("ccc_SendorNot", "combo"), ("cbo_delivery", "combo"),
+                                                         ("txt_SearchValue", "text"), ("ccc_Sales", "fixed"),
+                                                         ("dateFrom", "date"), ("없음", "combo"))]
+      == ["미전송", "(전체)", "", "매출구분 : 전체", 0, None])
+
+# ensure_query 흐름: 값은 STATE, 고치기는 set_cond, 화면 다시 열기는 fixed·체크를 기본값으로 되돌린다
+DEF = {aid: want for _, aid, _, want in wellife.query_defaults(rr, "InvoiceSend")}
+STATE, LOG14 = {}, []
+_saved14 = wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen
+wellife.controls = lambda rr_, ctx_, form: {"btn_Close": 1}
+wellife.cond_value = lambda rr_, ctl, aid, kind: STATE.get(aid)
+
+
+def _set(rr_, ctx_, ctl, key, aid, kind, want):
+    LOG14.append(("set", key))
+    if aid not in STUCK:
+        STATE[aid] = want
+
+
+def _reopen():
+    LOG14.append(("reopen",))
+    for _, aid, kind, want in wellife.QUERY_CONDITIONS["InvoiceSend"]:
+        if kind in ("fixed", "check") and aid not in STUCK:
+            STATE[aid] = want
+
+
+wellife.set_cond = _set
+wellife.close_screen = lambda rr_, ctx_, ctl, form: LOG14.append(("close",))
+STUCK = set()
+qrr = types.SimpleNamespace(log=lambda m: None, pl=rr.pl)
+
+
+def run14(**changes):
+    STATE.clear(); STATE.update(DEF); STATE.update(changes); LOG14.clear()
+    try:
+        return wellife.ensure_query(qrr, actx, "InvoiceSend", wellife.INVOICE_FORM, _reopen), None
+    except wellife.Stop as e:
+        return None, (e.result, str(e))
+
+
+got, err = run14()
+check("모두 기본값이면 아무것도 하지 않는다", got == [] and LOG14 == [] and err is None, f"{got} {LOG14}")
+got, err = run14(ccc_SendorNot="전체", dateFrom=-30, txt_SearchValue="홍길동")
+check("콤보·날짜·검색어가 다르면 그 칸만 기본값으로 고친다 (화면은 다시 열지 않음)",
+      LOG14 == [("set", "DateFrom"), ("set", "SendStatus"), ("set", "SearchValue")] and len(got) == 3
+      and STATE["ccc_SendorNot"] == "미전송", f"{got} {LOG14}")
+got, err = run14(ccc_Delivery="택배사 : 롯데연동 외 36개")
+check("택배사 체크 목록이 '전체' 가 아니면 화면을 닫고 다시 연다 (사용자 10-14 - 복잡한 조건)",
+      LOG14 == [("close",), ("reopen",)] and got and "화면 다시 열기(Delivery)" in got[0], f"{got} {LOG14}")
+got, err = run14(chk_UnstoringStand=None)
+check("'출고대기만' 을 못 읽으면(그림이 애매) 화면을 다시 연다", LOG14 == [("close",), ("reopen",)] and err is None, f"{LOG14}")
+got, err = run14(chk_UnstoringStand="Y")
+check("'출고대기만' 이 켜져 있으면 눌러 끈다 (화면을 다시 열지 않음)", LOG14 == [("set", "UnstoringOnly")], f"{LOG14}")
+STUCK = {"ccc_Sales"}
+got, err = run14(ccc_Sales="매출구분 : 옥션(zzata)")
+check("다시 열어도 '전체' 가 아니면 조회하지 않고 멈춘다", err and err[0] == "failed" and LOG14 == [("close",), ("reopen",)], f"{err} {LOG14}")
+STUCK = {"ccc_SendorNot"}
+got, err = run14(ccc_SendorNot="전송완료")
+check("고쳤는데 다시 읽은 값이 다르면 조회하지 않고 멈춘다", err and err[0] == "failed" and "SendStatus" in err[1], f"{err}")
+STUCK = set()
+wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen = _saved14
+
+# ⑥·⑤ 에 붙었는가: 조회 전에 ensure_query, 고친 것은 사유에
+_saved14 = wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows
+calls14 = []
+wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen: calls14.append(screen) or ["SendStatus '전체'→'미전송'"]
+wellife.controls = lambda rr_, ctx_, form: {"btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
+wellife.count_rows = lambda rr_, ctx_, grid: 0
+res = inv_run(False, rows=0)
+check("⑥: 조회 전에 조회 조건을 보고, 고친 것을 사유에 남긴다", calls14 == ["InvoiceSend"] and "조회 조건 기본값으로 고침" in res[1], str(res))
+calls14.clear()
+_saved_wms = wellife.goto_screen_by_menu, wellife.simple_stage
+wellife.goto_screen_by_menu = lambda rr_, ctx_, menu: (True, None)
+wellife.simple_stage = lambda rr_, ctx_, form, *stage, live=False: (f"{stage[4].split(' →')[0]} 0건", False)
+res = wellife.module_wms(types.SimpleNamespace(status=Rec(), log=lambda m: None), actx, False)
+check("⑤: 회차마다 단계 단추 전에 조회 조건을 보고, 고친 것을 사유 앞에", calls14 == ["Wms"] and "조회 조건 기본값으로 고침" in res[1]
+      and res[1].index("조회 조건") < res[1].index("5-1"), str(res))
+wellife.goto_screen_by_menu, wellife.simple_stage = _saved_wms
+wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved14
 POP.clear()
 
 finish()

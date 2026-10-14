@@ -27,6 +27,7 @@
 run_routine 을 import 하지 않는다. exe 에서 run_routine 은 __main__ 이라 다시 import 하면 사본이 하나 더 생기고,
 그 사본이 결과 로그를 'w' 로 다시 열어 지운다. 그래서 run_routine 이 자기 모듈(rr)을 넘겨준다.
 """
+import datetime
 import os
 import re
 import time
@@ -422,7 +423,10 @@ def module_wms(rr, ctx, live=False):
     if not ok:
         return "failed", reason
     try:
+        fixed = ensure_query(rr, ctx, "Wms", WMS_FORM, lambda: reopen_menu(rr, ctx, WMS_MENU))   # 회차마다 (사용자 10-13)
         done = [simple_stage(rr, ctx, WMS_FORM, *stage, live=live) for stage in WMS_STAGES]
+        if fixed:
+            done.insert(0, (query_note(fixed).strip(" ()"), False))
     except Stop as e:
         return e.result, str(e)
     except Exception as e:
@@ -620,6 +624,7 @@ def invoice_send(rr, ctx, live):
     실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
     체크는 되돌리지 않는다 (다음 조회로 풀린다). (결과, 사유)."""
     tag = mode_tag(live)
+    fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
     ctl = controls(rr, ctx, INVOICE_FORM)
     query, grid = ctl.get("btn_Search"), ctl.get("gridCtrl_List")
     if query is None or grid is None:
@@ -635,7 +640,7 @@ def invoice_send(rr, ctx, live):
     rr.log(f"  {INVOICE_TAB}: 그리드 {count}줄")
     rr.status.note(f"운송장 {count}건")
     if not count:
-        return "no_target", f"[{tag}] 운송장 0건 - 전송할 것 없음"
+        return "no_target", f"[{tag}] 운송장 0건 - 전송할 것 없음" + query_note(fixed)
     checked = check_rows(rr, ctx, grid, INVOICE_TAB, live)
     ctl = controls(rr, ctx, INVOICE_FORM)
     # 누르기 직전에 체크를 다시 본다 - 새로 잡은 그리드로 (조회가 늦게 끝나 그리드가 새로 그려지면 체크가 풀린다)
@@ -645,7 +650,25 @@ def invoice_send(rr, ctx, live):
         "" if checked else " - 체크가 안 돼 전송하지 않음 (확인할 것)")
     if not live:
         head += " - 전송요청은 누르지 않음"
-    return ("done" if pressed else "skipped"), head + note
+    return ("done" if pressed else "skipped"), head + note + query_note(fixed)
+
+
+def query_note(fixed):
+    return f" (조회 조건 기본값으로 고침: {', '.join(fixed)})" if fixed else ""
+
+
+def reopen_icon(rr, ctx):
+    """⑥ 다시 열기 - 좌측 아이콘 (조회 조건을 화면 기본값으로 되돌릴 때)."""
+    r = rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB)
+    if r != "ok":
+        raise Stop("failed", f"'{INVOICE_TAB}' 화면을 다시 열지 못했습니다 ({r}).")
+
+
+def reopen_menu(rr, ctx, menu):
+    """메뉴 검색으로 다시 열기 (⑤ - 조회 조건을 화면 기본값으로 되돌릴 때)."""
+    ok, reason = goto_screen_by_menu(rr, ctx, menu)
+    if not ok:
+        raise Stop("failed", f"'{menu}' 화면을 다시 열지 못했습니다: {reason}")
 
 
 def rows_checked(rr, grid, one=False):
@@ -694,6 +717,253 @@ def count_rows(rr, ctx, grid):
         if rows is None:
             return last
     raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 못 셈")
+
+
+# ---------------------------------------------------------------------------
+# 조회 조건 기본값 - 반복 화면(⑤ WMS·⑥ 운송장)은 회차마다 조회 전에 기본값인지 보고, 아니면 고쳐서 조회한다 (사용자 10-13).
+# 기본값은 ERPia 를 새로 연 화면의 값 (10-14 개발기 실측, docs/wellife-rpa.md 9.4). 날짜는 오늘부터의 일 수 (-10 = 10일 전).
+# 설정 QueryDefaults.<화면>.<키> 가 있으면 그 값 (웹에는 안 보인다). 'fixed' 는 목록 창이 복잡해(체크 목록·상품) 고치지
+# 않고, 기본값이 아니면 화면을 닫고 다시 연다 (사용자 10-14). 체크 상자 '출고대기만' 은 UIA·MSAA 로 상태가 안 읽혀
+# 컨트롤이 그린 그림(PrintWindow)으로 본다 - 애매하면 화면을 다시 연다.
+# ---------------------------------------------------------------------------
+QUERY_SECTION = "QueryDefaults"
+QUERY_CONDITIONS = {      # 화면 -> (설정 키, auto_id, 종류, 기본값)
+    "InvoiceSend": (
+        ("Sales", "ccc_Sales", "fixed", "매출구분 : 전체"),
+        ("Delivery", "ccc_Delivery", "fixed", "택배사 : 전체"),
+        ("UnstoringOnly", "chk_UnstoringStand", "check", "N"),
+        ("DateBasis", "cboCondition", "combo", "배송일"),
+        ("DateFrom", "dateFrom", "date", -10),
+        ("DateTo", "dateTo", "date", 0),
+        ("SendStatus", "ccc_SendorNot", "combo", "미전송"),
+        ("SearchField", "cbo_Condition", "combo", "수령자"),
+        ("SearchValue", "txt_SearchValue", "text", ""),
+    ),
+    "Wms": (    # cbo_stage 는 단계 단추가 바꾼다. '건식상품 제외'(chk_Dryfood) 는 건드리지 않는다 (사용자 10-07)
+        ("Sales", "cbo_CustSiteCode", "fixed", "매출구분 : 전체"),
+        ("Goods", "cbo_customCtrlSelectorGoods", "fixed", "상품 : 전체"),
+        ("DateBasis", "cboCondition", "combo", "납품예정일"),
+        ("DateFrom", "dateFrom", "date", 1),        # 내일 ~ 내일 (사용자 10-14)
+        ("DateTo", "dateTo", "date", 1),
+        ("SearchField", "cbo_Condition", "combo", "PO번호(다중)"),
+        ("SearchValue", "txt_SearchValue", "text", ""),
+        ("Delivery", "cbo_delivery", "combo", "(전체)"),
+    ),
+}
+CHECKED_AT, UNCHECKED_BELOW = 0.25, 0.05   # 체크 상자 안쪽의 색 있는 점 비율 (10-14 실측: 체크 0.551, 안 체크 0.000 - 포커스와 상관없이)
+
+
+def query_defaults(rr, screen):
+    """[(키, auto_id, 종류, 기본값)]. 설정에 같은 키가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로).
+    값 모양이 틀리면 RuntimeError (설정 오류)."""
+    conf = (rr.pl.load_settings().get(QUERY_SECTION) or {}).get(screen) or {}
+    out = []
+    for key, aid, kind, default in QUERY_CONDITIONS[screen]:
+        want = default if kind == "fixed" else conf.get(key, default)
+        if (kind == "date" and not isinstance(want, int)) or (kind == "check" and want not in ("Y", "N")) \
+                or (kind in ("combo", "text") and not isinstance(want, str)):
+            raise RuntimeError(f"{rr.pl.config_name()} 의 '{QUERY_SECTION}.{screen}.{key}' 값이 틀립니다: {want!r}")
+        out.append((key, aid, kind, want))
+    return out
+
+
+def date_days(value, today=None):
+    """날짜 칸 값 '2026년 10월 4일 일요일' (또는 2026-10-04) -> 오늘부터의 일 수. 못 읽으면 None."""
+    m = re.search(r"(\d{4})\s*[년.-]\s*(\d{1,2})\s*[월.-]\s*(\d{1,2})", value or "")
+    if not m:
+        return None
+    try:
+        day = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+    return (day - (today or datetime.date.today())).days
+
+
+def check_state(ratio):
+    """체크 상자 안쪽의 색 있는 점 비율 -> 'Y' / 'N' / None (애매함)."""
+    if ratio is None:
+        return None
+    return "Y" if ratio >= CHECKED_AT else "N" if ratio < UNCHECKED_BELOW else None
+
+
+def box_ink(raw, w, h):
+    """BGRA 그림(한 줄 w 점)에서 체크 상자 안쪽의 색 있는 점 비율. 상자는 칸 높이의 65% 정사각형, 왼쪽·세로 가운데
+    (10-14 실측: 높이 20 -> (1,3)~(13,15), 테두리 2점). 체크 안 됨은 안쪽이 흰색, 체크는 주황 체크(마우스가 올라가면 어둡게)."""
+    s = round(h * 0.65)
+    x0, y0 = max(1, round(h * 0.05)), (h - s) // 2
+    m = max(3, round(s * 0.23))
+    pts = [(x, y) for y in range(y0 + m, y0 + s - m) for x in range(x0 + m, x0 + s - m)]
+    if not pts or x0 + s > w:
+        return None
+
+    def colored(x, y):
+        b, g, r = raw[(y * w + x) * 4:(y * w + x) * 4 + 3]
+        return max(r, g, b) - min(r, g, b) > 40 or (r + g + b) / 3 < 200
+    return sum(1 for x, y in pts if colored(x, y)) / len(pts)
+
+
+def glyph_ratio(rr, el):
+    """체크 상자가 스스로 그린 그림(PrintWindow - 가려져도·왼쪽 모니터여도 같다)의 상자 안쪽 색 있는 점 비율. 못 읽으면 None.
+    UIA·MSAA 로는 체크 상태가 안 나온다 (10-14 실측 - 포커스만 바뀐다). 마우스가 올라가 있으면 그림이 달라 먼저 치운다."""
+    import ctypes
+    import win32ui
+    try:
+        hwnd = el.element_info.handle
+        l, t, r, b = rr.win32gui.GetWindowRect(hwnd)
+        w, h = r - l, b - t
+        mouse.move(coords=(r + 30, (t + b) // 2))     # 컨트롤 밖 (마우스만 - 누르지 않는다)
+        time.sleep(0.2)
+        hdc = rr.win32gui.GetWindowDC(hwnd)
+        src = win32ui.CreateDCFromHandle(hdc)
+        mem = src.CreateCompatibleDC()
+        bmp = win32ui.CreateBitmap()
+        bmp.CreateCompatibleBitmap(src, w, h)
+        mem.SelectObject(bmp)
+        try:
+            if not ctypes.windll.user32.PrintWindow(hwnd, mem.GetSafeHdc(), 0):
+                return None
+            return box_ink(bmp.GetBitmapBits(True), w, h)
+        finally:
+            mem.DeleteDC()
+            src.DeleteDC()
+            rr.win32gui.ReleaseDC(hwnd, hdc)
+            rr.win32gui.DeleteObject(bmp.GetHandle())
+    except Exception:
+        return None
+
+
+def cond_value(rr, ctl, aid, kind):
+    """조회 조건의 지금 값 (기본값과 같은 모양). 컨트롤이 없거나 못 읽으면 None."""
+    el = ctl.get(aid)
+    if el is None:
+        return None
+    if kind == "date":
+        box = next(iter(el.descendants(control_type="ComboBox")), None)
+        return None if box is None else date_days(rr.legacy_value(box))
+    if kind == "check":
+        return check_state(glyph_ratio(rr, el))
+    value = rr.legacy_value(el)
+    if not value and kind == "fixed":     # 매출구분·상품은 안쪽 popEdit 에 글자가 있다
+        edit = next((d for d in el.descendants(control_type="Edit") if d.element_info.automation_id == "popEdit"), None)
+        value = rr.legacy_value(edit) if edit is not None else None
+    if kind == "combo" and value and " : " in value:      # '택배사 : (전체)' -> '(전체)'
+        value = value.split(" : ", 1)[1]
+    return "" if kind == "text" and value is None else value
+
+
+def ensure_query(rr, ctx, screen, form_id, reopen):
+    """조회(단계 단추) 직전: 조회 조건이 기본값인가 보고, 아니면 고친다. 고친 것 목록 (로그에도). 맞추지 못하면 멈춘다
+    (조회하지 않음). reopen(): 화면을 다시 여는 함수 - 'fixed' 가 다르거나 체크 상자가 애매할 때 한 번만."""
+    try:
+        conds = query_defaults(rr, screen)
+    except RuntimeError as e:
+        raise Stop("failed", f"설정 오류: {e}") from None
+    changed = []
+    for attempt in range(2):
+        ctl = controls(rr, ctx, form_id)
+        stale = [k for k, aid, kind, want in conds
+                 if kind == "fixed" and cond_value(rr, ctl, aid, kind) != want
+                 or kind == "check" and cond_value(rr, ctl, aid, kind) is None]
+        if not stale:
+            break
+        if attempt:
+            raise Stop("failed", f"조회 조건 {', '.join(stale)} 이(가) 화면을 다시 열어도 기본값이 아니어서 조회하지 않음.")
+        rr.log(f"  조회 조건 {', '.join(stale)} 이(가) 기본값이 아니거나 못 읽어 화면을 닫고 다시 엽니다")
+        close_screen(rr, ctx, ctl, form_id)
+        reopen()
+        changed.append(f"화면 다시 열기({', '.join(stale)})")
+    for key, aid, kind, want in conds:
+        if kind == "fixed":
+            continue
+        now = cond_value(rr, ctl, aid, kind)
+        if now == want:
+            continue
+        set_cond(rr, ctx, ctl, key, aid, kind, want)
+        ctl = controls(rr, ctx, form_id)
+        got = cond_value(rr, ctl, aid, kind)
+        if got != want:
+            raise Stop("failed", f"조회 조건 {key} 를 기본값({want!r})으로 맞추지 못해 조회하지 않음 (지금 {got!r}).")
+        changed.append(f"{key} {now!r}→{want!r}")
+    rr.log(f"  조회 조건({screen}): " + ("기본값 그대로" if not changed else "기본값으로 고침 - " + ", ".join(changed)))
+    return changed
+
+
+def set_cond(rr, ctx, ctl, key, aid, kind, want):
+    """조회 조건 하나를 기본값으로. 키는 포커스가 그 칸 안일 때만 보낸다 (메뉴 검색과 같다)."""
+    el = ctl[aid]
+    what = f"조회 조건 {key}"
+    no_popup(rr, ctx, f"{what} 바꾸기 전")
+    if kind == "check":
+        click(rr, ctx, el, what)            # 누를 때마다 켬/끔
+        time.sleep(0.6)
+        return
+    if kind == "combo":
+        pick_item(rr, ctx, el, want, what)
+        return
+    if kind == "date":      # 전체 선택 -> 2026-10-04 -> Tab (10-14 실측: 값이 '2026년 10월 4일 일요일' 이 된다)
+        box = next(iter(el.descendants(control_type="ComboBox")))
+        edit = next(iter(box.descendants(control_type="Edit")))
+        keys = "^a" + (datetime.date.today() + datetime.timedelta(days=want)).strftime("%Y-%m-%d") + "{TAB}"
+    else:
+        edit = next(iter(el.descendants(control_type="Edit")), el)
+        keys = "^a{BACKSPACE}" + rr.ec.literal_keys(want) + "{TAB}"
+    click(rr, ctx, edit, what)
+    if not _focus_in(rr, aid):
+        raise Stop("failed", f"{what}: 칸에 포커스가 오지 않아 입력하지 않았습니다 (포커스: {_focus_chain(rr)[:2]}).")
+    edit.type_keys(keys, with_spaces=True)
+    time.sleep(0.6)
+
+
+def pick_item(rr, ctx, combo, item, what):
+    """콤보를 눌러 따로 뜬 목록 창에서 그 이름의 항목을 누른다. 항목이 없으면 목록을 ESC 로 닫고 멈춘다."""
+    before = _menu_windows(rr, ctx)
+    click(rr, ctx, combo, what)
+    found, deadline = None, time.time() + DROPDOWN_WAIT_SECONDS
+    while found is None and time.time() < deadline:
+        time.sleep(0.2)
+        for h in _menu_windows(rr, ctx) - before:
+            try:
+                items = rr.Desktop(backend="uia").window(handle=h).wrapper_object().descendants(control_type="ListItem")
+            except Exception:
+                continue    # 그새 닫힌 창 (그림자 창 등)
+            hit = next((i for i in items if i.window_text() == item), None)
+            if hit is not None:
+                found = (h, hit)
+                break
+    opened = _menu_windows(rr, ctx) - before
+    if found is None:
+        _close_menu(rr, ctx, opened, what)
+        raise Stop("failed", f"{what}: 목록에 '{item}' 이(가) 없어 바꾸지 않고 멈춤")
+    h, hit = found
+    r = hit.rectangle()
+    pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    if _top_window(rr, pt) != h:        # 목록 창이 맨 위일 때만 (다른 창이 덮었으면 그것이 눌린다)
+        _close_menu(rr, ctx, opened, what)
+        raise Stop("failed", f"{what}: 목록 항목 자리를 다른 창이 덮고 있어 누르지 않고 멈춤")
+    hit.click_input(coords=pt, absolute=True)
+    deadline = time.time() + DROPDOWN_WAIT_SECONDS
+    while any(_shown(rr, w) for w in opened) and time.time() < deadline:
+        time.sleep(0.2)
+    _close_menu(rr, ctx, opened, what)     # 이미 닫혔으면 아무것도 안 한다
+
+
+def close_screen(rr, ctx, ctl, form_id):
+    """화면의 [닫기(X)](btn_Close) - 팝업 없이 탭이 닫힌다 (10-14 ⑥ 실측). 닫혔는지(폼이 안 보이는지) 본다."""
+    btn = ctl.get("btn_Close")
+    if btn is None:
+        raise Stop("failed", f"화면({form_id})의 [닫기(X)] 단추를 찾지 못해 다시 열지 않음")
+    no_popup(rr, ctx, f"화면({form_id}) 닫기 전")
+    click(rr, ctx, btn, f"화면({form_id}) [닫기(X)]")
+    deadline = time.time() + STAGE_WAIT_SECONDS
+    while True:
+        time.sleep(0.5)
+        no_popup(rr, ctx, f"화면({form_id}) 닫기")
+        try:
+            controls(rr, ctx, form_id)
+        except Stop:
+            return      # 화면이 사라졌다
+        if time.time() > deadline:
+            raise Stop("failed", f"화면({form_id}) [닫기(X)] 를 눌렀으나 닫히지 않았습니다.")
 
 
 # ---------------------------------------------------------------------------

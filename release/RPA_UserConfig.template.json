@@ -29,5 +29,29 @@
   },
   "ERPia": {
     "ExePath": "C:/Program Files (x86)/OneZeroSoft/ERPiaNet/ERPiaMain.exe"
+  },
+  "QueryDefaults": {
+    "_주석": [
+      "반복 화면의 조회 조건 기본값. 회차마다 조회 전에 이 값인지 보고, 아니면 고쳐서 조회한다. 웹에는 보이지 않는다.",
+      "날짜(DateFrom·DateTo)는 오늘부터의 일 수 (-10 = 10일 전, 1 = 내일). 빠진 키는 ERPia 를 새로 연 화면의 값.",
+      "매출구분·택배사 체크 목록·상품은 늘 '전체' - 아니면 화면을 닫고 다시 연다."
+    ],
+    "InvoiceSend": {
+      "DateBasis": "배송일",
+      "DateFrom": -10,
+      "DateTo": 0,
+      "SendStatus": "미전송",
+      "SearchField": "수령자",
+      "SearchValue": "",
+      "UnstoringOnly": "N"
+    },
+    "Wms": {
+      "DateBasis": "납품예정일",
+      "DateFrom": 1,
+      "DateTo": 1,
+      "SearchField": "PO번호(다중)",
+      "SearchValue": "",
+      "Delivery": "(전체)"
+    }
   }
 }

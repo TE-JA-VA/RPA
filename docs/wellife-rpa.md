@@ -417,7 +417,7 @@ SAP 에서 넘어온 건은 WMS 이관관리에 한꺼번에 들어오지 않고
 ### 9.2 동작 (`wellife.module_invoice_send`)
 
 1. 화면 열기: '운송장번호 전송' 메인 탭이 이미 열려 있으면 그 탭을 누르고(SAP·WMS 와 같은 확인), 없으면 좌측 아이콘 `lcg_InvoiceSend` 를 누른다 (기존 `goto_screen_by_icon`). 아이콘이 없으면 건너뛰지 않고 실패다.
-2. [조회(F)] (`btn_Search`). 조회 조건은 화면 기본값 그대로 둔다 (배송일 기간·미전송). 스피너가 사라질 때까지 기다리고, 팝업이 떠 있으면 멈춘다.
+2. 조회 조건이 기본값인지 보고, 아니면 고친다 (9.4 - 10-14). 그다음 [조회(F)] (`btn_Search`). 스피너가 사라질 때까지 기다리고, 팝업이 떠 있으면 멈춘다.
 3. 줄 수를 센다 - 세로 스크롤바가 있으면 맨 위에서부터 '페이지 아래로' 로 넘기며 행 번호로 (키보드는 쓰지 않는다). 0줄이면 `no_target`.
 4. 머리글 `row Check Box` 로 전체 체크 (기존 `check_all_rows`).
 5. [전송요청(S)] (`btn_SendRequest`) - 기존 `press_arrow` 를 그대로 쓴다.
@@ -435,3 +435,33 @@ SAP 에서 넘어온 건은 WMS 이관관리에 한꺼번에 들어오지 않고
 - **2026-10-13 모든 업체로 열었다** (사용자): 보통 PROCESS 의 `run_routine.ROUTINE_MODULES` 맨 뒤에 같은 키·비트(`invoicesend`, 512)로, `MODULE_FUNCS["invoicesend"]` 는 `run_routine.module_invoice_send` → `wellife.module_invoice_send`. 보통 PROCESS 도 모드가 있다 - `Routine` 섹션의 `InvoiceMode` (`"리허설"`·`"1건"`·`"실행"`, **빠지면 리허설**, 사용자 10-13. 그 전 빌드 2026.10.13-6 은 모드 없이 늘 실제로 [전송요청(S)] 을 눌렀다). 설치 틀(`RPA_UserConfig.template.json`)과 웹 '실행 모듈' 로 쓸 때 `"InvoiceMode": "리허설"` 을 적어 둔다. `rpa_status.ROUTINE_CONFIG_MODULES` 에 `InvoiceSend`, `rpa_dashboard.WELLIFE_ONLY_KEYS` 에서 뺌, 웹 `MODULES`·`RUN_CHIPS`, 관리 화면 토큰 배율의 PROCESS 묶음에도 같은 키 (로그인처럼 두 묶음에 같이). 웰라이프 업체는 그대로 `Wellife` 섹션·`InvoiceMode`.
 - **칸이 없으면 끔** (`rpa_status.ROUTINE_OFF_BY_DEFAULT`, `perform_login.load_routine_modules(off_by_default=)`): Routine 섹션의 다른 모듈은 칸이 없으면 켬이지만, 운송장번호 전송은 택배사로 나가 되돌릴 수 없어 업데이트를 받자마자 모든 업체가 보내지 않게 했다. 업체 웹 환경설정 '실행 모듈' 에서 켠 PC 만 돈다.
 - 모드 보기 (시험 기간용): 에이전트가 `Wellife` 섹션의 `SalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode` 를 `live.modes` 로 올리고(`rpa_status.read_wellife_modes`), 웹 '실행 모듈' 카드가 보여 준다. 실행이 하나라도 있으면 경고 색. 바꾸는 길은 없다 (PC 설정 파일). 옛 에이전트는 값을 안 올려 줄이 숨는다. 걷어낼 때는 `read_wellife_modes`·`WELLIFE_MODES`, 에이전트의 `snap["modes"]`, 웹의 `mod-modes` 를 지운다.
+
+### 9.4 조회 조건 기본값 (⑤ WMS·⑥ 운송장, 10-14)
+
+반복으로 도는 화면은 사람이 조회 조건을 바꿔 두면 그 조건으로 계속 조회하게 된다. 그래서 회차마다 조회(⑥ [조회(F)], ⑤ 첫 단계 단추) 직전에 조건이 기본값인지 보고, 아니면 고친 뒤 조회한다 (사용자 10-13). `wellife.ensure_query`.
+
+- **기본값**: ERPia 에서 화면을 새로 열었을 때의 값 (10-14 개발기 실측). 설정 `RPA_UserConfig.json` 의 `QueryDefaults.<화면>.<키>` 가 있으면 그 값이다 (웹에는 보이지 않는다, 설치 틀에 적혀 있다). 날짜는 오늘부터의 일 수라 매 회차 다시 계산한다.
+
+  | 화면 | 키 (auto_id) | 기본값 | 고치는 법 |
+  |---|---|---|---|
+  | ⑥ | `DateBasis` (`cboCondition`) | 배송일 (하나뿐) | 콤보 |
+  | ⑥ | `DateFrom`·`DateTo` (`dateFrom`·`dateTo`) | -10 ~ 0 (10일 전 ~ 오늘) | 날짜 칸 |
+  | ⑥ | `SendStatus` (`ccc_SendorNot`) | 미전송 | 콤보 |
+  | ⑥ | `SearchField` (`cbo_Condition`) + `SearchValue` (`txt_SearchValue`) | 수령자 + 빈 칸 | 콤보 + 글 칸 |
+  | ⑥ | `UnstoringOnly` (`chk_UnstoringStand` 출고대기만) | N | 체크 상자 (누를 때마다 켬/끔) |
+  | ⑥ | 매출구분 (`ccc_Sales`)·택배사 (`ccc_Delivery`) | '… : 전체' | 화면 다시 열기 |
+  | ⑤ | `DateBasis` (`cboCondition` 매출일/납품예정일) | 납품예정일 | 콤보 |
+  | ⑤ | `DateFrom`·`DateTo` | 1 ~ 1 (내일 ~ 내일, 사용자 10-14) | 날짜 칸 |
+  | ⑤ | `SearchField` (`cbo_Condition`, 8가지) + `SearchValue` | PO번호(다중) + 빈 칸 | 콤보 + 글 칸 |
+  | ⑤ | `Delivery` (`cbo_delivery` - 하나 고르는 목록) | (전체) | 콤보 |
+  | ⑤ | 매출구분 (`cbo_CustSiteCode`)·상품 (`cbo_customCtrlSelectorGoods`) | '… : 전체' | 화면 다시 열기 |
+
+  ⑤ 의 단계(`cbo_stage`)는 단계 단추가 바꾸고, '건식상품 제외'(`chk_Dryfood`)는 건드리지 않는다 (10-07 사용자).
+- **고치는 법** (10-14 개발기에서 바꿨다가 되돌려 확인)
+  - 콤보: 콤보를 누르면 목록이 따로 뜬 창으로 열린다. 그 이름의 `ListItem` 을 누른다 (목록 창이 그 자리의 맨 위일 때만). 값은 콤보의 `Value` 로 다시 읽는다 ('택배사 : (전체)' 처럼 앞말이 붙으면 뗀다).
+  - 날짜 칸: 안쪽 `Edit` 을 누르고 포커스가 그 칸 안인지 본 뒤 `^a` → `2026-10-04` → Tab. 값은 '2026년 10월 4일 일요일' 이 된다.
+  - 글 칸: 같은 방법으로 `^a` → BackSpace → 값 → Tab.
+  - 체크 상자 '출고대기만': UIA·MSAA 로는 체크 상태가 나오지 않는다 (Toggle 패턴 없음, `State` 는 포커스만 바뀜, MSAA 를 창에서 직접 열어도 같다). 그래서 컨트롤이 스스로 그린 그림(`PrintWindow` - 가려져도·왼쪽 모니터여도 같다)에서 체크 상자 안쪽의 색 있는 점 비율을 본다. 실측: 체크 0.551(주황 체크), 안 체크 0.000(흰 안쪽 - 포커스 테두리와 상관없이). 0.25 이상이면 체크, 0.05 미만이면 안 체크, 그 사이는 애매함 → 화면 다시 열기. 마우스가 올라가 있으면 그림이 달라져 읽기 전에 컨트롤 밖으로 옮긴다. 화면 배율이 다른 PC 에서는 웰라이프 PC 리허설로 한 번 확인해야 한다.
+  - 체크 목록(매출구분·택배사)과 상품 고르기 창은 복잡해 고치지 않고, 기본값이 아니면 [닫기(X)] 로 화면을 닫고(팝업 없이 닫힌다) 다시 연다 (⑥ 좌측 아이콘, ⑤ 메뉴 검색 - 사용자 10-14). 다시 열어도 다르면 조회하지 않고 멈춘다. 참고로 택배사 체크 목록은 [확인]·[취소] 를 눌러도 닫히지 않았고, 콤보를 다시 누르거나 다른 곳을 누르면 바꾼 체크가 적용됐다. 매출구분 목록은 마켓 계정 그리드이고 아무것도 체크하지 않은 것이 '전체' 다.
+- 고친 것은 로그와 모듈 사유 끝에 남는다. 예: `[리허설] 운송장 3건 - 전송요청은 누르지 않음 (조회 조건 기본값으로 고침: DateFrom -13→-10, SendStatus '전체'→'미전송', SearchField '주문번호'→'수령자', SearchValue 'zz'→'')`, `… (조회 조건 기본값으로 고침: 화면 다시 열기(Delivery))`.
+- 리허설도 같은 일을 한다 - 조회 조건은 데이터를 바꾸지 않는다.
