@@ -39,7 +39,8 @@ import web_replay as rec
 REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
 RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
-MIN_PRESETS, MAX_PRESETS = st.PRESET_MIN, st.PRESET_MAX
+MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
+PRESETS_PER_ROW = 10                    # 프리셋 단추 한 줄에 10개, 11개부터 줄을 더한다 (사용자 2026-10-14)
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 옵저버 회색 AP (tools/make_icon.py)
 CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
@@ -63,7 +64,7 @@ GUIDE = """<!doctype html><meta charset="utf-8"><title>오토파일럿 기록</t
 
 
 def circled(n):
-    return chr(0x2460 + n - 1)          # ① ~ ⑩
+    return chr(0x2460 + n - 1)          # ① ~ ⑳ (ponytail: 21 부터는 이 글자 줄이 끊긴다 - 업체 상한을 20 넘게 열 때 숫자로)
 
 
 def dpi_scale():
@@ -519,6 +520,7 @@ class App:
     def __init__(self, root, scale, presets, hint="", fake_creds=None):
         self.root, self.scale = root, scale
         self.presets = presets
+        self.max_presets = st.preset_limit()     # 업체 프리셋 수 (에이전트가 적은 업체 정책) - 켤 때 한 번
         if fake_creds and not any(p["loaded"] for p in self.presets):      # 시험: 가짜 쇼핑몰 계정
             self.presets[0].update(name="가짜 쇼핑몰", code="012", id=fake_creds[0], pw=fake_creds[1])
         self.cur, self.recording, self.previewing = 0, None, False
@@ -634,26 +636,29 @@ class App:
         for c in self.preset_bar.winfo_children():
             c.destroy()
         busy = self.recording is not None or self.previewing
+        rows = [tk.Frame(self.preset_bar, bg=CARD) for _ in range(max(1, -(-len(self.presets) // PRESETS_PER_ROW)))]
+        for r, row in enumerate(rows):
+            row.pack(fill="x", pady=(0 if r == 0 else 4, 0))
         for i, p in enumerate(self.presets):
             has = bool(p["raw"] or p["loaded"])
             sel = i == self.cur
             bg, fg = (BLUE, "white") if sel else ((BLUE_L, BLUE_D) if has else ("#f3f4f6", MUTED))
             if self.recording == i:
                 bg, fg = RED, "white"
-            b = tk.Button(self.preset_bar, text=circled(i + 1), font=(UI, 14, "bold"), bg=bg, fg=fg, activebackground=bg,
+            b = tk.Button(rows[i // PRESETS_PER_ROW], text=circled(i + 1), font=(UI, 14, "bold"), bg=bg, fg=fg, activebackground=bg,
                           activeforeground=fg, relief="flat", bd=0, width=3, pady=2, cursor="hand2" if not busy else "arrow",
                           disabledforeground=fg, command=lambda i=i: self.select(i))
             b.config(state="disabled" if busy and not sel else "normal")
             b.pack(side="left", padx=(0, 4))
         small = dict(font=(UI, 13, "bold"), relief="flat", bd=0, width=3, pady=1, bg=CARD, fg=MUTED, activebackground=LINE,
                      highlightthickness=1, highlightbackground=LINE)
-        if len(self.presets) < MAX_PRESETS:
-            tk.Button(self.preset_bar, text="+", command=self.add_preset, state="disabled" if busy else "normal",
+        if len(self.presets) < self.max_presets:
+            tk.Button(rows[-1], text="+", command=self.add_preset, state="disabled" if busy else "normal",
                       cursor="hand2", **small).pack(side="left", padx=(6, 2))
         if len(self.presets) > MIN_PRESETS:
-            tk.Button(self.preset_bar, text="−", command=self.remove_preset, state="disabled" if busy else "normal",
+            tk.Button(rows[-1], text="−", command=self.remove_preset, state="disabled" if busy else "normal",
                       cursor="hand2", **small).pack(side="left", padx=2)
-        tk.Label(self.preset_bar, text=f"{len(self.presets)}/{MAX_PRESETS}", font=F_SMALL, bg=CARD, fg=MUTED).pack(side="right")
+        tk.Label(rows[0], text=f"{len(self.presets)}/{self.max_presets}", font=F_SMALL, bg=CARD, fg=MUTED).pack(side="right")
 
     def paint_buttons(self):
         rec_on = self.recording is not None
@@ -1104,6 +1109,16 @@ def start_problem(me=None, session=None):
     return None
 
 
+def setup_problem(load=None):
+    """오토파일럿 설정(이 PC 의 에이전트 계정)을 마쳤나 - 안 했거나 깨졌으면 사람에게 보일 문장, 됐으면 None.
+    설정 없이 옵저버만 다른 용도로 쓰지 못하게 (사용자 2026-10-14). 설정 내용은 보지도 찍지도 않는다. load 는 시험용."""
+    try:
+        (load or (lambda: otp_relay._agent_modules()[1].load_config()))()
+        return None
+    except Exception:
+        return "오토파일럿 설정이 되어 있지 않습니다. 오토파일럿 설정을 먼저 해 주십시오."
+
+
 def busy_problem():
     """다른 옵저버·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는
     RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
@@ -1176,7 +1191,7 @@ def main(argv=None):
             return 0
         show_error("관리자 권한이 있어야 기록을 저장할 수 있습니다. 관리자 권한으로 실행하여 주십시오.")
         return 1
-    problem = start_problem() or busy_problem()
+    problem = start_problem() or setup_problem() or busy_problem()
     if problem:
         show_error(problem)
         return 1

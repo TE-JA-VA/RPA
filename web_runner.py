@@ -225,6 +225,8 @@ def _replay_problems(name, site):
     if any(s.get("kind") == "otp" for s in p["record"].get("steps") or []) and not (site.get("Phone") and site.get("SmsSenders")):
         return [f"{name}: 프리셋 {no} 에 인증번호 단계가 있는데 인증 휴대폰·발신번호가 정해지지 않았습니다 "
                 "(옵저버 저장 화면에서 정하세요)"]
+    if no > status.preset_limit():
+        return [f"{name}: 프리셋 {no} 은 이 업체의 프리셋 수({status.preset_limit()}개)를 넘어 돌리지 않습니다"]
     return []
 
 

@@ -545,16 +545,22 @@ def wellife_on(cid, features):
 
 
 def company_policy(client, cid, app=APP):
-    """업체 정책 한 번에 - (자동 실행 개수, 안 쓰는 모듈 키 목록, 웰라이프). 웰라이프 업체는 물류관리·운송장 출력도 안 쓰는 모듈에 더한다. 자리 meta/companies/{cid}/apps/{app} (총괄·Admin SDK 만 쓴다).
-    한도가 없거나 이상하면 기본 2. 못 읽으면 예외 - 부르는 쪽이 지난 값을 쓴다."""
+    """업체 정책 한 번에 - (자동 실행 개수, 안 쓰는 모듈 키 목록, 웰라이프, 프리셋 수). 웰라이프 업체는 물류관리·운송장 출력도 안 쓰는 모듈에 더한다. 자리 meta/companies/{cid}/apps/{app} (총괄·Admin SDK 만 쓴다).
+    한도가 없거나 이상하면 기본 2. 프리셋 수는 limits.presets (관리 화면) - 없거나 이상하면 None (PC 가 기본값, st.preset_limit).
+    못 읽으면 예외 - 부르는 쪽이 지난 값을 쓴다."""
+    import rpa_status as st
     got = client.get(f"meta/companies/{cid}/apps/{app}") or {}
-    raw = (got.get("limits") or {}).get("schedule")
+    limits = got.get("limits") or {}
+    raw = limits.get("schedule")
     ok = isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= SCHEDULE_LIMIT_MAX
+    presets = limits.get("presets")
+    if not (isinstance(presets, int) and not isinstance(presets, bool) and st.PRESET_MIN <= presets <= st.PRESET_MAX):
+        presets = None
     off = {k for k, v in (got.get("modules") or {}).items() if v is False}
     wl = wellife_on(cid, got.get("features"))
     if wl:
         off |= set(WELLIFE_BLOCKED)
-    return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(off), wl
+    return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(off), wl, presets
 
 
 class Policy:
@@ -565,7 +571,7 @@ class Policy:
         self._client, self._cid, self._every, self._at = client, cid, every, None
 
     def refresh(self, force=False):
-        """읽었으면 (limit, off, wellife), 아직 때가 아니거나 못 읽었으면 None."""
+        """읽었으면 (limit, off, wellife, presets), 아직 때가 아니거나 못 읽었으면 None."""
         if not force and self._at is not None and time.time() - self._at < self._every:
             return None
         self._at = time.time()

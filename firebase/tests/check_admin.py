@@ -223,6 +223,9 @@ code, r = api("POST", "/api/companies/t_new/disabled", {"id": boss, "disabled": 
 check(code == 200 and account(boss).get("disabled") is not True, "계정 다시 열기")
 code, r = api("POST", "/api/companies/t_new/modules", {"Hold": "on"})
 check(code == 200 and (db_get("meta/companies/t_new/apps/rpa/modules") or {}) == {}, "모듈 정책 켜기 (정책을 지운다 = 그 업체가 쓴다)")
+code, r = api("POST", "/api/companies/t_new/modules", {"InvoiceSend": "off"})
+check(code == 200 and db_get("meta/companies/t_new/apps/rpa/modules") == {"InvoiceSend": False}, "모듈 정책: 운송장번호 전송도 끌 수 있다 (사용자 2026-10-14)", r)
+api("POST", "/api/companies/t_new/modules", {"InvoiceSend": "on"})
 code, d = api("GET", "/api/companies/t_new")
 check(code == 200 and d.get("scheduleLimit") is None, "자동 실행 개수: 값이 없으면 null (화면은 기본 2)", str(d.get("scheduleLimit")))
 code, r = api("POST", "/api/companies/t_new/limits", {"schedule": "3"})
@@ -230,6 +233,14 @@ check(code == 200 and r == {"cid": "t_new", "schedule": 3} and db_get("meta/comp
 for bad in ("13", "-1", "2.5", "", "셋"):
     code, r = api("POST", "/api/companies/t_new/limits", {"schedule": bad})
     check(code == 400 and "0~12" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 3, f"자동 실행 개수 거절 {bad!r}", r)
+code, d = api("GET", "/api/companies/t_new")
+check(code == 200 and d.get("presetLimit") is None, "옵저버 프리셋 수: 값이 없으면 null (화면은 기본 2)", str(d.get("presetLimit")))
+code, r = api("POST", "/api/companies/t_new/presets", {"presets": "5"})
+check(code == 200 and r == {"cid": "t_new", "presets": 5} and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, "옵저버 프리셋 수 5", r)
+for bad in ("1", "11", "2.5", "", "셋"):
+    code, r = api("POST", "/api/companies/t_new/presets", {"presets": bad})
+    check(code == 400 and "2~10" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, f"옵저버 프리셋 수 거절 {bad!r}", r)
+check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 3, "프리셋 수를 바꿔도 자동 실행 개수는 그대로")
 code, d = api("GET", "/api/companies/t_new")
 check(code == 200 and d.get("wellife") is False and d.get("wellifeAuto") is False, "웰라이프: 보통 업체는 꺼짐", str(d.get("wellife")))
 code, r = api("POST", "/api/companies/t_new/features", {"wellife": True})
@@ -354,6 +365,11 @@ with sync_playwright() as pw:
     page.click("#detail .row:has(input[aria-label='자동 실행 슬롯 수']) button")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")?.value === '4'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 4, "화면: 업체 상세에서 자동 실행 개수 저장")
+    check("옵저버에서 만들 수 있는 프리셋 수를 결정합니다. (2~10, 기본 2)" in page.text_content("#detail"), "옵저버 프리셋 수 설명")
+    page.fill("#detail input[aria-label='옵저버 프리셋 수']", "7")
+    page.click("#detail .row:has(input[aria-label='옵저버 프리셋 수']) button")
+    page.wait_for_function("document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")?.value === '7'", timeout=10000)
+    check(db_get("meta/companies/t_new/apps/rpa/limits/presets") == 7, "화면: 업체 상세에서 옵저버 프리셋 수 저장")
 
     print("자동 업데이트 (설계 8절)")
     CID, PC = "t_new", "pc_a"
@@ -477,6 +493,8 @@ with sync_playwright() as pw:
     open_company(page, CID)
     check(page.is_disabled("#detail input[data-mod='Logistics']") and "웰라이프 업체는 쓰지 않음" in page.text_content("#detail .sec:has(.mod-apply)"),
           "웰라이프 업체: 물류관리·운송장 체크 잠김")
+    check(not page.is_disabled("#detail input[data-mod='InvoiceSend']") and "운송장번호 전송" in page.text_content("#detail .sec:has(.mod-apply)"),
+          "모듈 정책에 '운송장번호 전송' 체크 (웰라이프 업체도 쓴다 - 잠기지 않음)")
     page.locator("#detail input[data-feature='wellife']").uncheck(); page.click("#detail button.mod-apply"); page.wait_for_timeout(800)
     check(db_get(f"meta/companies/{CID}/apps/rpa/features/wellife") is None, "다시 끈다")
     api("POST", f"/api/companies/{CID}/tokens", {"amount": 1500, "memo": "보기 시험"})

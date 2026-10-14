@@ -294,6 +294,19 @@ check("비밀번호가 저장돼 있지도 않고 치지도 않았으면 막는�
       and rr.validate_presets([P(1, has_pw=False, pw="x")]) is None)
 check("다른 계정의 관리자 권한이면 멈춘다 (비밀번호가 그 계정으로 잠긴다)",
       "다른 사용자의 관리자 권한" in (rr.start_problem(me="PC\\a", session="PC\\b") or "") and rr.start_problem(me="PC\\a", session="pc\\A") is None)
+
+
+def no_cfg():
+    raise FileNotFoundError("agent_config.json")
+
+
+def bad_cfg():
+    raise ValueError("설정에 빠진 항목: cid")
+
+
+check("오토파일럿 설정(에이전트 계정)이 없거나 깨졌으면 알리고 켜지지 않는다 (사용자 2026-10-14)",
+      all("오토파일럿 설정을 먼저 해 주십시오" in (rr.setup_problem(f) or "") for f in (no_cfg, bad_cfg))
+      and rr.setup_problem(lambda: {"cid": "c"}) is None)
 st.start("prepare", ["a"])
 st.flush()
 busy = rr.busy_problem()
@@ -476,12 +489,39 @@ check("표준 핸들이 못 쓰는 값이면 그대로는 WinError 6, fix_std_ha
       got["as_is"].endswith("WinError 6") and got["fix"].endswith("드라이버 뜸"), str(got))
 
 orig_read = wr.status.read_presets
-wr.status.read_presets = lambda: [{"no": 7, "code": "012", "record": OTP_R}]
-no_phone = wr._replay_problems("PRESET7", {"Preset": 7})
-with_phone = wr._replay_problems("PRESET7", {"Preset": 7, "Phone": "kim", "SmsSenders": ["15881234"]})
+wr.status.read_presets = lambda: [{"no": 2, "code": "012", "record": OTP_R}]
+no_phone = wr._replay_problems("PRESET2", {"Preset": 2})
+with_phone = wr._replay_problems("PRESET2", {"Preset": 2, "Phone": "kim", "SmsSenders": ["15881234"]})
 wr.status.read_presets = orig_read
 check("ACTOR 오토파일럿은 인증 휴대폰이 없는 인증번호 프리셋을 시작하지 않는다 (까닭을 남김)", no_phone and "인증 휴대폰" in no_phone[0] and with_phone == [],
       (no_phone, with_phone))
+
+print("=== 업체별 프리셋 수 (에이전트가 적은 업체 정책, 사용자 2026-10-14) ===")
+import rpa_dashboard as dash  # noqa: E402
+
+
+def policy_presets(v):
+    cfg = st.read_settings()
+    cfg["schedule"]["policy"] = dict(cfg["schedule"].get("policy") or {}, presets=v)
+    st.write_settings(cfg)
+
+
+policy_presets(None)
+check("업체 프리셋 수를 모르면 기본 2개", st.preset_limit() == 2, st.preset_limit())
+dash.set_policy(2, [], False, 5)
+check("에이전트가 적은 업체 프리셋 수를 쓴다 (set_policy 4번째)", st.preset_limit() == 5, st.preset_limit())
+check("프리셋 수만 바뀌어도 다시 적는다", dash.set_policy(2, [], False, 6) is True and st.preset_limit() == 6)
+bad = []
+for v in (1, 11, "5", True, -3):
+    policy_presets(v)
+    bad.append(st.preset_limit())
+check("이상한 값(2 미만·10 초과·글자·참거짓)이면 기본 2개", bad == [2] * 5, bad)
+policy_presets(2)
+wr.status.read_presets = lambda: [{"no": n, "code": "012", "record": REC} for n in (1, 2, 3)]
+over, under = wr._replay_problems("PRESET3", {"Preset": 3}), wr._replay_problems("PRESET2", {"Preset": 2})
+wr.status.read_presets = orig_read
+check("업체 프리셋 수를 넘는 프리셋은 ACTOR 오토파일럿이 돌리지 않는다 (까닭을 남김)", over and "프리셋 수" in over[0] and under == [], (over, under))
+policy_presets(None)
 
 print()
 print(f"실패: {'없음' if not fails else fails}")

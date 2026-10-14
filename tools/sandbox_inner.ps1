@@ -83,6 +83,34 @@ Check "옵저버 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: M
 # 일꾼이 Playwright 드라이버(node.exe run-driver)를 띄우고 드라이버가 깔린 Edge 를 창으로 띄우면 통과 (2026-10-06 - 드라이버만 보고
 # 찍으면 사진이 '브라우저를 여는 중...' 이었다). -Wait 는 쓰지 않는다 (자손까지 기다려 켜 둔 옵저버에서 멈춘다)
 Set-Content "$X\no_console.py" "import subprocess, sys`nsubprocess.Popen([sys.argv[1]], cwd=sys.argv[2])" -Encoding ASCII
+# 오토파일럿 설정(에이전트 계정)이 아직 없다 - 옵저버는 알림만 띄우고 Edge 를 띄우지 않는다 (사용자 2026-10-14). 알림창은 사람이 닫을 때까지 떠 있어 끈다
+Start-Process "$App\python\pythonw.exe" -ArgumentList "`"$X\no_console.py`" `"$App\Prepare_Observer.exe`" `"$App`""
+$box = $null
+for ($i = 0; $i -lt 60 -and -not $box; $i++) {
+    Start-Sleep -Milliseconds 500
+    $box = Get-Process -Name Prepare_Observer -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "옵저버" }
+}
+$edge0 = Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -match "remote-debugging-pipe" }
+Check "오토파일럿 설정 전에는 옵저버가 알림만 띄우고 켜지지 않는다 (Edge 없음)" (($null -ne $box) -and ($null -eq $edge0)) "알림창 $(if ($box) { '있음' } else { '없음' }), Edge $(if ($edge0) { '뜸' } else { '없음' })"
+Get-CimInstance Win32_Process -Filter "Name='Prepare_Observer.exe'" | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }
+Remove-Item Env:RPA_USER_CONFIG, Env:RPA_PROGRAMDATA, Env:RPA_STATUS_DIR, Env:RPA_UNATTENDED
+
+# 2. 가짜 설정 (로그인 없이 파일만) → --after-install --no-window → 작업 등록·에이전트 켜기
+$cfg = @'
+import os, sys
+app = r"C:\Program Files\AFTER MARKET\RPA"
+sys.path.insert(0, app); sys.path.insert(0, os.path.join(app, "firebase", "agent"))
+import rpa_status as st, secret, agent
+data = st.read_user_config(os.path.join(app, "RPA_UserConfig.template.json"))
+data["LogIn"].update(AdminCode="sbx", ID="sbx", PW="sbx-pw")
+st.write_user_config(data, st.user_config_path())
+secret.write_config(secret.CONFIG_PATH, dict(secret.PUBLIC, email=agent.email_for("sbx", "sbx"), cid="sbx", pc_id="sbx"), "not-the-password")
+print("cfg ok")
+'@
+[IO.File]::WriteAllText("$O\cfg.py", $cfg, (New-Object Text.UTF8Encoding($false)))
+$c = & $Py "$O\cfg.py"
+Check "가짜 설정을 썼다" ("$c" -eq "cfg ok") "$c"
+# 설정을 마친 뒤 - 이제 옵저버가 켜져 Edge 를 띄운다 (에이전트를 켜기 전 - 도는 RPA 가 없을 때)
 Start-Process "$App\python\pythonw.exe" -ArgumentList "`"$X\no_console.py`" `"$App\Prepare_Observer.exe`" `"$App`""
 $drv = $null; $edge = $null
 for ($i = 0; $i -lt 120 -and -not $edge; $i++) {
@@ -101,23 +129,6 @@ $g.Dispose(); $bmp.Dispose()
 $obs = @(Get-CimInstance Win32_Process -Filter "Name='Prepare_Observer.exe'")
 Check "옵저버를 붙을 콘솔 없이 (시작 메뉴처럼) 켜도 Playwright 드라이버가 깔린 Edge 창을 띄운다 (사진 observer.png)" ($null -ne $edge) "옵저버 프로세스 $($obs.Count)개, 드라이버 $(if ($drv) { '있음' } else { '없음' }), Edge 창 없음"
 $obs | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }
-Remove-Item Env:RPA_USER_CONFIG, Env:RPA_PROGRAMDATA, Env:RPA_STATUS_DIR, Env:RPA_UNATTENDED
-
-# 2. 가짜 설정 (로그인 없이 파일만) → --after-install --no-window → 작업 등록·에이전트 켜기
-$cfg = @'
-import os, sys
-app = r"C:\Program Files\AFTER MARKET\RPA"
-sys.path.insert(0, app); sys.path.insert(0, os.path.join(app, "firebase", "agent"))
-import rpa_status as st, secret, agent
-data = st.read_user_config(os.path.join(app, "RPA_UserConfig.template.json"))
-data["LogIn"].update(AdminCode="sbx", ID="sbx", PW="sbx-pw")
-st.write_user_config(data, st.user_config_path())
-secret.write_config(secret.CONFIG_PATH, dict(secret.PUBLIC, email=agent.email_for("sbx", "sbx"), cid="sbx", pc_id="sbx"), "not-the-password")
-print("cfg ok")
-'@
-[IO.File]::WriteAllText("$O\cfg.py", $cfg, (New-Object Text.UTF8Encoding($false)))
-$c = & $Py "$O\cfg.py"
-Check "가짜 설정을 썼다" ("$c" -eq "cfg ok") "$c"
 $p = Start-Process $Py -ArgumentList "`"$App\rpa_settings.py`" --after-install --no-window" -Wait -PassThru -WindowStyle Hidden
 Check "--after-install --no-window (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.ExitCode)"
 $q = (schtasks /Query /TN $Task /XML) -join "`n"
