@@ -227,6 +227,7 @@ QUIET_JS = """() => new Promise(res => {
   t = setTimeout(done, 400); hard = setTimeout(done, 2500);
 })"""
 
+NO_DIGITS = lambda x: re.sub(r"\d+", "0", re.sub(r"\s+", "", x))     # '메일 11' == '메일 10' (숫자 뺀 글자 단서)
 KINDS_MERGE = ("fill", "secret", "select")        # 같은 칸에 잇달아 온 것은 마지막 값 하나로
 # 2차인증 (휴대폰 중계 설계 13절): 숫자 4~8자리를 친 칸이고 단서에 이런 말이 있으면 '인증번호 칸' - 값은 남기지 않는다 (한 번 쓰는 번호)
 OTP_VALUE = re.compile(r"^\d{4,8}$")
@@ -703,6 +704,9 @@ def candidates(t):
     href = t.get("href") or ""
     if tag == "a" and href not in ("", "#") and not href.lower().startswith("javascript:"):
         out.append(("링크 주소", f"a[href={q(href)}]", None))     # 글자 없는 아이콘 링크 (2026-10-13). 세션 값이 든 주소면 안 맞아 다음 단서로
+    if tag != "input" and re.search(r"\d", t["text"]) and re.search(r"[^\d\s]", t["text"]) and len(t["text"]) < 80:   # '메일 11' → '메일 10': 안 읽은 수가 바뀌는 메뉴 (비즈메카 2026-10-14). 쪽 번호 '2' 처럼 숫자뿐인 글자는 빼고
+        pat = "".join(r"\d+" if p.isdigit() else r"\s*" if p.isspace() else re.escape(p) for p in re.split(r"(\d+|\s+)", t["text"]) if p)
+        out.append(("숫자 뺀 글자", f"{tag}:text-matches({q('^' + pat + '$')})", t["textIndex"] if t["textCount"] > 1 else None))
     out.append(("위치", t["css"], None))
     if t["text"] and t["textCount"] > 1:
         sel = f"input[value={q(t['text'])}]" if tag == "input" else f"{tag}:text-is({q(t['text'])})"
@@ -821,13 +825,16 @@ class Replayer:
                 return f
         return None
 
-    def _same(self, loc, t):
-        """찾은 것이 기록한 것과 모양이 같은가 (id·위치가 다른 것을 가리키게 된 경우를 거른다)."""
+    def _same(self, loc, t, digits=False):
+        """찾은 것이 기록한 것과 모양이 같은가 (id·위치가 다른 것을 가리키게 된 경우를 거른다). digits = 숫자만 달라도 같다 (숫자 뺀 글자 단서)."""
         try:
             got = loc.evaluate("e => e.tagName.toLowerCase() + '|' + (e.getAttribute('type') || '').toLowerCase()").split("|", 1)
             if got[0] != t["tag"] or (t["tag"] == "input" and got[1] != t["type"]):
                 return False
-            return not t["text"] or loc.evaluate(TEXT_OF) == t["text"]
+            if not t["text"]:
+                return True
+            got = loc.evaluate(TEXT_OF)
+            return got == t["text"] or digits and NO_DIGITS(got) == NO_DIGITS(t["text"])
         except Exception:
             return False
 
@@ -879,7 +886,7 @@ class Replayer:
                         loc = self._pick(loc, loc.count(), nth, prev)
                     except Exception:
                         continue            # 화면이 바뀌는 중
-                    if loc is not None and self._same(loc, t):
+                    if loc is not None and self._same(loc, t, how == "숫자 뺀 글자"):
                         return frame, loc, how + (", 새로 생긴 것" if prev is not None else "")
             if time.time() > deadline:
                 if optional:

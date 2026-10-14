@@ -55,6 +55,7 @@ svc.addEventListener('mouseenter', on); svc.addEventListener('mouseleave', off);
 mega.addEventListener('mouseenter', on); mega.addEventListener('mouseleave', off);
 </script>"""
 PAGES = {"/login": LOGIN, "/main": MAIN}
+UNREAD = [11, 10, 9, 8]
 
 
 class H(BaseHTTPRequestHandler):
@@ -62,6 +63,10 @@ class H(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.startswith("/inbox"):          # E: 열 때마다 안 읽은 수가 하나 준다, 홀수일 때만 알림 띠
+            n = UNREAD.pop(0) if len(UNREAD) > 1 else UNREAD[0]
+            PAGES["/inbox"] = (HEAD.format(t="메일") + ("<div class='notice'>새 소식</div>" if n % 2 else "")
+                               + f"<div class='side'><a href='/mail'>메일 {n}</a></div><div class='top'><a href='/mail'>메일 {n}</a></div>")
         body = PAGES.get(self.path.split("?")[0], f"<!doctype html><meta charset='utf-8'><title>{self.path}</title><h1>{self.path}</h1>")
         b = body.encode("utf-8")
         self.send_response(200)
@@ -167,6 +172,14 @@ def human_d(page):
 r = scenario("D_두단", "/main", human_d, "/pw")
 hv = [s["target"]["text"] for s in r["steps"] if s["kind"] == "hover"]
 check("D: 기록에 '설정' → '계정' 마우스 올리기가 차례로 들어간다", hv[-2:] == ["설정", "계정"], hv)
+
+# E. 안 읽은 수가 붙은 메뉴 '메일 11' - 기록 때 메일을 읽어 재생 때는 '메일 10' (비즈메카 2026-10-14). 같은 링크가 두 곳, 알림 띠도 그때그때
+def human_e(page):
+    page.wait_for_timeout(800)
+    click(page, page.locator("div.top a"))
+r = scenario("E_숫자메뉴", "/inbox", human_e, "/mail")
+check("E: 기록 때 글자에 숫자가 붙어 있었다", any(s["target"]["text"].startswith("메일 1") for s in r["steps"] if s["kind"] == "click"),
+      [s["target"]["text"] for s in r["steps"] if s["kind"] == "click"])
 
 srv.shutdown()
 print("실패:", fails if fails else "없음")
