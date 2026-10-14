@@ -727,6 +727,10 @@ ROUTINE_CONFIG_MODULES = (
 # 칸이 없으면 끔인 모듈 (나머지는 칸이 없으면 켬 - 예전 파일 그대로 돌게). 운송장번호 전송은 택배사로 나가 되돌릴 수 없어
 # 업데이트를 받자마자 모든 업체가 보내지 않게 한다 - 업체 웹 환경설정에서 켠 PC 만 (사용자 2026-10-13)
 ROUTINE_OFF_BY_DEFAULT = ("InvoiceSend",)
+# Routine 섹션의 모드 키 (값 '리허설'/'실행'/'1건', 빠지면 리허설 - wellife.load_mode). 운송장번호 전송만 모드가 있다.
+# 모드는 기본 리허설 - 설정을 쓸 때 빠진 모드 키를 '리허설' 로 적어 둔다 (사용자 2026-10-13)
+ROUTINE_MODES = (("InvoiceMode", "운송장번호 전송"),)
+DEFAULT_MODE = "리허설"
 WELLIFE_SECTION = "Wellife"    # 웰라이프 업체 PC 만 (설계 2026-10-07-wellife-gate). 키 이름은 wellife.MODULES 와 같다 - 바꾸면 둘 다
 WELLIFE_CONFIG_MODULES = (
     ("Login", "로그인"),
@@ -743,8 +747,8 @@ WELLIFE_DEFAULT = {"Login": True, "Sales": True, "Hold": False, "Sap": False, "W
 SHARED_MODULES = ("InvoiceSend",)
 # Wellife 섹션의 모드 키와 웹에 보이는 이름 - wellife.MODE_NAMES 와 같은 키·순서 (시험이 대조한다).
 # 웹은 보기만 한다 (시험 기간용, 사용자 2026-10-13 - 바꾸기는 PC 설정 파일에서)
-WELLIFE_MODES = (("SalesMode", "주문매핑"), ("Mode", "물류대기"), ("SapMode", "SAP 연동"), ("WmsMode", "WMS 이관"),
-                 ("InvoiceMode", "운송장번호 전송"))
+WELLIFE_MODES = (("SalesMode", "주문매핑"), ("NormalSalesMode", "정상매출"), ("Mode", "물류대기"), ("SapMode", "SAP 연동"),
+                 ("WmsMode", "WMS 이관"), ("InvoiceMode", "운송장번호 전송"))
 
 
 def cred_file_path():
@@ -763,14 +767,17 @@ def cred_file_path():
     return os.path.join(desktop, AI_DIR_NAME, CRED_FILE_NAME)
 
 
-def _merge_routine_section(existing, final):
+def _merge_routine_section(existing, final, modes=()):
     """기존 Routine 섹션에서 아는 키만 Y/N 으로 바꾸고, 모르는 키는 그대로 둔다. 없던 키는 뒤에 붙인다.
+    modes ((모드 키, 이름) 목록) 중 빠진 키는 DEFAULT_MODE('리허설') 로 적는다 - 있던 값은 그대로 (사용자 2026-10-13).
 
     모르는 키를 지우지 않는 이유: 루틴이 '모르는 키' 경고를 내 주는데, 대시보드가 조용히 지워 버리면
     사용자가 오타를 알 길이 없어진다.
     """
     out = dict(existing) if isinstance(existing, dict) else {}
     out.update({k: ("Y" if final[k] else "N") for k in final})
+    for k, _ in modes:
+        out.setdefault(k, DEFAULT_MODE)
     return out
 
 
@@ -825,7 +832,7 @@ def write_routine_modules(selected, path=None):
     data = read_user_config(path)
     if not data:
         raise FileNotFoundError(path or user_config_path())
-    data[ROUTINE_SECTION] = _merge_routine_section(data.get(ROUTINE_SECTION), final)
+    data[ROUTINE_SECTION] = _merge_routine_section(data.get(ROUTINE_SECTION), final, ROUTINE_MODES)
     write_user_config(data, path)
     return final
 
@@ -879,7 +886,7 @@ def write_wellife_modules(selected, path=None):
     data = read_user_config(path)
     if not data:
         raise FileNotFoundError(path or user_config_path())
-    data[WELLIFE_SECTION] = _merge_routine_section(data.get(WELLIFE_SECTION), final)
+    data[WELLIFE_SECTION] = _merge_routine_section(data.get(WELLIFE_SECTION), final, WELLIFE_MODES)
     write_user_config(data, path)
     return final
 

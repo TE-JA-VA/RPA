@@ -4,9 +4,10 @@
 사용자 규칙: 확인만 있으면 '확인', 예/아니오면 '아니오'.
 """
 import io
+import os
 import sys
 
-sys.path.insert(0, r"D:\AX\RPA")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 저장소 (이 시험의 위 폴더)
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 import run_routine as rr  # noqa: E402

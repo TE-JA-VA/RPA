@@ -17,11 +17,12 @@ ERPia 없이 돈다. 하단 그리드를 흉내 낸 가짜 그리드에 대고 �
   - 우클릭 메뉴에 항목이 없는 경우
 """
 import io
+import os
 import sys
 import time as _time
 import types
 
-sys.path.insert(0, r"D:\AX\RPA")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 저장소 (이 시험의 위 폴더)
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 import run_routine as rr  # noqa: E402

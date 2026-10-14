@@ -14,7 +14,7 @@ tmp = tempfile.mkdtemp(prefix="rpa_sched_")
 os.environ["RPA_STATUS_DIR"] = tmp
 os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
 os.environ["RPA_OBSERVER_LOCK"] = rf"Local\AFTER_MARKET_RPA_OBSERVER_SCHED_TEST_{os.getpid()}"
-sys.path.insert(0, r"D:\AX\RPA")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 저장소 (이 시험의 위 폴더)
 import rpa_status as st  # noqa: E402
 import rpa_dashboard as d  # noqa: E402
 
