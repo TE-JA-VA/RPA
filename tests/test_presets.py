@@ -304,13 +304,24 @@ def bad_cfg():
     raise ValueError("설정에 빠진 항목: cid")
 
 
+_steps = [{"kind": "click", "pick": {"prefix": ">>>"}, "row": {}}, {"kind": "click"}]
+check("메일 고르기 아래에 받기 단계가 없으면 저장을 막는다 (2026-10-14)",
+      (rr.pick_problem([{"no": 3, "record": {"steps": _steps}}]) or (0, ""))[0] == 3
+      and "파일 받기 단계가 없습니다" in rr.pick_problem([{"no": 3, "record": {"steps": _steps}}])[1]
+      and rr.pick_problem([{"no": 3, "record": {"steps": _steps[:1] + [dict(_steps[1], download="a.xlsx")]}}]) is None
+      and rr.pick_problem([{"no": 1, "record": None}]) is None)
 check("오토파일럿 설정(에이전트 계정)이 없거나 깨졌으면 알리고 켜지지 않는다 (사용자 2026-10-14)",
       all("오토파일럿 설정을 먼저 해 주십시오" in (rr.setup_problem(f) or "") for f in (no_cfg, bad_cfg))
       and rr.setup_problem(lambda: {"cid": "c"}) is None)
 st.start("prepare", ["a"])
 st.flush()
 busy = rr.busy_problem()
+st.step("a")
+st.done_step("skipped", "대상 없음")
+_a = dict(st._find_step("a") or {})
 st.finish("success")
+check("받을 새 메일이 없으면 그 사이트 단계는 건너뜀·대상 없음 (토큰 안 씀, 메일 고르기 2026-10-14)",
+      _a.get("state") == "skipped" and _a.get("note") == "대상 없음", _a)
 check("RPA 가 돌고 있으면 ACTOR 오토파일럿을 안 연다 (RPA 가 화면·마우스를 쓴다)", "ACTOR 오토파일럿이 돌고 있습니다" in (busy or ""), str(busy))
 check("켜면 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는 RPA 를 안 띄우고 자동 실행은 기다린다",
       rr.busy_problem() is None and st.observer_open())

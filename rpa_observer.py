@@ -27,7 +27,7 @@ import threading
 import time
 import tkinter as tk
 from ctypes import wintypes
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from playwright.sync_api import sync_playwright
 
@@ -39,6 +39,7 @@ import web_replay as rec
 REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
 RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
+PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
 MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
 PRESETS_PER_ROW = 10                    # 프리셋 단추 한 줄에 10개, 11개부터 줄을 더한다 (사용자 2026-10-14)
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
@@ -356,6 +357,9 @@ class Worker(threading.Thread):
             rp.cancel, rp.pause = self.cancel, self.pause
             if any(s["kind"] == "otp" for s in steps):
                 rp.otp = self._otp_relay(creds, label, stamp)
+            if any(s.get("pick") for s in steps):     # 메일 고르기 - 기억과 상관없이 맞는 메일 1통 (사용자 2026-10-14)
+                rp.pick_preview = True
+                st.log_line(f"{stamp()} {PICK_NOTE}")
 
             def progress(i, state, how):
                 if state == "paused":
@@ -401,6 +405,7 @@ def new_preset(no, name=None, code=""):
     return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "start_url": None,
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
+            "pick": {}, "pick_dirty": False,             # 메일 고르기 {sid: 제목 시작 글자 | None=해제}, dirty = 저장할 때 '이미 처리' 기억을 채운다
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
 
 
@@ -474,6 +479,15 @@ def store(files, logins, fresh=(), phones=None):
         st.save_preset_sites(files, logins, fresh=fresh, phones=phones)
     except (OSError, ValueError, RuntimeError) as e:
         return f"저장하지 못했습니다: {e} - 잠시 뒤 다시 저장하세요"
+    return None
+
+
+def pick_problem(presets):
+    """메일 고르기 아래에 받기 단계가 없는 프리셋 (번호, 글) - 없으면 None."""
+    for o in presets:
+        steps = (o["record"] or {}).get("steps") or []
+        if any(x.get("pick") and rec.pick_body(steps, i) is None for i, x in enumerate(steps)):
+            return o["no"], "메일 고르기 아래에 파일 받기 단계가 없습니다. 첨부를 받는 단계까지 기록해 주십시오."
     return None
 
 
@@ -762,11 +776,42 @@ class App:
             i = next((k for k, s in enumerate(final["steps"]) if s["id"] == sid), None) if final else None
             if i is not None and (final["steps"][i]["kind"] == "otp") != on:
                 rec.set_otp(final["steps"], i, on)
+        for sid, prefix in p["pick"].items():     # 단계 목록에서 정한 메일 고르기
+            i = next((k for k, s in enumerate(final["steps"]) if s["id"] == sid), None) if final else None
+            if i is not None:
+                rec.set_pick(final["steps"], i, prefix)
         return final
 
     def toggle_otp(self, sid, on):
         self.presets[self.cur]["otp"][sid] = on
         self.render()
+
+    def toggle_pick(self, sid):
+        """[메일 고르기]: 목록 줄 누르기를 '제목이 이 글자로 시작하는 메일마다' 로 (사용자 2026-10-14). 다시 누르면 해제."""
+        p = self.presets[self.cur]
+        s = next(x for x in self._final(p)["steps"] if x["id"] == sid)
+        if s.get("pick"):
+            p["pick"][sid] = None
+            return self.render()
+        if not s.get("row"):
+            return self.tell("메일 고르기", "메일 목록의 줄을 누른 단계에서만 쓸 수 있습니다.")
+        prefix = simpledialog.askstring("메일 고르기", "제목이 아래 글자로 시작하는 메일을 모두 받습니다.\n\n제목 시작 글자",
+                                        initialvalue=rec.MAIL_PICK_DEFAULT, parent=self.root)
+        if prefix is None:
+            return None                     # 취소
+        if not prefix.strip():
+            return self.tell("메일 고르기", "제목 시작 글자를 넣어 주십시오.")
+        p["pick"][sid], p["pick_dirty"] = prefix.strip(), True
+        self.render()
+
+    def clear_mail_memory(self):
+        """[받은 메일 기억 지우기]: 다음 실행 때 메일함의 맞는 메일을 다시 받는다."""
+        mem = rec.MailMemory(st.mail_memory_path(self.cur + 1))
+        if not self.ask("받은 메일 기억 지우기", f"이 프리셋이 받은 메일 기억({len(mem.keys)}통)을 지웁니다. "
+                        "다음 실행 때 메일함의 맞는 메일을 다시 받습니다. 지우시겠습니까?"):
+            return
+        mem.clear()
+        self.status.config(text="받은 메일 기억을 지웠습니다.", fg=GREEN_D)
 
     def _var(self, p, sid):
         return p["enabled"].setdefault(sid, tk.BooleanVar(self.root, value=True))
@@ -784,8 +829,11 @@ class App:
         self.labels, self.base = {}, {}
         p = self.presets[self.cur]
         final = self._final(p)
-        n = 0
-        for s in final["steps"] if final else []:
+        n, body = 0, set()
+        for k, s in enumerate(final["steps"] if final else []):
+            end = rec.pick_body(final["steps"], k) if s.get("pick") else None
+            body |= set(range(k + 1, end + 1)) if end is not None else set()
+        for k, s in enumerate(final["steps"] if final else []):
             sid = s["id"]
             if sid in p["deleted"]:
                 continue
@@ -805,14 +853,22 @@ class App:
                 tk.Button(row, text="인증번호 칸 해제" if is_otp else "인증번호 칸", font=F_SMALL, fg=BLUE if is_otp else MUTED,
                           bg=CARD, activebackground=BLUE_L, relief="flat", bd=0, cursor="hand2",
                           command=lambda sid=sid, on=not is_otp: self.toggle_otp(sid, on)).pack(side="right", anchor="n", padx=2, pady=4)
+            if s["kind"] == "click":                 # 메일 목록 줄 - 제목이 정한 글자로 시작하는 메일마다 (2026-10-14)
+                picked = bool(s.get("pick"))
+                tk.Button(row, text="메일 고르기 해제" if picked else "메일 고르기", font=F_SMALL, fg=BLUE if picked else MUTED,
+                          bg=CARD, activebackground=BLUE_L, relief="flat", bd=0, cursor="hand2",
+                          command=lambda sid=sid: self.toggle_pick(sid)).pack(side="right", anchor="n", padx=2, pady=4)
             tk.Label(row, text=f"{n:2d}", font=F_SMALL, bg=CARD, fg=MUTED, width=3, anchor="e").pack(side="left", anchor="n", pady=6)
-            text = re.sub(r" \(\d+단계 뒤에 새로 생긴 것\)", " (새로 생긴 것)", rec.describe(s))
+            text = ("↳ " if k in body else "") + re.sub(r" \(\d+단계 뒤에 새로 생긴 것\)", " (새로 생긴 것)", rec.describe(s))
             warn = s["kind"] == "goto" and "로그인 세션 값을 감지" in text
             lab = tk.Label(row, text=text, font=F, bg=CARD, anchor="w", justify="left",
                            fg=(RED_D if warn else INK) if on else "#9ca3af",
                            wraplength=self.panel_w - int(170 * self.scale))
             lab.pack(side="left", fill="x", expand=True, padx=(6, 0), pady=6)
             self.labels[sid], self.base[sid] = lab, text
+        if final and any(s.get("pick") for s in final["steps"]):
+            tk.Button(self.inner, text="받은 메일 기억 지우기", font=F_SMALL, fg=MUTED, bg=CARD, activebackground=LINE,
+                      relief="flat", bd=0, cursor="hand2", command=self.clear_mail_memory).pack(anchor="e", padx=8, pady=6)
         if not n:
             tip = ("[● 기록 시작] 을 누르고 쇼핑몰 사이트 주소를 입력하는 것부터 시작해주세요.\n"
                    "모두 완료하였다면 [■ 기록 완료] 버튼을 누른 다음 저장해주세요.") if self.recording is None else \
@@ -853,7 +909,7 @@ class App:
         if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
                 "다시 기록", f"{circled(self.cur + 1)} {p['name']} 의 기록을 지우고 처음부터 다시 기록하시겠습니까?"):
             return
-        p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set())
+        p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set(), pick={}, pick_dirty=False)
         self.recording, self.shown = self.cur, 0
         self.status.config(text="브라우저를 여는 중…", fg=MUTED)
         self.render()
@@ -878,7 +934,7 @@ class App:
         self.worker.pause.clear()
         self.previewing, self.paused, self.stopping = True, False, False
         self.paint_buttons()
-        self.status.config(text="미리보기 중", fg=BLUE)
+        self.status.config(text=PICK_NOTE if any(s.get("pick") for s in r["steps"]) else "미리보기 중", fg=BLUE)
         self.worker.cmd.put(("preview", r, ids, {"ID": p["id"].strip(), "PW": pw, "Phone": p["phone"],
                                                   "SmsSenders": senders_list(p["senders"])}, p["code"] or "000",
                              f"{circled(self.cur + 1)} {p['name']}"))
@@ -918,7 +974,7 @@ class App:
                     s.pop("id", None)
             out.append({"no": no, "name": p["name"], "code": p["code"], "record": r,
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"]})
-        problem = validate_presets(out)
+        problem = validate_presets(out) or pick_problem(out)
         if problem:
             self.select(problem[0] - 1)
             return self.status.config(text=problem[1], fg=RED)
@@ -949,11 +1005,21 @@ class App:
                         phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]})
         if problem:
             return self.status.config(text=problem, fg=RED)
+        seeded = []
         for p, f in zip(self.presets, files):
             if f["record"]:
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
+            picks = [x for x in (f["record"] or {}).get("steps", []) if x.get("pick")]
+            if picks and p["pick_dirty"]:        # 기록할 때 보이던 맞는 메일은 이미 처리한 것으로 (사용자 2026-10-14 (나))
+                mem = rec.MailMemory(st.mail_memory_path(f["no"]))
+                keys = [k for x in picks for k in rec.pick_seed(x)]
+                mem.add_all(keys)
+                mem.save()
+                seeded.append((picks[0]["pick"]["prefix"], len(set(keys))))
+            p["pick_dirty"] = False
         self._load_fields()
-        self.status.config(text="저장했습니다.", fg=GREEN_D)
+        self.status.config(text=" ".join(f"기록했습니다. '{x}'이(가) 붙은 메일 {n}통은 이미 처리된 것으로 간주하였습니다. "
+                                         "다음 실행부터 수신한 메일만 처리합니다." for x, n in seeded) or "저장했습니다.", fg=GREEN_D)
         return st.presets_path()
 
     def browser_bounds(self):

@@ -1051,6 +1051,8 @@ def action_replay(page, name, site):
         import otp_relay
         rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
         log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']} 으로 받습니다")
+    if any(s.get("pick") for s in p["record"]["steps"]):     # 메일 고르기 - 처리한 메일은 건너뛰고 기억 (2026-10-14)
+        rp.mail_memory = web_replay.MailMemory(status.mail_memory_path(p["no"]))
     # 알림창은 재생기 하나만 받는다 - 둘이 받으면 로그가 두 줄이고, 대시보드로 가는 글이 줄지 않았다 (2026-10-01 검토)
     page.remove_listener("dialog", on_dialog)
     try:
@@ -1062,6 +1064,8 @@ def action_replay(page, name, site):
         i, _, why = rp.results[-1] if rp.results else (0, "fail", "알 수 없음")
         raise RuntimeError(f"{i}단계에서 멈췄습니다: {why}")
     log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in rp.saved) or '없음'}")
+    if rp.no_target and not rp.saved:
+        status.done_step("skipped", "대상 없음")       # 받을 새 메일이 없었다 - 토큰을 쓰지 않는다
     return True
 
 

@@ -87,6 +87,23 @@ JS = r"""
             placeholder: el.getAttribute('placeholder') || '', label, labelIndex, labelKind,
             href: el.getAttribute('href') || '', css: cssPath(el), inOverlay: inOverlay(el)};
   }
+  // 목록 줄(li·tr)을 눌렀으면 그 목록 - 메일 고르기가 쓴다 (사용자 2026-10-14). sel = 같은 모양의 줄, inner = 줄 안의 누른 칸,
+  // key = 줄의 고유 표시 (data-key 등, 없으면 빈 칸 - 제목 글자로 기억), list = 그때 보이던 줄 (저장하면 '이미 처리' 로)
+  const STATE = /^(on|off|active|selected?|hover|focus|read|unread|new|checked|current|open|show|odd|even)$|(^is-|-active$|-selected$|_on$|_over$)/i;
+  const clsOf = e => [...e.classList].filter(c => /^[A-Za-z_][\w-]*$/.test(c) && !STATE.test(c)).map(c => '.' + c).join('');
+  const rowKey = r => r.getAttribute('data-key') || r.getAttribute('data-id') || r.getAttribute('data-uid') || r.id || '';
+  function rowInfo(el) {
+    const row = el.closest('li,tr'), par = row && row.parentElement;
+    if (!par) return null;
+    const own = clsOf(row), tag = row.tagName.toLowerCase();
+    const sel = own ? tag + own : (par.id ? '#' + CSS.escape(par.id) : par.tagName.toLowerCase() + clsOf(par)) + ' > ' + tag;
+    let rows; try { rows = [...document.querySelectorAll(sel)]; } catch (e) { return null; }
+    if (rows.length < 2 || rows.indexOf(row) < 0) return null;
+    const segs = []; for (let e = el; e && e !== row; e = e.parentElement) segs.unshift(e.tagName.toLowerCase() + clsOf(e));
+    const inner = segs.join(' ');
+    const title = r => { const t = inner ? r.querySelector(inner) : null; return norm((t || r).textContent).slice(0, 120); };
+    return {sel, inner, key: rowKey(row), list: rows.slice(0, 200).map(r => ({k: rowKey(r), t: title(r)}))};
+  }
   function send(kind, el, extra) {
     try { window.__rec(J(Object.assign({kind, url: location.href, target: describe(el), t: Date.now()}, extra || {}))); } catch (e) {}
   }
@@ -162,7 +179,7 @@ JS = r"""
     if (tag === 'INPUT' && !BTN.includes(type) && type !== 'image') return;  // 글자 칸·체크 상자도
     let seen = null;
     if (el.matches(CLICKABLE)) { scan(); seen = firstSeen[sig(el)] || null; }
-    send('click', el, {detail: e.detail, firstSeen: seen, hovers: hoverChain(el)});
+    send('click', el, {detail: e.detail, firstSeen: seen, hovers: hoverChain(el), row: rowInfo(e.target)});   // 줄 안에서 실제로 누른 칸 (onclick 은 줄에 달려 있어도 - 제목 칸)
   }, true);
   document.addEventListener('input', e => {
     const el = e.target;
@@ -206,6 +223,11 @@ OTP_HINT = re.compile(r"인증|otp|auth|cert|verif", re.I)
 OTP_REJECT = re.compile(r"인증.*(틀|일치하지|불일치|잘못|만료|다시|실패)|(틀|일치하지|불일치|잘못|만료).*인증")
 OTP_TRIES = 3                # 모두 합쳐 (처음 + 2번 더, 사용자 2026-10-13)
 OTP_WAIT = 120               # 번호 하나를 기다리는 초 (요청이 열려 있는 2분)
+# 메일 고르기 (사용자 2026-10-14): 목록 줄 누르기를 '제목이 이 글자로 시작하는 메일마다' 로. 그 아래 받기 단계까지가 메일마다 되풀이할 묶음
+MAIL_PICK_DEFAULT = ">>>"
+MAIL_PICK_MAX = 20           # 한 번에 처리하는 메일 수 (나머지는 다음 실행)
+MAIL_MEMORY_DAYS = 90        # 처리한 메일을 기억하는 날 수
+MAIL_BACK_WAIT = 10          # 메일을 연 뒤 목록으로 돌아와 줄이 다시 보이기까지 기다리는 초
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
 OPTIONAL_WAIT = 3.0
@@ -316,6 +338,8 @@ class Recorder:
         for k in ("value", "option", "checked", "firstSeen"):
             if k in ev:
                 step[k] = ev[k]
+        if ev.get("row"):
+            step["row"] = ev["row"]        # 목록 줄을 눌렀다 - 메일 고르기 (set_pick)
         last = self.steps[-1] if self.steps else None
         if (step["kind"] == "click" and ev.get("detail", 1) >= 2 and last and last["kind"] == "click"
                 and same_target(last, step) and step["t"] - last["t"] < 600):
@@ -356,6 +380,68 @@ def appears_after(steps, j):
     if k is None or not ambiguous(s) or navigated(steps[k], s):
         return None
     return k
+
+
+def set_pick(steps, i, prefix):
+    """i 단계(목록 줄 누르기)를 '제목이 prefix 로 시작하는 메일마다' 로, prefix 가 None·빈 글자면 되돌린다. steps 를 고친다."""
+    if prefix:
+        steps[i]["pick"] = {"prefix": prefix}
+    else:
+        steps[i].pop("pick", None)
+    return steps
+
+
+def pick_body(steps, i):
+    """메일 고르기 i 단계 뒤 메일마다 되풀이할 묶음의 끝 (마지막 받기 단계 번호). 받기 단계가 없으면 None."""
+    return next((j for j in range(len(steps) - 1, i, -1) if steps[j].get("download")), None)
+
+
+def mail_key(key, title):
+    """처리한 메일을 기억하는 표시 - 줄의 고유 표시 (data-key 등), 없으면 제목 글자."""
+    return key or "제목:" + title
+
+
+def pick_seed(s):
+    """기록할 때 목록에 보이던 메일 중 제목이 정한 글자로 시작하는 것 (저장하면 '이미 처리' 로 - 사용자 2026-10-14 (나))."""
+    prefix = (s.get("pick") or {}).get("prefix") or ""
+    return [mail_key(x["k"], x["t"]) for x in (s.get("row") or {}).get("list", []) if prefix and x["t"].startswith(prefix)]
+
+
+class MailMemory:
+    """프리셋 하나가 처리한 메일 {표시: 날짜} - 같은 메일의 첨부를 두 번 받지 않게. MAIL_MEMORY_DAYS 지난 것은 저장할 때 버린다."""
+
+    def __init__(self, path):
+        self.path = path
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.keys = dict(json.load(f).get("keys") or {})
+        except (OSError, ValueError, AttributeError):
+            self.keys = {}
+
+    def add_all(self, keys):
+        today = datetime.date.today().isoformat()
+        for k in keys:
+            self.keys[k] = today
+
+    def save(self):
+        cut = (datetime.date.today() - datetime.timedelta(days=MAIL_MEMORY_DAYS)).isoformat()
+        self.keys = {k: d for k, d in self.keys.items() if d >= cut}
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"keys": self.keys}, f, ensure_ascii=False)
+        os.replace(tmp, self.path)
+
+    def clear(self):
+        self.keys = {}
+        self.save()
+
+
+# 목록 줄들 (key, 제목) - JSON 글자로 주고받는다 (사이트가 Map 을 바꿔치기해도, SNAP_JS 와 같다)
+ROWS_JS = """a => { const o = JSON.parse(a), n = s => (s || '').replace(/\\s+/g, ' ').trim();
+  const key = r => r.getAttribute('data-key') || r.getAttribute('data-id') || r.getAttribute('data-uid') || r.id || '';
+  return JSON.stringify([...document.querySelectorAll(o.sel)].map(r => { const t = o.inner ? r.querySelector(o.inner) : null;
+    return [key(r), n((t || r).textContent).slice(0, 120)]; })); }"""
 
 
 def otp_like(s):
@@ -498,6 +584,8 @@ def describe(s, hide_values=False):
         d = "뒤로 가기"
     elif k == "newtab":
         d = "새 탭 열기"
+    elif k == "click" and s.get("pick"):
+        d = f"제목이 '{s['pick']['prefix']}' 로 시작하는 메일마다 ↓"
     elif k == "click":
         d = f"'{n}' 누르기"
     elif k == "fill":
@@ -616,6 +704,8 @@ class Replayer:
         self.otp, self.otp_wait = None, OTP_WAIT
         self.otp_req, self.otp_try, self.otp_send, self.otp_check, self.otp_mark = None, 0, None, None, 0
         self.dialogs = []           # 재생 중 뜬 알림창 글 (사이트가 인증번호를 거절했나 본다)
+        # 메일 고르기: mail_memory = MailMemory (ACTOR - 처리한 메일을 건너뛰고 기억), pick_preview = 기억과 상관없이 1통 (옵저버 미리보기)
+        self.mail_memory, self.pick_preview, self.no_target = None, False, False
 
     def _watch(self, page):
         if page in self.watched:
@@ -738,6 +828,8 @@ class Replayer:
 
     def _find(self, page, s, prev):
         t = s["target"]
+        if s.get("loose"):          # 메일 고르기 묶음 - 메일마다 글자(첨부 이름 등)가 달라 글자 말고 자리·속성으로
+            t = dict(t, text="", textCount=0)
         cands = candidates(t)
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
         deadline = time.time() + (OPTIONAL_WAIT if optional else self.step_timeout)
@@ -1001,6 +1093,82 @@ class Replayer:
         self.elapsed = time.time() - started
         return all(r[1] != "fail" for r in self.results) and len(self.results) == len(steps)
 
+    # --- 메일 고르기 (사용자 2026-10-14) ---
+    def _mail_rows(self, page, s, wait):
+        """s 를 기록한 목록의 줄들 [(key, 제목)]. wait 초 안에 줄이 안 보이면 빈 목록."""
+        row, end = s["row"], time.time() + wait
+        while True:
+            self._check_cancel()
+            frame = self._frame(page, s["frame"])
+            try:
+                if frame is not None and frame.locator(row["sel"]).first.is_visible():
+                    return frame, [tuple(x) for x in json.loads(frame.evaluate(ROWS_JS, json.dumps(row)))]
+            except Exception:
+                pass                # 화면이 바뀌는 중
+            if time.time() > end:
+                return frame, []
+            page.wait_for_timeout(250)
+
+    def _run_pick(self, i, steps):
+        """i 단계(1부터) = 메일 고르기: 제목이 정한 글자로 시작하는 메일마다 열고 묶음 단계(받기까지)를 한다.
+        결과는 고르기와 묶음 단계 모두 여기서 적는다. 돌려주는 값 = 묶음 마지막 단계 번호 (다음은 그 뒤부터)."""
+        s, end = steps[i - 1], pick_body(steps, i - 1)
+        if end is None:
+            raise NotFound("메일 고르기 아래에 파일 받기 단계가 없습니다")
+        prefix, body = s["pick"]["prefix"], range(i, end + 1)
+        page = self.pages.get(s["page"])
+        if page is None or page.is_closed():
+            raise NotFound(f"창 {s['page']} 이 없음")
+        self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
+        frame, rows = self._mail_rows(page, s, self.step_timeout)
+        if frame is None or not rows:
+            raise NotFound(f"{self.step_timeout:.0f}초 안에 메일 목록을 못 찾음")
+        hits = [(k, t) for k, t in rows if t.startswith(prefix)]
+        mem = None if self.pick_preview else self.mail_memory
+        todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or mail_key(*h) not in mem.keys]
+        self.log(f"      제목이 '{prefix}' 로 시작하는 메일 {len(hits)}통 중 새 메일 {len(todo)}통")
+        if len(todo) > MAIL_PICK_MAX:
+            self.log(f"      메일은 한 번에 최대 {MAIL_PICK_MAX}개까지 처리할 수 있습니다. 나머지는 다음 실행 때 처리됩니다.")
+            todo = todo[:MAIL_PICK_MAX]
+        if not todo:
+            self.no_target = True
+            self.log("      받을 새 메일이 없습니다 (대상 없음)")
+            self.results.append((i, "ok", "대상 없음"))
+            self.results += [(j + 1, "skip", "대상 없음") for j in body]
+            return end + 1
+        for n, (k, t) in enumerate(todo, 1):
+            if n > 1:               # 앞 메일을 연 채다 - 목록으로 (메일 화면이 주소 # 만 바꾸는 비즈메카도 뒤로 가기로 돌아온다)
+                try:
+                    page.go_back(timeout=MAIL_BACK_WAIT * 1000)
+                except Exception:
+                    pass
+                frame, rows = self._mail_rows(page, s, MAIL_BACK_WAIT)
+                if not rows:
+                    raise NotFound("메일 목록으로 돌아가던 중 문제가 발생했습니다.")
+            self.log(f"      [{n}/{len(todo)}] 메일 열기: {t[:CUT] if self.hide_values else t}")
+            idx = next((x for x, r in enumerate(rows) if (r[0] == k if k else r[1] == t)), None)
+            if idx is None:
+                raise NotFound(f"메일을 목록에서 다시 찾지 못함: {t[:40]}")
+            loc = frame.locator(s["row"]["sel"]).nth(idx)
+            if s["row"]["inner"]:
+                loc = loc.locator(s["row"]["inner"]).first
+            self._click(page, loc)
+            for j in body:
+                if self.progress:
+                    self.progress(j + 1, "run", "")
+                try:
+                    how = self._step(j, dict(steps[j], loose=True))
+                except Skip as e:
+                    how = f"건너뜀 ({e})"
+                self.log(f"  {j + 1:2d}/{len(steps)} {describe(steps[j], self.hide_values)}  [{how}]")
+            if mem is not None:
+                mem.add_all([mail_key(k, t)])   # 받기까지 다 한 메일만 - 실패한 메일은 다음 실행에서 다시
+                mem.save()
+        self.results.append((i, "ok", f"메일 {len(todo)}통"))
+        self.results += [(j + 1, "ok", f"메일 {len(todo)}통") for j in body]
+        self.log(f"  {i:2d}/{len(steps)} {describe(s, self.hide_values)}  [메일 {len(todo)}통]")
+        return end + 1
+
     def _run_steps(self, steps):
         i = 0
         while i < len(steps):
@@ -1014,6 +1182,9 @@ class Replayer:
                 if s.get("otpSend") and self.otp is not None:
                     self.otp_send = i
                     self._otp_open()
+                if s.get("pick"):
+                    i = self._run_pick(i, steps)    # 메일마다 묶음 단계까지 - 결과도 거기서 적는다
+                    continue
                 how = self._step(i - 1, s)
                 if s["kind"] == "otp":
                     self.otp_check = i + 1          # 다음 누르기([확인]) 뒤에 사이트가 받았나 본다

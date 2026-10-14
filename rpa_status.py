@@ -1003,6 +1003,11 @@ def write_presets(presets):
     return data
 
 
+def mail_memory_path(no):
+    """프리셋 no 가 처리한 메일 기억 (web_replay.MailMemory) - 옵저버가 저장할 때 채우고 ACTOR 가 쓴다."""
+    return os.path.join(data_dir(), "메일기억", f"{preset_site_key(no)}.json")
+
+
 def preset_site_key(no):
     """사용자 설정 Sites 에서 프리셋 no 의 칸 이름."""
     return f"PRESET{no}"
@@ -1736,15 +1741,18 @@ def skip(key, note=None):
 
 
 @_safe
-def done_step():
+def done_step(state="done", note=None):
     """지금 단계를 끝냈다 - 다음 단계 없이 끝나는 마지막 사이트처럼. 실행이 '중단' 으로 끝나도 이 단계는 완료로 남는다
-    (전엔 finish 가 '중단' 으로 덮어 기록 탭에 실패로 보였고 토큰 셈에서도 빠졌다, 2026-10-06)."""
+    (전엔 finish 가 '중단' 으로 덮어 기록 탭에 실패로 보였고 토큰 셈에서도 빠졌다, 2026-10-06).
+    state="skipped", note="대상 없음": 할 것이 없었다 - 토큰을 쓰지 않는다 (메일 고르기에 새 메일이 없을 때, 2026-10-14)."""
     with _lock:
         if not _active():
             return
         s = _find_step(_state.get("current"))
         if s is not None and s["state"] == "running":
-            s.update(state="done", finished_at=now_iso())
+            s.update(state=state, finished_at=now_iso())
+            if note:
+                s["note"] = note
         _touch_locked(immediate=True)
 
 
