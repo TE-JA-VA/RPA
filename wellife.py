@@ -426,7 +426,7 @@ def module_wms(rr, ctx, live=False):
         fixed = ensure_query(rr, ctx, "Wms", WMS_FORM, lambda: reopen_menu(rr, ctx, WMS_MENU))   # 회차마다 (사용자 10-13)
         done = [simple_stage(rr, ctx, WMS_FORM, *stage, live=live) for stage in WMS_STAGES]
         if fixed:
-            done.insert(0, (query_note(fixed).strip(" ()"), False))
+            done.insert(0, ("조회 조건 기본값으로 고침: " + ", ".join(fixed), False))
     except Stop as e:
         return e.result, str(e)
     except Exception as e:

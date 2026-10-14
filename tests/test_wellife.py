@@ -1477,7 +1477,7 @@ wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen = _
 # ⑥·⑤ 에 붙었는가: 조회 전에 ensure_query, 고친 것은 사유에
 _saved14 = wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows
 calls14 = []
-wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen: calls14.append(screen) or ["SendStatus '전체'→'미전송'"]
+wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen: calls14.append(screen) or ["화면 다시 열기(Sales)"]
 wellife.controls = lambda rr_, ctx_, form: {"btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
 wellife.count_rows = lambda rr_, ctx_, grid: 0
 res = inv_run(False, rows=0)
@@ -1487,7 +1487,7 @@ _saved_wms = wellife.goto_screen_by_menu, wellife.simple_stage
 wellife.goto_screen_by_menu = lambda rr_, ctx_, menu: (True, None)
 wellife.simple_stage = lambda rr_, ctx_, form, *stage, live=False: (f"{stage[4].split(' →')[0]} 0건", False)
 res = wellife.module_wms(types.SimpleNamespace(status=Rec(), log=lambda m: None), actx, False)
-check("⑤: 회차마다 단계 단추 전에 조회 조건을 보고, 고친 것을 사유 앞에", calls14 == ["Wms"] and "조회 조건 기본값으로 고침" in res[1]
+check("⑤: 회차마다 단계 단추 전에 조회 조건을 보고, 고친 것을 사유 앞에 (괄호가 잘리지 않게)", calls14 == ["Wms"] and "조회 조건 기본값으로 고침: 화면 다시 열기(Sales) / 5-1" in res[1]
       and res[1].index("조회 조건") < res[1].index("5-1"), str(res))
 wellife.goto_screen_by_menu, wellife.simple_stage = _saved_wms
 wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved14
