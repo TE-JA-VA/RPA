@@ -28,6 +28,8 @@
     { "collectionGroup": "items", "queryScope": "COLLECTION",
       "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.output", "order": "ASCENDING" }] },
     { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.invoicesend", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
       "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.sites", "order": "ASCENDING" }] }
   ],
   "fieldOverrides": []

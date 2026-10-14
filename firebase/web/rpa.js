@@ -605,11 +605,12 @@ function paintRepeat() {
 // --- 이번 달 사용량 (토큰 3부, 관리자만 - 오른쪽 열): 이달 1일과 통장 시작 중 늦은 때부터, 업체 전체(PC 모두)를 서버가 더한다.
 // 남은 토큰이 바뀔 때(실행이 끝났거나 충전됐다)만 다시 읽는다. 로그인은 0개라 안 보인다. 새 모듈은 여기와 색인(firestore.indexes.json)에 더한다
 const USAGE_KEYS = [...MODULES.filter(([k]) => k !== "Login").map(([k, l]) => [k.toLowerCase(), l]), ["sites", "쇼핑몰·사이트 받기"]];
-let usageFor = null, usageSeq = 0;
+let usageFor = null, usageSeq = 0, usageRetryAt = 0;
+const USAGE_RETRY_MS = 5 * 60 * 1000;          // 못 읽으면 5분 뒤에 - 현황(1초)마다 다시 읽으면 하루 읽기 한도를 다 쓴다 (2026-10-14 색인 빠진 칸)
 async function paintUsage() {
   const t = live?.tokens, card = $("usage-card");
   if (typeof t?.balance !== "number") { card.classList.add("hide"); usageFor = null; usageSeq++; return; }
-  if (usageFor === t.balance) return;
+  if (usageFor === t.balance || Date.now() < usageRetryAt) return;
   usageFor = t.balance;
   const seq = ++usageSeq;                      // 읽는 사이 남은 토큰이 바뀌거나 통장이 사라지면 늦게 온 결과는 버린다
   try {
@@ -624,7 +625,7 @@ async function paintUsage() {
       { s: sum(field) }).then((r) => r.data().s ?? 0);
     const keys = USAGE_KEYS.map(([k]) => k);
     const [total, todayTotal, ...counts] = await Promise.all([
-      one(from, "cost"), one(from > today ? from : today, "cost"), ...keys.map((k) => one(from, `used.${k}`))]);
+      one(from, "cost"), one(from > today ? from : today, "cost"), ...keys.map((k) => one(from, `used.${k}`).catch(() => 0))]);   // 한 칸이 안 돼도 나머지는 보인다
     if (seq !== usageSeq) return;
     const got = Object.fromEntries(keys.map((k, i) => [k, counts[i]]));
     $("usage-list").replaceChildren(...USAGE_KEYS.filter(([k]) => got[k] > 0).map(([k, label]) => {
@@ -639,7 +640,8 @@ async function paintUsage() {
     card.classList.remove("hide");
   } catch {
     if (seq !== usageSeq) return;
-    usageFor = null;                           // 다음 현황 때 다시 읽는다
+    usageFor = null;                           // 5분 뒤 현황 때 다시 읽는다
+    usageRetryAt = Date.now() + USAGE_RETRY_MS;
     $("usage-list").replaceChildren();
     $("usage-sum").textContent = "사용량을 읽지 못했습니다";
     card.classList.remove("hide");
