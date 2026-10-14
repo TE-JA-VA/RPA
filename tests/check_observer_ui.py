@@ -27,6 +27,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 import rpa_status as st  # noqa: E402
 
 st.write_user_config({"LogIn": {"AdminCode": "t", "ID": "erp", "PW": "erp-pw"}, "Sites": {}})
+_cfg = st.read_settings()
+_cfg["schedule"]["policy"] = {"presets": 10}     # 업체 프리셋 수 10 (에이전트가 적는 자리 - 없으면 기본 2)
+st.write_settings(_cfg)
 import tkinter as tk  # noqa: E402
 
 import fake_mall  # noqa: E402
@@ -151,10 +154,16 @@ def main():
         app.save()
         result["date2"] = first_saved_at()
         for _ in range(12):
-            if len(app.presets) < rr.MAX_PRESETS:
+            if len(app.presets) < app.max_presets:
                 app.add_preset()
-        result["ten"] = (len(app.presets), "+" in [w.cget("text") for w in app.preset_bar.winfo_children()
-                                                   if isinstance(w, tk.Button)])
+        texts = lambda: [w.cget("text") for row in app.preset_bar.winfo_children() for w in row.winfo_children()   # noqa: E731
+                         if isinstance(w, tk.Button)]
+        result["ten"] = (app.max_presets, len(app.presets), "+" in texts(), len(app.preset_bar.winfo_children()))
+        app.presets += [rr.new_preset(11), rr.new_preset(12)]          # 나중에 더 열면: 11개부터 둘째 줄
+        app.paint_presets()
+        result["rows"] = (len(app.preset_bar.winfo_children()), "⑪" in texts())
+        del app.presets[10:]
+        app.paint_presets()
         app.select(0)
         real = rr.launch
 
@@ -253,7 +262,8 @@ def main():
           and fake_mall.PASSWORD not in logs, logs[-500:])
     pv = os.path.join(st.data_dir(), "옵저버", "미리보기")
     check("미리보기로 받은 파일은 기록 폴더 (ERPIA_AI_EXCEL 아님)", os.path.isdir(pv) and any(n.startswith("(012)") for n in os.listdir(pv)))
-    check("프리셋은 10개까지 - 10개면 [+] 가 없다", result.get("ten") == (10, False), str(result.get("ten")))
+    check("업체 프리셋 수(10)까지 - 10개면 [+] 가 없고 한 줄", result.get("ten") == (10, 10, False, 1), str(result.get("ten")))
+    check("11개부터는 둘째 줄 (10개 단위)", result.get("rows") == (2, True), str(result.get("rows")))
     fail = result.get("fail") or (None, "", None, "")
     check("미리보기 브라우저를 못 띄우면 까닭을 보이고 단추가 돌아온다 (미리보기 상태로 멈추지 않는다)",
           fail[0] is False and "띄우지 못했습니다" in fail[1] and fail[2] is False and fail[3] == "▶  미리보기", str(fail))

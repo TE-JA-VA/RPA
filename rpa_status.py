@@ -920,9 +920,20 @@ def wellife_policy():
 # 쇼핑몰 프리셋 (옵저버가 쓰고, 프리페어가 재생하고, 대시보드가 켠다 - 2026-09-30 설계 5절)
 # ---------------------------------------------------------------------------
 PRESETS_NAME = "RPA_Presets.json"
-PRESET_MIN, PRESET_MAX = 2, 10
+PRESET_MIN, PRESET_MAX = 2, 10           # PRESET_MAX = 업체가 받을 수 있는 최대 (더 열 때 여기와 관리 화면 ops.PRESET_LIMIT_MAX 를 함께)
+PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)
 REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 _PRESET_KEY = re.compile(r"(?:PRESET)?(\d+)")
+
+
+def preset_limit():
+    """이 업체가 쓸 수 있는 프리셋 수 - 에이전트가 적은 업체 정책(policy.presets, 관리 화면에서 정함). 없거나 이상하면 PRESET_DEFAULT.
+    옵저버는 이만큼까지 늘리고, ACTOR 오토파일럿은 이 번호까지만 돌린다 (넘는 프리셋은 지우지 않는다 - 사용자 2026-10-14)."""
+    try:
+        v = (read_settings()["schedule"].get("policy") or {}).get("presets")
+    except Exception:
+        return PRESET_DEFAULT
+    return v if isinstance(v, int) and not isinstance(v, bool) and PRESET_MIN <= v <= PRESET_MAX else PRESET_DEFAULT
 
 
 def presets_path():

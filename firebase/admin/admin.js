@@ -67,6 +67,7 @@ const ROUTES = [
   ["POST", "/api/companies/:cid/features", (b, p) => ops.setFeature(p.cid, "wellife", b.wellife === true),
     (b, r, p) => `웰라이프 실행 ${p.cid} = ${b.wellife === true ? "켬" : "끔"}`],
   ["POST", "/api/companies/:cid/limits", (b, p) => ops.setScheduleLimit(p.cid, b.schedule), (b, r, p) => `자동 실행 슬롯 수 ${p.cid} = ${r.schedule}`],
+  ["POST", "/api/companies/:cid/presets", (b, p) => ops.setPresetLimit(p.cid, b.presets), (b, r, p) => `옵저버 프리셋 수 ${p.cid} = ${r.presets}`],
   ["POST", "/api/companies/:cid/remove", (b, p) => {
     if (b.confirm !== p.cid) throw new ops.Refused("업체코드를 똑같이 쳐야 비활성화합니다");
     return ops.setCompanyRemoved(p.cid, true);

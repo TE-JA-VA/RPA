@@ -802,16 +802,18 @@ class AppClient:
 
 
 ac = AppClient({"modules": {"Hold": False, "Sales": True}, "limits": {"schedule": 3}})
-check(ag.company_policy(ac, "c_x") == (3, ["Hold"], False) and ac.asked == ["meta/companies/c_x/apps/rpa"], "한 번 읽어 한도·안 쓰는 모듈·웰라이프")
-check(ag.company_policy(AppClient(None), "c_x") == (2, [], False), "정책이 없으면 기본 2개·안 쓰는 모듈 없음·웰라이프 아님")
+check(ag.company_policy(ac, "c_x") == (3, ["Hold"], False, None) and ac.asked == ["meta/companies/c_x/apps/rpa"], "한 번 읽어 한도·안 쓰는 모듈·웰라이프")
+check(ag.company_policy(AppClient(None), "c_x") == (2, [], False, None), "정책이 없으면 기본 2개·안 쓰는 모듈 없음·웰라이프 아님")
 check(ag.company_policy(AppClient({"limits": {"schedule": "9"}}), "c_x")[0] == 2 and ag.company_policy(AppClient({"limits": {"schedule": 0}}), "c_x")[0] == 0,
       "이상한 값은 기본 2, 0 은 0 (자동 실행을 못 쓴다)")
 for cid, feats, want in (("WELLIFE_x", None, True), ("my_wellife", None, True), ("Wellife", {}, True), ("wel_life", None, False),
                          ("c_demo", {"wellife": True}, True), ("c_demo", {"wellife": False}, False), ("c_demo", None, False)):
     check(ag.wellife_on(cid, feats) is want, f"웰라이프 판정 {cid} {feats} → {want}")
-check(ag.company_policy(AppClient({"modules": {"Hold": False}}), "wellife_a") == (2, ["Hold", "Logistics", "Output"], True),
+check(ag.company_policy(AppClient({"modules": {"Hold": False}}), "wellife_a") == (2, ["Hold", "Logistics", "Output"], True, None),
       "웰라이프 업체: 물류관리·운송장 출력을 안 쓰는 모듈에 더한다")
 check(ag.company_policy(AppClient({"features": {"wellife": True}}), "c_demo")[2] is True, "관리 화면에서 연 업체도 웰라이프")
+got = [ag.company_policy(AppClient({"limits": {"presets": v}}), "c_x")[3] for v in (5, 10, 1, 11, "5", True)]
+check(got == [5, 10, None, None, None, None], f"업체 프리셋 수: 2~10 정수만, 아니면 None (PC 가 기본 2) {got}")
 with tempfile.TemporaryDirectory() as d:
     os.environ["RPA_STATUS_DIR"] = d              # 실제 settings.json 을 건드리지 않게
     os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
@@ -837,8 +839,10 @@ with tempfile.TemporaryDirectory() as d:
         ag.real_actions(limits=lambda: None)["set_schedule"](three)
         check(len(st.read_settings()["schedule"]["slots"]) == 3, "한 번도 못 읽었으면 자르지 않는다 (PC 상한 12 까지만)")
         pol = ag.Policy(AppClient({"limits": {"schedule": 3}, "modules": {"Hold": False}}), "c_x")
-        check(pol.refresh() == (3, ["Hold"], False) and st.read_settings()["schedule"]["policy"]["limit"] == 3
+        check(pol.refresh() == (3, ["Hold"], False, None) and st.read_settings()["schedule"]["policy"]["limit"] == 3
               and st.read_settings()["schedule"]["policy"]["off"] == ["Hold"], "정책을 읽어 PC 설정에 적는다")
+        ag.Policy(AppClient({"limits": {"schedule": 3, "presets": 7}, "modules": {"Hold": False}}), "c_x").refresh(force=True)
+        check(st.preset_limit() == 7, "업체 프리셋 수도 PC 설정에 적는다 (옵저버·ACTOR 가 본다)")
         check(pol.refresh() is None, "10분 안에는 다시 안 읽는다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_x").refresh(force=True) is None
               and st.read_settings()["schedule"]["policy"]["limit"] == 3, "못 읽으면 적힌 값 그대로")
@@ -846,14 +850,14 @@ with tempfile.TemporaryDirectory() as d:
         with open(os.environ["RPA_USER_CONFIG"], "w", encoding="utf-8") as f:
             json.dump({"LogIn": {"AdminCode": "x"}}, f)
         wl = ag.Policy(AppClient({"features": {"wellife": True}}), "c_demo")
-        check(wl.refresh(force=True) == (2, ["Logistics", "Output"], True) and st.wellife_policy() is True, "정책을 PC 에 적는다 (wellife)")
+        check(wl.refresh(force=True) == (2, ["Logistics", "Output"], True, None) and st.wellife_policy() is True, "정책을 PC 에 적는다 (wellife)")
         check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
                                                "InvoiceSend": False},
               "처음 열리면 섹션을 기본값(로그인·매출처리만)으로 만든다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_demo").refresh(force=True) is None and st.wellife_policy() is True,
               "정책을 못 읽으면 PC 에 적힌 마지막 값 (웰라이프 그대로)")
         check(st.has_wellife_section() is True, "정책을 못 읽어도 섹션은 안 지운다")
-        check(ag.Policy(AppClient({"features": {"wellife": False}}), "c_demo").refresh(force=True) == (2, [], False)
+        check(ag.Policy(AppClient({"features": {"wellife": False}}), "c_demo").refresh(force=True) == (2, [], False, None)
               and st.wellife_policy() is False and st.has_wellife_section() is False
               and st.read_user_config()["LogIn"] == {"AdminCode": "x"}, "열렸다 닫히면 정책 False + Wellife 섹션 지움 (다른 섹션은 그대로)")
         st.ensure_wellife_section()                  # 메모장으로 직접 넣은 섹션 - 한 번도 안 열렸던 업체

@@ -231,6 +231,14 @@ for bad in ("13", "-1", "2.5", "", "셋"):
     code, r = api("POST", "/api/companies/t_new/limits", {"schedule": bad})
     check(code == 400 and "0~12" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 3, f"자동 실행 개수 거절 {bad!r}", r)
 code, d = api("GET", "/api/companies/t_new")
+check(code == 200 and d.get("presetLimit") is None, "옵저버 프리셋 수: 값이 없으면 null (화면은 기본 2)", str(d.get("presetLimit")))
+code, r = api("POST", "/api/companies/t_new/presets", {"presets": "5"})
+check(code == 200 and r == {"cid": "t_new", "presets": 5} and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, "옵저버 프리셋 수 5", r)
+for bad in ("1", "11", "2.5", "", "셋"):
+    code, r = api("POST", "/api/companies/t_new/presets", {"presets": bad})
+    check(code == 400 and "2~10" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, f"옵저버 프리셋 수 거절 {bad!r}", r)
+check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 3, "프리셋 수를 바꿔도 자동 실행 개수는 그대로")
+code, d = api("GET", "/api/companies/t_new")
 check(code == 200 and d.get("wellife") is False and d.get("wellifeAuto") is False, "웰라이프: 보통 업체는 꺼짐", str(d.get("wellife")))
 code, r = api("POST", "/api/companies/t_new/features", {"wellife": True})
 check(code == 200 and db_get("meta/companies/t_new/apps/rpa/features/wellife") is True, "웰라이프 실행 켜기", r)
@@ -354,6 +362,11 @@ with sync_playwright() as pw:
     page.click("#detail .row:has(input[aria-label='자동 실행 슬롯 수']) button")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")?.value === '4'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 4, "화면: 업체 상세에서 자동 실행 개수 저장")
+    check("옵저버에서 만들 수 있는 프리셋 수를 결정합니다. (2~10, 기본 2)" in page.text_content("#detail"), "옵저버 프리셋 수 설명")
+    page.fill("#detail input[aria-label='옵저버 프리셋 수']", "7")
+    page.click("#detail .row:has(input[aria-label='옵저버 프리셋 수']) button")
+    page.wait_for_function("document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")?.value === '7'", timeout=10000)
+    check(db_get("meta/companies/t_new/apps/rpa/limits/presets") == 7, "화면: 업체 상세에서 옵저버 프리셋 수 저장")
 
     print("자동 업데이트 (설계 8절)")
     CID, PC = "t_new", "pc_a"

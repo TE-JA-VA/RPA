@@ -688,17 +688,18 @@ def active_slots(sch):
     return out
 
 
-def set_policy(limit, off, wellife=False):
+def set_policy(limit, off, wellife=False, presets=None):
     """에이전트가 읽은 업체 정책(자동 실행 개수·안 쓰는 모듈)을 settings.json 에 적는다 - 껐다 켜도·끊겨도 마지막 값.
     같으면 안 쓴다 (False). 다음 줄을 다시 잡는다 - 한도를 올리면 새로 들어온 줄이 그날부터 돌게, 가리키던 줄이 빠졌으면 다음 줄로.
     때가 됐는데 아직 못 띄운 줄(바쁨)은 그대로 둔다. 다른 칸(줄·반복 상태)은 그대로.
-    wellife: 이 업체가 웰라이프로 열려 있나 (루틴 갈래·명령이 본다)."""
-    new = {"limit": limit, "off": sorted(off), "wellife": bool(wellife)}
+    wellife: 이 업체가 웰라이프로 열려 있나 (루틴 갈래·명령이 본다). presets: 업체 프리셋 수 (None = 정하지 않음, st.preset_limit)."""
+    new = {"limit": limit, "off": sorted(off), "wellife": bool(wellife), "presets": presets}
     with _settings_lock:
         cfg = st.read_settings()
         sch = cfg["schedule"]
         old = sch.get("policy") or {}
-        if (old.get("limit"), old.get("off"), bool(old.get("wellife"))) == (new["limit"], new["off"], new["wellife"]):
+        if (old.get("limit"), old.get("off"), bool(old.get("wellife")), old.get("presets")) == (
+                new["limit"], new["off"], new["wellife"], new["presets"]):
             return False
         sch["policy"] = dict(new, read_at=now_text())
         due = st.parse_iso(sch.get("next_run_at"))
