@@ -4,19 +4,22 @@
 사용자 설정(RPA_UserConfig.json)에 "Wellife" 섹션이 있는 PC 에서만 run_routine.main 이 이리로 온다.
 섹션이 없는 PC(다른 업체)는 지금 루틴 그대로 돈다 - ROUTINE_MODULES 와 Routine 섹션은 건드리지 않는다.
     예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "InvoiceSend": "Y",
-                     "SalesMode": "리허설", "Mode": "리허설", "SapMode": "리허설", "WmsMode": "리허설", "InvoiceMode": "리허설"}}
+                     "SalesMode": "리허설", "NormalSalesMode": "리허설", "Mode": "리허설", "SapMode": "리허설",
+                     "WmsMode": "리허설", "InvoiceMode": "리허설"}}
 
 모드 (사용자 10-08) - 데이터를 바꾸는 단추를 누를지 정한다. 빠지면 리허설.
-모듈마다 키가 따로다: "SalesMode" ② 주문매핑(엑셀 업로드), "Mode" ③ 물류대기 저장, "SapMode" ④ 지정·화살표,
-"WmsMode" ⑤ 화살표, "InvoiceMode" ⑥ [전송요청(S)] (사용자 10-13 - 넷 다 빠지면 리허설, Mode 를 따르지 않는다).
+모듈마다 키가 따로다: "SalesMode" ② 엑셀 업로드, "NormalSalesMode" ② 하단 정상매출, "Mode" ③ 물류대기 저장,
+"SapMode" ④ 지정·화살표, "WmsMode" ⑤ 화살표, "InvoiceMode" ⑥ [전송요청(S)] (사용자 10-13 - 빠지면 리허설, Mode 를 따르지 않는다).
 - "리허설": 데이터를 바꾸는 단추(엑셀 업로드·물류대기 저장·[지정]·화살표·[전송요청(S)])는 누르지 않고 마우스만 올린다.
 - "실행": 실제로 누르고, 뜨는 팝업은 [예](없으면 [확인])를 누른다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
   팝업 문구는 모두 로그와 모듈 사유에 남긴다.
 - "1건": 실행과 같되 전체 체크 대신 첫 줄 하나만 체크해서 넘긴다 (실데이터 시험용 - 전체를 넘기면 다음 시험까지
-  데이터가 다시 쌓이기를 오래 기다려야 한다, 사용자 10-13). 체크 칸이 없는 4-4·5-4 는 실행처럼 누른다. ② 는 줄이 없어 못 쓴다.
+  데이터가 다시 쌓이기를 오래 기다려야 한다, 사용자 10-13). 체크 칸이 없는 4-4·5-4 는 실행처럼 누른다. ② 엑셀 업로드는
+  줄이 없어 못 쓴다. 한 번 실행에 1건이라 반복 회차(RPA_RUN_TRIGGER=repeat)에서는 돌지 않고 멈춘다 (repeat_ones).
 모드는 대시보드 단계 이름·실행 제목·모듈 사유 앞의 [리허설]/[실행] 과 시작 로그로 보인다.
 - ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집 [가져오기] 는
-  모드와 상관없이 누르지 않는다 (마우스만). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14).
+  모드와 상관없이 누르지 않는다 (마우스만). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14) -
+  정상매출은 NormalSalesMode 로 따로 정한다 (SalesMode '실행' 인 PC 가 업데이트만으로 매출처리를 시작하지 않게).
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
 - ⑥ 운송장번호 전송: 조회 -> 전체 체크 -> [전송요청(S)]. 모든 업체용 패키지 화면이라(좌측 아이콘) 웰라이프 고유 값을
@@ -55,11 +58,13 @@ QUIET_SECONDS = 5           # 실행: 팝업도 스피너도 이만큼 없으면
 MAX_POPUPS = 10             # 실행: 한 번 누른 뒤 이보다 많이 뜨면 멈춘다 (같은 팝업이 되풀이되는 경우)
 MODE_KEY = "Mode"              # ③ 물류대기 저장 (④⑤ 는 10-13 부터 따로 - SapMode·WmsMode)
 SALES_MODE_KEY = "SalesMode"   # ② 주문매핑 엑셀 업로드 - 따로 정한다 (사용자 10-08)
+NORMAL_SALES_MODE_KEY = "NormalSalesMode"   # ② 하단 정상매출 - 따로 정한다 (10-14, SalesMode '실행' 의 뜻이 바뀌지 않게)
 SAP_MODE_KEY = "SapMode"       # ④ 지정·화살표 (사용자 10-13)
 WMS_MODE_KEY = "WmsMode"       # ⑤ 화살표 (사용자 10-13)
 INVOICE_MODE_KEY = "InvoiceMode"   # ⑥ 운송장번호 [전송요청(S)] - 따로 정한다 (사용자 10-13, 택배사로 나가 되돌릴 수 없다)
 # 모드 키 -> (시작 로그·제목 이름, 누르는 것). 이 순서로 보인다 (rpa_status.WELLIFE_MODES 와 같은 순서)
-MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드·정상매출"), MODE_KEY: ("③ 물류대기", "저장"),
+MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드"), NORMAL_SALES_MODE_KEY: ("② 정상매출", "매출처리 ▼ 정상매출"),
+              MODE_KEY: ("③ 물류대기", "저장"),
               SAP_MODE_KEY: ("④ SAP 연동", "지정·화살표"), WMS_MODE_KEY: ("⑤ WMS 이관", "화살표"),
               INVOICE_MODE_KEY: ("⑥ 운송장 전송", "[전송요청(S)]")}
 ONE = "1건"   # 실행하되 체크는 첫 줄 하나만 (실데이터 시험용, 사용자 10-13). 참으로 읽혀 실행 경로를 그대로 탄다
@@ -101,6 +106,7 @@ MODULES = (
 # 모듈마다 따로 정하는 모드 키. 여기 없는 모듈(로그인·③ 물류대기)은 MODE_KEY
 MODULE_MODES = {"wellife_sales": SALES_MODE_KEY, "wellife_sap": SAP_MODE_KEY, "wellife_wms": WMS_MODE_KEY,
                 "invoicesend": INVOICE_MODE_KEY}
+STEP_MODES = {"wl_order_sales": NORMAL_SALES_MODE_KEY}   # 모듈 안에서 모드가 다른 단계
 # 단계 표 (단계 키, 대시보드 단추, 화살표, 머리글로 전체 체크하는가, 화살표가 하는 일). SAP전송전체 이후와
 # 송장X·API실패·WMS작업중·할당·출고완료·결품관리는 사람이 보는 화면이라 넣지 않는다 (docs/wellife-rpa.md 2절)
 SAP_SIMPLE_STAGES = (
@@ -165,7 +171,7 @@ def load_switches(rr):
 def load_mode(rr, key=MODE_KEY, section=SECTION):
     """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 리허설 - 잘 모르면 누르지 않는 쪽.
     key: MODE_NAMES 의 키 하나 (모듈마다 따로 - 빠지면 Mode 를 따르지 않고 리허설). "1건" 이면 ONE (참 - 실행하되 한 줄만).
-    ② SalesMode 는 줄이 없어 "1건" 을 못 쓴다.
+    ② SalesMode(엑셀 업로드)는 줄이 없어 "1건" 을 못 쓴다 (NormalSalesMode 는 하단 첫 줄 1건).
     section: 보통 PROCESS 의 운송장번호 전송은 Routine 섹션의 InvoiceMode (run_routine.module_invoice_send, 사용자 10-13).
     "리허설"/"실행" 이 아닌 값은 RuntimeError (load_switches 뒤에 부른다 - 섹션 모양은 거기서 본다)."""
     raw = (rr.pl.load_settings().get(section) or {}).get(key, "리허설")
@@ -179,6 +185,19 @@ def load_mode(rr, key=MODE_KEY, section=SECTION):
 
 def mode_tag(live):
     return ONE if live == ONE else "실행" if live else "리허설"
+
+
+def repeat_ones(modes):
+    """반복 회차(RPA_RUN_TRIGGER=repeat)인데 '1건' 인 모드 키들. '1건' 은 한 번 실행에 1건이라 반복을 켜 두면 회차마다
+    1건씩 계속 넘어간다 - 이 키가 있으면 돌지 않는다 (10-14 PR #6 검토). modes: {모드 키: load_mode 값}."""
+    if os.environ.get("RPA_RUN_TRIGGER") != "repeat":
+        return []
+    return [k for k, v in modes.items() if v == ONE]
+
+
+def repeat_one_reason(keys):
+    return (f"설정 확인: 반복 회차에서는 '1건' 을 쓸 수 없습니다 ({', '.join(keys)}) - 회차마다 1건씩 계속 넘어갑니다. "
+            f"'실행' 으로 바꾸거나 반복 시간대에서 빼십시오")
 
 
 def run_main(rr):
@@ -195,7 +214,7 @@ def run_main(rr):
     if not error and picked is not None:
         selected, unknown = picked, []
     # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다 - 단계마다 그 모듈의 모드
-    step_mode = {k: MODULE_MODES.get(m[0], MODE_KEY) for m in MODULES for k in m[3]}
+    step_mode = {k: STEP_MODES.get(k) or MODULE_MODES.get(m[0], MODE_KEY) for m in MODULES for k in m[3]}
     steps = STEPS if error else tuple((k, f"[{mode_tag(modes[step_mode[k]])}] {label}") for k, label in STEPS)
     status.start("routine", steps, title="웰라이프 실행" if error else "웰라이프 실행 [" + " / ".join(
         f"{name[2:]} {mode_tag(modes[k])}" for k, (name, _) in MODE_NAMES.items()) + "]")
@@ -232,6 +251,13 @@ def run_main(rr):
     else:
         log("실행할 모듈: " + " / ".join(
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in MODULES))
+    used = {step_mode[s] for m in MODULES if m[0] != "login" and selected[m[1]] for s in m[3]}   # 이번에 도는 모듈의 모드만
+    ones = repeat_ones({k: modes[k] for k in MODE_NAMES if k in used})
+    if ones:
+        log(repeat_one_reason(ones))
+        status.finish("stopped", repeat_one_reason(ones))
+        log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+        return
     if rr.ec.screen_locked():   # 잠긴 화면에서는 클릭이 헛돌아 엉뚱한 실패가 난다 (10-07 실측)
         log("윈도우 화면이 잠겨 있어 실행하지 않았습니다.")
         # 반복 회차는 PC 가 이 회차만 건너뛰고 쉬는 시간 뒤 다시 띄운다 - 잠긴 동안 회차마다 이력이 쌓이지 않게 (사용자 10-08)
@@ -247,7 +273,7 @@ def run_main(rr):
         return
 
     funcs = {"login": rr.module_login,
-             "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[SALES_MODE_KEY]),
+             "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[SALES_MODE_KEY], modes[NORMAL_SALES_MODE_KEY]),
              "wellife_hold": lambda ctx: module_hold(rr, ctx, modes[MODE_KEY]),
              "wellife_sap": lambda ctx: module_sap(rr, ctx, modes[SAP_MODE_KEY]),
              "wellife_wms": lambda ctx: module_wms(rr, ctx, modes[WMS_MODE_KEY]),
@@ -269,8 +295,9 @@ def run_main(rr):
 # 실제로 누른 것이 있으면 "done", 리허설·할 것 없음은 "skipped"(토큰 0).
 # ---------------------------------------------------------------------------
 
-def module_sales(rr, ctx, live=False):
-    """② 주문매핑: 화면 이동 -> 주문 수집 (collect_orders) -> 하단 전체선택 -> 정상매출 (normal_sales, 사용자 10-14)."""
+def module_sales(rr, ctx, live=False, sell=False):
+    """② 주문매핑: 화면 이동 -> 주문 수집 (collect_orders) -> 하단 전체선택 -> 정상매출 (normal_sales, 사용자 10-14).
+    live: SalesMode (엑셀 업로드), sell: NormalSalesMode (정상매출)."""
     rr.status.step("wl_order_screen")
     try:
         front(rr, ctx, "주문매핑 화면 이동")
@@ -280,15 +307,15 @@ def module_sales(rr, ctx, live=False):
     if not ok:
         return "failed", reason
     try:
-        return collect_orders(rr, ctx, live)
+        return collect_orders(rr, ctx, live, sell)
     except Stop as e:
         return e.result, str(e)
     except Exception as e:
         return ui_error(rr, e)
 
 
-def collect_orders(rr, ctx, live):
-    """주문 수집 (사용자 10-08).
+def collect_orders(rr, ctx, live, sell=False):
+    """주문 수집 (사용자 10-08). live: SalesMode, sell: NormalSalesMode.
     - 엑셀: 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
       (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만.
     - 자동 수집 [가져오기] 는 모드와 상관없이 누르지 않는다 - 마우스만.
@@ -324,8 +351,8 @@ def collect_orders(rr, ctx, live):
     else:
         hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}] (모드와 상관없이 누르지 않음)", None)
         notes.append("자동 수집은 누르지 않음")
-    note, sold = normal_sales(rr, ctx, live)
-    notes.append(note)
+    note, sold = normal_sales(rr, ctx, sell)
+    notes.append(f"정상매출 [{mode_tag(sell)}] " + note)
     return ("done" if uploaded or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
 
 
@@ -335,8 +362,8 @@ BOTTOM_ID_COLUMNS = ["주문번호", "마켓 상품명", "주문시간"]     # �
 
 def normal_sales(rr, ctx, live):
     """② 엑셀 업로드 뒤: 하단 그리드 전체선택 -> 매출처리 ▼ -> 정상매출 (원래 PROCESS module_sales 8~11 단계, 사용자 10-14).
-    (사유 글, 눌렀는가).
-    - 하단 전체선택은 원래 select_all_and_verify 그대로 - 리허설도 한다 (체크는 데이터를 바꾸지 않는다).
+    (사유 글, 눌렀는가). live: NormalSalesMode.
+    - 하단 전체선택은 원래 select_all_and_verify 그대로 - 리허설도 한다 (체크는 데이터를 바꾸지 않는다). '1건' 은 첫 줄만.
     - 리허설은 ▼ 로 메뉴를 열어 '정상매출' 에 마우스만 올리고 ESC (hover_menu_item). 실행은 ▼ → '정상매출' 을 [지정▼] 와
       같은 자리 확인으로 누르고, 뒤 팝업·비동기 대기는 원래 코드 그대로 (after_normal_sales - 사용자 10-14 '원래 규칙').
     - 하단이 0줄이면 누르지 않는다 (원래는 0건이어도 누른다 - 웰라이프는 0건이면 누르지 않는다).
@@ -352,14 +379,18 @@ def normal_sales(rr, ctx, live):
         return "하단 0줄 - 매출처리 하지 않음", False
     no_popup(rr, ctx, "하단 전체선택 전")
     front(rr, ctx, "하단 전체선택")
-    clear_point(rr, ctx, check_header(bottom, "주문매핑 하단"), "주문매핑 하단 머리글 체크 칸")
-    n = rr.select_all_and_verify("하단", ctx.hwnd, bottom, BOTTOM_ID_COLUMNS)
+    if live == ONE:     # 첫 줄 하나만 (다른 단계의 '1건' 과 같다). 못 했으면 이미 체크돼 있던 한 줄로 누르지 않게 n 으로도 막는다
+        n = 1 if check_one_row(rr, ctx, bottom, "주문매핑 하단") else 0
+        head = "하단 첫 줄 1건 체크" if n else "하단 첫 줄 체크 못 함"
+    else:
+        clear_point(rr, ctx, check_header(bottom, "주문매핑 하단"), "주문매핑 하단 머리글 체크 칸")
+        n = rr.select_all_and_verify("하단", ctx.hwnd, bottom, BOTTOM_ID_COLUMNS)
+        head = f"하단 {n or 0}줄 전체선택"
     no_popup(rr, ctx, "하단 전체선택")
-    checked = recheck(rr, bottom, "주문매핑 하단", live)
+    checked = (live != ONE or bool(n)) and recheck(rr, bottom, "주문매핑 하단", live)
     split = rr.find_by_text(ctx.window(), SALES_SPLIT, control_types=("SplitButton",))
     if split is None:
         raise Stop("failed", f"'{SALES_SPLIT}' 단추를 찾지 못했습니다.")
-    head = f"하단 {n or 0}줄 전체선택"
     what = f"{SALES_SPLIT} ▼"
     if not live:
         return head + hover_menu_item(rr, ctx, split, SALES_ITEM, what, checked) + " - 정상매출은 누르지 않음", False

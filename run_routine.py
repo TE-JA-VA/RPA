@@ -5825,6 +5825,10 @@ def module_invoice_send(ctx):
     except Exception as e:
         return "failed", f"설정 오류: {e}"
     log(f"운송장번호 전송 모드: {wellife.mode_tag(live)} ('{pl.ROUTINE_SECTION}' 섹션 {wellife.INVOICE_MODE_KEY} - 빠지면 리허설)")
+    ones = wellife.repeat_ones({wellife.INVOICE_MODE_KEY: live})   # '1건' 을 반복하면 회차마다 1건씩 나간다
+    if ones:
+        log(wellife.repeat_one_reason(ones))
+        return "stopped", wellife.repeat_one_reason(ones)
     return wellife.module_invoice_send(rr, ctx, live)
 
 

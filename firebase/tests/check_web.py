@@ -593,8 +593,8 @@ with sync_playwright() as pw:
           and any("운송장번호 전송" in n for n in names) and not any("물류관리" == n or "운송장 출력" in n for n in names),
           f"웰라이프 업체: 모듈 여섯 (물류관리·운송장 출력 없음, 운송장번호 전송 있음) ({names})")
     # 웰라이프 모드는 보기만 (시험 기간용, 사용자 2026-10-13) - PC 가 올린 값을 그대로, 실행이 있으면 경고 색
-    db_patch(LIVE, {"modes": [["주문매핑", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "실행"], ["WMS 이관", "1건"],
-                              ["운송장번호 전송", "리허설"]]})     # 에이전트가 올리는 모양 (rpa_status.WELLIFE_MODES 다섯)
+    db_patch(LIVE, {"modes": [["주문매핑", "리허설"], ["정상매출", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "실행"],
+                              ["WMS 이관", "1건"], ["운송장번호 전송", "리허설"]]})     # 에이전트가 올리는 모양 (rpa_status.WELLIFE_MODES 여섯)
     page.wait_for_function("(document.getElementById('mod-modes')?.textContent || '').includes('운송장번호 전송')", timeout=10000)
     check(page.is_visible("#mod-modes") and "SAP 연동 실행" in page.text_content("#mod-modes")
           and "warn" in (page.get_attribute("#mod-modes", "class") or ""), f"웰라이프 업체: 모드 보기 ({page.text_content('#mod-modes')})")

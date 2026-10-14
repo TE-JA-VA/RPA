@@ -78,6 +78,16 @@ called.clear()
 with_settings({"Routine": {"InvoiceSend": "Y", "InvoiceMode": "yes"}})
 got = _rr.MODULE_FUNCS["invoicesend"](object())
 check("모드 값이 틀리면 화면을 열지 않고 설정 오류", called == [] and got[0] == "failed" and "InvoiceMode" in got[1], f"{got}")
+for mode, trigger, runs in (("1건", "repeat", False), ("1건", "auto", True), ("실행", "repeat", True)):
+    called.clear()
+    with_settings({"Routine": {"InvoiceSend": "Y", "InvoiceMode": mode}})
+    os.environ["RPA_RUN_TRIGGER"] = trigger
+    try:
+        got = _rr.MODULE_FUNCS["invoicesend"](object())
+    finally:
+        os.environ.pop("RPA_RUN_TRIGGER", None)
+    check(f"InvoiceMode {mode} / {trigger}: " + ("돈다" if runs else "반복 회차의 '1건' 은 화면을 열지 않고 '설정 확인' 으로 멈춘다 (회차마다 1건씩 나가지 않게)"),
+          bool(called) == runs and (runs or (got[0] == "stopped" and "설정 확인" in got[1])), f"{called} {got}")
 _rr.wellife.module_invoice_send = orig_inv
 check("Routine 의 InvoiceMode 는 모르는 키 경고에서 빠진다", "InvoiceMode" in _rr.ROUTINE_MODE_KEYS)
 check("운송장번호 전송은 웰라이프와 같은 키·비트 512", ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512)

@@ -199,6 +199,18 @@ rr.ec.screen_locked = lambda: False
 picked_run("Wms", trigger="auto")
 check("반복이 아닌 예약 실행은 처리한 것이 없어도 이력에 남긴다",
       fins and fins[-1][1].get("record", True) is True, str(fins))
+# '1건' 은 한 번 실행에 1건 - 반복 회차면 회차마다 1건씩 계속 넘어가므로 돌지 않는다 (PR #6 검토)
+ONE_WMS = {"Wellife": {**ALL_Y["Wellife"], "WmsMode": "1건", "NormalSalesMode": "1건"}}
+picked_run("Wms", section=ONE_WMS, trigger="repeat")
+check("반복 회차에서 도는 모듈(⑤)이 '1건' 이면 run_modules 를 부르지 않고 '설정 확인' 으로 멈춘다 (이력에 남긴다)",
+      not got and fins and fins[-1][0][0] == "stopped" and "설정 확인" in fins[-1][0][1] and "WmsMode" in fins[-1][0][1]
+      and fins[-1][1].get("record", True) is True, str(fins))
+picked_run("Sales", section=ONE_WMS, trigger="repeat")
+check("② 를 반복하면 정상매출 '1건' 도 멈춘다", not got and fins and "NormalSalesMode" in fins[-1][0][1], str(fins))
+picked_run("Hold", section=ONE_WMS, trigger="repeat")
+check("이번 회차에 안 도는 모듈의 '1건' 은 보지 않는다 (③ 만 반복)", got.get("selected", {}).get("Hold") is True, str(fins))
+picked_run("Wms", section=ONE_WMS, trigger="auto")
+check("반복이 아닌 실행은 '1건' 이어도 돈다", got.get("selected", {}).get("Wms") is True, str(fins))
 
 # ---------------------------------------------------------------------------
 print("=== 3. main 갈래 ===")
@@ -273,10 +285,11 @@ fr = types.SimpleNamespace(status=Rec(), log=lambda m: None,
                            ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
 nctx = types.SimpleNamespace(hwnd=1)
 _saved = wellife.collect_orders, wellife.hold_save
-wellife.collect_orders = lambda rr_, ctx_, live: ("skipped", f"수집 live={live}")
+wellife.collect_orders = lambda rr_, ctx_, live, sell=None: ("skipped", f"수집 live={live} sell={sell}")
 wellife.hold_save = lambda rr_, ctx_, live: ("skipped", f"저장 live={live}")
 fr.goto_order_screen = lambda ctx: (True, None)
-check("② 화면 이동 성공 -> 주문 수집으로 (모드를 넘긴다)", wellife.module_sales(fr, nctx, True) == ("skipped", "수집 live=True"))
+check("② 화면 이동 성공 -> 주문 수집으로 (엑셀 업로드·정상매출 모드를 따로 넘긴다)",
+      wellife.module_sales(fr, nctx, True, wellife.ONE) == ("skipped", "수집 live=True sell=1건"))
 fr.goto_order_screen = lambda ctx: (False, "아이콘 없음")
 check("② 이동 실패 -> failed", wellife.module_sales(fr, nctx) == ("failed", "아이콘 없음"))
 for r, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")):
@@ -785,6 +798,12 @@ check("SalesMode 는 Mode 와 따로 읽는다",
       and wellife.load_switches(rr)[1] == [])
 settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
 check("SalesMode 가 없으면 Mode 를 따르지 않고 리허설", wellife.load_mode(rr, wellife.SALES_MODE_KEY) is False)
+settings({"Wellife": {"Login": "Y", "SalesMode": "실행"}})
+check("SalesMode '실행' 이어도 정상매출(NormalSalesMode)은 빠지면 리허설 - 업데이트만으로 매출처리를 시작하지 않는다 (PR #6 검토)",
+      wellife.load_mode(rr, wellife.SALES_MODE_KEY) is True and wellife.load_mode(rr, wellife.NORMAL_SALES_MODE_KEY) is False
+      and wellife.load_switches(rr)[1] == [])
+settings({"Wellife": {"Login": "Y", "NormalSalesMode": "1건"}})
+check("정상매출은 '1건'(하단 첫 줄)을 쓸 수 있다", wellife.load_mode(rr, wellife.NORMAL_SALES_MODE_KEY) == wellife.ONE)
 
 rec = Rec()
 rr.status = rec
@@ -796,6 +815,19 @@ start = rec.of("start")[0]
 own_keys = {k for m in wellife.MODULES if m[0] in wellife.MODULE_MODES for k in m[3]}
 check("단계 이름 앞에 모드 - ②④⑤⑥ 은 제 키(빠져서 [리허설]), 로그인·③ 은 Mode([실행])",
       all(label.startswith("[리허설] " if k in own_keys else "[실행] ") for k, label in start[1]), str(start[1][:4]))
+rec = Rec()
+rr.status = rec
+settings({"Wellife": {"Login": "Y", "SalesMode": "실행"}})
+wellife.run_main(rr)
+labels = dict(rec.of("start")[0][1])
+check("② 수집 단계는 SalesMode([실행]), 정상매출 단계는 NormalSalesMode([리허설])",
+      labels["wl_order_collect"].startswith("[실행] ") and labels["wl_order_sales"].startswith("[리허설] "), str(labels))
+sold_seen = []
+_saved_ms = wellife.module_sales
+wellife.module_sales = lambda rr_, ctx_, live, sell: sold_seen.append((live, sell)) or ("skipped", None)
+got["funcs"]["wellife_sales"](None)
+wellife.module_sales = _saved_ms
+check("② 모듈에 SalesMode·NormalSalesMode 를 따로 넘긴다", sold_seen == [(True, False)], str(sold_seen))
 settings({"Wellife": {"Login": "Y", "Mode": "run"}})
 rec = Rec()
 rr.status = rec
@@ -994,18 +1026,21 @@ for live, files, want_res, want_up in ((True, {}, "skipped", []), (False, {"101"
                                        (True, {"101": "x"}, "done", ["사이트"])):
     acts.clear(); uploads.clear()
     res = wellife.collect_orders(order_rr(files), octx, live)
-    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름, 그 뒤 매출처리 단계",
+    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름, "
+          f"그 뒤 매출처리 단계는 정상매출 모드(빠지면 리허설)로",
           res[0] == want_res and uploads == want_up and ("click", "가져오기") not in acts
-          and acts[-1] == ("normal_sales", live), f"{res} {uploads} {acts}")
+          and acts[-1] == ("normal_sales", False) and "정상매출 [리허설]" in res[1], f"{res} {uploads} {acts}")
 SOLD[0] = True
-res = wellife.collect_orders(order_rr({}), octx, True)
-check("올린 엑셀이 없어도 정상매출을 눌렀으면 done", res[0] == "done" and "매출처리 흉내" in res[1], str(res))
+res = wellife.collect_orders(order_rr({}), octx, False, True)
+check("올린 엑셀이 없어도(업로드 리허설) 정상매출을 눌렀으면 done", res[0] == "done" and acts[-1] == ("normal_sales", True)
+      and res[1].startswith("[리허설] ") and "정상매출 [실행] 매출처리 흉내" in res[1], str(res))
 wellife.normal_sales = _saved_ns
 
 # ② 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS module_sales 8~11 단계, 사용자 10-14)
 _saved_n = {n: getattr(wellife, n) for n in ("front", "no_popup", "clear_point", "check_header", "recheck",
-                                               "hover_menu_item", "press_menu_item", "after_normal_sales")}
-NS = {"rows": {1: {}}, "again": True, "split": True}
+                                               "hover_menu_item", "press_menu_item", "after_normal_sales", "check_one_row")}
+NS = {"rows": {1: {}}, "again": True, "split": True, "one": True}
+wellife.check_one_row = lambda rr_, ctx_, grid, label: acts.append(("one", grid.name)) or NS["one"]
 wellife.front = wellife.no_popup = lambda *a: None
 wellife.clear_point = lambda *a: (0, 0)
 wellife.check_header = lambda grid, label="": El("row Check Box")
@@ -1023,7 +1058,7 @@ nrr = types.SimpleNamespace(status=Rec(), log=lambda m: None, visible_child_wind
 
 
 def run_ns(live, **kw):
-    NS.update({"rows": {1: {}}, "again": True, "split": True}); NS.update(kw); acts.clear()
+    NS.update({"rows": {1: {}}, "again": True, "split": True, "one": True}); NS.update(kw); acts.clear()
     try:
         return wellife.normal_sales(nrr, octx, live), None
     except wellife.Stop as e:
@@ -1046,6 +1081,12 @@ check("실행: 누르기 직전 다시 보니 체크가 풀려 있으면 정상�
       ("press", "정상매출", False) not in acts and sold is False and "확인할 것" in note, f"{note} {acts}")
 _, err = run_ns(True, split=False)
 check("'매출처리' 단추가 없으면 멈춘다", err == "failed")
+(note, sold), _ = run_ns(wellife.ONE)
+check("1건: 하단 첫 줄만 체크(전체선택 안 함) -> 정상매출",
+      acts == [("one", "주문"), ("press", "정상매출", False), ("after",)] and sold and "첫 줄 1건" in note, f"{note} {acts}")
+(note, sold), _ = run_ns(wellife.ONE, one=False)
+check("1건: 첫 줄 체크를 못 했으면 다시 보기가 '한 줄 체크' 로 맞아도(이미 체크돼 있던 줄) 누르지 않는다",
+      ("press", "정상매출", False) not in acts and sold is False and "확인할 것" in note, f"{note} {acts}")
 for n, f in _saved_n.items():
     setattr(wellife, n, f)
 

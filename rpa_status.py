@@ -747,8 +747,8 @@ WELLIFE_DEFAULT = {"Login": True, "Sales": True, "Hold": False, "Sap": False, "W
 SHARED_MODULES = ("InvoiceSend",)
 # Wellife 섹션의 모드 키와 웹에 보이는 이름 - wellife.MODE_NAMES 와 같은 키·순서 (시험이 대조한다).
 # 웹은 보기만 한다 (시험 기간용, 사용자 2026-10-13 - 바꾸기는 PC 설정 파일에서)
-WELLIFE_MODES = (("SalesMode", "주문매핑"), ("Mode", "물류대기"), ("SapMode", "SAP 연동"), ("WmsMode", "WMS 이관"),
-                 ("InvoiceMode", "운송장번호 전송"))
+WELLIFE_MODES = (("SalesMode", "주문매핑"), ("NormalSalesMode", "정상매출"), ("Mode", "물류대기"), ("SapMode", "SAP 연동"),
+                 ("WmsMode", "WMS 이관"), ("InvoiceMode", "운송장번호 전송"))
 
 
 def cred_file_path():
