@@ -200,6 +200,9 @@ async function act(btn, fn) {
 }
 const when = (iso) => (iso ? new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-");
 const nf = (n) => Number(n ?? 0).toLocaleString("ko-KR");   // 1000 단위 콤마
+// 현재 토큰 칸 - 못 읽었으면 '읽지 못함' (까닭은 마우스 글), 토큰 정보가 없으면 '토큰 정보 없음'
+const leftCell = (r) => el("td", { class: "num" + (r.tokenErr ? " muted" : ""), title: r.tokenErr ?? "" },
+  r.tokenErr ? "읽지 못함" : r.left === null ? "토큰 정보 없음" : nf(r.left));
 const local = (s) => (s ? s.replace("T", " ") : "-");     // 한국 시각 글 ("2026-10-06T13:55:49") 그대로
 function secretBox(title, text) {
   const copy = el("button", { onclick: async () => { await navigator.clipboard.writeText(text).catch(() => {}); copy.textContent = "복사했습니다"; } }, "복사");
@@ -223,8 +226,8 @@ async function loadCompanies() {
   if (!rows) return;
   $("companies").replaceChildren(...rows.map((r) => el("tr", { class: `pick${r.cid === current ? " on" : ""}`, "data-cid": r.cid, onclick: () => openDetail(r.cid) },
     el("td", {}, r.cid), el("td", {}, r.name), el("td", { class: r.stts === 9 ? "muted" : "" }, r.stts === 9 ? "비활성" : "사용중"),
-    el("td", { class: "num" }, r.pcs), el("td", { class: "num" }, r.users), el("td", { class: "num" }, r.left === null ? "토큰 정보 없음" : nf(r.left)),
-    el("td", { class: "num" }, nf(r.month)), el("td", {}, when(r.lastSignIn)))));
+    el("td", { class: "num" }, r.pcs), el("td", { class: "num" }, r.users), leftCell(r),
+    el("td", { class: "num" }, r.tokenErr ? "-" : nf(r.month)), el("td", {}, when(r.lastSignIn)))));
 }
 async function openDetail(cid, keep) {
   const d = await act(null, () => api("GET", `/api/companies/${cid}`));
@@ -406,6 +409,7 @@ function tokenSection(d) {
     t ? el("table", { class: "wallet" }, el("thead", {}, el("tr", {}, ...["발급한 토큰", "사용한 토큰", "현재 토큰", "토큰 정보 생성"].map((h) => el("th", {}, h)))),
       el("tbody", {}, el("tr", {}, el("td", { class: "num" }, nf(t.granted)), el("td", { class: "num" }, nf(t.spent)),
         el("td", { class: "num left" }, el("strong", {}, nf(t.left))), el("td", {}, local(t.since)))))
+      : d.tokenErr ? el("p", { class: "bad" }, d.tokenErr)
       : el("p", { class: "muted" }, "업체가 보유한 토큰 정보가 없습니다. 최초 토큰 생성시 토큰 정보가 함께 생성됩니다. 토큰이 0이하라면 모듈 실행을 막습니다."),
     el("div", { class: "row" }, amount, memo, give),
     t && t.grants.length ? el("table", { class: "grants" }, el("thead", {}, el("tr", {}, el("th", {}, "날짜"), el("th", {}, "토큰량"), el("th", {}, "비고"))),
@@ -579,7 +583,7 @@ async function loadRates() {
     ...[...g.rows.filter(([k]) => mine || !g.wellife || k !== "login"), ...(g.title === "그 밖" ? extra : [])].map(row)]));   // 기본값 화면에선 로그인 줄을 한 번만
   paintRateSave();
   $("usage").replaceChildren(...usage.map((u) => el("tr", {}, el("td", {}, u.cid), el("td", {}, u.name),
-    el("td", { class: "num" }, u.left === null ? "토큰 정보 없음" : nf(u.left)), el("td", { class: "num" }, nf(u.month)), el("td", {}, local(u.since)))));
+    leftCell(u), el("td", { class: "num" }, u.tokenErr ? "-" : nf(u.month)), el("td", {}, local(u.since)))));
 }
 
 // --- 켜기·끄기 -----------------------------------------------------------------------

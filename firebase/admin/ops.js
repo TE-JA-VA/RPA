@@ -346,6 +346,8 @@ export async function setCompanyPrices(cid, values) {
   await store.doc(`prices/${cid}`).set(data, { merge: true });
   return companyPrices(cid);
 }
+// 토큰(Firestore)을 못 읽은 까닭 - 업체 목록·상세는 그래도 보인다 (2026-10-14 Spark 하루 한도 초과로 목록째 안 뜨던 것)
+const tokenErr = (e) => (e?.code === 8 ? "Firestore 하루 사용 한도 초과 - 오후 4시에 풀립니다" : `토큰 정보를 읽지 못했습니다 (${e?.code ?? e?.message ?? e})`);
 // 우리 통계: 업체마다 남은 토큰 · 이번 달 쓴 토큰 (통장 시작이 이번 달이면 그때부터). 통장이 없어도 쓴 것은 센다
 export async function usageRows(cid) {
   if (cid) checkKey("cid", cid);
@@ -353,9 +355,13 @@ export async function usageRows(cid) {
   const month = `${nowKst().slice(0, 7)}-01T00:00:00`, rows = [];
   for (const [k, v] of Object.entries(companies)) {
     if (cid && k !== cid) continue;
-    const w = (await store.doc(`wallet/${k}`).get()).data();
-    rows.push({ cid: k, name: v.name ?? "-", stts: v.stts ?? 0, left: w ? w.granted - await spentSince(k, w.since) : null,
-      month: await spentSince(k, w?.since > month ? w.since : month), since: w?.since ?? null });
+    try {
+      const w = (await store.doc(`wallet/${k}`).get()).data();
+      rows.push({ cid: k, name: v.name ?? "-", stts: v.stts ?? 0, left: w ? w.granted - await spentSince(k, w.since) : null,
+        month: await spentSince(k, w?.since > month ? w.since : month), since: w?.since ?? null });
+    } catch (e) {
+      rows.push({ cid: k, name: v.name ?? "-", stts: v.stts ?? 0, left: null, month: null, since: null, tokenErr: tokenErr(e) });
+    }
   }
   return rows;
 }
@@ -385,7 +391,8 @@ export async function companyDetail(cid) {
       ({ pcId, label: p.label ?? "", ...(await pcUpdateStatus(cid, pcId)) }))),
     users, phones, modules: v.apps?.rpa?.modules ?? {}, features: v.apps?.rpa?.features ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features),
     wellifeAuto: wellifeAuto(cid), scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null,
-    presetLimit: v.apps?.rpa?.limits?.presets ?? null, tokens: (await tokenStatus(cid)).wallet };
+    presetLimit: v.apps?.rpa?.limits?.presets ?? null,
+    ...(await tokenStatus(cid).then((t) => ({ tokens: t.wallet }), (e) => ({ tokens: null, tokenErr: tokenErr(e) }))) };
 }
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.
 // 이미 있는 업체·PC 는 그대로 쓰고, 이미 있는 계정은 건너뛰고, 토큰 정보가 이미 있으면 최초 토큰은 건너뛴다 - 다시 누르면 남은 것만
