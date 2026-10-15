@@ -352,6 +352,12 @@ focus = [FOCUS_IN]
 wellife._focus_chain = lambda rr_, depth=8: focus[0]
 
 
+# 메인 탭바 읽기는 자식 따라가기(main_tab_bar)·떠 있는 탭(wait_tab) - 이 절과 운송장 절은 창 흉내(Nav)의 목록과
+# rr.wait_for_active_main_tab 흉내로 대신한다. 진짜 함수는 '같은 화면 여러 개' 절에서 따로 본다
+_real_tabs = wellife.main_tab_bar, wellife.wait_tab
+wellife.main_tab_bar = lambda ctx_: (None, ctx_.window().descendants(control_type="TabItem"))
+wellife.wait_tab = lambda rr_, ctx_, name, timeout=0: rr_.wait_for_active_main_tab(None, None, name)
+
 TAB_HIT = types.SimpleNamespace(element_info=types.SimpleNamespace(control_type="TabItem"),
                                 window_text=lambda: MENU, parent=lambda: None)
 HIT = [TAB_HIT]     # 탭 가운데를 히트테스트하면 맞는 요소 (흉내)
@@ -1675,5 +1681,173 @@ check("⑤: 회차마다 단계 단추 전에 조회 조건을 보고, 고친 �
 wellife.goto_screen_by_menu, wellife.simple_stage = _saved_wms
 wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved14
 POP.clear()
+
+# ---------------------------------------------------------------------------
+print("=== 15. 같은 화면이 여러 개 열림 ('물류대기 관리 (2)', 10-14) ===")
+# 실측: 번호 붙은 탭이 있으면 descendants() 가 메인 탭바·좌측 아이콘을 빠뜨린다 (자식을 따라가면 있다).
+# 메인 탭바·아이콘은 자식을 따라 찾고, 이미 열린 화면은 번호 없는 탭을 누른다
+wellife.main_tab_bar, wellife.wait_tab = _real_tabs
+
+
+class UI:
+    def __init__(self, kind, text="", aid="", rect=None, kids=(), selected=False):
+        self.element_info = types.SimpleNamespace(control_type=kind, automation_id=aid)
+        self.text, self.rect, self.kids, self.selected = text, rect or Rect(10, 10, 150, 30), list(kids), selected
+        self.up = None
+        for k in self.kids:
+            k.up = self
+
+    def parent(self):
+        return self.up
+
+    def children(self, control_type=None):
+        return [k for k in self.kids if control_type is None or k.element_info.control_type == control_type]
+
+    def descendants(self, control_type=None):     # 실측처럼 화면에 있는 것을 빠뜨린다 - 쓰이면 시험이 실패한다
+        return []
+
+    def rectangle(self):
+        return self.rect
+
+    def window_text(self):
+        return self.text
+
+    def is_selected(self):
+        return self.selected
+
+
+def erpia(tabs, active, icons=("lcg_OrderCollect", "lcg_HoldLogistics", "lcg_InvoiceSend")):
+    """창 > pnlMain > (좌측 아이콘 줄, sdPnlMain > 화면들 + 메인 탭바(Tab) > 탭들, 숨은 화면의 서브탭 Tab)."""
+    items = [UI("TabItem", t, rect=Rect(20 + 120 * i, 5, 130 + 120 * i, 25), selected=(t == active)) for i, t in enumerate(tabs)]
+    hidden_sub = UI("Tab", rect=Rect(-900, -900, -100, -100), kids=[UI("TabItem", "일반", selected=True)])
+    page = UI("Pane", active, kids=[UI("Pane", kids=[UI("Tab", aid="tab_Data", rect=Rect(10, 60, 800, 500),
+                                                         kids=[UI("TabItem", "일반", selected=True)])])])
+    bar = UI("Tab", active, rect=Rect(0, 0, 1000, 600), kids=items)
+    work = UI("Pane", aid="sdPnlMain", kids=[UI("Pane", kids=[UI("Pane", "숨은 화면", rect=Rect(-900, -900, -100, -100), kids=[hidden_sub]),
+                                                              page, bar])])
+    side = UI("Pane", aid="tbPnl_ProcessBar", kids=[UI("Pane", kids=[UI("Pane", k, rect=Rect(2, 100, 40, 140)) for k in icons])])
+    win = UI("Window", rect=Rect(0, 0, 1200, 900), kids=[UI("Pane", aid="pnlMain", kids=[side, work])])
+    return types.SimpleNamespace(window=lambda: win, hwnd=1, app=None, bar=bar)
+
+
+TABS = ["메인페이지", "웰라이프 SAP 연동관리", "물류대기 관리 ", "물류대기 관리 (2)"]
+dctx = erpia(TABS, "물류대기 관리 (2)")
+bar, items = wellife.main_tab_bar(dctx)
+check("메인 탭바: 자식을 따라 얕은 곳부터 - 숨은 화면·떠 있는 화면 안의 서브탭(더 깊다)이 아니라 메인 탭바",
+      bar is not None and [t.window_text() for t in items] == TABS, str(bar and bar.window_text()))
+check("떠 있는 탭은 메인 탭바에서 (원래 함수가 서브탭 '일반' 을 돌려주던 상태)", wellife.active_tab(dctx) == "물류대기 관리 (2)")
+check("번호 붙은 탭만 (이름 끝 공백인 원래 탭은 아님)", wellife.numbered_tabs(dctx) == ["물류대기 관리 (2)"])
+check("못 찾은 탭은 실패 사유에 덧붙인다", "물류대기 관리 (2)" in wellife.dup_note(dctx) and wellife.dup_note(erpia(TABS[:3], "메인페이지")) == "")
+check("아이콘은 자식을 따라 (화면 영역은 내려가지 않음)", wellife.find_icon(dctx, "lcg_HoldLogistics").window_text() == "lcg_HoldLogistics"
+      and wellife.find_icon(dctx, "lcg_Logistics") is None)
+
+clicked, orig_calls = [], []
+_saved15 = wellife.click, wellife.TAB_WAIT_SECONDS
+wellife.TAB_WAIT_SECONDS = 0.2
+
+
+def press(rr_, ctx_, el, what):
+    """탭을 누르면 그 탭이, 물류대기 아이콘을 누르면 새 '물류대기 관리 ' 탭이 떠 있게."""
+    clicked.append(el.window_text())
+    name = el.window_text()
+    if name == "lcg_HoldLogistics":
+        ctx_.bar.kids.append(UI("TabItem", "물류대기 관리 "))
+        name = "물류대기 관리 "
+    for t in ctx_.bar.kids:
+        t.selected = t.window_text() == name
+
+
+wellife.click = press
+grr = types.SimpleNamespace(log=lambda m: None, element_at_point=lambda x, y: None)
+wellife._hits_tab = lambda rr_, t, name: True
+
+
+def go(ctx_, name, icon, r="ok"):
+    clicked.clear(); orig_calls.clear()
+    return wellife.goto_screen(grr, ctx_, name, icon, lambda: orig_calls.append(name) or r)
+
+
+dctx = erpia(TABS, "물류대기 관리 (2)")
+res = go(dctx, "물류대기 관리", "lcg_HoldLogistics")
+check("이미 열린 화면: 번호 붙은 '(2)' 가 떠 있어도 번호 없는 원래 탭을 누른다 (아이콘·원래 함수 안 씀)",
+      res == "ok" and clicked == ["물류대기 관리 "] and not orig_calls, f"{res} {clicked} {orig_calls}")
+dctx = erpia(["메인페이지", "웰라이프 SAP 연동관리", "웰라이프 SAP 연동관리 (2)"], "웰라이프 SAP 연동관리 (2)")
+res = go(dctx, "물류대기 관리", "lcg_HoldLogistics")
+check("열려 있지 않은 화면 + 번호 붙은 탭이 있음: 원래 함수(못 찾고 몇 분 기다림) 대신 자식을 따라 찾은 아이콘",
+      res == "ok" and clicked == ["lcg_HoldLogistics"] and not orig_calls, f"{res} {clicked} {orig_calls}")
+res = go(erpia(["메인페이지"], "메인페이지", icons=()), "물류대기 관리", "lcg_HoldLogistics", r="absent")
+check("번호 붙은 탭이 없으면 원래 아이콘 이동 그대로 (원래 결과 'absent' 를 그대로)",
+      res == "absent" and orig_calls == ["물류대기 관리"] and not clicked, f"{res} {clicked} {orig_calls}")
+res = go(erpia(["메인페이지"], "메인페이지"), "물류대기 관리", "lcg_HoldLogistics", r="failed")
+check("원래 함수의 'failed' 는 사유 글로", res == "'물류대기 관리' 화면으로 이동하지 못했습니다.", res)
+res = go(erpia(["메인페이지", "웰라이프 SAP 연동관리 (2)", "웰라이프 SAP 연동관리"], "메인페이지", icons=()), "물류대기 관리", "lcg_HoldLogistics")
+check("번호 붙은 탭이 있는데 아이콘이 정말 없으면 'absent'", res == "absent" and not clicked and not orig_calls, f"{res} {clicked}")
+stuck = erpia(TABS, "물류대기 관리 (2)")
+wellife.click = lambda rr_, ctx_, el, what: clicked.append(el.window_text())     # 눌러도 안 바뀐다
+res = go(stuck, "물류대기 관리", "lcg_HoldLogistics")
+check("탭을 눌렀는데 그 화면이 안 되면 실패 사유 (떠 있는 화면 이름과)", "바뀌지 않았습니다" in res and "(2)" in res, res)
+broken = types.SimpleNamespace(window=lambda: (_ for _ in ()).throw(RuntimeError("COMError 흉내")), hwnd=1, app=None)
+res = go(broken, "주문매핑 매출처리", "lcg_OrderCollect")
+check("탭을 읽다 UIA 오류(로그인 직후 등)면 원래 화면 이동으로", res == "ok" and orig_calls == ["주문매핑 매출처리"], f"{res} {orig_calls}")
+wellife.click, wellife.TAB_WAIT_SECONDS = _saved15
+
+# ---------------------------------------------------------------------------
+print("=== 16. 창 전체를 훑지 않기 (10-14 리허설 9분 10초 - 화면 7~8개가 열려 요소 약 3,400개, 한 번에 10~14초) ===")
+# 팝업 보기: 보이는 자식 창 목록이 마지막 '팝업 없음' 때와 같으면 다시 훑지 않는다 (ERPia 팝업은 자식 창으로 뜬다)
+scans, kids15, tops15 = [], [{1: ("a", (0, 0, 9, 9)), 2: ("b", (0, 0, 9, 9))}], [[]]
+prr = types.SimpleNamespace(visible_child_windows=lambda h: kids15[0], find_popup_windows=lambda pid, h: tops15[0],
+                            find_popup_buttons=lambda win: scans.append(1) or POP15[0], collect_popup_text=lambda b: "팝업 글")
+POP15 = [[]]
+pctx = types.SimpleNamespace(hwnd=1, pid=5, window=lambda: None)
+wellife.no_popup(prr, pctx, "가")
+wellife.no_popup(prr, pctx, "나")
+check("자식 창이 그대로면 두 번째는 훑지 않는다", len(scans) == 1, str(scans))
+tops15[0] = [77]
+wellife.no_popup(prr, pctx, "나2")
+check("ERPia 가 따로 띄운 창(별도 창 팝업)이 생겨도 다시 훑는다", len(scans) == 2, str(scans))
+kids15[0] = {1: ("a", (0, 0, 9, 9)), 2: ("b", (50, 50, 90, 90))}
+wellife.no_popup(prr, pctx, "나3")
+check("자식 창이 같아도 자리가 바뀌면 다시 훑는다", len(scans) == 3, str(scans))
+kids15[0] = {}
+wellife.no_popup(prr, pctx, "나4")
+wellife.no_popup(prr, pctx, "나5")
+check("자식 창 목록이 비면(창이 죽음 - 오류를 삼켜 빈 목록) 늘 훑는다", len(scans) == 5, str(scans))
+del scans[1:]
+kids15[0] = {1: 0, 2: 0, 3: 0}
+POP15[0] = [El("예")]
+try:
+    wellife.no_popup(prr, pctx, "다")
+    stopped = False
+except wellife.Stop:
+    stopped = True
+check("자식 창이 바뀌면(팝업이 뜸) 다시 훑고, 팝업이 있으면 멈춘다", stopped and len(scans) == 2)
+try:
+    wellife.no_popup(prr, pctx, "라")
+    stopped = False
+except wellife.Stop:
+    stopped = True
+check("팝업을 본 뒤에는 자식 창이 같아도 다시 훑는다 (팝업이 남아 있으면 또 멈춤)", stopped and len(scans) == 3)
+POP15[0] = []
+prr.visible_child_windows = lambda h: (_ for _ in ()).throw(OSError("못 읽음"))
+wellife.no_popup(prr, pctx, "마")
+wellife.no_popup(prr, pctx, "바")
+check("자식 창 목록을 못 읽으면 늘 훑는다", len(scans) == 5, str(scans))
+
+# 화면 컨트롤: 떠 있는 화면 안에서 폼을 자식을 따라 찾고, 그리드(Table) 속 칸은 내려가지 않는다
+cell = UI("DataItem", "칸", aid="inner_cell", rect=Rect(60, 200, 100, 220))
+form = UI("Pane", aid="Frm_Test", rect=Rect(20, 60, 1100, 800), kids=[
+    UI("Button", "조회(F)", aid="btn_Search", rect=Rect(30, 70, 90, 90)),
+    UI("Pane", kids=[UI("Button", "", aid="btn_FirstSend", rect=Rect(100, 70, 120, 90)),
+                     UI("Button", "", aid="btn_Hidden", rect=Rect(-900, -900, -880, -880))]),
+    UI("Table", aid="gridCtrl_List", rect=Rect(30, 150, 1000, 700), kids=[cell])])
+cctx = erpia(["메인페이지", "웰라이프 SAP 연동관리"], "웰라이프 SAP 연동관리")
+page = wellife.visible_page(cctx)
+page.kids.append(form)
+check("떠 있는 화면 = 메인 탭바 옆의 창 안 Pane (숨은 화면 아님)", page.window_text() == "웰라이프 SAP 연동관리", page.window_text())
+got15 = wellife.controls(rr, cctx, "Frm_Test")
+check("폼 안의 보이는 컨트롤만 (창 밖 숨은 단추 빼고), 그리드 칸은 내려가지 않는다",
+      set(got15) == {"btn_Search", "btn_FirstSend", "gridCtrl_List"}, str(sorted(got15)))
+broken_page = types.SimpleNamespace(window=lambda: UI("Window", rect=Rect(0, 0, 1200, 900)), hwnd=1)
+check("메인 탭바를 못 찾으면 떠 있는 화면 대신 창 (예전처럼 전체)", wellife.visible_page(broken_page).element_info.control_type == "Window")
 
 finish()
