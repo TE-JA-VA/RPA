@@ -903,6 +903,35 @@ except wellife.Stop as e:
     res = e.result
 check("[예]/[확인] 이 끝내 없는 팝업은 누르지 않고 멈춘다", res == "stopped" and acts == [], f"{res} {acts}")
 wellife.POPUP_SETTLE_SECONDS = _settle
+
+# ② 주문매핑 동안(ctx.pass_popups) 은 단계 사이 팝업도 멈추지 않고 [예]/[확인] 으로 넘긴다 (사용자 2026-10-15)
+fail_rr = lambda text: pop_rr(collect_popup_text=lambda b: text, match_sales_failure=lambda t: "실패" if "실패" in t else None)
+pctx = types.SimpleNamespace(pid=1, hwnd=2, window=lambda: Nav([]), pass_popups=True)
+acts.clear()
+POP[:] = [El("아니오"), Click("예", on_click=POP.clear)]
+try:
+    wellife.no_popup(fail_rr("저장하시겠습니까?"), pctx, "시험")
+    res = "통과"
+except wellife.Stop as e:
+    res = e.result
+check("② 동안: 예상 못 한 팝업도 [아니오] 가 있어도 [예] 를 누르고 이어간다", res == "통과" and acts == [("click", "예")], f"{res} {acts}")
+acts.clear()
+POP[:] = [Click("확인", on_click=POP.clear)]
+try:
+    wellife.no_popup(fail_rr("매출처리 실패: 재고 없음"), pctx, "시험")
+    res = "통과"
+except wellife.Stop as e:
+    res = e.result
+check("② 동안: 매출처리 실패 팝업은 [확인] 으로 닫고 멈춘다", res == "stopped" and acts == [("click", "확인")], f"{res} {acts}")
+acts.clear()
+POP[:] = [Click("예", on_click=POP.clear)]
+try:
+    wellife.no_popup(fail_rr("저장하시겠습니까?"), types.SimpleNamespace(pid=1, hwnd=2, window=lambda: Nav([])), "시험")
+    res = "통과"
+except wellife.Stop as e:
+    res = e.result
+check("② 밖에서는 예전처럼 누르지 않고 멈춘다", res == "stopped" and acts == [], f"{res} {acts}")
+POP.clear()
 POP[:] = [El("예")]            # 눌러도 안 닫히는 팝업
 _sleep = wellife.time.sleep
 wellife.time.sleep = lambda s: None

@@ -4846,15 +4846,21 @@ def popup_window_text(win):
     return " / ".join(parts)
 
 
+# 웰라이프 ② 주문매핑 동안만 True (wellife.module_sales) - 예/아니오 팝업도 [예] (사용자 2026-10-15). 보통 PROCESS 는 늘 False
+POPUP_PREFER_YES = False
+
+
 def pick_popup_button(buttons):
     """안내 팝업에서 누를 버튼을 고른다 (사용자 규칙).
 
     '예/아니오' 팝업이면 '아니오', 그 밖에는 '확인/예'. 둘 다 없으면 None
-    (모르는 창은 건드리지 않는다).
+    (모르는 창은 건드리지 않는다). POPUP_PREFER_YES 면 [예]/[확인] 만 본다.
     """
     def by(texts):
         return next((b for b in buttons if b.window_text() in texts), None)
 
+    if POPUP_PREFER_YES:
+        return by(OK_BUTTON_TEXTS)
     return by(NO_BUTTON_TEXTS) or by(OK_BUTTON_TEXTS)
 
 

@@ -317,6 +317,8 @@ def module_sales(rr, ctx, live=False, sell=False):
         return e.result, str(e)
     if r != "ok":
         return "failed", f"'{ORDER_ICON}' 아이콘을 찾지 못했습니다." if r == "absent" else r
+    # 이 화면에서는 예상 못 한 팝업도 [예](없으면 [확인]) 로 넘긴다 - 단계 사이(no_popup)·[가져오기]·정상매출 뒤 별도 창 모두 (사용자 2026-10-15)
+    ctx.pass_popups = rr.POPUP_PREFER_YES = True
     try:
         if getattr(ctx, "collected", False):    # ERPia 가 꺼져 다시 띄웠고 주문 수집은 끝났다 (run_routine.run_module)
             rr.log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
@@ -327,6 +329,8 @@ def module_sales(rr, ctx, live=False, sell=False):
         return e.result, str(e)
     except Exception as e:
         return ui_error(rr, e)
+    finally:
+        ctx.pass_popups = rr.POPUP_PREFER_YES = False
 
 
 def collect_orders(rr, ctx, live, sell=False):
@@ -1280,6 +1284,8 @@ def no_popup(rr, ctx, after):
     단추 찾기는 창 전체를 훑어 수 초 걸린다 (10-14 실측: 단계마다 4~5번). ERPia 팝업은 메인 창의 자식 창으로 뜨므로
     (원래 PROCESS 의 PopupGate 와 같은 근거) 보이는 자식 창 목록(win32 - 거의 0초)이 마지막으로 '팝업 없음' 을
     확인했을 때와 같으면 다시 훑지 않는다. 목록을 못 읽으면 늘 훑는다."""
+    if getattr(ctx, "pass_popups", False):
+        return pass_popups(rr, ctx, after)
     sig = _calm_sig(rr, ctx)
     if sig is not None and getattr(ctx, "calm_children", None) == sig:
         return
@@ -1290,6 +1296,33 @@ def no_popup(rr, ctx, after):
         raise Stop("stopped", f"{after} 뒤 팝업이 떠서 멈춤 (누르지 않음): {text[:200]}")
     # 훑는 사이에 창 구성이 바뀌었으면(막 뜨는 팝업) 기억하지 않는다 - 다음에 다시 훑는다
     ctx.calm_children = sig if sig is not None and sig == _calm_sig(rr, ctx) else None
+
+
+def pass_popups(rr, ctx, after):
+    """② 주문매핑 (사용자 2026-10-15): 떠 있는 팝업은 예상 못 한 것도 [예](없으면 [확인]) 로 넘기고 이어간다.
+    매출처리 실패 문구면 넘긴 뒤 멈춘다. [예]/[확인] 이 POPUP_SETTLE_SECONDS 동안 안 보이는 팝업, MAX_POPUPS 를 넘으면 멈춘다."""
+    passed, unknown = 0, None
+    while True:
+        found = _next_popup(rr, ctx, frozenset())
+        if found is None:
+            return
+        text, button = found
+        if button is None:
+            unknown = unknown or time.time()
+            if time.time() - unknown < POPUP_SETTLE_SECONDS:   # 막 뜬 팝업은 단추가 아직 안 그려졌을 수 있다
+                time.sleep(0.3)
+                continue
+            raise Stop("stopped", f"{after} 뒤 [예]/[확인] 이 없는 팝업이라 멈춤: {text[:200]}")
+        unknown = None
+        if passed >= MAX_POPUPS:
+            raise Stop("stopped", f"{after} 뒤 팝업이 {MAX_POPUPS}개를 넘어 멈춤 (마지막: {text[:200]})")
+        front(rr, ctx, f"{after} 팝업")
+        rr.log(f"  {after} 뒤 팝업: {text[:300]} -> [{button.window_text()}] 누름")
+        button.click_input()
+        passed += 1
+        if rr.match_sales_failure(text):
+            raise Stop("stopped", f"{after} 뒤 매출처리 실패 팝업이라 닫고 멈춤: {text[:200]}")
+        time.sleep(0.5)
 
 
 def _calm_sig(rr, ctx):

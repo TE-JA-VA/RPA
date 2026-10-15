@@ -47,5 +47,14 @@ for names, want, what in CASES:
     if not ok:
         fails.append(what)
 
+rr.POPUP_PREFER_YES = True     # 웰라이프 ② 주문매핑 동안 - 예상 못 한 팝업도 [예]/[확인] (사용자 2026-10-15)
+for names, want, what in ((["예(Y)", "아니오(N)"], "예(Y)", "② 동안: 예/아니오 -> 예"), (["확인", "취소"], "확인", "② 동안: 확인/취소 -> 확인"),
+                          (["닫기"], None, "② 동안에도 모르는 단추만 있으면 건드리지 않는다")):
+    got = pick(names)
+    print(("PASS " if got == want else "FAIL ") + f"{what}: {names} -> {got!r} (기대 {want!r})")
+    if got != want:
+        fails.append(what)
+rr.POPUP_PREFER_YES = False
+
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
