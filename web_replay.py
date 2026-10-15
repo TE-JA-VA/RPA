@@ -61,7 +61,19 @@ JS = r"""
     if (el.labels && el.labels.length) return [norm(el.labels[0].textContent), 0, 'for'];
     const tr = el.closest('tr'), th = tr && tr.querySelector('th');
     if (th) return [norm(th.textContent), [...tr.querySelectorAll(el.tagName)].indexOf(el) + 1, 'th'];
-    return ['', 0, ''];
+    const near = nearLabel(el);
+    return near ? [near, 0, 'near'] : ['', 0, ''];
+  }
+  function nearLabel(el) {        // 칸 바로 위·왼쪽에 따로 놓인 글자 (Nexacro 의 Static - <label> 로 이어져 있지 않다, 농협몰 2026-10-15). 이름 보이기·인증번호 단서용
+    const r = el.getBoundingClientRect(), mid = r.top + r.height / 2;
+    for (const [x, y] of [[r.left + 6, r.top - 10], [r.left + 6, r.top - 18], [r.left - 12, mid], [r.left - 40, mid], [r.left - 80, mid]]) {
+      if (x < 0 || y < 0) continue;
+      const e = document.elementFromPoint(x, y);
+      if (!e || e.contains(el) || el.contains(e) || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.tagName)) continue;
+      const t = norm(e.textContent);
+      if (t && t.length <= 30) return t;
+    }
+    return '';
   }
   function cssPath(el) {
     const parts = [];
@@ -107,6 +119,7 @@ JS = r"""
     return {sel, inner, key: rowKey(row), list: rows.slice(0, 200).map(r => ({k: rowKey(r), t: norm(cell(r).textContent).slice(0, 120), s: seenText(cell(r))}))};
   }
   function send(kind, el, extra) {
+    pend = null;                  // 다른 조작이 먼저 왔다 - 손가락 커서 아닌 누르기는 그 사이 아무것도 안 바뀌었다
     try { window.__rec(J(Object.assign({kind, url: location.href, target: describe(el), t: Date.now()}, extra || {}))); } catch (e) {}
   }
   // 누를 것마다 이 문서에 처음 나타난 시각. 재생은 '몇 단계 뒤에 나타난 것' 을 새로 생긴 것 중에서 고른다
@@ -167,15 +180,37 @@ JS = r"""
     }
     return out.map(h => ({target: h.target, t: h.t}));
   }
-  new MutationObserver(rescan).observe(document, {childList: true, subtree: true, attributes: true,
-                                                  attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-expanded']});
+  // 손가락 커서가 아닌 곳을 누른 것: 그 직후(PEND_MS) 누른 부품 안이 바뀌거나(체크 그림), 누른 것을 품은 칸이 바뀌거나(목록이 닫힘),
+  // 누른 자리 가까이에 새로 보이는 것이 생기면(목록이 펼쳐짐) 누르기로 적는다 - div 로 그린 체크박스·라디오·드롭다운 (Nexacro, 농협몰 2026-10-15).
+  // 이름표·빈 곳을 누른 것은 아무것도 안 바뀌어 지금처럼 버려진다. 부품 = tabindex 가 달린 가장 가까운 칸 (Nexacro 의 컴포넌트)
+  const PEND_MS = 600;
+  let pend = null;
+  function watchClick(el, e) {
+    const comp = el.closest('[tabindex]') || el, target = comp.id ? comp : el, t = Date.now();
+    pend = {comp, el: target, x: e.clientX, y: e.clientY, t,
+            extra: {detail: e.detail, firstSeen: null, hovers: hoverChain(target), row: rowInfo(e.target), t}};
+    setTimeout(() => { if (pend && pend.t === t) pend = null; }, PEND_MS);
+  }
+  function pendHit(m) {
+    const n = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+    if (!n || !n.isConnected) return false;
+    if (pend.comp.contains(n) || (m.type === 'attributes' && n.contains(pend.comp))) return true;
+    const near = x => { if (x.nodeType !== 1 || !visible(x)) return false; const r = x.getBoundingClientRect();
+      return r.width > 0 && Math.abs(r.top - pend.y) < 300 && Math.abs(r.left - pend.x) < 300; };
+    return m.type === 'childList' ? [...m.addedNodes].some(near) : near(n);
+  }
+  new MutationObserver(ms => {
+    rescan();
+    if (pend && ms.some(pendHit)) { const p = pend; send('click', p.el, p.extra); }
+  }).observe(document, {childList: true, subtree: true, attributes: true, characterData: true,
+                        attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-expanded', 'src', 'aria-checked', 'aria-selected']});
   scan();
   let lastEnter = 0;
   document.addEventListener('click', e => {
     if (!e.isTrusted) return;
     if (e.detail === 0 && Date.now() - lastEnter < 500) return;          // Enter 가 만든 단추 눌림
     const act = e.target.closest(ACT), el = act || e.target;
-    if (!act && getComputedStyle(el).cursor !== 'pointer') return;       // 글자·표 칸·빈 곳 (사람은 기다리며 여기저기 누른다)
+    if (!act && getComputedStyle(el).cursor !== 'pointer') { watchClick(el, e); return; }   // 글자·표 칸·빈 곳은 버리고, 누른 뒤 바뀌면 적는다 (watchClick)
     const tag = el.tagName, type = (el.type || '').toLowerCase();
     if (tag === 'SELECT' || tag === 'OPTION' || tag === 'TEXTAREA') return;   // 값 바뀜으로 적는다
     if (tag === 'INPUT' && !BTN.includes(type) && type !== 'image') return;  // 글자 칸·체크 상자도
@@ -481,11 +516,13 @@ ROWS_JS = r"""a => { const o = JSON.parse(a), n = s => (s || '').replace(/\s+/g,
     return [key(r), n(c.textContent).slice(0, 120), seenText(c)]; })); }""".replace("__SEEN__", SEEN_JS)
 
 
-def otp_like(s):
-    """사람이 문자로 받은 인증번호를 친 칸으로 보인다 (숫자 4~8자리 + 칸 단서에 '인증'·OTP 같은 말)."""
+def otp_like(s, nxt=None):
+    """사람이 문자로 받은 인증번호를 친 칸으로 보인다 (숫자 4~8자리 + 칸 단서에 '인증'·OTP 같은 말, 또는 바로 다음 단계의
+    알림창에 '인증' - 단서 없는 칸 edtAttcInput 뒤 '인증되었습니다.', 농협몰 2026-10-15)."""
     t = s.get("target") or {}
     hints = " ".join(str(t.get(k) or "") for k in ("placeholder", "label", "name", "id", "aria", "title"))
-    return s["kind"] == "fill" and bool(OTP_VALUE.match(str(s.get("value", "")).strip())) and bool(OTP_HINT.search(hints))
+    told = any("인증" in d for d in (nxt or {}).get("dialogs", []))
+    return s["kind"] == "fill" and bool(OTP_VALUE.match(str(s.get("value", "")).strip())) and (bool(OTP_HINT.search(hints)) or told)
 
 
 def set_otp(steps, i, on):
@@ -520,7 +557,7 @@ def finalize(steps, record_date, start_url, viewport=None):
                 s["appearsAfter"] = k
         s["gap"] = s["t"] - prev if prev else 0
         prev = s.pop("t")
-        if otp_like(s):
+        if otp_like(s, steps[i + 1] if i + 1 < len(steps) else None):
             set_otp(out + [s], len(out), True)
             out.append(s)
             continue
