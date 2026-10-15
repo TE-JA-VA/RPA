@@ -1004,7 +1004,7 @@ res = wellife.hold_save(hold_rr(again="선택안됨"), hctx, False)
 check("물류대기 리허설: 다시 보니 풀려 있으면 '확인할 것' 을 사유에 남긴다 (실행이었다면 누르지 않음)",
       res[0] == "skipped" and wellife.RECHECK_NOTE in res[1], str(res))
 
-# 주문 수집: 실행이면 상단 전체선택 -> 자동 수집 [가져오기] -> 엑셀, 리허설이면 [가져오기] 에 마우스만 (사용자 2026-10-15)
+# 주문 수집: 엑셀이 있을 때만 올리고, 자동 수집 [가져오기] 는 누르지 않는다
 xdir = tempfile.mkdtemp(prefix="rpa_wl_xl_")
 uploads = []
 
@@ -1015,8 +1015,6 @@ def order_rr(files):
                   get_onscreen_tables=lambda win: [El("사이트", Rect(0, 50, 200, 100))],
                   run_excel_upload_step=lambda app, pid, hwnd, grid: uploads.append(grid.name) or (len(files), 0),
                   find_site_upload_cell=lambda hwnd, grid, code: (El(f"업로드 {code}"), "1"),
-                  select_all_and_verify=lambda label, hwnd, grid, cols: acts.append(("select_all", grid.name)) or 3,
-                  run_import_step=lambda app, pid, hwnd, win: acts.append(("import",)) or True,
                   IMPORT_BUTTON_NAME="가져오기")
 
 
@@ -1024,14 +1022,13 @@ octx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([El("�
 _saved_ns = wellife.normal_sales
 SOLD = [False]
 wellife.normal_sales = lambda rr_, ctx_, live: (acts.append(("normal_sales", live)), ("매출처리 흉내", SOLD[0]))[1]
-for live, files, want_res, want_up in ((True, {}, "done", []), (False, {"101": "x"}, "skipped", []),
+for live, files, want_res, want_up in ((True, {}, "skipped", []), (False, {"101": "x"}, "skipped", []),
                                        (True, {"101": "x"}, "done", ["사이트"])):
     acts.clear(); uploads.clear()
     res = wellife.collect_orders(order_rr(files), octx, live)
-    pressed = acts[:2] == [("select_all", "사이트"), ("import",)]
-    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, "
-          f"[가져오기] 는 {'상단 전체선택 뒤 누름' if live else '안 누름'}, 그 뒤 매출처리 단계는 정상매출 모드(빠지면 리허설)로",
-          res[0] == want_res and uploads == want_up and pressed == live and (("import",) in acts) == live
+    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기] 는 안 누름, "
+          f"그 뒤 매출처리 단계는 정상매출 모드(빠지면 리허설)로",
+          res[0] == want_res and uploads == want_up and ("click", "가져오기") not in acts
           and acts[-1] == ("normal_sales", False) and "정상매출 [리허설]" in res[1], f"{res} {uploads} {acts}")
 SOLD[0] = True
 res = wellife.collect_orders(order_rr({}), octx, False, True)
