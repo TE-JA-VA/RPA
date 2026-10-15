@@ -1,9 +1,10 @@
-// 관리 작업 - setup.js(터미널 명령)와 admin.js(관리 화면 AFTERMARKET_SETUP)가 같이 쓴다. 우리 PC 에서만 돈다.
+// 관리 작업 - setup.js(터미널 명령)와 admin.js(관리 화면 AFTERMARKET_SETUP)가 같이 쓴다. 우리 PC 에서 돈다.
+// Blaze 뒤에는 웹 관리 함수(../functions/index.js)도 이 파일을 그대로 쓴다 - 그쪽은 키 파일 없이 Cloud Functions 기본 자격으로 (2026-10-15 밑작업).
 // 값을 돌려줄 뿐 찍지 않는다. 사람이 고칠 수 있는 거절은 Refused (그 글을 터미널은 '오류: …', 화면은 빨간 알림으로).
 // 비밀번호는 무작위로 만들어 돌려줄 뿐 어디에도 남기지 않는다.
 // 이메일은 조립한다: <아이디>@<cid 의 _ 를 - 로>.rpa-test-f02e0.firebaseapp.com (cid 가 없으면 도메인만, 에이전트 계정은 agent-<pcId>).
 // 아이디에 @ 가 있으면 그대로 이메일로 쓴다(외부 메일 계정).
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { initializeApp, cert } from "firebase-admin/app";
@@ -26,8 +27,10 @@ export const PRESET_LIMIT_MIN = 2, PRESET_LIMIT_MAX = 10;   // 옵저버 프리�
 export const PRICE_BASE = { default: 1, login: 0 };                    // 에이전트에 박힌 처음 토큰 배율 (agent.PRICES) - 서버 값이 위에 덮인다
 
 const KEY = fileURLToPath(new URL("./serviceAccountKey.json", import.meta.url));
+// 키 파일이 있으면 그것으로 (이 PC), 없으면 기본 자격 (Cloud Functions - 키는 함수 쪽으로 복사하지 않는다, functions/sync.mjs).
+// 환경 변수로 가르면 안 된다: 배포 도구가 이 PC 에서 함수 코드를 불러 목록을 찾을 때 함수 환경 변수가 없어 키를 찾다 죽었다 (검토 2026-10-15)
 const app = initializeApp({
-  credential: cert(JSON.parse(readFileSync(KEY, "utf8"))),
+  ...(existsSync(KEY) ? { credential: cert(JSON.parse(readFileSync(KEY, "utf8"))) } : {}),
   databaseURL: "https://rpa-test-f02e0-default-rtdb.asia-southeast1.firebasedatabase.app",
 });
 const auth = getAuth(app), rtdb = getDatabase(app), store = getFirestore(app);
@@ -36,6 +39,23 @@ const auth = getAuth(app), rtdb = getDatabase(app), store = getFirestore(app);
 export const onEmulator = () => ["FIREBASE_AUTH_EMULATOR_HOST", "FIREBASE_DATABASE_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST"].some((k) => process.env[k]);
 // 지금 한국 시각 - PC 가 기록에 적는 started_at 과 같은 꼴 ("2026-10-06T13:55:49")
 export const nowKst = () => new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace(" ", "T");
+
+// 관리 기록 한 줄을 Firestore admin_log 에 {at, line, by, via} - 로컬(관리_기록.txt 와 함께)·웹 관리가 한 곳에 남긴다 (2026-10-15).
+// by = 웹에서 한 총괄 계정 이메일 (로컬은 null), via = '로컬' | '웹'. 못 쓰면 (사용량 초과·끊김) 조용히 넘어간다 - 기록이 관리 일을 막으면 안 된다.
+// 읽기 규칙은 없다 (firestore.rules 끝의 모두 막음) - Admin SDK 만 읽고 쓴다
+export const LOG_WAIT_MS = 5000;
+export async function logToDb(line, by, via) {
+  let timer;
+  try {
+    await Promise.race([store.collection("admin_log").add({ at: nowKst(), line: String(line), by: by ?? null, via }),
+      new Promise((_, no) => { timer = setTimeout(() => no(new Error("timeout")), LOG_WAIT_MS); })]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const KEY_RE = /^[a-z0-9_]+$/;
 export function checkKey(name, value) {
@@ -278,7 +298,8 @@ export async function setCompanyRemoved(cid, removing) {
   const v = await companyOf(cid, { removed: true });
   const was = v.stts === 9;
   if (!removing && !was) return { cid, name: v.name, already: true, users: [] };
-  const users = await usersOf(cid);
+  // 총괄은 업체 계정이 아니다 - 업체코드가 붙은 총괄(setup.js user <cid> … super)도 업체를 끄고 켤 때 같이 잠기거나 풀리지 않게 (검토 2026-10-15)
+  const users = (await usersOf(cid)).filter((u) => u.customClaims?.role !== "super");
   await rtdb.ref(`meta/companies/${cid}/stts`).set(removing ? 9 : 0);
   for (const u of users) {
     await auth.updateUser(u.uid, { disabled: removing });

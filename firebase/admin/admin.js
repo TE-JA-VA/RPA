@@ -1,7 +1,8 @@
 // 관리 화면 서버 (AFTERMARKET_SETUP) - setup.js 와 같은 일을 화면으로 (같은 ops.js). 우리 PC 에서만 돈다:
 // 127.0.0.1 에서만 듣고, 켤 때마다 새 비밀 값을 만들어 연 주소(?k=)에만 싣는다. 화면은 /api 요청마다 X-Admin-Key 로 그 값을 보낸다 -
 // 다른 사이트는 값을 모르고 다른 출처에서는 맞춤 머리글을 못 보낸다 (CORS 를 안 연다). Host 가 127.0.0.1:<포트> 가 아니면 거절.
-// 비밀번호는 만든 응답에만 싣고 콘솔·기록에는 안 남긴다. 한 일은 관리_기록.txt 에 한 줄씩 (비밀번호 없이). 고치는 요청은 하나씩.
+// 비밀번호는 만든 응답에만 싣고 콘솔·기록에는 안 남긴다. 한 일은 관리_기록.txt 와 DB admin_log 에 한 줄씩 (비밀번호 없이). 고치는 요청은 하나씩.
+// 작업 목록은 routes.js (Blaze 뒤 웹 관리 함수 ../functions/index.js 와 같이 쓴다).
 //   node admin.js               켜고 기본 브라우저로 연다 (AFTERMARKET_SETUP.bat 이 부른다)
 //   node admin.js --no-open     브라우저 없이 주소만 찍는다 (시험)
 //   node admin.js --port 8790   포트를 정한다 (없으면 빈 포트)
@@ -29,67 +30,28 @@ if (args.includes("--shortcut")) {
 }
 
 const ops = await import("./ops.js");
+const routes = await import("./routes.js");
 const KEY = Buffer.from(randomBytes(32).toString("base64url"));
 const PAGE = readFileSync(here("./AFTERMARKET_SETUP.html"));
 const LOG = here("./관리_기록.txt");
-const log = (line) => { try { appendFileSync(LOG, `${ops.nowKst()}  ${line}\n`, "utf8"); } catch { /* 기록은 일을 막지 않는다 */ } };
+// 한 일은 이 PC 의 관리_기록.txt 와 DB(admin_log - 웹 관리와 한 곳에 모인다, 2026-10-15)에. 둘 다 일을 막지 않는다 (DB 는 기다리지도 않는다)
+const log = (line) => {
+  try { appendFileSync(LOG, `${ops.nowKst()}  ${line}\n`, "utf8"); } catch { /* 기록은 일을 막지 않는다 */ }
+  return ops.logToDb(line, null, "로컬");      // 실패해도 false 를 돌려줄 뿐 던지지 않는다
+};
 
-// [메서드, 경로, 할 일(body, params), 기록 글(body, 결과, params) - 없거나 null 이면 안 남긴다]. 비밀번호는 기록 글에 절대 넣지 않는다
 // 화면 테마 (밝게/어둡게) - 켤 때마다 포트가 바뀌어 브라우저 저장소로는 안 남는다 → 이 폴더의 파일에
 const PREFS = here("./admin_prefs.json");
 const readPrefs = () => { try { return JSON.parse(readFileSync(PREFS, "utf8")); } catch { return {}; } };
-// 관리 기록 한 줄: 'sales = 2, hold = (기본값)'
-const priceNote = (values) => Object.entries(values ?? {}).map(([k, v]) => `${k} = ${String(v ?? "").trim() || "(기본값)"}`).join(", ");
-const ROUTES = [
-  ["GET", "/api/info", () => ({ emulator: ops.onEmulator(), project: ops.PROJECT, dashboard: ops.DASHBOARD_URL })],
+// 이 PC 에만 있는 요청 + 웹 관리 함수와 같이 쓰는 작업 목록 (routes.js - 작업을 늘릴 때는 거기 한 줄)
+const ROUTES = [...routes.compile([
   ["GET", "/api/prefs", () => readPrefs()],
   ["POST", "/api/prefs", (b) => {
     const prefs = { ...readPrefs(), theme: ["light", "dark"].includes(b.theme) ? b.theme : null };
     writeFileSync(PREFS, JSON.stringify(prefs));
     return prefs;
   }],
-  ["GET", "/api/companies", () => ops.companyTable()],
-  ["GET", "/api/companies/:cid", (b, p) => ops.companyDetail(p.cid)],
-  ["POST", "/api/setup", (b) => ops.setupCompany(b),
-    (b, r) => `신규 업체 ${b.cid}: ${r.steps.map((s) => `${s.ok ? "✓" : "✗"} ${s.label}`).join(", ")}`],
-  ["POST", "/api/companies/:cid/pcs", async (b, p) => {
-    const pc = await ops.addPc(p.cid, b.pcId, b.label);
-    return { pc, agent: b.agent ? await ops.addAgent(p.cid, b.pcId) : null };
-  }, (b, r, p) => `PC 추가 ${p.cid}/${r.pc.pcId}${r.agent ? " + 에이전트 계정" : ""}`],
-  ["POST", "/api/companies/:cid/phones", (b, p) => ops.addPhone(p.cid, String(b.phoneId ?? "").trim(), b.label, b.owner),
-    (b, r, p) => `휴대폰 추가 ${p.cid}/${r.phoneId} (${r.label})`],
-  ["POST", "/api/companies/:cid/users", (b, p) => ops.addUser(p.cid, b.id, b.role, b.name), (b, r, p) => `계정 추가 ${p.cid} ${r.email} (${r.role})`],
-  ["POST", "/api/companies/:cid/passwd", (b, p) => ops.resetPassword(p.cid, b.id), (b, r, p) => `비밀번호 재발급 ${p.cid} ${r.email}`],
-  ["POST", "/api/companies/:cid/disabled", (b, p) => ops.setDisabled(p.cid, b.id, b.disabled === true),
-    (b, r, p) => `${r.disabled ? "사용중지" : "사용"} ${p.cid} ${r.email}`],
-  ["POST", "/api/companies/:cid/modules", (b, p) => ops.setModules(p.cid, b),
-    (b, r, p) => `모듈 정책 ${p.cid} ${Object.entries(b).map(([k, v]) => `${k}=${v}`).join(" ")}`],
-  ["POST", "/api/companies/:cid/features", (b, p) => ops.setFeature(p.cid, "wellife", b.wellife === true),
-    (b, r, p) => `웰라이프 실행 ${p.cid} = ${b.wellife === true ? "켬" : "끔"}`],
-  ["POST", "/api/companies/:cid/limits", (b, p) => ops.setScheduleLimit(p.cid, b.schedule), (b, r, p) => `자동 실행 슬롯 수 ${p.cid} = ${r.schedule}`],
-  ["POST", "/api/companies/:cid/presets", (b, p) => ops.setPresetLimit(p.cid, b.presets), (b, r, p) => `옵저버 프리셋 수 ${p.cid} = ${r.presets}`],
-  ["POST", "/api/companies/:cid/remove", (b, p) => {
-    if (b.confirm !== p.cid) throw new ops.Refused("업체코드를 똑같이 쳐야 비활성화합니다");
-    return ops.setCompanyRemoved(p.cid, true);
-  }, (b, r, p) => `업체 비활성화 ${p.cid} (계정 ${r.users.length}개 사용중지)`],
-  ["POST", "/api/companies/:cid/restore", (b, p) => ops.setCompanyRemoved(p.cid, false), (b, r, p) => (r.already ? null : `업체 다시 활성화 ${p.cid}`)],
-  ["POST", "/api/companies/:cid/tokens", (b, p) => ops.grantTokens(p.cid, b.amount, b.memo), (b, r, p) => `토큰 ${b.amount} ${p.cid} ${b.memo ?? ""}`.trim()],
-  ["GET", "/api/releases", () => ops.releasesOf()],
-  ["POST", "/api/releases/stable", (b) => ops.setStable(b.version), (b) => `안정본 지정 ${b.version}`],
-  ["GET", "/api/companies/:cid/pcs/:pcId/status", (b, p) => ops.pcUpdateStatus(p.cid, p.pcId)],
-  ["POST", "/api/companies/:cid/pcs/:pcId/update", (b, p) => ops.sendUpdate(p.cid, p.pcId, b.version), (b, r, p) => `업데이트 ${p.cid}/${p.pcId} → ${b.version}`],
-  ["POST", "/api/companies/:cid/pcs/:pcId/rollback", (b, p) => ops.sendRollback(p.cid, p.pcId), (b, r, p) => `이전 판으로 되돌리기 ${p.cid}/${p.pcId}`],
-  ["GET", "/api/prices", () => ops.getPrices()],
-  ["POST", "/api/prices", (b) => ops.setPrices(b.values), (b) => `토큰 배율 ${priceNote(b.values)}`],
-  ["GET", "/api/usage", () => ops.usageRows()],
-  ["GET", "/api/companies/:cid/prices", (b, p) => ops.companyPrices(p.cid)],
-  ["POST", "/api/companies/:cid/prices", (b, p) => ops.setCompanyPrices(p.cid, b.values),
-    (b, r, p) => `업체 토큰 배율 ${p.cid} ${priceNote(b.values)}`],
-].map(([method, pattern, run, note]) => {
-  const names = [];
-  const re = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, n) => { names.push(n); return "([a-z0-9_]+)"; })}$`);
-  return { method, re, names, run, note };
-});
+]), ...routes.ROUTES];
 
 // 고치는 요청은 한 번에 하나씩 - [만들기] 를 두 번 눌러도 두 번 만들지 않게 (늦은 쪽은 이미 있는 것을 건너뛴다)
 let chain = Promise.resolve();
@@ -126,14 +88,14 @@ async function handle(req, res) {
   }
   if (req.method === "POST" && path === "/api/quit") {
     await serial(() => {});   // 하던 고치는 일을 끝낸 뒤 끈다 - 흐름 중간에 끊으면 claim 없는 반쪽 계정이 남고 다시 해도 '이미 있다' 로 건너뛴다
-    log("관리 화면 끔");
+    await log("관리 화면 끔");   // 곧 끝나므로 DB 기록만은 기다린다 (최대 ops.LOG_WAIT_MS)
     send(200, { ok: true });
     setTimeout(() => process.exit(0), 200);
     return;
   }
-  const route = ROUTES.find((r) => r.method === req.method && r.re.test(path));
-  if (!route) return send(404, { error: "모르는 요청입니다" });
-  const hit = path.match(route.re), params = Object.fromEntries(route.names.map((n, i) => [n, hit[i + 1]]));
+  const found = routes.find(ROUTES, req.method, path);
+  if (!found) return send(404, { error: "모르는 요청입니다" });
+  const { route, params } = found;
   try {
     const body = req.method === "POST" ? await readJson(req) : {};
     const work = () => route.run(body, params);
