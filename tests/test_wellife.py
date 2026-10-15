@@ -86,8 +86,12 @@ check("설정을 못 읽으면 False (오류는 기존 main 이 알린다)", wel
 
 settings({"Wellife": {"Login": "Y", "Sales": " y ", "Hold": "N", "Extra": "Y"}})
 sel, unknown = wellife.load_switches(rr)
-check("적힌 Y 만 켬, 빠진 키(Sap·Wms·InvoiceSend)는 끔",
-      sel == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False, "InvoiceSend": False}, str(sel))
+check("적힌 Y 만 켬, 빠진 키(Sap·Wms·InvoiceSend)는 끔, 빠진 엑셀·자동 수집은 주문매핑(Sales)을 따른다 (10-15 나누기 전 PC)",
+      sel == {"Login": True, "Excel": True, "Import": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
+              "InvoiceSend": False}, str(sel))
+settings({"Wellife": {"Login": "Y", "Excel": "N", "Sales": "Y"}})
+sel, _ = wellife.load_switches(rr)
+check("엑셀 수집을 적어 두면 그 값 (끔), 빠진 자동 수집만 주문매핑을 따른다", sel["Excel"] is False and sel["Import"] is True, str(sel))
 check("모르는 키는 돌려준다", unknown == ["Extra"], str(unknown))
 settings({"Wellife": {}})
 sel, _ = wellife.load_switches(rr)
@@ -124,7 +128,7 @@ check("웰라이프 모듈 표를 등록", rec.of("set_modules") and [m[0] for m
 check("run_modules 에 웰라이프 표·섹션을 넘김", got.get("modules") is wellife.MODULES and got.get("section") == "Wellife")
 check("함수 표의 키 = 모듈 키", set(got.get("funcs") or ()) == {m[0] for m in wellife.MODULES})
 _saved_mods = {n: getattr(wellife, n) for n in ("module_sales", "module_sap")}
-wellife.module_sales = lambda rr_, ctx_, live, sell: ("done", None)
+wellife.module_sales = lambda rr_, ctx_, sell: ("done", None)
 wellife.module_sap = lambda rr_, ctx_, live: ("done", None)
 for extra, want in (({}, set()), ({"NormalSalesMode": "1건"}, {"wellife_sales"})):
     got.clear()
@@ -185,11 +189,13 @@ def picked_run(env, done=(), section=ALL_Y, trigger=None):
 
 picked_run("Wms")
 check("예약 줄이 ⑤ 만 고르면 로그인 + ⑤ 만 (섹션에서 켠 ②③④ 는 안 돈다)",
-      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": False, "Wms": True, "InvoiceSend": False},
+      got.get("selected") == {"Login": True, "Excel": False, "Import": False, "Sales": False, "Hold": False, "Sap": False,
+                              "Wms": True, "InvoiceSend": False},
       str(got.get("selected")))
 picked_run("Login,Sap", section={"Wellife": {"Login": "Y"}})
 check("섹션에서 끈 모듈도 예약 줄이 고르면 돈다 (④ 따로 실행)",
-      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": True, "Wms": False, "InvoiceSend": False},
+      got.get("selected") == {"Login": True, "Excel": False, "Import": False, "Sales": False, "Hold": False, "Sap": True,
+                              "Wms": False, "InvoiceSend": False},
       str(got.get("selected")))
 picked_run("Logistics,Output")
 check("웰라이프에 없는 모듈만 넘어오면 run_modules 를 부르지 않고 '비었습니다' 로 멈춤",
@@ -272,16 +278,19 @@ rr.RoutineContext.attach = no_attach
 rec = Rec()
 rr.status = rec
 funcs = {m[0]: fake(m[0]) for m in wellife.MODULES}
-out = rr.run_modules({"Login": True, "Sales": True, "Hold": False, "Sap": True, "Wms": False, "InvoiceSend": False},
+out = rr.run_modules({"Login": True, "Excel": True, "Import": False, "Sales": True, "Hold": False, "Sap": True, "Wms": False,
+                      "InvoiceSend": False},
                      wellife.MODULES, funcs, "Wellife")
-check("켠 모듈만 차례대로", order == ["login", "wellife_sales", "wellife_sap"] and out == ("success", None), f"{order} {out}")
-check("끈 모듈은 module_off", [a[0] for a in rec.of("module_off")] == ["wellife_hold", "wellife_wms", "invoicesend"],
+check("켠 모듈만 차례대로 (② 는 엑셀 수집 -> 자동 수집 -> 매출처리 순)", order == ["login", "wellife_excel", "wellife_sales", "wellife_sap"]
+      and out == ("success", None), f"{order} {out}")
+check("끈 모듈은 module_off", [a[0] for a in rec.of("module_off")] == ["wellife_import", "wellife_hold", "wellife_wms", "invoicesend"],
       str(rec.of("module_off")))
 
 order.clear()
 funcs["wellife_hold"] = fake("wellife_hold", "failed")
 out = rr.run_modules({m[1]: True for m in wellife.MODULES}, wellife.MODULES, funcs, "Wellife")
-check("물류대기가 실패하면 SAP·WMS 를 돌리지 않는다", order == ["login", "wellife_sales", "wellife_hold"] and out[0] == "stopped", f"{order} {out}")
+check("물류대기가 실패하면 SAP·WMS 를 돌리지 않는다",
+      order == ["login", "wellife_excel", "wellife_import", "wellife_sales", "wellife_hold"] and out[0] == "stopped", f"{order} {out}")
 out = rr.run_modules({m[1]: False for m in wellife.MODULES}, wellife.MODULES, funcs, "Wellife")
 check("모두 끄면 'Wellife' 섹션을 가리킨다", out[0] == "stopped" and "'Wellife'" in out[1], str(out))
 
@@ -298,19 +307,25 @@ print("=== 5. 화면 이동 모듈 ===")
 fr = types.SimpleNamespace(status=Rec(), log=lambda m: None,
                            ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
 nctx = types.SimpleNamespace(hwnd=1)
-_saved = wellife.collect_orders, wellife.hold_save
-wellife.collect_orders = lambda rr_, ctx_, live, sell=None: ("skipped", f"수집 live={live} sell={sell}")
+_saved = wellife.excel_collect, wellife.import_collect, wellife.normal_sales, wellife.hold_save
+wellife.excel_collect = lambda rr_, ctx_, live: ("skipped", f"엑셀 live={live}")
+wellife.import_collect = lambda rr_, ctx_, live: ("skipped", f"자동 live={live}")
+wellife.normal_sales = lambda rr_, ctx_, sell: (f"sell={sell}", False)
 wellife.hold_save = lambda rr_, ctx_, live: ("skipped", f"저장 live={live}")
 fr.goto_order_screen = lambda ctx: (True, None)
-check("② 화면 이동 성공 -> 주문 수집으로 (엑셀 업로드·정상매출 모드를 따로 넘긴다)",
-      wellife.module_sales(fr, nctx, True, wellife.ONE) == ("skipped", "수집 live=True sell=1건"))
+check("② 엑셀 수집·자동 수집·매출처리는 각자 화면으로 가서 자기 모드로 (사용자 10-15 셋으로 나눔)",
+      wellife.module_excel(fr, nctx, True) == ("skipped", "엑셀 live=True")
+      and wellife.module_import(fr, nctx, False) == ("skipped", "자동 live=False")
+      and wellife.module_sales(fr, nctx, wellife.ONE) == ("skipped", "[1건] 정상매출 sell=1건"))
+check("② 화면을 떠나면 팝업 강제 넘기기를 끈다", nctx.pass_popups is False and fr.POPUP_PREFER_YES is False)
 fr.goto_order_screen = lambda ctx: (False, "아이콘 없음")
 check("② 이동 실패 -> failed", wellife.module_sales(fr, nctx) == ("failed", "아이콘 없음"))
 for r, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")):
     fr.goto_hold_screen = lambda ctx, r=r: r
     check(f"③ 물류대기 '{r}' -> {want} (아이콘이 없어도 건너뛰지 않음)", wellife.module_hold(fr, nctx)[0] == want)
-wellife.collect_orders, wellife.hold_save = _saved
-check("모듈은 자기 단계만 찍는다", [a[0] for a in fr.status.of("step")] == ["wl_order_screen"] * 2 + ["wl_hold_screen"] * 3)
+wellife.excel_collect, wellife.import_collect, wellife.normal_sales, wellife.hold_save = _saved
+check("모듈은 자기 단계만 찍는다", [a[0] for a in fr.status.of("step")] ==
+      ["wl_excel_screen", "wl_import_screen", "wl_order_screen", "wl_order_screen"] + ["wl_hold_screen"] * 3, str(fr.status.of("step")))
 
 # ---------------------------------------------------------------------------
 print("=== 6. 메뉴 검색으로 화면 열기 ===")
@@ -840,14 +855,29 @@ rr.status = rec
 settings({"Wellife": {"Login": "Y", "SalesMode": "실행"}})
 wellife.run_main(rr)
 labels = dict(rec.of("start")[0][1])
-check("② 수집 단계는 SalesMode([실행]), 정상매출 단계는 NormalSalesMode([리허설])",
-      labels["wl_order_collect"].startswith("[실행] ") and labels["wl_order_sales"].startswith("[리허설] "), str(labels))
-sold_seen = []
-_saved_ms = wellife.module_sales
-wellife.module_sales = lambda rr_, ctx_, live, sell: sold_seen.append((live, sell)) or ("skipped", None)
-got["funcs"]["wellife_sales"](None)
-wellife.module_sales = _saved_ms
-check("② 모듈에 SalesMode·NormalSalesMode 를 따로 넘긴다", sold_seen == [(True, False)], str(sold_seen))
+check("② 엑셀 수집은 SalesMode([실행]), 자동 수집은 ImportMode 가 없으면 SalesMode 를 따르고([실행]), 매출처리는 NormalSalesMode([리허설])",
+      labels["wl_order_excel"].startswith("[실행] ") and labels["wl_order_import"].startswith("[실행] ")
+      and labels["wl_order_sales"].startswith("[리허설] "), str(labels))
+seen = []
+_saved_ms = {n: getattr(wellife, n) for n in ("module_excel", "module_import", "module_sales")}
+wellife.module_excel = lambda rr_, ctx_, live: seen.append(("excel", live)) or ("skipped", None)
+wellife.module_import = lambda rr_, ctx_, live: seen.append(("import", live)) or ("skipped", None)
+wellife.module_sales = lambda rr_, ctx_, sell: seen.append(("sales", sell)) or ("skipped", None)
+for k in ("wellife_excel", "wellife_import", "wellife_sales"):
+    got["funcs"][k](None)
+for n, f in _saved_ms.items():
+    setattr(wellife, n, f)
+check("② 세 모듈에 각자의 모드를 넘긴다", seen == [("excel", True), ("import", True), ("sales", False)], str(seen))
+settings({"Wellife": {"Login": "Y", "SalesMode": "실행", "ImportMode": "리허설"}})
+check("ImportMode 를 적어 두면 SalesMode 와 따로 (자동 수집만 리허설)", wellife.load_mode(rr, wellife.IMPORT_MODE_KEY) is False
+      and wellife.load_mode(rr, wellife.SALES_MODE_KEY) is True)
+settings({"Wellife": {"Login": "Y", "ImportMode": "1건"}})
+try:
+    wellife.load_mode(rr, wellife.IMPORT_MODE_KEY)
+    raised = False
+except RuntimeError:
+    raised = True
+check("ImportMode 도 줄이 없어 '1건' 을 못 쓴다 (설정 오류)", raised)
 settings({"Wellife": {"Login": "Y", "Mode": "run"}})
 rec = Rec()
 rr.status = rec
@@ -1098,24 +1128,29 @@ octx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Page([El("�
 _saved_ns = wellife.normal_sales
 SOLD = [False]
 wellife.normal_sales = lambda rr_, ctx_, live: (acts.append(("normal_sales", live)), ("매출처리 흉내", SOLD[0]))[1]
-for live, files, want_res, want_up in ((True, {}, "done", []), (False, {"101": "x"}, "skipped", []),
-                                       (True, {"101": "x"}, "done", ["사이트"]), (False, {}, "skipped", [])):
+for live, files, want_res, want_up in ((True, {}, "skipped", []), (False, {"101": "x"}, "skipped", []),
+                                       (True, {"101": "x"}, "done", ["사이트"])):
     acts.clear(); uploads.clear()
-    res = wellife.collect_orders(order_rr(files), octx, live)
-    press = ("click", "가져오기", "떠 있는 화면")
-    pressed = press in acts
-    check(f"주문 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, 상단 전체선택 뒤 "
-          f"[가져오기] {'누를 자리 확인 뒤 떠 있는 화면만 넘겨 누름' if live else '안 누름'}, 그 뒤 매출처리 단계는 정상매출 모드(빠지면 리허설)로",
-          res[0] == want_res and uploads == want_up and pressed == bool(live)
+    res = wellife.excel_collect(order_rr(files), octx, live)
+    check(f"엑셀 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기]·정상매출은 하지 않음 (10-15 셋으로 나눔)",
+          res[0] == want_res and uploads == want_up and not [a for a in acts if a[0] in ("click", "select", "normal_sales")],
+          f"{res} {uploads} {acts}")
+press = ("click", "가져오기", "떠 있는 화면")
+for live in (True, False):
+    acts.clear(); uploads.clear()
+    res = wellife.import_collect(order_rr({"101": "x"}), octx, live)
+    check(f"자동 수집 live={live}: 상단 전체선택 뒤 [가져오기] {'누를 자리 확인 뒤 떠 있는 화면만 넘겨 누름' if live else '안 누름 (마우스만)'}, "
+          f"엑셀 업로드·정상매출은 안 함",
+          res[0] == ("done" if live else "skipped") and (press in acts) == live and not uploads
           and (not live or acts.index(("clear", "가져오기")) < acts.index(press))
           and acts.index(("select", "좌측상단", "사이트")) < (acts.index(press) if live else len(acts))
-          and acts[-1] == ("normal_sales", False) and "정상매출 [리허설]" in res[1], f"{res} {uploads} {acts}")
+          and not [a for a in acts if a[0] == "normal_sales"], f"{res} {acts}")
 
 
 def collect_stop(rr_, ctx_=octx):
     acts.clear()
     try:
-        wellife.collect_orders(rr_, ctx_, True)
+        wellife.import_collect(rr_, ctx_, True)
         return None
     except wellife.Stop as e:
         return e.result, str(e)
@@ -1123,8 +1158,8 @@ def collect_stop(rr_, ctx_=octx):
 
 IMPORTED[0] = False
 res = collect_stop(order_rr({}))
-check("[가져오기] 끝을 확인 못 하면 정상매출로 넘어가지 않고 멈춘다 ('확인할 것', 리뷰 10-14)",
-      res and res[0] == "stopped" and "확인할 것" in res[1] and ("normal_sales", False) not in acts, f"{res} {acts}")
+check("[가져오기] 끝을 확인 못 하면 다음 모듈로 넘어가지 않고 멈춘다 ('확인할 것', 리뷰 10-14)",
+      res and res[0] == "stopped" and "확인할 것" in res[1], f"{res} {acts}")
 IMPORTED[0] = True
 zero_rr = order_rr({})
 zero_rr.select_all_and_verify = lambda *a: None
@@ -1137,35 +1172,9 @@ check("누를 단추가 확인한 단추와 다른 자리면 누르지 않고 �
       res and res[0] == "failed" and not [a for a in acts if a[0] in ("click", "clear")], f"{res} {acts}")
 FOUND[0] = None
 acts.clear()
-res = wellife.collect_orders(order_rr({}), types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([])), True)
+res = wellife.import_collect(order_rr({}), types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([])), True)
 check("[가져오기] 단추가 없으면 전체선택도 누르기도 않고 사유에 남긴다",
       not [a for a in acts if a[0] in ("select", "click")] and "자동 수집 단추 없음" in res[1], f"{res} {acts}")
-cctx = types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([El("가져오기")]), collected=False)
-alive_rr = order_rr({})
-alive_rr.ec.pid_alive = lambda pid: True
-wellife.collect_orders(alive_rr, cctx, True)
-check("수집이 ERPia 가 떠 있는 채로 끝나면 collected (꺼져 다시 돌 때 매출처리부터)", cctx.collected is True)
-cctx.collected = False
-alive_rr.ec.pid_alive = lambda pid: False
-wellife.collect_orders(alive_rr, cctx, True)
-check("수집 도중 꺼졌으면 collected 를 세우지 않는다", cctx.collected is False)
-
-# ERPia 가 꺼져 다시 돌 때 수집이 끝났으면 화면 이동 뒤 곧바로 매출처리
-_saved_ms = {n: getattr(wellife, n) for n in ("front", "goto_screen", "collect_orders")}
-wellife.front = lambda *a: None
-wellife.goto_screen = lambda *a: "ok"
-wellife.collect_orders = lambda *a: acts.append(("collect",)) or ("done", "수집")
-SOLD[0] = True
-for collected, want in ((False, ("collect",)), (True, ("normal_sales", True))):
-    acts.clear()
-    res = wellife.module_sales(order_rr({}), types.SimpleNamespace(collected=collected), False, True)
-    check(f"웰라이프 module_sales collected={collected}: {want[0]}", acts == [want] and res[0] == "done", f"{res} {acts}")
-for n, f in _saved_ms.items():
-    setattr(wellife, n, f)
-SOLD[0] = True
-res = wellife.collect_orders(order_rr({}), octx, False, True)
-check("올린 엑셀이 없어도(업로드 리허설) 정상매출을 눌렀으면 done", res[0] == "done" and acts[-1] == ("normal_sales", True)
-      and res[1].startswith("[리허설] ") and "정상매출 [실행] 매출처리 흉내" in res[1], str(res))
 wellife.normal_sales = _saved_ns
 wellife.clear_point = _saved_cp
 
@@ -1347,7 +1356,7 @@ fin = rec.of("finish")
 check("InvoiceMode 가 잘못되면 아무것도 돌리지 않고 설정 파일 오류", not got and fin and "설정 파일 오류" in fin[-1][1], str(fin))
 picked_run("InvoiceSend")
 check("예약 줄이 운송장 전송만 고르면 로그인 + ⑥ 만 (반복 시간대도 같은 길)",
-      got.get("selected") == {"Login": True, "Sales": False, "Hold": False, "Sap": False, "Wms": False, "InvoiceSend": True},
+      got.get("selected") == {"Login": True, "Excel": False, "Import": False, "Sales": False, "Hold": False, "Sap": False, "Wms": False, "InvoiceSend": True},
       str(got.get("selected")))
 picked_run("InvoiceSend", trigger="repeat")
 check("반복 회차가 보낸 것이 없으면 이력에 남기지 않는다", fins and fins[-1][1].get("record") is False, str(fins))

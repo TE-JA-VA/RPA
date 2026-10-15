@@ -734,20 +734,24 @@ DEFAULT_MODE = "리허설"
 WELLIFE_SECTION = "Wellife"    # 웰라이프 업체 PC 만 (설계 2026-10-07-wellife-gate). 키 이름은 wellife.MODULES 와 같다 - 바꾸면 둘 다
 WELLIFE_CONFIG_MODULES = (
     ("Login", "로그인"),
+    ("Excel", "엑셀 수집"),          # ② 주문매핑을 셋으로 (사용자 2026-10-15) - 빠지면 Sales 를 따른다 (WELLIFE_FOLLOW_SALES)
+    ("Import", "자동 수집"),
     ("Sales", "주문매핑 매출처리"),
     ("Hold", "물류대기 관리"),
     ("Sap", "웰라이프 SAP 연동관리"),
     ("Wms", "웰라이프 WMS 이관관리"),
     ("InvoiceSend", "운송장번호 전송"),
 )
-WELLIFE_DEFAULT = {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
+WELLIFE_FOLLOW_SALES = ("Excel", "Import")   # 10-15 전 섹션에 없는 키 - 주문매핑(Sales) 켬/끔을 따른다 (wellife.FOLLOW_SALES 와 같다)
+WELLIFE_DEFAULT = {"Login": True, "Excel": True, "Import": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
                    "InvoiceSend": False}   # 처음 열릴 때 (사용자 2026-10-07)
 # 모든 업체용 모듈 (패키지 공용 화면 - 운송장번호 전송, 2026-10-13). 이력·토큰 키에 wellife_ 를 붙이지 않아
 # 보통 PROCESS(Routine 섹션)와 웰라이프(Wellife 섹션)가 같은 키로 센다 (agent.history_key). 2026-10-13 모든 업체로 열었다
 SHARED_MODULES = ("InvoiceSend",)
 # Wellife 섹션의 모드 키와 웹에 보이는 이름 - wellife.MODE_NAMES 와 같은 키·순서 (시험이 대조한다).
 # 웹은 보기만 한다 (시험 기간용, 사용자 2026-10-13 - 바꾸기는 PC 설정 파일에서)
-WELLIFE_MODES = (("SalesMode", "주문매핑"), ("NormalSalesMode", "정상매출"), ("Mode", "물류대기"), ("SapMode", "SAP 연동"),
+WELLIFE_MODES = (("SalesMode", "엑셀 수집"), ("ImportMode", "자동 수집"), ("NormalSalesMode", "정상매출"), ("Mode", "물류대기"),
+                 ("SapMode", "SAP 연동"),
                  ("WmsMode", "WMS 이관"), ("InvoiceMode", "운송장번호 전송"))
 
 
@@ -856,6 +860,9 @@ def read_wellife_modules(path=None):
         else:
             selected[k] = None
             problems.append(f"{k} 값이 Y/N 이 아닙니다 ({raw!r})")
+    for k in WELLIFE_FOLLOW_SALES:
+        if k not in section:
+            selected[k] = selected["Sales"]
     return selected, problems
 
 
@@ -870,8 +877,8 @@ def read_wellife_modes(path=None):
         return None
     out = []
     for key, label in WELLIFE_MODES:
-        value = str(section.get(key, "리허설")).strip()
-        ok = ("리허설", "실행") if key == "SalesMode" else ("리허설", "실행", "1건")
+        value = str(section.get(key, section.get("SalesMode", "리허설") if key == "ImportMode" else "리허설")).strip()   # ImportMode 가 없으면 SalesMode
+        ok = ("리허설", "실행") if key in ("SalesMode", "ImportMode") else ("리허설", "실행", "1건")
         out.append([label, value if value in ok else f"설정 오류 ({value})"])
     return out
 

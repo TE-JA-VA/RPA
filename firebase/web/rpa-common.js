@@ -11,8 +11,8 @@ export const MODULES = [
   ["Logistics", "물류관리"], ["Output", "운송장 출력 / 엑셀 생성"], ["InvoiceSend", "운송장번호 전송"],
 ];
 // 웰라이프 업체 모듈 (설계 2026-10-07-wellife-gate) - PC 의 Wellife 섹션 키, wellife.MODULES 와 같다
-export const WELLIFE_MODULES = [
-  ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
+export const WELLIFE_MODULES = [   // ② 주문매핑은 엑셀 수집·자동 수집·매출처리 셋 (2026-10-15)
+  ["Login", "로그인"], ["Excel", "엑셀 수집"], ["Import", "자동 수집"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
   ["Sap", "웰라이프 SAP 연동관리"], ["Wms", "웰라이프 WMS 이관관리"], ["InvoiceSend", "운송장번호 전송"],
 ];
 /** 웰라이프 업체인가 - 업체코드에 wellife (대소문자 무관) 또는 관리 화면에서 연 업체. 에이전트·관리 화면과 같은 규칙 */
@@ -78,7 +78,7 @@ function watchCommand(c, cmdKey, label, alive) {
 export const RUN_CHIPS = [["Prepare", "사이트 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Logistics", "물류관리"], ["Output", "운송장"],
   ["InvoiceSend", "운송장 전송"]];
 // 웰라이프 업체의 줄 단추 - 물류관리·운송장 대신 SAP 연동·WMS 이관 (PC 의 rpa_dashboard.WELLIFE_ONLY_KEYS) + 운송장 전송 (모든 업체용)
-export const WELLIFE_RUN_CHIPS = [["Prepare", "사이트 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Sap", "SAP 연동"], ["Wms", "WMS 이관"],
+export const WELLIFE_RUN_CHIPS = [["Prepare", "사이트 수집"], ["Excel", "엑셀 수집"], ["Import", "자동 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Sap", "SAP 연동"], ["Wms", "WMS 이관"],
   ["InvoiceSend", "운송장 전송"]];
 export const RUN_NAMES = dict([...RUN_CHIPS, ...WELLIFE_RUN_CHIPS]);
 /** '고르기' 줄의 모듈 이름 (로그인은 늘 붙으니 안 적는다). '전체' 거나 줄이 없으면 "" */

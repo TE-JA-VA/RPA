@@ -585,6 +585,10 @@ class Policy:
         import rpa_status as st
         was = st.wellife_policy()                    # 적기 전의 값 - 열렸다 닫힌 업체인지 본다
         dash.set_policy(*got)
+        try:
+            dash.migrate_split_sales()               # 웰라이프 ② 를 셋으로 나눈 뒤 옛 예약 줄 (한 번만)
+        except Exception as e:
+            log(f"예약 줄을 고치지 못했습니다 ({type(e).__name__}) - 다음 번에 다시 합니다")
         if was and not got[2]:
             try:
                 st.remove_wellife_section()          # 닫히면 섹션도 지운다 (안 지우면 '열려 있지 않습니다' 로 영영 멈춘다)

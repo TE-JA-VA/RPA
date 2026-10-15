@@ -537,12 +537,31 @@ def launch_run_all(by):
 ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Sales, Hold, Logistics, Output
 # 웰라이프 업체만 (Wellife 섹션 키 - Login·Sales·Hold 는 PROCESS 와 같은 키). InvoiceSend 는 2026-10-13 모든 업체로 열어
 # ROUTINE_KEYS 에 있다 (웰라이프는 Wellife 섹션의 같은 키)
-WELLIFE_ONLY_KEYS = ("Sap", "Wms")
+WELLIFE_ONLY_KEYS = ("Excel", "Import", "Sap", "Wms")   # Excel·Import = ② 엑셀 수집·자동 수집 (2026-10-15)
 RUN_KEYS = ("Prepare",) + ROUTINE_KEYS + WELLIFE_ONLY_KEYS         # 줄의 run 에 쓰는 키. 이 순서로 저장한다
-SLOT_NAMES = {"Prepare": "사이트 수집", "Sales": "주문매핑", "Hold": "물류대기", "Logistics": "물류관리", "Output": "운송장",
+SLOT_NAMES = {"Prepare": "사이트 수집", "Excel": "엑셀 수집", "Import": "자동 수집", "Sales": "주문매핑", "Hold": "물류대기",
+              "Logistics": "물류관리", "Output": "운송장",
               "Sap": "SAP 연동", "Wms": "WMS 이관", "InvoiceSend": "운송장 전송"}   # 화면 단추와 같은 말
 REST_MIN_DEFAULT = 2
 REST_MIN_RANGE = (1, 60)   # 반복 시간대 쉬는 시간 (분)
+
+
+def migrate_split_sales():
+    """웰라이프 업체 PC 의 예약 줄을 한 번 고친다: 2026-10-15 ② 주문매핑을 엑셀 수집·자동 수집·매출처리로 나눴는데, 그 전 줄의
+    'Sales' 는 셋 모두였다 - 'Sales' 가 든 줄에 Excel·Import 를 더해 업데이트만으로 수집이 빠지지 않게. 한 번만 (schedule.split_sales).
+    웰라이프가 아닌 업체는 손대지 않는다 (보통 PROCESS 의 Sales 는 나뉘지 않았다). 고쳤으면 True."""
+    if not st.wellife_policy():
+        return False
+    cfg = st.read_settings()
+    sch = cfg.get("schedule")
+    if not isinstance(sch, dict) or sch.get("split_sales"):
+        return False
+    for s in sch.get("slots") or []:
+        if isinstance(s, dict) and isinstance(s.get("run"), list) and "Sales" in s["run"]:
+            s["run"] = [k for k in RUN_KEYS if k in set(s["run"]) | {"Excel", "Import"}]
+    sch["split_sales"] = True
+    st.write_settings(cfg)
+    return True
 
 
 def normalize_days(days):

@@ -17,9 +17,11 @@
   데이터가 다시 쌓이기를 오래 기다려야 한다, 사용자 10-13). 체크 칸이 없는 4-4·5-4 는 실행처럼 누른다. ② 엑셀 업로드는
   줄이 없어 못 쓴다. 한 번 실행에 1건이라 반복 회차(RPA_RUN_TRIGGER=repeat)에서는 돌지 않고 멈춘다 (repeat_ones).
 모드는 대시보드 단계 이름·실행 제목·모듈 사유 앞의 [리허설]/[실행] 과 시작 로그로 보인다.
-- ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집은 원래 PROCESS 와 같이
-  상단 전체선택 -> [가져오기] (SalesMode, 리허설은 마우스만 - 사용자 10-14). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14) -
-  정상매출은 NormalSalesMode 로 따로 정한다 (SalesMode '실행' 인 PC 가 업데이트만으로 매출처리를 시작하지 않게).
+- ② 주문매핑은 세 모듈 (사용자 2026-10-15 - 켬/끔·모드·토큰 각각, 이 순서로 돈다):
+  엑셀 수집 (Excel, SalesMode) - 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다.
+  자동 수집 (Import, ImportMode - 빠지면 SalesMode) - 원래 PROCESS 와 같이 상단 전체선택 -> [가져오기] (리허설은 마우스만).
+  매출처리 (Sales, NormalSalesMode) - 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14).
+  Excel·Import 가 빠진 10-15 전 섹션은 Sales 켬/끔을 따른다 (FOLLOW_SALES).
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
 - ⑥ 운송장번호 전송: 조회 -> 전체 체크 -> [전송요청(S)]. 모든 업체용 패키지 화면이라(좌측 아이콘) 웰라이프 고유 값을
@@ -62,13 +64,15 @@ TAB_WAIT_SECONDS = 20       # 탭·아이콘·메뉴를 누른 뒤 그 화면이
 MAIN_TAB_DEPTH = 6          # 메인 탭바를 창에서 자식을 따라 찾을 때 내려가는 최대 깊이 (10-14 실측: 4)
 FORM_DEPTH = 4              # 떠 있는 화면 안에서 폼(Frm_…)을 자식을 따라 찾을 때 내려가는 최대 깊이
 MODE_KEY = "Mode"              # ③ 물류대기 저장 (④⑤ 는 10-13 부터 따로 - SapMode·WmsMode)
-SALES_MODE_KEY = "SalesMode"   # ② 주문매핑 엑셀 업로드 - 따로 정한다 (사용자 10-08)
+SALES_MODE_KEY = "SalesMode"   # ② 엑셀 수집 (엑셀 업로드) - 따로 정한다 (사용자 10-08)
+IMPORT_MODE_KEY = "ImportMode" # ② 자동 수집 [가져오기] - 따로 정한다 (사용자 10-15). 빠지면 SalesMode 를 따른다 (그 전엔 SalesMode 였다)
 NORMAL_SALES_MODE_KEY = "NormalSalesMode"   # ② 하단 정상매출 - 따로 정한다 (10-14, SalesMode '실행' 의 뜻이 바뀌지 않게)
 SAP_MODE_KEY = "SapMode"       # ④ 지정·화살표 (사용자 10-13)
 WMS_MODE_KEY = "WmsMode"       # ⑤ 화살표 (사용자 10-13)
 INVOICE_MODE_KEY = "InvoiceMode"   # ⑥ 운송장번호 [전송요청(S)] - 따로 정한다 (사용자 10-13, 택배사로 나가 되돌릴 수 없다)
 # 모드 키 -> (시작 로그·제목 이름, 누르는 것). 이 순서로 보인다 (rpa_status.WELLIFE_MODES 와 같은 순서)
-MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드·[가져오기]"), NORMAL_SALES_MODE_KEY: ("② 정상매출", "매출처리 ▼ 정상매출"),
+MODE_NAMES = {SALES_MODE_KEY: ("② 엑셀 수집", "엑셀 업로드"), IMPORT_MODE_KEY: ("② 자동 수집", "[가져오기]"),
+              NORMAL_SALES_MODE_KEY: ("② 정상매출", "매출처리 ▼ 정상매출"),
               MODE_KEY: ("③ 물류대기", "저장"),
               SAP_MODE_KEY: ("④ SAP 연동", "지정·화살표"), WMS_MODE_KEY: ("⑤ WMS 이관", "화살표"),
               INVOICE_MODE_KEY: ("⑥ 운송장 전송", "[전송요청(S)]")}
@@ -80,8 +84,11 @@ OK_TEXTS = ("확인(O)", "확인")
 # 대시보드 단계 (rpa_status.step 키, 화면 이름). 순서가 곧 진행 순서다. 실행할 때 이름 앞에 [모드] 를 붙인다
 STEPS = (
     ("login", "ERPia 로그인"),
-    ("wl_order_screen", "주문매핑 화면 이동"),
-    ("wl_order_collect", "주문 수집 (엑셀 / 자동)"),
+    ("wl_excel_screen", "주문매핑 화면 이동 (엑셀 수집)"),
+    ("wl_order_excel", "엑셀 업로드"),
+    ("wl_import_screen", "주문매핑 화면 이동 (자동 수집)"),
+    ("wl_order_import", "상단 전체선택 → [가져오기]"),
+    ("wl_order_screen", "주문매핑 화면 이동 (매출처리)"),
     ("wl_order_sales", "하단 전체선택 → 매출처리 ▼ 정상매출"),
     ("wl_hold_screen", "물류대기 화면 이동"),
     ("wl_hold_save", "물류대기 조회 → 전체선택 → 저장"),
@@ -100,7 +107,10 @@ STEPS = (
 # run_routine.ROUTINE_MODULES 와 같은 모양 (모듈 키, 설정 키, 이름, 단계, module_flags 비트). 비트 32 부터는 웰라이프
 MODULES = (
     ("login", "Login", "로그인", ("login",), 1),
-    ("wellife_sales", "Sales", "웰라이프 주문매핑", ("wl_order_screen", "wl_order_collect", "wl_order_sales"), 32),
+    # ② 주문매핑은 셋 - 엑셀 수집 / 자동 수집 / 매출처리 (사용자 2026-10-15, 모드·토큰도 각각). 이 순서로 돈다
+    ("wellife_excel", "Excel", "웰라이프 엑셀 수집", ("wl_excel_screen", "wl_order_excel"), 1024),
+    ("wellife_import", "Import", "웰라이프 자동 수집", ("wl_import_screen", "wl_order_import"), 2048),
+    ("wellife_sales", "Sales", "웰라이프 주문매핑 매출처리", ("wl_order_screen", "wl_order_sales"), 32),
     ("wellife_hold", "Hold", "웰라이프 물류대기", ("wl_hold_screen", "wl_hold_save"), 64),
     ("wellife_sap", "Sap", "웰라이프 SAP 연동관리", ("wl_sap_screen", "wl_sap_slip", "wl_sap_shipping", "wl_sap_so"), 128),
     ("wellife_wms", "Wms", "웰라이프 WMS 이관관리",
@@ -109,9 +119,10 @@ MODULES = (
     ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512),
 )
 # 모듈마다 따로 정하는 모드 키. 여기 없는 모듈(로그인·③ 물류대기)은 MODE_KEY
-MODULE_MODES = {"wellife_sales": SALES_MODE_KEY, "wellife_sap": SAP_MODE_KEY, "wellife_wms": WMS_MODE_KEY,
-                "invoicesend": INVOICE_MODE_KEY}
-STEP_MODES = {"wl_order_sales": NORMAL_SALES_MODE_KEY}   # 모듈 안에서 모드가 다른 단계
+MODULE_MODES = {"wellife_excel": SALES_MODE_KEY, "wellife_import": IMPORT_MODE_KEY, "wellife_sales": NORMAL_SALES_MODE_KEY,
+                "wellife_sap": SAP_MODE_KEY, "wellife_wms": WMS_MODE_KEY, "invoicesend": INVOICE_MODE_KEY}
+# 엑셀 수집·자동 수집이 빠진 섹션 (10-15 전 PC) 은 주문매핑(Sales) 켬/끔을 따른다 - 업데이트만으로 수집이 멈추지 않게
+FOLLOW_SALES = ("Excel", "Import")
 # 단계 표 (단계 키, 대시보드 단추, 화살표, 머리글로 전체 체크하는가, 화살표가 하는 일). SAP전송전체 이후와
 # 송장X·API실패·WMS작업중·할당·출고완료·결품관리는 사람이 보는 화면이라 넣지 않는다 (docs/wellife-rpa.md 2절)
 SAP_SIMPLE_STAGES = (
@@ -167,6 +178,9 @@ def load_switches(rr):
         if value not in ("Y", "N"):
             bad.append(f"{key}={raw!r}")
         selected[key] = value == "Y"
+    for key in FOLLOW_SALES:
+        if key not in section:
+            selected[key] = selected["Sales"]
     if bad:
         raise RuntimeError(
             f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")
@@ -179,9 +193,10 @@ def load_mode(rr, key=MODE_KEY, section=SECTION):
     ② SalesMode(엑셀 업로드)는 줄이 없어 "1건" 을 못 쓴다 (NormalSalesMode 는 하단 첫 줄 1건).
     section: 보통 PROCESS 의 운송장번호 전송은 Routine 섹션의 InvoiceMode (run_routine.module_invoice_send, 사용자 10-13).
     "리허설"/"실행" 이 아닌 값은 RuntimeError (load_switches 뒤에 부른다 - 섹션 모양은 거기서 본다)."""
-    raw = (rr.pl.load_settings().get(section) or {}).get(key, "리허설")
+    found = rr.pl.load_settings().get(section) or {}
+    raw = found.get(key, found.get(SALES_MODE_KEY, "리허설") if key == IMPORT_MODE_KEY else "리허설")   # ImportMode 가 없으면 SalesMode
     value = str(raw).strip()
-    allowed = [m for m in MODES if not (key == SALES_MODE_KEY and MODES[m] == ONE)]
+    allowed = [m for m in MODES if not (key in (SALES_MODE_KEY, IMPORT_MODE_KEY) and MODES[m] == ONE)]   # 줄이 없어 '1건' 을 못 쓴다
     if value not in allowed:
         raise RuntimeError(f"{rr.pl.config_name()} 의 '{section}' 섹션 {key} 값은 "
                            f"{' 또는 '.join(repr(m) for m in allowed)} 이어야 합니다: {raw!r}")
@@ -219,7 +234,7 @@ def run_main(rr):
     if not error and picked is not None:
         selected, unknown = picked, []
     # 모드는 단계 이름 앞에 붙여 대시보드·웹(진행 중 단계 이름 포함)에 늘 보이게 한다 - 단계마다 그 모듈의 모드
-    step_mode = {k: STEP_MODES.get(k) or MODULE_MODES.get(m[0], MODE_KEY) for m in MODULES for k in m[3]}
+    step_mode = {k: MODULE_MODES.get(m[0], MODE_KEY) for m in MODULES for k in m[3]}
     steps = STEPS if error else tuple((k, f"[{mode_tag(modes[step_mode[k]])}] {label}") for k, label in STEPS)
     status.start("routine", steps, title="웰라이프 실행" if error else "웰라이프 실행 [" + " / ".join(
         f"{name[2:]} {mode_tag(modes[k])}" for k, (name, _) in MODE_NAMES.items()) + "]")
@@ -283,7 +298,9 @@ def run_main(rr):
         return lambda ctx: ((ctx.no_rerun.add(key) if one and hasattr(ctx, "no_rerun") else None), f(ctx))[1]
 
     funcs = {"login": rr.module_login,
-             "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[SALES_MODE_KEY], modes[NORMAL_SALES_MODE_KEY]),
+             "wellife_excel": lambda ctx: module_excel(rr, ctx, modes[SALES_MODE_KEY]),
+             "wellife_import": lambda ctx: module_import(rr, ctx, modes[IMPORT_MODE_KEY]),
+             "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[NORMAL_SALES_MODE_KEY]),
              "wellife_hold": lambda ctx: module_hold(rr, ctx, modes[MODE_KEY]),
              "wellife_sap": lambda ctx: module_sap(rr, ctx, modes[SAP_MODE_KEY]),
              "wellife_wms": lambda ctx: module_wms(rr, ctx, modes[WMS_MODE_KEY]),
@@ -306,10 +323,10 @@ def run_main(rr):
 # 실제로 누른 것이 있으면 "done", 리허설·할 것 없음은 "skipped"(토큰 0).
 # ---------------------------------------------------------------------------
 
-def module_sales(rr, ctx, live=False, sell=False):
-    """② 주문매핑: 화면 이동 -> 주문 수집 (collect_orders) -> 하단 전체선택 -> 정상매출 (normal_sales, 사용자 10-14).
-    live: SalesMode (엑셀 업로드), sell: NormalSalesMode (정상매출)."""
-    rr.status.step("wl_order_screen")
+def order_screen(rr, ctx, step, body):
+    """② 주문매핑 화면으로 가서 body() - 엑셀 수집·자동 수집·매출처리 세 모듈이 함께 쓴다 (사용자 2026-10-15 셋으로 나눔).
+    이 화면에서는 예상 못 한 팝업도 [예](없으면 [확인]) 로 넘긴다 - 단계 사이(no_popup)·[가져오기]·정상매출 뒤 별도 창 모두 (사용자 2026-10-15)."""
+    rr.status.step(step)
     try:
         front(rr, ctx, "주문매핑 화면 이동")
         r = goto_screen(rr, ctx, ORDER_TAB, ORDER_ICON, lambda: _ok_or_reason(rr.goto_order_screen(ctx)))
@@ -317,14 +334,9 @@ def module_sales(rr, ctx, live=False, sell=False):
         return e.result, str(e)
     if r != "ok":
         return "failed", f"'{ORDER_ICON}' 아이콘을 찾지 못했습니다." if r == "absent" else r
-    # 이 화면에서는 예상 못 한 팝업도 [예](없으면 [확인]) 로 넘긴다 - 단계 사이(no_popup)·[가져오기]·정상매출 뒤 별도 창 모두 (사용자 2026-10-15)
     ctx.pass_popups = rr.POPUP_PREFER_YES = True
     try:
-        if getattr(ctx, "collected", False):    # ERPia 가 꺼져 다시 띄웠고 주문 수집은 끝났다 (run_routine.run_module)
-            rr.log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
-            note, sold = normal_sales(rr, ctx, sell)
-            return ("done" if sold else "skipped"), f"[{mode_tag(sell)}] 수집은 앞에서 끝남 / 정상매출 " + note
-        return collect_orders(rr, ctx, live, sell)
+        return body()
     except Stop as e:
         return e.result, str(e)
     except Exception as e:
@@ -333,71 +345,83 @@ def module_sales(rr, ctx, live=False, sell=False):
         ctx.pass_popups = rr.POPUP_PREFER_YES = False
 
 
-def collect_orders(rr, ctx, live, sell=False):
-    """주문 수집 (사용자 10-08). live: SalesMode, sell: NormalSalesMode.
-    - 엑셀: 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
-      (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만.
-    - 자동 수집: 원래 PROCESS 와 같이 상단(사이트) 전체선택 -> [가져오기] (run_import_step - 끝날 때까지 기다리고 안내 팝업은
-      원래 규칙대로 닫는다). 리허설은 전체선택만 하고(체크는 데이터를 바꾸지 않는다) [가져오기] 에 마우스만 (사용자 10-14).
-    - 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (normal_sales, 사용자 10-14)."""
-    rr.status.step("wl_order_collect")
-    files = excel_files(rr)
-    notes, uploaded = [], 0
-    tables = rr.get_onscreen_tables(visible_page(ctx))     # 떠 있는 화면 안만 (창 전체는 숨은 화면까지 수천 개)
+def module_excel(rr, ctx, live=False):
+    """② 엑셀 수집 (live: SalesMode)."""
+    return order_screen(rr, ctx, "wl_excel_screen", lambda: excel_collect(rr, ctx, live))
+
+
+def module_import(rr, ctx, live=False):
+    """② 자동 수집 (live: ImportMode)."""
+    return order_screen(rr, ctx, "wl_import_screen", lambda: import_collect(rr, ctx, live))
+
+
+def module_sales(rr, ctx, sell=False):
+    """② 주문매핑 매출처리: 하단 전체선택 -> 매출처리 ▼ 정상매출 (normal_sales, sell: NormalSalesMode)."""
+    def body():
+        note, sold = normal_sales(rr, ctx, sell)
+        return ("done" if sold else "skipped"), f"[{mode_tag(sell)}] 정상매출 " + note
+    return order_screen(rr, ctx, "wl_order_screen", body)
+
+
+def site_grid(rr, ctx):
+    """주문매핑 상단 사이트 그리드 - 떠 있는 화면 안만 (창 전체는 숨은 화면까지 수천 개)."""
+    tables = rr.get_onscreen_tables(visible_page(ctx))
     if not tables:
         raise Stop("failed", "주문매핑 사이트 그리드를 찾지 못했습니다.")
-    sites = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
+    return min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
+
+
+def excel_collect(rr, ctx, live):
+    """엑셀 수집 (사용자 10-08): 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
+    (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만."""
+    rr.status.step("wl_order_excel")
+    files = excel_files(rr)
     if not files:
-        notes.append("엑셀: 올릴 파일 없음")
-    else:
-        names = ", ".join(sorted(files))
-        if live:
-            no_popup(rr, ctx, "엑셀 업로드 전")
-            front(rr, ctx, "엑셀 업로드")
-            rr.log(f"  [실행] 엑셀 업로드: 사이트 {names}")
-            uploaded, errors = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites)
-            notes.append(f"엑셀 {len(files)}건 중 {uploaded}건 업로드"
-                         + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
-        else:
-            code = sorted(files)[0]
-            cell, _ = rr.find_site_upload_cell(ctx.hwnd, sites, code)
-            if cell is not None:
-                hover(rr, ctx, cell, f"엑셀 업로드 칸 (사이트 {code})", True)
-            notes.append(f"엑셀 {len(files)}건 있음 (사이트 {names}) - 올리지 않음")
-    imported = False
-    page = visible_page(ctx)
+        return "skipped", f"[{mode_tag(live)}] 엑셀: 올릴 파일 없음"
+    sites, names = site_grid(rr, ctx), ", ".join(sorted(files))
+    if not live:
+        code = sorted(files)[0]
+        cell, _ = rr.find_site_upload_cell(ctx.hwnd, sites, code)
+        if cell is not None:
+            hover(rr, ctx, cell, f"엑셀 업로드 칸 (사이트 {code})", True)
+        return "skipped", f"[{mode_tag(live)}] 엑셀 {len(files)}건 있음 (사이트 {names}) - 올리지 않음"
+    no_popup(rr, ctx, "엑셀 업로드 전")
+    front(rr, ctx, "엑셀 업로드")
+    rr.log(f"  [실행] 엑셀 업로드: 사이트 {names}")
+    uploaded, errors = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites)
+    return ("done" if uploaded else "skipped"), (f"[{mode_tag(live)}] 엑셀 {len(files)}건 중 {uploaded}건 업로드"
+                                                 + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
+
+
+def import_collect(rr, ctx, live):
+    """자동 수집: 원래 PROCESS 와 같이 상단(사이트) 전체선택 -> [가져오기] (run_import_step - 끝날 때까지 기다리고 안내 팝업은
+    닫는다). 리허설은 전체선택만 하고(체크는 데이터를 바꾸지 않는다) [가져오기] 에 마우스만 (사용자 10-14)."""
+    rr.status.step("wl_order_import")
+    page, what = visible_page(ctx), f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]"
     imp = onscreen_button(page, rr.IMPORT_BUTTON_NAME)
     if imp is None:
-        notes.append("자동 수집 단추 없음")
-    else:
-        no_popup(rr, ctx, "상단 전체선택 전")
-        front(rr, ctx, "상단 전체선택")
-        n = rr.select_all_and_verify("좌측상단", ctx.hwnd, sites, ["아이디"])
-        no_popup(rr, ctx, "상단 전체선택")
-        if live:
-            what = f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]"
-            if not n:   # 원래 PROCESS 는 그래도 누르지만 웰라이프는 모르면 멈춘다
-                raise Stop("failed", f"상단 전체선택을 확인하지 못해 {what} 를 누르지 않고 멈춤")
-            # run_import_step 은 넘긴 범위에서 첫 같은 이름 단추를 다시 찾아 누른다 - 떠 있는 화면만 넘기고, 그 단추가
-            # 확인한 단추와 같은 자리인지, 그 자리가 창 안에 보이고 덮이지 않았는지 본 뒤 누른다 (숨은 화면 단추를 누르지 않게)
-            again = rr.find_by_text(page, rr.IMPORT_BUTTON_NAME, control_types=("Button",))
-            if again is None or again.rectangle() != imp.rectangle():
-                raise Stop("failed", f"{what}: 누를 단추가 떠 있는 화면의 단추와 달라 누르지 않고 멈춤")
-            front(rr, ctx, what)
-            clear_point(rr, ctx, imp, what)
-            rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
-            if not rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page):
-                raise Stop("stopped", f"{what} 를 눌렀으나 끝난 것을 확인하지 못해 정상매출로 넘어가지 않고 멈춤 (확인할 것)")
-            notes.append(f"자동 수집: 사이트 {n}줄 전체선택 -> [{rr.IMPORT_BUTTON_NAME}] 완료")
-            imported = True
-        else:
-            hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]", True)
-            notes.append(f"자동 수집: 사이트 {n or 0}줄 전체선택, [{rr.IMPORT_BUTTON_NAME}] 는 누르지 않음")
-    if hasattr(ctx, "collected"):    # 이 뒤에 ERPia 가 꺼지면 다시 띄워 매출처리부터 (run_routine.run_module)
-        ctx.collected = rr.ec.pid_alive(ctx.pid)
-    note, sold = normal_sales(rr, ctx, sell)
-    notes.append(f"정상매출 [{mode_tag(sell)}] " + note)
-    return ("done" if uploaded or imported or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
+        return "skipped", f"[{mode_tag(live)}] 자동 수집 단추 없음"
+    sites = site_grid(rr, ctx)
+    no_popup(rr, ctx, "상단 전체선택 전")
+    front(rr, ctx, "상단 전체선택")
+    n = rr.select_all_and_verify("좌측상단", ctx.hwnd, sites, ["아이디"])
+    no_popup(rr, ctx, "상단 전체선택")
+    if not live:
+        hover(rr, ctx, imp, what, True)
+        return "skipped", f"[{mode_tag(live)}] 자동 수집: 사이트 {n or 0}줄 전체선택, [{rr.IMPORT_BUTTON_NAME}] 는 누르지 않음"
+    if not n:   # 원래 PROCESS 는 그래도 누르지만 웰라이프는 모르면 멈춘다
+        raise Stop("failed", f"상단 전체선택을 확인하지 못해 {what} 를 누르지 않고 멈춤")
+    # run_import_step 은 넘긴 범위에서 첫 같은 이름 단추를 다시 찾아 누른다 - 떠 있는 화면만 넘기고, 그 단추가
+    # 확인한 단추와 같은 자리인지, 그 자리가 창 안에 보이고 덮이지 않았는지 본 뒤 누른다 (숨은 화면 단추를 누르지 않게)
+    again = rr.find_by_text(page, rr.IMPORT_BUTTON_NAME, control_types=("Button",))
+    if again is None or again.rectangle() != imp.rectangle():
+        raise Stop("failed", f"{what}: 누를 단추가 떠 있는 화면의 단추와 달라 누르지 않고 멈춤")
+    front(rr, ctx, what)
+    clear_point(rr, ctx, imp, what)
+    rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
+    if not rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page):
+        raise Stop("stopped", f"{what} 를 눌렀으나 끝난 것을 확인하지 못해 다음 모듈로 넘어가지 않고 멈춤 (확인할 것)")
+    return "done", f"[{mode_tag(live)}] 자동 수집: 사이트 {n}줄 전체선택 -> [{rr.IMPORT_BUTTON_NAME}] 완료"
 
 
 SALES_SPLIT, SALES_ITEM = "매출처리", "정상매출"

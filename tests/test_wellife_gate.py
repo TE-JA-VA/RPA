@@ -37,15 +37,15 @@ def read_cfg():
 print("=== 1. Wellife 섹션 ===")
 write_cfg({"LogIn": {"AdminCode": "x"}, "Routine": {"Logistics": "Y"}})
 check(st.has_wellife_section() is False, "섹션이 없으면 False")
-check(st.ensure_wellife_section() is True and read_cfg()["Wellife"] == {"Login": "Y", "Sales": "Y", "Hold": "N", "Sap": "N", "Wms": "N",
-                                                                   "InvoiceSend": "N", "SalesMode": "리허설", "NormalSalesMode": "리허설",
+check(st.ensure_wellife_section() is True and read_cfg()["Wellife"] == {"Login": "Y", "Excel": "Y", "Import": "Y", "Sales": "Y", "Hold": "N", "Sap": "N", "Wms": "N",
+                                                                   "InvoiceSend": "N", "SalesMode": "리허설", "ImportMode": "리허설", "NormalSalesMode": "리허설",
                                                                    "Mode": "리허설", "SapMode": "리허설", "WmsMode": "리허설",
                                                                    "InvoiceMode": "리허설"},
-      "처음 열리면 로그인·주문매핑 매출처리만 켬, 모드는 모두 '리허설' 로 적음")
+      "처음 열리면 로그인·주문매핑(엑셀 수집·자동 수집·매출처리)만 켬, 모드는 모두 '리허설' 로 적음")
 check(read_cfg()["LogIn"] == {"AdminCode": "x"} and read_cfg()["Routine"] == {"Logistics": "Y"}, "다른 섹션은 그대로")
 check(st.ensure_wellife_section() is False, "있으면 안 바꾼다")
 got = st.write_wellife_modules({"Login": False, "Sales": True, "Hold": True, "Sap": True})
-check(got == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False, "InvoiceSend": False},
+check(got == {"Login": True, "Excel": False, "Import": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False, "InvoiceSend": False},
       f"쓰기: 로그인은 늘 켬, 빠진 키는 끔 ({got})")
 check(st.read_wellife_modules() == (got, []), "읽기는 쓴 값 그대로")
 try:
@@ -55,14 +55,15 @@ except ValueError:
 write_cfg({"LogIn": {}, "Wellife": {"Sales": "Y", "Hold": "maybe"}})
 sel, problems = st.read_wellife_modules()
 check(sel["Hold"] is None and problems and sel["Sap"] is False, f"Y/N 아닌 값은 None·문제, 빠진 키는 끔 ({sel}, {problems})")
-check(st.read_wellife_modes() == [["주문매핑", "리허설"], ["정상매출", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "리허설"],
+check(sel["Excel"] is True and sel["Import"] is True, f"엑셀·자동 수집이 빠진 섹션(10-15 전)은 주문매핑(Sales) 켬을 따른다 ({sel})")
+check(st.read_wellife_modes() == [["엑셀 수집", "리허설"], ["자동 수집", "리허설"], ["정상매출", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "리허설"],
                                   ["WMS 이관", "리허설"], ["운송장번호 전송", "리허설"]],
       f"모드(웹 보기): 빠지면 리허설 ({st.read_wellife_modes()})")
 write_cfg({"LogIn": {}, "Wellife": {"Mode": " 실행 ", "SapMode": "1건", "SalesMode": "1건", "NormalSalesMode": "1건",
                                     "InvoiceMode": "보냄"}})
-check(st.read_wellife_modes() == [["주문매핑", "설정 오류 (1건)"], ["정상매출", "1건"], ["물류대기", "실행"], ["SAP 연동", "1건"],
+check(st.read_wellife_modes() == [["엑셀 수집", "설정 오류 (1건)"], ["자동 수집", "설정 오류 (1건)"], ["정상매출", "1건"], ["물류대기", "실행"], ["SAP 연동", "1건"],
                                   ["WMS 이관", "리허설"], ["운송장번호 전송", "설정 오류 (보냄)"]],
-      f"모드(웹 보기): 실행·1건·잘못된 값 (주문매핑 엑셀 업로드는 1건을 못 쓴다, 정상매출은 쓴다) ({st.read_wellife_modes()})")
+      f"모드(웹 보기): 실행·1건·잘못된 값 (엑셀 수집·자동 수집은 1건을 못 쓴다 - ImportMode 가 없으면 SalesMode, 정상매출은 쓴다) ({st.read_wellife_modes()})")
 write_cfg({"LogIn": {}})
 check(st.read_wellife_modes() is None, "Wellife 섹션이 없으면 모드 None (웹에 안 보인다)")
 
@@ -122,8 +123,28 @@ check(dash.slot_target({"at": "10:00", "until": "18:00", "rest_min": 5, "run": [
 check(dash.slot_text({"at": "10:00", "run": ["Login", "InvoiceSend"]}).endswith("운송장 전송"),
       f"줄 이름에 운송장 전송 ({dash.slot_text({'at': '10:00', 'run': ['Login', 'InvoiceSend']})})")
 _sch["policy"] = {"limit": None, "off": [], "wellife": False}
-check(dash.slot_off(_sch) == ["Sap", "Wms"], "보통 업체는 SAP 연동·WMS 이관을 뺀다 (운송장 전송은 2026-10-13 모든 업체로)")
+check(dash.slot_off(_sch) == ["Excel", "Import", "Sap", "Wms"], "보통 업체는 웰라이프 엑셀·자동 수집, SAP 연동·WMS 이관을 뺀다 (운송장 전송은 2026-10-13 모든 업체로)")
 check(dash.slot_target(_rows[1], dash.slot_off(_sch)) == (None, {}), "보통 업체에 ⑤ 만 있는 줄은 띄우지 않는다")
+
+# ② 를 셋으로 나눈 뒤 (2026-10-15): 웰라이프 PC 의 옛 예약 줄 'Sales' 에 엑셀·자동 수집을 한 번만 더한다
+_cfg = st.read_settings()
+_cfg["schedule"] = {"enabled": True, "days": [0], "policy": {"wellife": False},
+                    "slots": [{"at": "09:00", "run": ["Login", "Sales", "Hold"]}, {"at": "13:00", "run": ["Login", "Wms"]}]}
+st.write_settings(_cfg)
+check(dash.migrate_split_sales() is False and st.read_settings()["schedule"]["slots"][0]["run"] == ["Login", "Sales", "Hold"],
+      "웰라이프가 아닌 업체의 예약 줄은 손대지 않는다 (보통 PROCESS 의 Sales 는 나뉘지 않았다)")
+_cfg = st.read_settings()
+_cfg["schedule"]["policy"] = {"wellife": True}
+st.write_settings(_cfg)
+check(dash.migrate_split_sales() is True, "웰라이프 업체 PC 는 고친다")
+_slots = st.read_settings()["schedule"]["slots"]
+check(_slots[0]["run"] == ["Login", "Sales", "Hold", "Excel", "Import"] and _slots[1]["run"] == ["Login", "Wms"],
+      f"'Sales' 가 든 줄만 엑셀·자동 수집을 더한다 ({_slots})")
+_cfg = st.read_settings()
+_cfg["schedule"]["slots"][0]["run"] = ["Login", "Sales"]          # 그 뒤 사람이 매출처리만 고른 줄
+st.write_settings(_cfg)
+check(dash.migrate_split_sales() is False and st.read_settings()["schedule"]["slots"][0]["run"] == ["Login", "Sales"],
+      "한 번만 - 그 뒤 매출처리만 고른 줄은 그대로")
 
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
