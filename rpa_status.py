@@ -74,13 +74,15 @@ SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
 # (2026-10-07 시각별 모듈 - 설계 docs/superpowers/specs/2026-10-06-settings-schedule-design.md 5절. 옛 모양 {days, times} 는 read_settings 가 바꾼다)
 SCHEDULE_MINUTE_STEP = 5
 SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
-SCHEDULE_VERSION = 3        # 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
+SCHEDULE_VERSION = 4        # 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
     "schedule": {
         "version": SCHEDULE_VERSION,
         "enabled": False,
         "days": [0, 1, 2, 3, 4],    # 평일
         "slots": [{"at": "09:00"}],
+        "skip_holidays": True,      # 공휴일(kr_holidays)에는 자동 실행을 쉰다 - 업체가 끌 수 있다 (사용자 2026-10-15, 기본 켬)
+        "off_dates": [],            # 업체가 정한 쉬는 날 ["YYYY-MM-DD"] - 공휴일 쉬기와 상관없이 쉰다. 사람이 누르는 실행은 그대로 돈다
         "next_run_at": None,
         "next_slot": None,          # next_run_at 이 가리키는 줄의 at
         "last_launch_at": None,

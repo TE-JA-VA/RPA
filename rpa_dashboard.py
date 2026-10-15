@@ -44,6 +44,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import kr_holidays
 import rpa_status as st
 import rpa_update
 
@@ -668,6 +669,58 @@ def _same_day(a, b):
     return not a.get("days") or not b.get("days") or bool(set(a["days"]) & set(b["days"]))
 
 
+OFF_DATES_MAX = 100          # 업체 휴무일 칸 수 (지난 날은 저장할 때 빠진다)
+NEXT_OFF_DAYS = 45           # 화면에 '가까운 쉬는 날' 을 보여 주는 거리
+DUE_HORIZON_DAYS = 400       # 다음 예약을 찾는 거리 - 긴 휴무·연휴가 이어져도 찾게 (예전엔 8일)
+
+
+def day_off(sch, day):
+    """그날 자동 실행을 쉬면 까닭 (공휴일 이름·'업체 휴무일'), 돌면 None (사용자 2026-10-15).
+    공휴일은 skip_holidays 가 켜져 있을 때만 (기본 켬), 업체 휴무일은 늘. 사람이 누르는 실행·명령은 여기를 지나지 않는다."""
+    iso = day.isoformat()
+    if iso in (sch.get("off_dates") or []):
+        return "업체 휴무일"
+    if sch.get("skip_holidays", True) is not False and iso in kr_holidays.HOLIDAYS:
+        return kr_holidays.HOLIDAYS[iso]
+    return None
+
+
+def schedule_live(sch, today):
+    """에이전트가 웹(live/schedule)에 올리는 예약 - settings.json 값 복사본에 화면 안내를 더한다 (검토 2026-10-16: 원본만 올려
+    '가까운 휴무일'·'공휴일 표 끝' 안내가 화면에 안 떴다). 지난 휴무일은 뺀다 (다음 [적용] 때 PC 도 뺀다)."""
+    return dict(sch, off_dates=[x for x in sch.get("off_dates") or [] if x >= today.isoformat()],
+                next_off=next_off(sch, today), holidays_until=f"{kr_holidays.LAST_YEAR}-12-31")
+
+
+def next_off(sch, today):
+    """오늘부터 NEXT_OFF_DAYS 안의 가장 가까운 쉬는 날 {date, name} - 화면 안내. 없으면 None."""
+    for i in range(NEXT_OFF_DAYS + 1):
+        day = today + datetime.timedelta(days=i)
+        why = day_off(sch, day)
+        if why:
+            return {"date": day.isoformat(), "name": why}
+    return None
+
+
+def normalize_off_dates(dates, today):
+    """업체 휴무일 검증: YYYY-MM-DD 목록, 지난 날은 빼고 겹치면 하나로, 날짜 순. 틀리면 ValueError (사람에게 보일 글)."""
+    if not isinstance(dates, list):
+        raise ValueError("휴무일은 날짜 목록이어야 합니다.")
+    out = set()
+    for x in dates:
+        try:
+            if not isinstance(x, str) or len(x) != 10:
+                raise ValueError
+            day = datetime.date.fromisoformat(x)
+        except ValueError:
+            raise ValueError(f"휴무일 날짜가 올바르지 않습니다: {x}") from None
+        if day >= today:
+            out.add(day.isoformat())
+    if len(out) > OFF_DATES_MAX:
+        raise ValueError(f"휴무일은 최대 {OFF_DATES_MAX}개까지 등록할 수 있습니다.")
+    return sorted(out)
+
+
 def slot_days(sch, s):
     """줄이 도는 요일 - 줄마다 요일이 없으면 공통 요일 (옛 저장 값)."""
     return s.get("days") or sch.get("days") or []
@@ -731,8 +784,12 @@ def set_policy(limit, off, wellife=False, presets=None):
 def next_due(sch, after):
     """after 뒤 가장 가까운 예약 (시각, 그 줄). 없으면 (None, None)."""
     slots = active_slots(sch)
-    for offset in range(8):   # 오늘 포함 8일이면 어떤 요일 조합이든 한 번은 걸린다
+    if not slots:
+        return None, None
+    for offset in range(DUE_HORIZON_DAYS):   # 공휴일·업체 휴무일은 건너뛴다 - 연휴·긴 휴무 뒤 첫날까지 찾게 넉넉히
         day = after.date() + datetime.timedelta(days=offset)
+        if day_off(sch, day):
+            continue
         for s in slots:       # 시각 순
             if day.weekday() in slot_days(sch, s):
                 cand = datetime.datetime.combine(day, datetime.time(int(s["at"][:2]), int(s["at"][3:])))
@@ -796,7 +853,7 @@ def launch_slot(slot, by="auto", trigger="auto"):
 
 def open_window(sch, now):
     """지금 열려 있는 반복 시간대 (그날 요일 + 시작 ≤ 지금 < 끝, 한도 안의 줄). 없으면 None."""
-    if not sch.get("enabled"):
+    if not sch.get("enabled") or day_off(sch, now.date()):     # 공휴일·업체 휴무일에는 반복도 쉰다
         return None
     hm = now.strftime("%H:%M")
     return next((s for s in active_slots(sch) if s.get("until") and s["at"] <= hm < s["until"]
@@ -990,6 +1047,9 @@ class Scheduler(threading.Thread):
             if not self._advance_now(now)["next_run_at"]:
                 self.waiting_reason = "요일·시간 설정이 비어 있습니다"
                 return
+        elif now >= next_run and (day_off(sch, next_run.date()) or day_off(sch, now.date())):
+            # 공휴일을 모르던 버전이 잡아 둔 시각·잡은 뒤 넣은 휴무일, 또는 자던 PC 가 휴무일에 깨어 밀린 실행 - 띄우지 않고 다음 날로
+            self._advance_now(now)
         elif now >= next_run:
             slot = slot_of(sch)
             if slot is not None and not slot.get("until"):
@@ -1107,6 +1167,10 @@ def schedule_view():
         "next_slot": sch.get("next_slot") if nxt else None,
         "next_run_in_sec": max(0, int((nxt - now).total_seconds())) if nxt else None,
         "policy": sch.get("policy"),
+        "skip_holidays": sch.get("skip_holidays", True) is not False,
+        "off_dates": [x for x in sch.get("off_dates") or [] if x >= now.date().isoformat()],
+        "next_off": next_off(sch, now.date()),                     # 화면: '12/25 성탄절에는 자동 실행을 쉽니다'
+        "holidays_until": f"{kr_holidays.LAST_YEAR}-12-31",        # 화면: 공휴일 표가 끝나 가면 업데이트 안내
         "repeat": sch.get("repeat"),
         "last_launch_at": sch.get("last_launch_at"),
         "last_launch_by": sch.get("last_launch_by"),
@@ -1129,6 +1193,13 @@ def apply_schedule(payload):
         raise ValueError("enabled 는 true/false 여야 합니다")
     raw_days = payload.get("days")
     days = [] if not enabled and raw_days in (None, []) else normalize_days(raw_days)
+    skip = payload.get("skip_holidays")                 # 없으면 (옛 화면) 지금 값 그대로
+    if skip is not None and not isinstance(skip, bool):
+        raise ValueError("공휴일 휴무 적용 값은 true/false 여야 합니다.")
+    # 판 4 화면은 skip_holidays 를 늘 보낸다 - 그때 off_dates 가 없으면 빈 목록 (마지막 휴무일을 빼면 Realtime DB 가 [] 를 떨어뜨린다, 검토 2026-10-16).
+    # 둘 다 없으면 옛 화면이라 지금 값 그대로
+    v4 = "skip_holidays" in payload or "off_dates" in payload
+    off_dates = normalize_off_dates(payload.get("off_dates") or [], NOW().date()) if v4 else None
     raw = payload.get("slots") if "slots" in payload else payload.get("times")
     if not enabled and raw in (None, []):
         slots = []
@@ -1139,9 +1210,12 @@ def apply_schedule(payload):
     with _settings_lock:
         cfg = st.read_settings()
         sch = cfg["schedule"]
-        changed = bool(sch.get("enabled")) != enabled or sch.get("days") != days or sch.get("slots") != slots
+        skip = sch.get("skip_holidays", True) if skip is None else skip
+        off_dates = (sch.get("off_dates") or []) if off_dates is None else off_dates
+        changed = (bool(sch.get("enabled")) != enabled or sch.get("days") != days or sch.get("slots") != slots
+                   or sch.get("skip_holidays", True) != skip or (sch.get("off_dates") or []) != off_dates)
         sch.pop("interval_min", None)   # 예전 '실행 주기' 방식의 값
-        sch.update(enabled=enabled, days=days, slots=slots)
+        sch.update(enabled=enabled, days=days, slots=slots, skip_holidays=skip, off_dates=off_dates)
         if changed:
             sch["last_error"] = None
             advance(sch, NOW())

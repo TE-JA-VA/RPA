@@ -1156,6 +1156,57 @@ with sync_playwright() as pw:
     lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
     check("시간을 하나 이상 넣으세요" not in lines and page.text_content("#sch-full") == "자동 실행을 쓰려면 ERPia에 문의해주세요." and page.is_visible("#sch-full"),
           f"슬롯이 0개인 업체는 'ERPia 문의' 만 (시각을 넣으라는 글 없음) ({lines})")
+    print("6-5절 휴무일 - 공휴일·업체 휴무일 (사용자 2026-10-15, 판 4 PC)")
+    check(page.is_hidden("#sch-off-box"), "판 3 PC 에는 '휴무일' 이 없다 (모르는 값이라 보내지도 않는다)")
+    db_patch("meta/companies/c_demo/apps/rpa", {"limits": {"schedule": 3}})
+    db_patch(f"{LIVE}/schedule", {"version": 4, "enabled": True, "slots": [{"at": "09:00", "days": [0, 1, 2, 3, 4]}], "skip_holidays": True,
+                                  "off_dates": None, "next_off": {"date": "2026-12-25", "name": "성탄절"}, "holidays_until": "2027-12-31",
+                                  "repeat": None, "next_run_at": None, "next_slot": None})
+    page.wait_for_selector("#sch-off-box:not(.hide)", timeout=10000)
+    page.wait_for_function("document.getElementById('sch-count')?.textContent === '1/3 사용'", timeout=10000)
+    check(page.is_checked("#sch-holidays") and page.locator("#sch-off-list button").count() == 0 and page.is_disabled("#sch-apply"),
+          "판 4 PC: 공휴일 휴무 적용 켬 (PC 값) · 휴무일 없음 · 바뀐 것 없음")
+    note = page.text_content("#sch-off-note")
+    check("다음 휴무일: 12월 25일 (금) 성탄절. 해당 일에는 자동 실행을 진행하지 않습니다." in note and "업데이트" not in note, f"가까운 휴무일 안내 ({note})")
+    sw = page.text_content("label:has(#sch-holidays)")
+    check("공휴일 휴무 적용" in sw and "수동 실행으로 진행할 수 있습니다." in sw, f"스위치 이름과 '수동 실행으로 진행할 수 있습니다' 안내 ({sw})")
+    check(page.get_attribute("#sch-off-date", "min") == datetime.date.today().isoformat(), "달력에서 지난 날을 못 고른다 (min)")
+    future = (datetime.date.today() + datetime.timedelta(days=30)).isoformat()
+    for v in (future, future, (datetime.date.today() - datetime.timedelta(days=1)).isoformat()):   # 같은 날 두 번·지난 날
+        page.fill("#sch-off-date", v)
+        page.click("#sch-off-add")
+    chip = page.locator("#sch-off-list button")
+    check(chip.count() == 1 and not page.is_disabled("#sch-apply"), f"휴무일 추가 - 같은 날·지난 날은 안 들어감 → 적용 가능 ({chip.all_text_contents()})")
+    page.click("label:has(#sch-holidays)")
+    check(not page.is_checked("#sch-holidays"), "공휴일 휴무 적용 끄기")
+    page.click("#sch-apply"); time.sleep(1.5)
+    saved = db_get(f"{SETTINGS}/schedule") or {}
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check(saved.get("skip_holidays") is False and saved.get("off_dates") == [future] and args.get("skip_holidays") is False
+          and args.get("off_dates") == [future], f"공휴일 휴무 적용·휴무일을 저장하고 PC 에 보낸다 ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"skip_holidays": False, "off_dates": [future], "next_off": {"date": future, "name": "업체 휴무일"}})
+    page.wait_for_function("(document.getElementById('sch-off-note')?.textContent || '').includes('업체 휴무일')", timeout=10000)
+    check(page.is_disabled("#sch-apply") and not page.is_checked("#sch-holidays") and chip.count() == 1, "PC 가 돌려준 값과 같으면 바뀜 없음")
+    chip.first.click()
+    check(chip.count() == 0 and not page.is_disabled("#sch-apply"), "휴무일 칩을 누르면 빠진다 → 적용 가능")
+    page.fill("#sch-off-date", future); page.click("#sch-off-add")
+    check(page.is_disabled("#sch-apply"), "다시 넣으면 PC 값과 같아 바뀜 없음")
+    chip.first.click()
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check("off_dates" not in args and args.get("skip_holidays") is False,
+          f"마지막 휴무일을 빼고 적용하면 빈 목록은 DB 에서 사라진다 - PC 는 skip_holidays 를 보고 비운다 (검토 2026-10-16) ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"off_dates": None, "next_off": None})
+    page.wait_for_function("document.querySelectorAll('#sch-off-list button').length === 0", timeout=10000)
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    db_patch(f"{LIVE}/schedule", {"holidays_until": "2025-12-31"})
+    page.wait_for_function("(document.getElementById('sch-off-note')?.textContent || '').includes('업데이트')", timeout=10000)
+    check("공휴일 정보가 2025년까지 등록되어 있습니다. 새 버전으로 업데이트하여 주십시오." in page.text_content("#sch-off-note"), "공휴일 표가 끝나 가면 업데이트 안내")
+    db_patch(f"{LIVE}/schedule", {"skip_holidays": None, "off_dates": None, "next_off": None, "holidays_until": None})
     db_patch(f"{LIVE}/schedule", {"version": 2, "days": [0, 1, 2, 3, 4, 5, 6], "slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}]})
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
     goto(page, "settings")

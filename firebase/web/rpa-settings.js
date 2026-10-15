@@ -45,6 +45,13 @@ const HTML = `
           <div class="msg" id="sch-limit"></div>
           <div class="msg warn hide" id="sch-warn">너무 잦은 사이트 수집은 2차인증을 요구할 수도 있습니다.</div>
           <div class="msg good hide" id="sch-full"></div>
+          <div class="hide" id="sch-off-box">
+            <div class="lbl">휴무일</div>
+            <label class="switch first"><span>공휴일 휴무 적용<span class="why">공휴일에는 예약 실행과 반복 실행을 진행하지 않습니다. 수동 실행으로 진행할 수 있습니다.</span></span><input type="checkbox" id="sch-holidays"><span class="knob"></span></label>
+            <div class="seg"><input type="date" id="sch-off-date" aria-label="휴무일 선택"><button id="sch-off-add">+ 휴무일 추가</button></div>
+            <div class="offs" id="sch-off-list"></div>
+            <div class="msg" id="sch-off-note"></div>
+          </div>
         </div>
         <div class="msg" id="sch-old" hidden>이 PC 를 새 버전으로 업데이트하면 시각별 모듈·반복을 쓸 수 있습니다</div>
         <div class="msg" id="sch-info"></div>
@@ -56,7 +63,7 @@ const HTML = `
 
 let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, busy = false, live = null, liveLimit;
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
-let form = { modules: {}, shops: {}, sch: { enabled: false, days: [], slots: [] } };
+let form = { modules: {}, shops: {}, sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] } };
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
 
@@ -68,6 +75,16 @@ export function mount(el, context) {
   $("shop-apply").onclick = applyShops;
   $("sch-apply").onclick = applySchedule;
   $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
+  // 휴무일 (판 4 PC - 사용자 2026-10-15): 공휴일 휴무 적용 켬/끔과 업체 휴무일. 지난 날은 못 고른다 (PC 도 저장할 때 뺀다)
+  $("sch-off-date").min = isoDay(new Date());          // 달력에서 지난 날을 못 고르게 (검토 2026-10-16)
+  $("sch-holidays").onchange = (e) => { form.sch.holidays = e.target.checked; paintScheduleMeta(); };
+  $("sch-off-add").onclick = () => {
+    const v = $("sch-off-date").value;                  // "YYYY-MM-DD", 안 골랐으면 ""
+    if (!/^\d{4}-\d\d-\d\d$/.test(v) || v < isoDay(new Date()) || form.sch.offDates.includes(v)) return;
+    form.sch.offDates = [...form.sch.offDates, v].sort();
+    $("sch-off-date").value = "";
+    paintOffDates(); paintScheduleMeta();
+  };
   $("sch-add").onclick = () => { if (form.sch.slots.length >= limitOf()) return; form.sch.slots.push({ at: "09:00", run: null, ...newDays() }); paintTimes(); paintScheduleMeta(); };
   $("sch-add-win").onclick = () => {
     if (form.sch.slots.length >= limitOf()) return;
@@ -250,6 +267,23 @@ async function applyShops() {
 const isV2 = () => (live?.schedule?.version ?? 0) >= 2;
 // 판 3 PC 는 줄마다 요일 (slots[i].days, 사용자 2026-10-08). 옛 판 PC 에는 지금처럼 카드의 공통 요일 하나
 const isV3 = () => (live?.schedule?.version ?? 0) >= 3;
+const isV4 = () => (live?.schedule?.version ?? 0) >= 4;   // 공휴일·업체 휴무일 쉬기 (2026-10-15)
+const OFF_DATES_MAX = 100;                                // rpa_dashboard.OFF_DATES_MAX
+const savedOff = () => [...(live?.schedule?.off_dates || [])].sort();
+/** '12월 31일 (목)' */
+function dayText(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${DAYS[(d.getDay() + 6) % 7]})`;
+}
+function paintOffDates() {
+  $("sch-off-list").replaceChildren(...form.sch.offDates.map((iso) => {
+    const b = document.createElement("button");
+    b.textContent = `${dayText(iso)} ✕`;
+    b.title = "삭제";
+    b.onclick = () => { form.sch.offDates = form.sch.offDates.filter((x) => x !== iso); paintOffDates(); paintScheduleMeta(); };
+    return b;
+  }));
+}
 const WEEKDAYS = [0, 1, 2, 3, 4];
 const newDays = () => (isV3() ? { days: [...WEEKDAYS] } : {});     // 새 줄은 늘 평일 (사용자 2026-10-08)
 const sameDay = (a, b) => !isV3() || a.days.some((d) => b.days.includes(d));
@@ -277,9 +311,10 @@ const runChipList = () => (isWellife() ? WELLIFE_RUN_CHIPS : RUN_CHIPS).filter((
 const fitSlot = (s) => (s.run ? { ...s, run: s.run.filter((k) => runChipList().some(([x]) => x === k)) } : s);
 function resetSchedule() {
   const s = savedSch();
-  form.sch = { enabled: !!s.enabled, days: [...(s.days || [])], slots: savedSlots() };
+  form.sch = { enabled: !!s.enabled, days: [...(s.days || [])], slots: savedSlots(), holidays: s.skip_holidays !== false, offDates: savedOff() };
   $("sch-enabled").checked = form.sch.enabled;
-  paintDays(); paintTimes(); paintScheduleMeta();
+  $("sch-holidays").checked = form.sch.holidays;
+  paintDays(); paintTimes(); paintOffDates(); paintScheduleMeta();
 }
 const runKey = (run) => (run ? [...run].filter((k) => k !== "Login").sort().join() : "*");
 const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}${s.days ? `@${[...s.days].sort()}` : ""}`;
@@ -288,7 +323,8 @@ function scheduleDirty() {
   const s = savedSch();
   return form.sch.enabled !== !!s.enabled
     || (!isV3() && [...form.sch.days].sort().join() !== [...(s.days || [])].sort().join())
-    || slotsKey(form.sch.slots) !== slotsKey(savedSlots());
+    || slotsKey(form.sch.slots) !== slotsKey(savedSlots())
+    || (isV4() && (form.sch.holidays !== (s.skip_holidays !== false) || form.sch.offDates.join() !== savedOff().join()));
 }
 function paintDays() {
   $("sch-days").replaceChildren(...DAYS.map((d, i) => {
@@ -382,6 +418,7 @@ function scheduleProblems() {
   if (form.sch.enabled && slots.length > lim) out.push(lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 ERPia에 문의해주세요.");
   if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) out.push("시간을 확인하세요");
   if (isV3() && slots.some((s) => !s.days.length)) out.push("요일을 하나 이상 고르세요");
+  if (isV4() && form.sch.offDates.length > OFF_DATES_MAX) out.push(`휴무일은 최대 ${OFF_DATES_MAX}개까지 등록할 수 있습니다.`);
   slots.forEach((w, wi) => {
     if (w.until === undefined) return;
     if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) { out.push(`반복 끝 시각은 시작(${w.at})보다 늦어야 합니다`); return; }
@@ -418,6 +455,13 @@ function paintScheduleMeta() {
   // 반복 줄에 사이트 수집 - 쇼핑몰에 자주 로그인하면 2차 인증을 물을 수 있다 (사용자 2026-10-08, 빨강 아래 호박색)
   show($("sch-warn"), form.sch.slots.some((x) => x.until !== undefined && x.run?.includes("Prepare")));
   $("sch-old").hidden = !live || isV2();
+  show($("sch-off-box"), isV4());
+  $("sch-off-add").disabled = dis || form.sch.offDates.length >= OFF_DATES_MAX;
+  const off = [];                                        // PC 가 알려 준 가까운 휴무일·공휴일 표가 끝나 가는지
+  if (s.enabled && s.next_off) off.push(`다음 휴무일: ${dayText(s.next_off.date)} ${s.next_off.name}. 해당 일에는 자동 실행을 진행하지 않습니다.`);
+  const until = s.holidays_until || "";
+  if (until && isoDay(new Date()) >= `${until.slice(0, 4)}-11-01`) off.push(`공휴일 정보가 ${until.slice(0, 4)}년까지 등록되어 있습니다. 새 버전으로 업데이트하여 주십시오.`);
+  $("sch-off-note").textContent = off.join(" · ");
   for (const id of ["sch-days-lbl", "sch-presets", "sch-days"]) show($(id), !isV3());
   $("sch-meta").textContent = !live ? "" : !s.enabled ? "비활성화"
     : isV3() ? savedSlots().map((x) => `${labelDays(x.days)} ${slotText(x)}`).join(", ") : `${labelDays(s.days)} ${savedSlots().map(slotText).join(", ")}`;
@@ -461,7 +505,8 @@ function labelDays(days) {
 /** 보낼 값. 옛 판 PC 는 옛 모양, 새 판은 줄 (로그인은 PC 가 붙인다) */
 function payloadOf() {
   // 판 3 은 공통 요일 = 줄 요일을 모두 합친 것 (옛 판 에이전트가 읽어도 그 요일만 돈다)
-  const base = { enabled: form.sch.enabled, days: [...new Set(isV3() ? form.sch.slots.flatMap((s) => s.days) : form.sch.days)].sort() };
+  const base = { enabled: form.sch.enabled, days: [...new Set(isV3() ? form.sch.slots.flatMap((s) => s.days) : form.sch.days)].sort(),
+    ...(isV4() ? { skip_holidays: form.sch.holidays, off_dates: [...form.sch.offDates] } : {}) };   // 옛 판 PC 는 모르는 값 - 안 보낸다
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
   return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}) })) };
 }

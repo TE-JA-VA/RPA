@@ -27,6 +27,7 @@ def check(cond, what):
 
 
 CLOCK = [dt.datetime(2026, 9, 14, 10, 58)]          # 2026-09-14 월요일
+d.kr_holidays.HOLIDAYS = {}      # 이 시험은 공휴일과 상관없다 - 가짜 시계가 9/24~26 추석에 걸린다 (공휴일은 test_schedule_holidays)
 d.NOW = lambda: CLOCK[0]
 PID, CREATED = os.getpid(), st.process_created(os.getpid())
 

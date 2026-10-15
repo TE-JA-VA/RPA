@@ -75,18 +75,18 @@ check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
 check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
-      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == 3, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 3")
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 4, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 4 (공휴일 쉬기)")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
 conv = st.read_settings()["schedule"]
-check(conv["slots"] == [{"at": "13:30"}, {"at": "09:05"}] and "times" not in conv and conv["version"] == 3,
+check(conv["slots"] == [{"at": "13:30"}, {"at": "09:05"}] and "times" not in conv and conv["version"] == st.SCHEDULE_VERSION,
       "옛 모양 {days, times} 는 '전체' 줄로 읽힌다 (Review Focus 4)")
 st.write_settings({"schedule": {"enabled": False, "interval_min": 15, "next_run_at": None}})
 check(st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], "더 옛 모양 (interval_min, 시각 없음) 은 기본 줄 그대로")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
 sv = d.schedule_view()
-check(sv["times"] == ["09:05", "13:30"] and sv["slots"][0] == {"at": "09:05"} and sv["version"] == 3,
+check(sv["times"] == ["09:05", "13:30"] and sv["slots"][0] == {"at": "09:05"} and sv["version"] == st.SCHEDULE_VERSION,
       "화면 값: 줄은 시각 순, 옛 8765 화면용 times 도, 판 2 (줄이 0개여도 판으로 새 판을 안다 - Review Focus 5)")
 
 print("\n=== 5. 적용 ===")

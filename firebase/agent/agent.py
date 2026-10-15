@@ -979,7 +979,7 @@ def run(cfg):
                     snap["presets"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
                 policy.refresh()
-                snap["schedule"] = st.read_settings().get("schedule")
+                snap["schedule"] = dash.schedule_live(st.read_settings()["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝 (화면 안내)
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
                 hist_path = os.path.join(st.status_dir(create=False), st.HISTORY_NAME)
                 try:
