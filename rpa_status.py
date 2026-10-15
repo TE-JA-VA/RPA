@@ -934,7 +934,8 @@ def wellife_policy():
 # 쇼핑몰 프리셋 (옵저버가 쓰고, 프리페어가 재생하고, 대시보드가 켠다 - 2026-09-30 설계 5절)
 # ---------------------------------------------------------------------------
 PRESETS_NAME = "RPA_Presets.json"
-PRESET_MIN, PRESET_MAX = 2, 10           # PRESET_MAX = 업체가 받을 수 있는 최대 (더 열 때 여기와 관리 화면 ops.PRESET_LIMIT_MAX 를 함께)
+PRESET_MIN, PRESET_MAX = 2, 40           # PRESET_MAX = PC 가 받는 최대 - 보통 업체는 관리 화면에서 10 까지(ops.PRESET_LIMIT_MAX),
+PRESET_WELLIFE = 40                      # 업체코드에 wellife 가 든 업체는 늘 40 (사용자 2026-10-15, agent.company_policy)
 PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)
 REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 _PRESET_KEY = re.compile(r"(?:PRESET)?(\d+)")

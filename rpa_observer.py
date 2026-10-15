@@ -66,7 +66,8 @@ GUIDE = """<!doctype html><meta charset="utf-8"><title>오토파일럿 기록</t
 
 
 def circled(n):
-    return chr(0x2460 + n - 1)          # ① ~ ⑳ (ponytail: 21 부터는 이 글자 줄이 끊긴다 - 업체 상한을 20 넘게 열 때 숫자로)
+    """① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄로 나뉘어 있다 (1~20, 21~35, 36~50). 웰라이프 업체 40개 (2026-10-15)."""
+    return chr(0x2460 + n - 1) if n <= 20 else chr(0x3251 + n - 21) if n <= 35 else chr(0x32B1 + n - 36)
 
 
 def dpi_scale():
@@ -599,7 +600,11 @@ class App:
         card.pack(fill="x", padx=pad, pady=6)
         inner = tk.Frame(card, bg=CARD)
         inner.pack(fill="x", padx=12, pady=10)
-        tk.Label(inner, text="프리셋", font=F_BOLD, bg=CARD, fg=INK).pack(anchor="w")
+        head = tk.Frame(inner, bg=CARD)              # 제목 줄 오른쪽에 개수·[+][−] - 단추 줄에는 번호 단추 10개만 (2026-10-15)
+        head.pack(fill="x")
+        tk.Label(head, text="프리셋", font=F_BOLD, bg=CARD, fg=INK).pack(side="left")
+        self.preset_tools = tk.Frame(head, bg=CARD)
+        self.preset_tools.pack(side="right")
         self.preset_bar = tk.Frame(inner, bg=CARD)
         self.preset_bar.pack(fill="x", pady=(6, 8))
         form = tk.Frame(inner, bg=CARD)          # 프리셋마다 따로인 칸은 모두 여기 (아이디·비밀번호도 - 2026-10-02)
@@ -672,12 +677,14 @@ class App:
         self.prev_btn.pack(side="right", padx=8)
 
     def paint_presets(self):
-        for c in self.preset_bar.winfo_children():
+        for c in self.preset_bar.winfo_children() + self.preset_tools.winfo_children():
             c.destroy()
         busy = self.recording is not None or self.previewing
         rows = [tk.Frame(self.preset_bar, bg=CARD) for _ in range(max(1, -(-len(self.presets) // PRESETS_PER_ROW)))]
         for r, row in enumerate(rows):
             row.pack(fill="x", pady=(0 if r == 0 else 4, 0))
+            for c in range(PRESETS_PER_ROW):      # 한 줄 10칸을 같은 폭으로 나눠 창 폭에 맞춘다 (40개 - 4줄, 2026-10-15)
+                row.columnconfigure(c, weight=1, uniform="preset")
         for i, p in enumerate(self.presets):
             has = bool(p["raw"] or p["loaded"])
             sel = i == self.cur
@@ -685,19 +692,19 @@ class App:
             if self.recording == i:
                 bg, fg = RED, "white"
             b = tk.Button(rows[i // PRESETS_PER_ROW], text=circled(i + 1), font=(UI, 14, "bold"), bg=bg, fg=fg, activebackground=bg,
-                          activeforeground=fg, relief="flat", bd=0, width=3, pady=2, cursor="hand2" if not busy else "arrow",
+                          activeforeground=fg, relief="flat", bd=0, padx=0, pady=2, cursor="hand2" if not busy else "arrow",
                           disabledforeground=fg, command=lambda i=i: self.select(i))
             b.config(state="disabled" if busy and not sel else "normal")
-            b.pack(side="left", padx=(0, 4))
+            b.grid(row=0, column=i % PRESETS_PER_ROW, sticky="we", padx=(0, 4))
         small = dict(font=(UI, 13, "bold"), relief="flat", bd=0, width=3, pady=1, bg=CARD, fg=MUTED, activebackground=LINE,
                      highlightthickness=1, highlightbackground=LINE)
-        if len(self.presets) < self.max_presets:
-            tk.Button(rows[-1], text="+", command=self.add_preset, state="disabled" if busy else "normal",
-                      cursor="hand2", **small).pack(side="left", padx=(6, 2))
         if len(self.presets) > MIN_PRESETS:
-            tk.Button(rows[-1], text="−", command=self.remove_preset, state="disabled" if busy else "normal",
-                      cursor="hand2", **small).pack(side="left", padx=2)
-        tk.Label(rows[0], text=f"{len(self.presets)}/{self.max_presets}", font=F_SMALL, bg=CARD, fg=MUTED).pack(side="right")
+            tk.Button(self.preset_tools, text="−", command=self.remove_preset, state="disabled" if busy else "normal",
+                      cursor="hand2", **small).pack(side="right", padx=(2, 0))
+        if len(self.presets) < self.max_presets:
+            tk.Button(self.preset_tools, text="+", command=self.add_preset, state="disabled" if busy else "normal",
+                      cursor="hand2", **small).pack(side="right", padx=2)
+        tk.Label(self.preset_tools, text=f"{len(self.presets)}/{self.max_presets}", font=F_SMALL, bg=CARD, fg=MUTED).pack(side="right", padx=(0, 6))
 
     def paint_buttons(self):
         rec_on = self.recording is not None

@@ -556,6 +556,8 @@ def company_policy(client, cid, app=APP):
     presets = limits.get("presets")
     if not (isinstance(presets, int) and not isinstance(presets, bool) and st.PRESET_MIN <= presets <= st.PRESET_MAX):
         presets = None
+    if "wellife" in str(cid or "").lower():          # 업체코드에 wellife 가 든 업체는 40 (사용자 2026-10-15 - 관리 화면 값 대신)
+        presets = st.PRESET_WELLIFE
     off = {k for k, v in (got.get("modules") or {}).items() if v is False}
     wl = wellife_on(cid, got.get("features"))
     if wl:

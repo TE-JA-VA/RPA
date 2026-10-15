@@ -22,7 +22,7 @@ const randomPassword = () => randomBytes(18).toString("base64url");   // 24자
 export const POLICY_KEYS = ["Sales", "Hold", "Logistics", "Output", "InvoiceSend"];   // Login 은 언제나 켬이라 정책 대상이 아니다. InvoiceSend 는 Routine·Wellife 같은 키
 export const SCHEDULE_LIMIT_DEFAULT = 2;   // 자동 실행 개수 - 값이 없을 때 (agent.SCHEDULE_LIMIT_DEFAULT 와 같다)
 export const SCHEDULE_LIMIT_MAX = 12;      // PC 쪽 절대 상한 (rpa_status.SCHEDULE_MAX_SLOTS)
-export const PRESET_LIMIT_MIN = 2, PRESET_LIMIT_MAX = 10;   // 옵저버 프리셋 수 (rpa_status.PRESET_MIN·PRESET_MAX - 더 열 때 둘을 함께)
+export const PRESET_LIMIT_MIN = 2, PRESET_LIMIT_MAX = 10;   // 옵저버 프리셋 수 - 보통 업체. 업체코드에 wellife 가 든 업체는 PC 가 늘 40 (agent.company_policy, 2026-10-15)
 export const PRICE_BASE = { default: 1, login: 0 };                    // 에이전트에 박힌 처음 토큰 배율 (agent.PRICES) - 서버 값이 위에 덮인다
 
 const KEY = fileURLToPath(new URL("./serviceAccountKey.json", import.meta.url));

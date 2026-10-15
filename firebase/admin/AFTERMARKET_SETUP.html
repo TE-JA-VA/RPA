@@ -457,6 +457,9 @@ function limitSection(d) {
     el("div", { class: "row" }, n, save));
 }
 function presetSection(d) {
+  if (d.cid.toLowerCase().includes("wellife"))      // 업체코드에 wellife 가 든 업체는 PC 가 늘 40 (에이전트, 2026-10-15)
+    return el("div", { class: "sec" }, el("h3", {}, "옵저버 프리셋 수"),
+      el("p", { class: "muted" }, "업체코드에 wellife 가 들어간 업체는 옵저버 프리셋을 40개까지 만들 수 있습니다. (고정)"));
   const n = el("input", { value: d.presetLimit ?? 2, size: 4, inputmode: "numeric", "aria-label": "옵저버 프리셋 수" });
   const save = el("button", { onclick: () => act(save, async () => {
     const r = await api("POST", `/api/companies/${d.cid}/presets`, { presets: n.value.trim() });
