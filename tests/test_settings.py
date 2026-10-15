@@ -232,6 +232,41 @@ try:
     check("코드만 바꾸고 비밀번호 없이 저장은 거절", False)
 except ValueError as e:
     check("코드만 바꾸고 비밀번호 없이 저장은 거절", "바꿔서" in str(e), str(e))
+print("=== 5-1. 업체코드를 바꾸면 이전 업체 프리셋을 비울지 (사용자 2026-10-15) ===")
+logins_before = len(logins)        # 아래 시험이 로그인 횟수를 센다 - 이 묶음 것은 뺀다
+PS = paths_in("stash")
+PS["mail_dir"] = os.path.join(TMP, "stash", "data", "메일기억")
+rs.save(good_form(), PS, login=fake_login, run=Recorder(), running=Running(False), user="PC\\me")
+cfg = st.read_user_config(PS["user_config"])
+cfg[st.SITES_SECTION] = {"PRESET1": {"ID": "shop-id", "PW": "dpapi:x"}, "OLDSITE": {"ID": "keep"}}
+st.write_user_config(cfg, PS["user_config"])
+preset_file = os.path.join(PS["config_dir"], st.PRESETS_NAME)
+Path(preset_file).write_text(json.dumps([{"no": 1, "name": "웰라이프 4", "code": "101", "saved_at": None,
+                                          "record": {"steps": []}}, {"no": 2, "name": "프리셋 2", "code": "",
+                                                                     "saved_at": None, "record": None}]), encoding="utf-8")
+os.makedirs(PS["mail_dir"])
+Path(PS["mail_dir"], "PRESET1.json").write_text("{}", encoding="utf-8")
+_, state = rs.load_state(PS)
+check("기록 있는 프리셋 수를 센다 (빈 칸은 안 셈)", rs.preset_count(PS) == 1, rs.preset_count(PS))
+check("업체코드가 다를 때만 '바뀜'", rs.company_changed(good_form(cid="other"), state)
+      and not rs.company_changed(good_form(), state) and not rs.company_changed(good_form(cid="x"), {"saved": (None, None)}))
+done = rs.save(good_form(cid="other", agent_pw="new-agent-pw", erp_pw=""), PS, login=fake_login, run=Recorder(),
+               running=Running(False), user="PC\\me", clear_presets=True)
+stash = os.path.join(PS["config_dir"], rs.PRESET_STASH)
+got = [os.path.join(stash, d) for d in os.listdir(stash)] if os.path.isdir(stash) else []
+cfg = st.read_user_config(PS["user_config"])
+check("[예]: 프리셋 파일·메일 기억·쇼핑몰 계정을 'net_시각' 폴더로 옮기고 비운다",
+      len(got) == 1 and os.path.basename(got[0]).startswith("net_")
+      and os.path.isfile(os.path.join(got[0], st.PRESETS_NAME)) and os.path.isfile(os.path.join(got[0], "메일기억", "PRESET1.json"))
+      and json.loads(Path(got[0], "Sites.json").read_text(encoding="utf-8")) == {"PRESET1": {"ID": "shop-id", "PW": "dpapi:x"}}
+      and not os.path.exists(preset_file) and not os.path.exists(PS["mail_dir"]) and rs.preset_count(PS) == 0
+      and "PRESET1" not in cfg[st.SITES_SECTION] and cfg[st.SITES_SECTION].get("OLDSITE") == {"ID": "keep"}
+      and "이전 업체 프리셋을 따로 보관하고 비웠습니다." in done, (got, cfg.get(st.SITES_SECTION), done))
+Path(preset_file).write_text("[]", encoding="utf-8")
+rs.save(good_form(cid="other", agent_pw="", erp_pw=""), PS, login=fake_login, run=Recorder(), running=Running(True),
+        user="PC\\me", clear_presets=True)
+check("업체코드가 그대로면 clear_presets 여도 옮기지 않는다", len(os.listdir(stash)) == 1 and os.path.exists(preset_file))
+del logins[logins_before:]
 P2 = paths_in("loginfail")
 
 

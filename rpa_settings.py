@@ -36,6 +36,7 @@ import rpa_status as st  # noqa: E402
 TASK_NAME = r"AFTER MARKET\RPA Agent"
 TEMPLATE_NAME = "RPA_UserConfig.template.json"   # 설치 파일이 빈 틀 RPA_UserConfig.json 을 이 이름으로 넣는다
 AGENT_CONFIG_NAME = "agent_config.json"
+PRESET_STASH = "이전 업체 프리셋"     # 업체코드를 바꾸며 비운 프리셋을 옮겨 두는 폴더 (config 안, 사용자 2026-10-15)
 LOGISTIC_SECTION = "Logistic"
 KEY_RE = re.compile(r"[a-z0-9_]+")               # 업체코드·PC코드 (agent.ask_key 와 같은 규칙)
 AGENT_PY_RE = re.compile(r"""(^|[\\/\s"'])agent\.py\b""", re.IGNORECASE)
@@ -71,7 +72,8 @@ def default_paths():
     return {"program_dir": prog, "config_dir": st.config_dir(), "user_config": st.user_config_path(),
             "agent_config": secret.CONFIG_PATH, "template": os.path.join(prog, TEMPLATE_NAME),
             "agent_py": os.path.join(prog, "firebase", "agent", "agent.py"),
-            "stop_file": os.path.join(st.data_dir(), background.STOP_NAME)}
+            "stop_file": os.path.join(st.data_dir(), background.STOP_NAME),
+            "mail_dir": os.path.dirname(st.mail_memory_path(1))}
 
 
 # 관리자·계정 확인은 옵저버도 쓴다 - rpa_status 에 있다 (시험은 이 모듈의 이름을 바꿔 끼운다)
@@ -371,6 +373,41 @@ def read_stop(path):
         return None
 
 
+def company_changed(form, state):
+    """저장된 업체코드가 있고 칸의 업체코드가 그와 다르다 (PC 를 다른 업체로 넘김·시험으로 오감)."""
+    old = state["saved"][0]
+    return bool(old) and form["cid"] != old
+
+
+def preset_count(paths):
+    """이 PC 프리셋 파일에서 기록이 있는 프리셋 수. 없거나 못 읽으면 0 (묻지 않는다)."""
+    try:
+        with open(os.path.join(os.path.dirname(paths["user_config"]), st.PRESETS_NAME), encoding="utf-8") as f:
+            return sum(1 for p in json.load(f) if isinstance(p, dict) and p.get("record"))
+    except (OSError, ValueError, TypeError):
+        return 0
+
+
+def stash_presets(paths, cid, cfg):
+    """프리셋은 PC 에 하나라 업체코드를 바꿔도 이전 업체 것이 그대로 보였다 (2026-10-15 웰라이프·일반 업체 오감).
+    지우지 않고 config/이전 업체 프리셋/<업체코드>_<시각>/ 로 옮긴다: 프리셋 파일, 메일 처리 기억, Sites 의 PRESETn 칸
+    (쇼핑몰 아이디·잠근 비밀번호 - Sites.json). cfg 에서 PRESETn 칸을 뺀다 (부르는 쪽이 cfg 를 쓴다). 옮긴 폴더를 돌려준다."""
+    sites = cfg.get(st.SITES_SECTION)
+    sites = sites if isinstance(sites, dict) else {}
+    keys = [k for k in sites if re.fullmatch(r"PRESET\d+", k)]
+    name = f"{re.sub(r'[^\w-]', '_', cid)}_{time.strftime('%Y%m%d-%H%M%S')}"
+    dest = os.path.join(os.path.dirname(paths["user_config"]), PRESET_STASH, name)
+    os.makedirs(dest)
+    with open(os.path.join(dest, "Sites.json"), "w", encoding="utf-8") as f:
+        json.dump({k: sites[k] for k in keys}, f, ensure_ascii=False, indent=1)
+    for src in (os.path.join(os.path.dirname(paths["user_config"]), st.PRESETS_NAME), paths.get("mail_dir")):
+        if src and os.path.exists(src):
+            shutil.move(src, dest)
+    for k in keys:
+        del sites[k]
+    return dest
+
+
 def needs_agent_login(form, state):
     """에이전트 계정 로그인을 다시 해야 하나: 비밀번호를 넣었거나, 코드가 바뀌었거나, 저장된 비밀번호가 없거나 안 풀린다."""
     return (bool(form["agent_pw"]) or state["agent_pw"] != "ok"
@@ -447,9 +484,10 @@ def warm_roots():
     background.warm_windows_roots()
 
 
-def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None):
+def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None, clear_presets=False):
     """저장 (설계 4절 '저장' 1~5). 한 일 문장 목록. 칸이 틀리거나 로그인이 안 되면 ValueError, 빈 틀이 없거나
-    작업 등록·켜기가 안 되면 RuntimeError (둘 다 사람에게 보일 문장). 로그인이 안 되면 아무 파일도 쓰지 않는다."""
+    작업 등록·켜기가 안 되면 RuntimeError (둘 다 사람에게 보일 문장). 로그인이 안 되면 아무 파일도 쓰지 않는다.
+    clear_presets: 업체코드를 바꾸며 이전 업체 프리셋을 비운다 (stash_presets - 창이 물어서 정한다)."""
     _, state = load_state(paths)
     problems = validate(form, state)
     if problems:
@@ -464,6 +502,9 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None)
         login(paths["agent_config"], form["cid"], form["pc_id"], form["agent_pw"])
         done.append("에이전트 계정 로그인을 확인했습니다.")
     merged = merge_user_config(st.read_user_config(base_path), form)
+    if clear_presets and company_changed(form, state):
+        stash_presets(paths, state["saved"][0], merged)
+        done.append("이전 업체 프리셋을 따로 보관하고 비웠습니다.")
     st.write_user_config(merged, paths["user_config"])
     done.append("설정을 저장했습니다.")
     if not st._erpia_file(_section(merged, st.ERPIA_SECTION).get("ExePath")):
@@ -852,15 +893,24 @@ class SettingsWindow:
         if self.busy_now or not self.check_old_agents():
             return
         form = self.form()
+        clear, n = False, preset_count(self.paths)
+        if n and company_changed(form, self.state):
+            if st.observer_open():          # 켜 둔 옵저버가 이전 업체 프리셋을 들고 있다가 저장한다
+                return self.say("옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 저장해 주세요")
+            clear = self.dialogs.yesno(f"업체코드가 바뀝니다. 이 PC 에 이전 업체({self.state['saved'][0]})의 프리셋이 "
+                                       f"{n}개 있습니다.\n\n비우고 시작할까요?\n\n"
+                                       "[예] 이전 프리셋과 쇼핑몰 계정을 따로 보관하고 빈 프리셋으로 시작합니다.\n"
+                                       "[아니요] 이전 프리셋을 그대로 씁니다.")
         self.busy(True)
         self._result = None
-        threading.Thread(target=self._save_worker, args=(form,), daemon=True).start()
+        threading.Thread(target=self._save_worker, args=(form, clear), daemon=True).start()
         self.root.after(100, self._poll)
 
-    def _save_worker(self, form):
+    def _save_worker(self, form, clear=False):
         """저장은 로그인(인터넷)·작업 등록이 있어 따로 돌린다 - 창이 굳지 않게. 창은 _poll 이 만진다."""
         try:
-            self._result = ("ok", save(form, self.paths, login=self.login, run=self.run, running=self.running))
+            self._result = ("ok", save(form, self.paths, login=self.login, run=self.run, running=self.running,
+                                       clear_presets=clear))
         except (ValueError, RuntimeError) as e:
             self._result = ("error", str(e))
         except Exception as e:
