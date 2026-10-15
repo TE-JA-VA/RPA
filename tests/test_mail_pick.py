@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import web_replay as rec  # noqa: E402
+from fake_mall import xlsx_bytes  # noqa: E402
 
 MAILS = [("k1", ">>> 주문 A"), ("k2", "공지사항"), ("k3", ">>> 주문 C")]
 PAGE = """<!doctype html><meta charset="utf-8"><title>메일</title>
@@ -47,7 +48,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path, _, q = self.path.partition("?")
         if path == "/download":
-            b = b"PK\x03\x04" + q.encode()
+            b = xlsx_bytes(q)
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Disposition", f"attachment; filename=file_{q.split('=')[1]}.xlsx")

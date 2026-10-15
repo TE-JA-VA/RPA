@@ -14,6 +14,7 @@ import re
 import time
 import unicodedata
 import urllib.parse
+import zipfile
 
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
@@ -281,7 +282,9 @@ DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
 OPTIONAL_WAIT = 3.0
 STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
 RECORD_VERSION = 1           # 기록 모양. 다르면 재생하지 않는다 (옛 프리페어가 새 기록을 잘못 따라 하지 않게)
-DOWNLOAD_TIMEOUT_MS = 60000  # 파일 받기를 기다리는 시간 (안 오면 그 단계 실패)
+DOWNLOAD_TIMEOUT_MS = 300000  # 파일이 오기 시작할 때까지 기다리는 시간 (안 오면 그 단계 실패). 쇼핑몰이 엑셀을 만드는 데 오래 걸려 60초 → 5분,
+                              # 기다리는 동안 로그를 남긴다 (2026-10-15 메모 5). 오기 시작한 뒤에는 다 받을 때까지 기다린다 (느려도)
+OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"     # 옛 엑셀(xls)·암호 건 엑셀
 CUT = 20                     # 대시보드로 가는 설명에서 누른 것의 글자 길이
 SETTLE_MAX_MS = 3000        # 단계 사이 기다림 상한 (사람이 기다린 시간의 절반). 시험에서 0 으로도 돌려 본다
 TEXT_OF = """e => { const n = s => (s || '').replace(/\\s+/g, ' ').trim(); const t = e.tagName;
@@ -304,6 +307,48 @@ def user_tab(page):
 NAV_KINDS = ("goto", "back", "newtab")
 SESSION_Q = re.compile(r"(?i)[?&](sid|sess\w*|jsessionid|token|auth\w*)=")
 URL_QUERY = re.compile(r"(https?://[^\s?#'\"]*)[?#][^\s'\"]*")   # 실패 사유의 주소에서 ? 뒤 (대시보드로 갈 때 뺀다)
+
+
+def _text_head(path, limit):
+    """파일 앞부분을 소문자 글로 (UTF-16 웹 화면·표도 읽게). 태그 이름만 보므로 한글 인코딩은 상관없다."""
+    with open(path, "rb") as f:
+        raw = f.read(limit)
+    return raw.decode("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8", "ignore").lower()
+
+
+def download_problem(path):
+    """받은 파일을 쓸 수 있나 - 문제면 사람에게 보일 까닭, 괜찮으면 None (2026-10-15 메모 5: 다 받았나·진짜 엑셀인가).
+    xlsx 는 압축이 온전하고 통합 문서(xl/)가 들어 있어야, 옛 엑셀 xls 는 512바이트 단위로 끝나야 (잘림),
+    웹 화면(HTML·XML)은 표가 있어야 한다 - 쇼핑몰이 HTML 표를 .xls 로 주기도 하고, 로그인 만료·오류 화면은 표가 없다.
+    CSV 같은 그 밖의 것은 비어 있지만 않으면 된다 (모양으로 못 가린다)."""
+    if os.path.getsize(path) == 0:
+        return "빈 파일입니다."
+    with open(path, "rb") as f:
+        head = f.read(8)
+    ext = os.path.splitext(path)[1].lower()
+    if head.startswith(b"PK\x03\x04"):
+        try:
+            with zipfile.ZipFile(path) as z:
+                broken, names = z.testzip(), z.namelist()
+        except NotImplementedError:                 # 파이썬이 모르는 압축 방식 (deflate64 등) - 깨졌다고 단정하지 않는다
+            return None
+        except (zipfile.BadZipFile, OSError, EOFError, ValueError):
+            broken, names = True, []
+        if broken:
+            return "다운로드가 완료되지 않았거나 손상된 엑셀 파일입니다."
+        if ext in (".xlsx", ".xlsm") and not any(n.startswith("xl/") for n in names):
+            return "엑셀 파일이 아닙니다. (통합 문서가 없는 압축 파일)"
+        return None
+    if head.startswith(OLE_SIGNATURE):
+        return None     # 옛 엑셀(xls) - 마지막 칸을 안 채우는 생성기가 있어 크기로는 잘림을 못 가린다. 잘림은 브라우저가 알린다 (dl.failure, 검토 2026-10-16)
+    text = _text_head(path, 4_000_000)
+    if text.lstrip("\ufeff \t\r\n").startswith("<"):
+        if "<table" in text or "<workbook" in text or "urn:schemas-microsoft-com:office:spreadsheet" in text:
+            return None
+        return "엑셀 형식이 아닌 웹 화면입니다. 로그인 만료 또는 오류 화면일 수 있습니다."
+    if ext in (".xlsx", ".xlsm"):
+        return "엑셀 파일 형식이 아닙니다."
+    return None
 
 
 def url_path(url):
@@ -842,12 +887,17 @@ class Replayer:
         """act() 를 하고 파일이 올 때까지 기다린다 - 누른 창이든 그 단추가 연 새 창이든 (2026-10-02: 팝업이 내려 주는 파일을
         누른 창에서만 기다려 못 받았다). 안 오면 download_timeout_ms 뒤 그 단계 실패."""
         self.downloads = []
+        start = time.time()             # 누르기 전부터 - 누르기가 느린 페이지를 기다린 시간도 센다
         act()
-        end = time.time() + self.download_timeout_ms / 1000
+        end, note = start + self.download_timeout_ms / 1000, start + self.step_timeout
         while not self.downloads:
             self._check_cancel()
-            if time.time() > end:
+            now = time.time()
+            if now > end:
                 raise NotFound(f"{self.download_timeout_ms / 1000:.0f}초 안에 파일이 오지 않았습니다")
+            if now > note:              # 쇼핑몰이 엑셀을 만드는 중일 수 있다 - 멈춘 줄 알지 않게 (2026-10-15)
+                self.log(f"      파일 다운로드를 기다리는 중입니다. ({now - start:.0f}초 경과 / 최대 {self.download_timeout_ms / 1000:.0f}초)")
+                note = now + self.step_timeout
             self._idle(200, page)
         return self.downloads[0]
 
@@ -930,9 +980,9 @@ class Replayer:
                 if optional:
                     raise Skip("화면에 없음")
                 if tries >= self.step_tries:
-                    raise NotFound(f"{self.step_timeout:.0f}초씩 {tries}번 찾아도 못 찾음 (단서: {', '.join(c[0] for c in cands)})")
+                    raise NotFound(f"{self.step_timeout:.0f}초씩 {tries}번 찾았으나 대상을 찾지 못했습니다. (단서: {', '.join(c[0] for c in cands)})")
                 tries += 1
-                self.log(f"      {self.step_timeout:.0f}초 안에 못 찾음 - 다시 찾습니다 ({tries}/{self.step_tries})")
+                self.log(f"      {self.step_timeout:.0f}초 동안 대상을 찾지 못했습니다. 다시 찾습니다. ({tries}/{self.step_tries})")
                 deadline = time.time() + self.step_timeout
             page.wait_for_timeout(250)
 
@@ -978,6 +1028,8 @@ class Replayer:
                 return
             except PWTimeout as e:
                 msg = str(e)
+            if "click action done" in msg:      # 눌렀는데 그 뒤 페이지가 늦게 오는 것 (느린 엑셀 받기) - 다시 누르면 두 번 요청된다 (2026-10-15)
+                return
             if "intercepts pointer events" in msg and self._dismiss(page):
                 continue
             if "not visible" in msg and self._reveal(page, loc):
@@ -1093,6 +1145,12 @@ class Replayer:
         return False
 
     def _save(self, dl):
+        """받은 파일을 (사이트코드)이름 으로 둔다. 다 받을 때까지 기다리고 (느려도), 끊겼거나 쓸 수 없는 파일이면
+        지우고 그 단계를 실패로 - PROCESS 가 반쪽 파일·로그인 화면을 ERPia 에 올리지 않게 (2026-10-15 메모 5).
+        ponytail: Playwright 는 받는 중인 크기를 알려 주지 않아, 서버가 연결만 쥐고 아무것도 안 보내면 브라우저가 끊을 때까지 기다린다."""
+        failure = dl.failure()          # 다 받거나 끊길 때까지 기다린다
+        if failure:
+            raise NotFound(f"파일 다운로드가 중간에 끊겼습니다. ({failure})")
         os.makedirs(self.out_dir, exist_ok=True)
         path = os.path.join(self.out_dir, f"({self.code}){dl.suggested_filename}")
         stem, ext = os.path.splitext(path)
@@ -1101,6 +1159,13 @@ class Replayer:
             path = f"{stem} ({i}){ext}"
             i += 1
         dl.save_as(path)
+        problem = download_problem(path)
+        if problem:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            raise NotFound(f"다운로드한 파일({os.path.basename(path)})을 사용할 수 없어 삭제하였습니다. {problem}")
         self.saved.append(path)
         return path
 

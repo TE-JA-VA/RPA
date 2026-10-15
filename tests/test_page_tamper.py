@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import web_replay as rec  # noqa: E402
+from fake_mall import xlsx_bytes  # noqa: E402
 
 JSMAP = """Map = function() { this.map = new Object(); };
 Map.prototype = { put: function(k, v) { this.map[k] = v; }, get: function(k) { return (k in this.map) ? this.map[k] : ''; },
@@ -49,7 +50,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/download":
-            b = b"PK\x03\x04fake-xlsx"
+            b = xlsx_bytes("order")
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             self.send_header("Content-Disposition", "attachment; filename=order.xlsx")

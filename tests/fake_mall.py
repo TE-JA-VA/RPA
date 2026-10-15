@@ -17,12 +17,14 @@
 """
 import argparse
 import datetime
+import io
 import json
 import random
 import secrets
 import threading
 import time
 import urllib.parse
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 USER, PASSWORD = "seller01", "pw1234"
@@ -159,6 +161,16 @@ def _ids(n="abcdefghijk"):
     return {k: rid(k) for k in n}
 
 
+def xlsx_bytes(note=""):
+    """시험용 엑셀 - 압축 + xl/workbook.xml 이 든 진짜 xlsx 모양. 재생기가 받은 파일이 진짜 엑셀인지 본다 (web_replay.download_problem, 2026-10-15).
+    note 는 통합 문서 안 주석으로 들어간다 (파일마다 내용이 다르게)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<?xml version='1.0'?><Types/>")
+        z.writestr("xl/workbook.xml", f"<?xml version='1.0'?><workbook><!-- {note} --></workbook>")
+    return buf.getvalue()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -208,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/shipfile":
             m.ship_downloads.append(m.today.isoformat())
             name = urllib.parse.quote(f"송장목록_{m.today.isoformat()}.xlsx")
-            return self._send(b"FAKE-XLSX ship", ctype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            return self._send(xlsx_bytes("ship"), ctype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                               headers=[("Content-Disposition", f"attachment; filename=\"ship.xlsx\"; filename*=UTF-8''{name}")])
         if u.path == "/orders":
             return self._send(ORDERS.format(today=m.today.isoformat(), sid=sid, **_ids()))
@@ -227,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
             m.downloads.append(rq["id"])
             name = f"주문목록_{rq['range'].replace('~', '_')}_{rq['id']}.xlsx"
             disp = f"attachment; filename=\"orders.xlsx\"; filename*=UTF-8''{urllib.parse.quote(name)}"
-            return self._send(f"FAKE-XLSX request={rq['id']} range={rq['range']}".encode(),
+            return self._send(xlsx_bytes(f"request={rq['id']} range={rq['range']}"),
                               ctype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                               headers=[("Content-Disposition", disp)])
         return self._send("not found", 404)

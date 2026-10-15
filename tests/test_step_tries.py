@@ -61,12 +61,12 @@ check("기본값은 20초씩 6번", (rec.STEP_WAIT, rec.STEP_TRIES) == (20.0, 6)
       rec.Replayer(None, {"steps": []}, {}, ".", "000").step_tries == 6)
 res, lines = run(99, 3)
 check("끝내 없으면 3번 찾고 포기, 사이에 '다시 찾습니다 (2/3)·(3/3)' 를 남긴다",
-      "0초씩 3번 찾아도 못 찾음" in res and [l.strip() for l in lines] ==
-      ["0초 안에 못 찾음 - 다시 찾습니다 (2/3)", "0초 안에 못 찾음 - 다시 찾습니다 (3/3)"], f"{res} {lines}")
+      "0초씩 3번 찾았으나 대상을 찾지 못했습니다." in res and [l.strip() for l in lines] ==
+      ["0초 동안 대상을 찾지 못했습니다. 다시 찾습니다. (2/3)", "0초 동안 대상을 찾지 못했습니다. 다시 찾습니다. (3/3)"], f"{res} {lines}")
 res, lines = run(0.7, 3)
 check("두 번째 기다림 중에 나타나면 찾고 이어간다", res == "찾음" and len(lines) == 1, f"{res} {lines}")
 res, lines = run(99, 1)
-check("step_tries=1 이면 예전처럼 한 번만 (시험용)", "1번 찾아도 못 찾음" in res and not lines, f"{res} {lines}")
+check("step_tries=1 이면 예전처럼 한 번만 (시험용)", "1번 찾았으나 대상을 찾지 못했습니다." in res and not lines, f"{res} {lines}")
 
 print(f"\n{'모두 통과' if not fails else f'실패 {len(fails)}건'}")
 sys.exit(1 if fails else 0)
