@@ -714,6 +714,18 @@ check(SECRETS and all(SECRETS) and not any(s in text for s in SECRETS) and not a
       "기록 파일·서버 출력 어디에도 비밀번호가 없다")
 check(0 <= text.find("신규 업체 t_late") < text.rfind("관리 화면 끔"), "끄기는 하던 일(신규 업체 t_late)이 끝난 뒤에 (기록 차례)", text[-300:])
 check(srv.returncode == 0, "[끄기](/api/quit) 로 서버가 끝난다", srv.returncode)
+# 관리 기록은 DB(admin_log)에도 - 웹 관리와 한 곳에 모인다 (2026-10-15 웹 전환 밑작업). 로컬은 기다리지 않고 쓰므로 조금 기다려 본다
+db_lines = []
+for _ in range(20):
+    docs = (call("GET", f"{FS}/admin_log?pageSize=500", headers=OWNER) or {}).get("documents", [])
+    db_lines = [{k: list(v.values())[0] for k, v in d["fields"].items()} for d in docs]
+    if any("신규 업체 t_new" in r.get("line", "") for r in db_lines):
+        break
+    time.sleep(0.5)
+check(any("신규 업체 t_new" in r.get("line", "") and r.get("via") == "로컬" and r.get("by") is None and r.get("at") for r in db_lines)
+      and any("비밀번호 재발급 t_new" in r.get("line", "") for r in db_lines),
+      "관리 기록이 DB admin_log 에도 {at, line, by=없음, via=로컬}", db_lines[-3:])
+check(not any(s in json.dumps(db_lines, ensure_ascii=False) for s in SECRETS if s), "DB 관리 기록에도 비밀번호가 없다")
 if srv.poll() is None:
     srv.kill()
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")

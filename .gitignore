@@ -40,6 +40,10 @@ firebase-debug.log
 # ---- Firebase: Node 의존성 ----
 firebase/tests/node_modules/
 firebase/admin/node_modules/
+firebase/functions/node_modules/
+# 웹 관리 준비물 - functions/sync.mjs 가 admin/ 에서 복사해 만든다 (고칠 곳은 admin/)
+firebase/functions/shared/
+firebase/admin_web/
 firebase/**/*-debug.log
 firebase/agent/*_기록.txt*
 firebase/agent/history_pos.txt

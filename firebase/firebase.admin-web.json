@@ -1,0 +1,83 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "admin",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "*.log",
+        ".env*",
+        "**/serviceAccountKey.json",
+        "**/*adminsdk*.json",
+        "**/update_signing_key.txt",
+        "**/agent_config.json"
+      ],
+      "predeploy": [
+        "node functions/sync.mjs"
+      ]
+    }
+  ],
+  "hosting": {
+    "site": "rpa-test-f02e0-admin",
+    "public": "admin_web",
+    "predeploy": [
+      "node functions/sync.mjs"
+    ],
+    "ignore": [
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "no-referrer"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          }
+        ]
+      }
+    ]
+  },
+  "database": {
+    "rules": "rules/database.rules.json"
+  },
+  "firestore": {
+    "rules": "rules/firestore.rules",
+    "indexes": "rules/firestore.indexes.json"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "database": {
+      "port": 9000
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "functions": {
+      "port": 5001
+    },
+    "hosting": {
+      "port": 5002
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}
