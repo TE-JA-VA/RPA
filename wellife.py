@@ -318,12 +318,29 @@ def collect_orders(rr, ctx, live, sell=False):
     """주문 수집 (사용자 10-08). live: SalesMode, sell: NormalSalesMode.
     - 엑셀: 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
       (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만.
-    - 자동 수집 [가져오기] 는 모드와 상관없이 누르지 않는다 - 마우스만.
+    - 자동 수집 [가져오기]: 실행이면 원래 PROCESS 처럼 상단(사이트) 전체선택 -> [가져오기] -> 끝날 때까지 기다린 뒤 엑셀,
+      리허설이면 마우스만 (사용자 2026-10-15 - 그 전엔 모드와 상관없이 안 눌렀다).
     - 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (normal_sales, 사용자 10-14)."""
     rr.status.step("wl_order_collect")
     win = ctx.window()
     files = excel_files(rr)
-    notes, uploaded = [], 0
+    notes, uploaded, imported = [], 0, False
+    imp = onscreen_button(win, rr.IMPORT_BUTTON_NAME)
+    if imp is None:
+        notes.append("자동 수집 단추 없음")
+    elif live:
+        tables = rr.get_onscreen_tables(win)
+        if tables:              # [가져오기] 는 상단에서 고른 사이트만 받는다 (원래 PROCESS 의 top_select)
+            rr.select_all_and_verify("좌측상단", ctx.hwnd, min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left)), ["아이디"])
+        no_popup(rr, ctx, "자동 수집 전")
+        front(rr, ctx, "자동 수집")
+        rr.log(f"  [실행] 자동 수집 [{rr.IMPORT_BUTTON_NAME}]")
+        imported = rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, win)
+        notes.append("자동 수집 완료" if imported else "자동 수집을 끝까지 확인하지 못함 (확인할 것)")
+        win = ctx.window()
+    else:
+        hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]", True)
+        notes.append("자동 수집은 누르지 않음")
     if not files:
         notes.append("엑셀: 올릴 파일 없음")
     else:
@@ -345,15 +362,9 @@ def collect_orders(rr, ctx, live, sell=False):
             if cell is not None:
                 hover(rr, ctx, cell, f"엑셀 업로드 칸 (사이트 {code})", True)
             notes.append(f"엑셀 {len(files)}건 있음 (사이트 {names}) - 올리지 않음")
-    imp = onscreen_button(win, rr.IMPORT_BUTTON_NAME)
-    if imp is None:
-        notes.append("자동 수집 단추 없음")
-    else:
-        hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}] (모드와 상관없이 누르지 않음)", None)
-        notes.append("자동 수집은 누르지 않음")
     note, sold = normal_sales(rr, ctx, sell)
     notes.append(f"정상매출 [{mode_tag(sell)}] " + note)
-    return ("done" if uploaded or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
+    return ("done" if uploaded or sold or imported else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
 
 
 SALES_SPLIT, SALES_ITEM = "매출처리", "정상매출"
