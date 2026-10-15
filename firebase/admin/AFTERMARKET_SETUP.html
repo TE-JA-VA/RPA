@@ -195,7 +195,7 @@ function flash(text, bad = false) {
 async function api(method, path, body) {
   if (WEB) {
     if (path === "/api/prefs") return webPrefs(method, body);
-    if (!webCall) throw new Error("웹 관리에 연결하지 못했습니다 - 새로고침해 주세요");
+    if (!webCall) throw new Error("웹 관리에 연결하지 못했습니다. 새로고침하여 주십시오.");
     return webCall(method, path, body);
   }
   const r = await fetch(path, { method, headers: { "X-Admin-Key": KEY, "Content-Type": "application/json" },
@@ -634,15 +634,15 @@ async function webStart() {
   await webLogin(async (id, pw) => {
     const email = id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cfg.authDomain}`;   // ops.emailFor(null, 아이디) 와 같은 꼴 (총괄은 업체코드가 없다)
     let cred;
-    try { cred = await A.signInWithEmailAndPassword(auth, email, pw); } catch { throw new Error("아이디 또는 비밀번호가 맞지 않습니다"); }
-    if (!await isSuper(cred.user)) { await A.signOut(auth); throw new Error("총괄 계정만 쓸 수 있습니다"); }
+    try { cred = await A.signInWithEmailAndPassword(auth, email, pw); } catch { throw new Error("아이디 또는 비밀번호가 일치하지 않습니다."); }
+    if (!await isSuper(cred.user)) { await A.signOut(auth); throw new Error("총괄 계정만 사용할 수 있습니다."); }
   });
 }
 function webLogin(tryLogin) {
   return new Promise((done) => {
     const id = el("input", { id: "login-id", placeholder: "아이디 또는 이메일", autocomplete: "username" });
     const pw = el("input", { id: "login-pw", type: "password", placeholder: "비밀번호", autocomplete: "current-password" });
-    const msg = el("p", { class: "muted" }, "총괄 계정으로 로그인하세요.");
+    const msg = el("p", { class: "muted" }, "총괄 계정으로 로그인하여 주십시오.");
     const btn = el("button", { type: "submit", class: "primary" }, "로그인");
     const box = el("div", { id: "login" }, el("form", { class: "card", onsubmit: async (e) => {
       e.preventDefault();

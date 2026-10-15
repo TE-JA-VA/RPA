@@ -225,7 +225,7 @@ function paintHero() {
     state = "offline";
     title = "PC 연결 끊김";
     l1 = off == null ? "에이전트 기록 없음" : `${ago(off)} 전부터 응답 없음` + (v ? ` · 마지막 ${STATE_LABEL[v.state] || v.state} ${hhmm(v.finished_at || v.updated_at)}` : "");
-    l2 = "PC 가 꺼졌거나 윈도우에 로그인되어 있지 않습니다. PC 를 켜고 로그인해도 그대로면 시작 메뉴의 '오토파일럿 설정' 에서 [저장] 을 눌러 주세요.";   // 저장하면 다시 켠다 (rpa_settings.restart_agent)
+    l2 = "PC가 꺼져 있거나 윈도우에 로그인되어 있지 않습니다. PC를 켜고 로그인한 뒤에도 연결되지 않으면 시작 메뉴의 '오토파일럿 설정'에서 [저장]을 눌러 주십시오.";   // 저장하면 다시 켠다 (rpa_settings.restart_agent)
   } else if (!v) {
     state = ""; title = "기록 없음"; l1 = "PC 연결됨"; l2 = "";
   } else if (v.state !== "running" && !isToday(v)) {

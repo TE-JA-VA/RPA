@@ -33,13 +33,13 @@ async function touchesSuper(path, params, b) {
 // 화면이 누르는 동안 단추를 잠그고(act), ops 의 만들기는 '이미 있다' 를 건너뛰어 겹쳐도 반쪽이 남지 않는다. 총괄이 여럿 동시에 고치게 되면 트랜잭션으로.
 export const admin = onCall({ region: REGION, timeoutSeconds: 300, memory: "512MiB" }, async (req) => {
   const user = await superOf(req.auth);
-  if (!user) throw new HttpsError("permission-denied", "총괄 계정만 쓸 수 있습니다");
+  if (!user) throw new HttpsError("permission-denied", "총괄 계정만 사용할 수 있습니다.");
   const { method, path, body } = req.data ?? {};
   const found = find(ROUTES, method, path);
   if (!found) throw new HttpsError("not-found", "모르는 요청입니다");
   const b = body && typeof body === "object" && !Array.isArray(body) ? body : {};
   if (method === "POST" && await touchesSuper(path, found.params, b)) {
-    throw new HttpsError("permission-denied", "총괄 계정은 웹에서 만들거나 고칠 수 없습니다 - 이 PC 의 관리 도구(setup.js)로 하세요");
+    throw new HttpsError("permission-denied", "총괄 계정은 웹에서 등록하거나 변경할 수 없습니다. 관리 PC의 관리 도구(setup.js)를 사용하여 주십시오.");
   }
   try {
     const result = await found.route.run(b, found.params);

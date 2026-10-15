@@ -261,7 +261,7 @@ check("[예]: 프리셋 파일·메일 기억·쇼핑몰 계정을 'net_시각' 
       and json.loads(Path(got[0], "Sites.json").read_text(encoding="utf-8")) == {"PRESET1": {"ID": "shop-id", "PW": "dpapi:x"}}
       and not os.path.exists(preset_file) and not os.path.exists(PS["mail_dir"]) and rs.preset_count(PS) == 0
       and "PRESET1" not in cfg[st.SITES_SECTION] and cfg[st.SITES_SECTION].get("OLDSITE") == {"ID": "keep"}
-      and "이전 업체 프리셋을 따로 보관하고 비웠습니다." in done, (got, cfg.get(st.SITES_SECTION), done))
+      and "이전 업체 프리셋을 별도 폴더에 보관한 뒤 초기화하였습니다." in done, (got, cfg.get(st.SITES_SECTION), done))
 Path(preset_file).write_text("[]", encoding="utf-8")
 rs.save(good_form(cid="other", agent_pw="", erp_pw=""), PS, login=fake_login, run=Recorder(), running=Running(True),
         user="PC\\me", clear_presets=True)

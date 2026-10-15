@@ -235,7 +235,7 @@ try:
             pg.click("#login button[type=submit]")
         login("boss", "wrong-pw")
         pg.wait_for_selector("#login p.bad", timeout=20000)
-        check("맞지 않습니다" in pg.inner_text("#login p.bad"), "틀린 비밀번호는 알린다", pg.inner_text("#login"))
+        check("일치하지 않습니다" in pg.inner_text("#login p.bad"), "틀린 비밀번호는 알린다", pg.inner_text("#login"))
         login("adm@c-one.rpa-test-f02e0.firebaseapp.com", "admin-pw-1234")
         pg.wait_for_function("document.querySelector('#login p.bad')?.textContent.includes('총괄')", timeout=20000)
         check(True, "총괄이 아닌 계정은 '총괄 계정만' 으로 막는다")

@@ -504,7 +504,7 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
     merged = merge_user_config(st.read_user_config(base_path), form)
     if clear_presets and company_changed(form, state):
         stash_presets(paths, state["saved"][0], merged)
-        done.append("이전 업체 프리셋을 따로 보관하고 비웠습니다.")
+        done.append("이전 업체 프리셋을 별도 폴더에 보관한 뒤 초기화하였습니다.")
     st.write_user_config(merged, paths["user_config"])
     done.append("설정을 저장했습니다.")
     if not st._erpia_file(_section(merged, st.ERPIA_SECTION).get("ExePath")):
@@ -896,11 +896,11 @@ class SettingsWindow:
         clear, n = False, preset_count(self.paths)
         if n and company_changed(form, self.state):
             if st.observer_open():          # 켜 둔 옵저버가 이전 업체 프리셋을 들고 있다가 저장한다
-                return self.say("옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 저장해 주세요")
-            clear = self.dialogs.yesno(f"업체코드가 바뀝니다. 이 PC 에 이전 업체({self.state['saved'][0]})의 프리셋이 "
-                                       f"{n}개 있습니다.\n\n비우고 시작할까요?\n\n"
-                                       "[예] 이전 프리셋과 쇼핑몰 계정을 따로 보관하고 빈 프리셋으로 시작합니다.\n"
-                                       "[아니요] 이전 프리셋을 그대로 씁니다.")
+                return self.say("옵저버가 실행 중입니다. 옵저버를 종료한 뒤 저장하여 주십시오.")
+            clear = self.dialogs.yesno(f"업체코드가 변경됩니다. 이 PC에 이전 업체({self.state['saved'][0]})의 프리셋 "
+                                       f"{n}개가 저장되어 있습니다.\n\n프리셋을 초기화하시겠습니까?\n\n"
+                                       "[예] 이전 프리셋과 쇼핑몰 계정 정보를 별도 폴더에 보관한 뒤 초기화합니다.\n"
+                                       "[아니요] 이전 프리셋을 그대로 사용합니다.")
         self.busy(True)
         self._result = None
         threading.Thread(target=self._save_worker, args=(form, clear), daemon=True).start()
