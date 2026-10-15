@@ -732,8 +732,9 @@ with tempfile.TemporaryDirectory() as d:
         except RuntimeError as e:
             check(str(e) == "알 수 없는 모듈입니다.", "모르는 모듈만 있으면 거부")
         dash.set_policy(2, ["Logistics", "Output"], wellife=True)
-        msg = acts["set_modules"]({"Login": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False})
-        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": True, "Sap": True, "Wms": False, "InvoiceSend": False}
+        msg = acts["set_modules"]({"Login": False, "Excel": True, "Import": False, "Sales": True, "Hold": True, "Sap": True, "Wms": False})
+        check(st.read_wellife_modules()[0] == {"Login": True, "Excel": True, "Import": False, "Sales": True, "Hold": True, "Sap": True,
+                                               "Wms": False, "InvoiceSend": False}
               and msg == "모듈 수정 사항을 저장했습니다.",
               f"웰라이프 업체: set_modules 는 Wellife 섹션에 쓴다 ({msg})")
         try:
@@ -853,9 +854,9 @@ with tempfile.TemporaryDirectory() as d:
             json.dump({"LogIn": {"AdminCode": "x"}}, f)
         wl = ag.Policy(AppClient({"features": {"wellife": True}}), "c_demo")
         check(wl.refresh(force=True) == (2, ["Logistics", "Output"], True, None) and st.wellife_policy() is True, "정책을 PC 에 적는다 (wellife)")
-        check(st.read_wellife_modules()[0] == {"Login": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
-                                               "InvoiceSend": False},
-              "처음 열리면 섹션을 기본값(로그인·매출처리만)으로 만든다")
+        check(st.read_wellife_modules()[0] == {"Login": True, "Excel": True, "Import": True, "Sales": True, "Hold": False, "Sap": False,
+                                               "Wms": False, "InvoiceSend": False},
+              "처음 열리면 섹션을 기본값(로그인·주문매핑 - 엑셀 수집·자동 수집·매출처리만)으로 만든다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_demo").refresh(force=True) is None and st.wellife_policy() is True,
               "정책을 못 읽으면 PC 에 적힌 마지막 값 (웰라이프 그대로)")
         check(st.has_wellife_section() is True, "정책을 못 읽어도 섹션은 안 지운다")
@@ -886,7 +887,8 @@ with tempfile.TemporaryDirectory() as d:
         try:
             dash.set_policy(3, ["Logistics", "Output"], wellife=True)
             st.ensure_wellife_section()                                   # 로그인·주문매핑만 켬
-            check(ag.local_plan()[0] == ["login", "wellife_sales"], f"웰라이프 업체의 실행 1번 = Wellife 섹션에서 켠 모듈, 이력 키로 ({ag.local_plan()})")
+            check(ag.local_plan()[0] == ["login", "wellife_excel", "wellife_import", "wellife_sales"],
+                  f"웰라이프 업체의 실행 1번 = Wellife 섹션에서 켠 모듈, 이력 키로 ({ag.local_plan()})")
             c = st.read_user_config()
             c["Sites"] = {"SITE1": {"Stts": 0}, "PRESET1": {"Stts": 0}, "PRESET2": {"Stts": 9}}
             st.write_user_config(c)
@@ -899,8 +901,8 @@ with tempfile.TemporaryDirectory() as d:
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
             wk = ag.Tokens(wc, "c_demo", ag.Prices(wc, "c_demo"), ag.local_plan, next_plan=ag.next_plan)
             wk.refresh(force=True)
-            check(wk.view()["cost"]["routine"] == 3 and wk.view()["cost"]["next"] == 4,
-                  f"업체 배율이 웰라이프 모듈에 걸린다 - 주문매핑 3, WMS 4 ({wk.view()['cost']})")
+            check(wk.view()["cost"]["routine"] == 5 and wk.view()["cost"]["next"] == 4,
+                  f"업체 배율이 웰라이프 모듈에 걸린다 - 매출처리 3 + 엑셀·자동 수집 기본 1씩 (토큰 각각, 10-15), WMS 4 ({wk.view()['cost']})")
         finally:
             os.environ.pop("RPA_USER_CONFIG", None)
             dash.set_policy(3, [])
