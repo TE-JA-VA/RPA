@@ -48,6 +48,60 @@ def erpia_pids(process_name="ERPiaMain.exe"):
     return [int(p.ProcessId) for p in wmi.ExecQuery(f"SELECT ProcessId FROM Win32_Process WHERE Name='{process_name}'")]
 
 
+def _kernel32():
+    """오류 번호를 확실히 읽는 kernel32 (ctypes.windll + GetLastError 는 그 사이 다른 호출이 번호를 덮을 수 있다).
+    손잡이는 포인터 크기로 받는다."""
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = ctypes.c_void_p
+    k.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+    for name in ("CloseHandle", "TerminateProcess", "WaitForSingleObject"):
+        getattr(k, name).argtypes = (ctypes.c_void_p,) + ((ctypes.c_uint,) if name != "CloseHandle" else ())
+    return k
+
+
+def pid_alive(pid):
+    """그 번호의 프로세스가 아직 떠 있는가 (끝난 프로세스는 손잡이가 열려도 대기 신호가 켜져 있다)."""
+    k = _kernel32()
+    h = k.OpenProcess(0x00100000 | 0x1000, False, int(pid))   # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return ctypes.get_last_error() == 5    # 접근 거부 = 떠 있다 (번호가 없으면 87)
+    try:
+        return k.WaitForSingleObject(h, 0) == 0x102   # WAIT_TIMEOUT
+    finally:
+        k.CloseHandle(h)
+
+
+def process_elevated(pid):
+    """그 프로세스가 관리자 권한(상승된 토큰)으로 떠 있는가. 알 수 없으면 None."""
+    k, a = _kernel32(), ctypes.windll.advapi32
+    h = k.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    token = ctypes.c_void_p()
+    try:
+        if not a.OpenProcessToken(ctypes.c_void_p(h), 0x0008, ctypes.byref(token)):   # TOKEN_QUERY
+            return None
+        value, size = ctypes.c_ulong(), ctypes.c_ulong()
+        ok = a.GetTokenInformation(token, 20, ctypes.byref(value), 4, ctypes.byref(size))   # TokenElevation
+        k.CloseHandle(token)
+        return bool(value.value) if ok else None
+    finally:
+        k.CloseHandle(h)
+
+
+def terminate_pid(pid):
+    """프로세스를 강제로 끝낸다. 성공하면 None, 실패하면 이유 글 (일반 권한으로는 관리자 권한 프로세스를 못 끌 수 있다)."""
+    k = _kernel32()
+    h = k.OpenProcess(0x0001, False, int(pid))   # PROCESS_TERMINATE
+    if not h:
+        err = ctypes.get_last_error()
+        return "접근 거부" if err == 5 else f"열 수 없음 (오류 {err})"
+    try:
+        return None if k.TerminateProcess(h, 1) else f"종료 실패 (오류 {ctypes.get_last_error()})"
+    finally:
+        k.CloseHandle(h)
+
+
 def get_process_name(pid):
     wmi = win32com.client.GetObject("winmgmts:")
     procs = wmi.ExecQuery(f"SELECT Name FROM Win32_Process WHERE ProcessId={pid}")

@@ -17,8 +17,8 @@
   데이터가 다시 쌓이기를 오래 기다려야 한다, 사용자 10-13). 체크 칸이 없는 4-4·5-4 는 실행처럼 누른다. ② 엑셀 업로드는
   줄이 없어 못 쓴다. 한 번 실행에 1건이라 반복 회차(RPA_RUN_TRIGGER=repeat)에서는 돌지 않고 멈춘다 (repeat_ones).
 모드는 대시보드 단계 이름·실행 제목·모듈 사유 앞의 [리허설]/[실행] 과 시작 로그로 보인다.
-- ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집 [가져오기] 는
-  모드와 상관없이 누르지 않는다 (마우스만). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14) -
+- ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집은 원래 PROCESS 와 같이
+  상단 전체선택 -> [가져오기] (SalesMode, 리허설은 마우스만 - 사용자 10-14). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14) -
   정상매출은 NormalSalesMode 로 따로 정한다 (SalesMode '실행' 인 PC 가 업데이트만으로 매출처리를 시작하지 않게).
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
@@ -55,6 +55,8 @@ PAGE_WAIT_SECONDS = 5       # 페이지를 넘긴 뒤 그리드가 다 그려지
 QUERY_WAIT_SECONDS = 120    # 물류대기 조회가 끝나기를 기다리는 최대 시간
 CONFIRM_WAIT_SECONDS = 600  # 실행: 누른 뒤 처리(스피너·팝업)가 끝나기를 기다리는 최대 시간
 QUIET_SECONDS = 5           # 실행: 팝업도 스피너도 이만큼 없으면 처리가 끝난 것으로 본다
+POPUP_SETTLE_SECONDS = 5    # 실행: [예]/[확인] 이 없는 팝업은 이만큼 다시 본 뒤 멈춘다 - 막 뜬 팝업은 단추·문구가 아직 안 그려졌다
+                            # (10-15 실측: 5-4 API 전송 [예] 뒤 저장확인 팝업을 빈 문구·단추 없음으로 읽고 멈췄다)
 MAX_POPUPS = 10             # 실행: 한 번 누른 뒤 이보다 많이 뜨면 멈춘다 (같은 팝업이 되풀이되는 경우)
 TAB_WAIT_SECONDS = 20       # 탭·아이콘·메뉴를 누른 뒤 그 화면이 떠 있는 메인 탭이 되기를 기다리는 최대 시간
 MAIN_TAB_DEPTH = 6          # 메인 탭바를 창에서 자식을 따라 찾을 때 내려가는 최대 깊이 (10-14 실측: 4)
@@ -66,7 +68,7 @@ SAP_MODE_KEY = "SapMode"       # ④ 지정·화살표 (사용자 10-13)
 WMS_MODE_KEY = "WmsMode"       # ⑤ 화살표 (사용자 10-13)
 INVOICE_MODE_KEY = "InvoiceMode"   # ⑥ 운송장번호 [전송요청(S)] - 따로 정한다 (사용자 10-13, 택배사로 나가 되돌릴 수 없다)
 # 모드 키 -> (시작 로그·제목 이름, 누르는 것). 이 순서로 보인다 (rpa_status.WELLIFE_MODES 와 같은 순서)
-MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드"), NORMAL_SALES_MODE_KEY: ("② 정상매출", "매출처리 ▼ 정상매출"),
+MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드·[가져오기]"), NORMAL_SALES_MODE_KEY: ("② 정상매출", "매출처리 ▼ 정상매출"),
               MODE_KEY: ("③ 물류대기", "저장"),
               SAP_MODE_KEY: ("④ SAP 연동", "지정·화살표"), WMS_MODE_KEY: ("⑤ WMS 이관", "화살표"),
               INVOICE_MODE_KEY: ("⑥ 운송장 전송", "[전송요청(S)]")}
@@ -275,12 +277,18 @@ def run_main(rr):
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
 
+    def once(key, f):   # '1건' 모드가 걸린 모듈은 ERPia 가 꺼져도 다시 돌지 않는다 (run_routine.run_module - 1건이 2건이 된다)
+        mod = next(m for m in MODULES if m[0] == key)
+        one = any(modes[step_mode[s]] == ONE for s in mod[3])
+        return lambda ctx: ((ctx.no_rerun.add(key) if one and hasattr(ctx, "no_rerun") else None), f(ctx))[1]
+
     funcs = {"login": rr.module_login,
              "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[SALES_MODE_KEY], modes[NORMAL_SALES_MODE_KEY]),
              "wellife_hold": lambda ctx: module_hold(rr, ctx, modes[MODE_KEY]),
              "wellife_sap": lambda ctx: module_sap(rr, ctx, modes[SAP_MODE_KEY]),
              "wellife_wms": lambda ctx: module_wms(rr, ctx, modes[WMS_MODE_KEY]),
              "invoicesend": lambda ctx: module_invoice_send(rr, ctx, modes[INVOICE_MODE_KEY])}
+    funcs = {k: (f if k == "login" else once(k, f)) for k, f in funcs.items()}
     result, reason = rr.run_modules(selected, MODULES, funcs, SECTION)
     # 반복 회차(⑤ 를 시간대 동안 N분마다)는 처리한 것이 없으면 이력에 남기지 않는다 - 지금 루틴 main 과 같은 규칙
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
@@ -310,6 +318,10 @@ def module_sales(rr, ctx, live=False, sell=False):
     if r != "ok":
         return "failed", f"'{ORDER_ICON}' 아이콘을 찾지 못했습니다." if r == "absent" else r
     try:
+        if getattr(ctx, "collected", False):    # ERPia 가 꺼져 다시 띄웠고 주문 수집은 끝났다 (run_routine.run_module)
+            rr.log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
+            note, sold = normal_sales(rr, ctx, sell)
+            return ("done" if sold else "skipped"), f"[{mode_tag(sell)}] 수집은 앞에서 끝남 / 정상매출 " + note
         return collect_orders(rr, ctx, live, sell)
     except Stop as e:
         return e.result, str(e)
@@ -321,19 +333,19 @@ def collect_orders(rr, ctx, live, sell=False):
     """주문 수집 (사용자 10-08). live: SalesMode, sell: NormalSalesMode.
     - 엑셀: 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
       (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만.
-    - 자동 수집 [가져오기] 는 모드와 상관없이 누르지 않는다 - 마우스만.
+    - 자동 수집: 원래 PROCESS 와 같이 상단(사이트) 전체선택 -> [가져오기] (run_import_step - 끝날 때까지 기다리고 안내 팝업은
+      원래 규칙대로 닫는다). 리허설은 전체선택만 하고(체크는 데이터를 바꾸지 않는다) [가져오기] 에 마우스만 (사용자 10-14).
     - 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (normal_sales, 사용자 10-14)."""
     rr.status.step("wl_order_collect")
-    win = ctx.window()
     files = excel_files(rr)
     notes, uploaded = [], 0
+    tables = rr.get_onscreen_tables(visible_page(ctx))     # 떠 있는 화면 안만 (창 전체는 숨은 화면까지 수천 개)
+    if not tables:
+        raise Stop("failed", "주문매핑 사이트 그리드를 찾지 못했습니다.")
+    sites = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
     if not files:
         notes.append("엑셀: 올릴 파일 없음")
     else:
-        tables = rr.get_onscreen_tables(win)
-        if not tables:
-            raise Stop("failed", "주문매핑 사이트 그리드를 찾지 못했습니다.")
-        sites = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
         names = ", ".join(sorted(files))
         if live:
             no_popup(rr, ctx, "엑셀 업로드 전")
@@ -348,15 +360,40 @@ def collect_orders(rr, ctx, live, sell=False):
             if cell is not None:
                 hover(rr, ctx, cell, f"엑셀 업로드 칸 (사이트 {code})", True)
             notes.append(f"엑셀 {len(files)}건 있음 (사이트 {names}) - 올리지 않음")
-    imp = onscreen_button(win, rr.IMPORT_BUTTON_NAME)
+    imported = False
+    page = visible_page(ctx)
+    imp = onscreen_button(page, rr.IMPORT_BUTTON_NAME)
     if imp is None:
         notes.append("자동 수집 단추 없음")
     else:
-        hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}] (모드와 상관없이 누르지 않음)", None)
-        notes.append("자동 수집은 누르지 않음")
+        no_popup(rr, ctx, "상단 전체선택 전")
+        front(rr, ctx, "상단 전체선택")
+        n = rr.select_all_and_verify("좌측상단", ctx.hwnd, sites, ["아이디"])
+        no_popup(rr, ctx, "상단 전체선택")
+        if live:
+            what = f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]"
+            if not n:   # 원래 PROCESS 는 그래도 누르지만 웰라이프는 모르면 멈춘다
+                raise Stop("failed", f"상단 전체선택을 확인하지 못해 {what} 를 누르지 않고 멈춤")
+            # run_import_step 은 넘긴 범위에서 첫 같은 이름 단추를 다시 찾아 누른다 - 떠 있는 화면만 넘기고, 그 단추가
+            # 확인한 단추와 같은 자리인지, 그 자리가 창 안에 보이고 덮이지 않았는지 본 뒤 누른다 (숨은 화면 단추를 누르지 않게)
+            again = rr.find_by_text(page, rr.IMPORT_BUTTON_NAME, control_types=("Button",))
+            if again is None or again.rectangle() != imp.rectangle():
+                raise Stop("failed", f"{what}: 누를 단추가 떠 있는 화면의 단추와 달라 누르지 않고 멈춤")
+            front(rr, ctx, what)
+            clear_point(rr, ctx, imp, what)
+            rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
+            if not rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page):
+                raise Stop("stopped", f"{what} 를 눌렀으나 끝난 것을 확인하지 못해 정상매출로 넘어가지 않고 멈춤 (확인할 것)")
+            notes.append(f"자동 수집: 사이트 {n}줄 전체선택 -> [{rr.IMPORT_BUTTON_NAME}] 완료")
+            imported = True
+        else:
+            hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]", True)
+            notes.append(f"자동 수집: 사이트 {n or 0}줄 전체선택, [{rr.IMPORT_BUTTON_NAME}] 는 누르지 않음")
+    if hasattr(ctx, "collected"):    # 이 뒤에 ERPia 가 꺼지면 다시 띄워 매출처리부터 (run_routine.run_module)
+        ctx.collected = rr.ec.pid_alive(ctx.pid)
     note, sold = normal_sales(rr, ctx, sell)
     notes.append(f"정상매출 [{mode_tag(sell)}] " + note)
-    return ("done" if uploaded or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
+    return ("done" if uploaded or imported or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
 
 
 SALES_SPLIT, SALES_ITEM = "매출처리", "정상매출"
@@ -1619,7 +1656,7 @@ def _top_window(rr, pt):
 
 
 def hover(rr, ctx, el, what, would_press):
-    """누를 자리에 마우스만 올리고 잠깐 머문다 - 클릭하지 않는다 (리허설, 또는 늘 누르지 않는 자동 수집).
+    """누를 자리에 마우스만 올리고 잠깐 머문다 - 클릭하지 않는다 (리허설).
     would_press: True=실행이면 누를 자리, False=대상이 없어 실행에서도 안 누름, None=따지지 않음."""
     if el is None:
         raise Stop("failed", f"{what} 단추를 찾지 못했습니다.")
@@ -1661,16 +1698,22 @@ def confirm_popups(rr, ctx, what, grid=None, idle=0, before=frozenset()):
     """실행: 누른 뒤 처리가 끝날 때까지 팝업을 [예](없으면 [확인]) 로 넘긴다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
     메인 창 안 팝업과, 누른 뒤 새로 뜬 별도 창 팝업을 본다. 팝업도 스피너(grid 의 오버레이가 idle 보다 많음)도
     QUIET_SECONDS 동안 없으면 끝이다. 넘긴 팝업 문구 목록을 돌려준다 (로그에도 하나씩 남긴다).
-    [예]/[확인] 이 없는 팝업, MAX_POPUPS 를 넘는 팝업, CONFIRM_WAIT_SECONDS 안에 안 끝나는 처리는 멈춘다."""
+    [예]/[확인] 이 POPUP_SETTLE_SECONDS 동안 안 보이는 팝업, MAX_POPUPS 를 넘는 팝업, CONFIRM_WAIT_SECONDS 안에 안 끝나는
+    처리는 멈춘다."""
     texts = []
     deadline = time.time() + CONFIRM_WAIT_SECONDS
-    calm = None
+    calm = unknown = None
     while time.time() < deadline:
         found = _next_popup(rr, ctx, before)
         if found is not None:
             text, button = found
             if button is None:
+                unknown = unknown or time.time()
+                if time.time() - unknown < POPUP_SETTLE_SECONDS:   # 아직 그려지는 중일 수 있다 - 다시 본다
+                    time.sleep(0.3)
+                    continue
                 raise Stop("stopped", f"{what}: [예]/[확인] 이 없는 팝업이라 멈춤: {text[:200]}")
+            unknown = None
             if len(texts) >= MAX_POPUPS:
                 raise Stop("stopped", f"{what}: 팝업이 {MAX_POPUPS}개를 넘어 멈춤 (마지막: {text[:200]})")
             front(rr, ctx, f"{what} 팝업")    # 잠김·포커스 - 좌표 클릭이 다른 프로그램 창에 떨어지지 않게

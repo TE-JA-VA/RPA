@@ -15,6 +15,9 @@ r"""ERPia 정해진 업무 루틴을 처음부터 끝까지 한 번에 실행한
          팝업의 버튼 구성을 실제로 확인하기 전에는 실운영에서 켜지 말 것. **
     - 물류대기 아이콘이 없는 업체는 물류대기 모듈을 건너뛴다. 아이콘을 눌렀는데 탭이 안 뜨면
       (예전처럼 물류처리로 넘어가지 않고) 실패로 멈춘다.
+    - 실행 도중 ERPia 가 꺼지면 다시 띄워 로그인하고 꺼진 모듈부터 다시 돈다 (run_module, 2번까지).
+      주문매핑은 주문 수집이 끝났으면 매출처리(하단 전체선택)부터. 일반 권한 RPA 가 로그인하려는데 관리자 권한
+      ERPia 가 이미 로그인돼 있으면 끄고 새로 띄운다 (ensure_erpia_running, 2026-10-14).
     - 상태 파일(RPA_STATUS\status_routine.json)에 modules[] / module_flags / progress 를 남긴다.
       module_flags 비트: login=1 sales=2 hold=4 logistics=8 output=16 (완료·대상없음·건너뜀이면 1).
 
@@ -25,7 +28,7 @@ r"""ERPia 정해진 업무 루틴을 처음부터 끝까지 한 번에 실행한
 4. 자동 로그인 (2차 인증 팝업/기타 팝업 처리 규칙은 perform_login.login_flow와 동일)
 5. '주문매핑 매출처리' 화면으로 이동
 6. 좌측 상단 그리드 전체선택 + 검증
-7. '가져오기' 버튼에 5초간 마우스 유지 (클릭 없음)
+7. '가져오기' 클릭 -> 끝날 때까지 대기 (run_import_step)
 7-1. 엑셀업로드: 바탕화면 ERPIA_AI\ERPIA_AI_EXCEL 폴더에 (nnn)~.xls(x) 파일이 있으면,
     좌측 상단 그리드에서 '사이트코드'가 nnn 인 행의 '엑셀업로드' 셀을 눌러 올린다.
     - 폴더가 없거나 파일이 없으면 통째로 건너뛴다
@@ -122,6 +125,9 @@ import wellife   # 설정에 "Wellife" 섹션이 있는 PC 만 쓴다 (main 참�
 BASE_DIR = status.data_dir()
 RESULT_PATH = os.path.join(BASE_DIR, "run_routine_result.txt")
 PROCESS_WAIT_SECONDS = 30
+ERPIA_EXIT_WAIT_SECONDS = 30   # 관리자 권한 ERPia 를 끈 뒤 프로세스가 사라지기를 기다리는 최대 시간
+ERPIA_ELEVATED_NOTE = "ERPia 가 관리자 권한으로 떠 있어 일반 권한 RPA 가 다룰 수 없습니다"
+ERPIA_RESTARTS = 2             # 실행 한 번에 도중에 꺼진 ERPia 를 다시 띄우는 최대 횟수 (계속 꺼지면 멈춘다)
 LOGIN_WINDOW_WAIT_SECONDS = 30
 # 로그인 후 메인 화면(좌측 메뉴 포함)이 완전히 뜰 때까지 기다리는 최대 시간
 MAIN_WINDOW_READY_TIMEOUT = 90
@@ -272,14 +278,70 @@ def load_exe_path():
     return path
 
 
+def erpia_unreachable(pid):
+    """ERPia 는 관리자 권한인데 이 RPA 는 일반 권한이라 화면을 읽고 누를 수 없는가
+    (UIPI - 10-07 실측: 일반 권한으로는 메인 창 자식이 0개로 읽힌다). RPA 가 관리자 권한이면 어느 쪽이든 다룬다."""
+    return not status.is_admin() and ec.process_elevated(pid) is True
+
+
+def erpia_logged_in(pid):
+    """ERPia 가 이미 로그인된 상태인가 - 보이는 로그인 창이 없고, 보이는 메인 창(제목 '업체코드 - 아이디', 10-14 실측)이 있다.
+    창 제목만 본다 (win32 - 관리자 권한 ERPia 도 일반 권한에서 읽힌다. UIA 는 자식이 0개로 읽힌다).
+    2차 인증·공지 창만 보이는 로그인 도중은 메인 창 제목이 없어 로그인 전으로 본다."""
+    titles = []
+
+    def collect(hwnd, _):
+        if win32process.GetWindowThreadProcessId(hwnd)[1] == pid and win32gui.IsWindowVisible(hwnd):
+            titles.append(win32gui.GetWindowText(hwnd))
+    try:
+        win32gui.EnumWindows(collect, None)
+    except Exception:
+        return False
+    titles = [t for t in titles if t.strip()]
+    return any(re.fullmatch(r"\S+ - \S+", t.strip()) for t in titles) and not any("로그인" in t for t in titles)
+
+
+def close_elevated_erpia(pid):
+    """관리자 권한 ERPia 를 강제로 끈다. (ok, 사유). 일반 권한으로는 끌 수 없어(접근 거부) 사람이 띄운 실행이면
+    관리자 권한 taskkill 을 띄우고(UAC 확인), 무인 실행(RPA_UNATTENDED)은 확인할 사람이 없어 멈춘다."""
+    log(f"ERPia(PID={pid}) 가 관리자 권한으로 떠 있어 일반 권한 RPA 가 다룰 수 없습니다 -> 강제 종료 후 새로 띄웁니다")
+    why = ec.terminate_pid(pid)
+    if why and not os.environ.get("RPA_UNATTENDED"):
+        log(f"  바로 끄지 못했습니다({why}) -> 관리자 권한 taskkill 을 띄웁니다 (UAC 확인)")
+        if status.run_as_admin("taskkill.exe", ["/F", "/PID", str(pid)], None):
+            why = None
+    if why:
+        return False, (f"관리자 권한으로 떠 있는 ERPia 를 끄지 못했습니다 ({why}) - "
+                       "ERPia 를 닫거나 RPA 를 관리자 권한으로 실행하세요")
+    deadline = time.time() + ERPIA_EXIT_WAIT_SECONDS
+    while ec.pid_alive(pid):
+        if time.time() > deadline:
+            return False, f"관리자 권한 ERPia(PID={pid}) 가 {ERPIA_EXIT_WAIT_SECONDS}초 안에 꺼지지 않았습니다"
+        time.sleep(0.5)
+    log(f"  ERPia(PID={pid}) 종료 확인")
+    return True, None
+
+
 def ensure_erpia_running():
-    """ERPia 가 떠 있으면 그 PID. 없으면 띄운다 - 위치는 이때만 찾는다 (떠 있으면 위치가 틀려도 상관없다)."""
+    """ERPia 가 떠 있으면 그 PID. 없으면 띄운다 - 위치는 이때만 찾는다 (떠 있으면 위치가 틀려도 상관없다).
+    떠 있는 ERPia 가 관리자 권한이라 이 RPA 가 다룰 수 없으면: 이미 로그인된 ERPia 일 때만 끄고 새로 띄운다
+    (새 ERPia 는 RPA 와 같은 권한). 로그인 전(로그인 창)이면 끄지 않고 멈춘다 (사용자 2026-10-14)."""
     try:
         pid = ec.find_erpia_pid()
+    except RuntimeError:
+        pid = None
+    if pid is not None and erpia_unreachable(pid):
+        if not erpia_logged_in(pid):
+            raise RuntimeError(ERPIA_ELEVATED_NOTE + " (로그인 전이라 끄지 않습니다 - ERPia 를 닫고 다시 실행하세요)")
+        if len(ec.erpia_pids()) > 1:   # 어느 것을 끌지 모른다 - 다른 사람이 쓰는 ERPia 일 수 있다
+            raise RuntimeError(ERPIA_ELEVATED_NOTE + " (ERPia 가 여러 개 떠 있어 끄지 않습니다 - 하나만 남기고 다시 실행하세요)")
+        ok, why = close_elevated_erpia(pid)
+        if not ok:
+            raise RuntimeError(why)
+        pid = None
+    if pid is not None:
         log(f"ERPiaMain.exe 이미 실행 중 (PID={pid})")
         return pid
-    except RuntimeError:
-        pass
 
     exe_path = load_exe_path()
     log(f"ERPiaMain.exe 미실행 -> 실행: {exe_path}")
@@ -364,6 +426,10 @@ class RoutineContext:
         self.win = None
         self.options = None      # 물류 설정 (사용자 설정 Logistic). 처음 필요할 때 읽는다.
         self.results = {}        # 이번 실행의 모듈 결과 {모듈 키: "done" | "no_target" | ...}
+        self.collected = False   # 주문매핑의 주문 수집(가져오기·엑셀)이 ERPia 가 떠 있는 채로 끝났다 - 다시 돌 때 매출처리부터
+        self.resume = None       # ERPia 가 꺼져 다시 띄운 뒤 다시 도는 모듈 키 (run_module)
+        self.restarts = 0        # 이번 실행에서 꺼진 ERPia 를 다시 띄운 횟수 (ERPIA_RESTARTS 까지)
+        self.no_rerun = set()    # ERPia 가 꺼져도 다시 돌지 않는 모듈 키 - '1건' 모드 (다시 돌면 1건이 2건이 된다)
 
     def refresh(self):
         """메인 창을 다시 잡는다. 못 잡으면 False."""
@@ -379,6 +445,8 @@ class RoutineContext:
                            f" ({type(e).__name__})")
         # 로그인 창이 떠 있으면 메인 창을 1분 넘게 기다렸다 실패하므로 먼저 가려낸다.
         # find_login_window 는 로그인 뒤 숨은 채 남는 잔재 창도 돌려주므로 '보이는' 창만 본다.
+        if erpia_unreachable(self.pid):   # 끄는 것은 로그인 모듈만 한다 (ensure_erpia_running) - 여기서는 끄지 않는다
+            return False, ERPIA_ELEVATED_NOTE + " (Login 모듈을 켜면 끄고 새로 띄워 로그인합니다)"
         login_win = pl.find_login_window()
         if login_win is not None and win32gui.IsWindowVisible(login_win.handle):
             return False, "ERPia 로그인 창이 떠 있습니다. Login 모듈을 켜거나 먼저 로그인하세요."
@@ -5484,7 +5552,10 @@ def module_login(ctx):
     """ERPia 를 띄우고(이미 떠 있으면 그대로) 로그인한 뒤 메인 창을 잡는다."""
     status.step("login")
     admin_code, user_id, password = pl.load_credentials()
-    ctx.pid = ensure_erpia_running()
+    try:
+        ctx.pid = ensure_erpia_running()
+    except RuntimeError as e:   # ERPia 를 못 찾음·관리자 권한 ERPia 를 끄지 않음/못 끔 - 프로그램 오류가 아니라 로그인 실패로 남긴다
+        return "failed", str(e)
 
     state, obj = wait_login_or_main(ctx.pid)
     if state == "timeout":
@@ -5572,24 +5643,28 @@ def module_sales(ctx):
     top_left = min(onscreen_tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
     bottom = max(onscreen_tables, key=lambda t: t.rectangle().top)
 
-    status.step("top_select")
-    log("\n=== 좌측 상단 그리드 전체선택 ===")
-    n_top = select_all_and_verify("좌측상단", hwnd, top_left, ["아이디"])
-    if n_top is not None:
-        status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
+    if ctx.collected:
+        log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
+    else:
+        status.step("top_select")
+        log("\n=== 좌측 상단 그리드 전체선택 ===")
+        n_top = select_all_and_verify("좌측상단", hwnd, top_left, ["아이디"])
+        if n_top is not None:
+            status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
 
-    log("\n=== 주문 가져오기 ===")
-    if not run_import_step(app, pid, hwnd, win):
-        log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
-    win = app.window(handle=hwnd)
+        log("\n=== 주문 가져오기 ===")
+        if not run_import_step(app, pid, hwnd, win):
+            log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
+        win = app.window(handle=hwnd)
 
-    # 7-1. 엑셀업로드 (바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만)
-    status.step("excel_upload")
-    log("\n=== 엑셀업로드 ===")
-    try:
-        run_excel_upload_step(app, pid, hwnd, top_left)
-    except Exception as e:
-        log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
+        # 7-1. 엑셀업로드 (바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만)
+        status.step("excel_upload")
+        log("\n=== 엑셀업로드 ===")
+        try:
+            run_excel_upload_step(app, pid, hwnd, top_left)
+        except Exception as e:
+            log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
+        ctx.collected = ec.pid_alive(ctx.pid)   # 수집 도중 꺼졌으면 다시 돌 때 수집부터
 
     # 8. 하단 전체선택
     status.step("bottom_select")
@@ -5780,8 +5855,10 @@ def module_output(ctx):
     if logistics_result is not None and logistics_result != "done":
         return "no_target", (f"물류관리 모듈이 '{MODULE_RESULT_LABEL.get(logistics_result, logistics_result)}' "
                              f"로 끝나 출력할 배송장이 없습니다.")
+    # 출력 도중 ERPia 가 꺼져 다시 도는 것이면 새 ERPia 는 물류 관리 화면이 아니고 이미 출력했을 수 있다 - 출력 단독처럼
+    again = ctx.resume == "output"
 
-    if logistics_result is None:
+    if logistics_result is None or again:
         log("\n=== 물류 관리 화면 이동 (출력 단독 실행) ===")
         r = goto_logistics_screen(ctx)
         if r != "ok":
@@ -5794,7 +5871,7 @@ def module_output(ctx):
             return "failed", "자동/수동 모드를 설정하지 못해 출력하지 않습니다."
 
     log("\n=== 운송장 출력 / 엑셀파일 생성 ===")
-    policy = "continue" if logistics_result == "done" else "stop"
+    policy = "continue" if logistics_result == "done" and not again else "stop"
     result = run_print_step(ctx.app, ctx.pid, ctx.hwnd, options=ctx.logistic_options(),
                             already_printed=policy)
     if result == "already_printed":
@@ -5824,6 +5901,8 @@ def module_invoice_send(ctx):
         live = wellife.load_mode(rr, wellife.INVOICE_MODE_KEY, pl.ROUTINE_SECTION)
     except Exception as e:
         return "failed", f"설정 오류: {e}"
+    if live == wellife.ONE and hasattr(ctx, "no_rerun"):   # ERPia 가 꺼져도 다시 돌지 않는다 (1건이 2건이 된다)
+        ctx.no_rerun.add("invoicesend")
     log(f"운송장번호 전송 모드: {wellife.mode_tag(live)} ('{pl.ROUTINE_SECTION}' 섹션 {wellife.INVOICE_MODE_KEY} - 빠지면 리허설)")
     ones = wellife.repeat_ones({wellife.INVOICE_MODE_KEY: live})   # '1건' 을 반복하면 회차마다 1건씩 나간다
     if ones:
@@ -5876,7 +5955,7 @@ def run_modules(selected, modules=None, funcs=None, section=None):
 
         status.module_start(key)
         log(f"\n=== [{label}] 시작 ===")
-        result, reason = funcs[key](ctx)
+        result, reason = run_module(ctx, key, label, funcs)
         if reason is None and result in ("failed", "stopped"):
             reason = status.last_problem()
         status.module_done(key, result, reason)
@@ -5886,6 +5965,46 @@ def run_modules(selected, modules=None, funcs=None, section=None):
         if result in ("failed", "stopped"):
             return "stopped", reason
     return "success", None
+
+
+def run_module(ctx, key, label, funcs):
+    """모듈 하나를 돌린다. (결과, 사유). 도중에 ERPia 가 꺼졌으면(프로세스가 사라짐) 다시 띄워 로그인하고 그 모듈을
+    다시 돌린다 (실행 한 번에 ERPIA_RESTARTS 번까지). 끝난 모듈은 다시 돌지 않는다 - 꺼진 모듈부터 잇는다.
+    다시 돌 때 ctx.resume = 그 모듈 키. 주문매핑은 주문 수집이 끝났으면(ctx.collected) 매출처리부터 잇는다.
+    ERPia 가 떠 있는데 난 예외는 예전처럼 그대로 올린다."""
+    try:
+        while True:
+            try:
+                result, reason = funcs[key](ctx)
+                error = None
+            except Exception as e:
+                result, reason, error = "failed", f"{type(e).__name__}: {e}", e
+            if key == "login" or ctx.pid is None or ec.pid_alive(ctx.pid):
+                if error is not None:
+                    raise error
+                return result, reason
+            log(f"\n[{label}] 도중에 ERPia(PID={ctx.pid}) 가 꺼졌습니다 (모듈 결과: {result}"
+                f"{' - ' + reason if reason else ''})")
+            if key in ctx.no_rerun:
+                return "failed", "ERPia 가 꺼졌습니다 - '1건' 모드라 다시 돌지 않고 멈춥니다 (몇 건 처리됐는지 확인할 것)"
+            if ctx.restarts >= ERPIA_RESTARTS:
+                return "failed", f"ERPia 가 실행 도중 {ERPIA_RESTARTS + 1}번 꺼져 멈춥니다"
+            others = ec.erpia_pids()
+            if others:   # 사람이 띄운 ERPia 일 수 있다 - 그것을 쓰거나 끄지 않는다
+                return "failed", f"ERPia 가 꺼진 뒤 다른 ERPia(PID={others}) 가 떠 있어 다시 띄우지 않고 멈춥니다"
+            ctx.restarts += 1
+            status.fail_step(f"ERPia 가 꺼짐 - 다시 띄워 이어갑니다 ({ctx.restarts}/{ERPIA_RESTARTS})")
+            log(f"=== ERPia 를 다시 띄워 [{label}] 를 이어갑니다 ({ctx.restarts}/{ERPIA_RESTARTS}) ===")
+            ctx.pid = ctx.hwnd = None
+            try:
+                done, why = (funcs.get("login") or module_login)(ctx)
+            except Exception as e:
+                done, why = "failed", f"{type(e).__name__}: {e}"
+            if done != "done":
+                return "failed", f"꺼진 ERPia 를 다시 띄우지 못했습니다: {why}"
+            ctx.resume = key
+    finally:
+        ctx.resume = None
 
 
 def wellife_route(policy_on, has_section):
