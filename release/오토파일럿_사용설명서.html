@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오토파일럿 사용 설명서</title>
+<style>
+  :root {
+    --ink: #1d2433; --muted: #5d6779; --line: #e3e7ee; --bg: #f5f7fb; --card: #fff;
+    --accent: #2f6fed; --accent-soft: #eaf1fe; --warn: #b85c00; --warn-soft: #fff4e5; --ok-soft: #eaf7ef;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.75 "Pretendard", "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; word-break: keep-all; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 16px 80px; }
+  header { margin-bottom: 28px; }
+  header .tag { display: inline-block; font-size: 13px; color: var(--accent); background: var(--accent-soft);
+                padding: 2px 10px; border-radius: 99px; font-weight: 600; }
+  h1 { font-size: 32px; margin: 10px 0 6px; letter-spacing: -0.5px; }
+  header p { margin: 0; color: var(--muted); }
+  h2 { font-size: 22px; margin: 0 0 14px; display: flex; align-items: center; gap: 10px; letter-spacing: -0.3px; }
+  h2 .no { flex: none; width: 32px; height: 32px; border-radius: 10px; background: var(--accent); color: #fff;
+           font-size: 16px; display: grid; place-items: center; }
+  h3 { font-size: 17px; margin: 20px 0 6px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 26px 28px; margin-bottom: 18px; }
+  .summary { background: linear-gradient(135deg, #2f6fed, #5a8cff); color: #fff; border: 0; }
+  .summary h2 { color: #fff; }
+  .summary p { margin: 0 0 16px; opacity: .95; }
+  .steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 0 0 18px; padding: 0; list-style: none; }
+  .steps li { background: rgba(255,255,255,.14); border-radius: 12px; padding: 12px; font-size: 14px; line-height: 1.5; }
+  .steps b { display: block; font-size: 15px; margin-bottom: 4px; }
+  .steps .n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+              background: #fff; color: var(--accent); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+  .must { background: rgba(255,255,255,.96); color: var(--ink); border-radius: 12px; padding: 12px 16px; }
+  .must strong { color: var(--warn); }
+  .must ul { margin: 4px 0 0; padding-left: 20px; }
+  ol.do { padding-left: 0; list-style: none; counter-reset: s; margin: 0; }
+  ol.do > li { counter-increment: s; position: relative; padding: 8px 0 8px 40px; border-bottom: 1px dashed var(--line); }
+  ol.do > li:last-child { border-bottom: 0; }
+  ol.do > li::before { content: counter(s); position: absolute; left: 0; top: 10px; width: 26px; height: 26px; border-radius: 50%;
+                       background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+  ol.do ul, ol.do ol { margin: 4px 0 0; padding-left: 20px; }
+  .btn { display: inline-block; padding: 0 9px; border: 1px solid #c9d3e3; border-bottom-width: 2px; border-radius: 6px;
+         background: #fff; font-size: 14px; font-weight: 600; line-height: 1.7; white-space: nowrap; }
+  .path { font-weight: 600; color: var(--accent); }
+  .note { border-radius: 12px; padding: 12px 16px; margin-top: 14px; font-size: 15px; }
+  .note.tip { background: var(--ok-soft); }
+  .note.warn { background: var(--warn-soft); }
+  .note p { margin: 0; }
+  .note p + p { margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #f8fafd; font-size: 14px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .table { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 6px; }
+  .admin { font-size: 12px; font-weight: 600; color: var(--warn); background: var(--warn-soft); padding: 1px 8px; border-radius: 99px; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 0; }
+  nav.toc a { font-size: 14px; color: var(--ink); text-decoration: none; background: var(--card); border: 1px solid var(--line);
+              border-radius: 99px; padding: 4px 12px; }
+  nav.toc a:hover { border-color: var(--accent); color: var(--accent); }
+  footer { text-align: center; color: var(--muted); margin-top: 28px; }
+  @media (max-width: 720px) {
+    h1 { font-size: 26px; }
+    section { padding: 20px 18px; }
+    .steps { grid-template-columns: 1fr; }
+    .table { overflow-x: auto; }
+  }
+  @media print {
+    body { background: #fff; }
+    nav.toc { display: none; }
+    section { break-inside: avoid; border-color: #ccc; }
+    .summary { background: #2f6fed !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <span class="tag">사용 설명서</span>
+  <h1>오토파일럿</h1>
+  <p>ERPia 업무(주문 처리, 물류, 운송장 등)를 대신 눌러 드리는 프로그램입니다.</p>
+  <nav class="toc">
+    <a href="#prep">준비물</a><a href="#s1">1. 설치</a><a href="#s2">2. 처음 설정</a><a href="#s3">3. 로그인</a>
+    <a href="#s4">4. 결과 보기</a><a href="#s5">5. 바로 실행</a><a href="#s6">6. 환경설정</a>
+    <a href="#s7">7. 비밀번호</a><a href="#s8">8. 업데이트</a><a href="#faq">이럴 땐</a>
+  </nav>
+</header>
+
+<section class="summary">
+  <h2>한눈에 보기</h2>
+  <p>처음 한 번만 설정해 두시면, 정해 둔 시각에 알아서 실행됩니다.</p>
+  <ol class="steps">
+    <li><span class="n">1</span><b>설치</b>설치 파일을 열고 [예] → [설치]</li>
+    <li><span class="n">2</span><b>처음 설정</b>설정 창에 받은 정보를 넣고 [저장]</li>
+    <li><span class="n">3</span><b>로그인</b>'오토파일럿 대시보드'를 열고 로그인</li>
+    <li><span class="n">4</span><b>실행할 일 정하기</b>[환경설정]에서 고르고 [적용]</li>
+    <li><span class="n">5</span><b>결과 보기</b>[오토파일럿] 화면에서 확인</li>
+  </ol>
+  <div class="must">
+    <strong>꼭 지켜 주세요</strong>
+    <ul>
+      <li>실행 시각에는 PC가 켜져 있고, 윈도우에 로그인되어 있어야 합니다.</li>
+      <li>실행되는 동안에는 그 PC의 마우스와 키보드를 만지지 말아 주세요.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="prep">
+  <h2>준비해 주실 것</h2>
+  <p>담당자가 미리 전해 드립니다. 없으시면 담당자에게 요청해 주세요.</p>
+  <div class="table"><table>
+    <tr><th>무엇</th><th>어디에 씁니까</th></tr>
+    <tr><td>설치 파일 (AUTOPILOT_Setup_….exe)</td><td>1. 설치</td></tr>
+    <tr><td>업체코드, PC코드, 에이전트 계정 비밀번호</td><td>2. 처음 설정</td></tr>
+    <tr><td>대시보드 아이디, 비밀번호</td><td>3. 로그인</td></tr>
+  </table></div>
+  <div class="note tip"><p>ERPia 업체코드, 아이디, 비밀번호는 평소 ERPia에 로그인하실 때 쓰시는 것입니다.</p></div>
+</section>
+
+<section id="s1">
+  <h2><span class="no">1</span>설치하기</h2>
+  <ol class="do">
+    <li>설치 파일을 두 번 누릅니다.</li>
+    <li>'Windows의 PC 보호' 창이 뜨면 <span class="btn">추가 정보</span> → <span class="btn">실행</span>을 누릅니다.</li>
+    <li>"이 앱이 디바이스를 변경하도록 허용하시겠어요?"가 뜨면 <span class="btn">예</span>를 누릅니다.</li>
+    <li><span class="btn">설치</span>를 누릅니다.</li>
+    <li>설치가 끝날 무렵 '오토파일럿 설정' 창이 자동으로 뜹니다. 다음 2번으로 넘어가 주세요.</li>
+  </ol>
+  <div class="note warn"><p>"옵저버가 켜져 있습니다" 또는 "오토파일럿이 돌고 있습니다"가 나오면, 끝날 때까지 기다리거나 창을 닫은 뒤 다시 설치해 주세요.</p></div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>처음 설정하기</h2>
+  <p>창이 보이지 않으면 <span class="path">시작 메뉴 → 오토파일럿 → 오토파일럿 설정</span>을 눌러 여실 수 있습니다.</p>
+  <ol class="do">
+    <li><b>대시보드 연결</b>: 담당자에게 받은 업체코드, PC코드, 에이전트 계정 비밀번호를 넣습니다.</li>
+    <li><b>ERPia 로그인</b>: ERPia 업체코드, 아이디, 비밀번호를 넣습니다.
+      <ul><li>'ERPia 설치 위치'는 비워 두셔도 됩니다. 알아서 찾습니다.</li></ul></li>
+    <li><b>물류 처리 옵션</b>: 택배사, 박스, 운임을 넣습니다.
+      <ul>
+        <li>ERPia의 배송정보설정에 적힌 글자와 <b>똑같이</b> 넣어 주세요. 다르면 물류관리에서 저장되지 않습니다.</li>
+        <li>출력 방식은 처음 그대로 '수동 - 엑셀 파일'로 두시면 됩니다. 운송장을 바로 인쇄하려면 '자동 - 운송장 인쇄'와 프린터를 고릅니다.</li>
+      </ul></li>
+    <li>아래의 <span class="btn">저장</span>을 누릅니다.</li>
+    <li>잠시 뒤 "설정을 마쳤습니다"가 나오면 끝입니다. <span class="btn">닫기</span>를 누르셔도 됩니다.</li>
+  </ol>
+  <div class="note warn">
+    <p>빨간 글씨가 나오면 그 칸을 다시 확인해 주세요. (예: "ERPia 아이디를 넣으세요")</p>
+    <p>비밀번호 칸에 "저장됨 - 바꿀 때만 입력"이 흐리게 보이면, 바꿀 때만 새로 넣으시면 됩니다.</p>
+  </div>
+  <div class="note tip"><p>이후로는 윈도우에 로그인할 때마다 오토파일럿이 창 없이 저절로 켜집니다. 따로 켜실 필요는 없습니다.</p></div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>대시보드 로그인</h2>
+  <p>어느 PC, 어느 휴대폰에서든 인터넷 창으로 결과를 보실 수 있습니다.</p>
+  <ol class="do">
+    <li><span class="path">시작 메뉴 → 오토파일럿 → 오토파일럿 대시보드</span>를 누릅니다.<br>
+      <small>다른 기기에서는 <b>https://rpa-test-f02e0.web.app</b> 로 들어갑니다.</small></li>
+    <li>업체코드, 아이디, 비밀번호를 넣고 <span class="btn">로그인</span>을 누릅니다.
+      <ul><li>'업체코드·아이디 저장'에 체크해 두시면 다음부터 비밀번호만 넣으시면 됩니다.</li></ul></li>
+  </ol>
+  <div class="note warn"><p>"업체코드, 아이디 또는 비밀번호가 맞지 않습니다"가 나오면 담당자에게 확인해 주세요.</p></div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>결과 보기</h2>
+  <p>왼쪽 메뉴의 <span class="path">오토파일럿</span>을 누릅니다. PC가 여러 대이면 제목 옆에서 PC를 고릅니다.</p>
+  <h3>현황 탭</h3>
+  <p>지금 상태(진행 중, 성공, 실패 등), 처리한 주문 수, 다음 자동 실행 시각을 보여 드립니다. '연결'이 <b>정상</b>이면 PC와 잘 이어져 있는 것입니다.</p>
+  <h3>기록 탭</h3>
+  <p>날짜를 고르면 그날 언제 무엇을 실행했고 결과가 어땠는지 표로 보여 드립니다.</p>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>지금 바로 실행하기 <span class="admin">관리자</span></h2>
+  <p>[오토파일럿] 화면 오른쪽 <b>실행</b> 칸에서 누릅니다.</p>
+  <div class="table"><table>
+    <tr><th>단추</th><th>하는 일</th></tr>
+    <tr><td><span class="btn">전체 실행</span></td><td>쇼핑몰 주문 받기부터 ERPia 처리까지 모두</td></tr>
+    <tr><td><span class="btn">ACTOR 오토파일럿</span></td><td>쇼핑몰에서 주문 엑셀만 받기</td></tr>
+    <tr><td><span class="btn">PROCESS 오토파일럿</span></td><td>ERPia 처리만</td></tr>
+    <tr><td><span class="btn">오토파일럿 중단</span></td><td>실행 중인 것을 멈춤 (실행 중에만 보입니다)</td></tr>
+  </table></div>
+  <div class="note tip">
+    <p>단추 아래에 <b>남은 토큰</b>이 보입니다. 실행할 때마다 토큰이 쓰입니다.</p>
+    <p>"토큰이 없습니다"가 나오면 실행되지 않습니다. 담당자에게 충전을 요청해 주세요.</p>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>실행할 일과 시각 정하기 <span class="admin">관리자</span></h2>
+  <p>왼쪽 메뉴의 <span class="path">환경설정</span>을 누릅니다. 관리자 계정에만 보입니다.</p>
+  <h3>실행 모듈</h3>
+  <p>실행할 일을 켜고 끈 뒤 그 칸의 <span class="btn">적용</span>을 누릅니다. 하나 이상은 켜 두셔야 합니다.</p>
+  <h3>쇼핑몰 프리셋</h3>
+  <p>주문을 받아 올 쇼핑몰을 켜고 끈 뒤 <span class="btn">적용</span>을 누릅니다. 쇼핑몰 설정은 담당자가 해 드립니다.</p>
+  <h3>자동 실행</h3>
+  <ol class="do">
+    <li><span class="btn">활성화</span>를 켭니다.</li>
+    <li>요일(평일, 매일, 주말)을 고릅니다.</li>
+    <li><span class="btn">+ 시각</span>을 눌러 실행할 시각을 넣습니다. 일정한 간격으로 되풀이하려면 <span class="btn">+ 반복 시간대</span>를 누릅니다.</li>
+    <li>줄마다 '전체 모듈 실행' 또는 '선택 모듈만 실행'을 고를 수 있습니다.</li>
+    <li>마지막에 <span class="btn">적용</span>을 누릅니다.</li>
+  </ol>
+  <div class="note warn">
+    <p><span class="btn">적용</span>을 누르지 않으면 바뀌지 않습니다. 그냥 나가려 하면 "적용하지 않은 변경이 있습니다" 하고 알려 드립니다.</p>
+    <p>시각을 더 넣을 수 없다고 나오면 ERPia에 문의해 주세요.</p>
+  </div>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>비밀번호 바꾸기</h2>
+  <p>왼쪽 메뉴 <span class="path">계정</span> → 현재 비밀번호, 새 비밀번호(8자 이상), 다시 입력 → <span class="btn">바꾸기</span></p>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>업데이트</h2>
+  <p>새 버전은 <b>저절로</b> 설치됩니다. 누르실 것은 없습니다.<br>
+     업데이트하는 동안 잠시 실행 단추가 잠기며, [오토파일럿] 화면의 버전 옆에 "업데이트됨"이 보이면 끝난 것입니다.</p>
+</section>
+
+<section id="faq">
+  <h2>이럴 땐 이렇게</h2>
+  <div class="table"><table>
+    <tr><th style="width:34%">이럴 때</th><th>이렇게 해 주세요</th></tr>
+    <tr><td>'연결'이 <b>끊김</b>이에요</td><td>PC가 켜져 있고 윈도우에 로그인되어 있는지 봐 주세요. 그래도 끊김이면 시작 메뉴의 '오토파일럿 설정'에서 <span class="btn">저장</span>을 눌러 주세요. 그래도 안 되면 그 창 맨 위 줄 상태를 담당자에게 알려 주세요.</td></tr>
+    <tr><td>결과가 <b>실패</b>예요</td><td>[기록] 탭에서 그 줄의 상세 정보를 담당자에게 알려 주세요.</td></tr>
+    <tr><td>ERPia 비밀번호를 바꿨어요</td><td>'오토파일럿 설정' 창에서 새 비밀번호를 넣고 <span class="btn">저장</span>을 눌러 주세요.</td></tr>
+    <tr><td>자동 실행이 안 됐어요</td><td>그 시각에 PC가 켜져 있고 로그인되어 있었는지, [환경설정]에서 <span class="btn">활성화</span>가 켜져 있는지 봐 주세요.</td></tr>
+    <tr><td>휴대폰 인증이 필요한 쇼핑몰이에요</td><td>담당자가 휴대폰 앱 설정을 도와 드립니다. 실행 시각에 휴대폰을 켜 두세요.</td></tr>
+  </table></div>
+</section>
+
+<footer>그 밖에 궁금하신 점은 언제든 담당자에게 편하게 물어봐 주세요.</footer>
+</div>
+</body>
+</html>
