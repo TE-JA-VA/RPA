@@ -218,7 +218,8 @@ _real_run_logistics_step = rr.run_logistics_step     # 7절이 가짜로 바꾸�
 print()
 print("=== 3. 모듈 표 / 컨텍스트 / 화면 진입 ===")
 rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime=_time.strftime)
-rr.ec = types.SimpleNamespace(ensure_foreground=lambda *a, **k: True, find_erpia_pid=lambda: 4242)
+rr.ec = types.SimpleNamespace(ensure_foreground=lambda *a, **k: True, find_erpia_pid=lambda: 4242,
+                              process_elevated=lambda pid: False, pid_alive=lambda pid: True, erpia_pids=lambda: [])
 rr.log = lambda msg="": None
 rr.win32gui = types.SimpleNamespace(IsWindow=lambda h: True, IsWindowVisible=lambda h: True,
                                     PostMessage=lambda h, m, w, l: None)
@@ -241,6 +242,10 @@ class FakeWin:
 
     def descendants(self, control_type=None):
         return []
+
+
+_real_attach = rr.RoutineContext.attach   # 5절이 가짜로 바꾸므로 13절에서 되살린다
+_real_run_modules = rr.run_modules        # 10절 뒤로 가짜로 바뀐다
 
 
 def make_ctx():
@@ -707,6 +712,284 @@ rec = StatusRec(); rr.status = rec; ran.clear()
 rr.main()
 check("돌릴 게 없으면 run_modules 없이 중단 + 사유", not ran and rec.of("finish")[-1] == ("stopped", "이번 실행 모듈이 비었습니다"), f"{rec.of('finish')}")
 os.environ.pop("RPA_RUN_MODULES", None)
+
+print()
+print("=== 13. 도중에 꺼진 ERPia 다시 띄워 잇기 / 관리자 권한 ERPia (2026-10-14) ===")
+ALIVE = [True]
+rr.ec.pid_alive = lambda pid: ALIVE[0]
+SALES_ON = {"Login": True, "Sales": True, "Hold": False, "Logistics": False, "Output": False}
+seen = []
+
+
+def crash_once(ctx):
+    seen.append((ctx.resume, ctx.collected))
+    if len(seen) == 1:
+        ctx.collected = True         # 수집은 끝냈고 매출처리 중에 꺼졌다
+        ALIVE[0] = False
+        return "failed", "그리드가 충분히 발견되지 않았습니다."
+    return "done", None
+
+
+def run_crash(sales, selected=SALES_ON):
+    seen.clear()
+    ALIVE[0] = True
+    rr.RoutineContext.attach = lambda self: (True, None)
+    rec = StatusRec(); rr.status = rec
+    called = []
+
+    def login(ctx):
+        called.append("login")
+        ALIVE[0] = True               # 새로 띄운 ERPia
+        ctx.pid, ctx.hwnd = 4243, 778
+        return "done", None
+
+    def track(f):
+        return lambda ctx: (called.append("sales"), f(ctx))[1]
+    rr.MODULE_FUNCS = {"login": login, "sales": track(sales), "hold": None, "logistics": None, "output": None}
+    return _real_run_modules(selected), called, rec
+
+
+out, called, rec = run_crash(crash_once)
+check("매출처리 중 ERPia 가 꺼지면 다시 띄워 로그인하고 주문매핑을 다시 돈다",
+      out == ("success", None) and called == ["login", "sales", "login", "sales"], f"{out} {called}")
+check("다시 돌 때 ctx.resume='sales', 수집 끝남(collected) 이 남아 매출처리부터", seen == [(None, False), ("sales", True)], str(seen))
+check("꺼진 단계는 실패로 표시하고 모듈은 완료로 닫는다",
+      len(rec.of("fail_step")) == 1 and [r[1] for r in rec.of("module_done")] == ["done", "done"], str(rec.calls[-6:]))
+
+
+def always_crash(ctx):
+    seen.append(ctx.resume)
+    ALIVE[0] = False
+    return "done", None
+
+
+out, called, rec = run_crash(always_crash)
+check(f"계속 꺼지면 {rr.ERPIA_RESTARTS}번 다시 띄운 뒤 멈춘다 ('done' 이라고 돌려줘도 꺼졌으면 다시 돈다)",
+      out[0] == "stopped" and "3번 꺼져" in out[1] and called.count("sales") == rr.ERPIA_RESTARTS + 1, f"{out} {called}")
+
+
+def raise_dead(ctx):
+    seen.append(ctx.resume)
+    if len(seen) == 1:
+        ALIVE[0] = False
+        raise RuntimeError("COMError 흉내")
+    return "done", None
+
+
+OTHERS = [[]]
+rr.ec.erpia_pids = lambda: OTHERS[0]
+OTHERS[0] = [9999]
+out, called, rec = run_crash(crash_once)
+check("꺼진 뒤 다른 ERPia 가 떠 있으면 다시 띄우지 않고 멈춘다 (사람이 띄운 것일 수 있다, 리뷰 10-14)",
+      out[0] == "stopped" and "9999" in out[1] and called == ["login", "sales"], f"{out} {called}")
+OTHERS[0] = []
+
+
+def one_crash(ctx):
+    ctx.no_rerun.add("sales")      # '1건' 모드 모듈 (wellife.run_main 의 once, module_invoice_send)
+    seen.append(ctx.resume)
+    ALIVE[0] = False
+    return "done", None
+
+
+out, called, rec = run_crash(one_crash)
+check("'1건' 모드 모듈은 ERPia 가 꺼져도 다시 돌지 않고 멈춘다 (1건이 2건이 되지 않게, 리뷰 10-14)",
+      out[0] == "stopped" and "1건" in out[1] and called == ["login", "sales"], f"{out} {called}")
+
+out, called, rec = run_crash(raise_dead)
+check("꺼지면서 난 UI 예외도 다시 띄워 잇는다", out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
+
+
+def raise_alive(ctx):
+    raise ValueError("진짜 버그")
+
+
+try:
+    run_crash(raise_alive)
+    res = None
+except ValueError as e:
+    res = str(e)
+check("ERPia 가 떠 있는데 난 예외는 예전처럼 그대로 올린다", res == "진짜 버그", str(res))
+
+
+def login_fails_after(ctx):
+    ALIVE[0] = False
+    return "failed", "x"
+
+
+rr.MODULE_FUNCS = {"login": lambda ctx: ("failed", "로그인 실패: 흉내"), "sales": None}
+ctx = make_ctx()
+rr.status = StatusRec()
+ALIVE[0] = False
+res = rr.run_module(ctx, "sales", "주문매핑", {"login": lambda c: ("failed", "로그인 실패: 흉내"), "sales": login_fails_after})
+check("다시 띄우기(로그인)가 실패하면 그 사유로 실패", res[0] == "failed" and "로그인 실패: 흉내" in res[1] and ctx.resume is None, str(res))
+ALIVE[0] = True
+
+# 주문매핑 module_sales: 수집이 끝났으면 상단 전체선택·가져오기·엑셀을 건너뛴다
+_saved_s = {n: getattr(rr, n) for n in ("goto_order_screen", "get_onscreen_tables", "select_all_and_verify",
+                                         "run_import_step", "run_excel_upload_step", "find_by_text")}
+sales_acts = []
+
+
+class Tbl:
+    def __init__(self, top):
+        self.top = top
+
+    def rectangle(self):
+        return types.SimpleNamespace(top=self.top, left=0)
+
+
+rr.status = StatusRec()
+rr.goto_order_screen = lambda ctx: (True, None)
+rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300)]
+rr.select_all_and_verify = lambda name, *a: sales_acts.append(("select", name)) or 3
+rr.run_import_step = lambda *a: sales_acts.append(("import",)) or True
+rr.run_excel_upload_step = lambda *a: sales_acts.append(("excel",))
+rr.find_by_text = lambda *a, **k: None          # 매출처리 단추 없음 -> 여기서 멈춘다 (시험은 그 앞까지만 본다)
+for collected, want in ((False, [("select", "좌측상단"), ("import",), ("excel",), ("select", "하단")]),
+                        (True, [("select", "하단")])):
+    sales_acts.clear()
+    ctx = make_ctx()
+    ctx.collected = collected
+    res = rr.module_sales(ctx)
+    check(f"module_sales collected={collected}: " + ("상단 전체선택 -> 가져오기 -> 엑셀 -> 하단" if not collected
+                                                     else "수집을 건너뛰고 하단 전체선택(매출처리)부터"),
+          sales_acts == want and res[0] == "failed", f"{sales_acts} {res}")
+ctx = make_ctx()
+ALIVE[0] = False
+rr.module_sales(ctx)
+check("수집 도중 ERPia 가 꺼졌으면 collected 를 세우지 않는다 (다시 돌 때 수집부터)", ctx.collected is False)
+ALIVE[0] = True
+for n, f in _saved_s.items():
+    setattr(rr, n, f)
+
+# 출력 도중 꺼져 다시 돌면: 물류 관리 화면으로 가고, 이미 출력한 배송장은 다시 출력하지 않는다
+_saved_o = {n: getattr(rr, n) for n in ("goto_logistics_screen", "prefetch_auto_ids", "apply_auto_mode", "run_print_step")}
+out_acts = []
+rr.goto_logistics_screen = lambda ctx: out_acts.append("goto") or "ok"
+rr.prefetch_auto_ids = lambda *a: None
+rr.apply_auto_mode = lambda *a: (None, True)
+rr.run_print_step = lambda app, pid, hwnd, options=None, already_printed="continue": out_acts.append(already_printed) or "done"
+for resume, want in ((None, ["continue"]), ("output", ["goto", "stop"])):
+    out_acts.clear()
+    ctx = make_ctx()
+    ctx.options = {}
+    ctx.results["logistics"] = "done"
+    ctx.resume = resume
+    rr.module_output(ctx)
+    check(f"출력 resume={resume}: {want}", out_acts == want, str(out_acts))
+for n, f in _saved_o.items():
+    setattr(rr, n, f)
+
+# 관리자 권한 ERPia: 일반 권한 RPA 는 다룰 수 없어 끄고 새로 띄운다
+rr.status = StatusRec()
+ADMIN, ELEV = [False], [True]
+rr.status.is_admin = lambda: ADMIN[0]
+rr.ec.process_elevated = lambda pid: ELEV[0]
+check("관리자 ERPia + 일반 RPA -> 다룰 수 없음", rr.erpia_unreachable(4242) is True)
+ADMIN[0] = True
+check("RPA 가 관리자 권한이면 다룰 수 있다", rr.erpia_unreachable(4242) is False)
+ADMIN[0], ELEV[0] = False, None
+check("권한을 못 읽으면 끄지 않는다", rr.erpia_unreachable(4242) is False)
+ELEV[0] = True
+
+KILL, UAC = [], []
+rr.ec.terminate_pid = lambda pid: KILL.append(pid) or None
+ALIVE[0] = False
+check("끌 수 있으면 끄고 꺼진 것을 확인", rr.close_elevated_erpia(4242) == (True, None) and KILL == [4242])
+rr.ec.terminate_pid = lambda pid: "접근 거부"
+rr.status.run_as_admin = lambda exe, args, cwd: UAC.append((exe, args)) or True
+os.environ["RPA_UNATTENDED"] = "1"
+res = rr.close_elevated_erpia(4242)
+check("무인 실행: 접근 거부면 UAC 를 띄우지 않고 사유를 남겨 멈춘다", res[0] is False and "접근 거부" in res[1] and UAC == [], str(res))
+os.environ.pop("RPA_UNATTENDED")
+res = rr.close_elevated_erpia(4242)
+check("사람이 띄운 실행: 관리자 권한 taskkill (UAC)", res == (True, None) and UAC == [("taskkill.exe", ["/F", "/PID", "4242"])], str(res))
+ALIVE[0] = True
+rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=lambda: 10 ** 9 + len(KILL.append(0) or KILL) * 100,
+                                strftime=_time.strftime)
+rr.ec.terminate_pid = lambda pid: None
+res = rr.close_elevated_erpia(4242)
+check("끈다고 했는데 안 꺼지면 실패", res[0] is False and "꺼지지 않았습니다" in res[1], str(res))
+rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime=_time.strftime)
+
+POPEN = []
+LOGGED = [True]
+_saved_e = {n: getattr(rr, n) for n in ("load_exe_path", "subprocess", "erpia_logged_in")}
+rr.erpia_logged_in = lambda pid: LOGGED[0]
+rr.load_exe_path = lambda: r"C:\ERPia\ERPiaMain.exe"
+PIDS = [4242]
+rr.ec.find_erpia_pid = lambda: PIDS[0] if PIDS else (_ for _ in ()).throw(RuntimeError("없음"))
+rr.ec.terminate_pid = lambda pid: (PIDS.clear(), ALIVE.__setitem__(0, False))[0]
+
+
+def fake_popen(args, cwd=None):
+    POPEN.append(args)
+    PIDS.append(5555)
+
+
+rr.subprocess = types.SimpleNamespace(Popen=fake_popen)
+pid = rr.ensure_erpia_running()
+check("ensure_erpia_running: 이미 로그인된 관리자 ERPia 는 끄고 새로 띄운 ERPia 의 PID", pid == 5555 and len(POPEN) == 1, f"{pid} {POPEN}")
+ELEV[0] = False
+POPEN.clear()
+check("같은 권한이면 떠 있는 ERPia 를 그대로", rr.ensure_erpia_running() == 5555 and POPEN == [])
+ELEV[0] = True
+PIDS[:] = [4242]
+ALIVE[0] = True
+rr.ec.terminate_pid = lambda pid: "접근 거부"
+os.environ["RPA_UNATTENDED"] = "1"
+try:
+    rr.ensure_erpia_running()
+    res = None
+except RuntimeError as e:
+    res = str(e)
+os.environ.pop("RPA_UNATTENDED")
+check("못 끄면 새로 띄우지 않고 사유와 함께 멈춘다", res is not None and "끄지 못했습니다" in res and POPEN == [], str(res))
+OTHERS[0] = [4242, 4343]
+KILLED = []
+rr.ec.terminate_pid = lambda pid: KILLED.append(pid)
+try:
+    rr.ensure_erpia_running()
+    res = None
+except RuntimeError as e:
+    res = str(e)
+check("ERPia 가 여러 개면 로그인된 관리자 ERPia 라도 끄지 않는다 (리뷰 10-14)",
+      res is not None and "여러 개" in res and KILLED == [] and POPEN == [], str(res))
+OTHERS[0] = []
+LOGGED[0] = False
+KILLED = []
+rr.ec.terminate_pid = lambda pid: KILLED.append(pid)
+try:
+    rr.ensure_erpia_running()
+    res = None
+except RuntimeError as e:
+    res = str(e)
+check("관리자 ERPia 가 로그인 전(로그인 창)이면 끄지 않고 멈춘다 (사용자 10-14)",
+      res is not None and "로그인 전" in res and KILLED == [] and POPEN == [], str(res))
+_saved_cred = rr.pl.load_credentials
+rr.pl.load_credentials = lambda: ("업체", "아이디", "비번")
+lctx = rr.RoutineContext()
+res = rr.module_login(lctx)
+check("module_login: 로그인 전 관리자 ERPia 는 예외 없이 '실패' 와 사유 (프로그램 오류로 죽지 않음 - 10-14 실측)",
+      res[0] == "failed" and "로그인 전" in res[1] and KILLED == [], str(res))
+rr.pl.load_credentials = _saved_cred
+LOGGED[0] = True
+for n, f in _saved_e.items():
+    setattr(rr, n, f)
+
+LOGINS = []
+_saved_ml = rr.module_login
+rr.module_login = lambda ctx: LOGINS.append(1) or ("done", None)
+rr.RoutineContext.attach = _real_attach
+ctx = rr.RoutineContext()
+rr.ec.find_erpia_pid = lambda: 4242
+ok, reason = ctx.attach()
+check("로그인 모듈을 끈 채 관리자 ERPia 에 붙으려 하면 끄지 않고 사유를 남긴다 (끄는 것은 로그인할 때만)",
+      ok is False and LOGINS == [] and "Login 모듈" in reason, f"{ok} {reason}")
+rr.module_login = _saved_ml
+ELEV[0] = False
+ALIVE[0] = True
 
 print()
 print("=== 12. 반복 회차 - 처리한 게 없으면 기록에 안 남긴다 (RPA_RUN_TRIGGER=repeat) ===")

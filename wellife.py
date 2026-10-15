@@ -17,8 +17,8 @@
   데이터가 다시 쌓이기를 오래 기다려야 한다, 사용자 10-13). 체크 칸이 없는 4-4·5-4 는 실행처럼 누른다. ② 엑셀 업로드는
   줄이 없어 못 쓴다. 한 번 실행에 1건이라 반복 회차(RPA_RUN_TRIGGER=repeat)에서는 돌지 않고 멈춘다 (repeat_ones).
 모드는 대시보드 단계 이름·실행 제목·모듈 사유 앞의 [리허설]/[실행] 과 시작 로그로 보인다.
-- ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집 [가져오기] 는
-  모드와 상관없이 누르지 않는다 (마우스만). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14) -
+- ② 주문매핑: 미리 둔 엑셀(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 올린다. 자동 수집은 원래 PROCESS 와 같이
+  상단 전체선택 -> [가져오기] (SalesMode, 리허설은 마우스만 - 사용자 10-14). 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (원래 PROCESS 와 같이, 사용자 10-14) -
   정상매출은 NormalSalesMode 로 따로 정한다 (SalesMode '실행' 인 PC 가 업데이트만으로 매출처리를 시작하지 않게).
 - ③ 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 (보류는 하지 않는다).
 - ④⑤ 는 단계 조회·대상 고르기·체크 -> [지정]('선택 항목만')·화살표. 체크는 다음 단계를 조회하면 풀려서 되돌리지 않는다.
@@ -55,7 +55,12 @@ PAGE_WAIT_SECONDS = 5       # 페이지를 넘긴 뒤 그리드가 다 그려지
 QUERY_WAIT_SECONDS = 120    # 물류대기 조회가 끝나기를 기다리는 최대 시간
 CONFIRM_WAIT_SECONDS = 600  # 실행: 누른 뒤 처리(스피너·팝업)가 끝나기를 기다리는 최대 시간
 QUIET_SECONDS = 5           # 실행: 팝업도 스피너도 이만큼 없으면 처리가 끝난 것으로 본다
+POPUP_SETTLE_SECONDS = 5    # 실행: [예]/[확인] 이 없는 팝업은 이만큼 다시 본 뒤 멈춘다 - 막 뜬 팝업은 단추·문구가 아직 안 그려졌다
+                            # (10-15 실측: 5-4 API 전송 [예] 뒤 저장확인 팝업을 빈 문구·단추 없음으로 읽고 멈췄다)
 MAX_POPUPS = 10             # 실행: 한 번 누른 뒤 이보다 많이 뜨면 멈춘다 (같은 팝업이 되풀이되는 경우)
+TAB_WAIT_SECONDS = 20       # 탭·아이콘·메뉴를 누른 뒤 그 화면이 떠 있는 메인 탭이 되기를 기다리는 최대 시간
+MAIN_TAB_DEPTH = 6          # 메인 탭바를 창에서 자식을 따라 찾을 때 내려가는 최대 깊이 (10-14 실측: 4)
+FORM_DEPTH = 4              # 떠 있는 화면 안에서 폼(Frm_…)을 자식을 따라 찾을 때 내려가는 최대 깊이
 MODE_KEY = "Mode"              # ③ 물류대기 저장 (④⑤ 는 10-13 부터 따로 - SapMode·WmsMode)
 SALES_MODE_KEY = "SalesMode"   # ② 주문매핑 엑셀 업로드 - 따로 정한다 (사용자 10-08)
 NORMAL_SALES_MODE_KEY = "NormalSalesMode"   # ② 하단 정상매출 - 따로 정한다 (10-14, SalesMode '실행' 의 뜻이 바뀌지 않게)
@@ -63,7 +68,7 @@ SAP_MODE_KEY = "SapMode"       # ④ 지정·화살표 (사용자 10-13)
 WMS_MODE_KEY = "WmsMode"       # ⑤ 화살표 (사용자 10-13)
 INVOICE_MODE_KEY = "InvoiceMode"   # ⑥ 운송장번호 [전송요청(S)] - 따로 정한다 (사용자 10-13, 택배사로 나가 되돌릴 수 없다)
 # 모드 키 -> (시작 로그·제목 이름, 누르는 것). 이 순서로 보인다 (rpa_status.WELLIFE_MODES 와 같은 순서)
-MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드"), NORMAL_SALES_MODE_KEY: ("② 정상매출", "매출처리 ▼ 정상매출"),
+MODE_NAMES = {SALES_MODE_KEY: ("② 주문매핑", "엑셀 업로드·[가져오기]"), NORMAL_SALES_MODE_KEY: ("② 정상매출", "매출처리 ▼ 정상매출"),
               MODE_KEY: ("③ 물류대기", "저장"),
               SAP_MODE_KEY: ("④ SAP 연동", "지정·화살표"), WMS_MODE_KEY: ("⑤ WMS 이관", "화살표"),
               INVOICE_MODE_KEY: ("⑥ 운송장 전송", "[전송요청(S)]")}
@@ -272,12 +277,18 @@ def run_main(rr):
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
 
+    def once(key, f):   # '1건' 모드가 걸린 모듈은 ERPia 가 꺼져도 다시 돌지 않는다 (run_routine.run_module - 1건이 2건이 된다)
+        mod = next(m for m in MODULES if m[0] == key)
+        one = any(modes[step_mode[s]] == ONE for s in mod[3])
+        return lambda ctx: ((ctx.no_rerun.add(key) if one and hasattr(ctx, "no_rerun") else None), f(ctx))[1]
+
     funcs = {"login": rr.module_login,
              "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[SALES_MODE_KEY], modes[NORMAL_SALES_MODE_KEY]),
              "wellife_hold": lambda ctx: module_hold(rr, ctx, modes[MODE_KEY]),
              "wellife_sap": lambda ctx: module_sap(rr, ctx, modes[SAP_MODE_KEY]),
              "wellife_wms": lambda ctx: module_wms(rr, ctx, modes[WMS_MODE_KEY]),
              "invoicesend": lambda ctx: module_invoice_send(rr, ctx, modes[INVOICE_MODE_KEY])}
+    funcs = {k: (f if k == "login" else once(k, f)) for k, f in funcs.items()}
     result, reason = rr.run_modules(selected, MODULES, funcs, SECTION)
     # 반복 회차(⑤ 를 시간대 동안 N분마다)는 처리한 것이 없으면 이력에 남기지 않는다 - 지금 루틴 main 과 같은 규칙
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
@@ -301,12 +312,16 @@ def module_sales(rr, ctx, live=False, sell=False):
     rr.status.step("wl_order_screen")
     try:
         front(rr, ctx, "주문매핑 화면 이동")
+        r = goto_screen(rr, ctx, ORDER_TAB, ORDER_ICON, lambda: _ok_or_reason(rr.goto_order_screen(ctx)))
     except Stop as e:
         return e.result, str(e)
-    ok, reason = rr.goto_order_screen(ctx)
-    if not ok:
-        return "failed", reason
+    if r != "ok":
+        return "failed", f"'{ORDER_ICON}' 아이콘을 찾지 못했습니다." if r == "absent" else r
     try:
+        if getattr(ctx, "collected", False):    # ERPia 가 꺼져 다시 띄웠고 주문 수집은 끝났다 (run_routine.run_module)
+            rr.log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
+            note, sold = normal_sales(rr, ctx, sell)
+            return ("done" if sold else "skipped"), f"[{mode_tag(sell)}] 수집은 앞에서 끝남 / 정상매출 " + note
         return collect_orders(rr, ctx, live, sell)
     except Stop as e:
         return e.result, str(e)
@@ -318,19 +333,19 @@ def collect_orders(rr, ctx, live, sell=False):
     """주문 수집 (사용자 10-08). live: SalesMode, sell: NormalSalesMode.
     - 엑셀: 미리 둔 파일(ERPIA_AI_EXCEL 의 (사이트코드)~.xlsx)이 있을 때만 기존 run_excel_upload_step 으로 올린다
       (끝난 파일은 완료/날짜, 못 올린 파일은 오류 폴더로 옮겨진다). 리허설이면 올리지 않고 첫 사이트의 업로드 칸에 마우스만.
-    - 자동 수집 [가져오기] 는 모드와 상관없이 누르지 않는다 - 마우스만.
+    - 자동 수집: 원래 PROCESS 와 같이 상단(사이트) 전체선택 -> [가져오기] (run_import_step - 끝날 때까지 기다리고 안내 팝업은
+      원래 규칙대로 닫는다). 리허설은 전체선택만 하고(체크는 데이터를 바꾸지 않는다) [가져오기] 에 마우스만 (사용자 10-14).
     - 그 뒤 하단 전체선택 -> 매출처리 ▼ 정상매출 (normal_sales, 사용자 10-14)."""
     rr.status.step("wl_order_collect")
-    win = ctx.window()
     files = excel_files(rr)
     notes, uploaded = [], 0
+    tables = rr.get_onscreen_tables(visible_page(ctx))     # 떠 있는 화면 안만 (창 전체는 숨은 화면까지 수천 개)
+    if not tables:
+        raise Stop("failed", "주문매핑 사이트 그리드를 찾지 못했습니다.")
+    sites = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
     if not files:
         notes.append("엑셀: 올릴 파일 없음")
     else:
-        tables = rr.get_onscreen_tables(win)
-        if not tables:
-            raise Stop("failed", "주문매핑 사이트 그리드를 찾지 못했습니다.")
-        sites = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
         names = ", ".join(sorted(files))
         if live:
             no_popup(rr, ctx, "엑셀 업로드 전")
@@ -345,15 +360,40 @@ def collect_orders(rr, ctx, live, sell=False):
             if cell is not None:
                 hover(rr, ctx, cell, f"엑셀 업로드 칸 (사이트 {code})", True)
             notes.append(f"엑셀 {len(files)}건 있음 (사이트 {names}) - 올리지 않음")
-    imp = onscreen_button(win, rr.IMPORT_BUTTON_NAME)
+    imported = False
+    page = visible_page(ctx)
+    imp = onscreen_button(page, rr.IMPORT_BUTTON_NAME)
     if imp is None:
         notes.append("자동 수집 단추 없음")
     else:
-        hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}] (모드와 상관없이 누르지 않음)", None)
-        notes.append("자동 수집은 누르지 않음")
+        no_popup(rr, ctx, "상단 전체선택 전")
+        front(rr, ctx, "상단 전체선택")
+        n = rr.select_all_and_verify("좌측상단", ctx.hwnd, sites, ["아이디"])
+        no_popup(rr, ctx, "상단 전체선택")
+        if live:
+            what = f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]"
+            if not n:   # 원래 PROCESS 는 그래도 누르지만 웰라이프는 모르면 멈춘다
+                raise Stop("failed", f"상단 전체선택을 확인하지 못해 {what} 를 누르지 않고 멈춤")
+            # run_import_step 은 넘긴 범위에서 첫 같은 이름 단추를 다시 찾아 누른다 - 떠 있는 화면만 넘기고, 그 단추가
+            # 확인한 단추와 같은 자리인지, 그 자리가 창 안에 보이고 덮이지 않았는지 본 뒤 누른다 (숨은 화면 단추를 누르지 않게)
+            again = rr.find_by_text(page, rr.IMPORT_BUTTON_NAME, control_types=("Button",))
+            if again is None or again.rectangle() != imp.rectangle():
+                raise Stop("failed", f"{what}: 누를 단추가 떠 있는 화면의 단추와 달라 누르지 않고 멈춤")
+            front(rr, ctx, what)
+            clear_point(rr, ctx, imp, what)
+            rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
+            if not rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page):
+                raise Stop("stopped", f"{what} 를 눌렀으나 끝난 것을 확인하지 못해 정상매출로 넘어가지 않고 멈춤 (확인할 것)")
+            notes.append(f"자동 수집: 사이트 {n}줄 전체선택 -> [{rr.IMPORT_BUTTON_NAME}] 완료")
+            imported = True
+        else:
+            hover(rr, ctx, imp, f"자동 수집 [{rr.IMPORT_BUTTON_NAME}]", True)
+            notes.append(f"자동 수집: 사이트 {n or 0}줄 전체선택, [{rr.IMPORT_BUTTON_NAME}] 는 누르지 않음")
+    if hasattr(ctx, "collected"):    # 이 뒤에 ERPia 가 꺼지면 다시 띄워 매출처리부터 (run_routine.run_module)
+        ctx.collected = rr.ec.pid_alive(ctx.pid)
     note, sold = normal_sales(rr, ctx, sell)
     notes.append(f"정상매출 [{mode_tag(sell)}] " + note)
-    return ("done" if uploaded or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
+    return ("done" if uploaded or imported or sold else "skipped"), f"[{mode_tag(live)}] " + " / ".join(notes)
 
 
 SALES_SPLIT, SALES_ITEM = "매출처리", "정상매출"
@@ -369,8 +409,8 @@ def normal_sales(rr, ctx, live):
     - 하단이 0줄이면 누르지 않는다 (원래는 0건이어도 누른다 - 웰라이프는 0건이면 누르지 않는다).
     - 누르기 직전에 보이는 줄이 모두 체크인지 다시 본다 (recheck)."""
     rr.status.step("wl_order_sales")
-    win = ctx.window()
-    tables = rr.get_onscreen_tables(win)
+    page = visible_page(ctx)        # 떠 있는 화면 안만 훑는다
+    tables = rr.get_onscreen_tables(page)
     if len(tables) < 2:
         raise Stop("failed", "주문매핑 하단 그리드를 찾지 못했습니다.")
     bottom = max(tables, key=lambda t: t.rectangle().top)
@@ -388,7 +428,7 @@ def normal_sales(rr, ctx, live):
         head = f"하단 {n or 0}줄 전체선택"
     no_popup(rr, ctx, "하단 전체선택")
     checked = (live != ONE or bool(n)) and recheck(rr, bottom, "주문매핑 하단", live)
-    split = rr.find_by_text(ctx.window(), SALES_SPLIT, control_types=("SplitButton",))
+    split = rr.find_by_text(page, SALES_SPLIT, control_types=("SplitButton",))
     if split is None:
         raise Stop("failed", f"'{SALES_SPLIT}' 단추를 찾지 못했습니다.")
     what = f"{SALES_SPLIT} ▼"
@@ -461,11 +501,14 @@ def module_hold(rr, ctx, live=False):
         front(rr, ctx, "물류대기 화면 이동")
     except Stop as e:
         return e.result, str(e)
-    r = rr.goto_hold_screen(ctx)
+    try:
+        r = goto_screen(rr, ctx, HOLD_TAB, HOLD_ICON, lambda: rr.goto_hold_screen(ctx))
+    except Stop as e:
+        return e.result, str(e)
     if r == "absent":
         return "failed", "물류대기 아이콘(lcg_HoldLogistics)이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
     if r != "ok":
-        return "failed", "물류대기 화면으로 이동하지 못했습니다."
+        return "failed", r
     try:
         return hold_save(rr, ctx, live)
     except Stop as e:
@@ -482,8 +525,8 @@ def hold_save(rr, ctx, live):
     front(rr, ctx, "물류대기 일반 탭")
     if not rr.click_subtab(ctx.app, ctx.hwnd, rr.STOCK_GENERAL_TAB_NAME):   # 못 가면 다른 서브탭('상품별 재고검토')의 조회·저장을 누르게 된다
         raise Stop("failed", f"물류대기 '{rr.STOCK_GENERAL_TAB_NAME}' 탭을 찾지 못해 조회·저장하지 않습니다.")
-    win = ctx.window()
-    query, tables = onscreen_button(win, "조회(F)"), rr.get_onscreen_tables(win)
+    page = visible_page(ctx)        # 떠 있는 화면 안만 훑는다
+    query, tables = onscreen_button(page, "조회(F)"), rr.get_onscreen_tables(page)
     if query is None or not tables:
         raise Stop("failed", "물류대기 '조회(F)' 단추나 그리드를 찾지 못했습니다.")
     grid = max(tables, key=lambda t: t.rectangle().width() * t.rectangle().height())
@@ -502,7 +545,7 @@ def hold_save(rr, ctx, live):
         raise Stop("failed", "물류대기 첫 줄만 체크하지 못했습니다 (1건) - 저장하지 않음." if live == ONE
                    else "물류대기 전체선택(머리글 체크)에 실패했습니다.")
     no_popup(rr, ctx, "물류대기 전체선택")
-    save = onscreen_button(ctx.window(), "저장(S)")
+    save = onscreen_button(visible_page(ctx), "저장(S)")
     if save is None:
         raise Stop("failed", "물류대기 '저장(S)' 단추를 찾지 못했습니다.")
     again = recheck(rr, grid, "물류대기", live)
@@ -719,19 +762,12 @@ def module_invoice_send(rr, ctx, live=False):
     try:
         no_popup(rr, ctx, f"'{INVOICE_TAB}' 화면 이동 전")
         front(rr, ctx, f"'{INVOICE_TAB}' 화면 이동")
-        tab = open_tab(rr, ctx, INVOICE_TAB)
-        if tab is not None:     # 이미 열린 화면은 그 탭을 누른다 (SAP·WMS 와 같다)
-            rr.log(f"'{INVOICE_TAB}' 화면이 이미 열려 있어 그 탭을 누릅니다: {tab.rectangle()}")
-            click(rr, ctx, tab, f"'{INVOICE_TAB}' 탭")
-            ok, active = rr.wait_for_active_main_tab(ctx.app, ctx.hwnd, INVOICE_TAB, ctx=ctx)
-            if not ok:
-                return "failed", f"'{INVOICE_TAB}' 탭을 눌렀으나 그 화면으로 바뀌지 않았습니다 (활성 메인탭='{active}')."
-        else:
-            r = rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB)
-            if r == "absent":
-                return "failed", f"'{INVOICE_TAB}' 아이콘({INVOICE_ICON})이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
-            if r != "ok":
-                return "failed", f"'{INVOICE_TAB}' 화면으로 이동하지 못했습니다."
+        r = goto_screen(rr, ctx, INVOICE_TAB, INVOICE_ICON,     # 이미 열린 화면은 그 탭 (SAP·WMS 와 같다)
+                        lambda: rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB))
+        if r == "absent":
+            return "failed", f"'{INVOICE_TAB}' 아이콘({INVOICE_ICON})이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
+        if r != "ok":
+            return "failed", r
         rr.status.step("inv_send")
         return invoice_send(rr, ctx, live)
     except Stop as e:
@@ -780,7 +816,7 @@ def query_note(fixed):
 
 def reopen_icon(rr, ctx):
     """⑥ 다시 열기 - 좌측 아이콘 (조회 조건을 화면 기본값으로 되돌릴 때)."""
-    r = rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB)
+    r = goto_screen(rr, ctx, INVOICE_TAB, INVOICE_ICON, lambda: rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB))
     if r != "ok":
         raise Stop("failed", f"'{INVOICE_TAB}' 화면을 다시 열지 못했습니다 ({r}).")
 
@@ -1135,7 +1171,9 @@ def slip_target(value):
 def controls(rr, ctx, form_id):
     """그 화면(폼) 안의, 지금 창 안에 보이는 컨트롤 {auto_id: 요소}. 숨은 화면은 창 밖 좌표라 걸러진다
     (창이 왼쪽 모니터에 있으면 좌표가 음수다 - 그래서 늘 '지금의 창 사각형' 과 견준다).
-    단계마다 보이는 단추가 달라서(지정·건식상품 제외) 단계를 연 뒤 다시 부른다."""
+    단계마다 보이는 단추가 달라서(지정·건식상품 제외) 단계를 연 뒤 다시 부른다.
+    창 전체를 훑지 않는다 (10-14 실측: 화면 7~8개가 열려 있으면 요소 약 3,400개 - 한 번에 10~14초, 단계마다 여러 번):
+    폼은 떠 있는 화면 안에서 자식을 따라 찾고, 폼 안도 자식을 따라 보되 그리드(Table) 속 칸은 내려가지 않는다."""
     win = ctx.window()
     wr = win.rectangle()
 
@@ -1144,24 +1182,52 @@ def controls(rr, ctx, form_id):
         return r.width() > 0 and r.height() > 0 and wr.left <= r.left < wr.right and wr.top <= r.top < wr.bottom
 
     form = None
-    for c in win.descendants(control_type="Pane"):
-        try:
-            if c.element_info.automation_id == form_id and shown(c):
-                form = c
-                break
-        except Exception:
-            continue
+    try:
+        form = _find_form(ctx, form_id, shown)
+    except Exception:
+        form = None
+    if form is None:            # 못 찾으면 예전처럼 창 전체에서
+        for c in win.descendants(control_type="Pane"):
+            try:
+                if c.element_info.automation_id == form_id and shown(c):
+                    form = c
+                    break
+            except Exception:
+                continue
     if form is None:
         raise Stop("failed", f"화면({form_id})을 찾지 못했습니다.")
-    out = {}
-    for c in form.descendants():
+    out, stack = {}, [form]
+    while stack:
         try:
-            aid = c.element_info.automation_id
-            if aid and aid not in out and shown(c):
-                out[aid] = c
+            kids = stack.pop().children()
         except Exception:
             continue
+        for c in kids:
+            try:
+                aid = c.element_info.automation_id
+                if aid and aid not in out and shown(c):
+                    out[aid] = c
+                if c.element_info.control_type != "Table":     # 그리드 칸(수백~수천)은 내려가지 않는다
+                    stack.append(c)
+            except Exception:
+                continue
     return out
+
+
+def _find_form(ctx, form_id, shown):
+    """떠 있는 화면 안에서 자식을 따라 그 폼 (얕은 곳부터 FORM_DEPTH 까지). 없으면 None."""
+    level = [visible_page(ctx)]
+    if level[0].element_info.automation_id == form_id:
+        return level[0]
+    for _ in range(FORM_DEPTH):
+        below = []
+        for el in level:
+            for c in el.children():
+                if c.element_info.automation_id == form_id and shown(c):
+                    return c
+                below.append(c)
+        level = below
+    return None
 
 
 def open_stage(rr, ctx, form_id, dash_id):
@@ -1210,11 +1276,33 @@ def front(rr, ctx, what):
 
 
 def no_popup(rr, ctx, after):
-    """팝업(예/아니오/확인 단추)이 떠 있으면 누르지 않고 멈춘다."""
+    """팝업(예/아니오/확인 단추)이 떠 있으면 누르지 않고 멈춘다.
+    단추 찾기는 창 전체를 훑어 수 초 걸린다 (10-14 실측: 단계마다 4~5번). ERPia 팝업은 메인 창의 자식 창으로 뜨므로
+    (원래 PROCESS 의 PopupGate 와 같은 근거) 보이는 자식 창 목록(win32 - 거의 0초)이 마지막으로 '팝업 없음' 을
+    확인했을 때와 같으면 다시 훑지 않는다. 목록을 못 읽으면 늘 훑는다."""
+    sig = _calm_sig(rr, ctx)
+    if sig is not None and getattr(ctx, "calm_children", None) == sig:
+        return
     buttons = rr.find_popup_buttons(ctx.window())
     if buttons:
+        ctx.calm_children = None
         text = rr.collect_popup_text(buttons[0])
         raise Stop("stopped", f"{after} 뒤 팝업이 떠서 멈춤 (누르지 않음): {text[:200]}")
+    # 훑는 사이에 창 구성이 바뀌었으면(막 뜨는 팝업) 기억하지 않는다 - 다음에 다시 훑는다
+    ctx.calm_children = sig if sig is not None and sig == _calm_sig(rr, ctx) else None
+
+
+def _calm_sig(rr, ctx):
+    """팝업을 다시 훑을지 가르는 창 구성: 메인 창의 보이는 자식 창(자리 포함) + ERPia 가 따로 띄운 보이는 최상위 창
+    (별도 창 팝업은 자식 창 목록에 안 보인다 - run_routine.find_popup_windows). 못 읽거나 자식 창이 하나도 없으면
+    (창이 죽음 - visible_child_windows 는 오류를 삼키고 빈 목록을 준다) None - 늘 훑는다."""
+    try:
+        kids = rr.visible_child_windows(ctx.hwnd)
+        if not kids:
+            return None
+        return ctx.hwnd, frozenset(kids.items()), frozenset(rr.find_popup_windows(ctx.pid, ctx.hwnd))
+    except Exception:
+        return None
 
 
 def mark_rows(rr, ctx, grid, expected, want, limit=None):
@@ -1568,7 +1656,7 @@ def _top_window(rr, pt):
 
 
 def hover(rr, ctx, el, what, would_press):
-    """누를 자리에 마우스만 올리고 잠깐 머문다 - 클릭하지 않는다 (리허설, 또는 늘 누르지 않는 자동 수집).
+    """누를 자리에 마우스만 올리고 잠깐 머문다 - 클릭하지 않는다 (리허설).
     would_press: True=실행이면 누를 자리, False=대상이 없어 실행에서도 안 누름, None=따지지 않음."""
     if el is None:
         raise Stop("failed", f"{what} 단추를 찾지 못했습니다.")
@@ -1610,16 +1698,22 @@ def confirm_popups(rr, ctx, what, grid=None, idle=0, before=frozenset()):
     """실행: 누른 뒤 처리가 끝날 때까지 팝업을 [예](없으면 [확인]) 로 넘긴다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
     메인 창 안 팝업과, 누른 뒤 새로 뜬 별도 창 팝업을 본다. 팝업도 스피너(grid 의 오버레이가 idle 보다 많음)도
     QUIET_SECONDS 동안 없으면 끝이다. 넘긴 팝업 문구 목록을 돌려준다 (로그에도 하나씩 남긴다).
-    [예]/[확인] 이 없는 팝업, MAX_POPUPS 를 넘는 팝업, CONFIRM_WAIT_SECONDS 안에 안 끝나는 처리는 멈춘다."""
+    [예]/[확인] 이 POPUP_SETTLE_SECONDS 동안 안 보이는 팝업, MAX_POPUPS 를 넘는 팝업, CONFIRM_WAIT_SECONDS 안에 안 끝나는
+    처리는 멈춘다."""
     texts = []
     deadline = time.time() + CONFIRM_WAIT_SECONDS
-    calm = None
+    calm = unknown = None
     while time.time() < deadline:
         found = _next_popup(rr, ctx, before)
         if found is not None:
             text, button = found
             if button is None:
+                unknown = unknown or time.time()
+                if time.time() - unknown < POPUP_SETTLE_SECONDS:   # 아직 그려지는 중일 수 있다 - 다시 본다
+                    time.sleep(0.3)
+                    continue
                 raise Stop("stopped", f"{what}: [예]/[확인] 이 없는 팝업이라 멈춤: {text[:200]}")
+            unknown = None
             if len(texts) >= MAX_POPUPS:
                 raise Stop("stopped", f"{what}: 팝업이 {MAX_POPUPS}개를 넘어 멈춤 (마지막: {text[:200]})")
             front(rr, ctx, f"{what} 팝업")    # 잠김·포커스 - 좌표 클릭이 다른 프로그램 창에 떨어지지 않게
@@ -1692,28 +1786,23 @@ def goto_screen_by_menu(rr, ctx, menu):
     UI 오류는 실행 전체를 죽이지 않고 이 화면 이동의 실패로 돌려준다.
     """
     try:
-        return _open_by_menu(rr, ctx, menu)
+        ok, reason = _open_by_menu(rr, ctx, menu)
     except Stop as e:           # 잠긴 화면 / ERPia 를 앞으로 못 가져옴 - 누르지 않고 멈춘 것
         return False, str(e)
     except Exception as e:
         rr.log(f"  메뉴 검색 중 UI 오류: {type(e).__name__}: {e}")
         _clear_search(rr, ctx)
         return False, f"메뉴 검색 중 UI 오류: {type(e).__name__}"
+    return ok, (reason if ok else reason + dup_note(ctx))
 
 
 def _open_by_menu(rr, ctx, menu):
     log = rr.log
     no_popup(rr, ctx, f"'{menu}' 화면 이동 전")   # 앞 화면(③ 물류대기 등)에서 뜬 팝업이 남아 있으면 그 위를 누르지 않게
-    tab = open_tab(rr, ctx, menu)
-    if tab is not None:
-        # 이미 열린 화면은 메뉴를 눌러도 그 탭으로 가지 않는다 (10-07 실측: 60초 기다리다 사람이 탭을 닫고 다시 열었다)
-        log(f"'{menu}' 화면이 이미 열려 있어 그 탭을 누릅니다: {tab.rectangle()}")
-        click(rr, ctx, tab, f"'{menu}' 탭")
-        ok, active = rr.wait_for_active_main_tab(ctx.app, ctx.hwnd, menu, ctx=ctx)
-        if not ok:
-            return False, f"'{menu}' 탭을 눌렀으나 그 화면으로 바뀌지 않았습니다 (활성 메인탭='{active}')."
-        log(f"'{menu}' 화면으로 이동 확인 (활성 메인탭='{active}')")
-        return True, None
+    # 이미 열린 화면은 메뉴를 눌러도 그 탭으로 가지 않는다 (10-07 실측: 60초 기다리다 사람이 탭을 닫고 다시 열었다)
+    went = goto_open_tab(rr, ctx, menu)
+    if went is not None:
+        return went
 
     win = ctx.window()
     rr.prefetch_auto_ids(win, ("sch_Menus", "acd_Nav"))
@@ -1737,7 +1826,7 @@ def _open_by_menu(rr, ctx, menu):
     log(f"  메뉴 항목 클릭: {item.rectangle()}")
     click(rr, ctx, item, "메뉴 항목")
 
-    ok, active = rr.wait_for_active_main_tab(ctx.app, ctx.hwnd, menu, ctx=ctx)
+    ok, active = wait_tab(rr, ctx, menu)
     if not ok:
         _log_menu_state(rr, ctx, search, nav)
     _clear_search(rr, ctx)
@@ -1750,11 +1839,12 @@ def _open_by_menu(rr, ctx, menu):
 def open_tab(rr, ctx, name):
     """이미 열려 있는 그 화면의 메인 탭 (화면 안의 서브탭은 이름이 다르다). 없으면 None - 그때는 메뉴 검색으로 연다.
     탭 머리 전체가 창 안에 있고, 그 가운데에서 맞는 요소가 그 탭일 때만 돌려준다 - 탭바가 넘쳐 잘린 탭의 가운데는
-    탭바의 ◀ ▶ × 단추일 수 있다. 같은 이름의 탭이 있는데 그렇지 않으면 멈춘다 (메뉴로는 이미 열린 화면에 못 간다)."""
-    win = ctx.window()
-    wr = win.rectangle()
+    탭바의 ◀ ▶ × 단추일 수 있다. 같은 이름의 탭이 있는데 그렇지 않으면 멈춘다 (메뉴로는 이미 열린 화면에 못 간다).
+    번호 붙은 같은 화면('물류대기 관리 (2)')은 고르지 않는다 - 번호 없는 원래 화면 (사용자 10-14: 원래 화면이 늘 함께 있다).
+    이름 끝 공백은 무시한다 (10-14 실측: '물류대기 관리 ')."""
+    wr = ctx.window().rectangle()
     found = False
-    for t in win.descendants(control_type="TabItem"):
+    for t in main_tab_bar(ctx)[1]:
         try:
             if t.window_text().strip() != name:
                 continue
@@ -1769,6 +1859,162 @@ def open_tab(rr, ctx, name):
         raise Stop("failed", f"'{name}' 화면이 이미 열려 있지만 탭이 다 보이지 않아 누르지 않았습니다 "
                              "(탭을 몇 개 닫고 다시 실행)")
     return None
+
+
+# ---------------------------------------------------------------------------
+# 화면 이동 - 메인 탭바·좌측 아이콘을 descendants() 로 찾지 않는다. 같은 화면이 번호를 달고 또 열려 있으면
+# ('물류대기 관리 (2)') descendants 가 메인 탭바·좌측 아이콘 줄·메뉴 검색 칸을 빠뜨린다 (10-14 개발기 실측: 화면에는 있고
+# 자식을 따라가면 다 있다. 원래 함수는 아이콘을 못 찾고 9분 30초 뒤 'absent' - 보통 PROCESS 는 ③ 을 '메뉴 없는 업체' 로 건너뛴다).
+# 그래서 이미 열린 화면은 번호 없는 탭을 누르고, 번호 붙은 탭이 있을 때만 아이콘도 자식을 따라 찾는다.
+# ---------------------------------------------------------------------------
+NUMBERED_TAB = re.compile(r"\s\(\d+\)\s*$")      # 같은 화면을 또 열면 ERPia 가 붙이는 번호
+ORDER_TAB, ORDER_ICON = "주문매핑 매출처리", "lcg_OrderCollect"
+HOLD_TAB, HOLD_ICON = "물류대기 관리", "lcg_HoldLogistics"
+
+
+def main_tab_bar(ctx):
+    """(메인 탭바 Tab, 그 탭들). 창에서 자식을 따라 얕은 곳부터 보며 처음 만나는 창 안의 Tab (화면 안의 서브탭은
+    더 깊다 - 10-14 실측: 메인 4, 물류대기 서브탭 6). 탭바의 이름은 떠 있는 화면 이름이다. 못 찾으면 (None, [])."""
+    win = ctx.window()
+    wr = win.rectangle()
+    level = [win]
+    for _ in range(MAIN_TAB_DEPTH):
+        below = []
+        for el in level:
+            for c in el.children():
+                if c.element_info.control_type == "Tab":
+                    r = c.rectangle()
+                    if r.width() > 0 and wr.left <= r.left < wr.right and wr.top <= r.top < wr.bottom:
+                        return c, c.children(control_type="TabItem")
+                below.append(c)
+        level = below
+    return None, []
+
+
+def visible_page(ctx):
+    """떠 있는 화면 (메인 탭바와 같은 부모 아래, 창 안에 있는 화면 Pane). 단추·그리드는 이 안에서만 찾는다 -
+    창 전체에는 숨은 화면들까지 수천 개가 있다. 못 찾으면 창 (예전처럼 전체)."""
+    win = ctx.window()
+    try:
+        bar, _ = main_tab_bar(ctx)
+        wr = win.rectangle()
+        for p in (bar.parent().children() if bar is not None else []):
+            r = p.rectangle()
+            if (p.element_info.control_type == "Pane" and r.width() > 0
+                    and wr.left <= r.left < wr.right and wr.top <= r.top < wr.bottom):
+                return p
+    except Exception:
+        pass
+    return win
+
+
+def active_tab(ctx):
+    """떠 있는 메인 탭 이름 (못 읽으면 None). 원래 get_active_main_tab 은 descendants 로 가장 큰 Tab 을 고르는데,
+    번호 붙은 '물류대기 관리 (2)' 가 떠 있으면 메인 탭바가 빠져 서브탭 '일반' 을 돌려줬다 (10-14 실측)."""
+    for t in main_tab_bar(ctx)[1]:
+        try:
+            if t.is_selected():
+                return t.window_text()
+        except Exception:
+            continue
+    return None
+
+
+def wait_tab(rr, ctx, name, timeout=TAB_WAIT_SECONDS):
+    """떠 있는 메인 탭이 name 이 될 때까지 (이름 끝 공백 무시, 번호 붙은 같은 화면은 아님). (됐는가, 마지막 탭 이름)."""
+    deadline = time.time() + timeout
+    last = None
+    while True:
+        try:
+            last = active_tab(ctx)
+        except Exception:
+            last = None         # 화면이 바뀌는 순간의 UIA 오류 - 다시 본다
+        if last is not None and last.strip() == name:
+            return True, last
+        if time.time() > deadline:
+            return False, last
+        time.sleep(0.5)
+
+
+def numbered_tabs(ctx):
+    """번호 붙은 같은 화면 탭 이름들 ('물류대기 관리 (2)'). 못 읽으면 []."""
+    try:
+        return [t.window_text().strip() for t in main_tab_bar(ctx)[1] if NUMBERED_TAB.search(t.window_text())]
+    except Exception:
+        return []
+
+
+def dup_note(ctx):
+    """화면 이동 실패 사유에 덧붙일 글 - 번호 붙은 탭이 있으면 그것 때문일 수 있다."""
+    dup = numbered_tabs(ctx)
+    return f" (같은 화면이 여러 개 열려 있음: {', '.join(dup)} - 번호 붙은 화면을 닫고 다시 실행)" if dup else ""
+
+
+def find_icon(ctx, key):
+    """좌측 아이콘 (이름이 key 인 Pane). 자식을 따라 찾는다 - 화면 영역(sdPnlMain)은 내려가지 않는다. 없으면 None."""
+    stack = [ctx.window()]
+    while stack:
+        for c in stack.pop().children():
+            info = c.element_info
+            if info.control_type == "Pane" and c.window_text() == key:
+                return c
+            if info.automation_id != "sdPnlMain":
+                stack.append(c)
+    return None
+
+
+def goto_open_tab(rr, ctx, name):
+    """이미 열린 name 화면이면 그 탭을 눌러 간다: (True, None) / (False, 사유). 열려 있지 않으면 None."""
+    tab = open_tab(rr, ctx, name)
+    if tab is None:
+        return None
+    rr.log(f"'{name}' 화면이 이미 열려 있어 그 탭을 누릅니다: {tab.rectangle()}")
+    click(rr, ctx, tab, f"'{name}' 탭")
+    ok, active = wait_tab(rr, ctx, name)
+    if not ok:
+        return False, f"'{name}' 탭을 눌렀으나 그 화면으로 바뀌지 않았습니다 (떠 있는 화면='{active}')."
+    rr.log(f"'{name}' 화면으로 이동 확인")
+    return True, None
+
+
+def goto_screen(rr, ctx, name, icon, original):
+    """②③⑥ 화면 이동 (좌측 아이콘 화면): 'ok' / 'absent'(아이콘 없음) / 실패 사유 글.
+    1) 이미 열린 화면이면 번호 없는 그 탭을 누른다.  2) 번호 붙은 탭이 없으면 원래 아이콘 이동 original()
+    ('ok'/'absent'/'failed' 또는 사유 글 - 로그인 직후 창이 다시 만들어지는 경우를 원래 함수가 다룬다).
+    3) 번호 붙은 탭이 있으면 원래 함수는 아이콘을 못 찾으므로 자식을 따라 찾은 아이콘을 누른다.
+    탭을 읽다가 난 UIA 오류(로그인 직후 등)는 '열려 있지 않음' 으로 보고 원래 함수로 간다."""
+    try:
+        went = goto_open_tab(rr, ctx, name)
+        dup = [] if went is not None else numbered_tabs(ctx)
+    except Stop:
+        raise
+    except Exception as e:
+        rr.log(f"  '{name}' 탭을 읽지 못해 원래 화면 이동으로 갑니다: {type(e).__name__}")
+        went, dup = None, []
+    if went is not None:
+        return "ok" if went[0] else went[1]
+    if not dup:
+        r = original()
+        return r if r in ("ok", "absent") else (f"'{name}' 화면으로 이동하지 못했습니다." if r == "failed" else r)
+    rr.log(f"  같은 화면이 여러 개 열려 있어({', '.join(dup)}) 좌측 아이콘을 자식을 따라 찾습니다")
+    try:
+        el = find_icon(ctx, icon)
+        if el is None:
+            return "absent"
+        click(rr, ctx, el, f"'{name}' 아이콘")
+        ok, active = wait_tab(rr, ctx, name)
+    except Stop:
+        raise
+    except Exception as e:      # UIA 오류는 실행 전체를 죽이지 않고 이 화면 이동의 실패로 (원래 아이콘 이동과 같다)
+        rr.log(f"  '{name}' 아이콘 이동 중 UI 오류: {type(e).__name__}: {e}")
+        return f"'{name}' 화면으로 이동하지 못했습니다 (UI 오류: {type(e).__name__})" + dup_note(ctx)
+    return "ok" if ok else f"'{name}' 아이콘을 눌렀으나 그 화면으로 바뀌지 않았습니다 (떠 있는 화면='{active}')."
+
+
+def _ok_or_reason(result):
+    """원래 goto_order_screen 의 (ok, 사유) -> 'ok' / 사유."""
+    ok, reason = result
+    return "ok" if ok else reason
 
 
 def _hits_tab(rr, tab, name):
