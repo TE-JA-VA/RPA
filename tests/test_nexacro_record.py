@@ -134,7 +134,7 @@ def act(self, page, loc, s):
 
 rec.Replayer._act = act
 try:
-    ok, rp = rec.replay(r, {"ID": "me@x.com", "PW": "pw1234"}, os.path.join(OUT, "a"), "000", log=lambda m: None, step_timeout=6)
+    ok, rp = rec.replay(r, {"ID": "me@x.com", "PW": "pw1234"}, os.path.join(OUT, "a"), "000", log=lambda m: None, step_timeout=6, step_tries=1)
 finally:
     rec.Replayer._act = orig
 check("재생: 체크박스를 켜고 드롭다운에서 '1년' 을 골라 조회까지 간다",

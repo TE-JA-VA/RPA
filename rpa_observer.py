@@ -353,7 +353,7 @@ class Worker(threading.Thread):
                 st.log_line(f"{stamp()} {why}")
                 return
             rp = rec.Replayer(ctx, record, creds, PREVIEW_DL, code, review=True, hide_values=True,
-                              log=lambda m: st.log_line(f"{stamp()} {m}"), step_timeout=20)
+                              log=lambda m: st.log_line(f"{stamp()} {m}"))     # 못 찾으면 20초씩 6번 (rec.STEP_WAIT·STEP_TRIES)
             rp.first_page = ctx.pages[0] if ctx.pages else None
             rp.page_hook = lambda pg: self._set_bounds(pg, where)               # 기록 창 자리에 겹쳐 띄운다
             rp.cancel, rp.pause = self.cancel, self.pause

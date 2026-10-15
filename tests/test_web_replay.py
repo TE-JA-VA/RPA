@@ -118,7 +118,7 @@ def replay_check(srv, url, rec_obj, day, notice, want, label, creds=None, step_t
     out_dir = os.path.join(OUT, label)
     print(f"--- 재생 {label}: {day} (공지 {'뜸' if notice else '안 뜸'})")
     ok, r = rec.replay(rec_obj, creds or {"ID": fake_mall.USER, "PW": fake_mall.PASSWORD}, out_dir, "012", today=day,
-                       log=print, step_timeout=step_timeout)
+                       log=print, step_timeout=step_timeout, step_tries=1)
     print(f"    {r.elapsed:.1f}초, 찾은 단서: " + ", ".join(sorted({h.split(',')[0] for _, st, h in r.results if st == 'ok'})))
     return ok, r, mall
 
@@ -325,7 +325,7 @@ def main():
         with rec.sync_playwright() as p:
             browser = rec.edge(p.chromium.launch)
             ctx = browser.new_context(accept_downloads=True)
-            r = rec.Replayer(ctx, lost, creds, os.path.join(OUT, "K"), "012", today=day, log=print, step_timeout=20)
+            r = rec.Replayer(ctx, lost, creds, os.path.join(OUT, "K"), "012", today=day, log=print, step_timeout=20, step_tries=1)
             r.cancel, r.progress = ev, on_k
             ok = r.run()
             took = time.time() - t_run.get("t", time.time())

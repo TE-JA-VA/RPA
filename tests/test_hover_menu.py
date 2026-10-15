@@ -114,7 +114,7 @@ def replay(label, r, want_path):
         got["url"] = page.url
     rec.Replayer._act = act
     try:
-        ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "000", log=lines.append, step_timeout=6)
+        ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "000", log=lines.append, step_timeout=6, step_tries=1)
     finally:
         rec.Replayer._act = orig
     check(f"{label}: 재생이 끝까지 가서 {want_path} 에 닿는다", ok and got.get("url", "").endswith(want_path),

@@ -115,7 +115,7 @@ def replay(label, memory=None, preview=False):
         self.mail_memory, self.pick_preview = memory, preview
     rec.Replayer.__init__ = init
     try:
-        ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "013", log=lines.append, step_timeout=6)
+        ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "013", log=lines.append, step_timeout=6, step_tries=1)
     finally:
         rec.Replayer.__init__ = orig
     return ok, rp, lines

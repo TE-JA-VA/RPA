@@ -126,7 +126,7 @@ def replay(label, relay, wait=2):
         ctx["rp"] = self
     rec.Replayer.__init__ = init
     try:
-        ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "000", log=lines.append, step_timeout=5)
+        ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "000", log=lines.append, step_timeout=5, step_tries=1)
     finally:
         rec.Replayer.__init__ = orig
     return ok, rp, lines

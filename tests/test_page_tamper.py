@@ -94,7 +94,7 @@ for label, path in (("A_Map", "/a"), ("B_Map_Set_Array", "/b")):
     check(f"{label}: 첨부 누르기가 기록되고, 받은 파일이 그 단계에 붙는다", len(att) == 1 and att[0].get("download") == "order.xlsx",
           [(s["kind"], (s.get("target") or {}).get("text"), s.get("download")) for s in steps])
     lines = []
-    ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "013", log=lines.append, step_timeout=6)
+    ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "013", log=lines.append, step_timeout=6, step_tries=1)
     check(f"{label}: 재생이 끝까지 가서 파일을 받는다", ok and len(rp.saved) == 1 and os.path.basename(rp.saved[0]) == "(013)order.xlsx",
           (rp.results[-2:], rp.saved))
 

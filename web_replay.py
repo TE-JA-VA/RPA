@@ -279,6 +279,7 @@ MAIL_BACK_WAIT = 10          # 메일을 연 뒤 목록으로 돌아와 줄이 �
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
 OPTIONAL_WAIT = 3.0
+STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
 RECORD_VERSION = 1           # 기록 모양. 다르면 재생하지 않는다 (옛 프리페어가 새 기록을 잘못 따라 하지 않게)
 DOWNLOAD_TIMEOUT_MS = 60000  # 파일 받기를 기다리는 시간 (안 오면 그 단계 실패)
 CUT = 20                     # 대시보드로 가는 설명에서 누른 것의 글자 길이
@@ -760,11 +761,11 @@ class OtpRetry(Exception):
 
 
 class Replayer:
-    def __init__(self, context, rec, creds, out_dir, code, today=None, review=False, log=print, step_timeout=30.0,
-                 hide_values=False, shot_dir=None):
+    def __init__(self, context, rec, creds, out_dir, code, today=None, review=False, log=print, step_timeout=STEP_WAIT,
+                 hide_values=False, shot_dir=None, step_tries=STEP_TRIES):
         self.context, self.rec, self.creds, self.out_dir, self.code = context, rec, creds, out_dir, code
         self.today = today or datetime.date.today()
-        self.review, self.log, self.step_timeout = review, log, step_timeout
+        self.review, self.log, self.step_timeout, self.step_tries = review, log, step_timeout, step_tries
         self.hide_values = hide_values       # 로그에 칸에 친 값·주소 ? 뒤를 안 싣는다 (대시보드로 간다)
         self.shot_dir = shot_dir or out_dir  # 실패 사진 자리 (프리페어는 받은 파일 폴더에 사진을 두지 않는다)
         self.pages, self.watched, self.saved, self.results, self.baseline = {}, set(), [], [], {}
@@ -912,7 +913,7 @@ class Replayer:
             t = dict(t, text="", textCount=0)
         cands = candidates(t)
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
-        deadline = time.time() + (OPTIONAL_WAIT if optional else self.step_timeout)
+        deadline, tries = time.time() + (OPTIONAL_WAIT if optional else self.step_timeout), 1
         while True:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
@@ -928,7 +929,11 @@ class Replayer:
             if time.time() > deadline:
                 if optional:
                     raise Skip("화면에 없음")
-                raise NotFound(f"{self.step_timeout:.0f}초 안에 못 찾음 (단서: {', '.join(c[0] for c in cands)})")
+                if tries >= self.step_tries:
+                    raise NotFound(f"{self.step_timeout:.0f}초씩 {tries}번 찾아도 못 찾음 (단서: {', '.join(c[0] for c in cands)})")
+                tries += 1
+                self.log(f"      {self.step_timeout:.0f}초 안에 못 찾음 - 다시 찾습니다 ({tries}/{self.step_tries})")
+                deadline = time.time() + self.step_timeout
             page.wait_for_timeout(250)
 
     # --- 하기 ---
@@ -1200,9 +1205,9 @@ class Replayer:
         if page is None or page.is_closed():
             raise NotFound(f"창 {s['page']} 이 없음")
         self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
-        frame, rows = self._mail_rows(page, s, self.step_timeout)
+        frame, rows = self._mail_rows(page, s, self.step_timeout * self.step_tries)
         if frame is None or not rows:
-            raise NotFound(f"{self.step_timeout:.0f}초 안에 메일 목록을 못 찾음")
+            raise NotFound(f"{self.step_timeout * self.step_tries:.0f}초 안에 메일 목록을 못 찾음")
         hits = [(k, seen or t) for k, t, seen in rows if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
         mem = None if self.pick_preview else self.mail_memory
         todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or mail_key(*h) not in mem.keys]
@@ -1324,11 +1329,13 @@ class Replayer:
                 self.progress(*self.results[-1])
 
 
-def replay(rec, creds, out_dir, code, today=None, review=False, headless=True, log=print, step_timeout=30.0):
+def replay(rec, creds, out_dir, code, today=None, review=False, headless=True, log=print, step_timeout=STEP_WAIT,
+           step_tries=STEP_TRIES):
     with sync_playwright() as p:
         browser = edge(p.chromium.launch, headless=headless, slow_mo=250 if review else 0)
         context = browser.new_context(accept_downloads=True)
-        r = Replayer(context, rec, creds, out_dir, code, today=today, review=review, log=log, step_timeout=step_timeout)
+        r = Replayer(context, rec, creds, out_dir, code, today=today, review=review, log=log, step_timeout=step_timeout,
+                     step_tries=step_tries)
         ok = r.run()
         if review and context.pages:
             log("검수가 끝났습니다. 3초 뒤 창을 닫습니다.")
