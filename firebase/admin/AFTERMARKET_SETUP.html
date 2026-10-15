@@ -71,6 +71,9 @@
   #flash { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); padding:10px 16px; border-radius:10px; background:var(--strong);
     color:var(--card); font-size:14px; max-width:90vw; }
   #flash.bad { background:var(--bad); color:#fff; }
+  /* 웹 관리 로그인 (WEB 일 때만) */
+  #login { position:fixed; inset:0; background:var(--bg); display:grid; place-items:center; padding:16px; z-index:10; }
+  #login form { width:min(360px, 100%); display:grid; gap:10px; }
 </style>
 </head>
 <body>
@@ -147,6 +150,9 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+// 웹 관리 (Blaze 뒤, docs/admin-web-transition.md): functions/sync.mjs 가 admin_web/index.html 로 복사할 때만 이 줄을 true 로 바꾼다.
+// 로컬(admin.js 가 연 127.0.0.1)은 늘 false - 지금처럼 비밀 값(X-Admin-Key)으로 이 PC 서버에 묻는다
+const WEB = false;
 // 비밀 값은 서버가 연 주소(?k=)에만 있다 - 탭 안에만 두고 주소창에서는 지운다 (새로고침은 sessionStorage 로)
 const KEY = new URLSearchParams(location.search).get("k") || sessionStorage.getItem("k") || "";
 if (KEY) sessionStorage.setItem("k", KEY);
@@ -187,6 +193,11 @@ function flash(text, bad = false) {
   flashTimer = setTimeout(() => f.classList.add("hide"), bad ? 9000 : 3500);
 }
 async function api(method, path, body) {
+  if (WEB) {
+    if (path === "/api/prefs") return webPrefs(method, body);
+    if (!webCall) throw new Error("웹 관리에 연결하지 못했습니다 - 새로고침해 주세요");
+    return webCall(method, path, body);
+  }
   const r = await fetch(path, { method, headers: { "X-Admin-Key": KEY, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
@@ -589,6 +600,62 @@ async function loadRates() {
     leftCell(u), el("td", { class: "num" }, u.tokenErr ? "-" : nf(u.month)), el("td", {}, local(u.since)))));
 }
 
+// --- 웹 관리 (WEB 일 때만) ----------------------------------------------------------------
+// 총괄(super) 계정으로 로그인하고, 같은 요청 {method, path, body} 를 관리 함수(functions/index.js 'admin')로 보낸다.
+// 함수가 계정을 다시 읽어 총괄인지 본다 - 여기의 확인은 엉뚱한 계정에 친절하게 알리려는 것뿐이다
+let webCall = null, webSignOut = null;
+function webPrefs(method, body) {          // 테마는 이 브라우저에 (로컬은 admin_prefs.json)
+  try {
+    if (method === "POST") localStorage.setItem("admin_theme", body?.theme ?? "");
+    return { theme: localStorage.getItem("admin_theme") || null };
+  } catch { return {}; }
+}
+async function webStart() {
+  $("quit").textContent = "로그아웃";
+  $("quit").onclick = () => location.reload();        // 연결 전·연결 실패 때 (로그인 뒤에는 아래에서 바꾼다)
+  const v = "10.14.1", sdk = (m) => import(`https://www.gstatic.com/firebasejs/${v}/firebase-${m}.js`);
+  const [{ initializeApp }, A, F] = await Promise.all([sdk("app"), sdk("auth"), sdk("functions")]);
+  const cfg = await (await fetch("/__/firebase/init.json")).json();   // Hosting 이 주는 이 사이트의 프로젝트 값 - 실사용 프로젝트로 옮겨도 고칠 곳이 없다
+  const app = initializeApp(cfg), auth = A.getAuth(app), fns = F.getFunctions(app, "asia-northeast3");   // 지역은 functions/index.js REGION 과 같게
+  if (["127.0.0.1", "localhost"].includes(location.hostname)) {     // 에뮬레이터 Hosting 에서 연 시험 (실제 주소는 *.web.app)
+    A.connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+    F.connectFunctionsEmulator(fns, "127.0.0.1", 5001);
+  }
+  const call = F.httpsCallable(fns, "admin", { timeout: 300000 });
+  webCall = async (method, path, body) => {
+    try { return (await call({ method, path, body })).data; } catch (e) { throw new Error(e.message || "요청이 실패했습니다"); }
+  };
+  webSignOut = () => A.signOut(auth);
+  $("quit").onclick = () => act($("quit"), async () => { await webSignOut(); location.reload(); });
+  const isSuper = async (u) => (await u.getIdTokenResult()).claims.role === "super";
+  const now = await new Promise((ok) => { const off = A.onAuthStateChanged(auth, (u) => { off(); ok(u); }); });
+  if (now && await isSuper(now)) return;
+  if (now) await A.signOut(auth);
+  await webLogin(async (id, pw) => {
+    const email = id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cfg.authDomain}`;   // ops.emailFor(null, 아이디) 와 같은 꼴 (총괄은 업체코드가 없다)
+    let cred;
+    try { cred = await A.signInWithEmailAndPassword(auth, email, pw); } catch { throw new Error("아이디 또는 비밀번호가 맞지 않습니다"); }
+    if (!await isSuper(cred.user)) { await A.signOut(auth); throw new Error("총괄 계정만 쓸 수 있습니다"); }
+  });
+}
+function webLogin(tryLogin) {
+  return new Promise((done) => {
+    const id = el("input", { id: "login-id", placeholder: "아이디 또는 이메일", autocomplete: "username" });
+    const pw = el("input", { id: "login-pw", type: "password", placeholder: "비밀번호", autocomplete: "current-password" });
+    const msg = el("p", { class: "muted" }, "총괄 계정으로 로그인하세요.");
+    const btn = el("button", { type: "submit", class: "primary" }, "로그인");
+    const box = el("div", { id: "login" }, el("form", { class: "card", onsubmit: async (e) => {
+      e.preventDefault();
+      btn.disabled = true;
+      try { await tryLogin(id.value.trim(), pw.value); box.remove(); done(); }
+      catch (err) { msg.textContent = err.message; msg.className = "bad"; }
+      finally { btn.disabled = false; }
+    } }, el("h2", {}, "오토파일럿 관리"), id, pw, btn, msg));
+    document.body.append(box);
+    id.focus();
+  });
+}
+
 // --- 켜기·끄기 -----------------------------------------------------------------------
 $("quit").onclick = () => act($("quit"), async () => {
   if (!confirm("관리 화면을 끌까요?")) return;
@@ -621,6 +688,7 @@ applyTheme(null);
 api("GET", "/api/prefs").then((p) => applyTheme(p.theme), () => {});
 (async () => {
   try {
+    if (WEB) await webStart();
     info = await api("GET", "/api/info");
     $("badge").textContent = info.emulator ? "에뮬레이터 (시험)" : `실제 서버 (${info.project})`;
     $("badge").className = info.emulator ? "badge" : "badge real";
