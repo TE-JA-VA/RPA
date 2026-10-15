@@ -36,7 +36,7 @@ export const admin = onCall({ region: REGION, timeoutSeconds: 300, memory: "512M
   if (!user) throw new HttpsError("permission-denied", "총괄 계정만 사용할 수 있습니다.");
   const { method, path, body } = req.data ?? {};
   const found = find(ROUTES, method, path);
-  if (!found) throw new HttpsError("not-found", "모르는 요청입니다");
+  if (!found) throw new HttpsError("not-found", "알 수 없는 요청입니다.");
   const b = body && typeof body === "object" && !Array.isArray(body) ? body : {};
   if (method === "POST" && await touchesSuper(path, found.params, b)) {
     throw new HttpsError("permission-denied", "총괄 계정은 웹에서 등록하거나 변경할 수 없습니다. 관리 PC의 관리 도구(setup.js)를 사용하여 주십시오.");
@@ -49,6 +49,6 @@ export const admin = onCall({ region: REGION, timeoutSeconds: 300, memory: "512M
   } catch (e) {
     if (e instanceof ops.Refused) throw new HttpsError("failed-precondition", e.message);
     console.error(e);                             // 비밀번호는 결과에만 있고 오류에는 없다
-    throw new HttpsError("internal", `뜻밖의 오류 - ${e.code ?? e.name}: ${e.message}`);
+    throw new HttpsError("internal", `예기치 않은 오류가 발생하였습니다. (${e.code ?? e.name}: ${e.message})`);
   }
 });

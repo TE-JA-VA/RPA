@@ -25,7 +25,7 @@ if (args.includes("--shortcut")) {
     `$l.WorkingDirectory = ${q(here("./"))}`,
     `$l.IconLocation = ${q(here("../../release/AFTER_MARKET.ico"))}`,
     "$l.Save()"].join("; ")], { stdio: "inherit" });
-  console.log("바탕화면에 '오토파일럿 관리' 바로 가기를 만들었습니다");
+  console.log("바탕화면에 '오토파일럿 관리' 바로 가기를 생성하였습니다.");
   process.exit(0);
 }
 
@@ -63,10 +63,10 @@ function readJson(req) {
     let size = 0;
     req.on("data", (c) => {
       size += c.length;
-      if (size > 65536) { fail(new ops.Refused("요청이 너무 큽니다")); req.destroy(); } else chunks.push(c);
+      if (size > 65536) { fail(new ops.Refused("요청이 너무 큽니다.")); req.destroy(); } else chunks.push(c);
     });
     req.on("end", () => {
-      try { ok(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); } catch { fail(new ops.Refused("요청 형식이 잘못되었습니다")); }
+      try { ok(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); } catch { fail(new ops.Refused("요청 형식이 올바르지 않습니다.")); }
     });
     req.on("error", fail);
   });
@@ -79,12 +79,12 @@ async function handle(req, res) {
       "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY" });
     res.end(Buffer.isBuffer(body) ? body : JSON.stringify(body));
   };
-  if (req.headers.host !== `127.0.0.1:${port}`) return send(403, { error: "이 PC 의 관리 화면 주소(127.0.0.1)로만 엽니다" });
+  if (req.headers.host !== `127.0.0.1:${port}`) return send(403, { error: "이 PC의 관리 화면 주소(127.0.0.1)로만 접속할 수 있습니다." });
   const path = new URL(req.url, "http://127.0.0.1").pathname;
-  if (!path.startsWith("/api/")) return path === "/" && req.method === "GET" ? send(200, PAGE, "text/html; charset=utf-8") : send(404, { error: "없는 주소입니다" });
+  if (!path.startsWith("/api/")) return path === "/" && req.method === "GET" ? send(200, PAGE, "text/html; charset=utf-8") : send(404, { error: "존재하지 않는 주소입니다." });
   const got = Buffer.from(String(req.headers["x-admin-key"] ?? ""));
   if (got.length !== KEY.length || !timingSafeEqual(got, KEY)) {
-    return send(403, { error: "비밀 값이 맞지 않습니다 - 관리 화면을 다시 켜세요 (바탕화면 '오토파일럿 관리')" });
+    return send(403, { error: "비밀 값이 일치하지 않습니다. 관리 화면을 다시 실행하여 주십시오. (바탕화면 '오토파일럿 관리')" });
   }
   if (req.method === "POST" && path === "/api/quit") {
     await serial(() => {});   // 하던 고치는 일을 끝낸 뒤 끈다 - 흐름 중간에 끊으면 claim 없는 반쪽 계정이 남고 다시 해도 '이미 있다' 로 건너뛴다
@@ -94,7 +94,7 @@ async function handle(req, res) {
     return;
   }
   const found = routes.find(ROUTES, req.method, path);
-  if (!found) return send(404, { error: "모르는 요청입니다" });
+  if (!found) return send(404, { error: "알 수 없는 요청입니다." });
   const { route, params } = found;
   try {
     const body = req.method === "POST" ? await readJson(req) : {};
@@ -106,7 +106,7 @@ async function handle(req, res) {
   } catch (e) {
     if (e instanceof ops.Refused) return send(400, { error: e.message });
     console.error(e);
-    send(500, { error: `뜻밖의 오류 - ${e.code ?? e.name}: ${e.message}` });
+    send(500, { error: `예기치 않은 오류가 발생하였습니다. (${e.code ?? e.name}: ${e.message})` });
   }
 }
 
@@ -116,16 +116,16 @@ const server = http.createServer((req, res) => handle(req, res).catch((e) => {
   console.error(e);
   if (res.headersSent) return res.destroy();
   res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify({ error: "뜻밖의 오류 - 요청을 읽지 못했습니다" }));
+  res.end(JSON.stringify({ error: "예기치 않은 오류가 발생하였습니다. 요청을 읽지 못했습니다." }));
 }));
-server.on("error", (e) => { console.error(`오류: 관리 화면을 켜지 못했습니다 (${e.code}) - 이미 켜져 있으면 그 창을 쓰세요`); process.exit(1); });
+server.on("error", (e) => { console.error(`오류: 관리 화면을 실행하지 못했습니다. (${e.code}) 이미 실행 중이면 해당 창을 사용하여 주십시오.`); process.exit(1); });
 server.listen(at >= 0 ? Number(args[at + 1]) || 0 : 0, "127.0.0.1", () => {
   port = server.address().port;
   const url = `http://127.0.0.1:${port}/?k=${KEY}`;
   const where = ops.onEmulator() ? "에뮬레이터 (시험)" : `실제 서버 (${ops.PROJECT})`;
   console.log(`오토파일럿 관리 화면 - ${where}`);
   console.log(`  ${url}`);
-  console.log("  브라우저가 안 열리면 위 주소를 여세요. 끄려면 화면의 [끄기] 를 누르거나 이 창을 닫으세요");
+  console.log("  브라우저가 열리지 않으면 위 주소로 접속하여 주십시오. 종료하려면 화면의 [끄기]를 누르거나 이 창을 닫아 주십시오.");
   log(`관리 화면 켬 - ${where}`);
   if (!args.includes("--no-open")) spawn("rundll32", ["url.dll,FileProtocolHandler", url], { detached: true, stdio: "ignore" }).unref();
 });

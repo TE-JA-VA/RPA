@@ -293,7 +293,7 @@ def main():
             ok = r.run()
             browser.close()
         check("I: 파일이 안 오면 정해진 시간 뒤 그 단계 실패 (끝없이 기다리지 않는다)", not ok and r.results[-1][0] == 8
-              and "3초 안에 파일이 오지 않았습니다" in r.results[-1][2] and time.time() - t0 < 60, str(r.results[-1]))
+              and "3초 동안 파일 다운로드가 시작되지 않았습니다" in r.results[-1][2] and time.time() - t0 < 60, str(r.results[-1]))
 
         # ---------------- J: 미리보기 중 창을 닫음 (Review Focus 4) ----------------
         ev = threading.Event()
@@ -308,7 +308,7 @@ def main():
             ok = r.run()
             browser.close()
         check("J: 멈춤(cancel)이 켜지면 다음 단계 전에 멈춘다", not ok and r.results[-1][:2] == (4, "fail")
-              and "멈춤" in r.results[-1][2] and m.downloads == [], str(r.results[-2:]))
+              and "중단하였습니다" in r.results[-1][2] and m.downloads == [], str(r.results[-2:]))
         creds = {"ID": fake_mall.USER, "PW": fake_mall.PASSWORD}
 
         # ---------------- K: 단계 안에서 기다리는 중에 중단 (2026-10-02 미리보기 [■ 중단]) ----------------
@@ -331,7 +331,7 @@ def main():
             took = time.time() - t_run.get("t", time.time())
             browser.close()
         check("K: 단추를 찾으며 기다리는 중에 중단해도 곧 멈춘다 (20초를 다 기다리지 않는다)", not ok
-              and r.results[-1][:2] == (3, "fail") and "멈춤" in r.results[-1][2] and took < 6, f"{took:.1f}초 {r.results[-1:]}")
+              and r.results[-1][:2] == (3, "fail") and "중단하였습니다" in r.results[-1][2] and took < 6, f"{took:.1f}초 {r.results[-1:]}")
 
         # ---------------- L: 일시정지 - 지금 단계를 마치고 다음 단계 앞에서 기다린다 ----------------
         pause, seen, held = threading.Event(), [], {}

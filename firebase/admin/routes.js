@@ -46,7 +46,7 @@ export const ROUTES = compile([
   ["POST", "/api/companies/:cid/limits", (b, p) => ops.setScheduleLimit(p.cid, b.schedule), (b, r, p) => `자동 실행 슬롯 수 ${p.cid} = ${r.schedule}`],
   ["POST", "/api/companies/:cid/presets", (b, p) => ops.setPresetLimit(p.cid, b.presets), (b, r, p) => `옵저버 프리셋 수 ${p.cid} = ${r.presets}`],
   ["POST", "/api/companies/:cid/remove", (b, p) => {
-    if (b.confirm !== p.cid) throw new ops.Refused("업체코드를 똑같이 쳐야 비활성화합니다");
+    if (b.confirm !== p.cid) throw new ops.Refused("업체코드를 정확히 입력해야 비활성화할 수 있습니다.");
     return ops.setCompanyRemoved(p.cid, true);
   }, (b, r, p) => `업체 비활성화 ${p.cid} (계정 ${r.users.length}개 사용중지)`],
   ["POST", "/api/companies/:cid/restore", (b, p) => ops.setCompanyRemoved(p.cid, false), (b, r, p) => (r.already ? null : `업체 다시 활성화 ${p.cid}`)],

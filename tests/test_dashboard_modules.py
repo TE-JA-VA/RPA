@@ -359,7 +359,7 @@ try:
     pl.load_credentials()
     check("못 푸는 비밀번호면 RuntimeError + 다시 넣으라는 안내", False, "예외 없음")
 except RuntimeError as e:
-    check("못 푸는 비밀번호면 RuntimeError + 다시 넣으라는 안내", "풀지 못했습니다" in str(e) and "다시 넣으세요" in str(e), str(e))
+    check("못 푸는 비밀번호면 RuntimeError + 다시 넣으라는 안내", "복호화하지 못했습니다" in str(e) and "다시 입력하여 주십시오" in str(e), str(e))
 
 data["Routine"] = "Y"
 json.dump(data, open(new, "w", encoding="utf-8"), ensure_ascii=False)
@@ -457,7 +457,7 @@ try:
         rr.load_exe_path()
         check("무인 실행은 창을 안 띄우고 바로 멈춘다 (사유에 고르는 법)", False, "예외 없음")
     except RuntimeError as e:
-        check("무인 실행은 창을 안 띄우고 바로 멈춘다 (사유에 고르는 법)", calls == [] and "찾지 못했습니다" in str(e) and "고르는 창" in str(e), str(e))
+        check("무인 실행은 창을 안 띄우고 바로 멈춘다 (사유에 고르는 법)", calls == [] and "찾지 못했습니다" in str(e) and "선택하는 창" in str(e), str(e))
     del os.environ["RPA_UNATTENDED"]
     try:
         rr.load_exe_path()

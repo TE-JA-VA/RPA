@@ -169,7 +169,7 @@ got = open(os.path.join(OUT, "trickle", files[0]), "rb").read() if files else b"
 check(f"아주 느리게 내려받기 ({sec:.0f}초): 끝까지 받은 뒤에야 다음으로 - 파일이 온전하다", ok and got == BIG, (lines[-3:], len(got), len(BIG)))
 
 ok, rp, lines, files, sec = replay("toolate", timeout_ms=4000, wait=8)
-check("시작이 기다림보다 늦으면 실패 - '초 안에 파일이 오지 않았습니다'", not ok and any("파일이 오지 않았습니다" in str(x) for x in rp.results[-1:]),
+check("시작이 기다림보다 늦으면 실패 - '초 안에 파일이 오지 않았습니다'", not ok and any("파일 다운로드가 시작되지 않았습니다" in str(x) for x in rp.results[-1:]),
       rp.results[-1:])
 
 for mode, why, word in (("drop", "중간에 끊김 (크기를 알려 놓고)", "끊겼"), ("cutclose", "반만 보내고 닫음 (크기 모름)", "완료되지"),

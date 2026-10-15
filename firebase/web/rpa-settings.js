@@ -11,7 +11,7 @@ const HTML = `
   <div class="settings-grid" id="settings-grid">
     <div>
       <h3 class="grp">ACTOR 오토파일럿 (사이트 수집)</h3>
-      <div class="msg grp-note">쇼핑몰 사이트에서 주문 엑셀을 받아 옵니다</div>
+      <div class="msg grp-note">쇼핑몰 사이트에서 주문 엑셀을 다운로드합니다.</div>
       <div class="card hide" id="shop-card">
         <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
         <div id="shop-list"></div>
@@ -20,10 +20,10 @@ const HTML = `
       </div>
       <div class="msg hide" id="shop-none">이 PC 는 아직 사이트 수집 정보를 보내지 않았습니다 (에이전트를 새 버전으로 업데이트하세요)</div>
       <h3 class="grp">PROCESS 오토파일럿</h3>
-      <div class="msg grp-note">받아 온 주문을 ERPia 에서 처리합니다</div>
+      <div class="msg grp-note">다운로드한 주문을 ERPia에서 처리합니다.</div>
       <div class="card" id="mod-card">
         <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
-        <div class="msg">전체 실행과 '전체 모듈 실행' 예약이 이 모듈을 돌립니다</div>
+        <div class="msg">전체 실행과 '전체 모듈 실행' 예약은 이 모듈을 실행합니다.</div>
         <div id="mod-list"></div>
         <div class="msg hide" id="mod-modes"></div>
         <button class="apply" id="mod-apply" disabled>적용</button>
@@ -31,7 +31,7 @@ const HTML = `
     </div>
     <div>
       <h3 class="grp">자동 실행</h3>
-      <div class="msg grp-note">시각마다 사이트 수집과 PROCESS 를 함께 고를 수 있습니다</div>
+      <div class="msg grp-note">시각마다 사이트 수집과 PROCESS를 함께 선택할 수 있습니다.</div>
       <div class="card" id="sch-card">
         <h2>자동 실행 <span class="muted" id="sch-meta"></span></h2>
         <label class="switch first"><span>활성화</span><input type="checkbox" id="sch-enabled"><span class="knob"></span></label>
@@ -53,13 +53,13 @@ const HTML = `
             <div class="msg" id="sch-off-note"></div>
           </div>
         </div>
-        <div class="msg" id="sch-old" hidden>이 PC 를 새 버전으로 업데이트하면 시각별 모듈·반복을 쓸 수 있습니다</div>
+        <div class="msg" id="sch-old" hidden>이 PC를 새 버전으로 업데이트하면 시각별 모듈·반복 실행을 사용할 수 있습니다.</div>
         <div class="msg" id="sch-info"></div>
         <button class="apply" id="sch-apply" disabled>적용</button>
       </div>
     </div>
   </div>
-  <p class="muted hide" id="no-pc">등록된 PC 가 없습니다</p>`;
+  <p class="muted hide" id="no-pc">등록된 PC가 없습니다.</p>`;
 
 let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, busy = false, live = null, liveLimit;
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
@@ -119,7 +119,7 @@ export function mount(el, context) {
     if (first || !was[1]) resetShops();
     if (first || !was[2]) resetSchedule();
     paintAll();
-  }, (e) => notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `읽지 못했습니다 (${e.code || e})`));
+  }, (e) => notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `읽지 못했습니다. (${e.code || e})`));
 }
 
 export function unmount() {
@@ -184,7 +184,7 @@ function paintModules() {
       if (Object.values(NEEDS).includes(k)) { applyNeeds(form.modules); paintModules(); return; }
       paintModuleMeta();
     };
-    row.append(switchText(text, need && `${need}${josa(need)} 켜야 쓸 수 있습니다`), cb,
+    row.append(switchText(text, need && `${need}${josa(need)} 켜야 사용할 수 있습니다.`), cb,
       Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
@@ -203,10 +203,10 @@ function paintModuleMeta() {
 }
 async function applyModules() {
   const wanted = applyNeeds(Object.fromEntries(ownModules().map(([k]) => [k, !!form.modules[k]])));
-  if (!Object.values(wanted).some(Boolean)) { notify("warn", "최소 하나 이상의 모듈을 선택해야 합니다"); return; }
+  if (!Object.values(wanted).some(Boolean)) { notify("warn", "최소 하나 이상의 모듈을 선택해야 합니다."); return; }
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
-  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.modules = keyOf.modules();
   await send("set_modules", wanted, "실행 모듈");
 }
@@ -239,12 +239,12 @@ function paintShops() {
     cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
     cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
     cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
-    const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 넣고 저장하세요" : "옵저버에서 기록하고 저장하세요";
+    const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 입력한 뒤 저장하여 주십시오." : "옵저버에서 기록한 뒤 저장하여 주십시오.";
     cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
     row.append(switchText(shopLine(p), why), cb, Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
-  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC 의 '옵저버' 에서 기록하세요";
+  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC의 '옵저버'에서 기록하여 주십시오.";
   paintShopMeta();
 }
 function paintShopMeta() {
@@ -257,7 +257,7 @@ async function applyShops() {
   const wanted = Object.fromEntries(savedShops().map((p) => [`PRESET${p.no}`, !!form.shops[p.no]]));
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/presets`), wanted);
-  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.shops = keyOf.shops();
   await send("set_presets", wanted, "쇼핑몰 프리셋");
 }
@@ -365,7 +365,7 @@ function runChips(s) {
     b.setAttribute("aria-pressed", s.run.includes(k));
     const locked = k === "Output" && !s.run.includes("Logistics");
     b.disabled = !c.isAdmin || busy || locked;
-    if (locked) b.title = "물류관리를 켜야 쓸 수 있습니다";
+    if (locked) b.title = "물류관리를 켜야 사용할 수 있습니다.";
     b.onclick = () => {
       s.run = s.run.includes(k) ? s.run.filter((x) => x !== k) : [...s.run, k];
       if (!s.run.includes("Logistics")) s.run = s.run.filter((x) => x !== "Output");
@@ -415,26 +415,26 @@ function paintTimes() {
 /** 적용을 막는 까닭 모두 (없으면 []) - 하나 고치고 나서야 다음 까닭이 보이지 않게 한꺼번에 (사용자 2026-10-08). 줄 모양은 꺼도 지킨다 (PC 가 본다), 한도는 켤 때만 - 끄기는 언제나 된다 */
 function scheduleProblems() {
   const lim = limitOf(), slots = form.sch.slots, out = [];
-  if (form.sch.enabled && slots.length > lim) out.push(lim ? `자동 실행은 ${lim}개까지입니다 - 줄을 줄여야 적용할 수 있습니다` : "자동 실행을 쓰려면 ERPia에 문의해주세요.");
-  if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) out.push("시간을 확인하세요");
-  if (isV3() && slots.some((s) => !s.days.length)) out.push("요일을 하나 이상 고르세요");
+  if (form.sch.enabled && slots.length > lim) out.push(lim ? `자동 실행은 최대 ${lim}개까지입니다. 줄을 줄여야 적용할 수 있습니다.` : "자동 실행을 쓰려면 ERPia에 문의해주세요.");
+  if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) out.push("시간을 확인하여 주십시오.");
+  if (isV3() && slots.some((s) => !s.days.length)) out.push("요일을 하나 이상 선택하여 주십시오.");
   if (isV4() && form.sch.offDates.length > OFF_DATES_MAX) out.push(`휴무일은 최대 ${OFF_DATES_MAX}개까지 등록할 수 있습니다.`);
   slots.forEach((w, wi) => {
     if (w.until === undefined) return;
-    if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) { out.push(`반복 끝 시각은 시작(${w.at})보다 늦어야 합니다`); return; }
-    if (!(Number.isInteger(w.rest_min) && w.rest_min >= 1 && w.rest_min <= 60)) out.push("쉬는 시간은 1~60분입니다");
-    if (!w.run.length) out.push("반복 줄에 모듈을 하나 이상 고르세요");
+    if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) { out.push(`반복 끝 시각은 시작 시각(${w.at})보다 늦어야 합니다.`); return; }
+    if (!(Number.isInteger(w.rest_min) && w.rest_min >= 1 && w.rest_min <= 60)) out.push("쉬는 시간은 1~60분 사이로 입력하여 주십시오.");
+    if (!w.run.length) out.push("반복 줄에 모듈을 하나 이상 선택하여 주십시오.");
     slots.forEach((x, xi) => {
       if (x === w || !sameDay(w, x)) return;
-      if (x.until && xi > wi && x.at < w.until && w.at < x.until) out.push(`반복 시간대가 겹칩니다: ${w.at}~${w.until}, ${x.at}~${x.until}`);
+      if (x.until && xi > wi && x.at < w.until && w.at < x.until) out.push(`반복 시간대가 겹칩니다. (${w.at}~${w.until}, ${x.at}~${x.until})`);
       if (!x.until && w.at <= x.at && x.at < w.until) out.push(`${x.at} 은 반복 시간대(${w.at}~${w.until}) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오.`);
     });
   });
   const plain = slots.filter((s) => s.until === undefined);   // 반복 시간대가 끼면 위의 '겹칩니다' 가 이미 말한다
-  if (plain.some((a, i) => plain.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) out.push("같은 시각이 두 번 있습니다");
-  if (slots.some((s) => s.until === undefined && s.run && !s.run.length)) out.push("'선택 모듈만 실행' 줄에 모듈을 하나 이상 고르세요");   // 반복 줄은 위에서 따로
-  if (form.sch.enabled && !isV3() && !form.sch.days.length) out.push("요일을 하나 이상 고르세요");
-  if (form.sch.enabled && !slots.length && lim) out.push("시간을 하나 이상 넣으세요");   // 슬롯 0개 업체는 초록 'ERPia 문의' 만
+  if (plain.some((a, i) => plain.slice(i + 1).some((b) => a.at === b.at && sameDay(a, b)))) out.push("같은 시각이 중복되어 있습니다.");
+  if (slots.some((s) => s.until === undefined && s.run && !s.run.length)) out.push("'선택 모듈만 실행' 줄에 모듈을 하나 이상 선택하여 주십시오.");   // 반복 줄은 위에서 따로
+  if (form.sch.enabled && !isV3() && !form.sch.days.length) out.push("요일을 하나 이상 선택하여 주십시오.");
+  if (form.sch.enabled && !slots.length && lim) out.push("시간을 하나 이상 입력하여 주십시오.");   // 슬롯 0개 업체는 초록 'ERPia 문의' 만
   return [...new Set(out)];
 }
 function paintScheduleMeta() {
@@ -482,14 +482,14 @@ function paintScheduleMeta() {
   if (rep && rep.date === isoDay(new Date())) {
     info.push(`오늘 반복 ${rep.runs || 0}회 · 처리 ${rep.done || 0}회` + (rep.skipped ? ` · 화면 잠김으로 건너뜀 ${rep.skipped}회` : ""));   // 잠긴 회차는 건너뛰고 잇는다 (사용자 2026-10-08)
     if (rep.stopped) {
-      const why = rep.stopped.reason || "반복을 멈췄습니다";
-      info.push(tokenErr(why) && t.balance <= 0 ? "반복을 멈췄습니다" : why); cls = " bad";
+      const why = rep.stopped.reason || "반복 실행을 중단하였습니다.";
+      info.push(tokenErr(why) && t.balance <= 0 ? "반복 실행을 중단하였습니다." : why); cls = " bad";
     }
   }
   if (s.enabled && knowTokens) {                         // 예약 실행은 지켜볼 사람이 없다 - 토큰이 모자라면 여기에도 (토큰 2부)
     const need = t.cost?.next ?? t.cost?.all ?? 0;       // 다음 줄이 '고르기' 면 그 줄의 토큰 (에이전트가 cost.next)
-    if (t.balance <= 0) { info.push("토큰이 없어 예약 실행을 건너뜁니다"); cls = " bad"; }
-    else if (t.balance < need) { info.push(`다음 예약 실행에 ${need}개 · 남은 ${t.balance}개 - 마이너스로 떨어질 수 있습니다`); cls = cls || " warn"; }
+    if (t.balance <= 0) { info.push("토큰이 없어 예약 실행을 건너뜁니다."); cls = " bad"; }
+    else if (t.balance < need) { info.push(`다음 예약 실행에 ${need}개 · 남은 토큰 ${t.balance}개. 잔여 토큰이 마이너스가 될 수 있습니다.`); cls = cls || " warn"; }
   }
   $("sch-info").textContent = info.join(" · ");
   $("sch-info").className = "msg" + cls;
@@ -514,7 +514,7 @@ async function applySchedule() {
   const payload = payloadOf();
   try {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/schedule`), payload);
-  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `저장하지 못했습니다 (${e.code || e})`); return; }
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.sch = keyOf.sch();
   await send("set_schedule", payload, "자동 실행");
 }

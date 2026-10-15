@@ -54,7 +54,7 @@ def read_state():
 def write_state(state):
     os.makedirs(update_dir(), exist_ok=True)
     if not st.write_json_atomic(path("state.json"), state):
-        raise UpdateError("상태 파일을 쓰지 못했습니다")      # 도우미의 판단이 이 파일에 달려 있다 - 조용히 넘기면 안 된다
+        raise UpdateError("상태 파일을 저장하지 못했습니다.")      # 도우미의 판단이 이 파일에 달려 있다 - 조용히 넘기면 안 된다
 
 
 def log(msg):
@@ -94,9 +94,9 @@ def _read_manifest(root):
 def _check_manifest(man, version=None):
     files = man.get("files") if isinstance(man, dict) else None
     if man.get("format") != st.MANIFEST_FORMAT or not isinstance(files, dict):
-        raise UpdateError("판 목록 형식이 다릅니다")
+        raise UpdateError("버전 목록 형식이 올바르지 않습니다.")
     if version is not None and man.get("version") != version:
-        raise UpdateError(f"요청한 판({version})과 판 목록의 판({man.get('version')})이 다릅니다")
+        raise UpdateError(f"요청한 버전({version})과 버전 목록의 버전({man.get('version')})이 다릅니다.")
     for rel, d in files.items():
         if not st.manifest_path_ok(rel) or not isinstance(d, dict):
             raise UpdateError(f"판 목록의 경로가 잘못되었습니다: {rel!r}")
@@ -130,20 +130,20 @@ def fetch_release(version, program_root, staging, base_url=None, get=http_get, p
         except Exception:
             sig_bytes = b""
         if not key:
-            raise UpdateError("이 판에는 업데이트 확인 열쇠가 없습니다 - 설치 파일로 다시 설치하세요")
+            raise UpdateError("이 버전에는 업데이트 확인 키가 없습니다. 설치 파일로 다시 설치하여 주십시오.")
         if not update_sign.verify(key, man_bytes, sig_bytes):
-            raise UpdateError("판 서명이 맞지 않습니다 - 받지 않습니다")
+            raise UpdateError("버전 서명이 일치하지 않아 다운로드하지 않습니다.")
         new_man = json.loads(man_bytes.decode("utf-8"))
         _check_manifest(new_man, version)
         cur_man = _read_manifest(program_root)
         if (new_man.get("runtime") or {}) != (cur_man.get("runtime") or {}):
-            raise UpdateError("파이썬이 바뀐 판입니다 - 설치 파일로 깔아야 합니다")
+            raise UpdateError("파이썬이 변경된 버전입니다. 설치 파일로 설치하여 주십시오.")
         fetch, remove, _ = plan_files(cur_man["files"], new_man["files"])
         os.makedirs(update_dir(), exist_ok=True)
         need = _need_bytes(cur_man, new_man, fetch, remove)
         free = shutil.disk_usage(update_dir()).free
         if free < need:
-            raise UpdateError(f"디스크 여유가 모자랍니다 ({need // (1 << 20)}MB 필요, {free // (1 << 20)}MB 남음)")
+            raise UpdateError(f"디스크 여유 공간이 부족합니다. ({need // (1 << 20)}MB 필요, {free // (1 << 20)}MB 남음)")
         os.makedirs(os.path.join(staging, "files"), exist_ok=True)
         for rel in fetch:
             want = new_man["files"][rel]
@@ -187,7 +187,7 @@ def stage_rollback(program_root, staging):
         for rel in fetch:
             src = path("backup", "files", *rel.split("/"))
             if not os.path.isfile(src) or st.file_digest(src)["sha256"] != bman["files"][rel]["sha256"]:
-                raise UpdateError(f"보관본에 {rel} 이(가) 없거나 다릅니다 - 되돌릴 수 없습니다")
+                raise UpdateError(f"보관본에 {rel}이(가) 없거나 다릅니다. 되돌릴 수 없습니다.")
             dst = os.path.join(staging, "files", *rel.split("/"))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
@@ -198,7 +198,7 @@ def stage_rollback(program_root, staging):
         raise
     except Exception as e:
         shutil.rmtree(staging, ignore_errors=True)
-        raise UpdateError(f"보관본을 읽지 못했습니다 ({type(e).__name__})") from None
+        raise UpdateError(f"보관본을 읽지 못했습니다. ({type(e).__name__})") from None
 
 
 def live_view():
@@ -272,9 +272,9 @@ def run_update(version, mode, program_root, idle, register, run_task, fetch=fetc
                 delete_task()
             except Exception as e2:
                 log(f"도우미 작업 지우기 실패 ({type(e2).__name__})")
-            raise UpdateError("도우미가 켜지지 않았습니다 - 다시 [업데이트] 하세요")
+            raise UpdateError("업데이트 도우미가 실행되지 않았습니다. 다시 [업데이트]를 눌러 주십시오.")
     except Exception as e:
-        reason = str(e) if isinstance(e, UpdateError) else f"도우미에게 넘기지 못했습니다 - 다시 [업데이트] 하세요"
+        reason = str(e) if isinstance(e, UpdateError) else f"업데이트 도우미에게 전달하지 못했습니다. 다시 [업데이트]를 눌러 주십시오."
         shutil.rmtree(staging, ignore_errors=True)
         log(f"실패: {reason} [{type(e).__name__}: {e}]"[:300])
         try:
@@ -292,6 +292,6 @@ def clear_stale():
         return False
     shutil.rmtree(path("staging"), ignore_errors=True)
     write_state({"state": "failed", "mode": s.get("mode"), "target": s.get("target"), "from": s.get("from"), "at": now_text(),
-                 "reason": "에이전트가 다시 켜져 업데이트를 멈췄습니다 - 다시 [업데이트] 하세요"})
+                 "reason": "에이전트가 다시 실행되어 업데이트를 중단하였습니다. 다시 [업데이트]를 눌러 주십시오."})
     log("다시 켜져 멈춘 업데이트를 정리")
     return True

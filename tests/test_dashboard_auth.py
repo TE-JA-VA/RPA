@@ -84,7 +84,7 @@ d.apply_schedule({"enabled": True, "days": [0, 1, 2, 3, 4, 5, 6], "times": ["09:
 cfg = st.read_settings(); cfg["schedule"]["next_run_at"] = (datetime.datetime.now() - datetime.timedelta(seconds=3)).isoformat(timespec="seconds"); st.write_settings(cfg)
 sched.tick()
 check(d.LAUNCHED == ["all:manual:admin"] and sched.waiting_reason, "예약: RPA 진행 중이면 대기")
-st.finish("success"); sched.tick(); check(d.LAUNCHED == ["all:manual:admin"] and "끝나기" in (sched.waiting_reason or ""), f"예약: 띄운 실행이 살아 있으면 대기 ({sched.waiting_reason})"); d._active["until"] = 0
+st.finish("success"); sched.tick(); check(d.LAUNCHED == ["all:manual:admin"] and "종료를 기다리는" in (sched.waiting_reason or ""), f"예약: 띄운 실행이 살아 있으면 대기 ({sched.waiting_reason})"); d._active["until"] = 0
 sched.tick()
 check(d.LAUNCHED == ["all:manual:admin", "all:auto"], "예약: 끝나면 자동 실행")
 sch = st.read_settings()["schedule"]
@@ -96,7 +96,7 @@ check(st.read_settings()["schedule"]["next_run_at"] == before, "수동 실행은
 try:
     d.launch("prepare", "manual:admin"); check(False, "전체 실행이 살아 있으면 개별 실행 거부")
 except RuntimeError as e:
-    check("실행중" in str(e), f"전체 실행이 살아 있으면 개별 실행 거부: {e}")
+    check("실행 중" in str(e), f"전체 실행이 살아 있으면 개별 실행 거부: {e}")
 d._active["until"] = 0
 nb = st.read_settings()["schedule"]["next_run_at"]
 d.launch("prepare", "manual:admin"); d._active["until"] = 0

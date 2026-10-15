@@ -195,7 +195,7 @@ def change_password(user_id, current, new):
         salt, digest = hash_password(new)
         acc.update(salt=salt, hash=digest, changed_at=now_text(), default_password=False)
         if not st.write_settings(cfg):
-            raise RuntimeError("설정 파일을 쓰지 못했습니다")
+            raise RuntimeError("설정 파일을 저장하지 못했습니다.")
 
 
 class Sessions:
@@ -441,7 +441,7 @@ def _note_start_failure(code):
         except UnicodeDecodeError:
             text = raw.decode("cp949", "replace")     # 파일로 받은 exe 출력이 CP949 일 때가 있다 (샌드박스 실측)
         tail = [ln for ln in text.splitlines() if ln.strip()][-20:]
-        reason = "시작하지 못했습니다 - " + (tail[-1].strip() if tail else f"오류 출력 없음, 종료 코드 {code}")
+        reason = "시작하지 못했습니다. " + (tail[-1].strip() if tail else f"오류 출력 없음, 종료 코드 {code}")
         for program in (("prepare", "routine") if target == "all" else (target,)):
             started = st.parse_iso((st.read_json(st.status_path(program)) or {}).get("started_at"))
             if started is None or started < since:
@@ -465,7 +465,7 @@ def launch(target, by, env=None):
     env: 자식에게 더할 환경 변수 - 예약 줄의 이번 실행 모듈(RPA_RUN_MODULES)·띄운 까닭(RPA_RUN_TRIGGER)
     """
     if target not in TARGETS:
-        raise ValueError("실행 대상이 잘못되었습니다")
+        raise ValueError("실행 대상이 올바르지 않습니다.")
     label, name, args = TARGETS[target]
     path = target_path(target)
     if not os.path.isfile(path):
@@ -477,12 +477,12 @@ def launch(target, by, env=None):
         running = any_rpa_running()
         if running:
             names = ", ".join(st.PROGRAMS.get(p, p) for p in running)
-            raise RuntimeError(f"{names} 가 이미 실행중입니다.")
+            raise RuntimeError(f"{names}이(가) 이미 실행 중입니다.")
         ls = launch_state()
         if ls:
-            raise RuntimeError(f"{TARGETS[ls['target']][0]} 이(가) 아직 실행중입니다 ({ls['sec']}초째)")
+            raise RuntimeError(f"{TARGETS[ls['target']][0]}이(가) 아직 실행 중입니다. ({ls['sec']}초 경과)")
         if st.observer_open():
-            raise RuntimeError("옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 실행하세요")
+            raise RuntimeError("옵저버가 실행 중입니다. 옵저버를 종료한 뒤 실행하여 주십시오.")
         if TOKEN_GATE is not None:
             TOKEN_GATE(target)             # 실행 단추·예약 모두 여기를 지난다
         proc = None
@@ -572,7 +572,7 @@ def normalize_days(days):
     out = set()
     for v in days:
         if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 6:
-            raise ValueError("요일 값이 잘못되었습니다")
+            raise ValueError("요일 값이 올바르지 않습니다.")
         out.add(v)
     return sorted(out)
 
@@ -593,7 +593,7 @@ def normalize_times(times):
         raise ValueError("실행 시간을 하나 이상 골라주십시오")
     out = sorted({_check_time(t) for t in times})
     if len(out) > st.SCHEDULE_MAX_SLOTS:
-        raise ValueError(f"실행 시간은 {st.SCHEDULE_MAX_SLOTS}개까지 넣을 수 있습니다")
+        raise ValueError(f"실행 시간은 최대 {st.SCHEDULE_MAX_SLOTS}개까지 입력할 수 있습니다.")
     return out
 
 
@@ -602,19 +602,19 @@ def normalize_run(run):
     if run is None:
         return None
     if not isinstance(run, list) or not all(isinstance(k, str) for k in run):
-        raise ValueError("모듈 목록이 잘못되었습니다")
+        raise ValueError("모듈 목록이 올바르지 않습니다.")
     bad = [k for k in run if k not in RUN_KEYS]
     if bad:
         raise ValueError(f"모르는 모듈입니다: {', '.join(bad)}")
     if len(set(run)) != len(run):
-        raise ValueError("같은 모듈이 두 번 있습니다")
+        raise ValueError("같은 모듈이 중복되어 있습니다.")
     picked = set(run)
     if picked - {"Prepare", "Login"}:
         picked.add("Login")          # 루틴을 돌리면 로그인은 늘 (실행 모듈 카드처럼 못 끈다)
     else:
         picked.discard("Login")      # 루틴 모듈이 없으면 로그인만 돌릴 까닭이 없다
     if "Output" in picked and "Logistics" not in picked:
-        raise ValueError("운송장 출력 모듈은 물류관리 모듈과 함께 선택해야만 합니다")
+        raise ValueError("운송장 출력 모듈은 물류관리 모듈과 함께 선택해야 합니다.")
     if not picked:
         raise ValueError("현재 반복 실행 슬롯에서 사용할 모듈을 하나 이상 골라주십시오.")
     return [k for k in RUN_KEYS if k in picked]
@@ -629,7 +629,7 @@ def normalize_slots(slots):
     out = []
     for s in slots:
         if not isinstance(s, dict):
-            raise ValueError("자동 실행 줄이 잘못되었습니다")
+            raise ValueError("자동 실행 설정이 올바르지 않습니다.")
         item = {"at": _check_time(s.get("at"))}
         if s.get("days") is not None:
             item["days"] = normalize_days(s.get("days"))
@@ -637,12 +637,12 @@ def normalize_slots(slots):
         if s.get("until") is not None:                 # 반복 시간대 (설계 6-1)
             item["until"] = _check_time(s.get("until"))
             if item["until"] <= item["at"]:
-                raise ValueError(f"반복 끝 시각은 시작({item['at']})보다 늦어야 합니다")
+                raise ValueError(f"반복 끝 시각은 시작 시각({item['at']})보다 늦어야 합니다.")
             rest = s.get("rest_min", REST_MIN_DEFAULT)
             if not isinstance(rest, int) or isinstance(rest, bool) or not REST_MIN_RANGE[0] <= rest <= REST_MIN_RANGE[1]:
                 raise ValueError("반복 작업 간 쉬는 시간은 1~60분 사이의 값이어야 합니다")
             if s.get("on_fail", "stop") != "stop":
-                raise ValueError("실패하면 '멈춤' 만 됩니다")
+                raise ValueError("실패 시 동작은 '중단'만 선택할 수 있습니다.")
             if run is None:
                 raise ValueError("반복 실행에서는 '전체' 모듈을 사용할 수 없습니다 - 모듈을 선택해 주십시오")
             item.update(rest_min=rest, on_fail="stop")
@@ -660,7 +660,7 @@ def normalize_slots(slots):
                 raise ValueError(f"{x['at']} 은 반복 시간대({w['at']}~{w['until']}) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오.")
     dup = sorted({x["at"] for i, x in enumerate(out) for y in out[i + 1:] if x["at"] == y["at"] and _same_day(x, y)})
     if dup:
-        raise ValueError(f"같은 시각이 두 번 있습니다: {', '.join(dup)}")
+        raise ValueError(f"같은 시각이 중복되어 있습니다: {', '.join(dup)}")
     return out
 
 
@@ -847,7 +847,7 @@ def launch_slot(slot, by="auto", trigger="auto"):
     """예약 줄 하나를 띄운다. 업체가 안 쓰는 모듈만 남으면 RuntimeError (사람에게 보일 글 - 예약 칸의 까닭이 된다)."""
     target, env = slot_target(slot, slot_off(st.read_settings()["schedule"]))
     if target is None:
-        raise RuntimeError("업체가 쓰지 않는 모듈만 남아 건너뜁니다")
+        raise RuntimeError("업체가 사용하지 않는 모듈만 남아 건너뜁니다.")
     return launch(target, by, dict(env, RPA_RUN_TRIGGER=trigger))
 
 
@@ -896,10 +896,10 @@ def stop_reason(status):
     """멈춘 회차의 까닭 한 줄: '10:23 물류관리 실패로 반복을 멈췄습니다: <사유>'."""
     bad = next((m for m in status.get("modules") or [] if m.get("state") in ("failed", "stopped")), None) or {}
     if status.get("reason") == STOPPED_TEXT:
-        return f"{(status.get('finished_at') or '')[11:16]} {STOPPED_TEXT} - 반복을 멈췄습니다".strip()
+        return f"{(status.get('finished_at') or '')[11:16]} {STOPPED_TEXT}. 반복 실행을 중단하였습니다.".strip()
     word = "오류" if status.get("state") == "crashed" else "실패"
     why = status.get("reason") or bad.get("reason") or "까닭 없음"
-    return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or 'PROCESS'} {word}로 반복을 멈췄습니다: {why}".strip()
+    return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or 'PROCESS'} {word}로 반복 실행을 중단하였습니다: {why}".strip()
 
 
 def repeat_state(sch, win, now):
@@ -929,10 +929,10 @@ def resume_repeat():
         win = open_window(sch, now)
         rep = sch.get("repeat") or {}
         if win is None or not rep.get("stopped") or (rep.get("date"), rep.get("at")) != (now.date().isoformat(), win["at"]):
-            raise RuntimeError("중단된 반복 작업이 없습니다")
+            raise RuntimeError("중단된 반복 작업이 없습니다.")
         rep.update(stopped=None, next_at=None, resumed_at=now.isoformat(timespec="seconds"))   # 쉬는 시간을 안 기다리고 바로 (tick_repeat)
         st.write_settings(cfg)
-    return f"반복 작업을 다시 시작했습니다 ({win['until']}까지)"
+    return f"반복 작업을 다시 시작하였습니다. ({win['until']}까지)"
 
 
 def days_label(days):
@@ -1028,11 +1028,11 @@ class Scheduler(threading.Thread):
         if upd:
             return upd
         if any_rpa_running():
-            return "오토파일럿이 아직 돌고 있어 끝나기를 기다립니다"
+            return "오토파일럿이 아직 실행 중이어서 종료를 기다리는 중입니다."
         if launch_state() is not None:
-            return "대시보드가 띄운 실행이 끝나기를 기다립니다"
+            return "대시보드가 실행한 작업의 종료를 기다리는 중입니다."
         if st.observer_open():
-            return "옵저버가 켜져 있어 닫히기를 기다립니다"
+            return "옵저버가 실행 중이어서 종료를 기다리는 중입니다."
         return None
 
     def tick(self):
@@ -1045,7 +1045,7 @@ class Scheduler(threading.Thread):
         next_run = st.parse_iso(sch.get("next_run_at"))
         if next_run is None:
             if not self._advance_now(now)["next_run_at"]:
-                self.waiting_reason = "요일·시간 설정이 비어 있습니다"
+                self.waiting_reason = "요일·시간 설정이 비어 있습니다."
                 return
         elif now >= next_run and (day_off(sch, next_run.date()) or day_off(sch, now.date())):
             # 공휴일을 모르던 버전이 잡아 둔 시각·잡은 뒤 넣은 휴무일, 또는 자던 PC 가 휴무일에 깨어 밀린 실행 - 띄우지 않고 다음 날로
@@ -1072,10 +1072,10 @@ class Scheduler(threading.Thread):
             if new:
                 st.write_settings(cfg)
         if rep.get("stopped"):
-            self.waiting_reason = "반복을 멈췄습니다 - [반복 다시 시작] 을 누르면 이어 돕니다"
+            self.waiting_reason = "반복 실행을 중단하였습니다. [반복 다시 시작]을 누르면 이어서 실행합니다."
             return
         if rep.get("pending"):
-            self.waiting_reason = "반복 회차가 끝나기를 기다립니다"
+            self.waiting_reason = "반복 회차가 끝나기를 기다리는 중입니다."
             return
         end = last_finished()
         resumed = st.parse_iso(rep.get("resumed_at"))       # [반복 다시 시작] 뒤 첫 회차는 쉬지 않는다 - 그 회차가 끝나면 다시 쉰다
@@ -1118,7 +1118,7 @@ class Scheduler(threading.Thread):
             rep["pending"] = None
             stamp = now.isoformat(timespec="seconds")
             if not fresh:                        # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
-                rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차가 시작하지 못했습니다"}
+                rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차를 시작하지 못했습니다."}
             elif not launched_in(rep, since):
                 pass                             # 앞 시간대에 띄운 회차가 붙은 시간대가 열린 뒤 끝났다 - 이 시간대 회차가 아니니 세지도 멈추지도 않는다
             elif v.get("trigger") != "repeat":
@@ -1187,10 +1187,10 @@ def apply_schedule(payload):
     payload: {enabled, days, slots} - 옛 화면(8765·옛 웹)이 보내는 {enabled, days, times} 도 받는다 (모두 '전체' 줄).
     끌 때는 요일·줄이 비어도 된다."""
     if not isinstance(payload, dict):
-        raise ValueError("잘못된 요청입니다")
+        raise ValueError("잘못된 요청입니다.")
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
-        raise ValueError("enabled 는 true/false 여야 합니다")
+        raise ValueError("enabled 값은 true/false 여야 합니다.")
     raw_days = payload.get("days")
     days = [] if not enabled and raw_days in (None, []) else normalize_days(raw_days)
     skip = payload.get("skip_holidays")                 # 없으면 (옛 화면) 지금 값 그대로
@@ -1220,7 +1220,7 @@ def apply_schedule(payload):
             sch["last_error"] = None
             advance(sch, NOW())
         if not st.write_settings(cfg):
-            raise RuntimeError("설정 파일을 쓰지 못했습니다")
+            raise RuntimeError("설정 파일을 저장하지 못했습니다.")
     return changed
 
 
@@ -1250,17 +1250,17 @@ def _wanted_routine_modules(payload, before):
 def validate_routine_modules(payload):
     """실행 모듈 요청을 검증만 한다 (파일은 안 건드린다). 자동 실행 저장 **앞에** 불러 반쪽 저장을 막는다."""
     if not isinstance(payload, dict):
-        raise ValueError("실행 모듈 값이 잘못되었습니다")
+        raise ValueError("실행 모듈 값이 올바르지 않습니다.")
     keys = [k for k, _ in st.ROUTINE_CONFIG_MODULES]
     unknown = sorted(set(payload) - set(keys))
     if unknown:
         raise ValueError(f"모르는 모듈: {', '.join(unknown)}")
     for k, v in payload.items():
         if not isinstance(v, bool):
-            raise ValueError(f"{k} 는 true/false 여야 합니다")
+            raise ValueError(f"{k} 값은 true/false 여야 합니다.")
     before, _ = st.read_routine_modules()
     if not any(_wanted_routine_modules(payload, before).values()):
-        raise ValueError("최소 하나 이상의 모듈을 선택해야 합니다")
+        raise ValueError("최소 하나 이상의 모듈을 선택해야 합니다.")
     return payload
 
 
@@ -1276,13 +1276,13 @@ def apply_routine_modules(payload):
         before, _ = st.read_routine_modules()
         wanted = _wanted_routine_modules(payload, before)
         if not any(wanted.values()):
-            raise ValueError("최소 하나 이상의 모듈을 선택해야 합니다")
+            raise ValueError("최소 하나 이상의 모듈을 선택해야 합니다.")
         changed = any(before.get(k) != wanted[k] for k in keys)
         if changed:
             try:
                 st.write_routine_modules(wanted)
             except Exception as e:
-                raise RuntimeError(f"실행 모듈 설정을 쓰지 못했습니다 ({type(e).__name__})") from e
+                raise RuntimeError(f"실행 모듈 설정을 저장하지 못했습니다. ({type(e).__name__})") from e
     return changed
 
 
@@ -1300,7 +1300,7 @@ def stop_erpia():
     errors = [e for e in (terminate_pid(p) for p in pids) if e]
     if errors:
         return 500, {"ok": False, "error": errors[0]}
-    return 200, {"ok": True, "killed": len(pids), "message": f"ERPia 를 종료했습니다 ({len(pids)}개)."}
+    return 200, {"ok": True, "killed": len(pids), "message": f"ERPia를 종료하였습니다. ({len(pids)}개)"}
 
 
 STOPPED_TEXT = "대시보드에서 중단했습니다"

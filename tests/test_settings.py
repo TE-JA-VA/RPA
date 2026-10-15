@@ -121,9 +121,9 @@ OK_STATE = {"agent_pw": "ok", "erp_pw": "ok", "saved": ("net", "test")}
 print("=== 1. 칸 확인 ===")
 p = rs.validate({k: "" for k in rs.FORM_KEYS}, NONE_STATE)
 check("빈 칸은 모두 알린다", all(any(w in x for x in p) for w in (
-    "PC코드를 넣으세요", "처음 설정이라 에이전트 계정 비밀번호", "ERPia 아이디", "ERPia 비밀번호")), p)
+    "PC코드를 입력하여 주십시오.", "처음 설정이라 에이전트 계정 비밀번호", "ERPia 아이디", "ERPia 비밀번호")), p)
 check("업체코드는 대시보드 것과 ERPia 것을 따로 알린다 (칸 이름이 같다 - 2026-09-30)",
-      "업체코드를 넣으세요" in p and "ERPia 업체코드를 넣으세요" in p, p)
+      "업체코드를 입력하여 주십시오." in p and "ERPia 업체코드를 입력하여 주십시오." in p, p)
 check("업체코드 대문자는 안 된다", any("소문자" in x for x in rs.validate(good_form(cid="Net"), NONE_STATE)))
 check("다 채우면 통과", rs.validate(good_form(), NONE_STATE) == [])
 f = good_form(agent_pw="", erp_pw="")
@@ -131,9 +131,9 @@ check("저장된 값이 있으면 비밀번호 칸을 비워도 된다 (로그�
       rs.validate(f, OK_STATE) == [] and not rs.needs_agent_login(f, OK_STATE))
 f = good_form(cid="net2", agent_pw="")
 check("코드를 바꾸면 기계 계정 비밀번호가 필요하다",
-      rs.needs_agent_login(f, OK_STATE) and any("바꿔서" in x for x in rs.validate(f, OK_STATE)))
+      rs.needs_agent_login(f, OK_STATE) and any("변경되어" in x for x in rs.validate(f, OK_STATE)))
 p = rs.validate(good_form(agent_pw="", erp_pw=""), dict(OK_STATE, agent_pw="bad", erp_pw="bad"))
-check("못 푸는 저장값이면 다시 넣게 한다", any("풀 수 없어" in x for x in p) and any("ERPia 비밀번호" in x for x in p), p)
+check("못 푸는 저장값이면 다시 넣게 한다", any("읽을 수 없어" in x for x in p) and any("ERPia 비밀번호" in x for x in p), p)
 fake_exe = os.path.join(TMP, "erp", st.ERPIA_EXE_NAME)
 os.makedirs(os.path.dirname(fake_exe))
 open(fake_exe, "wb").close()
@@ -203,7 +203,7 @@ rec = Recorder()
 done = rs.save(good_form(), P, login=fake_login, run=rec, running=Running(False), user="PC\\me")
 check("기계 계정 로그인 전에 윈도우 인증서를 채운다 (갓 설치한 윈도우)", warms == [0], warms)
 raw = Path(P["user_config"]).read_bytes()
-check("처음 저장: 로그인·설정·에이전트 켜기", logins == [("net", "test")] and "에이전트를 켰습니다" in " ".join(done), done)
+check("처음 저장: 로그인·설정·에이전트 켜기", logins == [("net", "test")] and "에이전트를 실행하였습니다" in " ".join(done), done)
 check("비밀번호 평문이 파일에 없다", ERP_PW.encode() not in raw
       and AGENT_PW.encode() not in Path(P["agent_config"]).read_bytes())
 cfg = st.read_user_config(P["user_config"])
@@ -218,7 +218,7 @@ done = rs.save(good_form(agent_pw="", erp_pw="", printer="다른 프린터", car
 cfg = st.read_user_config(P["user_config"])
 check("비밀번호를 비우고 프린터·택배사만 바꾸면 로그인·다시 켜기 없이 저장 (RPA 는 실행할 때마다 설정을 읽는다)",
       len(logins) == 1 and rec.verbs() == ["/Create"]
-      and "에이전트를 켰습니다" not in " ".join(done) and "설정을 저장했습니다" in " ".join(done), (logins, rec.verbs(), done))
+      and "에이전트를 실행하였습니다" not in " ".join(done) and "설정을 저장하였습니다" in " ".join(done), (logins, rec.verbs(), done))
 check("비운 비밀번호 칸은 저장된 값 그대로", cfg["LogIn"]["PW"] == first_pw and cfg["Logistic"]["Printer"] == "다른 프린터"
       and cfg["Logistic"]["cboTag"] == "CJ대한통운")
 check("로그인을 안 하면 인증서도 안 채운다", warms == [0], warms)
@@ -231,7 +231,7 @@ try:
             user="PC\\me")
     check("코드만 바꾸고 비밀번호 없이 저장은 거절", False)
 except ValueError as e:
-    check("코드만 바꾸고 비밀번호 없이 저장은 거절", "바꿔서" in str(e), str(e))
+    check("코드만 바꾸고 비밀번호 없이 저장은 거절", "변경되어" in str(e), str(e))
 print("=== 5-1. 업체코드를 바꾸면 이전 업체 프리셋을 비울지 (사용자 2026-10-15) ===")
 logins_before = len(logins)        # 아래 시험이 로그인 횟수를 센다 - 이 묶음 것은 뺀다
 PS = paths_in("stash")
@@ -286,7 +286,7 @@ try:
     rs.save(good_form(), P3, login=fake_login, run=Recorder(), running=Running(False), user="PC\\me")
     check("빈 틀이 없으면 멈춘다 (실행 모듈이 다 켜진 설정을 만들지 않게)", False)
 except RuntimeError as e:
-    check("빈 틀이 없으면 멈춘다 (실행 모듈이 다 켜진 설정을 만들지 않게)", "빈 틀" in str(e) and len(logins) == 2, str(e))
+    check("빈 틀이 없으면 멈춘다 (실행 모듈이 다 켜진 설정을 만들지 않게)", "설정 기본 파일" in str(e) and len(logins) == 2, str(e))
 try:
     rs.save(good_form(agent_pw="", erp_pw=""), P, login=fake_login, run=Recorder(code=1), running=Running(False),
             user="PC\\me")
@@ -318,14 +318,14 @@ try:
     _, state = rs.load_state(E)
     check("ERPia 를 못 찾으면 알린다 (설계: 경고만)", state["erpia_missing"] is True)
     done = rs.save(good_form(), E, login=fake_login, run=Recorder(), running=Running(False), user="PC\\me")
-    check("저장은 되고, ERPia 를 아직 못 찾았다고 덧붙인다", "ERPia 는 아직 못 찾았습니다" in " ".join(done), done)
+    check("저장은 되고, ERPia 를 아직 못 찾았다고 덧붙인다", "ERPia를 아직 찾지 못했습니다." in " ".join(done), done)
 finally:
     st._erpia_install_dirs = saved_dirs
 
 print("=== 6. 기계 계정 로그인 오류 문장 ===")
 orig_first_run = agent.first_run
 try:
-    for exc, want in ((fb.AuthError(400, "INVALID_LOGIN_CREDENTIALS"), "비밀번호가 맞지 않습니다"),
+    for exc, want in ((fb.AuthError(400, "INVALID_LOGIN_CREDENTIALS"), "비밀번호가 일치하지 않습니다"),
                       (ValueError("에이전트 계정(agent-…)이 아닙니다"), "에이전트 계정(agent-…)이 아닙니다"),
                       (urllib.error.URLError("down"), "인터넷에 연결하지 못해"),
                       (urllib.error.URLError(ssl.SSLCertVerificationError(
@@ -429,7 +429,7 @@ try:
     rs.restart_agent(run=Recorder(), running=Running(True, sticky=True), wait=0.3, sleep=lambda s: time.sleep(0.05))
     check("안 멈추면 알린다", False)
 except RuntimeError as e:
-    check("안 멈추면 알린다", "멈추지 않습니다" in str(e))
+    check("안 멈추면 알린다", "종료되지 않습니다" in str(e))
 try:
     rs.start_task(run=Recorder(code=1))
     check("켜기가 안 되면 알린다", False)

@@ -70,9 +70,9 @@ async function change() {
   const cur = $("pw-cur").value, nw = $("pw-new").value, nw2 = $("pw-new2").value;
   const msg = $("pw-msg");
   msg.className = "msg";
-  if (nw.length < 8) { msg.className = "msg bad"; msg.textContent = "새 비밀번호는 8자 이상이어야 합니다"; return; }
-  if (nw !== nw2) { msg.className = "msg bad"; msg.textContent = "다시 입력한 비밀번호가 다릅니다"; return; }
-  if (nw === cur) { msg.className = "msg bad"; msg.textContent = "지금 비밀번호와 같습니다"; return; }
+  if (nw.length < 8) { msg.className = "msg bad"; msg.textContent = "새 비밀번호는 8자 이상이어야 합니다."; return; }
+  if (nw !== nw2) { msg.className = "msg bad"; msg.textContent = "다시 입력한 비밀번호가 일치하지 않습니다."; return; }
+  if (nw === cur) { msg.className = "msg bad"; msg.textContent = "현재 비밀번호와 같습니다."; return; }
   $("pw-btn").disabled = true;
   msg.textContent = "바꾸는 중";
   try {
@@ -84,9 +84,9 @@ async function change() {
   } catch (e) {
     msg.className = "msg bad";
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password"];
-    msg.textContent = wrong.includes(e.code) ? "현재 비밀번호가 맞지 않습니다"
-      : e.code === "auth/weak-password" ? "비밀번호가 너무 짧거나 단순합니다"
-      : `바꾸지 못했습니다 (${e.code || e})`;
+    msg.textContent = wrong.includes(e.code) ? "현재 비밀번호가 일치하지 않습니다."
+      : e.code === "auth/weak-password" ? "비밀번호가 너무 짧거나 단순합니다."
+      : `비밀번호를 변경하지 못했습니다. (${e.code || e})`;
   } finally {
     if (root) $("pw-btn").disabled = false;
   }

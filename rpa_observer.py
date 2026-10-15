@@ -331,7 +331,7 @@ class Worker(threading.Thread):
             try:
                 return otp_relay.agent_relay(creds["Phone"], creds["SmsSenders"], label)
             except RuntimeError as e:
-                st.log_line(f"{stamp()} {e} - 미리보기 창에 직접 넣는 것으로 기다립니다")
+                st.log_line(f"{stamp()} {e} 미리보기 창에서 직접 입력하기를 기다립니다.")
         return otp_relay.ManualOtp(on_wait=lambda: self.ui.put(
             ("status", "미리보기 창의 인증번호 칸에 휴대폰으로 받은 번호를 넣어 주십시오 (2분 안).", BLUE)))
 
@@ -343,7 +343,7 @@ class Worker(threading.Thread):
         steps = record["steps"]
         st.start("observer", [(f"s{i}", rec.describe(s, hide_values=True)) for i, s in enumerate(steps, 1)], title=label)
         st.log_line(f"{stamp()} === 미리보기: {label} ({len(steps)}단계) ===")
-        ok, why, note, saved, sec = False, "미리보기가 끝까지 가지 못했습니다", None, [], 0.0
+        ok, why, note, saved, sec = False, "미리보기를 끝까지 진행하지 못했습니다.", None, [], 0.0
         ctx = prof = None
         try:
             try:
@@ -378,7 +378,7 @@ class Worker(threading.Thread):
             ok = rp.run()
             saved, sec = [os.path.basename(x) for x in rp.saved], rp.elapsed
             if not ok and self.cancel.is_set():
-                why = note = "미리보기를 중단했습니다"
+                why = note = "미리보기를 중단하였습니다."
             elif not ok and rp.results:
                 i, _, how = rp.results[-1]
                 why = f"{i}단계에서 멈췄습니다: {how}"
@@ -484,7 +484,7 @@ def store(files, logins, fresh=(), phones=None):
         st.write_presets(files)
         st.save_preset_sites(files, logins, fresh=fresh, phones=phones)
     except (OSError, ValueError, RuntimeError) as e:
-        return f"저장하지 못했습니다: {e} - 잠시 뒤 다시 저장하세요"
+        return f"저장하지 못했습니다. ({e}) 잠시 후 다시 저장하여 주십시오."
     return None
 
 
@@ -517,7 +517,7 @@ def validate_presets(presets):
         if not re.fullmatch(r"\d{3}", p.get("code") or ""):
             return p["no"], f"{tag}: 사이트코드는 숫자 세 자리여야 합니다 (받은 엑셀파일 이름 앞에 붙어, 주문매핑 매출처리 단계에서 자동으로 처리하게 됩니다.)"
         if p["code"] in codes:
-            return p["no"], (f"{tag}: 사이트코드 {p['code']} 를 {codes[p['code']]} 도 사용합니다. "
+            return p["no"], (f"{tag}: 사이트코드 {p['code']}을(를) {codes[p['code']]}에서도 사용하고 있습니다. "
                              "다른 사이트코드를 입력하여 주십시오.")
         codes[p["code"]] = tag
         if has_otp(p["record"]) and not (p.get("phone") and senders_list(p.get("senders"))):
@@ -816,7 +816,7 @@ class App:
     def remove_preset(self):
         p = self.presets[-1]
         if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
-                "프리셋 지우기", f"{circled(len(self.presets))} {p['name']} 에 기록이 있습니다. 프리셋을 지우시겠습니까?"):
+                "프리셋 지우기", f"{circled(len(self.presets))} {p['name']}에 기록이 있습니다. 프리셋을 삭제하시겠습니까?"):
             return
         self._store_fields()
         self.presets.pop()
@@ -851,8 +851,8 @@ class App:
     def clear_mail_memory(self):
         """[받은 메일 기억 지우기]: 다음 실행 때 메일함의 맞는 메일을 다시 받는다."""
         mem = rec.MailMemory(st.mail_memory_path(self.cur + 1))
-        if not self.ask("받은 메일 기억 지우기", f"이 프리셋이 받은 메일 기억({len(mem.keys)}통)을 지웁니다. "
-                        "다음 실행 때 메일함의 맞는 메일을 다시 받습니다. 지우시겠습니까?"):
+        if not self.ask("받은 메일 기억 지우기", f"이 프리셋의 메일 처리 기록({len(mem.keys)}통)을 삭제합니다. "
+                        "다음 실행 때 메일함에서 조건에 맞는 메일을 다시 다운로드합니다. 삭제하시겠습니까?"):
             return
         mem.clear()
         self.status.config(text="받은 메일 기억을 지웠습니다.", fg=GREEN_D)
@@ -946,7 +946,7 @@ class App:
         self._store_fields()
         p = self.presets[self.cur]
         if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
-                "다시 기록", f"{circled(self.cur + 1)} {p['name']} 의 기록을 지우고 처음부터 다시 기록하시겠습니까?"):
+                "다시 기록", f"{circled(self.cur + 1)} {p['name']}의 기록을 삭제하고 처음부터 다시 기록하시겠습니까?"):
             return
         p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set(), pick_dirty=True)
         self.recording, self.shown = self.cur, 0
@@ -982,7 +982,7 @@ class App:
         """[Ⅱ 일시정지]: 지금 단계를 마치고 다음 단계 앞에서 기다린다. [▶ 계속] 이면 이어 간다."""
         self.paused = not self.paused
         (self.worker.pause.set if self.paused else self.worker.pause.clear)()
-        self.status.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하십시오" if self.paused else
+        self.status.config(text="일시정지하였습니다. [▶ 계속]으로 이어서 진행하거나 [■ 중단]을 눌러 주십시오." if self.paused else
                         "미리보기 중", fg=BLUE)
         self.paint_buttons()
 
@@ -1002,7 +1002,7 @@ class App:
         except ValueError as e:
             return self.status.config(text=f"사용자 설정을 읽지 못했습니다: {e}", fg=RED)
         if not cfg:
-            return self.status.config(text="이 PC 의 사용자 설정이 없습니다 - 시작 메뉴 '오토파일럿 설정' 에서 먼저 저장하세요", fg=RED)
+            return self.status.config(text="이 PC의 사용자 설정이 없습니다. 시작 메뉴의 '오토파일럿 설정'에서 먼저 저장하여 주십시오.", fg=RED)
         now = datetime.datetime.now().isoformat(timespec="seconds")
         out = []
         for no, p in enumerate(self.presets, 1):
@@ -1105,7 +1105,7 @@ class App:
                 elif m[0] == "progress":
                     self._progress(*m[1:])
                 elif m[0] == "paused":
-                    self.status.config(text="일시정지했습니다 - [▶ 계속] 으로 이어 가거나 [■ 중단] 하십시오",
+                    self.status.config(text="일시정지하였습니다. [▶ 계속]으로 이어서 진행하거나 [■ 중단]을 눌러 주십시오.",
                                     fg=BLUE)
                     self.on_paused()
                 elif m[0] == "preview_done":
@@ -1118,7 +1118,7 @@ class App:
                     if ok:
                         self.status.config(text=f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}", fg=GREEN_D)
                     elif stopped:
-                        self.status.config(text="미리보기를 중단했습니다", fg=MUTED)
+                        self.status.config(text="미리보기를 중단하였습니다.", fg=MUTED)
                     else:
                         self.status.config(text=note or "미리보기 중 오류가 발생했습니다. - 문제의 단계를 확인하여 주십시오.", fg=RED)
                     self.on_preview_done(ok)
@@ -1261,21 +1261,21 @@ def check():
         ps = st.read_presets()
         print(f"프리셋 {len(ps)}개 (기록 있는 것 {sum(1 for p in ps if p['record'])}개)")
     except ValueError as e:
-        print(f"문제: 프리셋 파일을 읽지 못했습니다 ({e})")
+        print(f"문제: 프리셋 파일을 읽지 못했습니다. ({e})")
     try:                                                # 깔린 Edge 를 실제로 띄워 본다 (샌드박스가 이 줄을 본다)
         with sync_playwright() as p:
             b = rec.edge(p.chromium.launch, headless=True)
             print(f"브라우저: Microsoft Edge {b.version}")
             b.close()
     except Exception as e:
-        print(f"문제: 브라우저를 띄우지 못했습니다 ({type(e).__name__}: {(str(e).splitlines() or [''])[0]})")
+        print(f"문제: 브라우저를 실행하지 못했습니다. ({type(e).__name__}: {(str(e).splitlines() or [''])[0]})")
     try:
         root = tk.Tk()
         root.withdraw()
         print(f"Tcl/Tk: {root.tk.eval('info patchlevel')}")
         root.destroy()
     except Exception as e:
-        print(f"문제: Tcl/Tk 를 불러오지 못했습니다 ({type(e).__name__}: {e})")
+        print(f"문제: Tcl/Tk를 불러오지 못했습니다. ({type(e).__name__}: {e})")
     print(otp_relay.check_line())
     print(CHECK_DONE, flush=True)
     return 0

@@ -173,7 +173,7 @@ check(meta.get("name") == PLAN["name"] and set(meta.get("pcs", {})) == {"pc_a", 
 w = fs_doc("wallet/t_new") or {}
 check(w.get("granted") == 500 and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", w.get("since") or ""), "첫 토큰 500 - 통장과 시작 시각", w)
 code, r = api("POST", "/api/setup", dict(PLAN, name="다른 업체", users=[{"id": "newboss", "role": "admin"}], tokens=None))
-check(code == 400 and "이미 있는 업체" in r.get("error", "") and (db_get("meta/companies/t_new") or {}).get("name") == PLAN["name"]
+check(code == 400 and "이미 등록된 업체" in r.get("error", "") and (db_get("meta/companies/t_new") or {}).get("name") == PLAN["name"]
       and not account(email("t_new", "newboss")), "이미 있는 업체코드를 다른 이름으로 치면 거절 (그 업체 이름을 안 바꾸고 계정도 안 만든다)", (code, r))
 
 TWICE = dict(PLAN, cid="t_twice", name="두번", pcs=[{"pcId": "pc_1", "label": "PC"}], users=[{"id": "boss", "role": "admin"}],
@@ -189,7 +189,7 @@ for _, res in results:
 w = fs_doc("wallet/t_twice") or {}
 check(all(c == 200 for c, _ in results) and w.get("granted") == 100, f"동시에 두 번 눌러도 토큰은 한 번만 ({w.get('granted')})")
 late = [res for _, res in results if not res.get("made", {}).get("users")]
-check(len(late) == 1 and any("이미 있어 건너뜀" in s["note"] for s in late[0]["steps"])
+check(len(late) == 1 and any("이미 등록되어 있어 건너뛰었습니다" in s["note"] for s in late[0]["steps"])
       and any("이미 토큰 정보가 있어" in s["note"] for s in late[0]["steps"]), "늦은 쪽은 이미 있는 계정·통장을 건너뛴다", late)
 
 subprocess.run(["node", "setup.js", "company", "t_retry", "다시"], cwd=ADMIN, capture_output=True, timeout=60)
@@ -212,7 +212,7 @@ check(code == 200 and {u["role"] for u in d["users"]} == {"admin", "viewer", "ag
 code, r = api("POST", "/api/companies/t_new/tokens", {"amount": "+100", "memo": "추가"})
 check(code == 200 and r["wallet"]["left"] == 600 and not r["created"], "토큰 더 넣기 → 남은 600", str(r)[:200])
 code, r = api("POST", "/api/companies/t_new/tokens", {"amount": "1,000"})
-check(code == 400 and "0 이 아닌 정수" in r.get("error", ""), "토큰 수 '1,000' 은 거절 (쉼표)", r)
+check(code == 400 and "0이 아닌 정수" in r.get("error", ""), "토큰 수 '1,000' 은 거절 (쉼표)", r)
 boss = email("t_new", "boss")
 code, r = api("POST", "/api/companies/t_new/passwd", {"id": boss})
 SECRETS.append(r.get("password", ""))
@@ -253,7 +253,7 @@ db_put("meta/companies/my_wellife", {"name": "웰라이프 시험", "stts": 0})
 code, d = api("GET", "/api/companies/my_wellife")
 check(code == 200 and d.get("wellife") is True and d.get("wellifeAuto") is True, "업체코드에 wellife → 늘 켜짐", str(d)[:200])
 code, r = api("POST", "/api/companies/my_wellife/features", {"wellife": False})
-check(code == 400 and "늘 켜짐" in r.get("error", ""), "업체코드 규칙 업체는 끌 수 없다", r)
+check(code == 400 and "항상 켜져" in r.get("error", ""), "업체코드 규칙 업체는 끌 수 없다", r)
 code, r = api("POST", "/api/companies/t_new/remove", {"confirm": "t_ne"})
 check(code == 400 and db_get("meta/companies/t_new/stts") == 0, "업체코드를 똑같이 안 치면 삭제하지 않는다", (code, r))
 code, r = api("POST", "/api/companies/t_new/remove", {"confirm": "t_new"})
@@ -408,7 +408,7 @@ with sync_playwright() as pw:
     page.click(f"#pc-{PC} button.upd-go")
     page.wait_for_timeout(800)
     cmd = [v for v in (db_get(f"apps/rpa/commands/{CID}/{PC}") or {}).values() if v.get("type") == "update"]
-    check(dialogs == [f"{CID} / {PC} 를 2026.10.07-5 로 바꿉니다. 오토파일럿이 끝나면 바로 바뀝니다."], f"확인 창 ({dialogs})")
+    check(dialogs == [f"{CID} / {PC}을(를) 2026.10.07-5 버전으로 업데이트하시겠습니까? 오토파일럿 실행이 끝나면 바로 적용됩니다."], f"확인 창 ({dialogs})")
     check(len(cmd) == 1 and cmd[0]["args"] == {"version": "2026.10.07-5"} and cmd[0]["by"] == "admin-tool" and cmd[0]["state"] == "queued"
           and cmd[0]["expires_at"] - cmd[0]["created_at"] == 600, f"update 명령 ({cmd})")
     # 누른 뒤 그 줄만 따라간다 (사용자 2026-10-08): 명령 보냄 → PC 상태 → 끝나면 단추가 풀린다
@@ -430,7 +430,7 @@ with sync_playwright() as pw:
     db_put(f"apps/rpa/commands/{CID}/{PC}/zz_old", {"type": "update", "args": {"version": "2026.10.07-5"}, "by": "admin-tool",
                                                    "created_at": old, "expires_at": old + 600, "state": "queued"})
     open_company(page, CID)
-    check("PC 가 응답하지 않습니다" in page.text_content(status_cell) and not page.is_disabled(f"#pc-{PC} button.upd-go"),
+    check("PC가 응답하지 않습니다" in page.text_content(status_cell) and not page.is_disabled(f"#pc-{PC} button.upd-go"),
           f"10분 안에 PC 가 안 받으면 '응답하지 않습니다' ({page.text_content(status_cell)})")
     db_patch(f"apps/rpa/commands/{CID}/{PC}/zz_old", {"state": "failed", "started_at": int(time.time()), "result": "이미 최신 업데이트를 사용하고 있습니다"})
     open_company(page, CID)
@@ -577,7 +577,7 @@ with sync_playwright() as pw:
     sent = page.text_content("#setup-result .secret pre")
     seen = re.findall(r"비밀번호: (\S{24})", sent)
     SECRETS.extend(seen)
-    check(page.text_content("#setup-result h2") == "다 만들었습니다" and "관리자  업체코드: t_ui   아이디: ui_admin" in sent
+    check(page.text_content("#setup-result h2") == "모두 등록하였습니다." and "관리자  업체코드: t_ui   아이디: ui_admin" in sent
           and "관리자  업체코드: t_ui   아이디: ui_boss2" in sent and "유저  업체코드: t_ui   아이디: ui_view" in sent
           and "업체코드: t_ui   PC코드: pc_ui" in sent and len(seen) == 4 and f"https://{PROJECT}.web.app" in sent,
           "다 만들면 고객에게 보낼 정보 (대시보드 주소·관리자 둘·유저·에이전트 계정)", sent)
@@ -607,7 +607,7 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('rates-save')?.textContent === '저장' && !document.querySelector('#rates tr.changed')", timeout=15000)
     page.locator("#rates tr[data-key='hold'] input").fill("-1")
     page.click("#rates-save")
-    page.wait_for_function("document.getElementById('flash')?.textContent.includes('0 이상 정수')", timeout=15000)
+    page.wait_for_function("document.getElementById('flash')?.textContent.includes('0 이상의 정수')", timeout=15000)
     check((fs_doc("meta/prices") or {}).get("hold") == 3, "틀린 값이면 알리고 저장하지 않는다")
     page.locator("#rates tr[data-key='hold'] input").fill("1")
     page.click("#rates-save")
@@ -677,7 +677,7 @@ with sync_playwright() as pw:
     old = browser.new_page()
     old.goto(f"{BASE}/?k={'x' * len(key)}")
     old.wait_for_function("document.getElementById('badge')?.textContent === '연결 안 됨'", timeout=15000)
-    check("다시 켜세요" in old.text_content("#flash"), "비밀 값이 틀린 화면(옛 주소)은 '다시 켜세요' 를 알린다")
+    check("다시 실행하여 주십시오" in old.text_content("#flash"), "비밀 값이 틀린 화면(옛 주소)은 '다시 켜세요' 를 알린다")
 
     LATE = dict(PLAN, cid="t_late", name="끄기 직전", pcs=[{"pcId": f"pc_{i}", "label": f"PC {i}"} for i in range(1, 31)],
                 users=[{"id": "boss", "role": "admin"}], tokens={"amount": "7"})
@@ -691,10 +691,10 @@ with sync_playwright() as pw:
     page.click("#quit")
     worker.join(timeout=60)
     srv.wait(timeout=15)
-    page.wait_for_function("document.body.textContent.includes('관리 화면을 껐습니다')", timeout=15000)
+    page.wait_for_function("document.body.textContent.includes('관리 화면을 종료하였습니다')", timeout=15000)
     check("3초 뒤 이 창을 닫습니다" in page.text_content("body"), "끄면 '3초 뒤 이 창을 닫습니다' (사용자 2026-10-08)")
     page.wait_for_timeout(3800)
-    check(page.is_closed() or "직접 닫아 주세요" in page.text_content("body"),
+    check(page.is_closed() or "직접 닫아 주십시오" in page.text_content("body"),
           "3초 뒤 창을 닫는다 - 브라우저가 막으면 직접 닫으라고 알린다")
     browser.close()
     done = late[0][1] if late and late[0][0] == 200 else {}

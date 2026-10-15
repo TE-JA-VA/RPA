@@ -115,7 +115,7 @@ check(d.normalize_run(["Logistics"]) == ["Login", "Logistics"], "루틴 모듈�
 check(d.normalize_run(["Output", "Logistics", "Prepare"]) == ["Prepare", "Login", "Logistics", "Output"], "정한 순서로 (사이트 수집 → 루틴)")
 check(d.normalize_run(["Prepare", "Login"]) == ["Prepare"], "사이트 수집만이면 로그인은 뺀다")
 for bad, why in ((["Output"], "물류관리 모듈과 함께"), (["Login"], "하나 이상"), ([], "하나 이상"), (["Nope"], "모르는 모듈"),
-                 (["Sales", "Sales"], "두 번"), ("Sales", "잘못")):
+                 (["Sales", "Sales"], "중복"), ("Sales", "올바르지 않습니다")):
     try:
         d.normalize_run(bad); check(False, f"run 거부 {bad!r}")
     except ValueError as e:
@@ -123,7 +123,7 @@ for bad, why in ((["Output"], "물류관리 모듈과 함께"), (["Login"], "하
 slots = d.normalize_slots([{"at": "11:00", "run": ["Logistics"]}, {"at": "10:00"}])
 check(slots == [{"at": "10:00"}, {"at": "11:00", "run": ["Login", "Logistics"]}], f"줄은 시각 순, '전체' 줄엔 run 이 없다 ({slots})")
 for bad, why in (([{"at": "10:00"}, {"at": "10:00", "run": ["Hold"]}], "같은 시각"), ([{"at": "10:03"}], "5분"),
-                 ([{"at": f"{h:02d}:00"} for h in range(13)], "12개"), ([], "하나 이상"), (["10:00"], "줄이 잘못")):
+                 ([{"at": f"{h:02d}:00"} for h in range(13)], "12개"), ([], "하나 이상"), (["10:00"], "자동 실행 설정이 올바르지")):
     try:
         d.normalize_slots(bad); check(False, f"줄 거부 {why}")
     except ValueError as e:
@@ -160,7 +160,7 @@ check(d.LAUNCHED == [], "예약 시각 전에는 띄우지 않음")
 set_next(-3)
 st.start("routine", ["a", "b"]); st.flush()
 sched.tick()
-check(d.LAUNCHED == [] and "돌고 있어" in (sched.waiting_reason or ""), f"RPA 진행 중이면 대기: {sched.waiting_reason}")
+check(d.LAUNCHED == [] and "실행 중이어서" in (sched.waiting_reason or ""), f"RPA 진행 중이면 대기: {sched.waiting_reason}")
 st.finish("success")
 sched.tick()
 check(d.LAUNCHED == ["all:auto"], "끝나면 자동 실행")
@@ -280,7 +280,7 @@ sched.tick()
 check(d.LAUNCHED == saved and st.read_settings()["schedule"]["next_slot"] in ("10:00", "11:00"), "가리키던 줄이 한도로 빠졌으면 띄우지 않고 다음 줄로")
 c = st.read_settings(); c["schedule"]["next_slot"] = "11:00"; c["schedule"]["next_run_at"] = (dt.datetime.now() - dt.timedelta(seconds=3)).isoformat(timespec="seconds"); st.write_settings(c)
 sched.tick_safe()
-check(d.LAUNCHED == saved and st.read_settings()["schedule"]["last_error"] == "업체가 쓰지 않는 모듈만 남아 건너뜁니다",
+check(d.LAUNCHED == saved and st.read_settings()["schedule"]["last_error"] == "업체가 사용하지 않는 모듈만 남아 건너뜁니다.",
       f"줄의 모듈이 모두 업체가 안 쓰는 것 → 건너뛰고 까닭 ({st.read_settings()['schedule']['last_error']})")
 d.set_policy(0, [])
 check(d.active_slots(st.read_settings()["schedule"]) == [] and d.schedule_view()["next_run_at"] is None, "한도 0 → 아무것도 안 돈다")

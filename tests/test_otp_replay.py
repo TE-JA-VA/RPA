@@ -145,11 +145,11 @@ check("다시 시도는 로그에 남는다", any("다시" in x and "2/3" in x f
 
 ok, rp, lines = replay("none", FakeRelay("none"), wait=1)
 check("번호가 3번 다 안 오면 실패 - '인증번호를 3번 받지 못했습니다'", not ok and rp.otp.opened == 3
-      and "인증번호를 3번 받지 못했습니다" in rp.results[-1][2] and rp.otp.closed >= 1, rp.results[-1:])
+      and "인증번호를 3번 수신하지 못했습니다" in rp.results[-1][2] and rp.otp.closed >= 1, rp.results[-1:])
 
 ok, rp, lines = replay("wrong", FakeRelay("wrong"))
 check("사이트가 3번 다 거절하면 실패 - '사이트가 인증번호를 3번 거절했습니다'", not ok and rp.otp.opened == 3
-      and "3번 거절" in rp.results[-1][2], rp.results[-1:])
+      and "3번 거절되었습니다" in rp.results[-1][2], rp.results[-1:])
 
 ok, rp, lines = replay("no_relay", None)
 check("인증 휴대폰이 없으면 그 단계에서 까닭과 함께 멈춘다", not ok and "인증 휴대폰" in rp.results[-1][2], rp.results[-1:])

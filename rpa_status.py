@@ -102,8 +102,8 @@ MIN_WRITE_GAP = 0.5        # 잇따른 변경은 이 간격으로 묶어서 쓴�
 PROBLEM_WORDS = ("중단", "실패", "오류", "못했", "초과", "종료합니다", "않습니다")
 _TIME_PREFIX = re.compile(r"^\s*\[\d{2}:\d{2}:\d{2}\]\s*")
 
-VANISHED_REASON = ("프로그램이 도중에 꺼졌습니다 (강제 종료되었거나 오류로 멈췄습니다). "
-                   "마지막 로그를 확인하세요.")
+VANISHED_REASON = ("프로그램이 도중에 종료되었습니다. (강제 종료 또는 오류로 중단) "
+                   "마지막 로그를 확인하여 주십시오.")
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ def check_install(root=None):
             man = json.load(f)
         files = man.get("files") if isinstance(man, dict) else None
         if man.get("format") != MANIFEST_FORMAT or not isinstance(files, dict):
-            raise ValueError("판 목록 형식이 다릅니다")
+            raise ValueError("버전 목록 형식이 올바르지 않습니다.")
         out["version"] = str(man.get("version") or "") or None
         changed = []
         for rel, want in files.items():
@@ -422,8 +422,8 @@ def unseal(value):
         return _dpapi(False, base64.b64decode(value[len(SEALED_PREFIX):])).decode("utf-8")
     except Exception:
         raise RuntimeError(
-            f"{USER_CONFIG_NAME} 의 비밀번호를 풀지 못했습니다. 다른 PC 나 다른 윈도우 계정에서 잠근 값입니다. "
-            "이 PC 에서 비밀번호를 다시 넣으세요 (파일에 평문으로 적으면 에이전트가 켤 때 잠급니다)") from None
+            f"{USER_CONFIG_NAME}의 비밀번호를 복호화하지 못했습니다. 다른 PC나 다른 윈도우 계정에서 암호화한 값입니다. "
+            "이 PC에서 비밀번호를 다시 입력하여 주십시오. (파일에 평문으로 적으면 에이전트가 실행될 때 암호화합니다)") from None
 
 
 def _pw_slots(data):
@@ -441,11 +441,11 @@ def _read_json(path):
     """인코딩을 가리지 않고 JSON 을 읽는다. 깨졌으면 ValueError - 메시지에 파일 내용은 싣지 않는다."""
     text = _read_text_any(path)
     if text is None:
-        raise ValueError(f"{os.path.basename(path)} 의 인코딩을 알 수 없습니다")
+        raise ValueError(f"{os.path.basename(path)}의 인코딩을 알 수 없습니다.")
     try:
         return json.loads(text)
     except ValueError:
-        raise ValueError(f"{os.path.basename(path)} 이(가) JSON 형식이 아닙니다") from None
+        raise ValueError(f"{os.path.basename(path)}이(가) JSON 형식이 아닙니다.") from None
 
 
 def _sections(data, name):
@@ -453,7 +453,7 @@ def _sections(data, name):
     섹션 없이 바로 있는 값은 LogIn 에 넣는다 (가장 옛 형식). 단 Routine 을 값으로 잘못 쓴 것은 그대로 둬서
     읽는 쪽이 '잘못됨' 으로 알린다. '_' 로 시작하는 키는 사람이 적는 주석이라 손대지 않고 둔다."""
     if not isinstance(data, (dict, list)):
-        raise ValueError(f"{name} 의 JSON 최상위가 객체도 배열도 아닙니다")
+        raise ValueError(f"{name}의 JSON 최상위가 객체 또는 배열이 아닙니다.")
     out, loose = {}, {}
     for key, value in _flatten(data).items():
         if key.startswith("_") or (key == ROUTINE_SECTION and not isinstance(value, (dict, list))):
@@ -662,7 +662,7 @@ def _pick_erpia_exe_sta():
         k.GetConsoleWindow.restype = wintypes.HWND
         filt = ctypes.create_unicode_buffer(f"ERPia 프로그램 ({ERPIA_EXE_NAME})\0{ERPIA_EXE_NAME}\0\0")
         start = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles") or "C:\\"
-        title = f"ERPia 프로그램({ERPIA_EXE_NAME})이 어디 있는지 골라 주세요"
+        title = f"ERPia 프로그램({ERPIA_EXE_NAME})의 위치를 선택하여 주십시오."
         for _ in range(3):
             buf = ctypes.create_unicode_buffer(1024)
             ofn = OFN()
@@ -681,7 +681,7 @@ def _pick_erpia_exe_sta():
             found = _erpia_file(buf.value)
             if found:
                 return found
-            title = f"{ERPIA_EXE_NAME} 가 아닙니다. ERPia 설치 폴더의 {ERPIA_EXE_NAME} 를 골라 주세요"
+            title = f"{ERPIA_EXE_NAME}이(가) 아닙니다. ERPia 설치 폴더의 {ERPIA_EXE_NAME}을(를) 선택하여 주십시오."
             start = os.path.dirname(buf.value) or start
         return None
     finally:
@@ -801,7 +801,7 @@ def read_routine_modules(path=None):
     except Exception as e:
         return {k: None for k in keys}, [f"{name} 을(를) 읽지 못했습니다: {type(e).__name__}"]
     if not data:
-        return {k: None for k in keys}, [f"{name} 이(가) 없거나 비어 있습니다"]
+        return {k: None for k in keys}, [f"{name}이(가) 없거나 비어 있습니다."]
     section = data.get(ROUTINE_SECTION, {})
     if not isinstance(section, dict):
         # {"Routine": "Y"} 처럼 섹션이 아니라 값으로 쓴 경우. 루틴은 이 파일로 돌지 않는다.
@@ -819,7 +819,7 @@ def read_routine_modules(path=None):
             selected[k] = v == "Y"
         else:
             selected[k] = None
-            problems.append(f"{k} 값이 Y/N 이 아닙니다 ({raw!r})")
+            problems.append(f"{k} 값이 Y/N이 아닙니다. ({raw!r})")
     return selected, problems
 
 
@@ -852,7 +852,7 @@ def read_wellife_modules(path=None):
         return {k: None for k in keys}, [f"설정을 읽지 못했습니다: {type(e).__name__}"]
     section = data.get(WELLIFE_SECTION)
     if not isinstance(section, dict):
-        return {k: (k == "Login") for k in keys}, ([] if section is None else [f"'{WELLIFE_SECTION}' 은 섹션이어야 합니다"])
+        return {k: (k == "Login") for k in keys}, ([] if section is None else [f"'{WELLIFE_SECTION}'은(는) 섹션이어야 합니다."])
     selected, problems = {}, []
     for k in keys:
         raw = section.get(k)
@@ -861,7 +861,7 @@ def read_wellife_modules(path=None):
             selected[k] = v == "Y" or k == "Login"
         else:
             selected[k] = None
-            problems.append(f"{k} 값이 Y/N 이 아닙니다 ({raw!r})")
+            problems.append(f"{k} 값이 Y/N이 아닙니다. ({raw!r})")
     for k in WELLIFE_FOLLOW_SALES:
         if k not in section:
             selected[k] = selected["Sales"]
@@ -970,23 +970,23 @@ def read_presets():
         return [blank_preset(i + 1) for i in range(PRESET_MIN)]
     data = _read_json(path)
     if not isinstance(data, list):
-        raise ValueError(f"{PRESETS_NAME} 가 목록이 아닙니다")
+        raise ValueError(f"{PRESETS_NAME}이(가) 목록 형식이 아닙니다.")
     if len(data) > PRESET_MAX:
-        raise ValueError(f"{PRESETS_NAME} 에 프리셋이 {len(data)}개 있습니다 (최대 {PRESET_MAX})")
+        raise ValueError(f"{PRESETS_NAME}에 프리셋이 {len(data)}개 있습니다. (최대 {PRESET_MAX}개)")
     out, codes = [], {}
     for i, d in enumerate(data, 1):
         # 손으로 고친 파일을 고쳐 읽지 않는다: 번호가 밀리면 다른 쇼핑몰의 Sites.PRESETn 계정과 엮인다 (2026-10-01 검토)
         if not isinstance(d, dict) or d.get("no") != i:
-            raise ValueError(f"{PRESETS_NAME} 의 {i}번째가 프리셋 {i} 이 아닙니다 (번호가 빠졌거나 바뀌었습니다)")
+            raise ValueError(f"{PRESETS_NAME}의 {i}번째가 프리셋 {i}이(가) 아닙니다. (번호가 빠졌거나 바뀌었습니다)")
         r = d.get("record")
         if r is not None and not (isinstance(r, dict) and isinstance(r.get("steps"), list)):
-            raise ValueError(f"{PRESETS_NAME} 의 프리셋 {i} 기록 모양이 틀렸습니다")
+            raise ValueError(f"{PRESETS_NAME}의 프리셋 {i} 기록 형식이 올바르지 않습니다.")
         if d.get("saved_at") is not None and not isinstance(d.get("saved_at"), str):
-            raise ValueError(f"{PRESETS_NAME} 의 프리셋 {i} 저장 시각이 틀렸습니다")
+            raise ValueError(f"{PRESETS_NAME}의 프리셋 {i} 저장 시각이 올바르지 않습니다.")
         p = blank_preset(i)
         p.update(name=str(d.get("name") or p["name"]), code=str(d.get("code") or ""), saved_at=d.get("saved_at"), record=r)
         if r and p["code"] in codes:
-            raise ValueError(f"{PRESETS_NAME} 의 프리셋 {codes[p['code']]} 와 {i} 이 같은 사이트코드 {p['code']} 입니다")
+            raise ValueError(f"{PRESETS_NAME}의 프리셋 {codes[p['code']]}와(과) {i}이(가) 같은 사이트코드 {p['code']}를 사용합니다.")
         codes[p["code"]] = i
         out.append(p)
     while len(out) < PRESET_MIN:
@@ -998,7 +998,7 @@ def write_presets(presets):
     """프리셋 목록을 통째로 쓴다 (번호는 순서대로 다시 매긴다). PRESET_MIN~PRESET_MAX 개가 아니면 ValueError.
     임시 파일에 다 쓴 뒤 바꿔치기한다 (반쯤 쓴 파일이 남지 않게). 쓴 목록을 돌려준다."""
     if not PRESET_MIN <= len(presets) <= PRESET_MAX:
-        raise ValueError(f"프리셋은 {PRESET_MIN}~{PRESET_MAX}개입니다 ({len(presets)}개)")
+        raise ValueError(f"프리셋은 {PRESET_MIN}~{PRESET_MAX}개여야 합니다. ({len(presets)}개)")
     data = [{"no": i, "name": str(p.get("name") or f"프리셋 {i}"), "code": str(p.get("code") or ""),
              "saved_at": p.get("saved_at"), "record": p.get("record")} for i, p in enumerate(presets, 1)]
     path = presets_path()
@@ -1862,7 +1862,7 @@ def fail_exception(exc):
     if isinstance(exc, SystemExit):
         return
     if isinstance(exc, KeyboardInterrupt):
-        finish("stopped", "사용자가 중지했습니다 (Ctrl+C)")
+        finish("stopped", "사용자가 중지하였습니다. (Ctrl+C)")
         return
     with _lock:
         if _active():
@@ -1912,7 +1912,7 @@ def _close_dead(path, seen, state, reason, part_state, part_note, end=None):
 
 def _mark_vanished(path, seen):
     """'진행 중'으로 남은 채 프로세스가 사라진 실행을 '비정상 종료'로 (끝 시각은 마지막으로 살아 있던 때)."""
-    return _close_dead(path, seen, "crashed", VANISHED_REASON, "failed", "여기서 멈췄습니다")
+    return _close_dead(path, seen, "crashed", VANISHED_REASON, "failed", "여기서 중단되었습니다.")
 
 
 def mark_stopped(program, reason):

@@ -130,7 +130,7 @@ check("받은 메일을 기억한다", "k4" in rec.MailMemory(mem_path).keys)
 
 ok, rp, lines = replay("again", rec.MailMemory(mem_path))
 check("다시 돌리면 대상 없음 (성공·받은 것 없음·no_target)", ok and not rp.saved and rp.no_target
-      and any("받을 새 메일이 없습니다 (대상 없음)" in x for x in lines), (rp.results, lines[-3:]))
+      and any("다운로드할 새 메일이 없습니다. (대상 없음)" in x for x in lines), (rp.results, lines[-3:]))
 
 ok, rp, lines = replay("preview", rec.MailMemory(mem_path), preview=True)
 check("미리보기는 기억과 상관없이 맞는 메일 1통 (맨 위)", ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_k4.xlsx"], rp.saved)

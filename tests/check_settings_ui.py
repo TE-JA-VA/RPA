@@ -131,7 +131,7 @@ def shown(key):
 
 check("처음 비밀번호 칸은 아무 글도 없다 ('*필수' 없앰 - 빠지면 저장할 때 빨간 글씨로 알린다)",
       rs.PW_HINTS["none"] == "" and all(shown(k) is None for k in rs.PASSWORD_KEYS), [shown(k) for k in rs.PASSWORD_KEYS])
-check("상태 줄: 버전 없음·에이전트 꺼짐", "버전 없음" in win.status.get() and "꺼져 있음" in win.status.get(), win.status.get())
+check("상태 줄: 버전 없음·에이전트 꺼짐", "버전 없음" in win.status.get() and "꺼짐" in win.status.get(), win.status.get())
 check("메일 칸이 없다 (다른 프로그램이 맡는다 - 2026-09-30)", "mail_id" not in win.entries and "mail_pw" not in win.entries)
 check("프린터 목록: 맨 위 '(기본 프린터)', 안 골랐으면 그것이 보인다",
       list(win.entries["printer"].cget("values")) == [rs.DEFAULT_PRINTER, "사무실 프린터", "Microsoft Print to PDF"]
@@ -191,7 +191,7 @@ check("다시 수동이면 다시 꺼진다", printer_view() == ("disabled", Fal
 print("=== 2. 빈 칸으로 저장 ===")
 win.on_save()
 wait_idle()
-check("빨간 글씨로 무엇이 틀렸는지", "업체코드를 넣으세요" in win.msg.get() and win.msg_label.cget("fg") == rs.RED, win.msg.get())
+check("빨간 글씨로 무엇이 틀렸는지", "업체코드를 입력하여 주십시오." in win.msg.get() and win.msg_label.cget("fg") == rs.RED, win.msg.get())
 check("저장 안 됨", not win.saved and not os.path.exists(paths["user_config"]))
 
 print("=== 3. 채우고 저장 ===")
@@ -201,14 +201,14 @@ for k, v in dict(cid="net", pc_id="test", agent_pw="Agent-Pw-5555!", admin_code=
     win.vars[k].set(v)
 win.on_save()
 ok = wait_idle()
-check("저장됨 (초록 안내)", ok and win.saved and "에이전트를 켰습니다" in win.msg.get() and win.msg_label.cget("fg") == rs.GREEN,
+check("저장됨 (초록 안내)", ok and win.saved and "에이전트를 실행하였습니다" in win.msg.get() and win.msg_label.cget("fg") == rs.GREEN,
       win.msg.get())
 check("설정 파일 두 개", os.path.isfile(paths["user_config"]) and os.path.isfile(paths["agent_config"]))
 saved_logistic = st.read_user_config(paths["user_config"])["Logistic"]
 check("물류 칸이 설정 파일에 (자동 = Y)", saved_logistic == {"cboBS_Auto_YN": "Y", "Printer": "사무실 프린터", "cboTag": "한진연동",
                                                     "cboTagAmt": "대", "cboBeasong_Gu_Apply": "신용"}, saved_logistic)
 check("작업 등록 → 켜기", calls == ["/Create", "/End", "/Run"], calls)
-check("막 켰으면 상태 줄은 '켜는 중' (감독이 인증서를 채우고 켜기까지 1분쯤)", "켜는 중" in win.status.get(), win.status.get())
+check("막 켰으면 상태 줄은 '켜는 중' (감독이 인증서를 채우고 켜기까지 1분쯤)", "실행 준비 중" in win.status.get(), win.status.get())
 check("저장 뒤 비밀번호 칸은 비고, 칸 안에 흐린 '저장됨 - 바꿀 때만 입력'", all(win.vars[k].get() == "" for k in rs.PASSWORD_KEYS)
       and rs.PW_HINTS["ok"] == "저장됨 - 바꿀 때만 입력" and all(shown(k) == rs.PW_HINTS["ok"] for k in rs.PASSWORD_KEYS),
       [shown(k) for k in rs.PASSWORD_KEYS])
@@ -228,7 +228,7 @@ shutil.copyfile(paths["agent_config"], os.path.join(old, "firebase", "agent", rs
 dlg.folder_result = old
 win.on_import()
 root.update()
-check("이미 있으면 바꿀지 묻고 가져온다", any(k == "yesno" and "바꿀까요" in t for k, t in dlg.said)
+check("이미 있으면 바꿀지 묻고 가져온다", any(k == "yesno" and "변경하시겠습니까?" in t for k, t in dlg.said)
       and "가져왔습니다" in win.msg.get(), win.msg.get())
 win.on_save()
 wait_idle()
@@ -254,7 +254,7 @@ with open(paths["stop_file"], "w", encoding="utf-8") as f:
     f.write('{"code": 3, "reason": "로그인이 막혔습니다 (에이전트 계정 비밀번호가 바뀌었거나 계정이 사용중지됨)", "at": "2026-09-29 15:00:00"}')
 win.reload()
 root.update()
-check("멈춘 까닭을 상태 줄에 노란 글씨로", "멈춤" in win.status.get() and "로그인이 막혔습니다" in win.status.get()
+check("멈춘 까닭을 상태 줄에 노란 글씨로", "중단됨" in win.status.get() and "로그인이 막혔습니다" in win.status.get()
       and str(win.status_label.cget("foreground")) == rs.AMBER, win.status.get())
 check("로그인 거부로 멈췄으면 에이전트 계정 비밀번호 칸 안에 주황 '새 비밀번호 입력'", shown("agent_pw") == rs.PW_HINTS["refused"]
       and str(win.hints["agent_pw"][0].cget("fg")) == rs.AMBER, shown("agent_pw"))

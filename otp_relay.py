@@ -53,7 +53,7 @@ def check_line():
         fb, secret = _agent_modules()
         return f"인증번호 중계: 준비됨 (fb {'있음' if hasattr(fb, 'Client') else '없음'})"
     except Exception as e:
-        return f"문제: 인증번호 중계를 불러오지 못했습니다 ({type(e).__name__}: {e})"
+        return f"문제: 인증번호 중계를 불러오지 못했습니다. ({type(e).__name__}: {e})"
 
 
 class PhoneRelay:
@@ -143,5 +143,5 @@ def agent_relay(phone_id, senders, site):
     try:
         cfg = secret.load_config()
     except (OSError, ValueError) as e:
-        raise RuntimeError(f"에이전트 설정을 읽지 못해 인증번호를 받을 수 없습니다 ({type(e).__name__}) - '오토파일럿 설정' 을 확인하세요") from None
+        raise RuntimeError(f"에이전트 설정을 읽지 못해 인증번호를 수신할 수 없습니다. ({type(e).__name__}) '오토파일럿 설정'을 확인하여 주십시오.") from None
     return PhoneRelay(fb.Client(cfg), cfg["cid"], cfg["pc_id"], phone_id, senders, site)

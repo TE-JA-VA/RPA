@@ -67,9 +67,9 @@ $("login-form").addEventListener("submit", async (ev) => {
   } catch (e) {
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password",
       "auth/user-not-found", "auth/invalid-email", "auth/missing-password"];
-    alert.textContent = wrong.includes(e.code) ? "업체코드, 아이디 또는 비밀번호가 맞지 않습니다"
-      : e.code === "auth/user-disabled" ? "사용이 중지된 계정입니다"   // setup.js disable, 또는 remove 로 업체째 막힘
-      : `로그인하지 못했습니다 (${e.code})`;
+    alert.textContent = wrong.includes(e.code) ? "업체코드, 아이디 또는 비밀번호가 일치하지 않습니다."
+      : e.code === "auth/user-disabled" ? "사용이 중지된 계정입니다."   // setup.js disable, 또는 remove 로 업체째 막힘
+      : `로그인하지 못했습니다. (${e.code})`;
     show(alert, true);
   } finally {
     $("login-btn").disabled = false;
@@ -89,7 +89,7 @@ onAuthStateChanged(auth, async (user) => {
   const t = await user.getIdTokenResult(true);
   if (t.claims.role === "agent") {   // 기계 계정은 PC 에이전트 전용. 화면에서 비밀번호를 바꾸면 그 PC 가 죽으니 아예 안 들인다
     await signOut(auth);
-    $("login-alert").textContent = "에이전트 계정으로는 화면에 들어올 수 없습니다"; show($("login-alert"), true);
+    $("login-alert").textContent = "에이전트 계정으로는 화면에 로그인할 수 없습니다."; show($("login-alert"), true);
     return;
   }
   me = { uid: user.uid, email: user.email, cid: t.claims.cid || null, role: t.claims.role || null };
@@ -97,7 +97,7 @@ onAuthStateChanged(auth, async (user) => {
   await loadCompany();
   if (company.stts === 9) {   // 삭제(비활성)된 업체. setup.js remove 가 계정도 막지만 이미 받은 토큰은 1시간 살아서 화면에서도 막는다
     await signOut(auth);
-    $("login-alert").textContent = "사용이 중지된 업체입니다"; show($("login-alert"), true);
+    $("login-alert").textContent = "사용이 중지된 업체입니다."; show($("login-alert"), true);
     return;
   }
   show($("login"), false); show($("main"), true);
@@ -154,7 +154,7 @@ function ctx() {
 
 /** 적용 안 한 변경이 있는 페이지(환경설정)를 떠나기 전에 묻는다 - 메뉴·PC 바꾸기·로그아웃 */
 function leaveOk() {
-  return !current?.dirty?.() || confirm("적용하지 않은 변경이 있습니다. 버리고 나갈까요?");
+  return !current?.dirty?.() || confirm("적용하지 않은 변경 사항이 있습니다. 저장하지 않고 나가시겠습니까?");
 }
 
 function navLink(mod) {

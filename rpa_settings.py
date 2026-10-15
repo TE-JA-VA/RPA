@@ -91,18 +91,18 @@ def start_problem(session=None, me=None, here=None):
     설치 폴더 밖의 사본(손으로 넘긴 압축 폴더 등)에서 열면 멈춘다 - 그대로 저장하면 자동 시작 작업이 그 사본을 가리키는데,
     D:\\ 같은 곳의 폴더는 누구나 고칠 수 있어 그 파일이 관리자 권한으로 돌게 된다 (2026-09-29 검토)."""
     if not st.new_layout():
-        return (f"설치 마법사로 설치한 PC 가 아닙니다 ({os.path.join(st.install_root(), 'config')} 이 없습니다).\n"
-                "AUTOPILOT_Setup 으로 설치한 뒤 시작 메뉴의 '오토파일럿 설정' 을 여세요.")
+        return (f"설치 마법사로 설치한 PC가 아닙니다. ({os.path.join(st.install_root(), 'config')}이(가) 없습니다)\n"
+                "AUTOPILOT_Setup으로 설치한 뒤 시작 메뉴의 '오토파일럿 설정'을 실행하여 주십시오.")
     here = here or HERE
     if os.path.normcase(os.path.normpath(here)) != os.path.normcase(INSTALL_DIR):
-        return (f"이 설정 창은 설치 폴더({INSTALL_DIR})의 것이 아닙니다 ({here}).\n"
-                "시작 메뉴 → 오토파일럿 → '오토파일럿 설정' 을 여세요.")
+        return (f"이 설정 창은 설치 폴더({INSTALL_DIR})의 것이 아닙니다. ({here})\n"
+                "시작 메뉴 → 오토파일럿 → '오토파일럿 설정'을 실행하여 주십시오.")
     me = me or process_user()
     session = session_user() if session is None else session
     if session and not same_account(me, session):
-        return (f"이 PC 에 로그인한 윈도우 계정({session})이 아니라 다른 계정({me})의 관리자 권한으로 이 창이 떴습니다.\n"
-                f"오토파일럿은 로그인한 계정으로 돕니다. {session} 계정을 관리자로 바꾼 뒤 그 계정으로 다시 설치하거나 "
-                "'오토파일럿 설정' 을 여세요.")
+        return (f"이 PC에 로그인한 윈도우 계정({session})이 아닌 다른 계정({me})의 관리자 권한으로 이 창이 실행되었습니다.\n"
+                f"오토파일럿은 로그인한 계정으로 실행됩니다. {session} 계정을 관리자로 변경한 뒤 해당 계정으로 다시 설치하거나 "
+                "'오토파일럿 설정'을 실행하여 주십시오.")
     return None
 
 
@@ -297,7 +297,7 @@ def restart_agent(run=run_quiet, running=None, wait=STOP_WAIT_SEC, sleep=time.sl
     running = running or agent_running
     end_task(run)
     if not wait_released(running, wait, sleep):
-        raise RuntimeError("에이전트가 멈추지 않습니다. 에이전트 창(에이전트_시작.bat)이 열려 있으면 닫고 다시 저장하세요")
+        raise RuntimeError("에이전트가 종료되지 않습니다. 에이전트 창(에이전트_시작.bat)이 열려 있으면 닫은 뒤 다시 저장하여 주십시오.")
     start_task(run)
 
 
@@ -419,21 +419,21 @@ def validate(form, state):
     out = []
     for key, label in (("cid", "업체코드"), ("pc_id", "PC코드")):
         if not form[key]:
-            out.append(f"{label}를 넣으세요")
+            out.append(f"{label}를 입력하여 주십시오.")
         elif not KEY_RE.fullmatch(form[key]):
-            out.append(f"{label}는 영어 소문자·숫자·밑줄(_)만 쓸 수 있습니다")
+            out.append(f"{label}는 영어 소문자·숫자·밑줄(_)만 사용할 수 있습니다.")
     if needs_agent_login(form, state) and not form["agent_pw"]:
-        why = {"none": "처음 설정이라", "bad": "저장된 비밀번호를 이 PC 에서 풀 수 없어",
-               "refused": "에이전트가 로그인을 거부당해 멈춰서"}.get(state["agent_pw"], "업체코드나 PC코드를 바꿔서")
-        out.append(f"{why} 에이전트 계정 비밀번호를 넣어야 합니다")
+        why = {"none": "처음 설정이라", "bad": "저장된 비밀번호를 이 PC에서 읽을 수 없어",
+               "refused": "에이전트 로그인이 거부되어 중단되었으므로"}.get(state["agent_pw"], "업체코드 또는 PC코드가 변경되어")
+        out.append(f"{why} 에이전트 계정 비밀번호를 입력하여 주십시오.")
     if not form["admin_code"]:
-        out.append("ERPia 업체코드를 넣으세요")
+        out.append("ERPia 업체코드를 입력하여 주십시오.")
     if not form["erp_id"]:
-        out.append("ERPia 아이디를 넣으세요")
+        out.append("ERPia 아이디를 입력하여 주십시오.")
     if not form["erp_pw"] and state["erp_pw"] != "ok":
-        out.append("ERPia 비밀번호를 넣으세요" + (" (저장된 값을 이 PC 에서 풀 수 없습니다)" if state["erp_pw"] == "bad" else ""))
+        out.append("ERPia 비밀번호를 입력하여 주십시오." + (" (저장된 값을 이 PC에서 읽을 수 없습니다)" if state["erp_pw"] == "bad" else ""))
     if form["erpia_path"] and not st._erpia_file(form["erpia_path"]):
-        out.append(f"ERPia 설치 위치에 {st.ERPIA_EXE_NAME} 가 없습니다. [찾기] 로 고르거나 비워 두세요")
+        out.append(f"ERPia 설치 위치에 {st.ERPIA_EXE_NAME}이(가) 없습니다. [찾기]로 선택하거나 비워 두십시오.")
     return out
 
 
@@ -466,15 +466,15 @@ def agent_login(path, cid, pc_id, password):
     try:
         agent.first_run(path, cid, pc_id, password)
     except fb.AuthError as e:
-        raise ValueError(f"에이전트 계정 로그인이 안 됩니다: {agent.auth_message(e.code)}") from None
+        raise ValueError(f"에이전트 계정으로 로그인하지 못했습니다: {agent.auth_message(e.code)}") from None
     except ValueError as e:
-        raise ValueError(f"에이전트 계정 로그인이 안 됩니다: {e}") from None
+        raise ValueError(f"에이전트 계정으로 로그인하지 못했습니다: {e}") from None
     except OSError as e:
         if isinstance(getattr(e, "reason", e), ssl.SSLCertVerificationError):
-            raise ValueError("Firebase 의 보안 인증서를 확인하지 못했습니다. 인터넷 연결과 이 PC 의 날짜·시간이 맞는지 보고 "
-                             "다시 저장하세요 (CERTIFICATE_VERIFY_FAILED)") from None
-        raise ValueError(f"인터넷에 연결하지 못해 에이전트 계정을 확인하지 못했습니다 ({type(e).__name__}). "
-                         "연결을 확인하고 다시 저장하세요") from None
+            raise ValueError("Firebase 보안 인증서를 확인하지 못했습니다. 인터넷 연결과 이 PC의 날짜·시간이 올바른지 확인한 뒤 "
+                             "다시 저장하여 주십시오. (CERTIFICATE_VERIFY_FAILED)") from None
+        raise ValueError(f"인터넷에 연결하지 못해 에이전트 계정을 확인하지 못했습니다. ({type(e).__name__}) "
+                         "연결을 확인한 뒤 다시 저장하여 주십시오.") from None
 
 
 def warm_roots():
@@ -494,21 +494,21 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
         raise ValueError("\n".join(problems))
     base_path = paths["user_config"] if os.path.isfile(paths["user_config"]) else paths["template"]
     if not os.path.isfile(base_path):
-        raise RuntimeError(f"빈 틀({TEMPLATE_NAME})이 없습니다. 설치 파일로 다시 설치하세요")
+        raise RuntimeError(f"설정 기본 파일({TEMPLATE_NAME})이 없습니다. 설치 파일로 다시 설치하여 주십시오.")
     done = []
     relogin = needs_agent_login(form, state)
     if relogin:
         warm_roots()
         login(paths["agent_config"], form["cid"], form["pc_id"], form["agent_pw"])
-        done.append("에이전트 계정 로그인을 확인했습니다.")
+        done.append("에이전트 계정 로그인을 확인하였습니다.")
     merged = merge_user_config(st.read_user_config(base_path), form)
     if clear_presets and company_changed(form, state):
         stash_presets(paths, state["saved"][0], merged)
         done.append("이전 업체 프리셋을 별도 폴더에 보관한 뒤 초기화하였습니다.")
     st.write_user_config(merged, paths["user_config"])
-    done.append("설정을 저장했습니다.")
+    done.append("설정을 저장하였습니다.")
     if not st._erpia_file(_section(merged, st.ERPIA_SECTION).get("ExePath")):
-        done.append("ERPia 는 아직 못 찾았습니다 - ERPia 를 설치한 뒤 '오토파일럿 설정' 에서 위치를 고르세요.")
+        done.append("ERPia를 아직 찾지 못했습니다. ERPia를 설치한 뒤 '오토파일럿 설정'에서 위치를 선택하여 주십시오.")
     register_task(task_xml(user or process_user(), paths["program_dir"]), paths["config_dir"], run)
     running = running or agent_running
     if relogin or not running():
@@ -517,7 +517,7 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
         except OSError:
             pass
         restart_agent(run, running)
-        done.append("에이전트를 켰습니다.")
+        done.append("에이전트를 실행하였습니다.")
     return done
 
 
@@ -620,7 +620,7 @@ ROWS = (
         ("admin_code", "업체코드", "", "text"),      # 대시보드 업체코드와 같은 개념이라 같은 이름 (2026-09-30 사용자)
         ("erp_id", "아이디", "", "text"),
         ("erp_pw", "비밀번호", "", "password"),
-        ("erpia_path", "ERPia 설치 위치", "비우면 설치된 곳을 찾아 씁니다", "path"),
+        ("erpia_path", "ERPia 설치 위치", "비워 두면 자동으로 찾습니다", "path"),
     )),
     ("물류 처리 옵션", (
         ("print_mode", "출력 방식", "", "choice"),
@@ -638,7 +638,7 @@ PW_HINTS = {"none": "", "ok": "저장됨 - 바꿀 때만 입력", "bad": "다시
             "refused": "새 비밀번호 입력 - 로그인 거부됨"}   # 빈 칸 안 흐린 안내. 처음('none')은 없음 - 빠지면 저장 때 알린다
 ERPIA_MISSING = "ERPia 를 못 찾음 - [찾기]"
 DEFAULT_PRINTER = "(기본 프린터)"                 # 프린터 목록 맨 위. 저장은 빈 값 = 윈도우 기본 프린터
-MISSING_PRINTER = "이 PC 에 없는 프린터입니다 - 다시 고르세요"
+MISSING_PRINTER = "이 PC에 없는 프린터입니다. 다시 선택하여 주십시오."
 WRAP_STATUS, WRAP_MSG = "230p", "330p"            # 긴 글이 창을 넓히지 않게 줄바꿈 (포인트라 화면 배율을 따른다)
 GRAY, RED, GREEN, AMBER, PLACEHOLDER = "#6b7280", "#dc2626", "#15803d", "#b45309", "#9ca3af"
 
@@ -691,7 +691,7 @@ class Dialogs:
         return self._f.askdirectory(title=title, mustexist=True, parent=self._p)
 
     def exe(self, start):
-        return self._f.askopenfilename(title=f"ERPia 프로그램({st.ERPIA_EXE_NAME})을 고르세요", initialdir=start,
+        return self._f.askopenfilename(title=f"ERPia 프로그램({st.ERPIA_EXE_NAME})을 선택하여 주십시오.", initialdir=start,
                                        filetypes=[("ERPia 프로그램", st.ERPIA_EXE_NAME)], parent=self._p)
 
 
@@ -775,7 +775,7 @@ class SettingsWindow:
         path = crash_log(exc)
         if self.busy_now:
             self.busy(False)
-        self.say(f"뜻밖의 문제가 생겼습니다 ({exc_type.__name__}: {exc}). 자세한 내용: {path or '(기록하지 못함)'}")
+        self.say(f"예기치 않은 문제가 발생하였습니다. ({exc_type.__name__}: {exc}) 자세한 내용: {path or '(기록하지 못함)'}")
 
     # --- 채우기 -----------------------------------------------------------
     def reload(self):
@@ -827,13 +827,13 @@ class SettingsWindow:
         version = st.check_install(self.paths["program_dir"]).get("version") or "없음"
         stopped = self.state.get("stopped")
         if starting:
-            text, color = "켜는 중 (1분쯤 걸립니다)", GRAY
+            text, color = "실행 준비 중 (약 1분 소요)", GRAY
         elif self.running():
-            text, color = "돌고 있음", ""
+            text, color = "실행 중", ""
         elif stopped:
-            text, color = f"멈춤 - {stopped.get('reason') or stopped.get('code')}", AMBER
+            text, color = f"중단됨 - {stopped.get('reason') or stopped.get('code')}", AMBER
         else:
-            text, color = "꺼져 있음", ""
+            text, color = "꺼짐", ""
         self.status.set(f"버전 {version}   ·   에이전트: {text}")
         self.status_label.configure(foreground=color)
 
@@ -870,9 +870,9 @@ class SettingsWindow:
             if not olds:
                 return True
             lines = "\n".join(f"    {exe or '?'}" for _, exe, _ in olds[:5])
-            if not self.dialogs.retry("옛 에이전트가 켜져 있습니다. 그 창(오토파일럿 클라우드 에이전트)을 닫은 뒤 "
-                                      f"[다시 시도] 를 누르세요.\n\n{lines}\n\n"
-                                      "같이 켜 두면 에이전트 둘이 같은 PC 로 돌아 자동 실행이 두 번 될 수 있습니다."):
+            if not self.dialogs.retry("이전 버전 에이전트가 실행 중입니다. 해당 창(오토파일럿 클라우드 에이전트)을 닫은 뒤 "
+                                      f"[다시 시도]를 눌러 주십시오.\n\n{lines}\n\n"
+                                      "함께 실행하면 에이전트 두 개가 같은 PC로 동작하여 자동 실행이 두 번 진행될 수 있습니다."):
                 return False
 
     # --- 단추 -------------------------------------------------------------
@@ -887,7 +887,7 @@ class SettingsWindow:
             self.vars["erpia_path"].set(found.replace("\\", "/"))
             self.say("")
         else:
-            self.say(f"{st.ERPIA_EXE_NAME} 가 아닙니다. ERPia 설치 폴더의 {st.ERPIA_EXE_NAME} 를 고르세요")
+            self.say(f"{st.ERPIA_EXE_NAME}이(가) 아닙니다. ERPia 설치 폴더의 {st.ERPIA_EXE_NAME}을(를) 선택하여 주십시오.")
 
     def on_save(self):
         if self.busy_now or not self.check_old_agents():
@@ -914,7 +914,7 @@ class SettingsWindow:
         except (ValueError, RuntimeError) as e:
             self._result = ("error", str(e))
         except Exception as e:
-            self._result = ("error", f"저장하지 못했습니다 ({type(e).__name__}: {e})")
+            self._result = ("error", f"저장하지 못했습니다. ({type(e).__name__}: {e})")
 
     def _poll(self):
         if self._result is None:
@@ -927,7 +927,7 @@ class SettingsWindow:
             return
         self.saved = True
         self.reload()
-        if "에이전트를 켰습니다." in value:
+        if "에이전트를 실행하였습니다." in value:
             self.set_status(starting=True)       # 감독이 인증서를 채우고 잠금을 잡기까지 '꺼져 있음' 으로 보이지 않게
         self.say(" ".join(value), GREEN)
         self.after_saved()
@@ -935,21 +935,21 @@ class SettingsWindow:
     def after_saved(self):
         if self.imported_from:
             folder, self.imported_from = self.imported_from, None
-            if self.dialogs.yesno(f"옛 에이전트가 다시 켜지지 않게 옛 폴더 이름을 바꿀까요?\n\n{folder}\n→ {folder}_옮김\n\n"
-                                  "파일은 그대로 남습니다. 옛 바로 가기로 옛 에이전트를 켜면 에이전트 둘이 같이 돌아 "
-                                  "자동 실행이 두 번 될 수 있습니다."):
+            if self.dialogs.yesno(f"이전 에이전트가 다시 실행되지 않도록 이전 폴더 이름을 변경하시겠습니까?\n\n{folder}\n→ {folder}_옮김\n\n"
+                                  "파일은 그대로 유지됩니다. 이전 바로 가기로 이전 에이전트를 실행하면 에이전트 두 개가 함께 동작하여 "
+                                  "자동 실행이 두 번 진행될 수 있습니다."):
                 try:
-                    self.dialogs.info(f"이름을 바꿨습니다: {retire_old_folder(folder)}")
+                    self.dialogs.info(f"이름을 변경하였습니다: {retire_old_folder(folder)}")
                 except OSError as e:
-                    self.dialogs.error(f"이름을 바꾸지 못했습니다 ({e.strerror or e}). 옛 에이전트 창이 열려 있지 않은지 "
-                                       "보고 직접 바꾸거나 지우세요")
+                    self.dialogs.error(f"이름을 변경하지 못했습니다. ({e.strerror or e}) 이전 에이전트 창이 열려 있지 않은지 "
+                                       "확인한 뒤 직접 변경하거나 삭제하여 주십시오.")
         if self.after_install:
-            self.dialogs.info("설정을 마쳤습니다. 에이전트는 윈도우에 로그인할 때마다 창 없이 켜집니다.\n"
-                              "설정을 바꿀 때는 시작 메뉴의 '오토파일럿 설정' 을 여세요.")
+            self.dialogs.info("설정을 완료하였습니다. 에이전트는 윈도우에 로그인할 때마다 창 없이 실행됩니다.\n"
+                              "설정을 변경할 때는 시작 메뉴의 '오토파일럿 설정'을 실행하여 주십시오.")
             self.root.destroy()
 
     def on_import(self):
-        folder = self.dialogs.folder("옛 배포 폴더(Run_All.bat 이 있는 폴더)를 고르세요")
+        folder = self.dialogs.folder("이전 배포 폴더(Run_All.bat이 있는 폴더)를 선택하여 주십시오.")
         if not folder:
             return
         folder = os.path.normpath(folder)
@@ -957,22 +957,22 @@ class SettingsWindow:
             try:
                 names = import_old(folder, self.paths["config_dir"])
             except FileExistsError as e:
-                if not self.dialogs.yesno(f"지금 설정({e})을 옛 폴더의 것으로 바꿀까요?"):
+                if not self.dialogs.yesno(f"현재 설정({e})을 이전 폴더의 설정으로 변경하시겠습니까?"):
                     return
                 names = import_old(folder, self.paths["config_dir"], overwrite=True)
         except FileNotFoundError:
-            self.say("그 폴더에서 설정 파일(RPA_UserConfig.json, firebase\\agent\\agent_config.json)을 찾지 못했습니다. "
-                     "옛 배포 폴더(Run_All.bat 이 있는 폴더)를 고르세요")
+            self.say("해당 폴더에서 설정 파일(RPA_UserConfig.json, firebase\\agent\\agent_config.json)을 찾지 못했습니다. "
+                     "이전 배포 폴더(Run_All.bat이 있는 폴더)를 선택하여 주십시오.")
             return
         except OSError as e:
-            self.say(f"가져오지 못했습니다 ({e.strerror or e})")
+            self.say(f"설정값을 가져오지 못했습니다. ({e.strerror or e})")
             return
         self.imported_from = folder
         self.reload()
         bad = [label for key, label in (("agent_pw", "에이전트 계정"), ("erp_pw", "ERPia")) if self.state[key] == "bad"]
-        self.say(f"가져왔습니다 ({', '.join(names)}). "
-                 + (f"다른 PC·계정에서 잠근 비밀번호라 다시 넣어야 합니다: {', '.join(bad)}. " if bad else "")
-                 + "확인한 뒤 [저장] 을 누르세요.", GREEN)
+        self.say(f"설정값을 가져왔습니다. ({', '.join(names)}) "
+                 + (f"다른 PC·계정에서 암호화한 비밀번호이므로 다시 입력하여 주십시오: {', '.join(bad)}. " if bad else "")
+                 + "확인한 뒤 [저장]을 눌러 주십시오.", GREEN)
 
     def on_close(self):
         if self.busy_now:
@@ -1023,7 +1023,7 @@ def main(argv=None):
     except Exception as e:
         path = crash_log(e)
         if not ({"--no-window", "--stop", "--remove-task", "--check-rpa"} & set(args)):
-            show_error_box(f"설정 창에 뜻밖의 문제가 생겼습니다 ({type(e).__name__}: {e}).\n"
+            show_error_box(f"설정 창에 예기치 않은 문제가 발생하였습니다. ({type(e).__name__}: {e})\n"
                            f"자세한 내용: {path or '(기록하지 못함)'}")
         return 1
 

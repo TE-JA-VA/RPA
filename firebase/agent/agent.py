@@ -40,11 +40,11 @@ def email_for(cid, pc_id):
 def auth_message(code):
     """Identity Toolkit 의 거부 code → 사람이 할 일. 첫 실행과 운영 중 둘 다 이 문구를 쓴다."""
     if code in ("INVALID_LOGIN_CREDENTIALS", "INVALID_PASSWORD", "EMAIL_NOT_FOUND"):
-        return "비밀번호가 맞지 않습니다 (바뀌었으면 새 비밀번호를 넣으세요)"
+        return "비밀번호가 일치하지 않습니다. (변경되었다면 새 비밀번호를 입력하여 주십시오)"
     if code == "USER_DISABLED":
-        return "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 물어보세요"
+        return "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 문의하여 주십시오."
     if code == "TOO_MANY_ATTEMPTS_TRY_LATER":
-        return "시도가 너무 많아 잠시 막혔습니다. 10분쯤 뒤에 다시 띄우세요"
+        return "시도가 너무 많아 잠시 차단되었습니다. 약 10분 후 다시 실행하여 주십시오."
     return f"로그인 거부: {code}"
 LOG_LINES = 80
 
@@ -466,16 +466,16 @@ HEARTBEAT_SEC = 5   # 화면은 HEARTBEAT_STALE_SEC(20초) 넘게 없으면 '끊
 def decide(cmd, now):
     """명령을 실행할지 정한다. ('run'|'expired'|'bad', 사유)"""
     if not isinstance(cmd, dict):
-        return "bad", "명령 모양이 아닙니다"
+        return "bad", "명령 형식이 올바르지 않습니다."
     if cmd.get("state") != "queued":
-        return "bad", f"queued 가 아닙니다 ({cmd.get('state')})"
+        return "bad", f"queued 상태가 아닙니다. ({cmd.get('state')})"
     if cmd.get("type") not in KNOWN_TYPES:
-        return "bad", f"모르는 종류입니다 ({cmd.get('type')})"
+        return "bad", f"알 수 없는 명령 종류입니다. ({cmd.get('type')})"
     if cmd.get("type") in ADMIN_ONLY_TYPES and cmd.get("by") != ADMIN_TOOL_BY:
-        return "bad", "관리 화면에서만 보낼 수 있는 명령입니다"
+        return "bad", "관리 화면에서만 보낼 수 있는 명령입니다."
     expires = cmd.get("expires_at")
     if not isinstance(expires, (int, float)):
-        return "bad", "만료 시각이 없습니다"
+        return "bad", "만료 시각이 없습니다."
     if expires < now:
         return "expired", "만료된 명령입니다. PC에 도달하지 못했습니다."
     return "run", None
@@ -514,7 +514,7 @@ class Commands:
         action = self._actions.get(kind)
         try:
             if action is None:
-                raise RuntimeError(f"이 에이전트는 '{kind}' 를 할 수 없습니다")
+                raise RuntimeError(f"이 에이전트는 '{kind}'을(를) 실행할 수 없습니다.")
             message = action(cmd.get("args")) or "완료"
             self._mark(cmd_id, state="done", result=str(message)[:500], ended_at=int(time.time()))
             return "done"
@@ -590,17 +590,17 @@ class Policy:
         try:
             dash.migrate_split_sales()               # 웰라이프 ② 를 셋으로 나눈 뒤 옛 예약 줄 (한 번만)
         except Exception as e:
-            log(f"예약 줄을 고치지 못했습니다 ({type(e).__name__}) - 다음 번에 다시 합니다")
+            log(f"예약 설정을 수정하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
         if was and not got[2]:
             try:
                 st.remove_wellife_section()          # 닫히면 섹션도 지운다 (안 지우면 '열려 있지 않습니다' 로 영영 멈춘다)
             except Exception as e:
-                log(f"웰라이프 설정을 지우지 못했습니다 ({type(e).__name__}) - 다음 번에 다시 합니다")
+                log(f"웰라이프 설정을 삭제하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
         if got[2]:
             try:
                 st.ensure_wellife_section()          # 처음 열리면 로그인·매출처리만 켠 섹션 (메모장 편집 없음)
             except Exception as e:
-                log(f"웰라이프 설정을 만들지 못했습니다 ({type(e).__name__}) - 다음 번에 다시 합니다")
+                log(f"웰라이프 설정을 생성하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
         return got
 
 
@@ -622,14 +622,14 @@ def real_actions(policy=None, limits=None, start_update=None):
     def do_stop(args):
         status, body = dash.stop_erpia()
         if status != 200:
-            raise RuntimeError(body.get("error") or "ERPia 를 종료하지 못했습니다")
-        return body.get("message") or "ERPia 를 종료했습니다"
+            raise RuntimeError(body.get("error") or "ERPia를 종료하지 못했습니다.")
+        return body.get("message") or "ERPia를 종료하였습니다."
 
     def do_stop_rpa(args):
         status, body = dash.stop_rpa()        # 바로 끔·ERPia 는 그대로 (사용자 2026-10-12)
         if status != 200:
-            raise RuntimeError(body.get("error") or "오토파일럿을 중단하지 못했습니다")
-        return body.get("message") or "오토파일럿을 중단했습니다"
+            raise RuntimeError(body.get("error") or "오토파일럿을 중단하지 못했습니다.")
+        return body.get("message") or "오토파일럿을 중단하였습니다."
 
     def do_modules(args):
         if not isinstance(args, dict) or not args:
@@ -665,7 +665,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         try:
             final = st.set_preset_switches(args)
         except FileNotFoundError:
-            raise RuntimeError("이 PC 의 사용자 설정이 없습니다") from None
+            raise RuntimeError("이 PC의 사용자 설정이 없습니다.") from None
         except ValueError as e:
             raise RuntimeError(str(e)) from None
         names = {p["no"]: p["name"] for p in (st.preset_summary() or [])}
@@ -689,7 +689,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         changed = dash.apply_schedule(args)
         sch = st.read_settings()["schedule"]
         if not sch.get("enabled"):
-            return "자동 실행을 껐습니다"
+            return "자동 실행을 비활성화하였습니다."
         return f"자동 실행: {dash.schedule_label(sch)}" + ("" if changed else " (변경 없음)")
 
     def do_resume(args):
@@ -711,29 +711,29 @@ def real_actions(policy=None, limits=None, start_update=None):
 
     def check_can_update():
         if upd.read_state().get("state") in upd.ACTIVE_STATES:
-            raise RuntimeError("이미 업데이트가 진행 중입니다")
+            raise RuntimeError("이미 업데이트가 진행 중입니다.")
         install = st.check_install()
         if install.get("state") != "ok":
-            raise RuntimeError(f"판 구조가 맞지 않아 업데이트하지 않습니다 ({install.get('state')}) - 설치 파일로 다시 설치하세요")
+            raise RuntimeError(f"설치 구조가 맞지 않아 업데이트하지 않습니다. ({install.get('state')}) 설치 파일로 다시 설치하여 주십시오.")
         return install
 
     def do_update(args):
         version = (args or {}).get("version") if isinstance(args, dict) else None
         if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
-            raise RuntimeError(f"판 번호가 잘못되었습니다 ({version})")
+            raise RuntimeError(f"버전 번호가 올바르지 않습니다. ({version})")
         install = check_can_update()
         if install.get("version") == version:
             raise RuntimeError("이미 최신 업데이트를 사용하고 있습니다")
         start(version, "update")
-        return f"업데이트를 예약했습니다 ({install.get('version')} → {version}) - 오토파일럿이 끝나면 바로 바뀝니다"
+        return f"업데이트를 예약하였습니다. ({install.get('version')} → {version}) 오토파일럿 실행이 끝나면 바로 적용됩니다."
 
     def do_rollback(args):
         back = upd.backup_version()
         if not back:
-            raise RuntimeError("되돌릴 이전 판이 없습니다")
+            raise RuntimeError("되돌릴 이전 버전이 없습니다.")
         check_can_update()
         start(back, "rollback")
-        return f"이전 버전으로 되돌리기를 예약했습니다 ({back}) - 오토파일럿이 끝나면 바로 바뀝니다"
+        return f"이전 버전으로 되돌리기를 예약하였습니다. ({back}) 오토파일럿 실행이 끝나면 바로 적용됩니다."
 
     return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets,
             "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback}
@@ -798,10 +798,10 @@ def first_run(path, cid, pc_id, password, client=None, email=None):
     cfg = dict(secret.PUBLIC, email=email or email_for(cid, pc_id), password=password, cid=cid, pc_id=pc_id)
     c = fb.claims((client or fb.Client(cfg)).token())
     if c.get("role") != "agent":
-        raise ValueError("에이전트 계정(agent-…)이 아닙니다. 사람 계정으로는 에이전트를 띄울 수 없습니다")
+        raise ValueError("에이전트 계정(agent-…)이 아닙니다. 사용자 계정으로는 에이전트를 실행할 수 없습니다.")
     if (c.get("cid"), c.get("pcId")) != (cid, pc_id):
         if email is None or not (c.get("cid") and c.get("pcId")):
-            raise ValueError(f"이 계정은 {c.get('cid')}/{c.get('pcId')} 의 것입니다. 회사 코드·PC 이름을 확인하세요")
+            raise ValueError(f"이 계정은 {c.get('cid')}/{c.get('pcId')}의 계정입니다. 업체코드·PC코드를 확인하여 주십시오.")
         log(f"토큰의 회사·PC({c['cid']}/{c['pcId']})가 설정({cid}/{pc_id})과 다릅니다. 토큰 값을 씁니다")
         cfg.update(cid=c["cid"], pc_id=c["pcId"])
     secret.write_config(path, cfg, password)
@@ -934,10 +934,10 @@ def run(cfg):
     try:
         exe = st.erpia_exe(ask=sys.stdin.isatty())
         log(f"ERPia 위치: {exe}" if exe else
-            "ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. PROCESS 오토파일럿이 ERPia 를 켜지 못합니다 - "
-            "ERPia 를 설치했는지 보고 에이전트를 다시 켜서 위치를 고르세요")
+            "ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. PROCESS 오토파일럿이 ERPia를 실행할 수 없습니다. "
+            "ERPia 설치 여부를 확인한 뒤 에이전트를 다시 실행하여 위치를 선택하여 주십시오.")
     except Exception as e:
-        log(f"ERPia 위치를 확인하지 못했습니다 ({type(e).__name__})")
+        log(f"ERPia 위치를 확인하지 못했습니다. ({type(e).__name__})")
     # 판: 프로그램 폴더를 판 목록(manifest.json)과 맞춰 PC 현황에 올린다 (배포판 구조 1부 5절).
     # 파일은 업데이트나 손으로 넣을 때만 바뀌고 둘 다 에이전트를 다시 켜므로 켤 때 한 번이면 된다. 예외를 내지 않는다
     install = st.check_install()

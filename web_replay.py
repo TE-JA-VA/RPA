@@ -19,7 +19,7 @@ import zipfile
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
-EDGE_MISSING = "Microsoft Edge 가 없습니다 - Edge 를 설치한 뒤 다시 실행하세요"
+EDGE_MISSING = "Microsoft Edge가 설치되어 있지 않습니다. Edge를 설치한 뒤 다시 실행하여 주십시오."
 
 
 def edge(launch, *args, **kw):
@@ -655,7 +655,7 @@ def record(start_url, out_path, headless=False, human=None, record_date=None, sa
         if human:
             human(page)
         else:
-            print("창에서 평소처럼 조작하세요. 파일을 받았으면 브라우저 창을 닫으면 끝납니다.")
+            print("창에서 평소처럼 조작하여 주십시오. 파일을 다운로드한 뒤 브라우저 창을 닫으면 기록이 끝납니다.")
             while context.pages:
                 try:
                     context.pages[0].wait_for_timeout(500)
@@ -760,7 +760,7 @@ class Cancelled(Exception):
     """[■ 중단] (옵저버 미리보기) - 찾거나 기다리던 것을 그만둔다."""
 
 
-STOPPED = "멈춤 - 중단을 눌렀습니다"
+STOPPED = "[■ 중단]을 눌러 중단하였습니다."
 
 
 def q(s):
@@ -894,7 +894,7 @@ class Replayer:
             self._check_cancel()
             now = time.time()
             if now > end:
-                raise NotFound(f"{self.download_timeout_ms / 1000:.0f}초 안에 파일이 오지 않았습니다")
+                raise NotFound(f"{self.download_timeout_ms / 1000:.0f}초 동안 파일 다운로드가 시작되지 않았습니다.")
             if now > note:              # 쇼핑몰이 엑셀을 만드는 중일 수 있다 - 멈춘 줄 알지 않게 (2026-10-15)
                 self.log(f"      파일 다운로드를 기다리는 중입니다. ({now - start:.0f}초 경과 / 최대 {self.download_timeout_ms / 1000:.0f}초)")
                 note = now + self.step_timeout
@@ -996,7 +996,7 @@ class Replayer:
                     try:
                         if loc.count() and loc.first.is_visible():
                             loc.first.click(timeout=2000)
-                            self.log(f"      가린 공지를 닫음 ('{text}')")
+                            self.log(f"      화면을 가리는 공지를 닫았습니다. ('{text}')")
                             page.wait_for_timeout(300)
                             return True
                     except Exception:
@@ -1014,7 +1014,7 @@ class Replayer:
         for _ in range(2):
             try:
                 el.hover(timeout=3000)
-                self.log("      가려진 메뉴를 마우스를 올려 열었음")
+                self.log("      가려진 메뉴를 마우스를 올려 열었습니다.")
                 return True
             except PWTimeout as e:
                 if "intercepts pointer events" not in str(e) or not self._dismiss(page):
@@ -1051,7 +1051,7 @@ class Replayer:
             if "not visible" in msg and self._reveal(page, loc):
                 continue
             break
-        raise Skip("마우스를 올리지 못함")
+        raise Skip("마우스를 올리지 못했습니다.")
 
     def _fill(self, loc, value):
         try:
@@ -1096,7 +1096,7 @@ class Replayer:
         self._otp_close()
         self.otp_try += 1
         self.otp_req = self.otp.open()
-        self.log(f"      인증번호 요청을 열었습니다 ({self.otp_try}/{OTP_TRIES})")
+        self.log(f"      인증번호 요청을 시작하였습니다. ({self.otp_try}/{OTP_TRIES})")
 
     def _otp_close(self):
         if self.otp is not None and self.otp_req is not None:
@@ -1108,13 +1108,13 @@ class Replayer:
 
     def _otp_code(self, page, loc):
         if self.otp is None:
-            raise NotFound("인증 휴대폰이 정해지지 않았습니다 - 옵저버 저장 화면에서 인증 휴대폰을 고르세요")
+            raise NotFound("인증 휴대폰이 설정되지 않았습니다. 옵저버 저장 화면에서 인증 휴대폰을 선택하여 주십시오.")
         if self.otp_req is None:
             self._otp_open()            # '인증번호 받기' 를 못 알아본 기록 - 지금이라도 연다
-        self.log(f"      인증번호 문자를 기다립니다 ({self.otp_try}/{OTP_TRIES}, 최대 {self.otp_wait:.0f}초)")
+        self.log(f"      인증번호 문자를 기다리는 중입니다. ({self.otp_try}/{OTP_TRIES}, 최대 {self.otp_wait:.0f}초)")
         code = self.otp.wait(self.otp_req, self.otp_wait, lambda sec: self._wait(page, sec * 1000), field=loc)
         if not code:
-            raise OtpRetry("문자가 오지 않았습니다")
+            raise OtpRetry("인증번호 문자가 수신되지 않았습니다.")
         self.otp_mark = len(self.dialogs)
         return code
 
@@ -1179,7 +1179,7 @@ class Replayer:
             return "새 탭"
         page = self.pages.get(s["page"])
         if page is None or page.is_closed():
-            raise NotFound(f"창 {s['page']} 이 없음")
+            raise NotFound(f"창 {s['page']}이(가) 없습니다.")
         # 사람이 기다린 시간의 절반 (0.3~3초): 화면이 따라올 틈
         self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
         if s["kind"] == "goto":
@@ -1217,8 +1217,8 @@ class Replayer:
 
     def run(self):
         if self.rec.get("version") != RECORD_VERSION:
-            raise ValueError(f"모르는 기록 형식입니다 (version {self.rec.get('version')!r}) - "
-                             "옵저버와 ACTOR 오토파일럿을 같은 버전으로 맞추세요")
+            raise ValueError(f"알 수 없는 기록 형식입니다. (version {self.rec.get('version')!r}) "
+                             "옵저버와 ACTOR 오토파일럿을 같은 버전으로 업데이트하여 주십시오.")
         page = self.first_page or self.context.new_page()
         if self.page_hook:
             self.page_hook(page)
@@ -1264,15 +1264,15 @@ class Replayer:
         결과는 고르기와 묶음 단계 모두 여기서 적는다. 돌려주는 값 = 묶음 마지막 단계 번호 (다음은 그 뒤부터)."""
         s, end = steps[i - 1], pick_body(steps, i - 1)
         if end is None:
-            raise NotFound("메일 고르기 아래에 파일 받기 단계가 없습니다")
+            raise NotFound("메일 선택 단계 아래에 파일 다운로드 단계가 없습니다.")
         prefix, body = s["pick"]["prefix"], range(i, end + 1)
         page = self.pages.get(s["page"])
         if page is None or page.is_closed():
-            raise NotFound(f"창 {s['page']} 이 없음")
+            raise NotFound(f"창 {s['page']}이(가) 없습니다.")
         self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
         frame, rows = self._mail_rows(page, s, self.step_timeout * self.step_tries)
         if frame is None or not rows:
-            raise NotFound(f"{self.step_timeout * self.step_tries:.0f}초 안에 메일 목록을 못 찾음")
+            raise NotFound(f"{self.step_timeout * self.step_tries:.0f}초 동안 메일 목록을 찾지 못했습니다.")
         hits = [(k, seen or t) for k, t, seen in rows if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
         mem = None if self.pick_preview else self.mail_memory
         todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or mail_key(*h) not in mem.keys]
@@ -1282,7 +1282,7 @@ class Replayer:
             todo = todo[:MAIL_PICK_MAX]
         if not todo:
             self.no_target = True
-            self.log("      받을 새 메일이 없습니다 (대상 없음)")
+            self.log("      다운로드할 새 메일이 없습니다. (대상 없음)")
             self.results.append((i, "ok", "대상 없음"))
             self.results += [(j + 1, "skip", "대상 없음") for j in body]
             return end + 1
@@ -1342,7 +1342,7 @@ class Replayer:
                     self.otp_check = None
                     otp_i = next(j for j in range(i - 1, 0, -1) if steps[j - 1]["kind"] == "otp")
                     if self._otp_rejected(self.pages.get(s["page"]), steps[otp_i - 1], s):
-                        raise OtpRetry("사이트가 인증번호를 받지 않았습니다", rejected=True)
+                        raise OtpRetry("사이트에서 인증번호가 승인되지 않았습니다.", rejected=True)
                     self._otp_close()               # 통과 - 요청·번호를 지운다
                 self.results.append((i, "ok", how))
                 self.log(f"  {i:2d}/{len(steps)} {text}  [{how}]")
@@ -1356,8 +1356,8 @@ class Replayer:
                     self._otp_close()               # 다시 열 때 새 요청 (받기 단추가 없는 기록이면 인증번호 칸에서 연다)
                     i = back - 1
                     continue
-                why = (f"사이트가 인증번호를 {OTP_TRIES}번 거절했습니다" if e.rejected
-                       else f"인증번호를 {OTP_TRIES}번 받지 못했습니다 ({e})")
+                why = (f"사이트에서 인증번호가 {OTP_TRIES}번 거절되었습니다." if e.rejected
+                       else f"인증번호를 {OTP_TRIES}번 수신하지 못했습니다. ({e})")
                 self.results[-1] = (i, "fail", why)
                 self.log(f"  {i:2d}/{len(steps)} {text}  - 실패: {why}")
                 if self.progress:
@@ -1377,7 +1377,7 @@ class Replayer:
                 if self.hide_values:
                     why = URL_QUERY.sub(r"\1", why)       # Playwright 오류에 주소가 통째로 들어온다 (2026-10-01 검토)
                 if "has been closed" in why:
-                    why = "창이 닫혀 멈췄습니다 (검수 중에는 창을 누르거나 닫지 마세요)"
+                    why = "창이 닫혀 중단되었습니다. 미리보기 중에는 창을 클릭하거나 닫지 마십시오."
                 self.results.append((i, "fail", why))
                 self.log(f"  {i:2d}/{len(steps)} {text}  - 실패: {why}")
                 if self.progress:

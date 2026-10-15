@@ -60,11 +60,11 @@ try {
   } else if (cmdName === "passwd") {
     const r = await ops.resetPassword(rest[0], rest[1]);
     console.log(`비밀번호 교체: ${r.email}`);
-    console.log(`  비밀번호: ${r.password}   (다시 볼 수 없다. 잃으면 다시 passwd. 이미 받은 토큰은 최대 1시간 산다)`);
-    if (r.agent) console.log(`  PC 에서 에이전트가 1시간 안에 멈추고 새 비밀번호를 묻는다`);
+    console.log(`  비밀번호: ${r.password}   (다시 확인할 수 없습니다. 분실 시 passwd 로 재발급. 이미 발급된 토큰은 최대 1시간 유효합니다)`);
+    if (r.agent) console.log(`  PC의 에이전트는 1시간 이내에 중단되고 새 비밀번호를 요청합니다.`);
   } else if (cmdName === "disable" || cmdName === "enable") {
     const r = await ops.setDisabled(rest[0], rest[1], cmdName === "disable");
-    console.log(r.disabled ? `사용중지: ${r.email}  (이미 받은 토큰은 최대 1시간 산다)` : `다시 사용: ${r.email}`);
+    console.log(r.disabled ? `사용중지: ${r.email}  (이미 발급된 토큰은 최대 1시간 유효합니다)` : `다시 사용: ${r.email}`);
   } else if (cmdName === "show") {
     console.log(await ops.showUser(rest[0], rest[1]));
   } else if (cmdName === "list") {
@@ -79,7 +79,7 @@ try {
     } else {
       if (removing && r.already) console.log("이미 비활성화된 업체입니다.");   // 그래도 다시 사용중지했다 (중간에 멈췄거나 누가 enable 했을 때)
       console.log(removing
-        ? `업체 비활성화: ${r.cid} ${r.name}  stts=9, 계정 ${r.users.length}개 사용중지 (이미 받은 토큰은 최대 1시간 산다. 에이전트는 그 안에 멈춘다)`
+        ? `업체 비활성화: ${r.cid} ${r.name}  stts=9, 계정 ${r.users.length}개 사용중지 (이미 발급된 토큰은 최대 1시간 유효합니다. 에이전트는 그 안에 중단됩니다)`
         : `업체 다시 활성화: ${r.cid} ${r.name}  stts=0, 계정 ${r.users.length}개 다시 사용`);
       for (const e of r.users) console.log(`  ${e}`);
     }
@@ -94,14 +94,14 @@ try {
       console.log(`자동 실행 개수: ${cid}  ${v ?? `${ops.SCHEDULE_LIMIT_DEFAULT} (기본)`}`);
     } else {
       const r = await ops.setScheduleLimit(cid, n);
-      console.log(`자동 실행 개수: ${r.cid} = ${r.schedule} (PC 에는 10분 안에 닿는다)`);
+      console.log(`자동 실행 슬롯 수: ${r.cid} = ${r.schedule} (PC에는 10분 이내에 적용됩니다)`);
     }
   } else if (cmdName === "tokens") {
     const [cid, amount, ...memoParts] = rest;
     const s = amount === undefined ? await ops.tokenStatus(cid) : await ops.grantTokens(cid, amount, memoParts.join(" "));
-    if (s.created) console.log(`토큰 정보를 만들었습니다: ${s.cid} ${s.name} - 지금부터 토큰이 0 이하면 모듈 실행을 막습니다 (그 전에 쓴 것은 안 뺀다)`);
+    if (s.created) console.log(`토큰 정보를 생성하였습니다: ${s.cid} ${s.name} . 지금부터 토큰이 0 이하이면 모듈 실행이 제한됩니다. (이전 사용분은 차감하지 않습니다)`);
     if (!s.wallet) {
-      console.log(`${s.cid} ${s.name} 는 토큰 정보가 없다 (토큰 제도 밖 - 세기만 한다). 넣으려면: node setup.js tokens ${s.cid} +1000 "메모"`);
+      console.log(`${s.cid} ${s.name} 은(는) 토큰 정보가 없습니다. (토큰 미적용 - 사용량만 집계) 발급하려면: node setup.js tokens ${s.cid} +1000 "메모"`);
     } else {
       const w = s.wallet;
       console.log(`토큰: ${s.cid} ${s.name}  넣은 합계 ${w.granted} · 쓴 ${w.spent} · 남은 ${w.left}  (${w.since} 부터)`);

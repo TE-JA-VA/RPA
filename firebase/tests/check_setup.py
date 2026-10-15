@@ -79,10 +79,10 @@ rc, out = setup("agent", CID, "pc_1")
 check(rc == 0 and account(AG) and not account(AG).get("disabled") and "업체코드: t_x   PC코드: pc_1   비밀번호: ****" in out,
       "agent 등록 - PC 설정 창의 칸 이름 그대로 (업체코드·PC코드)", out[-200:])
 rc, out = setup("user", "t_none", "u9", "admin", "없는 업체")
-check(rc != 0 and "먼저 company" in out and account(f"u9@t-none.{PROJECT}.firebaseapp.com") is None, "없는 업체엔 user 를 못 만든다", out[-200:])
-check(out.strip().startswith("오류: 먼저 company") and "    at " not in out, "거절은 '오류: …' 한 줄 (오류 꼬리 없이)", out[-200:])
+check(rc != 0 and "먼저 업체를 등록" in out and account(f"u9@t-none.{PROJECT}.firebaseapp.com") is None, "없는 업체엔 user 를 못 만든다", out[-200:])
+check(out.strip().startswith("오류: 먼저 업체를 등록") and "    at " not in out, "거절은 '오류: …' 한 줄 (오류 꼬리 없이)", out[-200:])
 rc, out = setup("modules", "t_none", "Hold=off")
-check(rc != 0 and "먼저 company" in out and db_get("meta/companies/t_none") is None, "없는 업체엔 모듈 정책을 못 넣는다", out[-200:])
+check(rc != 0 and "먼저 업체를 등록" in out and db_get("meta/companies/t_none") is None, "없는 업체엔 모듈 정책을 못 넣는다", out[-200:])
 
 print("=== 2. 삭제 (remove) ===")
 rc, out = setup("remove", CID)
@@ -98,7 +98,7 @@ rc, out = setup("remove", CID)
 check(rc == 0 and db_get(f"meta/companies/{CID}/stts") == 9, "remove 를 다시 돌려도 된다 (중간에 실패했을 때)", out[-200:])
 check(out.startswith("이미 비활성화된 업체입니다.") and "계정 2개 사용중지" in out, "다시 remove 하면 이미 비활성화됐다고 알리고 그래도 사용중지한다", out[-200:])
 rc, out = setup("remove", "t_none")
-check(rc != 0 and "먼저 company" in out, "없는 업체는 remove 못 한다", out[-200:])
+check(rc != 0 and "먼저 업체를 등록" in out, "없는 업체는 remove 못 한다", out[-200:])
 rc, out = setup("list")
 check(rc == 0 and CID in out and "9" in out, "list 에 업체 상태가 나온다", out[-300:])
 
@@ -144,12 +144,12 @@ def fs_run(run_id, started_at, cost):
 
 fs_run("before", "2020-01-01T09:00:00", 5)                 # 통장을 만들기 전 기록 - 빼지 않는다
 rc, out = setup("tokens", CID)
-check(rc == 0 and "토큰 정보가 없다" in out and fs_doc(f"wallet/{CID}") is None, "토큰 정보가 없으면 그렇다고만 (만들지 않는다)", out[-200:])
+check(rc == 0 and "토큰 정보가 없습니다" in out and fs_doc(f"wallet/{CID}") is None, "토큰 정보가 없으면 그렇다고만 (만들지 않는다)", out[-200:])
 rc, out = setup("tokens", CID, "+1000", "10월", "결제")
 w = fs_doc(f"wallet/{CID}") or {}
 check(rc == 0 and w.get("granted") == 1000 and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", w.get("since") or ""),
       "처음 넣으면 통장을 만든다 (넣은 합계·시작 시각 - 기록의 started_at 과 같은 꼴)", out[-300:])
-check("토큰 정보를 만들었습니다" in out and "모듈 실행을 막습니다" in out and "남은 1000" in out, "만들었다고 알리고, 토큰 정보 전 기록은 안 뺀다", out[-300:])
+check("토큰 정보를 생성하였습니다" in out and "모듈 실행이 제한됩니다" in out and "남은 1000" in out, "만들었다고 알리고, 토큰 정보 전 기록은 안 뺀다", out[-300:])
 g = fs_list(f"wallet/{CID}/grants")
 check(len(g) == 1 and g[0].get("amount") == 1000 and g[0].get("memo") == "10월 결제" and g[0].get("at"), "넣은 내역 한 줄 (언제·얼마·메모)", str(g))
 fs_run("after", (datetime.datetime.now() + datetime.timedelta(minutes=1)).isoformat(timespec="seconds"), 30)
@@ -160,9 +160,9 @@ rc, out = setup("tokens", CID)
 check(rc == 0 and "남은 920" in out and "10월 결제" in out and "정정" in out, "금액 없이 부르면 합계·남은 토큰·넣은 내역", out[-400:])
 for bad in ("abc", "0", "1.5"):
     rc, out = setup("tokens", CID, bad)
-    check(rc != 0 and "0 이 아닌 정수" in out and (fs_doc(f"wallet/{CID}") or {}).get("granted") == 950, f"토큰 수 '{bad}' 은 거절", out[-200:])
+    check(rc != 0 and "0이 아닌 정수" in out and (fs_doc(f"wallet/{CID}") or {}).get("granted") == 950, f"토큰 수 '{bad}' 은 거절", out[-200:])
 rc, out = setup("tokens", "t_none", "+5")
-check(rc != 0 and "먼저 company" in out and fs_doc("wallet/t_none") is None, "없는 업체엔 못 넣는다", out[-200:])
+check(rc != 0 and "먼저 업체를 등록" in out and fs_doc("wallet/t_none") is None, "없는 업체엔 못 넣는다", out[-200:])
 rc, out = setup("price")
 check(rc == 0 and "토큰 배율" in out and "default" in out and "login" in out, "토큰 배율 보기 (서버에 없으면 처음 배율)", out[-200:])
 rc, out = setup("price", "logistics", "2")
@@ -185,7 +185,7 @@ check(rc == 0 and db_get(f"meta/companies/{CID}/apps/rpa/limits/schedule") == 3 
 rc, out = setup("slots", CID, "13")
 check(rc != 0 and out.strip().startswith("오류:") and db_get(f"meta/companies/{CID}/apps/rpa/limits/schedule") == 3, "13 은 거절 (0~12)", out[-200:])
 rc, out = setup("slots", "t_none", "3")
-check(rc != 0 and "먼저 company" in out, "없는 업체는 거절", out[-200:])
+check(rc != 0 and "먼저 업체를 등록" in out, "없는 업체는 거절", out[-200:])
 print("=== 6. 판 목록 (자동 업데이트 4절) ===")
 import tempfile  # noqa: E402
 lst = os.path.join(tempfile.gettempdir(), "rpa_releases_test.json")
@@ -200,7 +200,7 @@ r = json.loads(out.strip().splitlines()[-1])
 check(r["newest"] == "2026.10.07-5" and r["stable"] == "2026.10.07-4" and [x["version"] for x in r["list"]] == ["2026.10.07-5", "2026.10.07-4"],
       "최신본 자동·안정본 지정·최근 판이 위", r)
 rc, out = setup("stable", "2026.10.07-9")
-check(rc == 1 and "올라가 있지 않은 판" in out, "목록에 없는 판은 안정본으로 못 한다", out[-200:])
+check(rc == 1 and "업로드되지 않은 버전" in out, "목록에 없는 판은 안정본으로 못 한다", out[-200:])
 os.remove(lst)
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:

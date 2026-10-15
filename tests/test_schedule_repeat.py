@@ -75,7 +75,7 @@ for bad, why in (
         ([{"at": "11:00", "until": "11:00", "run": ["Hold"]}], "늦어야"),
         ([{"at": "11:00", "until": "12:00", "run": ["Hold"], "rest_min": 0}], "1~60"),
         ([{"at": "11:00", "until": "12:00", "run": ["Hold"], "rest_min": 61}], "1~60"),
-        ([{"at": "11:00", "until": "12:00", "run": ["Hold"], "on_fail": "retry"}], "멈춤"),
+        ([{"at": "11:00", "until": "12:00", "run": ["Hold"], "on_fail": "retry"}], "'중단'만"),
         ([{"at": "11:00", "until": "12:00"}], "전체"),
         ([dict(WIN), {"at": "11:30", "until": "12:30", "run": ["Hold"]}], "겹칩니다"),
         ([dict(WIN), {"at": "11:30"}], "11:30 은 반복 시간대(11:00~12:00) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오."),
@@ -128,17 +128,17 @@ put_status("routine", "stopped", at("11:06", sec=5), at("11:10"),
            [LOGIN, {"key": "logistics", "label": "물류관리", "state": "failed", "reason": "저장 실패"}], reason="저장 실패"); ended()
 CLOCK[0] = at("11:15")
 sched.tick()
-check((rep().get("stopped") or {}).get("reason") == "11:10 물류관리 실패로 반복을 멈췄습니다: 저장 실패" and len(d.LAUNCHED) == 3,
+check((rep().get("stopped") or {}).get("reason") == "11:10 물류관리 실패로 반복 실행을 중단하였습니다: 저장 실패" and len(d.LAUNCHED) == 3,
       f"까닭을 남기고 멈춘다 ({rep().get('stopped')})")
-check("멈췄습니다" in (sched.waiting_reason or ""), "예약기도 멈춤으로 안다")
+check("반복 실행을 중단하였습니다" in (sched.waiting_reason or ""), "예약기도 멈춤으로 안다")
 
 print("\n=== 5. [반복 다시 시작] ===")
 CLOCK[0] = at("11:16")
-check(d.resume_repeat() == "반복 작업을 다시 시작했습니다 (12:00까지)" and rep().get("stopped") is None, "멈춤을 푼다")
+check(d.resume_repeat() == "반복 작업을 다시 시작하였습니다. (12:00까지)" and rep().get("stopped") is None, "멈춤을 푼다")
 try:
     d.resume_repeat(); check(False, "멈추지 않았는데 다시 시작")
 except RuntimeError as e:
-    check(str(e) == "중단된 반복 작업이 없습니다", "두 번 눌러도 한 번만 (두 번째는 '멈춘 반복이 없습니다')")
+    check(str(e) == "중단된 반복 작업이 없습니다.", "두 번 눌러도 한 번만 (두 번째는 '멈춘 반복이 없습니다')")
 sched.tick()
 check(len(d.LAUNCHED) == 4, "바로 다음 회차 (11:10 + 2분이 지났다)")
 

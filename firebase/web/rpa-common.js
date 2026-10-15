@@ -46,7 +46,7 @@ export const notify = (kind, text, ttlMs) => toast(kind, text, ttlMs, "act");
 /** 명령을 넣고 PC 가 끝낼 때까지 토스트로 알린다. 실패도 토스트 - 던지지 않는다.
  *  alive() 가 거짓이면 (화면을 떠났다) 결과 안내를 하지 않는다 */
 export async function sendCommand(c, type, args, label, alive = () => true) {
-  notify("info", `${label} 명령을 보냈습니다. PC 응답을 기다립니다.`);
+  notify("info", `${label} 명령을 전송하였습니다. PC 응답을 기다리는 중입니다.`);
   try {
     const now = Math.floor(Date.now() / 1000);
     const node = await push(ref(c.db, P("commands", c.me.cid, c.pcId)), {
@@ -54,13 +54,13 @@ export async function sendCommand(c, type, args, label, alive = () => true) {
     });
     await watchCommand(c, node.key, label, alive);
   } catch (e) {
-    notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다" : `보내지 못했습니다 (${e.code || e})`);
+    notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `전송하지 못했습니다. (${e.code || e})`);
   }
 }
 
 function watchCommand(c, cmdKey, label, alive) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => { off(); if (alive()) notify("bad", "PC 가 응답하지 않습니다"); resolve(); }, 60000);
+    const timer = setTimeout(() => { off(); if (alive()) notify("bad", "PC가 응답하지 않습니다."); resolve(); }, 60000);
     const off = onValue(ref(c.db, `${P("commands", c.me.cid, c.pcId)}/${cmdKey}`), (snap) => {
       const v = snap.val();
       if (!v || !alive()) return;

@@ -910,7 +910,7 @@ rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=lambda: 10 ** 9 + le
                                 strftime=_time.strftime)
 rr.ec.terminate_pid = lambda pid: None
 res = rr.close_elevated_erpia(4242)
-check("끈다고 했는데 안 꺼지면 실패", res[0] is False and "꺼지지 않았습니다" in res[1], str(res))
+check("끈다고 했는데 안 꺼지면 실패", res[0] is False and "종료되지 않았습니다" in res[1], str(res))
 rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime=_time.strftime)
 
 POPEN = []
@@ -945,7 +945,7 @@ try:
 except RuntimeError as e:
     res = str(e)
 os.environ.pop("RPA_UNATTENDED")
-check("못 끄면 새로 띄우지 않고 사유와 함께 멈춘다", res is not None and "끄지 못했습니다" in res and POPEN == [], str(res))
+check("못 끄면 새로 띄우지 않고 사유와 함께 멈춘다", res is not None and "종료하지 못했습니다" in res and POPEN == [], str(res))
 OTHERS[0] = [4242, 4343]
 KILLED = []
 rr.ec.terminate_pid = lambda pid: KILLED.append(pid)
@@ -986,7 +986,7 @@ ctx = rr.RoutineContext()
 rr.ec.find_erpia_pid = lambda: 4242
 ok, reason = ctx.attach()
 check("로그인 모듈을 끈 채 관리자 ERPia 에 붙으려 하면 끄지 않고 사유를 남긴다 (끄는 것은 로그인할 때만)",
-      ok is False and LOGINS == [] and "Login 모듈" in reason, f"{ok} {reason}")
+      ok is False and LOGINS == [] and "로그인 모듈" in reason, f"{ok} {reason}")
 rr.module_login = _saved_ml
 ELEV[0] = False
 ALIVE[0] = True

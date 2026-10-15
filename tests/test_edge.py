@@ -201,7 +201,7 @@ os.makedirs(nowhere)                      # 그 아래 Program Files 두 곳)
 code, out = run(["-c", EDGE_GONE], LOCALAPPDATA=nowhere, PROGRAMFILES=nowhere, HOMEDRIVE=nowhere,
                 **{"PROGRAMFILES(X86)": nowhere})
 check("Edge 가 없으면 'Microsoft Edge 가 없습니다' 로 멈춘다 (playwright install 같은 개발자 말 대신)",
-      "Microsoft Edge 가 없습니다" in out and "playwright install" not in out, out[-400:])
+      "Microsoft Edge가 설치되어 있지 않습니다" in out and "playwright install" not in out, out[-400:])
 
 shutil.rmtree(TMP, ignore_errors=True)
 print()

@@ -131,7 +131,7 @@ export function mount(el, context) {
   // RPA 가 도는 동안엔 같은 자리가 [RPA 중단] (2026-10-12 사용자: 하던 단계를 기다리지 않고 바로 끔, ERPia 는 그대로)
   $("stop-erpia").onclick = () => {
     if (rpaRunning()) { if (confirm("실행 중인 오토파일럿을 중단할까요? 하던 단계는 끝까지 가지 않습니다.")) send("stop_rpa", null, "오토파일럿 중단"); }
-    else if (confirm("ERPia 를 종료할까요?")) send("stop_erpia", null, "ERPia 종료");
+    else if (confirm("ERPia를 종료하시겠습니까?")) send("stop_erpia", null, "ERPia 종료");
   };
   $("repeat-resume").onclick = () => send("resume_repeat", null, "반복 다시 시작");
   show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
@@ -145,7 +145,7 @@ export function mount(el, context) {
     strip.scrollLeft += e.deltaY; e.preventDefault();
   }, { passive: false });
   tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); paintRepeat(); } }, 1000);   // 시간대가 열리고 닫히는 것은 시각이 정한다
-  if (!c.pcId) { $("h-state").textContent = "등록된 PC 가 없습니다"; return; }
+  if (!c.pcId) { $("h-state").textContent = "등록된 PC가 없습니다."; return; }
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const v = snap.val();
     const first = live == null;
@@ -153,7 +153,7 @@ export function mount(el, context) {
     runToasts(first);
     paintHero(); paintTiles(); paintRecent(); paintSteps(); paintLog();
     paintButtons();
-  }, (e) => { $("h-state").textContent = e.code === "PERMISSION_DENIED" ? "권한 없음" : "읽지 못했습니다"; });
+  }, (e) => { $("h-state").textContent = e.code === "PERMISSION_DENIED" ? "권한 없음" : "읽지 못했습니다."; });
 }
 
 export function unmount() {
@@ -183,7 +183,7 @@ function runToasts(first) {
     seenRun[k] = mark;
     if (first || was === undefined || was === mark) continue;
     const label = v.program_label || PROGRAM_SHORT[k] || k;
-    if (v.state === "running") toast("info", `${label} 를 시작했습니다`);
+    if (v.state === "running") toast("info", `${label}을(를) 시작하였습니다.`);
     else if (v.state === "success") toast("ok", [`${label} 성공`, dur(v.duration_sec)].filter(Boolean).join(" · "));
     else if (v.state === "crashed") toast("warn", `${label} 오류 · ${v.reason || "프로그램이 도중에 멈췄습니다"}`);
     else if (v.state === "stopped" && v.reason === STOPPED_TEXT) toast("info", `${label} 중단 · ${v.reason}`);   // 사람이 멈춘 것 - 실패 아님
@@ -508,11 +508,11 @@ async function loadHistory(date) {
       : query(col, where("pcId", "==", c.pcId), orderBy("started_at", "desc"), limit(HISTORY_LIMIT));
     const snap = await getDocs(q);
     const items = snap.docs.map((d) => d.data());
-    msg.textContent = items.length ? `${items.length}건` + (items.length >= HISTORY_LIMIT ? " (최근 것만)" : "") : "기록이 없습니다";
+    msg.textContent = items.length ? `${items.length}건` + (items.length >= HISTORY_LIMIT ? " (최근 것만)" : "") : "기록이 없습니다.";
     rows.replaceChildren(...items.flatMap(histRow));
   } catch (e) {
     msg.className = "msg bad";
-    msg.textContent = e.code === "permission-denied" ? "권한이 없습니다" : `불러오지 못했습니다 (${e.code || e})`;
+    msg.textContent = e.code === "permission-denied" ? "권한이 없습니다." : `불러오지 못했습니다. (${e.code || e})`;
   }
 }
 
@@ -561,7 +561,7 @@ function paintButtons() {
   const upd = updBusy();
   for (const id of ["run-prepare", "run-routine", "run-all"]) {
     $(id).disabled = off || running || empty || upd;     // 다른 사람이 이미 돌리는 중이면 못 누른다
-    $(id).title = upd && !off ? "업데이트 중이라 잠시 실행할 수 없습니다" : running && !off ? "오토파일럿이 돌고 있어 실행할 수 없습니다" : "";
+    $(id).title = upd && !off ? "업데이트 중이어서 잠시 실행할 수 없습니다." : running && !off ? "오토파일럿이 실행 중이어서 실행할 수 없습니다." : "";
   }
   for (const [id, [key, name]] of Object.entries(RUN_LABELS)) {
     const on = live?.programs?.[key]?.state === "running";
@@ -584,10 +584,10 @@ function paintTokens() {
   if (line.hidden) return;
   const all = t.cost?.all ?? 0;
   if (t.balance <= 0) {
-    line.textContent = `토큰이 없습니다 (남은 ${t.balance}개) - 충전한 뒤 실행하세요`;
+    line.textContent = `토큰이 없습니다. (남은 토큰 ${t.balance}개) 토큰을 충전한 뒤 실행하여 주십시오.`;
     line.className = "msg bad";
   } else {
-    line.textContent = `남은 토큰 ${t.balance}개 · 전체 실행 1번에 ${all}개` + (t.balance < all ? " - 마이너스로 떨어질 수 있습니다" : "");
+    line.textContent = `남은 토큰 ${t.balance}개 · 전체 실행 1번에 ${all}개` + (t.balance < all ? ". 잔여 토큰이 마이너스가 될 수 있습니다." : "");
     line.className = t.balance < all ? "msg warn" : "msg";
   }
 }
@@ -643,7 +643,7 @@ async function paintUsage() {
     usageFor = null;                           // 5분 뒤 현황 때 다시 읽는다
     usageRetryAt = Date.now() + USAGE_RETRY_MS;
     $("usage-list").replaceChildren();
-    $("usage-sum").textContent = "사용량을 읽지 못했습니다";
+    $("usage-sum").textContent = "사용량을 읽지 못했습니다.";
     card.classList.remove("hide");
   }
 }

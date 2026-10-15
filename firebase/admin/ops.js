@@ -59,7 +59,7 @@ export async function logToDb(line, by, via) {
 
 const KEY_RE = /^[a-z0-9_]+$/;
 export function checkKey(name, value) {
-  if (!KEY_RE.test(value || "")) throw new Refused(`${name} 는 영문 소문자·숫자·밑줄만 쓴다: ${value ?? ""}`);
+  if (!KEY_RE.test(value || "")) throw new Refused(`${name}은(는) 영문 소문자·숫자·밑줄만 사용할 수 있습니다: ${value ?? ""}`);
 }
 export function cidOf(arg) {
   if (arg === "-") return null;
@@ -71,7 +71,7 @@ async function createAuthUser(email, password) {
   try {
     return await auth.createUser({ email, password, emailVerified: false });
   } catch (e) {
-    if (e.code === "auth/email-already-exists") throw new Refused(`${email} 은 이미 있다. 비밀번호를 바꾸려면 passwd, 사용중지하려면 disable`);
+    if (e.code === "auth/email-already-exists") throw new Refused(`${email}은(는) 이미 등록된 계정입니다. 비밀번호 변경은 passwd, 사용중지는 disable 명령을 사용하여 주십시오.`);
     throw e;
   }
 }
@@ -80,15 +80,15 @@ async function userOf(cidArg, id) {
   try {
     return await auth.getUserByEmail(email);
   } catch (e) {
-    if (e.code === "auth/user-not-found") throw new Refused(`계정이 없다: ${email}`);
+    if (e.code === "auth/user-not-found") throw new Refused(`등록되지 않은 계정입니다: ${email}`);
     throw e;
   }
 }
 // 업체 메타. 없거나 삭제(stts=9)된 업체면 멈춘다 - removed=true 는 remove/restore 처럼 삭제된 업체도 다뤄야 할 때
 export async function companyOf(cid, { removed = false } = {}) {
   const v = (await rtdb.ref(`meta/companies/${cid}`).get()).val();
-  if (!v?.name) throw new Refused(`먼저 company 로 등록: node setup.js company ${cid} <회사 이름>`);
-  if (!removed && v.stts === 9) throw new Refused(`${cid} 는 비활성화된 업체다. 다시 활성화: 관리 화면의 [다시 활성화] 또는 node setup.js restore ${cid}`);
+  if (!v?.name) throw new Refused(`먼저 업체를 등록하여 주십시오: node setup.js company ${cid} <회사 이름>`);
+  if (!removed && v.stts === 9) throw new Refused(`${cid}은(는) 비활성화된 업체입니다. 다시 활성화하려면 관리 화면의 [다시 활성화] 또는 node setup.js restore ${cid}를 사용하여 주십시오.`);
   return v;
 }
 // 그 업체의 계정 전부 (cid 없으면 모두). 에이전트 계정도 claim 에 cid 가 있어 같이 잡힌다
@@ -113,8 +113,8 @@ export async function spentSince(cid, since) {
 export async function addCompany(cid, name) {
   checkKey("cid", cid);
   const clean = String(name ?? "").trim();
-  if (!clean) throw new Refused("업체 이름을 넣으세요");
-  if ((await rtdb.ref(`meta/companies/${cid}/stts`).get()).val() === 9) throw new Refused(`${cid} 는 비활성화된 업체다. 다시 활성화: 관리 화면의 [다시 활성화] 또는 node setup.js restore ${cid}`);
+  if (!clean) throw new Refused("업체 이름을 입력하여 주십시오.");
+  if ((await rtdb.ref(`meta/companies/${cid}/stts`).get()).val() === 9) throw new Refused(`${cid}은(는) 비활성화된 업체입니다. 다시 활성화하려면 관리 화면의 [다시 활성화] 또는 node setup.js restore ${cid}를 사용하여 주십시오.`);
   await rtdb.ref(`meta/companies/${cid}`).update({ name: clean, stts: 0 });
   return { cid, name: clean };
 }
@@ -126,12 +126,12 @@ export async function addPc(cid, pcId, label) {
   return { cid, pcId, label: clean };
 }
 export async function addUser(cidArg, id, role, name) {
-  if (!["super", "admin", "viewer"].includes(role)) throw new Refused("role 은 super/admin/viewer");
+  if (!["super", "admin", "viewer"].includes(role)) throw new Refused("역할(role)은 super, admin, viewer 중 하나여야 합니다.");
   const cid = cidOf(cidArg);
-  if (role !== "super" && !cid) throw new Refused("super 가 아니면 cid 가 있어야 한다");
+  if (role !== "super" && !cid) throw new Refused("super가 아닌 계정은 업체코드(cid)가 있어야 합니다.");
   if (cid) await companyOf(cid);
   const local = String(id ?? "").trim();
-  if (!local) throw new Refused("아이디를 넣으세요");
+  if (!local) throw new Refused("아이디를 입력하여 주십시오.");
   const email = emailFor(cid, local), password = randomPassword();
   const user = await createAuthUser(email, password);
   try {
@@ -142,7 +142,7 @@ export async function addUser(cidArg, id, role, name) {
 }
 export async function addAgent(cid, pcId) {
   checkKey("cid", cid); checkKey("pcId", pcId);
-  if (!(await companyOf(cid)).pcs?.[pcId]) throw new Refused(`먼저 pc 로 등록: node setup.js pc ${cid} ${pcId} <PC 이름>`);
+  if (!(await companyOf(cid)).pcs?.[pcId]) throw new Refused(`먼저 PC를 등록하여 주십시오: node setup.js pc ${cid} ${pcId} <PC 이름>`);
   const email = emailFor(cid, `agent-${pcId}`), password = randomPassword();
   const user = await createAuthUser(email, password);
   try {
@@ -155,8 +155,8 @@ export async function addAgent(cid, pcId) {
 export async function addPhone(cid, phoneId, label, owner) {
   checkKey("cid", cid); checkKey("휴대폰코드", phoneId);
   const clean = String(label ?? "").trim();
-  if (!clean) throw new Refused("휴대폰 이름을 넣으세요 (예: 김OO 휴대폰)");
-  if ((await companyOf(cid)).phones?.[phoneId]) throw new Refused(`휴대폰코드 ${phoneId} 는 이미 있다 - 비밀번호를 모르면 재발급`);
+  if (!clean) throw new Refused("휴대폰 이름을 입력하여 주십시오. (예: 김OO 휴대폰)");
+  if ((await companyOf(cid)).phones?.[phoneId]) throw new Refused(`휴대폰코드 ${phoneId}은(는) 이미 등록되어 있습니다. 비밀번호를 모르면 재발급하여 주십시오.`);
   const email = emailFor(cid, `phone-${phoneId}`), password = randomPassword();
   const user = await createAuthUser(email, password);
   try {
@@ -199,8 +199,8 @@ export async function setModules(cid, patch) {
   await companyOf(cid, { removed: true });
   const clean = {};
   for (const [k, v] of Object.entries(patch ?? {})) {
-    if (!POLICY_KEYS.includes(k)) throw new Refused(`모듈 키는 ${POLICY_KEYS.join(", ")} 중 하나 (받은 값: ${k})`);
-    if (v !== "on" && v !== "off") throw new Refused(`${k} 의 값은 on 또는 off (받은 값: ${v})`);
+    if (!POLICY_KEYS.includes(k)) throw new Refused(`모듈 키는 ${POLICY_KEYS.join(", ")} 중 하나여야 합니다. (받은 값: ${k})`);
+    if (v !== "on" && v !== "off") throw new Refused(`${k}의 값은 on 또는 off여야 합니다. (받은 값: ${v})`);
     clean[k] = v === "off" ? false : null;
   }
   const at = rtdb.ref(`meta/companies/${cid}/apps/rpa/modules`);
@@ -212,9 +212,9 @@ export const wellifeAuto = (cid) => String(cid ?? "").toLowerCase().includes("we
 export const wellifeOn = (cid, features) => wellifeAuto(cid) || features?.wellife === true;
 export async function setFeature(cid, key, on) {
   checkKey("cid", cid);
-  if (key !== "wellife") throw new Refused(`모르는 기능입니다: ${key}`);
+  if (key !== "wellife") throw new Refused(`알 수 없는 기능입니다: ${key}`);
   await companyOf(cid, { removed: true });
-  if (!on && wellifeAuto(cid)) throw new Refused("업체코드에 wellife 포함 - 늘 켜짐 (끌 수 없습니다)");
+  if (!on && wellifeAuto(cid)) throw new Refused("업체코드에 wellife가 포함되어 항상 켜져 있습니다. (끌 수 없습니다)");
   const at = rtdb.ref(`meta/companies/${cid}/apps/rpa/features/${key}`);
   await at.set(on ? true : null);
   return { features: (await rtdb.ref(`meta/companies/${cid}/apps/rpa/features`).get()).val() ?? {} };
@@ -224,7 +224,7 @@ export async function setScheduleLimit(cid, n) {
   checkKey("cid", cid);
   await companyOf(cid, { removed: true });
   const s = String(n ?? "").trim();
-  if (!/^\d+$/.test(s) || Number(s) > SCHEDULE_LIMIT_MAX) throw new Refused(`자동 실행 개수는 0~${SCHEDULE_LIMIT_MAX} 정수 (받은 값: ${s})`);
+  if (!/^\d+$/.test(s) || Number(s) > SCHEDULE_LIMIT_MAX) throw new Refused(`자동 실행 슬롯 수는 0~${SCHEDULE_LIMIT_MAX} 사이의 정수여야 합니다. (받은 값: ${s})`);
   await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/schedule`).set(Number(s));
   return { cid, schedule: Number(s) };
 }
@@ -234,7 +234,7 @@ export async function setPresetLimit(cid, n) {
   await companyOf(cid, { removed: true });
   const s = String(n ?? "").trim();
   if (!/^\d+$/.test(s) || Number(s) < PRESET_LIMIT_MIN || Number(s) > PRESET_LIMIT_MAX)
-    throw new Refused(`옵저버 프리셋 수는 ${PRESET_LIMIT_MIN}~${PRESET_LIMIT_MAX} 정수 (받은 값: ${s})`);
+    throw new Refused(`옵저버 프리셋 수는 ${PRESET_LIMIT_MIN}~${PRESET_LIMIT_MAX} 사이의 정수여야 합니다. (받은 값: ${s})`);
   await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/presets`).set(Number(s));
   return { cid, presets: Number(s) };
 }
@@ -247,7 +247,7 @@ export async function releasesOf() {
   return { list, stable: v.stable ?? null, newest: v.newest ?? null };
 }
 export async function setReleases(list) {
-  if (!Array.isArray(list) || list.some((x) => !VERSION_RE.test(x?.version ?? ""))) throw new Refused("판 목록 모양이 다릅니다");
+  if (!Array.isArray(list) || list.some((x) => !VERSION_RE.test(x?.version ?? ""))) throw new Refused("버전 목록 형식이 올바르지 않습니다.");
   const cur = await releasesOf();
   const newest = [...list].sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""))[0]?.version ?? null;
   const stable = list.some((x) => x.version === cur.stable) ? cur.stable : null;
@@ -259,14 +259,14 @@ const COMMAND_TTL_SEC = 600;     // 웹 화면(firebase-config.js)과 같은 값
 async function sendAdminCommand(cid, pcId, type, args) {
   checkKey("cid", cid); checkKey("pcId", pcId);
   const v = await companyOf(cid);
-  if (!v.pcs?.[pcId]) throw new Refused(`없는 PC 입니다: ${pcId}`);
+  if (!v.pcs?.[pcId]) throw new Refused(`등록되지 않은 PC입니다: ${pcId}`);
   const now = Math.floor(Date.now() / 1000);
   const ref = rtdb.ref(`apps/rpa/commands/${cid}/${pcId}`).push();
   await ref.set({ type, args: args ?? null, by: "admin-tool", created_at: now, expires_at: now + COMMAND_TTL_SEC, state: "queued" });
   return { key: ref.key };
 }
 export async function sendUpdate(cid, pcId, version) {
-  if (!(await releasesOf()).list.some((x) => x.version === version)) throw new Refused(`올라가 있지 않은 판입니다: ${version}`);
+  if (!(await releasesOf()).list.some((x) => x.version === version)) throw new Refused(`업로드되지 않은 버전입니다: ${version}`);
   return sendAdminCommand(cid, pcId, "update", { version });
 }
 export const sendRollback = (cid, pcId) => sendAdminCommand(cid, pcId, "rollback", null);
@@ -282,7 +282,7 @@ export async function pcUpdateStatus(cid, pcId) {
 }
 export async function setStable(version) {
   const cur = await releasesOf();
-  if (!cur.list.some((x) => x.version === version)) throw new Refused(`올라가 있지 않은 판입니다: ${version}`);
+  if (!cur.list.some((x) => x.version === version)) throw new Refused(`업로드되지 않은 버전입니다: ${version}`);
   await rtdb.ref("meta/releases/stable").set(version);
   return { stable: version };
 }
@@ -314,7 +314,7 @@ export async function grantTokens(cid, amount, memo) {
   checkKey("cid", cid);
   await companyOf(cid);
   const text = String(amount ?? "").trim(), n = Number(text);
-  if (!/^[+-]?\d+$/.test(text) || !Number.isSafeInteger(n) || n === 0) throw new Refused(`토큰 수는 +1000 이나 -50 처럼 0 이 아닌 정수 (받은 값: ${text})`);
+  if (!/^[+-]?\d+$/.test(text) || !Number.isSafeInteger(n) || n === 0) throw new Refused(`토큰 수는 +1000 또는 -50처럼 0이 아닌 정수여야 합니다. (받은 값: ${text})`);
   const wallet = store.doc(`wallet/${cid}`), at = nowKst();
   const created = await store.runTransaction(async (t) => {
     const cur = await t.get(wallet);
@@ -338,12 +338,12 @@ export async function getPrices() {
 }
 function priceValue(value) {
   const text = String(value ?? "").trim();
-  if (!/^\d+$/.test(text)) throw new Refused(`토큰 배율은 0 이상 정수 (받은 값: ${text})`);
+  if (!/^\d+$/.test(text)) throw new Refused(`토큰 배율은 0 이상의 정수여야 합니다. (받은 값: ${text})`);
   return Number(text);
 }
 // 일괄 저장 (사용자 2026-10-12): 바꾼 줄 { 키: 값 } 을 한 번에 - 하나라도 틀리면 아무것도 안 쓴다 (문서 하나라 쓰기도 한 번)
 function priceMap(values, blankDeletes) {
-  if (!values || typeof values !== "object" || Array.isArray(values) || !Object.keys(values).length) throw new Refused("바꾼 토큰 배율이 없습니다");
+  if (!values || typeof values !== "object" || Array.isArray(values) || !Object.keys(values).length) throw new Refused("변경된 토큰 배율이 없습니다.");
   return Object.fromEntries(Object.entries(values).map(([key, value]) => {
     checkKey("모듈 키", key);
     return [key, blankDeletes && String(value ?? "").trim() === "" ? FieldValue.delete() : priceValue(value)];
@@ -368,8 +368,8 @@ export async function setCompanyPrices(cid, values) {
   return companyPrices(cid);
 }
 // 토큰(Firestore)을 못 읽은 까닭 - 업체 목록·상세는 그래도 보인다 (2026-10-14 Spark 하루 한도 초과로 목록째 안 뜨던 것)
-const tokenErr = (e) => (e?.code === 8 || e?.code === "timeout" ? "Firestore 하루 사용 한도 초과 - 오후 4시에 풀립니다"
-  : `토큰 정보를 읽지 못했습니다 (${e?.code ?? e?.message ?? e})`);
+const tokenErr = (e) => (e?.code === 8 || e?.code === "timeout" ? "Firestore 일일 사용 한도를 초과하였습니다. 오후 4시에 초기화됩니다."
+  : `토큰 정보를 읽지 못했습니다. (${e?.code ?? e?.message ?? e})`);
 // 한도 초과면 Firestore 가 한동안 다시 해 보다 포기한다 (업체마다 7초쯤) - 5초만 기다린다
 const TOKEN_WAIT_MS = 5000;
 const within = (p) => Promise.race([p, new Promise((_, no) => setTimeout(() => no({ code: "timeout" }), TOKEN_WAIT_MS))]);
@@ -422,23 +422,23 @@ export async function companyDetail(cid) {
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.
 // 이미 있는 업체·PC 는 그대로 쓰고, 이미 있는 계정은 건너뛰고, 토큰 정보가 이미 있으면 최초 토큰은 건너뛴다 - 다시 누르면 남은 것만
 function checkPlan(plan) {
-  if (!plan || typeof plan !== "object") throw new Refused("신규 업체 내용이 비었습니다");
+  if (!plan || typeof plan !== "object") throw new Refused("신규 업체 정보가 비어 있습니다.");
   checkKey("업체코드", plan.cid);
-  if (!String(plan.name ?? "").trim()) throw new Refused("업체 이름을 넣으세요");
+  if (!String(plan.name ?? "").trim()) throw new Refused("업체 이름을 입력하여 주십시오.");
   const pcs = plan.pcs ?? [], users = plan.users ?? [];
-  if (!pcs.length) throw new Refused("PC 를 하나 이상 넣으세요");
+  if (!pcs.length) throw new Refused("PC를 하나 이상 등록하여 주십시오.");
   for (const p of pcs) checkKey("PC코드", p.pcId);
-  if (new Set(pcs.map((p) => p.pcId)).size !== pcs.length) throw new Refused("PC코드가 겹칩니다");
-  if (!users.some((u) => u.role === "admin")) throw new Refused("관리자 계정을 한 명 이상 넣으세요");
+  if (new Set(pcs.map((p) => p.pcId)).size !== pcs.length) throw new Refused("PC코드가 중복되었습니다.");
+  if (!users.some((u) => u.role === "admin")) throw new Refused("관리자 계정을 한 명 이상 등록하여 주십시오.");
   for (const u of users) {
-    if (u.role !== "admin" && u.role !== "viewer") throw new Refused("계정 역할은 관리자나 유저");
-    if (!String(u.id ?? "").trim()) throw new Refused("계정 아이디를 넣으세요");
+    if (u.role !== "admin" && u.role !== "viewer") throw new Refused("계정 역할은 관리자 또는 유저여야 합니다.");
+    if (!String(u.id ?? "").trim()) throw new Refused("계정 아이디를 입력하여 주십시오.");
   }
-  if (new Set(users.map((u) => String(u.id).trim())).size !== users.length) throw new Refused("계정 아이디가 겹칩니다");
-  if (typeof plan.hold !== "boolean") throw new Refused("물류대기 관리 메뉴 사용 여부를 골라 주세요 (업체마다 다릅니다)");
+  if (new Set(users.map((u) => String(u.id).trim())).size !== users.length) throw new Refused("계정 아이디가 중복되었습니다.");
+  if (typeof plan.hold !== "boolean") throw new Refused("물류대기 관리 메뉴 사용 여부를 선택하여 주십시오. (업체마다 다릅니다)");
   if (plan.tokens) {
     const a = String(plan.tokens.amount ?? "").trim();
-    if (!/^\+?\d+$/.test(a) || Number(a) <= 0) throw new Refused(`최초 토큰량은 1 이상 정수 (받은 값: ${a})`);
+    if (!/^\+?\d+$/.test(a) || Number(a) <= 0) throw new Refused(`최초 토큰량은 1 이상의 정수여야 합니다. (받은 값: ${a})`);
   }
 }
 export async function setupCompany(plan) {
@@ -446,7 +446,7 @@ export async function setupCompany(plan) {
   const { cid } = plan, steps = [], made = { users: [], agents: [] };
   // 이미 있는 업체코드는 이름이 같을 때만 이어서 한다 - 오타로 남의 업체 이름을 바꾸고 거기에 새 고객 계정을 만들면 그 고객이 남의 자료를 본다
   const was = (await rtdb.ref(`meta/companies/${cid}/name`).get()).val();
-  if (was && was !== String(plan.name).trim()) throw new Refused(`업체코드 ${cid} 는 이미 있는 업체(${was})입니다 - 이어서 하려면 이름을 똑같이, 새 업체면 다른 업체코드를 쓰세요`);
+  if (was && was !== String(plan.name).trim()) throw new Refused(`업체코드 ${cid}은(는) 이미 등록된 업체(${was})입니다. 이어서 진행하려면 업체 이름을 동일하게 입력하고, 새 업체라면 다른 업체코드를 사용하여 주십시오.`);
   const step = async (label, fn) => {
     try {
       steps.push({ label, ok: true, note: (await fn()) ?? "" });
@@ -461,7 +461,7 @@ export async function setupCompany(plan) {
       await fn();
       return "";
     } catch (e) {
-      if (e instanceof Refused && e.message.includes("이미 있다")) return "이미 있어 건너뜀 - 비밀번호를 모르면 재발급";
+      if (e instanceof Refused && e.message.includes("이미 등록된 계정입니다")) return "이미 등록되어 있어 건너뛰었습니다. 비밀번호를 모르면 재발급하여 주십시오.";   // createAuthUser 의 거절 글
       throw e;
     }
   };
@@ -475,7 +475,7 @@ export async function setupCompany(plan) {
     && await step(`물류대기 관리 메뉴 ${plan.hold ? "사용" : "사용 안 함"}`, async () => { await setModules(cid, { Hold: plan.hold ? "on" : "off" }); });
   if (ok && plan.tokens) {
     await step(`최초 토큰 ${Number(String(plan.tokens.amount).trim())}개`, async () => {
-      if ((await store.doc(`wallet/${cid}`).get()).exists) return "이미 토큰 정보가 있어 건너뜀";
+      if ((await store.doc(`wallet/${cid}`).get()).exists) return "이미 토큰 정보가 있어 건너뛰었습니다.";
       await grantTokens(cid, plan.tokens.amount, plan.tokens.memo);
     });
   }

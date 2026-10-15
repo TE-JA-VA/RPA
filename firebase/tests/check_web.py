@@ -206,7 +206,7 @@ with sync_playwright() as pw:
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
     page.fill("#login-id", "admin@t.local"); page.fill("#password", "틀린비밀번호"); page.click("#login-btn")
     page.wait_for_selector("#login-alert:not(.hide)")
-    check(page.text_content("#login-alert") == "업체코드, 아이디 또는 비밀번호가 맞지 않습니다", "틀린 비밀번호 안내 (세 칸 문구)")
+    check(page.text_content("#login-alert") == "업체코드, 아이디 또는 비밀번호가 일치하지 않습니다.", "틀린 비밀번호 안내 (세 칸 문구)")
     geo = page.evaluate("""() => { const b = document.getElementById('login-btn').getBoundingClientRect(),
         a = document.getElementById('login-alert').getBoundingClientRect(), s = getComputedStyle(document.getElementById('login-alert'));
         return { right: a.left >= b.right, row: Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < 4, color: s.color,
@@ -223,7 +223,7 @@ with sync_playwright() as pw:
          {"localId": sign_in_id("off@t.local"), "disableUser": True}, OWNER)
     page.fill("#login-id", "off@t.local"); page.fill("#password", "pw123456"); page.click("#login-btn")
     page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('중지된 계정')", timeout=15000)
-    check(page.text_content("#login-alert") == "사용이 중지된 계정입니다", "막힌 계정 안내 (auth/user-disabled)")
+    check(page.text_content("#login-alert") == "사용이 중지된 계정입니다.", "막힌 계정 안내 (auth/user-disabled)")
     page.fill("#login-id", "admin@t.local")
     check(page.locator("#email").count() == 0 and "업체코드" in page.text_content("#login") and page.get_attribute("#cid", "placeholder") is None and page.get_attribute("#login-id", "placeholder") is None, "로그인은 업체코드·아이디·비밀번호 세 칸, 힌트 글 없음")
     page.fill("#password", "pw123456"); page.click("#login-btn")
@@ -493,7 +493,7 @@ with sync_playwright() as pw:
     print("4절 명령 투입")
     page.click("#run-routine")
     page.wait_for_selector("#toasts .toast")
-    check("보냈습니다" in page.text_content("#toasts") and page.locator('#toasts [data-id="act"].info').count() == 1,
+    check("전송하였습니다" in page.text_content("#toasts") and page.locator('#toasts [data-id="act"].info').count() == 1,
           "보냈다는 안내가 토스트로")
     check(page.locator("#act-alert").count() == 0, "카드 안 안내 상자는 없앴다")
     time.sleep(1.0)
@@ -538,7 +538,7 @@ with sync_playwright() as pw:
     check(not out_cb.is_checked() and out_cb.is_disabled(), "물류관리를 끄면 출력도 꺼지고 잠긴다")
     check("3/5 켬" in page.text_content("#mod-meta"), f"둘 다 꺼진 개수 ({page.text_content('#mod-meta')})")
     why = page.text_content(f"{out_row} .why") if page.locator(f"{out_row} .why").count() else None
-    check(why == "물류관리를 켜야 쓸 수 있습니다" and page.is_visible(f"{out_row} .why"),
+    check(why == "물류관리를 켜야 사용할 수 있습니다." and page.is_visible(f"{out_row} .why"),
           f"잠긴 이유를 줄 아래 글로 보여 준다 - 휴대폰에는 마우스 글(title)이 없다 ({why})")
     if os.environ.get("SHOT_DIR"): page.locator("#mod-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "mod_why.png"))
     page.click(out_row, force=True)   # 잠긴 스위치라 Playwright 가 '비활성' 으로 본다
@@ -649,13 +649,13 @@ with sync_playwright() as pw:
                                                     {"key": "sales", "label": "주문매핑 화면 이동", "state": "running"},
                                                     {"key": "top", "label": "상단 선택", "state": "pending"}]})
     page.wait_for_function("document.getElementById('run-routine')?.disabled === true", timeout=10000)
-    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('시작했습니다')", timeout=10000)
-    check(page.locator("#toasts .toast.info", has_text="시작했습니다").count() == 1, "오토파일럿이 시작되면 파란 토스트")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('시작하였습니다')", timeout=10000)
+    check(page.locator("#toasts .toast.info", has_text="시작하였습니다").count() == 1, "오토파일럿이 시작되면 파란 토스트")
     check(lu("#toasts .toast.info svg.lu")[:2] == ["info", "x"], f"토스트 아이콘: 안내 info + 닫기 x ({lu('#toasts .toast.info svg.lu')})")
     check(lu(".pc-pick .chev") in ([], ["chevron-down"]) and lu("#log-box summary .chev") == ["chevron-right"], "접기 꺾쇠: PC 고르기 chevron-down, 로그 chevron-right")
     check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
-    check("돌고 있어" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
+    check("실행 중이어서" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
     check(page.text_content("#run-routine .t") == "PROCESS 오토파일럿 실행중" and page.is_hidden("#run-routine .fly")
           and page.text_content("#run-prepare .t") == "ACTOR 오토파일럿" and page.is_visible("#run-prepare .fly"),
           f"도는 RPA 의 단추는 '… 실행중' (화살표 없이), 다른 단추는 그대로 ({page.text_content('#run-routine .t')})")
@@ -665,7 +665,7 @@ with sync_playwright() as pw:
     asked, n_erpia = [], len(cmds_of("stop_erpia"))
     page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
     page.click("#stop-erpia")
-    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('오토파일럿 중단 명령을 보냈습니다')", timeout=10000)
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('오토파일럿 중단 명령을 전송하였습니다')", timeout=10000)
     check(bool(asked) and "중단할까요" in asked[0], f"누르면 먼저 묻는다 ({asked})")
     time.sleep(1.0)
     stop_key = next((k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "stop_rpa"), None)
@@ -760,16 +760,16 @@ with sync_playwright() as pw:
     check(page.text_content("#usage-meta") == want, f"토큰 정보를 이달 중간에 만들었으면 그날부터 ({page.text_content('#usage-meta')})")
     db_patch(LIVE, {"tokens": {"balance": 3, "cost": cost}})
     page.wait_for_function("document.getElementById('token-line')?.classList.contains('warn')", timeout=10000)
-    check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개 - 마이너스로 떨어질 수 있습니다"
+    check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개. 잔여 토큰이 마이너스가 될 수 있습니다."
           and not page.is_disabled("#run-all"), f"모자라면 노란 글, 실행은 된다 ({page.text_content('#token-line')})")
     goto(page, "settings")
-    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('남은 3개')", timeout=10000)
-    check("다음 예약 실행에 6개 · 남은 3개 - 마이너스로 떨어질 수 있습니다" in page.text_content("#sch-info")
+    page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('남은 토큰 3개')", timeout=10000)
+    check("다음 예약 실행에 6개 · 남은 토큰 3개. 잔여 토큰이 마이너스가 될 수 있습니다." in page.text_content("#sch-info")
           and "warn" in page.get_attribute("#sch-info", "class"), f"예약 칸에도 노란 글 ({page.text_content('#sch-info')})")
     goto(page, "rpa")
     db_patch(LIVE, {"tokens": {"balance": 0, "cost": cost}})
     page.wait_for_function("document.getElementById('run-all')?.disabled === true", timeout=10000)
-    check(page.text_content("#token-line") == "토큰이 없습니다 (남은 0개) - 충전한 뒤 실행하세요"
+    check(page.text_content("#token-line") == "토큰이 없습니다. (남은 토큰 0개) 토큰을 충전한 뒤 실행하여 주십시오."
           and "bad" in page.get_attribute("#token-line", "class")
           and all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")) and not page.is_disabled("#stop-erpia"),
           "0 이하면 빨간 글, 실행 단추 셋 잠김 (ERPia 종료는 그대로)")
@@ -805,7 +805,7 @@ with sync_playwright() as pw:
     check(page.text_content("#shop-list label:nth-child(2)").startswith("② <b>몰</b>")
           and page.locator("#shop-list b").count() == 0, "이름의 꺾쇠는 글자 그대로 (태그가 아니다 - Review Focus 5)")
     check(page.locator("#shop-list label:nth-child(2) input").is_disabled()
-          and "옵저버에서 기록하고 저장하세요" == (page.text_content("#shop-list label:nth-child(2) .why") or "")
+          and "옵저버에서 기록한 뒤 저장하여 주십시오." == (page.text_content("#shop-list label:nth-child(2) .why") or "")
           and page.locator("#shop-list label:nth-child(1) .why").count() == 0,
           "기록이 없는 줄은 스위치가 잠기고 까닭이 줄 아래 글로 보인다 (준비된 줄에는 없다)")
     if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "shop_why.png"))
@@ -850,7 +850,7 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"days": [0, 1, 2, 3, 4, 5, 6], "times": ["09:05", "13:30"]})
     page.wait_for_function("document.getElementById('sch-meta')?.textContent === '매일 09:05, 13:30'", timeout=10000)
     check(page.is_disabled("#sch-apply"), "PC 값이 돌아오면 요약 갱신·적용 비활성")
-    check(page.text_content("#sch-old") == "이 PC 를 새 버전으로 업데이트하면 시각별 모듈·반복을 쓸 수 있습니다", "옛 버전 PC 안내는 '버전' 으로")
+    check(page.text_content("#sch-old") == "이 PC를 새 버전으로 업데이트하면 시각별 모듈·반복 실행을 사용할 수 있습니다.", "옛 버전 PC 안내는 '버전' 으로")
     check(page.is_visible("#sch-old") and page.locator("#sch-times select").count() == 0,
           "옛 판 PC (live.schedule 에 version 없음): 시각만, 새 판 안내가 보인다 (Review Focus 4)")
     # 새 판 PC (2부): 줄마다 전체/고르기
@@ -863,7 +863,7 @@ with sync_playwright() as pw:
     order = page.evaluate("['sch-limit','sch-warn','sch-full'].map(i => document.getElementById(i)).every((e, i, a) => !i || a[i - 1].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)")
     check("good" in page.get_attribute("#sch-full", "class") and order,
           "문의 안내는 초록·가장 아래 (빨강 > 호박색 > 초록, 사용자 2026-10-08)")
-    check("전체 실행과 '전체 모듈 실행' 예약이 이 모듈을 돌립니다" in page.text_content("#mod-card"), "실행 모듈 카드: '전체 모듈 실행' 의 뜻")
+    check("전체 실행과 '전체 모듈 실행' 예약은 이 모듈을 실행합니다." in page.text_content("#mod-card"), "실행 모듈 카드: '전체 모듈 실행' 의 뜻")
     page.select_option("#sch-times .t:nth-child(2) select", "pick")
     chips = "#sch-times .t:nth-child(2) .chips button"
     check(page.locator(chips).count() == 5 and page.is_disabled("#sch-apply") and "모듈을 하나 이상" in page.text_content("#sch-limit"),
@@ -926,13 +926,13 @@ with sync_playwright() as pw:
     page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.dismiss()))
     page.click("#app-nav a[data-key='rpa']")
     page.wait_for_timeout(300)
-    check(asked == ["적용하지 않은 변경이 있습니다. 버리고 나갈까요?"] and page.text_content("#page-title") == "환경설정"
+    check(asked == ["적용하지 않은 변경 사항이 있습니다. 저장하지 않고 나가시겠습니까?"] and page.text_content("#page-title") == "환경설정"
           and page.is_visible("#sch-card"), f"적용 안 한 변경이 있으면 묻고, 아니오면 남는다 ({asked})")
     asked.clear()
     page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.dismiss()))
     page.click("#logout-btn")
     page.wait_for_timeout(300)
-    check(asked == ["적용하지 않은 변경이 있습니다. 버리고 나갈까요?"] and page.is_visible("#main") and page.is_visible("#sch-card"),
+    check(asked == ["적용하지 않은 변경 사항이 있습니다. 저장하지 않고 나가시겠습니까?"] and page.is_visible("#main") and page.is_visible("#sch-card"),
           f"로그아웃도 묻고, 아니오면 남는다 ({asked})")
     check(page.evaluate("() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }") is True, "탭 닫기·새로고침은 브라우저가 묻는다")
     page.once("dialog", lambda dlg: dlg.accept())
@@ -1122,12 +1122,12 @@ with sync_playwright() as pw:
     page.set_viewport_size(vp); page.wait_for_timeout(300)
     if os.environ.get("SHOT_DIR"): page.locator("#sch-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "slots_desktop.png"))
     lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
-    check("같은 시각이 두 번 있습니다" in lines and "반복 줄에 모듈을 하나 이상 고르세요" in lines and page.is_disabled("#sch-apply"),
+    check("같은 시각이 중복되어 있습니다." in lines and "반복 줄에 모듈을 하나 이상 선택하여 주십시오." in lines and page.is_disabled("#sch-apply"),
           f"막는 까닭은 하나씩이 아니라 모두, 한 줄에 하나씩 (사용자 2026-10-08) ({lines})")
     check(len(lines) == 2, f"반복 줄의 모듈 미선택은 한 번만 ('선택 모듈만 실행' 줄 글과 겹치지 않는다) ({lines})")
     el = page.query_selector(f"{row2} input[type=time]"); el.fill("10:00"); el.dispatch_event("change")
     lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
-    check(any("10:00 은 반복 시간대(10:00~11:00) 와 겹칩니다" in x for x in lines) and "같은 시각이 두 번 있습니다" not in lines,
+    check(any("10:00 은 반복 시간대(10:00~11:00) 와 겹칩니다" in x for x in lines) and "같은 시각이 중복되어 있습니다." not in lines,
           f"반복 시간대와 같은 시각에 시작하면 '겹칩니다' 하나만 ('같은 시각' 은 시각 줄끼리) ({lines})")
     page.click(f"{row3} button.del")
     el = page.query_selector(f"{row2} input[type=time]"); el.fill("09:00"); el.dispatch_event("change")
@@ -1154,7 +1154,7 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"slots": None})   # PC 에 줄이 없다 (화면에서 지우면 '적용 안 한 변경' 이 남아 다음 절이 막힌다)
     page.wait_for_function("document.getElementById('sch-count')?.textContent === '0/0 사용'", timeout=10000)
     lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
-    check("시간을 하나 이상 넣으세요" not in lines and page.text_content("#sch-full") == "자동 실행을 쓰려면 ERPia에 문의해주세요." and page.is_visible("#sch-full"),
+    check("시간을 하나 이상 입력하여 주십시오." not in lines and page.text_content("#sch-full") == "자동 실행을 쓰려면 ERPia에 문의해주세요." and page.is_visible("#sch-full"),
           f"슬롯이 0개인 업체는 'ERPia 문의' 만 (시각을 넣으라는 글 없음) ({lines})")
     print("6-5절 휴무일 - 공휴일·업체 휴무일 (사용자 2026-10-15, 판 4 PC)")
     check(page.is_hidden("#sch-off-box"), "판 3 PC 에는 '휴무일' 이 없다 (모르는 값이라 보내지도 않는다)")
@@ -1221,10 +1221,10 @@ with sync_playwright() as pw:
     page.fill("#pw-cur", "pw123456"); page.fill("#pw-new", "short"); page.fill("#pw-new2", "short"); page.click("#pw-btn")
     check("8자" in page.text_content("#pw-msg"), "짧은 비밀번호 거부")
     page.fill("#pw-new", "newpass123"); page.fill("#pw-new2", "newpass124"); page.click("#pw-btn")
-    check("다릅니다" in page.text_content("#pw-msg"), "재입력 불일치 거부")
+    check("다시 입력한 비밀번호가 일치하지 않습니다." in page.text_content("#pw-msg"), "재입력 불일치 거부")
     page.fill("#pw-cur", "wrongpass"); page.fill("#pw-new2", "newpass123"); page.click("#pw-btn")
-    page.wait_for_function("/맞지 않습니다|바꾸지 못했/.test(document.getElementById('pw-msg')?.textContent || '')", timeout=10000)
-    check("현재 비밀번호가 맞지 않습니다" in page.text_content("#pw-msg"), "현재 비밀번호 틀림 거부")
+    page.wait_for_function("/일치하지 않습니다|변경하지 못했/.test(document.getElementById('pw-msg')?.textContent || '')", timeout=10000)
+    check("현재 비밀번호가 일치하지 않습니다." in page.text_content("#pw-msg"), "현재 비밀번호 틀림 거부")
     page.fill("#pw-cur", "pw123456"); page.click("#pw-btn")
     page.wait_for_function("(document.getElementById('pw-msg')?.textContent || '').includes('바꿨습니다')", timeout=10000)
     check(True, "비밀번호 변경 성공 안내")
@@ -1413,7 +1413,7 @@ with sync_playwright() as pw:
     page.press("#login-id", "Enter")   # 어느 칸에서든 Enter 로 로그인
     page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('에이전트 계정')", timeout=15000)
     check(page.is_visible("#login") and page.is_hidden("#main"), "에이전트 계정은 로그인 화면에 그대로")
-    check(page.text_content("#login-alert") == "에이전트 계정으로는 화면에 들어올 수 없습니다", "에이전트 계정 안내 문구 (전 '기계 계정')")
+    check(page.text_content("#login-alert") == "에이전트 계정으로는 화면에 로그인할 수 없습니다.", "에이전트 계정 안내 문구 (전 '기계 계정')")
     check(page.evaluate("""async () => {
       const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
       return a.getAuth().currentUser === null; }"""), "기계 계정은 곧바로 로그아웃된다")
@@ -1424,7 +1424,7 @@ with sync_playwright() as pw:
     page.click("#login-btn")
     page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('중지')", timeout=15000)
     check(page.is_visible("#login") and page.is_hidden("#main"), "삭제된 업체 계정은 로그인 화면에 그대로")
-    check(page.text_content("#login-alert") == "사용이 중지된 업체입니다", "삭제된 업체 안내 문구")
+    check(page.text_content("#login-alert") == "사용이 중지된 업체입니다.", "삭제된 업체 안내 문구")
     check(page.evaluate("""async () => {
       const a = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js');
       return a.getAuth().currentUser === null; }"""), "삭제된 업체 계정은 곧바로 로그아웃된다")
@@ -1466,7 +1466,7 @@ with sync_playwright() as pw:
     db_patch(LIVE, {"update": {"state": "waiting", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T15:00:00", "backup": None}})
     page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('업데이트 대기 중')", timeout=10000)
     check(page.is_disabled("#run-routine") and page.is_disabled("#run-all")
-          and page.get_attribute("#run-routine", "title") == "업데이트 중이라 잠시 실행할 수 없습니다", "업데이트 대기 중: 판 옆 글 + 실행 단추 잠금")
+          and page.get_attribute("#run-routine", "title") == "업데이트 중이어서 잠시 실행할 수 없습니다.", "업데이트 대기 중: 판 옆 글 + 실행 단추 잠금")
     db_patch(LIVE, {"update": {"state": "rolled_back", "target": "2026.10.07-5", "from": "2026.10.07-4", "at": "2026-10-07T15:10:00",
                                "reason": "새 판이 3분 안에 정상으로 켜지지 않았습니다", "backup": "2026.10.07-3"}})
     page.wait_for_function("(document.getElementById('ver')?.textContent || '').includes('이전 버전으로 되돌림')", timeout=10000)

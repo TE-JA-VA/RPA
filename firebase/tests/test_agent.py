@@ -747,7 +747,7 @@ with tempfile.TemporaryDirectory() as d:
             check(str(e) == "현재 접속한 업체는 사용할 수 없는 모듈입니다.", f"웰라이프 업체: 운송장도 같은 글로 거절 ({e})")
         ag.real_actions(lambda: {"Hold": False})["set_modules"]({"Hold": True, "Sales": True})
         check(st.read_wellife_modules()[0]["Hold"] is False and st.read_wellife_modules()[0]["Sales"] is True, "웰라이프 업체도 업체 정책(안 쓰는 모듈)을 따른다")
-        check(acts["set_schedule"]({"enabled": False, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]}) == "자동 실행을 껐습니다",
+        check(acts["set_schedule"]({"enabled": False, "days": [0], "slots": [{"at": "09:00", "run": ["Sales"]}]}) == "자동 실행을 비활성화하였습니다.",
           "웰라이프 업체: 끄는 요청은 고르기 줄이 있어도 된다")
         check("자동 실행" in acts["set_schedule"]({"enabled": True, "days": [0], "slots": [
             {"at": "09:00", "run": ["Sales", "Hold", "Sap"]}, {"at": "10:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]}),
@@ -832,7 +832,7 @@ with tempfile.TemporaryDirectory() as d:
         except RuntimeError as e:
             check(str(e) == "최대 자동 실행 슬롯은 2개입니다" and st.read_settings()["schedule"]["slots"] == [{"at": "09:00"}], f"한도를 넘으면 저장 전에 거절 ({e})")
         msg = acts["set_schedule"]({**three, "enabled": False})
-        check(msg == "자동 실행을 껐습니다" and len(st.read_settings()["schedule"]["slots"]) == 3, f"끄기는 한도를 넘어도 된다 - 줄은 그대로 ({msg})")
+        check(msg == "자동 실행을 비활성화하였습니다." and len(st.read_settings()["schedule"]["slots"]) == 3, f"끄기는 한도를 넘어도 된다 - 줄은 그대로 ({msg})")
         msg = acts["set_schedule"]({"enabled": True, "days": [0], "slots": [{"at": "09:00"}, {"at": "11:00", "run": ["Logistics"]}]})
         check("월 09:00, 11:00 물류관리" in msg, f"한도 안이면 저장 ({msg})")
         dash.set_policy(1, [])
@@ -911,7 +911,7 @@ with tempfile.TemporaryDirectory() as d:
         try:
             ag.real_actions()["resume_repeat"](None); check(False, "멈춘 반복이 없는데 다시 시작")
         except RuntimeError as e:
-            check(str(e) == "중단된 반복 작업이 없습니다", "resume_repeat: 멈춘 반복이 없으면 그 글로 실패")
+            check(str(e) == "중단된 반복 작업이 없습니다.", "resume_repeat: 멈춘 반복이 없으면 그 글로 실패")
     finally:
         os.environ.pop("RPA_STATUS_DIR", None)
         os.environ.pop("RPA_DASHBOARD_DRY_RUN", None)
@@ -930,7 +930,7 @@ with tempfile.TemporaryDirectory() as d:
         orig = st.check_install
         st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "ok"}
         try:
-            for bad, why in (({"version": "../x"}, "판 번호"), ({"version": "2026.10.07-4"}, "이미 최신 업데이트를 사용하고 있습니다")):
+            for bad, why in (({"version": "../x"}, "버전 번호"), ({"version": "2026.10.07-4"}, "이미 최신 업데이트를 사용하고 있습니다")):
                 try:
                     acts["update"](bad); check(False, f"거절 안 됨 {bad}")
                 except RuntimeError as e:
@@ -946,12 +946,12 @@ with tempfile.TemporaryDirectory() as d:
             try:
                 acts["rollback"](None); check(False, "보관본 없이 되돌리기")
             except RuntimeError as e:
-                check("이전 판" in str(e), f"보관본이 없으면 거절 ({e})")
+                check("이전 버전" in str(e), f"보관본이 없으면 거절 ({e})")
             st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "mixed"}
             try:
                 acts["update"]({"version": "2026.10.07-5"}); check(False, "mixed 인데 업데이트")
             except RuntimeError as e:
-                check("판 구조" in str(e), f"판 구조가 어긋난 PC 는 거절 ({e})")
+                check("설치 구조" in str(e), f"판 구조가 어긋난 PC 는 거절 ({e})")
         finally:
             st.check_install = orig
     finally:
@@ -1002,8 +1002,8 @@ check(ag.email_for("", "pc_x") == "agent-pc-x@rpa-test-f02e0.firebaseapp.com", "
 check(ag.email_for("c_a_b", "pc_1_2") == "agent-pc-1-2@c-a-b.rpa-test-f02e0.firebaseapp.com", "밑줄은 전부 하이픈으로")
 
 check(ag.auth_message("INVALID_LOGIN_CREDENTIALS") == ag.auth_message("EMAIL_NOT_FOUND") == ag.auth_message("INVALID_PASSWORD")
-      and "비밀번호가 맞지" in ag.auth_message("INVALID_PASSWORD"), "자격증명 거부 셋은 한 문구")
-check(ag.auth_message("USER_DISABLED") == "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 물어보세요"
+      and "비밀번호가 일치하지" in ag.auth_message("INVALID_PASSWORD"), "자격증명 거부 셋은 한 문구")
+check(ag.auth_message("USER_DISABLED") == "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 문의하여 주십시오."
       and "10분" in ag.auth_message("TOO_MANY_ATTEMPTS_TRY_LATER"), "사용중지·과다 시도 문구 (2026-10-06 이름: 에이전트 계정·사용중지)")
 check(ag.auth_message("OPERATION_NOT_ALLOWED") == "로그인 거부: OPERATION_NOT_ALLOWED", "모르는 code 는 그대로 보여 준다")
 

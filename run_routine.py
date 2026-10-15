@@ -126,7 +126,7 @@ BASE_DIR = status.data_dir()
 RESULT_PATH = os.path.join(BASE_DIR, "run_routine_result.txt")
 PROCESS_WAIT_SECONDS = 30
 ERPIA_EXIT_WAIT_SECONDS = 30   # 관리자 권한 ERPia 를 끈 뒤 프로세스가 사라지기를 기다리는 최대 시간
-ERPIA_ELEVATED_NOTE = "ERPia 가 관리자 권한으로 떠 있어 일반 권한 RPA 가 다룰 수 없습니다"
+ERPIA_ELEVATED_NOTE = "ERPia가 관리자 권한으로 실행되어 있어 일반 권한 RPA가 다룰 수 없습니다."
 ERPIA_RESTARTS = 2             # 실행 한 번에 도중에 꺼진 ERPia 를 다시 띄우는 최대 횟수 (계속 꺼지면 멈춘다)
 LOGIN_WINDOW_WAIT_SECONDS = 30
 # 로그인 후 메인 화면(좌측 메뉴 포함)이 완전히 뜰 때까지 기다리는 최대 시간
@@ -274,7 +274,7 @@ def load_exe_path():
     path = status.erpia_exe(ask=not os.environ.get("RPA_UNATTENDED"))
     if not path:
         raise RuntimeError("ERPia 프로그램(ERPiaMain.exe)을 찾지 못했습니다. ERPia 가 설치되어 있는지 보고, "
-                           "에이전트를 다시 켜거나 PROCESS 오토파일럿을 직접 실행하면 위치를 고르는 창이 뜹니다")
+                           "에이전트를 다시 실행하거나 PROCESS 오토파일럿을 직접 실행하면 위치를 선택하는 창이 나타납니다.")
     return path
 
 
@@ -304,19 +304,19 @@ def erpia_logged_in(pid):
 def close_elevated_erpia(pid):
     """관리자 권한 ERPia 를 강제로 끈다. (ok, 사유). 일반 권한으로는 끌 수 없어(접근 거부) 사람이 띄운 실행이면
     관리자 권한 taskkill 을 띄우고(UAC 확인), 무인 실행(RPA_UNATTENDED)은 확인할 사람이 없어 멈춘다."""
-    log(f"ERPia(PID={pid}) 가 관리자 권한으로 떠 있어 일반 권한 RPA 가 다룰 수 없습니다 -> 강제 종료 후 새로 띄웁니다")
+    log(f"ERPia(PID={pid})가 관리자 권한으로 실행되어 있어 일반 권한 RPA가 다룰 수 없습니다. 강제 종료한 뒤 다시 실행합니다.")
     why = ec.terminate_pid(pid)
     if why and not os.environ.get("RPA_UNATTENDED"):
-        log(f"  바로 끄지 못했습니다({why}) -> 관리자 권한 taskkill 을 띄웁니다 (UAC 확인)")
+        log(f"  바로 종료하지 못했습니다. ({why}) 관리자 권한 taskkill을 실행합니다. (UAC 확인)")
         if status.run_as_admin("taskkill.exe", ["/F", "/PID", str(pid)], None):
             why = None
     if why:
-        return False, (f"관리자 권한으로 떠 있는 ERPia 를 끄지 못했습니다 ({why}) - "
-                       "ERPia 를 닫거나 RPA 를 관리자 권한으로 실행하세요")
+        return False, (f"관리자 권한으로 실행된 ERPia를 종료하지 못했습니다. ({why}) "
+                       "ERPia를 닫거나 RPA를 관리자 권한으로 실행하여 주십시오.")
     deadline = time.time() + ERPIA_EXIT_WAIT_SECONDS
     while ec.pid_alive(pid):
         if time.time() > deadline:
-            return False, f"관리자 권한 ERPia(PID={pid}) 가 {ERPIA_EXIT_WAIT_SECONDS}초 안에 꺼지지 않았습니다"
+            return False, f"관리자 권한 ERPia(PID={pid}) 가 {ERPIA_EXIT_WAIT_SECONDS}초 안에 종료되지 않았습니다."
         time.sleep(0.5)
     log(f"  ERPia(PID={pid}) 종료 확인")
     return True, None
@@ -332,9 +332,9 @@ def ensure_erpia_running():
         pid = None
     if pid is not None and erpia_unreachable(pid):
         if not erpia_logged_in(pid):
-            raise RuntimeError(ERPIA_ELEVATED_NOTE + " (로그인 전이라 끄지 않습니다 - ERPia 를 닫고 다시 실행하세요)")
+            raise RuntimeError(ERPIA_ELEVATED_NOTE + " (로그인 전이어서 종료하지 않습니다. ERPia를 닫은 뒤 다시 실행하여 주십시오)")
         if len(ec.erpia_pids()) > 1:   # 어느 것을 끌지 모른다 - 다른 사람이 쓰는 ERPia 일 수 있다
-            raise RuntimeError(ERPIA_ELEVATED_NOTE + " (ERPia 가 여러 개 떠 있어 끄지 않습니다 - 하나만 남기고 다시 실행하세요)")
+            raise RuntimeError(ERPIA_ELEVATED_NOTE + " (ERPia가 여러 개 실행되어 있어 종료하지 않습니다. 하나만 남긴 뒤 다시 실행하여 주십시오)")
         ok, why = close_elevated_erpia(pid)
         if not ok:
             raise RuntimeError(why)
@@ -441,17 +441,17 @@ class RoutineContext:
         try:
             self.pid = ec.find_erpia_pid()
         except Exception as e:
-            return False, ("ERPia 가 실행되어 있지 않습니다. 로그인 모듈을 켜거나 ERPia 를 먼저 띄우세요."
+            return False, ("ERPia가 실행되어 있지 않습니다. 로그인 모듈을 켜거나 ERPia를 먼저 실행하여 주십시오."
                            f" ({type(e).__name__})")
         # 로그인 창이 떠 있으면 메인 창을 1분 넘게 기다렸다 실패하므로 먼저 가려낸다.
         # find_login_window 는 로그인 뒤 숨은 채 남는 잔재 창도 돌려주므로 '보이는' 창만 본다.
         if erpia_unreachable(self.pid):   # 끄는 것은 로그인 모듈만 한다 (ensure_erpia_running) - 여기서는 끄지 않는다
-            return False, ERPIA_ELEVATED_NOTE + " (Login 모듈을 켜면 끄고 새로 띄워 로그인합니다)"
+            return False, ERPIA_ELEVATED_NOTE + " (로그인 모듈을 켜면 ERPia를 다시 실행하여 로그인합니다)"
         login_win = pl.find_login_window()
         if login_win is not None and win32gui.IsWindowVisible(login_win.handle):
-            return False, "ERPia 로그인 창이 떠 있습니다. Login 모듈을 켜거나 먼저 로그인하세요."
+            return False, "ERPia 로그인 창이 열려 있습니다. 로그인 모듈을 켜거나 먼저 로그인하여 주십시오."
         if not self.refresh():
-            return False, "메인 화면을 잡지 못했습니다 (로그인 전이거나 팝업이 떠 있을 수 있습니다)."
+            return False, "메인 화면을 찾지 못했습니다. (로그인 전이거나 팝업이 열려 있을 수 있습니다)"
         return True, None
 
     def window(self):
@@ -498,7 +498,7 @@ def wait_for_active_main_tab(app, hwnd, keyword, timeout=20, interval=1.0, ctx=N
             return True, last
         if last is None and not win32gui.IsWindow(hwnd):
             # 창 핸들 자체가 죽었다 = 창이 다시 만들어졌다. 새 메인 창을 잡아 이어서 기다린다.
-            log("  메인 창 핸들이 무효가 됐습니다 -> 메인 창을 다시 잡습니다")
+            log("  메인 창 핸들이 무효화되어 메인 창을 다시 찾습니다.")
             try:
                 new_hwnd, new_app, _win = acquire_main_window(ec.find_erpia_pid())
             except Exception as e:
@@ -542,7 +542,7 @@ def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
             target = None
             if errors >= 3 or not win32gui.IsWindow(ctx.hwnd):
                 # 창 자체가 다시 만들어졌거나(로그인 직후에 이런 일이 있다) 오류가 계속된다
-                log("  메인 창 핸들이 무효가 됐거나 UIA 오류가 계속됩니다 -> 메인 창을 다시 잡습니다")
+                log("  메인 창 핸들이 무효화되었거나 UIA 오류가 계속되어 메인 창을 다시 찾습니다.")
                 if not ctx.refresh():
                     return "failed"
                 errors = 0
@@ -552,7 +552,7 @@ def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
         if not win32gui.IsWindow(ctx.hwnd):
             # 예외 없이도 창이 죽어 있을 수 있다
             had_error = True
-            log("  메인 창 핸들이 무효가 됐습니다 -> 메인 창을 다시 잡습니다")
+            log("  메인 창 핸들이 무효화되어 메인 창을 다시 찾습니다.")
             if not ctx.refresh():
                 return "failed"
             log(f"  메인 창 다시 확보: hwnd={ctx.hwnd}")
@@ -561,7 +561,7 @@ def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
 
     if target is None:
         if had_error:
-            log(f"'{label}'({key}) 아이콘을 찾지 못했습니다 (조회 중 오류가 있어 '메뉴 없음' 으로 보지 않습니다).")
+            log(f"'{label}'({key}) 아이콘을 찾지 못했습니다. (조회 중 오류가 있어 '메뉴 없음'으로 판단하지 않습니다)")
             return "failed"
         log(f"'{label}'({key}) 아이콘을 찾지 못했습니다.")
         return "absent"
@@ -835,7 +835,7 @@ def sort_grid_by_status_desc(hwnd, grid, status_col="상품상태",
             time.sleep(3)
             state = header_sort_state(header)
         if state != "desc":
-            log(f"  {clicks}번 눌렀는데도 내림차순이 되지 않았습니다 (헤더 상태: {state}).")
+            log(f"  {clicks}번 눌렀으나 내림차순으로 정렬되지 않았습니다. (헤더 상태: {state})")
             return False
         vals = snapshot()
         if not vals:
@@ -872,7 +872,7 @@ def sort_grid_by_status_desc(hwnd, grid, status_col="상품상태",
             return True
 
         if vals == before and i == 1:
-            log("  헤더를 눌러도 화면이 그대로입니다 "
+            log("  헤더를 눌러도 화면이 변경되지 않습니다. "
                 "(이 그리드는 정렬이 막혀 있을 수 있습니다).")
             return False
 
@@ -1210,7 +1210,7 @@ def select_abnormal_range_and_check(pid, hwnd, grid, status_col="상품상태",
             rows = [(y, (v or "").strip(), el) for y, v, el in rows if (v or "").strip()]
             if rows:
                 boundary_el, boundary_val = rows[0][2], rows[0][1]
-                log(f"  맨 위까지 전부 비정상입니다 -> 첫 행 '{boundary_val}' 이 경계")
+                log(f"  맨 위까지 모두 비정상입니다. 첫 행 '{boundary_val}'이(가) 경계입니다.")
                 status.metric("abnormal_hold", "비정상 보류", (page + 1) * len(rows),
                               note=f"화면 {page + 1}쪽 기준 추정", approx=True)
             break
@@ -1602,7 +1602,7 @@ def run_logistics_step(app, pid, hwnd, options=None):
     win = app.window(handle=hwnd)
     tables = get_onscreen_tables(win)
     if len(tables) < 2:
-        log("물류 관리 화면의 그리드를 찾지 못했습니다 (2개 필요).")
+        log("물류관리 화면의 그리드를 찾지 못했습니다. (2개 필요)")
         return "failed"
 
     top_grid = min(tables, key=lambda t: t.rectangle().top)
@@ -1624,8 +1624,8 @@ def run_logistics_step(app, pid, hwnd, options=None):
         log("하단 그리드에 배송 대상이 없습니다 -> 할 것이 없습니다.")
         try:
             if top_grid.descendants(control_type="DataItem"):
-                log("  경고: 상단 그리드에는 행이 남아 있습니다 (저장되지 않은 배송장일 수 있음). "
-                    "자동으로 저장하지 않으니 화면에서 확인하세요.")
+                log("  경고: 상단 그리드에 행이 남아 있습니다. (저장되지 않은 배송장일 수 있음) "
+                    "자동으로 저장하지 않으므로 화면에서 확인하여 주십시오.")
         except Exception:
             pass
         return "no_target"
@@ -1663,10 +1663,10 @@ def run_logistics_step(app, pid, hwnd, options=None):
     top_grid = min(tables, key=lambda t: t.rectangle().top)
     rows = len(top_grid.descendants(control_type="DataItem"))
     if rows == 0:
-        log("상단 그리드에 데이터가 생기지 않았습니다 (DataItem 0개). "
+        log("상단 그리드에 데이터가 생성되지 않았습니다. (DataItem 0개) "
             "'개별 배송(B)'이 실제로 반영되지 않았을 수 있습니다.")
         return "failed"
-    log(f"상단 그리드 DataItem {rows}개 -> 배송 생성 확인됨")
+    log(f"상단 그리드 DataItem {rows}개 - 배송 생성을 확인하였습니다.")
     return "done"
 
 
@@ -1930,7 +1930,7 @@ def collect_shortage_rows(hwnd, grid, max_scrolls=GRID_MAX_SCROLLS):
             break
 
     if excluded:
-        log(f"  제외 상품코드라 건너뜁니다 ({len(excluded)}건): {excluded}")
+        log(f"  제외 상품코드여서 건너뜁니다. ({len(excluded)}건): {excluded}")
 
     return ordered, reached_bottom
 
@@ -2239,7 +2239,7 @@ def sort_grid_ascending_by(hwnd, grid, col_name, geo, max_clicks=3):
             return False
         time.sleep(1.5)
 
-    log(f"    '{col_name}' 오름차순 정렬에 실패했습니다 (헤더 상태를 읽지 못했을 수 있음).")
+    log(f"    '{col_name}' 오름차순 정렬에 실패하였습니다. (헤더 상태를 읽지 못했을 수 있음)")
     return False
 
 
@@ -2788,7 +2788,7 @@ def type_path_into_dialog(dlg_hwnd, edit_hwnd, path):
         time.sleep(0.2)
         leftover = (read_save_filename(edit_hwnd) or "").strip()
         if leftover:
-            log(f"    파일명 칸을 비우지 못했습니다 (남은 값: {leftover!r})")
+            log(f"    파일명 칸을 비우지 못했습니다. (남은 값: {leftover!r})")
             return False
 
         send_keys("^v")
@@ -2797,7 +2797,7 @@ def type_path_into_dialog(dlg_hwnd, edit_hwnd, path):
         if os.path.normcase(typed) == os.path.normcase(path):
             log(f"    파일명 입력 확인: {typed}")
             return True
-        log(f"    파일명이 정확히 들어가지 않았습니다 (읽은 값: {typed!r})")
+        log(f"    파일명이 정확히 입력되지 않았습니다. (읽은 값: {typed!r})")
         return False
     finally:
         if saved is not None:
@@ -2902,7 +2902,7 @@ def submit_open_dialog(dlg_hwnd, pid=None, attempts=3, settle=2.0, edit_hwnd=Non
         # 경로가 잘못되면 오류 메시지 창이 뜨고 대화상자는 그대로 남는다.
         if pid is not None and dismiss_dialog_error(pid, dlg_hwnd):
             return False
-        log(f"    창이 아직 열려 있습니다 (시도 {i}/{attempts})")
+        log(f"    창이 아직 열려 있습니다. (시도 {i}/{attempts})")
     return False
 
 
@@ -2924,7 +2924,7 @@ def double_click_file_in_dialog(dlg_hwnd, path):
                 return True
     except Exception as e:
         log(f"    목록 더블클릭 실패: {e}")
-    log("    목록에서 파일을 찾지 못했습니다 (다른 폴더에서 열린 듯).")
+    log("    목록에서 파일을 찾지 못했습니다. (다른 폴더가 열린 것으로 보입니다)")
     return False
 
 
@@ -2980,13 +2980,13 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
     """
     folder = excel_upload_dir()
     if not os.path.isdir(folder):
-        log(f"  '{EXCEL_UPLOAD_DIR_NAME}' 폴더가 없습니다 -> 엑셀업로드를 건너뜁니다.")
+        log(f"  '{EXCEL_UPLOAD_DIR_NAME}' 폴더가 없어 엑셀업로드를 건너뜁니다.")
         status.metric("excel_upload", "엑셀 업로드", 0, 0, unit="개", note="폴더 없음")
         return 0, 0
 
     targets, duplicates, ignored = collect_upload_files(folder)
     if not targets and not duplicates:
-        log(f"  '{EXCEL_UPLOAD_DIR_NAME}' 폴더에 올릴 파일이 없습니다 -> 건너뜁니다.")
+        log(f"  '{EXCEL_UPLOAD_DIR_NAME}' 폴더에 업로드할 파일이 없어 건너뜁니다.")
         status.metric("excel_upload", "엑셀 업로드", 0, 0, unit="개", note="올릴 파일 없음")
         return 0, 0
 
@@ -3038,11 +3038,11 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         log(f"    '{EXCEL_UPLOAD_COL}' 셀 클릭: {cell.rectangle()}")
         dlg = open_upload_dialog(pid, hwnd, cell)
         if dlg is None:
-            log("    파일 열기 창을 띄우지 못했습니다 -> 파일은 그대로 두고 넘어갑니다.")
+            log("    파일 열기 창을 열지 못해 파일은 그대로 두고 넘어갑니다.")
             continue
 
         if not upload_file_in_dialog(dlg, path, pid=pid):
-            log("    파일을 넘기지 못했습니다. 창을 닫고 파일은 그대로 둡니다.")
+            log("    파일을 전달하지 못했습니다. 창을 닫고 파일은 그대로 둡니다.")
             dismiss_dialog_error(pid, dlg)   # 오류 창이 떠 있으면 취소도 안 먹는다
             cancel_save_dialog(dlg)
             continue
@@ -3063,14 +3063,14 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             cancel_save_dialog(dlg)
             continue
 
-        log("    파일을 넘겼습니다. ERPia 가 읽기를 끝낼 때까지 기다립니다.")
+        log("    파일을 전달하였습니다. ERPia가 읽기를 마칠 때까지 기다립니다.")
         popups = wait_upload_result(app, hwnd)
         # 읽는 도중에 옮기면 ERPia 가 파일을 놓친다. 잠금이 풀린 뒤에 옮긴다.
         wait_file_unlocked(path)
 
         # 정상 업로드면 팝업이 뜨지 않고, 실패하면 사유와 함께 확인 팝업이 뜬다(실측).
         if popups:
-            log(f"    업로드 실패로 판단합니다 (팝업 {len(popups)}건).")
+            log(f"    업로드 실패로 판단합니다. (팝업 {len(popups)}건)")
             failed += 1
             status.progress(uploaded, len(targets))
             status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets),
@@ -3081,7 +3081,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             else:
                 log("    (검증 모드: 파일을 옮기지 않습니다)")
         else:
-            log("    업로드 완료 (오류 팝업 없음)")
+            log("    업로드를 완료하였습니다. (오류 팝업 없음)")
             uploaded += 1
             status.progress(uploaded, len(targets))
             status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets), unit="개",
@@ -3139,7 +3139,7 @@ def run_stock_review_step(app, pid, hwnd):
     win = app.window(handle=hwnd)
     tables = get_onscreen_tables(win)
     if len(tables) < 2:
-        log("  상품별 재고검토 화면의 그리드를 찾지 못했습니다 (2개 필요).")
+        log("  상품별 재고검토 화면의 그리드를 찾지 못했습니다. (2개 필요)")
         return 0, 0
     top_grid = min(tables, key=lambda t: t.rectangle().top)
     bottom_grid = max(tables, key=lambda t: t.rectangle().top)
@@ -3192,7 +3192,7 @@ def run_stock_review_step(app, pid, hwnd):
             log("    상단 행의 상품코드를 읽지 못해 건너뜁니다.")
             continue
         if code in STOCK_EXCLUDED_CODES:
-            log("    제외 상품코드입니다 -> 배송보류하지 않고 넘어갑니다.")
+            log("    제외 상품코드여서 배송보류하지 않고 넘어갑니다.")
             continue
 
         cell = None
@@ -3229,7 +3229,7 @@ def run_stock_review_step(app, pid, hwnd):
         children_before = len(visible_child_windows(hwnd))
 
         if not right_click_element_and_select(pid, hwnd, anchor, "배송보류"):
-            log("    '배송보류' 실행 실패 -> 건너뜁니다.")
+            log("    '배송보류' 실행에 실패하여 건너뜁니다.")
             continue
         time.sleep(1.2)
 
@@ -3586,9 +3586,9 @@ def select_in_combo(win_provider, hwnd, combo_provider, value, label="",
                 break
             if seen:
                 break  # 목록은 제대로 읽혔는데 그 값이 없는 것 -> 재시도해도 같다
-            log(f"  '{label}' 드롭다운 항목이 비어 있습니다 (시도 {attempt}/{retries})")
+            log(f"  '{label}' 드롭다운 항목이 비어 있습니다. (시도 {attempt}/{retries})")
         else:
-            log(f"  '{label}' 드롭다운 목록을 찾지 못했습니다 (시도 {attempt}/{retries})")
+            log(f"  '{label}' 드롭다운 목록을 찾지 못했습니다. (시도 {attempt}/{retries})")
 
         try:
             send_keys("{ESC}")
@@ -3613,7 +3613,7 @@ def select_in_combo(win_provider, hwnd, combo_provider, value, label="",
     combo = combo_provider()
     after = combo_value(combo) if combo is not None else ""
     if after != value:
-        log(f"  경고: '{label}' 선택 후 값이 '{after}' 입니다 (기대: '{value}').")
+        log(f"  경고: '{label}' 선택 후 값이 '{after}'입니다. (기대: '{value}')")
         return False
     log(f"  '{label}' 값 확인: '{after}'")
     return True
@@ -3680,8 +3680,8 @@ def apply_auto_mode(app, hwnd, options):
     win = app.window(handle=hwnd)
     combo = find_by_auto_id(win, AUTO_MODE_COMBO)
     if combo is None:
-        log(f"  '{AUTO_MODE_COMBO}' 콤보가 화면에 없습니다 (업체에 따라 없을 수 있음). "
-            f"-> '수동'으로 간주합니다.")
+        log(f"  '{AUTO_MODE_COMBO}' 콤보가 화면에 없습니다. (업체에 따라 없을 수 있음) "
+            f"'수동'으로 간주합니다.")
         return False, True
 
     current = combo_value(combo)
@@ -3846,13 +3846,13 @@ def wait_save_spinner_gone(app, hwnd, baseline_children,
         if gate.should_scan():
             win = app.window(handle=hwnd)
             if find_popup_buttons(win):
-                log(f"  저장 대기 중 팝업이 떴습니다 ({waited:.0f}초 경과)")
+                log(f"  저장 대기 중 팝업이 나타났습니다. ({waited:.0f}초 경과)")
                 return saw_spinner
 
         spinners = detect_spinner(hwnd, baseline_children)
         if not spinners:
             if saw_spinner:
-                log(f"  저장 스피너가 사라졌습니다 ({waited:.0f}초 경과)")
+                log(f"  저장 스피너가 사라졌습니다. ({waited:.0f}초 경과)")
             return saw_spinner
 
         if not saw_spinner:
@@ -3928,12 +3928,12 @@ def run_logistics_save_step(app, hwnd):
     probe_spinner(hwnd, baseline_children, seconds=SAVE_SPINNER_PROBE_SECONDS)
     saw_spinner = wait_save_spinner_gone(app, hwnd, baseline_children)
     if not saw_spinner:
-        log("  스피너를 보지 못했습니다 (감지 전에 저장이 끝났을 수 있습니다).")
+        log("  스피너를 감지하지 못했습니다. (감지 전에 저장이 끝났을 수 있습니다)")
 
     for _round in range(1, SAVE_POPUP_MAX_ROUNDS + 1):
         buttons = wait_for_popup_buttons(app, hwnd)
         if not buttons:
-            log("  팝업 없음 -> 저장이 정상 처리된 것으로 봅니다.")
+            log("  팝업이 없어 저장이 정상 처리된 것으로 판단합니다.")
             return _save_succeeded(app, hwnd, "팝업 없음")
 
         text = collect_popup_text(buttons[0])
@@ -3944,7 +3944,7 @@ def run_logistics_save_step(app, hwnd):
         hit = find_validation_error(text)
         if hit:
             log(f"  검증 오류 팝업입니다: '{hit}'")
-            log("  -> 규칙에 따라 PROCESS 를 여기서 종료합니다. (팝업은 닫지 않고 그대로 둡니다)")
+            log("  규칙에 따라 PROCESS를 여기서 종료합니다. (팝업은 닫지 않고 그대로 둡니다)")
             return False, f"저장 검증 오류: {hit}"
 
         yes_btn = next((b for b in buttons if b.window_text() in YES_BUTTON_TEXTS), None)
@@ -3972,7 +3972,7 @@ def run_logistics_save_step(app, hwnd):
             time.sleep(2.0)
             continue
 
-        log(f"  처리 방법을 모르는 팝업입니다 (버튼: {names}). 안전하게 중단합니다.")
+        log(f"  처리 방법을 알 수 없는 팝업입니다. (버튼: {names}) 안전하게 중단합니다.")
         return False, f"알 수 없는 팝업: {names}"
 
     log(f"  팝업이 {SAVE_POPUP_MAX_ROUNDS}회를 넘겨 계속 뜹니다. 중단합니다.")
@@ -4115,12 +4115,12 @@ def handle_print_popups(app, pid, hwnd, rounds=3, wait=2.0, already_printed="con
             log(f"  출력 중단 팝업입니다: '{hit}'")
             log(f"      내용: {text}")
             if btn is not None:
-                log(f"  -> '{want}' 클릭 후 PROCESS 를 종료합니다.")
+                log(f"  '{want}'을(를) 클릭한 뒤 PROCESS를 종료합니다.")
                 ec.ensure_foreground(hwnd)
                 btn.click_input()
                 time.sleep(1.5)
             else:
-                log(f"  -> 확인 버튼이 없습니다 (버튼: {names}). 팝업을 그대로 두고 종료합니다.")
+                log(f"  확인 버튼이 없습니다. (버튼: {names}) 팝업을 그대로 두고 종료합니다.")
             return "abort"
         if action == "stuck":
             log(f"  출력 중 팝업의 버튼을 처리할 수 없습니다: {names}")
@@ -4135,7 +4135,7 @@ def handle_print_popups(app, pid, hwnd, rounds=3, wait=2.0, already_printed="con
             # 아니오 뒤에도 출력 관련 창이 남아 있으면 닫는다 (남으면 메인 창이 잠긴다)
             for title in (CARRIER_PICKER_TITLE, PRINT_PREVIEW_TITLE, PRINT_DIALOG_TITLE):
                 for h in find_top_hwnds_by_title(pid, title):
-                    log(f"  '{title}' 창이 남아 있어 닫습니다 (hwnd={h})")
+                    log(f"  '{title}' 창이 남아 있어 닫습니다. (hwnd={h})")
                     try:
                         win32gui.PostMessage(h, win32con.WM_CLOSE, 0, 0)
                     except Exception as ex:
@@ -4260,7 +4260,7 @@ def run_print_dialog(pid, printer_name, timeout=DIALOG_WAIT_SECONDS):
                 lambda: find_printer_combo(connect_dialog(dlg_hwnd)),
                 printer_name, "프린터")
             if not ok:
-                log("  설정한 프린터를 고르지 못했습니다. 인쇄하지 않고 중단합니다.")
+                log("  설정한 프린터를 선택하지 못했습니다. 인쇄하지 않고 중단합니다.")
                 dlg = connect_dialog(dlg_hwnd)
                 cancel = next((b for b in dlg.descendants(control_type="Button")
                                if b.window_text() == "취소"), None)
@@ -4485,7 +4485,7 @@ def save_dialog_to_jobs(dlg_hwnd, ext=".xlsx", prefix="WAYBILL", keep_name=True)
     ec.ensure_foreground(dlg_hwnd)
     typed = set_save_filename(edit_hwnd, full)
     if typed != full:
-        log(f"  파일 이름을 넣지 못했습니다 (입력란: {typed!r}). "
+        log(f"  파일 이름을 입력하지 못했습니다. (입력란: {typed!r}) "
             f"덮어쓰기 사고를 막기 위해 저장하지 않고 취소합니다.")
         cancel_save_dialog(dlg_hwnd)
         return False
@@ -4513,7 +4513,7 @@ def save_dialog_to_jobs(dlg_hwnd, ext=".xlsx", prefix="WAYBILL", keep_name=True)
         no = next((b for b in cdlg.descendants(control_type="Button")
                    if b.window_text() in NO_BUTTON_TEXTS), None)
         if no is not None:
-            log(f"  -> '{no.window_text()}' 클릭 (기존 파일 보존). 저장 실패로 처리합니다.")
+            log(f"  -> '{no.window_text()}' 클릭하였습니다. (기존 파일 보존) 저장 실패로 처리합니다.")
             ec.ensure_foreground(confirm[0])
             no.click_input()
             time.sleep(1.5)
@@ -4638,10 +4638,10 @@ def check_excel_open_prompt(app, hwnd, rounds=3, wait=1.5):
         text = collect_popup_text(buttons[0])
 
         if any(k in text for k in EXCEL_OPEN_PROMPT_KEYWORDS):
-            log(f"  '엑셀 파일 열기' 안내 팝업이 떴습니다 "
+            log(f"  '엑셀 파일 열기' 안내 팝업이 나타났습니다. "
                 f"(버튼: {[b.window_text() for b in buttons]})")
             log(f"      내용: {text}")
-            log("  -> 누르지 않고 그대로 둔 채 PROCESS 를 끝냅니다.")
+            log("  누르지 않고 그대로 둔 채 PROCESS를 종료합니다.")
             return True
 
         if any(k in text for k in EXCEL_PATH_NOTICE_KEYWORDS):
@@ -4721,7 +4721,7 @@ def run_hold_logistics_step(app, pid, hwnd):
     # 배송보류를 건너뛰고 전체 선택 후 저장으로 진행한다.
     do_hold = scroll_grid_right_to_column(hwnd, grid, "상품상태")
     if not do_hold:
-        log("'상품상태' 컬럼을 찾지 못했습니다 -> 비정상 배송보류를 건너뛰고 전체 저장으로 진행합니다.")
+        log("'상품상태' 컬럼을 찾지 못해 비정상 배송보류를 건너뛰고 전체 저장으로 진행합니다.")
 
     if do_hold:
         log("상품상태 내림차순 정렬 -> 아래 비정상 구간 범위선택 -> 선택영역 체크")
@@ -4729,7 +4729,7 @@ def run_hold_logistics_step(app, pid, hwnd):
         if result == "none":
             log("비정상 상품이 없어 배송보류를 건너뛰고 전체 저장으로 진행합니다.")
         elif result == "error":
-            log("비정상 상품을 판별하지 못했습니다(정렬/읽기 실패) -> 배송보류 없이 전체 저장으로 진행합니다.")
+            log("비정상 상품을 판별하지 못해 배송보류 없이 전체 저장으로 진행합니다. (정렬/읽기 실패)")
         else:  # "held": 비정상 구간 선택 + 선택영역 체크 완료
             time.sleep(1.5)
             # 체크된 상태에서 다시 우클릭 -> 배송보류. 앵커는 반드시 '정상이 아닌 행' 위에서 잡는다.
@@ -4761,7 +4761,7 @@ def run_hold_logistics_step(app, pid, hwnd):
                     ec.ensure_foreground(hwnd)
                     btn.click_input()
             else:
-                log("  배송보류 실행에 실패했습니다 -> 전체 저장으로 진행합니다.")
+                log("  배송보류 실행에 실패하여 전체 저장으로 진행합니다.")
 
     # 후반 처리: 전체선택 -> 저장 -> 비동기 대기 (배송보류 여부와 무관하게 항상 실행)
     status.step("hold_save")
@@ -4880,7 +4880,7 @@ def dismiss_popup_window(popup_hwnd):
     names = [b.window_text() for b in buttons]
     btn = pick_popup_button(buttons)
     if btn is None:
-        return False, f"아는 버튼이 없습니다 (버튼: {names})", ""
+        return False, f"처리할 수 있는 버튼이 없습니다. (버튼: {names})", ""
 
     # 누를 버튼 이름과 문구는 반드시 클릭 '전에' 잡아둔다.
     # 클릭하면 창이 사라져서 그 뒤에 읽으면 빈 문자열이 나온다.

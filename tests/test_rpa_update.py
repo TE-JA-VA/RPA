@@ -110,7 +110,7 @@ def refused(what, host=None, pub=PK, version="2026.10.07-2", contains=""):
 
 
 refused("서명이 다르면 거절", pub=us.keygen()[1], contains="서명")
-refused("공개 열쇠가 없으면 거절", pub=b"", contains="열쇠")
+refused("공개 열쇠가 없으면 거절", pub=b"", contains="확인 키")
 bad = dict(HOST); bad[f"{BASE}/blobs/{MAN_B['files']['c.py']['sha256']}"] = b"tampered"
 refused("파일 지문이 다르면 거절 (Review Focus 3)", host=bad, contains="c.py")
 gone = dict(HOST); del gone[f"{BASE}/blobs/{MAN_B['files']['a.py']['sha256']}"]
@@ -118,7 +118,7 @@ refused("파일이 없으면(404) 거절 (Review Focus 3)", host=gone, contains=
 mv = dict(HOST)
 for n in ("manifest.json", "manifest.sig"):
     mv[f"{BASE}/releases/2026.10.07-3/{n}"] = HOST[f"{BASE}/releases/2026.10.07-2/{n}"]   # -3 자리에 -2 의 서명된 manifest
-refused("요청한 판과 manifest 판이 다르면 거절", host=mv, version="2026.10.07-3", contains="판")
+refused("요청한 판과 manifest 판이 다르면 거절", host=mv, version="2026.10.07-3", contains="버전")
 MAN_R = dict(MAN_B, runtime={"python": "3.15.0"}); MR = json.dumps(MAN_R).encode()
 rt = dict(HOST); rt[f"{BASE}/releases/2026.10.07-2/manifest.json"] = MR; rt[f"{BASE}/releases/2026.10.07-2/manifest.sig"] = us.sign(SK, MR).hex().encode()
 refused("파이썬이 바뀐 판은 거절 (설치 파일로)", host=rt, contains="설치 파일")
@@ -256,7 +256,7 @@ up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: o
               delete_task=lambda: dels.append(1))
 s = up.read_state()
 check(order == [("reg", "waiting"), ("run", "ready")], f"등록은 ready 보다 먼저, 실행은 ready 뒤 ({order})")
-check(s["state"] == "failed" and "도우미가 켜지지 않았습니다" in s["reason"] and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1",
+check(s["state"] == "failed" and "도우미가 실행되지 않았습니다" in s["reason"] and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1",
       f"도우미가 120초 안에 안 켜지면 failed (target·from 그대로) ({s})")
 check(dels == [1] and sum(slept) >= 120 and up.busy_reason() is None, f"작업 지움 {dels}, 2초씩 120초 기다림 ({sum(slept)}), 막기 풀림")
 up.write_state({})
@@ -294,7 +294,7 @@ print("\n--- C. 열쇠 없는 판 ---")
 real_hex = us.PUBLIC_KEY_HEX
 us.PUBLIC_KEY_HEX = ""
 try:
-    refused("공개 열쇠가 비어 있으면 (pub 안 줌) 따로 안내", pub=None, contains="열쇠가 없습니다")
+    refused("공개 열쇠가 비어 있으면 (pub 안 줌) 따로 안내", pub=None, contains="키가 없습니다")
 finally:
     us.PUBLIC_KEY_HEX = real_hex
 up.write_state({})
@@ -312,7 +312,7 @@ for s0 in ("downloading", "waiting"):
     os.makedirs(up.path("staging", "files"), exist_ok=True)
     up.clear_stale()
     s = up.read_state()
-    check(s["state"] == "failed" and "다시 켜져" in s["reason"] and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1"
+    check(s["state"] == "failed" and "다시 실행되어" in s["reason"] and s["target"] == "2026.10.07-2" and s["from"] == "2026.10.07-1"
           and not os.path.exists(up.path("staging")), f"{s0} 였다면 failed + staging 지움 ({s.get('reason')})")
     check(up.busy_reason() is None, f"{s0} 정리 뒤엔 실행 막기가 풀린다")
 for s0 in ("ready", "applying", "rolling_back", "done"):

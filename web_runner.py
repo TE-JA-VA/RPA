@@ -217,16 +217,16 @@ def _replay_problems(name, site):
     try:
         p = next((x for x in status.read_presets() if x["no"] == no), None)
     except ValueError as e:
-        return [f"{name}: 프리셋 파일을 읽지 못했습니다 ({e})"]
+        return [f"{name}: 프리셋 파일을 읽지 못했습니다. ({e})"]
     if p is None or not p.get("record"):
-        return [f"{name}: 프리셋 {no} 의 기록이 없습니다 (옵저버에서 기록하고 저장하세요)"]
+        return [f"{name}: 프리셋 {no}의 기록이 없습니다. (옵저버에서 기록한 뒤 저장하여 주십시오)"]
     if not re.fullmatch(r"\d{3}", p.get("code") or ""):
-        return [f"{name}: 프리셋 {no} 의 사이트코드가 숫자 세 자리가 아닙니다 ({p.get('code')!r})"]
+        return [f"{name}: 프리셋 {no}의 사이트코드가 숫자 세 자리가 아닙니다. ({p.get('code')!r})"]
     if any(s.get("kind") == "otp" for s in p["record"].get("steps") or []) and not (site.get("Phone") and site.get("SmsSenders")):
-        return [f"{name}: 프리셋 {no} 에 인증번호 단계가 있는데 인증 휴대폰·발신번호가 정해지지 않았습니다 "
-                "(옵저버 저장 화면에서 정하세요)"]
+        return [f"{name}: 프리셋 {no}에 인증번호 단계가 있으나 인증 휴대폰·발신번호가 설정되지 않았습니다. "
+                "(옵저버 저장 화면에서 설정하여 주십시오)"]
     if no > status.preset_limit():
-        return [f"{name}: 프리셋 {no} 은 이 업체의 프리셋 수({status.preset_limit()}개)를 넘어 돌리지 않습니다"]
+        return [f"{name}: 프리셋 {no}은(는) 이 업체의 프리셋 수({status.preset_limit()}개)를 넘어 실행하지 않습니다."]
     return []
 
 
@@ -245,7 +245,7 @@ def validate_site(name, site):
 
     stts = site_stts(site)
     if stts is not None and stts not in STTS_VALUES:
-        problems.append(f"{name}: Stts 는 {STTS_RUN} 또는 {STTS_SKIP} 이어야 합니다 "
+        problems.append(f"{name}: Stts는 {STTS_RUN} 또는 {STTS_SKIP}이어야 합니다. "
                         f"(지금 값: {site.get('Stts')!r})")
 
     url = site.get("URL") or ""
@@ -324,7 +324,7 @@ def find_id_field(page, selectors):
     if idx is None or idx < 0:
         raise RuntimeError(
             "아이디 입력칸을 찾지 못했습니다. "
-            "설정에 selectors.id 로 직접 지정해 주세요.")
+            "설정에 selectors.id로 직접 지정하여 주십시오.")
     return page.locator("input").nth(idx)
 
 
@@ -464,7 +464,7 @@ def action_login(page, name, site):
 
     before = page.url
     how = click_submit(page, selectors, pw_field)
-    log(f"  [{name}] 로그인 눌렀습니다 ({how})")
+    log(f"  [{name}] 로그인 단추를 눌렀습니다. ({how})")
 
     # 주소가 바뀌거나 페이지가 조용해질 때까지 기다린다.
     # 주소가 그대로여도 실패라고 단정할 수는 없다(같은 주소에서 화면만 바뀌는 사이트도 있다).
@@ -475,7 +475,7 @@ def action_login(page, name, site):
 
     log(f"  [{name}] 이동 후 주소: {page.url}")
     if page.url == before:
-        log(f"  [{name}] 주소가 그대로입니다. 로그인 결과를 확인해 주세요.")
+        log(f"  [{name}] 주소가 변경되지 않았습니다. 로그인 결과를 확인하여 주십시오.")
     return True
 
 
@@ -511,7 +511,7 @@ def dismiss_toast(page, name):
             try:
                 if loc.count() and loc.is_visible():
                     loc.click(timeout=3000)
-                    log(f"  [{name}] 안내 토스트를 닫았습니다 ({role} '{text}')")
+                    log(f"  [{name}] 안내 토스트를 닫았습니다. ({role} '{text}')")
                     page.wait_for_timeout(500)
                     return text
             except Exception:
@@ -577,20 +577,20 @@ def wait_for_sms_code(reader, before, name, timeout=SMS_WAIT_SECONDS):
             seen.add(item)
             sender, body = item
             if sms_watch.KEYWORD not in body:
-                log(f"  [{name}] 새 문자가 왔지만 인증번호가 아닙니다 (발신 {sender})")
+                log(f"  [{name}] 새 문자를 수신하였으나 인증번호가 아닙니다. (발신 {sender})")
                 continue
             code = sms_watch.extract_auth_code(body)
             if code is None:
-                log(f"  [{name}] 인증번호 문자인데 번호를 못 읽었습니다 (발신 {sender})")
+                log(f"  [{name}] 인증번호 문자이나 번호를 읽지 못했습니다. (발신 {sender})")
                 continue
             if code in known_codes:
-                log(f"  [{name}] 전에 받아둔 인증번호와 같습니다. 새 문자를 더 기다립니다.")
+                log(f"  [{name}] 이전에 받은 인증번호와 같습니다. 새 문자를 기다리는 중입니다.")
                 continue
             log(f"  [{name}] 인증번호 문자 도착 (발신 {sender})")
             # 다 받았으니 진행 막대로 보이지 않게 총량을 지우고 걸린 시간만 남긴다.
             status.metric(f"{name}:sms_wait", "문자 대기", int(time.time() - started),
-                          unit="초", note="인증번호를 받았습니다")
-            status.note("인증번호 문자를 받았습니다")
+                          unit="초", note="인증번호를 수신하였습니다")
+            status.note("인증번호 문자를 수신하였습니다")
             return code
 
     # 못 받았다. 그 시점에 무엇이 보이고 있었는지 남긴다.
@@ -599,7 +599,7 @@ def wait_for_sms_code(reader, before, name, timeout=SMS_WAIT_SECONDS):
     for sender, body in (last or [])[:6]:
         log(f"      - {sender}: {mask_digits(body)}")
     if not last:
-        log("      (한 건도 읽히지 않았습니다. Phone Link 의 '메시지' 탭을 확인해 주세요)")
+        log("      (한 건도 읽지 못했습니다. Phone Link의 '메시지' 탭을 확인하여 주십시오)")
     return None
 
 
@@ -622,7 +622,7 @@ def action_sms_2fa(page, name, site):
     problem = reader.connection_problem()
     if problem:
         raise RuntimeError(f"휴대폰 연결에 문제가 있습니다: {problem} "
-                           "문자를 받을 수 없으니 연결부터 고쳐 주세요.")
+                           "문자를 수신할 수 없으므로 연결 상태를 먼저 확인하여 주십시오.")
 
     before = reader.read_conversations()
     if before is None:
@@ -638,7 +638,7 @@ def action_sms_2fa(page, name, site):
 
     dismiss_toast(page, name)
 
-    log(f"  [{name}] 문자를 기다립니다 (최대 {SMS_WAIT_SECONDS}초)")
+    log(f"  [{name}] 인증 문자를 기다리는 중입니다. (최대 {SMS_WAIT_SECONDS}초)")
     code = wait_for_sms_code(reader, before, name)
     if code is None:
         raise RuntimeError(f"{SMS_WAIT_SECONDS}초 안에 인증번호 문자가 오지 않았습니다.")
@@ -654,7 +654,7 @@ def action_sms_2fa(page, name, site):
         raise RuntimeError("'인증번호 확인' 버튼을 찾지 못했습니다.")
     before_url = page.url
     verify_btn.click()
-    log(f"  [{name}] 인증번호 확인 눌렀습니다 ({vhow})")
+    log(f"  [{name}] 인증번호 확인 단추를 눌렀습니다. ({vhow})")
 
     try:
         page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
@@ -668,7 +668,7 @@ def action_sms_2fa(page, name, site):
         final, fhow = find_clickable_by_texts(page, ("로그인",))
         if final is not None:
             final.click()
-            log(f"  [{name}] 마지막 '로그인' 을 눌렀습니다 ({fhow})")
+            log(f"  [{name}] 마지막 '로그인' 단추를 눌렀습니다. ({fhow})")
             try:
                 page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
             except PWTimeout:
@@ -682,7 +682,7 @@ def action_sms_2fa(page, name, site):
     if still is not None:
         save_shot(page, name, "2fa")
         raise RuntimeError("아직 2차인증 화면에 머물러 있습니다. "
-                           "저장된 화면을 확인해 주세요.")
+                           "저장된 화면을 확인하여 주십시오.")
     log(f"  [{name}] 2차인증을 통과했습니다.")
     return True
 
@@ -780,7 +780,7 @@ def goto_mailbox(page, name, site):
         loc, how = find_clickable_by_texts(page, ("메일", "Mail"))
         if loc is None:
             raise RuntimeError("'메일' 링크를 찾지 못했습니다. "
-                               "설정에 MailURL 을 넣어 주세요.")
+                               "설정에 MailURL을 입력하여 주십시오.")
         loc.click()
         log(f"  [{name}] 메일함으로 이동 ({how})")
 
@@ -817,7 +817,7 @@ def collect_unread_mails(page, name):
         except PWTimeout:
             pass
         page.wait_for_timeout(800)
-        log(f"  [{name}] '안읽음' 으로 걸렀습니다 ({how})")
+        log(f"  [{name}] '안읽음'으로 필터링하였습니다. ({how})")
 
     found = []
     seen_keys = set()
@@ -903,7 +903,7 @@ def find_mail_row(page, name, key):
     if loc is not None:
         loc.click()
         settle()
-        log(f"  [{name}] 1쪽에 없어 '안읽음' 으로 걸렀습니다 ({how})")
+        log(f"  [{name}] 1쪽에 없어 '안읽음'으로 필터링하였습니다. ({how})")
         if here():
             return True
 
@@ -950,7 +950,7 @@ def open_mail_by_key(page, name, site, key, expect_subject, keyword):
             f"열려던 메일의 제목이 '{keyword}' 로 시작하지 않습니다: {actual!r}. "
             "대상이 아니므로 열지 않습니다.")
     if actual != expect_subject:
-        log(f"  [{name}] 제목이 조금 다릅니다 (찾던 것 {expect_subject!r} / 실제 {actual!r})")
+        log(f"  [{name}] 제목이 일부 다릅니다. (찾던 제목 {expect_subject!r} / 실제 {actual!r})")
 
     row.first.locator(".m_title").first.click()
     try:
@@ -1050,7 +1050,7 @@ def action_replay(page, name, site):
     if any(s.get("kind") == "otp" for s in p["record"]["steps"]):     # 2차인증 - 휴대폰 중계 (설계 13절, 에이전트 계정으로)
         import otp_relay
         rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
-        log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']} 으로 받습니다")
+        log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']}(으)로 수신합니다.")
     if any(s.get("pick") for s in p["record"]["steps"]):     # 메일 고르기 - 처리한 메일은 건너뛰고 기억 (2026-10-14)
         rp.mail_memory = web_replay.MailMemory(status.mail_memory_path(p["no"]))
     # 알림창은 재생기 하나만 받는다 - 둘이 받으면 로그가 두 줄이고, 대시보드로 가는 글이 줄지 않았다 (2026-10-01 검토)
@@ -1145,7 +1145,7 @@ def run_site(browser, name, site, use_session=True, keep_open=False):
     else:
         context = browser.new_context(accept_downloads=True)
         if not use_session:
-            log(f"  [{name}] 빈 프로필로 시작합니다 (매번 새로 로그인 + 2차인증)")
+            log(f"  [{name}] 빈 프로필로 시작합니다. (매번 새로 로그인 + 2차인증)")
             # 안 쓸 파일을 남겨두지 않는다. 로그인한 것과 같은 효력을 갖는 파일이다.
             if os.path.exists(spath):
                 try:
@@ -1160,7 +1160,7 @@ def run_site(browser, name, site, use_session=True, keep_open=False):
         for act in site_actions(site):
             fn = ACTIONS.get(act)
             if fn is None:
-                log(f"  [{name}] 모르는 Action '{act}' - 건너뜁니다.")
+                log(f"  [{name}] 알 수 없는 Action '{act}'입니다. 건너뜁니다.")
                 status.skip(step_key(name, act), "모르는 Action")
                 ok = False
                 continue
@@ -1169,7 +1169,7 @@ def run_site(browser, name, site, use_session=True, keep_open=False):
 
         wait_after = site.get("wait_after", 0)
         if wait_after:
-            log(f"  [{name}] 확인용으로 {wait_after}초 열어둡니다.")
+            log(f"  [{name}] 확인용으로 {wait_after}초 동안 열어 둡니다.")
             time.sleep(wait_after)
         if ok:
             status.done_step()           # 이 사이트를 끝냈다 - 마지막 사이트여도 실행 끝의 '중단' 에 안 덮인다 (토큰 셈)
@@ -1209,7 +1209,7 @@ def cmd_check():
     import otp_relay
     log(f"  {otp_relay.check_line()}")
     if not cfg:   # 새로 깐 PC 는 프리셋이 없다 - 오류가 아니다 (빌드가 끝 줄로 점검한다)
-        log("  프리셋이 아직 없습니다 (옵저버에서 쇼핑몰 프리셋을 저장하면 생깁니다).")
+        log("  프리셋이 아직 없습니다. (옵저버에서 쇼핑몰 프리셋을 저장하면 생성됩니다)")
 
     all_problems = []
     for name, site in cfg.items():
@@ -1256,7 +1256,7 @@ def cmd_selftest(headless):
         id_field.fill("테스트아이디")
         pw_field.fill("secret123")
         how = click_submit(page, {}, pw_field)
-        log(f"  로그인 눌렀습니다 ({how})")
+        log(f"  로그인 단추를 눌렀습니다. ({how})")
 
         page.wait_for_selector("#r:not(:empty)", timeout=5000)
         result = page.inner_text("#r")
@@ -1303,14 +1303,14 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         if blocked:
             for t in blocked:
                 log(f"{t}: Stts={site_stts(cfg[t])} 이라 실행하지 않습니다. "
-                    f"실행하려면 Stts 를 {STTS_RUN} 으로 바꾸세요.")
+                    f"실행하려면 Stts를 {STTS_RUN}(으)로 변경하여 주십시오.")
             return 1
         chosen = [(t, cfg[t]) for t in targets]
     else:
         chosen = [(n, s) for n, s in cfg.items()
                   if isinstance(s, dict) and site_will_run(s)]
         if not chosen:
-            log(f"실행할 사이트가 없습니다 (Stts={STTS_RUN} 인 사이트가 없습니다).")
+            log(f"실행할 사이트가 없습니다. (Stts={STTS_RUN}인 사이트가 없습니다)")
             return 1
 
     problems = []
@@ -1344,7 +1344,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
             # 창을 열어두고 기다리기 전에 닫는다. 기다리는 동안은 '끝난' 상태로 보여야 한다.
             status.finish("success" if done == len(chosen) else "stopped")
             if keep_open:
-                log("창을 열어둔 채 대기합니다. 끝내려면 Ctrl+C 를 누르세요.")
+                log("창을 열어 둔 채 대기합니다. 종료하려면 Ctrl+C를 눌러 주십시오.")
                 try:
                     while True:
                         time.sleep(1)
