@@ -362,6 +362,47 @@ try:
 finally:
     st.write_json_atomic = real_wja
 
+print("\n=== 13. 막 끈 감독 프로그램이 아직 쥔 exe - 잠깐 기다려 다시 옮긴다 (2026-10-16 전환 시험: 끊긴 뒤 되돌리기가 PermissionError) ===")
+d = tempfile.mkdtemp()
+src, dst = os.path.join(d, "new.exe"), os.path.join(d, "sub", "old.exe")
+open(src, "w").close()
+tries, real_replace, real_sleep = [0], os.replace, uh.time.sleep
+
+
+def locked_twice(a, b):
+    tries[0] += 1
+    if tries[0] <= 2:
+        raise PermissionError(5, "액세스가 거부되었습니다")
+    real_replace(a, b)
+
+
+os.replace, uh.time.sleep = locked_twice, lambda s: None
+try:
+    uh._move(src, dst)
+finally:
+    os.replace, uh.time.sleep = real_replace, real_sleep
+check(tries[0] == 3 and os.path.isfile(dst), f"두 번 잠겨 있다가 풀리면 세 번째에 옮긴다 ({tries[0]})")
+open(src, "w").close()
+os.replace, uh.time.sleep = (lambda a, b: (_ for _ in ()).throw(PermissionError(5, "x"))), (lambda s: None)
+try:
+    uh._move(src, dst)
+    check(False, "끝까지 잠겨 있으면 PermissionError (되돌리기가 오류로 남긴다)")
+except PermissionError:
+    check(True, "끝까지 잠겨 있으면 PermissionError (되돌리기가 오류로 남긴다)")
+finally:
+    os.replace, uh.time.sleep = real_replace, real_sleep
+ran = []
+o = uh.Ops()
+o._run = lambda args, timeout=120: ran.append(args) or 0
+real_held, st.lock_held = st.lock_held, lambda name: False
+try:
+    o.end_agent()
+finally:
+    st.lock_held = real_held
+check(ran[0][:2] == ["schtasks", "/End"] and any(a[0] == "taskkill" and "AFTER_MARKET_RPA_Supervisor.exe" in a and "AFTER_MARKET_RPA_Agent.exe" in a for a in ran),
+      f"에이전트 끄기는 작업을 끝낸 뒤 남은 감독·에이전트 프로세스도 끝낸다 ({ran})")
+shutil.rmtree(d, ignore_errors=True)
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

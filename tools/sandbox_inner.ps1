@@ -235,12 +235,33 @@ if (Test-Path "$T\site") {
   Check "제거 목록의 판 번호도 B" ((Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}_is1").DisplayVersion -eq $B)
   $uacl = (icacls "$App\rpa_dashboard.py") -join " "      # 바뀐 파일이 ProgramData 권한(관리자 전용)을 들고 와 옵저버가 안 열렸다 (2026-10-12)
   Check "업데이트로 바뀐 파일도 사용자가 읽고 실행할 수 있다 (Users)" ($uacl -match "Users") $uacl
+  # --from 전환 시험: 판 A = 옛 버전, 판 B = 새 빌드 (2026-10-16 node.exe 를 exe 에서 빼 playwright\node.exe 한 벌로) - 업데이트로 넘어가도 브라우저가 뜨나
+  function RunExe($exe, $arg, $tag) {
+    $p = Start-Process "$App\$exe" -ArgumentList $arg -WorkingDirectory $App -PassThru -WindowStyle Hidden -RedirectStandardOutput "$X\$tag.out.txt" -RedirectStandardError "$X\$tag.err.txt"
+    $ended = $p.WaitForExit(180000)
+    if (-not $ended) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    $b = [IO.File]::ReadAllBytes("$X\$tag.out.txt") + [IO.File]::ReadAllBytes("$X\$tag.err.txt")
+    # ACTOR 콘솔은 CP949 - 두 가지로 다 읽는다 (위 68행 점검과 같게)
+    return [Text.Encoding]::UTF8.GetString($b) + "`n" + [Text.Encoding]::GetEncoding(949).GetString($b) + $(if ($ended) { " [종료 코드 $($p.ExitCode)]" } else { " [180초 안에 끝나지 않음]" })
+  }
+  $transition = Test-Path "$T\site\transition.txt"
+  if ($transition) {
+    Check "전환: 판 B 에 playwright\node.exe 가 생겼다" (Test-Path "$App\playwright\node.exe")
+    $txt = RunExe "Prepare_Observer.exe" "--check" "tb_obs"
+    Check "전환: 업데이트 뒤 옵저버가 따로 둔 node 로 Edge 를 띄운다" ($txt -match "브라우저: Microsoft Edge \d") (($txt -split "`n" | Where-Object { $_ -match "브라우저|문제" }) -join " / ")
+    $txt = RunExe "Prepare_RPA.exe" "--selftest --headless" "tb_actor"
+    Check "전환: 업데이트 뒤 ACTOR 자체 테스트 통과" ($txt.Contains("자체 테스트 통과")) ($txt.Substring([Math]::Max(0, $txt.Length - 300)))
+  }
   # 도우미는 done 을 적고 뒷정리를 한 뒤에야 작업을 지운다 - 지워질 때까지 30초 기다린다
   for ($i = 0; $i -lt 30; $i++) { schtasks /Query /TN "\AFTER MARKET\RPA Update" *> $null; if ($LASTEXITCODE -ne 0) { break }; Start-Sleep 1 }
   Check "도우미 작업은 끝나면 지운다" ($LASTEXITCODE -ne 0)
   Upd "rollback" "" | Out-File "$O\upd_back.txt"
   $s = WaitState @("done", "rolled_back", "failed")
   Check "[이전 판으로 되돌리기] → 판 A" (($s -eq "done") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
+  if ($transition) {
+    $txt = RunExe "Prepare_Observer.exe" "--check" "ta_obs"
+    Check "전환: 옛 판으로 되돌린 뒤에도 옵저버가 Edge 를 띄운다 (옛 exe 는 node 를 품고 있다)" ($txt -match "브라우저: Microsoft Edge \d") (($txt -split "`n" | Where-Object { $_ -match "브라우저|문제" }) -join " / ")
+  }
   Upd "update" $C | Out-File "$O\upd_c.txt"
   $s = WaitState @("rolled_back", "done", "failed")
   Check "켜지지 않는 판 C → 3분 점검 실패 → 되돌림 (판 A)" (($s -eq "rolled_back") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
@@ -251,6 +272,11 @@ if (Test-Path "$T\site") {
   Check "끊긴 뒤 applying 이 남았다" ((WaitState @("applying") 5 1) -eq "applying")
   schtasks /Run /TN "\AFTER MARKET\RPA Update" | Out-Null
   $s = WaitState @("rolled_back", "done")
+  if ($s -ne "rolled_back") {                             # 원인을 볼 수 있게 남긴다 (2026-10-16 전환 시험에서 applying 그대로)
+    Copy-Item "$PD\update\업데이트_기록.txt" "$O\update_log.txt" -ErrorAction SilentlyContinue
+    schtasks /Query /TN "\AFTER MARKET\RPA Update" /V /FO LIST 2>&1 | Out-File "$O\helper_task.txt"
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" } | Out-File "$O\py_procs.txt"
+  }
   Check "다음 로그온(도우미 다시)에 되돌림 → 판 A (Review Focus 2)" (($s -eq "rolled_back") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
   Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
 }

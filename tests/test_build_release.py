@@ -293,16 +293,131 @@ class _Done:
     stdout = "4.2.2\n"
 
 
-real_run, br.subprocess.run = br.subprocess.run, lambda cmd, **kw: calls.append(kw) or _Done()
+built = []
+
+
+def fake_run(cmd, **kw):
+    """가짜 Nuitka: --output-filename 의 exe 를 '만든다' (매번 다른 내용 - 진짜 Nuitka 도 같은 소스에서 지문이 달라진다)"""
+    calls.append(kw)
+    out = next((a.split("=", 1)[1] for a in cmd if a.startswith("--output-filename=")), None)
+    if out:
+        built.append(out)
+        d = next(a.split("=", 1)[1] for a in cmd if a.startswith("--output-dir="))
+        write(os.path.join(d, out), os.urandom(16))
+    return _Done()
+
+
+real_run, br.subprocess.run = br.subprocess.run, fake_run
 try:
     with tempfile.TemporaryDirectory() as d:
-        br.build_exes(d, only=["Prepare_RPA.exe"])
+        br.build_exes(d, only=["Prepare_RPA.exe"], cache=os.path.join(d, "cache"))
 finally:
     br.subprocess.run = real_run
-env = calls[0].get("env") or {}
+env = next((c["env"] for c in calls if c.get("env")), {})   # 첫 부름은 nuitka --version
 check("Nuitka 는 링크에도 일반 x86-64 CPU 를 준다 (LDFLAGS) - 안 주면 Zig 가 이 PC(Ryzen 9700X)에 맞춘 AVX-512 memcpy 를 "
       "붙여 인텔 노트북에서 exe 가 켜지자마자 0xC000001D (2026-10-02)",
       env.get("LDFLAGS") == "-march=x86_64" and env.get("PATH") == os.environ.get("PATH"), str(env.get("LDFLAGS")))
+
+print("재료가 같은 exe 는 다시 만들지 않는다 (2026-10-16 사용자: 업데이트 크기 - 옵저버만 고쳐도 exe 셋 115MB 를 받았다)")
+imp = {exe: {os.path.basename(p) for p in br.local_imports(os.path.join(str(ROOT), src))} for exe, src in br.EXES.items()}
+check("옵저버 exe 의 재료에 기록기(web_replay)·상태(rpa_status)가 들어간다 (함수 안 import 까지)",
+      {"rpa_observer.py", "web_replay.py", "rpa_status.py"} <= imp["Prepare_Observer.exe"], str(sorted(imp["Prepare_Observer.exe"])))
+check("PROCESS exe 의 재료에 옵저버·ACTOR 파일은 없다 (옵저버만 고치면 PROCESS 는 그대로)",
+      "rpa_observer.py" not in imp["ERPia_RPA.exe"] and "web_runner.py" not in imp["ERPia_RPA.exe"], str(sorted(imp["ERPia_RPA.exe"])))
+check("ACTOR exe 재료에 --include-module 로 넣는 에이전트 모듈(fb·secret)도 든다",
+      {"fb.py", "secret.py"} <= {os.path.basename(p) for p in br.exe_sources("Prepare_RPA.exe")})
+real_run, real_imports, br.subprocess.run = br.subprocess.run, br.local_imports, fake_run
+try:
+    with tempfile.TemporaryDirectory() as d:
+        src = {exe: os.path.join(d, f"{exe}.py") for exe in br.EXES}
+        for p in src.values():
+            write(p, b"x = 1\n")
+        br.local_imports = lambda entry: [src[e] for e, s in br.EXES.items() if entry.endswith(s)]   # 에이전트 모듈은 재료 없음
+        work, cache = os.path.join(d, "work"), os.path.join(d, "cache")
+        built.clear()
+        first = br.build_exes(work, cache=cache)
+        check("처음(보관된 것 없음)에는 셋 다 만들고 보관한다",
+              sorted(built) == sorted(br.EXES) and all(os.path.isfile(os.path.join(cache, e)) for e in br.EXES), str(built))
+        before = {e: Path(work, e).read_bytes() for e in br.EXES}
+        built.clear()
+        second = br.build_exes(work, cache=cache)
+        check(f"재료가 그대로면 하나도 안 만들고 보관한 exe 를 그대로 (지문이 같아 PC 가 안 받는다) - {second}",
+              built == [] and all(Path(work, e).read_bytes() == before[e] for e in br.EXES) and "그대로 3" in second, str(built))
+        write(src["Prepare_Observer.exe"], b"x = 2\n")
+        built.clear()
+        third = br.build_exes(work, cache=cache)
+        check(f"옵저버 재료만 바뀌면 옵저버만 다시 만든다 - {third}", built == ["Prepare_Observer.exe"]
+              and Path(work, "Prepare_Observer.exe").read_bytes() != before["Prepare_Observer.exe"]
+              and Path(work, "ERPia_RPA.exe").read_bytes() == before["ERPia_RPA.exe"], str(built))
+        built.clear()
+        br.build_exes(work, cache=cache, force=True)
+        check("--rebuild-all 이면 재료가 같아도 셋 다 다시", sorted(built) == sorted(br.EXES), str(built))
+        Path(cache, "ERPia_RPA.exe").unlink()
+        built.clear()
+        br.build_exes(work, cache=cache)
+        check("보관한 exe 가 없어졌으면 지문이 같아도 다시 만든다", built == ["ERPia_RPA.exe"], str(built))
+        Path(cache, "Prepare_RPA.exe").write_bytes(b"tampered")
+        built.clear()
+        br.build_exes(work, cache=cache)
+        check("보관한 exe 의 내용이 바뀌었으면(깨짐·변조) 다시 만든다 (.inputs 에 exe 지문도)", built == ["Prepare_RPA.exe"], str(built))
+        real_fake = br.subprocess.run
+
+        def fat_run(cmd, **kw):          # node.exe 가 다시 들어간 듯 큰 exe
+            r = real_fake(cmd, **kw)
+            out = next((a.split("=", 1)[1] for a in cmd if a.startswith("--output-filename=")), None)
+            if out:
+                d2 = next(a.split("=", 1)[1] for a in cmd if a.startswith("--output-dir="))
+                write(os.path.join(d2, out), b"\0" * ((br.NODE_IN_EXE_MB + 1) * 2 ** 20))
+            return r
+        br.subprocess.run = fat_run
+        try:
+            br.build_exes(work, only=["Prepare_RPA.exe"], cache=cache, force=True)
+            check("node.exe 를 뺀 exe 가 40MB 를 넘으면 (빼기가 안 맞음) 멈추고 보관하지 않는다", False)
+        except RuntimeError as e:
+            check("node.exe 를 뺀 exe 가 40MB 를 넘으면 (빼기가 안 맞음) 멈추고 보관하지 않는다",
+                  "node.exe" in str(e) and os.path.getsize(os.path.join(cache, "Prepare_RPA.exe")) < 2 ** 20, str(e))
+        br.subprocess.run = fake_run
+finally:
+    br.subprocess.run, br.local_imports = real_run, real_imports
+print("Playwright node.exe(89MB)는 exe 마다 싣지 않고 프로그램 폴더에 한 벌 (2026-10-16 업데이트 크기 2단계)")
+pw_exes = [e for e, extra in br.NUITKA_EXTRA.items() if "--include-package=playwright" in extra]
+check(f"Playwright 를 쓰는 exe({pw_exes})는 node.exe 를 빼고 만든다 (Nuitka 는 node 를 DLL 로 싣는다 - --noinclude-dlls)",
+      sorted(pw_exes) == ["Prepare_Observer.exe", "Prepare_RPA.exe"]
+      and all(br.NODE_EXCLUDE in br.NUITKA_EXTRA[e] for e in pw_exes) and br.NODE_EXCLUDE == "--noinclude-dlls=playwright/driver/node.exe")
+node = dict(br.PROGRAM_FILES).get("playwright/node.exe")
+check("node.exe 는 판 목록(프로그램 파일)에 한 벌 - 지문이 같으면 PC 가 다시 안 받는다, 원본은 깔린 playwright 의 것",
+      bool(node) and os.path.isfile(os.path.join(str(ROOT), *node.split("/"))) and os.path.getsize(os.path.join(str(ROOT), *node.split("/"))) > 50 * 2 ** 20, str(node))
+import web_replay  # noqa: E402
+with tempfile.TemporaryDirectory() as d:
+    check("exe 는 프로그램 폴더의 playwright\\node.exe 를 찾는다, 없으면 None (그때는 Playwright 기본 자리)",
+          web_replay.shared_node(d) is None)
+    write(os.path.join(d, "playwright", "node.exe"), b"MZ")
+    check("… 있으면 그 경로", web_replay.shared_node(d) == os.path.join(d, "playwright", "node.exe"))
+import playwright._impl._transport as pw_transport  # noqa: E402
+real_driver = pw_transport.compute_driver_executable
+try:
+    with tempfile.TemporaryDirectory() as d:
+        web_replay.use_shared_node(d)                # node 가 없는 프로그램 폴더
+        try:
+            pw_transport.compute_driver_executable()
+            check("node.exe 가 없으면 드라이버를 띄울 때 사람 말로 멈춘다 ('설치 파일로 다시 설치')", False)
+        except RuntimeError as e:
+            check("node.exe 가 없으면 드라이버를 띄울 때 사람 말로 멈춘다 ('설치 파일로 다시 설치')",
+                  str(e) == web_replay.NODE_MISSING and "다시 설치" in str(e), str(e))
+finally:
+    pw_transport.compute_driver_executable = real_driver
+src_wr = (ROOT / "web_replay.py").read_text(encoding="utf-8")
+check("web_replay 를 불러오면 (exe 일 때만) PLAYWRIGHT_NODEJS_PATH 를 그 경로로 - ACTOR·옵저버 둘 다 web_replay 를 부른다",
+      'os.environ["PLAYWRIGHT_NODEJS_PATH"]' in src_wr and 'globals().get("__compiled__")' in src_wr)
+import update_helper  # noqa: E402
+check("감독·에이전트 사본은 판 번호가 아니라 고정 버전으로 찍는다 (판마다 같은 파일 - 업데이트에 안 들어간다)",
+      br.BRAND_VERSION == "1.0.0.0" and "collect(out_dir, work, version=BRAND_VERSION)" in Path(br.__file__).read_text(encoding="utf-8"))
+check("도우미가 끄는 사본 이름 = 빌드가 만드는 사본 이름",
+      set(update_helper.BRANDED_EXES) == set(br.BRANDED), str(update_helper.BRANDED_EXES))
+fp = br.exe_fingerprint("ERPia_RPA.exe", "nuitka 4.2.2 · python 3.14.7")
+check("지문은 Nuitka·파이썬 버전이 바뀌어도 달라진다",
+      fp != br.exe_fingerprint("ERPia_RPA.exe", "nuitka 4.2.3 · python 3.14.7") and fp == br.exe_fingerprint("ERPia_RPA.exe", "nuitka 4.2.2 · python 3.14.7"))
+
 lock = re.search(r'OBSERVER_LOCK = os\.environ\.get\("RPA_OBSERVER_LOCK"\) or r"([^"]+)"', (ROOT / "rpa_status.py").read_text(encoding="utf-8"))
 prep_code = iss[iss.find("function PrepareToInstall"):iss.find("function InitializeUninstall")]
 check("옵저버가 켜져 있으면 판 올림·지우기를 시작 전에 멈춘다 (켜진 exe 는 덮지 못한다) - 잠금 이름은 rpa_status 와 같고, "

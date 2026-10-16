@@ -1,9 +1,10 @@
 r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpowers/specs/2026-09-29-release-layout-design.md,
 2026-09-29-installer-design.md).
 
-    .venv\Scripts\python.exe tools\build_release.py [--exes-from <판 폴더>] [--no-setup] [--to-dist]
+    .venv\Scripts\python.exe tools\build_release.py [--exes-from <판 폴더>] [--rebuild-all] [--no-setup] [--to-dist]
 
-1. exe 셋을 만든다 (build\release 에). --exes-from 이면 그 판 폴더의 exe 를 가져온다 (exe 소스가 안 바뀐 판)
+1. exe 셋을 만든다 (build\release 에). 재료(소스·옵션·패키지)가 지난번과 같은 exe 는 build\exe_cache 의 것을 그대로 쓴다 -
+   같은 파일이라 PC 가 업데이트 때 다시 받지 않는다. --rebuild-all 이면 모두 새로. --exes-from 이면 그 판 폴더의 exe 를 가져온다
 2. 정해 둔 파일만 D:\AX\배포_<판 번호>\ 에 모은다
 3. 판 목록(manifest.json)을 쓴다
 4. D:\AX\배포_<판 번호>.zip 으로 압축한다 (맨 위 폴더도 같은 이름 - 손으로 넘기는 대비책)
@@ -12,9 +13,13 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다. 설치 파일은 5번을 통과한 판 폴더로만 만든다).
 """
 import argparse
+import ast
 import datetime
 import fnmatch
+import glob
 import hashlib
+import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -61,6 +66,7 @@ PROGRAM_FILES = [
     ("rpa_update.py", "rpa_update.py"),                                       # 자동 업데이트 (3부)
     ("update_helper.py", "update_helper.py"),
     ("update_sign.py", "update_sign.py"),
+    ("playwright/node.exe", ".venv/Lib/site-packages/playwright/driver/node.exe"),   # ACTOR·옵저버가 같이 쓰는 Playwright node (NODE_EXCLUDE)
 ]
 # 판 목록에 넣지 않는 것 (문서·빈 배포 틀). 업데이트가 건드리지 않는다
 OTHER_FILES = [
@@ -83,6 +89,9 @@ NUITKA_YML = os.path.join(REPO, "tools", "nuitka-package.config.yml")   # comtyp
 # 설명 칸(작업 관리자 '프로세스' 탭이 보여 주는 글자)을 바꾼다. 사본은 파이썬 재단 서명이 빠진다 (Defender 는 통과)
 BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "오토파일럿 에이전트 감독"),
            bg.AGENT_EXE: ("python.exe", "오토파일럿 에이전트")}
+# 사본의 파일 버전은 고정 - 판 번호를 찍으면 판마다 바이트가 달라 업데이트 때마다 바뀌었고, 감독이 쥔 채로 끊긴 업데이트를
+# 되돌리다 PermissionError 가 났다 (2026-10-16 전환 시험). 같은 파이썬·아이콘이면 판이 바뀌어도 같은 파일이라 PC 가 안 받는다
+BRAND_VERSION = "1.0.0.0"
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
 ICON = os.path.join(REPO, "release", "AFTER_MARKET.ico")
 ICON_PROCESS = os.path.join(REPO, "release", "AUTOPILOT_PROCESS.ico")       # 프로그램마다 바탕색이 다르다 (2026-10-13 오토파일럿)
@@ -96,9 +105,15 @@ NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--remove-output",
 # CPU(Ryzen 9700X)에 맞춰 AVX-512 를 써서, AVX-512 가 없는 인텔 노트북에서 exe 가 켜지자마자 0xC000001D 로 죽었다
 # (2026-10-02 시연 노트북. 샌드박스는 이 PC 의 CPU 를 그대로 써서 못 잡는다). Nuitka 가 LDFLAGS 를 링크에 붙인다
 NUITKA_ENV = {"LDFLAGS": "-march=x86_64"}
-PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright"]
+# Playwright 의 node.exe(89MB, 압축해도 exe 마다 30MB 안팎)는 exe 에 싣지 않고 프로그램 폴더 playwright/node.exe 에 한 벌 -
+# ACTOR·옵저버가 같이 쓰고 playwright 를 올리기 전엔 지문이 그대로라 업데이트 때 다시 안 받는다 (2026-10-16, web_replay.shared_node).
+# Nuitka 는 node 를 데이터가 아니라 DLL 로 싣는다 (standard.nuitka-package.config.yml 'playwright' dlls)
+NODE_EXCLUDE = "--noinclude-dlls=playwright/driver/node.exe"
+NODE_REL = ("playwright", "node.exe")   # 배포판 안 자리 (web_replay.NODE_REL 과 같게 - PROGRAM_FILES 의 "playwright/node.exe")
+PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright", NODE_EXCLUDE]
 # 문자 2차인증 중계(otp_relay)가 쓰는 에이전트 모듈 - firebase/agent 에 있어 빌드 때 PYTHONPATH 로 찾게 한다 (설계 13절)
 AGENT_DIR = os.path.join(REPO, "firebase", "agent")
+EXE_CACHE = os.path.join(REPO, "build", "exe_cache")   # 지난번에 만든 exe 와 재료 지문 (exe_fingerprint) - 재료가 같으면 다시 만들지 않는다
 AGENT_MODULES = ["--include-module=fb", "--include-module=secret"]
 TK_PLUGIN = "--enable-plugin=tk-inter"
 # 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
@@ -326,6 +341,8 @@ def smoke_check(zip_path, timeout=180):
                 out = r.stdout + r.stderr
                 if not found_marker(out, marker):
                     problems.append(f"{exe} --check 가 끝까지 가지 않았습니다: {out[-300:].decode('utf-8', 'replace')}")
+                elif exe == "Prepare_Observer.exe" and not found_marker(out, "브라우저: Microsoft Edge"):   # 따로 둔 node.exe 로 Playwright 가 도는지
+                    problems.append(f"{exe} --check 가 브라우저를 띄우지 못했습니다: {out[-300:].decode('utf-8', 'replace')}")
             except subprocess.TimeoutExpired:
                 problems.append(f"{exe} --check 가 {timeout}초 안에 끝나지 않았습니다")
             except OSError as e:   # 보안 프로그램이 격리·차단했거나 실행 파일이 깨짐 - 오류 추적 대신 판정으로 끝낸다
@@ -365,19 +382,106 @@ def nuitka_command(py, exe, work_dir, tk_dirs=None):
             os.path.join(REPO, EXES[exe])]
 
 
-def build_exes(work_dir, only=None):
-    """exe 들(only 를 주면 그것만)을 Nuitka 로 work_dir 에 만든다. 판 목록의 builder 칸 글자를 돌려준다
-    ("nuitka 4.2.2 · python 3.14.7"). 옵저버(tk-inter)가 Nuitka 로만 돼서 PyInstaller 선택지는 뺐다 (2026-10-02)."""
+def local_imports(entry, roots=(REPO, AGENT_DIR)):
+    """entry 가 차례로 import 하는 저장소 안 .py 파일들 (자기 포함, 함수 안 import 도). exe 재료 지문에 쓴다."""
+    seen, todo = set(), [os.path.abspath(entry)]
+    while todo:
+        path = todo.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        with open(path, encoding="utf-8") as f:
+            tree = ast.parse(f.read(), path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names = [node.module]
+            else:
+                continue
+            for name in names:
+                hit = next((p for p in (os.path.join(r, *name.split(".")) + ".py" for r in roots) if os.path.isfile(p)), None)
+                if hit:
+                    todo.append(os.path.abspath(hit))
+    return sorted(seen)
+
+
+def exe_sources(exe):
+    """exe 에 들어가는 저장소 파이썬 파일: 시작 파일 + --include-module 로 넣는 에이전트 모듈과 그것들이 부르는 것."""
+    roots = [os.path.join(REPO, EXES[exe])] + [os.path.join(AGENT_DIR, a.split("=", 1)[1] + ".py")
+                                               for a in NUITKA_EXTRA[exe] if a.startswith("--include-module=")]
+    return sorted({p for r in roots if os.path.isfile(r) for p in local_imports(r)})
+
+
+def exe_fingerprint(exe, tool):
+    """exe 재료 지문 - 같으면 지난번 exe 를 그대로 쓴다 (Nuitka 는 같은 소스에서도 매번 다른 exe 를 만들어, 안 바뀐 exe 까지
+    PC 가 다시 받았다 - 2026-10-16). 재료: 저장소 파이썬 파일, Nuitka 옵션과 옵션이 가리키는 파일(아이콘·DLL·설정),
+    빌드 환경 변수, Nuitka·파이썬 버전(tool), 깔린 패키지 버전 전부."""
+    h = hashlib.sha256()
+    put = lambda *parts: [h.update(str(p).encode("utf-8") + b"\0") for p in parts]
+    put(tool, json.dumps(NUITKA_ENV, sort_keys=True))
+    cmd = nuitka_command("python", exe, "OUT", ("TCL", "TK"))       # 자리 값 - tcl/tk 폴더는 파이썬 버전을 따른다
+    put(*cmd)
+    for arg in cmd:
+        p = arg.split("=", 1)[-1].split("=", 1)[0]                   # --include-data-files=원본=대상 → 원본
+        if os.path.isfile(p):
+            put(p)
+            h.update(open(p, "rb").read())
+    for p in exe_sources(exe):
+        put(os.path.relpath(p, REPO) if p.startswith(REPO) else p)
+        h.update(open(p, "rb").read())
+    put(*sorted(f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions()))
+    # comtypes 가 PC 의 UIA 형식 라이브러리로 만들어 둔 모듈 (--include-package=comtypes 로 exe 셋에 들어간다).
+    # 패키지 버전이 같아도 다시 만들어질 수 있다 (검토 2026-10-16 - 이 PC 는 10-15 에 다시 만들어졌다)
+    gen = os.path.join(importlib.util.find_spec("comtypes").submodule_search_locations[0], "gen")
+    for p in sorted(glob.glob(os.path.join(gen, "*.py"))):
+        put(os.path.basename(p))
+        h.update(open(p, "rb").read())
+    return h.hexdigest()
+
+
+def _sha(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+
+NODE_IN_EXE_MB = 40   # node.exe 를 뺀 ACTOR·옵저버는 25MB 안팎 - 이보다 크면 --noinclude-dlls 가 안 맞은 것 (Nuitka·playwright 를 올린 뒤)
+
+
+def build_exes(work_dir, only=None, cache=EXE_CACHE, force=False):
+    """exe 들(only 를 주면 그것만)을 Nuitka 로 work_dir 에 만든다. 재료 지문(exe_fingerprint)이 cache 에 보관한
+    지난번 exe 와 같으면 다시 만들지 않고 그 exe 를 쓴다 (force 면 늘 새로). 판 목록의 builder 칸 글자를 돌려준다
+    ("nuitka 4.2.2 · python 3.14.7 (새로 1: …, 그대로 2)"). 옵저버(tk-inter)가 Nuitka 로만 돼서 PyInstaller 선택지는 뺐다 (2026-10-02)."""
     os.makedirs(work_dir, exist_ok=True)
+    os.makedirs(cache, exist_ok=True)
     py = sys.executable
+    ver = subprocess.run([py, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
+    tool = f"nuitka {ver} · python {platform.python_version()}"
     tk_dirs = None
+    made, kept = [], []
     for exe in (only or EXES):
+        fp, keep = exe_fingerprint(exe, tool), os.path.join(cache, exe)
+        try:   # .inputs = 재료 지문 + 보관한 exe 의 지문 (보관한 exe 가 깨지거나 바뀌었으면 다시 만든다)
+            same = not force and os.path.isfile(keep) and open(keep + ".inputs", encoding="utf-8").read().split() == [fp, _sha(keep)]
+        except OSError:
+            same = False
+        if same:
+            shutil.copy2(keep, os.path.join(work_dir, exe))
+            kept.append(exe)
+            print(f"  {exe}: 재료가 지난번과 같아 그대로 씁니다")
+            continue
         if TK_PLUGIN in NUITKA_EXTRA[exe] and tk_dirs is None:
             tk_dirs = tcl_tk_dirs(work_dir)
         env = dict(os.environ, **NUITKA_ENV, PYTHONPATH=os.pathsep.join(filter(None, [AGENT_DIR, os.environ.get("PYTHONPATH")])))
         subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True, env=env)
-    ver = subprocess.run([py, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
-    return f"nuitka {ver} · python {platform.python_version()}"
+        built = os.path.join(work_dir, exe)
+        if NODE_EXCLUDE in NUITKA_EXTRA[exe] and os.path.getsize(built) > NODE_IN_EXE_MB * 2 ** 20:
+            raise RuntimeError(f"{exe} 가 {os.path.getsize(built) // 2 ** 20}MB 입니다 - node.exe 가 다시 들어갔습니다 "
+                               f"({NODE_EXCLUDE} 가 안 맞음: Nuitka·playwright 가 node 를 싣는 자리를 확인하세요)")
+        shutil.copy2(built, keep)
+        with open(keep + ".inputs", "w", encoding="utf-8") as f:              # exe 를 다 보관한 뒤에 지문 - 중간에 죽으면 다음에 다시 만든다
+            f.write(f"{fp}\n{_sha(keep)}\n")
+        made.append(exe)
+    return f"{tool} (새로 {len(made)}{': ' + ', '.join(made) if made else ''}, 그대로 {len(kept)})"
 
 
 def reuse_exes(src_dir, work_dir):
@@ -458,6 +562,7 @@ def main(argv=None):
                     help="exe 셋을 이 PC 의 dist 에도 복사한다 (설정 파일은 건드리지 않는다)")
     ap.add_argument("--exes-from", metavar="판폴더", help="exe 셋을 만들지 않고 이 판 폴더에서 가져온다 (exe 소스가 안 바뀐 판)")
     ap.add_argument("--no-setup", action="store_true", help="설치 파일(setup.exe)을 만들지 않는다")
+    ap.add_argument("--rebuild-all", action="store_true", help="재료가 지난번과 같아도 exe 셋을 모두 새로 만든다")
     args = ap.parse_args(argv)
     problem = signing_key_problem()
     if problem:
@@ -467,12 +572,12 @@ def main(argv=None):
     work = os.path.join(REPO, "build", "release")
     print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else 'Nuitka'})")
     try:
-        builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(work)
+        builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(work, force=args.rebuild_all)
     except (FileNotFoundError, RuntimeError) as e:
         print("  문제:", e)
         return 1
     out_dir = os.path.join(OUT_ROOT, f"배포_{version}")
-    program = collect(out_dir, work, version=num_version(version))
+    program = collect(out_dir, work, version=BRAND_VERSION)
     man = write_manifest(out_dir, version, builder, program)
     zip_path = out_dir + ".zip"
     make_zip(out_dir, zip_path)
@@ -483,6 +588,8 @@ def main(argv=None):
         print("  문제:", p)
     if problems:
         print(f"배포판에 문제가 {len(problems)}건 있습니다. {zip_path} 를 쓰지 마세요")
+        print("  exe 가 의심되면 --rebuild-all 로 다시 만드세요 (재료가 같으면 보관한 exe 를 또 씁니다 - 보관 폴더는 지우지 말 것: "
+              "멀쩡한 exe 까지 새로 만들어 PC 가 다 다시 받는다)")
         return 1
     if not args.no_setup:
         try:
@@ -494,7 +601,8 @@ def main(argv=None):
     if args.to_dist:
         for exe in EXES:
             shutil.copy2(os.path.join(out_dir, exe), os.path.join(REPO, "dist", exe))
-        print("  dist 에 exe 셋을 복사했습니다 (설정 파일은 그대로)")
+        _copy(os.path.join(out_dir, *NODE_REL), os.path.join(REPO, "dist"), "/".join(NODE_REL))   # ACTOR·옵저버가 dist 옆에서 찾는다 (검토 2026-10-16)
+        print("  dist 에 exe 셋과 playwright\\node.exe 를 복사했습니다 (설정 파일은 그대로)")
     print(f"판 {version}  {zip_path}  ({os.path.getsize(zip_path) // 2 ** 20}MB)")
     removed = prune_local(OUT_ROOT, protect=[args.exes_from])      # 새 판이 다 만들어진 뒤에만 옛 판을 찾아 지운다
     print(f"  {OUT_ROOT} 의 옛 판을 지웠습니다: {', '.join(removed)}" if removed else f"  {OUT_ROOT} 에 지울 옛 판이 없습니다 (최신 {LOCAL_KEEP}개)")
