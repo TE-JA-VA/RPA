@@ -92,10 +92,23 @@ onAuthStateChanged(auth, async (user) => {
     $("login-alert").textContent = "에이전트 계정으로는 화면에 로그인할 수 없습니다."; show($("login-alert"), true);
     return;
   }
-  me = { uid: user.uid, email: user.email, cid: t.claims.cid || null, role: t.claims.role || null };
+  // 총괄은 업체가 없다 - 관리 화면 [대시보드 보기] 가 연 주소의 ?cid= 업체를 본다 (규칙이 총괄에게 모든 업체를 연다). 다른 역할은 주소를 무시
+  const want = new URLSearchParams(location.search).get("cid") || "";
+  const asSuper = t.claims.role === "super" ? (/^[A-Za-z0-9_-]{1,40}$/.test(want) ? want : "") : null;
+  me = { uid: user.uid, email: user.email, cid: asSuper ?? (t.claims.cid || null), role: t.claims.role || null };
   $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "유저"})`;
+  show($("super-bar"), asSuper !== null);
+  if (asSuper === "") {
+    $("super-bar").textContent = "총괄 계정입니다. 관리 화면의 업체 상세에서 [대시보드 보기]를 눌러 업체 화면을 열어 주십시오.";
+    $("company").textContent = ""; $("app-nav").replaceChildren(); $("admin-nav").replaceChildren(); $("page-title").textContent = "";
+    show($("pc-pick"), false); show($("login"), false); show($("main"), true);
+    return;
+  }
   await loadCompany();
-  if (company.stts === 9) {   // 삭제(비활성)된 업체. setup.js remove 가 계정도 막지만 이미 받은 토큰은 1시간 살아서 화면에서도 막는다
+  if (asSuper) {
+    $("super-bar").textContent = `총괄 계정으로 ${company.name || asSuper} (${asSuper}) 업체 화면을 보고 있습니다. 실행과 설정 변경은 실제로 적용됩니다.`
+      + (company.stts === 9 ? " 사용이 중지된 업체입니다." : "");
+  } else if (company.stts === 9) {   // 삭제(비활성)된 업체. setup.js remove 가 계정도 막지만 이미 받은 토큰은 1시간 살아서 화면에서도 막는다
     await signOut(auth);
     $("login-alert").textContent = "사용이 중지된 업체입니다."; show($("login-alert"), true);
     return;

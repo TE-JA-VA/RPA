@@ -1431,7 +1431,29 @@ with sync_playwright() as pw:
     db_put("meta/companies/c_gone/stts", 0)
     login(page, "gone@t.local")
     check("gone@t.local" in page.text_content("#who") and "지운 회사" in page.text_content("#company"), "되살리면(stts=0) 들어온다")
+    # 업체 관리자는 주소에 다른 업체를 붙여도 자기 업체만
+    page.goto(WEB + "&cid=c_demo"); page.wait_for_selector("#main:not(.hide)", timeout=15000)
+    check("지운 회사" in page.text_content("#company") and page.is_hidden("#super-bar"), "업체 관리자는 주소의 cid 를 무시하고 자기 업체 (띠 없음)")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+
+    print("9-2절 총괄 계정으로 업체 화면 보기 (관리 화면 [대시보드 보기])")
+    make_user("super@t.local", "pw123456", {"role": "super"})
+    login(page, "super@t.local")
+    page.wait_for_selector("#super-bar:not(.hide)")
+    check("관리 화면" in page.text_content("#super-bar") and page.query_selector("#hero") is None,
+          "업체를 지정하지 않은 총괄 계정은 빈 화면 대신 관리 화면에서 열라는 안내")
+    page.goto(WEB + "&cid=c_demo"); page.wait_for_selector("#hero", timeout=15000)   # 한 번 로그인하면 주소만 바꿔 연다
+    bar = page.text_content("#super-bar")
+    check("시연 회사" in page.text_content("#company") and "총괄 계정" in bar and "시연 회사" in bar and "실제로 적용" in bar,
+          f"?cid=c_demo 로 열면 그 업체 화면 + 총괄로 보는 중이라는 띠 ({bar})")
+    goto(page, "settings")
+    check(page.is_visible("#mod-card"), "총괄은 그 업체 환경설정도 연다")
+    page.goto(WEB + "&cid=c_gone"); page.wait_for_selector("#main:not(.hide)", timeout=15000)
+    check("지운 회사" in page.text_content("#company"), "다른 업체 주소로 바꾸면 그 업체")
+    page.goto(WEB + "&cid=../c_demo"); page.wait_for_selector("#super-bar:not(.hide)", timeout=15000)
+    check(page.query_selector("#hero") is None and "관리 화면" in page.text_content("#super-bar"), "업체코드 꼴이 아닌 cid 는 지정 안 한 것과 같다")
+    page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+    page.goto(WEB)
 
     print("10절 버전 표시")
     login(page, "admin@t.local", pw="newpass123")   # 7절에서 이 계정 비밀번호를 바꿨다

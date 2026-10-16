@@ -342,6 +342,12 @@ with sync_playwright() as pw:
     page.click("#companies tr[data-cid='t_new']")
     page.wait_for_function("document.querySelector('#detail table.wallet td.left')?.textContent === '600'", timeout=15000)
     check(True, "줄을 누르면 상세: 현재 토큰 600")
+    page.evaluate("() => { window.__opened = []; window.open = (u, t) => { window.__opened.push({ u: String(u), t: String(t) }); }; }")   # 이 시험엔 업체 웹(Hosting)이 없어 여는 주소만 본다
+    page.click("#open-dash")
+    opened = page.evaluate("window.__opened")
+    dash = opened[0]["u"] if opened and opened[0]["t"] == "_blank" else str(opened)
+    check(page.text_content("#open-dash") == "대시보드 보기" and dash.endswith("cid=t_new") and "127.0.0.1:5000" in dash,
+          "[대시보드 보기] 는 업체 대시보드를 그 업체(?cid=)로 새 탭에 연다 (에뮬레이터면 에뮬레이터 Hosting)", dash)
     heads = [h.strip() for h in page.locator("#detail table.wallet th").all_text_contents()]
     check(heads == ["발급한 토큰", "사용한 토큰", "현재 토큰", "토큰 정보 생성"], f"토큰 정보는 표로 ({heads})")
     OLD = ("기계", "열람자", "통장", "막기", "막힘", "막을", "막았", "열기", "열림", "열었", "더하기", "더했", "삭제", "되살",

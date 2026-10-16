@@ -98,6 +98,7 @@
   .side .foot .row { display:flex; gap:8px; }
   .side .foot button { flex:1; padding:7px 10px; font-size:13px; white-space:nowrap; }
   .main { flex:1; min-width:0; padding:20px 24px 32px; }
+  .super-bar { background:var(--warn-bg); color:var(--strong); border-left:4px solid var(--warn-mark); border-radius:8px; padding:10px 14px; margin-bottom:14px; font-weight:600; }   /* 총괄 계정이 업체 화면을 보는 중 */
   .main .top { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
   .main .top h2 { margin:0; font-size:20px; }
   /* PC 고르기 (사용자가 준 예시 방식): 올리거나 누르면 목록이 아래로 미끄러져 나온다. 지금 고른 PC 는 목록에 없다.
@@ -408,6 +409,7 @@
   </aside>
 
   <main class="main">
+    <div id="super-bar" class="super-bar hide" role="status"></div>
     <div class="top"><h2 id="page-title"></h2><div id="pc-pick" class="pc-pick hide"></div></div>
     <div id="app-root"></div>
   </main>

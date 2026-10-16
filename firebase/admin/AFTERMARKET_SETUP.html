@@ -38,6 +38,7 @@
   #releases td:nth-child(4) { white-space:normal; width:100%; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:16px; }
   h2 { margin:0 0 12px; font-size:17px; color:var(--strong); }
+  h2 .h2-btn { margin-left:10px; font-size:13px; vertical-align:middle; }   /* 업체 상세 제목 옆 [대시보드 보기] */
   h3 { margin:18px 0 6px; font-size:15px; color:var(--strong); }
   table { width:100%; border-collapse:collapse; font-size:14px; }
   th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
@@ -247,10 +248,13 @@ async function openDetail(cid, keep) {
   current = cid;
   for (const tr of $("companies").children) tr.classList.toggle("on", tr.dataset.cid === cid);
   const box = $("detail");
-  box.replaceChildren(el("h2", {}, `${d.name} (${d.cid})`, d.stts === 9 ? el("span", { class: "muted" }, " · 비활성화된 업체") : ""),
+  box.replaceChildren(el("h2", {}, `${d.name} (${d.cid})`, d.stts === 9 ? el("span", { class: "muted" }, " · 비활성화된 업체") : "",
+      el("button", { id: "open-dash", class: "h2-btn", onclick: () => window.open(dashUrl(d.cid), "_blank", "noopener") }, "대시보드 보기")),
     keep ?? "", pcSection(d), phoneSection(d), userSection(d), tokenSection(d), moduleSection(d), limitSection(d), presetSection(d), dangerSection(d));
   box.classList.remove("hide");
 }
+// 업체 대시보드를 그 업체로 연다 - 총괄 계정으로 로그인하면 그 업체 화면 (web/app.js ?cid=). 에뮬레이터 시험이면 에뮬레이터 Hosting
+const dashUrl = (cid) => `${info.emulator ? "http://127.0.0.1:5000/?emu=1&" : `${info.dashboard}/?`}cid=${encodeURIComponent(cid)}`;
 const refresh = (cid, keep) => { openDetail(cid, keep); loadCompanies(); };
 const UPD_TEXT = { downloading: "업데이트 받는 중", waiting: "업데이트 대기 중", ready: "바꾸는 중", applying: "바꾸는 중", rolling_back: "바꾸는 중",
   failed: "업데이트 실패", rolled_back: "업데이트 실패 - 이전 버전으로 되돌림" };
