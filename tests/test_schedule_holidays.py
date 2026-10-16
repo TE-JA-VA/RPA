@@ -34,7 +34,10 @@ print("=== 1. 공휴일 표 ===")
 check(all(D(k).isoformat() == k and v.strip() for k, v in kr_holidays.HOLIDAYS.items()), "날짜는 모두 YYYY-MM-DD, 이름이 있다")
 check(kr_holidays.LAST_YEAR >= 2027 and any(k.startswith(f"{kr_holidays.LAST_YEAR}-") for k in kr_holidays.HOLIDAYS),
       f"{kr_holidays.LAST_YEAR}년까지 들어 있다")
-for day, name in (("2026-12-25", "성탄절"), ("2027-02-09", "대체공휴일"), ("2027-09-15", "추석"), ("2027-12-27", "대체공휴일")):
+for day, name in (("2026-12-25", "성탄절"), ("2027-02-09", "대체공휴일"), ("2027-09-15", "추석"), ("2027-12-27", "대체공휴일"),
+                  ("2026-07-17", "제헌절"), ("2027-07-17", "제헌절"), ("2027-07-19", "대체공휴일 (제헌절)")):
+    check(name in kr_holidays.HOLIDAYS.get(day, ""), f"{day} {name}")
+for day, name in (("2026-05-01", "노동절"), ("2027-05-01", "노동절"), ("2027-05-03", "대체공휴일 (노동절)")):
     check(name in kr_holidays.HOLIDAYS.get(day, ""), f"{day} {name}")
 subs = [k for k, v in kr_holidays.HOLIDAYS.items() if v.startswith("대체공휴일")]
 check(subs and all(D(k).weekday() < 5 for k in subs), "대체공휴일은 모두 평일", [(k, D(k).weekday()) for k in subs])
