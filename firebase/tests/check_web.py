@@ -1433,7 +1433,13 @@ with sync_playwright() as pw:
     check("gone@t.local" in page.text_content("#who") and "지운 회사" in page.text_content("#company"), "되살리면(stts=0) 들어온다")
     # 업체 관리자는 주소에 다른 업체를 붙여도 자기 업체만
     page.goto(WEB + "&cid=c_demo"); page.wait_for_selector("#main:not(.hide)", timeout=15000)
-    check("지운 회사" in page.text_content("#company") and page.is_hidden("#super-bar"), "업체 관리자는 주소의 cid 를 무시하고 자기 업체 (띠 없음)")
+    bar = page.text_content("#super-bar")
+    check("지운 회사" in page.text_content("#company") and page.is_visible("#super-bar") and "c_demo" in bar and "총괄 계정으로 로그인" in bar,
+          f"업체 관리자는 주소의 cid 를 무시하고 자기 업체 + 왜 그런지 띠로 안내 ({bar})")
+    page.goto(WEB + "&cid=c_gone"); page.wait_for_selector("#main:not(.hide)", timeout=15000)
+    check(page.is_hidden("#super-bar"), "주소의 cid 가 자기 업체면 띠 없음")
+    page.goto(WEB); page.wait_for_selector("#main:not(.hide)", timeout=15000)
+    check(page.is_hidden("#super-bar"), "cid 없는 주소도 띠 없음")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
 
     print("9-2절 총괄 계정으로 업체 화면 보기 (관리 화면 [대시보드 보기])")
@@ -1453,6 +1459,25 @@ with sync_playwright() as pw:
     page.goto(WEB + "&cid=../c_demo"); page.wait_for_selector("#super-bar:not(.hide)", timeout=15000)
     check(page.query_selector("#hero") is None and "관리 화면" in page.text_content("#super-bar"), "업체코드 꼴이 아닌 cid 는 지정 안 한 것과 같다")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+    # 관리 화면이 # 뒤에 붙여 주는 총괄 로그인 열쇠 (ops.dashboardToken). 에뮬레이터는 서명 없는 열쇠를 받는다
+    import base64
+    b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    now = int(time.time())
+    tok = b64({"alg": "none", "typ": "JWT"}) + "." + b64({
+        "iss": "x@x", "sub": "x@x", "aud": "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit",
+        "iat": now, "exp": now + 3600, "uid": "admin-console", "claims": {"role": "super"}}) + "."
+    login(page, "gone@t.local")                     # 업체 계정으로 로그인돼 있던 브라우저에서 눌러도
+    page.goto(WEB + "&cid=c_demo#t=" + tok)
+    page.wait_for_function("document.getElementById('company')?.textContent.includes('시연 회사')", timeout=15000)
+    check(page.is_visible("#super-bar") and "총괄 계정으로" in page.text_content("#super-bar") and "#t=" not in page.url
+          and page.text_content("#who") == "관리 화면 (총괄)",
+          f"관리 화면 열쇠로 바로 총괄 로그인 + 그 업체, 주소창의 열쇠는 지운다 ({page.text_content('#who')}, {page.url[-30:]})")
+    check(page.query_selector("#admin-nav a[data-key='account']") is None and page.query_selector("#admin-nav a[data-key='settings']") is not None,
+          "열쇠로 들어온 계정은 비밀번호가 없어 '계정' 메뉴가 없다 (환경설정은 있다)")
+    page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+    page.goto(WEB + "&cid=c_demo&again=1#t=broken")   # # 뒤만 바뀐 주소는 다시 읽지 않는다
+    page.wait_for_function("(document.getElementById('login-alert')?.textContent || '').includes('만료')", timeout=15000)
+    check(page.is_visible("#login") and "#t=" not in page.url, "못 쓰는 열쇠면 로그인 화면에 '다시 눌러 주십시오' 안내")
     page.goto(WEB)
 
     print("10절 버전 표시")

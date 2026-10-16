@@ -1,7 +1,7 @@
 // AFTER MARKET 껍데기: 로그인, 회사·PC, 사이드바(앱·관리), 테마. 페이지 내용은 각 모듈이 mount/unmount 한다.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
-  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator,
+  getAuth, signInWithEmailAndPassword, signInWithCustomToken, signOut, onAuthStateChanged, connectAuthEmulator,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getDatabase, ref, get, connectDatabaseEmulator,
@@ -79,6 +79,16 @@ $("logout-btn").addEventListener("click", () => { if (leaveOk()) signOut(auth); 
 // 탭 닫기·새로고침은 브라우저가 묻는다 (글은 브라우저가 정한다)
 window.addEventListener("beforeunload", (e) => { if (current?.dirty?.()) { e.preventDefault(); e.returnValue = ""; } });
 
+// 관리 화면 [대시보드 보기] 가 주소 # 뒤에 붙인 1시간짜리 총괄 로그인 열쇠 (2026-10-16) - 주소창에서 곧바로 지우고 그 열쇠로 로그인한다.
+// 이미 다른 계정으로 로그인돼 있어도 바꾼다 (총괄 화면을 보려고 누른 것). 못 쓰면 (1시간 지남) 로그인 화면 안내
+const handoff = new URLSearchParams(location.hash.slice(1)).get("t");
+if (handoff) {
+  history.replaceState(null, "", location.pathname + location.search);
+  try { await signInWithCustomToken(auth, handoff); } catch {
+    $("login-alert").textContent = "관리 화면 로그인 정보가 만료되었습니다. 관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오."; show($("login-alert"), true);
+  }
+}
+
 onAuthStateChanged(auth, async (user) => {
   unmount();
   if (!user) {
@@ -96,8 +106,11 @@ onAuthStateChanged(auth, async (user) => {
   const want = new URLSearchParams(location.search).get("cid") || "";
   const asSuper = t.claims.role === "super" ? (/^[A-Za-z0-9_-]{1,40}$/.test(want) ? want : "") : null;
   me = { uid: user.uid, email: user.email, cid: asSuper ?? (t.claims.cid || null), role: t.claims.role || null };
-  $("who").textContent = `${user.email} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "유저"})`;
-  show($("super-bar"), asSuper !== null);
+  $("who").textContent = `${user.email || "관리 화면"} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "유저"})`;
+  const elsewhere = asSuper === null && want && want !== me.cid;   // 업체 계정이 [대시보드 보기] 주소를 연 것 - 이미 로그인된 브라우저에서 헷갈렸다 (2026-10-16)
+  show($("super-bar"), asSuper !== null || elsewhere);
+  if (elsewhere) $("super-bar").textContent = `지금 로그인한 계정(${user.email || user.uid})은 다른 업체(${want}) 화면을 볼 수 없어 자기 업체 화면을 보여 드립니다. `
+    + "다른 업체를 보려면 로그아웃한 뒤 업체코드를 비우고 총괄 계정으로 로그인하여 주십시오.";
   if (asSuper === "") {
     $("super-bar").textContent = "총괄 계정입니다. 관리 화면의 업체 상세에서 [대시보드 보기]를 눌러 업체 화면을 열어 주십시오.";
     $("company").textContent = ""; $("app-nav").replaceChildren(); $("admin-nav").replaceChildren(); $("page-title").textContent = "";
@@ -181,7 +194,7 @@ function navLink(mod) {
 
 function paintNav() {
   $("app-nav").replaceChildren(...APPS.map(navLink));
-  $("admin-nav").replaceChildren(...PAGES.filter((p) => !p.adminOnly || ctx().isAdmin).map(navLink));   // 유저는 환경설정 링크가 없다
+  $("admin-nav").replaceChildren(...PAGES.filter((p) => (!p.adminOnly || ctx().isAdmin) && (p !== account || me?.email)).map(navLink));   // 관리 화면 열쇠로 들어온 계정은 이메일·비밀번호가 없다 - 계정 페이지 없음   // 유저는 환경설정 링크가 없다
 }
 
 function mount(mod) {

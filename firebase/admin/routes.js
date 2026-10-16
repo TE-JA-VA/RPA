@@ -27,6 +27,7 @@ export const ROUTES = compile([
   ["GET", "/api/info", () => ({ emulator: ops.onEmulator(), project: ops.PROJECT, dashboard: ops.DASHBOARD_URL })],
   ["GET", "/api/companies", () => ops.companyTable()],
   ["GET", "/api/companies/:cid", (b, p) => ops.companyDetail(p.cid)],
+  ["POST", "/api/companies/:cid/dashboard", () => ops.dashboardToken(), (b, r, p) => `대시보드 보기 ${p.cid} (총괄 로그인 열쇠 발급)`],   // 열쇠는 기록에 안 남긴다
   ["POST", "/api/setup", (b) => ops.setupCompany(b),
     (b, r) => `신규 업체 ${b.cid}: ${r.steps.map((s) => `${s.ok ? "✓" : "✗"} ${s.label}`).join(", ")}`],
   ["POST", "/api/companies/:cid/pcs", async (b, p) => {

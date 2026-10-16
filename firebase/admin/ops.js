@@ -57,6 +57,13 @@ export async function logToDb(line, by, via) {
   }
 }
 
+// [대시보드 보기] 가 업체 웹에 넘기는 1시간짜리 총괄 로그인 열쇠 (2026-10-16 사용자: 총괄 비밀번호를 몰라도 바로).
+// 계정은 관리 화면 전용 uid 하나 - 처음 쓰면 Auth 가 만든다. 그 화면에서 한 일은 이 계정으로 남는다 (업체 계정 대리 로그인은 기록이 업체 것이 돼 안 씀).
+// role 은 열쇠에만 실린다 (사용자 정보의 claims 는 없음) - 규칙은 auth.token.role 로 보고, 웹 관리 함수(superOf)는 이 계정을 총괄로 안 본다.
+// 웹 관리 함수에서 부르려면 함수 서비스 계정에 '서비스 계정 토큰 생성자' 권한이 있어야 한다 (docs/admin-web-transition.md)
+export const CONSOLE_UID = "admin-console";
+export const dashboardToken = async () => ({ token: await auth.createCustomToken(CONSOLE_UID, { role: "super" }) });
+
 const KEY_RE = /^[a-z0-9_]+$/;
 export function checkKey(name, value) {
   if (!KEY_RE.test(value || "")) throw new Refused(`${name}은(는) 영문 소문자·숫자·밑줄만 사용할 수 있습니다: ${value ?? ""}`);

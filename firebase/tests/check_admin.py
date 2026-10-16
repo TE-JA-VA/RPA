@@ -342,12 +342,23 @@ with sync_playwright() as pw:
     page.click("#companies tr[data-cid='t_new']")
     page.wait_for_function("document.querySelector('#detail table.wallet td.left')?.textContent === '600'", timeout=15000)
     check(True, "줄을 누르면 상세: 현재 토큰 600")
-    page.evaluate("() => { window.__opened = []; window.open = (u, t) => { window.__opened.push({ u: String(u), t: String(t) }); }; }")   # 이 시험엔 업체 웹(Hosting)이 없어 여는 주소만 본다
+    # 이 시험엔 업체 웹(Hosting)이 없어 새 탭 대신 가짜 창에 넣는 주소만 본다
+    page.evaluate("""() => { window.__win = { location: {}, closed: false, close() { this.closed = true; } };
+      window.open = (u, t) => { window.__win.first = String(u) + '|' + String(t); return window.__win; }; }""")
     page.click("#open-dash")
-    opened = page.evaluate("window.__opened")
-    dash = opened[0]["u"] if opened and opened[0]["t"] == "_blank" else str(opened)
-    check(page.text_content("#open-dash") == "대시보드 보기" and dash.endswith("cid=t_new") and "127.0.0.1:5000" in dash,
-          "[대시보드 보기] 는 업체 대시보드를 그 업체(?cid=)로 새 탭에 연다 (에뮬레이터면 에뮬레이터 Hosting)", dash)
+    page.wait_for_function("!!window.__win.location.href", timeout=15000)
+    w = page.evaluate("({ first: window.__win.first, href: window.__win.location.href, opener: window.__win.opener })")
+    dash, _, tok = w["href"].partition("#t=")
+    check(page.text_content("#open-dash") == "대시보드 보기" and w["first"] == "about:blank|_blank" and w["opener"] is None
+          and dash.endswith("cid=t_new") and "127.0.0.1:5000" in dash and tok.count(".") == 2,
+          "[대시보드 보기] 는 누른 순간 새 탭을 열고, 받은 총괄 로그인 열쇠를 # 뒤에 붙여 그 업체(?cid=) 대시보드로", str(w)[:200])
+    import base64
+    tok_body = json.loads(base64.urlsafe_b64decode(tok.split(".")[1] + "=="))
+    check(tok_body.get("uid") == "admin-console" and tok_body.get("claims") == {"role": "super"},
+          "열쇠는 관리 화면 전용 계정(admin-console)·총괄 권한", str(tok_body)[:200])
+    LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "admin", "관리_기록.txt")
+    logtxt = open(LOG_PATH, encoding="utf-8").read() if os.path.exists(LOG_PATH) else ""
+    check("대시보드 보기 t_new" in logtxt and tok not in logtxt, "관리 기록엔 '대시보드 보기' 만, 열쇠는 안 남긴다")
     heads = [h.strip() for h in page.locator("#detail table.wallet th").all_text_contents()]
     check(heads == ["발급한 토큰", "사용한 토큰", "현재 토큰", "토큰 정보 생성"], f"토큰 정보는 표로 ({heads})")
     OLD = ("기계", "열람자", "통장", "막기", "막힘", "막을", "막았", "열기", "열림", "열었", "더하기", "더했", "삭제", "되살",
