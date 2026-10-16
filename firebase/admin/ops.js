@@ -24,6 +24,7 @@ export const POLICY_KEYS = ["Sales", "Hold", "Logistics", "Output", "InvoiceSend
 export const SCHEDULE_LIMIT_DEFAULT = 2;   // 자동 실행 개수 - 값이 없을 때 (agent.SCHEDULE_LIMIT_DEFAULT 와 같다)
 export const SCHEDULE_LIMIT_MAX = 12;      // PC 쪽 절대 상한 (rpa_status.SCHEDULE_MAX_SLOTS)
 export const PRESET_LIMIT_MIN = 2, PRESET_LIMIT_MAX = 10;   // 옵저버 프리셋 수 - 보통 업체. 업체코드에 wellife 가 든 업체는 PC 가 늘 40 (agent.company_policy, 2026-10-15)
+export const PARALLEL_LIMIT_MIN = 1, PARALLEL_LIMIT_MAX = 16;   // 병렬 실행 허용 최대 창 수 - 1 = 허용 안 함 (rpa_status.PARALLEL_MIN/MAX, 2026-10-16)
 export const PRICE_BASE = { default: 1, login: 0 };                    // 에이전트에 박힌 처음 토큰 배율 (agent.PRICES) - 서버 값이 위에 덮인다
 
 const KEY = fileURLToPath(new URL("./serviceAccountKey.json", import.meta.url));
@@ -245,6 +246,17 @@ export async function setPresetLimit(cid, n) {
   await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/presets`).set(Number(s));
   return { cid, presets: Number(s) };
 }
+// 병렬 실행 허용 (사용자 2026-10-16) - 업체가 ACTOR 오토파일럿으로 프리셋(사이트)을 동시에 몇 개까지 열 수 있나. 1(또는 없음) = 허용 안 함:
+// 업체 웹에 '동시 실행' 설정이 보이지 않고 PC 는 하나씩. 2 이상이면 업체가 웹에서 1 ~ 이 수 중에 고른다 (rpa_status.parallel_choice)
+export async function setParallelLimit(cid, n) {
+  checkKey("cid", cid);
+  await companyOf(cid, { removed: true });
+  const s = String(n ?? "").trim();
+  if (!/^\d+$/.test(s) || Number(s) < PARALLEL_LIMIT_MIN || Number(s) > PARALLEL_LIMIT_MAX)
+    throw new Refused(`병렬 실행 최대 창 수는 ${PARALLEL_LIMIT_MIN}~${PARALLEL_LIMIT_MAX} 사이의 정수여야 합니다. (받은 값: ${s})`);
+  await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/parallel`).set(Number(s));
+  return { cid, parallel: Number(s) };
+}
 // 판 목록 (자동 업데이트 4절) - meta/releases. 판 키는 점을 _ 로 (RTDB 키에 . 을 못 쓴다)
 const relKey = (v) => String(v).replaceAll(".", "_");
 const VERSION_RE = /^\d{4}\.\d{2}\.\d{2}-\d+$/;
@@ -423,7 +435,7 @@ export async function companyDetail(cid) {
       ({ pcId, label: p.label ?? "", ...(await pcUpdateStatus(cid, pcId)) }))),
     users, phones, modules: v.apps?.rpa?.modules ?? {}, features: v.apps?.rpa?.features ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features),
     wellifeAuto: wellifeAuto(cid), scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null,
-    presetLimit: v.apps?.rpa?.limits?.presets ?? null,
+    presetLimit: v.apps?.rpa?.limits?.presets ?? null, parallelLimit: v.apps?.rpa?.limits?.parallel ?? null,
     ...(await within(tokenStatus(cid)).then((t) => ({ tokens: t.wallet }), (e) => ({ tokens: null, tokenErr: tokenErr(e) }))) };
 }
 // 신규 업체 한 흐름 (설계 4-2). 먼저 내용을 다 본 뒤(틀리면 아무것도 안 만든다) 차례로 하고 첫 실패에서 멈춘다.

@@ -468,6 +468,23 @@ def navigated(before, s):
     return before.get("page") == s.get("page") and same_frame and before.get("url") != s.get("url")
 
 
+def auth_start(steps):
+    """인증 차례를 잡는 단계 번호(1부터) - 인증번호 단계 앞의 첫 칸 넣기(아이디). 그 앞의 검색·이동은 차례를 기다리지 않는다
+    (사용자 2026-10-16: 빙 검색으로 들어가는 사이트가 앞 사이트의 인증이 끝난 뒤에야 검색부터 시작해 오래 걸렸다)."""
+    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=0)
+    return next((i for i in range(last) if steps[i]["kind"] in ("fill", "secret")), 0) + 1
+
+
+def auth_end(steps):
+    """2차 인증이 끝나는 단계 번호(1부터) - 인증번호 단계 다음의 누르기·엔터([확인])까지. 인증번호 단계가 없으면 None.
+    병렬 수집(사용자 2026-10-15): 인증 사이트는 첫 단계(로그인)부터 여기까지를 한 번에 하나씩 - 앞 사이트가 인증 중이면
+    뒤 인증 사이트는 로그인 앞에서 기다린다. 인증 없는 사이트는 기다리지 않는다."""
+    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=None)
+    if last is None:
+        return None
+    return next((i for i in range(last + 1, len(steps)) if steps[i]["kind"] in ("click", "enter")), last) + 1
+
+
 def appears_after(steps, j):
     """j 단계가 '몇 단계 뒤에 새로 생긴 것' 으로 골라야 하면 그 단계 번호, 아니면 None (옛 기록도 navigated 로 거른다)."""
     s, k = steps[j], steps[j].get("appearsAfter")
@@ -863,6 +880,8 @@ class Replayer:
         self.dialogs = []           # 재생 중 뜬 알림창 글 (사이트가 인증번호를 거절했나 본다)
         # 메일 고르기: mail_memory = MailMemory (ACTOR - 처리한 메일을 건너뛰고 기억), pick_preview = 기억과 상관없이 1통 (옵저버 미리보기)
         self.mail_memory, self.pick_preview, self.no_target = None, False, False
+        # 인증 차례 (병렬 수집): (threading.Lock, 첫 단계, 끝 단계) - 첫 단계 앞에서 잡고 끝 단계를 지나면 놓는다 (auth_start·auth_end). 없으면 안 기다린다
+        self.gate, self.gate_held = None, False
 
     def _watch(self, page):
         if page in self.watched:
@@ -880,6 +899,12 @@ class Replayer:
         page.on("download", lambda dl: self.downloads.append(dl))
 
     # --- 중단·일시정지 ---
+    def _gate_release(self):
+        if self.gate_held:
+            self.gate_held = False
+            self.gate[0].release()
+            self.log("  다음 사이트에 인증 차례를 넘깁니다.")
+
     def _check_cancel(self):
         if self.cancel is not None and self.cancel.is_set():
             raise Cancelled()
@@ -906,8 +931,19 @@ class Replayer:
             self._idle(min(200, left * 1000), page)
 
     def _hold(self, i):
-        """다음 단계 앞: 중단이면 Cancelled, 일시정지면 풀릴 때까지 기다린다 (하던 단계는 끝까지 한다)."""
+        """다음 단계 앞: 중단이면 Cancelled, 일시정지면 풀릴 때까지 기다린다 (하던 단계는 끝까지 한다).
+        인증 차례(gate)가 있으면 첫 단계부터 끝 단계까지는 차례를 잡고 간다 - 인증번호를 다시 받으러 앞 단계로 돌아가도 잡은 채로."""
         self._check_cancel()
+        if self.gate is not None:
+            lock, start, end = self.gate
+            if not self.gate_held and start <= i <= end:
+                if not lock.acquire(blocking=False):
+                    self.log(f"  {i:2d}단계 앞: 다른 사이트가 인증하는 중입니다. 인증 차례를 기다립니다.")
+                    while not lock.acquire(timeout=0.5):
+                        self._check_cancel()
+                self.gate_held = True
+            elif self.gate_held and i > end:
+                self._gate_release()
         if self.pause is None or not self.pause.is_set():
             return
         if self.progress:
@@ -1276,6 +1312,7 @@ class Replayer:
             self._run_steps(steps)
         finally:
             self._otp_close()           # 성공·실패·중단 모두 - 요청·번호를 서버에 남기지 않는다
+            self._gate_release()        # 인증 중에 멈춰도 뒤 사이트가 영영 기다리지 않게
         self.elapsed = time.time() - started
         return all(r[1] != "fail" for r in self.results) and len(self.results) == len(steps)
 

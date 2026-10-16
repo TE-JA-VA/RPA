@@ -760,23 +760,35 @@ def active_slots(sch):
     return out
 
 
-def set_policy(limit, off, wellife=False, presets=None):
+def set_policy(limit, off, wellife=False, presets=None, parallel=None):
     """에이전트가 읽은 업체 정책(자동 실행 개수·안 쓰는 모듈)을 settings.json 에 적는다 - 껐다 켜도·끊겨도 마지막 값.
     같으면 안 쓴다 (False). 다음 줄을 다시 잡는다 - 한도를 올리면 새로 들어온 줄이 그날부터 돌게, 가리키던 줄이 빠졌으면 다음 줄로.
     때가 됐는데 아직 못 띄운 줄(바쁨)은 그대로 둔다. 다른 칸(줄·반복 상태)은 그대로.
-    wellife: 이 업체가 웰라이프로 열려 있나 (루틴 갈래·명령이 본다). presets: 업체 프리셋 수 (None = 정하지 않음, st.preset_limit)."""
-    new = {"limit": limit, "off": sorted(off), "wellife": bool(wellife), "presets": presets}
+    wellife: 이 업체가 웰라이프로 열려 있나 (루틴 갈래·명령이 본다). presets: 업체 프리셋 수 (None = 정하지 않음, st.preset_limit).
+    parallel: 동시에 여는 사이트 창 수 (None = 정하지 않음, st.parallel_limit)."""
+    new = {"limit": limit, "off": sorted(off), "wellife": bool(wellife), "presets": presets, "parallel": parallel}
     with _settings_lock:
         cfg = st.read_settings()
         sch = cfg["schedule"]
         old = sch.get("policy") or {}
-        if (old.get("limit"), old.get("off"), bool(old.get("wellife")), old.get("presets")) == (
-                new["limit"], new["off"], new["wellife"], new["presets"]):
+        if (old.get("limit"), old.get("off"), bool(old.get("wellife")), old.get("presets"), old.get("parallel")) == (
+                new["limit"], new["off"], new["wellife"], new["presets"], new["parallel"]):
             return False
         sch["policy"] = dict(new, read_at=now_text())
         due = st.parse_iso(sch.get("next_run_at"))
         if due is None or due > NOW() or sch.get("next_slot") not in [s["at"] for s in active_slots(sch)]:
             advance(sch, NOW())
+        st.write_settings(cfg)
+        return True
+
+
+def set_parallel(n):
+    """업체가 웹에서 고른 동시 실행 창 수를 settings.json 에 (명령 set_parallel, 검사는 부르는 쪽). 같으면 안 쓴다 (False)."""
+    with _settings_lock:
+        cfg = st.read_settings()
+        if cfg["prepare"].get("parallel") == n:
+            return False
+        cfg["prepare"]["parallel"] = n
         st.write_settings(cfg)
         return True
 

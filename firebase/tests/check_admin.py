@@ -242,6 +242,14 @@ for bad in ("1", "11", "2.5", "", "셋"):
     check(code == 400 and "2~10" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, f"옵저버 프리셋 수 거절 {bad!r}", r)
 check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 3, "프리셋 수를 바꿔도 자동 실행 개수는 그대로")
 code, d = api("GET", "/api/companies/t_new")
+check(code == 200 and d.get("parallelLimit") is None, "병렬 실행 최대 창 수: 값이 없으면 null (화면은 기본 1 = 허용 안 함)", str(d.get("parallelLimit")))
+code, r = api("POST", "/api/companies/t_new/parallel", {"parallel": "4"})
+check(code == 200 and r == {"cid": "t_new", "parallel": 4} and db_get("meta/companies/t_new/apps/rpa/limits/parallel") == 4, "병렬 실행 4개까지 허용", r)
+for bad in ("0", "17", "2.5", "", "넷"):
+    code, r = api("POST", "/api/companies/t_new/parallel", {"parallel": bad})
+    check(code == 400 and "1~16" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/parallel") == 4, f"병렬 실행 최대 창 수 거절 {bad!r}", r)
+check(db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, "병렬 실행 허용을 바꿔도 프리셋 수는 그대로")
+code, d = api("GET", "/api/companies/t_new")
 check(code == 200 and d.get("wellife") is False and d.get("wellifeAuto") is False, "웰라이프: 보통 업체는 꺼짐", str(d.get("wellife")))
 code, r = api("POST", "/api/companies/t_new/features", {"wellife": True})
 check(code == 200 and db_get("meta/companies/t_new/apps/rpa/features/wellife") is True, "웰라이프 실행 켜기", r)
@@ -387,6 +395,12 @@ with sync_playwright() as pw:
     page.click("#detail .row:has(input[aria-label='옵저버 프리셋 수']) button")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")?.value === '7'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/presets") == 7, "화면: 업체 상세에서 옵저버 프리셋 수 저장")
+    check("1이면 허용하지 않으며 업체 화면에도 보이지 않습니다. (1~16, 기본 1)" in page.text_content("#detail"), "병렬 실행 허용 설명")
+    page.fill("#detail input[aria-label='병렬 실행 최대 창 수']", "6")
+    page.click("#detail .row:has(input[aria-label='병렬 실행 최대 창 수']) button")
+    page.wait_for_function("document.querySelector(\"#detail input[aria-label='병렬 실행 최대 창 수']\")?.value === '6'", timeout=10000)
+    check(db_get("meta/companies/t_new/apps/rpa/limits/parallel") == 6 and "6개까지 허용" in page.text_content("#detail"),
+          "화면: 업체 상세에서 병렬 실행 허용 저장 (제목 옆에 허용 상태)")
 
     print("자동 업데이트 (설계 8절)")
     CID, PC = "t_new", "pc_a"
