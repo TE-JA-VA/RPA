@@ -476,6 +476,20 @@ def appears_after(steps, j):
     return k
 
 
+def loose_new(steps, j):
+    """j 의 '새로 생긴 것' 이 화면이 넘어간(또는 그 창이 새로 열린) 바로 뒤의 마우스 올리기 뒤로 적혔나 - 사람이 지나가며 마우스를
+    올리는 동안 늦게 그려진 것이 새로 생긴 것으로 적힌다 (비즈메카 포털 메일 카드: 카드 안 메일 미리보기가 로그인 뒤 늦게 와서
+    '9단계 뒤에 새로 생긴 것'. 네이버 메일: [메일] 로 연 새 창의 메일 목록이 마우스 올리기 뒤로 적혔다, 2026-10-16).
+    그러면 새로 생긴 것 중에 없을 때 원래 있던 것에서도 찾는다 - 새로 생긴 것에서 찾던 기록은 그대로."""
+    k = appears_after(steps, j)
+    if k is None or steps[k]["kind"] != "hover":
+        return False
+    i = k
+    while i > 0 and steps[i]["kind"] == "hover":
+        i -= 1
+    return navigated(steps[i], steps[j]) or steps[i].get("opens") == steps[j].get("page")
+
+
 def set_pick(steps, i, prefix):
     """i 단계(목록 줄 누르기)를 '제목이 prefix 로 시작하는 메일마다' 로, prefix 가 None·빈 글자면 되돌린다. steps 를 고친다."""
     if prefix:
@@ -794,7 +808,27 @@ def candidates(t):
     if t["text"] and t["textCount"] > 1:
         sel = f"input[value={q(t['text'])}]" if tag == "input" else f"{tag}:text-is({q(t['text'])})"
         out.append((f"글자 {t['textIndex'] + 1}번째", sel, t["textIndex"]))
+    # 글자가 안쪽 칸(div·span)에 들었거나 나뉘어 든 것은 :text-is·:text-matches 가 못 잡는다 (빙 광고 제목, 비즈메카 메일 카드 '메일 5',
+    # 2026-10-16). 기록기처럼 하위까지 합친 글자로 본다. 앞 단서가 모두 못 찾을 때만 쓰이게 맨 뒤에 (예전 기록이 찾던 것은 그대로)
+    if tag != "input" and t["text"]:
+        whole = "normalize-space(translate(., '\u00a0', ' '))"
+        nth = t["textIndex"] if t["textCount"] > 1 else None
+        if len(t["text"]) < 80:
+            out.append(("글자(안쪽 포함)", f"xpath=//{tag}[{whole}={xq(t['text'])}]", nth))
+        if re.search(r"\d", t["text"]) and re.search(r"[^\d\s]", t["text"]) and len(t["text"]) < 80:
+            bare = re.sub(r"[\d\s]", "", t["text"])
+            out.append(("숫자 뺀 글자(안쪽 포함)", f"xpath=//{tag}[translate({whole}, '0123456789 ', '')={xq(bare)} "
+                                              f"and translate(., '0123456789', '') != .]", nth))
     return out
+
+
+def xq(s):
+    """XPath 글자 값 (따옴표가 섞여도)."""
+    if '"' not in s:
+        return f'"{s}"'
+    if "'" not in s:
+        return f"'{s}'"
+    return "concat(" + ", '\"', ".join(f'"{p}"' for p in s.split('"')) + ")"
 
 
 class OtpRetry(Exception):
@@ -957,7 +991,8 @@ class Replayer:
         except Exception:
             return set()
 
-    def _find(self, page, s, prev):
+    def _find(self, page, s, prev, loose=False):
+        """loose: 새로 생긴 것 중에 없으면 원래 있던 것에서도 (loose_new)."""
         t = s["target"]
         if s.get("loose"):          # 메일 고르기 묶음 - 메일마다 글자(첨부 이름 등)가 달라 글자 말고 자리·속성으로
             t = dict(t, text="", textCount=0)
@@ -967,15 +1002,15 @@ class Replayer:
         while True:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
-            if frame is not None:
+            for pv in ((prev, None) if loose and prev is not None else (prev,)) if frame is not None else ():
                 for how, sel, nth in cands:
                     try:
                         loc = frame.locator(sel)
-                        loc = self._pick(loc, loc.count(), nth, prev)
+                        loc = self._pick(loc, loc.count(), nth, pv)
                     except Exception:
                         continue            # 화면이 바뀌는 중
-                    if loc is not None and self._same(loc, t, how == "숫자 뺀 글자"):
-                        return frame, loc, how + (", 새로 생긴 것" if prev is not None else "")
+                    if loc is not None and self._same(loc, t, how.startswith("숫자 뺀 글자")):
+                        return frame, loc, how + (", 새로 생긴 것" if pv is not None else "")
             if time.time() > deadline:
                 if optional:
                     raise Skip("화면에 없음")
@@ -1188,7 +1223,7 @@ class Replayer:
         if s["kind"] == "back":
             page.go_back(wait_until="domcontentloaded")
             return "뒤로"
-        frame, loc, how = self._find(page, s, self.baseline.get(i))
+        frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose)
         if url_path(frame.url) != s["url"]:
             self.log(f"      (주소가 다름: 기록 {s['url']} / 지금 {url_path(frame.url)})")
         if self.review:             # 누를 곳에 잠깐 빨간 테두리 (Playwright highlight 는 글자 표가 화면에 쌓인다)
@@ -1235,6 +1270,7 @@ class Replayer:
             k = appears_after(steps, j)
             if k is not None:
                 self.needs.setdefault(k, []).append(j)
+        self.loose = {j for j in range(len(steps)) if loose_new(steps, j)}
         started = time.time()
         try:
             self._run_steps(steps)
