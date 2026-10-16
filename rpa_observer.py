@@ -137,30 +137,43 @@ class LiveRecorder(rec.Recorder):
             self._add({"kind": "newtab", "page": no, "url": ""})
 
     def _track_nav(self, page, no):
-        """크롬 이력의 이동 종류로 가른다: typed = 사람이 주소줄에 친 것, 번호가 줄면 뒤로 가기 (2026-09-30 실험)."""
+        """주소줄에 친 주소 = 페이지가 먼저 요청하지 않고 시작된 새 문서 이동 (링크·폼·스크립트·새로고침 태그는
+        frameRequestedNavigation 이 먼저 온다). 이력의 이동 종류(typed)로 보면 열리자마자 스크립트로 넘어가는 주소는
+        그 줄이 'link' 로 덮여 빠졌다 (2026-10-16 사용자: 긴 링크를 붙여넣으면 기록이 안 됨). 뒤로 가기는 이력 번호가 줄면."""
         try:
             cdp = self.context.new_cdp_session(page)
+            cdp.send("Page.enable")
+            main = cdp.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
         except Exception:
             return
-        last = {"i": None}
+        last = {"i": None, "asked": 0.0}
+
+        def asked(e):
+            if e.get("frameId") == main:
+                last["asked"] = time.time()
+
+        def started(e):
+            if e.get("frameId") != main:
+                return                      # iframe 안 이동은 누른 것의 결과
+            by_page, last["asked"] = time.time() - last["asked"] < 10, 0.0
+            href = e.get("url") or ""
+            if (e.get("navigationType") == "differentDocument" and not by_page
+                    and href.startswith(("http://", "https://")) and not href.startswith(rec.BROWSER_PAGES)):
+                self._add({"kind": "goto", "page": no, "url": rec.url_path(href), "href": href})
 
         def on_nav(frame):
             if frame is not page.main_frame:
-                return                      # iframe 안 이동은 누른 것의 결과
+                return
             try:
                 h = cdp.send("Page.getNavigationHistory")
             except Exception:
                 return
-            i, e = h["currentIndex"], h["entries"][h["currentIndex"]]
+            i = h["currentIndex"]
             prev, last["i"] = last["i"], i
             if prev is not None and i < prev:
-                self._add({"kind": "back", "page": no, "url": rec.url_path(e["url"])})
-            elif (prev is None or i > prev) and e["transitionType"] in ("typed", "generated", "auto_bookmark"):
-                href = e.get("userTypedURL") or e["url"]
-                if not href.startswith(("http://", "https://")):
-                    href = e["url"]
-                if href.startswith(("http://", "https://")):
-                    self._add({"kind": "goto", "page": no, "url": rec.url_path(href), "href": href})
+                self._add({"kind": "back", "page": no, "url": rec.url_path(h["entries"][i]["url"])})
+        cdp.on("Page.frameRequestedNavigation", asked)
+        cdp.on("Page.frameStartedNavigating", started)
         page.on("framenavigated", on_nav)
 
     def _dialog(self, d):
