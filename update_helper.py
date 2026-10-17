@@ -31,9 +31,20 @@ UNINSTALL_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C3F7A2B4-
 CREATE_NO_WINDOW = 0x08000000
 
 
+MOVE_TRIES = 20     # 잠긴 파일은 1초씩 기다려 다시 - 막 끈 감독 프로그램이 아직 exe 를 쥐고 있다 (2026-10-16 전환 시험:
+                    # 끊긴 업데이트를 되돌리다 AFTER_MARKET_RPA_Supervisor.exe 에서 PermissionError → '다시 설치하세요')
+BRANDED_EXES = ("AFTER_MARKET_RPA_Supervisor.exe", "AFTER_MARKET_RPA_Agent.exe")   # background.SUPERVISOR_EXE·AGENT_EXE (runner 에는 background 가 없다)
+
+
 def _move(src, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    os.replace(src, dst)
+    for i in range(MOVE_TRIES):
+        try:
+            return os.replace(src, dst)
+        except PermissionError:
+            if i == MOVE_TRIES - 1:
+                raise
+            time.sleep(1)
 
 
 def _full(root, rel):
@@ -51,6 +62,8 @@ class Ops:
         until = time.monotonic() + 30
         while st.lock_held(AGENT_MUTEX) and time.monotonic() < until:
             time.sleep(0.5)
+        # 작업을 끝내도 감독·에이전트 프로세스가 남아 exe 를 쥐고 있을 수 있다 (끊긴 업데이트가 켜 둔 새 판 감독 등) - 마저 끝낸다
+        self._run(["taskkill", "/F", *[a for name in BRANDED_EXES for a in ("/IM", name)]])
 
     def after_install(self, program_dir):
         py = os.path.join(program_dir, "python", "pythonw.exe")

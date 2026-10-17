@@ -11,6 +11,7 @@ import datetime
 import json
 import os
 import re
+import sys
 import time
 import unicodedata
 import urllib.parse
@@ -18,6 +19,38 @@ import zipfile
 
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
+
+NODE_REL = ("playwright", "node.exe")   # 배포판 안 자리 (build_release.PROGRAM_FILES 와 같게)
+
+
+def shared_node(program_dir):
+    """프로그램 폴더에 한 벌 둔 Playwright node.exe - 없으면 None. exe 에는 node 를 싣지 않는다 (2026-10-16 업데이트 크기,
+    build_release.NODE_EXCLUDE). ACTOR·옵저버 둘 다 이 모듈을 부른다."""
+    p = os.path.join(program_dir, *NODE_REL)
+    return p if os.path.isfile(p) else None
+
+
+NODE_MISSING = "프로그램 폴더에 브라우저 도구(playwright\\node.exe)가 없습니다. 설치 파일로 다시 설치하여 주십시오."
+
+
+def use_shared_node(program_dir):
+    """exe 가 켜질 때 한 번: 프로그램 폴더의 node 를 Playwright 에 알려 준다 (PLAYWRIGHT_NODEJS_PATH - _impl/_driver.py 가 본다).
+    없으면 드라이버를 띄울 때 'FileNotFoundError' 대신 NODE_MISSING 으로 멈추게 한다 (검토 2026-10-16 - exe 만 손으로 옮긴 PC)."""
+    node = shared_node(program_dir)
+    if node:
+        os.environ["PLAYWRIGHT_NODEJS_PATH"] = node
+        return node
+    import playwright._impl._transport as transport   # 드라이버를 띄우는 곳이 이름으로 가져다 쓴다 (비공개 자리, playwright 1.62)
+
+    def no_node():
+        raise RuntimeError(NODE_MISSING)
+    transport.compute_driver_executable = no_node
+    return None
+
+
+_compiled = globals().get("__compiled__")            # exe 일 때만 - 소스로 돌 때는 패키지 안 node 그대로
+if _compiled is not None and not os.environ.get("PLAYWRIGHT_NODEJS_PATH"):
+    use_shared_node(getattr(_compiled, "containing_dir", None) or os.path.dirname(os.path.abspath(sys.argv[0])))
 
 EDGE_MISSING = "Microsoft Edge가 설치되어 있지 않습니다. Edge를 설치한 뒤 다시 실행하여 주십시오."
 
