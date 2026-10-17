@@ -1453,6 +1453,7 @@ def read_history(limit=0, program=None, since=None):
 # 기록하는 쪽 (RPA 프로그램이 부른다)
 # ---------------------------------------------------------------------------
 _lock = threading.RLock()
+_here = threading.local()   # 병렬 수집: 실행기(스레드)마다 지금 단계 - metric·note 가 마지막에 시작한 다른 사이트 단계에 붙지 않게 (검토 2026-10-17)
 _state = None
 _path = None
 _tail = deque(maxlen=LOG_TAIL_LINES)
@@ -1462,6 +1463,10 @@ _finished = True
 _last_problem = None
 _heart = None
 _stop = threading.Event()
+
+
+def _current():
+    return getattr(_here, "step", None) or _state.get("current")
 
 
 def _safe(fn):
@@ -1735,6 +1740,7 @@ def step(key, note=None, label=None, parallel=False):
             if i < index and s["state"] == "pending":
                 s["state"] = "skipped"
         target.update(state="running", started_at=now, finished_at=None, note=note)
+        _here.step = target["key"] if parallel else None
         cur = _find_module(_state.get("current_module"))
         if cur is not None:
             cur["progress"] = None   # 단계가 바뀌면 이전 단계의 진행률은 뜻이 없다
@@ -1760,7 +1766,7 @@ def note(text):
         if not _active():
             return
         _state["note"] = text
-        current = _find_step(_state.get("current"))
+        current = _find_step(_current())
         if current is not None:
             current["note"] = text
         _touch_locked()
@@ -1815,7 +1821,7 @@ def metric(key, label, value, total=None, unit="건", note=None, approx=False):
             return
         m = next((x for x in _state["metrics"] if x.get("key") == key), None)
         if m is None:
-            m = {"key": key, "step": _state.get("current")}
+            m = {"key": key, "step": _current()}
             _state["metrics"].append(m)
         m.update(label=label, value=value, total=total, unit=unit, note=note,
                  approx=bool(approx), updated_at=now_iso())

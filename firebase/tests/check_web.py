@@ -847,7 +847,7 @@ with sync_playwright() as pw:
     db_put("meta/companies/c_demo/apps/rpa/limits/parallel", 1)
     page.wait_for_function("document.getElementById('par-card')?.classList.contains('hide')", timeout=10000)
     check(True, "허용을 거두면 카드가 바로 사라진다")
-    db_put("meta/companies/c_demo/apps/rpa/limits/parallel", None)
+    call("DELETE", f"{DB}/meta/companies/c_demo/apps/rpa/limits/parallel.json?ns={NS}", None, OWNER)   # PUT null 은 본문이 없어 400
     db_patch(LIVE, {"parallel": None})
 
     print("6절 자동 실행")

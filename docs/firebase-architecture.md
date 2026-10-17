@@ -75,7 +75,7 @@ apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현�
                                         schedule = { version 2, enabled, days, slots, next_run_at, next_slot, policy{limit, off},
                                                      repeat{date, at, until, runs, done, stopped, pending, next_at}, last_* } (version 이 없으면 옛 판 PC - times 만)
                                         tokens.cost.next = 다음 예약 줄이 '고르기' 면 그 줄의 토큰
-apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, parallel?, schedule {enabled, days, slots: [{at, days?, run?, until?, rest_min?}]} (줄마다 요일 days 는 판 3 PC - live.schedule.version 3, 없으면 공통 days) }
+apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, parallel?, schedule {enabled, days, slots: [{at, days?, run?, until?, rest_min?}]} (줄마다 요일 days 는 버전 3 PC - live.schedule.version 3, 없으면 공통 days) }
 apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at, state, result, … }
 ```
 Firestore

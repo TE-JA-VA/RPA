@@ -313,6 +313,8 @@ MAIL_BACK_WAIT = 10          # 메일을 연 뒤 목록으로 돌아와 줄이 �
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
 OPTIONAL_WAIT = 3.0
+LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 것' 에서 찾기는 이만큼 찾아도 없을 때부터 - 화면이 덜 뜬 사이 넘어가는
+                        # 옛 화면에서 태그·글자가 같은 다른 것(헤더의 로그인 등)을 집지 않게 (검토 2026-10-17). 마우스 올리기(3초)보다 짧게
 STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
 RECORD_VERSION = 1           # 기록 모양. 다르면 재생하지 않는다 (옛 프리페어가 새 기록을 잘못 따라 하지 않게)
 DOWNLOAD_TIMEOUT_MS = 300000  # 파일이 오기 시작할 때까지 기다리는 시간 (안 오면 그 단계 실패). 쇼핑몰이 엑셀을 만드는 데 오래 걸려 60초 → 5분,
@@ -505,7 +507,8 @@ def auth_start(steps):
     """인증 차례를 잡는 단계 번호(1부터) - 인증번호 단계 앞의 첫 칸 넣기(아이디). 그 앞의 검색·이동은 차례를 기다리지 않는다
     (사용자 2026-10-16: 빙 검색으로 들어가는 사이트가 앞 사이트의 인증이 끝난 뒤에야 검색부터 시작해 오래 걸렸다)."""
     last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=0)
-    return next((i for i in range(last) if steps[i]["kind"] in ("fill", "secret")), 0) + 1
+    # [인증번호 받기](otpSend) 가 첫 칸 넣기보다 앞인 기록이면 거기부터 - 문자가 차례 밖에서 나가지 않게 (검토 2026-10-17)
+    return next((i for i in range(last) if steps[i]["kind"] in ("fill", "secret") or steps[i].get("otpSend")), 0) + 1
 
 
 def auth_end(steps):
@@ -1067,12 +1070,16 @@ class Replayer:
             t = dict(t, text="", textCount=0)
         cands = candidates(t)
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
-        deadline, tries = time.time() + (OPTIONAL_WAIT if optional else self.step_timeout), 1
+        started = time.time()
+        deadline, tries = started + (OPTIONAL_WAIT if optional else self.step_timeout), 1
         while True:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
-            for pv in ((prev, None) if loose and prev is not None else (prev,)) if frame is not None else ():
+            late = time.time() - started >= LATE_CLUE_WAIT
+            for pv in ((prev, None) if loose and late and prev is not None else (prev,)) if frame is not None else ():
                 for how, sel, nth in cands:
+                    if not late and how.endswith("(안쪽 포함)"):
+                        continue
                     try:
                         loc = frame.locator(sel)
                         loc = self._pick(loc, loc.count(), nth, pv)

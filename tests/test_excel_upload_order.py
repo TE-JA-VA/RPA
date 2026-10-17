@@ -21,10 +21,10 @@ def check(name, ok, detail=""):
         fails.append(name)
 
 
-def run(bad, late=False):
-    """bad: 결과 팝업이 뜨는 사이트코드. late: 팝업이 다음 파일의 사이트코드를 찾는 동안 늦게 뜬다.
-    반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수)"""
-    popup, delayed, moved, blocked = [], [], {}, []
+def run(bad, when="now"):
+    """bad: 결과 팝업이 뜨는 사이트코드. when: 팝업이 뜨는 때 - now 창이 닫히자마자, find 다음 파일의 사이트코드를 찾는 동안,
+    wait 그보다 늦게 (결과를 기다릴 때에야). 반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수)"""
+    popup, delayed, later, moved, blocked = [], [], [], {}, []
 
     def find(hwnd, grid, code):
         blocked.append(bool(popup))
@@ -41,15 +41,20 @@ def run(bad, late=False):
 
     def upload(dlg, path, pid=None):
         if os.path.basename(path)[0] in bad:
-            (delayed if late else popup).append("업로드 오류")
+            {"now": popup, "find": delayed, "wait": later}[when].append("업로드 오류")
         return True
+
+    def wait_result(app, hwnd, timeout=None, **_):
+        popup.extend(later)
+        later.clear()
+        return dismiss(app, hwnd)
 
     rr.log = lambda m: None
     rr.excel_upload_dir = tempfile.gettempdir
     rr.collect_upload_files = lambda folder: ({c: f"{c}.xlsx" for c in "ABC"}, [], [])
     rr.find_site_upload_cell = find
     rr.dismiss_popups = dismiss
-    rr.wait_upload_result = lambda app, hwnd, **_: dismiss(app, hwnd)
+    rr.wait_upload_result = wait_result
     rr.open_upload_dialog = lambda pid, hwnd, cell: 1
     rr.upload_file_in_dialog = upload
     rr.win32gui = SimpleNamespace(IsWindow=lambda h: False, IsWindowVisible=lambda h: False)
@@ -67,8 +72,12 @@ moved, blocked = run("A")
 check("앞 파일 결과 팝업은 다음 파일의 사이트코드를 찾기 전에 닫는다", blocked == 0, f"막힌 찾기 {blocked}번")
 check("팝업이 뜬 앞 파일만 실패, 다음 파일은 완료", moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
 
-moved, blocked = run("A", late=True)
+moved, blocked = run("A", when="find")
 check("찾는 동안 늦게 뜬 팝업도 앞 파일의 결과로 본다", moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
+
+moved, blocked = run("A", when="wait")
+check("그보다 늦게 뜬 팝업도 다음 칸을 누르기 전에 기다려 앞 파일의 결과로 본다 (실패한 파일이 완료로 가지 않는다)",
+      moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
 
 moved, blocked = run("C")
 check("마지막 파일은 결과 팝업을 기다려 본다", moved == {**done, "C.xlsx": "업로드 실패"}, str(moved))

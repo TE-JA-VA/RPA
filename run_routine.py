@@ -2982,8 +2982,10 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
     - 성공/실패는 팝업 유무로 가른다. 정상이면 팝업이 아예 뜨지 않고,
       실패하면 사유와 함께 확인 팝업이 뜬다(실측). 자세한 결과는 화면 우측 상단 로그에서 본다.
       (암호 걸린 파일은 들어가지 않는데도 팝업이 없었다 - 2026-10-15 개발기 실측. 그런 파일은 '완료' 로 옮겨진다)
-    - 파일 열기 창이 닫히면 기다리지 않고 바로 다음 파일 (사용자 2026-10-15, 개발기 실측: 창이 닫히자마자 다음 칸을 눌러도
-      열리고 둘 다 들어갔다, 파일 잠금은 창이 닫힐 때 이미 풀려 있었다). 앞 파일의 결과 팝업은 다음 파일 앞과 맨 끝에 본다.
+    - 파일 열기 창이 닫히면 결과를 기다리는 동안 다음 파일의 칸을 찾는다 (사용자 2026-10-15, 개발기 실측: 창이 닫히자마자 다음
+      칸을 눌러도 열리고 둘 다 들어갔다, 파일 잠금은 창이 닫힐 때 이미 풀려 있었다). 칸은 앞 파일 창이 닫힌 뒤
+      UPLOAD_RESULT_WAIT_SECONDS 가 지나야 누른다 - 늦게 뜬 오류 팝업을 놓치면 실패한 파일이 완료로 가거나 다음 파일의 실패로
+      잡힌다 (검토 2026-10-17).
     반환: (업로드한 수, 오류로 보낸 수)
     """
     folder = excel_upload_dir()
@@ -3021,11 +3023,16 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
     status.metric("excel_upload", "엑셀 업로드", 0, len(targets), unit="개")
     status.progress(0, len(targets))
     pending = None      # 넘기고 결과를 아직 안 본 파일 - 다음 파일 앞(앞 파일 결과 팝업)이나 맨 끝에 본다
+    closed_at = 0.0     # pending 의 파일 열기 창이 닫힌 때
     seen = []           # pending 의 결과로 닫은 팝업 (사이트코드 찾기 앞에서)
 
     def settle(popups):
-        """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료."""
+        """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
+        팝업이 없어도 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 가 지나기 전이면 남은 시간만큼 결과 팝업을 기다린다."""
         nonlocal pending, seen, uploaded, failed, errors
+        left = closed_at + UPLOAD_RESULT_WAIT_SECONDS - time.time()
+        if not popups and left > 0:
+            popups = wait_upload_result(app, hwnd, timeout=left)
         path, pending, seen = pending, None, []
         wait_file_unlocked(path)    # 읽는 도중 옮기면 '헤더 개수: 0' - 안 잠겼으면 바로 돌아온다
         if popups:
@@ -3103,11 +3110,11 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             cancel_save_dialog(dlg)
             continue
 
-        log("    파일을 전달하였습니다. 기다리지 않고 다음 파일을 올립니다. (결과 팝업은 다음 파일 앞에서 확인)")
-        pending = path
+        log("    파일을 전달하였습니다. 결과를 기다리는 동안 다음 파일의 칸을 찾습니다.")
+        pending, closed_at = path, time.time()
 
-    if pending:     # 마지막 파일 - 결과 팝업을 기다린다 (이미 닫았으면 그것으로, 뜨면 그때 끝, 안 뜨면 UPLOAD_RESULT_WAIT_SECONDS 뒤 완료)
-        settle(seen or wait_upload_result(app, hwnd))
+    if pending:     # 마지막 파일 - 결과 팝업을 기다린다 (이미 닫았으면 그것으로, 뜨면 그때 끝, 안 뜨면 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 에 완료)
+        settle(seen)
 
     log(f"  엑셀업로드 완료: 업로드 {uploaded}건 / 업로드 실패 {failed}건 "
         f"/ 오류 폴더로 옮긴 파일 {errors}건")

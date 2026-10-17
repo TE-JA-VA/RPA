@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,23 +53,30 @@ with sync_playwright() as p:
     ctx = b.new_context()
     page = ctx.new_page()
     page.set_content(HTML)
-    rp = rec.Replayer(ctx, {"steps": []}, {}, tempfile.mkdtemp(), "000", log=lambda m: None, step_timeout=1, step_tries=1)
+    rp = rec.Replayer(ctx, {"steps": []}, {}, tempfile.mkdtemp(), "000", log=lambda m: None, step_timeout=3, step_tries=1)
     rp.pages[0] = page
+
+    took = [0.0]
 
     def find(t, prev=None, loose=False):
         s = step(t)
+        t0 = time.time()
         try:
             _, loc, how = rp._find(page, s, prev, loose)
             return loc.evaluate("e => e.id"), how
         except rec.NotFound:
             return None, None
+        finally:
+            took[0] = time.time() - t0
 
     got = find(target("비즈메카이지", 1, 2))
     check("안쪽 칸에 든 글자 - 같은 글자 둘 중 기록한 2번째", got == ("ad3", "글자(안쪽 포함)"), str(got))
+    check(f"새 단서는 {rec.LATE_CLUE_WAIT:.0f}초 찾아도 없을 때부터 (화면이 덜 뜬 사이 옛 화면의 다른 것을 집지 않게)",
+          took[0] >= rec.LATE_CLUE_WAIT, f"{took[0]:.1f}초")
     got = find(target("메일 1", 1, 2))
     check("숫자가 바뀌고 따로 칸에 든 '메일 N' - 둘 중 2번째(카드)", got[0] == "card" and got[1].startswith("숫자 뺀 글자"), str(got))
     got = find(target("확인"))
-    check("글자가 바로 든 것은 예전 단서 '글자' 그대로", got == ("plain", "글자"), str(got))
+    check("글자가 바로 든 것은 예전 단서 '글자' 그대로 - 기다리지 않고", got == ("plain", "글자") and took[0] < 1, f"{got} {took[0]:.1f}초")
     got = find(target("없는 글자"))
     check("없는 것은 그대로 못 찾는다", got == (None, None), str(got))
 

@@ -44,6 +44,8 @@ check("인증번호가 없으면 None (기다리지 않는다)", rec.auth_end(S(
 check("차례는 로그인 칸부터 - 앞의 검색·이동은 기다리지 않는다",
       rec.auth_start(S("goto", "click", "click", "fill", "secret", "enter", "click", "otp", "click")) == 4)
 check("로그인 칸이 없으면 첫 단계부터", rec.auth_start(S("goto", "click", "otp", "click")) == 1)
+check("[인증번호 받기] 가 첫 칸 넣기보다 앞이면 거기부터 (문자가 차례 밖에서 나가지 않게)",
+      rec.auth_start([{"kind": "goto"}, {"kind": "click", "otpSend": True}, {"kind": "fill"}, {"kind": "otp"}, {"kind": "click"}]) == 2)
 
 print("=== 2. 대시보드 단계 - 함께 진행 중")
 status.start("prepare")
@@ -59,6 +61,32 @@ check("끝은 그 단계만 (key)", st == {"a": "done", "b": "pending", "c": "fa
 status.step("b")
 st = {s["key"]: s["state"] for s in status._state["steps"]}
 check("병렬이 아니면 예전 그대로", st["b"] == "running", str(st))
+status.finish("success")
+
+status.start("prepare")
+status.set_steps([("a", "A"), ("c", "C")])
+go = threading.Event()
+
+
+def worker_a():
+    status.step("a", parallel=True)
+    go.wait()
+    status.metric("a:n", "받은 엑셀", 1)
+    status.note("a 하는 중")
+
+
+ta = threading.Thread(target=worker_a)
+ta.start()
+time.sleep(0.1)
+tc = threading.Thread(target=lambda: status.step("c", parallel=True))
+tc.start()
+tc.join()
+go.set()
+ta.join()
+m = next(x for x in status._state["metrics"] if x["key"] == "a:n")
+notes = {s["key"]: s.get("note") for s in status._state["steps"]}
+check("병렬: 숫자·메모는 그 실행기의 단계에 붙는다 (마지막에 시작한 다른 사이트 단계가 아니라)",
+      m["step"] == "a" and notes == {"a": "a 하는 중", "c": None}, f"{m['step']} {notes}")
 status.finish("success")
 
 print("=== 3. 실행기 대기열 (브라우저 흉내)")
