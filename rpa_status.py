@@ -76,6 +76,9 @@ SCHEDULE_MINUTE_STEP = 5
 SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
 SCHEDULE_VERSION = 4        # 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
+    "prepare": {
+        "parallel": 1,              # 업체가 웹에서 고른 동시 실행 창 수 (명령 set_parallel) - 관리 화면이 허용한 최대(policy.parallel)까지만 쓴다
+    },
     "schedule": {
         "version": SCHEDULE_VERSION,
         "enabled": False,
@@ -943,6 +946,30 @@ REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 _PRESET_KEY = re.compile(r"(?:PRESET)?(\d+)")
 
 
+PARALLEL_MIN, PARALLEL_MAX = 1, 16       # ACTOR 가 동시에 여는 사이트 창 수 (관리 화면 limits.parallel, ops.PARALLEL_LIMIT_MIN/MAX 와 같다).
+PARALLEL_DEFAULT = 1                      # 허용하지 않은 업체·에이전트가 아직 못 읽은 PC·업체가 고르지 않은 PC - 예전처럼 하나씩
+
+
+def parallel_limit():
+    """관리 화면이 이 업체에 허용한 동시 실행 창 수의 최대 (에이전트가 적은 업체 정책 policy.parallel, 사용자 2026-10-16).
+    1 = 허용하지 않음 (업체 웹에 설정이 안 보인다). 없거나 이상하면 PARALLEL_DEFAULT."""
+    try:
+        v = (read_settings()["schedule"].get("policy") or {}).get("parallel")
+    except Exception:
+        return PARALLEL_DEFAULT
+    return v if isinstance(v, int) and not isinstance(v, bool) and PARALLEL_MIN <= v <= PARALLEL_MAX else PARALLEL_DEFAULT
+
+
+def parallel_choice():
+    """업체가 웹 대시보드에서 고른 동시 실행 창 수 (settings.json prepare.parallel, 명령 set_parallel). 없거나 이상하면 1.
+    실제로 여는 수는 이것과 parallel_limit() 중 작은 것 (web_runner.parallel_count) - 허용을 줄이면 고른 값과 상관없이 줄어든다."""
+    try:
+        v = read_settings()["prepare"].get("parallel")
+    except Exception:
+        return PARALLEL_DEFAULT
+    return v if isinstance(v, int) and not isinstance(v, bool) and PARALLEL_MIN <= v <= PARALLEL_MAX else PARALLEL_DEFAULT
+
+
 def preset_limit():
     """이 업체가 쓸 수 있는 프리셋 수 - 에이전트가 적은 업체 정책(policy.presets, 관리 화면에서 정함). 없거나 이상하면 PRESET_DEFAULT.
     옵저버는 이만큼까지 늘리고, ACTOR 오토파일럿은 이 번호까지만 돌린다 (넘는 프리셋은 지우지 않는다 - 사용자 2026-10-14)."""
@@ -1426,6 +1453,7 @@ def read_history(limit=0, program=None, since=None):
 # 기록하는 쪽 (RPA 프로그램이 부른다)
 # ---------------------------------------------------------------------------
 _lock = threading.RLock()
+_here = threading.local()   # 병렬 수집: 실행기(스레드)마다 지금 단계 - metric·note 가 마지막에 시작한 다른 사이트 단계에 붙지 않게 (검토 2026-10-17)
 _state = None
 _path = None
 _tail = deque(maxlen=LOG_TAIL_LINES)
@@ -1435,6 +1463,10 @@ _finished = True
 _last_problem = None
 _heart = None
 _stop = threading.Event()
+
+
+def _current():
+    return getattr(_here, "step", None) or _state.get("current")
 
 
 def _safe(fn):
@@ -1686,8 +1718,9 @@ def progress(value, total, note=None):
 
 
 @_safe
-def step(key, note=None, label=None):
-    """이 단계를 시작한다. 진행 중이던 단계는 완료로, 건너뛴 앞 단계는 '건너뜀'으로 표시한다."""
+def step(key, note=None, label=None, parallel=False):
+    """이 단계를 시작한다. 진행 중이던 단계는 완료로, 건너뛴 앞 단계는 '건너뜀'으로 표시한다.
+    parallel: 여러 단계가 함께 도는 실행(사이트 병렬 수집) - 다른 단계는 건드리지 않는다 (끝은 done_step/fail_step 에 key)."""
     with _lock:
         if not _active():
             return
@@ -1698,7 +1731,7 @@ def step(key, note=None, label=None):
             target = _new_step(key, label or key)
             steps.append(target)
         index = steps.index(target)
-        for i, s in enumerate(steps):
+        for i, s in enumerate(steps if not parallel else ()):
             if s is target:
                 continue
             if s["state"] == "running":
@@ -1707,6 +1740,7 @@ def step(key, note=None, label=None):
             if i < index and s["state"] == "pending":
                 s["state"] = "skipped"
         target.update(state="running", started_at=now, finished_at=None, note=note)
+        _here.step = target["key"] if parallel else None
         cur = _find_module(_state.get("current_module"))
         if cur is not None:
             cur["progress"] = None   # 단계가 바뀌면 이전 단계의 진행률은 뜻이 없다
@@ -1732,7 +1766,7 @@ def note(text):
         if not _active():
             return
         _state["note"] = text
-        current = _find_step(_state.get("current"))
+        current = _find_step(_current())
         if current is not None:
             current["note"] = text
         _touch_locked()
@@ -1751,14 +1785,15 @@ def skip(key, note=None):
 
 
 @_safe
-def done_step(state="done", note=None):
+def done_step(state="done", note=None, key=None):
     """지금 단계를 끝냈다 - 다음 단계 없이 끝나는 마지막 사이트처럼. 실행이 '중단' 으로 끝나도 이 단계는 완료로 남는다
     (전엔 finish 가 '중단' 으로 덮어 기록 탭에 실패로 보였고 토큰 셈에서도 빠졌다, 2026-10-06).
-    state="skipped", note="대상 없음": 할 것이 없었다 - 토큰을 쓰지 않는다 (메일 고르기에 새 메일이 없을 때, 2026-10-14)."""
+    state="skipped", note="대상 없음": 할 것이 없었다 - 토큰을 쓰지 않는다 (메일 고르기에 새 메일이 없을 때, 2026-10-14).
+    key: 그 단계 (병렬 수집 - 없으면 지금 단계)."""
     with _lock:
         if not _active():
             return
-        s = _find_step(_state.get("current"))
+        s = _find_step(key or _state.get("current"))
         if s is not None and s["state"] == "running":
             s.update(state=state, finished_at=now_iso())
             if note:
@@ -1767,12 +1802,12 @@ def done_step(state="done", note=None):
 
 
 @_safe
-def fail_step(note=None):
-    """지금 단계가 실패했다 (프로그램은 계속 돈다)."""
+def fail_step(note=None, key=None):
+    """지금 단계(key 를 주면 그 단계 - 병렬 수집)가 실패했다 (프로그램은 계속 돈다)."""
     with _lock:
         if not _active():
             return
-        s = _find_step(_state.get("current"))
+        s = _find_step(key or _state.get("current"))
         if s is not None and s["state"] == "running":
             s.update(state="failed", finished_at=now_iso(), note=note)
         _touch_locked(immediate=True)
@@ -1786,7 +1821,7 @@ def metric(key, label, value, total=None, unit="건", note=None, approx=False):
             return
         m = next((x for x in _state["metrics"] if x.get("key") == key), None)
         if m is None:
-            m = {"key": key, "step": _state.get("current")}
+            m = {"key": key, "step": _current()}
             _state["metrics"].append(m)
         m.update(label=label, value=value, total=total, unit=unit, note=note,
                  approx=bool(approx), updated_at=now_iso())

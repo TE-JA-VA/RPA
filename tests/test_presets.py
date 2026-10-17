@@ -539,6 +539,20 @@ wr.status.read_presets = orig_read
 check("업체 프리셋 수를 넘는 프리셋은 ACTOR 오토파일럿이 돌리지 않는다 (까닭을 남김)", over and "프리셋 수" in over[0] and under == [], (over, under))
 policy_presets(None)
 
+print("=== 업체별 동시 실행 창 수 (관리 화면, 사용자 2026-10-16) ===")
+check("정하지 않았으면 하나씩 (1)", st.parallel_limit() == 1, st.parallel_limit())
+check("에이전트가 적은 값을 쓴다 (set_policy 5번째), 그 값만 바뀌어도 다시 적는다",
+      dash.set_policy(2, [], False, None, 4) is True and st.parallel_limit() == 4 and dash.set_policy(2, [], False, None, 6) is True
+      and st.parallel_limit() == 6)
+bad = []
+for v in (0, 17, "4", True, -1):
+    cfg = st.read_settings()
+    cfg["schedule"]["policy"]["parallel"] = v
+    st.write_settings(cfg)
+    bad.append(st.parallel_limit())
+check("이상한 값(1 미만·16 초과·글자·참거짓)이면 1", bad == [1] * 5, bad)
+dash.set_policy(2, [], False, None, None)
+
 print()
 print(f"실패: {'없음' if not fails else fails}")
 sys.exit(1 if fails else 0)

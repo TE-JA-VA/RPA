@@ -805,20 +805,22 @@ class AppClient:
 
 
 ac = AppClient({"modules": {"Hold": False, "Sales": True}, "limits": {"schedule": 3}})
-check(ag.company_policy(ac, "c_x") == (3, ["Hold"], False, None) and ac.asked == ["meta/companies/c_x/apps/rpa"], "한 번 읽어 한도·안 쓰는 모듈·웰라이프")
-check(ag.company_policy(AppClient(None), "c_x") == (2, [], False, None), "정책이 없으면 기본 2개·안 쓰는 모듈 없음·웰라이프 아님")
+check(ag.company_policy(ac, "c_x") == (3, ["Hold"], False, None, None) and ac.asked == ["meta/companies/c_x/apps/rpa"], "한 번 읽어 한도·안 쓰는 모듈·웰라이프")
+check(ag.company_policy(AppClient(None), "c_x") == (2, [], False, None, None), "정책이 없으면 기본 2개·안 쓰는 모듈 없음·웰라이프 아님")
 check(ag.company_policy(AppClient({"limits": {"schedule": "9"}}), "c_x")[0] == 2 and ag.company_policy(AppClient({"limits": {"schedule": 0}}), "c_x")[0] == 0,
       "이상한 값은 기본 2, 0 은 0 (자동 실행을 못 쓴다)")
 for cid, feats, want in (("WELLIFE_x", None, True), ("my_wellife", None, True), ("Wellife", {}, True), ("wel_life", None, False),
                          ("c_demo", {"wellife": True}, True), ("c_demo", {"wellife": False}, False), ("c_demo", None, False)):
     check(ag.wellife_on(cid, feats) is want, f"웰라이프 판정 {cid} {feats} → {want}")
-check(ag.company_policy(AppClient({"modules": {"Hold": False}}), "wellife_a") == (2, ["Hold", "Logistics", "Output"], True, 40),
+check(ag.company_policy(AppClient({"modules": {"Hold": False}}), "wellife_a") == (2, ["Hold", "Logistics", "Output"], True, 40, None),
       "웰라이프 업체: 물류관리·운송장 출력을 안 쓰는 모듈에 더한다")
 check(ag.company_policy(AppClient({"features": {"wellife": True}}), "c_demo")[2] is True, "관리 화면에서 연 업체도 웰라이프")
 got = [ag.company_policy(AppClient({"limits": {"presets": v}}), "c_x")[3] for v in (5, 10, 40, 1, 41, "5", True)]
 check(got == [5, 10, 40, None, None, None, None], f"업체 프리셋 수: 2~40 정수만 (보통 업체는 관리 화면이 10 까지), 아니면 None (PC 가 기본 2) {got}")
 check([ag.company_policy(AppClient(v), "Test_Wellife_test")[3] for v in ({}, {"limits": {"presets": 5}})] == [40, 40],
       "업체코드에 wellife 가 든 업체는 프리셋 40 (관리 화면 값 대신, 사용자 2026-10-15)")
+got = [ag.company_policy(AppClient({"limits": {"parallel": v}}), "c_x")[4] for v in (1, 4, 16, 0, 17, "4", True)]
+check(got == [1, 4, 16, None, None, None, None], f"동시 실행 창 수: 1~16 정수만, 아니면 None (PC 가 하나씩) {got}")
 with tempfile.TemporaryDirectory() as d:
     os.environ["RPA_STATUS_DIR"] = d              # 실제 settings.json 을 건드리지 않게
     os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
@@ -844,10 +846,12 @@ with tempfile.TemporaryDirectory() as d:
         ag.real_actions(limits=lambda: None)["set_schedule"](three)
         check(len(st.read_settings()["schedule"]["slots"]) == 3, "한 번도 못 읽었으면 자르지 않는다 (PC 상한 12 까지만)")
         pol = ag.Policy(AppClient({"limits": {"schedule": 3}, "modules": {"Hold": False}}), "c_x")
-        check(pol.refresh() == (3, ["Hold"], False, None) and st.read_settings()["schedule"]["policy"]["limit"] == 3
+        check(pol.refresh() == (3, ["Hold"], False, None, None) and st.read_settings()["schedule"]["policy"]["limit"] == 3
               and st.read_settings()["schedule"]["policy"]["off"] == ["Hold"], "정책을 읽어 PC 설정에 적는다")
         ag.Policy(AppClient({"limits": {"schedule": 3, "presets": 7}, "modules": {"Hold": False}}), "c_x").refresh(force=True)
         check(st.preset_limit() == 7, "업체 프리셋 수도 PC 설정에 적는다 (옵저버·ACTOR 가 본다)")
+        ag.Policy(AppClient({"limits": {"schedule": 3, "presets": 7, "parallel": 4}, "modules": {"Hold": False}}), "c_x").refresh(force=True)
+        check(st.parallel_limit() == 4 and st.preset_limit() == 7, "동시 실행 창 수도 PC 설정에 적는다 (ACTOR 가 본다)")
         check(pol.refresh() is None, "10분 안에는 다시 안 읽는다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_x").refresh(force=True) is None
               and st.read_settings()["schedule"]["policy"]["limit"] == 3, "못 읽으면 적힌 값 그대로")
@@ -855,14 +859,14 @@ with tempfile.TemporaryDirectory() as d:
         with open(os.environ["RPA_USER_CONFIG"], "w", encoding="utf-8") as f:
             json.dump({"LogIn": {"AdminCode": "x"}}, f)
         wl = ag.Policy(AppClient({"features": {"wellife": True}}), "c_demo")
-        check(wl.refresh(force=True) == (2, ["Logistics", "Output"], True, None) and st.wellife_policy() is True, "정책을 PC 에 적는다 (wellife)")
+        check(wl.refresh(force=True) == (2, ["Logistics", "Output"], True, None, None) and st.wellife_policy() is True, "정책을 PC 에 적는다 (wellife)")
         check(st.read_wellife_modules()[0] == {"Login": True, "Excel": True, "Import": True, "Sales": True, "Hold": False, "Sap": False,
                                                "Wms": False, "InvoiceSend": False},
               "처음 열리면 섹션을 기본값(로그인·주문매핑 - 엑셀 수집·자동 수집·매출처리만)으로 만든다")
         check(ag.Policy(AppClient(fb.HttpError(503, "끊김")), "c_demo").refresh(force=True) is None and st.wellife_policy() is True,
               "정책을 못 읽으면 PC 에 적힌 마지막 값 (웰라이프 그대로)")
         check(st.has_wellife_section() is True, "정책을 못 읽어도 섹션은 안 지운다")
-        check(ag.Policy(AppClient({"features": {"wellife": False}}), "c_demo").refresh(force=True) == (2, [], False, None)
+        check(ag.Policy(AppClient({"features": {"wellife": False}}), "c_demo").refresh(force=True) == (2, [], False, None, None)
               and st.wellife_policy() is False and st.has_wellife_section() is False
               and st.read_user_config()["LogIn"] == {"AdminCode": "x"}, "열렸다 닫히면 정책 False + Wellife 섹션 지움 (다른 섹션은 그대로)")
         st.ensure_wellife_section()                  # 메모장으로 직접 넣은 섹션 - 한 번도 안 열렸던 업체
@@ -1162,6 +1166,20 @@ with tempfile.TemporaryDirectory() as d:
             except RuntimeError as e:
                 check(why in str(e), f"거부: {why} ({e})")
         check(ag.decide({"type": "set_presets", "state": "queued", "expires_at": NOW + 60}, NOW)[0] == "run", "set_presets 는 아는 명령")
+        # 동시 실행 창 수 (사용자 2026-10-16) - 관리 화면이 허용한 최대까지만
+        pacts = ag.real_actions(limits=lambda: (2, [], False, None, 4))
+        msg = pacts["set_parallel"]({"parallel": 3})
+        check(st.parallel_choice() == 3 and "3개" in msg, f"허용(4) 안이면 저장 ({msg})")
+        for args, lim, why in (({"parallel": 5}, 4, "4개까지"), ({"parallel": 2}, None, "1개까지"), ({"parallel": "3"}, 4, "올바르지"),
+                               ({"parallel": True}, 4, "올바르지"), ({"parallel": 0}, 4, "올바르지"), ({"parallel": 17}, 16, "올바르지"), (None, 4, "올바르지")):
+            try:
+                ag.real_actions(limits=lambda lim=lim: (2, [], False, None, lim))["set_parallel"](args)
+                check(False, f"거부: {args} 허용 {lim}")
+            except RuntimeError as e:
+                check(why in str(e) and st.parallel_choice() == 3, f"거부: {args} 허용 {lim} ({e})")
+        check("1개" in ag.real_actions(limits=lambda: (2, [], False, None, None))["set_parallel"]({"parallel": 1}) and st.parallel_choice() == 1,
+              "허용하지 않아도 1(하나씩)은 된다")
+        check(ag.decide({"type": "set_parallel", "state": "queued", "expires_at": NOW + 60}, NOW)[0] == "run", "set_parallel 은 아는 명령")
         rows2 = [{"started_at": "2026-09-14T13:55:00", "state": "success", "program": "observer"},
                  {"started_at": "2026-09-14T13:56:00", "state": "stopped", "program": "prepare"}]
         check(ag.recent_summary(rows2, _dt.date(2026, 9, 14))[-1] == {"date": "2026-09-14", "success": 0, "failed": 1, "crashed": 0},

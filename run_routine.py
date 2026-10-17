@@ -2587,39 +2587,44 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
 
     이 그리드는 스크롤이 있고 중간에 Group Row 도 섞여 있으므로
     맨 위부터 훑으며 좌표로 두 컬럼만 읽는다.
+    그리드가 좁으면 두 컬럼이 한 화면에 안 들어온다 (2026-10-15 개발기 실측: 엑셀업로드가 오른쪽 밖, 넘기면 사이트코드가
+    왼쪽 밖). 그래서 사이트코드로 줄(y)을 먼저 찾고, 업로드 컬럼이 밖이면 가로로 넘긴 뒤 같은 y 의 셀을 읽는다
+    (가로로 넘겨도 줄은 움직이지 않는다). 앞 파일이 오른쪽으로 넘겨 두었을 수 있어 처음에 맨 왼쪽으로 되돌린다.
     반환: (셀 요소, 엑셀업로드 값) - 못 찾으면 (None, None)
     """
+    if not _header_onscreen(grid, SITE_CODE_COL):
+        scroll_grid_left_home(hwnd, grid)
     geo_code = _column_scan_geometry(grid, SITE_CODE_COL)
-    geo_up = _column_scan_geometry(grid, EXCEL_UPLOAD_COL)
-    if geo_code is None or geo_up is None:
-        log(f"    '{SITE_CODE_COL}' 또는 '{EXCEL_UPLOAD_COL}' 컬럼을 찾지 못했습니다.")
+    if geo_code is None or not _header_onscreen(grid, SITE_CODE_COL):
+        log(f"    '{SITE_CODE_COL}' 컬럼을 찾지 못했습니다.")
         return None, None
 
-    def look():
-        x_up = geo_up[0]
-        for y, value, _el in scan_column(geo_code, SITE_CODE_COL):
-            if (value or "").strip() != code:
-                continue
-            try:
-                cell = element_at_point(x_up, y)
-                if cell.window_text().startswith(EXCEL_UPLOAD_COL):
-                    return cell, (legacy_value(cell) or "").strip()
-            except Exception:
-                pass
+    def row_y():
+        return next((y for y, value, _el in scan_column(geo_code, SITE_CODE_COL) if (value or "").strip() == code), None)
+
+    y = row_y()
+    if y is None:
+        grid_scroll_to_top(hwnd, grid)
+        for _ in range(max_pages):
+            y = row_y()
+            if y is not None or not grid_page_down(hwnd, grid):
+                break
+    if y is None:
         return None, None
 
-    cell, val = look()
-    if cell is not None:
-        return cell, val
-
-    grid_scroll_to_top(hwnd, grid)
-    for _ in range(max_pages):
-        cell, val = look()
-        if cell is not None:
-            return cell, val
-        if not grid_page_down(hwnd, grid):
-            break
-    return look()
+    if not _header_onscreen(grid, EXCEL_UPLOAD_COL):
+        scroll_grid_right_to_column(hwnd, grid, EXCEL_UPLOAD_COL)
+    geo_up = _column_scan_geometry(grid, EXCEL_UPLOAD_COL) if _header_onscreen(grid, EXCEL_UPLOAD_COL) else None
+    if geo_up is None:
+        log(f"    '{EXCEL_UPLOAD_COL}' 컬럼을 찾지 못했습니다.")
+        return None, None
+    try:
+        cell = element_at_point(geo_up[0], y)
+        if cell.window_text().startswith(EXCEL_UPLOAD_COL):
+            return cell, (legacy_value(cell) or "").strip()
+    except Exception:
+        pass
+    return None, None
 
 
 # 열기 대화상자의 '파일 이름' 콤보. 저장 대화상자(1001)와 ID 가 다르다.
@@ -2976,6 +2981,11 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
       사이트코드 중복(최신 1개만 사용) / 업로드 후 오류 팝업이 뜸
     - 성공/실패는 팝업 유무로 가른다. 정상이면 팝업이 아예 뜨지 않고,
       실패하면 사유와 함께 확인 팝업이 뜬다(실측). 자세한 결과는 화면 우측 상단 로그에서 본다.
+      (암호 걸린 파일은 들어가지 않는데도 팝업이 없었다 - 2026-10-15 개발기 실측. 그런 파일은 '완료' 로 옮겨진다)
+    - 파일 열기 창이 닫히면 결과를 기다리는 동안 다음 파일의 칸을 찾는다 (사용자 2026-10-15, 개발기 실측: 창이 닫히자마자 다음
+      칸을 눌러도 열리고 둘 다 들어갔다, 파일 잠금은 창이 닫힐 때 이미 풀려 있었다). 칸은 앞 파일 창이 닫힌 뒤
+      UPLOAD_RESULT_WAIT_SECONDS 가 지나야 누른다 - 늦게 뜬 오류 팝업을 놓치면 실패한 파일이 완료로 가거나 다음 파일의 실패로
+      잡힌다 (검토 2026-10-17).
     반환: (업로드한 수, 오류로 보낸 수)
     """
     folder = excel_upload_dir()
@@ -3012,12 +3022,47 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
     uploaded = 0
     status.metric("excel_upload", "엑셀 업로드", 0, len(targets), unit="개")
     status.progress(0, len(targets))
+    pending = None      # 넘기고 결과를 아직 안 본 파일 - 다음 파일 앞(앞 파일 결과 팝업)이나 맨 끝에 본다
+    closed_at = 0.0     # pending 의 파일 열기 창이 닫힌 때
+    seen = []           # pending 의 결과로 닫은 팝업 (사이트코드 찾기 앞에서)
+
+    def settle(popups):
+        """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
+        팝업이 없어도 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 가 지나기 전이면 남은 시간만큼 결과 팝업을 기다린다."""
+        nonlocal pending, seen, uploaded, failed, errors
+        left = closed_at + UPLOAD_RESULT_WAIT_SECONDS - time.time()
+        if not popups and left > 0:
+            popups = wait_upload_result(app, hwnd, timeout=left)
+        path, pending, seen = pending, None, []
+        wait_file_unlocked(path)    # 읽는 도중 옮기면 '헤더 개수: 0' - 안 잠겼으면 바로 돌아온다
+        if popups:
+            log(f"    {os.path.basename(path)}: 업로드 실패로 판단합니다. (팝업 {len(popups)}건)")
+            failed += 1
+            status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets), unit="개", note=f"실패 {failed}개")
+            if move_files:
+                move_file_to(path, error_dir, "업로드 실패")
+                errors += 1
+            else:
+                log("    (검증 모드: 파일을 옮기지 않습니다)")
+            return
+        log(f"    {os.path.basename(path)}: 업로드를 완료하였습니다. (오류 팝업 없음)")
+        uploaded += 1
+        status.progress(uploaded, len(targets))
+        status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets), unit="개",
+                      note=(f"실패 {failed}개" if failed else None))
+        if move_files:
+            move_file_to(path, done_dir, "업로드 완료")
+        else:
+            log("    (검증 모드: 파일을 옮기지 않습니다)")
+
     for idx, (code, path) in enumerate(sorted(targets.items()), 1):
         name = os.path.basename(path)
         log(f"  [{idx}/{len(targets)}] 사이트코드={code} 파일={name}")
         status.note(f"{idx}/{len(targets)} · {name}")
         status.progress(idx - 1, len(targets), name)
 
+        if pending:     # 앞 파일 결과 팝업이 떠 있으면 그리드를 넘기는 클릭도 먹지 않는다 - 사이트코드를 찾기 전에 닫는다
+            seen += dismiss_popups(app, hwnd, label="앞 파일 결과 ")
         cell, value = find_site_upload_cell(hwnd, grid, code)
         if cell is None:
             log(f"    사이트코드 {code} 인 행을 찾지 못했습니다.")
@@ -3032,8 +3077,10 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
                 errors += 1
             continue
 
-        # 앞 파일의 결과 팝업이 남아 있으면 셀 클릭이 먹지 않는다.
-        dismiss_popups(app, hwnd, label="클릭 전 남아있던 ")
+        # 찾는 동안 늦게 뜬 팝업도 닫는다 (남아 있으면 셀 클릭이 먹지 않는다) - 닫은 팝업은 모두 앞 파일의 결과로 본다.
+        popups = dismiss_popups(app, hwnd, label="앞 파일 결과 " if pending else "클릭 전 남아있던 ")
+        if pending:
+            settle(seen + popups)
 
         log(f"    '{EXCEL_UPLOAD_COL}' 셀 클릭: {cell.rectangle()}")
         dlg = open_upload_dialog(pid, hwnd, cell)
@@ -3063,34 +3110,11 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             cancel_save_dialog(dlg)
             continue
 
-        log("    파일을 전달하였습니다. ERPia가 읽기를 마칠 때까지 기다립니다.")
-        popups = wait_upload_result(app, hwnd)
-        # 읽는 도중에 옮기면 ERPia 가 파일을 놓친다. 잠금이 풀린 뒤에 옮긴다.
-        wait_file_unlocked(path)
+        log("    파일을 전달하였습니다. 결과를 기다리는 동안 다음 파일의 칸을 찾습니다.")
+        pending, closed_at = path, time.time()
 
-        # 정상 업로드면 팝업이 뜨지 않고, 실패하면 사유와 함께 확인 팝업이 뜬다(실측).
-        if popups:
-            log(f"    업로드 실패로 판단합니다. (팝업 {len(popups)}건)")
-            failed += 1
-            status.progress(uploaded, len(targets))
-            status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets),
-                          unit="개", note=f"실패 {failed}개")
-            if move_files:
-                move_file_to(path, error_dir, "업로드 실패")
-                errors += 1
-            else:
-                log("    (검증 모드: 파일을 옮기지 않습니다)")
-        else:
-            log("    업로드를 완료하였습니다. (오류 팝업 없음)")
-            uploaded += 1
-            status.progress(uploaded, len(targets))
-            status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets), unit="개",
-                          note=(f"실패 {failed}개" if failed else None))
-            if move_files:
-                move_file_to(path, done_dir, "업로드 완료")
-            else:
-                log("    (검증 모드: 파일을 옮기지 않습니다)")
-        time.sleep(1.0)
+    if pending:     # 마지막 파일 - 결과 팝업을 기다린다 (이미 닫았으면 그것으로, 뜨면 그때 끝, 안 뜨면 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 에 완료)
+        settle(seen)
 
     log(f"  엑셀업로드 완료: 업로드 {uploaded}건 / 업로드 실패 {failed}건 "
         f"/ 오류 폴더로 옮긴 파일 {errors}건")

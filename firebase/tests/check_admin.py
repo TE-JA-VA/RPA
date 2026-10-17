@@ -242,6 +242,14 @@ for bad in ("1", "11", "2.5", "", "셋"):
     check(code == 400 and "2~10" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, f"옵저버 프리셋 수 거절 {bad!r}", r)
 check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 3, "프리셋 수를 바꿔도 자동 실행 개수는 그대로")
 code, d = api("GET", "/api/companies/t_new")
+check(code == 200 and d.get("parallelLimit") is None, "병렬 실행 최대 창 수: 값이 없으면 null (화면은 기본 1 = 허용 안 함)", str(d.get("parallelLimit")))
+code, r = api("POST", "/api/companies/t_new/parallel", {"parallel": "4"})
+check(code == 200 and r == {"cid": "t_new", "parallel": 4} and db_get("meta/companies/t_new/apps/rpa/limits/parallel") == 4, "병렬 실행 4개까지 허용", r)
+for bad in ("0", "17", "2.5", "", "넷"):
+    code, r = api("POST", "/api/companies/t_new/parallel", {"parallel": bad})
+    check(code == 400 and "1~16" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/parallel") == 4, f"병렬 실행 최대 창 수 거절 {bad!r}", r)
+check(db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, "병렬 실행 허용을 바꿔도 프리셋 수는 그대로")
+code, d = api("GET", "/api/companies/t_new")
 check(code == 200 and d.get("wellife") is False and d.get("wellifeAuto") is False, "웰라이프: 보통 업체는 꺼짐", str(d.get("wellife")))
 code, r = api("POST", "/api/companies/t_new/features", {"wellife": True})
 check(code == 200 and db_get("meta/companies/t_new/apps/rpa/features/wellife") is True, "웰라이프 실행 켜기", r)
@@ -383,10 +391,21 @@ with sync_playwright() as pw:
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")?.value === '4'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 4, "화면: 업체 상세에서 자동 실행 개수 저장")
     check("옵저버에서 만들 수 있는 프리셋 수를 결정합니다. (2~10, 기본 2)" in page.text_content("#detail"), "옵저버 프리셋 수 설명")
+    preset = "document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")"
+    page.evaluate(f"{preset}.dataset.old = '1'")     # 저장하면 업체 상세를 다시 그린다 - 다시 그려졌는지 보려고
     page.fill("#detail input[aria-label='옵저버 프리셋 수']", "7")
     page.click("#detail .row:has(input[aria-label='옵저버 프리셋 수']) button")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")?.value === '7'", timeout=10000)
+    # 다시 그려질 때까지 (새 칸에 7) - 그 전에 다음 칸을 채우면 다시 그리며 지워진다
+    page.wait_for_function(f"{preset} && !{preset}.dataset.old && {preset}.value === '7'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/presets") == 7, "화면: 업체 상세에서 옵저버 프리셋 수 저장")
+    check("1이면 허용하지 않으며 업체 화면에도 보이지 않습니다. (1~16, 기본 1)" in page.text_content("#detail"), "병렬 실행 허용 설명")
+    page.fill("#detail input[aria-label='병렬 실행 최대 창 수']", "6")
+    page.click("#detail .row:has(input[aria-label='병렬 실행 최대 창 수']) button")
+    # 칸 값은 채우자마자 6 이라 저장을 못 기다린다 - 저장 뒤 다시 그린 제목의 허용 상태를 기다린다
+    page.wait_for_function("[...document.querySelectorAll('#detail h3')].some((h) => h.textContent.includes('6개까지 허용'))", timeout=10000)
+    check(db_get("meta/companies/t_new/apps/rpa/limits/parallel") == 6 and "6개까지 허용" in page.text_content("#detail"),
+          "화면: 업체 상세에서 병렬 실행 허용 저장 (제목 옆에 허용 상태)")
 
     print("자동 업데이트 (설계 8절)")
     CID, PC = "t_new", "pc_a"

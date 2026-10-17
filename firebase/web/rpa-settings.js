@@ -19,6 +19,12 @@ const HTML = `
         <button class="apply" id="shop-apply" disabled>적용</button>
       </div>
       <div class="msg hide" id="shop-none">이 PC 는 아직 사이트 수집 정보를 보내지 않았습니다 (에이전트를 새 버전으로 업데이트하세요)</div>
+      <div class="card hide" id="par-card">
+        <h2>동시 실행 <span class="muted" id="par-meta"></span></h2>
+        <div class="msg">쇼핑몰 사이트를 동시에 몇 개까지 열어 엑셀을 다운로드할지 선택합니다. 창은 PC 화면에 나눠 표시합니다.</div>
+        <div class="seg"><select id="par-n" aria-label="동시 실행 창 수"></select></div>
+        <button class="apply" id="par-apply" disabled>적용</button>
+      </div>
       <h3 class="grp">PROCESS 오토파일럿</h3>
       <div class="msg grp-note">다운로드한 주문을 ERPia에서 처리합니다.</div>
       <div class="card" id="mod-card">
@@ -61,18 +67,21 @@ const HTML = `
   </div>
   <p class="muted hide" id="no-pc">등록된 PC가 없습니다.</p>`;
 
-let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, busy = false, live = null, liveLimit;
+let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, stopPar = null, busy = false, live = null, liveLimit;
+let parLimit;    // 관리 화면이 허용한 동시 실행 최대 (limits/parallel) - 2 미만이면 '동시 실행' 카드가 없다 (업체는 이 기능을 모른다)
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
-let form = { modules: {}, shops: {}, sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] } };
+let form = { modules: {}, shops: {}, parallel: 1, sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] } };
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
 
 export function mount(el, context) {
-  root = el; c = context; busy = false; live = null; liveLimit = undefined; sent = {};
+  root = el; c = context; busy = false; live = null; liveLimit = undefined; parLimit = undefined; sent = {};
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
   $("mod-apply").onclick = applyModules;
   $("shop-apply").onclick = applyShops;
+  $("par-apply").onclick = applyParallel;
+  $("par-n").onchange = (e) => { form.parallel = Number(e.target.value); paintParMeta(); };
   $("sch-apply").onclick = applySchedule;
   $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
   // 휴무일 (판 4 PC - 사용자 2026-10-15): 공휴일 휴무 적용 켬/끔과 업체 휴무일. 지난 날은 못 고른다 (PC 도 저장할 때 뺀다)
@@ -101,6 +110,13 @@ export function mount(el, context) {
     liveLimit = snap.val();
     if (root && live) { paintTimes(); paintScheduleMeta(); }
   }, () => {});
+  // 동시 실행 허용도 같은 방식 (사용자 2026-10-16) - 허용을 거두면 카드가 바로 사라진다
+  stopPar = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/limits/parallel`), (snap) => {
+    const was = root && live ? parDirty() : null;
+    parLimit = snap.val();
+    if (was === null) return;
+    if (!was) resetParallel(); else paintParallel();
+  }, () => {});
   // 웰라이프 열림도 같은 방식 - 로그인 뒤 관리 화면에서 바뀌어도 따라간다
   stopFeatures = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/features`), (snap) => {
     const was = root && live ? [modulesDirty(), scheduleDirty()] : null;   // 정책을 바꾸기 전 목록으로 편집 중인지 본다
@@ -113,10 +129,11 @@ export function mount(el, context) {
     const first = live == null;
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신). 편집 중인지는 바뀌기 전 PC 값과 견준다 -
     // 새 값과 견주면 PC 쪽이 바뀌었을 때 손대지 않은 폼도 '편집 중' 으로 보여 옛 값에 머문다
-    const was = first ? [] : [modulesDirty(), shopsDirty(), scheduleDirty()];
+    const was = first ? [] : [modulesDirty(), shopsDirty(), scheduleDirty(), parDirty()];
     live = snap.val() || {};
     if (first || !was[0]) resetModules();
     if (first || !was[1]) resetShops();
+    if (first || !was[3]) resetParallel();
     if (first || !was[2]) resetSchedule();
     paintAll();
   }, (e) => notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `읽지 못했습니다. (${e.code || e})`));
@@ -126,17 +143,20 @@ export function unmount() {
   if (stopLive) { stopLive(); stopLive = null; }
   if (stopLimit) { stopLimit(); stopLimit = null; }
   if (stopFeatures) { stopFeatures(); stopFeatures = null; }
+  if (stopPar) { stopPar(); stopPar = null; }
   root = null; c = null;
 }
 
 /** 적용 안 한 변경이 있나 (떠날 때 확인 - app.js) */
 export function dirty() {
   return !!root && !!live && ((modulesDirty() && sent.modules !== keyOf.modules())
-    || (shopsDirty() && sent.shops !== keyOf.shops()) || (scheduleDirty() && sent.sch !== keyOf.sch()));
+    || (shopsDirty() && sent.shops !== keyOf.shops()) || (scheduleDirty() && sent.sch !== keyOf.sch())
+    || (parDirty() && sent.par !== keyOf.par()));
 }
-const keyOf = { modules: () => JSON.stringify(form.modules), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()) };
+const keyOf = { modules: () => JSON.stringify(form.modules), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()),
+  par: () => String(form.parallel) };
 
-function paintAll() { paintModuleMeta(); paintShopMeta(); paintScheduleMeta(); }
+function paintAll() { paintModuleMeta(); paintShopMeta(); paintParMeta(); paintScheduleMeta(); }
 
 /** 명령을 넣는 동안 카드 단추를 잠근다 */
 async function send(type, args, label) {
@@ -260,6 +280,42 @@ async function applyShops() {
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.shops = keyOf.shops();
   await send("set_presets", wanted, "쇼핑몰 프리셋");
+}
+
+// --- 동시 실행 (사용자 2026-10-16) ---------------------------------
+// 관리 화면이 허용한 업체(limits.parallel 2 이상)이고 PC 가 새 에이전트(live.parallel)일 때만 카드가 보인다. 1 ~ 허용 최대 중에서 고른다
+const parMax = () => (Number.isInteger(parLimit) && parLimit >= 2 ? Math.min(parLimit, 16) : 0);
+const parShown = () => parMax() >= 2 && !!live?.parallel;
+const savedPar = () => Math.min(Number.isInteger(live?.parallel?.chosen) ? live.parallel.chosen : 1, parMax() || 1);   // 허용을 줄이면 PC 도 그만큼만 연다
+function resetParallel() {
+  form.parallel = savedPar();
+  paintParallel();
+}
+function parDirty() {
+  return parShown() && form.parallel !== savedPar();
+}
+function paintParallel() {
+  show($("par-card"), parShown());
+  if (!parShown()) return;
+  $("par-n").replaceChildren(...Array.from({ length: parMax() }, (_, i) =>
+    Object.assign(document.createElement("option"), { value: String(i + 1), textContent: i ? `${i + 1}개` : "1개 (하나씩)" })));
+  form.parallel = Math.min(form.parallel, parMax());
+  $("par-n").value = String(form.parallel);
+  paintParMeta();
+}
+function paintParMeta() {
+  if (!parShown()) return;
+  $("par-meta").textContent = `${savedPar()}개`;
+  $("par-n").disabled = !c.isAdmin || busy;
+  $("par-apply").disabled = !c.isAdmin || busy || !parDirty();
+}
+async function applyParallel() {
+  const n = form.parallel;
+  try {
+    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/parallel`), n);
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
+  sent.par = keyOf.par();
+  await send("set_parallel", { parallel: n }, "동시 실행");
 }
 
 // --- 자동 실행 (2부: 줄마다 전체/고르기, 업체 한도) ----------------------------------------
