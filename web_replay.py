@@ -861,6 +861,14 @@ class Cancelled(Exception):
 STOPPED = "[■ 중단]을 눌러 중단하였습니다."
 
 
+class EditHere(Exception):
+    """옵저버 [수정] (설계 2026-10-19 4.2절) - 일시정지한 자리에서 멈추고 브라우저를 그대로 넘긴다. i = 아직 안 한 단계 (1부터)."""
+
+    def __init__(self, i):
+        super().__init__(f"{i}단계부터 수정합니다.")
+        self.i = i
+
+
 def q(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -938,6 +946,7 @@ class Replayer:
         self.fit_viewport = False   # 기록 때 창 안쪽 크기로 (프리페어. 옵저버 미리보기는 창 자리를 맞춘다)
         self.cancel = None          # threading.Event - 켜지면 곧 멈춘다 (찾기·기다리기 중에도. 옵저버 [■ 중단])
         self.pause = None           # threading.Event - 켜져 있으면 다음 단계 앞에서 기다린다 (옵저버 [Ⅱ 일시정지])
+        self.edit = None            # threading.Event - 일시정지 중 켜지면 EditHere(다음 단계) 를 던진다 (옵저버 [수정])
         self.download_timeout_ms = DOWNLOAD_TIMEOUT_MS
         self.downloads = []         # 지금 단계에서 온 파일 - 어느 창에서 왔든 (누른 창 말고 팝업이 내려 줄 때가 있다)
         self.elapsed = 0.0
@@ -1018,6 +1027,8 @@ class Replayer:
         self.log(f"  {i:2d}단계 앞에서 일시정지")
         while self.pause.is_set():
             self._check_cancel()
+            if self.edit is not None and self.edit.is_set():
+                raise EditHere(i)
             self._idle(200)
 
     def _until_download(self, page, act):
@@ -1513,6 +1524,8 @@ class Replayer:
                 if self.progress:
                     self.progress(*self.results[-1])
                 break
+            except EditHere:
+                raise                       # 옵저버가 받아 이 단계부터 이어 기록한다 (결과에 안 적는다)
             except Skip as e:
                 self.results.append((i, "skip", str(e)))
                 self.log(f"  {i:2d}/{len(steps)} {text}  - 건너뜀 ({e})")

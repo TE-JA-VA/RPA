@@ -27,11 +27,12 @@ import threading
 import time
 import tkinter as tk
 from ctypes import wintypes
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from playwright.sync_api import sync_playwright
 
 import otp_relay
+import preset_transfer as pt
 import rpa_status as st
 import web_replay as rec
 
@@ -220,7 +221,9 @@ class Worker(threading.Thread):
         self.rec_no = None
         self.cancel = threading.Event()   # [■ 중단]·창 닫기 - 미리보기가 찾기·기다리기 중에도 곧 멈춘다
         self.pause = threading.Event()    # [Ⅱ 일시정지] - 미리보기가 다음 단계 앞에서 기다린다. 둘 다 화면이 켜고 끈다
+        self.edit = threading.Event()     # [수정] - 일시정지·실패한 자리에서 브라우저를 그대로 두고 이어 기록한다
         self.human = None                 # 시험: 사람 대신 조작할 함수
+        self.step_wait = (rec.STEP_WAIT, rec.STEP_TRIES)   # 미리보기가 못 찾을 때 (초, 번) - 시험이 줄인다
 
     def run(self):
         try:
@@ -348,9 +351,12 @@ class Worker(threading.Thread):
         return otp_relay.ManualOtp(on_wait=lambda: self.ui.put(
             ("status", "미리보기 창의 인증번호 칸에 휴대폰으로 받은 번호를 넣어 주십시오 (2분 안).", BLUE)))
 
-    def _do_preview(self, record, ids, creds, code, label):
+    def _do_preview(self, no, record, ids, creds, code, label):
         """새 프로필 브라우저로 켜 둔 단계를 따라 한다. 한 번 할 때마다 상태 기록 'observer' 한 건 (대시보드 '기록').
-        로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다. 끝나면 (못 띄웠어도·중단해도) 늘 preview_done 과 프로필 지우기."""
+        로그에는 칸에 친 값·주소 ? 뒤를 싣지 않는다. 끝나면 (못 띄웠어도·중단해도) 늘 preview_done 과 프로필 지우기.
+        단, 일시정지·실패한 자리에서 [수정](edit) 이면 브라우저를 닫지 않고 기록기를 붙여 이어 기록한다 (설계 2026-10-19 4.2절) -
+        그때는 editing 알림 뒤 지금 기록과 같다 (steps → [■ 기록 완료] → _do_stop). 못 찾아 멈춘 단계에서도 바로 닫지 않고
+        [수정]·[■ 중단] 을 기다린다 (failed_at 알림)."""
         where = self._rec_bounds()
         stamp = lambda: datetime.datetime.now().strftime("[%H:%M:%S]")   # noqa: E731
         steps = record["steps"]
@@ -358,6 +364,7 @@ class Worker(threading.Thread):
         st.log_line(f"{stamp()} === 미리보기: {label} ({len(steps)}단계) ===")
         ok, why, note, saved, sec = False, "미리보기를 끝까지 진행하지 못했습니다.", None, [], 0.0
         ctx = prof = None
+        editing = False
         try:
             try:
                 ctx, prof = launch(self.p, slow_mo=120)     # 새 프로필 = RPA 가 혼자 돌 때처럼 로그아웃 상태
@@ -366,10 +373,11 @@ class Worker(threading.Thread):
                 st.log_line(f"{stamp()} {why}")
                 return
             rp = rec.Replayer(ctx, record, creds, PREVIEW_DL, code, review=True, hide_values=True,
-                              log=lambda m: st.log_line(f"{stamp()} {m}"))     # 못 찾으면 20초씩 6번 (rec.STEP_WAIT·STEP_TRIES)
+                              log=lambda m: st.log_line(f"{stamp()} {m}"),     # 못 찾으면 20초씩 6번 (rec.STEP_WAIT·STEP_TRIES)
+                              step_timeout=self.step_wait[0], step_tries=self.step_wait[1])
             rp.first_page = ctx.pages[0] if ctx.pages else None
             rp.page_hook = lambda pg: self._set_bounds(pg, where)               # 기록 창 자리에 겹쳐 띄운다
-            rp.cancel, rp.pause = self.cancel, self.pause
+            rp.cancel, rp.pause, rp.edit = self.cancel, self.pause, self.edit
             if any(s["kind"] == "otp" for s in steps):
                 rp.otp = self._otp_relay(creds, label, stamp)
             if any(s.get("pick") for s in steps):     # 메일 고르기 - 기억과 상관없이 맞는 메일 1통 (사용자 2026-10-14)
@@ -388,8 +396,27 @@ class Worker(threading.Thread):
                     st.fail_step(how)
                 self.ui.put(("progress", ids[i - 1], state, how))
             rp.progress = progress
-            ok = rp.run()
-            saved, sec = [os.path.basename(x) for x in rp.saved], rp.elapsed
+            try:
+                ok = rp.run()
+                saved, sec = [os.path.basename(x) for x in rp.saved], rp.elapsed
+                failed = rp.results[-1][0] if not ok and rp.results and rp.results[-1][1] == "fail" else None
+                if failed and not self.cancel.is_set() and any(not pg.is_closed() for pg in ctx.pages):
+                    self.ui.put(("failed_at", failed))          # 닫지 않고 그 단계 앞에서 [수정]·[■ 중단] 을 기다린다
+                    while not (self.edit.is_set() or self.cancel.is_set()):
+                        rp._idle(200)
+                    if self.edit.is_set():
+                        raise rec.EditHere(failed)
+            except rec.EditHere as e:
+                why = str(e)
+                st.log_line(f"{stamp()} {why} 미리보기 브라우저에서 이어서 기록합니다.")
+                recorder = LiveRecorder(ctx, RECORD_DL, lambda steps: self.ui.put(("steps", no, json.loads(json.dumps(steps)))))
+                recorder.next_id, recorder.tabs = max(ids) + 1, set(rp.pages)   # 새 단계 번호는 이어서, 받은 탭은 '새 탭' 단계로 안 적는다
+                editing = True
+                self.ui.put(("editing", no, ids[e.i - 1]))      # 기록기가 steps 를 보내기 전에 - 화면이 남길 앞부분을 먼저 자른다
+                self.ctx, self.prof, self.page, self.recorder, self.rec_no = ctx, prof, rp.pages[0], recorder, no
+                ctx = prof = None                               # finally 가 닫지 않게
+                recorder.adopt(rp.pages)                        # 미리보기가 쓰던 탭 번호 그대로 (설계 4.2절 - 새 창을 여는 사이트)
+                return
             if not ok and self.cancel.is_set():
                 why = note = "미리보기를 중단하였습니다."
             elif not ok and rp.results:
@@ -412,17 +439,39 @@ class Worker(threading.Thread):
                     pass
             if prof:
                 shutil.rmtree(prof, ignore_errors=True)
-            self.ui.put(("preview_done", ok, saved, sec, note))
+            if not editing:
+                self.ui.put(("preview_done", ok, saved, sec, note))
 
 
 def new_preset(no, name=None, code=""):
-    """화면이 들고 있는 프리셋 하나. raw = 이번에 기록한 단계, loaded = 저장돼 있던 기록 (둘 중 하나)."""
-    return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "start_url": None,
+    """화면이 들고 있는 프리셋 하나. raw = 이번에 기록한 단계, loaded = 저장돼 있던 기록 (둘 중 하나).
+    head = [수정]으로 남긴 앞부분 (다듬어진 기록) - 있으면 그 뒤에 raw 를 이어 붙인다."""
+    return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "head": None, "start_url": None,
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일), 메일 시작 문구
             "pick_dirty": False,                         # 저장할 때 '이미 처리' 기억을 다시 채운다 (문구·경로를 바꿨거나 새로 기록)
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
+
+
+def load_file_into(p, obj):
+    """프리셋 파일(pt.check_file 을 지난 dict)을 화면 칸 p 에 넣는다 - 저장 전까지 새로 기록한 것과 같게 (fresh).
+    사이트코드가 칸의 것과 다르면 아이디·비밀번호·인증 휴대폰을 비운다 (같으면 그대로). 같은 dict 를 돌려준다."""
+    r = json.loads(json.dumps(obj["record"]))
+    for k, s in enumerate(r["steps"]):
+        s["id"] = k
+    if obj["code"] != p["code"]:
+        p.update(id="", pw="", has_pw=False, phone="", senders="")
+    pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
+    p.update(name=obj["name"], code=obj["code"], loaded=r, raw=[], head=None, start_url=None, viewport=r.get("viewport"),
+             enabled={}, deleted=set(), otp={}, fresh=True, pick_dirty=True,
+             source="mail" if pick else "shop", prefix=pick["prefix"] if pick else "")
+    return p
+
+
+def export_name(no, name):
+    """내보내기 파일 이름 - 파일에 못 쓰는 글자는 _ 로."""
+    return f"프리셋_{no}_{re.sub(r'[\\/:*?\"<>|]', '_', name)}.json"
 
 
 def load_presets():
@@ -568,6 +617,7 @@ class App:
             self.presets[0].update(name="가짜 쇼핑몰", code="012", id=fake_creds[0], pw=fake_creds[1])
         self.cur, self.recording, self.previewing = 0, None, False
         self.paused = self.stopping = self.closing = False      # 미리보기 [Ⅱ 일시정지]·[■ 중단]·일시정지 중 창 닫기
+        self.failed_at, self.editing = None, False               # 미리보기가 못 찾아 멈춘 단계 (브라우저는 열린 채), [수정] 누름
         self.tell, self.ask = messagebox.showinfo, messagebox.askyesno     # 시험이 갈아 끼운다
         self.labels, self.base, self.shown, self._dock_job = {}, {}, 0, None
         self.start_url = None           # 시험: 주소를 치지 않고 바로 연다
@@ -688,6 +738,12 @@ class App:
         self.save_btn.pack(side="right")
         self.prev_btn = button(btns, "▶  미리보기", BLUE, BLUE_D, self.preview, width=12)
         self.prev_btn.pack(side="right", padx=8)
+        self.edit_btn = button(btns, "수정", BLUE, BLUE_D, self.edit_preview, width=8)      # 미리보기가 멈춰 있을 때만 보인다
+        self.import_btn, self.export_btn = (tk.Button(btns, text=t, command=c, font=F_SMALL, fg=MUTED, bg=BG, activebackground=LINE,
+                                                      relief="flat", bd=0, cursor="hand2")
+                                            for t, c in (("파일에서 불러오기", self.import_file), ("파일로 내보내기", self.export_file)))
+        self.import_btn.pack(side="left")
+        self.export_btn.pack(side="left", padx=(8, 0))
 
     def paint_presets(self):
         for c in self.preset_bar.winfo_children() + self.preset_tools.winfo_children():
@@ -724,16 +780,25 @@ class App:
         self.rec_btn.config(text="■  기록 완료" if rec_on else "●  기록 시작")
         enable(self.rec_btn, not self.previewing and (not rec_on or self.recording == self.cur))
         if self.previewing:         # 창을 닫는 대신 멈추는 단추 (2026-10-02 - 미리보기 중에는 창이 안 닫힌다)
+            idle = not (self.stopping or self.closing or self.editing)
             skin(self.prev_btn, "▶  계속" if self.paused else "Ⅱ  일시정지", BLUE, BLUE_D, self.toggle_pause)
             skin(self.save_btn, "■  중단", RED, RED_D, self.stop_preview)
-            enable(self.prev_btn, not (self.stopping or self.closing))
-            enable(self.save_btn, not (self.stopping or self.closing))
+            enable(self.prev_btn, idle and self.failed_at is None)      # 못 찾아 멈춘 자리에서는 이어 갈 수 없다
+            enable(self.save_btn, idle)
+            if self.paused or self.failed_at is not None:               # 멈춰 있을 때만 [수정] (설계 2026-10-19 4.2절)
+                self.edit_btn.pack(side="right", padx=(0, 8))
+                enable(self.edit_btn, idle)
+            else:
+                self.edit_btn.pack_forget()
         else:
+            self.edit_btn.pack_forget()
             kept = not rec_on and self._has_kept(self.presets[self.cur])
             skin(self.prev_btn, "▶  미리보기", BLUE, BLUE_D, self.preview)
             skin(self.save_btn, "저장", GREEN, GREEN_D, self.save)
             enable(self.prev_btn, kept)
             enable(self.save_btn, kept)     # 기록이 끝나 있고 켜 둔 단계가 한 줄은 있어야 (2026-10-02)
+        for b in (self.import_btn, self.export_btn):
+            b.config(state="disabled" if rec_on or self.previewing else "normal", cursor="arrow" if rec_on or self.previewing else "hand2")
         self.paint_presets()
 
     def _load_fields(self):
@@ -840,7 +905,9 @@ class App:
 
     # --- 기록 목록 ---
     def _final(self, p):
-        if p["raw"]:
+        if p["head"]:                             # [수정] - 남긴 앞부분 뒤에 이어 기록한 단계 (설계 2026-10-19 4.2절)
+            final = rec.continue_record(p["head"], json.loads(json.dumps(p["raw"])), datetime.date.today())
+        elif p["raw"]:
             start = p["start_url"] or next((s["href"] for s in p["raw"] if s["kind"] == "goto"), "")
             final = rec.finalize(json.loads(json.dumps(p["raw"])), datetime.date.today(), start, viewport=p["viewport"])
         else:
@@ -961,7 +1028,7 @@ class App:
         if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
                 "다시 기록", f"{circled(self.cur + 1)} {p['name']}의 기록을 삭제하고 처음부터 다시 기록하시겠습니까?"):
             return
-        p.update(raw=[], loaded=None, start_url=self.start_url, enabled={}, deleted=set(), pick_dirty=True)
+        p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set(), pick_dirty=True)
         self.recording, self.shown = self.cur, 0
         self.status.config(text="브라우저를 여는 중…", fg=MUTED)
         self.render()
@@ -984,11 +1051,13 @@ class App:
         self.render()
         self.worker.cancel.clear()          # 명령보다 먼저 - 일꾼이 받기 전에 누른 [■ 중단] 을 지우지 않게
         self.worker.pause.clear()
+        self.worker.edit.clear()
         self.previewing, self.paused, self.stopping = True, False, False
+        self.failed_at, self.editing = None, False
         self.paint_buttons()
         self.status.config(text=PICK_NOTE if any(s.get("pick") for s in r["steps"]) else "미리보기 중", fg=BLUE)
-        self.worker.cmd.put(("preview", r, ids, {"ID": p["id"].strip(), "PW": pw, "Phone": p["phone"],
-                                                  "SmsSenders": senders_list(p["senders"])}, p["code"] or "000",
+        self.worker.cmd.put(("preview", self.cur, r, ids, {"ID": p["id"].strip(), "PW": pw, "Phone": p["phone"],
+                                                            "SmsSenders": senders_list(p["senders"])}, p["code"] or "000",
                              f"{circled(self.cur + 1)} {p['name']}"))
 
     def toggle_pause(self):
@@ -1005,6 +1074,72 @@ class App:
         self.worker.cancel.set()
         self.status.config(text="중단하는 중…", fg=MUTED)
         self.paint_buttons()
+
+    def edit_preview(self):
+        """[수정]: 일시정지·실패한 자리에서 - 아직 안 한 단계를 지우고 미리보기 브라우저에 기록기를 붙여 이어 기록한다. 일꾼이 editing."""
+        self.editing = True
+        self.worker.edit.set()
+        self.status.config(text="이어서 기록할 준비 중…", fg=MUTED)
+        self.paint_buttons()
+
+    def _start_edit(self, no, cut):
+        """일꾼의 editing: 칸 no 의 기록을 cut(아직 안 한 단계의 id) 앞까지만 남기고 (꺼 둔 단계 포함 그대로) 그 뒤에 새 단계를 받는다.
+        id 는 단계 순서대로 커지므로 cut 보다 작은 것이 남긴 단계다."""
+        p = self.presets[no]
+        final = self._final(p)
+        k = next((i for i, s in enumerate(final["steps"]) if s["id"] == cut), len(final["steps"]))
+        p.update(head=dict(final, steps=final["steps"][:k]), raw=[], fresh=True, pick_dirty=True,
+                 deleted={d for d in p["deleted"] if d < cut}, enabled={d: v for d, v in p["enabled"].items() if d < cut},
+                 otp={d: v for d, v in p["otp"].items() if d < cut})
+        self.previewing = self.paused = self.stopping = self.editing = False
+        self.failed_at = None
+        self.recording, self.shown = no, 0
+        self.status.config(text=f"● {circled(no + 1)} {p['name']} 이어서 기록 중 - 마치면 [■ 기록 완료]를 눌러 주십시오.", fg=RED)
+        self.render()
+
+    def import_file(self):
+        """[파일에서 불러오기]: 프리셋 파일(6절)을 지금 칸에 넣는다. 저장은 [저장] 그대로 (아이디·비밀번호는 사용자가 넣는다)."""
+        if self.recording is not None or self.previewing:
+            return None
+        path = filedialog.askopenfilename(title="파일에서 불러오기", filetypes=[("프리셋 파일", "*.json")])
+        if not path:
+            return None
+        try:
+            with open(path, encoding="utf-8") as f:
+                obj = pt.check_file(json.load(f))
+        except (OSError, ValueError) as e:
+            return self.status.config(text=f"파일을 불러오지 못했습니다. ({e})", fg=RED)
+        self._store_fields()
+        p = self.presets[self.cur]
+        if (p["raw"] or p["loaded"]) and not self.ask(
+                "파일에서 불러오기", f"프리셋 {self.cur + 1}의 기록을 이 파일로 바꿉니다. 저장하기 전까지는 파일에 반영되지 않습니다. 진행하시겠습니까?"):
+            return None
+        load_file_into(p, obj)
+        self.shown = 0
+        self._load_fields()
+        self.render()
+        return self.status.config(text="파일에서 불러왔습니다. 아이디·비밀번호를 확인하고 저장하여 주십시오.", fg=GREEN_D)
+
+    def export_file(self):
+        """[파일로 내보내기]: 저장된 지금 칸을 프리셋 파일(6절)로. 아이디·비밀번호·인증 휴대폰은 넣지 않는다 (pt.export_item)."""
+        p = self.presets[self.cur]
+        if p.get("fresh") or not p["loaded"]:
+            return self.tell("파일로 내보내기", "저장한 뒤 내보내 주십시오.")
+        no = self.cur + 1
+        try:
+            item = pt.export_item(no)
+        except ValueError as e:
+            return self.status.config(text=str(e), fg=RED)
+        path = filedialog.asksaveasfilename(title="파일로 내보내기", initialfile=export_name(no, item["name"]), defaultextension=".json",
+                                            filetypes=[("프리셋 파일", "*.json")])
+        if not path:
+            return None
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(item, f, ensure_ascii=False, indent=1)
+        except OSError as e:
+            return self.status.config(text=f"파일로 내보내지 못했습니다. ({e})", fg=RED)
+        return self.status.config(text=f"파일로 내보냈습니다. ({os.path.basename(path)})", fg=GREEN_D)
 
     def save(self):
         if self.recording is not None or self.previewing:
@@ -1121,10 +1256,18 @@ class App:
                     self.status.config(text="일시정지하였습니다. [▶ 계속]으로 이어서 진행하거나 [■ 중단]을 눌러 주십시오.",
                                     fg=BLUE)
                     self.on_paused()
+                elif m[0] == "failed_at":
+                    self.failed_at = m[1]
+                    self.status.config(text=f"{m[1]}단계에서 멈췄습니다. [수정]으로 이 단계부터 다시 기록하거나 [■ 중단]을 눌러 주십시오.", fg=RED)
+                    self.paint_buttons()
+                    self.on_paused()
+                elif m[0] == "editing":
+                    self._start_edit(*m[1:])
                 elif m[0] == "preview_done":
                     ok, saved, sec, note = m[1:]
                     stopped = self.stopping
-                    self.previewing = self.paused = self.stopping = False
+                    self.previewing = self.paused = self.stopping = self.editing = False
+                    self.failed_at = None
                     if self.closing:            # 일시정지 중에 창을 닫았다 - 브라우저·프로필 정리가 끝났다
                         return self._close_now()
                     self.paint_buttons()
@@ -1169,7 +1312,7 @@ class App:
         (2026-10-02). 일시정지·중단 중이면 미리보기를 멈추고 정리가 끝난 뒤 (preview_done) 닫는다."""
         if self.closing:
             return
-        if self.previewing and not (self.paused or self.stopping):
+        if self.previewing and not (self.paused or self.stopping or self.failed_at is not None) or self.editing:
             return self.tell("미리보기 중", "미리보기 중에는 창을 닫을 수 없습니다.\n[Ⅱ 일시정지] 나 [■ 중단] 을 누른 후 다시 시도해 주십시오.")
         if any(p.get("fresh") for p in self.presets) and not self.ask(
                 "저장하지 않은 기록", "저장하지 않은 기록이 있습니다. 저장하지 않고 닫으시겠습니까?"):

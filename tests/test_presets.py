@@ -553,6 +553,48 @@ for v in (0, 17, "4", True, -1):
 check("이상한 값(1 미만·16 초과·글자·참거짓)이면 1", bad == [1] * 5, bad)
 dash.set_policy(2, [], False, None, None)
 
+print("=== 옵저버 [파일에서 불러오기]·[파일로 내보내기] (설계 2026-10-19 4.2절) ===")
+from types import SimpleNamespace  # noqa: E402
+
+FREC = {"version": st.RECORD_VERSION, "start_url": "https://store.example.com/login", "record_date": "2026-10-19",
+        "viewport": {"width": 900, "height": 640},
+        "steps": [{"kind": "goto", "page": 0, "url": "/login", "href": "https://store.example.com/login", "gap": 0},
+                  {"kind": "fill", "page": 0, "credential": "ID", "target": {"tag": "input"}, "gap": 10},
+                  {"kind": "secret", "page": 0, "credential": "PW", "target": {"tag": "input"}, "gap": 10}]}
+FILE = {"kind": "autopilot-preset", "version": 1, "exported_at": "2026-10-19T10:00:00", "from": {"cid": "c", "pcId": "pc_a", "no": 3},
+        "no": 3, "name": "스마트스토어", "code": "013", "record": FREC}
+check("새 프리셋 칸에는 head (수정으로 남긴 앞부분) 가 있고 비어 있다", rr.new_preset(1).get("head", 1) is None)
+p = rr.new_preset(1, "지마켓", "012")
+p.update(id="seller01", has_pw=True, phone="kim", senders="1588-1234", loaded={"steps": [{"id": 0, "kind": "goto"}]}, deleted={0},
+         enabled={0: "x"}, otp={0: True}, head={"steps": []}, viewport={"width": 1, "height": 1})
+rr.load_file_into(p, FILE)
+check("다른 사이트코드의 파일을 불러오면 아이디·비밀번호·인증 휴대폰을 비운다 (Global Constraints)",
+      p["id"] == "" and p["pw"] == "" and p["has_pw"] is False and p["phone"] == "" and p["senders"] == "", str({k: p[k] for k in ("id", "pw", "has_pw", "phone", "senders")}))
+check("이름·사이트코드·기록(단계마다 id)·창 크기를 파일 것으로, 저장 전까지 새로 기록한 것과 같게 (fresh)",
+      p["name"] == "스마트스토어" and p["code"] == "013" and [s["id"] for s in p["loaded"]["steps"]] == [0, 1, 2]
+      and p["loaded"]["steps"][0]["kind"] == "goto" and p["viewport"] == FREC["viewport"] and p["fresh"] is True and p["raw"] == []
+      and p["head"] is None and p["deleted"] == set() and p["enabled"] == {} and p["otp"] == {} and p["source"] == "shop",
+      str({k: p[k] for k in ("name", "code", "fresh", "raw", "head", "deleted", "enabled", "otp", "source")}))
+check("파일을 고쳐도 원본 dict 는 그대로 (파일 record 에 id 가 안 붙는다)", "id" not in FILE["record"]["steps"][0])
+p2 = rr.new_preset(2, "스토어", "013")
+p2.update(id="seller02", has_pw=True, phone="kim", senders="1588-1234")
+rr.load_file_into(p2, FILE)
+check("같은 사이트코드면 아이디·비밀번호·인증 휴대폰은 그대로", p2["id"] == "seller02" and p2["has_pw"] is True and p2["phone"] == "kim"
+      and p2["senders"] == "1588-1234" and p2["name"] == "스마트스토어", str({k: p2[k] for k in ("id", "has_pw", "phone", "senders")}))
+mail_rec = dict(FREC, steps=FREC["steps"][:1] + [{"kind": "click", "page": 0, "pick": {"prefix": ">>>"}, "row": {}, "gap": 0},
+                                                 {"kind": "click", "page": 0, "download": "a.xlsx", "gap": 0}])
+p3 = rr.new_preset(3)
+rr.load_file_into(p3, dict(FILE, code="014", record=mail_rec))
+check("메일 고르기 단계가 든 파일이면 메일 첨부파일·시작 문구로", p3["source"] == "mail" and p3["prefix"] == ">>>", str((p3["source"], p3["prefix"])))
+told = []
+fake = SimpleNamespace(presets=[dict(rr.new_preset(1), fresh=True, loaded=FREC)], cur=0, tell=lambda t, x: told.append(x))
+rr.App.export_file(fake)
+fake.presets[0].update(fresh=False, loaded=None)
+rr.App.export_file(fake)
+check("내보내기: 저장 안 한 칸(fresh)·기록 없는 칸은 '저장한 뒤 내보내 주십시오.'", told == ["저장한 뒤 내보내 주십시오."] * 2, str(told))
+check("내보내기 파일 이름은 프리셋_번호_이름.json (파일에 못 쓰는 글자는 _)",
+      rr.export_name(3, 'a/b:c*d?e<f>g|h"') == "프리셋_3_a_b_c_d_e_f_g_h_.json", rr.export_name(3, 'a/b:c*d?e<f>g|h"'))
+
 print()
 print(f"실패: {'없음' if not fails else fails}")
 sys.exit(1 if fails else 0)
