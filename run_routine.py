@@ -3064,6 +3064,11 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         if pending:     # 앞 파일 결과 팝업이 떠 있으면 그리드를 넘기는 클릭도 먹지 않는다 - 사이트코드를 찾기 전에 닫는다
             seen += dismiss_popups(app, hwnd, label="앞 파일 결과 ")
         cell, value = find_site_upload_cell(hwnd, grid, code)
+        if cell is None and pending:    # 찾는 동안 앞 파일 결과 팝업이 떠 그리드를 못 넘겼을 수 있다 - 닫고 한 번 더 (검토 2026-10-19)
+            late = dismiss_popups(app, hwnd, label="앞 파일 결과 ")
+            if late:
+                seen += late
+                cell, value = find_site_upload_cell(hwnd, grid, code)
         if cell is None:
             log(f"    사이트코드 {code} 인 행을 찾지 못했습니다.")
             if move_files and move_file_to(path, error_dir, "사이트코드 없음"):

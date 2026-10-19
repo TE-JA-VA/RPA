@@ -22,11 +22,14 @@ def check(name, ok, detail=""):
 
 
 def run(bad, when="now"):
-    """bad: 결과 팝업이 뜨는 사이트코드. when: 팝업이 뜨는 때 - now 창이 닫히자마자, find 다음 파일의 사이트코드를 찾는 동안,
-    wait 그보다 늦게 (결과를 기다릴 때에야). 반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수)"""
-    popup, delayed, later, moved, blocked = [], [], [], {}, []
+    """bad: 결과 팝업이 뜨는 사이트코드. when: 팝업이 뜨는 때 - now 창이 닫히자마자, block 다음 파일의 사이트코드를 찾기 시작할 때
+    (그리드를 못 넘긴다), find 찾는 동안, wait 그보다 늦게 (결과를 기다릴 때에야).
+    반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수)"""
+    popup, blocking, delayed, later, moved, blocked = [], [], [], [], {}, []
 
     def find(hwnd, grid, code):
+        popup.extend(blocking)
+        blocking.clear()
         blocked.append(bool(popup))
         popup.extend(delayed)
         delayed.clear()
@@ -41,7 +44,7 @@ def run(bad, when="now"):
 
     def upload(dlg, path, pid=None):
         if os.path.basename(path)[0] in bad:
-            {"now": popup, "find": delayed, "wait": later}[when].append("업로드 오류")
+            {"now": popup, "block": blocking, "find": delayed, "wait": later}[when].append("업로드 오류")
         return True
 
     def wait_result(app, hwnd, timeout=None, **_):
@@ -71,6 +74,10 @@ check("팝업이 없으면 셋 다 완료", moved == done, str(moved))
 moved, blocked = run("A")
 check("앞 파일 결과 팝업은 다음 파일의 사이트코드를 찾기 전에 닫는다", blocked == 0, f"막힌 찾기 {blocked}번")
 check("팝업이 뜬 앞 파일만 실패, 다음 파일은 완료", moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
+
+moved, blocked = run("A", when="block")
+check("찾기 시작할 때 뜬 팝업에 막히면 닫고 한 번 더 찾는다 (다음 파일이 '사이트코드 없음' 으로 가지 않는다)",
+      moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
 
 moved, blocked = run("A", when="find")
 check("찾는 동안 늦게 뜬 팝업도 앞 파일의 결과로 본다", moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
