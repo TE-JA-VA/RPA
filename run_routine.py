@@ -1682,6 +1682,7 @@ EXCEL_UPLOAD_ERROR_DIR = "오류"     # 올릴 수 없는 파일을 옮길 곳
 EXCEL_UPLOAD_EXTS = (".xlsx", ".xls")
 # 파일명은 '(nnn)로 시작한다. nnn 이 사이트코드다.
 EXCEL_FILE_CODE_RE = re.compile(r"^\((\d{3})\)")
+GRID_ROW_NO_RE = re.compile(r"행\s*(\d+)\s*$")   # 그리드 칸 이름 끝의 행 번호 ('사이트코드 행 14', '엑셀업로드 행 14')
 SITE_CODE_COL = "사이트코드"
 EXCEL_UPLOAD_COL = "엑셀업로드"
 # '엑셀업로드' 셀 값이 이 값이 아니면 그 사이트는 엑셀 업로드를 지원하지 않는다.
@@ -2582,7 +2583,16 @@ def collect_upload_files(folder):
     return targets, duplicates, ignored
 
 
-def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
+def grid_row_no(el):
+    """그리드 칸 이름 끝의 행 번호 - 없으면 None."""
+    try:
+        m = GRID_ROW_NO_RE.search(el.window_text() or "")
+    except Exception:
+        return None
+    return m.group(1) if m else None
+
+
+def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS, retry=True):
     """사이트코드가 code 인 행의 '엑셀업로드' 셀과 그 값을 찾는다.
 
     이 그리드는 스크롤이 있고 중간에 Group Row 도 섞여 있으므로
@@ -2590,6 +2600,8 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
     그리드가 좁으면 두 컬럼이 한 화면에 안 들어온다 (2026-10-15 개발기 실측: 엑셀업로드가 오른쪽 밖, 넘기면 사이트코드가
     왼쪽 밖). 그래서 사이트코드로 줄(y)을 먼저 찾고, 업로드 컬럼이 밖이면 가로로 넘긴 뒤 같은 y 의 셀을 읽는다
     (가로로 넘겨도 줄은 움직이지 않는다). 앞 파일이 오른쪽으로 넘겨 두었을 수 있어 처음에 맨 왼쪽으로 되돌린다.
+    찾은 업로드 셀이 사이트코드 셀과 같은 행 번호인지 확인한다 - 그 사이 줄이 움직이면 다른 사이트에 올라간다
+    (2026-10-19 개발기: 108 을 찾아 눌렀는데 109 에 올라갔다). 다르면 처음부터 한 번 더, 그래도 다르면 못 찾음.
     반환: (셀 요소, 엑셀업로드 값) - 못 찾으면 (None, None)
     """
     if not _header_onscreen(grid, SITE_CODE_COL):
@@ -2600,13 +2612,14 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
         return None, None
 
     def row_y():
-        return next((y for y, value, _el in scan_column(geo_code, SITE_CODE_COL) if (value or "").strip() == code), None)
+        return next(((y, el) for y, value, el in scan_column(geo_code, SITE_CODE_COL) if (value or "").strip() == code),
+                    (None, None))
 
-    y = row_y()
+    y, code_cell = row_y()
     if y is None:
         grid_scroll_to_top(hwnd, grid)
         for _ in range(max_pages):
-            y = row_y()
+            y, code_cell = row_y()
             if y is not None or not grid_page_down(hwnd, grid):
                 break
     if y is None:
@@ -2620,11 +2633,16 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
         return None, None
     try:
         cell = element_at_point(geo_up[0], y)
-        if cell.window_text().startswith(EXCEL_UPLOAD_COL):
-            return cell, (legacy_value(cell) or "").strip()
+        if not cell.window_text().startswith(EXCEL_UPLOAD_COL):
+            return None, None
     except Exception:
-        pass
-    return None, None
+        return None, None
+    want, got = grid_row_no(code_cell), grid_row_no(cell)
+    if want and got and want != got:
+        log(f"    사이트코드 {code} 는 {want}행인데 업로드 칸은 {got}행입니다. (줄이 움직임)"
+            + (" 다시 찾습니다." if retry else " 누르지 않습니다."))
+        return find_site_upload_cell(hwnd, grid, code, max_pages, retry=False) if retry else (None, None)
+    return cell, (legacy_value(cell) or "").strip()
 
 
 # 열기 대화상자의 '파일 이름' 콤보. 저장 대화상자(1001)와 ID 가 다르다.

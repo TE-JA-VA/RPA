@@ -12,6 +12,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import run_routine as rr  # noqa: E402
 
+REAL_FIND = rr.find_site_upload_cell     # 아래 run() 이 가짜로 바꾸기 전에
+
 fails = []
 
 
@@ -88,6 +90,34 @@ check("그보다 늦게 뜬 팝업도 다음 칸을 누르기 전에 기다려 �
 
 moved, blocked = run("C")
 check("마지막 파일은 결과 팝업을 기다려 본다", moved == {**done, "C.xlsx": "업로드 실패"}, str(moved))
+
+
+print("--- 업로드 칸이 사이트코드와 같은 줄인지 (행 번호, 2026-10-19: 108 을 눌렀는데 109 에 올라갔다)")
+
+
+class El:
+    def __init__(self, name):
+        self.name = name
+
+    def window_text(self):
+        return self.name
+
+
+cells = []
+rr.find_site_upload_cell = REAL_FIND        # 다시 찾을 때 이 이름으로 부른다
+rr._header_onscreen =lambda grid, col: True
+rr._column_scan_geometry = lambda grid, col: (10, 0, 100, 24)
+rr.scan_column = lambda geo, col: [(460, "108", El("사이트코드 행 14"))]
+rr.element_at_point = lambda x, y: cells.pop(0)
+rr.legacy_value = lambda el: rr.EXCEL_UPLOAD_ENABLED
+cells[:] = [El("엑셀업로드 행 14")]
+check("같은 줄이면 그 칸", REAL_FIND(0, None, "108")[0].name == "엑셀업로드 행 14")
+cells[:] = [El("엑셀업로드 행 15"), El("엑셀업로드 행 14")]
+check("줄이 움직였으면 처음부터 다시 찾아 맞는 칸", REAL_FIND(0, None, "108")[0].name == "엑셀업로드 행 14")
+cells[:] = [El("엑셀업로드 행 15"), El("엑셀업로드 행 15")]
+check("다시 찾아도 다르면 누르지 않는다 (못 찾음)", REAL_FIND(0, None, "108") == (None, None))
+cells[:] = [El("엑셀업로드")]
+check("행 번호가 없는 이름이면 예전처럼 그 칸", REAL_FIND(0, None, "108")[0].name == "엑셀업로드")
 
 print()
 print("실패:", fails or "없음")
