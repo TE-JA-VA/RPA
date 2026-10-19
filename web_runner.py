@@ -19,9 +19,12 @@ ERPia 루틴(run_routine.py), 문자 감시(sms_watch.py) 와 별개로 도는 �
 import argparse
 import datetime
 import json
+import math
 import os
+import queue
 import re
 import sys
+import threading
 import time
 
 from playwright.sync_api import TimeoutError as PWTimeout
@@ -116,6 +119,108 @@ def log(msg):
         _log_started = True
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# 병렬 수집 (사용자 2026-10-15): 사이트를 동시에 열어 받는다. 인증 사이트만 휴대폰마다 한 번에 하나씩 (인증 차례)
+# ---------------------------------------------------------------------------
+_here = threading.local()  # 실행기(스레드)마다: parallel(병렬인가), gates(인증 차례), key(지금 단계)
+
+
+def parallel_count(cli=None):
+    """동시에 여는 사이트 수 = 업체가 웹에서 고른 수(st.parallel_choice)와 관리 화면이 허용한 최대(st.parallel_limit) 중 작은 것.
+    허용하지 않은 업체(최대 1)·고르지 않은 업체는 1 = 예전처럼 하나씩. --parallel(시험)이 먼저. 숫자가 아니면 1. 창 하나가 수백 MB - st.PARALLEL_MAX 까지."""
+    raw = cli if cli is not None else min(status.parallel_choice(), status.parallel_limit())
+    try:
+        return max(1, min(status.PARALLEL_MAX, int(str(raw).strip())))
+    except (TypeError, ValueError):
+        return 1
+
+
+class AuthGates:
+    """휴대폰마다 인증 차례 하나 - 같은 휴대폰으로 오는 인증번호가 다른 사이트 것과 섞이지 않게."""
+
+    def __init__(self):
+        self._locks, self._guard = {}, threading.Lock()
+
+    def lock(self, phone):
+        with self._guard:
+            return self._locks.setdefault(str(phone or ""), threading.Lock())
+
+
+def work_area():
+    """주 화면의 작업 영역 (왼쪽, 위, 너비, 높이) - 물리 픽셀 (배율 150% 화면도), 작업 표시줄 뺀 것."""
+    import ctypes
+    from ctypes import wintypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+    r = wintypes.RECT()
+    ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)       # SPI_GETWORKAREA
+    return r.left, r.top, r.right - r.left, r.bottom - r.top
+
+
+def best_grid(n, size, viewport):
+    """창 n 개를 창이 가장 크게 보이도록 놓는 바둑판 (가로 칸, 세로 칸, 배율) - 넓은 화면은 가로로, 세로 화면은 세로로 더 놓는다.
+    배율이 같으면 빈 칸이 적은 것. 창 = 기록 때 페이지 크기 + 테두리·주소 줄 (Edge 실측 19·89 DIP)."""
+    W, H = size
+    grids = []
+    for cols in range(1, n + 1):
+        rows = math.ceil(n / cols)
+        grids.append((cols, rows, min(1.0, W / cols / (viewport[0] + 20), H / rows / (viewport[1] + 90))))
+    return max(grids, key=lambda g: (g[2], -g[0] * g[1]))
+
+
+def tile_layout(n, viewport):
+    """병렬 수집 창 n 개를 주 화면에 바둑판으로 (사용자 2026-10-16: 같은 자리에 겹쳐 떠서 뒤 창이 안 보였다).
+    개수는 관리 화면 값 그대로 - 화면이 작으면 개수를 줄이지 않고 창을 그 화면에 맞게 더 작게 띄운다 (사용자 2026-10-16).
+    페이지 크기(기록 때 크기)는 그대로 두고 화면 배율만 낮춘다 - 페이지를 줄이면 반응형 사이트의 메뉴 모양이 바뀐다.
+    반환: (배율, [(왼쪽, 위)]) - 자리는 Edge 의 DIP (물리 픽셀 / 배율)."""
+    left, top, W, H = work_area()
+    cols, rows, scale = best_grid(n, (W, H), viewport)
+    log(f"창 {n}개를 화면({W}x{H})에 가로 {cols} x 세로 {rows}로 나눠 띄웁니다. (배율 {scale:.2f})")
+    w, h = W / cols, H / rows
+    return scale, [(round((left + w * (k % cols)) / scale), round((top + h * (k // cols)) / scale)) for k in range(n)]
+
+
+def record_viewport(chosen):
+    """고른 프리셋들의 기록 때 창 안쪽 크기 중 가장 큰 것 (없으면 Playwright 기본 1280x720)."""
+    nos = {site.get("Preset") for _, site in chosen if isinstance(site, dict)}
+    try:
+        vs = [(p.get("record") or {}).get("viewport") for p in status.read_presets() if p["no"] in nos]
+    except ValueError:
+        vs = []
+    vs = [v for v in vs if v] or [{"width": 1280, "height": 720}]
+    return max(v["width"] for v in vs), max(v["height"] for v in vs)
+
+
+def place_windows(context, spot):
+    """이 실행기의 창(사이트가 여는 새 창까지)을 화면의 제 칸으로."""
+    def place(page):
+        try:
+            cdp = context.new_cdp_session(page)
+            wid = cdp.send("Browser.getWindowForTarget")["windowId"]
+            cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"left": spot[0], "top": spot[1]}})
+            cdp.detach()
+        except Exception:
+            pass        # 자리는 보기 편하라는 것 - 못 옮겨도 수집은 계속
+    context.on("page", place)
+
+
+def step_start(key):
+    if getattr(_here, "parallel", False) and getattr(_here, "key", None):
+        status.done_step(key=_here.key)     # 병렬은 step 이 앞 단계를 닫지 않는다 - 이 실행기의 앞 Action 단계 (이미 끝났으면 그대로)
+    _here.key = key
+    status.step(key, parallel=getattr(_here, "parallel", False))
+
+
+def step_done(state="done", note=None):
+    status.done_step(state, note, key=getattr(_here, "key", None))
+
+
+def step_fail(note):
+    status.fail_step(note, key=getattr(_here, "key", None))
 
 
 def eval_json(page, js_fn):
@@ -1043,8 +1148,12 @@ def action_replay(page, name, site):
     p = next(x for x in status.read_presets() if x["no"] == site.get("Preset"))
     dest = download_dir()
     log(f"  [{name}] 프리셋 {p['no']} '{p['name']}' 재생 ({len(p['record']['steps'])}단계) → {dest}")
+    many = getattr(_here, "parallel", False)
     rp = web_replay.Replayer(page.context, p["record"], {"ID": site["ID"], "PW": site["PW"]}, dest, p["code"],
-                             log=log, hide_values=True, shot_dir=BASE_DIR)
+                             log=(lambda m: log(f"  [{name}]{m}")) if many else log, hide_values=True, shot_dir=BASE_DIR)
+    end = web_replay.auth_end(p["record"]["steps"])
+    if many and end is not None:     # 인증 사이트 - 로그인부터 인증 [확인] 까지는 같은 휴대폰 사이트끼리 한 번에 하나 (그 앞 검색·이동은 먼저)
+        rp.gate = (_here.gates.lock(site.get("Phone")), web_replay.auth_start(p["record"]["steps"]), end)
     rp.first_page = page
     rp.fit_viewport = True
     if any(s.get("kind") == "otp" for s in p["record"]["steps"]):     # 2차인증 - 휴대폰 중계 (설계 13절, 에이전트 계정으로)
@@ -1065,7 +1174,7 @@ def action_replay(page, name, site):
         raise RuntimeError(f"{i}단계에서 멈췄습니다: {why}")
     log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in rp.saved) or '없음'}")
     if rp.no_target and not rp.saved:
-        status.done_step("skipped", "대상 없음")       # 받을 새 메일이 없었다 - 토큰을 쓰지 않는다
+        step_done("skipped", "대상 없음")       # 받을 새 메일이 없었다 - 토큰을 쓰지 않는다
     return True
 
 
@@ -1131,8 +1240,9 @@ def prepare_steps(chosen):
     return out
 
 
-def run_site(browser, name, site, use_session=True, keep_open=False):
-    """사이트 하나에 대해 Action 을 순서대로 실행한다."""
+def run_site(browser, name, site, use_session=True, keep_open=False, gates=None):
+    """사이트 하나에 대해 Action 을 순서대로 실행한다. gates: 병렬 수집의 인증 차례 (AuthGates) - 없으면 하나씩 돌 때."""
+    _here.parallel, _here.gates = gates is not None, gates
     log(f"=== {name} ===")
 
     # Playwright 의 new_context 자체가 시크릿 창과 같다. 매번 빈 프로필로 시작한다.
@@ -1154,8 +1264,11 @@ def run_site(browser, name, site, use_session=True, keep_open=False):
                 except Exception as e:
                     log(f"  [{name}] 세션 파일을 지우지 못했습니다: {e}")
 
+    if getattr(_here, "spot", None):    # 병렬 수집 - 창을 화면의 제 칸으로
+        place_windows(context, _here.spot)
     page = prepare_page(context.new_page())
     ok = True
+    held = None     # 예전 방식 문자 인증 사이트 (병렬) - 로그인부터 인증까지 휴대폰 차례를 잡고 간다 (사이에 다른 사이트가 문자를 보내지 않게)
     try:
         for act in site_actions(site):
             fn = ACTIONS.get(act)
@@ -1164,24 +1277,32 @@ def run_site(browser, name, site, use_session=True, keep_open=False):
                 status.skip(step_key(name, act), "모르는 Action")
                 ok = False
                 continue
-            status.step(step_key(name, act))
+            step_start(step_key(name, act))
+            if gates is not None and held is None and act in ("login", "sms_2fa") and "sms_2fa" in site_actions(site):
+                held = gates.lock(site.get("Phone"))
+                held.acquire()
             fn(page, name, site)
+            if held is not None and act == "sms_2fa":
+                held.release()
+                held = None
 
         wait_after = site.get("wait_after", 0)
         if wait_after:
             log(f"  [{name}] 확인용으로 {wait_after}초 동안 열어 둡니다.")
             time.sleep(wait_after)
         if ok:
-            status.done_step()           # 이 사이트를 끝냈다 - 마지막 사이트여도 실행 끝의 '중단' 에 안 덮인다 (토큰 셈)
+            step_done()           # 이 사이트를 끝냈다 - 마지막 사이트여도 실행 끝의 '중단' 에 안 덮인다 (토큰 셈)
     except PWTimeout as e:
         log(f"  [{name}] 시간 초과: {str(e).splitlines()[0]}")
-        status.fail_step(f"시간 초과: {str(e).splitlines()[0]}")
+        step_fail(f"시간 초과: {str(e).splitlines()[0]}")
         ok = False
     except Exception as e:
         log(f"  [{name}] 실패: {type(e).__name__}: {e}")
-        status.fail_step(f"{type(e).__name__}: {e}")
+        step_fail(f"{type(e).__name__}: {e}")
         ok = False
     finally:
+        if held is not None:
+            held.release()
         # 성공했을 때만 세션을 남긴다. 실패한 상태를 저장하면 다음 실행까지 망가진다.
         if ok and use_session:
             try:
@@ -1280,8 +1401,48 @@ def resolve_use_session(site, cli_override):
     return bool(site.get("UseSession", False))
 
 
+def run_parallel(chosen, n, headless, session_override):
+    """사이트를 n 개씩 동시에 - 실행기(스레드)마다 자기 Edge 를 띄우고 대기열에서 사이트를 하나씩 가져간다.
+    인증 사이트는 휴대폰마다 인증 차례를 기다린다 (AuthGates). 한 사이트가 실패해도 나머지는 계속. 성공한 사이트 수."""
+    todo = queue.Queue()
+    for item in chosen:
+        todo.put(item)
+    gates, ok = AuthGates(), []
+    scale, spots = (None, [None] * n) if headless else tile_layout(n, record_viewport(chosen))
+
+    def worker(k):
+        _here.spot = spots[k]
+        try:
+            with sync_playwright() as p:
+                browser = web_replay.edge(p.chromium.launch, headless=headless,
+                                          **({"args": [f"--force-device-scale-factor={scale:.3f}"]} if scale else {}))
+                try:
+                    while True:
+                        try:
+                            name, site = todo.get_nowait()
+                        except queue.Empty:
+                            return
+                        if run_site(browser, name, site, use_session=resolve_use_session(site, session_override),
+                                    gates=gates):
+                            ok.append(name)
+                finally:
+                    browser.close()
+        except Exception as e:      # 브라우저를 못 띄움 등 - 남은 사이트는 다른 실행기가 가져간다
+            log(f"  실행기 {threading.current_thread().name}에서 오류가 발생하였습니다. ({type(e).__name__}: {e})")
+
+    workers = [threading.Thread(target=worker, args=(k,), name=f"수집{k + 1}", daemon=True) for k in range(n)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+    left = todo.qsize()
+    if left:
+        log(f"  실행기가 모두 중단되어 {left}개 사이트를 실행하지 못했습니다.")
+    return len(ok)
+
+
 def cmd_run(targets, headless, session_override=None, keep_open=False,
-            force_close=False):
+            force_close=False, parallel=None):
     # 대시보드 기록을 시작한다. 설정 오류로 바로 끝나도 '중단'과 사유가 남는다.
     status.start("prepare")
     try:
@@ -1329,6 +1490,16 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         keep_open = False
 
     status.set_steps(prepare_steps(chosen))
+    n = min(parallel_count(parallel), len(chosen))
+    if n > 1:
+        if keep_open:
+            log("동시 실행에서는 창을 열어 두지 않습니다. (KeepOpen 무시)")
+        log(f"{len(chosen)}개 사이트를 {n}개씩 동시에 실행합니다. (창 {'숨김' if headless else '표시'}, 인증 사이트는 한 곳씩 인증)")
+        started = time.time()
+        done = run_parallel(chosen, n, headless, session_override)
+        log(f"=== 완료: 성공 {done}건 / 전체 {len(chosen)}건 ({time.time() - started:.0f}초) ===")
+        status.finish("success" if done == len(chosen) else "stopped")
+        return 0 if done == len(chosen) else 1
     log(f"{len(chosen)}개 사이트를 실행합니다. (창 {'숨김' if headless else '표시'})")
     done = 0
     with sync_playwright() as p:
@@ -1374,6 +1545,8 @@ def main():
     ap.add_argument("--no-keep-open", action="store_true", dest="no_keep_open",
                     help="설정의 KeepOpen 을 무시하고 끝나면 바로 닫는다 "
                          "(PROCESS 오토파일럿으로 이어서 실행할 때 필요)")
+    ap.add_argument("--parallel", type=int, metavar="N",
+                    help="사이트를 N 개씩 동시에 (시험용 - 관리 화면의 '동시 실행 창 수' 보다 먼저, 1 이면 하나씩)")
     args = ap.parse_args()
 
     if args.check:
@@ -1388,7 +1561,7 @@ def main():
             override = True
         return cmd_run(args.site, args.headless,
                        session_override=override, keep_open=args.keep_open,
-                       force_close=args.no_keep_open)
+                       force_close=args.no_keep_open, parallel=args.parallel)
 
     ap.print_help()
     return 0

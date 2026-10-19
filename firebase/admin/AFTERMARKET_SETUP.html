@@ -250,7 +250,7 @@ async function openDetail(cid, keep) {
   const box = $("detail");
   box.replaceChildren(el("h2", {}, `${d.name} (${d.cid})`, d.stts === 9 ? el("span", { class: "muted" }, " · 비활성화된 업체") : "",
       el("button", { id: "open-dash", class: "h2-btn", onclick: (ev) => openDash(ev.currentTarget, d.cid) }, "대시보드 보기")),
-    keep ?? "", pcSection(d), phoneSection(d), userSection(d), tokenSection(d), moduleSection(d), limitSection(d), presetSection(d), dangerSection(d));
+    keep ?? "", pcSection(d), phoneSection(d), userSection(d), tokenSection(d), moduleSection(d), limitSection(d), presetSection(d), parallelSection(d), dangerSection(d));
   box.classList.remove("hide");
 }
 // 업체 대시보드를 그 업체로 연다 - 총괄 계정으로 로그인하면 그 업체 화면 (web/app.js ?cid=). 에뮬레이터 시험이면 에뮬레이터 Hosting
@@ -492,6 +492,18 @@ function presetSection(d) {
   }) }, "저장");
   return el("div", { class: "sec" }, el("h3", {}, "옵저버 프리셋 수"),
     el("p", { class: "muted" }, "옵저버에서 만들 수 있는 프리셋 수를 결정합니다. (2~10, 기본 2)"),
+    el("div", { class: "row" }, n, save));
+}
+function parallelSection(d) {
+  const n = el("input", { value: d.parallelLimit ?? 1, size: 4, inputmode: "numeric", "aria-label": "병렬 실행 최대 창 수" });
+  const save = el("button", { onclick: () => act(save, async () => {
+    const r = await api("POST", `/api/companies/${d.cid}/parallel`, { parallel: n.value.trim() });
+    flash(`병렬 실행: ${r.parallel >= 2 ? `${r.parallel}개까지 허용` : "허용 안 함"} (PC에는 10분 이내에 적용됩니다)`);
+    openDetail(d.cid);
+  }) }, "저장");
+  return el("div", { class: "sec" }, el("h3", {}, "병렬 실행 허용", el("span", { class: "muted" }, (d.parallelLimit ?? 1) >= 2 ? ` · ${d.parallelLimit}개까지 허용` : " · 허용 안 함")),
+    el("p", { class: "muted" }, "업체가 ACTOR 오토파일럿으로 쇼핑몰 사이트(프리셋)를 동시에 여러 개 열어 엑셀을 다운로드할 수 있게 허용합니다. "
+      + "2 이상이면 업체 웹 대시보드의 설정에 '동시 실행'이 보이고 이 수까지 선택할 수 있습니다. 1이면 허용하지 않으며 업체 화면에도 보이지 않습니다. (1~16, 기본 1)"),
     el("div", { class: "row" }, n, save));
 }
 function dangerSection(d) {

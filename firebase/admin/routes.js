@@ -46,6 +46,7 @@ export const ROUTES = compile([
     (b, r, p) => `웰라이프 실행 ${p.cid} = ${b.wellife === true ? "켬" : "끔"}`],
   ["POST", "/api/companies/:cid/limits", (b, p) => ops.setScheduleLimit(p.cid, b.schedule), (b, r, p) => `자동 실행 슬롯 수 ${p.cid} = ${r.schedule}`],
   ["POST", "/api/companies/:cid/presets", (b, p) => ops.setPresetLimit(p.cid, b.presets), (b, r, p) => `옵저버 프리셋 수 ${p.cid} = ${r.presets}`],
+  ["POST", "/api/companies/:cid/parallel", (b, p) => ops.setParallelLimit(p.cid, b.parallel), (b, r, p) => `병렬 실행 최대 창 수 ${p.cid} = ${r.parallel}`],
   ["POST", "/api/companies/:cid/remove", (b, p) => {
     if (b.confirm !== p.cid) throw new ops.Refused("업체코드를 정확히 입력해야 비활성화할 수 있습니다.");
     return ops.setCompanyRemoved(p.cid, true);

@@ -456,7 +456,7 @@ class Uploader:
 # ---------------------------------------------------------------------------
 # 명령
 # ---------------------------------------------------------------------------
-KNOWN_TYPES = ("launch", "stop_erpia", "stop_rpa","set_modules", "set_schedule", "set_presets", "resume_repeat", "update", "rollback")
+KNOWN_TYPES = ("launch", "stop_erpia", "stop_rpa","set_modules", "set_schedule", "set_presets", "set_parallel", "resume_repeat", "update", "rollback")
 ADMIN_ONLY_TYPES = ("update", "rollback")   # 관리 화면(Admin SDK)만 - DB 규칙의 type 목록에도 없다 (자동 업데이트 10절)
 ADMIN_TOOL_BY = "admin-tool"
 VERSION_RE = re.compile(r"\d{4}\.\d{2}\.\d{2}-\d+")
@@ -545,8 +545,9 @@ def wellife_on(cid, features):
 
 
 def company_policy(client, cid, app=APP):
-    """업체 정책 한 번에 - (자동 실행 개수, 안 쓰는 모듈 키 목록, 웰라이프, 프리셋 수). 웰라이프 업체는 물류관리·운송장 출력도 안 쓰는 모듈에 더한다. 자리 meta/companies/{cid}/apps/{app} (총괄·Admin SDK 만 쓴다).
+    """업체 정책 한 번에 - (자동 실행 개수, 안 쓰는 모듈 키 목록, 웰라이프, 프리셋 수, 동시 창 수). 웰라이프 업체는 물류관리·운송장 출력도 안 쓰는 모듈에 더한다. 자리 meta/companies/{cid}/apps/{app} (총괄·Admin SDK 만 쓴다).
     한도가 없거나 이상하면 기본 2. 프리셋 수는 limits.presets (관리 화면) - 없거나 이상하면 None (PC 가 기본값, st.preset_limit).
+    동시 창 수는 limits.parallel (관리 화면, 사이트를 동시에 몇 개까지 여나) - 없거나 이상하면 None (PC 가 하나씩, st.parallel_limit).
     못 읽으면 예외 - 부르는 쪽이 지난 값을 쓴다."""
     import rpa_status as st
     got = client.get(f"meta/companies/{cid}/apps/{app}") or {}
@@ -558,11 +559,14 @@ def company_policy(client, cid, app=APP):
         presets = None
     if "wellife" in str(cid or "").lower():          # 업체코드에 wellife 가 든 업체는 40 (사용자 2026-10-15 - 관리 화면 값 대신)
         presets = st.PRESET_WELLIFE
+    parallel = limits.get("parallel")
+    if not (isinstance(parallel, int) and not isinstance(parallel, bool) and st.PARALLEL_MIN <= parallel <= st.PARALLEL_MAX):
+        parallel = None
     off = {k for k, v in (got.get("modules") or {}).items() if v is False}
     wl = wellife_on(cid, got.get("features"))
     if wl:
         off |= set(WELLIFE_BLOCKED)
-    return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(off), wl, presets
+    return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(off), wl, presets, parallel
 
 
 class Policy:
@@ -573,7 +577,7 @@ class Policy:
         self._client, self._cid, self._every, self._at = client, cid, every, None
 
     def refresh(self, force=False):
-        """읽었으면 (limit, off, wellife, presets), 아직 때가 아니거나 못 읽었으면 None."""
+        """읽었으면 (limit, off, wellife, presets, parallel), 아직 때가 아니거나 못 읽었으면 None."""
         if not force and self._at is not None and time.time() - self._at < self._every:
             return None
         self._at = time.time()
@@ -672,6 +676,19 @@ def real_actions(policy=None, limits=None, start_update=None):
         on = [f"{chr(0x2460 + no - 1)} {names.get(no, no)}" for no, v in sorted(final.items()) if v]
         return f"프리셋을 변경하였습니다. ({', '.join(on) or '없음'})"
 
+    def do_parallel(args):
+        # 동시 실행 창 수 (사용자 2026-10-16) - 관리 화면이 허용한 최대(limits.parallel)까지만. 허용하지 않은 업체는 웹에 설정이 안 보인다 -
+        # 화면을 거치지 않은 명령도 여기서 막힌다. 정책을 못 읽으면 PC 에 적힌 마지막 값
+        n = args.get("parallel") if isinstance(args, dict) else None
+        if not (isinstance(n, int) and not isinstance(n, bool) and st.PARALLEL_MIN <= n <= st.PARALLEL_MAX):
+            raise RuntimeError("동시 실행 창 수가 올바르지 않습니다.")
+        got = limits() if limits else None
+        allowed = (got[4] if got and len(got) > 4 else st.parallel_limit()) or 1
+        if n > allowed:
+            raise RuntimeError(f"동시 실행 창 수는 {allowed}개까지 선택할 수 있습니다.")
+        dash.set_parallel(n)
+        return f"동시 실행 창 수를 {n}개로 변경하였습니다."
+
     def do_schedule(args):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
         # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
@@ -735,7 +752,7 @@ def real_actions(policy=None, limits=None, start_update=None):
         start(back, "rollback")
         return f"이전 버전으로 되돌리기를 예약하였습니다. ({back}) 오토파일럿 실행이 끝나면 바로 적용됩니다."
 
-    return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets,
+    return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets, "set_parallel": do_parallel,
             "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback}
 
 
@@ -977,6 +994,10 @@ def run(cfg):
                     snap["presets"] = st.preset_summary()   # 이름·코드·단계 수·켬 (기록 내용·아이디·비밀번호는 안 싣는다)
                 except Exception:
                     snap["presets"] = None
+                try:   # 업체가 고른 동시 실행 창 수 - 관리 화면이 허용한 업체만 (허용하지 않았으면 올리지 않는다 = 화면이 이 기능을 모른다)
+                    snap["parallel"] = {"chosen": st.parallel_choice()} if st.parallel_limit() >= 2 else None
+                except Exception:
+                    snap["parallel"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
                 policy.refresh()
                 snap["schedule"] = dash.schedule_live(st.read_settings()["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝 (화면 안내)
@@ -999,7 +1020,7 @@ def run(cfg):
                 sent = upload_new_history(hist_path, up, cfg, prices=fresh_prices(prices))
                 tokens.refresh(force=bool(sent))           # 방금 올린 기록만큼 줄었다 - 아니면 10분마다 (우리가 넣은 것)
                 snap["tokens"] = tokens.view()
-                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("schedule"), snap.get("recent"),
+                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("parallel"), snap.get("schedule"), snap.get("recent"),
                                    snap.get("launching"), snap.get("tokens"), snap.get("update")], ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)

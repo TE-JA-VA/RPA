@@ -313,6 +313,8 @@ MAIL_BACK_WAIT = 10          # 메일을 연 뒤 목록으로 돌아와 줄이 �
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
 OPTIONAL_WAIT = 3.0
+LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 것' 에서 찾기는 이만큼 찾아도 없을 때부터 - 화면이 덜 뜬 사이 넘어가는
+                        # 옛 화면에서 태그·글자가 같은 다른 것(헤더의 로그인 등)을 집지 않게 (검토 2026-10-17). 마우스 올리기(3초)보다 짧게
 STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
 RECORD_VERSION = 1           # 기록 모양. 다르면 재생하지 않는다 (옛 프리페어가 새 기록을 잘못 따라 하지 않게)
 DOWNLOAD_TIMEOUT_MS = 300000  # 파일이 오기 시작할 때까지 기다리는 시간 (안 오면 그 단계 실패). 쇼핑몰이 엑셀을 만드는 데 오래 걸려 60초 → 5분,
@@ -501,12 +503,44 @@ def navigated(before, s):
     return before.get("page") == s.get("page") and same_frame and before.get("url") != s.get("url")
 
 
+def auth_start(steps):
+    """인증 차례를 잡는 단계 번호(1부터) - 인증번호 단계 앞의 첫 칸 넣기(아이디). 그 앞의 검색·이동은 차례를 기다리지 않는다
+    (사용자 2026-10-16: 빙 검색으로 들어가는 사이트가 앞 사이트의 인증이 끝난 뒤에야 검색부터 시작해 오래 걸렸다)."""
+    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=0)
+    # [인증번호 받기](otpSend) 가 첫 칸 넣기보다 앞인 기록이면 거기부터 - 문자가 차례 밖에서 나가지 않게 (검토 2026-10-17)
+    return next((i for i in range(last) if steps[i]["kind"] in ("fill", "secret") or steps[i].get("otpSend")), 0) + 1
+
+
+def auth_end(steps):
+    """2차 인증이 끝나는 단계 번호(1부터) - 인증번호 단계 다음의 누르기·엔터([확인])까지. 인증번호 단계가 없으면 None.
+    병렬 수집(사용자 2026-10-15): 인증 사이트는 첫 단계(로그인)부터 여기까지를 한 번에 하나씩 - 앞 사이트가 인증 중이면
+    뒤 인증 사이트는 로그인 앞에서 기다린다. 인증 없는 사이트는 기다리지 않는다."""
+    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=None)
+    if last is None:
+        return None
+    return next((i for i in range(last + 1, len(steps)) if steps[i]["kind"] in ("click", "enter")), last) + 1
+
+
 def appears_after(steps, j):
     """j 단계가 '몇 단계 뒤에 새로 생긴 것' 으로 골라야 하면 그 단계 번호, 아니면 None (옛 기록도 navigated 로 거른다)."""
     s, k = steps[j], steps[j].get("appearsAfter")
     if k is None or not ambiguous(s) or navigated(steps[k], s):
         return None
     return k
+
+
+def loose_new(steps, j):
+    """j 의 '새로 생긴 것' 이 화면이 넘어간(또는 그 창이 새로 열린) 바로 뒤의 마우스 올리기 뒤로 적혔나 - 사람이 지나가며 마우스를
+    올리는 동안 늦게 그려진 것이 새로 생긴 것으로 적힌다 (비즈메카 포털 메일 카드: 카드 안 메일 미리보기가 로그인 뒤 늦게 와서
+    '9단계 뒤에 새로 생긴 것'. 네이버 메일: [메일] 로 연 새 창의 메일 목록이 마우스 올리기 뒤로 적혔다, 2026-10-16).
+    그러면 새로 생긴 것 중에 없을 때 원래 있던 것에서도 찾는다 - 새로 생긴 것에서 찾던 기록은 그대로."""
+    k = appears_after(steps, j)
+    if k is None or steps[k]["kind"] != "hover":
+        return False
+    i = k
+    while i > 0 and steps[i]["kind"] == "hover":
+        i -= 1
+    return navigated(steps[i], steps[j]) or steps[i].get("opens") == steps[j].get("page")
 
 
 def set_pick(steps, i, prefix):
@@ -827,7 +861,27 @@ def candidates(t):
     if t["text"] and t["textCount"] > 1:
         sel = f"input[value={q(t['text'])}]" if tag == "input" else f"{tag}:text-is({q(t['text'])})"
         out.append((f"글자 {t['textIndex'] + 1}번째", sel, t["textIndex"]))
+    # 글자가 안쪽 칸(div·span)에 들었거나 나뉘어 든 것은 :text-is·:text-matches 가 못 잡는다 (빙 광고 제목, 비즈메카 메일 카드 '메일 5',
+    # 2026-10-16). 기록기처럼 하위까지 합친 글자로 본다. 앞 단서가 모두 못 찾을 때만 쓰이게 맨 뒤에 (예전 기록이 찾던 것은 그대로)
+    if tag != "input" and t["text"]:
+        whole = "normalize-space(translate(., '\u00a0', ' '))"
+        nth = t["textIndex"] if t["textCount"] > 1 else None
+        if len(t["text"]) < 80:
+            out.append(("글자(안쪽 포함)", f"xpath=//{tag}[{whole}={xq(t['text'])}]", nth))
+        if re.search(r"\d", t["text"]) and re.search(r"[^\d\s]", t["text"]) and len(t["text"]) < 80:
+            bare = re.sub(r"[\d\s]", "", t["text"])
+            out.append(("숫자 뺀 글자(안쪽 포함)", f"xpath=//{tag}[translate({whole}, '0123456789 ', '')={xq(bare)} "
+                                              f"and translate(., '0123456789', '') != .]", nth))
     return out
+
+
+def xq(s):
+    """XPath 글자 값 (따옴표가 섞여도)."""
+    if '"' not in s:
+        return f'"{s}"'
+    if "'" not in s:
+        return f"'{s}'"
+    return "concat(" + ", '\"', ".join(f'"{p}"' for p in s.split('"')) + ")"
 
 
 class OtpRetry(Exception):
@@ -862,6 +916,8 @@ class Replayer:
         self.dialogs = []           # 재생 중 뜬 알림창 글 (사이트가 인증번호를 거절했나 본다)
         # 메일 고르기: mail_memory = MailMemory (ACTOR - 처리한 메일을 건너뛰고 기억), pick_preview = 기억과 상관없이 1통 (옵저버 미리보기)
         self.mail_memory, self.pick_preview, self.no_target = None, False, False
+        # 인증 차례 (병렬 수집): (threading.Lock, 첫 단계, 끝 단계) - 첫 단계 앞에서 잡고 끝 단계를 지나면 놓는다 (auth_start·auth_end). 없으면 안 기다린다
+        self.gate, self.gate_held = None, False
 
     def _watch(self, page):
         if page in self.watched:
@@ -879,6 +935,12 @@ class Replayer:
         page.on("download", lambda dl: self.downloads.append(dl))
 
     # --- 중단·일시정지 ---
+    def _gate_release(self):
+        if self.gate_held:
+            self.gate_held = False
+            self.gate[0].release()
+            self.log("  다음 사이트에 인증 차례를 넘깁니다.")
+
     def _check_cancel(self):
         if self.cancel is not None and self.cancel.is_set():
             raise Cancelled()
@@ -905,8 +967,19 @@ class Replayer:
             self._idle(min(200, left * 1000), page)
 
     def _hold(self, i):
-        """다음 단계 앞: 중단이면 Cancelled, 일시정지면 풀릴 때까지 기다린다 (하던 단계는 끝까지 한다)."""
+        """다음 단계 앞: 중단이면 Cancelled, 일시정지면 풀릴 때까지 기다린다 (하던 단계는 끝까지 한다).
+        인증 차례(gate)가 있으면 첫 단계부터 끝 단계까지는 차례를 잡고 간다 - 인증번호를 다시 받으러 앞 단계로 돌아가도 잡은 채로."""
         self._check_cancel()
+        if self.gate is not None:
+            lock, start, end = self.gate
+            if not self.gate_held and start <= i <= end:
+                if not lock.acquire(blocking=False):
+                    self.log(f"  {i:2d}단계 앞: 다른 사이트가 인증하는 중입니다. 인증 차례를 기다립니다.")
+                    while not lock.acquire(timeout=0.5):
+                        self._check_cancel()
+                self.gate_held = True
+            elif self.gate_held and i > end:
+                self._gate_release()
         if self.pause is None or not self.pause.is_set():
             return
         if self.progress:
@@ -990,25 +1063,30 @@ class Replayer:
         except Exception:
             return set()
 
-    def _find(self, page, s, prev):
+    def _find(self, page, s, prev, loose=False):
+        """loose: 새로 생긴 것 중에 없으면 원래 있던 것에서도 (loose_new)."""
         t = s["target"]
         if s.get("loose"):          # 메일 고르기 묶음 - 메일마다 글자(첨부 이름 등)가 달라 글자 말고 자리·속성으로
             t = dict(t, text="", textCount=0)
         cands = candidates(t)
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
-        deadline, tries = time.time() + (OPTIONAL_WAIT if optional else self.step_timeout), 1
+        started = time.time()
+        deadline, tries = started + (OPTIONAL_WAIT if optional else self.step_timeout), 1
         while True:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
-            if frame is not None:
+            late = time.time() - started >= LATE_CLUE_WAIT
+            for pv in ((prev, None) if loose and late and prev is not None else (prev,)) if frame is not None else ():
                 for how, sel, nth in cands:
+                    if not late and how.endswith("(안쪽 포함)"):
+                        continue
                     try:
                         loc = frame.locator(sel)
-                        loc = self._pick(loc, loc.count(), nth, prev)
+                        loc = self._pick(loc, loc.count(), nth, pv)
                     except Exception:
                         continue            # 화면이 바뀌는 중
-                    if loc is not None and self._same(loc, t, how == "숫자 뺀 글자"):
-                        return frame, loc, how + (", 새로 생긴 것" if prev is not None else "")
+                    if loc is not None and self._same(loc, t, how.startswith("숫자 뺀 글자")):
+                        return frame, loc, how + (", 새로 생긴 것" if pv is not None else "")
             if time.time() > deadline:
                 if optional:
                     raise Skip("화면에 없음")
@@ -1221,7 +1299,7 @@ class Replayer:
         if s["kind"] == "back":
             page.go_back(wait_until="domcontentloaded")
             return "뒤로"
-        frame, loc, how = self._find(page, s, self.baseline.get(i))
+        frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose)
         if url_path(frame.url) != s["url"]:
             self.log(f"      (주소가 다름: 기록 {s['url']} / 지금 {url_path(frame.url)})")
         if self.review:             # 누를 곳에 잠깐 빨간 테두리 (Playwright highlight 는 글자 표가 화면에 쌓인다)
@@ -1268,11 +1346,13 @@ class Replayer:
             k = appears_after(steps, j)
             if k is not None:
                 self.needs.setdefault(k, []).append(j)
+        self.loose = {j for j in range(len(steps)) if loose_new(steps, j)}
         started = time.time()
         try:
             self._run_steps(steps)
         finally:
             self._otp_close()           # 성공·실패·중단 모두 - 요청·번호를 서버에 남기지 않는다
+            self._gate_release()        # 인증 중에 멈춰도 뒤 사이트가 영영 기다리지 않게
         self.elapsed = time.time() - started
         return all(r[1] != "fail" for r in self.results) and len(self.results) == len(steps)
 
