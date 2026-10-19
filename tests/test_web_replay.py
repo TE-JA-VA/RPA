@@ -392,6 +392,86 @@ def main():
         check("M: 재생도 팝업이 내려 준 파일을 받는다 (누른 창에서만 기다리지 않는다)", ok
               and [os.path.basename(x) for x in r.saved] == [f"(012)송장목록_{day.isoformat()}.xlsx"]
               and m.ship_downloads == [day.isoformat()], str(r.results[-1:]))
+
+        # ---------------- N: 기록 이어 붙이기 (설계 2026-10-19 4.2절 - 미리보기 멈춘 자리부터 [수정]) ----------------
+        print("=== N. 기록 이어 붙이기")
+        F = {"main": True, "name": "", "path": "/a"}
+        T2 = dict(T, tag="a", text="새 줄", css="body > a:nth-of-type(1)", inOverlay=False)
+        T1 = dict(T2, text="단추", css="body > a:nth-of-type(2)")
+        head = {"version": 1, "start_url": "http://x/login", "record_date": DAY.isoformat(),
+                "viewport": {"width": 900, "height": 640},
+                "steps": [{"kind": "click", "page": 0, "frame": F, "url": "/a", "target": T1, "gap": 0},
+                          {"kind": "click", "page": 0, "frame": F, "url": "/a", "target": T1, "gap": 500}]}
+        raw_new = [{"kind": "click", "page": 0, "frame": F, "url": "/a", "target": T1, "t": 1000},
+                   {"kind": "click", "page": 1, "frame": F, "url": "/a", "target": T1, "t": 2000},
+                   {"kind": "click", "page": 0, "frame": F, "url": "/a", "target": T2, "t": 3000, "firstSeen": 2500}]
+        joined = rec.continue_record(head, raw_new, DAY + datetime.timedelta(days=1))
+        js = joined["steps"]
+        check("N: 남긴 2단계 + 새 3단계, 새 쪽 '몇 단계 뒤에 나타남' 은 남긴 길이만큼 밀린다 (1 → 3)",
+              len(js) == 5 and js[4].get("appearsAfter") == 3 and "t" not in js[4], str([s.get("appearsAfter") for s in js]))
+        check("N: 새 쪽 첫 단계 gap 은 1000, 그 뒤는 기록대로", js[2]["gap"] == rec.STEP_GAP_AFTER_EDIT == 1000 and js[3]["gap"] == 1000
+              and js[:2] == head["steps"], str([s["gap"] for s in js]))
+        check("N: 시작 주소·창 크기·기록 날짜는 남긴 기록 것", joined["start_url"] == head["start_url"]
+              and joined["viewport"] == head["viewport"] and joined["record_date"] == DAY.isoformat()
+              and joined["version"] == 1, str({k: v for k, v in joined.items() if k != "steps"}))
+
+        # A 기록을 10단계([엑셀 요청] - 팝업을 연다)까지 재생하고 멈춘 뒤 그 탭들에 기록기를 붙여 이어서 기록한다 (Review Focus 3)
+        day = DAY + datetime.timedelta(days=1)
+        srv.mall = m = fake_mall.Mall(day, False)
+        stop = threading.Event()
+        with rec.sync_playwright() as p:
+            browser = rec.edge(p.chromium.launch)
+            ctx = browser.new_context(accept_downloads=True)
+            r = rec.Replayer(ctx, a, creds, os.path.join(OUT, "N"), "012", today=day, log=print)
+            r.cancel = stop
+            r.progress = lambda i, state, how: stop.set() if (i, state) == (10, "ok") else None
+            r.run()
+            check("N: 10단계(팝업 열기)까지 하고 멈췄다, 탭 0·1", r.results[-1][:2] == (11, "fail") and sorted(r.pages) == [0, 1]
+                  and not r.pages[1].is_closed(), str((r.results[-1], sorted(r.pages))))
+            rr = rec.Recorder(ctx)
+            rr.adopt(r.pages)
+            page, pop = r.pages[0], r.pages[1]
+            fl = page.frame_locator("iframe[name=content]")
+            hclick(page, fl.get_by_role("button", name="새로고침", exact=True))      # 첫 탭 → 0
+            hclick(pop, pop.get_by_placeholder("사유를 입력하세요"))                 # 팝업 → 1
+            pop.keyboard.type("이어서 처리", delay=15)
+            with pop.expect_event("close"):
+                hclick(pop, pop.get_by_role("button", name="요청", exact=True))
+            row = wait_new_ready(page, m, fl)
+            with page.expect_download() as di:
+                hclick(page, row.get_by_role("link", name="다운로드"))
+            di.value.path()
+            page.wait_for_timeout(300)
+            raw = [dict(s) for s in rr.steps]
+            browser.close()
+        for i, s in enumerate(raw, 1):
+            print(f"    {i:2d}. {rec.describe(s)}")
+        pages = [(s["kind"], s["page"]) for s in raw]
+        check("N: 이어 기록한 단계의 탭 번호가 재생기 번호와 같다 (첫 탭 0, 팝업 1)",
+              pages == [("click", 0), ("fill", 1), ("click", 1), ("click", 0)], str(pages))
+        check("N: 받은 탭 0·1 은 그대로, 그 뒤에 생긴 창(Edge 다운로드 창)은 2부터", rr.pages[:2] == [page, pop]
+              and all(pg not in (page, pop) for pg in rr.pages[2:]), str(len(rr.pages)))
+
+        class FakeCtx:                      # 번호가 비어 있는 탭들(1번 팝업이 닫혀 빠짐)을 받는 모양만 - 브라우저 없이
+            add_init_script = expose_binding = on = staticmethod(lambda *a, **k: None)
+
+        class FakePage:
+            frames = ()
+            is_closed = staticmethod(lambda: False)
+            on = staticmethod(lambda *a: None)
+        p0, p2, p3 = FakePage(), FakePage(), FakePage()
+        fr = rec.Recorder(FakeCtx())
+        fr.adopt({0: p0, 2: p2})
+        check("N: 빈 번호는 None 으로 두고 새 탭은 max+1 부터", fr.pages == [p0, None, p2] and fr._no(p3) == 3 and fr._no(p2) == 2
+              and fr._no(p0) == 0, str(fr.pages))
+        joined = rec.continue_record(dict(a, steps=a["steps"][:10]), raw, day)
+        check("N: 남긴 10단계 + 새 4단계, 다운로드는 '13단계(요청) 뒤에 새로 생긴 것'", len(joined["steps"]) == 14
+              and joined["steps"][13].get("appearsAfter") == 12 and joined["steps"][13].get("download"),
+              str([s.get("appearsAfter") for s in joined["steps"]]))
+        day = DAY + datetime.timedelta(days=2)
+        ok, r, m = replay_check(srv, url, joined, day, False, None, "N1_이어붙인기록")
+        check("N1: 이어 붙인 기록을 처음부터 재생하면 끝까지 간다", ok and m.requests[-1]["reason"] == "이어서 처리"
+              and m.downloads == [m.requests[-1]["id"]], str(r.results[-1]))
     finally:
         srv.shutdown()
     print()

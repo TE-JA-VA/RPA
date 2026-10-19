@@ -434,6 +434,17 @@ class Recorder:
         page.on("framenavigated", self._inject)
         page.on("domcontentloaded", lambda pg: [self._inject(f) for f in pg.frames])
 
+    def adopt(self, pages):
+        """이미 열린 탭들(재생기의 pages {번호: Page})을 그 번호 그대로 받는다 - 미리보기가 멈춘 자리부터 이어 기록 (설계 2026-10-19
+        4.2절). 빈 번호(닫힌 팝업)는 None 으로 비워 두어 새 탭이 max+1 부터 받고, 남긴 단계가 가리키는 탭 번호가 그대로 맞는다.
+        지금 문서에도 기록 JS 를 심는다 (add_init_script 는 다음 문서부터. 문서마다 표시가 있어 두 번 붙지 않는다)."""
+        self.pages = [pages.get(i) for i in range(max(pages, default=-1) + 1)]
+        for pg in self.pages:
+            if pg is not None and not pg.is_closed():
+                self._page(pg)
+                for f in pg.frames:
+                    self._inject(f)
+
     def _browser_page(self, page, no, step):
         """새 창이 나중에 브라우저 자체 페이지로 밝혀졌다 - 앞 동작이 연 창으로 적은 것을 되돌린다 (2026-10-06: Edge 는 파일을
         받으면 다운로드 창 edge://downloads-hub 을 페이지로 열어, 재생이 오지 않을 새 창을 15초 기다리다 실패했다)."""
@@ -449,7 +460,10 @@ class Recorder:
     def _dialog(self, d):
         if self.steps:
             self.steps[-1].setdefault("dialogs", []).append(d.message)
-        d.accept()
+        try:
+            d.accept()
+        except Exception:
+            pass                    # 이어 기록(adopt)할 때는 재생기의 알림창 받기가 먼저 닫는다
 
     def _download(self, d):
         if self.steps:
@@ -694,6 +708,22 @@ def finalize(steps, record_date, start_url, viewport=None):
     if viewport:
         rec_obj["viewport"] = viewport       # 기록 때 창 안쪽 크기 - 프리페어가 같은 크기로 연다
     return rec_obj
+
+
+STEP_GAP_AFTER_EDIT = 1000      # [수정]으로 이어 기록한 첫 단계가 앞 단계를 기다리는 시간 (ms) - 사람이 기다린 시간이 없다
+
+
+def continue_record(head, raw_new, record_date):
+    """head(다듬어 둔 기록의 남긴 앞부분) 뒤에 기록기의 새 단계 raw_new(t 있음)를 다듬어 붙인다 (설계 2026-10-19 4.2절).
+    새 쪽의 '몇 단계 뒤에 나타남' 은 남긴 길이만큼 민다. 시작 주소·창 크기·기록 날짜는 head 것."""
+    n = len(head["steps"])
+    new = finalize(raw_new, record_date, head["start_url"], head.get("viewport"))["steps"]
+    for s in new:
+        if "appearsAfter" in s:
+            s["appearsAfter"] += n
+    if new:
+        new[0]["gap"] = STEP_GAP_AFTER_EDIT
+    return dict(head, steps=head["steps"] + new)
 
 
 def keep_steps(rec_obj, keep):
