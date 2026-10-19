@@ -88,10 +88,10 @@ site = st.read_user_config()["Sites"]["PRESET1"]
 check("다시 저장: 비밀번호를 안 주면 그대로, 켬/끔도 그대로, 이름·아이디는 새 값", st.unseal(site["PW"]) == PW
       and site["Stts"] == 0 and site["note"] == "지마켓 판매자" and site["ID"] == "seller02", str(site))
 summary = st.preset_summary()
-check("요약: 번호·이름·코드·단계 수·저장 시각·아이디 여부·켬", summary[0] == {
-      "no": 1, "name": "지마켓", "code": "012", "steps": 1, "saved_at": "2026-09-30T18:20:00", "has_login": True, "on": True}
+check("요약: 번호·이름·코드·단계 수·저장 시각·아이디 여부·켬·보관", summary[0] == {
+      "no": 1, "name": "지마켓", "code": "012", "steps": 1, "saved_at": "2026-09-30T18:20:00", "has_login": True, "on": True, "backup": False}
       and summary[1]["steps"] == 0 and summary[1]["has_login"] is False, str(summary))
-check("요약에는 기록 내용·아이디·비밀번호가 없다", all(set(s) == {"no", "name", "code", "steps", "saved_at", "has_login", "on"}
+check("요약에는 기록 내용·아이디·비밀번호가 없다", all(set(s) == {"no", "name", "code", "steps", "saved_at", "has_login", "on", "backup"}
                                                   for s in summary) and "seller" not in json.dumps(summary, ensure_ascii=False))
 check("켜기·끄기는 Stts 0/9 (키는 PRESET1·'1'·1 모두)",
       st.set_preset_switches({"PRESET1": False}) == {1: False} and st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 9

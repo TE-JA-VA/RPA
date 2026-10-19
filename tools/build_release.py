@@ -54,6 +54,7 @@ PROGRAM_FILES = [
     ("rpa_dashboard.py", "rpa_dashboard.py"),
     ("kr_holidays.py", "kr_holidays.py"),                                     # 공휴일 표 - rpa_dashboard 가 부른다 (2026-10-15 자동 실행 쉬기)
     ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
+    ("preset_transfer.py", "preset_transfer.py"),                             # 프리셋 파일·넣기·되돌리기 (에이전트·옵저버, 2026-10-19)
     ("AFTER_MARKET.ico", "release/AFTER_MARKET.ico"),                         # 오토파일럿: 설정 창·바로 가기·에이전트 (tools/make_icon.py)
     ("AUTOPILOT_PROCESS.ico", "release/AUTOPILOT_PROCESS.ico"),               # PROCESS 오토파일럿 exe (샌드박스가 exe 와 견준다)
     ("AUTOPILOT_ACTOR.ico", "release/AUTOPILOT_ACTOR.ico"),                   # ACTOR 오토파일럿 exe (Prepare_RPA)

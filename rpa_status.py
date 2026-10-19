@@ -1050,6 +1050,11 @@ def preset_site_key(no):
     return f"PRESET{no}"
 
 
+def preset_backup_path(no):
+    """넣어 주기·복사로 바꾸기 전 프리셋 no 의 보관 (칸마다 하나, preset_transfer 가 쓰고 restore 로 돌린다)."""
+    return os.path.join(data_dir(), "프리셋보관", f"{preset_site_key(no)}.json")
+
+
 def is_preset_site(key):
     """Sites 의 프리셋 칸(PRESETn)인가. 프리페어는 이 칸만 돌린다 - 옛 SITEn 방식은 쓰는 업체가 없다 (사용자 2026-10-12)."""
     return bool(re.fullmatch(r"PRESET\d+", str(key)))
@@ -1085,7 +1090,8 @@ def save_preset_sites(presets, logins, fresh=(), phones=None):
 
 
 def preset_summary():
-    """대시보드용 [{no, name, code, steps, saved_at, has_login, on}] - 기록 내용·아이디·비밀번호는 싣지 않는다.
+    """대시보드용 [{no, name, code, steps, saved_at, has_login, on, backup}] - 기록 내용·아이디·비밀번호는 싣지 않는다.
+    backup: 넣어 주기·복사 전 기록이 보관돼 있어 되돌릴 수 있다 (preset_transfer).
     사용자 설정이 없거나 프리셋 파일이 깨졌으면 None (화면이 카드를 숨긴다 - 빈 목록으로 속이지 않는다)."""
     try:
         cfg = read_user_config()
@@ -1102,7 +1108,8 @@ def preset_summary():
         out.append({"no": p["no"], "name": p["name"], "code": p["code"],
                     "steps": len((p["record"] or {}).get("steps") or []), "saved_at": p["saved_at"],
                     "has_login": bool(site.get("ID")) and bool(site.get("PW")),
-                    "on": str(site.get("Stts", "")).strip() == "0"})
+                    "on": str(site.get("Stts", "")).strip() == "0",
+                    "backup": os.path.isfile(preset_backup_path(p["no"]))})
     return out
 
 
