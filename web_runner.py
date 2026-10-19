@@ -179,7 +179,7 @@ def tile_layout(n, viewport):
     반환: (배율, [(왼쪽, 위)]) - 자리는 Edge 의 DIP (물리 픽셀 / 배율)."""
     left, top, W, H = work_area()
     cols, rows, scale = best_grid(n, (W, H), viewport)
-    log(f"창 {n}개를 화면({W}x{H})에 가로 {cols} x 세로 {rows}로 나눠 띄웁니다. (배율 {scale:.2f})")
+    log(f"창 {n}개를 화면({W}x{H})에 가로 {cols} x 세로 {rows}로 나누어 표시합니다. (배율 {scale:.2f})")
     w, h = W / cols, H / rows
     return scale, [(round((left + w * (k % cols)) / scale), round((top + h * (k // cols)) / scale)) for k in range(n)]
 
