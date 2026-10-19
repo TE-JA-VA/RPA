@@ -50,46 +50,53 @@ export function sendCommand(c, type, args, label, alive = () => true) {
 }
 
 /** 명령 둘을 한꺼번에 넣는다 - 업체 PC 끼리 프리셋 복사 (설계 2026-10-19 4.3절): 보낼 PC 에 export_preset, 받을 PC 에 import_preset.
- *  마지막(받을 PC) 명령만 지켜본다. 웹을 닫아도 두 PC 가 전송 자리로 끝까지 간다 */
+ *  결과는 마지막(받을 PC) 명령의 것. 앞 명령이 failed·expired 면 (받을 PC 는 전송이 안 와도 명령 만료까지 기다리므로) 그 사유로 바로 끝낸다.
+ *  웹을 닫아도 두 PC 가 전송 자리로 끝까지 간다 */
 export function sendPair(c, cmds, label, alive = () => true) {
   return sendTo(c, cmds, label, alive);
 }
 
-/** cmds = [[pcId, type, args], ...] 를 차례로 넣고 마지막 명령을 지켜본다 */
+/** cmds = [[pcId, type, args], ...] 를 차례로 넣고 지켜본다 */
 async function sendTo(c, cmds, label, alive) {
   notify("info", `${label} 명령을 전송하였습니다. PC 응답을 기다리는 중입니다.`);
   try {
     const now = Math.floor(Date.now() / 1000);
-    let last = null;
+    const sent = [];
     for (const [pcId, type, args] of cmds) {
       const node = await push(ref(c.db, P("commands", c.me.cid, pcId)), {
         type, args: args ?? null, by: c.me.uid, created_at: now, expires_at: now + COMMAND_TTL_SEC, state: "queued",
       });
-      last = [pcId, node.key];
+      sent.push([pcId, node.key]);
     }
-    await watchCommand(c, last[0], last[1], label, alive);
+    await watchCommands(c, sent, label, alive);
   } catch (e) {
     notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `전송하지 못했습니다. (${e.code || e})`);
   }
 }
 
-/** PC 의 응답(queued → running)은 60초 안에 와야 한다. running 뒤엔 명령 만료(expires_at)까지 지켜본다 - 받을 PC 는 옵저버·ACTOR 가
- *  끝나길 몇 분 기다릴 수 있다 (import·restore_preset, 설계 2026-10-19 4.3·4.4절). 시험은 window.__replyWaitMs 로 60초를 줄인다 */
-function watchCommand(c, pcId, cmdKey, label, alive) {
+/** 마지막 명령의 응답(queued → running)은 60초 안에 와야 한다. running 뒤엔 명령 만료(expires_at)까지 지켜본다 - 받을 PC 는 옵저버·ACTOR 가
+ *  끝나길 몇 분 기다릴 수 있다 (import·restore_preset, 설계 2026-10-19 4.3·4.4절). 앞 명령은 failed·expired 만 본다.
+ *  시험은 window.__replyWaitMs 로 60초를 줄인다 */
+function watchCommands(c, sent, label, alive) {
   return new Promise((resolve) => {
-    const end = (kind, text) => { clearTimeout(timer); off(); if (alive()) notify(kind, text); resolve(); };
+    const offs = [];
+    const end = (kind, text) => { clearTimeout(timer); for (const off of offs) off(); if (alive()) notify(kind, text); resolve(); };
     let timer = setTimeout(() => end("bad", "PC가 응답하지 않습니다."), window.__replyWaitMs ?? 60000);
     let started = false;
-    const off = onValue(ref(c.db, `${P("commands", c.me.cid, pcId)}/${cmdKey}`), (snap) => {
-      const v = snap.val();
-      if (!v || !alive()) return;
-      if (v.state === "running" && !started) {
-        started = true; notify("info", `${label} 진행 중`);
-        clearTimeout(timer);
-        timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - Date.now()) + 5000);
-      }
-      if (["done", "failed", "expired"].includes(v.state)) end(v.state === "done" ? "ok" : "bad", v.result || v.state);
-    });
+    const lastKey = sent.at(-1)[1];
+    for (const [pcId, cmdKey] of sent) {
+      offs.push(onValue(ref(c.db, `${P("commands", c.me.cid, pcId)}/${cmdKey}`), (snap) => {
+        const v = snap.val();
+        if (!v || !alive()) return;
+        if (cmdKey === lastKey && v.state === "running" && !started) {
+          started = true; notify("info", `${label} 진행 중`);
+          clearTimeout(timer);
+          timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - Date.now()) + 5000);
+        }
+        if (v.state === "failed" || v.state === "expired") end("bad", v.result || v.state);
+        else if (cmdKey === lastKey && v.state === "done") end("ok", v.result || v.state);
+      }));
+    }
   });
 }
 

@@ -868,9 +868,34 @@ with sync_playwright() as pw:
           f"지금 PC 에 export_preset (tid 20자, 휴대폰 포함) ({exp})")
     check(len(imp) == 1 and imp[0]["args"] == {"tid": tid, "slots": [1, 5]} and imp[0]["by"] == admin_uid, f"받을 PC 에 같은 tid 의 import_preset ({imp})")
     key = next(k for k, v in (db_get("apps/rpa/commands/c_demo/pc_x") or {}).items() if v.get("type") == "import_preset")
-    db_patch(f"apps/rpa/commands/c_demo/pc_x/{key}", {"state": "done", "result": "PC pc_office의 프리셋 2개를 복사하였습니다.", "started_at": 1, "ended_at": 2})
+    db_patch(f"apps/rpa/commands/c_demo/pc_x/{key}", {"state": "done", "started_at": 1, "ended_at": 2,   # agent.do_import 의 결과 글
+                                                        "result": "PC pc_office의 프리셋 2개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."})
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('복사하였습니다')", timeout=10000)
     check(page.locator('#toasts [data-id="act"].ok').count() == 1, "받을 PC 의 결과가 토스트로")
+    # 최종 고침 B4: 보낼 PC 의 export_preset 이 failed 면 (받을 PC 는 명령 만료까지 기다린다) 그 사유를 바로 알리고 잠금을 푼다
+    page.once("dialog", lambda dlg: dlg.accept())
+    page.click("#copy-send")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('프리셋 복사 명령을 전송하였습니다')", timeout=10000)
+    time.sleep(1)
+    key = max(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "export_preset")   # push 키는 시각 순 - 방금 것
+    db_patch(f"{CMDS}/{key}", {"state": "failed", "result": "프리셋 2에 기록이 없습니다.", "started_at": 1, "ended_at": 2})
+    try:
+        page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('기록이 없습니다')", timeout=10000)
+    except Exception:
+        pass
+    check(page.locator('#toasts [data-id="act"].bad').count() == 1 and "프리셋 2에 기록이 없습니다." in (page.text_content("#toasts") or "")
+          and not page.is_disabled("#copy-send"),
+          f"보낼 PC 의 export_preset 이 failed 면 그 사유를 빨간 토스트로, [복사] 는 다시 열린다 ({page.text_content('#toasts')!r})")
+    # 최종 고침 B5: 지금 PC 가 옛 버전(live.preset_transfer 없음)이면 [복사] 비활성 + 안내
+    db_patch(LIVE, {"preset_transfer": None})
+    try:
+        page.wait_for_function("(document.getElementById('copy-info')?.textContent || '').includes('업데이트')", timeout=10000)
+    except Exception:
+        pass
+    check(page.is_disabled("#copy-send") and page.text_content("#copy-info") == "이 PC를 새 버전으로 업데이트하면 프리셋을 복사할 수 있습니다.",
+          f"지금 PC 가 옛 버전이면 [복사] 비활성·업데이트 안내 ({page.text_content('#copy-info')!r})")
+    db_patch(LIVE, {"preset_transfer": 1})
+    page.wait_for_function("(document.getElementById('copy-info')?.textContent || '') === '' && !document.getElementById('copy-send').disabled", timeout=10000)
     check("아이디·비밀번호 입력 필요" in page.text_content("#shop-list label:nth-child(2)")
           and "입력 필요" not in page.text_content("#shop-list label:nth-child(1)"), "아이디·비밀번호가 없는 줄에만 이름표")
     check(page.locator("#shop-list label:nth-child(1) .restore").count() == 1 and page.locator("#shop-list .restore").count() == 1, "보관이 있는 줄에만 [되돌리기]")

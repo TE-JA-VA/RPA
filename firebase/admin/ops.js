@@ -275,10 +275,12 @@ export async function setReleases(list) {
   return { count: list.length, newest, stable };
 }
 const COMMAND_TTL_SEC = 600;     // 웹 화면(firebase-config.js)과 같은 값 - PC 가 받자마자 '예약했습니다' 로 끝낸다
-async function sendAdminCommand(cid, pcId, type, args) {
+async function checkPc(cid, pcId) {
   checkKey("cid", cid); checkKey("pcId", pcId);
-  const v = await companyOf(cid);
-  if (!v.pcs?.[pcId]) throw new Refused(`등록되지 않은 PC입니다: ${pcId}`);
+  if (!(await companyOf(cid)).pcs?.[pcId]) throw new Refused(`등록되지 않은 PC입니다: ${pcId}`);
+}
+async function sendAdminCommand(cid, pcId, type, args) {
+  await checkPc(cid, pcId);
   const now = Math.floor(Date.now() / 1000);
   const ref = rtdb.ref(`apps/rpa/commands/${cid}/${pcId}`).push();
   await ref.set({ type, args: args ?? null, by: "admin-tool", created_at: now, expires_at: now + COMMAND_TTL_SEC, state: "queued" });
@@ -301,7 +303,8 @@ export async function pcUpdateStatus(cid, pcId) {
     started_at: c.started_at ?? null, result: c.result ?? null } : null;
   const p = recent.filter(([, x]) => PRESET_TYPES.includes(x.type)).at(-1);
   const preset = p ? { key: p[0], type: p[1].type, state: p[1].state, result: p[1].result ?? null } : null;
-  return { version: live.version ?? null, update: live.update ?? null, cmd, presets: Array.isArray(live.presets) ? live.presets : null, preset };
+  return { version: live.version ?? null, update: live.update ?? null, cmd, presets: Array.isArray(live.presets) ? live.presets : null, preset,
+    preset_transfer: live.preset_transfer ?? null };   // 프리셋 명령을 아는 에이전트(agent.PRESET_TRANSFER) - 없으면 화면이 단추를 막는다
 }
 // 프리셋 가져오기·넣어 주기·되돌리기 (설계 2026-10-19 4.1절). 전송 자리 apps/rpa/transfers/{cid}/{tid} 에 잠깐 올렸다 지운다.
 // 파일에는 이름·사이트코드·기록만 - 아이디·비밀번호가 든 파일은 올리기 전에 거절한다 (서버에도 남지 않게).
@@ -344,10 +347,17 @@ export async function importPreset(cid, pcId, file, slot) {
   checkKey("cid", cid); checkKey("pcId", pcId);
   checkPresetFile(file);
   presetNo(slot, "칸 번호");
+  await checkPc(cid, pcId);                       // 전송 자리를 쓰기 전에 - 거절되면 6시간 남는 찌꺼기가 없게
   const tid = newTid(), now = Date.now();
-  await rtdb.ref(`apps/rpa/transfers/${cid}/${tid}`).set({ by: "admin-tool", from_pc: "admin", created_at: now, expires_at: now + TRANSFER_TTL_SEC * 1000, presets: [file] });
-  const { key } = await sendAdminCommand(cid, pcId, "import_preset", { tid, slots: [slot] });
-  return { key, tid, slot };
+  const ref = rtdb.ref(`apps/rpa/transfers/${cid}/${tid}`);
+  await ref.set({ by: "admin-tool", from_pc: "admin", created_at: now, expires_at: now + TRANSFER_TTL_SEC * 1000, presets: [file] });
+  try {
+    const { key } = await sendAdminCommand(cid, pcId, "import_preset", { tid, slots: [slot] });
+    return { key, tid, slot };
+  } catch (e) {
+    await ref.remove().catch(() => {});           // 명령을 못 넣었으면 올린 파일도 거둔다
+    throw e;
+  }
 }
 export const restorePreset = (cid, pcId, no) => sendAdminCommand(cid, pcId, "restore_preset", { nos: [presetNo(no)] });
 export async function setStable(version) {

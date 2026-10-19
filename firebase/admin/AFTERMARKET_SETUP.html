@@ -373,22 +373,25 @@ async function exportPreset(d, p, no) {
 }
 function presetPanel(d, p) {
   const file = el("input", { type: "file", accept: ".json" }), slot = el("input", { class: "preset-slot", type: "number", min: 1, max: 40, style: "width:5em" });
+  const old = p.preset_transfer !== 1;   // 옛 에이전트는 프리셋 명령을 모른다 - 보내면 queued 로만 남는다
   let loaded = null;
   file.onchange = async () => {
     loaded = null;
+    if (!file.files[0]) return;          // 파일 대화상자 취소
     try { loaded = JSON.parse(await file.files[0].text()); slot.value = Number.isInteger(loaded?.no) ? loaded.no : ""; } catch { flash("프리셋 파일 형식이 아닙니다.", true); }
   };
-  const put = el("button", { class: "preset-import", onclick: () => act(put, async () => {
+  const put = el("button", { class: "preset-import", disabled: old, onclick: () => act(put, async () => {
     if (!loaded) throw new Error("프리셋 파일을 선택하여 주십시오.");
     const n = Number(slot.value);
+    if (!Number.isInteger(n) || n < 1 || n > 40) throw new Error("칸 번호를 입력하여 주십시오.");
     if (!confirm(`프리셋 ${n}을(를) 이 파일로 변경합니다. 기록이 있으면 덮어쓰며 이전 기록은 PC에 보관됩니다. 진행하시겠습니까?`)) return;
     const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/import`, { file: loaded, slot: n });
     flash(`프리셋 ${n} 넣어 주기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
     followPreset(d, p, r.key, panel);
   }) }, "넣어 주기");
   const rows = (p.presets ?? []).map((x) => {
-    const get = el("button", { class: "preset-export", "data-no": x.no, onclick: () => act(get, () => exportPreset(d, p, x.no)) }, "가져오기");
-    const back = x.backup ? el("button", { class: "preset-restore", "data-no": x.no, onclick: () => act(back, async () => {
+    const get = el("button", { class: "preset-export", "data-no": x.no, disabled: old, onclick: () => act(get, () => exportPreset(d, p, x.no)) }, "가져오기");
+    const back = x.backup ? el("button", { class: "preset-restore", "data-no": x.no, disabled: old, onclick: () => act(back, async () => {
       if (!confirm(`프리셋 ${x.no}을(를) 이전 기록으로 되돌리시겠습니까?`)) return;
       const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/${x.no}/restore`, {});
       flash(`프리셋 ${x.no} 되돌리기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
@@ -399,6 +402,7 @@ function presetPanel(d, p) {
   });
   const panel = el("tr", { id: `pc-${p.pcId}-presets`, class: "preset-panel" }, el("td", { colspan: 6 },
     rows.length ? el("table", {}, el("tbody", {}, rows)) : el("p", { class: "muted" }, "프리셋 정보가 없습니다. (PC가 꺼져 있거나 옵저버 프리셋이 없음)"),
+    old ? el("p", { class: "bad" }, "(업데이트 필요) 이 PC를 새 버전으로 업데이트하면 사용할 수 있습니다.") : null,
     el("div", { class: "row" }, file, el("label", { class: "inline" }, "칸 번호 ", slot), put),
     el("p", { class: "muted" }, "가져온 파일에는 아이디·비밀번호가 없습니다. 검색어 등 입력한 값은 포함될 수 있습니다.")));
   return panel;

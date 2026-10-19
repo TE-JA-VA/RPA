@@ -533,7 +533,7 @@ with sync_playwright() as pw:
               and re.fullmatch(r"[a-z0-9]{20}", tid) and exp[0][1]["state"] == "queued", f"[가져오기] → export_preset 명령 (tid 20자, nos [1], 휴대폰 없이) ({exp})")
         now_ms = int(time.time() * 1000)   # 에이전트 대신 전송 자리에 올리고 명령을 끝낸다
         db_put(f"apps/rpa/transfers/{CID}/{tid}", {"by": "admin-tool", "from_pc": PC, "created_at": now_ms, "expires_at": now_ms + 6 * 3600 * 1000, "presets": [FILE]})
-        db_patch(f"{CMDS}/{exp[0][0]}", {"state": "done", "started_at": int(time.time()), "ended_at": int(time.time()), "result": "프리셋 1개를 보냈습니다."})
+        db_patch(f"{CMDS}/{exp[0][0]}", {"state": "done", "started_at": int(time.time()), "ended_at": int(time.time()), "result": "프리셋 1개를 전송하였습니다."})   # agent.do_export 의 결과 글
     got = dl.value
     with open(got.path(), encoding="utf-8") as f:
         content = json.load(f)
@@ -598,6 +598,46 @@ with sync_playwright() as pw:
     code, d = api("GET", f"/api/companies/{CID}")
     pcrow = next((x for x in d.get("pcs", []) if x["pcId"] == PC), {}) if code == 200 else {}
     check([x["no"] for x in pcrow.get("presets") or []] == [1, 2], "업체 상세의 PC 줄에 프리셋 요약 (live.presets)", str(pcrow)[:200])
+    check(pcrow.get("preset_transfer") == 1, "업체 상세의 PC 줄에 live.preset_transfer (새 명령을 아는 PC 표시)", str(pcrow)[:200])
+    # 최종 고침 B5: [가져오기] 가 failed 로 끝나면 그 사유를 알린다
+    page.evaluate("document.getElementById('flash').classList.add('hide')")
+    page.click(f"{box} button.preset-export[data-no='2']")
+    page.wait_for_timeout(800)
+    exp2 = [(k, v) for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "export_preset" and v.get("state") == "queued"]
+    db_patch(f"{CMDS}/{exp2[0][0]}", {"state": "failed", "started_at": int(time.time()), "ended_at": int(time.time()), "result": "프리셋 2에 기록이 없습니다."})
+    page.wait_for_function("document.getElementById('flash').textContent.includes('기록이 없습니다')", timeout=15000)
+    check(page.text_content("#flash") == "가져오지 못했습니다. 프리셋 2에 기록이 없습니다." and "bad" in (page.get_attribute("#flash", "class") or "")
+          and not page.is_disabled(f"{box} button.preset-export[data-no='2']"), f"[가져오기] 가 failed 면 사유를 빨간 알림으로, 단추는 다시 열린다 ({page.text_content('#flash')})")
+    # 최종 고침 B3: 파일 대화상자 취소는 조용히, 칸 번호가 1~40 정수가 아니면 확인 창 전에 안내
+    page.evaluate("document.getElementById('flash').classList.add('hide')")
+    page.set_input_files(f"{box} input[type=file]", [])
+    page.wait_for_timeout(500)
+    check(page.is_hidden("#flash"), "파일 대화상자를 취소하면 아무 알림도 없다")
+    page.set_input_files(f"{box} input[type=file]", big_path)
+    page.wait_for_function(f"document.querySelector('{box} input.preset-slot')?.value === '2'", timeout=10000)
+    dialogs.clear()
+    for bad in ("", "0", "41", "2.5"):
+        page.fill(f"{box} input.preset-slot", bad)
+        page.click(f"{box} button.preset-import")
+        page.wait_for_timeout(300)
+    check(page.text_content("#flash") == "칸 번호를 입력하여 주십시오." and "bad" in (page.get_attribute("#flash", "class") or "") and dialogs == []
+          and len([v for v in (db_get(CMDS) or {}).values() if v.get("type") == "import_preset"]) == 1,
+          f"칸 번호가 1~40 정수가 아니면 확인 창 전에 안내 (명령 없음) ({page.text_content('#flash')}, {dialogs})")
+    # 최종 고침 B1: 등록되지 않은 PC 면 전송 자리를 쓰기 전에 거절 (전송 자리에 6시간 남는 찌꺼기 없음)
+    code, r = api("POST", f"/api/companies/{CID}/pcs/pc_zz/presets/import", {"file": FILE, "slot": 1})
+    left = list(db_get(f"apps/rpa/transfers/{CID}") or {})
+    check(code == 400 and "등록되지 않은 PC" in r.get("error", "") and left == [tid2], "등록되지 않은 PC 에 넣어 주기: 거절, 전송 자리에 남는 것 없음", (code, r, left))
+    # 최종 고침 B2: 옛 버전 PC (live.preset_transfer 없음) 는 [가져오기]·[넣어 주기]·[되돌리기] 를 막고 업데이트 안내
+    call("DELETE", f"{DB}/apps/rpa/live/{CID}/{PC}/preset_transfer.json?ns={NS}", None, OWNER)
+    code, s = api("GET", f"/api/companies/{CID}/pcs/{PC}/status")
+    check(code == 200 and s.get("preset_transfer") is None, "PC 상태에 preset_transfer (옛 PC 는 null)", (code, s))
+    open_company(page, CID)
+    page.click(f"#pc-{PC} button.preset-open")
+    page.wait_for_selector(box, timeout=10000)
+    btns = page.evaluate(f"[...document.querySelectorAll('{box} button')].map((b) => [b.className, b.disabled])")
+    check(sorted(btns) == [["preset-export", True], ["preset-export", True], ["preset-import", True], ["preset-restore", True]]
+          and "이 PC를 새 버전으로 업데이트하면 사용할 수 있습니다." in page.text_content(box),
+          f"옛 버전 PC 는 단추 넷이 모두 잠기고 '(업데이트 필요)' 안내 ({btns})")
     call("DELETE", f"{DB}/apps/rpa/transfers/{CID}.json?ns={NS}", None, OWNER)
 
     print("화면 다듬기 (사용자 2026-10-07)")
@@ -836,6 +876,46 @@ with sync_playwright() as pw:
     SECRETS += [u["password"] for u in done.get("made", {}).get("users", [])] + [a["password"] for a in done.get("made", {}).get("agents", [])]
     check(done.get("ok") and len(done.get("made", {}).get("agents", [])) == 30 and (fs_doc("wallet/t_late") or {}).get("granted") == 7,
           "[만들기] 바로 뒤 [끄기] 를 눌러도 하던 일을 끝내고 끈다", late[0][0] if late else "응답 없음 (중간에 꺼짐)")
+
+print("=== 4-2. 에이전트가 켜질 때 끝나지 못한 프리셋 명령 정리 - agent 토큰으로 RTDB 질의 (최종 고침 B7) ===")
+# agent.fail_stale_slow 는 commands 를 orderBy state=running 으로 질의한다 (규칙 .indexOn state). 에뮬레이터에 그 PC 의 agent 토큰으로 붙어
+# 규칙을 지나는지, running 인 import/restore_preset 만 failed 로 바꾸는지 본다. 계정은 check_phone_relay 처럼 에뮬레이터에 직접 만든다
+import tempfile  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent"))
+os.environ.setdefault("RPA_AGENT_QUEUE", os.path.join(tempfile.mkdtemp(), "queue.jsonl"))   # log() 가 실제 기록을 어지럽히지 않게
+import agent as ag  # noqa: E402
+import fb  # noqa: E402
+
+
+def emu_agent(email_, cid, pc_id):
+    r = call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x", {"email": email_, "password": "pw123456"})
+    call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:update",
+         {"localId": r["localId"], "customAttributes": json.dumps({"cid": cid, "pcId": pc_id, "role": "agent"})}, OWNER)
+    return fb.Client({"api_key": "x", "email": email_, "password": "pw123456", "database_url": f"{DB}/?ns={NS}"})
+
+
+STALE = "apps/rpa/commands/t_stale/pc_s"
+now = int(time.time())
+base_cmd = {"by": "admin-tool", "created_at": now, "expires_at": now + 600}
+db_put(STALE, {"s_imp": {**base_cmd, "type": "import_preset", "state": "running", "started_at": now},
+               "s_rst": {**base_cmd, "type": "restore_preset", "state": "running", "started_at": now},
+               "s_run": {**base_cmd, "type": "launch", "state": "running", "started_at": now},
+               "s_q": {**base_cmd, "type": "import_preset", "state": "queued"},
+               "s_done": {**base_cmd, "type": "import_preset", "state": "done", "started_at": now, "ended_at": now, "result": "x"}})
+other = emu_agent("agent-other@t.local", "t_stale", "pc_other")
+n = ag.fail_stale_slow(other, "t_stale", "pc_s", now)
+states = {k: v["state"] for k, v in (db_get(STALE) or {}).items()}
+check(n == 0 and states == {"s_imp": "running", "s_rst": "running", "s_run": "running", "s_q": "queued", "s_done": "done"},
+      "같은 업체 다른 PC 의 agent 토큰으로는 못 바꾼다 (규칙) - 0, 그대로", (n, states))
+mine = emu_agent("agent-stale@t.local", "t_stale", "pc_s")
+n = ag.fail_stale_slow(mine, "t_stale", "pc_s", now)
+after = db_get(STALE) or {}
+states = {k: v["state"] for k, v in after.items()}
+check(n == 2 and states == {"s_imp": "failed", "s_rst": "failed", "s_run": "running", "s_q": "queued", "s_done": "done"},
+      "그 PC 의 agent 토큰: state=running 질의가 규칙을 지나고, running 인 import/restore_preset 만 failed", (n, states))
+check(all(after.get(k, {}).get("result") == ag.STALE_TEXT and after.get(k, {}).get("ended_at") == now for k in ("s_imp", "s_rst"))
+      and "result" not in after.get("s_run", {}), "failed 로 바꾼 것에만 사유·ended_at", {k: after.get(k) for k in ("s_imp", "s_run")})
+check(ag.fail_stale_slow(mine, "t_stale", "pc_s", now) == 0, "다시 부르면 0 (running 인 느린 명령이 없다)")
 
 print("=== 5. 기록 ===")
 if srv.poll() is None:
