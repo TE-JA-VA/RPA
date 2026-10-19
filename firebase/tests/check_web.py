@@ -744,17 +744,17 @@ with sync_playwright() as pw:
     check(page.text_content("#token-line") == "전체 실행 1번에 6개 · 약 20번 더 실행할 수 있습니다."
           and page.get_attribute("#token-line", "class") == "msg", f"평소: 회색 한 줄, 몇 번 더 ({page.text_content('#token-line')})")
     # 남은 토큰 막대 (사용자 2026-10-19): 충전 합계(wallet.granted) 대비 남은 것, ECAM 색, 관리자는 실행 단추 아래
-    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'good' && document.querySelector('#tok-bar .left').style.width === '24%'", timeout=10000)
-    bar = page.evaluate("""() => { const b = document.getElementById('tok-bar'), f = b.querySelector('.left');
+    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'good' && document.querySelector('#tok-bar .fill').style.width === '76%'", timeout=10000)
+    bar = page.evaluate("""() => { const b = document.getElementById('tok-bar'), f = b.querySelector('.fill');
       return [b.dataset.state, f.style.width, document.getElementById('tok-left').textContent,
               document.getElementById('tok-used').textContent, document.getElementById('tok-granted').textContent,
               b.getAttribute('aria-label'), !!document.querySelector('#act-card #token-box')] }""")
-    check(bar[:6] == ["good", "24%", "남은 토큰 120개", "사용 380개", "충전 합계 500개", "남은 토큰 120개, 충전 합계 500개"],
-          f"막대: 남은 120 / 충전 500 = 24%, 초록 ({bar[:6]})")
+    check(bar[:6] == ["good", "76%", "남은 토큰 120개", "사용 380개", "충전 합계 500개", "남은 토큰 120개, 충전 합계 500개"],
+          f"막대: 쓴 380 / 충전 500 = 76% 채움, 남은 게 넉넉해 초록 ({bar[:6]})")
     check(bar[6], "관리자는 실행 카드 안 (실행 단추 아래)")
     ecam = page.evaluate("""() => { const t = document.createElement('i'); t.style.color = 'var(--ecam-green)'; document.body.append(t);
       const want = getComputedStyle(t).color; t.remove();
-      return [want, getComputedStyle(document.querySelector('#tok-bar .left')).backgroundColor] }""")
+      return [want, getComputedStyle(document.querySelector('#tok-bar .fill')).backgroundColor] }""")
     check(ecam[0] == ecam[1], f"넉넉하면 ECAM 초록 ({ecam})")
     page.wait_for_function("!document.getElementById('usage-card')?.classList.contains('hide')", timeout=10000)
     rows = page.evaluate("[...document.querySelectorAll('#usage-list .u-row')].map((r) => r.children[0].textContent + ' ' + r.children[1].textContent)")
@@ -772,6 +772,10 @@ with sync_playwright() as pw:
     except Exception:
         pass
     check(page.text_content("#usage-meta") == want, f"토큰 정보를 이달 중간에 만들었으면 그날부터 ({page.text_content('#usage-meta')})")
+    db_patch(LIVE, {"tokens": {"balance": 90, "cost": cost}})   # 충전 500 의 18% - 실행은 15번 더 되지만 막대는 호박색 (사용자 2026-10-19: 20% 미만부터)
+    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'warn' && document.querySelector('#tok-bar .fill').style.width === '82%'", timeout=10000)
+    check(page.get_attribute("#token-line", "class") == "msg" and page.text_content("#token-line") == "전체 실행 1번에 6개 · 약 15번 더 실행할 수 있습니다.",
+          f"남은 것이 20% 미만이면 막대만 호박색, 글줄은 평소 그대로 ({page.text_content('#token-line')})")
     db_patch(LIVE, {"tokens": {"balance": 3, "cost": cost}})
     page.wait_for_function("document.getElementById('token-line')?.classList.contains('warn')", timeout=10000)
     check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개. 잔여 토큰이 마이너스가 될 수 있습니다."
@@ -779,7 +783,7 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'warn' && document.getElementById('tok-used').textContent === '사용 497개'", timeout=10000)
     ecam = page.evaluate("""() => { const t = document.createElement('i'); t.style.color = 'var(--ecam-amber)'; document.body.append(t);
       const want = getComputedStyle(t).color; t.remove();
-      return [want, getComputedStyle(document.querySelector('#tok-bar .left')).backgroundColor, document.getElementById('tok-used').textContent] }""")
+      return [want, getComputedStyle(document.querySelector('#tok-bar .fill')).backgroundColor, document.getElementById('tok-used').textContent] }""")
     check(ecam[0] == ecam[1] and ecam[2] == "사용 497개", f"다음 실행에 모자라면 막대 ECAM 호박색 ({ecam})")
     goto(page, "settings")
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('남은 토큰 3개')", timeout=10000)
@@ -792,9 +796,9 @@ with sync_playwright() as pw:
           and "bad" in page.get_attribute("#token-line", "class")
           and all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")) and not page.is_disabled("#stop-erpia"),
           "0 이하면 빨간 글, 실행 단추 셋 잠김 (ERPia 종료는 그대로)")
-    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'bad' && document.querySelector('#tok-bar .left').style.width === '0%'", timeout=10000)
-    check(page.evaluate("document.querySelector('#tok-bar .left').style.width") == "0%"
-          and page.text_content("#tok-left") == "남은 토큰 0개", "0 이하면 막대가 비고 빨강")
+    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'bad' && document.querySelector('#tok-bar .fill').style.width === '100%'", timeout=10000)
+    check(page.evaluate("document.querySelector('#tok-bar .fill').style.width") == "100%"
+          and page.text_content("#tok-left") == "남은 토큰 0개", "다 쓰면 막대 전체가 빨강")
     db_patch(f"{LIVE}/schedule", {"last_error": "토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요"})   # PC 의 예약기가 토큰 0 으로 거절했다
     goto(page, "settings")
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('토큰이 없어')", timeout=10000)
@@ -1515,11 +1519,11 @@ with sync_playwright() as pw:
     check(page.is_hidden("#token-card"), "통장이 없으면 유저의 토큰 카드도 없다")
     call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "200"}, "since": {"stringValue": "2026-01-01T00:00:00"}}}, OWNER)
     db_patch(LIVE, {"tokens": {"balance": 150, "cost": {"all": 6, "prepare": 2, "routine": 4}}})
-    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'good' && document.querySelector('#tok-bar .left').style.width === '75%'", timeout=10000)
-    vt = page.evaluate("""() => [!!document.querySelector('#token-card #token-box'), document.querySelector('#tok-bar .left').style.width,
+    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'good' && document.querySelector('#tok-bar .fill').style.width === '25%'", timeout=10000)
+    vt = page.evaluate("""() => [!!document.querySelector('#token-card #token-box'), document.querySelector('#tok-bar .fill').style.width,
       document.getElementById('token-line').textContent,
       document.getElementById('token-card').compareDocumentPosition(document.querySelector('.card.recent')) & Node.DOCUMENT_POSITION_FOLLOWING]""")
-    check(vt[0] and not page.is_hidden("#token-card") and vt[1] == "75%" and vt[2] == "전체 실행 1번에 6개 · 약 25번 더 실행할 수 있습니다." and vt[3],
+    check(vt[0] and not page.is_hidden("#token-card") and vt[1] == "25%" and vt[2] == "전체 실행 1번에 6개 · 약 25번 더 실행할 수 있습니다." and vt[3],
           f"유저: 본문 맨 위 토큰 카드에 같은 막대 ('최근 20일' 위) ({vt})")
     db_patch(LIVE, {"tokens": None})
     page.wait_for_function("document.getElementById('token-card')?.classList.contains('hide')", timeout=10000)

@@ -74,7 +74,7 @@ const HTML = `
           </div>
           <div class="tok hide" id="token-box">
             <div class="tok-head"><span>토큰</span><span class="num" id="tok-left"></span></div>
-            <div class="tok-bar" id="tok-bar" role="img"><span class="left"></span></div>
+            <div class="tok-bar" id="tok-bar" role="img"><span class="fill"></span></div>
             <div class="tok-foot" id="tok-foot"><span class="num" id="tok-used"></span><span class="num" id="tok-granted"></span></div>
             <div class="msg" id="token-line"></div>
           </div>
@@ -584,7 +584,9 @@ function paintButtons() {
 
 // --- 토큰 (2026-10-06, 2부 · 막대 2026-10-19): 남은 토큰 막대 + 한 줄. 통장이 없는 업체(live.tokens 없음)는 없다 ------
 // 남은 토큰이 1 이상이면 실행은 된다 (도중에 떨어져도 끝까지) - 이번 실행에 드는 것보다 적으면 호박색, 0 이하면 빨강·잠금.
-// 막대 = 충전 합계(wallet.granted) 대비 남은 것, 색은 환경설정 안내와 같은 ECAM. 관리자는 실행 단추 아래, 유저는 본문 맨 위 카드
+// 막대 = 충전 합계(wallet.granted) 중 쓴 양을 채운다. 색은 환경설정 안내와 같은 ECAM - 남은 것이 20% 미만이거나 다음 실행에 모자라면
+// 호박색, 0 이하면 빨강 (사용자 2026-10-19). 관리자는 실행 단추 아래, 유저는 본문 맨 위 카드
+const TOKEN_LOW = 0.2;
 let walletAt, walletP = null, tokSeq = 0;
 function walletOf(balance) {                   // 충전 합계 - 남은 토큰이 바뀔 때만 다시 읽는다 (막대·사용량 카드가 같이 쓴다, 2026-10-14 읽기 한도)
   if (walletAt !== balance || !walletP) {
@@ -614,7 +616,9 @@ function paintTokens() {
     const g = Number(w?.granted), ok = Number.isFinite(g) && g > 0;
     show(bar, ok); show($("tok-foot"), ok);      // 충전 합계를 모르면 막대 없이 글자만
     if (!ok) return;
-    bar.querySelector(".left").style.width = `${Math.round(Math.min(Math.max(t.balance / g, 0), 1) * 100)}%`;
+    // 채운 칸 = 쓴 양 (사용자 2026-10-19: 70% 를 썼으면 막대도 70% 차야 한다). 색은 남은 상태 - 다 쓰면 막대 전체가 빨강
+    bar.querySelector(".fill").style.width = `${Math.round(Math.min(Math.max((g - t.balance) / g, 0), 1) * 100)}%`;
+    if (state === "good" && t.balance < g * TOKEN_LOW) bar.dataset.state = "warn";   // 글줄은 그대로 (다음 실행에 모자랄 때만 경고)
     $("tok-used").textContent = `사용 ${count(g - t.balance)}개`;
     $("tok-granted").textContent = `충전 합계 ${count(g)}개`;
     bar.title = `남은 토큰 ${count(t.balance)}개, 충전 합계 ${count(g)}개`;
