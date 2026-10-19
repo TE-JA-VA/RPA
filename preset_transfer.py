@@ -180,7 +180,8 @@ def apply(items):
             presets.append(st.blank_preset(len(presets) + 1))
         presets[no - 1] = {"no": no, "name": obj["name"], "code": obj["code"], "saved_at": now, "record": obj["record"]}
         url = obj["record"].get("start_url") or ""
-        if old.get("record") and old_site and old["code"] == obj["code"]:
+        # 같은 사이트라도 짝이 이미 깨진 칸(계정 Code 가 다름)은 계정을 두지 않는다 - 새 Code 로 덮어 세탁하지 않게 (이슈 #13 다시 검토)
+        if old.get("record") and old_site and old["code"] == obj["code"] and not st.login_mismatch(old_site, old["code"]):
             sites[key] = dict(old_site, URL=url or old_site.get("URL", ""), note=obj["name"], Preset=no, Code=obj["code"])
         else:
             sites[key] = {"URL": url, "ID": "", "PW": "", "Action": [st.REPLAY_ACTION], "Stts": 9, "Preset": no, "Code": obj["code"], "note": obj["name"]}
@@ -217,8 +218,9 @@ def restore(slots):
             presets.append(st.blank_preset(len(presets) + 1))
         presets[no - 1] = dict(bk["preset"], no=no)
         key = st.preset_site_key(no)
-        if isinstance(bk.get("site"), dict):     # 번호·Code 는 돌린 칸 기준 - 옵저버가 보관 파일을 다른 번호로 옮겼을 수 있다 (이슈 #13 검토)
-            sites[key] = dict(bk["site"], Preset=no, Code=str(bk["preset"].get("code") or ""))
+        if isinstance(bk.get("site"), dict):     # 번호는 돌린 칸 기준 - 옵저버가 보관 파일을 다른 번호로 옮겼을 수 있다 (이슈 #13 검토).
+            # Code 는 보관본에 적힌 것 그대로 (보관할 때 함께 담은 짝) - 깨진 짝을 되살려도 짝 확인에 걸린다. 없는 옛 보관만 보관 프리셋 code
+            sites[key] = {"Code": str(bk["preset"].get("code") or ""), **bk["site"], "Preset": no}
         else:
             sites.pop(key, None)
         done.append(no)

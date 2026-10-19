@@ -262,6 +262,22 @@ done, rejected = pt.restore([7])
 check("B2: 되돌리기는 보관본의 Preset 이 아니라 돌린 칸 번호를 쓰고 Code 를 적는다 (옵저버가 보관 파일을 다른 번호로 옮긴 뒤)",
       done == [7] and site(7)["Preset"] == 7 and site(7)["Code"] == "777" and site(7)["ID"] == "mover" and st.read_presets()[6]["code"] == "777", str((done, rejected, site(7))))
 
+print("=== 12. 다시 검토 (이슈 #13): 깨진 짝은 넣기·되돌리기로 세탁되지 않는다 ===")
+cfg = st.read_user_config()
+cfg[st.SITES_SECTION]["PRESET3"].update(ID="seller-of-012", Code="012", Stts=0)   # 설정 쓰기만 실패한 뒤처럼 - 칸은 090, 계정은 012 것
+st.write_user_config(cfg)
+done, rejected = pt.apply([(dict(good, name="네이버 또", code="090", record=REC2), 3)])
+check("C1: 깨진 짝인 칸에 같은 사이트코드를 넣어도 옛 계정을 두지 않는다 (비우고 끔)",
+      done == [3] and site(3)["ID"] == "" and site(3)["Stts"] == 9 and site(3)["Code"] == "090"
+      and not next(s for s in st.preset_summary() if s["no"] == 3)["has_login"], str(site(3)))
+st.write_json_atomic(pt.backup_path(6), {"preset": {"no": 6, "name": "깨진보관", "code": "066", "saved_at": None, "record": REC2},
+                                         "site": {"URL": "https://x", "ID": "seller-of-012", "PW": "x", "Action": ["replay"], "Stts": 0,
+                                                  "Preset": 6, "Code": "012", "note": "깨진보관"}})
+done, rejected = pt.restore([6])
+check("C2: 되돌리기는 보관본에 적힌 Code 를 그대로 둔다 - 깨진 짝을 되살려도 짝 확인에 걸린다",
+      done == [6] and site(6)["Code"] == "012" and st.login_mismatch(site(6), "066")
+      and not next(s for s in st.preset_summary() if s["no"] == 6)["has_login"], str((done, rejected, site(6))))
+
 print()
 print("실패: " + (", ".join(fails) if fails else "없음"))
 sys.exit(1 if fails else 0)
