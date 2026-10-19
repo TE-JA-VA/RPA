@@ -1187,6 +1187,171 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         os.environ.pop("RPA_USER_CONFIG", None)
 
+print("\n12절 프리셋 보내기·받기·되돌리기 명령과 전송 자리 (설계 2026-10-19 4.1·4.3·4.4·5절)")
+import time  # noqa: E402
+
+
+def hist(run_id):
+    return next((r for r in st.read_history(program="observer") if r.get("run_id") == run_id), {})
+
+for t in ("export_preset", "import_preset", "restore_preset"):
+    check(ag.decide({"type": t, "state": "queued", "expires_at": NOW + 60, "by": "u1"}, NOW)[0] == "run", f"{t} 은(는) 아는 명령")
+check(ag.TRANSFER_TTL_SEC == 6 * 3600 and ag.transfer_path("c_demo", "abcdefghij0123456789") == "apps/rpa/transfers/c_demo/abcdefghij0123456789",
+      "전송 자리 apps/rpa/transfers/{cid}/{tid}, 만료 6시간")
+check(ag.live_extras({})["preset_transfer"] == 1, "현황(live)에 preset_transfer 1 - 업체 웹이 새 명령을 아는 PC 만 고른다")
+
+
+class TransferClient(RecClient):
+    """명령 자리(patch) + 전송 자리(get/put/delete). gets 에 둔 값을 차례로 돌려준다 (처음엔 None 두 번 → 세 번째 도착)."""
+    def __init__(self, store=None, gets=None):
+        super().__init__()
+        self.store = dict(store or {})
+        self.gets = list(gets) if gets is not None else None
+        self.puts, self.deletes, self.get_calls = [], [], []
+
+    def get(self, path, params=None):
+        self.get_calls.append((path, params))
+        if self.gets is not None and self.gets:
+            return self.gets.pop(0)
+        if params and params.get("shallow"):
+            node = self.store.get(path) or {}
+            return {k: True for k in node} or None
+        parts = path.split("/")
+        for base, node in self.store.items():
+            if path == base:
+                return node
+            if path.startswith(base + "/"):
+                v = node
+                for k in path[len(base) + 1:].split("/"):
+                    v = v.get(k) if isinstance(v, dict) else None
+                return v
+        return None
+
+    def put(self, path, value):
+        self.puts.append((path, value))
+
+    def delete(self, path):
+        self.deletes.append(path)
+
+
+TID = "abcdefghij0123456789"
+REC_T = {"version": 1, "start_url": "https://x/login", "record_date": "2026-10-19",
+         "steps": [{"kind": "goto", "page": 0, "frame": {"main": True, "name": "", "path": "/login"}, "url": "/login", "gap": 0, "href": "https://x/login"}]}
+with tempfile.TemporaryDirectory() as d:
+    os.environ["RPA_USER_CONFIG"] = os.path.join(d, "config", "RPA_UserConfig.json")
+    os.environ["RPA_PROGRAMDATA"] = os.path.join(d, "programdata")
+    os.environ["RPA_STATUS_DIR"] = os.path.join(d, "status")
+    os.environ["RPA_DASHBOARD_DRY_RUN"] = "1"
+    os.makedirs(os.path.join(d, "config"))
+    os.makedirs(os.path.join(d, "programdata", "config"))
+    try:
+        import rpa_status as st
+        import preset_transfer as pt
+        st.write_user_config({"LogIn": {"AdminCode": "x", "ID": "a", "PW": "비밀-시험"}, "Sites": {
+            "PRESET1": {"URL": "https://x/login", "ID": "seller", "PW": st.seal("몰-비밀"), "Action": ["replay"], "Stts": 0, "Preset": 1, "note": "지마켓"}}})
+        st.write_presets([{"no": 1, "name": "지마켓", "code": "012", "saved_at": None, "record": REC_T}, st.blank_preset(2)])
+        import rpa_dashboard as dash
+        dash.set_policy(2, [], False, 10, None)       # 업체 프리셋 수 10 - 칸 3 에 넣을 수 있다
+        clock = [3000.0]
+        slept = []
+
+        def acts_with(client, busy=lambda: False):
+            return ag.real_actions(client=client, cid="c_demo", pc_id="pc_office", busy=busy,
+                                   clock=lambda: clock[0], sleep=lambda s: (slept.append(s), clock.__setitem__(0, clock[0] + s)))
+
+        # 보내기 (export_preset) - 전송 자리에 PUT, 아이디·비밀번호 없이
+        tc = TransferClient()
+        meta = {"key": "k1", "by": "admin-tool", "expires_at": 3600}
+        msg = acts_with(tc)["export_preset"]({"tid": TID, "nos": [1], "with_phone": False}, meta)
+        check(msg == "프리셋 1개를 보냈습니다." and len(tc.puts) == 1 and tc.puts[0][0] == f"apps/rpa/transfers/c_demo/{TID}", f"전송 자리에 PUT ({msg}, {tc.puts})")
+        sent = tc.puts[0][1]
+        check(sent["from_pc"] == "pc_office" and sent["by"] == "admin-tool" and sent["expires_at"] - sent["created_at"] == 6 * 3600 * 1000,
+              f"from_pc·by·만료 6시간 ({ {k: v for k, v in sent.items() if k != 'presets'} })")
+        p0 = sent["presets"][0]
+        check(p0["kind"] == "autopilot-preset" and p0["no"] == 1 and p0["name"] == "지마켓" and p0["record"] == REC_T and p0["from"] == {"cid": "c_demo", "pcId": "pc_office", "no": 1}
+              and "seller" not in json.dumps(sent, ensure_ascii=False) and "몰-비밀" not in json.dumps(sent, ensure_ascii=False) and "ID" not in p0 and "PW" not in p0,
+              "보낸 프리셋에 아이디·비밀번호 없음")
+        last = hist("preset_k1")
+        check(last.get("log_tail") == ["총괄 계정이 프리셋 1 (지마켓)을(를) 가져갔습니다."], f"총괄이 가져가면 실행 기록 한 건 ({last.get('log_tail')})")
+        cl, cmds = make_cmds(acts_with(TransferClient()))
+        cmds.handle("k2", {"type": "export_preset", "by": "u1", "expires_at": 3600, "state": "queued", "args": {"tid": "a/b", "nos": [1]}}, 3000.0)
+        check(cl.patches[-1][1]["state"] == "failed" and "전송" in cl.patches[-1][1]["result"], f"나쁜 tid 는 failed ({cl.patches[-1][1]['result']})")
+        cl, cmds = make_cmds(acts_with(TransferClient()))
+        cmds.handle("k2b", {"type": "export_preset", "by": "u1", "expires_at": 3600, "state": "queued", "args": {"tid": TID, "nos": [2]}}, 3000.0)
+        check(cl.patches[-1][1]["state"] == "failed" and "기록이 없습니다" in cl.patches[-1][1]["result"], f"빈 칸은 failed ({cl.patches[-1][1]['result']})")
+
+        # 받기 (import_preset) - 전송이 처음 두 번 없다가 세 번째에 도착
+        fixed = dict(p0, name="지마켓 고침", record=dict(REC_T, steps=REC_T["steps"] + [{"kind": "click", "page": 0, "frame": REC_T["steps"][0]["frame"], "url": "/", "gap": 10,
+                                                                                            "target": {"css": "body > a", "text": "엑셀"}}]))
+        transfer = dict(sent, presets=[fixed])
+        tc = TransferClient(gets=[None, None, transfer])
+        slept.clear()
+        msg = acts_with(tc)["import_preset"]({"tid": TID, "slots": [1]}, {"key": "k3", "by": "admin-tool", "expires_at": 3600})
+        check(msg == "총괄 계정이 프리셋 1을(를) 변경하였습니다. (이전 기록 보관)", f"결과 글 ({msg})")
+        check(slept == [2, 2] and tc.deletes == [f"apps/rpa/transfers/c_demo/{TID}"], f"2초마다 기다렸다 도착하면 넣고 전송 자리 DELETE ({slept}, {tc.deletes})")
+        p1 = st.read_presets()[0]
+        s1 = st.read_user_config()["Sites"]["PRESET1"]
+        check(p1["name"] == "지마켓 고침" and len(p1["record"]["steps"]) == 2 and s1["ID"] == "seller" and st.unseal(s1["PW"]) == "몰-비밀" and s1["Stts"] == 0,
+              "같은 사이트코드: 이름·기록만 바뀌고 아이디·비밀번호·켬 그대로")
+        check(os.path.isfile(pt.backup_path(1)) and st.preset_summary()[0]["backup"] is True, "이전 기록 보관")
+        last = hist("preset_k3")
+        check(last.get("log_tail") == ["총괄 계정이 프리셋 1을(를) 변경하였습니다. (이전 기록 보관)"] and last.get("state") == "success",
+              f"실행 기록 한 건 ({last.get('log_tail')})")
+        # 업체 안 복사 - 결과 글, 거절된 칸은 뒤에
+        copy_t = dict(sent, from_pc="pc_b", by="u1", presets=[dict(fixed, no=2, code="034", name="쿠팡"), dict(fixed, no=3, code="012", name="겹침")])
+        tc = TransferClient(gets=[copy_t])
+        msg = acts_with(tc)["import_preset"]({"tid": TID, "slots": [2, 3]}, {"key": "k4", "by": "u1", "expires_at": 3600})
+        check(msg == "PC pc_b의 프리셋 1개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오. 변경하지 못한 프리셋: 3 (프리셋 1와(과) 같은 사이트코드 012를 사용합니다.)",
+              f"복사 결과 글 + 거절된 칸 ({msg})")
+        s2 = st.read_user_config()["Sites"]["PRESET2"]
+        check(st.read_presets()[1]["name"] == "쿠팡" and s2["ID"] == "" and s2["PW"] == "" and s2["Stts"] == 9, "다른 사이트코드 새 칸: 아이디·비밀번호 없이 꺼짐")
+        # 바쁘면(옵저버·ACTOR) 마감까지 기다렸다 실패
+        tc = TransferClient(gets=[transfer])
+        slept.clear()
+        try:
+            acts_with(tc, busy=lambda: True)["import_preset"]({"tid": TID, "slots": [1]}, {"key": "k5", "by": "admin-tool", "expires_at": clock[0] + 7})
+            check(False, "바쁘면 실패")
+        except RuntimeError as e:
+            check(str(e) == "옵저버 또는 ACTOR가 실행 중이라 변경하지 못했습니다." and tc.deletes == [] and len(slept) >= 3, f"바쁘면 마감까지 기다렸다 실패 ({e}, {slept})")
+        tc = TransferClient(gets=[None] * 10)
+        try:
+            acts_with(tc)["import_preset"]({"tid": TID, "slots": [1]}, {"key": "k6", "by": "admin-tool", "expires_at": clock[0] + 5})
+            check(False, "전송이 안 오면 실패")
+        except RuntimeError as e:
+            check(str(e) == "보낼 PC에서 프리셋이 도착하지 않았습니다.", f"전송이 안 오면 마감에 실패 ({e})")
+        # 되돌리기 (restore_preset)
+        tc = TransferClient()
+        msg = acts_with(tc)["restore_preset"]({"nos": [1, 2]}, {"key": "k8", "by": "admin-tool", "expires_at": 3600})
+        check(msg == "프리셋 1을(를) 이전 기록으로 되돌렸습니다. 변경하지 못한 프리셋: 2 (보관된 이전 기록이 없습니다.)", f"되돌리기 결과 ({msg})")
+        check(st.read_presets()[0]["name"] == "지마켓" and len(st.read_presets()[0]["record"]["steps"]) == 1 and not os.path.isfile(pt.backup_path(1)), "칸 1 이 바꾸기 전으로")
+        check(hist("preset_k8").get("log_tail", [""])[0].startswith("프리셋 1을(를) 이전 기록으로 되돌렸습니다."), "되돌리기도 실행 기록 한 건")
+        try:
+            acts_with(tc)["restore_preset"]({"nos": [1]}, {"key": "k9", "by": "admin-tool", "expires_at": 3600})
+            check(False, "보관 없음")
+        except RuntimeError as e:
+            check("보관된 이전 기록이 없습니다" in str(e), f"되돌릴 것이 없으면 failed ({e})")
+        # Commands.handle 은 import_preset 을 스레드로 - 곧바로 돌아오고, 끝난 뒤 done 패치
+        tc = TransferClient(gets=[transfer])
+        cmds = ag.Commands(tc, "c_demo", "pc_office", acts_with(tc))
+        got = cmds.handle("k7", {"type": "import_preset", "by": "admin-tool", "expires_at": 3600, "state": "queued", "args": {"tid": TID, "slots": [1]}}, 3000.0)
+        check(got == "running" and tc.patches[-1][1]["state"] == "running", f"handle 은 running 으로 표시하고 곧 돌아온다 ({got})")
+        for _ in range(100):
+            if tc.patches[-1][1].get("state") == "done":
+                break
+            time.sleep(0.05)
+        check(tc.patches[-1][1]["state"] == "done" and "변경하였습니다" in tc.patches[-1][1]["result"], f"스레드가 끝나면 done ({tc.patches[-1][1]})")
+        # 전송 자리 정리 - 만료된 것만 지운다 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
+        tc = TransferClient(store={"apps/rpa/transfers/c_demo": {"old00000000000000000": {"expires_at": 999, "presets": [p0]},
+                                                                 "new00000000000000000": {"expires_at": 5000, "presets": [p0]}}})
+        n = ag.cleanup_transfers(tc, "c_demo", 1000)
+        check(n == 1 and tc.deletes == ["apps/rpa/transfers/c_demo/old00000000000000000"], f"만료 1건만 DELETE ({n}, {tc.deletes})")
+        check(all(p == "apps/rpa/transfers/c_demo" and (params or {}).get("shallow") or p.endswith("/expires_at") for p, params in tc.get_calls),
+              f"목록은 shallow, 만료만 읽는다 (프리셋 내용을 내려받지 않는다) ({tc.get_calls})")
+        check(ag.cleanup_transfers(TransferClient(), "c_demo", 1000) == 0, "전송이 없으면 0")
+    finally:
+        for k in ("RPA_USER_CONFIG", "RPA_PROGRAMDATA", "RPA_STATUS_DIR", "RPA_DASHBOARD_DRY_RUN"):
+            os.environ.pop(k, None)
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

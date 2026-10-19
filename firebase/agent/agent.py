@@ -456,11 +456,48 @@ class Uploader:
 # ---------------------------------------------------------------------------
 # 명령
 # ---------------------------------------------------------------------------
-KNOWN_TYPES = ("launch", "stop_erpia", "stop_rpa","set_modules", "set_schedule", "set_presets", "set_parallel", "resume_repeat", "update", "rollback")
+KNOWN_TYPES = ("launch", "stop_erpia", "stop_rpa","set_modules", "set_schedule", "set_presets", "set_parallel", "resume_repeat", "update", "rollback",
+               "export_preset", "import_preset", "restore_preset")
 ADMIN_ONLY_TYPES = ("update", "rollback")   # 관리 화면(Admin SDK)만 - DB 규칙의 type 목록에도 없다 (자동 업데이트 10절)
 ADMIN_TOOL_BY = "admin-tool"
 VERSION_RE = re.compile(r"\d{4}\.\d{2}\.\d{2}-\d+")
 HEARTBEAT_SEC = 5   # 화면은 HEARTBEAT_STALE_SEC(20초) 넘게 없으면 '끊김' - 네 번 놓쳐야 끊김이다
+# 프리셋 전송 (설계 2026-10-19 5절): 보낸 PC 가 apps/rpa/transfers/{cid}/{tid} 에 올리고 받은 쪽이 지운다. 아무도 안 지우면 6시간 뒤 주기 점검이 지운다
+META_TYPES = ("export_preset", "import_preset", "restore_preset")   # handler 가 action(args, meta) - meta = {key, by, expires_at}
+SLOW_TYPES = ("import_preset", "restore_preset")   # 옵저버·ACTOR 가 끝나길 기다린다 - running 표시 뒤 스레드에서 (명령 흐름을 막지 않게)
+TRANSFER_TTL_SEC = 6 * 3600
+TRANSFER_CLEAN_SEC = 600
+TRANSFER_RE = re.compile(r"^[A-Za-z0-9_-]{16,40}$")
+PRESET_TRANSFER = 1    # live 에 싣는 표시 - 업체 웹이 이 명령을 아는 PC 만 복사 상대로 고른다 (옛 버전 PC 는 키가 없다)
+BUSY_TEXT = "옵저버 또는 ACTOR가 실행 중이라 변경하지 못했습니다."
+
+
+def transfer_path(cid, tid, app=APP):
+    return f"apps/{app}/transfers/{cid}/{tid}"
+
+
+def live_extras(snap):
+    """현황 스냅숏에 이 에이전트의 능력 표시를 더한다."""
+    snap["preset_transfer"] = PRESET_TRANSFER
+    return snap
+
+
+def cleanup_transfers(client, cid, now_ms, app=APP):
+    """만료(expires_at < now_ms)된 전송 자리를 지운다 → 지운 수. 목록은 shallow 로, 만료 시각만 읽는다 (프리셋 내용은 안 내려받는다).
+    못 읽으면 0, 인증이 죽었으면 AuthError 그대로."""
+    base = f"apps/{app}/transfers/{cid}"
+    n = 0
+    try:
+        for tid in (client.get(base, {"shallow": "true"}) or {}):
+            exp = client.get(f"{base}/{tid}/expires_at")
+            if isinstance(exp, (int, float)) and exp < now_ms:
+                client.delete(transfer_path(cid, tid, app))
+                n += 1
+    except fb.AuthError:
+        raise
+    except Exception as e:
+        log(f"전송 자리 정리 실패: {type(e).__name__}")
+    return n
 
 
 def decide(cmd, now):
@@ -485,9 +522,11 @@ class Commands:
     """명령 하나를 받아 상태를 옮긴다. 한 번에 하나씩만 부른다."""
 
     def __init__(self, client, cid, pc_id, actions):
+        import threading
         self._client = client
         self._base = app_path("commands", cid, pc_id)
         self._actions = actions
+        self._slow_lock = threading.Lock()   # 기다리는 명령(SLOW_TYPES)은 한 번에 하나
 
     def _mark(self, cmd_id, **fields):
         """상태를 쓴다. 못 쓰면 False (에이전트는 계속 돈다)."""
@@ -512,10 +551,26 @@ class Commands:
             return "deferred"
         kind = cmd.get("type")
         action = self._actions.get(kind)
-        try:
+        meta = {"key": cmd_id, "by": cmd.get("by"), "expires_at": cmd.get("expires_at")}
+
+        def call():
             if action is None:
                 raise RuntimeError(f"이 에이전트는 '{kind}'을(를) 실행할 수 없습니다.")
-            message = action(cmd.get("args")) or "완료"
+            return action(cmd.get("args"), meta) if kind in META_TYPES else action(cmd.get("args"))
+
+        if kind in SLOW_TYPES and action is not None:
+            import threading
+            threading.Thread(target=self._finish_slow, args=(cmd_id, call), daemon=True, name=f"cmd-{kind}").start()
+            return "running"
+        return self._finish(cmd_id, call)
+
+    def _finish_slow(self, cmd_id, call):
+        with self._slow_lock:
+            self._finish(cmd_id, call)
+
+    def _finish(self, cmd_id, call):
+        try:
+            message = call() or "완료"
             self._mark(cmd_id, state="done", result=str(message)[:500], ended_at=int(time.time()))
             return "done"
         except Exception as e:
@@ -608,12 +663,15 @@ class Policy:
         return got
 
 
-def real_actions(policy=None, limits=None, start_update=None):
+def real_actions(policy=None, limits=None, start_update=None, client=None, cid=None, pc_id=None, busy=None, clock=time.time, sleep=time.sleep):
     """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)
-    limits: 업체 정책을 지금 읽어 (limit, off, wellife) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)"""
+    limits: 업체 정책을 지금 읽어 (limit, off, wellife) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)
+    client·cid·pc_id: 프리셋 전송 자리를 읽고 쓸 때. busy·clock·sleep 은 시험이 바꿔 끼운다."""
+    import socket
     import rpa_dashboard as dash
     import rpa_status as st
     import rpa_update as upd
+    import preset_transfer as pt
 
     def do_launch(args):
         target = (args or {}).get("target") if isinstance(args, dict) else None
@@ -752,8 +810,97 @@ def real_actions(policy=None, limits=None, start_update=None):
         start(back, "rollback")
         return f"이전 버전으로 되돌리기를 예약하였습니다. ({back}) 오토파일럿 실행이 끝나면 바로 적용됩니다."
 
+    # --- 프리셋 보내기·받기·되돌리기 (설계 2026-10-19 4.1·4.3·4.4절). 기록 내용만 오간다 - 아이디·비밀번호·세션은 PC 밖으로 안 나간다
+    def is_busy():
+        return bool(dash.any_rpa_running() or dash.launch_state() is not None or st.observer_open())   # 업데이트의 idle() 과 같은 조건
+
+    busy = busy or is_busy
+
+    def nos_of(args, key):
+        nos = args.get(key) if isinstance(args, dict) else None
+        if not isinstance(nos, list) or not nos or any(not isinstance(n, int) or isinstance(n, bool) for n in nos):
+            raise RuntimeError("프리셋 번호가 올바르지 않습니다.")
+        return nos
+
+    def tid_of(args):
+        tid = args.get("tid") if isinstance(args, dict) else None
+        if not isinstance(tid, str) or not TRANSFER_RE.fullmatch(tid):
+            raise RuntimeError("전송 번호가 올바르지 않습니다.")
+        return tid
+
+    def note(meta, lines):
+        """업체 웹 실행 기록 한 건 (옵저버 줄) - 업체가 모르게 프리셋이 바뀌지 않게."""
+        now = st.now_iso()
+        st.append_history(st.history_record({"run_id": f"preset_{meta.get('key')}", "program": "observer", "program_label": st.LABELS["observer"],
+                                             "host": socket.gethostname(), "state": "success", "started_at": now, "finished_at": now, "log_tail": list(lines)}))
+
+    def rejected_text(rejected):
+        return (" 변경하지 못한 프리셋: " + ", ".join(f"{no} ({why})" for no, why in rejected)) if rejected else ""
+
+    def do_export(args, meta):
+        tid = tid_of(args)
+        nos = nos_of(args, "nos")
+        try:
+            presets = [pt.export_item(n, bool(args.get("with_phone")), {"cid": cid, "pcId": pc_id, "no": n}) for n in nos]
+        except ValueError as e:
+            raise RuntimeError(str(e)) from None
+        now_ms = int(clock() * 1000)
+        client.put(transfer_path(cid, tid), {"by": meta.get("by"), "from_pc": pc_id, "created_at": now_ms,
+                                             "expires_at": now_ms + TRANSFER_TTL_SEC * 1000, "presets": presets})
+        if meta.get("by") == ADMIN_TOOL_BY:
+            note(meta, [f"총괄 계정이 프리셋 {p['no']} ({p['name']})을(를) 가져갔습니다." for p in presets])
+        return f"프리셋 {len(presets)}개를 보냈습니다."
+
+    def wait_for(ready, deadline, why):
+        """ready() 가 참이 될 때까지 2초마다. 마감(초)이 지나면 RuntimeError(why())."""
+        while not ready():
+            if clock() >= deadline:
+                raise RuntimeError(why())
+            sleep(2)
+
+    def do_import(args, meta):
+        tid = tid_of(args)
+        path = transfer_path(cid, tid)
+        got = [None]
+
+        def ready():
+            if got[0] is None:
+                t = client.get(path)
+                got[0] = t if isinstance(t, dict) and isinstance(t.get("presets"), list) and t["presets"] else None
+            return got[0] is not None and not busy()
+
+        wait_for(ready, meta.get("expires_at") or 0, lambda: "보낼 PC에서 프리셋이 도착하지 않았습니다." if got[0] is None else BUSY_TEXT)
+        presets = got[0]["presets"]
+        slots = args.get("slots") if isinstance(args, dict) and args.get("slots") else [p.get("no") for p in presets]
+        done, rejected = pt.apply(list(zip(presets, slots)))
+        try:
+            client.delete(path)                  # 못 지우면 6시간 뒤 주기 점검이 지운다
+        except fb.AuthError:
+            raise
+        except Exception:
+            pass
+        if not done:
+            raise RuntimeError(rejected_text(rejected).strip())
+        if meta.get("by") == ADMIN_TOOL_BY:
+            lines = [f"총괄 계정이 프리셋 {no}을(를) 변경하였습니다. (이전 기록 보관)" for no in done]
+        else:
+            lines = [f"PC {got[0].get('from_pc')}의 프리셋 {len(done)}개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."]
+        note(meta, lines + ([rejected_text(rejected).strip()] if rejected else []))
+        return " ".join(lines) + rejected_text(rejected)
+
+    def do_restore(args, meta):
+        nos = nos_of(args, "nos")
+        wait_for(lambda: not busy(), meta.get("expires_at") or 0, lambda: BUSY_TEXT)
+        done, rejected = pt.restore(nos)
+        if not done:
+            raise RuntimeError(rejected_text(rejected).strip())
+        msg = f"프리셋 {', '.join(str(n) for n in done)}을(를) 이전 기록으로 되돌렸습니다."
+        note(meta, [msg] + ([rejected_text(rejected).strip()] if rejected else []))
+        return msg + rejected_text(rejected)
+
     return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets, "set_parallel": do_parallel,
-            "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback}
+            "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback,
+            "export_preset": do_export, "import_preset": do_import, "restore_preset": do_restore}
 
 
 def send_heartbeat(up, info, install, alive):
@@ -936,7 +1083,8 @@ def run(cfg):
     tokens = Tokens(client, cfg["cid"], prices, next_plan=next_plan)
     dash.TOKEN_GATE = tokens.gate      # 실행 단추·예약이 띄우기 직전에 남은 토큰을 본다 (0 이하면 거절)
     cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"]),
-                                                                   limits=lambda: policy.refresh(force=True)))
+                                                                   limits=lambda: policy.refresh(force=True),
+                                                                   client=client, cid=cfg["cid"], pc_id=cfg["pc_id"]))
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
     # 사용자 설정 한 파일로 옮기기 (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json → RPA_UserConfig.json,
     # 비밀번호 잠금). 실패해도 에이전트는 계속 돈다 - RPA 는 옛 파일이나 평문으로도 돈다
@@ -978,10 +1126,11 @@ def run(cfg):
         """상태와 heartbeat. 1초마다 상태 파일을 보고 바뀌었을 때만 올린다."""
         last = None
         last_beat = 0.0
+        last_clean = 0.0
         recent_key = [None, []]   # (이력 파일 mtime, 오늘) 과 그때 센 요약
         while not stop.is_set():
             try:
-                snap = st.dashboard_snapshot()
+                snap = live_extras(st.dashboard_snapshot())
                 try:
                     snap["modules"] = (st.read_wellife_modules() if st.wellife_policy() else st.read_routine_modules())[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)
                 except Exception:
@@ -1000,6 +1149,9 @@ def run(cfg):
                     snap["parallel"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
                 policy.refresh()
+                if time.time() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
+                    last_clean = time.time()
+                    cleanup_transfers(client, cfg["cid"], int(time.time() * 1000))
                 snap["schedule"] = dash.schedule_live(st.read_settings()["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝 (화면 안내)
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
                 hist_path = os.path.join(st.status_dir(create=False), st.HISTORY_NAME)
