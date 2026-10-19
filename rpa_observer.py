@@ -1123,7 +1123,7 @@ class App:
     def export_file(self):
         """[파일로 내보내기]: 저장된 지금 칸을 프리셋 파일(6절)로. 아이디·비밀번호·인증 휴대폰은 넣지 않는다 (pt.export_item)."""
         p = self.presets[self.cur]
-        if p.get("fresh") or not p["loaded"]:
+        if p.get("fresh") or not (p["loaded"] or p["raw"] or p["head"]):      # 기록한 칸은 저장 뒤에도 loaded 가 없다 (raw·head)
             return self.tell("파일로 내보내기", "저장한 뒤 내보내 주십시오.")
         no = self.cur + 1
         try:

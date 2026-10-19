@@ -589,9 +589,20 @@ check("메일 고르기 단계가 든 파일이면 메일 첨부파일·시작 �
 told = []
 fake = SimpleNamespace(presets=[dict(rr.new_preset(1), fresh=True, loaded=FREC)], cur=0, tell=lambda t, x: told.append(x))
 rr.App.export_file(fake)
-fake.presets[0].update(fresh=False, loaded=None)
+fake.presets[0].update(fresh=False, loaded=None, raw=[], head=None)
 rr.App.export_file(fake)
 check("내보내기: 저장 안 한 칸(fresh)·기록 없는 칸은 '저장한 뒤 내보내 주십시오.'", told == ["저장한 뒤 내보내 주십시오."] * 2, str(told))
+asked, told[:] = [], []
+_orig_export = rr.pt.export_item
+rr.pt.export_item = lambda no, **kw: (asked.append(no), (_ for _ in ()).throw(ValueError("시험")))[1]
+fake.status = SimpleNamespace(config=lambda **kw: None)
+fake.presets[0].update(fresh=False, loaded=None, raw=[{"kind": "goto", "page": 0, "href": "https://x/"}])
+rr.App.export_file(fake)
+fake.presets[0].update(raw=[], head={"steps": []})
+rr.App.export_file(fake)
+rr.pt.export_item = _orig_export
+check("내보내기: 기록해서 저장한 칸(raw 또는 head 있음·loaded None·fresh False) 은 export_item 까지 간다 (Task 6 검토 지적)",
+      asked == [1, 1] and told == [], str((asked, told)))
 check("내보내기 파일 이름은 프리셋_번호_이름.json (파일에 못 쓰는 글자는 _)",
       rr.export_name(3, 'a/b:c*d?e<f>g|h"') == "프리셋_3_a_b_c_d_e_f_g_h_.json", rr.export_name(3, 'a/b:c*d?e<f>g|h"'))
 
