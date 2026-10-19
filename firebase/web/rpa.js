@@ -49,6 +49,7 @@ const HTML = `
     <div class="tiles" id="tiles"></div>
     <div class="cols">
       <div>
+        <div class="card hide" id="token-card"></div>
         <div class="card recent">
           <h2>최근 20일 <span class="muted" id="recent-meta"></span></h2>
           <div class="recent-body">
@@ -71,7 +72,12 @@ const HTML = `
             ${runBtn("run-routine", PLAY, "PROCESS 오토파일럿")}
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
-          <div class="msg" id="token-line" hidden></div>
+          <div class="tok hide" id="token-box">
+            <div class="tok-head"><span>토큰</span><span class="num" id="tok-left"></span></div>
+            <div class="tok-bar" id="tok-bar" role="img"><span class="left"></span></div>
+            <div class="tok-foot" id="tok-foot"><span class="num" id="tok-used"></span><span class="num" id="tok-granted"></span></div>
+            <div class="msg" id="token-line"></div>
+          </div>
           <div class="msg bad" id="repeat-line" hidden></div>
           <button class="apply" id="repeat-resume" hidden>반복 다시 시작</button>
         </div>
@@ -135,6 +141,7 @@ export function mount(el, context) {
   };
   $("repeat-resume").onclick = () => send("resume_repeat", null, "반복 다시 시작");
   show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
+  if (!c.isAdmin) $("token-card").append($("token-box"));   // 남은 토큰 막대는 유저도 본다 - 본문 맨 위 (사용자 2026-10-19)
   paintedRecent = null;
   const strip = $("recent-strip");
   // 폭이 바뀌거나 다시 보이면 칸 크기를 다시 맞추고 오늘(오른쪽 끝)로. 띠 위에서 세로 휠은 가로 스크롤로 (넘칠 때만)
@@ -575,21 +582,44 @@ function paintButtons() {
   paintTokens(); paintRepeat();
 }
 
-// --- 토큰 (2026-10-06, 2부): 실행 단추 아래 늘 보이는 한 줄. 통장이 없는 업체(live.tokens 없음)는 줄이 없다 ------
-// 남은 토큰이 1 이상이면 실행은 된다 (도중에 떨어져도 끝까지) - 이번 실행에 드는 것보다 적으면 노랑, 0 이하면 빨강·잠금
-function paintTokens() {
-  const t = live?.tokens, line = $("token-line");
-  paintUsage();                                          // 통장이 사라졌을 때 카드를 숨기는 것도 여기서
-  line.hidden = typeof t?.balance !== "number";
-  if (line.hidden) return;
-  const all = t.cost?.all ?? 0;
-  if (t.balance <= 0) {
-    line.textContent = `토큰이 없습니다. (남은 토큰 ${t.balance}개) 토큰을 충전한 뒤 실행하여 주십시오.`;
-    line.className = "msg bad";
-  } else {
-    line.textContent = `남은 토큰 ${t.balance}개 · 전체 실행 1번에 ${all}개` + (t.balance < all ? ". 잔여 토큰이 마이너스가 될 수 있습니다." : "");
-    line.className = t.balance < all ? "msg warn" : "msg";
+// --- 토큰 (2026-10-06, 2부 · 막대 2026-10-19): 남은 토큰 막대 + 한 줄. 통장이 없는 업체(live.tokens 없음)는 없다 ------
+// 남은 토큰이 1 이상이면 실행은 된다 (도중에 떨어져도 끝까지) - 이번 실행에 드는 것보다 적으면 호박색, 0 이하면 빨강·잠금.
+// 막대 = 충전 합계(wallet.granted) 대비 남은 것, 색은 환경설정 안내와 같은 ECAM. 관리자는 실행 단추 아래, 유저는 본문 맨 위 카드
+let walletAt, walletP = null, tokSeq = 0;
+function walletOf(balance) {                   // 충전 합계 - 남은 토큰이 바뀔 때만 다시 읽는다 (막대·사용량 카드가 같이 쓴다, 2026-10-14 읽기 한도)
+  if (walletAt !== balance || !walletP) {
+    walletAt = balance;
+    walletP = getDoc(doc(fs, "wallet", c.me.cid)).then((s) => s.data() || null).catch(() => { walletAt = undefined; return undefined; });
   }
+  return walletP;
+}
+const count = (v) => Number(v).toLocaleString("ko-KR");
+function paintTokens() {
+  const t = live?.tokens, line = $("token-line"), bar = $("tok-bar");
+  paintUsage();                                          // 통장이 사라졌을 때 카드를 숨기는 것도 여기서
+  const has = typeof t?.balance === "number";
+  show($("token-box"), has);
+  show($("token-card"), has && !c.isAdmin);
+  if (!has) { tokSeq++; return; }
+  const all = t.cost?.all ?? 0, state = t.balance <= 0 ? "bad" : t.balance < all ? "warn" : "good";
+  if (state === "bad") line.textContent = `토큰이 없습니다. (남은 토큰 ${count(t.balance)}개) 토큰을 충전한 뒤 실행하여 주십시오.`;
+  else if (state === "warn") line.textContent = `남은 토큰 ${count(t.balance)}개 · 전체 실행 1번에 ${count(all)}개. 잔여 토큰이 마이너스가 될 수 있습니다.`;
+  else line.textContent = all > 0 ? `전체 실행 1번에 ${count(all)}개 · 약 ${count(Math.floor(t.balance / all))}번 더 실행할 수 있습니다.` : "";
+  line.className = state === "good" ? "msg" : `msg ${state}`;
+  $("tok-left").textContent = `남은 토큰 ${count(t.balance)}개`;
+  bar.dataset.state = state;
+  const seq = ++tokSeq;
+  walletOf(t.balance).then((w) => {
+    if (seq !== tokSeq) return;                  // 읽는 사이 남은 토큰이 바뀌었다
+    const g = Number(w?.granted), ok = Number.isFinite(g) && g > 0;
+    show(bar, ok); show($("tok-foot"), ok);      // 충전 합계를 모르면 막대 없이 글자만
+    if (!ok) return;
+    bar.querySelector(".left").style.width = `${Math.round(Math.min(Math.max(t.balance / g, 0), 1) * 100)}%`;
+    $("tok-used").textContent = `사용 ${count(g - t.balance)}개`;
+    $("tok-granted").textContent = `충전 합계 ${count(g)}개`;
+    bar.title = `남은 토큰 ${count(t.balance)}개, 충전 합계 ${count(g)}개`;
+    bar.setAttribute("aria-label", bar.title);
+  });
 }
 
 // --- 반복 (3부): 지금 열린 시간대가 멈췄으면 까닭과 [반복 다시 시작] (관리자만) ------------------------------
@@ -614,7 +644,8 @@ async function paintUsage() {
   usageFor = t.balance;
   const seq = ++usageSeq;                      // 읽는 사이 남은 토큰이 바뀌거나 통장이 사라지면 늦게 온 결과는 버린다
   try {
-    const w = (await getDoc(doc(fs, "wallet", c.me.cid))).data();
+    const w = await walletOf(t.balance);
+    if (w === undefined) throw new Error("wallet");   // 못 읽음 - 5분 뒤 다시
     if (seq !== usageSeq) return;
     if (!w) { card.classList.add("hide"); return; }
     const kst = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace(" ", "T");   // PC 기록의 started_at 과 같은 꼴

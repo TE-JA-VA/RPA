@@ -205,6 +205,17 @@
   .msg.bad { color:var(--bad); }
   .msg.warn { color:var(--warn); }
   .u-row { display:flex; justify-content:space-between; gap:12px; font-size:13px; padding:3px 0; }
+  /* 남은 토큰 막대 (사용자 2026-10-19): 남은 칸만 ECAM 색 (넉넉 초록 · 다음 실행에 모자람 호박색 · 0 이하 빨강), 쓴 칸은 바탕 회색 */
+  .tok { margin-top:14px; }
+  #token-card .tok { margin-top:0; }
+  .tok-head, .tok-foot { display:flex; justify-content:space-between; gap:12px; }
+  .tok-head { font-size:13px; font-weight:600; color:var(--strong); }
+  .tok-foot { font-size:12px; color:var(--muted); margin-top:4px; }
+  .tok-bar { display:flex; height:10px; margin-top:6px; border-radius:4px; background:var(--soft); overflow:hidden; }
+  .tok-bar .left { width:0; background:var(--ecam-green); border-radius:4px; box-shadow:2px 0 0 var(--card); transition:width .3s; }
+  .tok-bar[data-state="warn"] .left { background:var(--ecam-amber); }
+  .tok-bar[data-state="bad"] .left { background:var(--ecam-red); }
+  .tok .msg.warn { color:var(--ecam-amber); } .tok .msg.bad { color:var(--ecam-red); }
 
   details summary { cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:14px; color:var(--strong); }
   details summary::-webkit-details-marker { display:none; }
