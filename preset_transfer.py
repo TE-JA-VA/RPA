@@ -49,7 +49,7 @@ def check_file(obj):
     if not isinstance(rec, dict) or not isinstance(rec.get("steps"), list):
         raise ValueError("기록 형식이 올바르지 않습니다.")
     if rec.get("version") != st.RECORD_VERSION:
-        raise ValueError(f"기록 버전이 다릅니다. ({rec.get('version')} - 이 버전은 {st.RECORD_VERSION})")
+        raise ValueError(f"기록 버전이 다릅니다. (파일 {rec.get('version')}, 이 PC {st.RECORD_VERSION})")
     for s in rec["steps"]:
         if not isinstance(s, dict):
             raise ValueError("기록 단계 형식이 올바르지 않습니다.")
@@ -71,9 +71,50 @@ def _code_clash(presets, no, code):
 
 
 def _write_backup(no, preset, site):
+    """보관 파일을 쓴다 → 됐나. 못 쓰면 그 칸은 바꾸지 않는다 (되돌릴 수 없는 변경을 만들지 않게)."""
     path = backup_path(no)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    st.write_json_atomic(path, {"preset": preset, "site": site})
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError:
+        return False
+    return st.write_json_atomic(path, {"preset": preset, "site": site})
+
+
+def _drop_backup(no):
+    try:
+        os.remove(backup_path(no))
+    except OSError:
+        pass
+
+
+def _bad_slots(nos, limit):
+    """칸 번호 검사 → 칸마다 사유 또는 None (nos 와 같은 순서). 정수(bool 제외)·1~limit, 한 번에 같은 칸이 둘이면 둘 다 거절."""
+    dup = [n for n in nos if nos.count(n) > 1]
+    out = []
+    for no in nos:
+        if type(no) is not int:
+            out.append("프리셋 번호가 올바르지 않습니다.")
+        elif no in dup:
+            out.append("받을 프리셋 번호가 중복되어 있습니다.")
+        elif no < 1 or no > limit:
+            out.append(f"프리셋 수({limit}개)를 넘는 칸입니다.")
+        else:
+            out.append(None)
+    return out
+
+
+def _ordered(sites):
+    """PRESETn 칸을 번호 순으로 뒤에 (save_preset_sites 와 같은 순서 - ACTOR 는 dict 순서대로 돈다)."""
+    others = {k: v for k, v in sites.items() if not st.is_preset_site(k)}
+    mine = sorted((k for k in sites if st.is_preset_site(k)), key=lambda k: int(k[len("PRESET"):]))
+    return {**others, **{k: sites[k] for k in mine}}
+
+
+def _write_all(cfg, sites, presets):
+    """설정 먼저, 프리셋 뒤 - 설정 쓰기가 실패해도 '새 기록 + 옛 아이디·비밀번호' 가 남지 않게."""
+    cfg[st.SITES_SECTION] = _ordered(sites)
+    st.write_user_config(cfg)
+    st.write_presets(presets)
 
 
 def apply(items):
@@ -88,26 +129,30 @@ def apply(items):
     limit = st.preset_limit()
     done, rejected = [], []
     now = datetime.datetime.now().isoformat(timespec="seconds")
-    for obj, no in items:
+    for (obj, no), bad in zip(items, _bad_slots([no for _, no in items], limit)):
+        if bad:
+            rejected.append((no, bad))
+            continue
         try:
             check_file(obj)
         except ValueError as e:
             rejected.append((no, str(e)))
             continue
-        if not isinstance(no, int) or no < 1 or no > limit:
-            rejected.append((no, f"프리셋 수({limit}개)를 넘는 칸입니다."))
-            continue
         clash = _code_clash(presets, no, obj["code"])
         if clash:
             rejected.append((no, clash))
             continue
-        while len(presets) < no:
-            presets.append(st.blank_preset(len(presets) + 1))
-        old = presets[no - 1]
+        old = presets[no - 1] if no <= len(presets) else st.blank_preset(no)
         key = st.preset_site_key(no)
         old_site = sites.get(key) if isinstance(sites.get(key), dict) else None
         if old.get("record"):
-            _write_backup(no, old, old_site)
+            if not _write_backup(no, old, old_site):
+                rejected.append((no, "이전 기록을 보관하지 못해 변경하지 않았습니다."))
+                continue
+        else:
+            _drop_backup(no)            # 남아 있던 옛 보관 - [되돌리기]가 방금 넣은 것을 버리고 옛 계정을 되살리지 않게
+        while len(presets) < no:
+            presets.append(st.blank_preset(len(presets) + 1))
         presets[no - 1] = {"no": no, "name": obj["name"], "code": obj["code"], "saved_at": now, "record": obj["record"]}
         url = obj["record"].get("start_url") or ""
         if old.get("record") and old_site and old["code"] == obj["code"]:
@@ -118,9 +163,7 @@ def apply(items):
                 sites[key].update(Phone=obj["phone"], SmsSenders=list(obj["senders"]))
         done.append(no)
     if done:
-        st.write_presets(presets)
-        cfg[st.SITES_SECTION] = sites
-        st.write_user_config(cfg)
+        _write_all(cfg, sites, presets)
     return done, rejected
 
 
@@ -132,7 +175,10 @@ def restore(slots):
         raise FileNotFoundError(st.user_config_path())
     sites = cfg.get(st.SITES_SECTION) if isinstance(cfg.get(st.SITES_SECTION), dict) else {}
     done, rejected, used = [], [], []
-    for no in slots:
+    for no, bad in zip(slots, _bad_slots(list(slots), st.PRESET_MAX)):
+        if bad:
+            rejected.append((no, bad))
+            continue
         path = backup_path(no)
         bk = st.read_json(path) if os.path.isfile(path) else None
         if not isinstance(bk, dict) or not isinstance(bk.get("preset"), dict):
@@ -153,9 +199,7 @@ def restore(slots):
         done.append(no)
         used.append(path)
     if done:
-        st.write_presets(presets)
-        cfg[st.SITES_SECTION] = sites
-        st.write_user_config(cfg)
+        _write_all(cfg, sites, presets)
         for path in used:
             try:
                 os.remove(path)

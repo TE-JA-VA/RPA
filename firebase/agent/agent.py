@@ -470,6 +470,8 @@ TRANSFER_CLEAN_SEC = 600
 TRANSFER_RE = re.compile(r"^[A-Za-z0-9_-]{16,40}$")
 PRESET_TRANSFER = 1    # live 에 싣는 표시 - 업체 웹이 이 명령을 아는 PC 만 복사 상대로 고른다 (옛 버전 PC 는 키가 없다)
 BUSY_TEXT = "옵저버 또는 ACTOR가 실행 중이라 변경하지 못했습니다."
+SLOW_MAX_SEC = 600     # 느린 명령이 기다리는 최대 (만든 쪽 시계가 틀려도 _slow_lock 을 오래 쥐지 않게)
+STALE_TEXT = "PC 프로그램이 다시 시작되어 중단되었습니다. 다시 시도하여 주십시오."
 
 
 def transfer_path(cid, tid, app=APP):
@@ -497,6 +499,24 @@ def cleanup_transfers(client, cid, now_ms, app=APP):
         raise
     except Exception as e:
         log(f"전송 자리 정리 실패: {type(e).__name__}")
+    return n
+
+
+def fail_stale_slow(client, cid, pc_id, now, app=APP):
+    """켤 때 한 번: 지난 에이전트가 running 으로 두고 죽은 느린 명령(SLOW_TYPES)을 failed 로 → 고친 수. 업데이트·재시작으로
+    스레드가 죽으면 영영 running 으로 남는다 (규칙: running→failed 는 agent 가 한다). 못 읽으면 0, 인증이 죽었으면 AuthError 그대로."""
+    base = app_path("commands", cid, pc_id, app)
+    n = 0
+    try:
+        got = client.get(base, {"orderBy": '"state"', "equalTo": '"running"'}) or {}
+        for key, cmd in got.items():
+            if isinstance(cmd, dict) and cmd.get("type") in SLOW_TYPES:
+                client.patch(f"{base}/{key}", {"state": "failed", "result": STALE_TEXT, "ended_at": int(now)})
+                n += 1
+    except fb.AuthError:
+        raise
+    except Exception as e:
+        log(f"끝나지 못한 프리셋 명령 정리 실패: {type(e).__name__}")
     return n
 
 
@@ -834,7 +854,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
                                              "host": socket.gethostname(), "state": "success", "started_at": now, "finished_at": now, "log_tail": list(lines)}))
 
     def rejected_text(rejected):
-        return (" 변경하지 못한 프리셋: " + ", ".join(f"{no} ({why})" for no, why in rejected)) if rejected else ""
+        return (" 변경하지 못한 프리셋이 있습니다. " + ", ".join(f"{no} ({why})" for no, why in rejected)) if rejected else ""
 
     def do_export(args, meta):
         import preset_transfer as pt   # 명령 안에서 - 못 올리면 이 명령만 실패하고 에이전트는 산다
@@ -849,10 +869,11 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
                                              "expires_at": now_ms + TRANSFER_TTL_SEC * 1000, "presets": presets})
         if meta.get("by") == ADMIN_TOOL_BY:
             note(meta, [f"총괄 계정이 프리셋 {p['no']} ({p['name']})을(를) 가져갔습니다." for p in presets])
-        return f"프리셋 {len(presets)}개를 보냈습니다."
+        return f"프리셋 {len(presets)}개를 전송하였습니다."
 
-    def wait_for(ready, deadline, why):
-        """ready() 가 참이 될 때까지 2초마다. 마감(초)이 지나면 RuntimeError(why())."""
+    def wait_for(ready, expires_at, why):
+        """ready() 가 참이 될 때까지 2초마다. 마감 = min(명령 만료, 지금 + SLOW_MAX_SEC) 이 지나면 RuntimeError(why())."""
+        deadline = min(float(expires_at or 0), clock() + SLOW_MAX_SEC)
         while not ready():
             if clock() >= deadline:
                 raise RuntimeError(why())
@@ -866,14 +887,28 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
 
         def ready():
             if got[0] is None:
-                t = client.get(path)
+                try:
+                    t = client.get(path)
+                except fb.AuthError:
+                    raise
+                except Exception as e:           # 망 오류는 마감까지 다시 시도
+                    log(f"전송 자리 읽기 실패: {type(e).__name__}")
+                    return False
                 got[0] = t if isinstance(t, dict) and isinstance(t.get("presets"), list) and t["presets"] else None
             return got[0] is not None and not busy()
 
-        wait_for(ready, meta.get("expires_at") or 0, lambda: "보낼 PC에서 프리셋이 도착하지 않았습니다." if got[0] is None else BUSY_TEXT)
+        wait_for(ready, meta.get("expires_at"), lambda: "보낼 PC에서 프리셋이 도착하지 않았습니다." if got[0] is None else BUSY_TEXT)
         presets = got[0]["presets"]
         slots = args.get("slots") if isinstance(args, dict) and args.get("slots") else [p.get("no") for p in presets]
+        if not isinstance(slots, list) or len(slots) != len(presets):
+            raise RuntimeError("프리셋 번호가 올바르지 않습니다.")
         done, rejected = pt.apply(list(zip(presets, slots)))
+        if done:                                 # 실행 기록 먼저 - 아래 DELETE 에서 인증이 죽어도 업체가 모르는 변경이 없게
+            if meta.get("by") == ADMIN_TOOL_BY:
+                lines = [f"총괄 계정이 프리셋 {no}을(를) 변경하였습니다. (이전 기록 보관)" for no in done]
+            else:
+                lines = [f"PC {got[0].get('from_pc')}의 프리셋 {len(done)}개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."]
+            note(meta, lines + ([rejected_text(rejected).strip()] if rejected else []))
         try:
             client.delete(path)                  # 못 지우면 6시간 뒤 주기 점검이 지운다
         except fb.AuthError:
@@ -882,17 +917,12 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
             pass
         if not done:
             raise RuntimeError(rejected_text(rejected).strip())
-        if meta.get("by") == ADMIN_TOOL_BY:
-            lines = [f"총괄 계정이 프리셋 {no}을(를) 변경하였습니다. (이전 기록 보관)" for no in done]
-        else:
-            lines = [f"PC {got[0].get('from_pc')}의 프리셋 {len(done)}개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."]
-        note(meta, lines + ([rejected_text(rejected).strip()] if rejected else []))
         return " ".join(lines) + rejected_text(rejected)
 
     def do_restore(args, meta):
         import preset_transfer as pt   # 명령 안에서 - 못 올리면 이 명령만 실패하고 에이전트는 산다
         nos = nos_of(args, "nos")
-        wait_for(lambda: not busy(), meta.get("expires_at") or 0, lambda: BUSY_TEXT)
+        wait_for(lambda: not busy(), meta.get("expires_at"), lambda: BUSY_TEXT)
         done, rejected = pt.restore(nos)
         if not done:
             raise RuntimeError(rejected_text(rejected).strip())
@@ -1088,6 +1118,12 @@ def run(cfg):
                                                                    limits=lambda: policy.refresh(force=True),
                                                                    client=client, cid=cfg["cid"], pc_id=cfg["pc_id"]))
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
+    try:
+        n = fail_stale_slow(client, cfg["cid"], cfg["pc_id"], time.time())   # 지난 실행이 running 으로 두고 죽은 프리셋 명령
+        if n:
+            log(f"끝나지 못한 프리셋 명령 {n}건을 실패로 표시하였습니다")
+    except fb.AuthError as e:
+        return e
     # 사용자 설정 한 파일로 옮기기 (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json → RPA_UserConfig.json,
     # 비밀번호 잠금). 실패해도 에이전트는 계속 돈다 - RPA 는 옛 파일이나 평문으로도 돈다
     try:

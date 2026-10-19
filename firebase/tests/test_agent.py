@@ -1212,7 +1212,10 @@ class TransferClient(RecClient):
     def get(self, path, params=None):
         self.get_calls.append((path, params))
         if self.gets is not None and self.gets:
-            return self.gets.pop(0)
+            v = self.gets.pop(0)
+            if isinstance(v, Exception):          # 망 오류·인증 죽음 흉내
+                raise v
+            return v
         if params and params.get("shallow"):
             node = self.store.get(path) or {}
             return {k: True for k in node} or None
@@ -1263,7 +1266,7 @@ with tempfile.TemporaryDirectory() as d:
         tc = TransferClient()
         meta = {"key": "k1", "by": "admin-tool", "expires_at": 3600}
         msg = acts_with(tc)["export_preset"]({"tid": TID, "nos": [1], "with_phone": False}, meta)
-        check(msg == "프리셋 1개를 보냈습니다." and len(tc.puts) == 1 and tc.puts[0][0] == f"apps/rpa/transfers/c_demo/{TID}", f"전송 자리에 PUT ({msg}, {tc.puts})")
+        check(msg == "프리셋 1개를 전송하였습니다." and len(tc.puts) == 1 and tc.puts[0][0] == f"apps/rpa/transfers/c_demo/{TID}", f"전송 자리에 PUT ({msg}, {tc.puts})")
         sent = tc.puts[0][1]
         check(sent["from_pc"] == "pc_office" and sent["by"] == "admin-tool" and sent["expires_at"] - sent["created_at"] == 6 * 3600 * 1000,
               f"from_pc·by·만료 6시간 ({ {k: v for k, v in sent.items() if k != 'presets'} })")
@@ -1301,10 +1304,34 @@ with tempfile.TemporaryDirectory() as d:
         copy_t = dict(sent, from_pc="pc_b", by="u1", presets=[dict(fixed, no=2, code="034", name="쿠팡"), dict(fixed, no=3, code="012", name="겹침")])
         tc = TransferClient(gets=[copy_t])
         msg = acts_with(tc)["import_preset"]({"tid": TID, "slots": [2, 3]}, {"key": "k4", "by": "u1", "expires_at": 3600})
-        check(msg == "PC pc_b의 프리셋 1개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오. 변경하지 못한 프리셋: 3 (프리셋 1와(과) 같은 사이트코드 012를 사용합니다.)",
+        check(msg == "PC pc_b의 프리셋 1개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오. 변경하지 못한 프리셋이 있습니다. 3 (프리셋 1와(과) 같은 사이트코드 012를 사용합니다.)",
               f"복사 결과 글 + 거절된 칸 ({msg})")
         s2 = st.read_user_config()["Sites"]["PRESET2"]
         check(st.read_presets()[1]["name"] == "쿠팡" and s2["ID"] == "" and s2["PW"] == "" and s2["Stts"] == 9, "다른 사이트코드 새 칸: 아이디·비밀번호 없이 꺼짐")
+        # A1: 칸 수가 프리셋 수와 다르면 (zip 이 남는 프리셋을 말없이 버리지 않게), 목록이 아니면
+        for bad_slots in ([2], {"a": 1}):
+            tc = TransferClient(gets=[copy_t])
+            try:
+                acts_with(tc)["import_preset"]({"tid": TID, "slots": bad_slots}, {"key": "k4b", "by": "u1", "expires_at": 3600})
+                check(False, f"칸 수 다름 {bad_slots}")
+            except RuntimeError as e:
+                check(str(e) == "프리셋 번호가 올바르지 않습니다." and tc.deletes == [], f"칸 수가 프리셋 수와 다르면 RuntimeError ({bad_slots}: {e}, {tc.deletes})")
+        # A6: 마감 = min(만료, 시작 + 600초) - 만든 쪽 시계가 틀려도 _slow_lock 을 오래 쥐지 않는다
+        tc = TransferClient(gets=[transfer])
+        slept.clear()
+        t0 = clock[0]
+        try:
+            acts_with(tc, busy=lambda: True)["import_preset"]({"tid": TID, "slots": [1]}, {"key": "k5a", "by": "admin-tool", "expires_at": clock[0] + 100000})
+            check(False, "마감 600초")
+        except RuntimeError as e:
+            check(str(e) == ag.BUSY_TEXT and 598 <= clock[0] - t0 <= 604, f"만료가 멀어도 600초면 포기 ({e}, {clock[0] - t0:.0f}초)")
+        slept.clear()
+        try:
+            acts_with(tc, busy=lambda: True)["restore_preset"]({"nos": [1]}, {"key": "k5b", "by": "admin-tool", "expires_at": clock[0] + 100000})
+            check(False, "마감 600초")
+        except RuntimeError as e:
+            check(str(e) == ag.BUSY_TEXT and 598 <= sum(slept) <= 604, f"되돌리기도 600초면 포기 ({e}, {sum(slept)}초)")
+        clock[0] = 3000.0                 # 뒤 시험의 만료(3600)가 지나지 않게
         # 바쁘면(옵저버·ACTOR) 마감까지 기다렸다 실패
         tc = TransferClient(gets=[transfer])
         slept.clear()
@@ -1322,7 +1349,7 @@ with tempfile.TemporaryDirectory() as d:
         # 되돌리기 (restore_preset)
         tc = TransferClient()
         msg = acts_with(tc)["restore_preset"]({"nos": [1, 2]}, {"key": "k8", "by": "admin-tool", "expires_at": 3600})
-        check(msg == "프리셋 1을(를) 이전 기록으로 되돌렸습니다. 변경하지 못한 프리셋: 2 (보관된 이전 기록이 없습니다.)", f"되돌리기 결과 ({msg})")
+        check(msg == "프리셋 1을(를) 이전 기록으로 되돌렸습니다. 변경하지 못한 프리셋이 있습니다. 2 (보관된 이전 기록이 없습니다.)", f"되돌리기 결과 ({msg})")
         check(st.read_presets()[0]["name"] == "지마켓" and len(st.read_presets()[0]["record"]["steps"]) == 1 and not os.path.isfile(pt.backup_path(1)), "칸 1 이 바꾸기 전으로")
         check(hist("preset_k8").get("log_tail", [""])[0].startswith("프리셋 1을(를) 이전 기록으로 되돌렸습니다."), "되돌리기도 실행 기록 한 건")
         try:
@@ -1330,6 +1357,27 @@ with tempfile.TemporaryDirectory() as d:
             check(False, "보관 없음")
         except RuntimeError as e:
             check("보관된 이전 기록이 없습니다" in str(e), f"되돌릴 것이 없으면 failed ({e})")
+        # A6: 전송 자리 읽기의 망 오류는 다시 시도, 인증 죽음은 그대로 올린다
+        tc = TransferClient(gets=[OSError("망"), transfer])
+        msg = acts_with(tc)["import_preset"]({"tid": TID, "slots": [1]}, {"key": "k3b", "by": "admin-tool", "expires_at": 3600})
+        check("변경하였습니다" in msg and tc.deletes == [f"apps/rpa/transfers/c_demo/{TID}"], f"읽기 망 오류 뒤 다시 읽어 넣는다 ({msg})")
+        tc = TransferClient(gets=[fb.AuthError(401, "TOKEN_EXPIRED"), transfer])
+        try:
+            acts_with(tc)["import_preset"]({"tid": TID, "slots": [1]}, {"key": "k3c", "by": "admin-tool", "expires_at": 3600})
+            check(False, "AuthError 올림")
+        except fb.AuthError:
+            check(tc.deletes == [], "읽기에서 인증이 죽으면 AuthError 그대로 (넣지 않는다)")
+        # A6: 실행 기록은 전송 자리 DELETE 보다 먼저 - DELETE 에서 인증이 죽어도 업체가 모르는 변경이 없다
+
+        class DeleteDies(TransferClient):
+            def delete(self, path):
+                raise fb.AuthError(401, "TOKEN_EXPIRED")
+        tc = DeleteDies(gets=[transfer])
+        try:
+            acts_with(tc)["import_preset"]({"tid": TID, "slots": [1]}, {"key": "k3d", "by": "admin-tool", "expires_at": 3600})
+            check(False, "DELETE AuthError 올림")
+        except fb.AuthError:
+            check(hist("preset_k3d").get("log_tail") == ["총괄 계정이 프리셋 1을(를) 변경하였습니다. (이전 기록 보관)"], "DELETE 가 죽어도 실행 기록은 남는다")
         # Commands.handle 은 import_preset 을 스레드로 - 곧바로 돌아오고, 끝난 뒤 done 패치
         tc = TransferClient(gets=[transfer])
         cmds = ag.Commands(tc, "c_demo", "pc_office", acts_with(tc))
@@ -1348,6 +1396,33 @@ with tempfile.TemporaryDirectory() as d:
         check(all(p == "apps/rpa/transfers/c_demo" and (params or {}).get("shallow") or p.endswith("/expires_at") for p, params in tc.get_calls),
               f"목록은 shallow, 만료만 읽는다 (프리셋 내용을 내려받지 않는다) ({tc.get_calls})")
         check(ag.cleanup_transfers(TransferClient(), "c_demo", 1000) == 0, "전송이 없으면 0")
+        # A6: 켤 때 지난 에이전트가 running 으로 두고 죽은 느린 명령을 failed 로 (업데이트·재시작으로 스레드가 죽으면 영영 running)
+
+        class CmdClient(RecClient):
+            def __init__(self, got):
+                super().__init__()
+                self.got, self.get_calls = got, []
+
+            def get(self, path, params=None):
+                self.get_calls.append((path, params))
+                if isinstance(self.got, Exception):
+                    raise self.got
+                return self.got
+        cc = CmdClient({"s1": {"type": "import_preset", "state": "running", "by": "u1"}, "s2": {"type": "launch", "state": "running"},
+                        "s3": {"type": "restore_preset", "state": "running"}, "s4": "x"})
+        n = ag.fail_stale_slow(cc, "c_demo", "pc_office", 4000)
+        check(n == 2 and sorted(p for p, _ in cc.patches) == ["apps/rpa/commands/c_demo/pc_office/s1", "apps/rpa/commands/c_demo/pc_office/s3"]
+              and all(v == {"state": "failed", "result": "PC 프로그램이 다시 시작되어 중단되었습니다. 다시 시도하여 주십시오.", "ended_at": 4000} for _, v in cc.patches),
+              f"running 인 import/restore_preset 만 failed ({n}, {cc.patches})")
+        check(cc.get_calls == [("apps/rpa/commands/c_demo/pc_office", {"orderBy": '"state"', "equalTo": '"running"'})],
+              f"명령함은 state=running 만 질의한다 (규칙 .indexOn state) ({cc.get_calls})")
+        check(ag.fail_stale_slow(CmdClient(None), "c_demo", "pc_office", 4000) == 0 and ag.fail_stale_slow(CmdClient(OSError("망")), "c_demo", "pc_office", 4000) == 0,
+              "없거나 못 읽으면 0")
+        try:
+            ag.fail_stale_slow(CmdClient(fb.AuthError(401, "USER_DISABLED")), "c_demo", "pc_office", 4000)
+            check(False, "AuthError 올림")
+        except fb.AuthError:
+            check(True, "인증이 죽었으면 AuthError 그대로")
     finally:
         for k in ("RPA_USER_CONFIG", "RPA_PROGRAMDATA", "RPA_STATUS_DIR", "RPA_DASHBOARD_DRY_RUN"):
             os.environ.pop(k, None)

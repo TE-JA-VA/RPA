@@ -201,6 +201,56 @@ check("되돌리기는 4번과 겹쳐 거절", done == [] and rejected == [(1, "
 check("보관은 남고 1번은 099 그대로", os.path.isfile(pt.backup_path(1)) and st.read_presets()[0]["code"] == "099")
 check("프리셋 파일은 여전히 읽힌다 (요약도 됨)", raises(ValueError, st.read_presets) is None and st.preset_summary() is not None)
 
+print("=== 10. 최종 고침 A1~A5 (칸 번호 검사·옛 보관 삭제·쓰기 순서·보관 실패·칸 순서) ===")
+n_before = len(st.read_presets())
+done, rejected = pt.apply([(dict(good, code="120", record=REC2), True)])
+check("A1: True 는 칸 번호가 아니다 (PRESETTrue 칸이 생기지 않는다)", done == [] and rejected == [(True, "프리셋 번호가 올바르지 않습니다.")]
+      and "PRESETTrue" not in st.read_user_config()["Sites"] and len(st.read_presets()) == n_before, f"{done} {rejected}")
+done, rejected = pt.apply([(dict(good, code="121", record=REC2), 8), (dict(good, code="122", record=REC2), 8)])
+check("A1: 한 번에 같은 칸이 두 번 오면 둘 다 거절", done == [] and rejected == [(8, "받을 프리셋 번호가 중복되어 있습니다.")] * 2
+      and len(st.read_presets()) == n_before and site(8) is None, f"{done} {rejected}")
+done, rejected = pt.restore([4, 4])
+check("A1: 되돌리기도 같은 칸 두 번이면 거절", done == [] and rejected == [(4, "받을 프리셋 번호가 중복되어 있습니다.")] * 2, f"{done} {rejected}")
+os.makedirs(os.path.dirname(pt.backup_path(8)), exist_ok=True)
+st.write_json_atomic(pt.backup_path(8), {"preset": {"no": 8, "name": "옛것", "code": "077", "saved_at": None, "record": REC2}, "site": {"ID": "old", "PW": "x"}})
+done, rejected = pt.apply([(dict(good, name="새것", code="123", record=REC2), 8)])
+check("A2: 기록이 없던 칸에 넣으면 남아 있던 옛 보관을 지운다 ([되돌리기]가 옛 계정을 되살리지 않게)", done == [8]
+      and not os.path.isfile(pt.backup_path(8)) and st.preset_summary()[7]["backup"] is False, f"{done} {rejected} {os.path.isfile(pt.backup_path(8))}")
+_orig_atomic = st.write_json_atomic
+st.write_json_atomic = lambda path, data: False
+try:
+    done, rejected = pt.apply([(dict(good, name="보관 실패", code="124", record=REC2), 8)])
+finally:
+    st.write_json_atomic = _orig_atomic
+check("A4: 이전 기록을 보관하지 못하면 그 칸은 바꾸지 않는다", done == [] and rejected == [(8, "이전 기록을 보관하지 못해 변경하지 않았습니다.")]
+      and st.read_presets()[7]["code"] == "123" and site(8)["note"] == "새것", f"{done} {rejected} {st.read_presets()[7]['code']}")
+_orig_wuc = st.write_user_config
+
+
+def _boom(*a, **k):
+    raise OSError("설정 쓰기 실패")
+
+
+st.write_user_config = _boom
+try:
+    e = raises(OSError, pt.apply, [(dict(good, name="설정 실패", code="125", record=REC2), 9)])
+finally:
+    st.write_user_config = _orig_wuc
+check("A3: 설정 쓰기가 실패하면 프리셋 파일도 안 바뀐다 (설정 먼저, 프리셋 뒤)", e is not None and len(st.read_presets()) == 8 and site(9) is None,
+      f"{e} {len(st.read_presets())}")
+keys = list(st.read_user_config()["Sites"])
+check("A5: Sites 의 PRESETn 칸은 번호 순 (ACTOR 는 dict 순서대로 돈다)", keys == ["SITE1", "PRESET1", "PRESET2", "PRESET3", "PRESET4", "PRESET5", "PRESET6", "PRESET8"], str(keys))
+done, rejected = pt.restore([4]) if os.path.isfile(pt.backup_path(4)) else ([], [])
+pt.apply([(dict(good, name="되돌릴 것", code="126", record=REC2), 2)])      # 2 보관 → 되돌리면 칸이 다시 들어간다
+sites = st.read_user_config()["Sites"]
+sites.pop("PRESET2")
+cfg = st.read_user_config()
+cfg["Sites"] = sites
+st.write_user_config(cfg)
+done, rejected = pt.restore([2])
+keys = list(st.read_user_config()["Sites"])
+check("A5: 되돌리기로 다시 들어간 칸도 번호 순", done == [2] and keys == ["SITE1", "PRESET1", "PRESET2", "PRESET3", "PRESET4", "PRESET5", "PRESET6", "PRESET8"], str(keys))
+
 print()
 print("실패: " + (", ".join(fails) if fails else "없음"))
 sys.exit(1 if fails else 0)
