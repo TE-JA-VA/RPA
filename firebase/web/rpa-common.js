@@ -73,18 +73,22 @@ async function sendTo(c, cmds, label, alive) {
   }
 }
 
+/** PC 의 응답(queued → running)은 60초 안에 와야 한다. running 뒤엔 명령 만료(expires_at)까지 지켜본다 - 받을 PC 는 옵저버·ACTOR 가
+ *  끝나길 몇 분 기다릴 수 있다 (import·restore_preset, 설계 2026-10-19 4.3·4.4절). 시험은 window.__replyWaitMs 로 60초를 줄인다 */
 function watchCommand(c, pcId, cmdKey, label, alive) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => { off(); if (alive()) notify("bad", "PC가 응답하지 않습니다."); resolve(); }, 60000);
+    const end = (kind, text) => { clearTimeout(timer); off(); if (alive()) notify(kind, text); resolve(); };
+    let timer = setTimeout(() => end("bad", "PC가 응답하지 않습니다."), window.__replyWaitMs ?? 60000);
+    let started = false;
     const off = onValue(ref(c.db, `${P("commands", c.me.cid, pcId)}/${cmdKey}`), (snap) => {
       const v = snap.val();
       if (!v || !alive()) return;
-      if (v.state === "running") notify("info", `${label} 진행 중`);
-      if (["done", "failed", "expired"].includes(v.state)) {
-        clearTimeout(timer); off();
-        notify(v.state === "done" ? "ok" : "bad", v.result || v.state);
-        resolve();
+      if (v.state === "running" && !started) {
+        started = true; notify("info", `${label} 진행 중`);
+        clearTimeout(timer);
+        timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - Date.now()) + 5000);
       }
+      if (["done", "failed", "expired"].includes(v.state)) end(v.state === "done" ? "ok" : "bad", v.result || v.state);
     });
   });
 }

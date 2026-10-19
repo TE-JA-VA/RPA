@@ -876,6 +876,7 @@ with sync_playwright() as pw:
     check(page.locator("#shop-list label:nth-child(1) .restore").count() == 1 and page.locator("#shop-list .restore").count() == 1, "보관이 있는 줄에만 [되돌리기]")
     asked = []
     page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
+    page.evaluate("window.__replyWaitMs = 3000")   # 응답 대기(60초)를 줄여 시험한다
     page.click("#shop-list label:nth-child(1) .restore")
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('프리셋 되돌리기 명령을 전송하였습니다')", timeout=10000)
     check(asked == ["프리셋 1을(를) 이전 기록으로 되돌리시겠습니까?"], f"되돌리기 확인 창 ({asked})")
@@ -884,8 +885,17 @@ with sync_playwright() as pw:
     check(len(rs) == 1 and rs[0]["args"] == {"nos": [1]}, f"restore_preset 명령 ({rs})")
     check(page.is_checked("#shop-list label:nth-child(1) input") and page.is_disabled("#shop-apply"), "[되돌리기] 를 눌러도 스위치는 안 바뀐다")
     key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "restore_preset")
-    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "프리셋 1을(를) 이전 기록으로 되돌렸습니다.", "started_at": 1, "ended_at": 2})
-    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('되돌렸습니다')", timeout=10000)
+    # 받을 PC 는 옵저버·ACTOR 가 끝나길 명령 만료까지 기다린다 (설계 4.3·4.4절) - running 뒤엔 응답 대기 시간이 지나도 실패로 보이면 안 된다
+    db_patch(f"{CMDS}/{key}", {"state": "running", "started_at": 1, "expires_at": int(time.time()) + 7})
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('프리셋 되돌리기 진행 중')", timeout=10000)
+    time.sleep(4)
+    check("응답하지 않습니다" not in (page.text_content("#toasts") or "") and page.is_disabled("#shop-list label:nth-child(1) .restore"),
+          f"running 상태로 응답 대기 시간(3초)을 넘겨도 'PC가 응답하지 않습니다' 없음·단추 잠김 그대로 ({page.text_content('#toasts')!r})")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오.')", timeout=15000)
+    check(page.locator('#toasts [data-id="act"].bad').count() == 0 and not page.is_disabled("#shop-list label:nth-child(1) .restore"),
+          "명령 만료까지 안 끝나면 실패가 아닌 안내로 끝내고 단추를 푼다")
+    page.evaluate("window.__replyWaitMs = undefined")
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "프리셋 1을(를) 이전 기록으로 되돌렸습니다.", "ended_at": 2})
     # 시드 되돌리기 (PC 하나, 프리셋 둘)
     db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}}})
     db_patch(LIVE, {"preset_transfer": None, "presets": [{**SHOPS[0], "on": True}, SHOPS[1]]})

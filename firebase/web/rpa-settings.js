@@ -312,6 +312,7 @@ function paintShopMeta() {
   const on = list.filter((p) => form.shops?.[p.no]).length;
   $("shop-meta").textContent = list.length ? `${on}/${list.length} 켬` : "";
   $("shop-apply").disabled = !c.isAdmin || busy || !shopsDirty();
+  for (const b of $("shop-list").querySelectorAll(".restore")) b.disabled = busy;   // 줄은 live 가 올 때만 다시 만든다 - 잠금은 여기서
 }
 async function applyShops() {
   const wanted = Object.fromEntries(savedShops().map((p) => [`PRESET${p.no}`, !!form.shops[p.no]]));
