@@ -124,11 +124,12 @@
 
 **Interfaces:**
 - 명령 `type` 목록에 `export_preset`·`import_preset`·`restore_preset` (그 업체 admin·super 가 만든다 - 지금 규칙 그대로).
-- 새 `apps/rpa/transfers/$cid/$tid`:
-  - `.read`: 그 업체 agent 또는 super.
-  - `.write`: super, 또는 그 업체 agent 가 (새로 만들 때 `!data.exists()` 이고 `newData.child('from_pc').val() === auth.token.pcId`) 또는 지울 때(`!newData.exists()`).
-  - `.validate` (지우기 아닐 때): `$tid` 가 `^[A-Za-z0-9_-]{16,40}$`, children `from_pc`·`created_at`·`expires_at`·`presets`, `expires_at` 숫자이고 `created_at + 21600000` 이하.
-- [ ] **Step 1: 실패하는 시험 쓰기** (rules.test.js, 기존 persona): asAgentA1 이 from_pc pc1 로 만들기 성공 / from_pc pc2 로 실패; asAgentA2 가 읽기·지우기 성공; asAdminA 읽기 실패·쓰기 실패; asAgentB(다른 업체)·asViewerA 읽기 실패; asSuper 읽기 성공; 만료 7시간 실패; asAdminA 가 `import_preset` 명령 만들기 성공.
+- 새 `apps/rpa/transfers/$cid`:
+  - `.read` (**`$cid` 에 둔다 - `$tid` 가 아니다**): 그 업체 agent 또는 super. 에이전트 `cleanup_transfers` 가 `apps/rpa/transfers/{cid}` 를 `?shallow=true` 로 읽어 tid 목록을 얻는데, RTDB 규칙은 위에서 아래로만 내려 주므로 `$tid` 에만 `.read` 가 있으면 그 읽기가 401 (규칙 거부) 이 되어 만료된 전송이 영영 안 지워진다 (Review Focus 1).
+  - `$tid`:
+    - `.write`: super, 또는 그 업체 agent 가 (새로 만들 때 `!data.exists()` 이고 `newData.child('from_pc').val() === auth.token.pcId`) 또는 지울 때(`!newData.exists()`).
+    - `.validate` (지우기 아닐 때): `$tid` 가 `^[A-Za-z0-9_-]{16,40}$`, children `from_pc`·`by`·`created_at`·`expires_at`·`presets`, `by` 문자열 (에이전트 `do_export` 가 명령의 `by` 를, 관리 화면이 `"admin-tool"` 을 싣는다 - `$other: false` 를 두려면 `by` 를 빼먹지 말 것), `expires_at` 숫자이고 `created_at + 21600000` 이하.
+- [ ] **Step 1: 실패하는 시험 쓰기** (rules.test.js, 기존 persona): asAgentA1 이 from_pc pc1·by 가 든 전송 만들기 성공 / from_pc pc2 로 실패; asAgentA2 가 `apps/rpa/transfers/ca` 를 shallow 로 읽기 성공 (`get(query(ref(...)))` 대신 REST `?shallow=true` 와 같은 뜻으로 `get(ref(db, "apps/rpa/transfers/ca"))`), asAdminA·asAgentB 는 그 읽기 실패; asAgentA2 가 `$tid` 읽기·지우기 성공; asAdminA 읽기 실패·쓰기 실패; asAgentB(다른 업체)·asViewerA 읽기 실패; asSuper 읽기 성공; 만료 7시간 실패; asAdminA 가 `import_preset` 명령 만들기 성공.
 - [ ] **Step 2: 실패 확인** — `cd firebase\tests; npm test` → 새 시험 실패
 - [ ] **Step 3: 규칙 구현**
 - [ ] **Step 4: 통과 확인** — `npm test` 모두 통과
