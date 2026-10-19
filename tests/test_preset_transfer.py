@@ -22,7 +22,6 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 
 import rpa_status as st  # noqa: E402
-import web_replay  # noqa: E402
 import preset_transfer as pt  # noqa: E402
 
 fails = []
@@ -49,7 +48,7 @@ def step(kind, **extra):
 
 
 PW = "비밀번호-유출금지"
-REC = {"version": web_replay.RECORD_VERSION, "start_url": "https://shop.example.com/login", "record_date": "2026-09-30",
+REC = {"version": st.RECORD_VERSION, "start_url": "https://shop.example.com/login", "record_date": "2026-09-30",
        "steps": [step("goto", url="/login", href="https://shop.example.com/login"), step("fill", credential="ID"),
                  step("secret", credential="PW")]}
 REC2 = dict(REC, start_url="https://other.example.com/", steps=REC["steps"][:1])
@@ -95,7 +94,7 @@ bad_cases = {
     "kind 다름": dict(good, kind="other"),
     "version 2": dict(good, version=2),
     "steps 가 dict": dict(good, record=dict(REC, steps={})),
-    "기록 모양(version) 다름": dict(good, record=dict(REC, version=web_replay.RECORD_VERSION + 1)),
+    "기록 모양(version) 다름": dict(good, record=dict(REC, version=st.RECORD_VERSION + 1)),
     "비밀번호 값이 든 secret 단계": dict(good, record=dict(REC, steps=REC["steps"][:2] + [step("secret", credential="PW", value="x")])),
     "credential PW 인 fill 에 값": dict(good, record=dict(REC, steps=[step("fill", credential="PW", value="x")])),
     "PW 키": dict(good, PW="x"),

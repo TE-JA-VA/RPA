@@ -17,6 +17,7 @@ import unicodedata
 import urllib.parse
 import zipfile
 
+import rpa_status
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
@@ -316,7 +317,7 @@ OPTIONAL_WAIT = 3.0
 LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 것' 에서 찾기는 이만큼 찾아도 없을 때부터 - 화면이 덜 뜬 사이 넘어가는
                         # 옛 화면에서 태그·글자가 같은 다른 것(헤더의 로그인 등)을 집지 않게 (검토 2026-10-17). 마우스 올리기(3초)보다 짧게
 STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
-RECORD_VERSION = 1           # 기록 모양. 다르면 재생하지 않는다 (옛 프리페어가 새 기록을 잘못 따라 하지 않게)
+RECORD_VERSION = rpa_status.RECORD_VERSION   # 기록 모양 - rpa_status 에 있다 (에이전트도 본다)
 DOWNLOAD_TIMEOUT_MS = 300000  # 파일이 오기 시작할 때까지 기다리는 시간 (안 오면 그 단계 실패). 쇼핑몰이 엑셀을 만드는 데 오래 걸려 60초 → 5분,
                               # 기다리는 동안 로그를 남긴다 (2026-10-15 메모 5). 오기 시작한 뒤에는 다 받을 때까지 기다린다 (느려도)
 OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"     # 옛 엑셀(xls)·암호 건 엑셀

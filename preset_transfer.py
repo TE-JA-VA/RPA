@@ -10,7 +10,6 @@ import os
 import re
 
 import rpa_status as st
-import web_replay
 
 FILE_KIND = "autopilot-preset"
 FILE_VERSION = 1
@@ -49,8 +48,8 @@ def check_file(obj):
     rec = obj.get("record")
     if not isinstance(rec, dict) or not isinstance(rec.get("steps"), list):
         raise ValueError("기록 형식이 올바르지 않습니다.")
-    if rec.get("version") != web_replay.RECORD_VERSION:
-        raise ValueError(f"기록 버전이 다릅니다. ({rec.get('version')} - 이 버전은 {web_replay.RECORD_VERSION})")
+    if rec.get("version") != st.RECORD_VERSION:
+        raise ValueError(f"기록 버전이 다릅니다. ({rec.get('version')} - 이 버전은 {st.RECORD_VERSION})")
     for s in rec["steps"]:
         if not isinstance(s, dict):
             raise ValueError("기록 단계 형식이 올바르지 않습니다.")

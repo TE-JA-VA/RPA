@@ -479,4 +479,17 @@ with tempfile.TemporaryDirectory() as d:
     check("지켜 줄 판이 없으면 그것도 지운다", br.prune_local(d, keep=4) == ["2026.10.07-8"])
     check("지운 뒤에도 다음 판 번호는 이어진다", br.next_version(d, datetime.date(2026, 10, 12)) == "2026.10.12-3")
 
+print("배포 파일만으로 에이전트가 켜진다 (내장 파이썬 - site-packages 없음, playwright 없음. 2026-10-19 Task 2 검토)")
+with tempfile.TemporaryDirectory() as d:
+    for rel, src in br.PROGRAM_FILES:
+        if rel.endswith(".py"):
+            os.makedirs(os.path.join(d, *rel.split("/")[:-1]), exist_ok=True)
+            shutil.copy2(os.path.join(br.REPO, *src.split("/")), os.path.join(d, *rel.split("/")))
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import agent; print(sorted(agent.real_actions()))"
+    r = subprocess.run([os.path.join(br.RUNTIME_ROOT, "python", "python.exe"), "-I", "-c", code, os.path.join(d, "firebase", "agent")],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8", "RPA_PROGRAMDATA": d, "RPA_STATUS_DIR": d, "RPA_USER_CONFIG": os.path.join(d, "u.json")})
+    check("내장 파이썬 + 배포 .py 만으로 agent.real_actions() 가 명령표를 돌려준다 (web_replay·playwright 를 끌어오면 에이전트가 통째로 죽는다)",
+          r.returncode == 0 and "export_preset" in r.stdout, (r.stderr or r.stdout)[-600:])
+
 finish()

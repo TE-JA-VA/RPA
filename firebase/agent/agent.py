@@ -671,7 +671,6 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
     import rpa_dashboard as dash
     import rpa_status as st
     import rpa_update as upd
-    import preset_transfer as pt
 
     def do_launch(args):
         target = (args or {}).get("target") if isinstance(args, dict) else None
@@ -838,6 +837,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         return (" 변경하지 못한 프리셋: " + ", ".join(f"{no} ({why})" for no, why in rejected)) if rejected else ""
 
     def do_export(args, meta):
+        import preset_transfer as pt   # 명령 안에서 - 못 올리면 이 명령만 실패하고 에이전트는 산다
         tid = tid_of(args)
         nos = nos_of(args, "nos")
         try:
@@ -859,6 +859,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
             sleep(2)
 
     def do_import(args, meta):
+        import preset_transfer as pt   # 명령 안에서 - 못 올리면 이 명령만 실패하고 에이전트는 산다
         tid = tid_of(args)
         path = transfer_path(cid, tid)
         got = [None]
@@ -889,6 +890,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         return " ".join(lines) + rejected_text(rejected)
 
     def do_restore(args, meta):
+        import preset_transfer as pt   # 명령 안에서 - 못 올리면 이 명령만 실패하고 에이전트는 산다
         nos = nos_of(args, "nos")
         wait_for(lambda: not busy(), meta.get("expires_at") or 0, lambda: BUSY_TEXT)
         done, rejected = pt.restore(nos)
