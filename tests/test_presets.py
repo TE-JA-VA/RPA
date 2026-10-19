@@ -243,7 +243,7 @@ def human_alert(page):
 rec_alert = web_replay.record(url + "/login", os.path.join(TMP, "rec_alert.json"), headless=True, human=human_alert,
                               record_date=TODAY)
 st.write_presets([{"no": 1, "name": "알림몰", "code": "014", "saved_at": None, "record": rec_alert}, st.blank_preset(2)])
-site = dict(st.read_user_config()["Sites"]["PRESET1"], ID=fake_mall.USER, PW=fake_mall.PASSWORD)
+site = dict(st.read_user_config()["Sites"]["PRESET1"], ID=fake_mall.USER, PW=fake_mall.PASSWORD, Code="014")   # 프리셋 파일만 바꿔치기 - Code 도 맞춘다
 lines, real_log = [], wr.log
 wr.log = lines.append
 try:
@@ -701,7 +701,7 @@ def _rec(no):
 
 def _site(no):
     return {"URL": f"https://shop{no}.example.com/login", "ID": f"seller0{no}", "PW": st.seal(f"pw-{no}"), "Action": ["replay"],
-            "Stts": 0 if no % 2 == 0 else 9, "Preset": no, "note": f"몰{no}", "Phone": f"phone{no}", "SmsSenders": [f"1588000{no}"]}
+            "Stts": 0 if no % 2 == 0 else 9, "Preset": no, "Code": f"0{no}1", "note": f"몰{no}", "Phone": f"phone{no}", "SmsSenders": [f"1588000{no}"]}
 
 
 def _side_path(kind, no):
@@ -728,13 +728,13 @@ def _side(kind, no):
 
 
 def _app():
-    asked, said = [], []
-    f = SimpleNamespace(presets=rr.load_presets(), cur=0, recording=None, previewing=False, shown=0, start_url=None,
+    asked, said, titles = [], [], []
+    f = SimpleNamespace(presets=rr.load_presets(), cur=0, recording=None, previewing=False, shown=0, start_url=None, unsaved_drop=False,
                         _store_fields=lambda: None, _load_fields=lambda: None, render=lambda: None, select=lambda i: None,
-                        ask=lambda t, x: (asked.append(x), True)[1], status=SimpleNamespace(config=lambda **kw: said.append(kw.get("text"))))
+                        ask=lambda t, x: (asked.append(x), titles.append(t), True)[2], status=SimpleNamespace(config=lambda **kw: said.append(kw.get("text"))))
     f._final = lambda q: rr.App._final(f, q)
     f._kept = lambda q, final: list(range(len(final["steps"])))
-    f.asked, f.said = asked, said
+    f.asked, f.said, f.titles = asked, said, titles
     return f
 
 
@@ -815,6 +815,78 @@ app.presets.pop()                        # 옛 [−] 처럼 마지막만 지워�
 rr.App.save(app)
 check("마지막 프리셋을 지우면 그 번호의 Sites·메일 기억·세션·보관을 지운다", "PRESET5" not in _sites_now() and len(st.read_presets()) == 4
       and all(_side(k, 5) is None and _side(k, 4) == 4 for k in ("mail", "session", "backup")))
+
+print("=== 검토 고침 (이슈 #13): 계정과 기록의 짝(Code)·되돌리기 번호·새 칸·닫기 확인 ===")
+policy_presets(10)
+_seed()
+pt._write_backup(4, st.read_presets()[3], _sites_now()["PRESET4"])      # ④ 에 넣어 주기 전 보관 (보관 당시 Preset 4)
+app = _app()
+app.cur = 2
+rr.App.remove_preset(app)
+check("확인 창 제목은 '프리셋 삭제' (docs/ui-wording.md)", app.titles == ["프리셋 삭제"], str(app.titles))
+rr.App.save(app)
+done, rejected = pt.restore([3])
+s3, ps = _sites_now()["PRESET3"], st.read_presets()
+check("넣어 주기 → 앞 번호 삭제 저장 → 되돌리기: 되돌린 칸의 Preset 은 돌린 칸 번호 (옛 ④ 계정이 지금의 ④ 사이트로 가지 않는다)",
+      done == [3] and s3["Preset"] == 3 and s3["ID"] == "seller04" and ps[2]["code"] == "041" and ps[3]["code"] == "051", str((done, rejected, s3)))
+check("저장·되돌리기가 Sites 칸마다 Code(그 칸 프리셋의 사이트코드)를 적는다",
+      all(_sites_now()[f"PRESET{i}"].get("Code") == ps[i - 1]["code"] for i in range(1, 5)), str({k: v.get("Code") for k, v in _sites_now().items()}))
+
+_seed()
+app = _app()
+app.cur = 2
+rr.App.remove_preset(app)
+_real_wuc = st.write_user_config
+
+
+def _locked(*a, **k):
+    raise PermissionError("locked")
+
+
+st.write_user_config = _locked
+try:
+    r = rr.App.save(app)
+finally:
+    st.write_user_config = _real_wuc
+sites = _sites_now()
+check("설정 쓰기만 실패하면 프리셋은 당겨지고 Sites 는 옛 번호 그대로 - 저장 실패를 알린다",
+      r is None and "저장하지 못했습니다" in app.said[-1] and st.read_presets()[2]["code"] == "041" and sites["PRESET3"]["ID"] == "seller03", str(app.said))
+check("짝이 깨진 칸(Code ≠ 프리셋 사이트코드)은 ACTOR 가 실행하지 않는다 - 업무 서식 안내",
+      wr._replay_problems("PRESET3", sites["PRESET3"]) == ["PRESET3: 프리셋 3의 아이디·비밀번호가 다른 사이트의 것입니다. 옵저버에서 다시 입력하여 주십시오."]
+      and wr.validate_site("PRESET1", sites["PRESET1"]) == [], str(wr._replay_problems("PRESET3", sites["PRESET3"])))
+check("Code 가 없는 옛 설정은 짝을 따지지 않는다 (다음 저장 때 채워진다)",
+      wr._replay_problems("PRESET3", {k: v for k, v in sites["PRESET3"].items() if k != "Code"}) == [])
+summ = st.preset_summary()
+check("요약: 짝이 깨진 칸은 has_login False, 켜기도 막힌다",
+      summ[2]["has_login"] is False and summ[0]["has_login"] is True and raises(ValueError, st.set_preset_switches, {"PRESET3": True}) is not None
+      and st.set_preset_switches({"PRESET1": True}) == {1: True}, str(summ))
+app2 = _app()
+check("옵저버를 다시 열면 짝이 깨진 칸은 아이디·비밀번호가 비어 있다 (저장해도 잘못된 짝이 굳지 않는다)",
+      app2.presets[2]["id"] == "" and app2.presets[2]["has_pw"] is False and app2.presets[0]["id"] == "seller01" and app2.presets[0]["has_pw"] is True,
+      str([(p["id"], p["has_pw"]) for p in app2.presets]))
+r = rr.App.save(app2)
+check("그대로 저장하면 아이디를 묻는다", r is None and "아이디가 필요합니다" in app2.said[-1], str(app2.said))
+
+_seed()
+st.save_preset_sites(st.read_presets(), {5: ("newseller", "new-pw")}, origs={1: 1, 2: 2, 3: 4, 4: 5, 5: None})
+s5 = _sites_now()["PRESET5"]
+check("새 칸(orig None)은 옛 Sites 를 보지 않는다 - 옛 ⑤ 의 휴대폰·켬끔이 새 ⑤ 로 오지 않는다",
+      s5["ID"] == "newseller" and "Phone" not in s5 and s5["Stts"] == 9 and s5["Code"] == "051", str(s5))
+
+_seed()
+app = _app()
+app.closing = app.previewing = app.paused = app.stopping = app.editing = False
+app.failed_at, closed = None, []
+app._close_now = lambda: closed.append(1)
+answers = [True, False]
+app.ask = lambda t, x: (app.asked.append(x), answers.pop(0))[1]
+app.cur = 2
+rr.App.remove_preset(app)
+rr.App.quit(app)
+check("삭제만 하고 저장하지 않은 채 닫으면 묻는다 - 아니오면 안 닫는다", closed == [] and len(app.asked) == 2 and "저장하지 않은 변경이 있습니다" in app.asked[-1], str(app.asked))
+rr.App.save(app)
+rr.App.quit(app)
+check("저장한 뒤에는 묻지 않고 닫는다", closed == [1] and len(app.asked) == 2 and app.said[-1] == "저장했습니다.", str((closed, app.asked, app.said)))
 
 print()
 print(f"실패: {'없음' if not fails else fails}")

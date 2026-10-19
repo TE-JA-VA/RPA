@@ -492,7 +492,8 @@ def load_presets():
                 q["source"], q["prefix"] = "mail", pick["prefix"]
         site = sites.get(st.preset_site_key(p["no"])) if isinstance(sites, dict) else None
         if isinstance(site, dict):
-            q["id"], q["has_pw"] = site.get("ID") or "", bool(site.get("PW"))
+            if not st.login_mismatch(site, p["code"]):     # 다른 사이트의 계정이면 비워 둔다 - 다시 저장해도 잘못된 짝이 굳지 않게 (이슈 #13 검토)
+                q["id"], q["has_pw"] = site.get("ID") or "", bool(site.get("PW"))
             q["phone"], q["senders"] = site.get("Phone") or "", ", ".join(site.get("SmsSenders") or [])
         out.append(q)
     return out
@@ -621,6 +622,7 @@ class App:
         if fake_creds and not any(p["loaded"] for p in self.presets):      # 시험: 가짜 쇼핑몰 계정
             self.presets[0].update(name="가짜 쇼핑몰", code="012", id=fake_creds[0], pw=fake_creds[1])
         self.cur, self.recording, self.previewing = 0, None, False
+        self.unsaved_drop = False       # [−] 로 지우고 아직 저장 안 함 (닫을 때 묻는다)
         self.paused = self.stopping = self.closing = False      # 미리보기 [Ⅱ 일시정지]·[■ 중단]·일시정지 중 창 닫기
         self.failed_at, self.editing = None, False               # 미리보기가 못 찾아 멈춘 단계 (브라우저는 열린 채), [수정] 누름
         self.tell, self.ask = messagebox.showinfo, messagebox.askyesno     # 시험이 갈아 끼운다
@@ -902,9 +904,10 @@ class App:
             return
         p = self.presets[self.cur]
         if (p["raw"] or p["loaded"] or p["head"]) and not self.ask(
-                "프리셋 지우기", f"{circled(self.cur + 1)} {p['name']}에 기록이 있습니다. 프리셋을 삭제하시겠습니까?"):
+                "프리셋 삭제", f"{circled(self.cur + 1)} {p['name']}에 기록이 있습니다. 프리셋을 삭제하시겠습니까?"):
             return
         self.presets.pop(self.cur)
+        self.unsaved_drop = True
         self.cur, self.shown = min(self.cur, len(self.presets) - 1), 0
         self._load_fields()
         self.status.config(text="")
@@ -1180,20 +1183,22 @@ class App:
             old = {p["no"]: p for p in st.read_presets()}
         except ValueError:
             old = {}                                   # 예전 파일을 못 읽으면 기록 있는 것은 모두 오늘 날짜
-        # 프리셋을 지워 번호가 당겨졌으면 (이슈 #13) 옛 값(비밀번호·켬끔·날짜·파일)은 불러올 때 번호(orig)로 찾는다
-        origs = {no: p["orig"] for no, p in enumerate(self.presets, 1) if p["orig"]}
+        # 프리셋을 지워 번호가 당겨졌으면 (이슈 #13) 옛 값(비밀번호·켬끔·날짜·파일)은 불러올 때 번호(orig)로 찾는다 - 새 칸은 None (옛 값 없음)
+        origs = {no: p["orig"] for no, p in enumerate(self.presets, 1)}
         dropped = sorted(set(old) - set(origs.values()))
-        if (dropped or any(o != no for no, o in origs.items())) and st.running_programs():
+        # rpa_dashboard.launch_state()(띄우는 중)는 에이전트 프로세스 안의 Popen 손잡이(_active)라 다른 프로세스인 옵저버에서는 늘 None - 못 쓴다.
+        # 옵저버가 열린 동안은 대시보드가 RPA 를 안 띄우므로 (busy_problem 의 잠금) 기록에 남은 '도는 중' 만 본다.
+        if (dropped or any(o is not None and o != no for no, o in origs.items())) and st.running_programs():
             return self.status.config(text="오토파일럿이 실행 중이라 저장하지 못했습니다. 끝난 뒤 저장하여 주십시오.", fg=RED)
         old = {no: old[o] for no, o in origs.items() if o in old}
         sites = cfg.get(st.SITES_SECTION)
         sites = sites if isinstance(sites, dict) else {}
         logins_changed = {o["no"] for o in out if o["pw"] or o["id"].strip() != (
-            (sites.get(st.preset_site_key(origs.get(o["no"], o["no"]))) or {}).get("ID") or "")}
+            (sites.get(st.preset_site_key(origs.get(o["no"]))) or {}).get("ID") or "")}
         files = keep_dates([{k: o[k] for k in ("no", "name", "code", "record")} for o in out], old, logins_changed, now)
         for o in out:
             try:
-                pw = o["pw"] or (stored_password(origs.get(o["no"], o["no"])) if o["has_pw"] else "")
+                pw = o["pw"] or (stored_password(origs.get(o["no"])) if o["has_pw"] and origs.get(o["no"]) else "")
             except RuntimeError as e:
                 return self.status.config(text=f"{circled(o['no'])} 저장된 비밀번호가 일치하지 않습니다. ({e}) - 비밀번호를 다시 "
                                             "설정해 주십시오.", fg=RED)
@@ -1207,6 +1212,7 @@ class App:
         if problem:
             return self.status.config(text=problem, fg=RED)
         seeded = []
+        self.unsaved_drop = False
         for p, f in zip(self.presets, files):
             p["orig"] = f["no"]                  # 이제부터는 이 번호가 옛 번호
             if f["record"]:
@@ -1337,8 +1343,8 @@ class App:
             return
         if self.previewing and not (self.paused or self.stopping or self.failed_at is not None) or self.editing:
             return self.tell("미리보기 중", "미리보기 중에는 창을 닫을 수 없습니다.\n[Ⅱ 일시정지] 나 [■ 중단] 을 누른 후 다시 시도해 주십시오.")
-        if any(p.get("fresh") for p in self.presets) and not self.ask(
-                "저장하지 않은 기록", "저장하지 않은 기록이 있습니다. 저장하지 않고 닫으시겠습니까?"):
+        if (any(p.get("fresh") for p in self.presets) or self.unsaved_drop) and not self.ask(
+                "저장하지 않은 변경", "저장하지 않은 변경이 있습니다. 저장하지 않고 닫으시겠습니까?"):
             return
         if self.previewing:
             self.closing = True

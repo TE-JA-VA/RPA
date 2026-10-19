@@ -1068,13 +1068,22 @@ def is_preset_site(key):
     return bool(re.fullmatch(r"PRESET\d+", str(key)))
 
 
+def login_mismatch(site, code):
+    """Sites 칸의 아이디·비밀번호가 다른 사이트 것인가 - 칸의 Code(쓸 때 적은 그 칸 프리셋의 사이트코드)가 지금 프리셋의 code 와
+    다르면. 번호만 믿지 않는다 (이슈 #13 검토: 프리셋 → 설정 쓰기 사이에 실패하거나 보관본을 되돌리면 번호가 어긋난다).
+    Code 가 없는 옛 설정은 통과 - 다음 저장 때 채워진다."""
+    c = (site or {}).get("Code")
+    return c is not None and str(c) != str(code or "")
+
+
 def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None):
     """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
     presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
     기록이 있는 프리셋만 칸을 둔다 - 새 칸과 fresh (이번에 다시 기록한 번호) 는 꺼짐(Stts 9), 나머지 있던 칸의 켬/끔은 그대로
     (확인 안 한 기록이 다음 자동 실행에 끼지 않게 - 2026-10-01 검토). 기록이 없거나 빠진 번호의 칸은 지운다.
     phones: {번호: (인증 휴대폰 phoneId, [발신번호])} - 문자 2차인증 (휴대폰 중계 설계 13절). 없는 번호는 있던 값 그대로.
-    origs: {번호: 있던 값을 찾을 옛 번호} - 옵저버가 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13). 없는 번호는 같은 번호.
+    origs: {번호: 있던 값을 찾을 옛 번호} - 옵저버가 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13). 없는 번호는 같은 번호,
+    None 이면 새 칸 (옛 값 없음). 칸마다 Code 에 프리셋 사이트코드를 적는다 - 읽는 쪽이 login_mismatch 로 짝을 확인한다.
     사용자 설정이 아예 없으면 FileNotFoundError (자격증명 없는 설정을 새로 만들지 않는다 - write_routine_modules 와 같다)."""
     data = read_user_config()
     if not data:
@@ -1086,12 +1095,13 @@ def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None):
         if not p.get("record"):
             continue
         key = preset_site_key(p["no"])
-        old = sites.get(preset_site_key((origs or {}).get(p["no"], p["no"])))
+        src = (origs or {}).get(p["no"], p["no"])
+        old = sites.get(preset_site_key(src)) if src else None
         old = old if isinstance(old, dict) else {}
         login_id, pw = logins.get(p["no"], (old.get("ID", ""), None))
         mine[key] = {"URL": p["record"].get("start_url") or old.get("URL", ""), "ID": (login_id or "").strip(),
                      "PW": pw or old.get("PW", ""), "Action": [REPLAY_ACTION],
-                     "Stts": 9 if (not old or p["no"] in fresh) else old.get("Stts", 9), "Preset": p["no"], "note": p["name"]}
+                     "Stts": 9 if (not old or p["no"] in fresh) else old.get("Stts", 9), "Preset": p["no"], "Code": p["code"], "note": p["name"]}
         phone, senders = (phones or {}).get(p["no"]) or (old.get("Phone"), old.get("SmsSenders"))
         if phone and senders:
             mine[key].update(Phone=phone, SmsSenders=list(senders))
@@ -1117,7 +1127,7 @@ def preset_summary():
         site = site if isinstance(site, dict) else {}
         out.append({"no": p["no"], "name": p["name"], "code": p["code"],
                     "steps": len((p["record"] or {}).get("steps") or []), "saved_at": p["saved_at"],
-                    "has_login": bool(site.get("ID")) and bool(site.get("PW")),
+                    "has_login": bool(site.get("ID")) and bool(site.get("PW")) and not login_mismatch(site, p["code"]),
                     "on": str(site.get("Stts", "")).strip() == "0",
                     "backup": os.path.isfile(preset_backup_path(p["no"]))})
     return out

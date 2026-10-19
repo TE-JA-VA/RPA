@@ -118,7 +118,7 @@ def move_preset_files(origs, dropped):
         for p in paths(no):
             _remove(p)
     for new, old in sorted(origs.items()):
-        if new == old:
+        if old is None or new == old:        # None = 새 칸
             continue
         for src, dst in zip(paths(old), paths(new)):
             if os.path.isfile(src):
@@ -181,9 +181,9 @@ def apply(items):
         presets[no - 1] = {"no": no, "name": obj["name"], "code": obj["code"], "saved_at": now, "record": obj["record"]}
         url = obj["record"].get("start_url") or ""
         if old.get("record") and old_site and old["code"] == obj["code"]:
-            sites[key] = dict(old_site, URL=url or old_site.get("URL", ""), note=obj["name"], Preset=no)
+            sites[key] = dict(old_site, URL=url or old_site.get("URL", ""), note=obj["name"], Preset=no, Code=obj["code"])
         else:
-            sites[key] = {"URL": url, "ID": "", "PW": "", "Action": [st.REPLAY_ACTION], "Stts": 9, "Preset": no, "note": obj["name"]}
+            sites[key] = {"URL": url, "ID": "", "PW": "", "Action": [st.REPLAY_ACTION], "Stts": 9, "Preset": no, "Code": obj["code"], "note": obj["name"]}
             if obj.get("phone") and obj.get("senders"):
                 sites[key].update(Phone=obj["phone"], SmsSenders=list(obj["senders"]))
         done.append(no)
@@ -217,8 +217,8 @@ def restore(slots):
             presets.append(st.blank_preset(len(presets) + 1))
         presets[no - 1] = dict(bk["preset"], no=no)
         key = st.preset_site_key(no)
-        if isinstance(bk.get("site"), dict):
-            sites[key] = bk["site"]
+        if isinstance(bk.get("site"), dict):     # 번호·Code 는 돌린 칸 기준 - 옵저버가 보관 파일을 다른 번호로 옮겼을 수 있다 (이슈 #13 검토)
+            sites[key] = dict(bk["site"], Preset=no, Code=str(bk["preset"].get("code") or ""))
         else:
             sites.pop(key, None)
         done.append(no)

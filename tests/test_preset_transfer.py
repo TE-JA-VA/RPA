@@ -251,6 +251,17 @@ done, rejected = pt.restore([2])
 keys = list(st.read_user_config()["Sites"])
 check("A5: 되돌리기로 다시 들어간 칸도 번호 순", done == [2] and keys == ["SITE1", "PRESET1", "PRESET2", "PRESET3", "PRESET4", "PRESET5", "PRESET6", "PRESET8"], str(keys))
 
+print("=== 11. 검토 고침 (이슈 #13): Sites 칸의 Code·되돌리기의 Preset 번호 ===")
+check("B1: 넣기가 Sites 칸에 Code(프리셋 사이트코드)를 적는다 - 다른 사이트(빈 칸)", site(8)["Code"] == "123" and site(2)["Code"] == "034", str((site(8), site(2))))
+done, rejected = pt.apply([(dict(good, name="네이버 고침", code="090", record=REC2), 3)])
+check("B1: 같은 사이트면 칸을 두고 Code 만 더한다", done == [3] and site(3)["Code"] == "090" and site(3)["note"] == "네이버 고침", str(site(3)))
+os.makedirs(os.path.dirname(pt.backup_path(7)), exist_ok=True)
+st.write_json_atomic(pt.backup_path(7), {"preset": {"no": 1, "name": "옮긴것", "code": "777", "saved_at": None, "record": REC2},
+                                         "site": {"URL": "https://x", "ID": "mover", "PW": "x", "Action": ["replay"], "Stts": 0, "Preset": 1, "note": "옮긴것"}})
+done, rejected = pt.restore([7])
+check("B2: 되돌리기는 보관본의 Preset 이 아니라 돌린 칸 번호를 쓰고 Code 를 적는다 (옵저버가 보관 파일을 다른 번호로 옮긴 뒤)",
+      done == [7] and site(7)["Preset"] == 7 and site(7)["Code"] == "777" and site(7)["ID"] == "mover" and st.read_presets()[6]["code"] == "777", str((done, rejected, site(7))))
+
 print()
 print("실패: " + (", ".join(fails) if fails else "없음"))
 sys.exit(1 if fails else 0)
