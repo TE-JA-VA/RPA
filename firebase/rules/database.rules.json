@@ -43,7 +43,7 @@
                 ".validate": "newData.hasChildren(['type', 'by', 'created_at', 'expires_at', 'state'])",
 
                 "type": {
-                  ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'stop_rpa' ||newData.val() === 'set_modules' || newData.val() === 'set_schedule' || newData.val() === 'set_presets' || newData.val() === 'set_parallel' || newData.val() === 'resume_repeat') && (!data.exists() || data.val() === newData.val())"
+                  ".validate": "newData.isString() && (newData.val() === 'launch' || newData.val() === 'stop_erpia' || newData.val() === 'stop_rpa' ||newData.val() === 'set_modules' || newData.val() === 'set_schedule' || newData.val() === 'set_presets' || newData.val() === 'set_parallel' || newData.val() === 'resume_repeat' || newData.val() === 'export_preset' || newData.val() === 'import_preset' || newData.val() === 'restore_preset') && (!data.exists() || data.val() === newData.val())"
                 },
                 "by": {
                   ".validate": "newData.isString() && (data.exists() ? data.val() === newData.val() : newData.val() === auth.uid)"
@@ -63,6 +63,23 @@
                 "ended_at": { ".validate": "newData.isNumber() && auth.token.role === 'agent'" },
                 "$other": { ".validate": false }
               }
+            }
+          }
+        },
+
+        "transfers": {
+          "$cid": {
+            ".read": "auth != null && ((auth.token.role === 'agent' && auth.token.cid === $cid) || auth.token.role === 'super')",
+
+            "$tid": {
+              ".write": "auth != null && (auth.token.role === 'super' || (auth.token.role === 'agent' && auth.token.cid === $cid && (!newData.exists() || (!data.exists() && newData.child('from_pc').val() === auth.token.pcId))))",
+              ".validate": "$tid.matches(/^[A-Za-z0-9_-]{16,40}$/) && newData.hasChildren(['from_pc', 'by', 'created_at', 'expires_at', 'presets'])",
+              "from_pc": { ".validate": "newData.isString()" },
+              "by": { ".validate": "newData.isString()" },
+              "created_at": { ".validate": "newData.isNumber()" },
+              "expires_at": { ".validate": "newData.isNumber() && newData.val() <= newData.parent().child('created_at').val() + 21600000" },
+              "presets": { ".validate": "newData.hasChildren()" },
+              "$other": { ".validate": false }
             }
           }
         }

@@ -391,3 +391,58 @@ test("users: 본인과 super 만 읽고 아무도 못 쓴다", async () => {
   await assertFails(getDoc(doc(fsAdminB(), "users/u_admin_a")));
   await assertFails(setDoc(doc(fsAdminA(), "users/u_admin_a"), { role: "super" }));
 });
+
+// ---------------------------------------------------------------------------
+// 프리셋 전송 자리 apps/rpa/transfers (2026-10-19, specs/2026-10-19-preset-transfer-design.md 5절)
+// ---------------------------------------------------------------------------
+const asAgentB1 = () => env.authenticatedContext("u_agent_b1", { cid: "cb", pcId: "pc1", role: "agent" }).database();
+const TID = "abcdef0123456789abcd";
+const TR = `apps/rpa/transfers/ca/${TID}`;
+const transfer = (over = {}) => ({
+  by: "u_admin_a", from_pc: "pc1", created_at: 1000, expires_at: 1000 + 6 * 3600 * 1000,
+  presets: [{ kind: "autopilot-preset", version: 1, no: 1, name: "가나몰", code: "001", record: { steps: [] } }],
+  ...over,
+});
+const putTransferRaw = () => env.withSecurityRulesDisabled(async (c) => { await set(ref(c.database(), TR), transfer()); });
+
+test("transfers: 그 업체 에이전트가 자기 PC 이름으로 만든다, 남의 PC 이름·관리자는 거부", async () => {
+  await assertSucceeds(set(ref(asAgentA1(), TR), transfer()));
+  await assertFails(set(ref(asAgentA1(), `apps/rpa/transfers/ca/${TID.replace("a", "b")}`), transfer({ from_pc: "pc2" })));
+  await assertFails(set(ref(asAdminA(), `apps/rpa/transfers/ca/${TID.replace("a", "c")}`), transfer()));
+  await assertFails(set(ref(asAgentB1(), `apps/rpa/transfers/ca/${TID.replace("a", "d")}`), transfer()));
+});
+
+test("transfers: 만료 7시간·by 없음·모르는 칸·짧은 id 는 거부", async () => {
+  await assertFails(set(ref(asAgentA1(), TR), transfer({ expires_at: 1000 + 7 * 3600 * 1000 })));
+  await assertFails(set(ref(asAgentA1(), TR), transfer({ by: null })));
+  await assertFails(set(ref(asAgentA1(), TR), transfer({ by: 1 })));
+  await assertFails(set(ref(asAgentA1(), TR), transfer({ extra: 1 })));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/transfers/ca/short"), transfer()));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/transfers/ca/" + "x".repeat(41)), transfer()));
+});
+
+test("transfers: 업체 목록(shallow)은 그 업체 에이전트·super 가 읽고 관리자·열람자·다른 업체는 못 읽는다 (cleanup_transfers)", async () => {
+  await putTransferRaw();
+  await assertSucceeds(get(ref(asAgentA2(), "apps/rpa/transfers/ca")));
+  await assertSucceeds(get(ref(asSuper(), "apps/rpa/transfers/ca")));
+  for (const who of [asAdminA, asViewerA, asAgentB1, asAnon]) await assertFails(get(ref(who(), "apps/rpa/transfers/ca")));
+});
+
+test("transfers: 받는 PC 에이전트가 한 건을 읽고 지운다, 관리자·다른 업체는 읽기·쓰기 거부, super 는 읽는다", async () => {
+  await putTransferRaw();
+  await assertSucceeds(get(ref(asAgentA2(), TR)));
+  await assertSucceeds(get(ref(asSuper(), TR)));
+  for (const who of [asAdminA, asViewerA, asAgentB1]) await assertFails(get(ref(who(), TR)));
+  await assertFails(set(ref(asAdminA(), TR), transfer({ by: "u_admin_a" })));
+  await assertFails(remove(ref(asAdminA(), TR)));
+  await assertFails(remove(ref(asAgentB1(), TR)));
+  await assertFails(set(ref(asAgentA2(), TR), transfer({ from_pc: "pc2" })));   // 있는 것 덮어쓰기는 안 된다
+  await assertSucceeds(remove(ref(asAgentA2(), TR)));
+});
+
+test("commands: export_preset·import_preset·restore_preset 은 관리자가 만들 수 있다", async () => {
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "export_preset", args: { tid: TID, nos: [1], with_phone: true } })));
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc2/c2"), cmd({ type: "import_preset", args: { tid: TID, slots: [1] } })));
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c3"), cmd({ type: "restore_preset", args: { nos: [1] } })));
+  await assertFails(set(ref(asViewerA(), "apps/rpa/commands/ca/pc2/c4"), cmd({ type: "import_preset", by: "u_view_a", args: { tid: TID, slots: [1] } })));
+});
