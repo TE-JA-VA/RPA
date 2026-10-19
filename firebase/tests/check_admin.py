@@ -386,9 +386,13 @@ with sync_playwright() as pw:
     page.click("#detail button:has-text('넣기')")
     page.wait_for_function("document.querySelector('#detail table.wallet td.left')?.textContent === '650'", timeout=15000)
     check(True, "화면에서 토큰 넣기 → 현재 토큰 650")
+    slot = "document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")"
+    page.evaluate(f"{slot}.dataset.old = '1'")     # 저장하면 업체 상세를 다시 그린다 - 다시 그려졌는지 보려고
     page.fill("#detail input[aria-label='자동 실행 슬롯 수']", "4")
     page.click("#detail .row:has(input[aria-label='자동 실행 슬롯 수']) button")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")?.value === '4'", timeout=10000)
+    # 다시 그려질 때까지 (새 칸에 4) - 그 전에 다음 칸에 표시하거나 채우면 다시 그리며 지워진다
+    page.wait_for_function(f"{slot} && !{slot}.dataset.old && {slot}.value === '4'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 4, "화면: 업체 상세에서 자동 실행 개수 저장")
     check("옵저버에서 만들 수 있는 프리셋 수를 결정합니다. (2~10, 기본 2)" in page.text_content("#detail"), "옵저버 프리셋 수 설명")
     preset = "document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")"
