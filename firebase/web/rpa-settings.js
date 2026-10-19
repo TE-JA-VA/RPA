@@ -80,6 +80,7 @@ const HTML = `
 
 let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, stopPar = null, busy = false, live = null, liveLimit;
 let stopPeers = [], transferOk = {};   // 다른 PC 의 live.preset_transfer (새 명령을 아는 PC 만 복사 상대로 고른다 - Review Focus 5)
+let copyKey = "";   // 복사 카드의 줄·받을 PC 목록을 마지막으로 만든 기준 - 같으면 다시 안 만든다 (heartbeat 가 5초마다 live 를 바꾼다, Task 7 검토)
 let parLimit;    // 관리 화면이 허용한 동시 실행 최대 (limits/parallel) - 2 미만이면 '동시 실행' 카드가 없다 (업체는 이 기능을 모른다)
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
 let form = { modules: {}, shops: {}, parallel: 1, sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] }, copy: { to: "", pick: {} } };
@@ -88,13 +89,13 @@ const show = (el, on) => el.classList.toggle("hide", !on);
 
 export function mount(el, context) {
   root = el; c = context; busy = false; live = null; liveLimit = undefined; parLimit = undefined; sent = {};
-  form.copy = { to: "", pick: {} }; transferOk = {};
+  form.copy = { to: "", pick: {} }; transferOk = {}; copyKey = "";
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
   $("mod-apply").onclick = applyModules;
   $("shop-apply").onclick = applyShops;
   $("copy-send").onclick = copyPresets;
-  $("copy-all").onclick = () => { for (const p of copyable()) form.copy.pick[p.no] = { ...form.copy.pick[p.no], on: true }; paintCopy(); };
+  $("copy-all").onclick = () => { for (const p of copyable()) form.copy.pick[p.no] = { ...form.copy.pick[p.no], on: true }; copyKey = ""; paintCopy(); };
   $("copy-to").onchange = (e) => { form.copy.to = e.target.value; paintCopyMeta(); };
   if (copyPeers().length) {
     stopPeers = copyPeers().map((pc) => onValue(ref(c.db, `${P("live", c.me.cid, pc)}/preset_transfer`), (snap) => {
@@ -341,6 +342,10 @@ function copyProblem() {
 function paintCopy() {
   show($("copy-card"), copyShown());
   if (!copyShown()) return;
+  // 복사할 목록·받을 PC·버전이 그대로면 줄을 다시 만들지 않는다 - 치는 중인 받을 번호 칸의 포커스가 빠지지 않게 (heartbeat 마다 live 가 온다)
+  const key = JSON.stringify([copyable().map((p) => [p.no, p.name, p.code]), copyPeers(), transferOk]);
+  if (key === copyKey) { paintCopyMeta(); return; }
+  copyKey = key;
   $("copy-to").replaceChildren(...copyPeers().map((k) => {
     const ok = transferOk[k] === true;
     const o = new Option(ok ? pcLabel(k) : `${pcLabel(k)} (업데이트 필요)`, k);

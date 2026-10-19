@@ -848,6 +848,13 @@ with sync_playwright() as pw:
     check(page.is_disabled("#copy-send") and page.text_content("#copy-info") == "받을 프리셋 번호가 중복되어 있습니다.", "같은 받을 번호가 둘이면 막힘")
     page.fill("#copy-list .copy-row:nth-child(2) .copy-slot", "5")
     check(not page.is_disabled("#copy-send") and page.text_content("#copy-info") == "", "다른 번호면 다시 열림")
+    # 에이전트는 live/heartbeat 를 5초마다 쓴다 - 그때마다 줄을 다시 만들면 치던 칸의 포커스가 빠진다 (Task 7 검토)
+    page.focus("#copy-list .copy-row:nth-child(2) .copy-slot")
+    db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600, "every": 5, "n": 1})   # 값이 바뀌어야 onValue 가 온다 (시드는 그대로 신선하게)
+    time.sleep(1)
+    check(page.evaluate("document.activeElement === document.querySelector('#copy-list .copy-row:nth-child(2) .copy-slot')")
+          and page.input_value("#copy-list .copy-row:nth-child(2) .copy-slot") == "5",
+          "받을 번호 칸에 포커스를 둔 채 heartbeat 가 와도 그 칸 그대로 (줄을 다시 만들지 않는다)")
     asked = []
     page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
     page.click("#copy-send")
