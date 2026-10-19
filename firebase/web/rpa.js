@@ -49,7 +49,14 @@ const HTML = `
     <div class="tiles" id="tiles"></div>
     <div class="cols">
       <div>
-        <div class="card hide" id="token-card"></div>
+        <div class="card hide" id="token-card">
+          <div class="tok" id="token-box">
+            <h2>토큰 <span class="num" id="tok-left"></span></h2>
+            <div class="tok-bar" id="tok-bar" role="img"><span class="fill"></span></div>
+            <div class="tok-foot" id="tok-foot"><span class="num" id="tok-used"></span><span class="num" id="tok-granted"></span></div>
+            <div class="msg" id="token-line"></div>
+          </div>
+        </div>
         <div class="card recent">
           <h2>최근 20일 <span class="muted" id="recent-meta"></span></h2>
           <div class="recent-body">
@@ -71,12 +78,6 @@ const HTML = `
             ${runBtn("run-prepare", PLAY, "ACTOR 오토파일럿")}
             ${runBtn("run-routine", PLAY, "PROCESS 오토파일럿")}
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
-          </div>
-          <div class="tok hide" id="token-box">
-            <div class="tok-head"><span>토큰</span><span class="num" id="tok-left"></span></div>
-            <div class="tok-bar" id="tok-bar" role="img"><span class="fill"></span></div>
-            <div class="tok-foot" id="tok-foot"><span class="num" id="tok-used"></span><span class="num" id="tok-granted"></span></div>
-            <div class="msg" id="token-line"></div>
           </div>
           <div class="msg bad" id="repeat-line" hidden></div>
           <button class="apply" id="repeat-resume" hidden>반복 다시 시작</button>
@@ -141,7 +142,8 @@ export function mount(el, context) {
   };
   $("repeat-resume").onclick = () => send("resume_repeat", null, "반복 다시 시작");
   show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
-  if (!c.isAdmin) $("token-card").append($("token-box"));   // 남은 토큰 막대는 유저도 본다 - 본문 맨 위 (사용자 2026-10-19)
+  // 토큰 카드: 관리자는 오른쪽 열 '실행' 위, 유저(오른쪽 열 없음)는 본문 맨 위 그대로 (사용자 2026-10-19)
+  if (c.isAdmin) $("sidecol").prepend($("token-card"));
   paintedRecent = null;
   const strip = $("recent-strip");
   // 폭이 바뀌거나 다시 보이면 칸 크기를 다시 맞추고 오늘(오른쪽 끝)로. 띠 위에서 세로 휠은 가로 스크롤로 (넘칠 때만)
@@ -584,8 +586,8 @@ function paintButtons() {
 
 // --- 토큰 (2026-10-06, 2부 · 막대 2026-10-19): 남은 토큰 막대 + 한 줄. 통장이 없는 업체(live.tokens 없음)는 없다 ------
 // 남은 토큰이 1 이상이면 실행은 된다 (도중에 떨어져도 끝까지) - 이번 실행에 드는 것보다 적으면 호박색, 0 이하면 빨강·잠금.
-// 막대 = 충전 합계(wallet.granted) 중 쓴 양을 채운다. 색은 환경설정 안내와 같은 ECAM - 남은 것이 20% 미만이거나 다음 실행에 모자라면
-// 호박색, 0 이하면 빨강 (사용자 2026-10-19). 관리자는 실행 단추 아래, 유저는 본문 맨 위 카드
+// 막대 = 충전 합계(wallet.granted) 대비 남은 양을 채운다. 색은 환경설정 안내와 같은 ECAM - 남은 것이 20% 미만이거나 다음 실행에
+// 모자라면 호박색, 0 이하면 빨강 (사용자 2026-10-19). 관리자는 '실행' 위 카드, 유저는 본문 맨 위 카드
 const TOKEN_LOW = 0.2;
 let walletAt, walletP = null, tokSeq = 0;
 function walletOf(balance) {                   // 충전 합계 - 남은 토큰이 바뀔 때만 다시 읽는다 (막대·사용량 카드가 같이 쓴다, 2026-10-14 읽기 한도)
@@ -600,8 +602,7 @@ function paintTokens() {
   const t = live?.tokens, line = $("token-line"), bar = $("tok-bar");
   paintUsage();                                          // 통장이 사라졌을 때 카드를 숨기는 것도 여기서
   const has = typeof t?.balance === "number";
-  show($("token-box"), has);
-  show($("token-card"), has && !c.isAdmin);
+  show($("token-card"), has);
   if (!has) { tokSeq++; return; }
   const all = t.cost?.all ?? 0, state = t.balance <= 0 ? "bad" : t.balance < all ? "warn" : "good";
   if (state === "bad") line.textContent = `토큰이 없습니다. (남은 토큰 ${count(t.balance)}개) 토큰을 충전한 뒤 실행하여 주십시오.`;
@@ -616,8 +617,7 @@ function paintTokens() {
     const g = Number(w?.granted), ok = Number.isFinite(g) && g > 0;
     show(bar, ok); show($("tok-foot"), ok);      // 충전 합계를 모르면 막대 없이 글자만
     if (!ok) return;
-    // 채운 칸 = 쓴 양 (사용자 2026-10-19: 70% 를 썼으면 막대도 70% 차야 한다). 색은 남은 상태 - 다 쓰면 막대 전체가 빨강
-    bar.querySelector(".fill").style.width = `${Math.round(Math.min(Math.max((g - t.balance) / g, 0), 1) * 100)}%`;
+    bar.querySelector(".fill").style.width = `${Math.round(Math.min(Math.max(t.balance / g, 0), 1) * 100)}%`;   // 채운 칸 = 남은 양
     if (state === "good" && t.balance < g * TOKEN_LOW) bar.dataset.state = "warn";   // 글줄은 그대로 (다음 실행에 모자랄 때만 경고)
     $("tok-used").textContent = `사용 ${count(g - t.balance)}개`;
     $("tok-granted").textContent = `충전 합계 ${count(g)}개`;
