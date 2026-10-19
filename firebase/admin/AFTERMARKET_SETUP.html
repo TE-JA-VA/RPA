@@ -328,10 +328,80 @@ function pcRowEl(d, p, rel) {
     await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/rollback`, {});
     flash(`되돌리기 명령을 전송하였습니다. (${p.pcId} → ${p.update.backup})`); await refreshRow(d, p.pcId);
   }) }, `이전 버전으로 되돌리기${busy ? "" : ` (${p.update.backup})`}`) : null;   // 진행 중엔 보관본이 아직 옛 값이다
+  const pre = el("button", { class: "preset-open", onclick: () => {       // 그 PC 아래 프리셋 펼침·접음 (줄을 다시 그려도 펼친 것은 남는다)
+    const old = document.getElementById(`pc-${p.pcId}-presets`);
+    if (old) return old.remove();
+    document.getElementById(`pc-${p.pcId}`)?.after(presetPanel(d, p));
+  } }, "프리셋");
   const tr = el("tr", { id: `pc-${p.pcId}` }, el("td", {}, p.label || "(이름 없음)"), el("td", {}, p.pcId), el("td", {}, ver),
-    el("td", { title: p.update?.reason ?? "" }, phase.text), el("td", {}, el("div", { class: "row" }, sel, go, back), memo));
+    el("td", { title: p.update?.reason ?? "" }, phase.text), el("td", {}, pre), el("td", {}, el("div", { class: "row" }, sel, go, back), memo));
   if (busy) followRow(d, p.pcId, tr);
   return tr;
+}
+// --- 프리셋 가져오기·넣어 주기·되돌리기 (설계 2026-10-19 4.1절) - PC 줄 아래 펼침. 파일(autopilot-preset)에는 아이디·비밀번호가 없다 ---
+const PRESET_END = ["done", "failed", "expired"];
+const pause = (ms) => new Promise((ok) => setTimeout(ok, ms));
+// 관리 화면이 보낸 프리셋 명령(key)이 끝날 때까지 2초마다 - 끝나면 결과를 알리고 펼침을 새로 그린다. 펼침을 접으면(화면에서 빠지면) 멈춘다
+async function followPreset(d, p, key, panel) {
+  for (let i = 0; i < 320 && panel.isConnected; i++) {           // 명령 만료(600초)보다 조금 더
+    await pause(2000);
+    let s;
+    try { s = await api("GET", `/api/companies/${d.cid}/pcs/${p.pcId}/status`); } catch { continue; }
+    if (s.preset?.key !== key || !PRESET_END.includes(s.preset.state)) continue;
+    flash(s.preset.state === "done" ? s.preset.result : `변경하지 못했습니다. ${s.preset.result ?? "PC가 응답하지 않습니다."}`, s.preset.state !== "done");
+    Object.assign(p, s);
+    if (panel.isConnected) panel.replaceWith(presetPanel(d, p));
+    return;
+  }
+}
+// [가져오기]: 명령을 보내고 2초마다 전송 자리를 받아 오면 파일로 다운로드 (받으면 서버의 전송 자리는 지워진다). 60초 넘으면 응답 없음
+async function exportPreset(d, p, no) {
+  const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/${no}/export`, {});
+  flash(`프리셋 ${no} 가져오기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
+  for (let i = 0; i < 30; i++) {
+    await pause(2000);
+    const t = await api("GET", `/api/companies/${d.cid}/transfers/${r.tid}`);
+    if (t.file) {
+      const a = el("a", { href: URL.createObjectURL(new Blob([JSON.stringify(t.file, null, 1)], { type: "application/json" })), download: `프리셋_${d.cid}_${p.pcId}_${no}.json` });
+      document.body.append(a); a.click(); a.remove();
+      return flash(`프리셋 ${no}을(를) 파일로 다운로드하였습니다.`);
+    }
+    const s = await api("GET", `/api/companies/${d.cid}/pcs/${p.pcId}/status`);
+    if (s.preset?.key === r.key && (s.preset.state === "failed" || s.preset.state === "expired")) throw new Error(`가져오지 못했습니다. ${s.preset.result ?? ""}`.trim());
+  }
+  throw new Error("PC가 응답하지 않습니다.");
+}
+function presetPanel(d, p) {
+  const file = el("input", { type: "file", accept: ".json" }), slot = el("input", { class: "preset-slot", type: "number", min: 1, max: 40, style: "width:5em" });
+  let loaded = null;
+  file.onchange = async () => {
+    loaded = null;
+    try { loaded = JSON.parse(await file.files[0].text()); slot.value = Number.isInteger(loaded?.no) ? loaded.no : ""; } catch { flash("프리셋 파일 형식이 아닙니다.", true); }
+  };
+  const put = el("button", { class: "preset-import", onclick: () => act(put, async () => {
+    if (!loaded) throw new Error("프리셋 파일을 선택하여 주십시오.");
+    const n = Number(slot.value);
+    if (!confirm(`프리셋 ${n}을(를) 이 파일로 변경합니다. 기록이 있으면 덮어쓰며 이전 기록은 PC에 보관됩니다. 진행하시겠습니까?`)) return;
+    const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/import`, { file: loaded, slot: n });
+    flash(`프리셋 ${n} 넣어 주기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
+    followPreset(d, p, r.key, panel);
+  }) }, "넣어 주기");
+  const rows = (p.presets ?? []).map((x) => {
+    const get = el("button", { class: "preset-export", "data-no": x.no, onclick: () => act(get, () => exportPreset(d, p, x.no)) }, "가져오기");
+    const back = x.backup ? el("button", { class: "preset-restore", "data-no": x.no, onclick: () => act(back, async () => {
+      if (!confirm(`프리셋 ${x.no}을(를) 이전 기록으로 되돌리시겠습니까?`)) return;
+      const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/${x.no}/restore`, {});
+      flash(`프리셋 ${x.no} 되돌리기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
+      followPreset(d, p, r.key, panel);
+    }) }, "되돌리기") : null;
+    return el("tr", { class: "preset" }, el("td", { class: "num" }, x.no), el("td", {}, x.name || "(이름 없음)"), el("td", {}, x.code || "-"),
+      el("td", { class: "num" }, `${x.steps ?? 0}단계`), el("td", {}, el("div", { class: "row" }, get, back)));
+  });
+  const panel = el("tr", { id: `pc-${p.pcId}-presets`, class: "preset-panel" }, el("td", { colspan: 6 },
+    rows.length ? el("table", {}, el("tbody", {}, rows)) : el("p", { class: "muted" }, "프리셋 정보가 없습니다. (PC가 꺼져 있거나 옵저버 프리셋이 없음)"),
+    el("div", { class: "row" }, file, el("label", { class: "inline" }, "칸 번호 ", slot), put),
+    el("p", { class: "muted" }, "가져온 파일에는 아이디·비밀번호가 없습니다. 검색어 등 입력한 값은 포함될 수 있습니다.")));
+  return panel;
 }
 // 판 목록 (업체 표 위) - [판 목록] 을 누르면 펼친다
 async function drawReleases() {
@@ -360,7 +430,7 @@ function pcSection(d) {
     refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
   }) }, "PC 추가");
   return el("div", { class: "sec" }, el("h3", {}, "PC"),
-    d.pcs.length ? el("div", { style: "overflow-x:auto" }, el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"].map((h) => el("th", {}, h)))),
+    d.pcs.length ? el("div", { style: "overflow-x:auto" }, el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "프리셋", "업데이트"].map((h) => el("th", {}, h)))),
       el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases))))) : el("p", { class: "muted" }, "PC가 없습니다."),
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
 }

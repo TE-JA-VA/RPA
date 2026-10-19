@@ -57,13 +57,14 @@ const ROUTES = [...routes.compile([
 let chain = Promise.resolve();
 const serial = (fn) => { const run = chain.then(fn); chain = run.catch(() => {}); return run; };
 
-function readJson(req) {
+const BODY_MAX = 65536, PRESET_BODY_MAX = 8 * 1048576;   // 프리셋 파일(기록 수십~수백 KB)을 올리는 요청만 크게
+function readJson(req, max = BODY_MAX) {
   return new Promise((ok, fail) => {
     const chunks = [];
     let size = 0;
     req.on("data", (c) => {
       size += c.length;
-      if (size > 65536) { fail(new ops.Refused("요청이 너무 큽니다.")); req.destroy(); } else chunks.push(c);
+      if (size > max) { fail(new ops.Refused("요청이 너무 큽니다.")); req.destroy(); } else chunks.push(c);
     });
     req.on("end", () => {
       try { ok(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); } catch { fail(new ops.Refused("요청 형식이 올바르지 않습니다.")); }
@@ -97,7 +98,7 @@ async function handle(req, res) {
   if (!found) return send(404, { error: "알 수 없는 요청입니다." });
   const { route, params } = found;
   try {
-    const body = req.method === "POST" ? await readJson(req) : {};
+    const body = req.method === "POST" ? await readJson(req, path.endsWith("/presets/import") ? PRESET_BODY_MAX : BODY_MAX) : {};
     const work = () => route.run(body, params);
     const result = await (req.method === "POST" ? serial(work) : work());
     const line = route.note?.(body, result, params);

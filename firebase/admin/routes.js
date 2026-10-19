@@ -58,6 +58,11 @@ export const ROUTES = compile([
   ["GET", "/api/companies/:cid/pcs/:pcId/status", (b, p) => ops.pcUpdateStatus(p.cid, p.pcId)],
   ["POST", "/api/companies/:cid/pcs/:pcId/update", (b, p) => ops.sendUpdate(p.cid, p.pcId, b.version), (b, r, p) => `업데이트 ${p.cid}/${p.pcId} → ${b.version}`],
   ["POST", "/api/companies/:cid/pcs/:pcId/rollback", (b, p) => ops.sendRollback(p.cid, p.pcId), (b, r, p) => `이전 판으로 되돌리기 ${p.cid}/${p.pcId}`],
+  // 프리셋 가져오기·넣어 주기·되돌리기 (설계 2026-10-19 4.1절). 기록 글에 파일 내용은 절대 넣지 않는다. 진행은 .../status 의 preset 으로 본다
+  ["POST", "/api/companies/:cid/pcs/:pcId/presets/:no/export", (b, p) => ops.exportPreset(p.cid, p.pcId, Number(p.no)), (b, r, p) => `프리셋 가져오기 ${p.cid}/${p.pcId} ${p.no}`],
+  ["GET", "/api/companies/:cid/transfers/:tid", (b, p) => ops.takeTransfer(p.cid, p.tid)],
+  ["POST", "/api/companies/:cid/pcs/:pcId/presets/import", (b, p) => ops.importPreset(p.cid, p.pcId, b.file, b.slot), (b, r, p) => `프리셋 넣어 주기 ${p.cid}/${p.pcId} ${r.slot}`],
+  ["POST", "/api/companies/:cid/pcs/:pcId/presets/:no/restore", (b, p) => ops.restorePreset(p.cid, p.pcId, Number(p.no)), (b, r, p) => `프리셋 되돌리기 ${p.cid}/${p.pcId} ${p.no}`],
   ["GET", "/api/prices", () => ops.getPrices()],
   ["POST", "/api/prices", (b) => ops.setPrices(b.values), (b) => `토큰 배율 ${priceNote(b.values)}`],
   ["GET", "/api/usage", () => ops.usageRows()],

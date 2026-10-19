@@ -424,7 +424,7 @@ with sync_playwright() as pw:
 
     open_company(page, CID)
     heads = [h.strip() for h in page.locator("#detail table.pcs th").all_text_contents()]
-    check(heads == ["PC 이름", "PC코드", "버전", "업데이트 상태", "업데이트"], f"PC 는 표로 - 칸이 맞춰진다 ({heads})")
+    check(heads == ["PC 이름", "PC코드", "버전", "업데이트 상태", "프리셋", "업데이트"], f"PC 는 표로 - 칸이 맞춰진다 ({heads})")
     cells = [c.strip() for c in page.locator(f"#pc-{PC} td").all_text_contents()]
     check(cells[1] == PC and cells[2] == "2026.10.07-4 (안정본)" and cells[3] == "업데이트됨 10/7 14:03", f"PC 줄 칸: 코드·버전·상태 ({cells})")
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4"
@@ -435,8 +435,9 @@ with sync_playwright() as pw:
           f"고르기 칸은 버전만, 고른 버전의 비고는 아래에 ({opt!r}, {page.text_content(f'#pc-{PC} .upd-memo')!r})")
     lines = lambda sel: page.evaluate(f"""[...document.querySelectorAll("{sel}")].map((el) => {{ const r = document.createRange();
       r.selectNodeContents(el); return r.getClientRects().length; }})""")
-    check(set(lines("#detail table.pcs th") + lines(f"#pc-{PC} td:not(:last-child)") + lines(f"#pc-{PC} button")) == {1},
-          f"PC 표 머리·칸·단추가 한 줄 ({lines('#detail table.pcs th')}, {lines(f'#pc-{PC} td:not(:last-child)')}, {lines(f'#pc-{PC} button')})")
+    cells_sel = f"#pc-{PC} td:not(:last-child):not(:has(button))"   # 단추만 든 칸(프리셋)은 단추 쪽에서 잰다 (Range 가 단추를 두 상자로 센다)
+    check(set(lines("#detail table.pcs th") + lines(cells_sel) + lines(f"#pc-{PC} button")) == {1},
+          f"PC 표 머리·칸·단추가 한 줄 ({lines('#detail table.pcs th')}, {lines(cells_sel)}, {lines(f'#pc-{PC} button')})")
     if os.environ.get("SHOT_DIR"): page.locator("#detail .sec").first.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "pc_row.png"))
     page.select_option(f"#pc-{PC} select.upd-ver", "2026.10.07-5")
     check(page.text_content(f"#pc-{PC} .upd-memo") == "새", "다른 버전을 고르면 그 버전의 비고")
@@ -500,6 +501,104 @@ with sync_playwright() as pw:
     page.wait_for_timeout(800)
     check(db_get("meta/releases/stable") == "2026.10.07-5", "판 목록에서 안정본으로 지정")
     check("안정본 지정 2026.10.07-5" in open(LOG, encoding="utf-8").read(), "관리 기록에 남는다")
+
+    print("프리셋 가져오기·넣어 주기·되돌리기 (설계 2026-10-19 4.1절)")
+    import tempfile
+    CMDS = f"apps/rpa/commands/{CID}/{PC}"
+    REC = {"version": 1, "start_url": "https://mall.example/login", "viewport": {"width": 1280, "height": 800},
+           "steps": [{"id": 1, "kind": "click", "sel": "#go"}, {"id": 2, "kind": "type", "sel": "#q", "value": "검색어"}]}
+    FILE = {"kind": "autopilot-preset", "version": 1, "exported_at": "2026-10-19T10:00:00", "from": {"cid": CID, "pcId": PC, "no": 1},
+            "no": 1, "name": "네이버 스마트스토어", "code": "001", "record": REC}
+    db_put(f"apps/rpa/live/{CID}/{PC}/presets", [
+        {"no": 1, "name": "네이버 스마트스토어", "code": "001", "steps": 2, "saved_at": "2026-10-19T09:00:00", "has_login": True, "on": True, "backup": False},
+        {"no": 2, "name": "쿠팡", "code": "002", "steps": 5, "saved_at": "2026-10-19T09:00:00", "has_login": False, "on": False, "backup": True}])
+    db_put(f"apps/rpa/live/{CID}/{PC}/preset_transfer", 1)
+    open_company(page, CID)
+    box = f"#pc-{PC}-presets"
+    page.click(f"#pc-{PC} button.preset-open")
+    page.wait_for_selector(box, timeout=10000)
+    rows = [r.strip() for r in page.locator(f"{box} tr.preset").all_text_contents()]
+    check(len(rows) == 2 and all(w in rows[0] for w in ("1", "네이버 스마트스토어", "001", "2")) and all(w in rows[1] for w in ("2", "쿠팡", "002", "5")),
+          f"[프리셋] 을 누르면 그 PC 아래 프리셋마다 번호·이름·사이트코드·단계 수 ({rows})")
+    check(page.locator(f"{box} button.preset-export").count() == 2 and page.locator(f"{box} button.preset-restore").count() == 1
+          and page.get_attribute(f"{box} button.preset-restore", "data-no") == "2", "프리셋마다 [가져오기], 보관이 있는 칸에만 [되돌리기]")
+    check("가져온 파일에는 아이디·비밀번호가 없습니다. 검색어 등 입력한 값은 포함될 수 있습니다." in page.text_content(box), "안내 한 줄")
+    dialogs.clear()
+    with page.expect_download(timeout=30000) as dl:
+        page.click(f"{box} button.preset-export[data-no='1']")
+        page.wait_for_timeout(800)
+        exp = [(k, v) for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "export_preset"]
+        tid = exp[0][1]["args"].get("tid", "") if exp else ""
+        check(len(exp) == 1 and exp[0][1]["args"] == {"tid": tid, "nos": [1], "with_phone": False} and exp[0][1]["by"] == "admin-tool"
+              and re.fullmatch(r"[a-z0-9]{20}", tid) and exp[0][1]["state"] == "queued", f"[가져오기] → export_preset 명령 (tid 20자, nos [1], 휴대폰 없이) ({exp})")
+        now_ms = int(time.time() * 1000)   # 에이전트 대신 전송 자리에 올리고 명령을 끝낸다
+        db_put(f"apps/rpa/transfers/{CID}/{tid}", {"by": "admin-tool", "from_pc": PC, "created_at": now_ms, "expires_at": now_ms + 6 * 3600 * 1000, "presets": [FILE]})
+        db_patch(f"{CMDS}/{exp[0][0]}", {"state": "done", "started_at": int(time.time()), "ended_at": int(time.time()), "result": "프리셋 1개를 보냈습니다."})
+    got = dl.value
+    with open(got.path(), encoding="utf-8") as f:
+        content = json.load(f)
+    check(got.suggested_filename == f"프리셋_{CID}_{PC}_1.json" and content == FILE, f"파일로 내려받는다 (이름·내용) ({got.suggested_filename})")
+    check(db_get(f"apps/rpa/transfers/{CID}/{tid}") is None, "내려받은 뒤 전송 자리는 지운다")
+    text = open(LOG, encoding="utf-8").read()
+    check(f"프리셋 가져오기 {CID}/{PC} 1" in text and "mall.example" not in text and "검색어" not in text, "관리 기록에 가져오기 한 줄, 기록 내용은 없다")
+    code, r = api("GET", f"/api/companies/{CID}/transfers/{tid}")
+    check(code == 200 and r == {"pending": True}, "없는 전송은 '아직' (pending)", (code, r))
+    # 넣어 주기 - 200 KB 기록 (Review Focus 4: 요청 상한 64 KB 를 넘는다)
+    BIG = dict(FILE, no=2, name="큰 기록", code="003", record=dict(REC, steps=[{"id": i, "kind": "click", "sel": f"#b{i}", "text": "x" * 100} for i in range(1, 1801)]))
+    tmp = tempfile.mkdtemp()
+    big_path = os.path.join(tmp, "big.json")
+    with open(big_path, "w", encoding="utf-8") as f:
+        json.dump(BIG, f, ensure_ascii=False)
+    check(os.path.getsize(big_path) > 200 * 1024, f"시험 파일은 200 KB 넘김 ({os.path.getsize(big_path)})")
+    page.set_input_files(f"{box} input[type=file]", big_path)
+    page.wait_for_function(f"document.querySelector('{box} input.preset-slot')?.value === '2'", timeout=10000)
+    check(True, "파일을 고르면 칸 번호 기본값 = 파일의 번호")
+    page.fill(f"{box} input.preset-slot", "3")
+    dialogs.clear()
+    page.click(f"{box} button.preset-import")
+    page.wait_for_timeout(1500)
+    check(dialogs == ["프리셋 3을(를) 이 파일로 변경합니다. 기록이 있으면 덮어쓰며 이전 기록은 PC에 보관됩니다. 진행하시겠습니까?"], f"넣어 주기 확인 창 ({dialogs})")
+    imp = [(k, v) for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "import_preset"]
+    tid2 = imp[0][1]["args"].get("tid", "") if imp else ""
+    check(len(imp) == 1 and imp[0][1]["args"] == {"tid": tid2, "slots": [3]} and re.fullmatch(r"[a-z0-9]{20}", tid2), f"import_preset 명령 (slots [3]) ({imp and imp[0][1]['args'].get('slots')})")
+    tr = db_get(f"apps/rpa/transfers/{CID}/{tid2}") or {}
+    check(tr.get("presets", [None])[0] == BIG and tr.get("by") == "admin-tool" and tr.get("from_pc") == "admin"
+          and tr.get("expires_at", 0) - tr.get("created_at", 0) == 6 * 3600 * 1000, "전송 자리에 그 파일 (by admin-tool, 6시간)", {k: v for k, v in tr.items() if k != "presets"})
+    db_patch(f"{CMDS}/{imp[0][0]}", {"state": "done", "started_at": int(time.time()), "ended_at": int(time.time()), "result": "총괄 계정이 프리셋 3을(를) 변경하였습니다. (이전 기록 보관)"})
+    page.wait_for_function("document.getElementById('flash').textContent.includes('변경하였습니다')", timeout=15000)
+    check("bad" not in (page.get_attribute("#flash", "class") or ""), "PC 가 끝내면 그 결과를 알린다")
+    text = open(LOG, encoding="utf-8").read()
+    check(f"프리셋 넣어 주기 {CID}/{PC} 3" in text and "#b1799" not in text, "관리 기록에 넣어 주기 한 줄, 파일 내용은 없다")
+    # 비밀번호가 든 파일은 올리기 전에 거절 (서버에도 남지 않는다)
+    for label, bad in (("PW 키", dict(FILE, PW="secret-pw-value")),
+                       ("값이 든 비밀번호 단계", dict(FILE, record=dict(REC, steps=[{"id": 1, "kind": "secret", "value": "hunter2-pw"}])))):
+        bad_path = os.path.join(tmp, f"bad_{label}.json")   # 같은 이름을 다시 고르면 change 가 안 난다
+        with open(bad_path, "w", encoding="utf-8") as f:
+            json.dump(bad, f, ensure_ascii=False)
+        page.fill(f"{box} input.preset-slot", "")
+        page.set_input_files(f"{box} input[type=file]", bad_path)
+        page.wait_for_function(f"document.querySelector('{box} input.preset-slot')?.value === '1'", timeout=10000)   # 파일을 다 읽은 뒤
+        page.click(f"{box} button.preset-import")
+        page.wait_for_function("!document.getElementById('flash').classList.contains('hide') && document.getElementById('flash').classList.contains('bad')", timeout=10000)
+        tr_all = json.dumps(db_get(f"apps/rpa/transfers/{CID}") or {}, ensure_ascii=False)
+        check("비밀번호" in page.text_content("#flash") and len([v for v in (db_get(CMDS) or {}).values() if v.get("type") == "import_preset"]) == 1
+              and "secret-pw-value" not in tr_all and "hunter2-pw" not in tr_all, f"{label}가 든 파일은 거절 (명령·전송 없음) ({page.text_content('#flash')})")
+        page.evaluate("document.getElementById('flash').classList.add('hide')")
+    for label, body in (("칸 번호 41", {"file": FILE, "slot": 41}), ("칸 번호 글자", {"file": FILE, "slot": "셋"}), ("파일 아님", {"file": "x", "slot": 1})):
+        code, r = api("POST", f"/api/companies/{CID}/pcs/{PC}/presets/import", body)
+        check(code == 400, f"넣어 주기 거절: {label}", (code, r))
+    check(len([v for v in (db_get(CMDS) or {}).values() if v.get("type") == "import_preset"]) == 1, "거절된 것은 명령을 만들지 않는다")
+    dialogs.clear()
+    page.click(f"{box} button.preset-restore[data-no='2']")
+    page.wait_for_timeout(1000)
+    rst = [v for v in (db_get(CMDS) or {}).values() if v.get("type") == "restore_preset"]
+    check(dialogs == ["프리셋 2을(를) 이전 기록으로 되돌리시겠습니까?"] and len(rst) == 1 and rst[0]["args"] == {"nos": [2]},
+          f"[되돌리기] → restore_preset 명령 ({dialogs}, {rst and rst[0]['args']})")
+    check(f"프리셋 되돌리기 {CID}/{PC} 2" in open(LOG, encoding="utf-8").read(), "관리 기록에 되돌리기 한 줄")
+    code, d = api("GET", f"/api/companies/{CID}")
+    pcrow = next((x for x in d.get("pcs", []) if x["pcId"] == PC), {}) if code == 200 else {}
+    check([x["no"] for x in pcrow.get("presets") or []] == [1, 2], "업체 상세의 PC 줄에 프리셋 요약 (live.presets)", str(pcrow)[:200])
+    call("DELETE", f"{DB}/apps/rpa/transfers/{CID}.json?ns={NS}", None, OWNER)
 
     print("화면 다듬기 (사용자 2026-10-07)")
     check("지금은 기본값" not in page.text_content("#detail"), "자동 실행 개수: '지금은 기본값' 글 없음")

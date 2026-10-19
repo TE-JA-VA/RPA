@@ -289,16 +289,67 @@ export async function sendUpdate(cid, pcId, version) {
   return sendAdminCommand(cid, pcId, "update", { version });
 }
 export const sendRollback = (cid, pcId) => sendAdminCommand(cid, pcId, "rollback", null);
-/** PC 한 대의 버전·업데이트 상태와 관리 화면이 보낸 마지막 업데이트/되돌리기 명령 - 화면이 진행 중인 줄만 3초마다 다시 읽는다 */
+/** PC 한 대의 버전·업데이트 상태와 관리 화면이 보낸 마지막 업데이트/되돌리기 명령 - 화면이 진행 중인 줄만 3초마다 다시 읽는다.
+ *  프리셋 요약(live.presets - 이름·코드·단계 수, 기록 내용 없음)과 마지막 프리셋 명령(preset)도 같이 - 화면이 가져오기·넣어 주기를 따라간다 */
 export async function pcUpdateStatus(cid, pcId) {
   checkKey("cid", cid); checkKey("pcId", pcId);
   const live = (await rtdb.ref(`apps/rpa/live/${cid}/${pcId}`).get()).val() ?? {};
-  const recent = (await rtdb.ref(`apps/rpa/commands/${cid}/${pcId}`).orderByKey().limitToLast(20).get()).val() ?? {};
-  const c = Object.values(recent).filter((x) => x?.by === "admin-tool" && (x.type === "update" || x.type === "rollback")).at(-1);
+  const recent = Object.entries((await rtdb.ref(`apps/rpa/commands/${cid}/${pcId}`).orderByKey().limitToLast(20).get()).val() ?? {})
+    .filter(([, x]) => x?.by === "admin-tool");
+  const c = recent.map(([, x]) => x).filter((x) => x.type === "update" || x.type === "rollback").at(-1);
   const cmd = c ? { type: c.type, state: c.state, created_at: c.created_at ?? null, expires_at: c.expires_at ?? null,
     started_at: c.started_at ?? null, result: c.result ?? null } : null;
-  return { version: live.version ?? null, update: live.update ?? null, cmd };
+  const p = recent.filter(([, x]) => PRESET_TYPES.includes(x.type)).at(-1);
+  const preset = p ? { key: p[0], type: p[1].type, state: p[1].state, result: p[1].result ?? null } : null;
+  return { version: live.version ?? null, update: live.update ?? null, cmd, presets: Array.isArray(live.presets) ? live.presets : null, preset };
 }
+// 프리셋 가져오기·넣어 주기·되돌리기 (설계 2026-10-19 4.1절). 전송 자리 apps/rpa/transfers/{cid}/{tid} 에 잠깐 올렸다 지운다.
+// 파일에는 이름·사이트코드·기록만 - 아이디·비밀번호가 든 파일은 올리기 전에 거절한다 (서버에도 남지 않게).
+const PRESET_TYPES = ["export_preset", "import_preset", "restore_preset"];
+export const TRANSFER_TTL_SEC = 6 * 3600;        // agent.TRANSFER_TTL_SEC 와 같다
+const PRESET_FILE_MAX = 8 * 1048576;
+const PRESET_SLOT_MAX = 40;                       // 웰라이프 업체의 프리셋 수 (rpa_status) - 칸 번호 상한
+const TID_RE = /^[a-z0-9]{20}$/;                   // routes 의 :tid 와 agent.TRANSFER_RE 를 둘 다 지난다
+const newTid = () => randomBytes(10).toString("hex");
+function presetNo(no, what = "프리셋 번호") {
+  if (!Number.isInteger(no) || no < 1 || no > PRESET_SLOT_MAX) throw new Refused(`${what}는 1~${PRESET_SLOT_MAX} 사이의 정수여야 합니다. (받은 값: ${no})`);
+  return no;
+}
+export function checkPresetFile(file) {
+  if (!file || typeof file !== "object" || Array.isArray(file)) throw new Refused("프리셋 파일 형식이 아닙니다.");
+  if (file.kind !== "autopilot-preset" || file.version !== 1) throw new Refused("오토파일럿 프리셋 파일이 아니거나 버전이 다릅니다.");
+  if (["id", "pw", "ID", "PW"].some((k) => k in file)) throw new Refused("아이디·비밀번호가 든 파일은 받지 않습니다.");
+  const steps = file.record?.steps;
+  if (!Array.isArray(steps)) throw new Refused("기록 형식이 올바르지 않습니다.");
+  if (steps.some((s) => s && typeof s === "object" && (s.kind === "secret" || s.credential === "PW") && s.value)) throw new Refused("비밀번호 값이 든 기록은 받지 않습니다.");
+  if (JSON.stringify(file).length > PRESET_FILE_MAX) throw new Refused("프리셋 파일이 너무 큽니다. (8 MB 이하)");
+  return file;
+}
+export async function exportPreset(cid, pcId, no) {
+  const tid = newTid();
+  const { key } = await sendAdminCommand(cid, pcId, "export_preset", { tid, nos: [presetNo(no)], with_phone: false });
+  return { key, tid };
+}
+/** 전송 자리를 읽어 있으면 지우고 파일을 돌려준다. 아직 없으면 {pending: true} - 화면이 2초마다 다시 부른다 */
+export async function takeTransfer(cid, tid) {
+  checkKey("cid", cid);
+  if (!TID_RE.test(tid)) throw new Refused("전송 번호가 올바르지 않습니다.");
+  const ref = rtdb.ref(`apps/rpa/transfers/${cid}/${tid}`);
+  const v = (await ref.get()).val();
+  if (!v?.presets?.[0]) return { pending: true };
+  await ref.remove();
+  return { file: v.presets[0] };
+}
+export async function importPreset(cid, pcId, file, slot) {
+  checkKey("cid", cid); checkKey("pcId", pcId);
+  checkPresetFile(file);
+  presetNo(slot, "칸 번호");
+  const tid = newTid(), now = Date.now();
+  await rtdb.ref(`apps/rpa/transfers/${cid}/${tid}`).set({ by: "admin-tool", from_pc: "admin", created_at: now, expires_at: now + TRANSFER_TTL_SEC * 1000, presets: [file] });
+  const { key } = await sendAdminCommand(cid, pcId, "import_preset", { tid, slots: [slot] });
+  return { key, tid, slot };
+}
+export const restorePreset = (cid, pcId, no) => sendAdminCommand(cid, pcId, "restore_preset", { nos: [presetNo(no)] });
 export async function setStable(version) {
   const cur = await releasesOf();
   if (!cur.list.some((x) => x.version === version)) throw new Refused(`업로드되지 않은 버전입니다: ${version}`);
