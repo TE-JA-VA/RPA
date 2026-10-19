@@ -103,11 +103,14 @@ bad_cases = {
     "ID 키": dict(good, ID="x"),
     "id 키": dict(good, id="x"),
     "name 이 문자열 아님": dict(good, name=3),
+    "code 가 빈 문자열": dict(good, code=""),
+    "code 가 숫자 세 자리 아님": dict(good, code="ab"),
     "dict 아님": [good],
 }
 for label, obj in bad_cases.items():
     e = raises(ValueError, pt.check_file, obj)
     check(f"거절: {label}", e is not None and str(e).strip() != "", repr(e))
+check("사이트코드 사유 글", str(raises(ValueError, pt.check_file, dict(good, code="12"))) == "사이트코드는 숫자 세 자리여야 합니다.")
 
 print("=== 3. 같은 사이트코드로 1번 칸에 넣기 (apply) ===")
 new1 = dict(good, name="지마켓 고침", record=dict(REC, steps=REC["steps"] + [step("click", target={"text": "엑셀"})]))
@@ -187,6 +190,17 @@ s2 = site(2)
 check("다른 사이트(빈 칸)인데 파일에 휴대폰이 있으면 그 값을 쓴다", s2["Phone"] == "lee" and s2["SmsSenders"] == ["0212345678"] and s2["ID"] == "" and s2["Stts"] == 9, str(s2))
 pt.apply([(dict(with_phone, phone="park", senders=["1"]), 2)])
 check("같은 사이트면 받는 PC 에 있던 휴대폰을 둔다", site(2)["Phone"] == "lee", str(site(2)))
+
+print("=== 9. 다른 칸으로 옮긴 뒤 되돌리기는 사이트코드 겹침을 막는다 ===")
+# 1번 칸 = 지마켓 고침 012. 1번에 099 를 넣으면 012 가 보관되고, 빈 4번에 012 를 넣은 뒤 1번을 되돌리면 4번과 겹친다.
+done, rejected = pt.apply([(dict(good, name="위메프", code="099", record=REC2), 1)])
+check("1번에 099 넣음 (012 보관)", done == [1] and os.path.isfile(pt.backup_path(1)), f"{done} {rejected}")
+done, rejected = pt.apply([(dict(good, name="지마켓", code="012", record=REC2), 4)])
+check("4번에 012 넣음 (1번이 099 라 통과)", done == [4] and rejected == [], f"{done} {rejected}")
+done, rejected = pt.restore([1])
+check("되돌리기는 4번과 겹쳐 거절", done == [] and rejected == [(1, "프리셋 4와(과) 같은 사이트코드 012를 사용합니다.")], f"{done} {rejected}")
+check("보관은 남고 1번은 099 그대로", os.path.isfile(pt.backup_path(1)) and st.read_presets()[0]["code"] == "099")
+check("프리셋 파일은 여전히 읽힌다 (요약도 됨)", raises(ValueError, st.read_presets) is None and st.preset_summary() is not None)
 
 print()
 print("실패: " + (", ".join(fails) if fails else "없음"))

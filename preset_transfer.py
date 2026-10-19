@@ -7,6 +7,7 @@
 import datetime
 import json
 import os
+import re
 
 import rpa_status as st
 import web_replay
@@ -43,6 +44,8 @@ def check_file(obj):
         raise ValueError("아이디·비밀번호가 든 파일은 받지 않습니다.")
     if not isinstance(obj.get("name"), str) or not isinstance(obj.get("code"), str):
         raise ValueError("프리셋 이름·사이트코드가 올바르지 않습니다.")
+    if not re.fullmatch(r"\d{3}", obj["code"]):      # 옵저버 validate_presets 와 같은 규칙 (빈 코드는 read_presets 가 빈 칸과 겹친다고 본다)
+        raise ValueError("사이트코드는 숫자 세 자리여야 합니다.")
     rec = obj.get("record")
     if not isinstance(rec, dict) or not isinstance(rec.get("steps"), list):
         raise ValueError("기록 형식이 올바르지 않습니다.")
@@ -60,6 +63,12 @@ def _sites():
     cfg = st.read_user_config()
     sites = cfg.get(st.SITES_SECTION) if isinstance(cfg.get(st.SITES_SECTION), dict) else {}
     return sites
+
+
+def _code_clash(presets, no, code):
+    """칸 no 에 code 를 넣으면 read_presets 가 거절하는 상태가 되는지. 겹치면 사유 글, 아니면 None."""
+    k = next((p["no"] for p in presets if p["no"] != no and p.get("record") and p["code"] == code), None)
+    return None if k is None else f"프리셋 {k}와(과) 같은 사이트코드 {code}를 사용합니다."
 
 
 def _write_backup(no, preset, site):
@@ -89,9 +98,9 @@ def apply(items):
         if not isinstance(no, int) or no < 1 or no > limit:
             rejected.append((no, f"프리셋 수({limit}개)를 넘는 칸입니다."))
             continue
-        clash = next((p["no"] for p in presets if p["no"] != no and p.get("record") and p["code"] == obj["code"]), None)
-        if clash is not None:
-            rejected.append((no, f"프리셋 {clash}와(과) 같은 사이트코드 {obj['code']}를 사용합니다."))
+        clash = _code_clash(presets, no, obj["code"])
+        if clash:
+            rejected.append((no, clash))
             continue
         while len(presets) < no:
             presets.append(st.blank_preset(len(presets) + 1))
@@ -129,6 +138,10 @@ def restore(slots):
         bk = st.read_json(path) if os.path.isfile(path) else None
         if not isinstance(bk, dict) or not isinstance(bk.get("preset"), dict):
             rejected.append((no, "보관된 이전 기록이 없습니다."))
+            continue
+        clash = _code_clash(presets, no, bk["preset"].get("code")) if bk["preset"].get("record") else None
+        if clash:                     # 다른 칸으로 옮긴 뒤 되돌리면 겹친다 - 보관은 남겨 둔다
+            rejected.append((no, clash))
             continue
         while len(presets) < no:
             presets.append(st.blank_preset(len(presets) + 1))
