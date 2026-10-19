@@ -606,6 +606,91 @@ check("내보내기: 기록해서 저장한 칸(raw 또는 head 있음·loaded N
 check("내보내기 파일 이름은 프리셋_번호_이름.json (파일에 못 쓰는 글자는 _)",
       rr.export_name(3, 'a/b:c*d?e<f>g|h"') == "프리셋_3_a_b_c_d_e_f_g_h_.json", rr.export_name(3, 'a/b:c*d?e<f>g|h"'))
 
+print("=== 옵저버 [수정] 화면 쪽 (최종 고침 A7·A8·A9·A11) ===")
+LREC = dict(FREC, steps=[dict(s, id=k) for k, s in enumerate(FREC["steps"] + [
+    {"kind": "click", "page": 0, "target": {"tag": "a", "text": "요청", "css": "#req", "textCount": 1}, "gap": 10},
+    {"kind": "click", "page": 0, "target": {"tag": "a", "text": "다운로드", "css": "#dl", "textCount": 3}, "gap": 10, "appearsAfter": 3, "download": "a.xlsx"},
+    {"kind": "click", "page": 0, "target": {"tag": "a", "text": "닫기", "css": "#x", "textCount": 1}, "gap": 10}])])
+said = []
+p = rr.new_preset(1, "지마켓", "012")
+p.update(loaded=json.loads(json.dumps(LREC)), deleted={1, 5}, enabled={0: True, 2: False, 4: True, 5: True}, otp={1: False, 5: False})
+fake = SimpleNamespace(presets=[p], previewing=True, paused=True, stopping=False, editing=True, failed_at=None, recording=None, shown=3,
+                       status=SimpleNamespace(config=lambda **kw: said.append(kw.get("text"))), render=lambda: None)
+fake._final = lambda q: rr.App._final(fake, q)
+rr.App._start_edit(fake, 0, 4)
+check("A11: cut(아직 안 한 단계 id 4) 앞까지만 남긴다 - 꺼 둔·지운 단계 포함, cut 뒤의 꺼 둔·지운·인증번호 표시는 버린다",
+      [s["id"] for s in p["head"]["steps"]] == [0, 1, 2, 3] and p["deleted"] == {1} and p["enabled"] == {0: True, 2: False} and p["otp"] == {1: False}
+      and p["raw"] == [] and p["fresh"] is True, str({k: p[k] for k in ("deleted", "enabled", "otp", "raw", "fresh")}))
+check("A10: 남긴 앞부분(head)에 잘린 단계를 cut 으로 둔다 (이어 기록 첫 단계가 '몇 단계 뒤에 새로 생긴 것' 을 이어받게)",
+      p["head"].get("cut") == LREC["steps"][4] and p["head"]["start_url"] == FREC["start_url"], str(p["head"].get("cut")))
+check("A11: 미리보기 상태를 내리고 기록 중으로", fake.previewing is False and fake.paused is False and fake.editing is False and fake.failed_at is None
+      and fake.recording == 0 and fake.shown == 0)
+check("A7: 상태 글은 업무 서식", said and said[-1] == "● ① 지마켓 이어서 기록 중입니다. 마치면 [■ 기록 완료]를 눌러 주십시오.", str(said))
+final = fake._final(p)
+check("A10: 이어 붙인 기록에는 cut 이 남지 않는다", "cut" not in final and [s["id"] for s in final["steps"]] == [0, 1, 2, 3], str(final.keys()))
+
+
+class FakeBtn:
+    def __init__(self):
+        self.calls, self.colors = [], ("c", "d")
+
+    def config(self, **kw):
+        self.calls.append(kw)
+
+    def pack(self, **kw):
+        pass
+
+    def pack_forget(self):
+        pass
+
+    def state(self):
+        return next((c["state"] for c in reversed(self.calls) if "state" in c), None)
+
+
+def painted(**flags):
+    f = SimpleNamespace(recording=None, previewing=True, paused=True, stopping=False, closing=False, editing=False, failed_at=None,
+                        rec_btn=FakeBtn(), prev_btn=FakeBtn(), save_btn=FakeBtn(), edit_btn=FakeBtn(), import_btn=FakeBtn(), export_btn=FakeBtn(),
+                        paint_presets=lambda: None, toggle_pause=None, stop_preview=None, preview=None, save=None, cur=0, presets=[p])
+    f.__dict__.update(flags)
+    rr.App.paint_buttons(f)
+    return f
+
+
+f = painted(editing=True)
+check("A8: [수정] 직후 editing 중에도 [■ 중단] 은 열려 있다 (파일 받기를 기다리는 단계면 최대 5분 멈출 수 없었다)",
+      f.save_btn.state() == "normal" and f.prev_btn.state() == "disabled" and f.edit_btn.state() == "disabled", str((f.save_btn.state(), f.prev_btn.state())))
+f = painted(stopping=True)
+check("A8: 중단하는 중이면 [■ 중단] 도 잠긴다", f.save_btn.state() == "disabled")
+f = painted(closing=True)
+check("A8: 창을 닫는 중이면 [■ 중단] 도 잠긴다", f.save_btn.state() == "disabled")
+said = []
+f = SimpleNamespace(previewing=True, paused=True, stopping=False, closing=False, editing=True, failed_at=None, paint_buttons=lambda: None,
+                    status=SimpleNamespace(config=lambda **kw: said.append(kw.get("text"))), on_preview_done=lambda ok: None, _close_now=lambda: None)
+closed = rr.App._preview_done(f, True, ["a.xlsx"], 12.3, None)
+check("A8: 마지막 단계가 성공해 [수정] 이 무시되면 상태 글로 알린다", closed is False and f.editing is False and f.previewing is False
+      and said[-1] == "마지막 단계까지 끝나 수정할 자리가 없습니다. 미리보기 성공 (12초) - 받은 파일: a.xlsx", str(said))
+f.editing, f.previewing = False, True
+rr.App._preview_done(f, True, [], 3.0, None)
+check("A8: [수정] 을 안 눌렀으면 지금 글 그대로", said[-1] == "미리보기 성공 (3초) - 받은 파일: 없음", str(said))
+f.closing = True
+check("A8: 닫는 중이면 _close_now 로 True", rr.App._preview_done(f, False, [], 0, None) is True)
+asked = []
+hp = dict(rr.new_preset(2, "헤드만", "013"), head={"steps": []}, loaded=None, raw=[])
+f = SimpleNamespace(recording=None, previewing=False, presets=[hp], cur=0, _store_fields=lambda: None, start_url=None, shown=0,
+                    ask=lambda t, x: (asked.append(x), False)[1], status=SimpleNamespace(config=lambda **kw: None), render=lambda: None)
+rr.App.toggle_record(f)
+tmp_file = os.path.join(TMP, "preset_file.json")
+with open(tmp_file, "w", encoding="utf-8") as fh:
+    json.dump(FILE, fh, ensure_ascii=False)
+_orig_open = rr.filedialog.askopenfilename
+rr.filedialog.askopenfilename = lambda **kw: tmp_file
+try:
+    rr.App.import_file(f)
+finally:
+    rr.filedialog.askopenfilename = _orig_open
+check("A9: head 만 남은 칸도 '기록이 있다' - 다시 기록·파일에서 불러오기 전에 묻는다 (묻지 않고 지우지 않는다)",
+      len(asked) == 2 and hp["head"] == {"steps": []} and hp["name"] == "헤드만", str((asked, hp["head"], hp["name"])))
+
 print()
 print(f"실패: {'없음' if not fails else fails}")
 sys.exit(1 if fails else 0)

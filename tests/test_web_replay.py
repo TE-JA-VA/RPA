@@ -432,9 +432,9 @@ def main():
             rr.adopt(r.pages)
             page, pop = r.pages[0], r.pages[1]
             fl = page.frame_locator("iframe[name=content]")
-            hclick(page, fl.get_by_role("button", name="새로고침", exact=True))      # 첫 탭 → 0
-            hclick(pop, pop.get_by_placeholder("사유를 입력하세요"))                 # 팝업 → 1
+            hclick(pop, pop.get_by_placeholder("사유를 입력하세요"))                 # 팝업 → 1 (먼저 - 본 순서대로 매기면 0 이 돼 버린다)
             pop.keyboard.type("이어서 처리", delay=15)
+            hclick(page, fl.get_by_role("button", name="새로고침", exact=True))      # 첫 탭 → 0
             with pop.expect_event("close"):
                 hclick(pop, pop.get_by_role("button", name="요청", exact=True))
             row = wait_new_ready(page, m, fl)
@@ -447,8 +447,8 @@ def main():
         for i, s in enumerate(raw, 1):
             print(f"    {i:2d}. {rec.describe(s)}")
         pages = [(s["kind"], s["page"]) for s in raw]
-        check("N: 이어 기록한 단계의 탭 번호가 재생기 번호와 같다 (첫 탭 0, 팝업 1)",
-              pages == [("click", 0), ("fill", 1), ("click", 1), ("click", 0)], str(pages))
+        check("N: 이어 기록한 단계의 탭 번호가 재생기 번호와 같다 (팝업 1 을 먼저 눌러도 1, 첫 탭은 0)",
+              pages == [("fill", 1), ("click", 0), ("click", 1), ("click", 0)], str(pages))
         check("N: 받은 탭 0·1 은 그대로, 그 뒤에 생긴 창(Edge 다운로드 창)은 2부터", rr.pages[:2] == [page, pop]
               and all(pg not in (page, pop) for pg in rr.pages[2:]), str(len(rr.pages)))
 
@@ -472,6 +472,41 @@ def main():
         ok, r, m = replay_check(srv, url, joined, day, False, None, "N1_이어붙인기록")
         check("N1: 이어 붙인 기록을 처음부터 재생하면 끝까지 간다", ok and m.requests[-1]["reason"] == "이어서 처리"
               and m.downloads == [m.requests[-1]["id"]], str(r.results[-1]))
+
+        # N2. 요청 뒤 새 줄이 늦게 떠서 다운로드 단계에서 멈춤 → [수정] 에서 다운로드만 누름 (최종 고침 A10 - 고치러 오는 가장 흔한 경우)
+        print("=== N2. 멈춘 다운로드 단계부터 이어 기록 - '몇 단계 뒤에 새로 생긴 것' 을 이어받는다")
+        dl = next(i for i, s in enumerate(a["steps"]) if s.get("download"))
+        cut = a["steps"][dl]
+        check("N2: A 의 다운로드 단계는 '몇 단계 뒤에 새로 생긴 것'", cut.get("appearsAfter") is not None, str(cut))
+        day = DAY + datetime.timedelta(days=3)
+        srv.mall = m = fake_mall.Mall(day, False)
+        ready_was, fake_mall.READY_SECONDS = fake_mall.READY_SECONDS, 8.0      # 새 줄이 8초 뒤에야 '완료' - 미리보기(2초)는 못 기다린다
+        try:
+            with rec.sync_playwright() as p:
+                browser = rec.edge(p.chromium.launch)
+                ctx = browser.new_context(accept_downloads=True)
+                r = rec.Replayer(ctx, a, creds, os.path.join(OUT, "N2"), "012", today=day, log=print, step_timeout=2.0, step_tries=1)
+                r.run()
+                check("N2: 새 줄이 늦어 다운로드 단계에서 멈췄다", r.results[-1][:2] == (dl + 1, "fail"), str(r.results[-1]))
+                rr = rec.Recorder(ctx)
+                rr.adopt(r.pages)
+                page = r.pages[0]
+                row = wait_new_ready(page, m, page.frame_locator("iframe[name=content]"))
+                with page.expect_download() as di:
+                    hclick(page, row.get_by_role("link", name="다운로드"))
+                di.value.path()
+                page.wait_for_timeout(300)
+                raw = [dict(s) for s in rr.steps]
+                browser.close()
+            check("N2: 이어 기록은 다운로드 한 단계", [s["kind"] for s in raw] == ["click"] and bool(raw[0].get("download")), str(raw))
+            joined = rec.continue_record(dict(a, steps=a["steps"][:dl], cut=cut), raw, day)
+            check("N2: 잘린 단계와 같은 대상이면 그 '몇 단계 뒤에 새로 생긴 것' 을 이어받는다, 결과에 cut 은 없다",
+                  len(joined["steps"]) == dl + 1 and joined["steps"][dl].get("appearsAfter") == cut["appearsAfter"] and "cut" not in joined,
+                  str((joined["steps"][dl].get("appearsAfter"), cut["appearsAfter"])))
+            ok, r, m = replay_check(srv, url, joined, day, False, None, "N2_이어붙인기록")
+            check("N2: 재생이 옛 줄이 아니라 새 줄을 받는다", ok and m.downloads == [m.requests[-1]["id"]], str((r.results[-1], m.downloads)))
+        finally:
+            fake_mall.READY_SECONDS = ready_was
     finally:
         srv.shutdown()
     print()

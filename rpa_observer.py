@@ -404,7 +404,7 @@ class Worker(threading.Thread):
                     self.ui.put(("failed_at", failed))          # 닫지 않고 그 단계 앞에서 [수정]·[■ 중단] 을 기다린다
                     while not (self.edit.is_set() or self.cancel.is_set()):
                         rp._idle(200)
-                    if self.edit.is_set():
+                    if self.edit.is_set() and not self.cancel.is_set():   # [수정] 뒤에 [■ 중단] 을 눌렀으면 중단이 이긴다
                         raise rec.EditHere(failed)
             except rec.EditHere as e:
                 why = str(e)
@@ -784,7 +784,7 @@ class App:
             skin(self.prev_btn, "▶  계속" if self.paused else "Ⅱ  일시정지", BLUE, BLUE_D, self.toggle_pause)
             skin(self.save_btn, "■  중단", RED, RED_D, self.stop_preview)
             enable(self.prev_btn, idle and self.failed_at is None)      # 못 찾아 멈춘 자리에서는 이어 갈 수 없다
-            enable(self.save_btn, idle)
+            enable(self.save_btn, not (self.stopping or self.closing))  # [수정] 뒤 기다리는 동안(파일 받기 최대 5분)에도 멈출 수 있게
             if self.paused or self.failed_at is not None:               # 멈춰 있을 때만 [수정] (설계 2026-10-19 4.2절)
                 self.edit_btn.pack(side="right", padx=(0, 8))
                 enable(self.edit_btn, idle)
@@ -1025,7 +1025,7 @@ class App:
             return
         self._store_fields()
         p = self.presets[self.cur]
-        if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
+        if (p["raw"] or p["loaded"] or p["head"]) and not self.ask(
                 "다시 기록", f"{circled(self.cur + 1)} {p['name']}의 기록을 삭제하고 처음부터 다시 기록하시겠습니까?"):
             return
         p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set(), pick_dirty=True)
@@ -1084,17 +1084,18 @@ class App:
 
     def _start_edit(self, no, cut):
         """일꾼의 editing: 칸 no 의 기록을 cut(아직 안 한 단계의 id) 앞까지만 남기고 (꺼 둔 단계 포함 그대로) 그 뒤에 새 단계를 받는다.
-        id 는 단계 순서대로 커지므로 cut 보다 작은 것이 남긴 단계다."""
+        id 는 단계 순서대로 커지므로 cut 보다 작은 것이 남긴 단계다. 잘린 단계는 head["cut"] 에 둔다 - 이어 기록한 같은 대상이
+        '몇 단계 뒤에 새로 생긴 것' 을 이어받는다 (rec.continue_record)."""
         p = self.presets[no]
         final = self._final(p)
         k = next((i for i, s in enumerate(final["steps"]) if s["id"] == cut), len(final["steps"]))
-        p.update(head=dict(final, steps=final["steps"][:k]), raw=[], fresh=True, pick_dirty=True,
+        p.update(head=dict(final, steps=final["steps"][:k], cut=final["steps"][k] if k < len(final["steps"]) else None), raw=[], fresh=True, pick_dirty=True,
                  deleted={d for d in p["deleted"] if d < cut}, enabled={d: v for d, v in p["enabled"].items() if d < cut},
                  otp={d: v for d, v in p["otp"].items() if d < cut})
         self.previewing = self.paused = self.stopping = self.editing = False
         self.failed_at = None
         self.recording, self.shown = no, 0
-        self.status.config(text=f"● {circled(no + 1)} {p['name']} 이어서 기록 중 - 마치면 [■ 기록 완료]를 눌러 주십시오.", fg=RED)
+        self.status.config(text=f"● {circled(no + 1)} {p['name']} 이어서 기록 중입니다. 마치면 [■ 기록 완료]를 눌러 주십시오.", fg=RED)
         self.render()
 
     def import_file(self):
@@ -1111,7 +1112,7 @@ class App:
             return self.status.config(text=f"파일을 불러오지 못했습니다. ({e})", fg=RED)
         self._store_fields()
         p = self.presets[self.cur]
-        if (p["raw"] or p["loaded"]) and not self.ask(
+        if (p["raw"] or p["loaded"] or p["head"]) and not self.ask(
                 "파일에서 불러오기", f"프리셋 {self.cur + 1}의 기록을 이 파일로 바꿉니다. 저장하기 전까지는 파일에 반영되지 않습니다. 진행하시겠습니까?"):
             return None
         load_file_into(p, obj)
@@ -1264,20 +1265,8 @@ class App:
                 elif m[0] == "editing":
                     self._start_edit(*m[1:])
                 elif m[0] == "preview_done":
-                    ok, saved, sec, note = m[1:]
-                    stopped = self.stopping
-                    self.previewing = self.paused = self.stopping = self.editing = False
-                    self.failed_at = None
-                    if self.closing:            # 일시정지 중에 창을 닫았다 - 브라우저·프로필 정리가 끝났다
-                        return self._close_now()
-                    self.paint_buttons()
-                    if ok:
-                        self.status.config(text=f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}", fg=GREEN_D)
-                    elif stopped:
-                        self.status.config(text="미리보기를 중단하였습니다.", fg=MUTED)
-                    else:
-                        self.status.config(text=note or "미리보기 중 오류가 발생했습니다. - 문제의 단계를 확인하여 주십시오.", fg=RED)
-                    self.on_preview_done(ok)
+                    if self._preview_done(*m[1:]):
+                        return
                 elif m[0] == "human_done":
                     self.on_human_done()
         except queue.Empty:
@@ -1285,6 +1274,26 @@ class App:
         if dirty and not self.previewing:
             self.render()
         self.root.after(80, self._poll)
+
+    def _preview_done(self, ok, saved, sec, note):
+        """미리보기가 끝났다 → 창을 닫는 중이면 True (부른 쪽이 _poll 을 끝낸다). [수정] 을 눌렀는데 마지막 단계까지 성공해 수정할
+        자리가 없었으면 그 말도 상태 글에."""
+        stopped, was_editing = self.stopping, self.editing
+        self.previewing = self.paused = self.stopping = self.editing = False
+        self.failed_at = None
+        if self.closing:            # 일시정지 중에 창을 닫았다 - 브라우저·프로필 정리가 끝났다
+            self._close_now()
+            return True
+        self.paint_buttons()
+        if ok:
+            self.status.config(text=("마지막 단계까지 끝나 수정할 자리가 없습니다. " if was_editing else "")
+                               + f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}", fg=GREEN_D)
+        elif stopped:
+            self.status.config(text="미리보기를 중단하였습니다.", fg=MUTED)
+        else:
+            self.status.config(text=note or "미리보기 중 오류가 발생했습니다. - 문제의 단계를 확인하여 주십시오.", fg=RED)
+        self.on_preview_done(ok)
+        return False
 
     # 시험 모드가 갈아 끼운다
     def on_ready(self):

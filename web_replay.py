@@ -715,15 +715,30 @@ STEP_GAP_AFTER_EDIT = 1000      # [수정]으로 이어 기록한 첫 단계가 
 
 def continue_record(head, raw_new, record_date):
     """head(다듬어 둔 기록의 남긴 앞부분) 뒤에 기록기의 새 단계 raw_new(t 있음)를 다듬어 붙인다 (설계 2026-10-19 4.2절).
-    새 쪽의 '몇 단계 뒤에 나타남' 은 남긴 길이만큼 민다. 시작 주소·창 크기·기록 날짜는 head 것."""
+    새 쪽의 '몇 단계 뒤에 나타남' 은 남긴 길이만큼 민다. 시작 주소·창 크기·기록 날짜는 head 것.
+    head["cut"] (잘린 단계 - 옵저버 _start_edit) 이 '몇 단계 뒤에 새로 생긴 것' 이면, 새 쪽에서 그 대상을 누른 단계 중 나타난 때를 모르는
+    것(기록기를 붙이기 전에 이미 있던 것 - 요청 뒤 늦게 뜬 새 줄에서 미리보기가 멈춘 뒤 [수정]) 은 그 번호를 이어받는다. 결과에 cut 은 없다."""
     n = len(head["steps"])
+    cut = head.get("cut")
     new = finalize(raw_new, record_date, head["start_url"], head.get("viewport"))["steps"]
     for s in new:
         if "appearsAfter" in s:
             s["appearsAfter"] += n
+        elif cut and cut.get("appearsAfter") is not None and cut["appearsAfter"] < n and _same_thing(cut, s):
+            s["appearsAfter"] = cut["appearsAfter"]
     if new:
         new[0]["gap"] = STEP_GAP_AFTER_EDIT
-    return dict(head, steps=head["steps"] + new)
+    out = dict(head, steps=head["steps"] + new)
+    out.pop("cut", None)
+    return out
+
+
+def _same_thing(a, b):
+    """같은 창·같은 틀에서 같은 것을 눌렀나 - 위치(css)가 같거나 글자가 같은 것 (새 줄은 자리가 밀릴 수 있다)."""
+    if a["kind"] != b["kind"] or a["page"] != b["page"] or a["frame"] != b["frame"]:
+        return False
+    ta, tb = a.get("target") or {}, b.get("target") or {}
+    return ta.get("css") == tb.get("css") or bool(ta.get("text")) and ta.get("text") == tb.get("text")
 
 
 def keep_steps(rec_obj, keep):
