@@ -485,7 +485,8 @@ with tempfile.TemporaryDirectory() as d:
         if rel.endswith(".py"):
             os.makedirs(os.path.join(d, *rel.split("/")[:-1]), exist_ok=True)
             shutil.copy2(os.path.join(br.REPO, *src.split("/")), os.path.join(d, *rel.split("/")))
-    code = "import sys; sys.path.insert(0, sys.argv[1]); import agent; print(sorted(agent.real_actions()))"
+    # agent 는 preset_transfer 를 명령 안에서만 올리므로 같이 올려 본다 (옵저버와 같이 쓰는 PC 쪽 모듈이 늘면 여기에 추가)
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import agent, preset_transfer; print(sorted(agent.real_actions()))"
     r = subprocess.run([os.path.join(br.RUNTIME_ROOT, "python", "python.exe"), "-I", "-c", code, os.path.join(d, "firebase", "agent")],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
                        env={**os.environ, "PYTHONIOENCODING": "utf-8", "RPA_PROGRAMDATA": d, "RPA_STATUS_DIR": d, "RPA_USER_CONFIG": os.path.join(d, "u.json")})
