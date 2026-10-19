@@ -8,6 +8,7 @@
 import datetime
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -823,6 +824,70 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
     check("1/2 켬" in page.text_content("#shop-meta"), "PC 값이 돌아오면 기준값 갱신")
 
+    print("5-2-1절 프리셋 복사·되돌리기 (설계 2026-10-19 4.3절)")
+    check(page.is_hidden("#copy-card"), "PC 하나뿐인 업체는 복사 카드가 없다")
+    # pc_x 는 새 버전(preset_transfer 1), pc_y 는 옛 버전 (키 없음). 키 이름순에서 pc_office 가 맨 앞이어야 지금 PC 가 안 바뀐다
+    db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}, "pc_x": {"label": "창고 PC"}, "pc_y": {"label": "옛 PC"}}})
+    COPY_SHOPS = [{"no": 1, "name": "지마켓", "code": "012", "steps": 12, "saved_at": "2026-09-30T18:20:00", "has_login": True, "on": True, "backup": True},
+                  {"no": 2, "name": "쿠팡", "code": "027", "steps": 5, "has_login": False, "on": False, "backup": False},
+                  {"no": 3, "name": "", "code": "", "steps": 0, "has_login": False, "on": False, "backup": False}]
+    db_patch(LIVE, {"preset_transfer": 1, "presets": COPY_SHOPS})
+    db_put("apps/rpa/live/c_demo/pc_x", {"host": "X", "preset_transfer": 1})
+    db_put("apps/rpa/live/c_demo/pc_y", {"host": "Y"})
+    reload_to(page, "settings")
+    page.wait_for_selector("#copy-card:not(.hide)", timeout=10000)
+    page.wait_for_function("document.querySelectorAll('#copy-to option').length === 2", timeout=10000)
+    opts = page.evaluate("Array.from(document.querySelectorAll('#copy-to option')).map(o => [o.value, o.textContent, o.disabled])")
+    check(opts == [["pc_x", "창고 PC", False], ["pc_y", "옛 PC (업데이트 필요)", True]], f"받을 PC 는 지금 PC 를 뺀 나머지, 옛 버전 PC 는 선택 못 함 ({opts})")
+    check(page.locator("#copy-list .copy-row").count() == 2, "기록이 있는 프리셋만 줄이 있다 (1·2)")
+    check(page.input_value("#copy-list .copy-row:nth-child(2) .copy-slot") == "2", "받을 번호 기본값은 같은 번호")
+    check(page.is_disabled("#copy-send"), "선택한 게 없으면 [복사] 비활성")
+    page.click("#copy-all")
+    check(page.locator("#copy-list input[type=checkbox]:checked").count() == 2 and not page.is_disabled("#copy-send"), "[전부 선택] 하면 둘 다 체크·[복사] 활성")
+    page.fill("#copy-list .copy-row:nth-child(2) .copy-slot", "1")
+    check(page.is_disabled("#copy-send") and page.text_content("#copy-info") == "받을 프리셋 번호가 중복되어 있습니다.", "같은 받을 번호가 둘이면 막힘")
+    page.fill("#copy-list .copy-row:nth-child(2) .copy-slot", "5")
+    check(not page.is_disabled("#copy-send") and page.text_content("#copy-info") == "", "다른 번호면 다시 열림")
+    asked = []
+    page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
+    page.click("#copy-send")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('프리셋 복사 명령을 전송하였습니다')", timeout=10000)
+    check(asked == ["창고 PC의 프리셋 1, 5을(를) 이 PC의 프리셋으로 변경합니다. 기록이 있으면 덮어쓰며 아이디·비밀번호는 복사되지 않습니다. 진행하시겠습니까?"], f"확인 창 ({asked})")
+    time.sleep(1)
+    exp = cmds_of("export_preset")
+    imp = [v for v in (db_get("apps/rpa/commands/c_demo/pc_x") or {}).values() if v.get("type") == "import_preset"]
+    tid = (exp[0].get("args") or {}).get("tid", "") if exp else ""
+    check(len(exp) == 1 and exp[0]["args"] == {"tid": tid, "nos": [1, 2], "with_phone": True} and re.fullmatch(r"[a-z0-9]{20}", tid or "") is not None,
+          f"지금 PC 에 export_preset (tid 20자, 휴대폰 포함) ({exp})")
+    check(len(imp) == 1 and imp[0]["args"] == {"tid": tid, "slots": [1, 5]} and imp[0]["by"] == admin_uid, f"받을 PC 에 같은 tid 의 import_preset ({imp})")
+    key = next(k for k, v in (db_get("apps/rpa/commands/c_demo/pc_x") or {}).items() if v.get("type") == "import_preset")
+    db_patch(f"apps/rpa/commands/c_demo/pc_x/{key}", {"state": "done", "result": "PC pc_office의 프리셋 2개를 복사하였습니다.", "started_at": 1, "ended_at": 2})
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('복사하였습니다')", timeout=10000)
+    check(page.locator('#toasts [data-id="act"].ok').count() == 1, "받을 PC 의 결과가 토스트로")
+    check("아이디·비밀번호 입력 필요" in page.text_content("#shop-list label:nth-child(2)")
+          and "입력 필요" not in page.text_content("#shop-list label:nth-child(1)"), "아이디·비밀번호가 없는 줄에만 이름표")
+    check(page.locator("#shop-list label:nth-child(1) .restore").count() == 1 and page.locator("#shop-list .restore").count() == 1, "보관이 있는 줄에만 [되돌리기]")
+    asked = []
+    page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
+    page.click("#shop-list label:nth-child(1) .restore")
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('프리셋 되돌리기 명령을 전송하였습니다')", timeout=10000)
+    check(asked == ["프리셋 1을(를) 이전 기록으로 되돌리시겠습니까?"], f"되돌리기 확인 창 ({asked})")
+    time.sleep(1)
+    rs = cmds_of("restore_preset")
+    check(len(rs) == 1 and rs[0]["args"] == {"nos": [1]}, f"restore_preset 명령 ({rs})")
+    check(page.is_checked("#shop-list label:nth-child(1) input") and page.is_disabled("#shop-apply"), "[되돌리기] 를 눌러도 스위치는 안 바뀐다")
+    key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "restore_preset")
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "프리셋 1을(를) 이전 기록으로 되돌렸습니다.", "started_at": 1, "ended_at": 2})
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('되돌렸습니다')", timeout=10000)
+    # 시드 되돌리기 (PC 하나, 프리셋 둘)
+    db_put("meta/companies/c_demo", {"name": "시연 회사", "pcs": {"pc_office": {"label": "사무실 PC"}}})
+    db_patch(LIVE, {"preset_transfer": None, "presets": [{**SHOPS[0], "on": True}, SHOPS[1]]})
+    call("DELETE", f"{DB}/apps/rpa/live/c_demo/pc_x.json?ns={NS}", None, OWNER)
+    call("DELETE", f"{DB}/apps/rpa/live/c_demo/pc_y.json?ns={NS}", None, OWNER)
+    reload_to(page, "settings")
+    page.wait_for_function("document.querySelectorAll('#shop-list label').length === 2", timeout=10000)
+    check(page.is_hidden("#copy-card"), "PC 를 하나로 되돌리면 복사 카드가 숨는다")
+
     print("5-3절 동시 실행 (관리 화면이 허용한 업체만, 사용자 2026-10-16)")
     db_patch(LIVE, {"parallel": {"chosen": 1}})
     time.sleep(1)
@@ -1381,6 +1446,7 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
     check(page.is_hidden("#act-card") and page.locator("#admin-nav a[data-key='settings']").count() == 0,
           "유저는 실행 카드도 환경설정 메뉴도 없다")
+    check(page.locator("#copy-card").count() == 0, "유저는 프리셋 복사 카드도 없다 (환경설정 자체가 없다)")
     cols_w = page.evaluate("document.querySelector('.cols').getBoundingClientRect().width")
     main_w = page.evaluate("document.querySelector('.cols > div').getBoundingClientRect().width")
     check(abs(cols_w - main_w) < 2, f"오른쪽 열 자리를 남기지 않는다 (본문 {main_w:.0f} / 전체 {cols_w:.0f})")

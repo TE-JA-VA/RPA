@@ -1,7 +1,7 @@
 // RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 프리페어 RPA(사이트 수집: 쇼핑몰 프리셋) · 루틴 RPA(실행 모듈) · 자동 실행 (PC 마다).
 // 값의 기준은 PC 가 올린 live. 적용 = settings 에 쓰고 명령을 넣는다 - PC 가 반영해 live 로 돌려준다
 import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
+import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, sendPair, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
 
 export const title = "오토파일럿";
 
@@ -19,6 +19,17 @@ const HTML = `
         <button class="apply" id="shop-apply" disabled>적용</button>
       </div>
       <div class="msg hide" id="shop-none">이 PC 는 아직 사이트 수집 정보를 보내지 않았습니다 (에이전트를 새 버전으로 업데이트하세요)</div>
+      <div class="card hide" id="copy-card">
+        <h2>프리셋 복사 <span class="muted" id="copy-meta"></span></h2>
+        <div class="msg">이 PC의 프리셋을 같은 업체의 다른 PC로 복사합니다. 아이디·비밀번호는 복사되지 않습니다.</div>
+        <div class="lbl">받을 PC</div>
+        <div class="seg"><select id="copy-to" aria-label="받을 PC"></select></div>
+        <div class="lbl">프리셋 · 받을 번호</div>
+        <div id="copy-list"></div>
+        <div class="seg"><button id="copy-all">전부 선택</button></div>
+        <div class="msg" id="copy-info"></div>
+        <button class="apply" id="copy-send" disabled>복사</button>
+      </div>
       <div class="card hide" id="par-card">
         <h2>동시 실행 <span class="muted" id="par-meta"></span></h2>
         <div class="msg">쇼핑몰 사이트를 동시에 몇 개까지 열어 엑셀을 다운로드할지 선택합니다. 창은 PC 화면에 나눠 표시합니다.</div>
@@ -68,18 +79,29 @@ const HTML = `
   <p class="muted hide" id="no-pc">등록된 PC가 없습니다.</p>`;
 
 let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, stopPar = null, busy = false, live = null, liveLimit;
+let stopPeers = [], transferOk = {};   // 다른 PC 의 live.preset_transfer (새 명령을 아는 PC 만 복사 상대로 고른다 - Review Focus 5)
 let parLimit;    // 관리 화면이 허용한 동시 실행 최대 (limits/parallel) - 2 미만이면 '동시 실행' 카드가 없다 (업체는 이 기능을 모른다)
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
-let form = { modules: {}, shops: {}, parallel: 1, sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] } };
+let form = { modules: {}, shops: {}, parallel: 1, sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] }, copy: { to: "", pick: {} } };
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
 
 export function mount(el, context) {
   root = el; c = context; busy = false; live = null; liveLimit = undefined; parLimit = undefined; sent = {};
+  form.copy = { to: "", pick: {} }; transferOk = {};
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
   $("mod-apply").onclick = applyModules;
   $("shop-apply").onclick = applyShops;
+  $("copy-send").onclick = copyPresets;
+  $("copy-all").onclick = () => { for (const p of copyable()) form.copy.pick[p.no] = { ...form.copy.pick[p.no], on: true }; paintCopy(); };
+  $("copy-to").onchange = (e) => { form.copy.to = e.target.value; paintCopyMeta(); };
+  if (copyPeers().length) {
+    stopPeers = copyPeers().map((pc) => onValue(ref(c.db, `${P("live", c.me.cid, pc)}/preset_transfer`), (snap) => {
+      transferOk[pc] = snap.val() === 1;
+      if (root && live) paintCopy();
+    }, () => {}));
+  }
   $("par-apply").onclick = applyParallel;
   $("par-n").onchange = (e) => { form.parallel = Number(e.target.value); paintParMeta(); };
   $("sch-apply").onclick = applySchedule;
@@ -144,6 +166,8 @@ export function unmount() {
   if (stopLimit) { stopLimit(); stopLimit = null; }
   if (stopFeatures) { stopFeatures(); stopFeatures = null; }
   if (stopPar) { stopPar(); stopPar = null; }
+  for (const off of stopPeers) off();
+  stopPeers = [];
   root = null; c = null;
 }
 
@@ -156,14 +180,15 @@ export function dirty() {
 const keyOf = { modules: () => JSON.stringify(form.modules), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()),
   par: () => String(form.parallel) };
 
-function paintAll() { paintModuleMeta(); paintShopMeta(); paintParMeta(); paintScheduleMeta(); }
+function paintAll() { paintModuleMeta(); paintShopMeta(); paintCopyMeta(); paintParMeta(); paintScheduleMeta(); }
 
 /** 명령을 넣는 동안 카드 단추를 잠근다 */
-async function send(type, args, label) {
+async function locked(run) {
   busy = true; paintAll();
-  try { await sendCommand(c, type, args, label, () => !!root); }
+  try { await run(); }
   finally { busy = false; if (root) paintAll(); }
 }
+const send = (type, args, label) => locked(() => sendCommand(c, type, args, label, () => !!root));
 
 // --- 실행 모듈 ------------------------------------------------------
 
@@ -261,11 +286,25 @@ function paintShops() {
     cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
     const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 입력한 뒤 저장하여 주십시오." : "옵저버에서 기록한 뒤 저장하여 주십시오.";
     cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
-    row.append(switchText(shopLine(p), why), cb, Object.assign(document.createElement("span"), { className: "knob" }));
+    const text = switchText(shopLine(p), why), extras = [];
+    // 복사·넣어 주기로 받은 칸은 아이디·비밀번호가 비어 있다 (설계 2026-10-19 4.3절). 보관이 있으면 [되돌리기] (restore_preset)
+    if (p.steps > 0 && !p.has_login) extras.push(Object.assign(document.createElement("span"), { className: "pill bad", textContent: "아이디·비밀번호 입력 필요" }));
+    if (c.isAdmin && p.backup) {
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "restore", textContent: "되돌리기", disabled: busy });
+      b.onclick = (e) => { e.preventDefault(); restorePreset(p.no); };   // 스위치(label)는 안 건드린다
+      extras.push(b);
+    }
+    if (extras.length) text.firstChild.after(" ", ...extras);
+    row.append(text, cb, Object.assign(document.createElement("span"), { className: "knob" }));
     return row;
   }));
   $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC의 '옵저버'에서 기록하여 주십시오.";
   paintShopMeta();
+  paintCopy();
+}
+async function restorePreset(no) {
+  if (!confirm(`프리셋 ${no}을(를) 이전 기록으로 되돌리시겠습니까?`)) return;
+  await send("restore_preset", { nos: [no] }, "프리셋 되돌리기");
 }
 function paintShopMeta() {
   const list = savedShops();
@@ -280,6 +319,73 @@ async function applyShops() {
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.shops = keyOf.shops();
   await send("set_presets", wanted, "쇼핑몰 프리셋");
+}
+
+// --- 프리셋 복사 (설계 2026-10-19 4.3절) --------------------------------
+// 관리자가 이 PC 의 프리셋을 같은 업체의 다른 PC 로. 보낼 PC 에 export_preset, 받을 PC 에 import_preset 을 같은 tid 로 한꺼번에 넣는다.
+// 기록만 오간다 (아이디·비밀번호는 안 간다, 인증 휴대폰은 업체 안이라 따라간다 - with_phone). 받을 번호는 프리셋마다 (기본 같은 번호)
+const SLOT_MAX = 40;   // ops.importPreset 과 같다
+const copyPeers = () => Object.keys(c?.pcs || {}).filter((k) => k !== c.pcId);
+const copyShown = () => !!c?.isAdmin && copyPeers().length > 0 && Array.isArray(live?.presets);
+const copyable = () => savedShops().filter((p) => p.steps > 0);
+const pcLabel = (k) => c.pcs?.[k]?.label || k;
+function copyPicked() {
+  return copyable().filter((p) => form.copy.pick[p.no]?.on).map((p) => [p.no, form.copy.pick[p.no].slot]);
+}
+function copyProblem() {
+  const picked = copyPicked();
+  if (picked.some(([, s]) => !Number.isInteger(s) || s < 1 || s > SLOT_MAX)) return `받을 프리셋 번호는 1~${SLOT_MAX} 사이로 입력하여 주십시오.`;
+  if (new Set(picked.map(([, s]) => s)).size !== picked.length) return "받을 프리셋 번호가 중복되어 있습니다.";
+  return "";
+}
+function paintCopy() {
+  show($("copy-card"), copyShown());
+  if (!copyShown()) return;
+  $("copy-to").replaceChildren(...copyPeers().map((k) => {
+    const ok = transferOk[k] === true;
+    const o = new Option(ok ? pcLabel(k) : `${pcLabel(k)} (업데이트 필요)`, k);
+    o.disabled = !ok;
+    return o;
+  }));
+  if (!transferOk[form.copy.to]) form.copy.to = copyPeers().find((k) => transferOk[k]) || "";
+  $("copy-to").value = form.copy.to;
+  const list = copyable();
+  for (const p of list) form.copy.pick[p.no] ??= { on: false, slot: p.no };
+  $("copy-list").replaceChildren(...list.map((p) => {
+    const pick = form.copy.pick[p.no];
+    const row = document.createElement("label"); row.className = "copy-row";
+    const cb = Object.assign(document.createElement("input"), { type: "checkbox", checked: pick.on });
+    cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
+    cb.onchange = () => { pick.on = cb.checked; paintCopyMeta(); };
+    const num = Object.assign(document.createElement("input"), { type: "number", min: 1, max: SLOT_MAX, value: pick.slot, className: "num copy-slot" });
+    num.setAttribute("aria-label", "받을 번호");
+    num.oninput = () => { pick.slot = num.value === "" ? NaN : Number(num.value); paintCopyMeta(); };
+    row.append(cb, Object.assign(document.createElement("span"), { className: "copy-name", textContent: `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""}` }),
+      Object.assign(document.createElement("span"), { className: "muted", textContent: "→" }), num);
+    return row;
+  }));
+  paintCopyMeta();
+}
+function paintCopyMeta() {
+  if (!copyShown()) return;
+  const picked = copyPicked(), problem = copyProblem();
+  const old = live?.preset_transfer !== 1;   // 이 PC 가 옛 버전이면 보낼 수 없다
+  $("copy-info").textContent = problem || (old ? "이 PC를 새 버전으로 업데이트하면 프리셋을 복사할 수 있습니다." : copyable().length ? "" : "복사할 프리셋이 없습니다.");
+  $("copy-info").className = "msg" + (problem ? " bad" : "");
+  $("copy-meta").textContent = `${picked.length}개 선택`;
+  for (const el of $("copy-card").querySelectorAll("input, select, button")) el.disabled = busy;
+  for (const o of $("copy-to").options) o.disabled = transferOk[o.value] !== true;
+  $("copy-send").disabled = busy || old || !form.copy.to || !picked.length || !!problem;
+}
+async function copyPresets() {
+  const picked = copyPicked(), to = form.copy.to;
+  if (!picked.length || copyProblem() || !to || live?.preset_transfer !== 1) return;
+  const slots = picked.map(([, s]) => s);
+  if (!confirm(`${pcLabel(to)}의 프리셋 ${slots.join(", ")}을(를) 이 PC의 프리셋으로 변경합니다. 기록이 있으면 덮어쓰며 아이디·비밀번호는 복사되지 않습니다. 진행하시겠습니까?`)) return;
+  // 전송 id: 영문 소문자·숫자 20자 (ops.newTid·agent.TRANSFER_RE 와 같은 꼴)
+  const tid = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, "0")).join("");
+  await locked(() => sendPair(c, [[c.pcId, "export_preset", { tid, nos: picked.map(([n]) => n), with_phone: true }],
+                                  [to, "import_preset", { tid, slots }]], "프리셋 복사", () => !!root));
 }
 
 // --- 동시 실행 (사용자 2026-10-16) ---------------------------------

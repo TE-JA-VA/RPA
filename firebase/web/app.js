@@ -173,6 +173,7 @@ document.addEventListener("click", (e) => { if (!$("pc-pick").contains(e.target)
 // --- 모듈 -----------------------------------------------------------
 function ctx() {
   return { db, auth, me, pcId, pcLabel: company?.pcs?.[pcId]?.label || pcId || "",
+           pcs: company?.pcs || {},         // 업체 PC 모두 {pcId: {label}} - 프리셋 복사의 받을 PC 목록
            policy: company?.apps || {},   // 업체가 안 쓰는 기능 (총괄이 정한다). 예: apps.rpa.modules.Hold === false
            isAdmin: !!me && (me.role === "admin" || me.role === "super"),
            apps: APPS };   // 환경설정 페이지가 앱마다 설정 화면을 붙인다

@@ -77,7 +77,14 @@ apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현�
                                         tokens.cost.next = 다음 예약 줄이 '고르기' 면 그 줄의 토큰
 apps/rpa/settings/{cid}/{pcId}          화면이 요청한 값 { modules, presets: {"PRESET1": true, …}, parallel?, schedule {enabled, days, slots: [{at, days?, run?, until?, rest_min?}]} (줄마다 요일 days 는 버전 3 PC - live.schedule.version 3, 없으면 공통 days) }
 apps/rpa/commands/{cid}/{pcId}/{cmdId}  { type, args, by, created_at, expires_at, state, result, … }
+apps/rpa/transfers/{cid}/{tid}          프리셋 전송 자리 (잠깐) { by, from_pc, created_at, expires_at, presets: [autopilot-preset 파일…] }
 ```
+
+**프리셋 전송** (2026-10-19, 설계 `docs/superpowers/specs/2026-10-19-preset-transfer-design.md`): 기록 내용만 오간다 (아이디·비밀번호·세션은 PC 밖으로 안 나간다).
+명령 셋 - `export_preset {tid, nos, with_phone}` (PC 가 전송 자리에 올림), `import_preset {tid, slots}` (전송이 올 때까지 기다렸다 칸을 바꿈, 바꾸기 전 것은 PC 에 보관),
+`restore_preset {nos}` (보관으로 되돌림). 전송 자리는 그 업체 agent·super 만 읽고 쓰며 쓴 쪽이 지운다. 안 지운 것은 6시간(`TRANSFER_TTL_SEC`) 뒤 에이전트 주기 점검이 지운다.
+관리 화면은 파일로 가져오기·넣어 주기 (`ops.exportPreset/importPreset`), 업체 웹은 자기 PC 끼리 복사 - 같은 tid 로 보낼 PC 에 export, 받을 PC 에 import 를 한꺼번에 넣는다 (`rpa-common.sendPair`).
+옛 버전 PC 는 `live.preset_transfer` 가 없어 업체 웹이 받을 PC 로 고르지 못한다.
 Firestore
 ```
 runs/{cid}/items/{runId}   실행 이력 한 건 (조회용 필드 + 쓴 것 used·쓴 토큰 cost + payload JSON)
