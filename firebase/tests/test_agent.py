@@ -1199,6 +1199,10 @@ for t in ("export_preset", "import_preset", "restore_preset"):
 check(ag.TRANSFER_TTL_SEC == 6 * 3600 and ag.transfer_path("c_demo", "abcdefghij0123456789") == "apps/rpa/transfers/c_demo/abcdefghij0123456789",
       "전송 자리 apps/rpa/transfers/{cid}/{tid}, 만료 6시간")
 check(ag.live_extras({})["preset_transfer"] == 1, "현황(live)에 preset_transfer 1 - 업체 웹이 새 명령을 아는 PC 만 고른다")
+_a = ag.live_extras({"programs": {"routine": {"state": "idle", "age_sec": 10}, "prepare": None}})
+_b = ag.live_extras({"programs": {"routine": {"state": "idle", "age_sec": 11}, "prepare": None}})
+check(_a == _b and "age_sec" not in _a["programs"]["routine"],
+      "현황에 age_sec(매초 바뀜)를 싣지 않는다 - 실을 때는 1초마다 현황 전체를 다시 올려 RTDB 다운로드가 열린 웹 탭마다 하루 1GB (2026-10-19 한도 초과)")
 
 
 class TransferClient(RecClient):

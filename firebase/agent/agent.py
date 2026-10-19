@@ -479,8 +479,13 @@ def transfer_path(cid, tid, app=APP):
 
 
 def live_extras(snap):
-    """현황 스냅숏에 이 에이전트의 능력 표시를 더한다."""
+    """현황 스냅숏에 이 에이전트의 능력 표시를 더하고, 매초 바뀌는 age_sec 는 뺀다 - 아무도 안 읽는데 실으면 pump 가 1초마다
+    '바뀌었다' 고 보고 현황 전체(15KB 안팎)를 다시 올려, 그 PC 를 연 업체 웹 탭마다 하루 1GB 를 내려받았다
+    (2026-10-19 RTDB 다운로드 한도 10GB 초과)."""
     snap["preset_transfer"] = PRESET_TRANSFER
+    for v in (snap.get("programs") or {}).values():
+        if isinstance(v, dict):
+            v.pop("age_sec", None)
     return snap
 
 
