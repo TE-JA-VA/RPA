@@ -451,6 +451,7 @@ def new_preset(no, name=None, code=""):
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일), 메일 시작 문구
             "pick_dirty": False,                         # 저장할 때 '이미 처리' 기억을 다시 채운다 (문구·경로를 바꿨거나 새로 기록)
+            "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
 
 
@@ -480,7 +481,7 @@ def load_presets():
     out = []
     for p in st.read_presets():
         q = new_preset(p["no"], p["name"], p["code"])
-        q["saved_at"] = p["saved_at"]
+        q["saved_at"], q["orig"] = p["saved_at"], p["no"]
         r = p["record"]
         if r and r.get("steps"):
             for k, s in enumerate(r["steps"]):
@@ -540,13 +541,17 @@ def keep_dates(files, old, logins_changed, now):
     return files
 
 
-def store(files, logins, fresh=(), phones=None):
-    """프리셋 파일과 Sites 의 PRESETn 을 쓴다. 못 쓰면 화면에 보일 문장 (콘솔 없는 exe 라 조용히 넘어가면 안 된다), 되면 None."""
+def store(files, logins, fresh=(), phones=None, origs=None, dropped=()):
+    """프리셋 파일과 Sites 의 PRESETn 을 쓴다. 못 쓰면 화면에 보일 문장 (콘솔 없는 exe 라 조용히 넘어가면 안 된다), 되면 None.
+    origs: {번호: 불러올 때 번호}·dropped: 지운 옛 번호 - 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13) Sites 의 옛 값은 옛 번호에서 찾고,
+    메일 기억·로그인 세션·보관 파일도 따라 옮긴다. 순서는 프리셋 → 설정 → 파일: 설정 쓰기가 실패해도 Sites 는 옛 번호 그대로라
+    다시 저장하면 같은 옛 번호로 다시 찾는다 (반대 순서면 두 번 당겨진다)."""
     try:
         st.write_presets(files)
-        st.save_preset_sites(files, logins, fresh=fresh, phones=phones)
+        st.save_preset_sites(files, logins, fresh=fresh, phones=phones, origs=origs)
     except (OSError, ValueError, RuntimeError) as e:
         return f"저장하지 못했습니다. ({e}) 잠시 후 다시 저장하여 주십시오."
+    pt.move_preset_files(origs or {}, dropped)
     return None
 
 
@@ -892,15 +897,17 @@ class App:
         self.select(len(self.presets) - 1)
 
     def remove_preset(self):
-        p = self.presets[-1]
-        if (p["raw"] or p["loaded"]) and not messagebox.askyesno(
-                "프리셋 지우기", f"{circled(len(self.presets))} {p['name']}에 기록이 있습니다. 프리셋을 삭제하시겠습니까?"):
+        """고른 프리셋 하나를 지우고 뒤 번호를 당긴다 (이슈 #13). 파일·설정은 [저장] 때 바뀐다 (save - orig 로 옛 값을 찾는다)."""
+        if len(self.presets) <= MIN_PRESETS:
             return
-        self._store_fields()
-        self.presets.pop()
-        if self.cur >= len(self.presets):
-            self.cur = len(self.presets) - 1
-            self._load_fields()
+        p = self.presets[self.cur]
+        if (p["raw"] or p["loaded"] or p["head"]) and not self.ask(
+                "프리셋 지우기", f"{circled(self.cur + 1)} {p['name']}에 기록이 있습니다. 프리셋을 삭제하시겠습니까?"):
+            return
+        self.presets.pop(self.cur)
+        self.cur, self.shown = min(self.cur, len(self.presets) - 1), 0
+        self._load_fields()
+        self.status.config(text="")
         self.render()
 
     # --- 기록 목록 ---
@@ -1173,14 +1180,20 @@ class App:
             old = {p["no"]: p for p in st.read_presets()}
         except ValueError:
             old = {}                                   # 예전 파일을 못 읽으면 기록 있는 것은 모두 오늘 날짜
+        # 프리셋을 지워 번호가 당겨졌으면 (이슈 #13) 옛 값(비밀번호·켬끔·날짜·파일)은 불러올 때 번호(orig)로 찾는다
+        origs = {no: p["orig"] for no, p in enumerate(self.presets, 1) if p["orig"]}
+        dropped = sorted(set(old) - set(origs.values()))
+        if (dropped or any(o != no for no, o in origs.items())) and st.running_programs():
+            return self.status.config(text="오토파일럿이 실행 중이라 저장하지 못했습니다. 끝난 뒤 저장하여 주십시오.", fg=RED)
+        old = {no: old[o] for no, o in origs.items() if o in old}
         sites = cfg.get(st.SITES_SECTION)
         sites = sites if isinstance(sites, dict) else {}
         logins_changed = {o["no"] for o in out if o["pw"] or o["id"].strip() != (
-            (sites.get(st.preset_site_key(o["no"])) or {}).get("ID") or "")}
+            (sites.get(st.preset_site_key(origs.get(o["no"], o["no"]))) or {}).get("ID") or "")}
         files = keep_dates([{k: o[k] for k in ("no", "name", "code", "record")} for o in out], old, logins_changed, now)
         for o in out:
             try:
-                pw = o["pw"] or (stored_password(o["no"]) if o["has_pw"] else "")
+                pw = o["pw"] or (stored_password(origs.get(o["no"], o["no"])) if o["has_pw"] else "")
             except RuntimeError as e:
                 return self.status.config(text=f"{circled(o['no'])} 저장된 비밀번호가 일치하지 않습니다. ({e}) - 비밀번호를 다시 "
                                             "설정해 주십시오.", fg=RED)
@@ -1190,11 +1203,12 @@ class App:
                                             "해당 단계를 수정해주십시오.", fg=RED)
         fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh,
-                        phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]})
+                        phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]}, origs=origs, dropped=dropped)
         if problem:
             return self.status.config(text=problem, fg=RED)
         seeded = []
         for p, f in zip(self.presets, files):
+            p["orig"] = f["no"]                  # 이제부터는 이 번호가 옛 번호
             if f["record"]:
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
             picks = [x for x in (f["record"] or {}).get("steps", []) if x.get("pick")]

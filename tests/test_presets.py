@@ -691,6 +691,131 @@ finally:
 check("A9: head 만 남은 칸도 '기록이 있다' - 다시 기록·파일에서 불러오기 전에 묻는다 (묻지 않고 지우지 않는다)",
       len(asked) == 2 and hp["head"] == {"steps": []} and hp["name"] == "헤드만", str((asked, hp["head"], hp["name"])))
 
+print("=== 고른 프리셋 지우기 - 번호에 묶인 값이 따라온다 (이슈 #13) ===")
+import preset_transfer as pt  # noqa: E402
+
+
+def _rec(no):
+    return dict(FREC, start_url=f"https://shop{no}.example.com/login", steps=json.loads(json.dumps(FREC["steps"])))
+
+
+def _site(no):
+    return {"URL": f"https://shop{no}.example.com/login", "ID": f"seller0{no}", "PW": st.seal(f"pw-{no}"), "Action": ["replay"],
+            "Stts": 0 if no % 2 == 0 else 9, "Preset": no, "note": f"몰{no}", "Phone": f"phone{no}", "SmsSenders": [f"1588000{no}"]}
+
+
+def _side_path(kind, no):
+    return {"mail": st.mail_memory_path, "session": lambda n: st.session_path(st.preset_site_key(n)), "backup": pt.backup_path}[kind](no)
+
+
+def _seed(n=5):
+    st.write_user_config({"LogIn": {"ID": "erp", "PW": "erp-pw"}, "Sites": {"SITE1": {"URL": "https://mail.example.com", "ID": "m", "PW": "x",
+                          "Action": "login", "Stts": 9}, **{f"PRESET{i}": _site(i) for i in range(1, n + 1)}}})
+    st.write_presets([{"no": i, "name": f"몰{i}", "code": f"0{i}1", "saved_at": f"2026-10-0{i}T10:00:00", "record": _rec(i)} for i in range(1, n + 1)])
+    for kind in ("mail", "session", "backup"):
+        for i in range(1, n + 1):
+            os.makedirs(os.path.dirname(_side_path(kind, i)), exist_ok=True)
+            with open(_side_path(kind, i), "w", encoding="utf-8") as fh:
+                json.dump({"kind": kind, "of": i}, fh)
+
+
+def _side(kind, no):
+    p = _side_path(kind, no)
+    if not os.path.isfile(p):
+        return None
+    with open(p, encoding="utf-8") as fh:
+        return json.load(fh)["of"]
+
+
+def _app():
+    asked, said = [], []
+    f = SimpleNamespace(presets=rr.load_presets(), cur=0, recording=None, previewing=False, shown=0, start_url=None,
+                        _store_fields=lambda: None, _load_fields=lambda: None, render=lambda: None, select=lambda i: None,
+                        ask=lambda t, x: (asked.append(x), True)[1], status=SimpleNamespace(config=lambda **kw: said.append(kw.get("text"))))
+    f._final = lambda q: rr.App._final(f, q)
+    f._kept = lambda q, final: list(range(len(final["steps"])))
+    f.asked, f.said = asked, said
+    return f
+
+
+def _sites_now():
+    return st.read_user_config()[st.SITES_SECTION]
+
+
+_seed()
+app = _app()
+check("불러온 칸은 원래 번호(orig)를 들고 있고 새 칸은 None", [p.get("orig") for p in app.presets] == [1, 2, 3, 4, 5] and rr.new_preset(6).get("orig", 0) is None)
+app.cur = 2
+rr.App.remove_preset(app)
+check("[−] 는 고른 프리셋(③)을 지우고 번호를 당긴다 - 기록이 있어 묻는다", [p["name"] for p in app.presets] == ["몰1", "몰2", "몰4", "몰5"]
+      and app.cur == 2 and len(app.asked) == 1 and "③ 몰3" in app.asked[0], str((app.asked, [p["name"] for p in app.presets], app.cur)))
+r = rr.App.save(app)
+sites = _sites_now()
+check("저장: 새 ③ 의 Sites 는 옛 ④ 의 아이디·비밀번호·켬끔·휴대폰, 새 ④ 는 옛 ⑤, PRESET5 는 없다",
+      r == st.presets_path() and sites["PRESET3"]["ID"] == "seller04" and st.unseal(sites["PRESET3"]["PW"]) == "pw-4"
+      and sites["PRESET3"]["Stts"] == 0 and sites["PRESET3"]["Phone"] == "phone4" and sites["PRESET3"]["SmsSenders"] == ["15880004"]
+      and sites["PRESET3"]["Preset"] == 3 and sites["PRESET3"]["note"] == "몰4" and sites["PRESET4"]["ID"] == "seller05"
+      and st.unseal(sites["PRESET4"]["PW"]) == "pw-5" and sites["PRESET4"]["Stts"] == 9 and "PRESET5" not in sites
+      and sites["PRESET1"]["ID"] == "seller01" and sites["SITE1"]["ID"] == "m", str((app.said, {k: (v.get("ID"), v.get("Stts")) for k, v in sites.items()})))
+check("옛 ③ 의 계정은 어디에도 없다", "seller03" not in json.dumps(sites, ensure_ascii=False) and all(st.unseal(sites[f"PRESET{i}"]["PW"]) != "pw-3" for i in range(1, 5)))
+ps = st.read_presets()
+check("프리셋 파일도 당겨지고 그대로인 기록의 저장 날짜는 유지된다 (keep_dates 가 옛 번호로 맞춰 본다)",
+      [(p["no"], p["name"], p["code"]) for p in ps] == [(1, "몰1", "011"), (2, "몰2", "021"), (3, "몰4", "041"), (4, "몰5", "051")]
+      and ps[2]["saved_at"] == "2026-10-04T10:00:00" and ps[3]["saved_at"] == "2026-10-05T10:00:00", str([(p["no"], p["name"], p["saved_at"]) for p in ps]))
+check("메일 기억·로그인 세션·보관 파일이 따라 옮겨지고 옛 ③ 것은 지워진다",
+      all([_side(k, i) for i in range(1, 6)] == [1, 2, 4, 5, None] for k in ("mail", "session", "backup")),
+      str({k: [_side(k, i) for i in range(1, 6)] for k in ("mail", "session", "backup")}))
+check("저장한 뒤에는 화면 칸의 원래 번호가 새 번호가 된다 (다시 저장해도 또 당기지 않는다)", [p["orig"] for p in app.presets] == [1, 2, 3, 4])
+summ = st.preset_summary()
+check("대시보드 요약·켬끔은 Sites·프리셋 파일을 따른다", [(s["no"], s["name"], s["on"], s["backup"]) for s in summ] == [(1, "몰1", False, True), (2, "몰2", True, True), (3, "몰4", True, True), (4, "몰5", False, True)]
+      and st.set_preset_switches({"PRESET3": False}) == {3: False}, str(summ))
+before = (json.dumps(_sites_now(), sort_keys=True), json.dumps(st.read_presets(), sort_keys=True))
+app = _app()
+rr.App.save(app)
+check("지우지 않은 평소 저장은 그대로 (번호·날짜·계정 안 바뀜)", before == (json.dumps(_sites_now(), sort_keys=True), json.dumps(st.read_presets(), sort_keys=True))
+      and app.said[-1] == "저장했습니다.", str(app.said))
+
+_seed()
+app = _app()
+rr.App.remove_preset(app)
+rr.App.save(app)
+sites = _sites_now()
+check("① 도 지울 수 있다 - 새 ① 은 옛 ② 의 계정, 파일도 따라온다", [p["name"] for p in app.presets] == ["몰2", "몰3", "몰4", "몰5"] and app.cur == 0
+      and sites["PRESET1"]["ID"] == "seller02" and st.unseal(sites["PRESET1"]["PW"]) == "pw-2" and "PRESET5" not in sites
+      and [_side("mail", i) for i in range(1, 6)] == [2, 3, 4, 5, None] and "seller01" not in json.dumps(sites), str((app.said, [_side("mail", i) for i in range(1, 6)])))
+
+_seed(2)
+app = _app()
+rr.App.remove_preset(app)
+check("PRESET_MIN 개면 [−] 가 막힌다 (묻지도 않는다)", len(app.presets) == st.PRESET_MIN and app.asked == [], str((len(app.presets), app.asked)))
+app.presets.append(rr.new_preset(3))
+app.presets[2].update(name="새칸", code="031")
+app.cur = 2
+rr.App.remove_preset(app)
+check("기록 없는 칸(새 칸)은 묻지 않고 지운다", len(app.presets) == 2 and app.asked == [])
+
+_seed()
+app = _app()
+app.cur = 2
+rr.App.remove_preset(app)
+before = (json.dumps(_sites_now(), sort_keys=True), json.dumps(st.read_presets(), sort_keys=True), [_side("mail", i) for i in range(1, 6)])
+st.start("prepare", ["a"])
+st.flush()
+r = rr.App.save(app)
+st.finish("success")
+check("오토파일럿이 실행 중이면 번호가 바뀌는 저장을 거절하고 아무것도 안 바뀐다",
+      r is None and app.said[-1] == "오토파일럿이 실행 중이라 저장하지 못했습니다. 끝난 뒤 저장하여 주십시오."
+      and before == (json.dumps(_sites_now(), sort_keys=True), json.dumps(st.read_presets(), sort_keys=True), [_side("mail", i) for i in range(1, 6)])
+      and [p["orig"] for p in app.presets] == [1, 2, 4, 5], str((r, app.said, [p["orig"] for p in app.presets])))
+r = rr.App.save(app)
+check("끝난 뒤 다시 저장하면 당겨진다", r == st.presets_path() and _sites_now()["PRESET3"]["ID"] == "seller04" and [_side("backup", i) for i in range(1, 6)] == [1, 2, 4, 5, None])
+_seed()
+app = _app()
+app.presets.pop()                        # 옛 [−] 처럼 마지막만 지워도 그 번호의 파일은 지운다
+rr.App.save(app)
+check("마지막 프리셋을 지우면 그 번호의 Sites·메일 기억·세션·보관을 지운다", "PRESET5" not in _sites_now() and len(st.read_presets()) == 4
+      and all(_side(k, 5) is None and _side(k, 4) == 4 for k in ("mail", "session", "backup")))
+
 print()
 print(f"실패: {'없음' if not fails else fails}")
 sys.exit(1 if fails else 0)

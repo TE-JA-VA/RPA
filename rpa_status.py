@@ -1052,6 +1052,12 @@ def preset_site_key(no):
     return f"PRESET{no}"
 
 
+def session_path(key):
+    """Sites 칸 key 의 로그인 세션 파일 (web_runner 가 쓴다). 여기 둔 이유: 프리셋 번호를 옮길 때 따라가야 하는데 web_runner 는
+    playwright 를 끌어와 에이전트가 못 부른다."""
+    return os.path.join(data_dir(), "sessions", f"{key}.json")
+
+
 def preset_backup_path(no):
     """넣어 주기·복사로 바꾸기 전 프리셋 no 의 보관 (칸마다 하나, preset_transfer 가 쓰고 restore 로 돌린다)."""
     return os.path.join(data_dir(), "프리셋보관", f"{preset_site_key(no)}.json")
@@ -1062,12 +1068,13 @@ def is_preset_site(key):
     return bool(re.fullmatch(r"PRESET\d+", str(key)))
 
 
-def save_preset_sites(presets, logins, fresh=(), phones=None):
+def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None):
     """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
     presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
     기록이 있는 프리셋만 칸을 둔다 - 새 칸과 fresh (이번에 다시 기록한 번호) 는 꺼짐(Stts 9), 나머지 있던 칸의 켬/끔은 그대로
     (확인 안 한 기록이 다음 자동 실행에 끼지 않게 - 2026-10-01 검토). 기록이 없거나 빠진 번호의 칸은 지운다.
     phones: {번호: (인증 휴대폰 phoneId, [발신번호])} - 문자 2차인증 (휴대폰 중계 설계 13절). 없는 번호는 있던 값 그대로.
+    origs: {번호: 있던 값을 찾을 옛 번호} - 옵저버가 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13). 없는 번호는 같은 번호.
     사용자 설정이 아예 없으면 FileNotFoundError (자격증명 없는 설정을 새로 만들지 않는다 - write_routine_modules 와 같다)."""
     data = read_user_config()
     if not data:
@@ -1079,7 +1086,8 @@ def save_preset_sites(presets, logins, fresh=(), phones=None):
         if not p.get("record"):
             continue
         key = preset_site_key(p["no"])
-        old = sites.get(key) if isinstance(sites.get(key), dict) else {}
+        old = sites.get(preset_site_key((origs or {}).get(p["no"], p["no"])))
+        old = old if isinstance(old, dict) else {}
         login_id, pw = logins.get(p["no"], (old.get("ID", ""), None))
         mine[key] = {"URL": p["record"].get("start_url") or old.get("URL", ""), "ID": (login_id or "").strip(),
                      "PW": pw or old.get("PW", ""), "Action": [REPLAY_ACTION],

@@ -240,7 +240,7 @@ def eval_json(page, js_fn):
 
 
 def session_path(name):
-    return os.path.join(SESSION_DIR, f"{name}.json")
+    return status.session_path(name)        # SESSION_DIR 안 - 자리는 rpa_status 가 안다 (프리셋 번호를 옮길 때 따라간다)
 
 
 def strip_fragment(url):

@@ -81,10 +81,7 @@ def _write_backup(no, preset, site):
 
 
 def _drop_backup(no):
-    try:
-        os.remove(backup_path(no))
-    except OSError:
-        pass
+    _remove(backup_path(no))
 
 
 def _bad_slots(nos, limit):
@@ -108,6 +105,34 @@ def _ordered(sites):
     others = {k: v for k, v in sites.items() if not st.is_preset_site(k)}
     mine = sorted((k for k in sites if st.is_preset_site(k)), key=lambda k: int(k[len("PRESET"):]))
     return {**others, **{k: sites[k] for k in mine}}
+
+
+def move_preset_files(origs, dropped):
+    """프리셋 번호에 묶인 파일(메일 기억·로그인 세션·보관)을 옵저버가 지워 당겨진 번호에 맞춘다 (이슈 #13).
+    origs: {새 번호: 옛 번호}, dropped: 지운 옛 번호들. 지울 것을 먼저 지우고 새 번호 오름차순으로 옮긴다 - 당기기만 하므로
+    (새 ≤ 옛) 늘 비운 자리로만 간다. 설정·프리셋 파일을 쓴 뒤에 부른다 (못 옮기면 옛 번호 것을 지운다 - 다른 프리셋 것이 섞이지 않게)."""
+    def paths(no):
+        return st.mail_memory_path(no), st.session_path(st.preset_site_key(no)), backup_path(no)
+
+    for no in dropped:
+        for p in paths(no):
+            _remove(p)
+    for new, old in sorted(origs.items()):
+        if new == old:
+            continue
+        for src, dst in zip(paths(old), paths(new)):
+            if os.path.isfile(src):
+                try:
+                    os.replace(src, dst)
+                except OSError:
+                    _remove(src)
+
+
+def _remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _write_all(cfg, sites, presets):
