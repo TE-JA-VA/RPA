@@ -54,6 +54,8 @@ STAGE_WAIT_SECONDS = 30     # 단계 단추를 누른 뒤 cbo_stage 가 그 단�
 CHECK_WAIT_SECONDS = 3      # 체크 칸을 누른 뒤 값이 바뀌기를 기다리는 최대 시간
 KEYS_SETTLE_SECONDS = 1     # 함께 실행: 키보드를 잡고 이만큼 뒤에 친다 - 사이트 수집이 하던 단계(새 창을 띄울 수 있다)를 마칠 틈
 HIDDEN_MAX = 10             # 함께 실행: 업로드 중 '+' 화면이 뒤로 간(자동 수집이 원래 탭을 앞으로 가져옴) 횟수가 이보다 많으면 멈춘다
+# 함께 실행: 올리지 못하고 업로드 폴더에 남은 파일 안내 (excel_together - 결과·멈춘 사유에 붙인다)
+LEFT_NOTE = "다음 실행 전에 확인하여 주십시오. 같은 사이트의 새 파일이 오면 남은 파일은 중복으로 처리되어 오류 폴더로 이동합니다"
 IDLE_WAIT_SECONDS = 60      # 자동 수집: 화면이 조회·다시 그리기를 마치기(단추가 켜진 채 머물기)를 기다리는 최대 시간
 FOCUS_WAIT_SECONDS = 2      # 칸을 누른 뒤 키보드 포커스가 오기를 기다리는 최대 시간 (자동 수집 중엔 늦게 온다 - 10-19 실측)
 HOVER_SECONDS = 1.5         # 리허설: 누를 자리에 마우스를 올려 두는 시간 (사람이 화면으로 보게 - 조건 대기 아님)
@@ -445,7 +447,11 @@ def excel_together(rr, ctx, import_live):
     2. 사이트 수집은 기다리지 않고 인증 사이트부터 돈다 (사용자 10-19). 그동안 Edge 창이 뜰 때마다 포커스를 가져가므로 메뉴 검색에
        키를 치는 동안만 수집을 잡고(keys), ERPia 는 맨 위로 두고(module_excel - 업로드 칸을 다른 창이 덮으면 안 열린다) 파일 창·팝업은
        창 메시지·UIA 로만 (run_routine.UPLOAD_NO_KEYS).
-    3. 프리페어가 끝나고 새 파일이 없을 때까지 올린다. 앞 차례에 못 올려 그 자리에 남은 파일은 다시 누르지 않는다 (다음 실행에)."""
+    3. 프리페어가 끝나고 새 파일이 없을 때까지 올린다. 앞 차례에 못 올려 그 자리에 남은 파일은 다시 누르지 않는다 (다음 실행에).
+    4. 업로드 차례 사이에 새로 뜬 ERPia 창은 다음 차례 앞과 끝에서 닫고 그 수를 결과에 알린다 - 결과 대기 뒤에 뜬 실패 팝업이면 그
+       파일은 이미 완료 폴더에 있고, 남겨 두면 다음 차례의 사이트코드 찾기·탭 되돌리기를 막는다 (검토 10-20). 멈추거나 끝날 때
+       올리지 못하고 남은 파일 수도 알린다 - 수집은 그 뒤에도 파일을 넘기고, 다음 실행에 같은 사이트의 새 파일이 오면 남은 파일은
+       중복으로 오류 폴더에 간다 (run_routine.collect_upload_files)."""
     rr.status.step("wl_order_excel")
     copy = None
     try:
@@ -457,14 +463,26 @@ def excel_together(rr, ctx, import_live):
             switch_tab(rr, ctx, copy)
         sites = site_grid(rr, ctx)
         no_popup(rr, ctx, "엑셀 업로드 전")
-        uploaded = errors = hidden = 0
+        base = popup_windows(rr, ctx)
+        uploaded = errors = hidden = late = 0
         tried = set()
+
+        def between(label):
+            nonlocal late
+            try:
+                texts = rr.upload_popups(ctx.pid, ctx.hwnd, base, label=label)
+            except rr.UploadStop:   # 막 뜬 창은 단추가 아직 안 그려졌을 수 있다 - 한 번 더 본 뒤 멈춘다
+                time.sleep(POPUP_SETTLE_SECONDS)
+                texts = rr.upload_popups(ctx.pid, ctx.hwnd, base, label=label)
+            late += len(texts)
+
         rr.UPLOAD_NO_KEYS = True
         try:
             rr.log("  [실행] 엑셀 업로드: 사이트 수집과 함께 - 사이트마다 받은 엑셀을 받는 대로 올립니다")
             while True:
                 new = upload_paths(rr) - tried
                 if new:
+                    between("업로드 사이 ")
                     if copy and keep_front(rr, ctx, copy):
                         sites = site_grid(rr, ctx)
                     try:
@@ -473,24 +491,35 @@ def excel_together(rr, ctx, import_live):
                     except rr.UploadGridHidden as h:     # 남은 파일은 그 자리에 있다 - 다음 차례에 화면을 되돌려 이어서 올린다
                         u, e, hidden = h.uploaded, h.errors, hidden + 1
                         if not copy or hidden > HIDDEN_MAX:
-                            raise Stop("stopped", f"엑셀 업로드 중 사이트 그리드가 계속 화면에서 사라져({hidden}번) 멈춤 - "
-                                                  "남은 파일은 업로드 폴더에 그대로 있습니다 (확인할 것)") from h
+                            raise Stop("stopped", f"엑셀 업로드 중 사이트 그리드가 계속 화면에서 사라져({hidden}번) 멈춤") from h
                     uploaded, errors = uploaded + u, errors + e
                 elif "prepare" in rr.status.running_programs():
                     time.sleep(1)
                 elif not upload_paths(rr) - tried:     # 수집이 끝났다 - 끝나기 직전에 넘긴 파일이 없으면 끝
                     break
+            between("업로드 끝 ")
         except rr.UploadStop as e:
             raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 모르는 창이 떠 멈춤 (누르지 않음): {e}") from e
         finally:
             rr.UPLOAD_NO_KEYS = False
+        left = len(upload_paths(rr))
         rr.status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개",
-                         note=f"오류 폴더 {errors}개" if errors else None)
+                         note=", ".join(n for n in (f"오류 폴더 {errors}개" if errors else "", f"남은 파일 {left}개" if left else "",
+                                                    f"업로드 사이 팝업 {late}개" if late else "") if n) or None)
+    except Stop as e:
+        left = len(upload_paths(rr))
+        if left:
+            raise Stop(e.result, f"{e} - 업로드 폴더에 올리지 못한 파일 {left}개: 사이트 수집이 이 뒤에 넘기는 파일도 이번 실행에서는 "
+                                 f"올라가지 않습니다 ({LEFT_NOTE})") from e
+        raise
     finally:
         if copy:    # 멈춰도 닫는다 - 남으면 다음 실행이 '(3)' 을 연다 (검토 10-20)
             close_order_copy(rr, ctx, copy)
     return ("done" if uploaded else "skipped"), (f"[{mode_tag(True)}] 엑셀 {len(tried)}건 중 {uploaded}건 업로드 (사이트 수집과 함께)"
-                                                 + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
+                                                 + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else "")
+                                                 + (f", 올리지 못해 남은 파일 {left}개 ({LEFT_NOTE})" if left else "")
+                                                 + (f", 업로드 사이에 ERPia 팝업 {late}개를 닫음 (앞서 완료 폴더로 옮긴 파일이 실패였을 수 "
+                                                    "있습니다. 결과 기록을 확인하여 주십시오)" if late else ""))
 
 
 def upload_paths(rr):
@@ -532,7 +561,7 @@ def keys(rr):
             _keys_depth -= 1
         return
     rr.status.hold_keys(True)
-    _keys_depth = 1
+    _keys_depth, held_at = 1, time.time()
     try:
         # ponytail: 수집이 이미 시작한 단계가 늦게 띄우는 창(사이트 팝업)은 틈(KEYS_SETTLE_SECONDS)으로만 피한다 - 새는 일이 보이면
         # 수집 쪽이 '단계 사이에서 멈췄다' 를 알리고 루틴이 그것을 기다리게 바꿀 것
@@ -541,6 +570,8 @@ def keys(rr):
     finally:
         _keys_depth = 0
         rr.status.hold_keys(False)
+        # 차례의 길이 - 그동안 사이트 수집(인증 사이트 포함)이 단계 사이에서 기다린다. 차례 상한·좁히기를 정할 실측 (검토 10-20)
+        rr.log(f"  키보드 차례 {time.time() - held_at:.1f}초")
 
 
 _keys_depth = 0     # keys 를 겹쳐 부른 깊이 (바깥 하나만 잡고 놓는다)
@@ -1040,6 +1071,8 @@ INVOICE_TAB = "운송장번호 전송"
 INVOICE_FORM = "Frm_Send_TrackingNumber"
 INVOICE_ICON = "lcg_InvoiceSend"
 INVOICE_SEND = "운송장번호 [전송요청(S)]"
+SEND_BUSY_WAIT = 60.0      # '전송 중' 인지 이만큼 1초마다 다시 본다 - 잠깐 막힌 것과 가리려고
+SEND_BUSY_LAST = "이후에는 전송하지 않습니다"   # 반복 끝 시각까지 전송 중일 때 사유 끝 (send_busy_reason)
 
 
 def module_invoice_send(rr, ctx, live=False):
@@ -1068,6 +1101,10 @@ def invoice_send(rr, ctx, live):
     실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
     체크는 되돌리지 않는다 (다음 조회로 풀린다). (결과, 사유)."""
     tag = mode_tag(live)
+    # 앞 회차에 누른 전송이 아직 도는 중 - 누르지 않고 다음 회차에 (사용자 2026-10-19).
+    # 반복 회차이고 오늘 전송을 누른 기록이 있을 때만 본다 - 하루 한 번·수동 실행·반복 첫 회차는 화면이 느려도 예전대로 (PR #15 검토 2026-10-20)
+    if os.environ.get("RPA_REPEAT_UNTIL") and last_send_at(rr, datetime.datetime.now()) and send_busy(rr, ctx):
+        return "skipped", f"[{tag}] {send_busy_reason(rr)}"
     fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
     ctl = controls(rr, ctx, INVOICE_FORM)
     query, grid = ctl.get("btn_Search"), ctl.get("gridCtrl_List")
@@ -1095,6 +1132,62 @@ def invoice_send(rr, ctx, live):
     if not live:
         head += " - 전송요청은 누르지 않음"
     return ("done" if pressed else "skipped"), head + note + query_note(fixed)
+
+
+def send_busy(rr, ctx, wait=None):
+    """앞서 누른 [전송요청(S)] 이 아직 도는 중인가 - 그리드나 조회(F) 단추가 꺼져 고르거나 누를 수 없는 상태.
+    송장이 많으면 전송이 반복 간격(쉬는 시간)보다 오래 걸린다 (사용자 2026-10-19). wait 초 동안 1초마다 다시 보고
+    그래도 꺼져 있으면 True. ponytail: 실측 전 - 전송 중 화면을 아직 못 봤다. IsEnabled 만 보니 다른 표시(진행 창 등)가
+    보이면 여기에 더한다."""
+    end = time.time() + (SEND_BUSY_WAIT if wait is None else wait)
+    while True:
+        ctl = controls(rr, ctx, INVOICE_FORM)
+        off = [n for n in ("gridCtrl_List", "btn_Search") if ctl.get(n) is not None and not is_on(ctl[n])]
+        if not off:
+            return False
+        if time.time() >= end:
+            rr.log(f"  {INVOICE_TAB}: {', '.join(off)} 이(가) 꺼져 있습니다 - 앞서 누른 전송이 아직 진행 중으로 봅니다.")
+            return True
+        time.sleep(1)
+
+
+def is_on(c):
+    try:
+        return c.is_enabled()
+    except Exception:
+        return True         # 못 읽으면 막힌 것으로 보지 않는다 (예전처럼 진행)
+
+
+def send_busy_reason(rr, now=None):
+    """전송 중이라 이번 회차를 건너뛸 때의 사유. 반복 회차(대시보드가 끝 시각·쉬는 시간을 넘긴다 - rpa_dashboard.launch_slot)이고
+    다음 회차가 끝 시각을 넘으면(지금 + 쉬는 시간 >= 끝) 마지막 기회라 '이후에는 전송하지 않습니다' 로 남기고,
+    처리한 게 없어도 이력에 남긴다 (사용자 2026-10-19)."""
+    now = now or datetime.datetime.now()
+    last = last_send_at(rr, now)
+    at = f"{last:%H:%M}에 " if last else ""        # 기록이 없으면 시각 없이 (PR #15 검토 2026-10-20)
+    until = os.environ.get("RPA_REPEAT_UNTIL") or ""
+    try:
+        rest = int(os.environ.get("RPA_REPEAT_REST") or "")
+        end = now.replace(hour=int(until[:2]), minute=int(until[3:5]), second=0, microsecond=0)
+    except ValueError:
+        return f"앞서 {at}누른 전송이 아직 진행 중이라 이번에는 누르지 않습니다."
+    if now + datetime.timedelta(minutes=rest) >= end:
+        rr.status.keep_record()
+        return f"마지막으로 {at}전송요청을 눌렀고, 반복 끝 시각({until})까지 전송 중이라 {SEND_BUSY_LAST}."
+    return f"앞서 {at}누른 전송이 아직 진행 중이라 이번 회차는 누르지 않습니다. {rest}분 뒤 다시 확인합니다."
+
+
+def last_send_at(rr, now):
+    """오늘 [전송요청(S)] 을 누른(운송장번호 전송 '완료') 마지막 실행의 그 모듈 끝 시각 - 이력에서. 없으면 None."""
+    try:
+        rows = rr.status.read_history(since=f"{now:%Y-%m-%d}T00:00:00") or []
+    except Exception:
+        return None
+    for r in rows:
+        m = next((m for m in r.get("modules") or [] if m.get("key") == "invoicesend" and m.get("state") == "done"), None)
+        if m:
+            return rr.status.parse_iso(m.get("finished_at") or r.get("finished_at"))
+    return None
 
 
 def query_note(fixed):
@@ -1559,7 +1652,19 @@ def front(rr, ctx, what):
     if rr.ec.screen_locked():
         raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤")
     if not rr.ec.ensure_foreground(ctx.hwnd):
-        raise Stop("failed", f"{what}: ERPia 창을 앞으로 가져오지 못해 누르지 않고 멈춤")
+        raise Stop("failed", f"{what}: ERPia 창을 앞으로 가져오지 못해 누르지 않고 멈춤{front_note(rr, ctx)}")
+
+
+def front_note(rr, ctx):
+    """ERPia 를 앞으로 못 가져왔을 때 맨 앞이던 창의 갈래 - 까닭(ERPia 자신의 팝업 / 사이트 수집이나 사람의 Edge / 사람이 쓰는
+    프로그램)을 다음 실시험에서 세려고 남긴다 (검토 10-20). 프로그램 이름은 기록·웹에 올리지 않는다. 못 읽으면 빈 글."""
+    try:
+        pid = rr.win32process.GetWindowThreadProcessId(rr.win32gui.GetForegroundWindow())[1]
+        if pid == ctx.pid:
+            return " (맨 앞 창: ERPia 의 다른 창)"
+        return " (맨 앞 창: Edge)" if (rr.ec.get_process_name(pid) or "").lower() == "msedge.exe" else " (맨 앞 창: 다른 프로그램)"
+    except Exception:
+        return ""
 
 
 def no_popup(rr, ctx, after):

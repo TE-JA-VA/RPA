@@ -4,6 +4,7 @@
 사이트코드를 찾기 전에 닫아야 하고, 찾는 동안 늦게 뜬 팝업도 앞 파일의 결과로 봐야 한다.
 """
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -20,6 +21,7 @@ REAL_POPUPS, REAL_WAIT = rr.upload_popups, rr.wait_upload_result
 REAL_OPEN, REAL_IN_DIALOG = rr.open_upload_dialog, rr.upload_file_in_dialog
 REAL_ONSCREEN = rr.grid_onscreen
 REAL_INVOKE = rr.invoke_popup_window
+REAL_COLLECT, REAL_MOVE = rr.collect_upload_files, rr.move_file_to
 ONSCREEN = [True]       # 사이트 그리드가 화면에 있는가 (아래 시험들은 가짜 win32gui 라 자리를 못 읽는다)
 rr.grid_onscreen = lambda hwnd, grid: ONSCREEN[0]
 
@@ -257,6 +259,21 @@ check("누를 자리를 다른 창이 덮고 있으면 누르지 않는다 (클�
       str(clicked))
 rr.win32gui.WindowFromPoint = lambda pt: 2
 check("ERPia 메인 창이면 누른다", REAL_OPEN(0, 2, cell) == 1 and clicked == ["클릭"], str(clicked))
+stale, closed = [7], []
+rr.find_top_hwnds_by_title = lambda pid, title, exact=True: list(stale)
+rr.find_open_dialog_filename_edit = lambda h: 77
+rr.close_upload_dialog = lambda pid, h: closed.append(h) or stale.remove(h)
+rr.win32gui.GetClassName = lambda h: rr.SAVE_DIALOG_CLASS
+clicked.clear()
+check("앞 파일에서 늦게 뜬 파일 열기 창은 누르기 전에 취소하고, 새로 눌러 뜬 창을 받는다 (그 창을 받으면 앞 사이트에 올라간다, 검토 10-20)",
+      REAL_OPEN(0, 2, cell) == 1 and closed == [7] and clicked == ["클릭"], f"{closed} {clicked}")
+stale[:] = [8]
+rr.close_upload_dialog = lambda pid, h: closed.append(h)    # 취소해도 남는다
+closed.clear()
+clicked.clear()
+check("늦게 뜬 창이 닫히지 않으면 누르지 않는다 (파일은 그대로)", REAL_OPEN(0, 2, cell) is None and closed == [8] and not clicked,
+      f"{closed} {clicked}")
+stale.clear()
 
 
 print("--- 업로드 칸이 사이트코드와 같은 줄인지 (행 번호, 2026-10-19: 108 을 눌렀는데 109 에 올라갔다)")
@@ -285,6 +302,31 @@ cells[:] = [El("엑셀업로드 행 15"), El("엑셀업로드 행 15")]
 check("다시 찾아도 다르면 누르지 않는다 (못 찾음)", REAL_FIND(0, None, "108") == (None, None))
 cells[:] = [El("엑셀업로드")]
 check("행 번호가 없는 이름이면 예전처럼 그 칸", REAL_FIND(0, None, "108")[0].name == "엑셀업로드")
+
+
+print("--- 같은 사이트코드 파일이 여럿일 때 - 지금 동작 기록 (기획 판단 전, 검토 10-20)")
+d = tempfile.mkdtemp(prefix="rpa_dup_")
+for name, age in (("(107)먼저받음.xlsx", 20), ("(107)나중받음.xlsx", 10), ("(108)b.xlsx", 5), ("메모.xlsx", 5)):
+    p = os.path.join(d, name)
+    open(p, "w").close()
+    os.utime(p, (time.time() - age, time.time() - age))
+sent = []
+rr.excel_upload_dir = lambda: d
+rr.collect_upload_files, rr.move_file_to = REAL_COLLECT, REAL_MOVE
+rr.find_site_upload_cell = lambda hwnd, grid, code: (SimpleNamespace(rectangle=lambda: (0, 0, 1, 1)), rr.EXCEL_UPLOAD_ENABLED)
+rr.upload_popups = rr.wait_upload_result = lambda *a, **k: []
+rr.open_upload_dialog = lambda pid, hwnd, cell: 1
+rr.upload_file_in_dialog = lambda dlg, path, pid=None: sent.append(os.path.basename(path)) or True
+rr.win32gui = SimpleNamespace(IsWindow=lambda h: False, IsWindowVisible=lambda h: False)
+res = rr.run_excel_upload_step(None, 0, 0, None)
+done_dir = os.path.join(d, rr.EXCEL_UPLOAD_DONE_DIR, time.strftime("%Y%m%d"))
+check("같은 사이트코드면 마지막에 받은(수정 시각이 늦은) 파일만 올리고 먼저 받은 파일은 오류 폴더 '중복' - 메일을 최신순으로 받으면 "
+      "가장 오래된 메일이 올라간다",
+      sent == ["(107)나중받음.xlsx", "(108)b.xlsx"] and res == (2, 1)
+      and os.path.exists(os.path.join(d, rr.EXCEL_UPLOAD_ERROR_DIR, "(107)먼저받음.xlsx"))
+      and sorted(os.listdir(done_dir)) == ["(107)나중받음.xlsx", "(108)b.xlsx"], f"{sent} {res}")
+check("이름 규칙 밖 파일은 건드리지 않고 폴더에 남는다", os.path.exists(os.path.join(d, "메모.xlsx")))
+shutil.rmtree(d, ignore_errors=True)
 
 print()
 print("실패:", fails or "없음")

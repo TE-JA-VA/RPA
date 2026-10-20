@@ -158,7 +158,7 @@ export function mount(el, context) {
     if (!was) return;
     if (!was[0]) resetModules();   // 편집 중인 폼은 건드리지 않는다 (보내는 값은 어차피 규칙대로 거른다)
     if (!was[1]) resetSchedule(); else { paintTimes(); paintScheduleMeta(); }
-    if (!was[2]) resetTogether(); else paintTogether();   // 전체 실행 방식은 웰라이프만 - 열림이 바뀌면 카드가 따라간다
+    if (!was[2]) resetTogether(); else paintTogether();   // 전체 실행 방식 - 정책이 바뀌면 카드를 다시 그린다
   }, () => {});
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const first = live == null;
@@ -443,15 +443,15 @@ async function applyParallel() {
   await send("set_parallel", { parallel: n }, "동시 실행");
 }
 
-// --- 전체 실행 방식 (웰라이프, 사용자 2026-10-20) ---------------------------------
-// 웰라이프 업체이고 PC 가 새 에이전트(live.together)일 때만 보인다. 값·이름은 rpa_status.TOGETHER_MODES 와 같다 (PC 가 다른 값은 거절한다)
+// --- 전체 실행 방식 (모든 업체, 사용자 2026-10-20 - 웰라이프만이던 것을 같은 날 넓힘) -----------------
+// PC 가 새 에이전트(live.together)일 때만 보인다. 값·이름은 rpa_status.TOGETHER_MODES 와 같다 (PC 가 다른 값은 거절한다)
 const TOGETHER = [
   ["off", "순서대로", "사이트 수집(ACTOR)이 끝난 뒤 PROCESS를 실행합니다."],
   ["excel", "함께 (엑셀 업로드)", "PROCESS를 함께 실행하여 사이트별 엑셀을 다운로드하는 대로 업로드합니다. 자동 수집은 사이트 수집이 끝난 뒤 실행합니다."],
   ["excel_import", "함께 (엑셀 업로드·자동 수집)", "PROCESS를 함께 실행하여 엑셀 업로드와 자동 수집을 사이트 수집과 함께 진행합니다."],
 ];
 const togOf = (k) => TOGETHER.find(([v]) => v === k) || TOGETHER[0];
-const togShown = () => isWellife() && !!live?.together;
+const togShown = () => !!live?.together;
 const savedTog = () => togOf(live?.together?.chosen)[0];
 function resetTogether() {
   form.together = savedTog();

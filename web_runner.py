@@ -961,19 +961,19 @@ def recover_stage():
 
 
 def start_routine_together():
-    """전체 실행(Run_All.bat 이 ALL_RUN_ENV 를 준다)의 웰라이프 업체이고 업체가 '함께' 방식을 골랐으면 (status.together_choice,
-    사용자 2026-10-20) ERPia 쪽(루틴)을 지금 함께 띄운다 (사용자 2026-10-19) - 사이트에서 받은 엑셀을 받는 대로 올리고,
-    '함께 (엑셀 업로드·자동 수집)' 이면 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가 예전처럼 돈다.
-    (프로세스, 띄운 시각) - 띄우지 않았으면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다 - '순서대로')."""
+    """전체 실행(Run_All.bat 이 ALL_RUN_ENV 를 준다)이고 업체가 '함께' 방식을 골랐으면 (status.together_choice, 사용자 2026-10-20 -
+    모든 업체, 웰라이프만이던 것을 같은 날 넓힘) ERPia 쪽(루틴)을 지금 함께 띄운다 (사용자 2026-10-19) - 사이트에서 받은 엑셀을 받는 대로
+    올리고, '함께 (엑셀 업로드·자동 수집)' 이면 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가
+    예전처럼 돈다. (프로세스, 띄운 시각) - 띄우지 않았으면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다 - '순서대로')."""
     global _together
-    if os.environ.get(status.ALL_RUN_ENV) != "1" or not status.wellife_policy():
+    if os.environ.get(status.ALL_RUN_ENV) != "1":
         return None
     mode = status.together_choice()
     if mode == "off":
         log(f"전체 실행 방식이 '{status.TOGETHER_MODES[mode]}'이므로 사이트 수집이 끝난 뒤 PROCESS를 실행합니다.")
         return None
-    if getattr(sys, "frozen", False):
-        cmd = [os.path.join(os.path.dirname(sys.executable), ROUTINE_EXE)]
+    if status.packaged():   # 설치판 - Nuitka 는 sys.frozen 이 없어 소스 쪽으로 빠져 Prepare_RPA.exe 를 다시 띄웠다 (10-20)
+        cmd = [os.path.join(status.program_dir(), ROUTINE_EXE)]
     else:
         cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_routine.py")]
     env = {k: v for k, v in os.environ.items() if k != status.ALL_RUN_ENV}
@@ -993,15 +993,27 @@ def wait_keys():
     if not _together or not status.keys_held(_together[1]):
         return
     log("  ERPia 쪽이 키보드를 쓰는 동안 기다립니다.")
+    t = time.time()
     while _together[0].poll() is None and status.keys_held(_together[1]):
         time.sleep(0.2)
+    log(f"  ERPia 쪽 키보드 차례가 끝나 이어 갑니다 ({time.time() - t:.1f}초 기다림).")
 
 
 class KeysPause:
     """재생기의 일시정지 자리(Replayer.pause - is_set 만 본다): 함께 띄운 루틴이 ERPia 에 키보드를 쓰는 동안 다음 단계 앞에서 기다린다.
-    하던 단계는 끝까지 하므로 루틴은 키보드를 잡고 잠깐 뒤에 친다 (wellife.KEYS_SETTLE_SECONDS)."""
+    하던 단계는 끝까지 하므로 루틴은 키보드를 잡고 잠깐 뒤에 친다 (wellife.KEYS_SETTLE_SECONDS).
+    풀리면 멈춘 시간을 남긴다 - 인증 사이트가 얼마나 기다렸는지 보는 실측 (검토 10-20)."""
+    def __init__(self):
+        self.since = None
+
     def is_set(self):
-        return bool(_together) and _together[0].poll() is None and status.keys_held(_together[1])
+        held = bool(_together) and _together[0].poll() is None and status.keys_held(_together[1])
+        if held and self.since is None:
+            self.since = time.time()
+        elif not held and self.since is not None:
+            log(f"  키보드 차례가 끝나 이어 갑니다 ({time.time() - self.since:.1f}초 일시정지).")
+            self.since = None
+        return held
 
 
 def erpia_rect():

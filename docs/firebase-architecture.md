@@ -72,7 +72,7 @@ apps/rpa/live/{cid}/{pcId}              에이전트가 PATCH 로 올리는 현�
                                         tokens = { balance, cost: { routine, prepare, all } } (통장이 없는 업체는 없음)
                                         presets = [{ no, name, code, steps, saved_at, has_login, on }] (기록 내용·아이디·비밀번호 없음)
                                         parallel = { chosen } (동시 실행 창 수 - limits/parallel 이 2 이상인 업체만, 아니면 키 없음)
-                                        together = { chosen } (웰라이프 전체 실행 방식 off|excel|excel_import - 웰라이프 업체만, 아니면 키 없음. 옛 에이전트도 키 없음)
+                                        together = { chosen } (전체 실행 방식 off|excel|excel_import - 모든 업체 (10-20 에 웰라이프만이던 것을 넓힘). 옛 에이전트는 키 없음)
                                         schedule = { version 2, enabled, days, slots, next_run_at, next_slot, policy{limit, off},
                                                      repeat{date, at, until, runs, done, stopped, pending, next_at}, last_* } (version 이 없으면 옛 판 PC - times 만)
                                         tokens.cost.next = 다음 예약 줄이 '고르기' 면 그 줄의 토큰
@@ -114,7 +114,7 @@ users/{uid}                { cid, role, name } - 표시용. 권한 근거는 cus
 
 기준값은 항상 `live` 다. `settings` 는 "이렇게 해 달라" 는 요청이고, PC 가 실제로 반영한 결과가 `live.modules` 와 `live.schedule` 로 돌아온다.
 
-명령 종류는 `launch`, `stop_erpia`, `set_modules`, `set_schedule`, `set_presets`, `set_parallel`(동시 실행 창 수 - 관리 화면이 허용한 업체만), `set_together`(웰라이프 전체 실행 방식 - 웰라이프 업체만, `{mode: off|excel|excel_import}` → PC settings.json `prepare.together`), `resume_repeat`(반복 다시 시작), `stop_rpa`, `export_preset`·`import_preset`·`restore_preset`(프리셋 전송) 이다 (관리 화면 전용 `update`·`rollback` 은 따로) (`set_presets` 는 에이전트가 `Sites.PRESETn.Stts` 를 0/9 로 - 키가 `PRESET1` 인 것은 숫자 키를 Realtime DB 가 배열로 바꿔 읽기 때문). 상태는 `queued → running → done|failed`, 늦게 받으면 `expired`.
+명령 종류는 `launch`, `stop_erpia`, `set_modules`, `set_schedule`, `set_presets`, `set_parallel`(동시 실행 창 수 - 관리 화면이 허용한 업체만), `set_together`(전체 실행 방식 - 모든 업체, `{mode: off|excel|excel_import}` → PC settings.json `prepare.together`), `resume_repeat`(반복 다시 시작), `stop_rpa`, `export_preset`·`import_preset`·`restore_preset`(프리셋 전송) 이다 (관리 화면 전용 `update`·`rollback` 은 따로) (`set_presets` 는 에이전트가 `Sites.PRESETn.Stts` 를 0/9 로 - 키가 `PRESET1` 인 것은 숫자 키를 Realtime DB 가 배열로 바꿔 읽기 때문). 상태는 `queued → running → done|failed`, 늦게 받으면 `expired`.
 
 | 값 | 지금 |
 |---|---|

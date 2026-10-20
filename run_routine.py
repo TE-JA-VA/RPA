@@ -3051,10 +3051,33 @@ def upload_file_in_dialog(dlg_hwnd, path, pid=None):
     return submit_open_dialog(dlg_hwnd, pid=pid, edit_hwnd=edit)
 
 
+def open_dialogs(pid):
+    """이미 떠 있는 파일 열기 창 ('#32770' 이면서 '파일 이름' 칸이 있는 창 - 표준 메시지 상자는 뺀다). 못 읽으면 빈 목록."""
+    found = []
+    try:
+        for h in find_top_hwnds_by_title(pid, "", exact=False):
+            if win32gui.GetClassName(h) == SAVE_DIALOG_CLASS and find_open_dialog_filename_edit(h):
+                found.append(h)
+    except Exception:
+        pass
+    return found
+
+
 def open_upload_dialog(pid, hwnd, cell):
     """'엑셀업로드' 셀을 눌러 파일 열기 창을 띄운다. 한 번 눌러 안 뜨면 더블클릭.
     누를 자리의 맨 위 창이 ERPia 메인 창이 아니면 누르지 않는다 - 다른 창(Edge·팝업)에 클릭이 떨어진다 (2026-10-19 개발기:
-    덮인 칸은 커서를 올리고 클릭 메시지를 보내도 열리지 않았다)."""
+    덮인 칸은 커서를 올리고 클릭 메시지를 보내도 열리지 않았다).
+    누르기 전에 이미 떠 있는 파일 열기 창은 취소한다 - 앞 파일에서 기다림(클릭·더블클릭 각 OPEN_DIALOG_WAIT_SECONDS)을 넘겨 늦게
+    뜬 창이고, 그 창을 이 파일의 창으로 받으면 이 파일이 앞 사이트에 올라간다 (검토 10-20). 못 닫으면 누르지 않는다."""
+    for h in open_dialogs(pid):
+        log(f"    앞에서 늦게 뜬 파일 열기 창(hwnd={h})을 취소합니다 - 이 파일을 넣으면 앞 사이트에 올라갑니다.")
+        close_upload_dialog(pid, h)
+    end = time.time() + 2
+    while open_dialogs(pid):
+        if time.time() > end:
+            log("    앞에서 늦게 뜬 파일 열기 창이 닫히지 않아 누르지 않습니다.")
+            return None
+        time.sleep(0.1)
     for attempt, how in ((1, "클릭"), (2, "더블클릭")):
         ec.ensure_foreground(hwnd)
         r = cell.rectangle()
@@ -3137,24 +3160,31 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
     pending = None      # 넘기고 결과를 아직 안 본 파일 - 다음 파일 앞(앞 파일 결과 팝업)이나 맨 끝에 본다
     closed_at = 0.0     # pending 의 파일 열기 창이 닫힌 때
     seen = []           # pending 의 결과로 닫은 팝업 (사이트코드 찾기 앞에서)
+    seen_at = None      # pending 의 결과 팝업을 처음 본 때
     before = set(find_popup_windows(pid, hwnd))     # 업로드 전부터 있던 별도 창은 팝업으로 보지 않는다
     if before:
         log(f"  업로드 전부터 떠 있던 별도 창 {len(before)}개는 건드리지 않습니다.")
 
     def popups_now(label):
-        return upload_popups(pid, hwnd, before, label=label)
+        nonlocal seen_at
+        texts = upload_popups(pid, hwnd, before, label=label)
+        if texts and pending and seen_at is None:
+            seen_at = time.time()
+        return texts
 
     def settle(popups):
         """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
         팝업이 없어도 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 가 지나기 전이면 남은 시간만큼 결과 팝업을 기다린다."""
-        nonlocal pending, seen, uploaded, failed, errors
+        nonlocal pending, seen, seen_at, uploaded, failed, errors
         left = closed_at + upload_result_wait() - time.time()
         if not popups and left > 0:
             popups = wait_upload_result(pid, hwnd, before, timeout=left)
-        path, pending, seen = pending, None, []
+        at = (seen_at or time.time()) - closed_at
+        path, pending, seen, seen_at = pending, None, [], None
         wait_file_unlocked(path)    # 읽는 도중 옮기면 '헤더 개수: 0' - 안 잠겼으면 바로 돌아온다
         if popups:
-            log(f"    {os.path.basename(path)}: 업로드 실패로 판단합니다. (팝업 {len(popups)}건)")
+            # 뜬 때는 결과 대기 시간이 맞는지 볼 실측 (검토 10-20 - 개발기 0.73~1.05초는 함께 실행이 아닐 때 잰 값)
+            log(f"    {os.path.basename(path)}: 업로드 실패로 판단합니다. (팝업 {len(popups)}건, 파일 창이 닫힌 뒤 {at:.1f}초에 봄)")
             failed += 1
             status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets), unit="개", note=f"실패 {failed}개")
             if move_files:
@@ -5791,8 +5821,81 @@ def goto_order_screen(ctx):
     return True, None
 
 
+# 함께 실행 (모든 업체, 사용자 2026-10-20): 프리페어가 함께 띄운 루틴이면 main 이 업체가 고른 방식을 적는다. None 이면 예전 그대로.
+# 'excel' - 받는 엑셀을 사이트 수집이 끝날 때까지 먼저 올리고 자동 수집은 그 뒤 / 'excel_import' - 자동 수집을 끝까지 본 뒤 같은 화면에서
+# 받는 대로 (웰라이프의 '+' 화면 없이 - 두 탭이 동시에 넣지 않는다)
+TOGETHER_MODE = None
+TOGETHER_ENV = status.TOGETHER_ENV   # 불러올 때 받아 둔다 (시험이 status 를 바꿔 끼운다)
+
+
+def excel_upload_together(ctx, grid):
+    """함께 실행: 사이트 수집(프리페어)이 넘기는 엑셀을 수집이 끝날 때까지 받는 대로 올린다 (웰라이프 wellife.excel_together 와 같은 규칙).
+    파일 창·팝업은 키보드·마우스 없이(UPLOAD_NO_KEYS). 차례 사이에 새로 뜬 ERPia 창은 다음 차례 앞과 끝에서 닫고 그 수를 알린다 - 결과
+    대기 뒤 늦게 뜬 실패 팝업이면 그 파일은 이미 완료 폴더에 있다. 앞 차례에 못 올려 남은 파일은 다시 누르지 않는다 (다음 실행에).
+    오류가 나도 매출처리는 이어간다 (예전 엑셀업로드와 같다) - 남은 파일은 업로드 폴더에 그대로."""
+    global UPLOAD_NO_KEYS
+    rr = sys.modules[__name__]
+    status.step("excel_upload")
+    log("\n=== 엑셀업로드 (사이트 수집과 함께 - 받는 대로) ===")
+    base = set(find_popup_windows(ctx.pid, ctx.hwnd))
+    tried, uploaded, errors, late = set(), 0, 0, 0
+
+    def between(label):
+        try:
+            return len(upload_popups(ctx.pid, ctx.hwnd, base, label=label))
+        except UploadStop:      # 막 뜬 창은 단추가 아직 안 그려졌을 수 있다 - 한 번 더 본 뒤 멈춘다
+            time.sleep(wellife.POPUP_SETTLE_SECONDS)
+            return len(upload_popups(ctx.pid, ctx.hwnd, base, label=label))
+
+    UPLOAD_NO_KEYS = True
+    try:
+        while True:
+            new = wellife.upload_paths(rr) - tried
+            if new:
+                late += between("업로드 사이 ")
+                u, e = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, grid, skip=tried)
+                tried |= new
+                uploaded, errors = uploaded + u, errors + e
+            elif "prepare" in status.running_programs():
+                time.sleep(1)
+            elif not wellife.upload_paths(rr) - tried:  # 수집이 끝났다 - 끝나기 직전에 넘긴 파일이 없으면 끝 (있으면 한 번 더)
+                break
+        late += between("업로드 끝 ")
+    except Exception as e:
+        log(f"경고: 엑셀업로드 처리 중 오류가 발생해 멈춥니다 (남은 파일은 업로드 폴더에 그대로 - 다음 실행에): {e}")
+    finally:
+        UPLOAD_NO_KEYS = False
+    left = len(wellife.upload_paths(rr))
+    notes = [f"오류 폴더 {errors}개" if errors else "", f"남은 파일 {left}개" if left else "",
+             f"업로드 사이 팝업 {late}개 - 결과 기록 확인" if late else ""]
+    status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개", note=", ".join(n for n in notes if n) or None)
+    log(f"  엑셀 업로드 (사이트 수집과 함께): {len(tried)}건 중 {uploaded}건, 오류 폴더 {errors}건, 남은 파일 {left}건, "
+        f"업로드 사이에 닫은 팝업 {late}개" + (f" ({wellife.LEFT_NOTE})" if left else ""))
+
+
 def module_sales(ctx):
+    """주문매핑 매출처리 (sales_flow). 함께 실행이면 ERPia 를 맨 위로 두고(사이트 수집의 Edge 창이 누를 자리를 덮지 않게) 끝나면 풀고,
+    사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 간다 (뒤 모듈이 Edge 창과 겹치지 않게 - 예전 차례와 같다).
+    함께 실행이 아니면 맨 위만 푼다 - 앞 함께 실행이 대시보드 [중지](강제 종료)로 끝나 finally 를 못 타면 맨 위로 남는다 (맨 위가 아니면
+    아무 일 없음, 웰라이프 login_free 와 같다)."""
+    rr = sys.modules[__name__]
+    if not TOGETHER_MODE:
+        wellife.on_top(rr, ctx.hwnd, False)
+        return sales_flow(ctx)
+    wellife.on_top(rr, ctx.hwnd, True)
+    try:
+        return sales_flow(ctx)
+    finally:
+        wellife.on_top(rr, ctx.hwnd, False)
+        if "prepare" in status.running_programs():
+            log("사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 갑니다.")
+            while "prepare" in status.running_programs():
+                time.sleep(2)
+
+
+def sales_flow(ctx):
     """주문매핑 매출처리: 화면 이동 -> 상단 전체선택 -> 가져오기 -> 엑셀업로드 -> 하단 전체선택 -> 정상매출.
+    함께 실행(TOGETHER_MODE)이면 엑셀업로드는 받는 대로 (excel_upload_together) - 'excel' 은 상단 전체선택 앞, 'excel_import' 는 가져오기 뒤.
 
     대상이 0건이어도 '정상매출'을 누른다 (예전 흐름 그대로. ERPia 가 어떤 팝업을 내는지 실측이 없어
     '대상 없음' 판정은 넣지 않았다).
@@ -5814,6 +5917,8 @@ def module_sales(ctx):
     if ctx.collected:
         log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
     else:
+        if TOGETHER_MODE == "excel":    # 받는 엑셀을 사이트 수집이 끝날 때까지 먼저 올린다 - 자동 수집은 그 뒤
+            excel_upload_together(ctx, top_left)
         status.step("top_select")
         log("\n=== 좌측 상단 그리드 전체선택 ===")
         n_top = select_all_and_verify("좌측상단", hwnd, top_left, ["아이디"])
@@ -5825,13 +5930,16 @@ def module_sales(ctx):
             log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
         win = app.window(handle=hwnd)
 
-        # 7-1. 엑셀업로드 (바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만)
-        status.step("excel_upload")
-        log("\n=== 엑셀업로드 ===")
-        try:
-            run_excel_upload_step(app, pid, hwnd, top_left)
-        except Exception as e:
-            log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
+        if TOGETHER_MODE == "excel_import":     # 자동 수집을 끝까지 본 뒤 같은 화면에서 받는 대로 - 사이트 수집이 끝날 때까지
+            excel_upload_together(ctx, top_left)
+        elif not TOGETHER_MODE:
+            # 7-1. 엑셀업로드 (바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만)
+            status.step("excel_upload")
+            log("\n=== 엑셀업로드 ===")
+            try:
+                run_excel_upload_step(app, pid, hwnd, top_left)
+            except Exception as e:
+                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
         ctx.collected = ec.pid_alive(ctx.pid)   # 수집 도중 꺼졌으면 다시 돌 때 수집부터
 
     # 8. 하단 전체선택
@@ -6183,6 +6291,22 @@ def wellife_route(policy_on, has_section):
     return ("stop", "이 업체는 웰라이프 실행이 열려 있지 않습니다 (관리 화면)") if has_section else ("routine", None)
 
 
+def together_setup(rr, selected):
+    """프리페어가 함께 띄운 루틴(TOGETHER_ENV)이면 업체가 고른 방식을 TOGETHER_MODE 에 적는다 (모든 업체, 사용자 2026-10-20).
+    주문매핑 매출처리를 안 하거나 '순서대로' 면 사이트 수집이 끝나기를 기다린 뒤 예전처럼 돈다 (예전 차례). 함께 올리면 로그인 창에
+    키를 치는 동안 사이트 수집이 새 Edge 창을 띄우지 않게 키보드 차례를 잡는다 (wellife.keys - Edge 창이 포커스를 가져가면 비밀번호가 샌다)."""
+    global TOGETHER_MODE
+    if os.environ.get(TOGETHER_ENV) != "1":
+        return
+    mode = status.together_choice()
+    log(f"전체 실행 방식: {status.TOGETHER_MODES.get(mode, mode)} (사이트 수집과 함께 띄워짐)")
+    if mode == "off" or not selected.get("Sales"):
+        wellife.wait_prepare(rr, "'순서대로' 라" if mode == "off" else "주문매핑 매출처리를 하지 않아")
+        return
+    TOGETHER_MODE = mode
+    pl.KEYS_GUARD = lambda: wellife.keys(rr)
+
+
 def main():
     if "--check" in sys.argv[1:]:
         run_self_check()
@@ -6236,6 +6360,7 @@ def main():
     else:
         log("실행할 모듈: " + " / ".join(
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
+    together_setup(rr, selected)
 
     result, reason = run_modules(selected)
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \

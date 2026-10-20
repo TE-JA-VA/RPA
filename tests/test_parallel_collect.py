@@ -321,18 +321,23 @@ os.environ.pop(status.ALL_RUN_ENV, None)
 status.wellife_policy = lambda: True
 check("전체 실행(Run_All.bat)이 아니면 함께 띄우지 않는다", web_runner.start_routine_together() is None and not spawned)
 os.environ[status.ALL_RUN_ENV] = "1"
-status.wellife_policy = lambda: False
-check("웰라이프 업체가 아니면 함께 띄우지 않는다 (예전 차례)", web_runner.start_routine_together() is None and not spawned)
-status.wellife_policy = lambda: True
 status.together_choice = lambda: "off"
-check("웰라이프 전체 실행이어도 전체 실행 방식이 '순서대로'(기본)면 함께 띄우지 않는다 (사용자 2026-10-20)",
+check("전체 실행이어도 전체 실행 방식이 '순서대로'(기본)면 함께 띄우지 않는다 (사용자 2026-10-20)",
       web_runner.start_routine_together() is None and not spawned)
+status.wellife_policy = lambda: False
 status.together_choice = lambda: "excel"
 together = web_runner.start_routine_together()
 cmd, env = spawned[0] if spawned else (None, {})
-check("웰라이프 전체 실행이면 루틴을 함께 띄운다 - 함께 표시는 주고 전체 실행 표시는 빼서",
+check("'함께' 를 고른 전체 실행이면 웰라이프가 아니어도 루틴을 함께 띄운다 (모든 업체, 사용자 2026-10-20) - 함께 표시는 주고 전체 실행 표시는 빼서",
       together is not None and env.get(status.TOGETHER_ENV) == "1" and status.ALL_RUN_ENV not in env
       and cmd[-1].endswith("run_routine.py"), str(cmd))
+spawned.clear()
+_saved_pk = status.packaged, status.program_dir
+status.packaged, status.program_dir = (lambda: True), (lambda: r"C:\RPA")
+web_runner.start_routine_together()
+status.packaged, status.program_dir = _saved_pk
+check("설치판(Nuitka 는 sys.frozen 이 없다)은 exe 가 놓인 폴더의 ERPia_RPA.exe 를 띄운다 (10-20: Prepare_RPA.exe 를 다시 띄웠다)",
+      bool(spawned) and spawned[0][0] == [os.path.join(r"C:\RPA", web_runner.ROUTINE_EXE)], str(spawned))
 holds = [True, True, False]
 status.keys_held = lambda since: holds.pop(0) if holds else False
 t0 = time.time()
@@ -345,6 +350,18 @@ t0 = time.time()
 web_runner.wait_keys()
 check("루틴이 먼저 끝나면 잡은 표시가 남아도 기다리지 않는다",
       time.time() - t0 < 0.3 and not web_runner.KeysPause().is_set())
+logs, _saved_log = [], web_runner.log
+web_runner.log = logs.append
+web_runner._together[0].rc = None
+status.keys_held = lambda since: True
+kp = web_runner.KeysPause()
+kp.is_set()
+kp.is_set()
+status.keys_held = lambda since: False
+held_now = kp.is_set()
+web_runner.log = _saved_log
+check("일시정지가 풀리면 멈춘 시간을 한 번 남긴다 (인증 사이트가 기다린 시간 실측, 검토 10-20)",
+      not held_now and sum("일시정지" in m for m in logs) == 1, str(logs))
 rcs = []
 for prep, rt in ((0, 0), (0, 3), (1, 0), (1, -1073741819), (0, 3221225477)):     # 비정상 종료 0xC0000005 (cmd 는 음수로 본다)
     web_runner._together[0].rc = rt
