@@ -1101,7 +1101,9 @@ def invoice_send(rr, ctx, live):
     실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
     체크는 되돌리지 않는다 (다음 조회로 풀린다). (결과, 사유)."""
     tag = mode_tag(live)
-    if send_busy(rr, ctx):          # 앞 회차에 누른 전송이 아직 도는 중 - 누르지 않고 다음 회차에 (사용자 2026-10-19)
+    # 앞 회차에 누른 전송이 아직 도는 중 - 누르지 않고 다음 회차에 (사용자 2026-10-19).
+    # 반복 회차이고 오늘 전송을 누른 기록이 있을 때만 본다 - 하루 한 번·수동 실행·반복 첫 회차는 화면이 느려도 예전대로 (PR #15 검토 2026-10-20)
+    if os.environ.get("RPA_REPEAT_UNTIL") and last_send_at(rr, datetime.datetime.now()) and send_busy(rr, ctx):
         return "skipped", f"[{tag}] {send_busy_reason(rr)}"
     fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
     ctl = controls(rr, ctx, INVOICE_FORM)

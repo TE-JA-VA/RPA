@@ -1469,6 +1469,11 @@ busy_ctl = {"btn_Search": busy_search, "gridCtrl_List": "grid", "btn_SendRequest
 _busy_wait = wellife.SEND_BUSY_WAIT
 wellife.SEND_BUSY_WAIT = 0
 wellife.controls = lambda rr_, ctx_, form: busy_ctl
+import datetime as _dt  # noqa: E402
+
+_saved_last = wellife.last_send_at
+wellife.last_send_at = lambda rr_, now_: _dt.datetime(2026, 10, 19, 10, 5)
+os.environ["RPA_REPEAT_UNTIL"] = "18:00"
 res = inv_run(True)
 check("전송 중(조회 단추가 꺼짐)이면 조회·체크·전송요청 모두 하지 않고 건너뛴다 - 반복은 이어 간다",
       res[0] == "skipped" and acts == [] and "진행 중" in res[1], f"{res} {acts}")
@@ -1480,8 +1485,19 @@ res = inv_run(True)
 check("잠깐 꺼졌다가 다시 켜지면 예전처럼 조회 -> 전체 체크 -> 전송요청",
       res[0] == "done" and ("click", "btn_SendRequest") in acts, f"{res} {acts}")
 wellife.SEND_BUSY_WAIT = _busy_wait
-
-import datetime as _dt  # noqa: E402
+wellife.controls = lambda rr_, ctx_, form: busy_ctl
+del os.environ["RPA_REPEAT_UNTIL"]
+acts.clear()
+res = inv_run(True)
+check("반복 회차가 아니면(하루 한 번·수동 실행) 버튼이 꺼져 있어도 전송 중으로 건너뛰지 않는다",
+      "진행 중" not in res[1] and ("click", "조회(F)") in acts, f"{res} {acts}")
+os.environ["RPA_REPEAT_UNTIL"] = "18:00"
+wellife.last_send_at = lambda rr_, now_: None
+acts.clear()
+res = inv_run(True)
+check("반복 첫 회차(오늘 전송 기록 없음)도 건너뛰지 않는다", "진행 중" not in res[1] and ("click", "조회(F)") in acts, f"{res} {acts}")
+del os.environ["RPA_REPEAT_UNTIL"]
+wellife.last_send_at = _saved_last
 
 busy_kept = []
 busy_hist = [{"modules": [{"key": "invoicesend", "state": "skipped", "finished_at": "2026-10-19T10:30:05"}]},
