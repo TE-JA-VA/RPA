@@ -19,6 +19,7 @@ REAL_FIND = rr.find_site_upload_cell     # 아래 run() 이 가짜로 바꾸기 
 REAL_POPUPS, REAL_WAIT = rr.upload_popups, rr.wait_upload_result
 REAL_OPEN, REAL_IN_DIALOG = rr.open_upload_dialog, rr.upload_file_in_dialog
 REAL_ONSCREEN = rr.grid_onscreen
+REAL_INVOKE = rr.invoke_popup_window
 ONSCREEN = [True]       # 사이트 그리드가 화면에 있는가 (아래 시험들은 가짜 win32gui 라 자리를 못 읽는다)
 rr.grid_onscreen = lambda hwnd, grid: ONSCREEN[0]
 
@@ -170,10 +171,34 @@ rr.win32gui = SimpleNamespace(GetClassName=lambda h: wins[h][0], IsWindow=lambda
                               IsWindowVisible=lambda h: h in wins)
 rr.upload_popups, rr.wait_upload_result = REAL_POPUPS, REAL_WAIT
 
+rr.find_open_dialog_filename_edit = lambda h: 77 if h == 2 else None     # 2 만 파일 이름 칸이 있는 파일 열기 창
 wins.update({1: ("popup", True, True), 2: (rr.SAVE_DIALOG_CLASS, True, True), 3: ("popup", True, True)})
 texts = rr.upload_popups(0, 0, before={1})
 check("업로드 전부터 있던 창과 파일 열기 창은 두고 새로 뜬 팝업만 닫는다", pressed == [3] and texts == ["팝업3 문구"],
       f"{pressed} {texts}")
+wins.clear()
+pressed.clear()
+wins[7] = (rr.SAVE_DIALOG_CLASS, True, True)
+texts = rr.upload_popups(0, 0)
+check("표준 메시지 상자('#32770', 파일 이름 칸 없음)는 실패 팝업으로 닫는다 (검토 10-20)", pressed == [7] and texts == ["팝업7 문구"],
+      f"{pressed} {texts}")
+
+invoked = []
+
+
+def popup_with(*names):
+    buttons = [SimpleNamespace(window_text=lambda n=n: n, invoke=lambda n=n: invoked.append(n)) for n in names]
+    w = SimpleNamespace(descendants=lambda **k: buttons, window_text=lambda: "ERPia")
+    rr.Desktop = lambda backend: SimpleNamespace(window=lambda handle: w)
+
+
+rr.popup_window_text = lambda w: "문구"
+popup_with("예(Y)", "아니오(N)")
+check("예/아니오 팝업은 [예] (엑셀 업로드에는 [아니오] 를 고를 질문이 없다, 사용자 10-20)",
+      REAL_INVOKE(1)[0] and invoked == ["예(Y)"], str(invoked))
+invoked.clear()
+popup_with("아니오(N)", "취소")
+check("[확인]/[예] 가 없으면 누르지 않는다", REAL_INVOKE(1)[0] is False and invoked == [], str(invoked))
 
 wins.clear()
 wins[4] = ("popup", True, False)

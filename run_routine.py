@@ -2722,12 +2722,13 @@ def grid_onscreen(hwnd, grid):
 
 
 def invoke_popup_window(popup_hwnd):
-    """dismiss_popup_window 와 같은 규칙으로 단추를 고르되 마우스 대신 UIA Invoke 로 누른다 - 창이 다른 창 뒤에 깔려 있거나
-    앞 창이 아니어도 된다 ('비밀번호 입력' 은 주인 없는 창이라 ERPia 뒤에 깔린다 - 2026-10-19 개발기). (눌렀나, 설명, 문구)"""
+    """엑셀 업로드 팝업의 [확인]/[예] 를 마우스 대신 UIA Invoke 로 누른다 - 창이 다른 창 뒤에 깔려 있거나 앞 창이 아니어도 된다
+    ('비밀번호 입력' 은 주인 없는 창이라 ERPia 뒤에 깔린다 - 2026-10-19 개발기). 예/아니오 팝업도 [예] - 엑셀 업로드에는
+    [아니오] 를 고를 질문이 없다 (사용자 2026-10-20, 예전 dismiss_popups 와 같음). (눌렀나, 설명, 문구)"""
     try:
         w = Desktop(backend="uia").window(handle=popup_hwnd)
         buttons = w.descendants(control_type="Button")
-        btn = pick_popup_button(buttons)
+        btn = next((b for b in buttons if b.window_text() in OK_BUTTON_TEXTS), None)
         if btn is None:
             return False, f"처리할 수 있는 버튼이 없습니다. (버튼: {[b.window_text() for b in buttons]})", ""
         label, msg, title = btn.window_text(), popup_window_text(w), w.window_text()     # 누르면 사라진다 - 먼저 읽는다
@@ -2738,14 +2739,15 @@ def invoke_popup_window(popup_hwnd):
 
 
 def upload_popups(pid, hwnd, before=(), label=""):
-    """업로드 뒤 ERPia 가 따로 띄운 창(실패 팝업 'ERPia', '비밀번호 입력' 등)을 사용자 규칙(invoke_popup_window)으로 닫고
+    """업로드 뒤 ERPia 가 따로 띄운 창(실패 팝업 'ERPia', '비밀번호 입력' 등)을 [확인]/[예] 로 닫고 (invoke_popup_window)
     문구를 돌려준다. 실패 팝업은 메인 창의 자식이 아니라 메인 창이 소유한 별도 창이라 (2026-10-19 개발기 실측) PopupGate 로는
     안 보이고, 메인 창 전체를 UIA 로 훑으면 한 번에 수 초 - 그래서 창 목록(win32, 거의 0초)으로 찾는다.
-    before(업로드 전부터 있던 창)와 파일 열기 창은 뺀다. 누를 단추가 없거나 눌러도 안 닫히면 UploadStop."""
+    before(업로드 전부터 있던 창)와 파일 열기 창은 뺀다. 누를 단추가 없거나 눌러도 안 닫히면 UploadStop.
+    파일 열기 창은 '파일 이름' 칸으로 가린다 - 윈도우 표준 메시지 상자도 같은 '#32770' 이라 종류만 보면 실패 팝업을 놓친다 (검토 10-20)."""
     texts = []
     for h in find_popup_windows(pid, hwnd):
         try:
-            if h in before or win32gui.GetClassName(h) == SAVE_DIALOG_CLASS:
+            if h in before or (win32gui.GetClassName(h) == SAVE_DIALOG_CLASS and find_open_dialog_filename_edit(h)):
                 continue
         except Exception:
             continue    # 그새 닫힌 창
