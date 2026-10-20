@@ -946,11 +946,16 @@ def recover_stage():
 
 
 def start_routine_together():
-    """전체 실행(Run_All.bat 이 ALL_RUN_ENV 를 준다)의 웰라이프 업체면 ERPia 쪽(루틴)을 지금 함께 띄운다 (사용자 2026-10-19) -
-    사이트에서 받은 엑셀을 받는 대로 올리고, 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가
-    예전처럼 돈다. (프로세스, 띄운 시각) - 못 띄우면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다)."""
+    """전체 실행(Run_All.bat 이 ALL_RUN_ENV 를 준다)의 웰라이프 업체이고 업체가 '함께' 방식을 골랐으면 (status.together_choice,
+    사용자 2026-10-20) ERPia 쪽(루틴)을 지금 함께 띄운다 (사용자 2026-10-19) - 사이트에서 받은 엑셀을 받는 대로 올리고,
+    '함께 (엑셀 업로드·자동 수집)' 이면 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가 예전처럼 돈다.
+    (프로세스, 띄운 시각) - 띄우지 않았으면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다 - '순서대로')."""
     global _together
     if os.environ.get(status.ALL_RUN_ENV) != "1" or not status.wellife_policy():
+        return None
+    mode = status.together_choice()
+    if mode == "off":
+        log(f"전체 실행 방식이 '{status.TOGETHER_MODES[mode]}'이므로 사이트 수집이 끝난 뒤 PROCESS를 실행합니다.")
         return None
     if getattr(sys, "frozen", False):
         cmd = [os.path.join(os.path.dirname(sys.executable), ROUTINE_EXE)]
@@ -963,7 +968,7 @@ def start_routine_together():
     except Exception as e:
         log(f"ERPia 쪽을 함께 띄우지 못했습니다 - 수집이 끝난 뒤 예전처럼 돕니다. ({type(e).__name__}: {e})")
         return None
-    log("ERPia 쪽(PROCESS)을 함께 띄웠습니다 - 받은 엑셀은 사이트마다 받는 대로 올립니다.")
+    log(f"전체 실행 방식 '{status.TOGETHER_MODES[mode]}': PROCESS를 함께 실행합니다. 사이트별 엑셀은 다운로드하는 대로 업로드합니다.")
     return _together
 
 

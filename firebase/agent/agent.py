@@ -456,7 +456,7 @@ class Uploader:
 # ---------------------------------------------------------------------------
 # 명령
 # ---------------------------------------------------------------------------
-KNOWN_TYPES = ("launch", "stop_erpia", "stop_rpa","set_modules", "set_schedule", "set_presets", "set_parallel", "resume_repeat", "update", "rollback",
+KNOWN_TYPES = ("launch", "stop_erpia", "stop_rpa","set_modules", "set_schedule", "set_presets", "set_parallel", "set_together", "resume_repeat", "update", "rollback",
                "export_preset", "import_preset", "restore_preset")
 ADMIN_ONLY_TYPES = ("update", "rollback")   # 관리 화면(Admin SDK)만 - DB 규칙의 type 목록에도 없다 (자동 업데이트 10절)
 ADMIN_TOOL_BY = "admin-tool"
@@ -771,6 +771,18 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         dash.set_parallel(n)
         return f"동시 실행 창 수를 {n}개로 변경하였습니다."
 
+    def do_together(args):
+        # 웰라이프 전체 실행 방식 (사용자 2026-10-20) - 순서대로 / 함께 (엑셀 업로드) / 함께 (엑셀 업로드·자동 수집). 웰라이프 업체만 -
+        # 화면을 거치지 않은 명령도 여기서 막힌다 (limits() 가 정책을 새로 적은 뒤에 본다, 못 읽으면 PC 에 적힌 마지막 값)
+        mode = args.get("mode") if isinstance(args, dict) else None
+        if not isinstance(mode, str) or mode not in st.TOGETHER_MODES:
+            raise RuntimeError("전체 실행 방식이 올바르지 않습니다.")
+        got = limits() if limits else None
+        if not (got[2] if got else st.wellife_policy()):
+            raise RuntimeError("현재 접속한 업체는 사용할 수 없는 설정입니다.")
+        dash.set_together(mode)
+        return f"전체 실행 방식을 '{st.TOGETHER_MODES[mode]}'(으)로 변경하였습니다."
+
     def do_schedule(args):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
         # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
@@ -935,7 +947,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         note(meta, [msg] + ([rejected_text(rejected).strip()] if rejected else []))
         return msg + rejected_text(rejected)
 
-    return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets, "set_parallel": do_parallel,
+    return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets, "set_parallel": do_parallel, "set_together": do_together,
             "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback,
             "export_preset": do_export, "import_preset": do_import, "restore_preset": do_restore}
 
@@ -1190,6 +1202,10 @@ def run(cfg):
                     snap["parallel"] = {"chosen": st.parallel_choice()} if st.parallel_limit() >= 2 else None
                 except Exception:
                     snap["parallel"] = None
+                try:   # 웰라이프 전체 실행 방식 - 웰라이프 업체만 (없으면 화면이 이 기능을 모른다 = 옛 에이전트)
+                    snap["together"] = {"chosen": st.together_choice()} if st.wellife_policy() else None
+                except Exception:
+                    snap["together"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
                 policy.refresh()
                 if time.time() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
@@ -1215,7 +1231,7 @@ def run(cfg):
                 sent = upload_new_history(hist_path, up, cfg, prices=fresh_prices(prices))
                 tokens.refresh(force=bool(sent))           # 방금 올린 기록만큼 줄었다 - 아니면 10분마다 (우리가 넣은 것)
                 snap["tokens"] = tokens.view()
-                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("parallel"), snap.get("schedule"), snap.get("recent"),
+                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("parallel"), snap.get("together"), snap.get("schedule"), snap.get("recent"),
                                    snap.get("launching"), snap.get("tokens"), snap.get("update")], ensure_ascii=False, default=str)
                 if body != last:
                     up.push_live(snap)

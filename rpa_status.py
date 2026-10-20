@@ -78,6 +78,7 @@ SCHEDULE_VERSION = 4        # 4: 공휴일·업체 휴무일 쉬기 (skip_holida
 DEFAULT_SETTINGS = {
     "prepare": {
         "parallel": 1,              # 업체가 웹에서 고른 동시 실행 창 수 (명령 set_parallel) - 관리 화면이 허용한 최대(policy.parallel)까지만 쓴다
+        "together": "off",          # 웰라이프 전체 실행 방식 (명령 set_together, TOGETHER_MODES) - 기본은 예전처럼 순서대로
     },
     "schedule": {
         "version": SCHEDULE_VERSION,
@@ -2084,6 +2085,24 @@ def running_programs(snapshot=None):
 # ---------------------------------------------------------------------------
 TOGETHER_ENV = "RPA_WITH_PREPARE"       # 프리페어가 함께 띄운 루틴에 준다
 ALL_RUN_ENV = "RPA_ALL_RUN"             # Run_All.bat 이 준다 - 전체 실행일 때만 함께 띄운다
+# 전체 실행 방식 (사용자 2026-10-20) - 업체가 웹에서 고른다 (명령 set_together → settings.json prepare.together). 웰라이프만.
+# 값은 업체 웹(rpa-settings.js TOGETHER)·에이전트(do_together)와 같다. 이름은 화면·결과 글에 쓴다
+TOGETHER_MODES = {
+    "off": "순서대로",                          # 사이트 수집이 끝난 뒤 PROCESS (Run_All.bat 이 이어서 띄운다 - 예전 그대로)
+    "excel": "함께 (엑셀 업로드)",               # PROCESS 를 함께 띄워 받은 엑셀을 받는 대로 업로드, 자동 수집은 사이트 수집이 끝난 뒤
+    "excel_import": "함께 (엑셀 업로드·자동 수집)",  # 엑셀 업로드와 자동 수집을 사이트 수집과 함께 ('+' 로 연 화면에서 업로드)
+}
+TOGETHER_DEFAULT = "off"
+
+
+def together_choice():
+    """업체가 고른 전체 실행 방식 (TOGETHER_MODES 의 키). 없거나 이상하면 TOGETHER_DEFAULT (순서대로).
+    웰라이프 업체의 전체 실행(Run_All.bat)에서만 쓴다 - web_runner.start_routine_together, wellife.run_main."""
+    try:
+        v = read_settings()["prepare"].get("together")
+    except Exception:
+        return TOGETHER_DEFAULT
+    return v if isinstance(v, str) and v in TOGETHER_MODES else TOGETHER_DEFAULT
 
 
 @_safe

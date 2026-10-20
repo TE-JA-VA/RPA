@@ -302,7 +302,7 @@ class FakeProc:
         return 3
 
 
-_saved_tog = web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held
+_saved_tog = web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held, status.together_choice
 web_runner.subprocess.Popen = FakeProc
 os.environ.pop(status.ALL_RUN_ENV, None)
 status.wellife_policy = lambda: True
@@ -311,6 +311,10 @@ os.environ[status.ALL_RUN_ENV] = "1"
 status.wellife_policy = lambda: False
 check("웰라이프 업체가 아니면 함께 띄우지 않는다 (예전 차례)", web_runner.start_routine_together() is None and not spawned)
 status.wellife_policy = lambda: True
+status.together_choice = lambda: "off"
+check("웰라이프 전체 실행이어도 전체 실행 방식이 '순서대로'(기본)면 함께 띄우지 않는다 (사용자 2026-10-20)",
+      web_runner.start_routine_together() is None and not spawned)
+status.together_choice = lambda: "excel"
 together = web_runner.start_routine_together()
 cmd, env = spawned[0] if spawned else (None, {})
 check("웰라이프 전체 실행이면 루틴을 함께 띄운다 - 함께 표시는 주고 전체 실행 표시는 빼서",
@@ -371,7 +375,7 @@ check("모니터가 둘이면 Edge 창은 ERPia 가 없는 모니터에",
 web_runner.monitor_work_areas = lambda: [(0, 0, 1920, 1040)]
 check("모니터가 하나면 주 화면 그대로 (ERPia 를 맨 위로 둔다)", web_runner.work_area((0, 0, 1920, 1032)) == web_runner.work_area())
 web_runner.monitor_work_areas = _saved_mon
-web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held = _saved_tog
+web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held, status.together_choice = _saved_tog
 web_runner._together = None
 os.environ.pop(status.ALL_RUN_ENV, None)
 

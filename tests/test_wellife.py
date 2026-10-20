@@ -2040,12 +2040,19 @@ check("함께 실행인데 엑셀 수집을 안 하면 수집이 끝나기를 �
 waits.clear()
 tgot.clear()
 settings({"Wellife": {"Login": "Y", "Excel": "Y", "Import": "Y", "SalesMode": "실행", "ImportMode": "실행"}})
+rr.status.together_choice = lambda: "excel_import"
 wellife.run_main(rr)
 margs = []
 wellife.module_excel = lambda rr_, ctx_, *a: margs.append(a) or ("skipped", None)
 tgot["funcs"]["wellife_excel"](None)
-check("엑셀 수집을 실제로 하면 기다리지 않고 함께 올린다 (자동 수집을 실제로 하는지도 넘긴다)",
+check("엑셀 수집을 실제로 하면 기다리지 않고 함께 올린다 - '함께 (엑셀 업로드·자동 수집)' 이면 자동 수집도 함께",
       not waits and margs == [(True, True, True)], f"{waits} {margs}")
+rr.status.together_choice = lambda: "excel"
+wellife.run_main(rr)
+margs.clear()
+tgot["funcs"]["wellife_excel"](None)
+check("'함께 (엑셀 업로드)' 면 엑셀만 함께 올리고 자동 수집은 넘기지 않는다 (② 자동 수집 모듈이 사이트 수집 뒤에)",
+      not waits and margs == [(True, True, False)], f"{waits} {margs}")
 check("함께 실행이면 로그인 창에 키를 치는 동안도 키보드 차례를 잡는다 (비밀번호가 Edge 로 새지 않게)",
       rr.pl.KEYS_GUARD is not contextlib.nullcontext)
 rr.pl.KEYS_GUARD = contextlib.nullcontext

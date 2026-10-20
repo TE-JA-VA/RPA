@@ -40,7 +40,7 @@ import time
 
 from pywinauto import mouse
 
-from rpa_status import TOGETHER_ENV   # 사이트 수집이 함께 띄운 실행 (run_main)
+from rpa_status import TOGETHER_ENV, TOGETHER_MODES   # 사이트 수집이 함께 띄운 실행·업체가 고른 전체 실행 방식 (run_main)
 
 SECTION = "Wellife"
 SAP_MENU = "웰라이프 SAP 연동관리"
@@ -309,12 +309,18 @@ def run_main(rr):
     together = os.environ.get(TOGETHER_ENV) == "1"
     upload_together = together and bool(selected.get("Excel")) and bool(modes[SALES_MODE_KEY])
     import_live = bool(selected.get("Import")) and bool(modes[IMPORT_MODE_KEY])
+    # 자동 수집도 사이트 수집과 함께 할지는 업체가 고른 전체 실행 방식대로 (사용자 2026-10-20) - '함께 (엑셀 업로드)' 면 엑셀만 받는 대로
+    # 올리고 자동 수집은 ② 자동 수집 모듈이 사이트 수집이 끝난 뒤 (예전 차례)
+    mode = rr.status.together_choice()
+    import_together = import_live and mode == "excel_import"
+    if together:
+        log(f"전체 실행 방식: {TOGETHER_MODES.get(mode, mode)}")
     if together and not upload_together:
         wait_prepare(rr, "엑셀 수집을 실제로 하지 않아")
     if together:    # 로그인 창에 키를 치는 동안도 사이트 수집이 새 Edge 창을 띄우지 않게 (keys)
         rr.pl.KEYS_GUARD = lambda: keys(rr)
     funcs = {"login": rr.module_login,
-             "wellife_excel": lambda ctx: module_excel(rr, ctx, modes[SALES_MODE_KEY], upload_together, import_live),
+             "wellife_excel": lambda ctx: module_excel(rr, ctx, modes[SALES_MODE_KEY], upload_together, import_together),
              "wellife_import": lambda ctx: module_import(rr, ctx, modes[IMPORT_MODE_KEY]),
              "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[NORMAL_SALES_MODE_KEY]),
              "wellife_hold": lambda ctx: module_hold(rr, ctx, modes[MODE_KEY]),

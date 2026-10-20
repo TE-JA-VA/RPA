@@ -782,6 +782,17 @@ def set_policy(limit, off, wellife=False, presets=None, parallel=None):
         return True
 
 
+def set_together(mode):
+    """업체가 웹에서 고른 전체 실행 방식을 settings.json 에 (명령 set_together, 검사는 부르는 쪽 - st.TOGETHER_MODES). 같으면 안 쓴다 (False)."""
+    with _settings_lock:
+        cfg = st.read_settings()
+        if cfg["prepare"].get("together") == mode:
+            return False
+        cfg["prepare"]["together"] = mode
+        st.write_settings(cfg)
+        return True
+
+
 def set_parallel(n):
     """업체가 웹에서 고른 동시 실행 창 수를 settings.json 에 (명령 set_parallel, 검사는 부르는 쪽). 같으면 안 쓴다 (False)."""
     with _settings_lock:

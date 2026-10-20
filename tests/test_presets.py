@@ -553,6 +553,22 @@ for v in (0, 17, "4", True, -1):
 check("이상한 값(1 미만·16 초과·글자·참거짓)이면 1", bad == [1] * 5, bad)
 dash.set_policy(2, [], False, None, None)
 
+print("=== 웰라이프 전체 실행 방식 (명령 set_together, 사용자 2026-10-20) ===")
+check("정하지 않았으면 순서대로 (예전 그대로)", st.together_choice() == "off", st.together_choice())
+check("고른 값을 settings.json prepare.together 에 쓰고 읽는다, 같으면 다시 쓰지 않는다",
+      dash.set_together("excel_import") is True and st.together_choice() == "excel_import"
+      and dash.set_together("excel_import") is False and dash.set_together("excel") is True and st.together_choice() == "excel")
+bad = []
+for v in ("together", "", None, 1, True):
+    cfg = st.read_settings()
+    cfg["prepare"]["together"] = v
+    st.write_settings(cfg)
+    bad.append(st.together_choice())
+check("모르는 값이면 순서대로", bad == ["off"] * 5, bad)
+check("세 방식 모두 이름이 있다 (화면·결과 글)", sorted(st.TOGETHER_MODES) == ["excel", "excel_import", "off"]
+      and all(st.TOGETHER_MODES.values()))
+dash.set_together("off")
+
 print("=== 옵저버 [파일에서 불러오기]·[파일로 내보내기] (설계 2026-10-19 4.2절) ===")
 from types import SimpleNamespace  # noqa: E402
 

@@ -1180,6 +1180,19 @@ with tempfile.TemporaryDirectory() as d:
         check("1개" in ag.real_actions(limits=lambda: (2, [], False, None, None))["set_parallel"]({"parallel": 1}) and st.parallel_choice() == 1,
               "허용하지 않아도 1(하나씩)은 된다")
         check(ag.decide({"type": "set_parallel", "state": "queued", "expires_at": NOW + 60}, NOW)[0] == "run", "set_parallel 은 아는 명령")
+        # 웰라이프 전체 실행 방식 (사용자 2026-10-20) - 웰라이프 업체만, 세 값만
+        tacts = ag.real_actions(limits=lambda: (2, [], True, None, None))
+        msg = tacts["set_together"]({"mode": "excel_import"})
+        check(st.together_choice() == "excel_import" and "엑셀 업로드·자동 수집" in msg, f"웰라이프면 저장, 결과에 이름 ({msg})")
+        for args, wl, why in (({"mode": "excel"}, False, "사용할 수 없는"), ({"mode": "parallel"}, True, "올바르지"),
+                              ({"mode": 1}, True, "올바르지"), ({}, True, "올바르지"), (None, True, "올바르지")):
+            try:
+                ag.real_actions(limits=lambda wl=wl: (2, [], wl, None, None))["set_together"](args)
+                check(False, f"거부: {args} 웰라이프 {wl}")
+            except RuntimeError as e:
+                check(why in str(e) and st.together_choice() == "excel_import", f"거부: {args} 웰라이프 {wl} ({e})")
+        check("순서대로" in tacts["set_together"]({"mode": "off"}) and st.together_choice() == "off", "순서대로로 되돌림")
+        check(ag.decide({"type": "set_together", "state": "queued", "expires_at": NOW + 60}, NOW)[0] == "run", "set_together 는 아는 명령")
         rows2 = [{"started_at": "2026-09-14T13:55:00", "state": "success", "program": "observer"},
                  {"started_at": "2026-09-14T13:56:00", "state": "stopped", "program": "prepare"}]
         check(ag.recent_summary(rows2, _dt.date(2026, 9, 14))[-1] == {"date": "2026-09-14", "success": 0, "failed": 1, "crashed": 0},
