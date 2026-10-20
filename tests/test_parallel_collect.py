@@ -274,6 +274,98 @@ xs, ys = sorted({x for x, _ in spots}), sorted({y for _, y in spots})
 check("창 4개는 2x2 칸에 (배율 1 미만, 칸 사이가 창보다 넓다)", 0 < scale < 1 and len(xs) == 2 and len(ys) == 2
       and (xs[1] - xs[0]) >= 1306 + 19 and (ys[1] - ys[0]) >= 920 + 89, f"{scale} {spots}")
 
+print("=== 3-3. 함께 실행 - ERPia 쪽을 같이 띄워 받은 엑셀을 받는 대로 (사용자 2026-10-19)")
+since = time.time()
+status.start("routine")
+check("루틴이 놓아주기 전에는 Edge 창을 띄우지 않는다", status.prepare_go(since) == (False, None))
+status.release_prepare((0, 0, 1920, 1032))
+check("놓아주면 ERPia 창 자리와 함께", status.prepare_go(since) == (True, [0, 0, 1920, 1032]), str(status.prepare_go(since)))
+check("띄우기 전에 시작한 루틴(앞 실행)의 표시는 보지 않는다", status.prepare_go(time.time() + 60) == (False, None))
+status.finish("success")
+check("루틴이 끝났으면 기다리지 않는다", status.prepare_go(since)[0] is True)
+
+spawned = []
+
+
+class FakeProc:
+    def __init__(self, cmd, env=None):
+        spawned.append((cmd, env))
+        self.rc = None
+
+    def poll(self):
+        return self.rc
+
+    def wait(self):
+        return 3
+
+
+_saved_tog = web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.prepare_go
+web_runner.subprocess.Popen = FakeProc
+os.environ.pop(status.ALL_RUN_ENV, None)
+status.wellife_policy = lambda: True
+check("전체 실행(Run_All.bat)이 아니면 함께 띄우지 않는다", web_runner.start_routine_together() is None and not spawned)
+os.environ[status.ALL_RUN_ENV] = "1"
+status.wellife_policy = lambda: False
+check("웰라이프 업체가 아니면 함께 띄우지 않는다 (예전 차례)", web_runner.start_routine_together() is None and not spawned)
+status.wellife_policy = lambda: True
+together = web_runner.start_routine_together()
+cmd, env = spawned[0] if spawned else (None, {})
+check("웰라이프 전체 실행이면 루틴을 함께 띄운다 - 함께 표시는 주고 전체 실행 표시는 빼서",
+      together is not None and env.get(status.TOGETHER_ENV) == "1" and status.ALL_RUN_ENV not in env
+      and cmd[-1].endswith("run_routine.py"), str(cmd))
+goes = [(False, None), (False, None), (True, [1, 2, 3, 4])]
+status.prepare_go = lambda since: goes.pop(0)
+check("루틴이 놓아줄 때까지 기다렸다가 ERPia 창 자리를", web_runner.wait_routine_go() == [1, 2, 3, 4])
+status.prepare_go = lambda since: (False, None)
+web_runner._together[0].rc = 0
+check("루틴이 먼저 끝나면 더 기다리지 않는다", web_runner.wait_routine_go() is None)
+check("끝 코드는 100 + 루틴 코드 (Run_All.bat 이 루틴을 다시 띄우지 않게)", web_runner.finish_together(0) == 103)
+check("Edge 인자: 함께 실행이면 맨 위 ERPia 에 가려져도 느려지지 않게",
+      "--disable-backgrounding-occluded-windows" in web_runner.edge_args()["args"])
+
+dl = tempfile.mkdtemp(prefix="rpa_dl_")
+web_runner.download_dir = lambda: dl
+mid = []
+
+
+def fake_download(page, name, site):
+    with open(os.path.join(web_runner.site_dest(), f"(107){name}.xlsx"), "w") as f:
+        f.write("x")
+    mid.append((web_runner.site_dest(), [f for f in os.listdir(dl) if f.endswith(".xlsx")]))
+
+
+with open(os.path.join(dl, "(107)S1.xlsx"), "w") as f:
+    f.write("old")
+web_runner.ACTIONS["dl"] = fake_download
+status.start("prepare")
+web_runner.run_site(FakeBrowser2(), "S1", {"Action": ["dl"]}, False, False, None)
+del web_runner.ACTIONS["dl"]
+stage = os.path.join(dl, web_runner.STAGE_DIR_NAME)
+check("받는 동안은 사이트마다 받는중 폴더에 - 업로드 폴더에는 아직 안 보인다",
+      mid and mid[0][0].startswith(stage) and mid[0][1] == ["(107)S1.xlsx"], str(mid))
+check("사이트를 다 돌면 업로드 폴더로 옮긴다 (같은 이름은 (1)), 받는중 폴더는 지운다",
+      sorted(f for f in os.listdir(dl) if f.endswith(".xlsx")) == ["(107)S1 (1).xlsx", "(107)S1.xlsx"]
+      and not os.listdir(stage), str(os.listdir(dl)))
+os.makedirs(os.path.join(stage, "site_left"))
+with open(os.path.join(stage, "site_left", "(108)남은것.xlsx"), "w") as f:
+    f.write("x")
+web_runner.recover_stage()
+check("앞 실행이 사이트 도중에 꺼져 받는중에 남은 파일은 다음 실행 처음에 업로드 폴더로",
+      "(108)남은것.xlsx" in os.listdir(dl) and not os.listdir(stage))
+status.finish("success")
+
+_saved_mon = web_runner.monitor_work_areas
+web_runner.monitor_work_areas = lambda: [(-1920, 0, 0, 1040), (0, 0, 1920, 1040)]
+check("모니터가 둘이면 Edge 창은 ERPia 가 없는 모니터에",
+      web_runner.work_area((0, 0, 1920, 1032)) == (-1920, 0, 1920, 1040)
+      and web_runner.work_area((-1920, 0, 0, 1032)) == (0, 0, 1920, 1040))
+web_runner.monitor_work_areas = lambda: [(0, 0, 1920, 1040)]
+check("모니터가 하나면 주 화면 그대로 (ERPia 를 맨 위로 둔다)", web_runner.work_area((0, 0, 1920, 1032)) == web_runner.work_area())
+web_runner.monitor_work_areas = _saved_mon
+web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.prepare_go = _saved_tog
+web_runner._together = None
+os.environ.pop(status.ALL_RUN_ENV, None)
+
 print("=== 4. 진짜 Edge - 가짜 쇼핑몰 3곳을 동시에 (인증 사이트 둘은 차례로)")
 import fake_mall  # noqa: E402
 import test_web_replay as twr  # noqa: E402  (기록하는 사람 흉내)

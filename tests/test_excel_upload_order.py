@@ -9,12 +9,15 @@ import tempfile
 import time
 from types import SimpleNamespace
 
+import win32con
+
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import run_routine as rr  # noqa: E402
 
 REAL_FIND = rr.find_site_upload_cell     # 아래 run() 이 가짜로 바꾸기 전에
 REAL_POPUPS, REAL_WAIT = rr.upload_popups, rr.wait_upload_result
+REAL_OPEN, REAL_IN_DIALOG = rr.open_upload_dialog, rr.upload_file_in_dialog
 
 fails = []
 
@@ -126,7 +129,7 @@ def stops(fn):
 
 
 rr.find_popup_windows = lambda pid, hwnd: list(wins)
-rr.dismiss_popup_window = press
+rr.invoke_popup_window = press
 rr.win32gui = SimpleNamespace(GetClassName=lambda h: wins[h][0], IsWindow=lambda h: h in wins,
                               IsWindowVisible=lambda h: h in wins)
 rr.upload_popups, rr.wait_upload_result = REAL_POPUPS, REAL_WAIT
@@ -165,6 +168,34 @@ rr.find_popup_windows = lambda pid, hwnd: []
 t = time.time()
 texts = rr.wait_upload_result(0, 0, timeout=0.3)
 check("안 뜨면 기다린 뒤 빈 목록 (정상 업로드)", texts == [] and 0.3 <= time.time() - t < 1, f"{texts} {time.time() - t:.1f}초")
+
+
+print("--- 함께 실행: 파일 열기 창을 키보드·마우스 없이, 덮인 칸은 누르지 않는다 (2026-10-19)")
+sent, box = [], {}
+rr.find_open_dialog_filename_edit = lambda dlg: 77
+rr.read_save_filename = lambda edit: box.get(edit, "")
+rr.double_click_file_in_dialog = lambda *a: sent.append("목록 더블클릭") or True
+rr.win32gui = SimpleNamespace(SendMessage=lambda h, m, w, l: box.__setitem__(h, l) or sent.append(("send", h, m)),
+                              PostMessage=lambda h, m, w, l: sent.append(("post", h, m, w)))
+rr.UPLOAD_NO_KEYS = True
+ok = REAL_IN_DIALOG(5, r"C:\x\(107)a.xlsx")
+check("경로는 WM_SETTEXT, [열기] 는 IDOK 메시지 - 목록 더블클릭·키 입력 없이",
+      ok and sent == [("send", 77, win32con.WM_SETTEXT), ("post", 5, win32con.WM_COMMAND, win32con.IDOK)], str(sent))
+sent.clear()
+box.clear()
+rr.win32gui.SendMessage = lambda *a: sent.append("send")
+check("넣은 값이 다르면 [열기] 를 보내지 않는다", REAL_IN_DIALOG(5, r"C:\x\(107)a.xlsx") is False and sent == ["send"], str(sent))
+rr.UPLOAD_NO_KEYS = False
+clicked = []
+cell = SimpleNamespace(rectangle=lambda: SimpleNamespace(left=0, top=0, right=10, bottom=10),
+                       click_input=lambda: clicked.append("클릭"), double_click_input=lambda: clicked.append("더블클릭"))
+rr.ec = SimpleNamespace(ensure_foreground=lambda h: True)
+rr.wait_save_dialog = lambda *a, **k: 1
+rr.win32gui = SimpleNamespace(WindowFromPoint=lambda pt: 99, GetAncestor=lambda h, f: h, GetWindowText=lambda h: "Edge")
+check("누를 자리를 다른 창이 덮고 있으면 누르지 않는다 (클릭이 그 창에 떨어진다)", REAL_OPEN(0, 2, cell) is None and not clicked,
+      str(clicked))
+rr.win32gui.WindowFromPoint = lambda pt: 2
+check("ERPia 메인 창이면 누른다", REAL_OPEN(0, 2, cell) == 1 and clicked == ["클릭"], str(clicked))
 
 
 print("--- 업로드 칸이 사이트코드와 같은 줄인지 (행 번호, 2026-10-19: 108 을 눌렀는데 109 에 올라갔다)")

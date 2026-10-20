@@ -23,7 +23,10 @@ import math
 import os
 import queue
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -148,17 +151,50 @@ class AuthGates:
             return self._locks.setdefault(str(phone or ""), threading.Lock())
 
 
-def work_area():
-    """주 화면의 작업 영역 (왼쪽, 위, 너비, 높이) - 물리 픽셀 (배율 150% 화면도), 작업 표시줄 뺀 것."""
+def work_area(avoid=None):
+    """주 화면의 작업 영역 (왼쪽, 위, 너비, 높이) - 물리 픽셀 (배율 150% 화면도), 작업 표시줄 뺀 것.
+    avoid(함께 도는 ERPia 창 자리)가 있고 모니터가 여럿이면 그 창과 가장 덜 겹치는 모니터 (사용자 2026-10-19: 엑셀업로드 칸을
+    Edge 창이 덮으면 업로드 창이 안 열린다). 모니터가 하나면 주 화면 - ERPia 를 맨 위로 두므로 Edge 창은 그 뒤에 깔린다."""
     import ctypes
     from ctypes import wintypes
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
+    if avoid:
+        areas = monitor_work_areas()
+        if len(areas) > 1:
+            def overlap(a):
+                w = min(a[2], avoid[2]) - max(a[0], avoid[0])
+                h = min(a[3], avoid[3]) - max(a[1], avoid[1])
+                return max(0, w) * max(0, h)
+            a = min(areas, key=lambda a: (overlap(a), -(a[2] - a[0]) * (a[3] - a[1])))
+            return a[0], a[1], a[2] - a[0], a[3] - a[1]
     r = wintypes.RECT()
     ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)       # SPI_GETWORKAREA
     return r.left, r.top, r.right - r.left, r.bottom - r.top
+
+
+def monitor_work_areas():
+    """모니터마다 작업 영역 [(왼, 위, 오른, 아래)] - 물리 픽셀."""
+    import ctypes
+    from ctypes import wintypes
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD)]
+    out = []
+
+    def cb(hmon, _hdc, _rect, _lp):
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            out.append((mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom))
+        return 1
+    proc = ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(wintypes.RECT),
+                              wintypes.LPARAM)(cb)
+    ctypes.windll.user32.EnumDisplayMonitors(None, None, proc, 0)
+    return out
 
 
 def best_grid(n, size, viewport):
@@ -172,12 +208,12 @@ def best_grid(n, size, viewport):
     return max(grids, key=lambda g: (g[2], -g[0] * g[1]))
 
 
-def tile_layout(n, viewport):
+def tile_layout(n, viewport, avoid=None):
     """병렬 수집 창 n 개를 주 화면에 바둑판으로 (사용자 2026-10-16: 같은 자리에 겹쳐 떠서 뒤 창이 안 보였다).
     개수는 관리 화면 값 그대로 - 화면이 작으면 개수를 줄이지 않고 창을 그 화면에 맞게 더 작게 띄운다 (사용자 2026-10-16).
     페이지 크기(기록 때 크기)는 그대로 두고 화면 배율만 낮춘다 - 페이지를 줄이면 반응형 사이트의 메뉴 모양이 바뀐다.
     반환: (배율, [(왼쪽, 위)]) - 자리는 Edge 의 DIP (물리 픽셀 / 배율)."""
-    left, top, W, H = work_area()
+    left, top, W, H = work_area(avoid)
     cols, rows, scale = best_grid(n, (W, H), viewport)
     log(f"창 {n}개를 화면({W}x{H})에 가로 {cols} x 세로 {rows}로 나누어 표시합니다. (배율 {scale:.2f})")
     w, h = W / cols, H / rows
@@ -193,6 +229,14 @@ def record_viewport(chosen):
         vs = []
     vs = [v for v in vs if v] or [{"width": 1280, "height": 720}]
     return max(v["width"] for v in vs), max(v["height"] for v in vs)
+
+
+def edge_args(scale=None):
+    """Edge 실행 인자 - 병렬 창 배율, 함께 실행이면 다른 창(맨 위의 ERPia)에 가려져도 느려지지 않게."""
+    args = [f"--force-device-scale-factor={scale:.3f}"] if scale else []
+    if _together:
+        args += ["--disable-backgrounding-occluded-windows", "--disable-features=CalculateNativeWinOcclusion"]
+    return {"args": args} if args else {}
 
 
 def place_windows(context, spot):
@@ -866,6 +910,94 @@ def download_dir():
     return os.path.join(pl.find_ai_dir(), DOWNLOAD_DIR_NAME)
 
 
+# 함께 실행 (사용자 2026-10-19, rpa_status 의 '함께 실행' 절): 사이트에서 받은 파일은 그 사이트를 다 돌 때까지 이 아래에 두었다가
+# ERPIA_AI_EXCEL 로 옮긴다 - 받는 중인 파일·검사에서 걸려 지울 파일을 함께 도는 루틴이 올리지 않게, 한 사이트의 파일은 한꺼번에.
+STAGE_DIR_NAME = "받는중"
+ROUTINE_EXE = "ERPia_RPA.exe"
+ROUTINE_GO_WAIT = 300       # 루틴이 ERPia 로그인·화면 열기를 마치기를 기다리는 최대 초 - 넘으면 수집을 시작한다
+TOGETHER_RC = 100           # 함께 실행이면 종료 코드 = 100 + 루틴 종료 코드 (Run_All.bat 이 루틴을 다시 띄우지 않게)
+_together = None            # 함께 띄운 루틴 (프로세스, 띄운 시각)
+
+
+def site_dest():
+    """이 실행기가 지금 받는 파일을 둘 곳 - 함께 실행이면 사이트마다 받는중 폴더, 아니면 ERPIA_AI_EXCEL."""
+    return getattr(_here, "stage", None) or download_dir()
+
+
+def hand_over(stage):
+    """사이트를 다 돌았다 - 받는중 폴더의 파일을 ERPIA_AI_EXCEL 로 옮기고 폴더를 지운다 (함께 도는 루틴이 바로 올린다)."""
+    if not stage or not os.path.isdir(stage):
+        return
+    for f in sorted(os.listdir(stage)):
+        src = os.path.join(stage, f)
+        if os.path.isfile(src):
+            try:
+                os.replace(src, unique_path(os.path.join(download_dir(), f)))
+            except Exception as e:
+                log(f"  받은 파일을 옮기지 못했습니다: {f} ({e})")
+    shutil.rmtree(stage, ignore_errors=True)
+
+
+def recover_stage():
+    """앞 실행이 사이트 도중에 꺼져(중단) 받는중 폴더에 남은 파일을 ERPIA_AI_EXCEL 로 - 다음 업로드에서 빠지지 않게."""
+    root = os.path.join(download_dir(), STAGE_DIR_NAME)
+    if os.path.isdir(root):
+        for d in os.listdir(root):
+            hand_over(os.path.join(root, d))
+
+
+def start_routine_together():
+    """전체 실행(Run_All.bat 이 ALL_RUN_ENV 를 준다)의 웰라이프 업체면 ERPia 쪽(루틴)을 지금 함께 띄운다 (사용자 2026-10-19) -
+    사이트에서 받은 엑셀을 받는 대로 올리고, 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가
+    예전처럼 돈다. (프로세스, 띄운 시각) - 못 띄우면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다)."""
+    global _together
+    if os.environ.get(status.ALL_RUN_ENV) != "1" or not status.wellife_policy():
+        return None
+    if getattr(sys, "frozen", False):
+        cmd = [os.path.join(os.path.dirname(sys.executable), ROUTINE_EXE)]
+    else:
+        cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_routine.py")]
+    env = {k: v for k, v in os.environ.items() if k != status.ALL_RUN_ENV}
+    env[status.TOGETHER_ENV] = "1"
+    try:
+        _together = (subprocess.Popen(cmd, env=env), time.time())
+    except Exception as e:
+        log(f"ERPia 쪽을 함께 띄우지 못했습니다 - 수집이 끝난 뒤 예전처럼 돕니다. ({type(e).__name__}: {e})")
+        return None
+    log("ERPia 쪽(PROCESS)을 함께 띄웠습니다 - 받은 엑셀은 사이트마다 받는 대로 올립니다.")
+    return _together
+
+
+def wait_routine_go():
+    """함께 띄운 루틴이 ERPia 를 키보드로 다룰 일(로그인·화면 열기)을 마칠 때까지 기다린다 - Edge 창은 뜰 때마다 포커스를
+    가져가 그사이 친 키가 Edge 로 샌다 (개발기 실측). 루틴이 끝났거나 ROUTINE_GO_WAIT 를 넘으면 그냥 시작한다.
+    반환: Edge 창이 피해 갈 ERPia 창 자리 (없으면 None)."""
+    proc, since = _together
+    log("ERPia 쪽이 로그인·화면 열기를 마칠 때까지 기다립니다.")
+    status.note("ERPia 준비를 기다리는 중")
+    end = time.time() + ROUTINE_GO_WAIT
+    while time.time() < end:
+        go, erpia = status.prepare_go(since)
+        if go:
+            log(f"ERPia 쪽 준비 끝 ({time.time() - since:.0f}초) - 수집을 시작합니다.")
+            return erpia
+        if proc.poll() is not None:
+            log("ERPia 쪽이 먼저 끝났습니다 - 수집을 시작합니다.")
+            return None
+        time.sleep(0.5)
+    log(f"ERPia 쪽이 {ROUTINE_GO_WAIT}초 안에 준비되지 않아 수집을 시작합니다.")
+    return None
+
+
+def finish_together(rc):
+    """함께 띄운 루틴이 끝날 때까지 기다린다 - 종료 코드는 TOGETHER_RC + 루틴 코드 (Run_All.bat 이 루틴을 다시 띄우지 않게).
+    함께 띄우지 않았으면 rc 그대로."""
+    if _together is None:
+        return rc
+    log("ERPia 쪽(PROCESS)이 끝나기를 기다립니다.")
+    return TOGETHER_RC + (_together[0].wait() or 0)
+
+
 def unique_path(path):
     """같은 이름이 있으면 뒤에 (1), (2) 를 붙인다. 기존 파일을 덮지 않는다."""
     if not os.path.exists(path):
@@ -1113,7 +1245,7 @@ def action_mail_download(page, name, site):
         status.metric(f"{name}:mail_open", "메일 처리", 0, 0, note="대상 없음")
         return True
 
-    dest = download_dir()
+    dest = site_dest()
     os.makedirs(dest, exist_ok=True)
     log(f"  [{name}] 저장 위치: {dest}")
 
@@ -1148,7 +1280,7 @@ def action_replay(page, name, site):
     if problems:
         raise RuntimeError(problems[0])
     p = next(x for x in status.read_presets() if x["no"] == site.get("Preset"))
-    dest = download_dir()
+    dest = site_dest()
     log(f"  [{name}] 프리셋 {p['no']} '{p['name']}' 재생 ({len(p['record']['steps'])}단계) → {dest}")
     many = getattr(_here, "parallel", False)
     rp = web_replay.Replayer(page.context, p["record"], {"ID": site["ID"], "PW": site["PW"]}, dest, p["code"],
@@ -1246,6 +1378,10 @@ def run_site(browser, name, site, use_session=True, keep_open=False, gates=None)
     """사이트 하나에 대해 Action 을 순서대로 실행한다. gates: 병렬 수집의 인증 차례 (AuthGates) - 없으면 하나씩 돌 때."""
     _here.parallel, _here.gates = gates is not None, gates
     log(f"=== {name} ===")
+    stage_root = os.path.join(download_dir(), STAGE_DIR_NAME)
+    if _together:
+        os.makedirs(stage_root, exist_ok=True)
+    _here.stage = tempfile.mkdtemp(prefix="site_", dir=stage_root) if _together else None
 
     # Playwright 의 new_context 자체가 시크릿 창과 같다. 매번 빈 프로필로 시작한다.
     # 그래서 '매번 다시 로그인' 은 저장해 둔 쿠키를 쓰지 않는 것만으로 이뤄진다.
@@ -1316,6 +1452,8 @@ def run_site(browser, name, site, use_session=True, keep_open=False, gates=None)
         # 창을 열어둔 채 두라고 했으면 닫지 않는다.
         if not keep_open:
             context.close()
+        hand_over(_here.stage)      # 함께 실행 - 이 사이트에서 받은 파일을 이제 올려도 된다
+        _here.stage = None
     return ok
 
 
@@ -1412,7 +1550,7 @@ def needs_auth(site, presets=()):
     return p is not None and any(s.get("kind") == "otp" for s in (p["record"] or {}).get("steps") or [])
 
 
-def run_parallel(chosen, n, headless, session_override):
+def run_parallel(chosen, n, headless, session_override, avoid=None):
     """사이트를 n 개씩 동시에 - 실행기(스레드)마다 자기 Edge 를 띄우고 대기열에서 사이트를 하나씩 가져간다.
     인증 사이트는 첫 실행기 한 창에서만 차례로 (사용자 2026-10-19) - 나머지 실행기는 인증 없는 사이트만, 첫 실행기도 인증
     사이트를 다 돌면 인증 없는 사이트를 돕는다. 첫 실행기가 멈추면(브라우저를 못 띄움 등) 남은 인증 사이트는 다른 실행기가
@@ -1427,7 +1565,7 @@ def run_parallel(chosen, n, headless, session_override):
         log(f"  인증 사이트 {auth.qsize()}곳은 한 창에서 차례로"
             + (f", 나머지 {plain.qsize()}곳은 {n - 1}개 창에서 동시에" if n > 1 else "") + " 실행합니다.")
     gates, ok, lane_down = AuthGates(), [], threading.Event()
-    scale, spots = (None, [None] * n) if headless else tile_layout(n, record_viewport(chosen))
+    scale, spots = (None, [None] * n) if headless else tile_layout(n, record_viewport(chosen), avoid)
 
     def take(k):
         for q in (auth, plain) if k == 0 else (plain, auth) if lane_down.is_set() else (plain,):
@@ -1441,8 +1579,7 @@ def run_parallel(chosen, n, headless, session_override):
         _here.spot = spots[k]
         try:
             with sync_playwright() as p:
-                browser = web_replay.edge(p.chromium.launch, headless=headless,
-                                          **({"args": [f"--force-device-scale-factor={scale:.3f}"]} if scale else {}))
+                browser = web_replay.edge(p.chromium.launch, headless=headless, **edge_args(scale))
                 try:
                     while True:
                         item = take(k)
@@ -1519,20 +1656,25 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         keep_open = False
 
     status.set_steps(prepare_steps(chosen))
+    recover_stage()
+    avoid = None
+    if start_routine_together():
+        keep_open = False           # 창을 열어 둔 채 기다리면 루틴이 수집이 끝나기를 영영 기다린다
+        avoid = wait_routine_go()
     n = min(parallel_count(parallel), len(chosen))
     if n > 1:
         if keep_open:
             log("동시 실행에서는 창을 열어 두지 않습니다. (KeepOpen 무시)")
         log(f"{len(chosen)}개 사이트를 {n}개씩 동시에 실행합니다. (창 {'숨김' if headless else '표시'}, 인증 사이트는 한 창에서 차례로)")
         started = time.time()
-        done = run_parallel(chosen, n, headless, session_override)
+        done = run_parallel(chosen, n, headless, session_override, avoid)
         log(f"=== 완료: 성공 {done}건 / 전체 {len(chosen)}건 ({time.time() - started:.0f}초) ===")
         status.finish("success" if done == len(chosen) else "stopped")
         return 0 if done == len(chosen) else 1
     log(f"{len(chosen)}개 사이트를 실행합니다. (창 {'숨김' if headless else '표시'})")
     done = 0
     with sync_playwright() as p:
-        browser = web_replay.edge(p.chromium.launch, headless=headless)
+        browser = web_replay.edge(p.chromium.launch, headless=headless, **edge_args())
         try:
             for name, site in chosen:
                 if run_site(browser, name, site,
@@ -1588,9 +1730,9 @@ def main():
             override = False
         elif args.session:
             override = True
-        return cmd_run(args.site, args.headless,
-                       session_override=override, keep_open=args.keep_open,
-                       force_close=args.no_keep_open, parallel=args.parallel)
+        return finish_together(cmd_run(args.site, args.headless,
+                                       session_override=override, keep_open=args.keep_open,
+                                       force_close=args.no_keep_open, parallel=args.parallel))
 
     ap.print_help()
     return 0
@@ -1601,5 +1743,8 @@ if __name__ == "__main__":
         exit_code = main()
     except BaseException as e:
         status.fail_exception(e)
-        raise
+        if _together is None:
+            raise
+        log(f"수집이 오류로 끝났습니다 ({type(e).__name__}: {e}) - 함께 띄운 ERPia 쪽은 끝까지 기다립니다.")
+        exit_code = finish_together(1)
     sys.exit(exit_code)

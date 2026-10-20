@@ -860,7 +860,7 @@ check("② 엑셀 수집은 SalesMode([실행]), 자동 수집은 ImportMode 가
       and labels["wl_order_sales"].startswith("[리허설] "), str(labels))
 seen = []
 _saved_ms = {n: getattr(wellife, n) for n in ("module_excel", "module_import", "module_sales")}
-wellife.module_excel = lambda rr_, ctx_, live: seen.append(("excel", live)) or ("skipped", None)
+wellife.module_excel = lambda rr_, ctx_, live, *_: seen.append(("excel", live)) or ("skipped", None)
 wellife.module_import = lambda rr_, ctx_, live: seen.append(("import", live)) or ("skipped", None)
 wellife.module_sales = lambda rr_, ctx_, sell: seen.append(("sales", sell)) or ("skipped", None)
 for k in ("wellife_excel", "wellife_import", "wellife_sales"):
@@ -1111,7 +1111,7 @@ def order_rr(files):
                   run_excel_upload_step=lambda app, pid, hwnd, grid: uploads.append(grid.name) or (len(files), 0),
                   find_site_upload_cell=lambda hwnd, grid, code: (El(f"업로드 {code}"), "1"),
                   select_all_and_verify=lambda name, hwnd, grid, cols: acts.append(("select", name, grid.name)) or 4,
-                  run_import_step=lambda app, pid, hwnd, win: acts.append(("click", "가져오기", getattr(win, "name", "창"))) or IMPORTED[0],
+                  run_import_step=lambda app, pid, hwnd, win, wait=True: acts.append(("click", "가져오기", getattr(win, "name", "창"))) or IMPORTED[0],
                   find_by_text=lambda win, text, control_types=(): FOUND[0] or next(
                       (e for e in win.descendants() if e.window_text() == text), None),
                   IMPORT_BUTTON_NAME="가져오기")
@@ -2000,5 +2000,118 @@ check("폼 안의 보이는 컨트롤만 (창 밖 숨은 단추 빼고), 그리�
       set(got15) == {"btn_Search", "btn_FirstSend", "gridCtrl_List"}, str(sorted(got15)))
 broken_page = types.SimpleNamespace(window=lambda: UI("Window", rect=Rect(0, 0, 1200, 900)), hwnd=1)
 check("메인 탭바를 못 찾으면 떠 있는 화면 대신 창 (예전처럼 전체)", wellife.visible_page(broken_page).element_info.control_type == "Window")
+
+# ---------------------------------------------------------------------------
+# 함께 실행 (사용자 2026-10-19): 사이트 수집(프리페어)이 띄운 실행 - 받은 엑셀을 받는 대로 올린다
+# ---------------------------------------------------------------------------
+import time as _time  # noqa: E402
+import win32con as _wc  # noqa: E402
+
+os.environ[wellife.TOGETHER_ENV] = "1"
+waits = []
+_saved_wp, _saved_me = wellife.wait_prepare, wellife.module_excel
+wellife.wait_prepare = lambda rr_, why: waits.append(why)
+rr.status = Rec()
+tgot = {}
+rr.run_modules = lambda selected, modules=None, funcs=None, section=None: tgot.update(funcs=funcs) or ("success", None)
+settings({"Wellife": {"Login": "Y", "Excel": "N", "SalesMode": "실행"}})
+wellife.run_main(rr)
+check("함께 실행인데 엑셀 수집을 안 하면 수집이 끝나기를 기다린 뒤 모듈을 돈다 (로그인 키 입력이 Edge 로 새지 않게)",
+      len(waits) == 1 and tgot.get("funcs"), str(waits))
+waits.clear()
+tgot.clear()
+settings({"Wellife": {"Login": "Y", "Excel": "Y", "Import": "Y", "SalesMode": "실행", "ImportMode": "실행"}})
+wellife.run_main(rr)
+margs = []
+wellife.module_excel = lambda rr_, ctx_, *a: margs.append(a) or ("skipped", None)
+tgot["funcs"]["wellife_excel"](None)
+check("엑셀 수집을 실제로 하면 기다리지 않고 함께 올린다 (자동 수집을 실제로 하는지도 넘긴다)",
+      not waits and margs == [(True, True, True)], f"{waits} {margs}")
+wellife.wait_prepare, wellife.module_excel = _saved_wp, _saved_me
+del os.environ[wellife.TOGETHER_ENV]
+
+tog = tempfile.mkdtemp(prefix="rpa_tog_")
+tev = []
+prep = {"on": True}
+arrive = [["(108)b.xlsx", "(109)c.xlsx"], []]     # 수집 중 기다릴 때마다 들어오는 파일
+
+
+def tog_collect(folder):
+    files = sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".xlsx"))
+    return {os.path.basename(p)[1:4]: p for p in files}, [], []
+
+
+def tog_upload(app, pid, hwnd, grid, skip=()):
+    todo = [p for p in tog_collect(tog)[0].values() if p not in skip]
+    tev.append(("upload", sorted(os.path.basename(p) for p in todo), trr.UPLOAD_NO_KEYS))
+    for p in todo:
+        os.remove(p)
+    return len(todo), 0
+
+
+def tog_sleep(_s):
+    if arrive:
+        for f in arrive.pop(0):
+            open(os.path.join(tog, f), "w").close()
+    else:
+        prep["on"] = False
+
+
+trr = types.SimpleNamespace(
+    log=lambda m: None, UPLOAD_NO_KEYS=False, UploadStop=rr.UploadStop, excel_upload_dir=lambda: tog,
+    collect_upload_files=tog_collect, run_excel_upload_step=tog_upload, win32con=_wc,
+    win32gui=types.SimpleNamespace(GetWindowRect=lambda h: (0, 0, 1920, 1032),
+                                   SetWindowPos=lambda h, after, *a: tev.append(("topmost", after == _wc.HWND_TOPMOST))),
+    status=types.SimpleNamespace(step=lambda *a, **k: None, metric=lambda *a, **k: None,
+                                 release_prepare=lambda rect=None: tev.append(("release", rect)),
+                                 running_programs=lambda: ["prepare"] if prep["on"] else []))
+_saved_tog = {n: getattr(wellife, n) for n in ("import_collect", "open_order_copy", "close_order_copy", "site_grid",
+                                               "no_popup", "time")}
+wellife.import_collect = lambda rr_, ctx_, live, wait=True: tev.append(("import start", wait)) or (lambda: ("done", "자동 수집 끝"))
+wellife.open_order_copy = lambda rr_, ctx_: tev.append(("copy open",)) or "주문매핑 매출처리 (2)"
+wellife.close_order_copy = lambda rr_, ctx_, name: tev.append(("copy close", name))
+wellife.site_grid = lambda rr_, ctx_: "사이트 그리드"
+wellife.no_popup = lambda *a: None
+wellife.time = types.SimpleNamespace(sleep=tog_sleep, time=_time.time)
+open(os.path.join(tog, "(107)a.xlsx"), "w").close()
+tctx = types.SimpleNamespace(app=None, pid=1, hwnd=2)
+res = wellife.excel_together(trr, tctx, True)
+check("함께 실행: 자동 수집을 걸어 두고(끝은 안 기다림) '+' 로 연 화면에서, 키보드 일을 마친 뒤 ERPia 를 맨 위로 두고 수집을 놓아준다",
+      [e[0] for e in tev[:4]] == ["import start", "copy open", "topmost", "release"] and tev[0] == ("import start", False)
+      and tev[2] == ("topmost", True) and tev[3] == ("release", (0, 0, 1920, 1032)), str(tev[:4]))
+ups = [e for e in tev if e[0] == "upload"]
+check("받은 엑셀은 들어오는 대로 (차례마다 새 파일만), 올리는 동안은 키보드 없이, 수집이 끝나고 새 파일이 없으면 멈춘다",
+      [u[1] for u in ups] == [["(107)a.xlsx"], ["(108)b.xlsx", "(109)c.xlsx"]] and all(u[2] for u in ups)
+      and not trr.UPLOAD_NO_KEYS, str(tev))
+check("끝나면 맨 위를 풀고 '+' 로 연 화면을 닫는다, 결과는 받은 수 중 올린 수",
+      tev[-1] == ("copy close", "주문매핑 매출처리 (2)") and ("topmost", False) in tev
+      and res == ("done", "[실행] 엑셀 3건 중 3건 업로드 (사이트 수집과 함께)"), f"{tev[-3:]} {res}")
+_saved_os = wellife.order_screen
+wellife.order_screen = lambda rr_, ctx_, step, body: body()
+check("② 자동 수집 모듈은 걸어 둔 자동 수집이 끝나기를 기다린다 (다시 누르지 않는다)",
+      wellife.module_import(trr, tctx, True) == ("done", "자동 수집 끝") and tctx.import_end is None)
+wellife.order_screen = _saved_os
+
+tev.clear()
+prep["on"] = True
+open(os.path.join(tog, "(110)d.xlsx"), "w").close()
+
+
+def stop_upload(*a, **k):
+    raise rr.UploadStop("처리할 수 있는 버튼이 없습니다.")
+
+
+trr.run_excel_upload_step = stop_upload
+try:
+    wellife.excel_together(trr, tctx, False)
+    stop = None
+except wellife.Stop as e:
+    stop = (e.result, str(e))
+check("업로드 중 모르는 창이면 멈추되, ERPia 맨 위·키보드 없음을 풀고 수집이 기다리지 않게 놓아준다 (자동 수집 안 하면 '+' 도 없이)",
+      stop is not None and stop[0] == "stopped" and ("topmost", False) in tev and not trr.UPLOAD_NO_KEYS
+      and tev.count(("release", None)) == 1 and not [e for e in tev if e[0] in ("import start", "copy open")],
+      f"{stop} {tev}")
+for n, f in _saved_tog.items():
+    setattr(wellife, n, f)
 
 finish()

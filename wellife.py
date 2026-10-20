@@ -39,6 +39,8 @@ import time
 
 from pywinauto import mouse
 
+from rpa_status import TOGETHER_ENV   # 사이트 수집이 함께 띄운 실행 (run_main)
+
 SECTION = "Wellife"
 SAP_MENU = "웰라이프 SAP 연동관리"
 WMS_MENU = "웰라이프 WMS 이관관리"
@@ -297,8 +299,15 @@ def run_main(rr):
         one = any(modes[step_mode[s]] == ONE for s in mod[3])
         return lambda ctx: ((ctx.no_rerun.add(key) if one and hasattr(ctx, "no_rerun") else None), f(ctx))[1]
 
+    # 함께 실행 (사용자 2026-10-19): 전체 실행에서 사이트 수집(프리페어)이 이 실행을 같이 띄웠다. 엑셀 수집을 실제로 하면 받는
+    # 대로 올리고(excel_together), 아니면 수집이 끝나기를 기다린 뒤 예전처럼 돈다 (수집한 주문이 다 들어온 뒤에 매출처리).
+    together = os.environ.get(TOGETHER_ENV) == "1"
+    upload_together = together and bool(selected.get("Excel")) and bool(modes[SALES_MODE_KEY])
+    import_live = bool(selected.get("Import")) and bool(modes[IMPORT_MODE_KEY])
+    if together and not upload_together:
+        wait_prepare(rr, "엑셀 수집을 실제로 하지 않아")
     funcs = {"login": rr.module_login,
-             "wellife_excel": lambda ctx: module_excel(rr, ctx, modes[SALES_MODE_KEY]),
+             "wellife_excel": lambda ctx: module_excel(rr, ctx, modes[SALES_MODE_KEY], upload_together, import_live),
              "wellife_import": lambda ctx: module_import(rr, ctx, modes[IMPORT_MODE_KEY]),
              "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[NORMAL_SALES_MODE_KEY]),
              "wellife_hold": lambda ctx: module_hold(rr, ctx, modes[MODE_KEY]),
@@ -345,13 +354,19 @@ def order_screen(rr, ctx, step, body):
         ctx.pass_popups = rr.POPUP_PREFER_YES = False
 
 
-def module_excel(rr, ctx, live=False):
-    """② 엑셀 수집 (live: SalesMode)."""
+def module_excel(rr, ctx, live=False, together=False, import_live=False):
+    """② 엑셀 수집 (live: SalesMode). together - 사이트 수집과 함께 (excel_together)."""
+    if together:
+        return order_screen(rr, ctx, "wl_excel_screen", lambda: excel_together(rr, ctx, import_live))
     return order_screen(rr, ctx, "wl_excel_screen", lambda: excel_collect(rr, ctx, live))
 
 
 def module_import(rr, ctx, live=False):
-    """② 자동 수집 (live: ImportMode)."""
+    """② 자동 수집 (live: ImportMode). 함께 실행이면 엑셀 업로드 전에 걸어 둔 자동 수집이 끝나기를 기다린다 (ctx.import_end)."""
+    end = getattr(ctx, "import_end", None)
+    if end is not None:
+        ctx.import_end = None
+        return order_screen(rr, ctx, "wl_import_screen", end)
     return order_screen(rr, ctx, "wl_import_screen", lambda: import_collect(rr, ctx, live))
 
 
@@ -396,7 +411,124 @@ def excel_collect(rr, ctx, live):
                                                  + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
 
 
-def import_collect(rr, ctx, live):
+def excel_together(rr, ctx, import_live):
+    """함께 실행 (사용자 2026-10-19): 사이트 수집(프리페어)과 같이 돌며 사이트마다 받은 엑셀을 바로 올린다.
+    1. 자동 수집도 실제로 하면 이 화면에서 [가져오기] 를 눌러 시작만 확인하고 (끝은 ② 자동 수집 모듈이 기다린다), 메뉴 검색의
+       '+' 로 같은 화면을 하나 더 열어 거기서 올린다 - 자동 수집은 오래 걸린다 (사용자).
+    2. 키보드를 쓸 일을 다 마친 뒤 프리페어를 놓아준다 (그 뒤 Edge 창이 뜰 때마다 포커스를 가져간다 - 개발기 실측). 그동안 ERPia 를
+       맨 위로 두고(업로드 칸을 다른 창이 덮으면 안 열린다) 파일 창·팝업은 창 메시지·UIA 로만 (run_routine.UPLOAD_NO_KEYS).
+    3. 프리페어가 끝나고 새 파일이 없을 때까지 올린다. 앞 차례에 못 올려 그 자리에 남은 파일은 다시 누르지 않는다 (다음 실행에)."""
+    rr.status.step("wl_order_excel")
+    copy = None
+    if import_live:
+        ctx.import_end = import_collect(rr, ctx, True, wait=False)
+        copy = open_order_copy(rr, ctx)
+    sites = site_grid(rr, ctx)
+    no_popup(rr, ctx, "엑셀 업로드 전")
+    uploaded = errors = 0
+    tried = set()
+    rr.UPLOAD_NO_KEYS = True
+    on_top(rr, ctx.hwnd, True)
+    try:
+        rr.status.release_prepare(rr.win32gui.GetWindowRect(ctx.hwnd))
+        rr.log("  [실행] 엑셀 업로드: 사이트 수집과 함께 - 사이트마다 받은 엑셀을 받는 대로 올립니다")
+        while True:
+            new = upload_paths(rr) - tried
+            if new:
+                u, e = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites, skip=tried)
+                tried |= new
+                uploaded, errors = uploaded + u, errors + e
+            elif "prepare" in rr.status.running_programs():
+                time.sleep(1)
+            elif not upload_paths(rr) - tried:     # 수집이 끝났다 - 끝나기 직전에 넘긴 파일이 없으면 끝
+                break
+    except rr.UploadStop as e:
+        raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 모르는 창이 떠 멈춤 (누르지 않음): {e}") from e
+    finally:
+        on_top(rr, ctx.hwnd, False)
+        rr.UPLOAD_NO_KEYS = False
+        rr.status.release_prepare()     # 도중에 멈춰도 수집이 기다리지 않게 (이미 놓았으면 그대로)
+    rr.status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개",
+                     note=f"오류 폴더 {errors}개" if errors else None)
+    if copy:
+        close_order_copy(rr, ctx, copy)
+    return ("done" if uploaded else "skipped"), (f"[{mode_tag(True)}] 엑셀 {len(tried)}건 중 {uploaded}건 업로드 (사이트 수집과 함께)"
+                                                 + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
+
+
+def upload_paths(rr):
+    """업로드 폴더의 올릴 엑셀 경로 (사이트코드가 겹친 것도) - 폴더가 없으면 빈 집합."""
+    folder = rr.excel_upload_dir()
+    if not os.path.isdir(folder):
+        return set()
+    targets, duplicates, _ = rr.collect_upload_files(folder)
+    return set(targets.values()) | set(duplicates)
+
+
+def wait_prepare(rr, why):
+    """함께 실행인데 엑셀을 함께 올리지 않는다 - 수집(프리페어)을 바로 놓아주고 끝날 때까지 기다린다 (예전 차례 그대로)."""
+    rr.status.release_prepare()
+    rr.log(f"사이트 수집과 함께 띄웠지만 {why} 수집이 끝나기를 기다린 뒤 시작합니다.")
+    while "prepare" in rr.status.running_programs():
+        time.sleep(2)
+
+
+def on_top(rr, hwnd, on):
+    """ERPia 메인 창을 맨 위로 두거나 푼다 (함께 실행 - Edge 창이 업로드 칸을 덮지 않게). 크기·자리·포커스는 그대로."""
+    try:
+        rr.win32gui.SetWindowPos(hwnd, rr.win32con.HWND_TOPMOST if on else rr.win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
+                                 rr.win32con.SWP_NOMOVE | rr.win32con.SWP_NOSIZE | rr.win32con.SWP_NOACTIVATE)
+    except Exception as e:
+        rr.log(f"  ERPia 창을 {'맨 위로 두지' if on else '맨 위에서 풀지'} 못했습니다: {e}")
+
+
+def open_order_copy(rr, ctx):
+    """메뉴 검색에서 이미 열린 주문매핑 매출처리 옆 '+' 로 같은 화면을 하나 더 연다 (사용자 2026-10-19 - 자동 수집이 도는 동안
+    엑셀은 다른 화면에서). 새 탭은 '주문매핑 매출처리 (2)' 처럼 번호가 붙어 바로 떠 있는 탭이 된다 (개발기 실측 2.4초).
+    반환: 새 탭 이름. 못 열면 Stop."""
+    win = ctx.window()
+    rr.prefetch_auto_ids(win, ("sch_Menus", "acd_Nav"))
+    search, nav = rr.find_by_auto_id(win, "sch_Menus"), rr.find_by_auto_id(win, "acd_Nav")
+    if search is None or nav is None:
+        raise Stop("failed", "메뉴 검색 칸(sch_Menus)이나 메뉴 트리(acd_Nav)를 찾지 못해 주문매핑 화면을 하나 더 열지 못했습니다.")
+    try:
+        click(rr, ctx, search, "메뉴 검색 칸")
+        if not _focus_in(rr, "sch_Menus"):
+            raise Stop("failed", "메뉴 검색 칸에 포커스가 오지 않아 주문매핑 화면을 하나 더 열지 못했습니다.")
+        search.type_keys("^a{BACKSPACE}")
+        search.type_keys(rr.ec.literal_keys(ORDER_TAB), with_spaces=True)
+        item = _wait_tree_item(nav, ORDER_TAB, MENU_WAIT_SECONDS)
+        plus = next((c for c in item.children() if c.element_info.control_type == "Button"), None) if item else None
+        if plus is None:
+            raise Stop("failed", f"메뉴 검색 결과에서 '{ORDER_TAB}' 옆 '+' 를 찾지 못했습니다.")
+        click(rr, ctx, plus, f"'{ORDER_TAB}' 옆 + (같은 화면 하나 더)")
+        end = time.time() + TAB_WAIT_SECONDS
+        while time.time() < end:
+            active = (rr.get_active_main_tab(ctx.app, ctx.hwnd) or "").strip()
+            if active.startswith(ORDER_TAB) and active != ORDER_TAB and rr.get_onscreen_tables(visible_page(ctx)):
+                rr.log(f"  주문매핑 화면을 하나 더 열었습니다: '{active}' - 엑셀은 여기서 올립니다")
+                return active
+            time.sleep(0.3)
+        raise Stop("failed", f"'+' 를 눌렀으나 주문매핑 화면이 하나 더 열리지 않았습니다 ({TAB_WAIT_SECONDS}초).")
+    finally:
+        _clear_search(rr, ctx)
+
+
+def close_order_copy(rr, ctx, name):
+    """엑셀을 올린 '주문매핑 매출처리 (2)' 탭을 닫는다 (다음 실행에 번호가 늘지 않게). 못 닫아도 실행은 계속 - 로그만."""
+    try:
+        tab = next((t for t in main_tab_bar(ctx)[1] if t.window_text().strip() == name), None)
+        x = next((c for c in tab.children() if c.window_text() == "닫기"), None) if tab is not None else None
+        if x is None:
+            rr.log(f"  '{name}' 탭의 닫기 단추를 찾지 못해 열어 둡니다.")
+            return
+        click(rr, ctx, x, f"'{name}' 탭 닫기")
+        no_popup(rr, ctx, f"'{name}' 탭 닫기")
+    except Stop as e:
+        rr.log(f"  '{name}' 탭을 닫지 못해 열어 둡니다: {e}")
+
+
+def import_collect(rr, ctx, live, wait=True):
     """자동 수집: 원래 PROCESS 와 같이 상단(사이트) 전체선택 -> [가져오기] (run_import_step - 끝날 때까지 기다리고 안내 팝업은
     닫는다). 리허설은 전체선택만 하고(체크는 데이터를 바꾸지 않는다) [가져오기] 에 마우스만 (사용자 10-14)."""
     rr.status.step("wl_order_import")
@@ -422,9 +554,16 @@ def import_collect(rr, ctx, live):
     front(rr, ctx, what)
     clear_point(rr, ctx, imp, what)
     rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
-    if not rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page):
-        raise Stop("stopped", f"{what} 를 눌렀으나 끝난 것을 확인하지 못해 다음 모듈로 넘어가지 않고 멈춤 (확인할 것)")
-    return "done", f"[{mode_tag(live)}] 자동 수집: 사이트 {n}줄 전체선택 -> [{rr.IMPORT_BUTTON_NAME}] 완료"
+    started = rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page, wait=wait)
+
+    def end(ok):
+        if not ok:
+            raise Stop("stopped", f"{what} 를 눌렀으나 끝난 것을 확인하지 못해 다음 모듈로 넘어가지 않고 멈춤 (확인할 것)")
+        return "done", f"[{mode_tag(live)}] 자동 수집: 사이트 {n}줄 전체선택 -> [{rr.IMPORT_BUTTON_NAME}] 완료"
+    if wait:
+        return end(started)
+    # 함께 실행: 끝은 ② 자동 수집 모듈에서 (module_import) - 시작을 못 봤으면 그때 멈춘다
+    return lambda: end(bool(started) and started())
 
 
 SALES_SPLIT, SALES_ITEM = "매출처리", "정상매출"

@@ -2074,3 +2074,34 @@ def running_programs(snapshot=None):
     """지금 도는 RPA (PROGRAMS 의 키) 목록. 대시보드 실행·자동 실행·옵저버가 본다."""
     snap = snapshot or dashboard_snapshot()
     return [p for p, v in snap["programs"].items() if v and v.get("state") == "running"]
+
+
+# ---------------------------------------------------------------------------
+# 함께 실행 (사용자 2026-10-19): 전체 실행에서 프리페어(사이트 수집)가 웰라이프 루틴을 같이 띄워, 사이트에서 받은 엑셀을 받는 대로
+# 올린다. 루틴은 ERPia 를 키보드로 다룰 일(로그인·화면 열기)을 마치면 release_prepare 로 알리고, 프리페어는 그 뒤에 Edge 창을
+# 띄운다 - Edge 창은 뜰 때마다 포커스를 가져가 그사이 친 키가 Edge 로 샌다 (개발기 실측). 루틴은 프리페어가 끝날 때까지 올린다.
+# ---------------------------------------------------------------------------
+TOGETHER_ENV = "RPA_WITH_PREPARE"       # 프리페어가 함께 띄운 루틴에 준다
+ALL_RUN_ENV = "RPA_ALL_RUN"             # Run_All.bat 이 준다 - 전체 실행일 때만 함께 띄운다
+
+
+@_safe
+def release_prepare(erpia_rect=None):
+    """루틴: 프리페어가 Edge 창을 띄워도 된다. erpia_rect - Edge 창이 피해 갈 ERPia 창 자리 (왼, 위, 오른, 아래)."""
+    with _lock:
+        if _active() and not _state.get("prepare_go"):
+            _state["prepare_go"] = {"at": now_iso(), "erpia": list(erpia_rect) if erpia_rect else None}
+            _write_locked()
+
+
+def prepare_go(since):
+    """프리페어: (Edge 창을 띄워도 되나, ERPia 창 자리). since(time.time()) 뒤에 시작한 루틴만 본다 -
+    그 루틴이 놓아줬거나 이미 끝났으면 된다. 아직 시작 전이면 안 된다."""
+    view = dashboard_snapshot()["programs"].get("routine")
+    started = parse_iso((view or {}).get("started_at"))
+    if not view or started is None or started.timestamp() < since - 2:
+        return False, None
+    if view.get("state") != "running":
+        return True, None
+    go = view.get("prepare_go")
+    return bool(go), (go or {}).get("erpia")
