@@ -192,6 +192,19 @@ done, where = lanes(mix, 3)
 check("첫 창이 브라우저를 못 띄우면 남은 인증 사이트는 다른 창이 가져간다 (빠뜨리지 않는다)",
       done == len(mix) and "수집1" not in where.values(), f"{done} {where}")
 FAIL_LAUNCH = ()
+
+
+def die_run_site(browser, name, site, use_session=True, keep_open=False, gates=None):
+    if name == "A1":
+        time.sleep(0.4)     # 다른 창들이 일반 사이트를 다 마치고 끝난 뒤에 첫 창이 멈춘다
+        raise RuntimeError("세션 파일이 깨짐")
+    return lane_run_site(browser, name, site)
+
+
+web_runner.run_site = die_run_site
+done, where = lanes([(f"A{i}", AUTH) for i in range(1, 4)] + [("N1", {}), ("N2", {})], 3)
+check("첫 창이 다른 창들이 다 끝난 뒤에 멈춰도 남은 인증 사이트를 다시 실행한다 (예전 큐 하나일 때처럼, 검토 10-20)",
+      done == 4 and "A2" in where and "A3" in where, f"{done} {where}")
 web_runner.sync_playwright, web_runner.web_replay.edge, web_runner.run_site = _saved
 
 print("=== 3-2. 예전 방식 문자 인증 사이트 (Action login·sms_2fa) 둘을 함께")
@@ -365,6 +378,23 @@ with open(os.path.join(stage, "site_left", "(108)남은것.xlsx"), "w") as f:
 web_runner.recover_stage()
 check("앞 실행이 사이트 도중에 꺼져 받는중에 남은 파일은 다음 실행 처음에 업로드 폴더로",
       "(108)남은것.xlsx" in os.listdir(dl) and not os.listdir(stage))
+locked = os.path.join(stage, "site_lock")
+os.makedirs(locked)
+with open(os.path.join(locked, "(110)잠김.xlsx"), "w") as f:
+    f.write("x")
+_saved_replace = web_runner.os.replace
+
+
+def busy_replace(src, dst):
+    raise PermissionError("다른 프로그램이 사용 중")
+
+
+web_runner.os.replace = busy_replace
+web_runner.hand_over(locked)
+web_runner.os.replace = _saved_replace
+check("옮기지 못한 파일은 지우지 않고 받는중에 남긴다 (백신이 잠깐 잡음 등, 검토 10-20)", os.path.exists(os.path.join(locked, "(110)잠김.xlsx")))
+web_runner.recover_stage()
+check("그 파일은 다음 실행 처음에 업로드 폴더로", "(110)잠김.xlsx" in os.listdir(dl) and not os.listdir(stage))
 status.finish("success")
 
 _saved_mon = web_runner.monitor_work_areas

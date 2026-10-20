@@ -31,10 +31,10 @@ def check(name, ok, detail=""):
         fails.append(name)
 
 
-def run(bad, when="now", unknown=False, hide=""):
+def run(bad, when="now", unknown=False, hide="", dlg_hide=""):
     """bad: 결과 팝업이 뜨는 사이트코드. when: 팝업이 뜨는 때 - now 창이 닫히자마자, block 다음 파일의 사이트코드를 찾기 시작할 때
     (그리드를 못 넘긴다), find 찾는 동안, wait 그보다 늦게 (결과를 기다릴 때에야). unknown: 그 팝업이 누를 단추를 모르는 창.
-    hide: 그 사이트코드를 찾을 때 그리드가 화면에서 사라진다 (다른 탭이 앞으로 옴).
+    hide: 그 사이트코드를 찾을 때 그리드가 화면에서 사라진다 (다른 탭이 앞으로 옴). dlg_hide: 그 칸을 눌러 파일 창이 뜨는 사이에 사라진다.
     반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수, 멈췄는가 - 그리드가 사라졌으면 ('hidden', 올린 수, 오류 수))"""
     popup, blocking, delayed, later, moved, blocked = [], [], [], [], {}, []
 
@@ -49,7 +49,7 @@ def run(bad, when="now", unknown=False, hide=""):
         delayed.clear()
         if blocked[-1]:
             return None, None       # 팝업에 막혀 그리드를 못 넘겼다
-        return SimpleNamespace(rectangle=lambda: (0, 0, 1, 1)), rr.EXCEL_UPLOAD_ENABLED
+        return SimpleNamespace(rectangle=lambda: (0, 0, 1, 1), code=code), rr.EXCEL_UPLOAD_ENABLED
 
     def dismiss(*_, **__):
         if unknown and popup:
@@ -75,7 +75,8 @@ def run(bad, when="now", unknown=False, hide=""):
     rr.find_popup_windows = lambda pid, hwnd: []
     rr.upload_popups = dismiss
     rr.wait_upload_result = wait_result
-    rr.open_upload_dialog = lambda pid, hwnd, cell: 1
+    rr.open_upload_dialog = lambda pid, hwnd, cell: ONSCREEN.__setitem__(0, cell.code not in dlg_hide) or 1
+    rr.close_upload_dialog = lambda pid, dlg: moved.__setitem__("창 닫음", dlg)
     rr.upload_file_in_dialog = upload
     rr.win32gui = SimpleNamespace(IsWindow=lambda h: False, IsWindowVisible=lambda h: False)
     rr.wait_file_unlocked = lambda path, **_: True
@@ -129,6 +130,16 @@ def at(left, top, right, bottom):
 
 check("숨은 탭의 그리드(화면 밖 자리 - 10-20 실측 (-1351,-854))는 보이지 않는 것으로, 떠 있는 탭의 그리드는 보이는 것으로",
       not REAL_ONSCREEN(1, at(-1351, -854, -690, -443)) and REAL_ONSCREEN(1, at(318, 129, 979, 540)))
+moved, blocked, stopped = run("", dlg_hide="B")
+check("칸을 눌러 파일 창이 뜨는 사이 그리드가 사라지면(같은 자리 다른 사이트 칸일 수 있다) 창을 닫고 남은 파일은 그대로 (검토 10-20)",
+      stopped == ("hidden", 1, 0) and moved == {"A.xlsx": "업로드 완료", "창 닫음": 1}, f"{stopped} {moved}")
+rr.UPLOAD_NO_KEYS = False
+normal = rr.upload_result_wait()
+rr.UPLOAD_NO_KEYS = True
+together = rr.upload_result_wait()
+rr.UPLOAD_NO_KEYS = False
+check("결과 팝업 대기는 평소 10초 그대로, 함께 실행만 3초 (느린 PC 의 늦은 실패 팝업, 검토 10-20)", (normal, together) == (10, 3),
+      (normal, together))
 
 
 print("--- 팝업은 ERPia 가 따로 띄운 창 목록으로 (2026-10-19: 실패 팝업은 메인 창이 소유한 별도 창)")

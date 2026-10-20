@@ -23,7 +23,6 @@ import math
 import os
 import queue
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -934,7 +933,10 @@ def hand_over(stage):
                 os.replace(src, unique_path(os.path.join(download_dir(), f)))
             except Exception as e:
                 log(f"  받은 파일을 옮기지 못했습니다: {f} ({e})")
-    shutil.rmtree(stage, ignore_errors=True)
+    try:    # 빈 폴더만 지운다 - 옮기지 못한 파일(백신이 잠깐 잡음 등)은 다음 실행 처음에 recover_stage 가 옮긴다 (rmtree 는 그 파일까지 지웠다, 검토 10-20)
+        os.rmdir(stage)
+    except OSError:
+        pass
 
 
 def recover_stage():
@@ -1626,6 +1628,9 @@ def run_parallel(chosen, n, headless, session_override, avoid=None):
         w.start()
     for w in workers:
         w.join()
+    if lane_down.is_set() and auth.qsize():     # 첫 실행기가 다른 실행기들이 다 끝난 뒤에 멈췄다 - 남은 인증 사이트를 아무도 안 가져갔다 (검토 10-20)
+        log(f"  첫 실행기가 중단되어 남은 인증 사이트 {auth.qsize()}곳을 한 창에서 다시 실행합니다.")
+        worker(0)
     left = auth.qsize() + plain.qsize()
     if left:
         log(f"  실행기가 모두 중단되어 {left}개 사이트를 실행하지 못했습니다.")

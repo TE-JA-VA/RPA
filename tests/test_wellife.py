@@ -142,7 +142,14 @@ for extra, want in (({}, set()), ({"NormalSalesMode": "1건"}, {"wellife_sales"}
           nctx.no_rerun == want, str(nctx.no_rerun))
 for n, f in _saved_mods.items():
     setattr(wellife, n, f)
-check("로그인은 기존 module_login 을 그대로 쓴다", (got.get("funcs") or {}).get("login") is rr.module_login)
+_saved_ml, _saved_ot = rr.module_login, wellife.on_top
+seen = []
+rr.module_login = lambda ctx_: seen.append("login") or ("done", None)
+wellife.on_top = lambda rr_, hwnd, on: seen.append(("top", hwnd, on))
+res = (got.get("funcs") or {}).get("login")(types.SimpleNamespace(hwnd=7))
+check("로그인은 기존 module_login 을 그대로 쓰고, 끝나면 ERPia 맨 위를 푼다 (앞 실행이 [중지] 로 끝나 남은 것, 검토 10-20)",
+      res == ("done", None) and seen == ["login", ("top", 7, False)], f"{res} {seen}")
+rr.module_login, wellife.on_top = _saved_ml, _saved_ot
 check("끝은 finish(success)", rec.of("finish") and rec.of("finish")[-1][0] == "success")
 
 rec = Rec()
@@ -2144,6 +2151,15 @@ except wellife.Stop as e:
 check("업로드 중 모르는 창이면 멈추되 키보드 없음을 푼다 (자동 수집 안 하면 '+' 도 없이)",
       stop is not None and stop[0] == "stopped" and not trr.UPLOAD_NO_KEYS
       and not [e for e in tev if e[0] in ("import start", "copy open")], f"{stop} {tev}")
+tev.clear()
+prep["on"] = True
+try:
+    wellife.excel_together(trr, tctx, True)
+    stop = None
+except wellife.Stop as e:
+    stop = (e.result, str(e))
+check("'+' 화면을 연 뒤 멈춰도 그 화면은 닫는다 (남으면 다음 실행이 '(3)' 을 연다, 검토 10-20)",
+      stop is not None and stop[0] == "stopped" and tev[-1] == ("copy close", "주문매핑 매출처리 (2)"), f"{stop} {tev}")
 
 tev.clear()
 prep["on"] = True

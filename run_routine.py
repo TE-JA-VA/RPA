@@ -1693,9 +1693,17 @@ OPEN_DIALOG_WAIT_SECONDS = 6
 # 이걸 기다리지 않고 파일을 옮기면 ERPia 가 읽는 도중 파일이 사라져
 # '헤더 개수: 0' 같은 오류가 난다 (실측으로 확인).
 # 업로드가 정상이면 팝업이 아예 뜨지 않으므로, 이 시간은 '문제가 있었는지 지켜보는' 시간이다.
-# 실패 팝업은 파일 열기 창이 닫힌 뒤 0.73~1.05초에 떴다 (2026-10-19 개발기 9번). 느린 회선을 보고 3초 -
-# 이보다 늦게 뜨는 곳이면 늘린다 (늦게 뜬 팝업은 다음 파일의 실패로 잡힌다).
-UPLOAD_RESULT_WAIT_SECONDS = 3
+# 평소는 예전 그대로 10초. 함께 실행(UPLOAD_NO_KEYS - 사이트 수집과 같이 받는 대로 올림)만 3초 - 실패 팝업은 파일 열기 창이 닫힌 뒤
+# 0.73~1.05초에 떴다 (2026-10-19 개발기 9번). 늦게 뜬 팝업은 실패한 파일이 '완료' 로 가거나 다음 파일의 실패로 잡히므로 (검토 10-20)
+# 함께 실행에서 늦게 뜨는 곳이면 UPLOAD_RESULT_WAIT_TOGETHER 를 늘린다.
+UPLOAD_RESULT_WAIT_SECONDS = 10
+UPLOAD_RESULT_WAIT_TOGETHER = 3
+
+
+def upload_result_wait():
+    """업로드 뒤 결과(실패) 팝업을 기다리는 시간 - 함께 실행이면 UPLOAD_RESULT_WAIT_TOGETHER, 아니면 UPLOAD_RESULT_WAIT_SECONDS."""
+    return UPLOAD_RESULT_WAIT_TOGETHER if UPLOAD_NO_KEYS else UPLOAD_RESULT_WAIT_SECONDS
+
 # 팝업을 닫은 뒤에도 파일이 잠겨 있을 수 있어, 풀릴 때까지 조금 더 기다린다.
 UPLOAD_FILE_RELEASE_WAIT = 10
 
@@ -2754,8 +2762,10 @@ def upload_popups(pid, hwnd, before=(), label=""):
     return texts
 
 
-def wait_upload_result(pid, hwnd, before=(), timeout=UPLOAD_RESULT_WAIT_SECONDS, interval=0.1):
-    """파일을 넘긴 뒤 결과 팝업을 timeout 동안 기다린다. 뜨면 닫고 문구를, 안 뜨면 [] (정상 업로드는 팝업이 없다)."""
+def wait_upload_result(pid, hwnd, before=(), timeout=None, interval=0.1):
+    """파일을 넘긴 뒤 결과 팝업을 timeout(없으면 upload_result_wait()) 동안 기다린다. 뜨면 닫고 문구를, 안 뜨면 [] (정상 업로드는 팝업이 없다)."""
+    if timeout is None:
+        timeout = upload_result_wait()
     end = time.time() + timeout
     while True:
         texts = upload_popups(pid, hwnd, before, label="업로드 결과 ")
@@ -3136,7 +3146,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
         """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
         팝업이 없어도 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 가 지나기 전이면 남은 시간만큼 결과 팝업을 기다린다."""
         nonlocal pending, seen, uploaded, failed, errors
-        left = closed_at + UPLOAD_RESULT_WAIT_SECONDS - time.time()
+        left = closed_at + upload_result_wait() - time.time()
         if not popups and left > 0:
             popups = wait_upload_result(pid, hwnd, before, timeout=left)
         path, pending, seen = pending, None, []
@@ -3203,6 +3213,11 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
         if dlg is None:
             log("    파일 열기 창을 열지 못해 파일은 그대로 두고 넘어갑니다.")
             continue
+        if not grid_onscreen(hwnd, grid):   # 누르는 사이 다른 탭이 앞으로 왔다 - 같은 자리 다른 사이트의 칸이었을 수 있다 (검토 10-20)
+            log("    파일 열기 창이 뜨는 사이 사이트 그리드가 화면에서 사라졌습니다. 창을 닫고 남은 파일은 그대로 둡니다.")
+            close_upload_dialog(pid, dlg)
+            hidden = True
+            break
 
         if not upload_file_in_dialog(dlg, path, pid=pid):
             log("    파일을 전달하지 못했습니다. 창을 닫고 파일은 그대로 둡니다.")
@@ -5206,7 +5221,9 @@ def run_import_step(app, pid, hwnd, win, wait=True):
         하다가 끝을 기다린다 (웰라이프 함께 실행: 자동 수집을 걸어 두고 다른 탭에서 엑셀 업로드, 사용자 2026-10-19)."""
         idle_since = None
         last_report = 0.0
-        while time.time() - t0 < IMPORT_MAX_WAIT_SECONDS:
+        # 보기 시작한 때부터 잰다 - 함께 실행은 업로드를 다 마친 뒤에야 부르므로 누른 때(t0)부터 재면 수집이 길 때 한 번도 안 보고 실패였다 (검토 10-20)
+        end = time.time() + IMPORT_MAX_WAIT_SECONDS
+        while time.time() < end:
             handle_import_popups(pid, hwnd, seen_popups)
             a, b = busy_now()
             elapsed = time.time() - t0

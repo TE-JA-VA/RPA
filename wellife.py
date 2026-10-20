@@ -319,7 +319,7 @@ def run_main(rr):
         wait_prepare(rr, "엑셀 수집을 실제로 하지 않아")
     if together:    # 로그인 창에 키를 치는 동안도 사이트 수집이 새 Edge 창을 띄우지 않게 (keys)
         rr.pl.KEYS_GUARD = lambda: keys(rr)
-    funcs = {"login": rr.module_login,
+    funcs = {"login": lambda ctx: login_free(rr, ctx),
              "wellife_excel": lambda ctx: module_excel(rr, ctx, modes[SALES_MODE_KEY], upload_together, import_together),
              "wellife_import": lambda ctx: module_import(rr, ctx, modes[IMPORT_MODE_KEY]),
              "wellife_sales": lambda ctx: module_sales(rr, ctx, modes[NORMAL_SALES_MODE_KEY]),
@@ -365,6 +365,15 @@ def order_screen(rr, ctx, step, body):
         return ui_error(rr, e)
     finally:
         ctx.pass_popups = rr.POPUP_PREFER_YES = False
+
+
+def login_free(rr, ctx):
+    """② 앞의 로그인 모듈 + ERPia 맨 위 풀기. 함께 실행 도중 대시보드 [중지](TerminateProcess)로 끝나면 module_excel 의 finally 를 못 타
+    ERPia 가 맨 위(HWND_TOPMOST)로 남는다 (검토 10-20) - 다음 실행은 로그인 뒤 늘 푼다 (맨 위가 아니면 아무 일 없음)."""
+    result = rr.module_login(ctx)
+    if getattr(ctx, "hwnd", None):
+        on_top(rr, ctx.hwnd, False)
+    return result
 
 
 def module_excel(rr, ctx, live=False, together=False, import_live=False):
@@ -439,45 +448,47 @@ def excel_together(rr, ctx, import_live):
     3. 프리페어가 끝나고 새 파일이 없을 때까지 올린다. 앞 차례에 못 올려 그 자리에 남은 파일은 다시 누르지 않는다 (다음 실행에)."""
     rr.status.step("wl_order_excel")
     copy = None
-    if import_live:
-        copy = open_order_copy(rr, ctx)
-        switch_tab(rr, ctx, ORDER_TAB)
-        end = import_collect(rr, ctx, True, wait=False)
-        ctx.import_end = end if callable(end) else (lambda: end)    # 단추가 없어 건너뜀이면 그 결과를 그대로
-        switch_tab(rr, ctx, copy)
-    sites = site_grid(rr, ctx)
-    no_popup(rr, ctx, "엑셀 업로드 전")
-    uploaded = errors = hidden = 0
-    tried = set()
-    rr.UPLOAD_NO_KEYS = True
     try:
-        rr.log("  [실행] 엑셀 업로드: 사이트 수집과 함께 - 사이트마다 받은 엑셀을 받는 대로 올립니다")
-        while True:
-            new = upload_paths(rr) - tried
-            if new:
-                if copy and keep_front(rr, ctx, copy):
-                    sites = site_grid(rr, ctx)
-                try:
-                    u, e = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites, skip=tried)
-                    tried |= new
-                except rr.UploadGridHidden as h:     # 남은 파일은 그 자리에 있다 - 다음 차례에 화면을 되돌려 이어서 올린다
-                    u, e, hidden = h.uploaded, h.errors, hidden + 1
-                    if not copy or hidden > HIDDEN_MAX:
-                        raise Stop("stopped", f"엑셀 업로드 중 사이트 그리드가 계속 화면에서 사라져({hidden}번) 멈춤 - "
-                                              "남은 파일은 업로드 폴더에 그대로 있습니다 (확인할 것)") from h
-                uploaded, errors = uploaded + u, errors + e
-            elif "prepare" in rr.status.running_programs():
-                time.sleep(1)
-            elif not upload_paths(rr) - tried:     # 수집이 끝났다 - 끝나기 직전에 넘긴 파일이 없으면 끝
-                break
-    except rr.UploadStop as e:
-        raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 모르는 창이 떠 멈춤 (누르지 않음): {e}") from e
+        if import_live:
+            copy = open_order_copy(rr, ctx)
+            switch_tab(rr, ctx, ORDER_TAB)
+            end = import_collect(rr, ctx, True, wait=False)
+            ctx.import_end = end if callable(end) else (lambda: end)    # 단추가 없어 건너뜀이면 그 결과를 그대로
+            switch_tab(rr, ctx, copy)
+        sites = site_grid(rr, ctx)
+        no_popup(rr, ctx, "엑셀 업로드 전")
+        uploaded = errors = hidden = 0
+        tried = set()
+        rr.UPLOAD_NO_KEYS = True
+        try:
+            rr.log("  [실행] 엑셀 업로드: 사이트 수집과 함께 - 사이트마다 받은 엑셀을 받는 대로 올립니다")
+            while True:
+                new = upload_paths(rr) - tried
+                if new:
+                    if copy and keep_front(rr, ctx, copy):
+                        sites = site_grid(rr, ctx)
+                    try:
+                        u, e = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites, skip=tried)
+                        tried |= new
+                    except rr.UploadGridHidden as h:     # 남은 파일은 그 자리에 있다 - 다음 차례에 화면을 되돌려 이어서 올린다
+                        u, e, hidden = h.uploaded, h.errors, hidden + 1
+                        if not copy or hidden > HIDDEN_MAX:
+                            raise Stop("stopped", f"엑셀 업로드 중 사이트 그리드가 계속 화면에서 사라져({hidden}번) 멈춤 - "
+                                                  "남은 파일은 업로드 폴더에 그대로 있습니다 (확인할 것)") from h
+                    uploaded, errors = uploaded + u, errors + e
+                elif "prepare" in rr.status.running_programs():
+                    time.sleep(1)
+                elif not upload_paths(rr) - tried:     # 수집이 끝났다 - 끝나기 직전에 넘긴 파일이 없으면 끝
+                    break
+        except rr.UploadStop as e:
+            raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 모르는 창이 떠 멈춤 (누르지 않음): {e}") from e
+        finally:
+            rr.UPLOAD_NO_KEYS = False
+        rr.status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개",
+                         note=f"오류 폴더 {errors}개" if errors else None)
     finally:
-        rr.UPLOAD_NO_KEYS = False
-    rr.status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개",
-                     note=f"오류 폴더 {errors}개" if errors else None)
-    if copy:
-        close_order_copy(rr, ctx, copy)
+        if copy:    # 멈춰도 닫는다 - 남으면 다음 실행이 '(3)' 을 연다 (검토 10-20)
+            close_order_copy(rr, ctx, copy)
     return ("done" if uploaded else "skipped"), (f"[{mode_tag(True)}] 엑셀 {len(tried)}건 중 {uploaded}건 업로드 (사이트 수집과 함께)"
                                                  + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
 

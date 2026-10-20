@@ -45,7 +45,7 @@ set RPA_ALL_RUN=1
 "%~dp0Prepare_RPA.exe" --all --no-keep-open
 set PREPARE_RC=%ERRORLEVEL%
 set RPA_ALL_RUN=
-if %PREPARE_RC% GEQ 100 goto together
+if %PREPARE_RC% GEQ 100 if %PREPARE_RC% LSS 200 goto together
 
 if not "%PREPARE_RC%"=="0" (
     echo.
