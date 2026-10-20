@@ -854,6 +854,9 @@ check("설정 쓰기만 실패하면 프리셋은 당겨지고 Sites 는 옛 번
 check("짝이 깨진 칸(Code ≠ 프리셋 사이트코드)은 ACTOR 가 실행하지 않는다 - 업무 서식 안내",
       wr._replay_problems("PRESET3", sites["PRESET3"]) == ["PRESET3: 프리셋 3의 아이디·비밀번호가 다른 사이트의 것입니다. 옵저버에서 다시 입력하여 주십시오."]
       and wr.validate_site("PRESET1", sites["PRESET1"]) == [], str(wr._replay_problems("PRESET3", sites["PRESET3"])))
+run_, skip_ = wr.split_mismatched([(n, sites[n]) for n in ("PRESET1", "PRESET3")])
+check("짝이 깨진 칸만 떼고 나머지는 실행한다 (사용자 2026-10-20)",
+      [n for n, _ in run_] == ["PRESET1"] and [n for n, _ in skip_] == ["PRESET3"], str((run_, skip_)))
 check("Code 가 없는 옛 설정은 짝을 따지지 않는다 (다음 저장 때 채워진다)",
       wr._replay_problems("PRESET3", {k: v for k, v in sites["PRESET3"].items() if k != "Code"}) == [])
 summ = st.preset_summary()

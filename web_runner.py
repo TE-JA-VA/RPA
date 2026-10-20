@@ -337,6 +337,19 @@ def _replay_problems(name, site):
     return []
 
 
+def split_mismatched(chosen):
+    """계정이 다른 사이트의 것인(Code ≠ 프리셋 사이트코드) replay 칸을 따로 뗀다 - 그 칸만 건너뛰고 나머지는 실행 (사용자 2026-10-20).
+    (실행할 칸, 건너뛸 칸) 을 돌려준다. 프리셋 파일을 못 읽으면 떼지 않는다 (validate_site 가 알린다)."""
+    try:
+        presets = {x["no"]: x for x in status.read_presets()}
+    except ValueError:
+        return chosen, []
+    def bad(site):
+        p = presets.get(site.get("Preset")) if isinstance(site, dict) and status.REPLAY_ACTION in site_actions(site) else None
+        return bool(p and p.get("record")) and status.login_mismatch(site, p["code"])
+    return [c for c in chosen if not bad(c[1])], [c for c in chosen if bad(c[1])]
+
+
 def validate_site(name, site):
     """설정 한 건을 검사해 문제 목록을 돌려준다."""
     problems = []
@@ -1476,6 +1489,12 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
             log(f"실행할 사이트가 없습니다. (Stts={STTS_RUN}인 사이트가 없습니다)")
             return 1
 
+    chosen, skipped = split_mismatched(chosen)
+    for name, site in skipped:
+        log(f"  ! {name}: 프리셋 {site.get('Preset')}의 아이디·비밀번호가 다른 사이트의 것이라 이 프리셋은 건너뜁니다. 옵저버에서 다시 입력하여 주십시오.")
+    total = len(chosen) + len(skipped)      # 건너뛴 칸은 실패로 센다 - '성공 n / 전체' 와 끝 상태에 드러나게
+    if not chosen:
+        return 1
     problems = []
     for name, site in chosen:
         problems += validate_site(name, site)
@@ -1499,9 +1518,9 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         log(f"{len(chosen)}개 사이트를 {n}개씩 동시에 실행합니다. (창 {'숨김' if headless else '표시'}, 인증 사이트는 한 곳씩 인증)")
         started = time.time()
         done = run_parallel(chosen, n, headless, session_override)
-        log(f"=== 완료: 성공 {done}건 / 전체 {len(chosen)}건 ({time.time() - started:.0f}초) ===")
-        status.finish("success" if done == len(chosen) else "stopped")
-        return 0 if done == len(chosen) else 1
+        log(f"=== 완료: 성공 {done}건 / 전체 {total}건 ({time.time() - started:.0f}초) ===")
+        status.finish("success" if done == total else "stopped")
+        return 0 if done == total else 1
     log(f"{len(chosen)}개 사이트를 실행합니다. (창 {'숨김' if headless else '표시'})")
     done = 0
     with sync_playwright() as p:
@@ -1513,9 +1532,9 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
                             keep_open=keep_open):
                     done += 1
 
-            log(f"=== 완료: 성공 {done}건 / 전체 {len(chosen)}건 ===")
+            log(f"=== 완료: 성공 {done}건 / 전체 {total}건 ===")
             # 창을 열어두고 기다리기 전에 닫는다. 기다리는 동안은 '끝난' 상태로 보여야 한다.
-            status.finish("success" if done == len(chosen) else "stopped")
+            status.finish("success" if done == total else "stopped")
             if keep_open:
                 log("창을 열어 둔 채 대기합니다. 종료하려면 Ctrl+C를 눌러 주십시오.")
                 try:
@@ -1526,7 +1545,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         finally:
             browser.close()
 
-    return 0 if done == len(chosen) else 1
+    return 0 if done == total else 1
 
 
 def main():

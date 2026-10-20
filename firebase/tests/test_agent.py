@@ -1307,8 +1307,8 @@ with tempfile.TemporaryDirectory() as d:
         # 업체 안 복사 - 결과 글, 거절된 칸은 뒤에
         copy_t = dict(sent, from_pc="pc_b", by="u1", presets=[dict(fixed, no=2, code="034", name="쿠팡"), dict(fixed, no=3, code="012", name="겹침")])
         tc = TransferClient(gets=[copy_t])
-        msg = acts_with(tc)["import_preset"]({"tid": TID, "slots": [2, 3]}, {"key": "k4", "by": "u1", "expires_at": 3600})
-        check(msg == "PC pc_b의 프리셋 1개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오. 변경하지 못한 프리셋이 있습니다. 3 (프리셋 1와(과) 같은 사이트코드 012를 사용합니다.)",
+        msg = acts_with(tc)["import_preset"]({"tid": TID, "slots": [2, 3], "from_label": "창고 PC"}, {"key": "k4", "by": "u1", "expires_at": 3600})
+        check(msg == "창고 PC의 프리셋 1개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오. 변경하지 못한 프리셋이 있습니다. 3 (프리셋 1와(과) 같은 사이트코드 012를 사용합니다.)",
               f"복사 결과 글 + 거절된 칸 ({msg})")
         s2 = st.read_user_config()["Sites"]["PRESET2"]
         check(st.read_presets()[1]["name"] == "쿠팡" and s2["ID"] == "" and s2["PW"] == "" and s2["Stts"] == 9, "다른 사이트코드 새 칸: 아이디·비밀번호 없이 꺼짐")

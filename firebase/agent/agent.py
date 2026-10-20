@@ -912,7 +912,9 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
             if meta.get("by") == ADMIN_TOOL_BY:
                 lines = [f"총괄 계정이 프리셋 {no}을(를) 변경하였습니다. (이전 기록 보관)" for no in done]
             else:
-                lines = [f"PC {got[0].get('from_pc')}의 프리셋 {len(done)}개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."]
+                label = args.get("from_label") if isinstance(args, dict) and isinstance(args.get("from_label"), str) else ""
+                label = label.strip()[:40] or f"PC {got[0].get('from_pc')}"     # 업체 웹이 보낸 PC 이름, 옛 웹이면 PC 코드
+                lines = [f"{label}의 프리셋 {len(done)}개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."]
             note(meta, lines + ([rejected_text(rejected).strip()] if rejected else []))
         try:
             client.delete(path)                  # 못 지우면 6시간 뒤 주기 점검이 지운다

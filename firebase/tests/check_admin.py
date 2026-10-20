@@ -612,6 +612,11 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('flash').textContent.includes('기록이 없습니다')", timeout=15000)
     check(page.text_content("#flash") == "가져오지 못했습니다. 프리셋 2에 기록이 없습니다." and "bad" in (page.get_attribute("#flash", "class") or "")
           and not page.is_disabled(f"{box} button.preset-export[data-no='2']"), f"[가져오기] 가 failed 면 사유를 빨간 알림으로, 단추는 다시 열린다 ({page.text_content('#flash')})")
+    # 연달아 보낸 명령: 위 [되돌리기] 뒤에 [가져오기] 를 또 보냈어도 [되돌리기] 의 결과를 알린다 (예전엔 마지막 명령만 봤다, 사용자 2026-10-20)
+    rk = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "restore_preset")
+    db_patch(f"{CMDS}/{rk}", {"state": "done", "started_at": int(time.time()), "ended_at": int(time.time()), "result": "프리셋 2을(를) 이전 기록으로 되돌렸습니다."})
+    page.wait_for_function("document.getElementById('flash').textContent.includes('되돌렸습니다')", timeout=15000)
+    check(True, "앞에 보낸 [되돌리기] 의 결과도 알린다")
     # 최종 고침 B3: 파일 대화상자 취소는 조용히, 칸 번호가 1~40 정수가 아니면 확인 창 전에 안내
     page.evaluate("document.getElementById('flash').classList.add('hide')")
     page.set_input_files(f"{box} input[type=file]", [])

@@ -391,7 +391,7 @@ async function copyPresets() {
   // 전송 id: 영문 소문자·숫자 20자 (ops.newTid·agent.TRANSFER_RE 와 같은 꼴)
   const tid = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, "0")).join("");
   await locked(() => sendPair(c, [[c.pcId, "export_preset", { tid, nos: picked.map(([n]) => n), with_phone: true }],
-                                  [to, "import_preset", { tid, slots }]], "프리셋 복사", () => !!root));
+                                  [to, "import_preset", { tid, slots, from_label: pcLabel(c.pcId) }]], "프리셋 복사", () => !!root));   // 결과 글에 PC 이름 (사용자 2026-10-20)
 }
 
 // --- 동시 실행 (사용자 2026-10-16) ---------------------------------

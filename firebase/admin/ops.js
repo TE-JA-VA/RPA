@@ -303,7 +303,9 @@ export async function pcUpdateStatus(cid, pcId) {
     started_at: c.started_at ?? null, result: c.result ?? null } : null;
   const p = recent.filter(([, x]) => PRESET_TYPES.includes(x.type)).at(-1);
   const preset = p ? { key: p[0], type: p[1].type, state: p[1].state, result: p[1].result ?? null } : null;
-  return { version: live.version ?? null, update: live.update ?? null, cmd, presets: Array.isArray(live.presets) ? live.presets : null, preset,
+  // 최근 프리셋 명령 모두 (명령 key → 상태) - 연달아 보내도 화면이 앞 명령의 결과까지 따라가게 (사용자 2026-10-20)
+  const preset_cmds = Object.fromEntries(recent.filter(([, x]) => PRESET_TYPES.includes(x.type)).map(([k, x]) => [k, { state: x.state, result: x.result ?? null }]));
+  return { version: live.version ?? null, update: live.update ?? null, cmd, presets: Array.isArray(live.presets) ? live.presets : null, preset, preset_cmds,
     preset_transfer: live.preset_transfer ?? null };   // 프리셋 명령을 아는 에이전트(agent.PRESET_TRANSFER) - 없으면 화면이 단추를 막는다
 }
 // 프리셋 가져오기·넣어 주기·되돌리기 (설계 2026-10-19 4.1절). 전송 자리 apps/rpa/transfers/{cid}/{tid} 에 잠깐 올렸다 지운다.

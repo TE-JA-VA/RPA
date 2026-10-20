@@ -694,14 +694,19 @@ class App:
         self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
         self.senders_var.trace_add("write", lambda *a: self._field_changed())
         src = tk.Frame(form, bg=CARD)               # 주문 수집용 엑셀파일 경로 (사용자 2026-10-14)
-        src.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        src.grid(row=3, column=0, columnspan=4, sticky="we", pady=(8, 0))
         tk.Label(src, text="주문 수집용 엑셀파일 경로", font=F, bg=CARD, fg=MUTED).pack(side="left")
         for value, label in (("shop", "쇼핑몰"), ("mail", "메일 첨부파일")):
             tk.Radiobutton(src, text=label, value=value, variable=self.source_var, font=F, bg=CARD, activebackground=CARD,
                            cursor="hand2", command=self._source_changed).pack(side="left", padx=(12, 0))
+        self.del_btn = tk.Button(src, text="프리셋 삭제", command=self.remove_preset, font=F_SMALL, relief="flat", bd=0, padx=8, pady=1,
+                                 bg=CARD, fg=MUTED, activebackground=LINE, highlightthickness=1, highlightbackground=LINE,
+                                 cursor="hand2")     # 제목 줄 [−] 와 같은 일 - 찾기 쉬운 자리에 하나 더 (사용자 2026-10-20)
+        self.del_btn.pack(side="right")
         self.prefix_label = tk.Label(form, text="메일 시작 문구", font=F, bg=CARD, fg=MUTED)
         self.prefix_entry = self._entry(form, self.prefix_var, 12)
         self.prefix_var.trace_add("write", lambda *a: self._field_changed())
+        form.columnconfigure(0, minsize=self.prefix_label.winfo_reqwidth())    # '메일 시작 문구' 가 나타나도 칸이 옆으로 밀리지 않게 (사용자 2026-10-20)
         for col in (1, 3):              # 왼쪽(이름·아이디·인증 휴대폰)·오른쪽(사이트코드·비밀번호·발신번호) 칸을 같은 너비로 (사용자 2026-10-13)
             form.columnconfigure(col, weight=1, uniform="field")
         self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
@@ -774,6 +779,8 @@ class App:
             b.grid(row=0, column=i % PRESETS_PER_ROW, sticky="we", padx=(0, 4))
         small = dict(font=(UI, 13, "bold"), relief="flat", bd=0, width=3, pady=1, bg=CARD, fg=MUTED, activebackground=LINE,
                      highlightthickness=1, highlightbackground=LINE)
+        can_del = len(self.presets) > MIN_PRESETS and not busy
+        self.del_btn.config(state="normal" if can_del else "disabled", cursor="hand2" if can_del else "arrow")
         if len(self.presets) > MIN_PRESETS:
             tk.Button(self.preset_tools, text="−", command=self.remove_preset, state="disabled" if busy else "normal",
                       cursor="hand2", **small).pack(side="right", padx=(2, 0))

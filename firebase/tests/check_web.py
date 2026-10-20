@@ -896,10 +896,10 @@ with sync_playwright() as pw:
     tid = (exp[0].get("args") or {}).get("tid", "") if exp else ""
     check(len(exp) == 1 and exp[0]["args"] == {"tid": tid, "nos": [1, 2], "with_phone": True} and re.fullmatch(r"[a-z0-9]{20}", tid or "") is not None,
           f"지금 PC 에 export_preset (tid 20자, 휴대폰 포함) ({exp})")
-    check(len(imp) == 1 and imp[0]["args"] == {"tid": tid, "slots": [1, 5]} and imp[0]["by"] == admin_uid, f"받을 PC 에 같은 tid 의 import_preset ({imp})")
+    check(len(imp) == 1 and imp[0]["args"] == {"tid": tid, "slots": [1, 5], "from_label": "사무실 PC"} and imp[0]["by"] == admin_uid, f"받을 PC 에 같은 tid 의 import_preset ({imp})")
     key = next(k for k, v in (db_get("apps/rpa/commands/c_demo/pc_x") or {}).items() if v.get("type") == "import_preset")
     db_patch(f"apps/rpa/commands/c_demo/pc_x/{key}", {"state": "done", "started_at": 1, "ended_at": 2,   # agent.do_import 의 결과 글
-                                                        "result": "PC pc_office의 프리셋 2개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."})
+                                                        "result": "사무실 PC의 프리셋 2개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."})
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('복사하였습니다')", timeout=10000)
     check(page.locator('#toasts [data-id="act"].ok').count() == 1, "받을 PC 의 결과가 토스트로")
     # 최종 고침 B4: 보낼 PC 의 export_preset 이 failed 면 (받을 PC 는 명령 만료까지 기다린다) 그 사유를 바로 알리고 잠금을 푼다

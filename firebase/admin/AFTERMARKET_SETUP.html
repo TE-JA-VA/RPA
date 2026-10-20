@@ -341,16 +341,19 @@ function pcRowEl(d, p, rel) {
 // --- 프리셋 가져오기·넣어 주기·되돌리기 (설계 2026-10-19 4.1절) - PC 줄 아래 펼침. 파일(autopilot-preset)에는 아이디·비밀번호가 없다 ---
 const PRESET_END = ["done", "failed", "expired"];
 const pause = (ms) => new Promise((ok) => setTimeout(ok, ms));
-// 관리 화면이 보낸 프리셋 명령(key)이 끝날 때까지 2초마다 - 끝나면 결과를 알리고 펼침을 새로 그린다. 펼침을 접으면(화면에서 빠지면) 멈춘다
-async function followPreset(d, p, key, panel) {
-  for (let i = 0; i < 320 && panel.isConnected; i++) {           // 명령 만료(600초)보다 조금 더
+// 관리 화면이 보낸 프리셋 명령(key)이 끝날 때까지 2초마다 - 끝나면 결과를 알리고 펼침을 새로 그린다. 펼침을 접으면 멈춘다.
+// 명령마다 따로 본다 (preset_cmds) - 연달아 보내도 앞 명령의 결과가 묻히지 않고, 다른 명령이 펼침을 새로 그려도 계속 따라간다 (사용자 2026-10-20)
+async function followPreset(d, p, key) {
+  const panel = () => document.getElementById(`pc-${p.pcId}-presets`);
+  for (let i = 0; i < 320 && panel(); i++) {           // 명령 만료(600초)보다 조금 더
     await pause(2000);
     let s;
     try { s = await api("GET", `/api/companies/${d.cid}/pcs/${p.pcId}/status`); } catch { continue; }
-    if (s.preset?.key !== key || !PRESET_END.includes(s.preset.state)) continue;
-    flash(s.preset.state === "done" ? s.preset.result : `변경하지 못했습니다. ${s.preset.result ?? "PC가 응답하지 않습니다."}`, s.preset.state !== "done");
+    const c = s.preset_cmds?.[key];
+    if (!c || !PRESET_END.includes(c.state)) continue;
+    flash(c.state === "done" ? c.result : `변경하지 못했습니다. ${c.result ?? "PC가 응답하지 않습니다."}`, c.state !== "done");
     Object.assign(p, s);
-    if (panel.isConnected) panel.replaceWith(presetPanel(d, p));
+    panel()?.replaceWith(presetPanel(d, p));
     return;
   }
 }
@@ -366,8 +369,8 @@ async function exportPreset(d, p, no) {
       document.body.append(a); a.click(); a.remove();
       return flash(`프리셋 ${no}을(를) 파일로 다운로드하였습니다.`);
     }
-    const s = await api("GET", `/api/companies/${d.cid}/pcs/${p.pcId}/status`);
-    if (s.preset?.key === r.key && (s.preset.state === "failed" || s.preset.state === "expired")) throw new Error(`가져오지 못했습니다. ${s.preset.result ?? ""}`.trim());
+    const c = (await api("GET", `/api/companies/${d.cid}/pcs/${p.pcId}/status`)).preset_cmds?.[r.key];
+    if (c?.state === "failed" || c?.state === "expired") throw new Error(`가져오지 못했습니다. ${c.result ?? ""}`.trim());
   }
   throw new Error("PC가 응답하지 않습니다.");
 }
@@ -387,7 +390,7 @@ function presetPanel(d, p) {
     if (!confirm(`프리셋 ${n}을(를) 이 파일로 변경합니다. 기록이 있으면 덮어쓰며 이전 기록은 PC에 보관됩니다. 진행하시겠습니까?`)) return;
     const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/import`, { file: loaded, slot: n });
     flash(`프리셋 ${n} 넣어 주기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
-    followPreset(d, p, r.key, panel);
+    followPreset(d, p, r.key);
   }) }, "넣어 주기");
   const rows = (p.presets ?? []).map((x) => {
     const get = el("button", { class: "preset-export", "data-no": x.no, disabled: old, onclick: () => act(get, () => exportPreset(d, p, x.no)) }, "가져오기");
@@ -395,7 +398,7 @@ function presetPanel(d, p) {
       if (!confirm(`프리셋 ${x.no}을(를) 이전 기록으로 되돌리시겠습니까?`)) return;
       const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/${x.no}/restore`, {});
       flash(`프리셋 ${x.no} 되돌리기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
-      followPreset(d, p, r.key, panel);
+      followPreset(d, p, r.key);
     }) }, "되돌리기") : null;
     return el("tr", { class: "preset" }, el("td", { class: "num" }, x.no), el("td", {}, x.name || "(이름 없음)"), el("td", {}, x.code || "-"),
       el("td", { class: "num" }, `${x.steps ?? 0}단계`), el("td", {}, el("div", { class: "row" }, get, back)));
