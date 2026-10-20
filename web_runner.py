@@ -972,8 +972,8 @@ def start_routine_together():
     if mode == "off":
         log(f"전체 실행 방식이 '{status.TOGETHER_MODES[mode]}'이므로 사이트 수집이 끝난 뒤 PROCESS를 실행합니다.")
         return None
-    if getattr(sys, "frozen", False):
-        cmd = [os.path.join(os.path.dirname(sys.executable), ROUTINE_EXE)]
+    if status.packaged():   # 설치판 - Nuitka 는 sys.frozen 이 없어 소스 쪽으로 빠져 Prepare_RPA.exe 를 다시 띄웠다 (10-20)
+        cmd = [os.path.join(status.program_dir(), ROUTINE_EXE)]
     else:
         cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_routine.py")]
     env = {k: v for k, v in os.environ.items() if k != status.ALL_RUN_ENV}

@@ -333,6 +333,13 @@ cmd, env = spawned[0] if spawned else (None, {})
 check("웰라이프 전체 실행이면 루틴을 함께 띄운다 - 함께 표시는 주고 전체 실행 표시는 빼서",
       together is not None and env.get(status.TOGETHER_ENV) == "1" and status.ALL_RUN_ENV not in env
       and cmd[-1].endswith("run_routine.py"), str(cmd))
+spawned.clear()
+_saved_pk = status.packaged, status.program_dir
+status.packaged, status.program_dir = (lambda: True), (lambda: r"C:\RPA")
+web_runner.start_routine_together()
+status.packaged, status.program_dir = _saved_pk
+check("설치판(Nuitka 는 sys.frozen 이 없다)은 exe 가 놓인 폴더의 ERPia_RPA.exe 를 띄운다 (10-20: Prepare_RPA.exe 를 다시 띄웠다)",
+      bool(spawned) and spawned[0][0] == [os.path.join(r"C:\RPA", web_runner.ROUTINE_EXE)], str(spawned))
 holds = [True, True, False]
 status.keys_held = lambda since: holds.pop(0) if holds else False
 t0 = time.time()
