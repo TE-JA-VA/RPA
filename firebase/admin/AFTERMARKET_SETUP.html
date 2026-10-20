@@ -393,7 +393,8 @@ function presetPanel(d, p) {
     followPreset(d, p, r.key);
   }) }, "넣어 주기");
   const rows = (p.presets ?? []).map((x) => {
-    const get = el("button", { class: "preset-export", "data-no": x.no, disabled: old, onclick: () => act(get, () => exportPreset(d, p, x.no)) }, "가져오기");
+    const get = el("button", { class: "preset-export", "data-no": x.no, disabled: old || !x.steps,   // 기록 없는 칸(0단계)은 PC 가 거절만 한다 (사용자 2026-10-20)
+      title: x.steps ? "" : "기록이 없는 프리셋입니다.", onclick: () => act(get, () => exportPreset(d, p, x.no)) }, "가져오기");
     const back = x.backup ? el("button", { class: "preset-restore", "data-no": x.no, disabled: old, onclick: () => act(back, async () => {
       if (!confirm(`프리셋 ${x.no}을(를) 이전 기록으로 되돌리시겠습니까?`)) return;
       const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/${x.no}/restore`, {});

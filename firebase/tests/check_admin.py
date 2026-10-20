@@ -515,17 +515,20 @@ with sync_playwright() as pw:
             "no": 1, "name": "네이버 스마트스토어", "code": "001", "record": REC}
     db_put(f"apps/rpa/live/{CID}/{PC}/presets", [
         {"no": 1, "name": "네이버 스마트스토어", "code": "001", "steps": 2, "saved_at": "2026-10-19T09:00:00", "has_login": True, "on": True, "backup": False},
-        {"no": 2, "name": "쿠팡", "code": "002", "steps": 5, "saved_at": "2026-10-19T09:00:00", "has_login": False, "on": False, "backup": True}])
+        {"no": 2, "name": "쿠팡", "code": "002", "steps": 5, "saved_at": "2026-10-19T09:00:00", "has_login": False, "on": False, "backup": True},
+        {"no": 3, "name": "프리셋 3", "code": "", "steps": 0, "saved_at": None, "has_login": False, "on": False, "backup": False}])
     db_put(f"apps/rpa/live/{CID}/{PC}/preset_transfer", 1)
     open_company(page, CID)
     box = f"#pc-{PC}-presets"
     page.click(f"#pc-{PC} button.preset-open")
     page.wait_for_selector(box, timeout=10000)
     rows = [r.strip() for r in page.locator(f"{box} tr.preset").all_text_contents()]
-    check(len(rows) == 2 and all(w in rows[0] for w in ("1", "네이버 스마트스토어", "001", "2")) and all(w in rows[1] for w in ("2", "쿠팡", "002", "5")),
+    check(len(rows) == 3 and all(w in rows[0] for w in ("1", "네이버 스마트스토어", "001", "2")) and all(w in rows[1] for w in ("2", "쿠팡", "002", "5")),
           f"[프리셋] 을 누르면 그 PC 아래 프리셋마다 번호·이름·사이트코드·단계 수 ({rows})")
-    check(page.locator(f"{box} button.preset-export").count() == 2 and page.locator(f"{box} button.preset-restore").count() == 1
+    check(page.locator(f"{box} button.preset-export").count() == 3 and page.locator(f"{box} button.preset-restore").count() == 1
           and page.get_attribute(f"{box} button.preset-restore", "data-no") == "2", "프리셋마다 [가져오기], 보관이 있는 칸에만 [되돌리기]")
+    check(page.is_disabled(f"{box} button.preset-export[data-no='3']") and not page.is_disabled(f"{box} button.preset-export[data-no='1']"),
+          "기록이 없는 칸(0단계)은 [가져오기] 가 꺼져 있다 (사용자 2026-10-20)")
     check("가져온 파일에는 아이디·비밀번호가 없습니다. 검색어 등 입력한 값은 포함될 수 있습니다." in page.text_content(box), "안내 한 줄")
     dialogs.clear()
     with page.expect_download(timeout=30000) as dl:
@@ -601,7 +604,7 @@ with sync_playwright() as pw:
     check(f"프리셋 되돌리기 {CID}/{PC} 2" in open(LOG, encoding="utf-8").read(), "관리 기록에 되돌리기 한 줄")
     code, d = api("GET", f"/api/companies/{CID}")
     pcrow = next((x for x in d.get("pcs", []) if x["pcId"] == PC), {}) if code == 200 else {}
-    check([x["no"] for x in pcrow.get("presets") or []] == [1, 2], "업체 상세의 PC 줄에 프리셋 요약 (live.presets)", str(pcrow)[:200])
+    check([x["no"] for x in pcrow.get("presets") or []] == [1, 2, 3], "업체 상세의 PC 줄에 프리셋 요약 (live.presets)", str(pcrow)[:200])
     check(pcrow.get("preset_transfer") == 1, "업체 상세의 PC 줄에 live.preset_transfer (새 명령을 아는 PC 표시)", str(pcrow)[:200])
     # 최종 고침 B5: [가져오기] 가 failed 로 끝나면 그 사유를 알린다
     page.evaluate("document.getElementById('flash').classList.add('hide')")
@@ -644,9 +647,9 @@ with sync_playwright() as pw:
     page.click(f"#pc-{PC} button.preset-open")
     page.wait_for_selector(box, timeout=10000)
     btns = page.evaluate(f"[...document.querySelectorAll('{box} button')].map((b) => [b.className, b.disabled])")
-    check(sorted(btns) == [["preset-export", True], ["preset-export", True], ["preset-import", True], ["preset-restore", True]]
+    check(sorted(btns) == [["preset-export", True]] * 3 + [["preset-import", True], ["preset-restore", True]]
           and "이 PC를 새 버전으로 업데이트하면 사용할 수 있습니다." in page.text_content(box),
-          f"옛 버전 PC 는 단추 넷이 모두 잠기고 '(업데이트 필요)' 안내 ({btns})")
+          f"옛 버전 PC 는 단추가 모두 잠기고 '(업데이트 필요)' 안내 ({btns})")
     call("DELETE", f"{DB}/apps/rpa/transfers/{CID}.json?ns={NS}", None, OWNER)
 
     print("화면 다듬기 (사용자 2026-10-07)")
