@@ -27,7 +27,7 @@ PAGE = """<!doctype html><meta charset="utf-8"><title>메일</title>
 <script>
 function show() { const m = /ukey=(\\w+)/.exec(location.hash); document.getElementById('list').style.display = m ? 'none' : 'block';
   document.getElementById('view').style.display = m ? 'block' : 'none';
-  if (m) { const li = document.querySelector('li[data-key=' + m[1] + ']'); document.getElementById('vt').textContent = li.querySelector('.m_subject').textContent;
+  if (m) { const li = document.querySelector('li[data-key=' + m[1] + ']') || [...document.querySelectorAll('li.m_data')].find(l => l.getAttribute('onclick').includes('ukey=' + m[1] + "'")); document.getElementById('vt').textContent = li.querySelector('.m_subject').textContent;
     const a = document.getElementById('att'); a.dataset.k = m[1]; a.textContent = 'file_' + m[1] + '.xlsx (3 KB)'; } }
 window.addEventListener('hashchange', show); show();
 </script>"""
@@ -36,7 +36,14 @@ window.addEventListener('hashchange', show); show();
 MARKS = {}        # key → 제목 칸 앞에 붙는 것 (비즈메카: 아이콘·숨은 글자 span.blind '중요'·'전달')
 
 
+KEYLESS = {}      # 켜면 네이버 메일처럼: 줄에 고유 표시가 없고, 제목 칸 앞에 숨은 글자 '메일 제목', 뒤에 받은 시각 (사용자 2026-10-20)
+
+
 def rows():
+    if KEYLESS:
+        return "".join(f'<li class="m_data unread" onclick="location.hash=\'act=VIEW&ukey={k}\'">'
+                       f'<span class="m_write">김창민</span> <p class="m_subject"><span class="blind">메일 제목</span>{t}</p>'
+                       f' <span class="m_time">{KEYLESS.get(k, "")}</span></li>' for k, t in MAILS)
     return "".join(f'<li class="m_data unread" data-key="{k}" onclick="location.hash=\'act=VIEW&ukey={k}\'">'
                    f'<span class="m_write">보낸이</span> <p class="m_subject">{MARKS.get(k, "")}{t}</p></li>' for k, t in MAILS)
 
@@ -165,6 +172,44 @@ m = rec.MailMemory(mem_path)
 n = len(m.keys)
 m.clear()
 check("기억 지우기", n >= 4 and not rec.MailMemory(mem_path).keys, n)
+
+# 네이버 메일처럼 줄에 고유 표시가 없는 목록 (사용자 2026-10-20): 저장 때 연 메일 제목은 숨은 글자 없이, 같은 제목 메일은 줄마다 따로
+MAILS[:] = [("n1", "[창민사이트]"), ("n2", "[공통사이트]"), ("n3", "[창민사이트]")]
+KEYLESS.update(n1="오후 01:57", n2="오후 01:57", n3="오후 01:57")      # n1·n3 은 보이는 줄 글자까지 같다
+
+
+def human2(page):
+    page.wait_for_timeout(500)
+    page.locator("li.m_data").nth(0).locator("p.m_subject").click()
+    page.wait_for_timeout(500)
+    with page.expect_download():
+        page.click("#att")
+    page.wait_for_timeout(500)
+
+
+r = rec.record(BASE + "/mail", os.path.join(OUT, "rec2.json"), headless=True, human=human2)
+steps2 = r["steps"]
+i2 = next((n for n, x in enumerate(steps2) if x["kind"] == "click" and x.get("row")), None)
+row2 = steps2[i2]["row"] if i2 is not None else {}
+check("고유 표시 없는 목록: 줄 key 는 비고 누른 줄 번호(at)를 남긴다, 누른 칸 글자에는 숨은 '메일 제목' 이 붙는다",
+      row2.get("key") == "" and row2.get("at") == 0 and "메일 제목[창민사이트]" in steps2[i2]["target"]["text"],
+      (row2.get("key"), row2.get("at"), steps2[i2].get("target", {}).get("text") if i2 is not None else None))
+check("시작 문구 '[창민사이트' 로 그 단계를 찾는다 - 보이는 제목으로 (예전엔 '메일 제목[창민사이트]' 로 봐 저장을 막았다)",
+      rec.auto_pick(steps2, "[창민사이트") == i2, rec.auto_pick(steps2, "[창민사이트"))
+old = [dict(x, row={k: v for k, v in x["row"].items() if k != "at"}) if x.get("row") else x for x in steps2]
+check("at 이 없는 옛 기록도 누른 칸 글자와 같은 줄의 보이는 제목으로 찾는다", rec.auto_pick(old, "[창민사이트") == i2)
+check("줄 기억 표시: 고유 표시가 없으면 보이는 줄 글자, 똑같은 줄은 몇 번째로 가른다",
+      rec.row_ids([("", "t", "[창민사이트]", "김창민 [창민사이트] 오후 01:57"), ("k", "t", "x", "y"), ("", "t", "[창민사이트]", "김창민 [창민사이트] 오후 01:57")])
+      == ["줄:김창민 [창민사이트] 오후 01:57", "k", "줄:김창민 [창민사이트] 오후 01:57#2"])
+rec.set_pick(steps2, i2, "[창민사이트")
+MAILS.insert(0, ("n4", "[창민사이트]"))
+KEYLESS["n4"] = "오후 01:58"
+mem2 = os.path.join(OUT, "mem", "PRESET2.json")
+ok, rp, lines = replay("keyless", rec.MailMemory(mem2))
+check("같은 제목 메일 셋(n4·n1·n3)을 줄마다 따로 연다 - 예전엔 제목으로 찾아 첫 줄만 세 번",
+      ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_n4.xlsx", "(013)file_n1.xlsx", "(013)file_n3.xlsx"], (rp.saved, [x for x in lines if "메일" in x]))
+ok, rp, lines = replay("keyless_again", rec.MailMemory(mem2))
+check("다시 돌리면 셋 다 기억해 대상 없음", ok and rp.no_target and not rp.saved, (rp.saved, rp.results[-2:]))
 
 srv.shutdown()
 print("실패:", fails if fails else "없음")

@@ -151,7 +151,8 @@ JS = r"""
     const inner = segs.join(' ');
     __SEEN__
     const cell = r => (inner ? r.querySelector(inner) : null) || r;
-    return {sel, inner, key: rowKey(row), list: rows.slice(0, 200).map(r => ({k: rowKey(r), t: norm(cell(r).textContent).slice(0, 120), s: seenText(cell(r))}))};
+    return {sel, inner, key: rowKey(row), at: rows.indexOf(row),   // at = 누른 줄 - 고유 표시(key)가 없는 목록(네이버 메일)에서 그 줄을 찾는다
+            list: rows.slice(0, 200).map(r => ({k: rowKey(r), t: norm(cell(r).textContent).slice(0, 120), s: seenText(cell(r))}))};
   }
   function send(kind, el, extra) {
     pend = null;                  // 다른 조작이 먼저 왔다 - 손가락 커서 아닌 누르기는 그 사이 아무것도 안 바뀌었다
@@ -572,9 +573,20 @@ def pick_body(steps, i):
     return next((j for j in range(len(steps) - 1, i, -1) if steps[j].get("download")), None)
 
 
-def mail_key(key, title):
-    """처리한 메일을 기억하는 표시 - 줄의 고유 표시 (data-key 등), 없으면 제목 글자."""
-    return key or "제목:" + title
+def row_ids(rows):
+    """메일 목록 줄마다 처리 기억 표시 - 줄의 고유 표시(data-key 등), 없으면 보이는 줄 글자(보낸이·제목·시각) + 같은 글자 줄 중 몇 번째.
+    네이버 메일은 고유 표시가 없어 제목만으로는 같은 제목 메일이 한 통으로 보였다 - 한 통을 받으면 나머지는 '이미 처리',
+    목록에서 다시 찾을 때도 첫 줄만 (사용자 2026-10-20). rows = ROWS_JS 의 [(key, 칸 글자, 보이는 제목, 보이는 줄 글자)]."""
+    count, out = {}, []
+    for k, t, seen, line in rows:
+        if k:
+            out.append(k)
+            continue
+        base = line or seen or t
+        n = count.get(base, 0)
+        count[base] = n + 1
+        out.append(f"줄:{base}" + (f"#{n + 1}" if n else ""))
+    return out
 
 
 def title_starts(prefix, *titles):
@@ -585,14 +597,20 @@ def title_starts(prefix, *titles):
 
 def auto_pick(steps, prefix):
     """메일 시작 문구(프리셋 칸)로 '메일마다' 로 바꿀 단계 - 목록 줄 누르기 중 연 메일의 제목이 prefix 로 시작하는 마지막 것.
-    없으면 None (옵저버가 저장을 막는다). 연 줄의 제목은 기록 때 목록에서 그 줄(key)의 보이는 제목, 아니면 누른 글자."""
+    없으면 None (옵저버가 저장을 막는다). 연 줄의 제목은 기록 때 목록에서 그 줄(key, 없으면 누른 줄 at)의 보이는 제목, 아니면 누른 글자."""
     for i in range(len(steps) - 1, -1, -1):
         s = steps[i]
         row = s.get("row") if s["kind"] == "click" else None
         if not row:
             continue
-        mine = [x for x in row.get("list", []) if row.get("key") and x["k"] == row["key"]]
-        titles = [t for x in mine for t in (x.get("s"), x["t"])] + [(s.get("target") or {}).get("text")]
+        rows, text = row.get("list", []), (s.get("target") or {}).get("text") or ""
+        if row.get("key"):
+            mine = [x for x in rows if x["k"] == row["key"]]
+        elif isinstance(row.get("at"), int) and 0 <= row["at"] < len(rows):
+            mine = [rows[row["at"]]]
+        else:                   # 옛 기록 - 누른 칸 글자와 같은 줄 (그 줄의 보이는 제목에는 숨은 글자 '메일 제목' 이 없다, 네이버 2026-10-20)
+            mine = [x for x in rows if text and x["t"] and (x["t"][:80] in text or text in x["t"])]   # 누른 칸이 제목 칸보다 크거나 작을 수 있다
+        titles = [t for x in mine for t in (x.get("s"), x["t"])] + [text]
         if title_starts(prefix, *titles):
             return i
     return None
@@ -628,12 +646,12 @@ class MailMemory:
         self.save()
 
 
-# 목록 줄들 (key, 제목) - JSON 글자로 주고받는다 (사이트가 Map 을 바꿔치기해도, SNAP_JS 와 같다)
+# 목록 줄들 (key, 칸 글자, 보이는 제목, 보이는 줄 글자) - JSON 글자로 주고받는다 (사이트가 Map 을 바꿔치기해도, SNAP_JS 와 같다)
 ROWS_JS = r"""a => { const o = JSON.parse(a), n = s => (s || '').replace(/\s+/g, ' ').trim();
   const key = r => r.getAttribute('data-key') || r.getAttribute('data-id') || r.getAttribute('data-uid') || r.id || '';
   __SEEN__
   return JSON.stringify([...document.querySelectorAll(o.sel)].map(r => { const c = (o.inner ? r.querySelector(o.inner) : null) || r;
-    return [key(r), n(c.textContent).slice(0, 120), seenText(c)]; })); }""".replace("__SEEN__", SEEN_JS)
+    return [key(r), n(c.textContent).slice(0, 120), seenText(c), seenText(r)]; })); }""".replace("__SEEN__", SEEN_JS)
 
 
 def otp_like(s, nxt=None):
@@ -1407,7 +1425,7 @@ class Replayer:
 
     # --- 메일 고르기 (사용자 2026-10-14) ---
     def _mail_rows(self, page, s, wait):
-        """s 를 기록한 목록의 줄들 [(key, 제목)]. wait 초 안에 줄이 안 보이면 빈 목록."""
+        """s 를 기록한 목록의 줄들 [(key, 칸 글자, 보이는 제목, 보이는 줄 글자)]. wait 초 안에 줄이 안 보이면 빈 목록."""
         row, end = s["row"], time.time() + wait
         while True:
             self._check_cancel()
@@ -1435,9 +1453,9 @@ class Replayer:
         frame, rows = self._mail_rows(page, s, self.step_timeout * self.step_tries)
         if frame is None or not rows:
             raise NotFound(f"{self.step_timeout * self.step_tries:.0f}초 동안 메일 목록을 찾지 못했습니다.")
-        hits = [(k, seen or t) for k, t, seen in rows if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
+        hits = [(rid, seen or t) for rid, (k, t, seen, line) in zip(row_ids(rows), rows) if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
         mem = None if self.pick_preview else self.mail_memory
-        todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or mail_key(*h) not in mem.keys]
+        todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or h[0] not in mem.keys]
         self.log(f"      제목이 '{prefix}' 로 시작하는 메일 {len(hits)}통 중 새 메일 {len(todo)}통")
         if len(todo) > MAIL_PICK_MAX:
             self.log(f"      메일은 한 번에 최대 {MAIL_PICK_MAX}개까지 처리할 수 있습니다. 나머지는 다음 실행 때 처리됩니다.")
@@ -1448,7 +1466,7 @@ class Replayer:
             self.results.append((i, "ok", "대상 없음"))
             self.results += [(j + 1, "skip", "대상 없음") for j in body]
             return end + 1
-        for n, (k, t) in enumerate(todo, 1):
+        for n, (rid, t) in enumerate(todo, 1):
             if n > 1:               # 앞 메일을 연 채다 - 목록으로 (메일 화면이 주소 # 만 바꾸는 비즈메카도 뒤로 가기로 돌아온다)
                 try:
                     page.go_back(timeout=MAIL_BACK_WAIT * 1000)
@@ -1458,7 +1476,7 @@ class Replayer:
                 if not rows:
                     raise NotFound("메일 목록으로 돌아가던 중 문제가 발생했습니다.")
             self.log(f"      [{n}/{len(todo)}] 메일 열기: {t[:CUT] if self.hide_values else t}")
-            idx = next((x for x, r in enumerate(rows) if (r[0] == k if k else (r[2] or r[1]) == t)), None)
+            idx = next((x for x, r in enumerate(row_ids(rows)) if r == rid), None)
             if idx is None:
                 raise NotFound(f"메일을 목록에서 다시 찾지 못함: {t[:40]}")
             loc = frame.locator(s["row"]["sel"]).nth(idx)
@@ -1474,7 +1492,7 @@ class Replayer:
                     how = f"건너뜀 ({e})"
                 self.log(f"  {j + 1:2d}/{len(steps)} {describe(steps[j], self.hide_values)}  [{how}]")
             if mem is not None:
-                mem.add_all([mail_key(k, t)])   # 받기까지 다 한 메일만 - 실패한 메일은 다음 실행에서 다시
+                mem.add_all([rid])   # 받기까지 다 한 메일만 - 실패한 메일은 다음 실행에서 다시
                 mem.save()
         self.results.append((i, "ok", f"메일 {len(todo)}통"))
         self.results += [(j + 1, "ok", f"메일 {len(todo)}통") for j in body]
