@@ -12,6 +12,7 @@ const HTML = `
     <div>
       <h3 class="grp">ACTOR 오토파일럿 (사이트 수집)</h3>
       <div class="msg grp-note">쇼핑몰 사이트에서 주문 엑셀을 다운로드합니다.</div>
+      <div class="grp-cards">
       <div class="card hide" id="shop-card">
         <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
         <div id="shop-list"></div>
@@ -42,6 +43,7 @@ const HTML = `
         <div class="seg"><select id="tog-mode" aria-label="전체 실행 방식"></select></div>
         <div class="msg" id="tog-note"></div>
         <button class="apply" id="tog-apply" disabled>적용</button>
+      </div>
       </div>
       <h3 class="grp">PROCESS 오토파일럿</h3>
       <div class="msg grp-note">다운로드한 주문을 ERPia에서 처리합니다.</div>

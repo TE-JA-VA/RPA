@@ -357,6 +357,9 @@
   .settings-grid h3.grp { margin:4px 0 2px; font-size:14px; }
   .settings-grid h3.grp ~ h3.grp { margin-top:18px; }
   .settings-grid .grp-note { margin:0 0 8px; }
+  /* 한 묶음의 카드 사이는 gap 14px 하나 - 숨긴 카드·안내 줄(#shop-none)이 사이에 있어 '.card + .card' 가 안 걸려 붙어 보였다 (사용자 2026-10-20) */
+  .settings-grid .grp-cards { display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }
+  .settings-grid .grp-cards > .card + .card { margin-top:0; }
   #sch-days + .lbl { margin-top:18px; }
   .days-mini button { min-width:28px; padding:3px 6px; font-size:12px; }   /* 줄마다 요일 (판 3 PC) */   /* 요일 단추와 '시간' 사이를 띄운다 (사용자 2026-10-08) */
   /* 환경설정 안내 글자만 AIRBUS ECAM 색 - 중요도 빨강 > 호박색 > 초록 (사용자 2026-10-08). 밝은 모드는 같은 색상을 대비 4.5:1 까지 어둡게 */

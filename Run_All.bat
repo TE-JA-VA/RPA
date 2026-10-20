@@ -40,7 +40,7 @@ echo  1/2  ACTOR 오토파일럿 - 메일 첨부파일 내려받기
 echo ============================================================
 rem --no-keep-open : 브라우저를 닫아야 다음 단계로 넘어간다
 rem 웰라이프 업체는 ACTOR 가 수집하는 동안 PROCESS 를 함께 띄워 받은 엑셀을 바로 올린다 (2026-10-19).
-rem 그때 ACTOR 는 PROCESS 가 끝날 때까지 기다렸다가 100 + PROCESS 코드로 끝난다 - PROCESS 를 다시 띄우지 않는다.
+rem 그때 ACTOR 는 PROCESS 가 끝날 때까지 기다렸다가 100~103 (100 + ACTOR 실패 2 + PROCESS 실패 1) 으로 끝난다 - PROCESS 를 다시 띄우지 않는다.
 set RPA_ALL_RUN=1
 "%~dp0Prepare_RPA.exe" --all --no-keep-open
 set PREPARE_RC=%ERRORLEVEL%

@@ -873,6 +873,10 @@ with sync_playwright() as pw:
     reload_to(page, "settings")
     page.wait_for_selector("#copy-card:not(.hide)", timeout=10000)
     page.wait_for_function("document.querySelectorAll('#copy-to option').length === 2", timeout=10000)
+    gaps = page.evaluate("""() => { const cs = [...document.querySelectorAll('.grp-cards > .card')].filter((x) => x.offsetParent);
+      return [cs.map((x) => x.id), cs.slice(1).map((x, i) => Math.round(x.getBoundingClientRect().top - cs[i].getBoundingClientRect().bottom))] }""")
+    check(len(gaps[0]) >= 2 and "copy-card" in gaps[0] and set(gaps[1]) == {14},
+          f"ACTOR 카드 사이 간격은 모두 14px - 숨긴 안내 줄이 사이에 있어도 (사용자 2026-10-20) ({gaps})")
     opts = page.evaluate("Array.from(document.querySelectorAll('#copy-to option')).map(o => [o.value, o.textContent, o.disabled])")
     check(opts == [["pc_x", "창고 PC", False], ["pc_y", "옛 PC (업데이트 필요)", True]], f"받을 PC 는 지금 PC 를 뺀 나머지, 옛 버전 PC 는 선택 못 함 ({opts})")
     check(page.locator("#copy-list .copy-row").count() == 2, "기록이 있는 프리셋만 줄이 있다 (1·2)")
