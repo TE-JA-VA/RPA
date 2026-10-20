@@ -589,13 +589,27 @@ function paintButtons() {
 // 막대 = 충전 합계(wallet.granted) 대비 남은 양을 채운다. 색은 환경설정 안내와 같은 ECAM - 남은 것이 20% 미만이거나 다음 실행에
 // 모자라면 호박색, 0 이하면 빨강 (사용자 2026-10-19). 관리자는 '실행' 위 카드, 유저는 본문 맨 위 카드
 const TOKEN_LOW = 0.2;
-let walletAt, walletP = null, tokSeq = 0;
-function walletOf(balance) {                   // 충전 합계 - 남은 토큰이 바뀔 때만 다시 읽는다 (막대·사용량 카드가 같이 쓴다, 2026-10-14 읽기 한도)
-  if (walletAt !== balance || !walletP) {
-    walletAt = balance;
-    walletP = getDoc(doc(fs, "wallet", c.me.cid)).then((s) => s.data() || null).catch(() => { walletAt = undefined; return undefined; });
+let tokKey, tokP = null, tokSeq = 0;
+const TOKEN_REREAD_MS = 10 * 60 * 1000;
+// 남은 토큰 = 충전 합계 - 토큰 정보 생성(since) 뒤 실행 기록의 쓴 토큰 합 (agent.balance 와 같은 셈). PC 가 올린 값(live.tokens.balance)은
+// PC 마다 마지막으로 센 때가 달라 계정마다 다르게 보였다 (사용자 2026-10-20) - 화면이 직접 센다.
+// 그 PC 의 값이 바뀌었을 때(실행이 끝났다)와 10분마다만 다시 읽는다. 못 읽어도 다음 때까지 그대로 (현황마다 다시 읽으면 읽기 한도, 2026-10-14)
+// → undefined: 통장을 못 읽음, null: 통장 없음, {w, g, bal}: bal 은 합을 못 더했으면 null
+function serverTokens(t) {
+  const key = `${t?.balance}|${Math.floor(Date.now() / TOKEN_REREAD_MS)}`;
+  if (tokKey !== key || !tokP) {
+    tokKey = key;
+    tokP = getDoc(doc(fs, "wallet", c.me.cid)).then(async (snap) => {
+      const w = snap.data();
+      if (!w) return null;
+      const g = Number(w.granted) || 0;
+      const q = collection(fs, "runs", c.me.cid, "items");
+      const spent = await getAggregateFromServer(w.since ? query(q, where("started_at", ">=", w.since)) : q, { s: sum("cost") })
+        .then((r) => r.data().s ?? 0, () => null);
+      return { w, g, bal: spent === null ? null : g - spent };
+    }, () => undefined);
   }
-  return walletP;
+  return tokP;
 }
 const count = (v) => Number(v).toLocaleString("ko-KR");
 function paintTokens() {
@@ -604,24 +618,25 @@ function paintTokens() {
   const has = typeof t?.balance === "number";
   show($("token-card"), has);
   if (!has) { tokSeq++; return; }
-  const all = t.cost?.all ?? 0, state = t.balance <= 0 ? "bad" : t.balance < all ? "warn" : "good";
-  if (state === "bad") line.textContent = `토큰이 없습니다. (남은 토큰 ${count(t.balance)}개) 토큰을 충전한 뒤 실행하여 주십시오.`;
-  else if (state === "warn") line.textContent = `남은 토큰 ${count(t.balance)}개 · 전체 실행 1번에 ${count(all)}개. 잔여 토큰이 마이너스가 될 수 있습니다.`;
-  else line.textContent = all > 0 ? `전체 실행 1번에 ${count(all)}개 · 약 ${count(Math.floor(t.balance / all))}번 더 실행할 수 있습니다.` : "";
-  line.className = state === "good" ? "msg" : `msg ${state}`;
-  $("tok-left").textContent = `남은 토큰 ${count(t.balance)}개`;
-  bar.dataset.state = state;
   const seq = ++tokSeq;
-  walletOf(t.balance).then((w) => {
-    if (seq !== tokSeq) return;                  // 읽는 사이 남은 토큰이 바뀌었다
-    const g = Number(w?.granted), ok = Number.isFinite(g) && g > 0;
+  serverTokens(t).then((sv) => {
+    if (seq !== tokSeq) return;                  // 읽는 사이 현황이 다시 왔다
+    const bal = typeof sv?.bal === "number" ? sv.bal : t.balance;     // 못 셌으면 PC 가 올린 값
+    const all = t.cost?.all ?? 0, state = bal <= 0 ? "bad" : bal < all ? "warn" : "good";
+    if (state === "bad") line.textContent = `토큰이 없습니다. (남은 토큰 ${count(bal)}개) 토큰을 충전한 뒤 실행하여 주십시오.`;
+    else if (state === "warn") line.textContent = `남은 토큰 ${count(bal)}개 · 전체 실행 1번에 ${count(all)}개. 잔여 토큰이 마이너스가 될 수 있습니다.`;
+    else line.textContent = all > 0 ? `전체 실행 1번에 ${count(all)}개 · 약 ${count(Math.floor(bal / all))}번 더 실행할 수 있습니다.` : "";
+    line.className = state === "good" ? "msg" : `msg ${state}`;
+    $("tok-left").textContent = `남은 토큰 ${count(bal)}개`;
+    bar.dataset.state = state;
+    const g = sv?.g, ok = Number.isFinite(g) && g > 0;
     show(bar, ok); show($("tok-foot"), ok);      // 충전 합계를 모르면 막대 없이 글자만
     if (!ok) return;
-    bar.querySelector(".fill").style.width = `${Math.round(Math.min(Math.max(t.balance / g, 0), 1) * 100)}%`;   // 채운 칸 = 남은 양
-    if (state === "good" && t.balance < g * TOKEN_LOW) bar.dataset.state = "warn";   // 글줄은 그대로 (다음 실행에 모자랄 때만 경고)
-    $("tok-used").textContent = `사용 ${count(g - t.balance)}개`;
+    bar.querySelector(".fill").style.width = `${Math.round(Math.min(Math.max(bal / g, 0), 1) * 100)}%`;   // 채운 칸 = 남은 양
+    if (state === "good" && bal < g * TOKEN_LOW) bar.dataset.state = "warn";   // 글줄은 그대로 (다음 실행에 모자랄 때만 경고)
+    $("tok-used").textContent = `사용 ${count(g - bal)}개`;
     $("tok-granted").textContent = `충전 합계 ${count(g)}개`;
-    bar.title = `남은 토큰 ${count(t.balance)}개, 충전 합계 ${count(g)}개`;
+    bar.title = `남은 토큰 ${count(bal)}개, 충전 합계 ${count(g)}개`;
     bar.setAttribute("aria-label", bar.title);
   });
 }
@@ -648,7 +663,7 @@ async function paintUsage() {
   usageFor = t.balance;
   const seq = ++usageSeq;                      // 읽는 사이 남은 토큰이 바뀌거나 통장이 사라지면 늦게 온 결과는 버린다
   try {
-    const w = await walletOf(t.balance);
+    const sv = await serverTokens(t), w = sv === undefined ? undefined : sv?.w ?? null;
     if (w === undefined) throw new Error("wallet");   // 못 읽음 - 5분 뒤 다시
     if (seq !== usageSeq) return;
     if (!w) { card.classList.add("hide"); return; }

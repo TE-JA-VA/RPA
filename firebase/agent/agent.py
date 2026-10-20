@@ -223,6 +223,7 @@ class Tokens:
         self._client, self._cid, self._prices, self._plan, self._every = client, cid, prices, plan, every
         self._next_plan = next_plan               # 기본 None - 시험이 costs 를 그대로 비교한다
         self._at, self.balance = None, None       # balance None = 통장 없음 또는 아직 모름
+        self._err = None                          # 마지막으로 기록에 남긴 확인 실패 (같은 까닭은 한 번만)
 
     def refresh(self, force=False):
         """10분마다 (우리가 넣은 것), force 면 바로 (실행 직전·기록을 올린 뒤)."""
@@ -230,10 +231,17 @@ class Tokens:
             self._at = time.time()
             try:
                 self.balance = balance(self._client, self._cid)
+                self._err = None
             except fb.AuthError:
                 raise
-            except Exception:
-                pass                              # 마지막으로 확인한 값 그대로
+            except Exception as e:                # 마지막으로 확인한 값 그대로 - 까닭은 기록에 (PC 마다 남은 토큰이 다르게 보인 것, 2026-10-20)
+                why = type(e).__name__
+                if isinstance(e, fb.HttpError):
+                    m = re.search(r'"status"\s*:\s*"([A-Z_]+)"', str(e.body))
+                    why = f"HTTP {e.status}" + (f" {m.group(1)}" if m else "")
+                if why != self._err:
+                    self._err = why
+                    log(f"남은 토큰을 확인하지 못했습니다 ({why}). 마지막으로 확인한 값({self.balance})으로 판단합니다.")
         return self.balance
 
     def costs(self):

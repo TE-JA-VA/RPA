@@ -495,6 +495,34 @@ check(refused(tk, "all") == "잔여 토큰이 없습니다 (남은 토큰 수 : 
 tc.spent, tc.fail = 2, True
 check(refused(tk) == "잔여 토큰이 없습니다 (남은 토큰 수 : -2개).\n토큰을 충전해주십시오." and tk.view()["balance"] == -2,
       "확인을 못 하면 마지막으로 확인한 값으로 판단 (그 값이 0 이하면 막는다)")
+class BusyClient(TokenClient):                   # Firestore 가 한도로 거절
+    def fs_sum(self, parent, collection, field, since=None):
+        if getattr(self, "busy", False):
+            raise fb.HttpError(429, '{"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}}')
+        return super().fs_sum(parent, collection, field, since)
+
+
+logged, _real_log = [], ag.log
+ag.log = logged.append
+try:
+    bc = BusyClient(5, 2)
+    tk3 = ag.Tokens(bc, "c_demo", ag.Prices(bc), plan)
+    tk3.refresh(force=True)
+    bc.fail = True
+    tk3.refresh(force=True)
+    tk3.refresh(force=True)
+    bc.fail, bc.busy = False, True
+    tk3.refresh(force=True)
+    bc.busy = False
+    tk3.refresh(force=True)
+    bc.fail = True
+    tk3.refresh(force=True)
+finally:
+    ag.log = _real_log
+check(logged == ["남은 토큰을 확인하지 못했습니다 (HTTP 503). 마지막으로 확인한 값(3)으로 판단합니다.",
+                 "남은 토큰을 확인하지 못했습니다 (HTTP 429 RESOURCE_EXHAUSTED). 마지막으로 확인한 값(3)으로 판단합니다.",
+                 "남은 토큰을 확인하지 못했습니다 (HTTP 503). 마지막으로 확인한 값(3)으로 판단합니다."],
+      f"확인 실패는 까닭과 함께 기록에 - 같은 까닭이 이어지면 한 번만, 성공한 뒤 다시 실패하면 또 (2026-10-20) ({logged})")
 tc.fail = False
 reads = tc.reads
 tk.refresh()

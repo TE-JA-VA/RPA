@@ -731,7 +731,8 @@ with sync_playwright() as pw:
     first_day = TODAY == f"{month}-01"
     usage_runs = {"u_month": (f"{month}-01T00:00:01", {"hold": 4}, 4),
                   "u_today1": (f"{TODAY}T08:00:00", {"login": 1, "sales": 1, "logistics": 1}, 2),
-                  "u_today2": (f"{TODAY}T09:00:00", {"logistics": 1, "sites": 2}, 3)}
+                  "u_today2": (f"{TODAY}T09:00:00", {"logistics": 1, "sites": 2}, 3),
+                  "u_big": (f"{month}-01T00:00:02", {}, 371)}     # 모듈 칸 없이 쓴 토큰만 - 이달 쓴 합 380 (남은 = 500 - 380 = 120)
     call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "500"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
     for rid, (started, used, spent) in usage_runs.items():
         call("POST", f"{FS}/runs/c_demo/items?documentId={rid}", {"fields": {
@@ -740,10 +741,11 @@ with sync_playwright() as pw:
             "used": {"mapValue": {"fields": {k: {"integerValue": str(n)} for k, n in used.items()}}}}}, OWNER)
     cost = {"all": 6, "prepare": 2, "routine": 4}
     db_patch(LIVE, {"tokens": {"balance": 120, "cost": cost}})
-    page.wait_for_function("!document.getElementById('token-card')?.classList.contains('hide')", timeout=10000)
+    page.wait_for_function("!document.getElementById('token-card')?.classList.contains('hide') && document.getElementById('token-line').textContent !== ''", timeout=10000)
     check(page.text_content("#token-line") == "전체 실행 1번에 6개 · 약 20번 더 실행할 수 있습니다."
           and page.get_attribute("#token-line", "class") == "msg", f"평소: 회색 한 줄, 몇 번 더 ({page.text_content('#token-line')})")
-    # 남은 토큰 막대 (사용자 2026-10-19): 충전 합계(wallet.granted) 대비 남은 것, ECAM 색, 관리자는 실행 단추 아래
+    # 남은 토큰 막대 (사용자 2026-10-19): 충전 합계(wallet.granted) 대비 남은 것, ECAM 색, 관리자는 실행 단추 아래.
+    # 남은 토큰은 화면이 센다 = 충전 합계 - since 뒤 쓴 합 (사용자 2026-10-20: PC 가 올린 값은 PC 마다 달랐다) - 아래 live 값은 다시 셀 때를 알리는 신호
     page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'good' && document.querySelector('#tok-bar .fill').style.width === '24%'", timeout=10000)
     bar = page.evaluate("""() => { const b = document.getElementById('tok-bar'), f = b.querySelector('.fill');
       return [b.dataset.state, f.style.width, document.getElementById('tok-left').textContent,
@@ -764,7 +766,7 @@ with sync_playwright() as pw:
     rows = page.evaluate("[...document.querySelectorAll('#usage-list .u-row')].map((r) => r.children[0].textContent + ' ' + r.children[1].textContent)")
     check(rows == ["주문매핑 매출처리 1회", "물류대기 관리 4회", "물류관리 2회", "쇼핑몰·사이트 받기 2회"],
           f"이번 달 사용량: 모듈별 횟수 (모듈 순서, 0회·로그인은 안 보임) ({rows})")
-    check(page.text_content("#usage-sum") == f"합계 9개 · 오늘 {9 if first_day else 5}개"
+    check(page.text_content("#usage-sum") == f"합계 380개 · 오늘 {380 if first_day else 5}개"
           and page.text_content("#usage-meta") == f"({int(month[5:])}월 1일부터)",
           f"합계·오늘은 서버가 더한 쓴 토큰, 이달 1일부터 ({page.text_content('#usage-meta')} {page.text_content('#usage-sum')})")
     # 토큰 정보(통장)를 이달 중간에 만들었으면 그날부터 - 남은 토큰이 바뀌어야 다시 읽는다 (2026-10-06 이름: 통장 시작 → 토큰 정보 생성)
@@ -776,26 +778,29 @@ with sync_playwright() as pw:
     except Exception:
         pass
     check(page.text_content("#usage-meta") == want, f"토큰 정보를 이달 중간에 만들었으면 그날부터 ({page.text_content('#usage-meta')})")
-    db_patch(LIVE, {"tokens": {"balance": 90, "cost": cost}})   # 충전 500 의 18% - 실행은 15번 더 되지만 막대는 호박색 (사용자 2026-10-19: 20% 미만부터)
-    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'warn' && document.querySelector('#tok-bar .fill').style.width === '18%'", timeout=10000)
+    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "470"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)   # 남은 90 = 충전 470 의 19% - 실행은 15번 더 되지만 막대는 호박색 (사용자 2026-10-19: 20% 미만부터)
+    db_patch(LIVE, {"tokens": {"balance": 90, "cost": cost}})
+    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'warn' && document.querySelector('#tok-bar .fill').style.width === '19%'", timeout=10000)
     check(page.get_attribute("#token-line", "class") == "msg" and page.text_content("#token-line") == "전체 실행 1번에 6개 · 약 15번 더 실행할 수 있습니다.",
           f"남은 것이 20% 미만이면 막대만 호박색, 글줄은 평소 그대로 ({page.text_content('#token-line')})")
+    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "383"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
     db_patch(LIVE, {"tokens": {"balance": 3, "cost": cost}})
     page.wait_for_function("document.getElementById('token-line')?.classList.contains('warn')", timeout=10000)
     check(page.text_content("#token-line") == "남은 토큰 3개 · 전체 실행 1번에 6개. 잔여 토큰이 마이너스가 될 수 있습니다."
           and not page.is_disabled("#run-all"), f"모자라면 노란 글, 실행은 된다 ({page.text_content('#token-line')})")
-    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'warn' && document.getElementById('tok-used').textContent === '사용 497개'", timeout=10000)
+    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'warn' && document.getElementById('tok-used').textContent === '사용 380개'", timeout=10000)
     ecam = page.evaluate("""() => { const t = document.createElement('i'); t.style.color = 'var(--ecam-amber)'; document.body.append(t);
       const want = getComputedStyle(t).color; t.remove();
       return [want, getComputedStyle(document.querySelector('#tok-bar .fill')).backgroundColor, document.getElementById('tok-used').textContent] }""")
-    check(ecam[0] == ecam[1] and ecam[2] == "사용 497개", f"다음 실행에 모자라면 막대 ECAM 호박색 ({ecam})")
+    check(ecam[0] == ecam[1] and ecam[2] == "사용 380개", f"다음 실행에 모자라면 막대 ECAM 호박색 ({ecam})")
     goto(page, "settings")
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('남은 토큰 3개')", timeout=10000)
     check("다음 예약 실행에 6개 · 남은 토큰 3개. 잔여 토큰이 마이너스가 될 수 있습니다." in page.text_content("#sch-info")
           and "warn" in page.get_attribute("#sch-info", "class"), f"예약 칸에도 노란 글 ({page.text_content('#sch-info')})")
     goto(page, "rpa")
+    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "380"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
     db_patch(LIVE, {"tokens": {"balance": 0, "cost": cost}})
-    page.wait_for_function("document.getElementById('run-all')?.disabled === true", timeout=10000)
+    page.wait_for_function("document.getElementById('run-all')?.disabled === true && document.getElementById('token-line').classList.contains('bad')", timeout=10000)
     check(page.text_content("#token-line") == "토큰이 없습니다. (남은 토큰 0개) 토큰을 충전한 뒤 실행하여 주십시오."
           and "bad" in page.get_attribute("#token-line", "class")
           and all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")) and not page.is_disabled("#stop-erpia"),
@@ -809,6 +814,7 @@ with sync_playwright() as pw:
     check("토큰이 없어 예약 실행을 건너뜁니다" in page.text_content("#sch-info") and "bad" in page.get_attribute("#sch-info", "class"),
           f"예약 칸: 건너뛴다고 빨간 글 ({page.text_content('#sch-info')})")
     check("오류: 토큰이 없습니다" not in page.text_content("#sch-info"), f"PC 의 토큰 오류는 같은 말이라 한 번만 ({page.text_content('#sch-info')})")
+    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "430"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
     db_patch(LIVE, {"tokens": {"balance": 50, "cost": cost}})
     page.wait_for_function("!(document.getElementById('sch-info')?.textContent || '').includes('토큰이 없어')", timeout=10000)
     check("토큰이 없습니다" not in page.text_content("#sch-info"), f"충전하면 지난 토큰 오류도 사라진다 ({page.text_content('#sch-info')})")
@@ -1521,14 +1527,15 @@ with sync_playwright() as pw:
     check(page.locator("#copy-card").count() == 0, "유저는 프리셋 복사 카드도 없다 (환경설정 자체가 없다)")
     # 남은 토큰 막대는 유저도 본다 - 오른쪽 열이 없으니 본문 맨 위 '토큰' 카드 (사용자 2026-10-19)
     check(page.is_hidden("#token-card"), "통장이 없으면 유저의 토큰 카드도 없다")
-    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "200"}, "since": {"stringValue": "2026-01-01T00:00:00"}}}, OWNER)
-    db_patch(LIVE, {"tokens": {"balance": 150, "cost": {"all": 6, "prepare": 2, "routine": 4}}})
-    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'good' && document.querySelector('#tok-bar .fill').style.width === '75%'", timeout=10000)
+    call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "200"}, "since": {"stringValue": "2099-01-01T00:00:00"}}}, OWNER)   # 그 뒤 기록 없음 = 쓴 합 0
+    db_patch(LIVE, {"tokens": {"balance": 150, "cost": {"all": 6, "prepare": 2, "routine": 4}}})   # PC 가 올린 150 은 옛 값 - 화면은 200 을 센다
+    page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'good' && document.querySelector('#tok-bar .fill').style.width === '100%'", timeout=10000)
     vt = page.evaluate("""() => [!!document.querySelector('#token-card #token-box'), document.querySelector('#tok-bar .fill').style.width,
       document.getElementById('token-line').textContent,
       document.getElementById('token-card').compareDocumentPosition(document.querySelector('.card.recent')) & Node.DOCUMENT_POSITION_FOLLOWING]""")
-    check(vt[0] and not page.is_hidden("#token-card") and vt[1] == "75%" and vt[2] == "전체 실행 1번에 6개 · 약 25번 더 실행할 수 있습니다." and vt[3],
+    check(vt[0] and not page.is_hidden("#token-card") and vt[1] == "100%" and vt[2] == "전체 실행 1번에 6개 · 약 33번 더 실행할 수 있습니다." and vt[3],
           f"유저: 본문 맨 위 토큰 카드에 같은 막대 ('최근 20일' 위) ({vt})")
+    check(page.text_content("#tok-left") == "남은 토큰 200개", f"PC 가 올린 값(150)이 아니라 충전 합계 - 쓴 합을 화면이 센다 - 어느 계정이든 같다 (사용자 2026-10-20) ({page.text_content('#tok-left')})")
     db_patch(LIVE, {"tokens": None})
     page.wait_for_function("document.getElementById('token-card')?.classList.contains('hide')", timeout=10000)
     call("DELETE", f"{FS}/wallet/c_demo", None, OWNER)
