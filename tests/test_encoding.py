@@ -75,6 +75,26 @@ for want in ("1/2  ACTOR 오토파일럿 - 메일 첨부파일 내려받기", "[
     check(f"한글 줄이 그대로 찍힌다: {want[:24]}…", want in text, text[-300:])
 check("명령 창 오류가 한 줄도 없다 (줄 조각이 명령으로 실행되면 여기 찍힌다)", errs.strip() == "", errs[-300:])
 
+print("=== 3-2. 함께 실행 종료 코드 100~103 (100 + 수집 실패 2 + 루틴 실패 1) 을 가짜 프리페어로 실제 실행 (검토 10-20) ===")
+CALL = b'"%~dp0Prepare_RPA.exe" --all --no-keep-open'
+for rc, actor, routine in ((100, 0, 0), (101, 0, 1), (102, 1, 0), (103, 1, 1)):
+    tmp = tempfile.mkdtemp(prefix="rpa_bat_")
+    b = (ROOT / "Run_All.bat").read_bytes()
+    check(f"프리페어 부르는 줄이 그대로 있다 ({rc})", CALL in b)
+    # 프리페어 자리: 전체 실행 표시가 넘어가는지 찍고 그 코드로 끝난다
+    Path(tmp, "Run_All.bat").write_bytes(b.replace(CALL, f"echo ALLRUN=%RPA_ALL_RUN%& cmd /c exit {rc}".encode()))
+    shutil.copy2(where, os.path.join(tmp, "ERPia_RPA.exe"))
+    r = subprocess.run(["cmd.exe", "/c", os.path.join(tmp, "Run_All.bat")], cwd=tmp, stdin=subprocess.DEVNULL,
+                       capture_output=True, creationflags=subprocess.CREATE_NEW_CONSOLE, timeout=60)
+    shutil.rmtree(tmp, ignore_errors=True)
+    text, errs = r.stdout.decode("cp949", "replace"), r.stderr.decode("cp949", "replace")
+    check(f"{rc}: 요약에 수집 {actor}, 루틴 {routine} 로 나눠 적는다",
+          f"끝났습니다.  ACTOR 오토파일럿={actor}  PROCESS={routine}" in text, text[-300:])
+    check(f"{rc}: 루틴을 다시 띄우지 않는다", "2/2  PROCESS 오토파일럿 - ERPia 처리" not in text
+          and "2/2  PROCESS 오토파일럿은 수집과 함께 돌았습니다." in text, text[-300:])
+    check(f"{rc}: 전체 실행 표시가 프리페어에 넘어간다", "ALLRUN=1" in text, text[-300:])
+    check(f"{rc}: 명령 창 오류가 없다", errs.strip() == "", errs[-300:])
+
 print("=== 4. 설치 파일 스크립트는 BOM 있는 UTF-8 ===")
 for s in (ROOT / "release" / "installer.iss", ROOT / "tools" / "sandbox_inner.ps1"):
     if s.exists():

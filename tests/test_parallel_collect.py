@@ -352,6 +352,18 @@ t0 = time.time()
 web_runner.wait_keys()
 check("루틴이 먼저 끝나면 잡은 표시가 남아도 기다리지 않는다",
       time.time() - t0 < 0.3 and not web_runner.KeysPause().is_set())
+logs, _saved_log = [], web_runner.log
+web_runner.log = logs.append
+web_runner._together[0].rc = None
+status.keys_held = lambda since: True
+kp = web_runner.KeysPause()
+kp.is_set()
+kp.is_set()
+status.keys_held = lambda since: False
+held_now = kp.is_set()
+web_runner.log = _saved_log
+check("일시정지가 풀리면 멈춘 시간을 한 번 남긴다 (인증 사이트가 기다린 시간 실측, 검토 10-20)",
+      not held_now and sum("일시정지" in m for m in logs) == 1, str(logs))
 rcs = []
 for prep, rt in ((0, 0), (0, 3), (1, 0), (1, -1073741819), (0, 3221225477)):     # 비정상 종료 0xC0000005 (cmd 는 음수로 본다)
     web_runner._together[0].rc = rt

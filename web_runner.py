@@ -993,15 +993,27 @@ def wait_keys():
     if not _together or not status.keys_held(_together[1]):
         return
     log("  ERPia 쪽이 키보드를 쓰는 동안 기다립니다.")
+    t = time.time()
     while _together[0].poll() is None and status.keys_held(_together[1]):
         time.sleep(0.2)
+    log(f"  ERPia 쪽 키보드 차례가 끝나 이어 갑니다 ({time.time() - t:.1f}초 기다림).")
 
 
 class KeysPause:
     """재생기의 일시정지 자리(Replayer.pause - is_set 만 본다): 함께 띄운 루틴이 ERPia 에 키보드를 쓰는 동안 다음 단계 앞에서 기다린다.
-    하던 단계는 끝까지 하므로 루틴은 키보드를 잡고 잠깐 뒤에 친다 (wellife.KEYS_SETTLE_SECONDS)."""
+    하던 단계는 끝까지 하므로 루틴은 키보드를 잡고 잠깐 뒤에 친다 (wellife.KEYS_SETTLE_SECONDS).
+    풀리면 멈춘 시간을 남긴다 - 인증 사이트가 얼마나 기다렸는지 보는 실측 (검토 10-20)."""
+    def __init__(self):
+        self.since = None
+
     def is_set(self):
-        return bool(_together) and _together[0].poll() is None and status.keys_held(_together[1])
+        held = bool(_together) and _together[0].poll() is None and status.keys_held(_together[1])
+        if held and self.since is None:
+            self.since = time.time()
+        elif not held and self.since is not None:
+            log(f"  키보드 차례가 끝나 이어 갑니다 ({time.time() - self.since:.1f}초 일시정지).")
+            self.since = None
+        return held
 
 
 def erpia_rect():

@@ -218,6 +218,19 @@ def collect_text(win):
     return " | ".join(parts)
 
 
+def owns_focus(login_win):
+    """키를 치기 직전 포커스가 ERPia(로그인 창의 프로세스)에 있나. KEYS_GUARD 를 바꾼 함께 실행에서만 본다 - 사이트 수집의 Edge 창이
+    포커스를 가져가면 업체코드·아이디·비밀번호가 그 창에 들어간다 (검토 10-20). 평소에는 늘 True (지금과 같다)."""
+    if KEYS_GUARD is contextlib.nullcontext:
+        return True
+    try:
+        fg = win32gui.GetForegroundWindow()
+        return bool(fg) and (win32process.GetWindowThreadProcessId(fg)[1]
+                             == win32process.GetWindowThreadProcessId(login_win.handle)[1])
+    except Exception:
+        return False
+
+
 def fill_login_fields(login_win, admin_code, user_id, password, log):
     edits = login_win.descendants(control_type="Edit")
     edits_sorted = sorted(edits, key=lambda e: e.rectangle().top)
@@ -229,6 +242,12 @@ def fill_login_fields(login_win, admin_code, user_id, password, log):
     def fill(edit, value, label):
         edit.click_input()
         time.sleep(0.2)
+        if not owns_focus(login_win):   # 한 번 더 가져와 본 뒤에도 아니면 치지 않는다
+            ec.ensure_foreground(login_win.handle)
+            edit.click_input()
+            time.sleep(0.2)
+            if not owns_focus(login_win):
+                raise RuntimeError(f"{label} 칸에 치기 전 포커스가 ERPia 에 없어 입력하지 않음 (다른 창에 키가 샐 수 있음)")
         edit.type_keys("^a{DEL}")
         edit.type_keys(ec.literal_keys(value), with_spaces=True)   # 비밀번호의 ( ) + 등을 글자 그대로
         log(f"  {label} 입력 완료")
@@ -353,8 +372,9 @@ def login_flow(admin_code, user_id, password, log=None):
                 log(f"  에러 로그 저장: {path}")
                 return {"status": "popup_error", "message": "2차 인증 팝업에 확인 버튼 없음", "error_log_path": path}
 
-            ec.ensure_foreground(popup_win.handle)
-            ok_btn.click_input()
+            with KEYS_GUARD():  # 함께 실행: 누르는 사이 새 Edge 창이 덮으면 클릭이 사이트 화면에 떨어진다 (검토 10-20)
+                ec.ensure_foreground(popup_win.handle)
+                ok_btn.click_input()
             log(f"  확인 클릭 완료. {TWO_FA_WAIT_SECONDS}초 대기 시작...")
             time.sleep(TWO_FA_WAIT_SECONDS)
             log(f"  {TWO_FA_WAIT_SECONDS}초 대기 완료. 로그인 재시도합니다.")

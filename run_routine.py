@@ -3051,10 +3051,33 @@ def upload_file_in_dialog(dlg_hwnd, path, pid=None):
     return submit_open_dialog(dlg_hwnd, pid=pid, edit_hwnd=edit)
 
 
+def open_dialogs(pid):
+    """이미 떠 있는 파일 열기 창 ('#32770' 이면서 '파일 이름' 칸이 있는 창 - 표준 메시지 상자는 뺀다). 못 읽으면 빈 목록."""
+    found = []
+    try:
+        for h in find_top_hwnds_by_title(pid, "", exact=False):
+            if win32gui.GetClassName(h) == SAVE_DIALOG_CLASS and find_open_dialog_filename_edit(h):
+                found.append(h)
+    except Exception:
+        pass
+    return found
+
+
 def open_upload_dialog(pid, hwnd, cell):
     """'엑셀업로드' 셀을 눌러 파일 열기 창을 띄운다. 한 번 눌러 안 뜨면 더블클릭.
     누를 자리의 맨 위 창이 ERPia 메인 창이 아니면 누르지 않는다 - 다른 창(Edge·팝업)에 클릭이 떨어진다 (2026-10-19 개발기:
-    덮인 칸은 커서를 올리고 클릭 메시지를 보내도 열리지 않았다)."""
+    덮인 칸은 커서를 올리고 클릭 메시지를 보내도 열리지 않았다).
+    누르기 전에 이미 떠 있는 파일 열기 창은 취소한다 - 앞 파일에서 기다림(클릭·더블클릭 각 OPEN_DIALOG_WAIT_SECONDS)을 넘겨 늦게
+    뜬 창이고, 그 창을 이 파일의 창으로 받으면 이 파일이 앞 사이트에 올라간다 (검토 10-20). 못 닫으면 누르지 않는다."""
+    for h in open_dialogs(pid):
+        log(f"    앞에서 늦게 뜬 파일 열기 창(hwnd={h})을 취소합니다 - 이 파일을 넣으면 앞 사이트에 올라갑니다.")
+        close_upload_dialog(pid, h)
+    end = time.time() + 2
+    while open_dialogs(pid):
+        if time.time() > end:
+            log("    앞에서 늦게 뜬 파일 열기 창이 닫히지 않아 누르지 않습니다.")
+            return None
+        time.sleep(0.1)
     for attempt, how in ((1, "클릭"), (2, "더블클릭")):
         ec.ensure_foreground(hwnd)
         r = cell.rectangle()
@@ -3137,24 +3160,31 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
     pending = None      # 넘기고 결과를 아직 안 본 파일 - 다음 파일 앞(앞 파일 결과 팝업)이나 맨 끝에 본다
     closed_at = 0.0     # pending 의 파일 열기 창이 닫힌 때
     seen = []           # pending 의 결과로 닫은 팝업 (사이트코드 찾기 앞에서)
+    seen_at = None      # pending 의 결과 팝업을 처음 본 때
     before = set(find_popup_windows(pid, hwnd))     # 업로드 전부터 있던 별도 창은 팝업으로 보지 않는다
     if before:
         log(f"  업로드 전부터 떠 있던 별도 창 {len(before)}개는 건드리지 않습니다.")
 
     def popups_now(label):
-        return upload_popups(pid, hwnd, before, label=label)
+        nonlocal seen_at
+        texts = upload_popups(pid, hwnd, before, label=label)
+        if texts and pending and seen_at is None:
+            seen_at = time.time()
+        return texts
 
     def settle(popups):
         """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
         팝업이 없어도 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 가 지나기 전이면 남은 시간만큼 결과 팝업을 기다린다."""
-        nonlocal pending, seen, uploaded, failed, errors
+        nonlocal pending, seen, seen_at, uploaded, failed, errors
         left = closed_at + upload_result_wait() - time.time()
         if not popups and left > 0:
             popups = wait_upload_result(pid, hwnd, before, timeout=left)
-        path, pending, seen = pending, None, []
+        at = (seen_at or time.time()) - closed_at
+        path, pending, seen, seen_at = pending, None, [], None
         wait_file_unlocked(path)    # 읽는 도중 옮기면 '헤더 개수: 0' - 안 잠겼으면 바로 돌아온다
         if popups:
-            log(f"    {os.path.basename(path)}: 업로드 실패로 판단합니다. (팝업 {len(popups)}건)")
+            # 뜬 때는 결과 대기 시간이 맞는지 볼 실측 (검토 10-20 - 개발기 0.73~1.05초는 함께 실행이 아닐 때 잰 값)
+            log(f"    {os.path.basename(path)}: 업로드 실패로 판단합니다. (팝업 {len(popups)}건, 파일 창이 닫힌 뒤 {at:.1f}초에 봄)")
             failed += 1
             status.metric("excel_upload", "엑셀 업로드", uploaded, len(targets), unit="개", note=f"실패 {failed}개")
             if move_files:

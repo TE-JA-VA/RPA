@@ -2136,8 +2136,10 @@ def tog_sleep(_s):
         prep["on"] = False
 
 
+pops = []      # 업로드 차례 사이에 볼 때마다 닫힌다고 돌려줄 창 문구 (비면 창 없음)
 trr = types.SimpleNamespace(
     log=lambda m: None, UPLOAD_NO_KEYS=False, UploadStop=rr.UploadStop, UploadGridHidden=rr.UploadGridHidden,
+    find_popup_windows=lambda pid, hwnd: [], upload_popups=lambda pid, hwnd, before=(), label="": pops.pop(0) if pops else [],
     excel_upload_dir=lambda: tog,
     collect_upload_files=tog_collect, run_excel_upload_step=tog_upload, win32con=_wc,
     win32gui=types.SimpleNamespace(GetWindowRect=lambda h: (0, 0, 1920, 1032),
@@ -2243,7 +2245,67 @@ except wellife.Stop as e:
 check(f"그리드가 계속 사라지면 {wellife.HIDDEN_MAX}번 넘어 멈추고 남은 파일은 그대로 둔다",
       stop is not None and stop[0] == "stopped" and os.path.exists(os.path.join(tog, "(112)f.xlsx"))
       and not trr.UPLOAD_NO_KEYS, str(stop))
+check("멈추면 올리지 못하고 남은 파일 수를 사유에 붙인다 (수집이 뒤에 넘기는 파일도 이번 실행에서는 안 올라감 - 검토 10-20)",
+      stop is not None and "올리지 못한 파일 1개" in stop[1] and wellife.LEFT_NOTE in stop[1], str(stop))
 os.remove(os.path.join(tog, "(112)f.xlsx"))
+
+tev.clear()
+prep["on"] = True
+open(os.path.join(tog, "(113)g.xlsx"), "w").close()
+labels = []
+trr.run_excel_upload_step = tog_upload
+pops[:] = [["[ERPia] 업로드 오류 -> '확인' 누름"]]
+
+
+def seen_pops(pid, hwnd, before=(), label=""):
+    labels.append(label)
+    return pops.pop(0) if pops else []
+
+
+trr.upload_popups = seen_pops
+res = wellife.excel_together(trr, tctx, False)
+check("업로드 차례 사이에 새로 뜬 ERPia 창은 다음 차례 앞과 끝에서 닫고, 그 수를 결과에 알린다 (결과 대기 뒤 늦게 뜬 실패 팝업이면 "
+      "그 파일은 이미 완료 폴더에 있다 - 검토 10-20)",
+      labels == ["업로드 사이 ", "업로드 끝 "] and "업로드 사이에 ERPia 팝업 1개를 닫음" in res[1], f"{labels} {res}")
+tev.clear()
+prep["on"] = True
+open(os.path.join(tog, "(114)h.xlsx"), "w").close()
+flaky = [rr.UploadStop("처리할 수 있는 버튼이 없습니다."), ["팝업"]]
+
+
+def flaky_pops(pid, hwnd, before=(), label=""):
+    x = flaky.pop(0) if flaky else []
+    if isinstance(x, Exception):
+        raise x
+    return x
+
+
+trr.upload_popups = flaky_pops
+res = wellife.excel_together(trr, tctx, False)
+check("막 뜬 창이라 단추가 아직 없으면 바로 멈추지 않고 한 번 더 본 뒤 닫는다", res[0] == "done" and "팝업 1개" in res[1], str(res))
+tev.clear()
+prep["on"] = True
+open(os.path.join(tog, "(115)i.xlsx"), "w").close()
+flaky[:] = [rr.UploadStop("처리할 수 있는 버튼이 없습니다."), rr.UploadStop("처리할 수 있는 버튼이 없습니다.")]
+try:
+    wellife.excel_together(trr, tctx, False)
+    stop = None
+except wellife.Stop as e:
+    stop = (e.result, str(e))
+check("다시 봐도 누를 단추가 없으면 누르지 않고 멈추고, 올리지 못한 파일 수를 알린다",
+      stop is not None and stop[0] == "stopped" and "올리지 못한 파일 1개" in stop[1], str(stop))
+os.remove(os.path.join(tog, "(115)i.xlsx"))
+trr.upload_popups = lambda pid, hwnd, before=(), label="": []
+tev.clear()
+prep["on"] = True
+arrive[:] = [["(116)j.xlsx"]]     # 앞서 올려 옮겨진 파일과 같은 이름이 다시 들어온다
+open(os.path.join(tog, "(116)j.xlsx"), "w").close()
+res = wellife.excel_together(trr, tctx, False)
+check("앞서 올려 옮겨진 파일과 같은 이름이 다시 들어오면 이번 실행에서는 올리지 않고 남은 파일로 알린다 (경로로 세므로 - 지금 동작 "
+      "기록, 다음 실행에 올라감)",
+      [e[1] for e in tev if e[0] == "upload"] == [["(116)j.xlsx"]] and os.path.exists(os.path.join(tog, "(116)j.xlsx"))
+      and "올리지 못해 남은 파일 1개" in res[1], f"{tev} {res}")
+os.remove(os.path.join(tog, "(116)j.xlsx"))
 tev.clear()
 _saved_os = wellife.order_screen
 
