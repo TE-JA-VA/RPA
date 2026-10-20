@@ -14,7 +14,6 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 """
 import argparse
 import ast
-import concurrent.futures
 import datetime
 import fnmatch
 import glob
@@ -30,7 +29,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-import time
 import zipfile
 
 import win32api
@@ -459,7 +457,8 @@ def build_exes(work_dir, only=None, cache=EXE_CACHE, force=False):
     py = sys.executable
     ver = subprocess.run([py, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
     tool = f"nuitka {ver} · python {platform.python_version()}"
-    made, kept, todo = [], [], []
+    tk_dirs = None
+    made, kept = [], []
     for exe in (only or EXES):
         fp, keep = exe_fingerprint(exe, tool), os.path.join(cache, exe)
         try:   # .inputs = 재료 지문 + 보관한 exe 의 지문 (보관한 exe 가 깨지거나 바뀌었으면 다시 만든다)
@@ -470,30 +469,11 @@ def build_exes(work_dir, only=None, cache=EXE_CACHE, force=False):
             shutil.copy2(keep, os.path.join(work_dir, exe))
             kept.append(exe)
             print(f"  {exe}: 재료가 지난번과 같아 그대로 씁니다")
-        else:
-            todo.append((exe, fp, keep))
-    tk_dirs = tcl_tk_dirs(work_dir) if any(TK_PLUGIN in NUITKA_EXTRA[exe] for exe, _, _ in todo) else None
-    env = dict(os.environ, **NUITKA_ENV, PYTHONPATH=os.pathsep.join(filter(None, [AGENT_DIR, os.environ.get("PYTHONPATH")])))
-
-    def nuitka(exe):
-        """exe 하나를 Nuitka 로 - 셋을 동시에 돌리니 글은 exe 마다 따로 (work_dir 의 exe.nuitka.log), 실패하면 끝부분을 보인다."""
-        log_path, started = os.path.join(work_dir, exe + ".nuitka.log"), time.time()
-        print(f"  {exe}: 만듭니다 (기록 {log_path})", flush=True)
-        try:
-            with open(log_path, "w", encoding="utf-8", errors="replace") as out:
-                subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True, env=env,
-                               stdout=out, stderr=subprocess.STDOUT)
-        except subprocess.CalledProcessError:
-            with open(log_path, encoding="utf-8", errors="replace") as f:
-                print(f"  {exe}: 실패 - 기록 끝부분:\n" + "".join(f.readlines()[-30:]), flush=True)
-            raise
-        print(f"  {exe}: {time.time() - started:.0f}초", flush=True)
-
-    # exe 마다 따로 Nuitka (출력·작업 폴더가 exe 이름별이라 겹치지 않는다) - 차례로 하면 3분씩 9~10분이던 것을 동시에 (사용자 2026-10-20)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(todo))) as pool:
-        for job in [pool.submit(nuitka, exe) for exe, _, _ in todo]:
-            job.result()            # 하나라도 실패하면 여기서 멈춘다 (나머지는 끝날 때까지 기다린다)
-    for exe, fp, keep in todo:
+            continue
+        if TK_PLUGIN in NUITKA_EXTRA[exe] and tk_dirs is None:
+            tk_dirs = tcl_tk_dirs(work_dir)
+        env = dict(os.environ, **NUITKA_ENV, PYTHONPATH=os.pathsep.join(filter(None, [AGENT_DIR, os.environ.get("PYTHONPATH")])))
+        subprocess.run(nuitka_command(py, exe, work_dir, tk_dirs), cwd=REPO, check=True, env=env)
         built = os.path.join(work_dir, exe)
         if NODE_EXCLUDE in NUITKA_EXTRA[exe] and os.path.getsize(built) > NODE_IN_EXE_MB * 2 ** 20:
             raise RuntimeError(f"{exe} 가 {os.path.getsize(built) // 2 ** 20}MB 입니다 - node.exe 가 다시 들어갔습니다 "

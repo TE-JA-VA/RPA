@@ -11,7 +11,6 @@ import shutil
 import struct
 import sys
 import tempfile
-import time
 import zipfile
 from pathlib import Path
 
@@ -353,21 +352,6 @@ try:
         built.clear()
         br.build_exes(work, cache=cache, force=True)
         check("--rebuild-all 이면 재료가 같아도 셋 다 다시", sorted(built) == sorted(br.EXES), str(built))
-
-        running, most = [0], [0]
-
-        def slow_run(cmd, **kw):         # exe 하나에 0.5초 걸리는 Nuitka - 동시에 몇 개가 도는지 센다
-            if not any(a.startswith("--output-filename=") for a in cmd):
-                return fake_run(cmd, **kw)
-            running[0] += 1
-            most[0] = max(most[0], running[0])
-            time.sleep(0.5)
-            running[0] -= 1
-            return fake_run(cmd, **kw)
-        br.subprocess.run = slow_run
-        br.build_exes(work, cache=cache, force=True)
-        br.subprocess.run = fake_run
-        check(f"exe 셋을 동시에 만든다 - 한꺼번에 {most[0]}개 (차례로면 1개, 사용자 2026-10-20)", most[0] == len(br.EXES), str(most[0]))
         Path(cache, "ERPia_RPA.exe").unlink()
         built.clear()
         br.build_exes(work, cache=cache)
