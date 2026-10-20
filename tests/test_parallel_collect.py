@@ -134,6 +134,64 @@ took = time.time() - t0
 check("7개를 3개씩: 동시에 셋까지만, 모두 돈다", peak[0] == 3 and sorted(ran) == sorted(n for n, _ in chosen), f"{peak} {ran}")
 check("한 사이트가 실패해도 나머지는 끝까지 (성공 6)", done == 6, str(done))
 check("하나씩보다 빠르다 (0.2초 x 7 = 1.4초 -> 3줄)", took < 1.0, f"{took:.2f}초")
+
+print("=== 3-1. 인증 사이트는 한 창에서 차례로, 나머지 창은 인증 없는 사이트 (사용자 2026-10-19)")
+AUTH = {"Action": ["login", "sms_2fa"], "Phone": "p"}
+spans, launched = [], []
+
+
+def lane_run_site(browser, name, site, use_session=True, keep_open=False, gates=None):
+    t = time.time()
+    time.sleep(0.1)
+    with lock:
+        spans.append((threading.current_thread().name, name, t, time.time()))
+    return True
+
+
+def lane_edge(launch, headless=False, **_):
+    me = threading.current_thread().name
+    launched.append(me)
+    if me in FAIL_LAUNCH:
+        raise RuntimeError("브라우저를 못 띄움")
+    return FakeBrowser()
+
+
+def lanes(chosen, n):
+    spans.clear()
+    launched.clear()
+    done = web_runner.run_parallel(chosen, n, True, None)
+    return done, {s[1]: s[0] for s in spans}
+
+
+web_runner.web_replay.edge = lane_edge
+web_runner.run_site = lane_run_site
+FAIL_LAUNCH = ()
+mix = [(f"A{i}", AUTH) for i in range(1, 4)] + [(f"N{i}", {}) for i in range(1, 7)]
+for n in (6, 2):
+    done, where = lanes(mix, n)
+    auth_spans = sorted((t0, t1) for th, nm, t0, t1 in spans if nm.startswith("A"))
+    check(f"{n}개 창: 인증 사이트는 모두 첫 창(수집1)에서 겹치지 않고 차례로, 인증 없는 사이트는 다른 창에서도",
+          done == len(mix) and {where[f"A{i}"] for i in range(1, 4)} == {"수집1"}
+          and all(b[0] >= a[1] for a, b in zip(auth_spans, auth_spans[1:]))
+          and {where[f"N{i}"] for i in range(1, 7)} - {"수집1"}, f"{done} {where}")
+done, where = lanes([(f"N{i}", {}) for i in range(1, 5)], 3)
+check("인증 사이트가 없으면 모든 창이 인증 없는 사이트를 (예전처럼)", done == 4 and len(set(where.values())) == 3, str(where))
+done, where = lanes([(f"A{i}", AUTH) for i in range(1, 4)], 4)
+check("인증 사이트만 있으면 창 하나만 띄운다 (할 일 없는 창을 띄우지 않는다)", done == 3 and launched == ["수집1"], f"{launched} {where}")
+done, where = lanes(mix[:2] + mix[3:5], 6)
+check("인증 없는 사이트가 적으면 그만큼만 띄운다 (인증 1 + 2)", done == 4 and len(launched) == 3, str(launched))
+preset_otp = [{"no": 7, "record": {"steps": [{"kind": "fill"}, {"kind": "otp"}, {"kind": "click"}]}},
+              {"no": 8, "record": {"steps": [{"kind": "fill"}, {"kind": "click"}]}}, {"no": 9, "record": None}]
+check("인증 사이트 가르기: 문자 인증 Action, 인증번호 단계가 있는 프리셋만",
+      web_runner.needs_auth(AUTH) and web_runner.needs_auth({"Action": "replay", "Preset": 7}, preset_otp)
+      and not web_runner.needs_auth({"Action": "replay", "Preset": 8}, preset_otp)
+      and not web_runner.needs_auth({"Action": "replay", "Preset": 9}, preset_otp)
+      and not web_runner.needs_auth({"Action": ["login", "mail"]}, preset_otp))
+FAIL_LAUNCH = ("수집1",)
+done, where = lanes(mix, 3)
+check("첫 창이 브라우저를 못 띄우면 남은 인증 사이트는 다른 창이 가져간다 (빠뜨리지 않는다)",
+      done == len(mix) and "수집1" not in where.values(), f"{done} {where}")
+FAIL_LAUNCH = ()
 web_runner.sync_playwright, web_runner.web_replay.edge, web_runner.run_site = _saved
 
 print("=== 3-2. 예전 방식 문자 인증 사이트 (Action login·sms_2fa) 둘을 함께")

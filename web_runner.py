@@ -122,7 +122,7 @@ def log(msg):
 
 
 # ---------------------------------------------------------------------------
-# 병렬 수집 (사용자 2026-10-15): 사이트를 동시에 열어 받는다. 인증 사이트만 휴대폰마다 한 번에 하나씩 (인증 차례)
+# 병렬 수집 (사용자 2026-10-15): 사이트를 동시에 열어 받는다. 인증 사이트는 한 창에서 차례로 (사용자 2026-10-19, run_parallel)
 # ---------------------------------------------------------------------------
 _here = threading.local()  # 실행기(스레드)마다: parallel(병렬인가), gates(인증 차례), key(지금 단계)
 
@@ -1403,14 +1403,39 @@ def resolve_use_session(site, cli_override):
     return bool(site.get("UseSession", False))
 
 
+def needs_auth(site, presets=()):
+    """인증 사이트인가 - 예전 방식 문자 인증(Action sms_2fa) 이나 인증번호 단계가 있는 프리셋 재생."""
+    acts = site_actions(site)
+    if "sms_2fa" in acts:
+        return True
+    p = next((x for x in presets if x["no"] == site.get("Preset")), None) if status.REPLAY_ACTION in acts else None
+    return p is not None and any(s.get("kind") == "otp" for s in (p["record"] or {}).get("steps") or [])
+
+
 def run_parallel(chosen, n, headless, session_override):
     """사이트를 n 개씩 동시에 - 실행기(스레드)마다 자기 Edge 를 띄우고 대기열에서 사이트를 하나씩 가져간다.
-    인증 사이트는 휴대폰마다 인증 차례를 기다린다 (AuthGates). 한 사이트가 실패해도 나머지는 계속. 성공한 사이트 수."""
-    todo = queue.Queue()
+    인증 사이트는 첫 실행기 한 창에서만 차례로 (사용자 2026-10-19) - 나머지 실행기는 인증 없는 사이트만, 첫 실행기도 인증
+    사이트를 다 돌면 인증 없는 사이트를 돕는다. 첫 실행기가 멈추면(브라우저를 못 띄움 등) 남은 인증 사이트는 다른 실행기가
+    휴대폰 인증 차례(AuthGates)를 지켜 가져간다. 한 사이트가 실패해도 나머지는 계속. 성공한 사이트 수."""
+    presets = status.read_presets()
+    auth, plain = queue.Queue(), queue.Queue()
     for item in chosen:
-        todo.put(item)
-    gates, ok = AuthGates(), []
+        (auth if needs_auth(item[1], presets) else plain).put(item)
+    lane = 1 if auth.qsize() else 0
+    n = lane + min(n - lane, plain.qsize())     # 할 일이 없는 창은 띄우지 않는다
+    if lane:
+        log(f"  인증 사이트 {auth.qsize()}곳은 한 창에서 차례로"
+            + (f", 나머지 {plain.qsize()}곳은 {n - 1}개 창에서 동시에" if n > 1 else "") + " 실행합니다.")
+    gates, ok, lane_down = AuthGates(), [], threading.Event()
     scale, spots = (None, [None] * n) if headless else tile_layout(n, record_viewport(chosen))
+
+    def take(k):
+        for q in (auth, plain) if k == 0 else (plain, auth) if lane_down.is_set() else (plain,):
+            try:
+                return q.get_nowait()
+            except queue.Empty:
+                pass
+        return None
 
     def worker(k):
         _here.spot = spots[k]
@@ -1420,16 +1445,18 @@ def run_parallel(chosen, n, headless, session_override):
                                           **({"args": [f"--force-device-scale-factor={scale:.3f}"]} if scale else {}))
                 try:
                     while True:
-                        try:
-                            name, site = todo.get_nowait()
-                        except queue.Empty:
+                        item = take(k)
+                        if item is None:
                             return
+                        name, site = item
                         if run_site(browser, name, site, use_session=resolve_use_session(site, session_override),
                                     gates=gates):
                             ok.append(name)
                 finally:
                     browser.close()
         except Exception as e:      # 브라우저를 못 띄움 등 - 남은 사이트는 다른 실행기가 가져간다
+            if k == 0:
+                lane_down.set()
             log(f"  실행기 {threading.current_thread().name}에서 오류가 발생하였습니다. ({type(e).__name__}: {e})")
 
     workers = [threading.Thread(target=worker, args=(k,), name=f"수집{k + 1}", daemon=True) for k in range(n)]
@@ -1437,7 +1464,7 @@ def run_parallel(chosen, n, headless, session_override):
         w.start()
     for w in workers:
         w.join()
-    left = todo.qsize()
+    left = auth.qsize() + plain.qsize()
     if left:
         log(f"  실행기가 모두 중단되어 {left}개 사이트를 실행하지 못했습니다.")
     return len(ok)
@@ -1496,7 +1523,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
     if n > 1:
         if keep_open:
             log("동시 실행에서는 창을 열어 두지 않습니다. (KeepOpen 무시)")
-        log(f"{len(chosen)}개 사이트를 {n}개씩 동시에 실행합니다. (창 {'숨김' if headless else '표시'}, 인증 사이트는 한 곳씩 인증)")
+        log(f"{len(chosen)}개 사이트를 {n}개씩 동시에 실행합니다. (창 {'숨김' if headless else '표시'}, 인증 사이트는 한 창에서 차례로)")
         started = time.time()
         done = run_parallel(chosen, n, headless, session_override)
         log(f"=== 완료: 성공 {done}건 / 전체 {len(chosen)}건 ({time.time() - started:.0f}초) ===")
