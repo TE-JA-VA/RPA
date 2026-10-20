@@ -780,14 +780,10 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         return f"동시 실행 창 수를 {n}개로 변경하였습니다."
 
     def do_together(args):
-        # 웰라이프 전체 실행 방식 (사용자 2026-10-20) - 순서대로 / 함께 (엑셀 업로드) / 함께 (엑셀 업로드·자동 수집). 웰라이프 업체만 -
-        # 화면을 거치지 않은 명령도 여기서 막힌다 (limits() 가 정책을 새로 적은 뒤에 본다, 못 읽으면 PC 에 적힌 마지막 값)
+        # 전체 실행 방식 (사용자 2026-10-20) - 순서대로 / 함께 (엑셀 업로드) / 함께 (엑셀 업로드·자동 수집). 모든 업체 (같은 날 웰라이프만이던 것을 넓힘)
         mode = args.get("mode") if isinstance(args, dict) else None
         if not isinstance(mode, str) or mode not in st.TOGETHER_MODES:
             raise RuntimeError("전체 실행 방식이 올바르지 않습니다.")
-        got = limits() if limits else None
-        if not (got[2] if got else st.wellife_policy()):
-            raise RuntimeError("현재 접속한 업체는 사용할 수 없는 설정입니다.")
         dash.set_together(mode)
         return f"전체 실행 방식을 '{st.TOGETHER_MODES[mode]}'(으)로 변경하였습니다."
 
@@ -1212,8 +1208,8 @@ def run(cfg):
                     snap["parallel"] = {"chosen": st.parallel_choice()} if st.parallel_limit() >= 2 else None
                 except Exception:
                     snap["parallel"] = None
-                try:   # 웰라이프 전체 실행 방식 - 웰라이프 업체만 (없으면 화면이 이 기능을 모른다 = 옛 에이전트)
-                    snap["together"] = {"chosen": st.together_choice()} if st.wellife_policy() else None
+                try:   # 전체 실행 방식 - 모든 업체 (없으면 화면이 이 기능을 모른다 = 옛 에이전트)
+                    snap["together"] = {"chosen": st.together_choice()}
                 except Exception:
                     snap["together"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다

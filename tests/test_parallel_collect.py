@@ -321,16 +321,14 @@ os.environ.pop(status.ALL_RUN_ENV, None)
 status.wellife_policy = lambda: True
 check("전체 실행(Run_All.bat)이 아니면 함께 띄우지 않는다", web_runner.start_routine_together() is None and not spawned)
 os.environ[status.ALL_RUN_ENV] = "1"
-status.wellife_policy = lambda: False
-check("웰라이프 업체가 아니면 함께 띄우지 않는다 (예전 차례)", web_runner.start_routine_together() is None and not spawned)
-status.wellife_policy = lambda: True
 status.together_choice = lambda: "off"
-check("웰라이프 전체 실행이어도 전체 실행 방식이 '순서대로'(기본)면 함께 띄우지 않는다 (사용자 2026-10-20)",
+check("전체 실행이어도 전체 실행 방식이 '순서대로'(기본)면 함께 띄우지 않는다 (사용자 2026-10-20)",
       web_runner.start_routine_together() is None and not spawned)
+status.wellife_policy = lambda: False
 status.together_choice = lambda: "excel"
 together = web_runner.start_routine_together()
 cmd, env = spawned[0] if spawned else (None, {})
-check("웰라이프 전체 실행이면 루틴을 함께 띄운다 - 함께 표시는 주고 전체 실행 표시는 빼서",
+check("'함께' 를 고른 전체 실행이면 웰라이프가 아니어도 루틴을 함께 띄운다 (모든 업체, 사용자 2026-10-20) - 함께 표시는 주고 전체 실행 표시는 빼서",
       together is not None and env.get(status.TOGETHER_ENV) == "1" and status.ALL_RUN_ENV not in env
       and cmd[-1].endswith("run_routine.py"), str(cmd))
 spawned.clear()

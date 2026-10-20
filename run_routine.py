@@ -5821,8 +5821,81 @@ def goto_order_screen(ctx):
     return True, None
 
 
+# 함께 실행 (모든 업체, 사용자 2026-10-20): 프리페어가 함께 띄운 루틴이면 main 이 업체가 고른 방식을 적는다. None 이면 예전 그대로.
+# 'excel' - 받는 엑셀을 사이트 수집이 끝날 때까지 먼저 올리고 자동 수집은 그 뒤 / 'excel_import' - 자동 수집을 끝까지 본 뒤 같은 화면에서
+# 받는 대로 (웰라이프의 '+' 화면 없이 - 두 탭이 동시에 넣지 않는다)
+TOGETHER_MODE = None
+TOGETHER_ENV = status.TOGETHER_ENV   # 불러올 때 받아 둔다 (시험이 status 를 바꿔 끼운다)
+
+
+def excel_upload_together(ctx, grid):
+    """함께 실행: 사이트 수집(프리페어)이 넘기는 엑셀을 수집이 끝날 때까지 받는 대로 올린다 (웰라이프 wellife.excel_together 와 같은 규칙).
+    파일 창·팝업은 키보드·마우스 없이(UPLOAD_NO_KEYS). 차례 사이에 새로 뜬 ERPia 창은 다음 차례 앞과 끝에서 닫고 그 수를 알린다 - 결과
+    대기 뒤 늦게 뜬 실패 팝업이면 그 파일은 이미 완료 폴더에 있다. 앞 차례에 못 올려 남은 파일은 다시 누르지 않는다 (다음 실행에).
+    오류가 나도 매출처리는 이어간다 (예전 엑셀업로드와 같다) - 남은 파일은 업로드 폴더에 그대로."""
+    global UPLOAD_NO_KEYS
+    rr = sys.modules[__name__]
+    status.step("excel_upload")
+    log("\n=== 엑셀업로드 (사이트 수집과 함께 - 받는 대로) ===")
+    base = set(find_popup_windows(ctx.pid, ctx.hwnd))
+    tried, uploaded, errors, late = set(), 0, 0, 0
+
+    def between(label):
+        try:
+            return len(upload_popups(ctx.pid, ctx.hwnd, base, label=label))
+        except UploadStop:      # 막 뜬 창은 단추가 아직 안 그려졌을 수 있다 - 한 번 더 본 뒤 멈춘다
+            time.sleep(wellife.POPUP_SETTLE_SECONDS)
+            return len(upload_popups(ctx.pid, ctx.hwnd, base, label=label))
+
+    UPLOAD_NO_KEYS = True
+    try:
+        while True:
+            new = wellife.upload_paths(rr) - tried
+            if new:
+                late += between("업로드 사이 ")
+                u, e = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, grid, skip=tried)
+                tried |= new
+                uploaded, errors = uploaded + u, errors + e
+            elif "prepare" in status.running_programs():
+                time.sleep(1)
+            elif not wellife.upload_paths(rr) - tried:  # 수집이 끝났다 - 끝나기 직전에 넘긴 파일이 없으면 끝 (있으면 한 번 더)
+                break
+        late += between("업로드 끝 ")
+    except Exception as e:
+        log(f"경고: 엑셀업로드 처리 중 오류가 발생해 멈춥니다 (남은 파일은 업로드 폴더에 그대로 - 다음 실행에): {e}")
+    finally:
+        UPLOAD_NO_KEYS = False
+    left = len(wellife.upload_paths(rr))
+    notes = [f"오류 폴더 {errors}개" if errors else "", f"남은 파일 {left}개" if left else "",
+             f"업로드 사이 팝업 {late}개 - 결과 기록 확인" if late else ""]
+    status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개", note=", ".join(n for n in notes if n) or None)
+    log(f"  엑셀 업로드 (사이트 수집과 함께): {len(tried)}건 중 {uploaded}건, 오류 폴더 {errors}건, 남은 파일 {left}건, "
+        f"업로드 사이에 닫은 팝업 {late}개" + (f" ({wellife.LEFT_NOTE})" if left else ""))
+
+
 def module_sales(ctx):
+    """주문매핑 매출처리 (sales_flow). 함께 실행이면 ERPia 를 맨 위로 두고(사이트 수집의 Edge 창이 누를 자리를 덮지 않게) 끝나면 풀고,
+    사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 간다 (뒤 모듈이 Edge 창과 겹치지 않게 - 예전 차례와 같다).
+    함께 실행이 아니면 맨 위만 푼다 - 앞 함께 실행이 대시보드 [중지](강제 종료)로 끝나 finally 를 못 타면 맨 위로 남는다 (맨 위가 아니면
+    아무 일 없음, 웰라이프 login_free 와 같다)."""
+    rr = sys.modules[__name__]
+    if not TOGETHER_MODE:
+        wellife.on_top(rr, ctx.hwnd, False)
+        return sales_flow(ctx)
+    wellife.on_top(rr, ctx.hwnd, True)
+    try:
+        return sales_flow(ctx)
+    finally:
+        wellife.on_top(rr, ctx.hwnd, False)
+        if "prepare" in status.running_programs():
+            log("사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 갑니다.")
+            while "prepare" in status.running_programs():
+                time.sleep(2)
+
+
+def sales_flow(ctx):
     """주문매핑 매출처리: 화면 이동 -> 상단 전체선택 -> 가져오기 -> 엑셀업로드 -> 하단 전체선택 -> 정상매출.
+    함께 실행(TOGETHER_MODE)이면 엑셀업로드는 받는 대로 (excel_upload_together) - 'excel' 은 상단 전체선택 앞, 'excel_import' 는 가져오기 뒤.
 
     대상이 0건이어도 '정상매출'을 누른다 (예전 흐름 그대로. ERPia 가 어떤 팝업을 내는지 실측이 없어
     '대상 없음' 판정은 넣지 않았다).
@@ -5844,6 +5917,8 @@ def module_sales(ctx):
     if ctx.collected:
         log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
     else:
+        if TOGETHER_MODE == "excel":    # 받는 엑셀을 사이트 수집이 끝날 때까지 먼저 올린다 - 자동 수집은 그 뒤
+            excel_upload_together(ctx, top_left)
         status.step("top_select")
         log("\n=== 좌측 상단 그리드 전체선택 ===")
         n_top = select_all_and_verify("좌측상단", hwnd, top_left, ["아이디"])
@@ -5855,13 +5930,16 @@ def module_sales(ctx):
             log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
         win = app.window(handle=hwnd)
 
-        # 7-1. 엑셀업로드 (바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만)
-        status.step("excel_upload")
-        log("\n=== 엑셀업로드 ===")
-        try:
-            run_excel_upload_step(app, pid, hwnd, top_left)
-        except Exception as e:
-            log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
+        if TOGETHER_MODE == "excel_import":     # 자동 수집을 끝까지 본 뒤 같은 화면에서 받는 대로 - 사이트 수집이 끝날 때까지
+            excel_upload_together(ctx, top_left)
+        elif not TOGETHER_MODE:
+            # 7-1. 엑셀업로드 (바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만)
+            status.step("excel_upload")
+            log("\n=== 엑셀업로드 ===")
+            try:
+                run_excel_upload_step(app, pid, hwnd, top_left)
+            except Exception as e:
+                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
         ctx.collected = ec.pid_alive(ctx.pid)   # 수집 도중 꺼졌으면 다시 돌 때 수집부터
 
     # 8. 하단 전체선택
@@ -6213,6 +6291,22 @@ def wellife_route(policy_on, has_section):
     return ("stop", "이 업체는 웰라이프 실행이 열려 있지 않습니다 (관리 화면)") if has_section else ("routine", None)
 
 
+def together_setup(rr, selected):
+    """프리페어가 함께 띄운 루틴(TOGETHER_ENV)이면 업체가 고른 방식을 TOGETHER_MODE 에 적는다 (모든 업체, 사용자 2026-10-20).
+    주문매핑 매출처리를 안 하거나 '순서대로' 면 사이트 수집이 끝나기를 기다린 뒤 예전처럼 돈다 (예전 차례). 함께 올리면 로그인 창에
+    키를 치는 동안 사이트 수집이 새 Edge 창을 띄우지 않게 키보드 차례를 잡는다 (wellife.keys - Edge 창이 포커스를 가져가면 비밀번호가 샌다)."""
+    global TOGETHER_MODE
+    if os.environ.get(TOGETHER_ENV) != "1":
+        return
+    mode = status.together_choice()
+    log(f"전체 실행 방식: {status.TOGETHER_MODES.get(mode, mode)} (사이트 수집과 함께 띄워짐)")
+    if mode == "off" or not selected.get("Sales"):
+        wellife.wait_prepare(rr, "'순서대로' 라" if mode == "off" else "주문매핑 매출처리를 하지 않아")
+        return
+    TOGETHER_MODE = mode
+    pl.KEYS_GUARD = lambda: wellife.keys(rr)
+
+
 def main():
     if "--check" in sys.argv[1:]:
         run_self_check()
@@ -6266,6 +6360,7 @@ def main():
     else:
         log("실행할 모듈: " + " / ".join(
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
+    together_setup(rr, selected)
 
     result, reason = run_modules(selected)
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \

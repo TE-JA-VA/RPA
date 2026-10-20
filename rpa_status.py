@@ -2087,26 +2087,27 @@ def running_programs(snapshot=None):
 
 
 # ---------------------------------------------------------------------------
-# 함께 실행 (사용자 2026-10-19): 전체 실행에서 프리페어(사이트 수집)가 웰라이프 루틴을 같이 띄워, 사이트에서 받은 엑셀을 받는 대로
-# 올린다. 수집은 기다리지 않고 인증 사이트부터 바로 시작한다 (사용자 10-19: 인증 사이트가 1순위 - 몇 곳일지, 얼마나 걸릴지 모른다).
+# 함께 실행 (사용자 2026-10-19, 10-20 부터 모든 업체): 전체 실행에서 프리페어(사이트 수집)가 루틴을 같이 띄워, 사이트에서 받은 엑셀을 받는
+# 대로 올린다 (웰라이프 wellife.excel_together, 그 밖 업체 run_routine.excel_upload_together). 수집은 기다리지 않고 인증 사이트부터 바로 시작한다 (사용자 10-19: 인증 사이트가 1순위 - 몇 곳일지, 얼마나 걸릴지 모른다).
 # Edge 창은 뜰 때마다 포커스를 가져가 그사이 친 키(비밀번호 포함)가 Edge 로 새므로 (개발기 실측), 루틴이 ERPia 에 키보드를 쓰는
 # 동안만(로그인 입력·메뉴 검색, 몇 초) hold_keys 로 잡고, 프리페어는 그동안 새 창을 띄우거나 다음 단계로 가지 않는다 (keys_held).
 # ---------------------------------------------------------------------------
 TOGETHER_ENV = "RPA_WITH_PREPARE"       # 프리페어가 함께 띄운 루틴에 준다
 ALL_RUN_ENV = "RPA_ALL_RUN"             # Run_All.bat 이 준다 - 전체 실행일 때만 함께 띄운다
-# 전체 실행 방식 (사용자 2026-10-20) - 업체가 웹에서 고른다 (명령 set_together → settings.json prepare.together). 웰라이프만.
-# 값은 업체 웹(rpa-settings.js TOGETHER)·에이전트(do_together)와 같다. 이름은 화면·결과 글에 쓴다
+# 전체 실행 방식 (사용자 2026-10-20) - 업체가 웹에서 고른다 (명령 set_together → settings.json prepare.together). 모든 업체
+# (같은 날 웰라이프만이던 것을 넓힘). 값은 업체 웹(rpa-settings.js TOGETHER)·에이전트(do_together)와 같다. 이름은 화면·결과 글에 쓴다
 TOGETHER_MODES = {
     "off": "순서대로",                          # 사이트 수집이 끝난 뒤 PROCESS (Run_All.bat 이 이어서 띄운다 - 예전 그대로)
     "excel": "함께 (엑셀 업로드)",               # PROCESS 를 함께 띄워 받은 엑셀을 받는 대로 업로드, 자동 수집은 사이트 수집이 끝난 뒤
-    "excel_import": "함께 (엑셀 업로드·자동 수집)",  # 엑셀 업로드와 자동 수집을 사이트 수집과 함께 ('+' 로 연 화면에서 업로드)
+    # 엑셀 업로드와 자동 수집을 사이트 수집과 함께 - 웰라이프는 '+' 로 연 화면에서 업로드, 그 밖 업체는 자동 수집을 끝까지 본 뒤 같은 화면에서
+    "excel_import": "함께 (엑셀 업로드·자동 수집)",
 }
 TOGETHER_DEFAULT = "off"
 
 
 def together_choice():
     """업체가 고른 전체 실행 방식 (TOGETHER_MODES 의 키). 없거나 이상하면 TOGETHER_DEFAULT (순서대로).
-    웰라이프 업체의 전체 실행(Run_All.bat)에서만 쓴다 - web_runner.start_routine_together, wellife.run_main."""
+    전체 실행(Run_All.bat)에서만 쓴다 - web_runner.start_routine_together, wellife.run_main, run_routine.main."""
     try:
         v = read_settings()["prepare"].get("together")
     except Exception:

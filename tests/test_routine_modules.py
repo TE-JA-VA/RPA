@@ -4,6 +4,7 @@ ERPia 없이 돈다. 상태 기록은 임시 폴더로 격리한다 (RPA_STATUS_
 
     .venv\\Scripts\\python.exe tests\\test_routine_modules.py
 """
+import contextlib
 import os
 import sys
 import tempfile
@@ -860,6 +861,107 @@ ALIVE[0] = False
 rr.module_sales(ctx)
 check("수집 도중 ERPia 가 꺼졌으면 collected 를 세우지 않는다 (다시 돌 때 수집부터)", ctx.collected is False)
 ALIVE[0] = True
+
+# 함께 실행 (모든 업체, 사용자 2026-10-20): 엑셀은 받는 대로 - 'excel' 은 상단 전체선택 앞, 'excel_import' 는 가져오기를 끝까지 본 뒤
+_saved_t = {n: getattr(rr, n) for n in ("excel_upload_together", "sales_flow", "find_popup_windows", "upload_popups",
+                                         "excel_upload_dir", "time")}
+_saved_w = rr.wellife.on_top, rr.wellife.wait_prepare
+rr.excel_upload_together = lambda ctx, grid: sales_acts.append(("together",))
+for mode, want in (("excel", [("together",), ("select", "좌측상단"), ("import",), ("select", "하단")]),
+                   ("excel_import", [("select", "좌측상단"), ("import",), ("together",), ("select", "하단")])):
+    sales_acts.clear()
+    rr.TOGETHER_MODE = mode
+    rr.sales_flow(make_ctx())
+    check(f"함께 실행 '{mode}': " + ("받는 엑셀을 먼저 (수집이 끝날 때까지) -> 상단 전체선택 -> 가져오기 -> 하단" if mode == "excel"
+                                   else "상단 전체선택 -> 가져오기(끝까지) -> 받는 엑셀 -> 하단 (예전 엑셀업로드 자리, '+' 화면 없이)"),
+          sales_acts == want, str(sales_acts))
+tops, prep = [], [["prepare"], ["prepare"], []]
+rr.wellife.on_top = lambda rr_, hwnd, on: tops.append(on)
+rr.status = StatusRec()
+rr.status.running_programs = lambda: prep.pop(0) if prep else []
+rr.time = types.SimpleNamespace(sleep=lambda s: None, time=_time.time)
+rr.TOGETHER_MODE = "excel"
+rr.sales_flow = lambda ctx: ("done", None)
+res = rr.module_sales(make_ctx())
+check("함께 실행이면 주문매핑 동안 ERPia 를 맨 위로 두고 끝나면 풀며, 사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 (키를 치는 뒤 모듈이 Edge 와 겹치지 않게)",
+      tops == [True, False] and not prep and res == ("done", None), f"{tops} {prep} {res}")
+rr.TOGETHER_MODE = None
+tops.clear()
+rr.module_sales(make_ctx())
+check("함께 실행이 아니면 맨 위만 푼다 (앞 함께 실행이 [중지] 로 남긴 맨 위 - 맨 위가 아니면 아무 일 없음)", tops == [False], str(tops))
+rr.sales_flow = _saved_t["sales_flow"]
+rr.excel_upload_together = _saved_t["excel_upload_together"]
+
+tdir = tempfile.mkdtemp(prefix="rpa_tog_")
+arrive, ups, labels, on = [["(108)b.xlsx"], []], [], [], [True]
+
+
+def tog_sleep(_s):
+    if arrive:
+        for f in arrive.pop(0):
+            open(os.path.join(tdir, f), "w").close()
+    else:
+        on[0] = False
+
+
+def tog_up(app, pid, hwnd, grid, skip=()):
+    todo = sorted(p for p in rr.wellife.upload_paths(rr) if p not in skip)
+    ups.append(([os.path.basename(p) for p in todo], rr.UPLOAD_NO_KEYS))
+    for p in todo:
+        os.remove(p)
+    return len(todo), 0
+
+
+rr.excel_upload_dir = lambda: tdir
+rr.find_popup_windows = lambda pid, hwnd: []
+rr.upload_popups = lambda pid, hwnd, before=(), label="": labels.append(label) or (["늦은 팝업"] if len(labels) == 1 else [])
+rr.run_excel_upload_step = tog_up
+rr.status = StatusRec()
+rr.status.running_programs = lambda: ["prepare"] if on[0] else []
+rr.time = types.SimpleNamespace(sleep=tog_sleep, time=_time.time)
+open(os.path.join(tdir, "(107)a.xlsx"), "w").close()
+rr.excel_upload_together(make_ctx(), "그리드")
+metric = rr.status.of("metric")
+check("받는 엑셀은 들어오는 대로 (차례마다 새 파일만, 키보드·마우스 없이), 사이트 수집이 끝나고 새 파일이 없으면 멈춘다",
+      [u[0] for u in ups] == [["(107)a.xlsx"], ["(108)b.xlsx"]] and all(u[1] for u in ups) and not rr.UPLOAD_NO_KEYS, str(ups))
+check("업로드 차례 사이·끝에 새로 뜬 ERPia 창은 닫고 그 수를 결과에 알린다 (늦게 뜬 실패 팝업 - 그 파일은 이미 완료 폴더)",
+      labels == ["업로드 사이 ", "업로드 사이 ", "업로드 끝 "] and metric and metric[-1][2:4] == (2, 2)
+      and "업로드 사이 팝업 1개" in metric[-1][4]["note"], f"{labels} {metric[-1:]}")
+ups.clear()
+
+
+def last_hand_over():   # 수집이 마지막 사이트 파일을 넘기자마자 끝난다 (빈 차례와 '수집 끝' 확인 사이)
+    open(os.path.join(tdir, "(109)c.xlsx"), "w").close()
+    return []
+
+
+rr.status.running_programs = last_hand_over
+rr.excel_upload_together(make_ctx(), "그리드")
+check("수집이 끝나기 직전에 넘긴 파일도 끝내기 전에 한 번 더 보고 올린다 (검토 10-20 - 웰라이프와 같은 규칙)",
+      [u[0] for u in ups] == [["(109)c.xlsx"]], str(ups))
+os.environ[rr.TOGETHER_ENV] = "1"
+waits = []
+rr.wellife.wait_prepare = lambda rr_, why: waits.append(why)
+rr.status = StatusRec()
+rr.status.TOGETHER_MODES = {"off": "순서대로", "excel": "함께 (엑셀 업로드)", "excel_import": "함께 (엑셀 업로드·자동 수집)"}
+_saved_guard = getattr(rr.pl, "KEYS_GUARD", None)     # rr.pl 은 위에서 가짜로 바꿔 끼웠다
+for mode, sales, want in (("excel", True, "excel"), ("excel_import", True, "excel_import"), ("excel", False, None), ("off", True, None)):
+    rr.TOGETHER_MODE, rr.pl.KEYS_GUARD = None, contextlib.nullcontext
+    waits.clear()
+    rr.status.together_choice = lambda m=mode: m
+    rr.together_setup(rr, {"Sales": sales})
+    check(f"함께 띄운 루틴: 방식 '{mode}', 주문매핑 {'켬' if sales else '끔'} -> "
+          + (f"받는 대로 올림 ('{want}'), 로그인 키 입력 동안 키보드 차례" if want else "사이트 수집이 끝나기를 기다린 뒤 예전처럼"),
+          rr.TOGETHER_MODE == want and len(waits) == (0 if want else 1) and (rr.pl.KEYS_GUARD is not contextlib.nullcontext) == bool(want),
+          f"{rr.TOGETHER_MODE} {waits}")
+del os.environ[rr.TOGETHER_ENV]
+rr.TOGETHER_MODE, rr.pl.KEYS_GUARD = None, contextlib.nullcontext
+rr.together_setup(rr, {"Sales": True})
+check("함께 띄운 루틴이 아니면 아무것도 바꾸지 않는다", rr.TOGETHER_MODE is None and rr.pl.KEYS_GUARD is contextlib.nullcontext)
+rr.pl.KEYS_GUARD = _saved_guard
+rr.wellife.on_top, rr.wellife.wait_prepare = _saved_w
+for n, f in _saved_t.items():
+    setattr(rr, n, f)
 for n, f in _saved_s.items():
     setattr(rr, n, f)
 

@@ -961,12 +961,12 @@ def recover_stage():
 
 
 def start_routine_together():
-    """전체 실행(Run_All.bat 이 ALL_RUN_ENV 를 준다)의 웰라이프 업체이고 업체가 '함께' 방식을 골랐으면 (status.together_choice,
-    사용자 2026-10-20) ERPia 쪽(루틴)을 지금 함께 띄운다 (사용자 2026-10-19) - 사이트에서 받은 엑셀을 받는 대로 올리고,
-    '함께 (엑셀 업로드·자동 수집)' 이면 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가 예전처럼 돈다.
-    (프로세스, 띄운 시각) - 띄우지 않았으면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다 - '순서대로')."""
+    """전체 실행(Run_All.bat 이 ALL_RUN_ENV 를 준다)이고 업체가 '함께' 방식을 골랐으면 (status.together_choice, 사용자 2026-10-20 -
+    모든 업체, 웰라이프만이던 것을 같은 날 넓힘) ERPia 쪽(루틴)을 지금 함께 띄운다 (사용자 2026-10-19) - 사이트에서 받은 엑셀을 받는 대로
+    올리고, '함께 (엑셀 업로드·자동 수집)' 이면 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가
+    예전처럼 돈다. (프로세스, 띄운 시각) - 띄우지 않았으면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다 - '순서대로')."""
     global _together
-    if os.environ.get(status.ALL_RUN_ENV) != "1" or not status.wellife_policy():
+    if os.environ.get(status.ALL_RUN_ENV) != "1":
         return None
     mode = status.together_choice()
     if mode == "off":
