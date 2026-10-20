@@ -1071,7 +1071,7 @@ INVOICE_TAB = "운송장번호 전송"
 INVOICE_FORM = "Frm_Send_TrackingNumber"
 INVOICE_ICON = "lcg_InvoiceSend"
 INVOICE_SEND = "운송장번호 [전송요청(S)]"
-SEND_BUSY_WAIT = 10.0      # '전송 중' 인지 이만큼 1초마다 다시 본다 - 잠깐 막힌 것과 가리려고
+SEND_BUSY_WAIT = 60.0      # '전송 중' 인지 이만큼 1초마다 다시 본다 - 잠깐 막힌 것과 가리려고
 SEND_BUSY_LAST = "이후에는 전송하지 않습니다"   # 반복 끝 시각까지 전송 중일 때 사유 끝 (send_busy_reason)
 
 
