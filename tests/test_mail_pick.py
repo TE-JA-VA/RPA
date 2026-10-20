@@ -97,13 +97,7 @@ rec.set_pick(steps, i, ">>>")
 check("설정한 줄의 설명", rec.describe(steps[i]) == "제목이 '>>>' 로 시작하는 메일마다 ↓", rec.describe(steps[i]))
 end = rec.pick_body(steps, i)
 check("묶음은 받기 단계까지", end is not None and steps[end].get("download"), end)
-seed = rec.pick_seed(steps[i])
-check("기록할 때 보이던 '>>>' 메일 (A·C) 을 처리한 것으로", sorted(seed) == ["k1", "k3"], seed)
-
-mem_path = os.path.join(OUT, "mem", "PRESET1.json")
-mem = rec.MailMemory(mem_path)
-mem.add_all(seed)
-mem.save()
+mem_path = os.path.join(OUT, "mem", "PRESET1.json")      # 기록 때 보이던 메일을 '이미 처리' 로 채우지 않는다 - 빈 기억에서 시작 (사용자 2026-10-20)
 MAILS.insert(0, ("k4", ">>> 주문 D"))      # 새로 온 메일 (맨 위)
 
 
@@ -123,10 +117,11 @@ def replay(label, memory=None, preview=False):
 
 
 ok, rp, lines = replay("new", rec.MailMemory(mem_path))
-check("새로 온 메일 D 만 받는다", ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_k4.xlsx"], (rp.results[-2:], rp.saved))
-check("로그: 고른 결과·메일마다", any("제목이 '>>>' 로 시작하는 메일 3통 중 새 메일 1통" in x for x in lines)
-      and any("[1/1] 메일 열기: >>> 주문 D" in x for x in lines), [x for x in lines if "메일" in x])
-check("받은 메일을 기억한다", "k4" in rec.MailMemory(mem_path).keys)
+check("첫 실행은 기록 때 보이던 메일(A·C, 기록 중 연 A 포함)과 새로 온 D 를 모두 받는다 (사용자 2026-10-20)",
+      ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_k4.xlsx", "(013)file_k1.xlsx", "(013)file_k3.xlsx"], (rp.results[-2:], rp.saved))
+check("로그: 고른 결과·메일마다", any("제목이 '>>>' 로 시작하는 메일 3통 중 새 메일 3통" in x for x in lines)
+      and any("[1/3] 메일 열기: >>> 주문 D" in x for x in lines), [x for x in lines if "메일" in x])
+check("받은 메일을 기억한다", {"k1", "k3", "k4"} <= set(rec.MailMemory(mem_path).keys))
 
 ok, rp, lines = replay("again", rec.MailMemory(mem_path))
 check("다시 돌리면 대상 없음 (성공·받은 것 없음·no_target)", ok and not rp.saved and rp.no_target
@@ -159,8 +154,6 @@ MAILS.insert(0, ("k11", "＞＞＞ 주문 K"))      # 전각 꺾쇠 - 사람이 
 ok, rp, lines = replay("marks", rec.MailMemory(mem_path))
 check("중요·전달 표시(아이콘·숨은 글자)가 제목 칸 앞에 있어도 '>>>' 로 알아본다", ok and sorted(os.path.basename(x) for x in rp.saved)
       == ["(013)file_k10.xlsx", "(013)file_k11.xlsx", "(013)file_k9.xlsx"], (rp.saved, [x for x in lines if "메일" in x]))
-check("한 메일이 중요 표시를 두 군데 가져도 제목 기억은 같은 메일 하나", rec.pick_seed({"pick": {"prefix": ">>>"}, "row": {"list": [
-      {"k": "", "t": "중요 >>> 주문", "s": ">>> 주문"}]}}) == ["제목:>>> 주문"])
 
 rec.set_pick(steps, i, "[긴급]")
 ok, rp, lines = replay("prefix", rec.MailMemory(mem_path))

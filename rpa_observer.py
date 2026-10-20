@@ -450,7 +450,6 @@ def new_preset(no, name=None, code=""):
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일), 메일 시작 문구
-            "pick_dirty": False,                         # 저장할 때 '이미 처리' 기억을 다시 채운다 (문구·경로를 바꿨거나 새로 기록)
             "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
 
@@ -465,7 +464,7 @@ def load_file_into(p, obj):
         p.update(id="", pw="", has_pw=False, phone="", senders="")
     pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
     p.update(name=obj["name"], code=obj["code"], loaded=r, raw=[], head=None, start_url=None, viewport=r.get("viewport"),
-             enabled={}, deleted=set(), otp={}, fresh=True, pick_dirty=True,
+             enabled={}, deleted=set(), otp={}, fresh=True,
              source="mail" if pick else "shop", prefix=pick["prefix"] if pick else "")
     return p
 
@@ -854,8 +853,6 @@ class App:
         p = self.presets[self.cur]
         i = self.phone_box.current()
         source, prefix = self.source_var.get(), self.prefix_var.get().strip()
-        if (source, prefix) != (p["source"], p["prefix"]):
-            p["pick_dirty"] = True                  # 저장할 때 그 문구로 '이미 처리' 를 다시 채운다
         p.update(name=self.name_var.get().strip() or p["name"], code=self.code_var.get().strip(),
                  id=self.id_var.get(), pw=self.pw_var.get(), senders=self.senders_var.get(),
                  phone=self.phone_ids[i] if 0 <= i < len(self.phone_ids) else p["phone"], source=source, prefix=prefix)
@@ -1045,7 +1042,7 @@ class App:
         if (p["raw"] or p["loaded"] or p["head"]) and not self.ask(
                 "다시 기록", f"{circled(self.cur + 1)} {p['name']}의 기록을 삭제하고 처음부터 다시 기록하시겠습니까?"):
             return
-        p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set(), pick_dirty=True)
+        p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set())
         self.recording, self.shown = self.cur, 0
         self.status.config(text="브라우저를 여는 중…", fg=MUTED)
         self.render()
@@ -1106,7 +1103,7 @@ class App:
         p = self.presets[no]
         final = self._final(p)
         k = next((i for i, s in enumerate(final["steps"]) if s["id"] == cut), len(final["steps"]))
-        p.update(head=dict(final, steps=final["steps"][:k], cut=final["steps"][k] if k < len(final["steps"]) else None), raw=[], fresh=True, pick_dirty=True,
+        p.update(head=dict(final, steps=final["steps"][:k], cut=final["steps"][k] if k < len(final["steps"]) else None), raw=[], fresh=True,
                  deleted={d for d in p["deleted"] if d < cut}, enabled={d: v for d, v in p["enabled"].items() if d < cut},
                  otp={d: v for d, v in p["otp"].items() if d < cut})
         self.previewing = self.paused = self.stopping = self.editing = False
@@ -1218,23 +1215,13 @@ class App:
                         phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]}, origs=origs, dropped=dropped)
         if problem:
             return self.status.config(text=problem, fg=RED)
-        seeded = []
         self.unsaved_drop = False
         for p, f in zip(self.presets, files):
             p["orig"] = f["no"]                  # 이제부터는 이 번호가 옛 번호
             if f["record"]:
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
-            picks = [x for x in (f["record"] or {}).get("steps", []) if x.get("pick")]
-            if picks and p["pick_dirty"]:        # 기록할 때 보이던 맞는 메일은 이미 처리한 것으로 (사용자 2026-10-14 (나))
-                mem = rec.MailMemory(st.mail_memory_path(f["no"]))
-                keys = [k for x in picks for k in rec.pick_seed(x)]
-                mem.add_all(keys)
-                mem.save()
-                seeded.append((picks[0]["pick"]["prefix"], len(set(keys))))
-            p["pick_dirty"] = False
         self._load_fields()
-        self.status.config(text=" ".join(f"기록했습니다. '{x}'이(가) 붙은 메일 {n}통은 이미 처리된 것으로 간주하였습니다. "
-                                         "다음 실행부터 수신한 메일만 처리합니다." for x, n in seeded) or "저장했습니다.", fg=GREEN_D)
+        self.status.config(text="저장했습니다.", fg=GREEN_D)     # 기록 때 보이던 메일도 실행 때 받는다 - '이미 처리' 로 미리 채우지 않는다 (사용자 2026-10-20, 중복은 주문번호로 막힌다)
         return st.presets_path()
 
     def browser_bounds(self):

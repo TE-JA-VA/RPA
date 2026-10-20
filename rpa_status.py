@@ -1043,7 +1043,7 @@ def write_presets(presets):
 
 
 def mail_memory_path(no):
-    """프리셋 no 가 처리한 메일 기억 (web_replay.MailMemory) - 옵저버가 저장할 때 채우고 ACTOR 가 쓴다."""
+    """프리셋 no 가 처리한 메일 기억 (web_replay.MailMemory) - ACTOR 가 받은 메일을 적고 다음 실행에서 건너뛴다."""
     return os.path.join(data_dir(), "메일기억", f"{preset_site_key(no)}.json")
 
 

@@ -136,7 +136,7 @@ JS = r"""
             href: el.getAttribute('href') || '', css: cssPath(el), inOverlay: inOverlay(el)};
   }
   // 목록 줄(li·tr)을 눌렀으면 그 목록 - 메일 고르기가 쓴다 (사용자 2026-10-14). sel = 같은 모양의 줄, inner = 줄 안의 누른 칸,
-  // key = 줄의 고유 표시 (data-key 등, 없으면 빈 칸 - 제목 글자로 기억), list = 그때 보이던 줄 (저장하면 '이미 처리' 로)
+  // key = 줄의 고유 표시 (data-key 등, 없으면 빈 칸 - 제목 글자로 기억), list = 그때 보이던 줄 (연 메일의 제목 - auto_pick)
   const STATE = /^(on|off|active|selected?|hover|focus|read|unread|new|checked|current|open|show|odd|even)$|(^is-|-active$|-selected$|_on$|_over$)/i;
   const clsOf = e => [...e.classList].filter(c => /^[A-Za-z_][\w-]*$/.test(c) && !STATE.test(c)).map(c => '.' + c).join('');
   const rowKey = r => r.getAttribute('data-key') || r.getAttribute('data-id') || r.getAttribute('data-uid') || r.id || '';
@@ -596,14 +596,6 @@ def auto_pick(steps, prefix):
         if title_starts(prefix, *titles):
             return i
     return None
-
-
-def pick_seed(s):
-    """기록할 때 목록에 보이던 메일 중 제목이 정한 글자로 시작하는 것 (저장하면 '이미 처리' 로 - 사용자 2026-10-14 (나)).
-    목록의 s = 보이는 제목 (중요·전달 같은 숨은 표시를 뺀 것, 옛 기록에는 없다), t = 칸 글자 전체."""
-    prefix = (s.get("pick") or {}).get("prefix") or ""
-    return [mail_key(x["k"], x.get("s") or x["t"]) for x in (s.get("row") or {}).get("list", [])
-            if title_starts(prefix, x.get("s"), x["t"])]
 
 
 class MailMemory:
