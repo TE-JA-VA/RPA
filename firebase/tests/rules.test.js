@@ -103,6 +103,10 @@ test("commands: set_parallel 은 관리자가 만들 수 있다 (동시 실행 �
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "set_parallel", args: { parallel: 3 } })));
 });
 
+test("commands: set_together 는 관리자가 만들 수 있다 (웰라이프 전체 실행 방식)", async () => {
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "set_together", args: { mode: "excel" } })));
+});
+
 test("commands: resume_repeat 는 관리자가 만들 수 있다 (반복 다시 시작)", async () => {
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd({ type: "resume_repeat", args: null })));
 });

@@ -39,8 +39,13 @@ echo ============================================================
 echo  1/2  ACTOR 오토파일럿 - 메일 첨부파일 내려받기
 echo ============================================================
 rem --no-keep-open : 브라우저를 닫아야 다음 단계로 넘어간다
+rem 웰라이프 업체는 ACTOR 가 수집하는 동안 PROCESS 를 함께 띄워 받은 엑셀을 바로 올린다 (2026-10-19).
+rem 그때 ACTOR 는 PROCESS 가 끝날 때까지 기다렸다가 100 + PROCESS 코드로 끝난다 - PROCESS 를 다시 띄우지 않는다.
+set RPA_ALL_RUN=1
 "%~dp0Prepare_RPA.exe" --all --no-keep-open
 set PREPARE_RC=%ERRORLEVEL%
+set RPA_ALL_RUN=
+if %PREPARE_RC% GEQ 100 if %PREPARE_RC% LSS 200 goto together
 
 if not "%PREPARE_RC%"=="0" (
     echo.
@@ -56,6 +61,17 @@ echo  2/2  PROCESS 오토파일럿 - ERPia 처리
 echo ============================================================
 "%~dp0ERPia_RPA.exe"
 set ROUTINE_RC=%ERRORLEVEL%
+goto summary
+
+:together
+rem 100 + (ACTOR 실패 2) + (PROCESS 실패 1)
+set /a TOGETHER_CODE=PREPARE_RC-100
+set /a ROUTINE_RC=TOGETHER_CODE %% 2
+set /a PREPARE_RC=TOGETHER_CODE / 2
+echo.
+echo  2/2  PROCESS 오토파일럿은 수집과 함께 돌았습니다.
+
+:summary
 
 echo.
 echo ============================================================

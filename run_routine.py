@@ -1682,6 +1682,7 @@ EXCEL_UPLOAD_ERROR_DIR = "오류"     # 올릴 수 없는 파일을 옮길 곳
 EXCEL_UPLOAD_EXTS = (".xlsx", ".xls")
 # 파일명은 '(nnn)로 시작한다. nnn 이 사이트코드다.
 EXCEL_FILE_CODE_RE = re.compile(r"^\((\d{3})\)")
+GRID_ROW_NO_RE = re.compile(r"행\s*(\d+)\s*$")   # 그리드 칸 이름 끝의 행 번호 ('사이트코드 행 14', '엑셀업로드 행 14')
 SITE_CODE_COL = "사이트코드"
 EXCEL_UPLOAD_COL = "엑셀업로드"
 # '엑셀업로드' 셀 값이 이 값이 아니면 그 사이트는 엑셀 업로드를 지원하지 않는다.
@@ -1692,7 +1693,17 @@ OPEN_DIALOG_WAIT_SECONDS = 6
 # 이걸 기다리지 않고 파일을 옮기면 ERPia 가 읽는 도중 파일이 사라져
 # '헤더 개수: 0' 같은 오류가 난다 (실측으로 확인).
 # 업로드가 정상이면 팝업이 아예 뜨지 않으므로, 이 시간은 '문제가 있었는지 지켜보는' 시간이다.
+# 평소는 예전 그대로 10초. 함께 실행(UPLOAD_NO_KEYS - 사이트 수집과 같이 받는 대로 올림)만 3초 - 실패 팝업은 파일 열기 창이 닫힌 뒤
+# 0.73~1.05초에 떴다 (2026-10-19 개발기 9번). 늦게 뜬 팝업은 실패한 파일이 '완료' 로 가거나 다음 파일의 실패로 잡히므로 (검토 10-20)
+# 함께 실행에서 늦게 뜨는 곳이면 UPLOAD_RESULT_WAIT_TOGETHER 를 늘린다.
 UPLOAD_RESULT_WAIT_SECONDS = 10
+UPLOAD_RESULT_WAIT_TOGETHER = 3
+
+
+def upload_result_wait():
+    """업로드 뒤 결과(실패) 팝업을 기다리는 시간 - 함께 실행이면 UPLOAD_RESULT_WAIT_TOGETHER, 아니면 UPLOAD_RESULT_WAIT_SECONDS."""
+    return UPLOAD_RESULT_WAIT_TOGETHER if UPLOAD_NO_KEYS else UPLOAD_RESULT_WAIT_SECONDS
+
 # 팝업을 닫은 뒤에도 파일이 잠겨 있을 수 있어, 풀릴 때까지 조금 더 기다린다.
 UPLOAD_FILE_RELEASE_WAIT = 10
 
@@ -2582,7 +2593,16 @@ def collect_upload_files(folder):
     return targets, duplicates, ignored
 
 
-def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
+def grid_row_no(el):
+    """그리드 칸 이름 끝의 행 번호 - 없으면 None."""
+    try:
+        m = GRID_ROW_NO_RE.search(el.window_text() or "")
+    except Exception:
+        return None
+    return m.group(1) if m else None
+
+
+def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS, retry=True):
     """사이트코드가 code 인 행의 '엑셀업로드' 셀과 그 값을 찾는다.
 
     이 그리드는 스크롤이 있고 중간에 Group Row 도 섞여 있으므로
@@ -2590,8 +2610,12 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
     그리드가 좁으면 두 컬럼이 한 화면에 안 들어온다 (2026-10-15 개발기 실측: 엑셀업로드가 오른쪽 밖, 넘기면 사이트코드가
     왼쪽 밖). 그래서 사이트코드로 줄(y)을 먼저 찾고, 업로드 컬럼이 밖이면 가로로 넘긴 뒤 같은 y 의 셀을 읽는다
     (가로로 넘겨도 줄은 움직이지 않는다). 앞 파일이 오른쪽으로 넘겨 두었을 수 있어 처음에 맨 왼쪽으로 되돌린다.
+    찾은 업로드 셀이 사이트코드 셀과 같은 행 번호인지 확인한다 - 그 사이 줄이 움직이면 다른 사이트에 올라간다
+    (2026-10-19 개발기: 108 을 찾아 눌렀는데 109 에 올라갔다). 다르면 처음부터 한 번 더, 그래도 다르면 못 찾음.
     반환: (셀 요소, 엑셀업로드 값) - 못 찾으면 (None, None)
     """
+    if not grid_onscreen(hwnd, grid):    # 다른 탭이 앞으로 왔다 - 넘기는 클릭을 하지 않는다 (부르는 쪽이 grid_onscreen 으로 가린다)
+        return None, None
     if not _header_onscreen(grid, SITE_CODE_COL):
         scroll_grid_left_home(hwnd, grid)
     geo_code = _column_scan_geometry(grid, SITE_CODE_COL)
@@ -2600,14 +2624,15 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
         return None, None
 
     def row_y():
-        return next((y for y, value, _el in scan_column(geo_code, SITE_CODE_COL) if (value or "").strip() == code), None)
+        return next(((y, el) for y, value, el in scan_column(geo_code, SITE_CODE_COL) if (value or "").strip() == code),
+                    (None, None))
 
-    y = row_y()
+    y, code_cell = row_y()
     if y is None:
         grid_scroll_to_top(hwnd, grid)
         for _ in range(max_pages):
-            y = row_y()
-            if y is not None or not grid_page_down(hwnd, grid):
+            y, code_cell = row_y()
+            if y is not None or not grid_onscreen(hwnd, grid) or not grid_page_down(hwnd, grid):
                 break
     if y is None:
         return None, None
@@ -2620,11 +2645,16 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS):
         return None, None
     try:
         cell = element_at_point(geo_up[0], y)
-        if cell.window_text().startswith(EXCEL_UPLOAD_COL):
-            return cell, (legacy_value(cell) or "").strip()
+        if not cell.window_text().startswith(EXCEL_UPLOAD_COL):
+            return None, None
     except Exception:
-        pass
-    return None, None
+        return None, None
+    want, got = grid_row_no(code_cell), grid_row_no(cell)
+    if want and got and want != got:
+        log(f"    사이트코드 {code} 는 {want}행인데 업로드 칸은 {got}행입니다. (줄이 움직임)"
+            + (" 다시 찾습니다." if retry else " 누르지 않습니다."))
+        return find_site_upload_cell(hwnd, grid, code, max_pages, retry=False) if retry else (None, None)
+    return cell, (legacy_value(cell) or "").strip()
 
 
 # 열기 대화상자의 '파일 이름' 콤보. 저장 대화상자(1001)와 ID 가 다르다.
@@ -2668,54 +2698,85 @@ def find_open_dialog_filename_edit(dlg_hwnd):
     return None
 
 
-def dismiss_popups(app, hwnd, label="", rounds=4, wait=1.2):
-    """메인 창에 떠 있는 안내 팝업을 닫고 내용을 로그로 남긴다.
+class UploadStop(RuntimeError):
+    """엑셀 업로드 중 누를 단추를 모르는 창이 떴다 - 누르지 않고 멈춘다."""
 
-    업로드 성공 여부는 사용자가 화면 우측 상단 로그로 판단하므로 여기서 판정하지 않는다.
-    다만 팝업이 떠 있으면 다음 셀 클릭이 먹지 않으므로 반드시 닫아야 한다.
-    반환: 닫은 팝업의 내용들
-    """
-    texts = []
-    for _ in range(rounds):
-        win = app.window(handle=hwnd)
-        buttons = find_popup_buttons(win)
-        if not buttons:
-            break
-        text = collect_popup_text(buttons[0])
-        texts.append(text)
-        log(f"    {label}팝업: {[b.window_text() for b in buttons]}")
-        log(f"      내용: {text}")
+
+class UploadGridHidden(RuntimeError):
+    """엑셀 업로드 중 사이트 그리드가 화면에서 사라졌다 - 다른 탭이 앞으로 왔다 (2026-10-20 개발기: 자동 수집이 도는 동안 ERPia 가
+    원래 탭을 앞으로 가져와 '+' 로 연 화면의 그리드가 화면 밖으로 갔다). 남은 파일은 그 자리에 두었다 - 부르는 쪽이 화면을
+    되돌리고 다시 부른다. uploaded·errors: 그때까지 올린 수·오류로 보낸 수."""
+    def __init__(self, uploaded, errors):
+        super().__init__("사이트 그리드가 화면에서 사라짐")
+        self.uploaded, self.errors = uploaded, errors
+
+
+def grid_onscreen(hwnd, grid):
+    """그리드가 ERPia 메인 창 안에 보이는가. 숨은 탭의 그리드는 화면 밖(음수 자리)으로 옮겨지고 IsWindowVisible 은 그대로라
+    (2026-10-20 개발기 실측) 자리로 본다 - 화면 밖 그리드를 넘기는 클릭은 화면 가장자리의 다른 창을 누른다."""
+    try:
+        r, (left, top, right, bottom) = grid.rectangle(), win32gui.GetWindowRect(hwnd)
+    except Exception:
+        return False
+    return r.width() > 0 and left <= r.left and r.right <= right and top <= r.top and r.bottom <= bottom
+
+
+def invoke_popup_window(popup_hwnd):
+    """엑셀 업로드 팝업의 [확인]/[예] 를 마우스 대신 UIA Invoke 로 누른다 - 창이 다른 창 뒤에 깔려 있거나 앞 창이 아니어도 된다
+    ('비밀번호 입력' 은 주인 없는 창이라 ERPia 뒤에 깔린다 - 2026-10-19 개발기). 예/아니오 팝업도 [예] - 엑셀 업로드에는
+    [아니오] 를 고를 질문이 없다 (사용자 2026-10-20, 예전 dismiss_popups 와 같음). (눌렀나, 설명, 문구)"""
+    try:
+        w = Desktop(backend="uia").window(handle=popup_hwnd)
+        buttons = w.descendants(control_type="Button")
         btn = next((b for b in buttons if b.window_text() in OK_BUTTON_TEXTS), None)
         if btn is None:
-            log("      확인/예 버튼이 없어 그대로 둡니다.")
-            break
+            return False, f"처리할 수 있는 버튼이 없습니다. (버튼: {[b.window_text() for b in buttons]})", ""
+        label, msg, title = btn.window_text(), popup_window_text(w), w.window_text()     # 누르면 사라진다 - 먼저 읽는다
+        btn.invoke()
+    except Exception as e:
+        return False, f"팝업을 누르지 못했습니다: {e}", ""
+    return True, f"[{title}] {msg[:300]} -> '{label}' 누름", msg
+
+
+def upload_popups(pid, hwnd, before=(), label=""):
+    """업로드 뒤 ERPia 가 따로 띄운 창(실패 팝업 'ERPia', '비밀번호 입력' 등)을 [확인]/[예] 로 닫고 (invoke_popup_window)
+    문구를 돌려준다. 실패 팝업은 메인 창의 자식이 아니라 메인 창이 소유한 별도 창이라 (2026-10-19 개발기 실측) PopupGate 로는
+    안 보이고, 메인 창 전체를 UIA 로 훑으면 한 번에 수 초 - 그래서 창 목록(win32, 거의 0초)으로 찾는다.
+    before(업로드 전부터 있던 창)와 파일 열기 창은 뺀다. 누를 단추가 없거나 눌러도 안 닫히면 UploadStop.
+    파일 열기 창은 '파일 이름' 칸으로 가린다 - 윈도우 표준 메시지 상자도 같은 '#32770' 이라 종류만 보면 실패 팝업을 놓친다 (검토 10-20)."""
+    texts = []
+    for h in find_popup_windows(pid, hwnd):
         try:
-            ec.ensure_foreground(hwnd)
-            btn.click_input()
-            time.sleep(wait)
-        except Exception as e:
-            log(f"      팝업 닫기 실패: {e}")
-            break
+            if h in before or (win32gui.GetClassName(h) == SAVE_DIALOG_CLASS and find_open_dialog_filename_edit(h)):
+                continue
+        except Exception:
+            continue    # 그새 닫힌 창
+        ok, why, msg = invoke_popup_window(h)
+        log(f"    {label}팝업: {why}")
+        if not ok:
+            raise UploadStop(why)
+        end = time.time() + 2
+        while win32gui.IsWindow(h) and win32gui.IsWindowVisible(h):
+            if time.time() > end:
+                raise UploadStop(f"눌러도 닫히지 않는 팝업: {why}")
+            time.sleep(0.05)
+        texts.append(msg or why)
     return texts
 
 
-def wait_upload_result(app, hwnd, timeout=UPLOAD_RESULT_WAIT_SECONDS, interval=0.5):
-    """파일을 넘긴 뒤 ERPia 가 읽기를 끝낼 때까지 기다린다.
-
-    결과 팝업이 뜨면 그것이 '읽기가 끝났다'는 신호다. 팝업을 닫고 내용을 돌려준다.
-    (자식 창 목록 확인은 win32 라 사실상 공짜라서 촘촘히 봐도 된다)
-    """
-    gate = PopupGate(hwnd)
-    waited = 0.0
-    while waited < timeout:
-        if gate.should_scan():
-            win = app.window(handle=hwnd)
-            if find_popup_buttons(win):
-                return dismiss_popups(app, hwnd, label="업로드 결과 ")
+def wait_upload_result(pid, hwnd, before=(), timeout=None, interval=0.1):
+    """파일을 넘긴 뒤 결과 팝업을 timeout(없으면 upload_result_wait()) 동안 기다린다. 뜨면 닫고 문구를, 안 뜨면 [] (정상 업로드는 팝업이 없다)."""
+    if timeout is None:
+        timeout = upload_result_wait()
+    end = time.time() + timeout
+    while True:
+        texts = upload_popups(pid, hwnd, before, label="업로드 결과 ")
+        if texts or time.time() >= end:
+            break
         time.sleep(interval)
-        waited += interval
-    log(f"    결과 팝업이 {timeout:.0f}초 안에 뜨지 않았습니다.")
-    return []
+    if not texts:
+        log(f"    결과 팝업이 {timeout:.0f}초 안에 뜨지 않았습니다.")
+    return texts
 
 
 def wait_file_unlocked(path, timeout=UPLOAD_FILE_RELEASE_WAIT, interval=0.5):
@@ -2933,12 +2994,50 @@ def double_click_file_in_dialog(dlg_hwnd, path):
     return False
 
 
+# 사이트 수집과 함께 도는 웰라이프 엑셀 업로드 (사용자 2026-10-19, wellife 가 켜고 끈다) - 그동안 Edge 창이 뜰 때마다 포커스를
+# 가져가므로 파일 열기 창은 키보드·마우스 대신 창 메시지로만 다룬다
+UPLOAD_NO_KEYS = False
+
+
+def submit_path_by_message(dlg_hwnd, path):
+    """파일 열기 창의 파일명 칸에 경로를 넣고(WM_SETTEXT) [열기](IDOK) - 키보드·마우스를 쓰지 않아 창이 가려져 있거나 앞 창이
+    아니어도 된다 (2026-10-19 개발기 실측: 다른 창이 덮은 채 0.05초에 넘어가고 결과 기록 '성공'). 넣은 값이 다르면 누르지 않는다."""
+    edit = find_open_dialog_filename_edit(dlg_hwnd)
+    if edit is None:
+        log("    파일명 입력란을 찾지 못했습니다.")
+        return False
+    win32gui.SendMessage(edit, win32con.WM_SETTEXT, 0, path)
+    if read_save_filename(edit) != path:
+        log("    파일명 칸에 경로가 들어가지 않았습니다.")
+        return False
+    win32gui.PostMessage(dlg_hwnd, win32con.WM_COMMAND, win32con.IDOK, 0)
+    return True
+
+
+def close_upload_dialog(pid, dlg_hwnd):
+    """넘기지 못한 파일 열기 창을 닫는다 (위에 뜬 오류 창 먼저). 키보드·마우스를 못 쓸 때는 둘 다 취소 메시지로."""
+    if not UPLOAD_NO_KEYS:
+        dismiss_dialog_error(pid, dlg_hwnd)   # 오류 창이 떠 있으면 취소도 안 먹는다
+        cancel_save_dialog(dlg_hwnd)
+        return
+    for h in [h for h in find_top_hwnds_by_title(pid, "", exact=False) if h != dlg_hwnd] + [dlg_hwnd]:
+        try:
+            if win32gui.GetClassName(h) == SAVE_DIALOG_CLASS:
+                win32gui.PostMessage(h, win32con.WM_COMMAND, win32con.IDCANCEL, 0)
+                time.sleep(0.3)
+        except Exception:
+            pass
+
+
 def upload_file_in_dialog(dlg_hwnd, path, pid=None):
     """파일 열기 창에서 지정한 파일을 연다.
 
     1) 목록에서 더블클릭 - 대화상자가 그 폴더에서 열렸을 때 가장 확실하다.
     2) 없으면 파일명 칸에 전체 경로를 넣고 '열기' - 다른 폴더에서 열린 경우 대비.
+    UPLOAD_NO_KEYS 면 창 메시지로만 (submit_path_by_message).
     """
+    if UPLOAD_NO_KEYS:
+        return submit_path_by_message(dlg_hwnd, path)
     if double_click_file_in_dialog(dlg_hwnd, path):
         return True
 
@@ -2953,9 +3052,17 @@ def upload_file_in_dialog(dlg_hwnd, path, pid=None):
 
 
 def open_upload_dialog(pid, hwnd, cell):
-    """'엑셀업로드' 셀을 눌러 파일 열기 창을 띄운다. 한 번 눌러 안 뜨면 더블클릭."""
+    """'엑셀업로드' 셀을 눌러 파일 열기 창을 띄운다. 한 번 눌러 안 뜨면 더블클릭.
+    누를 자리의 맨 위 창이 ERPia 메인 창이 아니면 누르지 않는다 - 다른 창(Edge·팝업)에 클릭이 떨어진다 (2026-10-19 개발기:
+    덮인 칸은 커서를 올리고 클릭 메시지를 보내도 열리지 않았다)."""
     for attempt, how in ((1, "클릭"), (2, "더블클릭")):
         ec.ensure_foreground(hwnd)
+        r = cell.rectangle()
+        pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+        top = win32gui.GetAncestor(win32gui.WindowFromPoint(pt), win32con.GA_ROOT)
+        if top != hwnd:
+            log(f"    누를 자리 {pt} 를 다른 창({top} '{win32gui.GetWindowText(top)[:30]}')이 덮고 있어 누르지 않습니다.")
+            return None
         try:
             if how == "클릭":
                 cell.click_input()
@@ -2964,7 +3071,7 @@ def open_upload_dialog(pid, hwnd, cell):
         except Exception as e:
             log(f"    셀 {how} 실패: {e}")
             continue
-        dlg = wait_save_dialog(pid, timeout=OPEN_DIALOG_WAIT_SECONDS)
+        dlg = wait_save_dialog(pid, timeout=OPEN_DIALOG_WAIT_SECONDS, interval=0.1)    # 창은 0.2~0.6초에 뜬다
         if dlg is not None:
             log(f"    파일 열기 창 확인 ({how}): hwnd={dlg}")
             return dlg
@@ -2972,8 +3079,9 @@ def open_upload_dialog(pid, hwnd, cell):
     return None
 
 
-def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
-    """바탕화면 ERPIA_AI_EXCEL 폴더의 엑셀을 사이트코드에 맞춰 업로드한다.
+def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
+    """바탕화면 ERPIA_AI_EXCEL 폴더의 엑셀을 사이트코드에 맞춰 업로드한다. skip - 이번에는 보지 않을 파일 (함께 실행에서
+    앞 차례에 올리지 못해 그 자리에 남은 파일을 거듭 누르지 않게).
 
     - 폴더가 없거나 비어 있으면 아무것도 하지 않는다.
     - 업로드가 끝난 파일은 완료/YYYYMMDD 로, 올릴 수 없거나 실패한 파일은 오류 폴더로 옮긴다.
@@ -2986,6 +3094,8 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
       칸을 눌러도 열리고 둘 다 들어갔다, 파일 잠금은 창이 닫힐 때 이미 풀려 있었다). 칸은 앞 파일 창이 닫힌 뒤
       UPLOAD_RESULT_WAIT_SECONDS 가 지나야 누른다 - 늦게 뜬 오류 팝업을 놓치면 실패한 파일이 완료로 가거나 다음 파일의 실패로
       잡힌다 (검토 2026-10-17).
+    - 팝업은 ERPia 가 따로 띄운 창 목록으로 본다 (upload_popups - 메인 창 UIA 조회는 한 번에 수 초라 파일당 15초가 넘었다).
+      누를 단추를 모르는 창이면 UploadStop - 결과를 못 본 파일은 그 자리에 둔다 (다시 올려도 같은 주문은 건너뛴다).
     반환: (업로드한 수, 오류로 보낸 수)
     """
     folder = excel_upload_dir()
@@ -2995,6 +3105,8 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         return 0, 0
 
     targets, duplicates, ignored = collect_upload_files(folder)
+    targets = {c: p for c, p in targets.items() if p not in skip}
+    duplicates = [p for p in duplicates if p not in skip]
     if not targets and not duplicates:
         log(f"  '{EXCEL_UPLOAD_DIR_NAME}' 폴더에 업로드할 파일이 없어 건너뜁니다.")
         status.metric("excel_upload", "엑셀 업로드", 0, 0, unit="개", note="올릴 파일 없음")
@@ -3025,14 +3137,20 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
     pending = None      # 넘기고 결과를 아직 안 본 파일 - 다음 파일 앞(앞 파일 결과 팝업)이나 맨 끝에 본다
     closed_at = 0.0     # pending 의 파일 열기 창이 닫힌 때
     seen = []           # pending 의 결과로 닫은 팝업 (사이트코드 찾기 앞에서)
+    before = set(find_popup_windows(pid, hwnd))     # 업로드 전부터 있던 별도 창은 팝업으로 보지 않는다
+    if before:
+        log(f"  업로드 전부터 떠 있던 별도 창 {len(before)}개는 건드리지 않습니다.")
+
+    def popups_now(label):
+        return upload_popups(pid, hwnd, before, label=label)
 
     def settle(popups):
         """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
         팝업이 없어도 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 가 지나기 전이면 남은 시간만큼 결과 팝업을 기다린다."""
         nonlocal pending, seen, uploaded, failed, errors
-        left = closed_at + UPLOAD_RESULT_WAIT_SECONDS - time.time()
+        left = closed_at + upload_result_wait() - time.time()
         if not popups and left > 0:
-            popups = wait_upload_result(app, hwnd, timeout=left)
+            popups = wait_upload_result(pid, hwnd, before, timeout=left)
         path, pending, seen = pending, None, []
         wait_file_unlocked(path)    # 읽는 도중 옮기면 '헤더 개수: 0' - 안 잠겼으면 바로 돌아온다
         if popups:
@@ -3055,6 +3173,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         else:
             log("    (검증 모드: 파일을 옮기지 않습니다)")
 
+    hidden = False
     for idx, (code, path) in enumerate(sorted(targets.items()), 1):
         name = os.path.basename(path)
         log(f"  [{idx}/{len(targets)}] 사이트코드={code} 파일={name}")
@@ -3062,13 +3181,17 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         status.progress(idx - 1, len(targets), name)
 
         if pending:     # 앞 파일 결과 팝업이 떠 있으면 그리드를 넘기는 클릭도 먹지 않는다 - 사이트코드를 찾기 전에 닫는다
-            seen += dismiss_popups(app, hwnd, label="앞 파일 결과 ")
+            seen += popups_now("앞 파일 결과 ")
         cell, value = find_site_upload_cell(hwnd, grid, code)
         if cell is None and pending:    # 찾는 동안 앞 파일 결과 팝업이 떠 그리드를 못 넘겼을 수 있다 - 닫고 한 번 더 (검토 2026-10-19)
-            late = dismiss_popups(app, hwnd, label="앞 파일 결과 ")
+            late = popups_now("앞 파일 결과 ")
             if late:
                 seen += late
                 cell, value = find_site_upload_cell(hwnd, grid, code)
+        if cell is None and not grid_onscreen(hwnd, grid):     # 못 찾은 게 아니라 그리드가 숨었다 - 오류로 보내지 않는다
+            log("    사이트 그리드가 화면에서 사라졌습니다 (다른 탭이 앞으로 옴). 남은 파일은 그대로 둡니다.")
+            hidden = True
+            break
         if cell is None:
             log(f"    사이트코드 {code} 인 행을 찾지 못했습니다.")
             if move_files and move_file_to(path, error_dir, "사이트코드 없음"):
@@ -3083,7 +3206,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             continue
 
         # 찾는 동안 늦게 뜬 팝업도 닫는다 (남아 있으면 셀 클릭이 먹지 않는다) - 닫은 팝업은 모두 앞 파일의 결과로 본다.
-        popups = dismiss_popups(app, hwnd, label="앞 파일 결과 " if pending else "클릭 전 남아있던 ")
+        popups = popups_now("앞 파일 결과 " if pending else "클릭 전 남아있던 ")
         if pending:
             settle(seen + popups)
 
@@ -3092,11 +3215,15 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         if dlg is None:
             log("    파일 열기 창을 열지 못해 파일은 그대로 두고 넘어갑니다.")
             continue
+        if not grid_onscreen(hwnd, grid):   # 누르는 사이 다른 탭이 앞으로 왔다 - 같은 자리 다른 사이트의 칸이었을 수 있다 (검토 10-20)
+            log("    파일 열기 창이 뜨는 사이 사이트 그리드가 화면에서 사라졌습니다. 창을 닫고 남은 파일은 그대로 둡니다.")
+            close_upload_dialog(pid, dlg)
+            hidden = True
+            break
 
         if not upload_file_in_dialog(dlg, path, pid=pid):
             log("    파일을 전달하지 못했습니다. 창을 닫고 파일은 그대로 둡니다.")
-            dismiss_dialog_error(pid, dlg)   # 오류 창이 떠 있으면 취소도 안 먹는다
-            cancel_save_dialog(dlg)
+            close_upload_dialog(pid, dlg)
             continue
 
         # 창이 닫혔는지로 '넘겼다'를 확인한다 (업로드 결과 자체는 사용자가 로그로 본다)
@@ -3106,13 +3233,12 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             if not win32gui.IsWindow(dlg) or not win32gui.IsWindowVisible(dlg):
                 closed = True
                 break
-            time.sleep(0.5)
-            waited += 0.5
+            time.sleep(0.1)     # 닫힌 때(closed_at)부터 결과 팝업을 기다리므로 촘촘히
+            waited += 0.1
 
         if not closed:
             log("    파일 열기 창이 닫히지 않았습니다. 취소하고 파일은 그대로 둡니다.")
-            dismiss_dialog_error(pid, dlg)
-            cancel_save_dialog(dlg)
+            close_upload_dialog(pid, dlg)
             continue
 
         log("    파일을 전달하였습니다. 결과를 기다리는 동안 다음 파일의 칸을 찾습니다.")
@@ -3123,6 +3249,8 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
 
     log(f"  엑셀업로드 완료: 업로드 {uploaded}건 / 업로드 실패 {failed}건 "
         f"/ 오류 폴더로 옮긴 파일 {errors}건")
+    if hidden:
+        raise UploadGridHidden(uploaded, errors)
     return uploaded, errors
 
 
@@ -4990,7 +5118,7 @@ def handle_sales_popups(pid, hwnd, tried):
     return None, closed
 
 
-def run_import_step(app, pid, hwnd, win):
+def run_import_step(app, pid, hwnd, win, wait=True):
     """'가져오기'를 실제로 눌러 주문을 받아오고, 끝날 때까지 기다린다.
 
     이 화면에는 그리드를 덮는 스피너가 없다. 대신 버튼 상태로 판단한다.
@@ -5090,35 +5218,40 @@ def run_import_step(app, pid, hwnd, win):
             f" 가져올 주문이 없었거나 클릭이 먹지 않았을 수 있습니다.")
         return False
 
-    # 2) 둘 다 활성으로 돌아오고, 잠깐 유지되면 완료
-    idle_since = None
-    last_report = 0.0
-    while time.time() - t0 < IMPORT_MAX_WAIT_SECONDS:
-        handle_import_popups(pid, hwnd, seen_popups)
-        a, b = busy_now()
-        elapsed = time.time() - t0
-        if not a and not b:
-            if idle_since is None:
-                idle_since = time.time()
-            elif time.time() - idle_since >= IMPORT_SETTLE_SECONDS:
-                log(f"  주문 가져오기 완료 ({elapsed:.0f}초)")
-                status.note(f"주문 가져오기 완료 ({elapsed:.0f}초)")
-                handle_import_popups(pid, hwnd, seen_popups)
-                return True
-        else:
-            idle_since = None
-            if elapsed - last_report >= 30:
-                last_report = elapsed
-                log(f"  가져오는 중... {elapsed:.0f}초 경과")
-                status.note(f"주문 가져오는 중 ({elapsed:.0f}초)")
-                if not handles_alive() and not refind_buttons():
-                    log("  버튼 상태를 더 볼 수 없어 대기를 끝냅니다.")
-                    return False
-        time.sleep(IMPORT_POLL_SECONDS)
+    def finish():
+        """2) 둘 다 활성으로 돌아오고, 잠깐 유지되면 완료 (True). wait=False 면 이 함수를 돌려준다 - 부르는 쪽이 다른 일을
+        하다가 끝을 기다린다 (웰라이프 함께 실행: 자동 수집을 걸어 두고 다른 탭에서 엑셀 업로드, 사용자 2026-10-19)."""
+        idle_since = None
+        last_report = 0.0
+        # 보기 시작한 때부터 잰다 - 함께 실행은 업로드를 다 마친 뒤에야 부르므로 누른 때(t0)부터 재면 수집이 길 때 한 번도 안 보고 실패였다 (검토 10-20)
+        end = time.time() + IMPORT_MAX_WAIT_SECONDS
+        while time.time() < end:
+            handle_import_popups(pid, hwnd, seen_popups)
+            a, b = busy_now()
+            elapsed = time.time() - t0
+            if not a and not b:
+                if idle_since is None:
+                    idle_since = time.time()
+                elif time.time() - idle_since >= IMPORT_SETTLE_SECONDS:
+                    log(f"  주문 가져오기 완료 ({elapsed:.0f}초)")
+                    status.note(f"주문 가져오기 완료 ({elapsed:.0f}초)")
+                    handle_import_popups(pid, hwnd, seen_popups)
+                    return True
+            else:
+                idle_since = None
+                if elapsed - last_report >= 30:
+                    last_report = elapsed
+                    log(f"  가져오는 중... {elapsed:.0f}초 경과")
+                    status.note(f"주문 가져오는 중 ({elapsed:.0f}초)")
+                    if not handles_alive() and not refind_buttons():
+                        log("  버튼 상태를 더 볼 수 없어 대기를 끝냅니다.")
+                        return False
+            time.sleep(IMPORT_POLL_SECONDS)
 
-    log(f"  경고: 최대 대기시간({IMPORT_MAX_WAIT_SECONDS // 60}분)을 넘겼습니다."
-        " 가져오기가 끝났는지 확인하지 못했습니다.")
-    return False
+        log(f"  경고: 최대 대기시간({IMPORT_MAX_WAIT_SECONDS // 60}분)을 넘겼습니다."
+            " 가져오기가 끝났는지 확인하지 못했습니다.")
+        return False
+    return finish() if wait else finish
 
 
 def find_popup_ok_button(win):

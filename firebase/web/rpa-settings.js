@@ -36,6 +36,13 @@ const HTML = `
         <div class="seg"><select id="par-n" aria-label="동시 실행 창 수"></select></div>
         <button class="apply" id="par-apply" disabled>적용</button>
       </div>
+      <div class="card hide" id="tog-card">
+        <h2>전체 실행 방식 <span class="muted" id="tog-meta"></span></h2>
+        <div class="msg">전체 실행에서 ACTOR와 PROCESS를 어떤 순서로 실행할지 선택합니다.</div>
+        <div class="seg"><select id="tog-mode" aria-label="전체 실행 방식"></select></div>
+        <div class="msg" id="tog-note"></div>
+        <button class="apply" id="tog-apply" disabled>적용</button>
+      </div>
       <h3 class="grp">PROCESS 오토파일럿</h3>
       <div class="msg grp-note">다운로드한 주문을 ERPia에서 처리합니다.</div>
       <div class="card" id="mod-card">
@@ -83,7 +90,7 @@ let stopPeers = [], transferOk = {};   // 다른 PC 의 live.preset_transfer (�
 let copyKey = "";   // 복사 카드의 줄·받을 PC 목록을 마지막으로 만든 기준 - 같으면 다시 안 만든다 (heartbeat 가 5초마다 live 를 바꾼다, Task 7 검토)
 let parLimit;    // 관리 화면이 허용한 동시 실행 최대 (limits/parallel) - 2 미만이면 '동시 실행' 카드가 없다 (업체는 이 기능을 모른다)
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
-let form = { modules: {}, shops: {}, parallel: 1, sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] }, copy: { to: "", pick: {} } };
+let form = { modules: {}, shops: {}, parallel: 1, together: "off", sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] }, copy: { to: "", pick: {} } };
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
 
@@ -105,6 +112,8 @@ export function mount(el, context) {
   }
   $("par-apply").onclick = applyParallel;
   $("par-n").onchange = (e) => { form.parallel = Number(e.target.value); paintParMeta(); };
+  $("tog-apply").onclick = applyTogether;
+  $("tog-mode").onchange = (e) => { form.together = e.target.value; paintTogMeta(); };
   $("sch-apply").onclick = applySchedule;
   $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
   // 휴무일 (판 4 PC - 사용자 2026-10-15): 공휴일 휴무 적용 켬/끔과 업체 휴무일. 지난 날은 못 고른다 (PC 도 저장할 때 뺀다)
@@ -142,21 +151,23 @@ export function mount(el, context) {
   }, () => {});
   // 웰라이프 열림도 같은 방식 - 로그인 뒤 관리 화면에서 바뀌어도 따라간다
   stopFeatures = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/features`), (snap) => {
-    const was = root && live ? [modulesDirty(), scheduleDirty()] : null;   // 정책을 바꾸기 전 목록으로 편집 중인지 본다
+    const was = root && live ? [modulesDirty(), scheduleDirty(), togDirty()] : null;   // 정책을 바꾸기 전 목록으로 편집 중인지 본다
     c.policy = { ...c.policy, rpa: { ...c.policy?.rpa, features: snap.val() || {} } };
     if (!was) return;
     if (!was[0]) resetModules();   // 편집 중인 폼은 건드리지 않는다 (보내는 값은 어차피 규칙대로 거른다)
     if (!was[1]) resetSchedule(); else { paintTimes(); paintScheduleMeta(); }
+    if (!was[2]) resetTogether(); else paintTogether();   // 전체 실행 방식은 웰라이프만 - 열림이 바뀌면 카드가 따라간다
   }, () => {});
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const first = live == null;
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신). 편집 중인지는 바뀌기 전 PC 값과 견준다 -
     // 새 값과 견주면 PC 쪽이 바뀌었을 때 손대지 않은 폼도 '편집 중' 으로 보여 옛 값에 머문다
-    const was = first ? [] : [modulesDirty(), shopsDirty(), scheduleDirty(), parDirty()];
+    const was = first ? [] : [modulesDirty(), shopsDirty(), scheduleDirty(), parDirty(), togDirty()];
     live = snap.val() || {};
     if (first || !was[0]) resetModules();
     if (first || !was[1]) resetShops();
     if (first || !was[3]) resetParallel();
+    if (first || !was[4]) resetTogether();
     if (first || !was[2]) resetSchedule();
     paintAll();
   }, (e) => notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `읽지 못했습니다. (${e.code || e})`));
@@ -176,12 +187,12 @@ export function unmount() {
 export function dirty() {
   return !!root && !!live && ((modulesDirty() && sent.modules !== keyOf.modules())
     || (shopsDirty() && sent.shops !== keyOf.shops()) || (scheduleDirty() && sent.sch !== keyOf.sch())
-    || (parDirty() && sent.par !== keyOf.par()));
+    || (parDirty() && sent.par !== keyOf.par()) || (togDirty() && sent.tog !== keyOf.tog()));
 }
 const keyOf = { modules: () => JSON.stringify(form.modules), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()),
-  par: () => String(form.parallel) };
+  par: () => String(form.parallel), tog: () => form.together };
 
-function paintAll() { paintModuleMeta(); paintShopMeta(); paintCopyMeta(); paintParMeta(); paintScheduleMeta(); }
+function paintAll() { paintModuleMeta(); paintShopMeta(); paintCopyMeta(); paintParMeta(); paintTogMeta(); paintScheduleMeta(); }
 
 /** 명령을 넣는 동안 카드 단추를 잠근다 */
 async function locked(run) {
@@ -428,6 +439,47 @@ async function applyParallel() {
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.par = keyOf.par();
   await send("set_parallel", { parallel: n }, "동시 실행");
+}
+
+// --- 전체 실행 방식 (웰라이프, 사용자 2026-10-20) ---------------------------------
+// 웰라이프 업체이고 PC 가 새 에이전트(live.together)일 때만 보인다. 값·이름은 rpa_status.TOGETHER_MODES 와 같다 (PC 가 다른 값은 거절한다)
+const TOGETHER = [
+  ["off", "순서대로", "사이트 수집(ACTOR)이 끝난 뒤 PROCESS를 실행합니다."],
+  ["excel", "함께 (엑셀 업로드)", "PROCESS를 함께 실행하여 사이트별 엑셀을 다운로드하는 대로 업로드합니다. 자동 수집은 사이트 수집이 끝난 뒤 실행합니다."],
+  ["excel_import", "함께 (엑셀 업로드·자동 수집)", "PROCESS를 함께 실행하여 엑셀 업로드와 자동 수집을 사이트 수집과 함께 진행합니다."],
+];
+const togOf = (k) => TOGETHER.find(([v]) => v === k) || TOGETHER[0];
+const togShown = () => isWellife() && !!live?.together;
+const savedTog = () => togOf(live?.together?.chosen)[0];
+function resetTogether() {
+  form.together = savedTog();
+  paintTogether();
+}
+function togDirty() {
+  return togShown() && form.together !== savedTog();
+}
+function paintTogether() {
+  show($("tog-card"), togShown());
+  if (!togShown()) return;
+  $("tog-mode").replaceChildren(...TOGETHER.map(([k, label]) =>
+    Object.assign(document.createElement("option"), { value: k, textContent: label })));
+  $("tog-mode").value = form.together;
+  paintTogMeta();
+}
+function paintTogMeta() {
+  if (!togShown()) return;
+  $("tog-meta").textContent = togOf(savedTog())[1];
+  $("tog-note").textContent = togOf(form.together)[2];
+  $("tog-mode").disabled = !c.isAdmin || busy;
+  $("tog-apply").disabled = !c.isAdmin || busy || !togDirty();
+}
+async function applyTogether() {
+  const mode = form.together;
+  try {
+    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/together`), mode);
+  } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
+  sent.tog = keyOf.tog();
+  await send("set_together", { mode }, "전체 실행 방식");
 }
 
 // --- 자동 실행 (2부: 줄마다 전체/고르기, 업체 한도) ----------------------------------------

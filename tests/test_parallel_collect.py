@@ -134,6 +134,77 @@ took = time.time() - t0
 check("7개를 3개씩: 동시에 셋까지만, 모두 돈다", peak[0] == 3 and sorted(ran) == sorted(n for n, _ in chosen), f"{peak} {ran}")
 check("한 사이트가 실패해도 나머지는 끝까지 (성공 6)", done == 6, str(done))
 check("하나씩보다 빠르다 (0.2초 x 7 = 1.4초 -> 3줄)", took < 1.0, f"{took:.2f}초")
+
+print("=== 3-1. 인증 사이트는 한 창에서 차례로, 나머지 창은 인증 없는 사이트 (사용자 2026-10-19)")
+AUTH = {"Action": ["login", "sms_2fa"], "Phone": "p"}
+spans, launched = [], []
+
+
+def lane_run_site(browser, name, site, use_session=True, keep_open=False, gates=None):
+    t = time.time()
+    time.sleep(0.1)
+    with lock:
+        spans.append((threading.current_thread().name, name, t, time.time()))
+    return True
+
+
+def lane_edge(launch, headless=False, **_):
+    me = threading.current_thread().name
+    launched.append(me)
+    if me in FAIL_LAUNCH:
+        raise RuntimeError("브라우저를 못 띄움")
+    return FakeBrowser()
+
+
+def lanes(chosen, n):
+    spans.clear()
+    launched.clear()
+    done = web_runner.run_parallel(chosen, n, True, None)
+    return done, {s[1]: s[0] for s in spans}
+
+
+web_runner.web_replay.edge = lane_edge
+web_runner.run_site = lane_run_site
+FAIL_LAUNCH = ()
+mix = [(f"A{i}", AUTH) for i in range(1, 4)] + [(f"N{i}", {}) for i in range(1, 7)]
+for n in (6, 2):
+    done, where = lanes(mix, n)
+    auth_spans = sorted((t0, t1) for th, nm, t0, t1 in spans if nm.startswith("A"))
+    check(f"{n}개 창: 인증 사이트는 모두 첫 창(수집1)에서 겹치지 않고 차례로, 인증 없는 사이트는 다른 창에서도",
+          done == len(mix) and {where[f"A{i}"] for i in range(1, 4)} == {"수집1"}
+          and all(b[0] >= a[1] for a, b in zip(auth_spans, auth_spans[1:]))
+          and {where[f"N{i}"] for i in range(1, 7)} - {"수집1"}, f"{done} {where}")
+done, where = lanes([(f"N{i}", {}) for i in range(1, 5)], 3)
+check("인증 사이트가 없으면 모든 창이 인증 없는 사이트를 (예전처럼)", done == 4 and len(set(where.values())) == 3, str(where))
+done, where = lanes([(f"A{i}", AUTH) for i in range(1, 4)], 4)
+check("인증 사이트만 있으면 창 하나만 띄운다 (할 일 없는 창을 띄우지 않는다)", done == 3 and launched == ["수집1"], f"{launched} {where}")
+done, where = lanes(mix[:2] + mix[3:5], 6)
+check("인증 없는 사이트가 적으면 그만큼만 띄운다 (인증 1 + 2)", done == 4 and len(launched) == 3, str(launched))
+preset_otp = [{"no": 7, "record": {"steps": [{"kind": "fill"}, {"kind": "otp"}, {"kind": "click"}]}},
+              {"no": 8, "record": {"steps": [{"kind": "fill"}, {"kind": "click"}]}}, {"no": 9, "record": None}]
+check("인증 사이트 가르기: 문자 인증 Action, 인증번호 단계가 있는 프리셋만",
+      web_runner.needs_auth(AUTH) and web_runner.needs_auth({"Action": "replay", "Preset": 7}, preset_otp)
+      and not web_runner.needs_auth({"Action": "replay", "Preset": 8}, preset_otp)
+      and not web_runner.needs_auth({"Action": "replay", "Preset": 9}, preset_otp)
+      and not web_runner.needs_auth({"Action": ["login", "mail"]}, preset_otp))
+FAIL_LAUNCH = ("수집1",)
+done, where = lanes(mix, 3)
+check("첫 창이 브라우저를 못 띄우면 남은 인증 사이트는 다른 창이 가져간다 (빠뜨리지 않는다)",
+      done == len(mix) and "수집1" not in where.values(), f"{done} {where}")
+FAIL_LAUNCH = ()
+
+
+def die_run_site(browser, name, site, use_session=True, keep_open=False, gates=None):
+    if name == "A1":
+        time.sleep(0.4)     # 다른 창들이 일반 사이트를 다 마치고 끝난 뒤에 첫 창이 멈춘다
+        raise RuntimeError("세션 파일이 깨짐")
+    return lane_run_site(browser, name, site)
+
+
+web_runner.run_site = die_run_site
+done, where = lanes([(f"A{i}", AUTH) for i in range(1, 4)] + [("N1", {}), ("N2", {})], 3)
+check("첫 창이 다른 창들이 다 끝난 뒤에 멈춰도 남은 인증 사이트를 다시 실행한다 (예전 큐 하나일 때처럼, 검토 10-20)",
+      done == 4 and "A2" in where and "A3" in where, f"{done} {where}")
 web_runner.sync_playwright, web_runner.web_replay.edge, web_runner.run_site = _saved
 
 print("=== 3-2. 예전 방식 문자 인증 사이트 (Action login·sms_2fa) 둘을 함께")
@@ -215,6 +286,133 @@ scale, spots = web_runner.tile_layout(4, (1306, 920))
 xs, ys = sorted({x for x, _ in spots}), sorted({y for _, y in spots})
 check("창 4개는 2x2 칸에 (배율 1 미만, 칸 사이가 창보다 넓다)", 0 < scale < 1 and len(xs) == 2 and len(ys) == 2
       and (xs[1] - xs[0]) >= 1306 + 19 and (ys[1] - ys[0]) >= 920 + 89, f"{scale} {spots}")
+
+print("=== 3-3. 함께 실행 - ERPia 쪽을 같이 띄워 받은 엑셀을 받는 대로 (사용자 2026-10-19)")
+since = time.time()
+status.start("routine")
+check("루틴이 키보드를 잡기 전에는 수집이 기다리지 않는다 (인증 사이트부터 바로 - 사용자 10-19)", not status.keys_held(since))
+status.hold_keys(True)
+check("루틴이 ERPia 에 키보드를 쓰는 동안은 기다린다", status.keys_held(since))
+check("띄우기 전에 시작한 루틴(앞 실행)의 표시는 보지 않는다", not status.keys_held(time.time() + 60))
+status.hold_keys(False)
+check("놓으면 다시 간다", not status.keys_held(since))
+status.hold_keys(True)
+status.finish("success")
+check("루틴이 끝났으면 잡은 채여도 기다리지 않는다", not status.keys_held(since))
+
+spawned = []
+
+
+class FakeProc:
+    def __init__(self, cmd, env=None):
+        spawned.append((cmd, env))
+        self.rc = None
+
+    def poll(self):
+        return self.rc
+
+    def wait(self):
+        return 3 if self.rc is None else self.rc
+
+
+_saved_tog = web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held, status.together_choice
+web_runner.subprocess.Popen = FakeProc
+os.environ.pop(status.ALL_RUN_ENV, None)
+status.wellife_policy = lambda: True
+check("전체 실행(Run_All.bat)이 아니면 함께 띄우지 않는다", web_runner.start_routine_together() is None and not spawned)
+os.environ[status.ALL_RUN_ENV] = "1"
+status.wellife_policy = lambda: False
+check("웰라이프 업체가 아니면 함께 띄우지 않는다 (예전 차례)", web_runner.start_routine_together() is None and not spawned)
+status.wellife_policy = lambda: True
+status.together_choice = lambda: "off"
+check("웰라이프 전체 실행이어도 전체 실행 방식이 '순서대로'(기본)면 함께 띄우지 않는다 (사용자 2026-10-20)",
+      web_runner.start_routine_together() is None and not spawned)
+status.together_choice = lambda: "excel"
+together = web_runner.start_routine_together()
+cmd, env = spawned[0] if spawned else (None, {})
+check("웰라이프 전체 실행이면 루틴을 함께 띄운다 - 함께 표시는 주고 전체 실행 표시는 빼서",
+      together is not None and env.get(status.TOGETHER_ENV) == "1" and status.ALL_RUN_ENV not in env
+      and cmd[-1].endswith("run_routine.py"), str(cmd))
+holds = [True, True, False]
+status.keys_held = lambda since: holds.pop(0) if holds else False
+t0 = time.time()
+web_runner.wait_keys()
+check("새 창을 띄우기 전: 루틴이 키보드를 놓을 때까지 기다린다", not holds and time.time() - t0 >= 0.15, str(holds))
+status.keys_held = lambda since: True
+check("재생 단계 사이: 루틴이 키보드를 쓰는 동안은 멈춘다 (Replayer.pause 자리)", web_runner.KeysPause().is_set())
+web_runner._together[0].rc = 0
+t0 = time.time()
+web_runner.wait_keys()
+check("루틴이 먼저 끝나면 잡은 표시가 남아도 기다리지 않는다",
+      time.time() - t0 < 0.3 and not web_runner.KeysPause().is_set())
+rcs = []
+for prep, rt in ((0, 0), (0, 3), (1, 0), (1, -1073741819), (0, 3221225477)):     # 비정상 종료 0xC0000005 (cmd 는 음수로 본다)
+    web_runner._together[0].rc = rt
+    rcs.append(web_runner.finish_together(prep))
+check("끝 코드는 100 + (수집 실패 2) + (루틴 실패 1) - 비정상 종료 코드여도 100~103 (Run_All.bat 이 루틴을 다시 띄우지 않게, 2026-10-20)",
+      rcs == [100, 101, 102, 103, 101], str(rcs))
+check("Edge 인자: 함께 실행이면 맨 위 ERPia 에 가려져도 느려지지 않게",
+      "--disable-backgrounding-occluded-windows" in web_runner.edge_args()["args"])
+
+dl = tempfile.mkdtemp(prefix="rpa_dl_")
+web_runner.download_dir = lambda: dl
+mid = []
+
+
+def fake_download(page, name, site):
+    with open(os.path.join(web_runner.site_dest(), f"(107){name}.xlsx"), "w") as f:
+        f.write("x")
+    mid.append((web_runner.site_dest(), [f for f in os.listdir(dl) if f.endswith(".xlsx")]))
+
+
+with open(os.path.join(dl, "(107)S1.xlsx"), "w") as f:
+    f.write("old")
+web_runner.ACTIONS["dl"] = fake_download
+status.start("prepare")
+web_runner.run_site(FakeBrowser2(), "S1", {"Action": ["dl"]}, False, False, None)
+del web_runner.ACTIONS["dl"]
+stage = os.path.join(dl, web_runner.STAGE_DIR_NAME)
+check("받는 동안은 사이트마다 받는중 폴더에 - 업로드 폴더에는 아직 안 보인다",
+      mid and mid[0][0].startswith(stage) and mid[0][1] == ["(107)S1.xlsx"], str(mid))
+check("사이트를 다 돌면 업로드 폴더로 옮긴다 (같은 이름은 (1)), 받는중 폴더는 지운다",
+      sorted(f for f in os.listdir(dl) if f.endswith(".xlsx")) == ["(107)S1 (1).xlsx", "(107)S1.xlsx"]
+      and not os.listdir(stage), str(os.listdir(dl)))
+os.makedirs(os.path.join(stage, "site_left"))
+with open(os.path.join(stage, "site_left", "(108)남은것.xlsx"), "w") as f:
+    f.write("x")
+web_runner.recover_stage()
+check("앞 실행이 사이트 도중에 꺼져 받는중에 남은 파일은 다음 실행 처음에 업로드 폴더로",
+      "(108)남은것.xlsx" in os.listdir(dl) and not os.listdir(stage))
+locked = os.path.join(stage, "site_lock")
+os.makedirs(locked)
+with open(os.path.join(locked, "(110)잠김.xlsx"), "w") as f:
+    f.write("x")
+_saved_replace = web_runner.os.replace
+
+
+def busy_replace(src, dst):
+    raise PermissionError("다른 프로그램이 사용 중")
+
+
+web_runner.os.replace = busy_replace
+web_runner.hand_over(locked)
+web_runner.os.replace = _saved_replace
+check("옮기지 못한 파일은 지우지 않고 받는중에 남긴다 (백신이 잠깐 잡음 등, 검토 10-20)", os.path.exists(os.path.join(locked, "(110)잠김.xlsx")))
+web_runner.recover_stage()
+check("그 파일은 다음 실행 처음에 업로드 폴더로", "(110)잠김.xlsx" in os.listdir(dl) and not os.listdir(stage))
+status.finish("success")
+
+_saved_mon = web_runner.monitor_work_areas
+web_runner.monitor_work_areas = lambda: [(-1920, 0, 0, 1040), (0, 0, 1920, 1040)]
+check("모니터가 둘이면 Edge 창은 ERPia 가 없는 모니터에",
+      web_runner.work_area((0, 0, 1920, 1032)) == (-1920, 0, 1920, 1040)
+      and web_runner.work_area((-1920, 0, 0, 1032)) == (0, 0, 1920, 1040))
+web_runner.monitor_work_areas = lambda: [(0, 0, 1920, 1040)]
+check("모니터가 하나면 주 화면 그대로 (ERPia 를 맨 위로 둔다)", web_runner.work_area((0, 0, 1920, 1032)) == web_runner.work_area())
+web_runner.monitor_work_areas = _saved_mon
+web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held, status.together_choice = _saved_tog
+web_runner._together = None
+os.environ.pop(status.ALL_RUN_ENV, None)
 
 print("=== 4. 진짜 Edge - 가짜 쇼핑몰 3곳을 동시에 (인증 사이트 둘은 차례로)")
 import fake_mall  # noqa: E402

@@ -78,6 +78,7 @@ SCHEDULE_VERSION = 4        # 4: 공휴일·업체 휴무일 쉬기 (skip_holida
 DEFAULT_SETTINGS = {
     "prepare": {
         "parallel": 1,              # 업체가 웹에서 고른 동시 실행 창 수 (명령 set_parallel) - 관리 화면이 허용한 최대(policy.parallel)까지만 쓴다
+        "together": "off",          # 웰라이프 전체 실행 방식 (명령 set_together, TOGETHER_MODES) - 기본은 예전처럼 순서대로
     },
     "schedule": {
         "version": SCHEDULE_VERSION,
@@ -2074,3 +2075,49 @@ def running_programs(snapshot=None):
     """지금 도는 RPA (PROGRAMS 의 키) 목록. 대시보드 실행·자동 실행·옵저버가 본다."""
     snap = snapshot or dashboard_snapshot()
     return [p for p, v in snap["programs"].items() if v and v.get("state") == "running"]
+
+
+# ---------------------------------------------------------------------------
+# 함께 실행 (사용자 2026-10-19): 전체 실행에서 프리페어(사이트 수집)가 웰라이프 루틴을 같이 띄워, 사이트에서 받은 엑셀을 받는 대로
+# 올린다. 수집은 기다리지 않고 인증 사이트부터 바로 시작한다 (사용자 10-19: 인증 사이트가 1순위 - 몇 곳일지, 얼마나 걸릴지 모른다).
+# Edge 창은 뜰 때마다 포커스를 가져가 그사이 친 키(비밀번호 포함)가 Edge 로 새므로 (개발기 실측), 루틴이 ERPia 에 키보드를 쓰는
+# 동안만(로그인 입력·메뉴 검색, 몇 초) hold_keys 로 잡고, 프리페어는 그동안 새 창을 띄우거나 다음 단계로 가지 않는다 (keys_held).
+# ---------------------------------------------------------------------------
+TOGETHER_ENV = "RPA_WITH_PREPARE"       # 프리페어가 함께 띄운 루틴에 준다
+ALL_RUN_ENV = "RPA_ALL_RUN"             # Run_All.bat 이 준다 - 전체 실행일 때만 함께 띄운다
+# 전체 실행 방식 (사용자 2026-10-20) - 업체가 웹에서 고른다 (명령 set_together → settings.json prepare.together). 웰라이프만.
+# 값은 업체 웹(rpa-settings.js TOGETHER)·에이전트(do_together)와 같다. 이름은 화면·결과 글에 쓴다
+TOGETHER_MODES = {
+    "off": "순서대로",                          # 사이트 수집이 끝난 뒤 PROCESS (Run_All.bat 이 이어서 띄운다 - 예전 그대로)
+    "excel": "함께 (엑셀 업로드)",               # PROCESS 를 함께 띄워 받은 엑셀을 받는 대로 업로드, 자동 수집은 사이트 수집이 끝난 뒤
+    "excel_import": "함께 (엑셀 업로드·자동 수집)",  # 엑셀 업로드와 자동 수집을 사이트 수집과 함께 ('+' 로 연 화면에서 업로드)
+}
+TOGETHER_DEFAULT = "off"
+
+
+def together_choice():
+    """업체가 고른 전체 실행 방식 (TOGETHER_MODES 의 키). 없거나 이상하면 TOGETHER_DEFAULT (순서대로).
+    웰라이프 업체의 전체 실행(Run_All.bat)에서만 쓴다 - web_runner.start_routine_together, wellife.run_main."""
+    try:
+        v = read_settings()["prepare"].get("together")
+    except Exception:
+        return TOGETHER_DEFAULT
+    return v if isinstance(v, str) and v in TOGETHER_MODES else TOGETHER_DEFAULT
+
+
+@_safe
+def hold_keys(on):
+    """루틴: ERPia 에 키보드를 쓰기 시작한다(on)/마쳤다 - 그동안 함께 도는 프리페어가 Edge 창을 새로 띄우지 않고 단계 사이에서 기다린다."""
+    with _lock:
+        if _active():
+            _state["keys"] = now_iso() if on else None
+            _write_locked()
+
+
+def keys_held(since):
+    """프리페어: since(time.time()) 뒤에 시작해 아직 도는 루틴이 ERPia 에 키보드를 쓰는 중인가 (앞 실행의 표시는 보지 않는다).
+    단계마다 불리므로 루틴 파일만 읽는다 - 루틴이 죽었는지는 부르는 쪽이 프로세스로 본다 (web_runner.wait_keys)."""
+    state = read_json(status_path("routine")) or {}
+    started = parse_iso(state.get("started_at"))
+    return bool(state.get("keys") and state.get("state") == "running"
+                and started is not None and started.timestamp() >= since - 2)
