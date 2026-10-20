@@ -1135,6 +1135,21 @@ for live, files, want_res, want_up in ((True, {}, "skipped", []), (False, {"101"
     check(f"엑셀 수집 live={live} 엑셀 {len(files)}건 -> {want_res}, 업로드 {len(want_up)}번, [가져오기]·정상매출은 하지 않음 (10-15 셋으로 나눔)",
           res[0] == want_res and uploads == want_up and not [a for a in acts if a[0] in ("click", "select", "normal_sales")],
           f"{res} {uploads} {acts}")
+
+
+def upload_stop(app, pid, hwnd, grid):
+    raise rr.UploadStop("처리할 수 있는 버튼이 없습니다.")
+
+
+stop_rr = order_rr({"101": "x"})
+stop_rr.run_excel_upload_step, stop_rr.UploadStop = upload_stop, rr.UploadStop
+try:
+    wellife.excel_collect(stop_rr, octx, True)
+    res = None
+except wellife.Stop as e:
+    res = e.result, str(e)
+check("엑셀 업로드 중 누를 단추를 모르는 창이 뜨면 멈춤 (누르지 않음)", res is not None and res[0] == "stopped" and "모르는 창" in res[1],
+      str(res))
 press = ("click", "가져오기", "떠 있는 화면")
 for live in (True, False):
     acts.clear(); uploads.clear()

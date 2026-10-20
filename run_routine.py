@@ -1693,7 +1693,9 @@ OPEN_DIALOG_WAIT_SECONDS = 6
 # 이걸 기다리지 않고 파일을 옮기면 ERPia 가 읽는 도중 파일이 사라져
 # '헤더 개수: 0' 같은 오류가 난다 (실측으로 확인).
 # 업로드가 정상이면 팝업이 아예 뜨지 않으므로, 이 시간은 '문제가 있었는지 지켜보는' 시간이다.
-UPLOAD_RESULT_WAIT_SECONDS = 10
+# 실패 팝업은 파일 열기 창이 닫힌 뒤 0.73~1.05초에 떴다 (2026-10-19 개발기 9번). 느린 회선을 보고 3초 -
+# 이보다 늦게 뜨는 곳이면 늘린다 (늦게 뜬 팝업은 다음 파일의 실패로 잡힌다).
+UPLOAD_RESULT_WAIT_SECONDS = 3
 # 팝업을 닫은 뒤에도 파일이 잠겨 있을 수 있어, 풀릴 때까지 조금 더 기다린다.
 UPLOAD_FILE_RELEASE_WAIT = 10
 
@@ -2686,54 +2688,46 @@ def find_open_dialog_filename_edit(dlg_hwnd):
     return None
 
 
-def dismiss_popups(app, hwnd, label="", rounds=4, wait=1.2):
-    """메인 창에 떠 있는 안내 팝업을 닫고 내용을 로그로 남긴다.
+class UploadStop(RuntimeError):
+    """엑셀 업로드 중 누를 단추를 모르는 창이 떴다 - 누르지 않고 멈춘다."""
 
-    업로드 성공 여부는 사용자가 화면 우측 상단 로그로 판단하므로 여기서 판정하지 않는다.
-    다만 팝업이 떠 있으면 다음 셀 클릭이 먹지 않으므로 반드시 닫아야 한다.
-    반환: 닫은 팝업의 내용들
-    """
+
+def upload_popups(pid, hwnd, before=(), label=""):
+    """업로드 뒤 ERPia 가 따로 띄운 창(실패 팝업 'ERPia', '비밀번호 입력' 등)을 사용자 규칙(dismiss_popup_window)으로 닫고
+    문구를 돌려준다. 실패 팝업은 메인 창의 자식이 아니라 메인 창이 소유한 별도 창이라 (2026-10-19 개발기 실측) PopupGate 로는
+    안 보이고, 메인 창 전체를 UIA 로 훑으면 한 번에 수 초 - 그래서 창 목록(win32, 거의 0초)으로 찾는다.
+    before(업로드 전부터 있던 창)와 파일 열기 창은 뺀다. 누를 단추가 없거나 눌러도 안 닫히면 UploadStop."""
     texts = []
-    for _ in range(rounds):
-        win = app.window(handle=hwnd)
-        buttons = find_popup_buttons(win)
-        if not buttons:
-            break
-        text = collect_popup_text(buttons[0])
-        texts.append(text)
-        log(f"    {label}팝업: {[b.window_text() for b in buttons]}")
-        log(f"      내용: {text}")
-        btn = next((b for b in buttons if b.window_text() in OK_BUTTON_TEXTS), None)
-        if btn is None:
-            log("      확인/예 버튼이 없어 그대로 둡니다.")
-            break
+    for h in find_popup_windows(pid, hwnd):
         try:
-            ec.ensure_foreground(hwnd)
-            btn.click_input()
-            time.sleep(wait)
-        except Exception as e:
-            log(f"      팝업 닫기 실패: {e}")
-            break
+            if h in before or win32gui.GetClassName(h) == SAVE_DIALOG_CLASS:
+                continue
+        except Exception:
+            continue    # 그새 닫힌 창
+        ok, why, msg = dismiss_popup_window(h)
+        log(f"    {label}팝업: {why}")
+        if not ok:
+            raise UploadStop(why)
+        end = time.time() + 2
+        while win32gui.IsWindow(h) and win32gui.IsWindowVisible(h):
+            if time.time() > end:
+                raise UploadStop(f"눌러도 닫히지 않는 팝업: {why}")
+            time.sleep(0.05)
+        texts.append(msg or why)
     return texts
 
 
-def wait_upload_result(app, hwnd, timeout=UPLOAD_RESULT_WAIT_SECONDS, interval=0.5):
-    """파일을 넘긴 뒤 ERPia 가 읽기를 끝낼 때까지 기다린다.
-
-    결과 팝업이 뜨면 그것이 '읽기가 끝났다'는 신호다. 팝업을 닫고 내용을 돌려준다.
-    (자식 창 목록 확인은 win32 라 사실상 공짜라서 촘촘히 봐도 된다)
-    """
-    gate = PopupGate(hwnd)
-    waited = 0.0
-    while waited < timeout:
-        if gate.should_scan():
-            win = app.window(handle=hwnd)
-            if find_popup_buttons(win):
-                return dismiss_popups(app, hwnd, label="업로드 결과 ")
+def wait_upload_result(pid, hwnd, before=(), timeout=UPLOAD_RESULT_WAIT_SECONDS, interval=0.1):
+    """파일을 넘긴 뒤 결과 팝업을 timeout 동안 기다린다. 뜨면 닫고 문구를, 안 뜨면 [] (정상 업로드는 팝업이 없다)."""
+    end = time.time() + timeout
+    while True:
+        texts = upload_popups(pid, hwnd, before, label="업로드 결과 ")
+        if texts or time.time() >= end:
+            break
         time.sleep(interval)
-        waited += interval
-    log(f"    결과 팝업이 {timeout:.0f}초 안에 뜨지 않았습니다.")
-    return []
+    if not texts:
+        log(f"    결과 팝업이 {timeout:.0f}초 안에 뜨지 않았습니다.")
+    return texts
 
 
 def wait_file_unlocked(path, timeout=UPLOAD_FILE_RELEASE_WAIT, interval=0.5):
@@ -2982,7 +2976,7 @@ def open_upload_dialog(pid, hwnd, cell):
         except Exception as e:
             log(f"    셀 {how} 실패: {e}")
             continue
-        dlg = wait_save_dialog(pid, timeout=OPEN_DIALOG_WAIT_SECONDS)
+        dlg = wait_save_dialog(pid, timeout=OPEN_DIALOG_WAIT_SECONDS, interval=0.1)    # 창은 0.2~0.6초에 뜬다
         if dlg is not None:
             log(f"    파일 열기 창 확인 ({how}): hwnd={dlg}")
             return dlg
@@ -3004,6 +2998,8 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
       칸을 눌러도 열리고 둘 다 들어갔다, 파일 잠금은 창이 닫힐 때 이미 풀려 있었다). 칸은 앞 파일 창이 닫힌 뒤
       UPLOAD_RESULT_WAIT_SECONDS 가 지나야 누른다 - 늦게 뜬 오류 팝업을 놓치면 실패한 파일이 완료로 가거나 다음 파일의 실패로
       잡힌다 (검토 2026-10-17).
+    - 팝업은 ERPia 가 따로 띄운 창 목록으로 본다 (upload_popups - 메인 창 UIA 조회는 한 번에 수 초라 파일당 15초가 넘었다).
+      누를 단추를 모르는 창이면 UploadStop - 결과를 못 본 파일은 그 자리에 둔다 (다시 올려도 같은 주문은 건너뛴다).
     반환: (업로드한 수, 오류로 보낸 수)
     """
     folder = excel_upload_dir()
@@ -3043,6 +3039,12 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
     pending = None      # 넘기고 결과를 아직 안 본 파일 - 다음 파일 앞(앞 파일 결과 팝업)이나 맨 끝에 본다
     closed_at = 0.0     # pending 의 파일 열기 창이 닫힌 때
     seen = []           # pending 의 결과로 닫은 팝업 (사이트코드 찾기 앞에서)
+    before = set(find_popup_windows(pid, hwnd))     # 업로드 전부터 있던 별도 창은 팝업으로 보지 않는다
+    if before:
+        log(f"  업로드 전부터 떠 있던 별도 창 {len(before)}개는 건드리지 않습니다.")
+
+    def popups_now(label):
+        return upload_popups(pid, hwnd, before, label=label)
 
     def settle(popups):
         """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
@@ -3050,7 +3052,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         nonlocal pending, seen, uploaded, failed, errors
         left = closed_at + UPLOAD_RESULT_WAIT_SECONDS - time.time()
         if not popups and left > 0:
-            popups = wait_upload_result(app, hwnd, timeout=left)
+            popups = wait_upload_result(pid, hwnd, before, timeout=left)
         path, pending, seen = pending, None, []
         wait_file_unlocked(path)    # 읽는 도중 옮기면 '헤더 개수: 0' - 안 잠겼으면 바로 돌아온다
         if popups:
@@ -3080,10 +3082,10 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
         status.progress(idx - 1, len(targets), name)
 
         if pending:     # 앞 파일 결과 팝업이 떠 있으면 그리드를 넘기는 클릭도 먹지 않는다 - 사이트코드를 찾기 전에 닫는다
-            seen += dismiss_popups(app, hwnd, label="앞 파일 결과 ")
+            seen += popups_now("앞 파일 결과 ")
         cell, value = find_site_upload_cell(hwnd, grid, code)
         if cell is None and pending:    # 찾는 동안 앞 파일 결과 팝업이 떠 그리드를 못 넘겼을 수 있다 - 닫고 한 번 더 (검토 2026-10-19)
-            late = dismiss_popups(app, hwnd, label="앞 파일 결과 ")
+            late = popups_now("앞 파일 결과 ")
             if late:
                 seen += late
                 cell, value = find_site_upload_cell(hwnd, grid, code)
@@ -3101,7 +3103,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             continue
 
         # 찾는 동안 늦게 뜬 팝업도 닫는다 (남아 있으면 셀 클릭이 먹지 않는다) - 닫은 팝업은 모두 앞 파일의 결과로 본다.
-        popups = dismiss_popups(app, hwnd, label="앞 파일 결과 " if pending else "클릭 전 남아있던 ")
+        popups = popups_now("앞 파일 결과 " if pending else "클릭 전 남아있던 ")
         if pending:
             settle(seen + popups)
 
@@ -3124,8 +3126,8 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True):
             if not win32gui.IsWindow(dlg) or not win32gui.IsWindowVisible(dlg):
                 closed = True
                 break
-            time.sleep(0.5)
-            waited += 0.5
+            time.sleep(0.1)     # 닫힌 때(closed_at)부터 결과 팝업을 기다리므로 촘촘히
+            waited += 0.1
 
         if not closed:
             log("    파일 열기 창이 닫히지 않았습니다. 취소하고 파일은 그대로 둡니다.")

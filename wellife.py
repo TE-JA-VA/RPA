@@ -388,7 +388,10 @@ def excel_collect(rr, ctx, live):
     no_popup(rr, ctx, "엑셀 업로드 전")
     front(rr, ctx, "엑셀 업로드")
     rr.log(f"  [실행] 엑셀 업로드: 사이트 {names}")
-    uploaded, errors = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites)
+    try:
+        uploaded, errors = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites)
+    except rr.UploadStop as e:
+        raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 모르는 창이 떠 멈춤 (누르지 않음): {e}") from e
     return ("done" if uploaded else "skipped"), (f"[{mode_tag(live)}] 엑셀 {len(files)}건 중 {uploaded}건 업로드"
                                                  + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
 

@@ -6,6 +6,7 @@
 import os
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -13,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import run_routine as rr  # noqa: E402
 
 REAL_FIND = rr.find_site_upload_cell     # 아래 run() 이 가짜로 바꾸기 전에
+REAL_POPUPS, REAL_WAIT = rr.upload_popups, rr.wait_upload_result
 
 fails = []
 
@@ -23,10 +25,10 @@ def check(name, ok, detail=""):
         fails.append(name)
 
 
-def run(bad, when="now"):
+def run(bad, when="now", unknown=False):
     """bad: 결과 팝업이 뜨는 사이트코드. when: 팝업이 뜨는 때 - now 창이 닫히자마자, block 다음 파일의 사이트코드를 찾기 시작할 때
-    (그리드를 못 넘긴다), find 찾는 동안, wait 그보다 늦게 (결과를 기다릴 때에야).
-    반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수)"""
+    (그리드를 못 넘긴다), find 찾는 동안, wait 그보다 늦게 (결과를 기다릴 때에야). unknown: 그 팝업이 누를 단추를 모르는 창.
+    반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수, 멈췄는가)"""
     popup, blocking, delayed, later, moved, blocked = [], [], [], [], {}, []
 
     def find(hwnd, grid, code):
@@ -39,7 +41,9 @@ def run(bad, when="now"):
             return None, None       # 팝업에 막혀 그리드를 못 넘겼다
         return SimpleNamespace(rectangle=lambda: (0, 0, 1, 1)), rr.EXCEL_UPLOAD_ENABLED
 
-    def dismiss(app, hwnd, label="", **_):
+    def dismiss(*_, **__):
+        if unknown and popup:
+            raise rr.UploadStop("처리할 수 있는 버튼이 없습니다.")
         texts = popup[:]
         popup.clear()
         return texts
@@ -49,47 +53,118 @@ def run(bad, when="now"):
             {"now": popup, "block": blocking, "find": delayed, "wait": later}[when].append("업로드 오류")
         return True
 
-    def wait_result(app, hwnd, timeout=None, **_):
+    def wait_result(*_, **__):
         popup.extend(later)
         later.clear()
-        return dismiss(app, hwnd)
+        return dismiss()
 
     rr.log = lambda m: None
     rr.excel_upload_dir = tempfile.gettempdir
     rr.collect_upload_files = lambda folder: ({c: f"{c}.xlsx" for c in "ABC"}, [], [])
     rr.find_site_upload_cell = find
-    rr.dismiss_popups = dismiss
+    rr.find_popup_windows = lambda pid, hwnd: []
+    rr.upload_popups = dismiss
     rr.wait_upload_result = wait_result
     rr.open_upload_dialog = lambda pid, hwnd, cell: 1
     rr.upload_file_in_dialog = upload
     rr.win32gui = SimpleNamespace(IsWindow=lambda h: False, IsWindowVisible=lambda h: False)
     rr.wait_file_unlocked = lambda path, **_: True
     rr.move_file_to = lambda path, dest, reason="": moved.__setitem__(path, reason) or True
-    rr.run_excel_upload_step(None, 0, 0, None)
-    return moved, blocked.count(True)
+    try:
+        rr.run_excel_upload_step(None, 0, 0, None)
+    except rr.UploadStop:
+        return moved, blocked.count(True), True
+    return moved, blocked.count(True), False
 
 
 done = {"A.xlsx": "업로드 완료", "B.xlsx": "업로드 완료", "C.xlsx": "업로드 완료"}
-moved, blocked = run("")
+moved, blocked, _ = run("")
 check("팝업이 없으면 셋 다 완료", moved == done, str(moved))
 
-moved, blocked = run("A")
+moved, blocked, _ = run("A")
 check("앞 파일 결과 팝업은 다음 파일의 사이트코드를 찾기 전에 닫는다", blocked == 0, f"막힌 찾기 {blocked}번")
 check("팝업이 뜬 앞 파일만 실패, 다음 파일은 완료", moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
 
-moved, blocked = run("A", when="block")
+moved, blocked, _ = run("A", when="block")
 check("찾기 시작할 때 뜬 팝업에 막히면 닫고 한 번 더 찾는다 (다음 파일이 '사이트코드 없음' 으로 가지 않는다)",
       moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
 
-moved, blocked = run("A", when="find")
+moved, blocked, _ = run("A", when="find")
 check("찾는 동안 늦게 뜬 팝업도 앞 파일의 결과로 본다", moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
 
-moved, blocked = run("A", when="wait")
+moved, blocked, _ = run("A", when="wait")
 check("그보다 늦게 뜬 팝업도 다음 칸을 누르기 전에 기다려 앞 파일의 결과로 본다 (실패한 파일이 완료로 가지 않는다)",
       moved == {**done, "A.xlsx": "업로드 실패"}, str(moved))
 
-moved, blocked = run("C")
+moved, blocked, _ = run("C")
 check("마지막 파일은 결과 팝업을 기다려 본다", moved == {**done, "C.xlsx": "업로드 실패"}, str(moved))
+
+moved, blocked, stopped = run("A", unknown=True)
+check("누를 단추를 모르는 창이면 멈추고, 결과를 못 본 앞 파일은 옮기지 않는다", stopped and moved == {}, f"멈춤 {stopped} {moved}")
+
+
+print("--- 팝업은 ERPia 가 따로 띄운 창 목록으로 (2026-10-19: 실패 팝업은 메인 창이 소유한 별도 창)")
+wins, pressed = {}, []      # hwnd: (class, 누르면 닫히는가, 누를 단추가 있는가)
+
+
+def press(h):
+    pressed.append(h)
+    _cls, closes, known = wins[h]
+    if not known:
+        return False, "처리할 수 있는 버튼이 없습니다.", ""
+    if closes:
+        wins.pop(h)
+    return True, f"[ERPia] 팝업{h} -> '확인(O)' 클릭", f"팝업{h} 문구"
+
+
+def stops(fn):
+    try:
+        fn()
+    except rr.UploadStop:
+        return True
+    return False
+
+
+rr.find_popup_windows = lambda pid, hwnd: list(wins)
+rr.dismiss_popup_window = press
+rr.win32gui = SimpleNamespace(GetClassName=lambda h: wins[h][0], IsWindow=lambda h: h in wins,
+                              IsWindowVisible=lambda h: h in wins)
+rr.upload_popups, rr.wait_upload_result = REAL_POPUPS, REAL_WAIT
+
+wins.update({1: ("popup", True, True), 2: (rr.SAVE_DIALOG_CLASS, True, True), 3: ("popup", True, True)})
+texts = rr.upload_popups(0, 0, before={1})
+check("업로드 전부터 있던 창과 파일 열기 창은 두고 새로 뜬 팝업만 닫는다", pressed == [3] and texts == ["팝업3 문구"],
+      f"{pressed} {texts}")
+
+wins.clear()
+wins[4] = ("popup", True, False)
+check("누를 단추가 없는 창이면 멈춘다", stops(lambda: rr.upload_popups(0, 0)))
+
+wins.clear()
+pressed.clear()
+wins[5] = ("popup", False, True)
+check("눌러도 안 닫히면 거듭 누르지 않고 멈춘다", stops(lambda: rr.upload_popups(0, 0)) and pressed == [5], str(pressed))
+
+wins.clear()
+calls = []
+
+
+def appear(pid, hwnd):
+    calls.append(1)
+    if len(calls) == 3:
+        wins[6] = ("popup", True, True)
+    return list(wins)
+
+
+rr.find_popup_windows = appear
+t = time.time()
+texts = rr.wait_upload_result(0, 0, timeout=3)
+check("결과 팝업이 뜨면 기다리기를 바로 끝낸다", texts == ["팝업6 문구"] and time.time() - t < 1,
+      f"{texts} {time.time() - t:.1f}초")
+rr.find_popup_windows = lambda pid, hwnd: []
+t = time.time()
+texts = rr.wait_upload_result(0, 0, timeout=0.3)
+check("안 뜨면 기다린 뒤 빈 목록 (정상 업로드)", texts == [] and 0.3 <= time.time() - t < 1, f"{texts} {time.time() - t:.1f}초")
 
 
 print("--- 업로드 칸이 사이트코드와 같은 줄인지 (행 번호, 2026-10-19: 108 을 눌렀는데 109 에 올라갔다)")
