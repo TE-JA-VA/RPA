@@ -1040,6 +1040,8 @@ INVOICE_TAB = "운송장번호 전송"
 INVOICE_FORM = "Frm_Send_TrackingNumber"
 INVOICE_ICON = "lcg_InvoiceSend"
 INVOICE_SEND = "운송장번호 [전송요청(S)]"
+SEND_BUSY_WAIT = 10.0      # '전송 중' 인지 이만큼 1초마다 다시 본다 - 잠깐 막힌 것과 가리려고
+SEND_BUSY_LAST = "이후에는 전송하지 않습니다"   # 반복 끝 시각까지 전송 중일 때 사유 끝 (send_busy_reason)
 
 
 def module_invoice_send(rr, ctx, live=False):
@@ -1068,6 +1070,8 @@ def invoice_send(rr, ctx, live):
     실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
     체크는 되돌리지 않는다 (다음 조회로 풀린다). (결과, 사유)."""
     tag = mode_tag(live)
+    if send_busy(rr, ctx):          # 앞 회차에 누른 전송이 아직 도는 중 - 누르지 않고 다음 회차에 (사용자 2026-10-19)
+        return "skipped", f"[{tag}] {send_busy_reason(rr)}"
     fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
     ctl = controls(rr, ctx, INVOICE_FORM)
     query, grid = ctl.get("btn_Search"), ctl.get("gridCtrl_List")
@@ -1095,6 +1099,62 @@ def invoice_send(rr, ctx, live):
     if not live:
         head += " - 전송요청은 누르지 않음"
     return ("done" if pressed else "skipped"), head + note + query_note(fixed)
+
+
+def send_busy(rr, ctx, wait=None):
+    """앞서 누른 [전송요청(S)] 이 아직 도는 중인가 - 그리드나 조회(F) 단추가 꺼져 고르거나 누를 수 없는 상태.
+    송장이 많으면 전송이 반복 간격(쉬는 시간)보다 오래 걸린다 (사용자 2026-10-19). wait 초 동안 1초마다 다시 보고
+    그래도 꺼져 있으면 True. ponytail: 실측 전 - 전송 중 화면을 아직 못 봤다. IsEnabled 만 보니 다른 표시(진행 창 등)가
+    보이면 여기에 더한다."""
+    end = time.time() + (SEND_BUSY_WAIT if wait is None else wait)
+    while True:
+        ctl = controls(rr, ctx, INVOICE_FORM)
+        off = [n for n in ("gridCtrl_List", "btn_Search") if ctl.get(n) is not None and not is_on(ctl[n])]
+        if not off:
+            return False
+        if time.time() >= end:
+            rr.log(f"  {INVOICE_TAB}: {', '.join(off)} 이(가) 꺼져 있습니다 - 앞서 누른 전송이 아직 진행 중으로 봅니다.")
+            return True
+        time.sleep(1)
+
+
+def is_on(c):
+    try:
+        return c.is_enabled()
+    except Exception:
+        return True         # 못 읽으면 막힌 것으로 보지 않는다 (예전처럼 진행)
+
+
+def send_busy_reason(rr, now=None):
+    """전송 중이라 이번 회차를 건너뛸 때의 사유. 반복 회차(대시보드가 끝 시각·쉬는 시간을 넘긴다 - rpa_dashboard.launch_slot)이고
+    다음 회차가 끝 시각을 넘으면(지금 + 쉬는 시간 >= 끝) 마지막 기회라 '이후에는 전송하지 않습니다' 로 남기고,
+    처리한 게 없어도 이력에 남긴다 (사용자 2026-10-19)."""
+    now = now or datetime.datetime.now()
+    last = last_send_at(rr, now)
+    at = f"{last:%H:%M}" if last else "(오늘 누른 기록 없음)"
+    until = os.environ.get("RPA_REPEAT_UNTIL") or ""
+    try:
+        rest = int(os.environ.get("RPA_REPEAT_REST") or "")
+        end = now.replace(hour=int(until[:2]), minute=int(until[3:5]), second=0, microsecond=0)
+    except ValueError:
+        return f"앞서 {at}에 누른 전송이 아직 진행 중이라 이번에는 누르지 않습니다."
+    if now + datetime.timedelta(minutes=rest) >= end:
+        rr.status.keep_record()
+        return f"마지막으로 {at}에 전송요청을 눌렀고, 반복 끝 시각({until})까지 전송 중이라 {SEND_BUSY_LAST}."
+    return f"앞서 {at}에 누른 전송이 아직 진행 중이라 이번 회차는 누르지 않습니다. {rest}분 뒤 다시 확인합니다."
+
+
+def last_send_at(rr, now):
+    """오늘 [전송요청(S)] 을 누른(운송장번호 전송 '완료') 마지막 실행의 그 모듈 끝 시각 - 이력에서. 없으면 None."""
+    try:
+        rows = rr.status.read_history(since=f"{now:%Y-%m-%d}T00:00:00") or []
+    except Exception:
+        return None
+    for r in rows:
+        m = next((m for m in r.get("modules") or [] if m.get("key") == "invoicesend" and m.get("state") == "done"), None)
+        if m:
+            return rr.status.parse_iso(m.get("finished_at") or r.get("finished_at"))
+    return None
 
 
 def query_note(fixed):

@@ -871,7 +871,10 @@ def launch_slot(slot, by="auto", trigger="auto"):
     target, env = slot_target(slot, slot_off(st.read_settings()["schedule"]))
     if target is None:
         raise RuntimeError("업체가 사용하지 않는 모듈만 남아 건너뜁니다.")
-    return launch(target, by, dict(env, RPA_RUN_TRIGGER=trigger))
+    env = dict(env, RPA_RUN_TRIGGER=trigger)
+    if trigger == "repeat" and slot.get("until"):   # 반복 회차: 끝 시각·쉬는 시간 - 운송장번호 전송이 마지막 기회인지 안다 (wellife.send_busy_reason)
+        env.update(RPA_REPEAT_UNTIL=slot["until"], RPA_REPEAT_REST=str(slot.get("rest_min", REST_MIN_DEFAULT)))
+    return launch(target, by, env)
 
 
 def open_window(sch, now):

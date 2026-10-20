@@ -1907,9 +1907,18 @@ def finish(result, reason=None, record=True):
             _state["current"] = None
             _state["note"] = None
         _write_locked()
-        if record:
+        if record or _state.get("keep_record"):
             append_history(history_record(_state))
         _finished = True
+
+
+@_safe
+def keep_record():
+    """처리한 게 없는 반복 회차라도 이력에 남긴다 - finish(record=False) 를 덮는다 (운송장번호 전송이 반복 끝 시각까지
+    전송 중이라 이후 전송하지 않을 때 그 사유를 남기려고 - wellife.send_busy_reason, 사용자 2026-10-19)."""
+    with _lock:
+        if _active():
+            _state["keep_record"] = True
 
 
 @_safe

@@ -1461,6 +1461,49 @@ try:
 except wellife.Stop as e:
     res = e.result
 check("조회(F) 단추가 없으면 멈춘다 (failed)", res == "failed" and acts == [], f"{res} {acts}")
+
+# 앞 회차에 누른 전송이 아직 도는 중 (사용자 2026-10-19 - 그리드·조회 단추가 꺼진 상태. 실측 전이라 가짜 화면으로만)
+busy_search = El("조회(F)")
+busy_search.on = False
+busy_ctl = {"btn_Search": busy_search, "gridCtrl_List": "grid", "btn_SendRequest": send_btn}
+_busy_wait = wellife.SEND_BUSY_WAIT
+wellife.SEND_BUSY_WAIT = 0
+wellife.controls = lambda rr_, ctx_, form: busy_ctl
+res = inv_run(True)
+check("전송 중(조회 단추가 꺼짐)이면 조회·체크·전송요청 모두 하지 않고 건너뛴다 - 반복은 이어 간다",
+      res[0] == "skipped" and acts == [] and "진행 중" in res[1], f"{res} {acts}")
+seen_ctl = []
+wellife.controls = lambda rr_, ctx_, form: seen_ctl.append(1) or (busy_ctl if len(seen_ctl) == 1 else {
+    "btn_Search": El("조회(F)"), "gridCtrl_List": "grid", "btn_SendRequest": send_btn})
+wellife.SEND_BUSY_WAIT = 5
+res = inv_run(True)
+check("잠깐 꺼졌다가 다시 켜지면 예전처럼 조회 -> 전체 체크 -> 전송요청",
+      res[0] == "done" and ("click", "btn_SendRequest") in acts, f"{res} {acts}")
+wellife.SEND_BUSY_WAIT = _busy_wait
+
+import datetime as _dt  # noqa: E402
+
+busy_kept = []
+busy_hist = [{"modules": [{"key": "invoicesend", "state": "skipped", "finished_at": "2026-10-19T10:30:05"}]},
+        {"modules": [{"key": "login", "state": "done"}, {"key": "invoicesend", "state": "done", "finished_at": "2026-10-19T10:05:40"}]},
+        {"modules": [{"key": "invoicesend", "state": "done", "finished_at": "2026-10-19T09:40:00"}]}]
+import rpa_status as real_status  # noqa: E402  (rr.status 는 앞에서 가짜로 바뀌어 있을 수 있다)
+
+busy_rr = types.SimpleNamespace(status=types.SimpleNamespace(read_history=lambda since=None: busy_hist, parse_iso=real_status.parse_iso,
+                                                         keep_record=lambda: busy_kept.append(1)))
+busy_now = _dt.datetime(2026, 10, 19, 17, 50)
+check("마지막 전송요청 시각은 이력에서 '완료' 로 끝난 가장 최근 운송장번호 전송", wellife.last_send_at(busy_rr, busy_now).strftime("%H:%M") == "10:05")
+os.environ.update(RPA_REPEAT_UNTIL="18:00", RPA_REPEAT_REST="5")
+busy_msg = wellife.send_busy_reason(busy_rr, _dt.datetime(2026, 10, 19, 17, 40))
+check("반복 회차 - 다음 회차가 끝 시각 안이면 'N분 뒤 다시 확인', 이력은 평소대로",
+      "10:05" in busy_msg and "5분 뒤 다시 확인" in busy_msg and not busy_kept, busy_msg)
+busy_msg = wellife.send_busy_reason(busy_rr, busy_now.replace(minute=56))
+check("끝 시각까지 다음 회차가 없으면 '마지막으로 HH:MM 에 전송요청을 눌렀고 ... 이후에는 전송하지 않습니다' + 이력에 남김",
+      busy_msg.startswith("마지막으로 10:05에 전송요청을 눌렀고") and "18:00" in busy_msg and wellife.SEND_BUSY_LAST in busy_msg and busy_kept == [1], busy_msg)
+del os.environ["RPA_REPEAT_UNTIL"], os.environ["RPA_REPEAT_REST"]
+busy_kept.clear()
+busy_msg = wellife.send_busy_reason(busy_rr, busy_now)
+check("반복 회차가 아니면(단독·예약 실행) 이번에는 누르지 않는다는 말만", "이번에는 누르지 않습니다" in busy_msg and not busy_kept, busy_msg)
 wellife.controls, wellife.count_rows, wellife.check_all_rows = _saved_inv
 wellife.ensure_query = _saved_eq
 POP.clear()
@@ -2244,5 +2287,29 @@ check("키보드 차례: 수집이 끝났으면 잡지 않는다", held == ["친
 del os.environ[wellife.TOGETHER_ENV]
 for n, f in _saved_tog.items():
     setattr(wellife, n, f)
+
+print("=== 운송장번호 전송 - 반복 끝 시각까지 전송 중 (사용자 2026-10-19)")
+st = real_status
+st.start("routine", [("inv_send", "운송장번호 전송")])
+st.finish("success", None, record=False)
+quiet = [r for r in st.read_history() if r.get("program") == "routine"]
+st.start("routine", [("inv_send", "운송장번호 전송")])
+st.keep_record()
+st.finish("success", "끝 시각까지 전송 중", record=False)
+kept_rows = [r for r in st.read_history() if r.get("program") == "routine"]
+check("처리한 게 없는 반복 회차는 이력에 안 남지만, keep_record 한 회차는 남는다",
+      not quiet and len(kept_rows) == 1 and kept_rows[0].get("reason") == "끝 시각까지 전송 중", f"{quiet} {kept_rows}")
+import rpa_dashboard as dash  # noqa: E402
+
+sent_env = []
+_saved_dash = dash.launch, dash.slot_target
+dash.launch = lambda target, by, env=None: sent_env.append(env)
+dash.slot_target = lambda slot, off: ("routine", {"RPA_RUN_MODULES": "InvoiceSend"})
+dash.launch_slot({"at": "09:00", "until": "18:00", "rest_min": 5}, trigger="repeat")
+dash.launch_slot({"at": "09:00"})
+dash.launch, dash.slot_target = _saved_dash
+check("반복 회차를 띄울 때만 끝 시각·쉬는 시간을 넘긴다 (운송장번호 전송이 마지막 기회인지 안다)",
+      sent_env[0].get("RPA_REPEAT_UNTIL") == "18:00" and sent_env[0].get("RPA_REPEAT_REST") == "5"
+      and "RPA_REPEAT_UNTIL" not in sent_env[1], str(sent_env))
 
 finish()
