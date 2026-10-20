@@ -2606,6 +2606,8 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS, retry=Tr
     (2026-10-19 개발기: 108 을 찾아 눌렀는데 109 에 올라갔다). 다르면 처음부터 한 번 더, 그래도 다르면 못 찾음.
     반환: (셀 요소, 엑셀업로드 값) - 못 찾으면 (None, None)
     """
+    if not grid_onscreen(hwnd, grid):    # 다른 탭이 앞으로 왔다 - 넘기는 클릭을 하지 않는다 (부르는 쪽이 grid_onscreen 으로 가린다)
+        return None, None
     if not _header_onscreen(grid, SITE_CODE_COL):
         scroll_grid_left_home(hwnd, grid)
     geo_code = _column_scan_geometry(grid, SITE_CODE_COL)
@@ -2622,7 +2624,7 @@ def find_site_upload_cell(hwnd, grid, code, max_pages=GRID_MAX_SCROLLS, retry=Tr
         grid_scroll_to_top(hwnd, grid)
         for _ in range(max_pages):
             y, code_cell = row_y()
-            if y is not None or not grid_page_down(hwnd, grid):
+            if y is not None or not grid_onscreen(hwnd, grid) or not grid_page_down(hwnd, grid):
                 break
     if y is None:
         return None, None
@@ -2690,6 +2692,25 @@ def find_open_dialog_filename_edit(dlg_hwnd):
 
 class UploadStop(RuntimeError):
     """엑셀 업로드 중 누를 단추를 모르는 창이 떴다 - 누르지 않고 멈춘다."""
+
+
+class UploadGridHidden(RuntimeError):
+    """엑셀 업로드 중 사이트 그리드가 화면에서 사라졌다 - 다른 탭이 앞으로 왔다 (2026-10-20 개발기: 자동 수집이 도는 동안 ERPia 가
+    원래 탭을 앞으로 가져와 '+' 로 연 화면의 그리드가 화면 밖으로 갔다). 남은 파일은 그 자리에 두었다 - 부르는 쪽이 화면을
+    되돌리고 다시 부른다. uploaded·errors: 그때까지 올린 수·오류로 보낸 수."""
+    def __init__(self, uploaded, errors):
+        super().__init__("사이트 그리드가 화면에서 사라짐")
+        self.uploaded, self.errors = uploaded, errors
+
+
+def grid_onscreen(hwnd, grid):
+    """그리드가 ERPia 메인 창 안에 보이는가. 숨은 탭의 그리드는 화면 밖(음수 자리)으로 옮겨지고 IsWindowVisible 은 그대로라
+    (2026-10-20 개발기 실측) 자리로 본다 - 화면 밖 그리드를 넘기는 클릭은 화면 가장자리의 다른 창을 누른다."""
+    try:
+        r, (left, top, right, bottom) = grid.rectangle(), win32gui.GetWindowRect(hwnd)
+    except Exception:
+        return False
+    return r.width() > 0 and left <= r.left and r.right <= right and top <= r.top and r.bottom <= bottom
 
 
 def invoke_popup_window(popup_hwnd):
@@ -3140,6 +3161,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
         else:
             log("    (검증 모드: 파일을 옮기지 않습니다)")
 
+    hidden = False
     for idx, (code, path) in enumerate(sorted(targets.items()), 1):
         name = os.path.basename(path)
         log(f"  [{idx}/{len(targets)}] 사이트코드={code} 파일={name}")
@@ -3154,6 +3176,10 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
             if late:
                 seen += late
                 cell, value = find_site_upload_cell(hwnd, grid, code)
+        if cell is None and not grid_onscreen(hwnd, grid):     # 못 찾은 게 아니라 그리드가 숨었다 - 오류로 보내지 않는다
+            log("    사이트 그리드가 화면에서 사라졌습니다 (다른 탭이 앞으로 옴). 남은 파일은 그대로 둡니다.")
+            hidden = True
+            break
         if cell is None:
             log(f"    사이트코드 {code} 인 행을 찾지 못했습니다.")
             if move_files and move_file_to(path, error_dir, "사이트코드 없음"):
@@ -3206,6 +3232,8 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
 
     log(f"  엑셀업로드 완료: 업로드 {uploaded}건 / 업로드 실패 {failed}건 "
         f"/ 오류 폴더로 옮긴 파일 {errors}건")
+    if hidden:
+        raise UploadGridHidden(uploaded, errors)
     return uploaded, errors
 
 

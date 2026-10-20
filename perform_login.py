@@ -8,6 +8,7 @@
     바탕화면에 'AI 로그인 실패(YYYYMMDD_HHmmss).txt' 에러 로그를 남긴다.
     (파일명에 콜론(:)은 Windows에서 사용할 수 없어 HHmmss로 대체함)
 """
+import contextlib
 import os
 import time
 from datetime import datetime
@@ -33,6 +34,9 @@ def find_desktop_dir():
 # 이 프로그램이 만드는 파일은 모두 여기 모은다.
 # (받은 엑셀, 출력 결과, 실패 기록. 설정은 exe 옆 RPA_UserConfig.json - rpa_status 의 '사용자 설정' 절)
 AI_DIR_NAME = "ERPIA_AI"
+# 로그인 창에 키를 치고 단추를 누르는 동안 잡을 것 - 웰라이프 함께 실행이 바꾼다 (wellife.keys: 그동안 사이트 수집이 Edge 창을
+# 새로 띄우지 않게 - 새 창이 포커스를 가져가면 비밀번호가 Edge 로 샌다). 평소에는 아무것도 하지 않는다.
+KEYS_GUARD = contextlib.nullcontext
 
 
 def find_ai_dir():
@@ -295,10 +299,10 @@ def login_flow(admin_code, user_id, password, log=None):
         return {"status": "already_logged_in", "message": "로그인 창을 찾지 못함 (이미 로그인 상태일 수 있음)", "error_log_path": None}
 
     log(f"로그인 창 발견: handle={login_win.handle}")
-    ec.ensure_foreground(login_win.handle)
-
     try:
-        fill_login_fields(login_win, admin_code, user_id, password, log)
+        with KEYS_GUARD():
+            ec.ensure_foreground(login_win.handle)
+            fill_login_fields(login_win, admin_code, user_id, password, log)
     except Exception as e:
         log(f"필드 입력 실패: {e}")
         return {"status": "error", "message": f"필드 입력 실패: {e}", "error_log_path": None}
@@ -313,7 +317,8 @@ def login_flow(admin_code, user_id, password, log=None):
 
         login_pid = win32process.GetWindowThreadProcessId(login_win.handle)[1]
         try:
-            click_login_button(login_win, log)
+            with KEYS_GUARD():
+                click_login_button(login_win, log)
         except Exception as e:
             log(f"로그인 버튼 클릭 실패: {e}")
             return {"status": "error", "message": f"로그인 버튼 클릭 실패: {e}", "error_log_path": None}

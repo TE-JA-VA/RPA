@@ -18,6 +18,9 @@ import run_routine as rr  # noqa: E402
 REAL_FIND = rr.find_site_upload_cell     # 아래 run() 이 가짜로 바꾸기 전에
 REAL_POPUPS, REAL_WAIT = rr.upload_popups, rr.wait_upload_result
 REAL_OPEN, REAL_IN_DIALOG = rr.open_upload_dialog, rr.upload_file_in_dialog
+REAL_ONSCREEN = rr.grid_onscreen
+ONSCREEN = [True]       # 사이트 그리드가 화면에 있는가 (아래 시험들은 가짜 win32gui 라 자리를 못 읽는다)
+rr.grid_onscreen = lambda hwnd, grid: ONSCREEN[0]
 
 fails = []
 
@@ -28,13 +31,17 @@ def check(name, ok, detail=""):
         fails.append(name)
 
 
-def run(bad, when="now", unknown=False):
+def run(bad, when="now", unknown=False, hide=""):
     """bad: 결과 팝업이 뜨는 사이트코드. when: 팝업이 뜨는 때 - now 창이 닫히자마자, block 다음 파일의 사이트코드를 찾기 시작할 때
     (그리드를 못 넘긴다), find 찾는 동안, wait 그보다 늦게 (결과를 기다릴 때에야). unknown: 그 팝업이 누를 단추를 모르는 창.
-    반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수, 멈췄는가)"""
+    hide: 그 사이트코드를 찾을 때 그리드가 화면에서 사라진다 (다른 탭이 앞으로 옴).
+    반환: (옮긴 곳 {파일: 까닭}, 팝업이 떠 있는 채로 사이트코드를 찾은 횟수, 멈췄는가 - 그리드가 사라졌으면 ('hidden', 올린 수, 오류 수))"""
     popup, blocking, delayed, later, moved, blocked = [], [], [], [], {}, []
 
     def find(hwnd, grid, code):
+        if code in hide:
+            ONSCREEN[0] = False
+            return None, None
         popup.extend(blocking)
         blocking.clear()
         blocked.append(bool(popup))
@@ -77,6 +84,10 @@ def run(bad, when="now", unknown=False):
         rr.run_excel_upload_step(None, 0, 0, None)
     except rr.UploadStop:
         return moved, blocked.count(True), True
+    except rr.UploadGridHidden as h:
+        return moved, blocked.count(True), ("hidden", h.uploaded, h.errors)
+    finally:
+        ONSCREEN[0] = True
     return moved, blocked.count(True), False
 
 
@@ -104,6 +115,20 @@ check("마지막 파일은 결과 팝업을 기다려 본다", moved == {**done,
 
 moved, blocked, stopped = run("A", unknown=True)
 check("누를 단추를 모르는 창이면 멈추고, 결과를 못 본 앞 파일은 옮기지 않는다", stopped and moved == {}, f"멈춤 {stopped} {moved}")
+
+moved, blocked, stopped = run("", hide="B")
+check("찾는 동안 그리드가 화면에서 사라지면(다른 탭이 앞으로 옴, 10-20 실측) 오류로 보내지 않고 남은 파일은 그대로 두고 알린다 - 앞 파일은 마무리",
+      stopped == ("hidden", 1, 0) and moved == {"A.xlsx": "업로드 완료"}, f"{stopped} {moved}")
+rr.win32gui = SimpleNamespace(GetWindowRect=lambda h: (0, 0, 1920, 1032))
+
+
+def at(left, top, right, bottom):
+    return SimpleNamespace(rectangle=lambda: SimpleNamespace(left=left, top=top, right=right, bottom=bottom,
+                                                             width=lambda: right - left))
+
+
+check("숨은 탭의 그리드(화면 밖 자리 - 10-20 실측 (-1351,-854))는 보이지 않는 것으로, 떠 있는 탭의 그리드는 보이는 것으로",
+      not REAL_ONSCREEN(1, at(-1351, -854, -690, -443)) and REAL_ONSCREEN(1, at(318, 129, 979, 540)))
 
 
 print("--- 팝업은 ERPia 가 따로 띄운 창 목록으로 (2026-10-19: 실패 팝업은 메인 창이 소유한 별도 창)")

@@ -277,12 +277,15 @@ check("창 4개는 2x2 칸에 (배율 1 미만, 칸 사이가 창보다 넓다)"
 print("=== 3-3. 함께 실행 - ERPia 쪽을 같이 띄워 받은 엑셀을 받는 대로 (사용자 2026-10-19)")
 since = time.time()
 status.start("routine")
-check("루틴이 놓아주기 전에는 Edge 창을 띄우지 않는다", status.prepare_go(since) == (False, None))
-status.release_prepare((0, 0, 1920, 1032))
-check("놓아주면 ERPia 창 자리와 함께", status.prepare_go(since) == (True, [0, 0, 1920, 1032]), str(status.prepare_go(since)))
-check("띄우기 전에 시작한 루틴(앞 실행)의 표시는 보지 않는다", status.prepare_go(time.time() + 60) == (False, None))
+check("루틴이 키보드를 잡기 전에는 수집이 기다리지 않는다 (인증 사이트부터 바로 - 사용자 10-19)", not status.keys_held(since))
+status.hold_keys(True)
+check("루틴이 ERPia 에 키보드를 쓰는 동안은 기다린다", status.keys_held(since))
+check("띄우기 전에 시작한 루틴(앞 실행)의 표시는 보지 않는다", not status.keys_held(time.time() + 60))
+status.hold_keys(False)
+check("놓으면 다시 간다", not status.keys_held(since))
+status.hold_keys(True)
 status.finish("success")
-check("루틴이 끝났으면 기다리지 않는다", status.prepare_go(since)[0] is True)
+check("루틴이 끝났으면 잡은 채여도 기다리지 않는다", not status.keys_held(since))
 
 spawned = []
 
@@ -299,7 +302,7 @@ class FakeProc:
         return 3
 
 
-_saved_tog = web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.prepare_go
+_saved_tog = web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held
 web_runner.subprocess.Popen = FakeProc
 os.environ.pop(status.ALL_RUN_ENV, None)
 status.wellife_policy = lambda: True
@@ -313,12 +316,18 @@ cmd, env = spawned[0] if spawned else (None, {})
 check("웰라이프 전체 실행이면 루틴을 함께 띄운다 - 함께 표시는 주고 전체 실행 표시는 빼서",
       together is not None and env.get(status.TOGETHER_ENV) == "1" and status.ALL_RUN_ENV not in env
       and cmd[-1].endswith("run_routine.py"), str(cmd))
-goes = [(False, None), (False, None), (True, [1, 2, 3, 4])]
-status.prepare_go = lambda since: goes.pop(0)
-check("루틴이 놓아줄 때까지 기다렸다가 ERPia 창 자리를", web_runner.wait_routine_go() == [1, 2, 3, 4])
-status.prepare_go = lambda since: (False, None)
+holds = [True, True, False]
+status.keys_held = lambda since: holds.pop(0) if holds else False
+t0 = time.time()
+web_runner.wait_keys()
+check("새 창을 띄우기 전: 루틴이 키보드를 놓을 때까지 기다린다", not holds and time.time() - t0 >= 0.15, str(holds))
+status.keys_held = lambda since: True
+check("재생 단계 사이: 루틴이 키보드를 쓰는 동안은 멈춘다 (Replayer.pause 자리)", web_runner.KeysPause().is_set())
 web_runner._together[0].rc = 0
-check("루틴이 먼저 끝나면 더 기다리지 않는다", web_runner.wait_routine_go() is None)
+t0 = time.time()
+web_runner.wait_keys()
+check("루틴이 먼저 끝나면 잡은 표시가 남아도 기다리지 않는다",
+      time.time() - t0 < 0.3 and not web_runner.KeysPause().is_set())
 check("끝 코드는 100 + 루틴 코드 (Run_All.bat 이 루틴을 다시 띄우지 않게)", web_runner.finish_together(0) == 103)
 check("Edge 인자: 함께 실행이면 맨 위 ERPia 에 가려져도 느려지지 않게",
       "--disable-backgrounding-occluded-windows" in web_runner.edge_args()["args"])
@@ -362,7 +371,7 @@ check("모니터가 둘이면 Edge 창은 ERPia 가 없는 모니터에",
 web_runner.monitor_work_areas = lambda: [(0, 0, 1920, 1040)]
 check("모니터가 하나면 주 화면 그대로 (ERPia 를 맨 위로 둔다)", web_runner.work_area((0, 0, 1920, 1032)) == web_runner.work_area())
 web_runner.monitor_work_areas = _saved_mon
-web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.prepare_go = _saved_tog
+web_runner.subprocess.Popen, status.wellife_policy, web_runner.download_dir, status.keys_held = _saved_tog
 web_runner._together = None
 os.environ.pop(status.ALL_RUN_ENV, None)
 

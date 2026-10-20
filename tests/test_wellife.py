@@ -4,6 +4,7 @@ ERPia 없이 돈다. 설정·기록·상태는 임시 폴더로 격리한다 (RP
 
     .venv\\Scripts\\python.exe tests\\test_wellife.py
 """
+import contextlib
 import os
 import sys
 import tempfile
@@ -378,6 +379,9 @@ MENU = wellife.SAP_MENU
 FOCUS_IN = [("", "Edit", ""), ("sch_Menus", "Pane", "")]          # 검색 칸 안쪽 Edit 에 포커스
 FOCUS_OUT = [("gridCtrl_List", "Table", "")]                       # 막 열린 화면의 그리드에 포커스
 focus = [FOCUS_IN]
+_late = iter([FOCUS_OUT, FOCUS_OUT, FOCUS_IN])
+wellife._focus_chain = lambda rr_, depth=8: next(_late, FOCUS_IN)
+check("누른 뒤 포커스가 늦게 와도 잠깐 다시 본다 (10-19 실측: 자동 수집 중 메뉴 검색 칸)", wellife._focus_in(None, "sch_Menus"))
 wellife._focus_chain = lambda rr_, depth=8: focus[0]
 
 
@@ -1114,10 +1118,12 @@ def order_rr(files):
                   run_import_step=lambda app, pid, hwnd, win, wait=True: acts.append(("click", "가져오기", getattr(win, "name", "창"))) or IMPORTED[0],
                   find_by_text=lambda win, text, control_types=(): FOUND[0] or next(
                       (e for e in win.descendants() if e.window_text() == text), None),
+                  native_enabled=lambda el: acts.append(("enabled?",)) or (ENABLED.pop(0) if ENABLED else True),
+                  scan_current_view=lambda grid, cols: VIEW[0], summarize=rr.summarize, IMPORT_SETTLE_SECONDS=0,
                   IMPORT_BUTTON_NAME="가져오기")
 
 
-IMPORTED, FOUND = [True], [None]
+IMPORTED, FOUND, ENABLED, VIEW = [True], [None], [], [{"a": "checked", "b": "null"}]
 _saved_cp = wellife.clear_point
 wellife.clear_point = lambda rr_, ctx_, el, what: acts.append(("clear", el.name)) or (0, 0)
 class Page(Nav):
@@ -1186,6 +1192,19 @@ res = collect_stop(order_rr({}))
 check("누를 단추가 확인한 단추와 다른 자리면 누르지 않고 멈춘다 (숨은 화면 단추, 리뷰 10-14)",
       res and res[0] == "failed" and not [a for a in acts if a[0] in ("click", "clear")], f"{res} {acts}")
 FOUND[0] = None
+VIEW[0] = {"a": "unchecked", "b": "null"}
+res = collect_stop(order_rr({}))
+check("전체선택 뒤 화면이 다시 그려져 체크가 풀렸으면 [가져오기] 를 누르지 않고 멈춘다 ('항목을 선택하세요' - 10-19 실측 2차)",
+      res and res[0] == "failed" and "체크가 풀렸" in res[1] and not [a for a in acts if a[0] == "click"], f"{res} {acts}")
+VIEW[0] = {"a": "checked", "b": "null"}
+ENABLED[:] = [False, False, True]
+_saved_sleep = wellife.time.sleep
+wellife.time.sleep = lambda s_: None
+res = collect_stop(order_rr({}))
+wellife.time.sleep = _saved_sleep
+first_select = acts.index(("select", "좌측상단", "사이트")) if ("select", "좌측상단", "사이트") in acts else -1
+check("화면이 조회 중(단추 꺼짐)이면 켜질 때까지 기다린 뒤 전체선택하고 누른다",
+      res is None and first_select == 3 and acts[:3] == [("enabled?",)] * 3 and press in acts, f"{res} {acts}")
 acts.clear()
 res = wellife.import_collect(order_rr({}), types.SimpleNamespace(pid=1, hwnd=2, app=None, window=lambda: Nav([])), True)
 check("[가져오기] 단추가 없으면 전체선택도 누르기도 않고 사유에 남긴다",
@@ -2027,6 +2046,9 @@ wellife.module_excel = lambda rr_, ctx_, *a: margs.append(a) or ("skipped", None
 tgot["funcs"]["wellife_excel"](None)
 check("엑셀 수집을 실제로 하면 기다리지 않고 함께 올린다 (자동 수집을 실제로 하는지도 넘긴다)",
       not waits and margs == [(True, True, True)], f"{waits} {margs}")
+check("함께 실행이면 로그인 창에 키를 치는 동안도 키보드 차례를 잡는다 (비밀번호가 Edge 로 새지 않게)",
+      rr.pl.KEYS_GUARD is not contextlib.nullcontext)
+rr.pl.KEYS_GUARD = contextlib.nullcontext
 wellife.wait_prepare, wellife.module_excel = _saved_wp, _saved_me
 del os.environ[wellife.TOGETHER_ENV]
 
@@ -2058,33 +2080,38 @@ def tog_sleep(_s):
 
 
 trr = types.SimpleNamespace(
-    log=lambda m: None, UPLOAD_NO_KEYS=False, UploadStop=rr.UploadStop, excel_upload_dir=lambda: tog,
+    log=lambda m: None, UPLOAD_NO_KEYS=False, UploadStop=rr.UploadStop, UploadGridHidden=rr.UploadGridHidden,
+    excel_upload_dir=lambda: tog,
     collect_upload_files=tog_collect, run_excel_upload_step=tog_upload, win32con=_wc,
     win32gui=types.SimpleNamespace(GetWindowRect=lambda h: (0, 0, 1920, 1032),
                                    SetWindowPos=lambda h, after, *a: tev.append(("topmost", after == _wc.HWND_TOPMOST))),
     status=types.SimpleNamespace(step=lambda *a, **k: None, metric=lambda *a, **k: None,
                                  release_prepare=lambda rect=None: tev.append(("release", rect)),
                                  running_programs=lambda: ["prepare"] if prep["on"] else []))
-_saved_tog = {n: getattr(wellife, n) for n in ("import_collect", "open_order_copy", "close_order_copy", "site_grid",
+_saved_tog = {n: getattr(wellife, n) for n in ("import_collect", "open_order_copy", "close_order_copy", "site_grid", "switch_tab",
+                                               "keep_front",
                                                "no_popup", "time")}
 wellife.import_collect = lambda rr_, ctx_, live, wait=True: tev.append(("import start", wait)) or (lambda: ("done", "자동 수집 끝"))
 wellife.open_order_copy = lambda rr_, ctx_: tev.append(("copy open",)) or "주문매핑 매출처리 (2)"
 wellife.close_order_copy = lambda rr_, ctx_, name: tev.append(("copy close", name))
+wellife.switch_tab = lambda rr_, ctx_, name: tev.append(("tab", name))
+fronts = []     # keep_front 가 돌려줄 값 (비면 False - '+' 화면이 그대로 앞에 있다)
+wellife.keep_front = lambda rr_, ctx_, name: fronts.pop(0) if fronts else False
 wellife.site_grid = lambda rr_, ctx_: "사이트 그리드"
 wellife.no_popup = lambda *a: None
 wellife.time = types.SimpleNamespace(sleep=tog_sleep, time=_time.time)
 open(os.path.join(tog, "(107)a.xlsx"), "w").close()
 tctx = types.SimpleNamespace(app=None, pid=1, hwnd=2)
 res = wellife.excel_together(trr, tctx, True)
-check("함께 실행: 자동 수집을 걸어 두고(끝은 안 기다림) '+' 로 연 화면에서, 키보드 일을 마친 뒤 ERPia 를 맨 위로 두고 수집을 놓아준다",
-      [e[0] for e in tev[:4]] == ["import start", "copy open", "topmost", "release"] and tev[0] == ("import start", False)
-      and tev[2] == ("topmost", True) and tev[3] == ("release", (0, 0, 1920, 1032)), str(tev[:4]))
+check("함께 실행: '+' 화면을 먼저 열고(키 입력은 자동 수집 전에) 원래 화면에서 자동 수집을 걸어 두고(끝은 안 기다림) '+' 화면에서 올린다",
+      tev[:4] == [("copy open",), ("tab", "주문매핑 매출처리"), ("import start", False), ("tab", "주문매핑 매출처리 (2)")]
+      and not [e for e in tev if e[0] in ("release", "topmost")], str(tev[:4]))
 ups = [e for e in tev if e[0] == "upload"]
 check("받은 엑셀은 들어오는 대로 (차례마다 새 파일만), 올리는 동안은 키보드 없이, 수집이 끝나고 새 파일이 없으면 멈춘다",
       [u[1] for u in ups] == [["(107)a.xlsx"], ["(108)b.xlsx", "(109)c.xlsx"]] and all(u[2] for u in ups)
       and not trr.UPLOAD_NO_KEYS, str(tev))
-check("끝나면 맨 위를 풀고 '+' 로 연 화면을 닫는다, 결과는 받은 수 중 올린 수",
-      tev[-1] == ("copy close", "주문매핑 매출처리 (2)") and ("topmost", False) in tev
+check("끝나면 '+' 로 연 화면을 닫는다, 결과는 받은 수 중 올린 수",
+      tev[-1] == ("copy close", "주문매핑 매출처리 (2)")
       and res == ("done", "[실행] 엑셀 3건 중 3건 업로드 (사이트 수집과 함께)"), f"{tev[-3:]} {res}")
 _saved_os = wellife.order_screen
 wellife.order_screen = lambda rr_, ctx_, step, body: body()
@@ -2107,10 +2134,91 @@ try:
     stop = None
 except wellife.Stop as e:
     stop = (e.result, str(e))
-check("업로드 중 모르는 창이면 멈추되, ERPia 맨 위·키보드 없음을 풀고 수집이 기다리지 않게 놓아준다 (자동 수집 안 하면 '+' 도 없이)",
-      stop is not None and stop[0] == "stopped" and ("topmost", False) in tev and not trr.UPLOAD_NO_KEYS
-      and tev.count(("release", None)) == 1 and not [e for e in tev if e[0] in ("import start", "copy open")],
-      f"{stop} {tev}")
+check("업로드 중 모르는 창이면 멈추되 키보드 없음을 푼다 (자동 수집 안 하면 '+' 도 없이)",
+      stop is not None and stop[0] == "stopped" and not trr.UPLOAD_NO_KEYS
+      and not [e for e in tev if e[0] in ("import start", "copy open")], f"{stop} {tev}")
+
+tev.clear()
+prep["on"] = True
+open(os.path.join(tog, "(111)e.xlsx"), "w").close()
+hid, grids = [True], []
+
+
+def hidden_once(app, pid, hwnd, grid, skip=()):
+    if hid:
+        hid.pop()
+        tev.append(("hidden",))
+        raise rr.UploadGridHidden(0, 0)
+    return tog_upload(app, pid, hwnd, grid, skip)
+
+
+trr.run_excel_upload_step = hidden_once
+fronts[:] = [False, True]
+wellife.site_grid = lambda rr_, ctx_: grids.append(1) or "사이트 그리드"
+res = wellife.excel_together(trr, tctx, True)
+check("업로드 중 '+' 화면이 뒤로 가면(자동 수집이 원래 탭을 앞으로 - 10-20 실측) 되돌리고 그리드를 다시 잡아 남은 파일을 이어서 올린다",
+      ("hidden",) in tev and len(grids) == 2 and ["(111)e.xlsx" in e[1] for e in tev if e[0] == "upload"] == [True]
+      and res[0] == "done", f"{tev} {grids} {res}")
+tev.clear()
+prep["on"] = True
+open(os.path.join(tog, "(112)f.xlsx"), "w").close()
+
+
+def always_hidden(*a, **k):
+    raise rr.UploadGridHidden(0, 0)
+
+
+trr.run_excel_upload_step = always_hidden
+try:
+    wellife.excel_together(trr, tctx, True)
+    stop = None
+except wellife.Stop as e:
+    stop = (e.result, str(e))
+check(f"그리드가 계속 사라지면 {wellife.HIDDEN_MAX}번 넘어 멈추고 남은 파일은 그대로 둔다",
+      stop is not None and stop[0] == "stopped" and os.path.exists(os.path.join(tog, "(112)f.xlsx"))
+      and not trr.UPLOAD_NO_KEYS, str(stop))
+os.remove(os.path.join(tog, "(112)f.xlsx"))
+tev.clear()
+_saved_os = wellife.order_screen
+
+
+def screen_fail(rr_, ctx_, step, body):
+    tev.append(("screen", step))
+    return "failed", "주문매핑 화면을 못 엶"
+
+
+wellife.order_screen = screen_fail
+res = wellife.module_excel(trr, tctx, True, True, True)
+check("함께 실행이면 화면 이동 전부터 ERPia 를 맨 위로 (Edge 창이 클릭 자리를 덮지 않게), 실패해도 푼다",
+      tev == [("topmost", True), ("screen", "wl_excel_screen"), ("topmost", False)] and res[0] == "failed", str(tev))
+wellife.order_screen = _saved_os
+
+held, prep["on"] = [], True
+trr.status.hold_keys = lambda on: held.append(on)
+os.environ[wellife.TOGETHER_ENV] = "1"
+wellife.time = types.SimpleNamespace(sleep=lambda s_: held.append("틈"), time=_time.time)
+with wellife.keys(trr):
+    held.append("친다")
+check("키보드 차례: 수집이 도는 함께 실행이면 잡고, 틈을 둔 뒤 치고, 놓는다", held == [True, "틈", "친다", False], str(held))
+held.clear()
+try:
+    with wellife.keys(trr):
+        raise wellife.Stop("failed", "포커스 없음")
+except wellife.Stop:
+    pass
+check("키보드 차례: 도중에 멈춰도 놓는다", held == [True, "틈", False], str(held))
+held.clear()
+with wellife.keys(trr):
+    with wellife.keys(trr):
+        held.append("안")
+    held.append("밖")
+check("키보드 차례: 안에서 다시 잡아도(검색 칸 비우기 등) 바깥이 놓을 때까지 그대로", held == [True, "틈", "안", "밖", False], str(held))
+held.clear()
+prep["on"] = False
+with wellife.keys(trr):
+    held.append("친다")
+check("키보드 차례: 수집이 끝났으면 잡지 않는다", held == ["친다"], str(held))
+del os.environ[wellife.TOGETHER_ENV]
 for n, f in _saved_tog.items():
     setattr(wellife, n, f)
 

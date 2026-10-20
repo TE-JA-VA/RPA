@@ -914,7 +914,6 @@ def download_dir():
 # ERPIA_AI_EXCEL 로 옮긴다 - 받는 중인 파일·검사에서 걸려 지울 파일을 함께 도는 루틴이 올리지 않게, 한 사이트의 파일은 한꺼번에.
 STAGE_DIR_NAME = "받는중"
 ROUTINE_EXE = "ERPia_RPA.exe"
-ROUTINE_GO_WAIT = 300       # 루틴이 ERPia 로그인·화면 열기를 마치기를 기다리는 최대 초 - 넘으면 수집을 시작한다
 TOGETHER_RC = 100           # 함께 실행이면 종료 코드 = 100 + 루틴 종료 코드 (Run_All.bat 이 루틴을 다시 띄우지 않게)
 _together = None            # 함께 띄운 루틴 (프로세스, 띄운 시각)
 
@@ -968,25 +967,43 @@ def start_routine_together():
     return _together
 
 
-def wait_routine_go():
-    """함께 띄운 루틴이 ERPia 를 키보드로 다룰 일(로그인·화면 열기)을 마칠 때까지 기다린다 - Edge 창은 뜰 때마다 포커스를
-    가져가 그사이 친 키가 Edge 로 샌다 (개발기 실측). 루틴이 끝났거나 ROUTINE_GO_WAIT 를 넘으면 그냥 시작한다.
-    반환: Edge 창이 피해 갈 ERPia 창 자리 (없으면 None)."""
-    proc, since = _together
-    log("ERPia 쪽이 로그인·화면 열기를 마칠 때까지 기다립니다.")
-    status.note("ERPia 준비를 기다리는 중")
-    end = time.time() + ROUTINE_GO_WAIT
-    while time.time() < end:
-        go, erpia = status.prepare_go(since)
-        if go:
-            log(f"ERPia 쪽 준비 끝 ({time.time() - since:.0f}초) - 수집을 시작합니다.")
-            return erpia
-        if proc.poll() is not None:
-            log("ERPia 쪽이 먼저 끝났습니다 - 수집을 시작합니다.")
-            return None
-        time.sleep(0.5)
-    log(f"ERPia 쪽이 {ROUTINE_GO_WAIT}초 안에 준비되지 않아 수집을 시작합니다.")
-    return None
+def wait_keys():
+    """함께 띄운 루틴이 ERPia 에 키보드를 쓰는 동안(로그인 입력·메뉴 검색, 몇 초) 기다린다 - Edge 창은 뜰 때마다 포커스를
+    가져가 그사이 친 키(비밀번호 포함)가 Edge 로 샌다 (개발기 실측). 함께 실행이 아니거나 루틴이 끝났으면 바로."""
+    if not _together or not status.keys_held(_together[1]):
+        return
+    log("  ERPia 쪽이 키보드를 쓰는 동안 기다립니다.")
+    while _together[0].poll() is None and status.keys_held(_together[1]):
+        time.sleep(0.2)
+
+
+class KeysPause:
+    """재생기의 일시정지 자리(Replayer.pause - is_set 만 본다): 함께 띄운 루틴이 ERPia 에 키보드를 쓰는 동안 다음 단계 앞에서 기다린다.
+    하던 단계는 끝까지 하므로 루틴은 키보드를 잡고 잠깐 뒤에 친다 (wellife.KEYS_SETTLE_SECONDS)."""
+    def is_set(self):
+        return bool(_together) and _together[0].poll() is None and status.keys_held(_together[1])
+
+
+def erpia_rect():
+    """이미 떠 있는 ERPia 의 가장 큰 창 자리 (왼, 위, 오른, 아래) - 함께 실행에서 Edge 창이 그 모니터를 피하게. 없으면 None
+    (주 화면 - 루틴이 ERPia 를 맨 위로 두므로 Edge 창은 그 뒤에 깔린다)."""
+    import win32gui
+    import win32process
+    try:
+        pid = pl.ec.find_erpia_pid()
+    except Exception:
+        return None
+    found = []
+
+    def each(h, _):
+        if win32gui.IsWindowVisible(h) and win32process.GetWindowThreadProcessId(h)[1] == pid:
+            r = win32gui.GetWindowRect(h)
+            found.append(((r[2] - r[0]) * (r[3] - r[1]), r))
+    try:
+        win32gui.EnumWindows(each, None)
+    except Exception:
+        return None
+    return max(found)[1] if found else None
 
 
 def finish_together(rc):
@@ -1290,6 +1307,8 @@ def action_replay(page, name, site):
         rp.gate = (_here.gates.lock(site.get("Phone")), web_replay.auth_start(p["record"]["steps"]), end)
     rp.first_page = page
     rp.fit_viewport = True
+    if _together:       # 루틴이 ERPia 에 키보드를 쓰는 동안은 다음 단계로 가지 않는다 (단계가 새 창을 띄우면 포커스를 가져간다)
+        rp.pause = KeysPause()
     if any(s.get("kind") == "otp" for s in p["record"]["steps"]):     # 2차인증 - 휴대폰 중계 (설계 13절, 에이전트 계정으로)
         import otp_relay
         rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
@@ -1404,6 +1423,7 @@ def run_site(browser, name, site, use_session=True, keep_open=False, gates=None)
 
     if getattr(_here, "spot", None):    # 병렬 수집 - 창을 화면의 제 칸으로
         place_windows(context, _here.spot)
+    wait_keys()     # 함께 실행 - 새 창은 포커스를 가져간다
     page = prepare_page(context.new_page())
     ok = True
     held = None     # 예전 방식 문자 인증 사이트 (병렬) - 로그인부터 인증까지 휴대폰 차례를 잡고 간다 (사이에 다른 사이트가 문자를 보내지 않게)
@@ -1655,12 +1675,14 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
     if force_close:
         keep_open = False
 
-    status.set_steps(prepare_steps(chosen))
     recover_stage()
     avoid = None
-    if start_routine_together():
+    if start_routine_together():    # ERPia 쪽은 그대로 두고 수집을 바로 시작한다 - 인증 사이트부터 (사용자 10-19: 1순위)
         keep_open = False           # 창을 열어 둔 채 기다리면 루틴이 수집이 끝나기를 영영 기다린다
-        avoid = wait_routine_go()
+        presets = status.read_presets()
+        chosen.sort(key=lambda item: not needs_auth(item[1], presets))     # 하나씩 돌 때도 인증 사이트 먼저 (순서는 그대로)
+        avoid = erpia_rect()
+    status.set_steps(prepare_steps(chosen))
     n = min(parallel_count(parallel), len(chosen))
     if n > 1:
         if keep_open:
