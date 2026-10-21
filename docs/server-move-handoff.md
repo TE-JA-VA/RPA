@@ -49,7 +49,7 @@
 
 다음 것도 Firebase에 직접 붙는다. 2단계에서 같이 바꿔야 한다.
 - `otp_relay.py`: ACTOR가 인증번호를 기다린다.
-- 휴대폰 쪽 중계: 설계는 `docs/superpowers/specs/2026-10-12-phone-otp-relay-design.md`. 휴대폰 앱 코드는 이 저장소에 없다 - 사용자에게 어디 있는지 묻는다.
+- 휴대폰 쪽 중계: 설계는 `docs/superpowers/specs/2026-10-12-phone-otp-relay-design.md`. 휴대폰 쪽(안드로이드 앱 `AUTOPILOT_AND`, 아이폰 단축어 `AUTOPILOT_IOS`, 약속 `CONTRACT.md`)은 **비공개 저장소 `TE-JA-VA/RPA-PhoneRelay`** 에 있다 (맥에서 만들고 빌드, 이 PC 에는 사본 없음). Firebase REST 로 직접 붙으므로 2단계에서 새 서버 주소·로그인으로 바꿔야 한다. 약속이 바뀌면 이 저장소의 규칙·`check_phone_relay.py` 를 먼저 바꾸고 그쪽 `CONTRACT.md`·앱을 맞춘다.
 - 관리 화면 `firebase/admin` (Admin SDK + 서비스 계정 키).
 
 ## 4. 지금까지 한 것
