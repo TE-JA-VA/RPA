@@ -1,6 +1,6 @@
 ﻿; AFTER MARKET RPA 설치 파일 (배포판 구조 2부 3절 - docs/superpowers/specs/2026-09-29-installer-design.md)
 ; tools/build_release.py 가 판 폴더에 대고 컴파일한다:
-;   ISCC.exe /DAppVersion=2026.09.29-5 /DNumVersion=2026.9.29.5 /DSourceDir=D:\AX\배포_2026.09.29-5 /OD:\AX /F... installer.iss
+;   ISCC.exe /DAppVersion=2026.09.29-5 /DNumVersion=2026.9.29.5 /DDashboardURL=https://... /DSourceDir=D:\AX\배포_2026.09.29-5 /OD:\AX /F... installer.iss
 ; 설치·제거·바로 가기·폴더 권한만 여기서 한다. 입력·로그인 확인·작업 등록·에이전트 켜고 끄기는 rpa_settings.py.
 ; 이 파일은 BOM 있는 UTF-8 로 저장한다 (Inno Setup 이 한글을 그렇게 읽는다. tests/test_encoding.py 가 본다).
 
@@ -9,6 +9,9 @@
 #endif
 #ifndef NumVersion
   #error NumVersion 이 없습니다 - tools/build_release.py 로 컴파일하세요
+#endif
+#ifndef DashboardURL
+  #error DashboardURL 이 없습니다 - tools/build_release.py 로 컴파일하세요 (server_info.DASHBOARD_URL)
 #endif
 #ifndef SourceDir
   #error SourceDir 이 없습니다 - tools/build_release.py 로 컴파일하세요
@@ -71,7 +74,7 @@ Name: "{group}\오토파일럿 설정"; Filename: "{app}\python\pythonw.exe"; Pa
 Name: "{group}\옵저버"; Filename: "{app}\Prepare_Observer.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작을 기록해 ACTOR 오토파일럿이 따라 하게 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Observer"
 
 [INI]
-Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "URL"; String: "https://rpa-test-f02e0.web.app"
+Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "URL"; String: "{#DashboardURL}"
 Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "IconFile"; String: "{app}\AFTER_MARKET.ico"
 Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut"; Key: "IconIndex"; String: "0"
 

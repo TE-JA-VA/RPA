@@ -44,7 +44,7 @@ applyAccent(getAccent());
 
 // --- 로그인 ---------------------------------------------------------
 // 공유 계약 (agent.py·setup.js 와 같은 규칙): 아이디에 @ 가 있으면 그대로, 없으면 아이디@회사코드.프로젝트도메인. '_' 는 '-' 로. 업체코드가 비면(총괄) 프로젝트 도메인만
-export const emailFor = (cid, id) => id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}rpa-test-f02e0.firebaseapp.com`;
+export const emailFor = (cid, id) => id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}${firebaseConfig.authDomain}`;
 // '업체코드·아이디 저장' 을 켜고 로그인하면 이 브라우저에 남긴다. 끄고 로그인하면 지운다
 try {
   localStorage.removeItem("cid");   // 옛 저장(업체코드만, 항상)은 버린다

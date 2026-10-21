@@ -16,6 +16,9 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if os.path.abspath(os.path.join(HERE, "..", "..")) not in sys.path:     # 저장소·배포 폴더 뿌리 (server_info 자리)
+    sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
+import server_info  # noqa: E402  서버 주소 한 곳 (2026-10-21)
 # 다시 켜지 않는 에이전트 종료 코드 (agent.main 의 약속). 그 밖(오류 1, 강제 종료 등)은 다시 켠다
 STOP_CODES = {
     0: "정상으로 끝났습니다",
@@ -144,7 +147,7 @@ def start_agent(cmd, folder):
 # 파이썬 urllib 은 처음 붙을 때 읽은 인증서를 다시 안 읽으므로(3.12+) 에이전트를 켜기 전에 해야 한다.
 ROOT_WARM_URLS = ("https://identitytoolkit.googleapis.com/", "https://securetoken.googleapis.com/",
                   "https://firestore.googleapis.com/",
-                  "https://rpa-test-f02e0-default-rtdb.asia-southeast1.firebasedatabase.app/.json")
+                  server_info.DATABASE_URL + "/.json")
 
 
 def warm_windows_roots(urls=ROOT_WARM_URLS, timeout=10, run=subprocess.run):

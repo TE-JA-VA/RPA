@@ -41,6 +41,7 @@ for _p in (REPO, os.path.join(REPO, "firebase", "agent")):
         sys.path.insert(0, _p)
 import background as bg  # noqa: E402
 import rpa_status as st  # noqa: E402
+import server_info  # noqa: E402
 import update_sign  # noqa: E402
 
 OUT_ROOT = r"D:\AX"
@@ -51,6 +52,7 @@ EXES = {"ERPia_RPA.exe": "run_routine.py", "Prepare_RPA.exe": "web_runner.py", "
 PROGRAM_FILES = [
     ("Run_All.bat", "Run_All.bat"),
     ("rpa_status.py", "rpa_status.py"),
+    ("server_info.py", "server_info.py"),                                     # 서버 주소 한 곳 - 에이전트·업데이트가 부른다 (2026-10-21)
     ("rpa_dashboard.py", "rpa_dashboard.py"),
     ("kr_holidays.py", "kr_holidays.py"),                                     # 공휴일 표 - rpa_dashboard 가 부른다 (2026-10-15 자동 실행 쉬기)
     ("rpa_settings.py", "rpa_settings.py"),                                   # 설정 창 (2부)
@@ -533,6 +535,7 @@ def setup_name(version):
 
 def iscc_command(iscc, out_dir, version, out_root=OUT_ROOT, iss=ISS_PATH):
     return [iscc, "/Qp", f"/DAppVersion={version}", f"/DNumVersion={num_version(version)}", f"/DSourceDir={out_dir}",
+            f"/DDashboardURL={server_info.DASHBOARD_URL}",
             f"/O{out_root}", f"/F{setup_name(version)[:-4]}", iss]
 
 

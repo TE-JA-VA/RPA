@@ -20,9 +20,10 @@ import shutil
 import urllib.request
 
 import rpa_status as st
+import server_info
 import update_sign
 
-UPDATE_BASE_URL = os.environ.get("RPA_UPDATE_BASE_URL") or "https://rpa-test-f02e0-releases.web.app"   # SFTP 로 옮기면 받기만 바꾼다
+UPDATE_BASE_URL = os.environ.get("RPA_UPDATE_BASE_URL") or server_info.UPDATE_BASE_URL   # SFTP 로 옮기면 받기만 바꾼다
 HEALTH_WAIT_SEC = 180
 DISK_MARGIN = 200 * 1024 * 1024
 BUSY_STATES = ("waiting", "ready", "applying", "rolling_back")

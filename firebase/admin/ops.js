@@ -2,7 +2,7 @@
 // Blaze 뒤에는 웹 관리 함수(../functions/index.js)도 이 파일을 그대로 쓴다 - 그쪽은 키 파일 없이 Cloud Functions 기본 자격으로 (2026-10-15 밑작업).
 // 값을 돌려줄 뿐 찍지 않는다. 사람이 고칠 수 있는 거절은 Refused (그 글을 터미널은 '오류: …', 화면은 빨간 알림으로).
 // 비밀번호는 무작위로 만들어 돌려줄 뿐 어디에도 남기지 않는다.
-// 이메일은 조립한다: <아이디>@<cid 의 _ 를 - 로>.rpa-test-f02e0.firebaseapp.com (cid 가 없으면 도메인만, 에이전트 계정은 agent-<pcId>).
+// 이메일은 조립한다: <아이디>@<cid 의 _ 를 - 로>.<PROJECT>.firebaseapp.com (cid 가 없으면 도메인만, 에이전트 계정은 agent-<pcId>).
 // 아이디에 @ 가 있으면 그대로 이메일로 쓴다(외부 메일 계정).
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -15,7 +15,7 @@ import { getFirestore, AggregateField, FieldValue } from "firebase-admin/firesto
 export class Refused extends Error {}
 
 // 공유 계약 — agent/agent.py, web/app.js 에도 같은 규칙이 한 줄씩 있다. 셋이 같아야 한다.
-export const PROJECT = "rpa-test-f02e0";
+export const PROJECT = "rpa-test-f02e0";       // 관리 화면의 서버 주소는 여기 한 곳 (server_info.py 와 같아야 한다 - tests/test_server_info.py)
 export const DASHBOARD_URL = `https://${PROJECT}.web.app`;
 const DOMAIN = `${PROJECT}.firebaseapp.com`;
 export const emailFor = (cid, local) => local.includes("@") ? local : `${local.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}${DOMAIN}`;
@@ -32,7 +32,7 @@ const KEY = fileURLToPath(new URL("./serviceAccountKey.json", import.meta.url));
 // 환경 변수로 가르면 안 된다: 배포 도구가 이 PC 에서 함수 코드를 불러 목록을 찾을 때 함수 환경 변수가 없어 키를 찾다 죽었다 (검토 2026-10-15)
 const app = initializeApp({
   ...(existsSync(KEY) ? { credential: cert(JSON.parse(readFileSync(KEY, "utf8"))) } : {}),
-  databaseURL: "https://rpa-test-f02e0-default-rtdb.asia-southeast1.firebasedatabase.app",
+  databaseURL: `https://${PROJECT}-default-rtdb.asia-southeast1.firebasedatabase.app`,
 });
 const auth = getAuth(app), rtdb = getDatabase(app), store = getFirestore(app);
 

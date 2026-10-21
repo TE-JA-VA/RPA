@@ -24,7 +24,8 @@ import fb   # noqa: E402
 
 APP = "rpa"                      # 이 에이전트가 맡는 앱. 경로는 apps/<앱>/... (플랫폼 AFTER MARKET 은 여러 앱을 담는다)
 BAD_KEY_CHARS = ".$#[]/"
-PROJECT_DOMAIN = "rpa-test-f02e0.firebaseapp.com"
+import server_info  # noqa: E402  서버 주소 한 곳 (2026-10-21)
+PROJECT_DOMAIN = server_info.AUTH_DOMAIN
 
 
 def app_path(kind, cid, pc_id, app=APP):

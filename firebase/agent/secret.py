@@ -12,6 +12,10 @@ import sys
 from ctypes import wintypes
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))     # 저장소·배포 폴더 뿌리 (rpa_status·server_info 자리)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+import server_info  # noqa: E402  서버 주소 한 곳 (2026-10-21)
 
 
 def _default_config_path():
@@ -28,12 +32,8 @@ def _default_config_path():
 # RPA_AGENT_CONFIG 는 시험용 - 통합 시험이 실제 설정을 덮어쓰지 않게 다른 파일을 가리킨다
 CONFIG_PATH = os.environ.get("RPA_AGENT_CONFIG") or _default_config_path()
 REQUIRED = ("project_id", "api_key", "database_url", "cid", "pc_id", "email")
-# 공개 값 (web/firebase-config.js 와 같다). 첫 실행 때 이메일·비밀번호만 물으면 되게 여기 둔다
-PUBLIC = {
-    "project_id": "rpa-test-f02e0",
-    "api_key": "AIzaSyCFbHQjWVxzi38IAYIhQX9wyiGIs1VcZuA",
-    "database_url": "https://rpa-test-f02e0-default-rtdb.asia-southeast1.firebasedatabase.app",
-}
+# 공개 값 (server_info - web/firebase-config.js 와 같다). 첫 실행 때 이메일·비밀번호만 물으면 되게 여기 둔다
+PUBLIC = {"project_id": server_info.PROJECT_ID, "api_key": server_info.API_KEY, "database_url": server_info.DATABASE_URL}
 
 
 class _Blob(ctypes.Structure):
