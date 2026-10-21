@@ -144,6 +144,26 @@ try:
 except up.UpdateError as e:
     check("받기 실패" in str(e) and "ConnectionResetError" in str(e) and tree_digest(PROG) == b4 and not os.path.exists(STG),
           f"받다가 끊기면 거절 - 프로그램 폴더 그대로, 받은 것 지움 ({e})")
+print("\n=== 2-1. 주소 여럿 - 새 주소가 안 되면 옛 주소 (서버 옮기기 1단계) ===")
+shutil.rmtree(STG, ignore_errors=True)
+GOT.clear()
+saved = up.UPDATE_BASE_URLS
+up.UPDATE_BASE_URLS = ("https://new.test/", BASE)               # 새 주소에는 아무것도 없다 (404)
+try:
+    man = up.fetch_release("2026.10.07-2", PROG, STG, get=get, pub=PK)
+    check(man["version"] == "2026.10.07-2" and GOT[0].startswith("https://new.test/releases/")
+          and not any("//releases" in u for u in GOT) and all(u.startswith(BASE) for u in GOT[1:]),
+          f"새 주소 404 → 옛 주소에서 받았다 ({GOT[:2]})")
+    up.UPDATE_BASE_URLS = ("https://new.test", "https://old.test")
+    try:
+        up.fetch_release("2026.10.07-2", PROG, STG, get=get, pub=PK)
+        check(False, "주소가 다 안 되면 거절 (거절 안 됨)")
+    except up.UpdateError as e:
+        check("404" in str(e) and not os.path.exists(STG), f"주소가 다 안 되면 마지막 까닭으로 거절 ({e})")
+finally:
+    up.UPDATE_BASE_URLS = saved
+check(up.UPDATE_BASE_URLS[0] == up.server_info.UPDATE_BASE_URL or os.environ.get("RPA_UPDATE_BASE_URL"),
+      "기본 주소 차례는 server_info.UPDATE_BASE_URL 부터")
 real_usage = shutil.disk_usage
 shutil.disk_usage = lambda p: real_usage(p)._replace(free=10)
 try:

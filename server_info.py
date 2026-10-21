@@ -12,3 +12,4 @@ DATABASE_URL = f"https://{PROJECT_ID}-default-rtdb.asia-southeast1.firebasedatab
 AUTH_DOMAIN = f"{PROJECT_ID}.firebaseapp.com"                           # 로그인 이메일 도메인 (계정 이메일을 조립한다)
 DASHBOARD_URL = f"https://{PROJECT_ID}.web.app"                         # 업체 웹
 UPDATE_BASE_URL = f"https://{PROJECT_ID}-releases.web.app"              # 업데이트 전용 호스팅
+UPDATE_FALLBACK_URLS = ()   # 위에서 못 받으면 차례로 - 서버를 옮기는 동안 옛 주소를 둔다 (docs/server-move-stage1.md)

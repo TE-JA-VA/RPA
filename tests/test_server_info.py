@@ -37,8 +37,10 @@ check("업체 웹 firebase-config.js 의 프로젝트·공개 키·DB 주소·�
 ops = read("firebase/admin/ops.js")
 m = re.search(r'export const PROJECT = "([^"]+)"', ops)
 check("관리 화면 ops.js 의 PROJECT 가 server_info.PROJECT_ID 와 같다", bool(m) and m.group(1) == srv.PROJECT_ID, m and m.group(1))
-check("ops.js 의 DB 주소·업체 웹 주소는 PROJECT 로 만든다 (따로 박지 않는다)",
-      ops.count(srv.PROJECT_ID) == 1 and "${PROJECT}-default-rtdb" in ops and "${PROJECT}.web.app" in ops)
+check("ops.js 의 DB 주소는 PROJECT 로 만든다 (따로 박지 않는다)", ops.count(srv.PROJECT_ID) == 1 and "${PROJECT}-default-rtdb" in ops)
+d = re.search(r"export const DASHBOARD_URL = [`\"]([^`\"]+)[`\"]", ops)
+dash = d and d.group(1).replace("${PROJECT}", m.group(1) if m else "")
+check("ops.js 의 업체 웹 주소(DASHBOARD_URL)가 server_info.DASHBOARD_URL 과 같다", dash == srv.DASHBOARD_URL, dash)
 check("업체 웹 app.js 의 계정 이메일 도메인은 firebaseConfig.authDomain", "${firebaseConfig.authDomain}" in read("firebase/web/app.js"))
 
 sys.path.insert(0, os.path.join(ROOT, "firebase", "agent"))

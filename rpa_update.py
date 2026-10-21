@@ -23,7 +23,9 @@ import rpa_status as st
 import server_info
 import update_sign
 
-UPDATE_BASE_URL = os.environ.get("RPA_UPDATE_BASE_URL") or server_info.UPDATE_BASE_URL   # SFTP 로 옮기면 받기만 바꾼다
+# 받을 주소 차례 - 앞 주소에서 못 받으면 다음 주소 (서버를 옮길 때 새 주소 → 옛 주소, docs/server-move-stage1.md)
+UPDATE_BASE_URLS = ((os.environ["RPA_UPDATE_BASE_URL"],) if os.environ.get("RPA_UPDATE_BASE_URL")
+                    else (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS))
 HEALTH_WAIT_SEC = 180
 DISK_MARGIN = 200 * 1024 * 1024
 BUSY_STATES = ("waiting", "ready", "applying", "rolling_back")
@@ -119,8 +121,17 @@ def _need_bytes(cur_man, new_man, fetch, remove):
 
 
 def fetch_release(version, program_root, staging, base_url=None, get=http_get, pub=None):
-    """새 판의 manifest·서명을 받아 확인하고, 바뀐 파일만 staging 에 받는다. 틀리면 staging 을 지우고 UpdateError."""
-    base = (base_url or UPDATE_BASE_URL).rstrip("/")
+    """새 판의 manifest·서명을 받아 확인하고, 바뀐 파일만 staging 에 받는다. 틀리면 staging 을 지우고 UpdateError.
+    주소가 여럿이면(UPDATE_BASE_URLS) 차례로 해 보고, 다 안 되면 마지막 까닭을 낸다."""
+    for base in ([base_url] if base_url else UPDATE_BASE_URLS):
+        try:
+            return _fetch_from(base.rstrip("/"), version, program_root, staging, get, pub)
+        except UpdateError as e:
+            last = e
+    raise last
+
+
+def _fetch_from(base, version, program_root, staging, get, pub):
     shutil.rmtree(staging, ignore_errors=True)
     try:
         man_bytes = get(f"{base}/releases/{version}/manifest.json")

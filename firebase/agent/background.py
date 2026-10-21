@@ -147,7 +147,9 @@ def start_agent(cmd, folder):
 # 파이썬 urllib 은 처음 붙을 때 읽은 인증서를 다시 안 읽으므로(3.12+) 에이전트를 켜기 전에 해야 한다.
 ROOT_WARM_URLS = ("https://identitytoolkit.googleapis.com/", "https://securetoken.googleapis.com/",
                   "https://firestore.googleapis.com/",
-                  server_info.DATABASE_URL + "/.json")
+                  server_info.DATABASE_URL + "/.json",
+                  # 업데이트 주소도 - 회사 서버 인증서는 Google 과 루트가 다를 수 있다 (2026-10-21)
+                  *(u.rstrip("/") + "/" for u in (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS)))
 
 
 def warm_windows_roots(urls=ROOT_WARM_URLS, timeout=10, run=subprocess.run):
