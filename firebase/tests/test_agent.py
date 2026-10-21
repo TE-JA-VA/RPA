@@ -79,6 +79,7 @@ class FakeHTTP:
         self.calls = []
         self.replies = []
         self.now = 1000.0
+        self.date = None        # 응답 Date 머리글 (서버 시각)
 
     def add(self, payload, status=200):
         """payload 가 예외면 (URLError 같은 망 오류) 그대로 던진다"""
@@ -94,7 +95,9 @@ class FakeHTTP:
         if status >= 400:
             import urllib.error
             raise urllib.error.HTTPError(req.full_url, status, "err", {}, io.BytesIO(data))
-        return io.BytesIO(data)
+        r = io.BytesIO(data)
+        r.headers = {"Date": self.date} if self.date else {}
+        return r
 
 
 http = FakeHTTP()
@@ -122,6 +125,13 @@ check(json.loads(body) == {"host": "PC1"}, "보낸 몸통")
 http.add({"ok": True})
 c.patch("apps/rpa/commands/c_demo/pc_office/x", {"state": "running"})
 check(http.calls[-1][0] == "PATCH", "PATCH 로 일부만 고친다")
+check(c.server_now() == http.now, "응답에 Date 가 없으면 서버 시각 = PC 시각")
+http.date = "Thu, 01 Jan 1970 00:30:00 GMT"       # 서버 1800초 - PC(4570초)가 46분 앞섬
+http.add({"ok": True})
+c.get("apps/rpa/x")
+http.date = None
+http.now += 10
+check(abs(c.server_now() - 1810) < 1e-6, f"RTDB 응답 Date 로 서버 시각을 맞추고 PC 시계로 흘러간다 ({c.server_now()})")
 
 http.add({"error": "Permission denied"}, status=401)
 http.add({"id_token": "T3", "refresh_token": "R3", "expires_in": "3600"})
@@ -1280,6 +1290,9 @@ class TransferClient(RecClient):
     def delete(self, path):
         self.deletes.append(path)
 
+    def server_now(self):
+        return 3000.0
+
 
 TID = "abcdefghij0123456789"
 REC_T = {"version": 1, "start_url": "https://x/login", "record_date": "2026-10-19",
@@ -1326,6 +1339,23 @@ with tempfile.TemporaryDirectory() as d:
         cl, cmds = make_cmds(acts_with(TransferClient()))
         cmds.handle("k2b", {"type": "export_preset", "by": "u1", "expires_at": 3600, "state": "queued", "args": {"tid": TID, "nos": [2]}}, 3000.0)
         check(cl.patches[-1][1]["state"] == "failed" and "기록이 없습니다" in cl.patches[-1][1]["result"], f"빈 칸은 failed ({cl.patches[-1][1]['result']})")
+        tc = TransferClient()
+        try:
+            acts_with(tc)["export_preset"]({"tid": TID, "nos": [2]}, {"key": "k2c", "by": "u1", "expires_at": 3600})
+            check(False, "빈 칸 보내기는 실패 (안 됨)")
+        except RuntimeError:
+            f = tc.puts[0][1] if tc.puts else {}
+            check(tc.puts and tc.puts[0][0] == f"apps/rpa/transfers/c_demo/{TID}" and "기록이 없습니다" in f.get("failed", "") and "presets" not in f
+                  and f["created_at"] == 3000000 and f["expires_at"] == 3000000 + 6 * 3600 * 1000,
+                  f"보내기 실패도 전송 자리에 failed 로 남긴다 - 받는 PC 가 10분 기다리지 않게, 시각은 서버 시각 ({tc.puts})")
+        try:
+            tc = TransferClient(gets=[None, {"by": "u1", "from_pc": "pc_office", "created_at": 1, "expires_at": 2, "failed": "프리셋 2에 기록이 없습니다."}])
+            slept.clear()
+            acts_with(tc)["import_preset"]({"tid": TID, "slots": [2]}, {"key": "k2d", "by": "u1", "expires_at": 3600})
+            check(False, "보낸 PC 가 실패를 남기면 받는 PC 도 실패 (안 됨)")
+        except RuntimeError as e:
+            check("보내지 못했습니다" in str(e) and "기록이 없습니다" in str(e) and slept == [2] and tc.deletes == [f"apps/rpa/transfers/c_demo/{TID}"],
+                  f"보낸 PC 의 실패를 보면 바로 끝내고 전송 자리를 지운다 ({e}, {slept}, {tc.deletes})")
 
         # 받기 (import_preset) - 전송이 처음 두 번 없다가 세 번째에 도착
         fixed = dict(p0, name="지마켓 고침", record=dict(REC_T, steps=REC_T["steps"] + [{"kind": "click", "page": 0, "frame": REC_T["steps"][0]["frame"], "url": "/", "gap": 10,

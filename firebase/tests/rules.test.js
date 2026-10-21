@@ -402,8 +402,9 @@ test("users: 본인과 super 만 읽고 아무도 못 쓴다", async () => {
 const asAgentB1 = () => env.authenticatedContext("u_agent_b1", { cid: "cb", pcId: "pc1", role: "agent" }).database();
 const TID = "abcdef0123456789abcd";
 const TR = `apps/rpa/transfers/ca/${TID}`;
+const T0 = Date.now();      // 규칙이 만든 시각을 서버 시각 ±10분만 받는다 (2026-10-21)
 const transfer = (over = {}) => ({
-  by: "u_admin_a", from_pc: "pc1", created_at: 1000, expires_at: 1000 + 6 * 3600 * 1000,
+  by: "u_admin_a", from_pc: "pc1", created_at: T0, expires_at: T0 + 6 * 3600 * 1000,
   presets: [{ kind: "autopilot-preset", version: 1, no: 1, name: "가나몰", code: "001", record: { steps: [] } }],
   ...over,
 });
@@ -417,12 +418,26 @@ test("transfers: 그 업체 에이전트가 자기 PC 이름으로 만든다, �
 });
 
 test("transfers: 만료 7시간·by 없음·모르는 칸·짧은 id 는 거부", async () => {
-  await assertFails(set(ref(asAgentA1(), TR), transfer({ expires_at: 1000 + 7 * 3600 * 1000 })));
+  await assertFails(set(ref(asAgentA1(), TR), transfer({ expires_at: T0 + 7 * 3600 * 1000 })));
   await assertFails(set(ref(asAgentA1(), TR), transfer({ by: null })));
   await assertFails(set(ref(asAgentA1(), TR), transfer({ by: 1 })));
   await assertFails(set(ref(asAgentA1(), TR), transfer({ extra: 1 })));
   await assertFails(set(ref(asAgentA1(), "apps/rpa/transfers/ca/short"), transfer()));
   await assertFails(set(ref(asAgentA1(), "apps/rpa/transfers/ca/" + "x".repeat(41)), transfer()));
+});
+
+test("transfers: 만든 시각이 서버 시각과 10분 넘게 다르면 거부 - PC 시계로 만료를 늘리지 못한다 (2026-10-21)", async () => {
+  const h = 3600 * 1000;
+  await assertFails(set(ref(asAgentA1(), TR), transfer({ created_at: T0 + 2 * h, expires_at: T0 + 8 * h })));
+  await assertFails(set(ref(asAgentA1(), TR), transfer({ created_at: 1000, expires_at: 1000 + 6 * h })));
+  await assertSucceeds(set(ref(asAgentA1(), TR), transfer({ created_at: T0 + 5 * 60000, expires_at: T0 + 5 * 60000 + 6 * h })));
+});
+
+test("transfers: 보내기 실패 표시(failed)는 프리셋 없이 받는다, 둘 다 없거나 200자 넘으면 거부 (2026-10-21)", async () => {
+  await assertSucceeds(set(ref(asAgentA1(), TR), transfer({ presets: null, failed: "프리셋 2에 기록이 없습니다." })));
+  await assertFails(set(ref(asAgentA1(), `apps/rpa/transfers/ca/${TID.replace("a", "e")}`), transfer({ presets: null })));
+  await assertFails(set(ref(asAgentA1(), `apps/rpa/transfers/ca/${TID.replace("a", "f")}`), transfer({ presets: null, failed: "가".repeat(201) })));
+  await assertFails(set(ref(asAgentA1(), `apps/rpa/transfers/ca/${TID.replace("a", "g")}`), transfer({ presets: null, failed: 1 })));
 });
 
 test("transfers: 업체 목록(shallow)은 그 업체 에이전트·super 가 읽고 관리자·열람자·다른 업체는 못 읽는다 (cleanup_transfers)", async () => {

@@ -10,6 +10,7 @@
 FIREBASE_AUTH_EMULATOR_HOST 가 있으면 로그인·갱신을 에뮬레이터로 보낸다 (통합 시험용).
 """
 import base64
+import email.utils
 import json
 import os
 import time
@@ -118,6 +119,18 @@ class Client:
         self._refresh_token = None
         self._expires_at = 0.0
         self._dead = None       # 비밀번호 로그인까지 거부한 AuthError. 새 Client 를 만들면 당연히 비어 있다
+        self._offset = 0.0      # 서버 시각 - PC 시각 (RTDB 응답의 Date 머리글, 초 단위 정밀도)
+
+    def server_now(self):
+        """서버 시각 (초). PC 시계가 틀려도 맞는 시각 - 전송 자리 만료처럼 여러 PC 가 같이 보는 시각에 쓴다 (2026-10-21).
+        아직 응답을 못 받았으면 PC 시각."""
+        return self._now() + self._offset
+
+    def _seen(self, resp):
+        try:
+            self._offset = email.utils.parsedate_to_datetime(resp.headers["Date"]).timestamp() - self._now()
+        except Exception:
+            pass
 
     # --- 토큰 ---------------------------------------------------------
     def _post_json(self, url, payload):
@@ -191,7 +204,9 @@ class Client:
         req = urllib.request.Request(self._url(path, params), data=body,
                                      headers={"Content-Type": "application/json"}, method=method)
         try:
-            raw = self._open(req, timeout=30).read().decode("utf-8")
+            resp = self._open(req, timeout=30)
+            raw = resp.read().decode("utf-8")
+            self._seen(resp)
         except urllib.error.HTTPError as e:
             if e.code == 401 and not retried:
                 self.renew()

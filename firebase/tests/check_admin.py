@@ -550,6 +550,10 @@ with sync_playwright() as pw:
     check(f"프리셋 가져오기 {CID}/{PC} 1" in text and "mall.example" not in text and "검색어" not in text, "관리 기록에 가져오기 한 줄, 기록 내용은 없다")
     code, r = api("GET", f"/api/companies/{CID}/transfers/{tid}")
     check(code == 200 and r == {"pending": True}, "없는 전송은 '아직' (pending)", (code, r))
+    db_put(f"apps/rpa/transfers/{CID}/{tid}", {"by": "admin-tool", "from_pc": PC, "created_at": now_ms, "expires_at": now_ms + 1000, "failed": "프리셋 1에 기록이 없습니다."})
+    code, r = api("GET", f"/api/companies/{CID}/transfers/{tid}")
+    check(code == 200 and r == {"pending": True} and db_get(f"apps/rpa/transfers/{CID}/{tid}") is None,
+          "PC 가 남긴 보내기 실패 표시는 지우고 '아직' - 까닭은 화면이 명령 결과로 알린다 (2026-10-21)", (code, r))
     # 넣어 주기 - 200 KB 기록 (Review Focus 4: 요청 상한 64 KB 를 넘는다)
     BIG = dict(FILE, no=2, name="큰 기록", code="003", record=dict(REC, steps=[{"id": i, "kind": "click", "sel": f"#b{i}", "text": "x" * 100} for i in range(1, 1801)]))
     tmp = tempfile.mkdtemp()

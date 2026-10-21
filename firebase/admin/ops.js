@@ -341,6 +341,7 @@ export async function takeTransfer(cid, tid) {
   if (!TID_RE.test(tid)) throw new Refused("전송 번호가 올바르지 않습니다.");
   const ref = rtdb.ref(`apps/rpa/transfers/${cid}/${tid}`);
   const v = (await ref.get()).val();
+  if (v?.failed) await ref.remove();              // PC 가 보내기 실패를 남겼다 - 까닭은 화면이 명령 결과에서 읽는다
   if (!v?.presets?.[0]) return { pending: true };
   await ref.remove();
   return { file: v.presets[0] };

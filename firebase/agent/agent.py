@@ -881,14 +881,20 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
     def do_export(args, meta):
         import preset_transfer as pt   # 명령 안에서 - 못 올리면 이 명령만 실패하고 에이전트는 산다
         tid = tid_of(args)
-        nos = nos_of(args, "nos")
+        now_ms = int(client.server_now() * 1000)        # 서버 시각 - 규칙이 서버 시각 ±10분만 받는다 (2026-10-21)
+        slot = {"by": meta.get("by"), "from_pc": pc_id, "created_at": now_ms, "expires_at": now_ms + TRANSFER_TTL_SEC * 1000}
         try:
+            nos = nos_of(args, "nos")
             presets = [pt.export_item(n, bool(args.get("with_phone")), {"cid": cid, "pcId": pc_id, "no": n}) for n in nos]
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
+            try:                                         # 받는 PC 가 10분 기다리지 않고 바로 끝나게 실패를 남긴다
+                client.put(transfer_path(cid, tid), dict(slot, failed=str(e)[:200]))
+            except fb.AuthError:
+                raise
+            except Exception as e2:
+                log(f"전송 실패 표시 못 남김: {type(e2).__name__}")
             raise RuntimeError(str(e)) from None
-        now_ms = int(clock() * 1000)
-        client.put(transfer_path(cid, tid), {"by": meta.get("by"), "from_pc": pc_id, "created_at": now_ms,
-                                             "expires_at": now_ms + TRANSFER_TTL_SEC * 1000, "presets": presets})
+        client.put(transfer_path(cid, tid), dict(slot, presets=presets))
         if meta.get("by") == ADMIN_TOOL_BY:
             note(meta, [f"총괄 계정이 프리셋 {p['no']} ({p['name']})을(를) 가져갔습니다." for p in presets])
         return f"프리셋 {len(presets)}개를 전송하였습니다."
@@ -916,6 +922,14 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
                 except Exception as e:           # 망 오류는 마감까지 다시 시도
                     log(f"전송 자리 읽기 실패: {type(e).__name__}")
                     return False
+                if isinstance(t, dict) and isinstance(t.get("failed"), str):   # 보낸 PC 가 실패를 남겼다 - 기다리지 않는다
+                    try:
+                        client.delete(path)
+                    except fb.AuthError:
+                        raise
+                    except Exception:
+                        pass                     # 6시간 뒤 주기 점검이 지운다
+                    raise RuntimeError(f"보낼 PC에서 프리셋을 보내지 못했습니다. ({t['failed']})")
                 got[0] = t if isinstance(t, dict) and isinstance(t.get("presets"), list) and t["presets"] else None
             return got[0] is not None and not busy()
 
@@ -1217,7 +1231,7 @@ def run(cfg):
                 policy.refresh()
                 if time.time() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
                     last_clean = time.time()
-                    cleanup_transfers(client, cfg["cid"], int(time.time() * 1000))
+                    cleanup_transfers(client, cfg["cid"], int(client.server_now() * 1000))   # 서버 시각 - PC 시계가 앞서도 남의 전송을 일찍 안 지운다
                 snap["schedule"] = dash.schedule_live(st.read_settings()["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝 (화면 안내)
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
                 hist_path = os.path.join(st.status_dir(create=False), st.HISTORY_NAME)

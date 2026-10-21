@@ -73,12 +73,13 @@
 
             "$tid": {
               ".write": "auth != null && (auth.token.role === 'super' || (auth.token.role === 'agent' && auth.token.cid === $cid && (!newData.exists() || (!data.exists() && newData.child('from_pc').val() === auth.token.pcId))))",
-              ".validate": "$tid.matches(/^[A-Za-z0-9_-]{16,40}$/) && newData.hasChildren(['from_pc', 'by', 'created_at', 'expires_at', 'presets'])",
+              ".validate": "$tid.matches(/^[A-Za-z0-9_-]{16,40}$/) && newData.hasChildren(['from_pc', 'by', 'created_at', 'expires_at']) && (newData.hasChild('presets') || newData.hasChild('failed'))",
               "from_pc": { ".validate": "newData.isString()" },
               "by": { ".validate": "newData.isString()" },
-              "created_at": { ".validate": "newData.isNumber()" },
+              "created_at": { ".validate": "newData.isNumber() && newData.val() >= now - 600000 && newData.val() <= now + 600000" },
               "expires_at": { ".validate": "newData.isNumber() && newData.val() <= newData.parent().child('created_at').val() + 21600000" },
               "presets": { ".validate": "newData.hasChildren()" },
+              "failed": { ".validate": "newData.isString() && newData.val().length <= 200" },
               "$other": { ".validate": false }
             }
           }
