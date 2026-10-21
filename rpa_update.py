@@ -239,7 +239,7 @@ def mark_alive(install):
 import time  # noqa: E402  (run_update 의 sleep 기본값)
 
 HELPER_START_WAIT_SEC = 120
-RUNNER_FILES = ("update_helper.py", "rpa_update.py", "rpa_status.py", "update_sign.py")
+RUNNER_FILES = ("update_helper.py", "rpa_update.py", "rpa_status.py", "update_sign.py", "server_info.py")   # 서로 부르는 것 모두 (tests/test_rpa_update.py 가 본다)
 
 
 def handoff(program_root, state, register, run_task):

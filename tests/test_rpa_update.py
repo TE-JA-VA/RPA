@@ -225,6 +225,16 @@ open(up.path("health_local"), "w").close()
 check(up.health_local() is True, "샌드박스용 표시 파일 update\\health_local (관리자만 쓰는 폴더)")
 os.remove(up.path("health_local"))
 
+print("\n=== 5-9. 도우미 복사 목록 - 도우미 파일들이 맨 위에서 부르는 우리 모듈은 모두 runner 로 복사한다 ===")
+import ast  # noqa: E402
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+missing = set()
+for name in up.RUNNER_FILES:
+    for node in ast.parse(open(os.path.join(REPO, name), encoding="utf-8").read()).body:
+        mods = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
+        missing |= {m for m in mods if os.path.isfile(os.path.join(REPO, m + ".py")) and m + ".py" not in up.RUNNER_FILES}
+check(not missing, f"도우미가 runner 에서 켜질 때 없는 모듈이 없다 ({sorted(missing)}) - 2026-10-21 server_info 를 빠뜨려 샌드박스 업데이트 실패")
+
 print("\n=== 6. 받기 → 대기 → 넘기기 (run_update) ===")
 for rel, text in (("a.py", "A1"), ("b.py", "B1")):
     put(PROG, rel, text)
