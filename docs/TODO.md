@@ -24,7 +24,7 @@
 
 ## 2. 말하면 시작
 
-- [ ] **exe 셋 동시 빌드 다시 (2026-10-21 예정)** - 2026-10-20 첫 시도: 셋이 288초 (차례로 9~10분)였지만 Prepare_RPA.exe 가 'No module named base64' 로 켜지지 않아 되돌림 (e1056aa). Nuitka 셋이 같은 캐시를 동시에 써 꼬인 것으로 추정 → exe 마다 `NUITKA_CACHE_DIR` 를 따로 주고 다시 (6d8a6c3 의 코드 + 캐시 폴더). 처음 한 번은 캐시가 비어 느리다. 함수 안 늦은 import 가 빠져도 --check 로는 안 보이니 동시 빌드 exe 는 샌드박스 + 늦은 import 점검까지
+- [ ] **exe 셋 동시 빌드 (보류)** - 2026-10-21 실측: 동시 337초 vs 차례 496초 (약 2분 40초 빠름) 이지만 동시로 만든 Prepare_RPA.exe 가 늘 'No module named base64' 로 켜지지 않는다. Nuitka 분석 캐시(module-cache·library_dependencies·adapted_headers·scons-msvc-config)를 exe 마다 따로 줘도 같았고, 같은 코드를 차례로 만들면 멀쩡 (115초). 원인 모름 - 남은 공유: downloads·zig 캐시, 작업 폴더 buildelease. 하려면 exe 마다 작업 폴더도 따로 + 원인부터 (코드는 6d8a6c3)
 - [ ] **캡차 감지** - 옵저버 미리보기·ACTOR 실행 중 캡차가 뜨면 멈추고 사람에게 넘긴다 (푸는 것·우회는 하지 않는다). 관제 알림의 바탕이라 Blaze 없이 먼저 해도 된다
   - 흔적: 리캡차 `google.com/recaptcha/`, hCaptcha, 클라우드플레어 `challenges.cloudflare.com`, 네이버 "자동입력 방지"·영수증 그림, "보안문자"·"로봇이 아닙니다"
   - 네이버는 직접 두드리지 말고 캡차가 뜬 옵저버 기록 파일로 확인 (차단 위험)
