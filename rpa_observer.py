@@ -31,6 +31,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from playwright.sync_api import sync_playwright
 
+import mail_imap
 import otp_relay
 import preset_transfer as pt
 import rpa_status as st
@@ -41,6 +42,8 @@ REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보�
 RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
 MAIL_HINT = "엑셀파일을 받으려는 메일이 '메일 시작 문구'로 시작하는 경우, 그 글자로 시작하는 메일이 처리대상이 됩니다."   # 메일 첨부파일일 때 안내 (사용자 2026-10-14 검수)
+IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부파일을 받습니다. 아이디·비밀번호는 메일 계정의 것입니다 "
+             "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣어 주십시오).")
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
 MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
 PRESETS_PER_ROW = 10                    # 프리셋 단추 한 줄에 10개, 11개부터 줄을 더한다 (사용자 2026-10-14)
@@ -449,7 +452,8 @@ def new_preset(no, name=None, code=""):
     return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "head": None, "start_url": None,
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
-            "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일), 메일 시작 문구
+            "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
+            "imap": None,       # 메일 서버(IMAP) 칸 {host, port, security, rules} - source 가 imap 일 때 (2026-10-22)
             "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
 
@@ -466,7 +470,16 @@ def load_file_into(p, obj):
     p.update(name=obj["name"], code=obj["code"], loaded=r, raw=[], head=None, start_url=None, viewport=r.get("viewport"),
              enabled={}, deleted=set(), otp={}, fresh=True,
              source="mail" if pick else "shop", prefix=pick["prefix"] if pick else "")
+    load_imap(p, r)
     return p
+
+
+def load_imap(p, r):
+    """기록이 메일 받기(imap 단계 하나)면 화면 칸 p 를 메일 서버 방식으로."""
+    step = st.imap_step(r)
+    if step:
+        p.update(source="imap", imap={"host": step.get("host") or "", "port": step.get("port") or 993,
+                                      "security": step.get("security") or "ssl", "rules": dict(step.get("rules") or {})})
 
 
 def export_name(no, name):
@@ -489,6 +502,7 @@ def load_presets():
             pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
             if pick:
                 q["source"], q["prefix"] = "mail", pick["prefix"]
+            load_imap(q, r)
         site = sites.get(st.preset_site_key(p["no"])) if isinstance(sites, dict) else None
         if isinstance(site, dict):
             if not st.login_mismatch(site, p["code"]):     # 다른 사이트의 계정이면 비워 둔다 - 다시 저장해도 잘못된 짝이 굳지 않게 (이슈 #13 검토)
@@ -505,6 +519,35 @@ def senders_list(text):
 
 def has_otp(record):
     return any(s.get("kind") == "otp" for s in (record or {}).get("steps") or [])
+
+
+def blank_imap(login_id=""):
+    """메일 서버 칸의 처음 값 - 아이디가 잘 알려진 메일 주소면 서버를 채운다."""
+    host, port, sec = mail_imap.guess_server(login_id) or ("", 993, "ssl")
+    return {"host": host, "port": port, "security": sec, "rules": dict(mail_imap.DEFAULT_RULES)}
+
+
+def imap_record(cfg):
+    """메일 서버 칸 → 기록 (imap 단계 하나 - st.imap_step)."""
+    step = {"id": 0, "kind": st.IMAP_KIND, "host": str(cfg["host"]).strip(), "port": cfg["port"], "security": cfg["security"],
+            "rules": dict(cfg["rules"])}
+    return {"version": st.RECORD_VERSION, "start_url": f"imap://{step['host']}", "steps": [step]}
+
+
+def imap_problem(step):
+    """메일 받기 단계의 문제 (사람에게 보일 글) 또는 None."""
+    if not str(step.get("host") or "").strip():
+        return "메일 서버 주소를 넣어 주십시오."
+    port = step.get("port")
+    if not (isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536):
+        return "메일 서버 포트가 올바르지 않습니다."
+    if step.get("security") not in ("ssl", "starttls"):
+        return "보안 방식이 올바르지 않습니다."
+    try:
+        mail_imap.check_rules(step.get("rules") or {})
+    except ValueError as e:
+        return str(e)
+    return None
 
 
 def stored_password(no):
@@ -587,6 +630,9 @@ def validate_presets(presets):
             return p["no"], (f"{tag}: 사이트코드 {p['code']}을(를) {codes[p['code']]}에서도 사용하고 있습니다. "
                              "다른 사이트코드를 입력하여 주십시오.")
         codes[p["code"]] = tag
+        step = st.imap_step(p["record"])
+        if step and imap_problem(step):
+            return p["no"], f"{tag}: {imap_problem(step)}"
         if has_otp(p["record"]) and not (p.get("phone") and senders_list(p.get("senders"))):
             return p["no"], f"{tag}: 인증번호 단계가 있습니다. 인증 휴대폰과 발신번호를 정해 주십시오."
         if not (p.get("id") or "").strip():
@@ -695,7 +741,7 @@ class App:
         src = tk.Frame(form, bg=CARD)               # 주문 수집용 엑셀파일 경로 (사용자 2026-10-14)
         src.grid(row=3, column=0, columnspan=4, sticky="we", pady=(8, 0))
         tk.Label(src, text="주문 수집용 엑셀파일 경로", font=F, bg=CARD, fg=MUTED).pack(side="left")
-        for value, label in (("shop", "쇼핑몰"), ("mail", "메일 첨부파일")):
+        for value, label in (("shop", "쇼핑몰"), ("mail", "메일 첨부파일"), ("imap", "메일 서버")):
             tk.Radiobutton(src, text=label, value=value, variable=self.source_var, font=F, bg=CARD, activebackground=CARD,
                            cursor="hand2", command=self._source_changed).pack(side="left", padx=(12, 0))
         self.del_btn = button(src, "프리셋 삭제", RED, RED_D, self.remove_preset)
@@ -790,7 +836,8 @@ class App:
     def paint_buttons(self):
         rec_on = self.recording is not None
         self.rec_btn.config(text="■  기록 완료" if rec_on else "●  기록 시작")
-        enable(self.rec_btn, not self.previewing and (not rec_on or self.recording == self.cur))
+        imap = self.presets[self.cur]["source"] == "imap"     # 메일 서버 - 기록·미리보기 대신 [찾아보기]
+        enable(self.rec_btn, not self.previewing and (not rec_on or self.recording == self.cur) and not (imap and not rec_on))
         if self.previewing:         # 창을 닫는 대신 멈추는 단추 (2026-10-02 - 미리보기 중에는 창이 안 닫힌다)
             idle = not (self.stopping or self.closing or self.editing)
             skin(self.prev_btn, "▶  계속" if self.paused else "Ⅱ  일시정지", BLUE, BLUE_D, self.toggle_pause)
@@ -807,7 +854,7 @@ class App:
             kept = not rec_on and self._has_kept(self.presets[self.cur])
             skin(self.prev_btn, "▶  미리보기", BLUE, BLUE_D, self.preview)
             skin(self.save_btn, "저장", GREEN, GREEN_D, self.save)
-            enable(self.prev_btn, kept)
+            enable(self.prev_btn, kept and not imap)
             enable(self.save_btn, kept)     # 기록이 끝나 있고 켜 둔 단계가 한 줄은 있어야 (2026-10-02)
         for b in (self.import_btn, self.export_btn):
             b.config(state="disabled" if rec_on or self.previewing else "normal", cursor="arrow" if rec_on or self.previewing else "hand2")
@@ -828,7 +875,8 @@ class App:
         self._show_prefix()
         self.pw_hint.config(text=("저장된 비밀번호가 있습니다. " if p["has_pw"] else "")
                             + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.\n"
-                            + "문자 인증번호를 받는 사이트면 인증 휴대폰과 발신번호(여러 개면 쉼표로)를 정해 주십시오."
+                            + (IMAP_HINT if p["source"] == "imap" else
+                               "문자 인증번호를 받는 사이트면 인증 휴대폰과 발신번호(여러 개면 쉼표로)를 정해 주십시오.")
                             + ("\n" + MAIL_HINT if p["source"] == "mail" else "")
                             + (" (휴대폰 목록을 불러오지 못했습니다)" if self.phones == [] and getattr(self, "phones_failed", False) else ""))
 
@@ -862,7 +910,10 @@ class App:
             before = (p["source"], p["prefix"])
             self._store_fields()
             self._title()
-            if (p["source"], p["prefix"]) != before:
+            guess = p["source"] == "imap" and p["imap"] and not p["imap"]["host"] and mail_imap.guess_server(p["id"].strip())
+            if guess:                               # 메일 주소를 아이디로 넣으면 서버 칸을 채운다
+                p["imap"].update(host=guess[0], port=guess[1], security=guess[2])
+            if (p["source"], p["prefix"]) != before or guess:
                 self.render()                       # '메일마다' 단계가 바뀐다
 
     def _show_prefix(self):
@@ -875,7 +926,16 @@ class App:
             self.prefix_entry.grid_remove()
 
     def _source_changed(self):
-        """라디오: 메일 첨부파일로 처음 바꾸면 시작 문구는 '>>>' 부터."""
+        """라디오: 메일 첨부파일로 처음 바꾸면 시작 문구는 '>>>' 부터. 메일 서버로 바꾸면 기록한 단계 대신 서버·조건 칸 -
+        기록이 있으면 묻는다 (저장하면 기록이 메일 받기로 바뀐다)."""
+        p = self.presets[self.cur]
+        if self.source_var.get() == "imap" and p["source"] != "imap":
+            if (p["raw"] or p["head"] or (p["loaded"] and not st.imap_step(p["loaded"]))) and not self.ask(
+                    "메일 서버", f"{circled(self.cur + 1)} {p['name']}을(를) 기록한 단계 대신 메일 서버에서 받도록 바꿉니다. "
+                    "저장하면 기록한 단계는 삭제됩니다. 진행하시겠습니까?"):
+                self.source_var.set(p["source"])
+                return
+            p["imap"] = p["imap"] or blank_imap(self.id_var.get().strip())
         if self.source_var.get() == "mail" and not self.prefix_var.get().strip():
             self._loading = True
             self.prefix_var.set(rec.MAIL_PICK_DEFAULT)
@@ -885,7 +945,7 @@ class App:
 
     def _title(self):
         p = self.presets[self.cur]
-        self.list_title.config(text=f"{circled(self.cur + 1)} {p['name']} - 기록한 단계")
+        self.list_title.config(text=f"{circled(self.cur + 1)} {p['name']} - " + ("메일 받기 조건" if p["source"] == "imap" else "기록한 단계"))
 
     def select(self, i):
         if i == self.cur:
@@ -918,13 +978,15 @@ class App:
 
     # --- 기록 목록 ---
     def _final(self, p):
-        if p["head"]:                             # [수정] - 남긴 앞부분 뒤에 이어 기록한 단계 (설계 2026-10-19 4.2절)
+        if p["source"] == "imap":                 # 메일 서버 - 기록 대신 imap 단계 하나 (2026-10-22)
+            return imap_record(p["imap"] or blank_imap(p["id"]))
+        if p["head"]:                            # [수정] - 남긴 앞부분 뒤에 이어 기록한 단계 (설계 2026-10-19 4.2절)
             final = rec.continue_record(p["head"], json.loads(json.dumps(p["raw"])), datetime.date.today())
         elif p["raw"]:
             start = p["start_url"] or next((s["href"] for s in p["raw"] if s["kind"] == "goto"), "")
             final = rec.finalize(json.loads(json.dumps(p["raw"])), datetime.date.today(), start, viewport=p["viewport"])
         else:
-            final = p["loaded"]
+            final = None if st.imap_step(p["loaded"]) else p["loaded"]     # 메일 서버에서 쇼핑몰로 바꾼 칸 - 기록이 없다
         for sid, on in p["otp"].items():          # 단계 목록에서 바꾼 인증번호 칸 (기록이 못 알아본 것·잘못 알아본 것)
             i = next((k for k, s in enumerate(final["steps"]) if s["id"] == sid), None) if final else None
             if i is not None and (final["steps"][i]["kind"] == "otp") != on:
@@ -965,6 +1027,11 @@ class App:
             c.destroy()
         self.labels, self.base = {}, {}
         p = self.presets[self.cur]
+        if p["source"] == "imap":
+            self._render_imap(p)
+            self._title()
+            self.paint_buttons()
+            return
         final = self._final(p)
         n, body = 0, set()
         for k, s in enumerate(final["steps"] if final else []):
@@ -1017,6 +1084,112 @@ class App:
     def delete(self, sid):
         self.presets[self.cur]["deleted"].add(sid)
         self.render()
+
+    # --- 메일 서버(IMAP) ---
+    IMAP_TEXT = (("서버 주소", "host"), ("포트", "port"), ("메일함", "mailbox"), ("보낸 사람", "senders"), ("제목 시작 글자", "subject_prefix"),
+                 ("제목에 들어갈 말", "subject_has"), ("제목에서 뺄 말", "subject_not"), ("최근 며칠 (0 = 오늘)", "days"),
+                 ("첨부 종류", "exts"), ("한 번에 최대 메일 수", "max"))
+    SECURITY = (("ssl", "SSL (포트 993)"), ("starttls", "STARTTLS (포트 143)"))
+
+    def _render_imap(self, p):
+        """기록한 단계 목록 자리에 메일 서버·조건 칸과 [찾아보기]. 칸을 고쳐도 다시 그리지 않는다 (치는 중에 칸이 사라지지 않게)."""
+        cfg = p["imap"] = p["imap"] or blank_imap(p["id"])
+        r = {**mail_imap.DEFAULT_RULES, **cfg["rules"]}
+        show = lambda v: ", ".join(v) if isinstance(v, list) else str(v)     # noqa: E731
+        box = tk.Frame(self.inner, bg=CARD)
+        box.pack(fill="x", padx=12, pady=(10, 4))
+        v = {}
+        for i, (label, key) in enumerate(self.IMAP_TEXT):
+            v[key] = tk.StringVar(self.root, value=show(cfg[key] if key in ("host", "port") else r[key]))
+            tk.Label(box, text=label, font=F, bg=CARD, fg=MUTED).grid(row=i, column=0, sticky="w", pady=2)
+            self._entry(box, v[key], 20).grid(row=i, column=1, sticky="we", padx=(8, 0), pady=2, ipady=2)
+        n = len(self.IMAP_TEXT)
+        tk.Label(box, text="보안 방식", font=F, bg=CARD, fg=MUTED).grid(row=n, column=0, sticky="w", pady=2)
+        sec = ttk.Combobox(box, state="readonly", font=F, values=[t for _, t in self.SECURITY])
+        sec.current(next((k for k, (x, _) in enumerate(self.SECURITY) if x == cfg["security"]), 0))
+        sec.grid(row=n, column=1, sticky="we", padx=(8, 0), pady=2)
+        v["unseen_only"], v["mark_seen"] = tk.BooleanVar(self.root, value=bool(r["unseen_only"])), tk.BooleanVar(self.root, value=bool(r["mark_seen"]))
+        for k, (key, text) in enumerate((("unseen_only", "안 읽은 메일만"), ("mark_seen", "받은 뒤 읽음으로 표시"))):
+            tk.Checkbutton(box, text=text, variable=v[key], font=F, bg=CARD, activebackground=CARD, cursor="hand2",
+                           command=lambda: self._imap_store(p, v, sec)).grid(row=n + 1 + k, column=0, columnspan=2, sticky="w")
+        box.columnconfigure(1, weight=1)
+        for x in v.values():
+            if isinstance(x, tk.StringVar):
+                x.trace_add("write", lambda *a: self._imap_store(p, v, sec))
+        sec.bind("<<ComboboxSelected>>", lambda e: self._imap_store(p, v, sec))
+        tk.Label(self.inner, text="보낸 사람·제목 조건은 쉼표로 여러 개를 넣을 수 있습니다. 보낸 사람이나 제목 조건 가운데 하나는 꼭 넣어 주십시오. "
+                 "이미 받은 메일은 다시 받지 않습니다.", font=F_SMALL, bg=CARD, fg=MUTED, justify="left", anchor="w",
+                 wraplength=self.panel_w - int(90 * self.scale)).pack(fill="x", padx=12, pady=(4, 6))
+        row = tk.Frame(self.inner, bg=CARD)
+        row.pack(fill="x", padx=12, pady=(0, 6))
+        button(row, "찾아보기", BLUE, BLUE_D, self.imap_find).pack(side="left")
+        tk.Button(row, text="받은 메일 기억 지우기", font=F_SMALL, fg=MUTED, bg=CARD, activebackground=LINE, relief="flat", bd=0,
+                  cursor="hand2", command=self.clear_imap_memory).pack(side="right")
+        found = getattr(self, "imap_found", None)
+        if found and found[0] == self.cur and isinstance(found[1], list):
+            for it in found[1]:
+                text = (f"{it['date']:%m-%d %H:%M}  {it['sender']}\n    {it['subject'][:60]}"
+                        + (f"\n    첨부: {', '.join(it['attachments'])}" if it["attachments"] else "\n    받을 첨부 없음")
+                        + ("  (이미 받음)" if it["done"] else ""))
+                tk.Label(self.inner, text=text, font=F_SMALL, bg=CARD, fg="#9ca3af" if it["done"] else INK, justify="left", anchor="w",
+                         wraplength=self.panel_w - int(90 * self.scale)).pack(fill="x", padx=14, pady=2)
+
+    def _imap_store(self, p, v, sec):
+        """메일 서버 칸 → p['imap']. 숫자 칸에 숫자가 아닌 글을 넣으면 그대로 두어 저장·찾아보기 때 까닭을 보인다."""
+        num = lambda s: int(s) if s.strip().isdigit() else s.strip()     # noqa: E731
+        split = lambda s: [x.strip() for x in s.split(",") if x.strip()]     # noqa: E731
+        cfg = p["imap"]
+        cfg.update(host=v["host"].get().strip(), port=num(v["port"].get()),
+                   security=self.SECURITY[max(sec.current(), 0)][0])
+        cfg["rules"].update(mailbox=v["mailbox"].get().strip() or "INBOX", senders=split(v["senders"].get()),
+                            subject_prefix=v["subject_prefix"].get().strip(), subject_has=split(v["subject_has"].get()),
+                            subject_not=split(v["subject_not"].get()), days=num(v["days"].get()), exts=split(v["exts"].get()),
+                            max=num(v["max"].get()), unseen_only=v["unseen_only"].get(), mark_seen=v["mark_seen"].get())
+
+    def imap_find(self):
+        """[찾아보기]: 지금 조건에 맞는 메일 목록. 받지도, 읽음 표시를 바꾸지도 않는다 (mail_imap.find)."""
+        self._store_fields()
+        i, p = self.cur, self.presets[self.cur]
+        step = imap_record(p["imap"])["steps"][0]
+        pw = p["pw"] or (stored_password(i + 1) if p["has_pw"] else "")
+        why = imap_problem(step) or (None if p["id"].strip() and pw else "메일 계정의 아이디·비밀번호를 넣어 주십시오.")
+        if why:
+            return self.status.config(text=why, fg=RED)
+        server = {"host": step["host"], "port": step["port"], "security": step["security"], "user": p["id"].strip(), "password": pw}
+        self.status.config(text="메일 서버에서 찾는 중…", fg=MUTED)
+
+        def work():
+            try:
+                res = mail_imap.find(server, step["rules"], st.imap_memory_path(i + 1))
+            except mail_imap.MailError as e:
+                res = str(e)
+            except Exception as e:
+                res = f"메일을 찾지 못했습니다. ({type(e).__name__})"
+            self.ui.put(("imap_found", i, res))
+        threading.Thread(target=work, daemon=True).start()
+        return None
+
+    def _imap_found(self, i, res):
+        self.imap_found = (i, res)
+        if isinstance(res, str):
+            self.status.config(text=res, fg=RED)
+        else:
+            done = sum(1 for x in res if x["done"])
+            self.status.config(text=f"조건에 맞는 메일 {len(res)}통" + (f" (이미 받은 메일 {done}통)" if done else "")
+                               + " - 찾아보기는 받거나 읽음 표시를 하지 않습니다.", fg=GREEN_D)
+        if i == self.cur:
+            self.render()
+
+    def clear_imap_memory(self):
+        """[받은 메일 기억 지우기] (메일 서버): 다음 실행 때 조건에 맞는 메일을 다시 받는다."""
+        path = st.imap_memory_path(self.cur + 1)
+        if not os.path.isfile(path):
+            return self.status.config(text="받은 메일 기억이 없습니다.", fg=MUTED)
+        if not self.ask("받은 메일 기억 지우기", "이 프리셋의 메일 처리 기록을 삭제합니다. 다음 실행 때 메일함에서 조건에 맞는 메일을 다시 "
+                        "다운로드합니다. 삭제하시겠습니까?"):
+            return None
+        mail_imap.forget(path)
+        return self.status.config(text="받은 메일 기억을 지웠습니다.", fg=GREEN_D)
 
     def _progress(self, sid, st, how):
         lab = self.labels.get(sid)
@@ -1282,6 +1455,8 @@ class App:
                         return
                 elif m[0] == "human_done":
                     self.on_human_done()
+                elif m[0] == "imap_found":
+                    self._imap_found(m[1], m[2])
         except queue.Empty:
             pass
         if dirty and not self.previewing:
@@ -1311,7 +1486,7 @@ class App:
     # 시험 모드가 갈아 끼운다
     def on_ready(self):
         p = self.presets[self.cur]
-        if not (p["raw"] or p["loaded"]):
+        if not (p["raw"] or p["loaded"]) and p["source"] != "imap":
             self.toggle_record()        # 빈 프리셋이면 켜자마자 브라우저를 띄우고 기록을 시작한다
 
     def on_recording(self):

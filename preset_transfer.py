@@ -112,7 +112,7 @@ def move_preset_files(origs, dropped):
     origs: {새 번호: 옛 번호}, dropped: 지운 옛 번호들. 지울 것을 먼저 지우고 새 번호 오름차순으로 옮긴다 - 당기기만 하므로
     (새 ≤ 옛) 늘 비운 자리로만 간다. 설정·프리셋 파일을 쓴 뒤에 부른다 (못 옮기면 옛 번호 것을 지운다 - 다른 프리셋 것이 섞이지 않게)."""
     def paths(no):
-        return st.mail_memory_path(no), st.session_path(st.preset_site_key(no)), backup_path(no)
+        return st.mail_memory_path(no), st.imap_memory_path(no), st.session_path(st.preset_site_key(no)), backup_path(no)
 
     for no in dropped:
         for p in paths(no):

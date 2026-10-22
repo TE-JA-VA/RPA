@@ -1048,6 +1048,21 @@ def mail_memory_path(no):
     return os.path.join(data_dir(), "메일기억", f"{preset_site_key(no)}.json")
 
 
+def imap_memory_path(no):
+    """메일 받기(IMAP) 프리셋 no 가 처리한 메일 기억 (mail_imap) - 웹메일 기억과 모양이 달라 파일을 따로 둔다."""
+    return os.path.join(data_dir(), "메일기억", f"{preset_site_key(no)}.imap.json")
+
+
+IMAP_KIND = "imap"
+
+
+def imap_step(record):
+    """메일 받기(IMAP) 프리셋이면 그 단계, 아니면 None. 메일 받기는 기록 안에 imap 단계 하나로 담는다 (2026-10-22) -
+    프리셋 옮기기·대시보드·켬/끔·사이트코드가 기록 프리셋과 똑같이 돈다. 단계: {kind, host, port, security, rules}."""
+    steps = (record or {}).get("steps") or []
+    return steps[0] if len(steps) == 1 and isinstance(steps[0], dict) and steps[0].get("kind") == IMAP_KIND else None
+
+
 def preset_site_key(no):
     """사용자 설정 Sites 에서 프리셋 no 의 칸 이름."""
     return f"PRESET{no}"
@@ -1128,6 +1143,7 @@ def preset_summary():
         site = site if isinstance(site, dict) else {}
         out.append({"no": p["no"], "name": p["name"], "code": p["code"],
                     "steps": len((p["record"] or {}).get("steps") or []), "saved_at": p["saved_at"],
+                    "imap": bool(imap_step(p["record"])),      # 메일 받기 - 화면이 'N단계' 대신 '메일 받기' (2026-10-22)
                     "has_login": bool(site.get("ID")) and bool(site.get("PW")) and not login_mismatch(site, p["code"]),
                     "on": str(site.get("Stts", "")).strip() == "0",
                     "backup": os.path.isfile(preset_backup_path(p["no"]))})

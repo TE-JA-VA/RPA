@@ -285,7 +285,7 @@ function shopsDirty() {
 }
 function shopLine(p) {
   const saved = p.saved_at ? ` · ${Number(p.saved_at.slice(5, 7))}/${Number(p.saved_at.slice(8, 10))} 저장` : "";
-  return `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""} · ${p.steps}단계${saved}`;
+  return `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""} · ${p.imap ? "메일 받기" : `${p.steps}단계`}${saved}`;   // imap: 메일 서버에서 받는 프리셋 (2026-10-22)
 }
 function paintShops() {
   show($("shop-card"), Array.isArray(live?.presets));   // 옛 에이전트·설정이 깨진 PC 는 카드를 숨긴다

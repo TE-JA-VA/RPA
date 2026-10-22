@@ -412,7 +412,7 @@ def validate_site(name, site):
                         f"(지금 값: {site.get('Stts')!r})")
 
     url = site.get("URL") or ""
-    if url and not url.startswith(("http://", "https://")):
+    if url and not url.startswith(("http://", "https://", "imap://")):      # imap:// = 메일 받기 프리셋 (2026-10-22)
         problems.append(f"{name}: URL 이 http:// 또는 https:// 로 시작하지 않습니다.")
 
     acts = site_actions(site)
@@ -1331,6 +1331,9 @@ def action_replay(page, name, site):
         raise RuntimeError(problems[0])
     p = next(x for x in status.read_presets() if x["no"] == site.get("Preset"))
     dest = site_dest()
+    imap = status.imap_step(p["record"])
+    if imap:
+        return _run_imap(name, site, p, imap, dest)
     log(f"  [{name}] 프리셋 {p['no']} '{p['name']}' 재생 ({len(p['record']['steps'])}단계) → {dest}")
     many = getattr(_here, "parallel", False)
     rp = web_replay.Replayer(page.context, p["record"], {"ID": site["ID"], "PW": site["PW"]}, dest, p["code"],
@@ -1361,6 +1364,27 @@ def action_replay(page, name, site):
     log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in rp.saved) or '없음'}")
     if rp.no_target and not rp.saved:
         step_done("skipped", "대상 없음")       # 받을 새 메일이 없었다 - 토큰을 쓰지 않는다
+    return True
+
+
+def _run_imap(name, site, p, step, dest):
+    """메일 받기(IMAP) 프리셋 - 브라우저 없이 메일 서버에서 규칙에 맞는 메일의 엑셀 첨부를 받는다 (설계 2026-10-14, 2026-10-22).
+    받을 메일이 없으면 '대상 없음' (토큰을 쓰지 않는다). 첨부를 하나도 못 받고 못 받은 까닭만 있으면 실패."""
+    import mail_imap
+    server = {"host": step["host"], "port": step["port"], "security": step["security"], "user": site["ID"], "password": site["PW"]}
+    log(f"  [{name}] 프리셋 {p['no']} '{p['name']}' 메일 받기 ({step['host']}) → {dest}")
+    try:
+        r = mail_imap.fetch(server, step["rules"], dest, p["code"], status.imap_memory_path(p["no"]), log=lambda m: log(f"  [{name}] {m}"))
+    except mail_imap.MailError as e:
+        raise RuntimeError(str(e)) from None
+    status.metric(f"{name}:files", "받은 엑셀", len(r["saved"]), unit="개")
+    for what, why in r["skipped"]:
+        log(f"  [{name}] 받지 못함: {what} ({why})")
+    if r["skipped"] and not r["saved"]:
+        raise RuntimeError(f"첨부파일을 받지 못했습니다. ({r['skipped'][0][1]})")
+    log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in r['saved']) or '없음'}")
+    if not r["saved"]:
+        step_done("skipped", "대상 없음")
     return True
 
 
