@@ -40,12 +40,14 @@ const asAgentA1 = () => env.authenticatedContext("u_agent_a1", { cid: "ca", pcId
 const asAgentA2 = () => env.authenticatedContext("u_agent_a2", { cid: "ca", pcId: "pc2", role: "agent" }).database();
 const asAnon = () => env.unauthenticatedContext().database();
 
+// 명령 시각은 초. 규칙이 만든 시각을 서버 시각 ±1분, 만료를 만든 시각 + 600초 이하로만 받는다 (BugBuster M1)
+const nowS = () => Math.floor(Date.now() / 1000);
 const cmd = (over = {}) => ({
   type: "launch",
   args: null,
   by: "u_admin_a",
-  created_at: 1000,
-  expires_at: 1600,
+  created_at: nowS(),
+  expires_at: nowS() + 600,
   state: "queued",
   ...over,
 });
@@ -163,6 +165,23 @@ test("commands: 늦게 받으면 queued→expired, 돌다 죽으면 running→fa
   await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c2"), { state: "failed", ended_at: 1200, result: "죽음" }));
 });
 
+test("commands: 만든 시각이 서버 시각과 1분 넘게 다르거나 만료가 10분 넘으면 거부 - 브라우저 시계로 명령 수명을 늘리지 못한다 (BugBuster M1)", async () => {
+  const at = (k) => ref(asAdminA(), `apps/rpa/commands/ca/pc1/${k}`);
+  await assertFails(set(at("c1"), cmd({ created_at: nowS() + 120, expires_at: nowS() + 720 })));
+  await assertFails(set(at("c2"), cmd({ created_at: nowS() - 120, expires_at: nowS() + 480 })));
+  await assertFails(set(at("c3"), cmd({ expires_at: nowS() + 601 })));
+  await assertSucceeds(set(at("c4"), cmd({ created_at: nowS() + 30, expires_at: nowS() + 30 + 90 })));
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c4"), { state: "running", started_at: 1100 }));   // 고칠 때는 시각을 다시 보지 않는다
+});
+
+test("commands: 에이전트는 명령을 고치기만 하고 지울 수 없다 (BugBuster L16)", async () => {
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd()));
+  await assertFails(remove(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1")));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), null));
+  await assertFails(remove(ref(asAgentA1(), "apps/rpa/commands/ca/pc1")));
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { state: "expired" }));
+});
+
 test("commands: 에이전트가 type 을 바꾸면 거부", async () => {
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd()));
   await assertFails(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { type: "stop_erpia" }));
@@ -262,12 +281,23 @@ test("otp 번호: 2분 지난 요청엔 못 쓴다", async () => {
   await assertFails(set(ref(asPhoneA1(), CODE), otpCode()));
 });
 
-test("otp 번호: 요청을 연 PC 의 에이전트만 읽고, 같은 업체 에이전트는 지운다. 휴대폰·관리자는 못 읽는다", async () => {
+test("otp 번호: 요청을 연 PC 의 에이전트만 읽고 지운다. 휴대폰·관리자는 못 읽는다", async () => {
   await putReqRaw();
   await assertSucceeds(set(ref(asPhoneA1(), CODE), otpCode()));
   await assertSucceeds(get(ref(asAgentA1(), CODE)));
   for (const who of [asAgentA2, asPhoneA1, asAdminA, asViewerA]) await assertFails(get(ref(who(), CODE)));
+  await assertFails(remove(ref(asAgentA2(), CODE)));                    // 남의 PC 가 연 요청의 번호는 못 지운다 (BugBuster M7)
   await assertSucceeds(remove(ref(asAgentA1(), CODE)));
+});
+
+test("otp 번호: 요청이 없거나 2분 지났으면 같은 업체 에이전트가 지운다, 다른 업체는 못 지운다 (BugBuster M7)", async () => {
+  const putCodeRaw = () => env.withSecurityRulesDisabled(async (c) => { await set(ref(c.database(), CODE), { ...otpCode(), written_at: Date.now() }); });
+  await putCodeRaw();
+  await assertFails(remove(ref(asAgentB1(), CODE)));
+  await assertSucceeds(remove(ref(asAgentA2(), CODE)));                 // 요청 없음
+  await putReqRaw({ created_at: Date.now() - 121000 });
+  await putCodeRaw();
+  await assertSucceeds(remove(ref(asAgentA2(), CODE)));                 // 지난 요청
 });
 
 test("otp 휴대폰 표시: 자기 것만 서버 시각으로 쓰고, 같은 업체 화면이 읽는다", async () => {
@@ -374,10 +404,9 @@ test("wallet: 같은 회사와 super 는 읽고 다른 회사는 거부, 아무�
     await setDoc(doc(c.firestore(), "wallet/ca"), { granted: 100 });
     await setDoc(doc(c.firestore(), "wallet/ca/grants/g1"), { amount: 100, at: "2026-10-06T12:00:00", memo: "첫 결제" });
   });
-  for (const who of [fsAgentA1(), fsAdminA(), fsSuper()]) {
-    await assertSucceeds(getDoc(doc(who, "wallet/ca")));
-    await assertSucceeds(getDoc(doc(who, "wallet/ca/grants/g1")));
-  }
+  for (const who of [fsAgentA1(), fsAdminA(), fsSuper()]) await assertSucceeds(getDoc(doc(who, "wallet/ca")));
+  for (const who of [fsAgentA1(), fsAdminA()]) await assertFails(getDoc(doc(who, "wallet/ca/grants/g1")));   // 넣은 내역은 super 만 (BugBuster L17)
+  await assertSucceeds(getDoc(doc(fsSuper(), "wallet/ca/grants/g1")));
   await assertFails(getDoc(doc(fsAdminB(), "wallet/ca")));
   await assertFails(getDoc(doc(fsAdminB(), "wallet/ca/grants/g1")));
   for (const who of [fsAgentA1(), fsAdminA(), fsSuper()]) {

@@ -27,6 +27,8 @@ STOP_CODES = {
     4: "이 PC 에서 에이전트가 이미 돌고 있습니다",
 }
 BACKOFF = (10, 30, 60, 120, 300)     # 다시 켜기 전 기다림(초). 잇따라 죽을수록 길게
+RETRY_LATER_CODE = 5                  # 로그인 일시 차단 (agent.RETRY_LATER_CODE) - 차단이 풀리게 오래 기다렸다 다시 켠다 (BugBuster M2)
+RETRY_LATER_SEC = 600                 # Identity Toolkit 안내 '약 10분 후' - 짧게 두드리면 차단이 길어진다
 HEALTHY_SEC = 600                     # 이만큼 넘게 돌다 죽었으면 처음 기다림부터
 LOG_NAME = "에이전트_기록.txt"          # agent.log 와 같은 파일
 ERR_NAME = "에이전트_오류.txt"          # 에이전트의 오류 출력 (죽은 까닭)
@@ -172,9 +174,10 @@ def run():
     return main()
 
 
-def main(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep):
+def main(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep, later_sec=RETRY_LATER_SEC):
     """에이전트를 띄우고 지킨다. 다시 켜지 않는 코드(STOP_CODES)로 끝나면 그 코드를 돌려주고 같이 끝난다.
-    cmd·backoff·healthy_sec·sleep 은 시험용 (가짜 에이전트, 짧은 기다림)."""
+    로그인 일시 차단(RETRY_LATER_CODE)이면 later_sec 기다렸다 다시 켠다.
+    cmd·backoff·healthy_sec·sleep·later_sec 은 시험용 (가짜 에이전트, 짧은 기다림)."""
     folder = log_dir()
     cmd = cmd or agent_command()
     stop_file = os.path.join(folder, STOP_NAME)
@@ -204,6 +207,11 @@ def main(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep):
             except OSError:
                 pass
             return code
+        if code == RETRY_LATER_CODE:
+            wait = later_sec
+            log(folder, f"로그인이 잠시 차단되었습니다 (코드 {code}). {wait}초 뒤 다시 켭니다")
+            sleep(wait)
+            continue
         fails = 1 if time.monotonic() - started >= healthy_sec else fails + 1
         wait = backoff[min(fails, len(backoff)) - 1]
         log(folder, f"에이전트가 멈췄습니다 (코드 {code}). {wait}초 뒤 다시 켭니다")

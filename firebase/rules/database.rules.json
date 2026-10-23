@@ -39,7 +39,7 @@
               ".indexOn": ["state"],
 
               "$cmdId": {
-                ".write": "auth != null && ((!data.exists() && newData.exists() && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')) || (data.exists() && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId))",
+                ".write": "auth != null && ((!data.exists() && newData.exists() && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')) || (data.exists() && newData.exists() && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId))",
                 ".validate": "newData.hasChildren(['type', 'by', 'created_at', 'expires_at', 'state'])",
 
                 "type": {
@@ -49,10 +49,10 @@
                   ".validate": "newData.isString() && (data.exists() ? data.val() === newData.val() : newData.val() === auth.uid)"
                 },
                 "created_at": {
-                  ".validate": "newData.isNumber() && (!data.exists() || data.val() === newData.val())"
+                  ".validate": "newData.isNumber() && (data.exists() ? data.val() === newData.val() : newData.val() * 1000 >= now - 60000 && newData.val() * 1000 <= now + 60000)"
                 },
                 "expires_at": {
-                  ".validate": "newData.isNumber() && (!data.exists() || data.val() === newData.val())"
+                  ".validate": "newData.isNumber() && (data.exists() ? data.val() === newData.val() : newData.val() <= newData.parent().child('created_at').val() + 600)"
                 },
                 "state": {
                   ".validate": "newData.isString() && (!data.exists() ? newData.val() === 'queued' : (auth.token.role === 'agent' && ((data.val() === 'queued' && (newData.val() === 'running' || newData.val() === 'expired')) || (data.val() === 'running' && (newData.val() === 'done' || newData.val() === 'failed')))))"
@@ -113,7 +113,7 @@
             "$phoneId": {
               "current": {
                 ".read": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/pcId').val() === auth.token.pcId",
-                ".write": "auth != null && ((auth.token.role === 'agent' && auth.token.cid === $cid && !newData.exists()) || (auth.token.role === 'phone' && auth.token.cid === $cid && auth.token.phoneId === $phoneId && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/created_at').val() + 120000 > now))",
+                ".write": "auth != null && ((auth.token.role === 'agent' && auth.token.cid === $cid && !newData.exists() && (!root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current').exists() || root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/pcId').val() === auth.token.pcId || root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/created_at').val() + 120000 < now)) || (auth.token.role === 'phone' && auth.token.cid === $cid && auth.token.phoneId === $phoneId && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/created_at').val() + 120000 > now))",
                 ".validate": "newData.hasChildren(['req_id', 'code', 'sender', 'sms_at', 'written_at']) && newData.child('req_id').val() === root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/req_id').val() && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/senders/' + newData.child('sender').val()).val() === true",
                 "req_id": { ".validate": "newData.isString()" },
                 "code": { ".validate": "newData.isString() && newData.val().matches(/^[0-9]{4,8}$/)" },

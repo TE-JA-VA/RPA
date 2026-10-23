@@ -75,6 +75,11 @@ def account(email_):
     return (r or {}).get("users", [None])[0] or {}
 
 
+def account_uid(uid):
+    r = call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:lookup", {"localId": [uid]}, OWNER)
+    return (r or {}).get("users", [None])[0] or {}
+
+
 def claims(email_):
     return json.loads(account(email_).get("customAttributes") or "{}")
 
@@ -213,6 +218,13 @@ code, r = api("POST", "/api/companies/t_new/tokens", {"amount": "+100", "memo": 
 check(code == 200 and r["wallet"]["left"] == 600 and not r["created"], "토큰 더 넣기 → 남은 600", str(r)[:200])
 code, r = api("POST", "/api/companies/t_new/tokens", {"amount": "1,000"})
 check(code == 400 and "0이 아닌 정수" in r.get("error", ""), "토큰 수 '1,000' 은 거절 (쉼표)", r)
+code, r = api("POST", "/api/companies/t_retry/tokens", {"amount": "-50"})
+check(code == 400 and "처음에는 양수만" in r.get("error", "") and fs_doc("wallet/t_retry") is None, "통장 없는 업체에 음수는 거절 (BugBuster L15)", r)
+code, r = api("POST", "/api/companies/t_new/pcs", {"pcId": "pc_a", "label": "", "agent": False})
+check(code == 400 and "이미 등록" in r.get("error", "") and db_get("meta/companies/t_new/pcs/pc_a/label") == "사무실 PC",
+      "이미 있는 PC 를 또 추가하면 거절 - 이름을 덮어쓰지 않는다 (BugBuster L14)", r)
+code, r = api("POST", "/api/companies/t_new/users", {"id": "x" * 70000, "role": "admin"})
+check(code == 400 and r.get("error") == "요청이 너무 큽니다.", "너무 큰 요청은 끊지 않고 거절 글로 답한다 (BugBuster L13)", (code, r))
 boss = email("t_new", "boss")
 code, r = api("POST", "/api/companies/t_new/passwd", {"id": boss})
 SECRETS.append(r.get("password", ""))
@@ -367,6 +379,20 @@ with sync_playwright() as pw:
     LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "admin", "관리_기록.txt")
     logtxt = open(LOG_PATH, encoding="utf-8").read() if os.path.exists(LOG_PATH) else ""
     check("대시보드 보기 t_new" in logtxt and tok not in logtxt, "관리 기록엔 '대시보드 보기' 만, 열쇠는 안 남긴다")
+    # [총괄 세션 끊기] (BugBuster I15): 열쇠로 로그인한 브라우저의 갱신 토큰을 회수한다
+    refresh = call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake",
+                   {"token": tok, "returnSecureToken": True}).get("refreshToken")
+    SECRETS.append(refresh)
+    since0 = int(account_uid("admin-console").get("validSince") or 0)
+    time.sleep(1.1)   # validSince 는 초 단위
+    dialogs.clear()
+    page.click("#revoke")
+    page.wait_for_function("document.getElementById('flash').textContent.includes('총괄 세션')", timeout=15000)
+    since1 = int(account_uid("admin-console").get("validSince") or 0)
+    check(dialogs and "총괄 로그인을 끊으시겠습니까" in dialogs[0] and since1 > since0 and "끊었습니다" in page.text_content("#flash"),
+          "[총괄 세션 끊기] 는 확인 뒤 admin-console 의 갱신 토큰을 회수한다", (dialogs, since0, since1))
+    # 회수한 갱신 토큰이 실제로 거절되는지는 에뮬레이터가 따지지 않는다 (validSince 만 본다) - 실서버에서 확인
+    check("총괄 세션 끊기 (대시보드 보기 로그인 모두 끊음)" in open(LOG_PATH, encoding="utf-8").read(), "관리 기록에 '총괄 세션 끊기' 한 줄")
     heads = [h.strip() for h in page.locator("#detail table.wallet th").all_text_contents()]
     check(heads == ["발급한 토큰", "사용한 토큰", "현재 토큰", "토큰 정보 생성"], f"토큰 정보는 표로 ({heads})")
     OLD = ("기계", "열람자", "통장", "막기", "막힘", "막을", "막았", "열기", "열림", "열었", "더하기", "더했", "삭제", "되살",
@@ -927,10 +953,11 @@ mine = emu_agent("agent-stale@t.local", "t_stale", "pc_s")
 n = ag.fail_stale_slow(mine, "t_stale", "pc_s", now)
 after = db_get(STALE) or {}
 states = {k: v["state"] for k, v in after.items()}
-check(n == 2 and states == {"s_imp": "failed", "s_rst": "failed", "s_run": "running", "s_q": "queued", "s_done": "done"},
-      "그 PC 의 agent 토큰: state=running 질의가 규칙을 지나고, running 인 import/restore_preset 만 failed", (n, states))
-check(all(after.get(k, {}).get("result") == ag.STALE_TEXT and after.get(k, {}).get("ended_at") == now for k in ("s_imp", "s_rst"))
-      and "result" not in after.get("s_run", {}), "failed 로 바꾼 것에만 사유·ended_at", {k: after.get(k) for k in ("s_imp", "s_run")})
+check(n == 3 and states == {"s_imp": "failed", "s_rst": "failed", "s_run": "failed", "s_q": "queued", "s_done": "done"},
+      "그 PC 의 agent 토큰: state=running 질의가 규칙을 지나고, running 인 명령은 모두 failed (BugBuster L19)", (n, states))
+check(all(after.get(k, {}).get("result") == ag.STALE_TEXT and after.get(k, {}).get("ended_at") == now for k in ("s_imp", "s_rst", "s_run"))
+      and after.get("s_done", {}).get("result") == "x" and "result" not in after.get("s_q", {}),
+      "failed 로 바꾼 것에만 사유·ended_at", {k: after.get(k) for k in ("s_imp", "s_q")})
 check(ag.fail_stale_slow(mine, "t_stale", "pc_s", now) == 0, "다시 부르면 0 (running 인 느린 명령이 없다)")
 
 print("=== 5. 기록 ===")

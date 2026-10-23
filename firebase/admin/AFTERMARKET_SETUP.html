@@ -87,6 +87,7 @@
     <button data-view="rates">토큰 배율·통계</button>
   </nav>
   <span class="grow"></span>
+  <button id="revoke" title="[대시보드 보기]로 로그인한 모든 브라우저의 총괄 로그인을 끊습니다.">총괄 세션 끊기</button>
   <button id="theme">☾ 어둡게</button>
   <button id="quit">끄기</button>
 </header>
@@ -759,6 +760,12 @@ function webLogin(tryLogin) {
   });
 }
 
+// [대시보드 보기] 로 연 총괄 로그인을 모두 끊는다 - 업체 PC·공용 PC 에 남은 로그인 (BugBuster I15)
+$("revoke").onclick = () => act($("revoke"), async () => {
+  if (!confirm("[대시보드 보기]로 로그인한 모든 브라우저의 총괄 로그인을 끊으시겠습니까? 1시간 이내에 로그인이 종료됩니다.")) return;
+  const r = await api("POST", "/api/console/revoke", {});
+  flash(r.revoked ? "총괄 세션을 끊었습니다. 1시간 이내에 로그인이 종료됩니다." : "[대시보드 보기]로 로그인한 기록이 없습니다.");
+});
 // --- 켜기·끄기 -----------------------------------------------------------------------
 $("quit").onclick = () => act($("quit"), async () => {
   if (!confirm("관리 화면을 종료하시겠습니까?")) return;

@@ -13,6 +13,7 @@ import datetime
 import json
 import os
 import re
+import secrets
 import sys
 import time
 
@@ -44,9 +45,13 @@ def auth_message(code):
         return "비밀번호가 일치하지 않습니다. (변경되었다면 새 비밀번호를 입력하여 주십시오)"
     if code == "USER_DISABLED":
         return "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 문의하여 주십시오."
-    if code == "TOO_MANY_ATTEMPTS_TRY_LATER":
+    if code in TEMP_BLOCK_CODES:
         return "시도가 너무 많아 잠시 차단되었습니다. 약 10분 후 다시 실행하여 주십시오."
     return f"로그인 거부: {code}"
+
+
+TEMP_BLOCK_CODES = ("TOO_MANY_ATTEMPTS_TRY_LATER", "QUOTA_EXCEEDED")   # 일시 차단 - 감독이 기다렸다 다시 켠다 (BugBuster M2)
+RETRY_LATER_CODE = 5            # agent.main 의 종료 코드 - background.py 가 RETRY_LATER_SEC 기다렸다 다시 켠다
 LOG_LINES = 80
 
 
@@ -287,13 +292,37 @@ def run_doc(rec, cid, pc_id, prices=None):
     return doc
 
 
-def trim_logs(snapshot, lines=LOG_LINES):
-    """로그 꼬리만 남긴 사본을 돌려준다 (원본은 건드리지 않는다)."""
+def trim_logs(snapshot):
+    """RPA 원본 로그(log_tail)를 뺀 사본을 돌려준다 (원본은 건드리지 않는다). 업체 웹·관리 화면 어디서도 현황의 로그를 읽지 않는다 -
+    전에는 없는 키 "log" 만 잘라 200줄이 통째로 올라갔다 (BugBuster M3). 실행 기록(run_doc)의 로그는 그대로."""
     out = json.loads(json.dumps(snapshot, ensure_ascii=False, default=str))
     for view in (out.get("programs") or {}).values():
-        if isinstance(view, dict) and isinstance(view.get("log"), list):
-            view["log"] = view["log"][-lines:]
+        if isinstance(view, dict):
+            view.pop("log_tail", None)
     return out
+
+
+LIVE_TICK_KEYS = ("elapsed_sec", "idle_sec", "updated_at")   # 실행 중 매초(updated_at 은 2초마다) 바뀌는 현황 값 - 웹은 started_at 으로 센다
+LIVE_RUNNING_SEC = 5            # 실행 중 매초 바뀌는 값만 바뀌었으면 이 간격으로만 올린다 (heartbeat 와 같게, BugBuster M3)
+
+
+def live_bodies(snap):
+    """pump 의 '바뀌었나' 비교 - (매초 바뀌는 값을 뺀 것, 전체). 앞이 바뀌면 바로, 뒤만 바뀌었으면 실행 중 5초마다 올린다 (BugBuster M3).
+    단계·모듈·지표의 duration_sec 도 뺀다 - 끝난 것의 값은 상태·finished_at 이 바뀔 때 같이 바뀐다."""
+    parts = [snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("parallel"), snap.get("together"), snap.get("schedule"),
+             snap.get("recent"), snap.get("launching"), snap.get("tokens"), snap.get("update")]
+    full = json.dumps(parts, ensure_ascii=False, default=str)
+    steady = json.loads(full)
+    for view in (steady[0] or {}).values():
+        if isinstance(view, dict):
+            for k in LIVE_TICK_KEYS:
+                view.pop(k, None)
+            view.pop("log_tail", None)
+            for kind in ("steps", "modules", "metrics"):
+                for item in view.get(kind) or []:
+                    if isinstance(item, dict):
+                        item.pop("duration_sec", None)
+    return json.dumps(steady, ensure_ascii=False), full
 
 
 HISTORY_POS_PATH = os.path.join(os.path.dirname(QUEUE_PATH), "history_pos.txt")
@@ -302,7 +331,7 @@ HISTORY_POS_PATH = os.path.join(os.path.dirname(QUEUE_PATH), "history_pos.txt")
 def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH, prices=None):
     """history.jsonl 에서 아직 안 올린 줄을 Firestore 로. 읽은 바이트 위치를 파일에 남긴다.
 
-    파일이 줄었으면(회전) 처음부터 다시 본다 - 같은 run_id 는 Firestore 가 409 로 거절하니 겹쳐도 안전하다.
+    파일이 줄었으면(회전) history.1.jsonl 의 남은 줄을 올리고 새 파일을 처음부터 본다 - 같은 run_id 는 Firestore 가 409 로 거절하니 겹쳐도 안전하다.
     위치 파일에는 어느 업체/PC 의 위치인지도 적는다. 없거나 다른 계정 것이면 그 전 기록은 올리지 않고 끝에서 시작한다
     (2026-10-12 사용자: PC 가 업체를 옮기면 옛 업체의 기록·토큰이 새 업체로 가던 것). 옛 버전의 숫자만 적힌 파일은 지금 계정 것.
     prices 는 값표를 돌려주는 함수 (Prices.get) - 올릴 줄이 있을 때만 부른다.
@@ -322,31 +351,47 @@ def upload_new_history(hist_path, up, cfg, pos_path=HISTORY_POS_PATH, prices=Non
     if not mine:
         _write_pos(pos_path, size, account)
         return 0
+    sent, table = 0, [None]
+
+    def send_from(path, start, whole):
+        """path 의 start 바이트 뒤 줄을 올린다 → (올린 수, 끝까지 쓴 줄의 끝 위치). whole 이면 마지막 조각도 다 쓴 줄로 본다."""
+        n = 0
+        with open(path, "rb") as f:
+            f.seek(start)
+            chunk = f.read()
+        lines = chunk.split(b"\n")
+        tail = b"" if whole else lines.pop()     # 마지막 조각은 아직 쓰는 중일 수 있다
+        for raw in lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("run_id"):
+                if table[0] is None:
+                    table[0] = prices() if prices else PRICES
+                up.push_run(run_doc(rec, cfg["cid"], cfg["pc_id"], table[0]))
+                n += 1
+        return n, start + len(chunk) - len(tail)
+
     if pos > size:
-        pos = 0
-    if pos == size:
-        return 0
-    sent, table = 0, None
-    with open(hist_path, "rb") as f:
-        f.seek(pos)
-        chunk = f.read()
-    lines = chunk.split(b"\n")
-    tail = lines.pop()               # 마지막 조각은 아직 쓰는 중일 수 있다
-    for raw in lines:
-        raw = raw.strip()
-        if not raw:
-            continue
+        # 회전됐다 (rpa_status.append_history 가 5MB 를 넘기면 history.1.jsonl 로) - 옛 파일의 아직 안 올린 줄부터 (BugBuster L18)
+        import rpa_status as st
+        old = os.path.join(os.path.dirname(hist_path), st.HISTORY_OLD_NAME)
         try:
-            rec = json.loads(raw.decode("utf-8"))
-        except ValueError:
-            continue
-        if isinstance(rec, dict) and rec.get("run_id"):
-            if table is None:
-                table = prices() if prices else PRICES
-            up.push_run(run_doc(rec, cfg["cid"], cfg["pc_id"], table))
-            sent += 1
-    _write_pos(pos_path, size - len(tail), account)
-    return sent
+            if os.path.getsize(old) >= pos:
+                sent += send_from(old, pos, True)[0]
+        except OSError:
+            pass
+        pos = 0
+        _write_pos(pos_path, 0, account)         # 새 파일이 아직 비어 있어도 - 옛 파일을 다시 올리지 않게
+    if pos == size:
+        return sent
+    n, pos = send_from(hist_path, pos, False)
+    _write_pos(pos_path, pos, account)
+    return sent + n
 
 
 def _write_pos(pos_path, pos, account):
@@ -364,10 +409,12 @@ class Uploader:
     """
 
     def __init__(self, client, cid, pc_id, queue_path=QUEUE_PATH):
+        import threading
         self._client = client
         self._cid = cid
         self._base = app_path("live", cid, pc_id)
         self._queue_path = queue_path
+        self._lock = threading.RLock()    # 명령 결과 표시(push_patch)는 느린 명령 스레드에서도 온다 (BugBuster L19)
         self._queue = self._read_queue()
 
     def _read_queue(self):
@@ -378,9 +425,12 @@ class Uploader:
                     line = line.strip()
                     if line:
                         try:
-                            rows.append(json.loads(line))
+                            row = json.loads(line)
                         except ValueError:
                             continue
+                        # 옛 버전이 쌓은 현황·heartbeat 는 버린다 - 되보내면 화면이 옛 상태로 돌아간다 (BugBuster H3)
+                        if isinstance(row, dict) and "/live/" not in f"/{row.get('path', '')}":
+                            rows.append(row)
         except FileNotFoundError:
             pass
         except Exception:
@@ -432,14 +482,20 @@ class Uploader:
         except Exception as e:
             if not queue or self._rejected(e):
                 return False
-            self._queue.append({"path": path, "value": value, "method": method})
-            del self._queue[:-QUEUE_MAX]
-            self._write_queue()
+            with self._lock:
+                self._queue.append({"path": path, "value": value, "method": method})
+                del self._queue[:-QUEUE_MAX]
+                self._write_queue()
             return False
 
     def push_live(self, snapshot):
         # PATCH 로 최상위 키만 갈아끼운다. PUT 이면 heartbeat 까지 지워진다.
-        return self._send(self._base, clean_for_rtdb(trim_logs(snapshot)) or {}, method="patch")
+        # 큐에 넣지 않는다 - 실패하면 pump 가 다음 틱에 새 현황을 다시 보낸다. 큐는 실행 기록·명령 결과 전용 (BugBuster H3)
+        return self._send(self._base, clean_for_rtdb(trim_logs(snapshot)) or {}, method="patch", queue=False)
+
+    def push_patch(self, path, value):
+        """명령 결과(done/failed) 표시. 실패하면 큐에 쌓아 연결되면 다시 보낸다 (BugBuster L19)."""
+        return self._send(path, value, method="patch")
 
     def push_heartbeat(self, info):
         # 큐에 넣지 않는다 - 지난 heartbeat 를 나중에 올려 봐야 의미 없고, 큐 500칸에서 이력을 밀어낸다
@@ -447,19 +503,20 @@ class Uploader:
 
     def flush(self):
         """쌓인 것을 순서대로 보낸다. 끊겨서 실패하면 거기서 멈추고, 거부된 것은 버리고 계속 간다."""
-        while self._queue:
-            row = self._queue[0]
-            try:
-                self._call(row.get("method", "put"), row["path"], row["value"])
-            except fb.AuthError:
-                raise
-            except Exception as e:
-                if not self._rejected(e):
-                    self._write_queue()
-                    return False
-            self._queue.pop(0)
-        self._write_queue()
-        return True
+        with self._lock:
+            while self._queue:
+                row = self._queue[0]
+                try:
+                    self._call(row.get("method", "put"), row["path"], row["value"])
+                except fb.AuthError:
+                    raise
+                except Exception as e:
+                    if not self._rejected(e):
+                        self._write_queue()
+                        return False
+                self._queue.pop(0)
+            self._write_queue()
+            return True
 
 
 # ---------------------------------------------------------------------------
@@ -517,14 +574,16 @@ def cleanup_transfers(client, cid, now_ms, app=APP):
 
 
 def fail_stale_slow(client, cid, pc_id, now, app=APP):
-    """켤 때 한 번: 지난 에이전트가 running 으로 두고 죽은 느린 명령(SLOW_TYPES)을 failed 로 → 고친 수. 업데이트·재시작으로
-    스레드가 죽으면 영영 running 으로 남는다 (규칙: running→failed 는 agent 가 한다). 못 읽으면 0, 인증이 죽었으면 AuthError 그대로."""
+    """켤 때 한 번: 지난 에이전트가 running 으로 두고 죽은 명령을 모두 failed 로 → 고친 수. 업데이트·재시작으로 스레드가 죽거나
+    done/failed 표시를 못 올리고 끝나면 영영 running 으로 남는다 (규칙: running→failed 는 agent 가 한다). 느린 명령만 보던 것을
+    모든 명령으로 넓혔다 (BugBuster L19) - 같은 계정을 PC 두 대에 넣으면 다른 PC 의 진행 중 명령도 닫는다 (I13 경고로 알린다).
+    못 읽으면 0, 인증이 죽었으면 AuthError 그대로."""
     base = app_path("commands", cid, pc_id, app)
     n = 0
     try:
         got = client.get(base, {"orderBy": '"state"', "equalTo": '"running"'}) or {}
         for key, cmd in got.items():
-            if isinstance(cmd, dict) and cmd.get("type") in SLOW_TYPES:
+            if isinstance(cmd, dict):
                 client.patch(f"{base}/{key}", {"state": "failed", "result": STALE_TEXT, "ended_at": int(now)})
                 n += 1
     except fb.AuthError:
@@ -555,23 +614,26 @@ def decide(cmd, now):
 class Commands:
     """명령 하나를 받아 상태를 옮긴다. 한 번에 하나씩만 부른다."""
 
-    def __init__(self, client, cid, pc_id, actions):
+    def __init__(self, client, cid, pc_id, actions, up=None):
         import threading
         self._client = client
         self._base = app_path("commands", cid, pc_id)
         self._actions = actions
+        self._up = up                         # Uploader - done/failed 표시를 못 올리면 큐로 (BugBuster L19)
         self._slow_lock = threading.Lock()   # 기다리는 명령(SLOW_TYPES)은 한 번에 하나
 
-    def _mark(self, cmd_id, **fields):
-        """상태를 쓴다. 못 쓰면 False (에이전트는 계속 돈다)."""
+    def _mark(self, cmd_id, queue=False, **fields):
+        """상태를 쓴다. 못 쓰면 False (에이전트는 계속 돈다). queue 면 실패한 표시를 큐에 남겨 연결되면 다시 보낸다."""
         try:
+            if queue and self._up is not None:
+                return self._up.push_patch(f"{self._base}/{cmd_id}", fields)
             self._client.patch(f"{self._base}/{cmd_id}", fields)
             return True
         except Exception:
             return False
 
     def handle(self, cmd_id, cmd, now=None):
-        now = time.time() if now is None else now
+        now = self._client.server_now() if now is None else now   # 만료는 서버 시각으로 - 명령 시각도 서버 시각(초) (BugBuster M1)
         verdict, reason = decide(cmd, now)
         if verdict == "bad":
             return verdict
@@ -605,10 +667,10 @@ class Commands:
     def _finish(self, cmd_id, call):
         try:
             message = call() or "완료"
-            self._mark(cmd_id, state="done", result=str(message)[:500], ended_at=int(time.time()))
+            self._mark(cmd_id, queue=True, state="done", result=str(message)[:500], ended_at=int(self._client.server_now()))
             return "done"
         except Exception as e:
-            self._mark(cmd_id, state="failed", result=f"{e}"[:500], ended_at=int(time.time()))
+            self._mark(cmd_id, queue=True, state="failed", result=f"{e}"[:500], ended_at=int(self._client.server_now()))
             return "failed"
 
 
@@ -697,7 +759,7 @@ class Policy:
         return got
 
 
-def real_actions(policy=None, limits=None, start_update=None, client=None, cid=None, pc_id=None, busy=None, clock=time.time, sleep=time.sleep):
+def real_actions(policy=None, limits=None, start_update=None, client=None, cid=None, pc_id=None, busy=None, clock=None, sleep=time.sleep):
     """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)
     limits: 업체 정책을 지금 읽어 (limit, off, wellife) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)
     client·cid·pc_id: 프리셋 전송 자리를 읽고 쓸 때. busy·clock·sleep 은 시험이 바꿔 끼운다."""
@@ -705,6 +767,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
     import rpa_dashboard as dash
     import rpa_status as st
     import rpa_update as upd
+    clock = clock or (client.server_now if client is not None else time.time)   # 명령 만료(expires_at)와 같은 서버 시각 (BugBuster M1)
 
     def do_launch(args):
         target = (args or {}).get("target") if isinstance(args, dict) else None
@@ -973,6 +1036,30 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
             "export_preset": do_export, "import_preset": do_import, "restore_preset": do_restore}
 
 
+OTHER_BOOT_SEC = 120
+
+
+def warn_other_boot(client, cid, pc_id, host=None, now=None):
+    """켤 때 한 번 (BugBuster I13): 이 계정의 heartbeat 를 읽어 2분 안에 다른 PC(호스트 이름이 다름)가 신호를 올렸으면 기록에 경고 →
+    경고했으면 True. 지난번 이 PC 의 신호는 호스트 이름이 같아 넘어간다 (재시작마다 경고하지 않게). 못 읽으면 False, 인증이 죽었으면 AuthError."""
+    import socket
+    try:
+        hb = client.get(f"{app_path('live', cid, pc_id)}/heartbeat")
+    except fb.AuthError:
+        raise
+    except Exception:
+        return False
+    if not isinstance(hb, dict) or not isinstance(hb.get("at"), (int, float)) or isinstance(hb.get("at"), bool):
+        return False
+    host = host or socket.gethostname()
+    now = time.time() if now is None else now
+    if hb.get("host") == host or abs(now - hb["at"]) > OTHER_BOOT_SEC:
+        return False
+    log(f"경고: 이 에이전트 계정({cid}/{pc_id})을 다른 PC({hb.get('host')}, 실행 번호 {hb.get('boot') or '없음'})가 {max(0, int(now - hb['at']))}초 전에 "
+        "사용했습니다. 같은 계정을 PC 두 대에서 사용하면 자동 실행이 두 번 진행되고 진행 중인 명령이 중단될 수 있습니다. 한 대에서만 사용하여 주십시오.")
+    return True
+
+
 def send_heartbeat(up, info, install, alive):
     """heartbeat 를 보내고, 서버가 받았을 때만 '살아 있음'을 적는다 (끊겼으면 도우미의 3분 점검이 되돌린다)."""
     import rpa_update as upd
@@ -986,8 +1073,12 @@ def watch_commands(client, path, on_command, stop=None):
     스트림에 실린 옛 토큰은 만료(최대 1시간)까지 살아 있으니, keep-alive(30초)마다 stop 을 봐야 그 안에 빠져나온다.
 
     로그인 토큰은 1시간마다 만료되고 그때 Firebase 가 auth_revoked 를 보낸다. 이걸 무시하면 heartbeat 는 계속
-    올라가는데(다른 요청이라 토큰이 갱신된다) 명령만 영원히 못 받는 귀머거리가 된다. 2026-09-22 실기에서 두 번 겪었다."""
-    gen = client.stream(path)
+    올라가는데(다른 요청이라 토큰이 갱신된다) 명령만 영원히 못 받는 귀머거리가 된다. 2026-09-22 실기에서 두 번 겪었다.
+
+    대기 중(state=queued)인 명령만 구독한다 (규칙 .indexOn state) - 명령함 전체를 처음·1시간마다·끊길 때마다 다시 받지 않게
+    (BugBuster I11). 명령을 running 으로 바꾸면 거른 결과에서 빠졌다는 이벤트(put /<키> data null)가 온다 - 명령이 지워진 것이
+    아니고, dict 가 아니라 아래에서 건너뛴다."""
+    gen = client.stream(path, {"orderBy": '"state"', "equalTo": '"queued"'})
     try:
         for event, data in gen:
             if stop is not None and stop.is_set():
@@ -1002,7 +1093,7 @@ def watch_commands(client, path, on_command, stop=None):
             if sub == "/" and isinstance(payload, dict):
                 items = payload                       # 처음 붙을 때: 대기 중인 명령 전부
             elif sub.count("/") == 1 and isinstance(payload, dict):
-                items = {sub.strip("/"): payload}     # 새 명령 하나
+                items = {sub.strip("/"): payload}     # 새 명령 하나 (null 은 queued 에서 빠진 것 - 지워짐 아님, 건너뛴다)
             for cmd_id, cmd in items.items():
                 on_command(cmd_id, cmd)
     finally:
@@ -1088,7 +1179,7 @@ def single_instance(name=None):
 def main():
     """감독자. 설정을 읽거나 처음 물어 만들고 run() 을 돈다. 인증이 죽어 run() 이 멈추면 이유를 찍고 (창이 있으면)
     비밀번호를 다시 물어 다시 돈다. 종료 코드: 0 정상, 2 설정 문제, 3 인증이 죽었는데 창이 없어 다시 물을 수 없음,
-    4 이 PC 에서 에이전트가 이미 돌고 있음 (background.py 가 이 코드들을 보고 다시 켤지 정한다)."""
+    4 이 PC 에서 에이전트가 이미 돌고 있음, 5 로그인 일시 차단 - 10분 뒤 다시 (background.py 가 이 코드들을 보고 다시 켤지 정한다)."""
     import secret
 
     if not single_instance():
@@ -1114,8 +1205,11 @@ def main():
         if dead is None:
             return 0
         log(f"인증이 죽어 멈췄습니다: {auth_message(dead.code)}")
-        # 막힌 계정·시도 초과는 비밀번호를 다시 넣어도 소용없다 - 안내대로 나중에 다시 띄운다
-        if not sys.stdin.isatty() or dead.code in ("USER_DISABLED", "TOO_MANY_ATTEMPTS_TRY_LATER"):
+        # 시도 초과·한도 초과는 잠시 뒤 풀린다 - 감독이 기다렸다 다시 켠다 (3 이면 영영 안 켜져 예약 실행도 멈췄다, BugBuster M2)
+        if dead.code in TEMP_BLOCK_CODES:
+            return RETRY_LATER_CODE
+        # 막힌 계정은 비밀번호를 다시 넣어도 소용없다 - 안내대로 나중에 다시 띄운다
+        if not sys.stdin.isatty() or dead.code == "USER_DISABLED":
             return 3
         print(f"비밀번호가 바뀌었거나 계정이 사용중지되었습니다: {auth_message(dead.code)}. "
               f"새 비밀번호를 넣으세요 (회사 {cfg['cid']} / PC {cfg['pc_id']}). "
@@ -1154,12 +1248,15 @@ def run(cfg):
     dash.TOKEN_GATE = tokens.gate      # 실행 단추·예약이 띄우기 직전에 남은 토큰을 본다 (0 이하면 거절)
     cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"]),
                                                                    limits=lambda: policy.refresh(force=True),
-                                                                   client=client, cid=cfg["cid"], pc_id=cfg["pc_id"]))
-    log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  밀린 기록={up.pending()}건")
+                                                                   client=client, cid=cfg["cid"], pc_id=cfg["pc_id"]), up=up)
+    boot = secrets.token_hex(4)                # 이번 실행 번호 - heartbeat.boot 에 싣는다. 업체 웹이 이 값이 오락가락하면 경고 (BugBuster I13)
+    log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  실행 번호={boot}  밀린 기록={up.pending()}건")
     try:
-        n = fail_stale_slow(client, cfg["cid"], cfg["pc_id"], time.time())   # 지난 실행이 running 으로 두고 죽은 프리셋 명령
+        warn_other_boot(client, cfg["cid"], cfg["pc_id"])
+        up.flush()                             # 밀린 명령 결과(done/failed)를 먼저 - 아래가 그 명령을 '중단' 으로 닫지 않게 (BugBuster L19)
+        n = fail_stale_slow(client, cfg["cid"], cfg["pc_id"], client.server_now())   # 지난 실행이 running 으로 두고 죽은 명령
         if n:
-            log(f"끝나지 못한 프리셋 명령 {n}건을 실패로 표시하였습니다")
+            log(f"끝나지 못한 명령 {n}건을 실패로 표시하였습니다")
     except fb.AuthError as e:
         return e
     # 사용자 설정 한 파일로 옮기기 (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json → RPA_UserConfig.json,
@@ -1199,11 +1296,13 @@ def run(cfg):
     dead = []     # 인증이 죽은 AuthError. pump 스레드와 구독 루프 어느 쪽이 먼저 만나든 여기 담고 둘 다 멈춘다
 
     def pump():
-        """상태와 heartbeat. 1초마다 상태 파일을 보고 바뀌었을 때만 올린다."""
+        """상태와 heartbeat. 1초마다 상태 파일을 보고 바뀌었을 때만 올린다 (실행 중 매초 바뀌는 값만 바뀌었으면 5초마다)."""
         last = None
+        last_full, last_live = None, 0.0
         last_beat = 0.0
         last_clean = 0.0
         recent_key = [None, []]   # (이력 파일 mtime, 오늘) 과 그때 센 요약
+        last_sched = None         # 마지막으로 제대로 읽은 schedule - settings.json 을 잠깐 못 읽으면 이것을 올린다 (BugBuster M20)
         while not stop.is_set():
             try:
                 snap = live_extras(st.dashboard_snapshot())
@@ -1232,7 +1331,11 @@ def run(cfg):
                 if time.time() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
                     last_clean = time.time()
                     cleanup_transfers(client, cfg["cid"], int(client.server_now() * 1000))   # 서버 시각 - PC 시계가 앞서도 남의 전송을 일찍 안 지운다
-                snap["schedule"] = dash.schedule_live(st.read_settings()["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝 (화면 안내)
+                settings = st.read_settings()
+                if settings.get(st.SETTINGS_UNREADABLE) and last_sched is not None:   # 못 읽은 기본값(예약 꺼짐)을 웹에 보이지 않는다 (BugBuster M20)
+                    snap["schedule"] = last_sched
+                else:
+                    snap["schedule"] = last_sched = dash.schedule_live(settings["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝 (화면 안내)
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
                 hist_path = os.path.join(st.status_dir(create=False), st.HISTORY_NAME)
                 try:
@@ -1252,21 +1355,21 @@ def run(cfg):
                 sent = upload_new_history(hist_path, up, cfg, prices=fresh_prices(prices))
                 tokens.refresh(force=bool(sent))           # 방금 올린 기록만큼 줄었다 - 아니면 10분마다 (우리가 넣은 것)
                 snap["tokens"] = tokens.view()
-                body = json.dumps([snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("parallel"), snap.get("together"), snap.get("schedule"), snap.get("recent"),
-                                   snap.get("launching"), snap.get("tokens"), snap.get("update")], ensure_ascii=False, default=str)
-                if body != last:
-                    up.push_live(snap)
-                    last = body
+                up.flush()     # 밀린 기록 먼저, 현황은 그 뒤 - 옛 것이 새 현황을 덮지 않게 (BugBuster H3)
+                running = bool([p for p, v in (snap.get("programs") or {}).items() if v and v.get("state") == "running"])
+                body, full = live_bodies(snap)
+                if body != last or (running and full != last_full and time.time() - last_live >= LIVE_RUNNING_SEC):   # BugBuster M3
+                    if up.push_live(snap):           # 못 올렸으면 last 를 그대로 두어 다음 틱에 다시 (큐에 안 넣는다, H3)
+                        last, last_full, last_live = body, full, time.time()
                 if time.time() - last_beat >= HEARTBEAT_SEC:
                     send_heartbeat(up, {
                         "at": int(time.time()),
                         "every": HEARTBEAT_SEC,   # 화면이 이 값으로 끊김 기준을 잡는다 (옛 에이전트는 없어서 30초로 본다)
                         "host": snap.get("host"),
-                        "rpa_running": bool([p for p, v in (snap.get("programs") or {}).items()
-                                             if v and v.get("state") == "running"]),
+                        "rpa_running": running,
+                        "boot": boot,             # 켤 때마다 바뀌는 실행 번호 (I13)
                     }, install, alive)
                     last_beat = time.time()
-                up.flush()
             except fb.AuthError as e:
                 dead.append(e)
                 stop.set()
@@ -1277,7 +1380,7 @@ def run(cfg):
     threading.Thread(target=pump, daemon=True).start()
 
     def on_command(cmd_id, cmd):
-        if decide(cmd, time.time())[0] == "bad":
+        if decide(cmd, client.server_now())[0] == "bad":
             return
         log(f"명령 {cmd.get('type')} ({cmd_id[:8]}) 처리")
         log(f"  → {cmds.handle(cmd_id, cmd)}")

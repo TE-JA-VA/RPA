@@ -8,6 +8,7 @@ export const title = "오토파일럿";
 const PRESETS = [["평일", [0, 1, 2, 3, 4]], ["매일", [0, 1, 2, 3, 4, 5, 6]], ["주말", [5, 6]]];
 
 const HTML = `
+  <div class="msg warn hide" id="changed-bar">다른 곳에서 이 PC의 설정이 변경되었습니다. <button id="reload-form">다시 불러오기</button></div>
   <div class="settings-grid" id="settings-grid">
     <div>
       <h3 class="grp">ACTOR 오토파일럿 (사이트 수집)</h3>
@@ -101,8 +102,10 @@ export function mount(el, context) {
   form.copy = { to: "", pick: {} }; transferOk = {}; copyKey = "";
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
-  $("mod-apply").onclick = applyModules;
-  $("shop-apply").onclick = applyShops;
+  // [적용] 은 저장(set)부터 명령 끝까지 잠근다 - 저장 왕복 사이에 두 번 눌러도 한 번만 (BugBuster K11)
+  $("mod-apply").onclick = () => locked(applyModules);
+  $("shop-apply").onclick = () => locked(applyShops);
+  $("reload-form").onclick = reloadForm;   // (I14)
   $("copy-send").onclick = copyPresets;
   $("copy-all").onclick = () => { for (const p of copyable()) form.copy.pick[p.no] = { ...form.copy.pick[p.no], on: true }; copyKey = ""; paintCopy(); };
   $("copy-to").onchange = (e) => { form.copy.to = e.target.value; paintCopyMeta(); };
@@ -112,11 +115,11 @@ export function mount(el, context) {
       if (root && live) paintCopy();
     }, () => {}));
   }
-  $("par-apply").onclick = applyParallel;
+  $("par-apply").onclick = () => locked(applyParallel);
   $("par-n").onchange = (e) => { form.parallel = Number(e.target.value); paintParMeta(); };
-  $("tog-apply").onclick = applyTogether;
+  $("tog-apply").onclick = () => locked(applyTogether);
   $("tog-mode").onchange = (e) => { form.together = e.target.value; paintTogMeta(); };
-  $("sch-apply").onclick = applySchedule;
+  $("sch-apply").onclick = () => locked(applySchedule);
   $("sch-enabled").onchange = (e) => { form.sch.enabled = e.target.checked; paintScheduleMeta(); };
   // 휴무일 (판 4 PC - 사용자 2026-10-15): 공휴일 휴무 적용 켬/끔과 업체 휴무일. 지난 날은 못 고른다 (PC 도 저장할 때 뺀다)
   $("sch-off-date").min = isoDay(new Date());          // 달력에서 지난 날을 못 고르게 (검토 2026-10-16)
@@ -164,13 +167,20 @@ export function mount(el, context) {
     const first = live == null;
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신). 편집 중인지는 바뀌기 전 PC 값과 견준다 -
     // 새 값과 견주면 PC 쪽이 바뀌었을 때 손대지 않은 폼도 '편집 중' 으로 보여 옛 값에 머문다
-    const was = first ? [] : [modulesDirty(), shopsDirty(), scheduleDirty(), parDirty(), togDirty()];
+    const was = first ? [] : dirtyList(), before = first ? [] : savedKeys();
     live = snap.val() || {};
     if (first || !was[0]) resetModules();
     if (first || !was[1]) resetShops();
     if (first || !was[3]) resetParallel();
     if (first || !was[4]) resetTogether();
     if (first || !was[2]) resetSchedule();
+    // 편집 중인 카드의 PC 값이 바뀌었는데 폼과 다르면 (다른 관리자가 [적용]) 띠로 알린다 - 그대로 [적용] 하면 그 변경을 덮는다 (BugBuster I14)
+    if (!first) {
+      const now = dirtyList(), after = savedKeys();
+      const mine = (i) => { const k = SENT_KEYS[i]; return sent[k] === keyOf[k](); };   // 내가 [적용] 한 폼 - PC 가 다듬어 돌려준 값은 띠 없이
+      if (was.some((d, i) => d && now[i] && before[i] !== after[i] && !mine(i))) show($("changed-bar"), true);
+      if (!now.some(Boolean)) show($("changed-bar"), false);
+    }
     paintAll();
   }, (e) => notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `읽지 못했습니다. (${e.code || e})`));
 }
@@ -194,15 +204,32 @@ export function dirty() {
 const keyOf = { modules: () => JSON.stringify(form.modules), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()),
   par: () => String(form.parallel), tog: () => form.together };
 
+// 카드 차례: 모듈·프리셋·자동 실행·동시 실행·전체 실행 방식 (I14). PC 값 열쇠에는 사람이 고치는 칸만 (next_run_at 처럼 저절로 바뀌는 것은 뺀다)
+const SENT_KEYS = ["modules", "shops", "sch", "par", "tog"];
+const dirtyList = () => [modulesDirty(), shopsDirty(), scheduleDirty(), parDirty(), togDirty()];
+const savedKeys = () => {
+  const s = savedSch();
+  return [JSON.stringify(savedModules()), JSON.stringify(savedShops().map((p) => [p.no, !!p.on])),
+    JSON.stringify([!!s.enabled, s.days || [], slotsKey(savedSlots()), s.skip_holidays, savedOff()]), String(savedPar()), savedTog()];
+};
+/** [다시 불러오기] - 폼을 모두 PC 값으로 (I14) */
+function reloadForm() {
+  sent = {};
+  resetModules(); resetShops(); resetParallel(); resetTogether(); resetSchedule();
+  show($("changed-bar"), false);
+  paintAll();
+}
+
 function paintAll() { paintModuleMeta(); paintShopMeta(); paintCopyMeta(); paintParMeta(); paintTogMeta(); paintScheduleMeta(); }
 
-/** 명령을 넣는 동안 카드 단추를 잠근다 */
+/** 저장·명령을 넣는 동안 카드 단추를 잠근다. 이미 잠겨 있으면 (두 번 누름) 그냥 돌아간다 (BugBuster K11) */
 async function locked(run) {
+  if (busy) return;
   busy = true; paintAll();
   try { await run(); }
   finally { busy = false; if (root) paintAll(); }
 }
-const send = (type, args, label) => locked(() => sendCommand(c, type, args, label, () => !!root));
+const send = (type, args, label) => sendCommand(c, type, args, label, () => !!root);   // 부르는 쪽이 locked 안에서 (K11)
 
 // --- 실행 모듈 ------------------------------------------------------
 
@@ -318,7 +345,7 @@ function paintShops() {
 }
 async function restorePreset(no) {
   if (!confirm(`프리셋 ${no}을(를) 이전 기록으로 되돌리시겠습니까?`)) return;
-  await send("restore_preset", { nos: [no] }, "프리셋 되돌리기");
+  await locked(() => send("restore_preset", { nos: [no] }, "프리셋 되돌리기"));
 }
 function paintShopMeta() {
   const list = savedShops();

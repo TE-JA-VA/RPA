@@ -135,7 +135,7 @@ const secondRef = await db.ref("apps/rpa/commands/c_demo/pc_office").push({
 });
 await waitFor("연달아 실행하면 잠금이 거절한다 (failed + 사유)", async () => {
   const v = (await secondRef.get()).val();
-  return v.state === "failed" && /실행중/.test(v.result || "");
+  return v.state === "failed" && /실행 ?중/.test(v.result || "");   // 2026-10-16 말투 맞추기로 '실행 중'
 });
 
 // 사용자 설정 한 파일: 켤 때 옮기기·잠그기, set_modules 는 그 파일의 Routine 에 쓴다 (임시 폴더라 실제 설정은 안 건드린다)

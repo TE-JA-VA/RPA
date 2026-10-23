@@ -13,6 +13,7 @@ import datetime as dt
 import email
 import email.policy
 import email.utils
+import encodings.aliases
 import imaplib
 import json
 import mimetypes
@@ -20,6 +21,11 @@ import os
 import re
 import ssl
 import unicodedata
+
+# ks_c_5601-1987 (아웃룩 등) 은 실제로 cp949 다 - euc_kr 로 풀면 똠·뷁 같은 확장 글자가 깨진다 (BugBuster M16).
+# 첫 codecs.lookup 전에 바꿔야 캐시에 안 걸린다. euc-kr 은 cp949 의 부분집합이라 늘 안전하다.
+for _a in ("ks_c_5601_1987", "ks_c_5601", "ksc5601"):
+    encodings.aliases.aliases[_a] = "cp949"
 
 KNOWN_SERVERS = {   # 실제 접속 확인 전
     "naver.com": ("imap.naver.com", 993, "ssl"),
@@ -30,9 +36,12 @@ KNOWN_SERVERS = {   # 실제 접속 확인 전
 }
 BLOCKED_EXT = {"exe", "js", "vbs", "bat", "cmd", "ps1", "scr", "xlsm"}
 DEFAULT_RULES = {"mailbox": "INBOX", "senders": [], "subject_prefix": "", "subject_has": [], "subject_not": [],
-                 "unseen_only": False, "days": 0, "exts": ["xlsx", "xls", "csv"], "name_has": "", "max": 20,
+                 "unseen_only": False, "days": 0, "exts": ["xlsx", "xls"], "name_has": "", "max": 20,
                  "mark_seen": False}
-# days 0 = 오늘 받은 것만 (PC 시각 00:00 부터), 1~30 = 최근 N일
+# days 0 = 오늘 받은 것만 (PC 시각 00:00 부터), 1~30 = 최근 N일 - 첫 실행만. 그 뒤는 마지막 실행 날부터 (BugBuster I8, _days)
+UPLOAD_EXT = ("xlsx", "xls")    # 엑셀 업로드가 올리는 종류 (run_routine.EXCEL_UPLOAD_EXTS) - csv 는 ERPia 가 받는지 미확인 (BugBuster I6)
+LAST_RUN = "_last_run"          # 기억 파일 안 마지막 실행 날 (Message-ID 는 <…> 라 겹치지 않는다)
+MAX_DAYS = 30
 
 CONNECT_TIMEOUT = 30            # 초
 CMD_TIMEOUT = 60                # 명령마다 초
@@ -46,6 +55,8 @@ NAMELESS_EXT = {"application/vnd.openxmlformats-officedocument.spreadsheetml.she
 CONNECT_FAIL = "메일 서버에 연결하지 못했습니다. (주소·포트를 확인하여 주십시오)"
 LOGIN_FAIL = "로그인을 거부하였습니다. (비밀번호·IMAP 사용 설정·앱 비밀번호를 확인하여 주십시오)"
 NO_RESPONSE = "메일 서버가 응답하지 않습니다."
+CERT_FAIL = "메일 서버의 보안 인증서를 믿을 수 없어 연결하지 않았습니다. (이 PC 의 날짜·시간과 루트 인증서·보안 프로그램을 확인하여 주십시오)"
+TOO_BIG = "50MB 를 넘는 메일이라 건너뜁니다."
 
 
 class MailError(Exception):
@@ -84,6 +95,8 @@ def check_rules(rules):
         raise ValueError("기간은 0(오늘)부터 30일까지입니다.")
     if not 1 <= r["max"] <= 50:
         raise ValueError("한 번에 최대는 1부터 50통까지입니다.")
+    odd = [e for e in r["exts"] if e not in UPLOAD_EXT]     # 받기만 하고 업로드되지 않는다 - 거절하지 않고 알린다 (BugBuster I6)
+    r["warn"] = f"엑셀 업로드는 xlsx·xls 파일만 올립니다. {', '.join(odd)} 첨부는 받기만 하고 업로드되지 않습니다." if odd else ""
     return r
 
 
@@ -96,10 +109,22 @@ def _since(now, days):
     return dt.datetime.combine(now.date() - dt.timedelta(days=days), dt.time())
 
 
+def _days(rules, memory, now):
+    """볼 기간 (날 수). 첫 실행은 규칙의 기간, 그 뒤는 마지막 실행 날부터 (최대 30일) - 자정 전 메일·PC 를 끈 날의 메일이
+    빠지지 않게. 이미 받은 메일은 기억이 막는다 (BugBuster I8)."""
+    try:
+        last = dt.date.fromisoformat(memory.get(LAST_RUN) or "")
+    except (TypeError, ValueError):
+        return rules["days"]
+    return min(MAX_DAYS, max(rules["days"], (now.date() - last).days))
+
+
 def matches(rules, sender, subject, date, now):
     """규칙에 맞는 메일인가 (rules 는 check_rules 를 거친 것). date·now 는 PC 시각."""
     s, subj = _norm(sender), _norm(subject)
-    if rules["senders"] and not any(_norm(x) in s for x in rules["senders"]):
+    addrs = [_norm(a) for _, a in email.utils.getaddresses([sender or ""]) if "@" in a]
+    # @ 가 든 조건은 주소로만 - 표시 이름은 아무나 흉내 낼 수 있다 (BugBuster I10). 이름만 쓴 조건은 전체에서.
+    if rules["senders"] and not any(any(_norm(x) in a for a in addrs) if "@" in x else _norm(x) in s for x in rules["senders"]):
         return False
     if not subj.startswith(_norm(rules["subject_prefix"])):
         return False
@@ -114,9 +139,11 @@ def matches(rules, sender, subject, date, now):
 
 def mask_sender(addr):
     """'ab***@naver.com' - 로그에는 앞 2글자만."""
-    a = email.utils.parseaddr(addr or "")[1] or addr or ""
-    local, at, dom = a.partition("@")
-    return f"{local[:2]}***{at}{dom}"
+    a = next((x for _, x in email.utils.getaddresses([addr or ""]) if "@" in x), "")
+    if not a:       # 주소를 못 골랐다 - 글 안의 @ 앞을 모두 가린다 (BugBuster M14)
+        return re.sub(r"[^\s<>,;@\"']+@", "***@", addr or "")
+    local, _, dom = a.partition("@")
+    return f"{local[:2]}***@{dom}"
 
 
 def unique_path(path):
@@ -170,6 +197,8 @@ def _connect(server):
         if M:
             with contextlib.suppress(Exception):
                 M.shutdown()
+        if isinstance(e, ssl.SSLCertVerificationError):     # 주소·포트 탓이 아니다 - 따로 알리고 까닭을 남긴다 (BugBuster K14)
+            raise MailError(f"{CERT_FAIL} ({e.verify_message or 'CERTIFICATE_VERIFY_FAILED'})") from e
         raise MailError(CONNECT_FAIL) from e
 
 
@@ -191,6 +220,9 @@ def _session(server, mailbox, readonly):
         uidvalidity = (M.response("UIDVALIDITY")[1] or [b""])[0] or b""
         yield M, uidvalidity.decode()
         ok = True
+    except imaplib.IMAP4.readonly:      # abort 의 하위라 먼저 - SELECT 했는데 서버가 읽기 전용으로 열었다 (BugBuster L11)
+        raise MailError(f"메일함 '{mailbox}'이(가) 읽기 전용이라 읽음 표시를 할 수 없습니다. "
+                        "('받은 뒤 읽음으로 표시' 를 끄거나 다른 메일함을 골라 주십시오)") from None
     except (TimeoutError, ConnectionError, ssl.SSLError, imaplib.IMAP4.abort):
         raise MailError(NO_RESPONSE) from None
     except imaplib.IMAP4.error as e:
@@ -226,7 +258,19 @@ def _hdr(msg, name):
         return ""
 
 
-def _candidates(M, rules, uidvalidity, now):
+def _date(meta, hdr):
+    """서버가 받은 시각(INTERNALDATE) → PC 시각. 규격에 안 맞으면 Date 머리글, 그것도 없으면 None (BugBuster K16)."""
+    t = imaplib.Internaldate2tuple(meta)
+    if t:
+        return dt.datetime(*t[:6])
+    try:
+        d = email.utils.parsedate_to_datetime(_hdr(hdr, "Date"))
+    except (TypeError, ValueError, IndexError):
+        return None
+    return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
+
+
+def _candidates(M, rules, uidvalidity, now, log=lambda m: None):
     """서버에 SINCE(+UNSEEN)만 묻고, 머리글을 받아 PC 에서 규칙으로 거른다. 최근 것부터."""
     day = _since(now, rules["days"]) - dt.timedelta(days=1)     # 서버 시간대가 달라도 빠지지 않게 하루 앞부터
     crit = ["SINCE", f"{day.day:02d}-{MONTHS[day.month - 1]}-{day.year}"] + (["UNSEEN"] if rules["unseen_only"] else [])
@@ -240,9 +284,12 @@ def _candidates(M, rules, uidvalidity, now):
             if not uid:
                 continue
             size = re.search(rb"RFC822\.SIZE (\d+)", meta)
-            t = imaplib.Internaldate2tuple(meta)        # 서버가 받은 시각 → PC 시각
             hdr = email.message_from_string(_text(raw), policy=email.policy.default)
-            m = {"uid": int(uid[1]), "size": int(size[1]) if size else 0, "date": dt.datetime(*t[:6]) if t else now,
+            date = _date(meta, hdr)
+            if date is None:        # '지금' 으로 두면 기간 거르기를 통과한다 (BugBuster K16)
+                log(f"메일 시각을 읽지 못해 건너뜁니다. (UID {int(uid[1])})")
+                continue
+            m = {"uid": int(uid[1]), "size": int(size[1]) if size else 0, "date": date,
                  "sender": _hdr(hdr, "From"), "subject": _hdr(hdr, "Subject")}
             m["key"] = _hdr(hdr, "Message-ID").strip() or f"{uidvalidity}:{m['uid']}"
             if matches(rules, m["sender"], m["subject"], m["date"], now):
@@ -326,6 +373,7 @@ def find(server, rules, memory_path=None, now=None):
     rules = check_rules(rules)
     now = now or dt.datetime.now()
     memory = _load(memory_path) if memory_path else {}
+    rules["days"] = _days(rules, memory, now)       # 받기와 같은 기간 (BugBuster I8)
     items = []
     with _session(server, rules["mailbox"], readonly=True) as (M, uv):
         for m in _candidates(M, rules, uv, now)[:rules["max"]]:
@@ -342,26 +390,33 @@ def fetch(server, rules, dest_dir, code, memory_path, log=print, now=None):
     rules = check_rules(rules)
     now = now or dt.datetime.now()
     memory = _load(memory_path)
-    result = {"mails": 0, "saved": [], "skipped": []}
+    rules["days"] = _days(rules, memory, now)       # 첫 실행 뒤는 마지막 실행 날부터 (BugBuster I8)
+    if rules["warn"]:
+        log(f"주의: {rules['warn']}")
+    result = {"mails": 0, "saved": [], "skipped": [], "no_attach": 0}
     done = []
+    complete = False        # 대상 메일을 모두 처리했나 - 그때만 마지막 실행 날을 옮긴다 (남은 메일이 기간 밖으로 밀리지 않게)
     os.makedirs(dest_dir, exist_ok=True)
     try:
         with _session(server, rules["mailbox"], readonly=not rules["mark_seen"]) as (M, uv):
-            mails = [m for m in _candidates(M, rules, uv, now) if m["key"] not in memory][:rules["max"]]
+            pending = [m for m in _candidates(M, rules, uv, now, log) if m["key"] not in memory]
+            mails = sorted(pending[:rules["max"]], key=lambda m: (m["date"], m["uid"]))    # 오래된 것부터 저장 (BugBuster I7)
             log(f"대상 메일 {len(mails)}통")
             for m in mails:
                 result["mails"] += 1
                 subj = m["subject"][:30]
                 log(f"메일: {mask_sender(m['sender'])} / {subj}")
-                if m["size"] > MAX_SIZE:
-                    result["skipped"].append((subj, "50MB 를 넘는 메일이라 건너뜁니다."))
-                    log("  50MB 를 넘는 메일이라 건너뜁니다.")
+                if m["size"] > MAX_SIZE:        # 기억한다 - 안 하면 기간 내내 매 실행이 실패한다 (BugBuster M15)
+                    result["skipped"].append((subj, TOO_BIG))
+                    log(f"  {TOO_BIG}")
+                    done.append(m["key"])
                     continue
                 msg = _message(M, m["uid"])
                 ok = msg is not None
                 atts = _attachments(msg, rules, m["uid"]) if ok else []
                 if ok and not atts:     # 받을 것이 없을 뿐 실패가 아니다 - skipped 에 넣지 않는다 (ACTOR 가 skipped 만 있으면 실패로 본다)
                     log("  맞는 첨부가 없습니다.")
+                    result["no_attach"] += 1        # 메일이 없던 날과 갈라 보인다 (BugBuster I9)
                 for name, part in atts:
                     path = unique_path(os.path.join(dest_dir, f"({code}){name}"))
                     try:
@@ -371,14 +426,19 @@ def fetch(server, rules, dest_dir, code, memory_path, log=print, now=None):
                         result["skipped"].append((name, f"저장하지 못했습니다. ({e.strerror or e})"))
                         log(f"  저장 실패: {name}")
                         continue
+                    with contextlib.suppress(OSError, ValueError, OverflowError):   # 파일 시각 = 메일 시각 - 업로드는 같은 코드면 가장 늦은 것 (BugBuster I7)
+                        os.utime(path, (m["date"].timestamp(),) * 2)
                     result["saved"].append(path)
                     log(f"  받음: {os.path.basename(path)}")
                 if ok:
                     done.append(m["key"])
                     if rules["mark_seen"]:
                         M.uid("STORE", str(m["uid"]), "+FLAGS", "(\\Seen)")
+            complete = len(pending) <= rules["max"] and len(done) == len(mails)
     finally:        # 중간에 끊겨도 다 받은 메일은 기억한다 (다음에 또 받지 않게)
-        if done:
+        if complete:
+            memory[LAST_RUN] = now.date().isoformat()
+        if done or complete:
             memory.update({k: now.date().isoformat() for k in done})
             _write(memory_path, memory, now)
     log(f"메일 {result['mails']}통, 첨부 {len(result['saved'])}개를 받았습니다."

@@ -136,7 +136,8 @@ JS = r"""
             href: el.getAttribute('href') || '', css: cssPath(el), inOverlay: inOverlay(el)};
   }
   // 목록 줄(li·tr)을 눌렀으면 그 목록 - 메일 고르기가 쓴다 (사용자 2026-10-14). sel = 같은 모양의 줄, inner = 줄 안의 누른 칸,
-  // key = 줄의 고유 표시 (data-key 등, 없으면 빈 칸 - 제목 글자로 기억), list = 그때 보이던 줄 (연 메일의 제목 - auto_pick)
+  // key = 줄의 고유 표시 (data-key 등, 없으면 빈 칸 - 제목 글자로 기억), mine = 누른 줄 하나의 글자 (연 메일의 제목 - auto_pick).
+  // 예전엔 같은 모양 줄 최대 200개의 글자(list)를 담아 다른 메일 제목·주문자가 프리셋에 남았다 (BugBuster I4)
   const STATE = /^(on|off|active|selected?|hover|focus|read|unread|new|checked|current|open|show|odd|even)$|(^is-|-active$|-selected$|_on$|_over$)/i;
   const clsOf = e => [...e.classList].filter(c => /^[A-Za-z_][\w-]*$/.test(c) && !STATE.test(c)).map(c => '.' + c).join('');
   const rowKey = r => r.getAttribute('data-key') || r.getAttribute('data-id') || r.getAttribute('data-uid') || r.id || '';
@@ -152,7 +153,7 @@ JS = r"""
     __SEEN__
     const cell = r => (inner ? r.querySelector(inner) : null) || r;
     return {sel, inner, key: rowKey(row), at: rows.indexOf(row),   // at = 누른 줄 - 고유 표시(key)가 없는 목록(네이버 메일)에서 그 줄을 찾는다
-            list: rows.slice(0, 200).map(r => ({k: rowKey(r), t: norm(cell(r).textContent).slice(0, 120), s: seenText(cell(r))}))};
+            mine: [{k: rowKey(row), t: norm(cell(row).textContent).slice(0, 120), s: seenText(cell(row))}]};   // (BugBuster I4)
   }
   function send(kind, el, extra) {
     pend = null;                  // 다른 조작이 먼저 왔다 - 손가락 커서 아닌 누르기는 그 사이 아무것도 안 바뀌었다
@@ -312,8 +313,8 @@ MAIL_PICK_DEFAULT = ">>>"
 MAIL_PICK_MAX = 20           # 한 번에 처리하는 메일 수 (나머지는 다음 실행)
 MAIL_MEMORY_DAYS = 90        # 처리한 메일을 기억하는 날 수
 MAIL_BACK_WAIT = 10          # 메일을 연 뒤 목록으로 돌아와 줄이 다시 보이기까지 기다리는 초
+MAIL_MORE = "목록의 마지막 줄까지 새 메일입니다. 다음 쪽에 더 있을 수 있습니다."   # 첫 쪽만 본다 (BugBuster I5)
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
-DATE_FORMATS = ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%Y%m%d")
 OPTIONAL_WAIT = 3.0
 LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 것' 에서 찾기는 이만큼 찾아도 없을 때부터 - 화면이 덜 뜬 사이 넘어가는
                         # 옛 화면에서 태그·글자가 같은 다른 것(헤더의 로그인 등)을 집지 않게 (검토 2026-10-17). 마우스 올리기(3초)보다 짧게
@@ -386,6 +387,19 @@ def download_problem(path):
     if ext in (".xlsx", ".xlsm"):
         return "엑셀 파일 형식이 아닙니다."
     return None
+
+
+UPLOAD_EXTS = (".xlsx", ".xls")     # PROCESS 엑셀 업로드가 올리는 종류 (run_routine.EXCEL_UPLOAD_EXTS - 무거워 가져오지 않는다)
+
+
+def upload_warning(path):
+    """받은 파일이 엑셀 업로드가 못 올리는 종류(csv·xlsm·확장자 없음 등)면 알릴 글, 아니면 None (BugBuster I6).
+    막지 않는다 - 파일은 쓸 수 있고(download_problem 통과), ERPia 가 csv 를 받는지는 아직 모른다 (mail_imap 도 알리기만)."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in UPLOAD_EXTS:
+        return None
+    kind = f"{ext[1:]} 파일" if ext else "확장자가 없는 파일"
+    return f"엑셀 업로드는 xlsx·xls 파일만 올립니다. 받은 {kind}({os.path.basename(path)})은 업로드되지 않습니다."
 
 
 def url_path(url):
@@ -501,13 +515,59 @@ class Recorder:
         self.steps.append(step)
 
 
+# 칸 값 속 날짜 하나: 2026-10-21 · 2026.10.21 · 2026. 10. 21 · 2026/1/5 · 20261021 (BugBuster I3)
+DATE_TOKEN = re.compile(r"(?<!\d)(\d{4})([-./])(\s*)(\d{1,2})\2\3(\d{1,2})(?!\d)|(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
+# 칸 값 전체 모양: 날짜(+ 시각)(+ 끝 점), 두 날짜 범위 '~'·' - ' (날짜 자리는 {0}·{1})
+DATE_TIME = r"(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\.?"
+DATE_SHAPE = re.compile(r"\s*\{0\}" + DATE_TIME + r"(?:\s*(?:~|-)\s*\{1\}" + DATE_TIME + r")?\s*")
+# 날짜로 보이는데 위 모양이 아닌 값 (21.10.2026 · 10/21 · 2026년 10월 21일 · 2026-10) - 저장 때 알린다 (date_like_fills)
+DATE_LIKE = re.compile(r"(?<!\d)(?:19|20)\d{2}\s*[-./년]\s*\d{1,2}(?!\d)|(?<!\d)\d{1,2}\s*[-./]\s*\d{1,2}\s*[-./]\s*\d{2,4}(?!\d)"
+                       r"|(?<![\d/])\d{1,2}/\d{1,2}(?![\d/])|\d{1,2}\s*월\s*\d{1,2}\s*일")
+
+
 def parse_date(s):
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.datetime.strptime(s.strip(), fmt).date(), fmt
-        except (ValueError, AttributeError):
-            pass
-    return None
+    """칸 값이 날짜면 (날짜들, 모양, 자리 모양들), 아니면 None. 모양 = 값에서 날짜 자리를 {0}·{1} 로 바꾼 것 (시각·끝 점은 그대로),
+    자리 모양 = 'YYYY-MM-DD'·'YYYY. M. D' 처럼 구분자·자릿수 (재생이 녹화한 모양 그대로 쓴다 - date_text). (BugBuster I3)"""
+    if not isinstance(s, str):
+        return None
+    dates, pats = [], []
+
+    def put(m):
+        if len(dates) == 2:
+            raise ValueError
+        if m.group(1):
+            y, sep, sp, mo, d = m.group(1, 2, 3, 4, 5)
+            pats.append("YYYY" + sep + sp + ("MM" if len(mo) == 2 else "M") + sep + sp + ("DD" if len(d) == 2 else "D"))
+        else:
+            y, mo, d = m.group(6, 7, 8)
+            pats.append("YYYYMMDD")
+        dates.append(datetime.date(int(y), int(mo), int(d)))
+        return "{%d}" % (len(dates) - 1)
+    try:
+        shape = DATE_TOKEN.sub(put, s)
+    except ValueError:              # 없는 날짜(2026-13-45)·날짜 셋 이상
+        return None
+    return (dates, shape, pats) if dates and DATE_SHAPE.fullmatch(shape) else None
+
+
+def _date_pat(pat, d):
+    return (pat.replace("YYYY", f"{d.year:04d}").replace("MM", f"{d.month:02d}").replace("M", str(d.month))
+            .replace("DD", f"{d.day:02d}").replace("D", str(d.day)))
+
+
+def date_text(info, today):
+    """기록의 날짜 칸 값 - 오늘 기준. 옛 기록은 날짜 하나 + strftime 형식(fmt)."""
+    if "shape" not in info:
+        return (today + datetime.timedelta(days=info["offset"])).strftime(info["fmt"])
+    vals = [_date_pat(p, today + datetime.timedelta(days=o)) for p, o in zip(info["pats"], info["offsets"])]
+    return re.sub(r"\{(\d)\}", lambda m: vals[int(m.group(1))], info["shape"])
+
+
+def date_like_fills(steps):
+    """오늘 기준으로 못 바꾼 날짜 모양 값의 칸 넣기 [(단계 번호 0부터, 값)] - 옵저버가 저장 때 경고할 수 있게 (BugBuster I3).
+    그대로 두면 매일 녹화한 날의 기간을 넣는다 (새 주문이 조용히 빠진다)."""
+    return [(i, s.get("value", "")) for i, s in enumerate(steps)
+            if s["kind"] == "fill" and not s.get("date") and not s.get("credential") and DATE_LIKE.search(str(s.get("value", "")))]
 
 
 def navigated(before, s):
@@ -523,7 +583,11 @@ def auth_start(steps):
     """인증 차례를 잡는 단계 번호(1부터) - 인증번호 단계 앞의 첫 칸 넣기(아이디). 그 앞의 검색·이동은 차례를 기다리지 않는다
     (사용자 2026-10-16: 빙 검색으로 들어가는 사이트가 앞 사이트의 인증이 끝난 뒤에야 검색부터 시작해 오래 걸렸다)."""
     last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=0)
-    # [인증번호 받기](otpSend) 가 첫 칸 넣기보다 앞인 기록이면 거기부터 - 문자가 차례 밖에서 나가지 않게 (검토 2026-10-17)
+    # 아이디·비밀번호(credential)가 달린 첫 단계부터 - 앞의 검색어 넣기는 차례를 기다리지 않는다 (BugBuster L8).
+    # [인증번호 받기](otpSend) 가 그보다 앞인 기록이면 거기부터 - 문자가 차례 밖에서 나가지 않게 (검토 2026-10-17)
+    cred = next((i for i in range(last) if steps[i].get("credential")), None)
+    if cred is not None:
+        return next((i for i in range(cred) if steps[i].get("otpSend")), cred) + 1
     return next((i for i in range(last) if steps[i]["kind"] in ("fill", "secret") or steps[i].get("otpSend")), 0) + 1
 
 
@@ -560,7 +624,9 @@ def loose_new(steps, j):
 
 
 def set_pick(steps, i, prefix):
-    """i 단계(목록 줄 누르기)를 '제목이 prefix 로 시작하는 메일마다' 로, prefix 가 None·빈 글자면 되돌린다. steps 를 고친다."""
+    """i 단계(목록 줄 누르기)를 '제목이 prefix 로 시작하는 메일마다' 로, prefix 가 None·빈 글자면 되돌린다. steps 를 고친다.
+    옛 기록의 목록 줄 글자도 여기서 줄인다 - 옵저버가 저장할 때 모든 단계에 부른다 (rpa_observer._final, BugBuster I4)."""
+    trim_row(steps[i])
     if prefix:
         steps[i]["pick"] = {"prefix": prefix}
     else:
@@ -603,17 +669,34 @@ def auto_pick(steps, prefix):
         row = s.get("row") if s["kind"] == "click" else None
         if not row:
             continue
-        rows, text = row.get("list", []), (s.get("target") or {}).get("text") or ""
-        if row.get("key"):
-            mine = [x for x in rows if x["k"] == row["key"]]
-        elif isinstance(row.get("at"), int) and 0 <= row["at"] < len(rows):
-            mine = [rows[row["at"]]]
-        else:                   # 옛 기록 - 누른 칸 글자와 같은 줄 (그 줄의 보이는 제목에는 숨은 글자 '메일 제목' 이 없다, 네이버 2026-10-20)
-            mine = [x for x in rows if text and x["t"] and (x["t"][:80] in text or text in x["t"])]   # 누른 칸이 제목 칸보다 크거나 작을 수 있다
-        titles = [t for x in mine for t in (x.get("s"), x["t"])] + [text]
+        text = (s.get("target") or {}).get("text") or ""
+        titles = [t for x in _row_mine(row, text) for t in (x.get("s"), x["t"])] + [text]
         if title_starts(prefix, *titles):
             return i
     return None
+
+
+def _row_mine(row, text):
+    """기록한 목록 줄 정보에서 누른 줄의 글자들 [{k, t, s}]. 새 기록은 mine 하나, 옛 기록은 list(보이던 줄 모두)에서 고른다."""
+    if "mine" in row:
+        return row["mine"]
+    rows = row.get("list", [])
+    if row.get("key"):
+        return [x for x in rows if x["k"] == row["key"]]
+    if isinstance(row.get("at"), int) and 0 <= row["at"] < len(rows):
+        return [rows[row["at"]]]
+    # 옛 기록 - 누른 칸 글자와 같은 줄 (그 줄의 보이는 제목에는 숨은 글자 '메일 제목' 이 없다, 네이버 2026-10-20)
+    return [x for x in rows if text and x["t"] and (x["t"][:80] in text or text in x["t"])]   # 누른 칸이 제목 칸보다 크거나 작을 수 있다
+
+
+def trim_row(s):
+    """옛 기록의 목록 줄 정보(list - 같은 모양 줄 최대 200개의 글자)를 누른 줄(mine)만으로 줄인다 - 다른 메일 제목·주문자가
+    프리셋·내보내기·프리셋 복사에 남지 않게 (BugBuster I4). auto_pick 이 보는 줄은 그대로. s 를 고치고 돌려준다."""
+    row = s.get("row")
+    if isinstance(row, dict) and "list" in row:
+        mine = _row_mine(row, (s.get("target") or {}).get("text") or "")
+        s["row"] = dict({k: v for k, v in row.items() if k != "list"}, mine=mine)
+    return s
 
 
 class MailMemory:
@@ -695,13 +778,18 @@ def finalize(steps, record_date, start_url, viewport=None):
                 s["appearsAfter"] = k
         s["gap"] = s["t"] - prev if prev else 0
         prev = s.pop("t")
+        trim_row(s)                       # (BugBuster I4)
         if otp_like(s, steps[i + 1] if i + 1 < len(steps) else None):
             set_otp(out + [s], len(out), True)
             out.append(s)
             continue
-        if s["kind"] == "fill" and parse_date(s.get("value", "")):
-            d, fmt = parse_date(s["value"])
-            s["date"] = {"offset": (d - record_date).days, "fmt": fmt}
+        got = parse_date(s.get("value", "")) if s["kind"] == "fill" else None
+        if got:                           # 녹화한 모양(구분자·자릿수·범위·시각) 그대로 오늘 기준으로 (BugBuster I3)
+            dates, shape, pats = got
+            offs = [(d - record_date).days for d in dates]
+            legacy = [p.replace("YYYY", "%Y").replace("MM", "%m").replace("M", "%m").replace("DD", "%d").replace("D", "%d") for p in pats]
+            s["date"] = {"offset": offs[0], "fmt": shape.format(*(legacy[:1] * len(pats))),   # fmt: 옛 ACTOR 가 읽는 것 (날짜 하나)
+                         "shape": shape, "pats": pats, "offsets": offs}
         if s["kind"] == "click" and s["target"]["inOverlay"] and s["target"]["text"].lower() in CLOSE_TEXTS:
             s["optional"] = True
         out.append(s)
@@ -738,7 +826,7 @@ def continue_record(head, raw_new, record_date):
             s["appearsAfter"] = cut["appearsAfter"]
     if new:
         new[0]["gap"] = STEP_GAP_AFTER_EDIT
-    out = dict(head, steps=head["steps"] + new)
+    out = dict(head, steps=[trim_row(dict(s)) for s in head["steps"]] + new)    # 옛 기록의 앞부분도 (BugBuster I4)
     out.pop("cut", None)
     return out
 
@@ -835,8 +923,8 @@ def describe(s, hide_values=False):
         if s.get("credential") == "ID":
             v = "아이디 (설정 값)"
         elif s.get("date"):
-            off = s["date"]["offset"]
-            v = "오늘 날짜" if off == 0 else f"오늘{off:+d}일 날짜"
+            offs = s["date"].get("offsets") or [s["date"]["offset"]]      # 두 날짜 범위 (BugBuster I3)
+            v = "~".join("오늘" if off == 0 else f"오늘{off:+d}일" for off in offs) + " 날짜"
         else:
             v = "글자" if hide_values else f"'{s.get('value', '')}'"
         d = f"'{n}' 칸에 {v} 넣기"
@@ -873,6 +961,10 @@ def describe(s, hide_values=False):
 
 class NotFound(Exception):
     pass
+
+
+class NoTarget(NotFound):
+    """찾을 것이 화면에 끝내 없다 (_find) - 메일 고르기 묶음에서는 '첨부 없는 메일' 로 보고 그 메일만 건너뛴다 (BugBuster M13)."""
 
 
 class Skip(Exception):
@@ -1092,7 +1184,12 @@ class Replayer:
             got = loc.evaluate("e => e.tagName.toLowerCase() + '|' + (e.getAttribute('type') || '').toLowerCase()").split("|", 1)
             if got[0] != t["tag"] or (t["tag"] == "input" and got[1] != t["type"]):
                 return False
-            if not t["text"]:
+            if not t["text"]:       # 글자 없는 것(아이콘): 기록 때 aria·title·name 이 있었는데 찾은 것과 전혀 다르면 다른 것 (BugBuster I2)
+                have = loc.evaluate("e => [e.getAttribute('aria-label'), e.getAttribute('title'), e.getAttribute('name')].map(v => v || '').join('\\u0000')")
+                for want, got in zip((t.get("aria"), t.get("title"), t.get("name")), have.split("\0")):
+                    a, b = NO_DIGITS(want or ""), NO_DIGITS(got)      # 숫자만 다르면 같다 ('메일 11' 처럼)
+                    if a and b and a not in b and b not in a:
+                        return False
                 return True
             got = loc.evaluate(TEXT_OF)
             return got == t["text"] or digits and NO_DIGITS(got) == NO_DIGITS(t["text"])
@@ -1158,7 +1255,7 @@ class Replayer:
                 if optional:
                     raise Skip("화면에 없음")
                 if tries >= self.step_tries:
-                    raise NotFound(f"{self.step_timeout:.0f}초씩 {tries}번 찾았으나 대상을 찾지 못했습니다. (단서: {', '.join(c[0] for c in cands)})")
+                    raise NoTarget(f"{self.step_timeout:.0f}초씩 {tries}번 찾았으나 대상을 찾지 못했습니다. (단서: {', '.join(c[0] for c in cands)})")
                 tries += 1
                 self.log(f"      {self.step_timeout:.0f}초 동안 대상을 찾지 못했습니다. 다시 찾습니다. ({tries}/{self.step_tries})")
                 deadline = time.time() + self.step_timeout
@@ -1250,7 +1347,7 @@ class Replayer:
             if s.get("credential") == "ID":
                 v = self.creds["ID"]
             elif s.get("date"):
-                v = (self.today + datetime.timedelta(days=s["date"]["offset"])).strftime(s["date"]["fmt"])
+                v = date_text(s["date"], self.today)      # (BugBuster I3)
             else:
                 v = s.get("value", "")
             self._fill(loc, v)
@@ -1273,7 +1370,14 @@ class Replayer:
         """요청을 연다 ('인증번호 받기' 누르기 전 - 문자가 요청보다 먼저 오면 휴대폰이 보내지 않는다)."""
         self._otp_close()
         self.otp_try += 1
-        self.otp_req = self.otp.open()
+        told = []
+
+        def tick(sec):              # 다른 PC 가 같은 휴대폰 요청을 쥐고 있으면 open 이 기다린다 (최대 약 130초) - 그동안도 [■ 중단] (BugBuster M7)
+            if not told:
+                told.append(1)
+                self.log("      다른 PC 가 같은 휴대폰을 쓰는 중이라 기다립니다.")
+            self._wait(None, sec * 1000)
+        self.otp_req = self.otp.open(tick=tick)
         self.log(f"      인증번호 요청을 시작하였습니다. ({self.otp_try}/{OTP_TRIES})")
 
     def _otp_close(self):
@@ -1344,6 +1448,9 @@ class Replayer:
             except OSError:
                 pass
             raise NotFound(f"다운로드한 파일({os.path.basename(path)})을 사용할 수 없어 삭제하였습니다. {problem}")
+        warn = upload_warning(path)
+        if warn:
+            self.log(f"      [주의] {warn}")      # (BugBuster I6)
         self.saved.append(path)
         return path
 
@@ -1457,15 +1564,25 @@ class Replayer:
         mem = None if self.pick_preview else self.mail_memory
         todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or h[0] not in mem.keys]
         self.log(f"      제목이 '{prefix}' 로 시작하는 메일 {len(hits)}통 중 새 메일 {len(todo)}통")
+        # 화면 마지막 줄까지 새 메일 - 다음 쪽(목록 2쪽)에 더 있을 수 있다. 첫 쪽만 본다 (BugBuster I5)
+        more = mem is not None and bool(todo) and row_ids(rows)[-1] in {h[0] for h in todo}
         if len(todo) > MAIL_PICK_MAX:
             self.log(f"      메일은 한 번에 최대 {MAIL_PICK_MAX}개까지 처리할 수 있습니다. 나머지는 다음 실행 때 처리됩니다.")
             todo = todo[:MAIL_PICK_MAX]
+        def put(*r):                # 결과마다 화면 진행 표시도 (BugBuster L7)
+            self.results.append(r)
+            if self.progress:
+                self.progress(*r)
         if not todo:
             self.no_target = True
             self.log("      다운로드할 새 메일이 없습니다. (대상 없음)")
-            self.results.append((i, "ok", "대상 없음"))
-            self.results += [(j + 1, "skip", "대상 없음") for j in body]
+            put(i, "ok", "대상 없음")
+            for j in body:
+                put(j + 1, "skip", "대상 없음")
             return end + 1
+        if more:
+            self.log(f"      [주의] {MAIL_MORE}")
+        got, skipped = 0, []
         for n, (rid, t) in enumerate(todo, 1):
             if n > 1:               # 앞 메일을 연 채다 - 목록으로 (메일 화면이 주소 # 만 바꾸는 비즈메카도 뒤로 가기로 돌아온다)
                 try:
@@ -1483,20 +1600,43 @@ class Replayer:
             if s["row"]["inner"]:
                 loc = loc.locator(s["row"]["inner"]).first
             self._click(page, loc)
-            for j in body:
-                if self.progress:
-                    self.progress(j + 1, "run", "")
-                try:
-                    how = self._step(j, dict(steps[j], loose=True))
-                except Skip as e:
-                    how = f"건너뜀 ({e})"
-                self.log(f"  {j + 1:2d}/{len(steps)} {describe(steps[j], self.hide_values)}  [{how}]")
+            try:
+                for j in body:
+                    if self.progress:
+                        self.progress(j + 1, "run", "")
+                    try:
+                        how = self._step(j, dict(steps[j], loose=True))
+                    except Skip as e:
+                        how = f"건너뜀 ({e})"
+                    except (Cancelled, EditHere):
+                        raise
+                    except Exception as e:
+                        e.step = j + 1      # 실패 번호는 묶음 안의 실제 단계 (BugBuster L7 - _run_steps 가 본다)
+                        if not isinstance(e, NoTarget):
+                            put(i, "ok", f"메일 {got}통")
+                        raise
+                    self.log(f"  {j + 1:2d}/{len(steps)} {describe(steps[j], self.hide_values)}  [{how}]")
+                    if self.progress:
+                        self.progress(j + 1, "skip" if how.startswith("건너뜀") else "ok", how)
+            except NoTarget as e:       # 첨부 없는 메일 - 그 메일만 건너뛰고 다음 메일로 (BugBuster M13)
+                if len(skipped) + 1 == len(todo) and not got:
+                    put(i, "ok", f"메일 {len(todo)}통 모두 건너뜀(첨부 없음)")   # 하나도 못 받았다 - 실패 (기억하지 않는다: 사이트가 바뀌었을 수 있다)
+                    raise
+                skipped.append(rid)
+                self.log(f"      [{n}/{len(todo)}] 건너뜀(첨부 없음): {e}")
+                continue
+            got += 1
             if mem is not None:
                 mem.add_all([rid])   # 받기까지 다 한 메일만 - 실패한 메일은 다음 실행에서 다시
                 mem.save()
-        self.results.append((i, "ok", f"메일 {len(todo)}통"))
-        self.results += [(j + 1, "ok", f"메일 {len(todo)}통") for j in body]
-        self.log(f"  {i:2d}/{len(steps)} {describe(s, self.hide_values)}  [메일 {len(todo)}통]")
+        if mem is not None and skipped:     # 받은 메일이 있을 때만 - 첨부 없는 메일이 매 실행을 막지 않게 (BugBuster M13)
+            mem.add_all(skipped)
+            mem.save()
+        done = f"메일 {got}통" + (f", 건너뜀 {len(skipped)}통(첨부 없음)" if skipped else "") + (f" - {MAIL_MORE}" if more else "")
+        put(i, "ok", done)
+        for j in body:
+            put(j + 1, "ok", f"메일 {got}통")
+        self.log(f"  {i:2d}/{len(steps)} {describe(s, self.hide_values)}  [{done}]")
         return end + 1
 
     def _run_steps(self, steps):
@@ -1555,6 +1695,9 @@ class Replayer:
                 self.results.append((i, "skip", str(e)))
                 self.log(f"  {i:2d}/{len(steps)} {text}  - 건너뜀 ({e})")
             except Exception as e:
+                if getattr(e, "step", None):        # 메일 고르기 묶음 안에서 실패 - 그 단계 번호로 (BugBuster L7)
+                    i, s = e.step, steps[e.step - 1]
+                    text = describe(s, self.hide_values)
                 why = f"{type(e).__name__}: {str(e).splitlines()[0]}"
                 if self.hide_values:
                     why = URL_QUERY.sub(r"\1", why)       # Playwright 오류에 주소가 통째로 들어온다 (2026-10-01 검토)

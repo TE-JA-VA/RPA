@@ -8,7 +8,7 @@ import {
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
 import { icon as lucide } from "./icons.js";
-import { P, esc, MODULES, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf } from "./rpa-common.js";
+import { P, esc, MODULES, WELLIFE_MODULES, wellifeOn, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf } from "./rpa-common.js";
 export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 이 앱의 설정 화면을 붙인다 (settings.js)
 
 export const key = "rpa";
@@ -46,6 +46,7 @@ const HTML = `
       </div>
       <div class="stats" id="hero-side"></div>
     </section>
+    <div class="msg bad hide" id="dup-agent">같은 에이전트 계정이 PC 두 대에서 켜져 있는 것 같습니다.</div>
     <div class="tiles" id="tiles"></div>
     <div class="cols">
       <div>
@@ -113,6 +114,16 @@ let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 -
 const STOPPED_TEXT = "대시보드에서 중단했습니다";   // rpa_dashboard.STOPPED_TEXT 와 같다
 let seenRun = {};  // 프로그램별로 마지막에 본 "run_id:상태" (토스트를 두 번 울리지 않게)
 let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 다시 안 그린다 - 스크롤이 튀지 않게)
+// 같은 에이전트 계정을 PC 두 대에 넣었나 (BugBuster I13): heartbeat.boot(켤 때마다 바뀌는 번호)가 3분 안에 앞서 본 값으로 돌아오면
+// 두 대가 번갈아 쓰는 것이다 (다시 켠 것은 새 번호로 한 번 바뀔 뿐). boot 가 없는 옛 에이전트는 조용히
+const DUP_MS = 3 * 60 * 1000;
+let boots = {}, lastBoot = null, dupUntil = 0;
+export function seeBoot(boot, nowMs = Date.now()) {
+  if (typeof boot !== "string" || !boot) return;
+  if (boot !== lastBoot && nowMs - (boots[boot] ?? -Infinity) < DUP_MS) dupUntil = nowMs + DUP_MS;
+  boots[boot] = nowMs; lastBoot = boot;
+}
+export const dupAgent = (nowMs = Date.now()) => nowMs < dupUntil;
 
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
@@ -123,7 +134,7 @@ const isToday = (v) => ((v?.started_at || v?.finished_at || "").slice(0, 10)) ==
 export function mount(el, context) {
   root = el; c = context;
   root.innerHTML = HTML;
-  busy = false; live = null; seenRun = {};
+  busy = false; live = null; seenRun = {}; boots = {}; lastBoot = null; dupUntil = 0;
   fs = getFirestore(c.db.app);
   if (location.hostname === "127.0.0.1" && new URLSearchParams(location.search).get("emu") === "1") {
     try { connectFirestoreEmulator(fs, "127.0.0.1", 8080); } catch {}   // 두 번째 mount 부터는 이미 붙어 있다
@@ -159,6 +170,7 @@ export function mount(el, context) {
     const v = snap.val();
     const first = live == null;
     live = v || {};
+    seeBoot(live.heartbeat?.boot);   // (I13)
     runToasts(first);
     paintHero(); paintTiles(); paintRecent(); paintSteps(); paintLog();
     paintButtons();
@@ -170,6 +182,7 @@ export function unmount() {
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (tick) { clearInterval(tick); tick = null; }
   usageSeq++; usageFor = null;   // 읽는 중인 사용량은 버린다 (화면을 떠난 뒤 늦게 온 결과가 없는 칸을 고치지 않게)
+  tokKey = undefined; tokP = null; tokSeq++; usageRetryAt = 0;   // 통장 캐시도 비운다 - 로그아웃·다른 업체 로그인 뒤 남지 않게 (BugBuster M5)
   root = null; c = null;
 }
 
@@ -257,6 +270,7 @@ function paintHero() {
     }
   }
   hero.dataset.state = state;
+  show($("dup-agent"), dupAgent());   // (I13) 1초마다 다시 보므로 3분 동안 안 오가면 사라진다
   $("h-state").textContent = title;
   $("h-line1").textContent = l1;
   $("h-line2").textContent = l2;
@@ -351,7 +365,8 @@ function nextRunText(sch) {
     return `반복 중 · ${win.until}까지${soon}`;
   }
   if (!(sch?.enabled && sch.next_run_at)) return "꺼짐";
-  const slot = (Array.isArray(sch.slots) ? sch.slots : []).find((s) => s && s.at === sch.next_slot);
+  const wd = (new Date(sch.next_run_at).getDay() + 6) % 7;   // 같은 시각 줄이 요일별로 여럿이면 그날 줄 (BugBuster M6, rpa-settings 와 같게)
+  const slot = (Array.isArray(sch.slots) ? sch.slots : []).find((s) => s && s.at === sch.next_slot && (!Array.isArray(s.days) || s.days.includes(wd)));
   const names = slotNames(slot);
   return when(sch.next_run_at) + (slot?.until ? " 반복" : "") + (names ? ` · ${names}` : "");
 }
@@ -505,7 +520,9 @@ function paintLog() {
 }
 
 // --- 기록 (Firestore) ------------------------------------------------
+let histSeq = 0;   // 빠르게 연달아 누르면 늦게 온 옛 응답은 버린다 (BugBuster K10)
 async function loadHistory(date) {
+  const seq = ++histSeq;
   const rows = $("hist-rows"), msg = $("hist-msg");
   $("hist-title").textContent = date ? `기록 · ${date}` : "기록";
   msg.textContent = "불러오는 중"; msg.className = "msg";
@@ -516,10 +533,12 @@ async function loadHistory(date) {
       ? query(col, where("pcId", "==", c.pcId), where("date", "==", date), orderBy("started_at", "desc"), limit(HISTORY_LIMIT))
       : query(col, where("pcId", "==", c.pcId), orderBy("started_at", "desc"), limit(HISTORY_LIMIT));
     const snap = await getDocs(q);
+    if (seq !== histSeq || !root) return;
     const items = snap.docs.map((d) => d.data());
     msg.textContent = items.length ? `${items.length}건` + (items.length >= HISTORY_LIMIT ? " (최근 것만)" : "") : "기록이 없습니다.";
     rows.replaceChildren(...items.flatMap(histRow));
   } catch (e) {
+    if (seq !== histSeq || !root) return;
     msg.className = "msg bad";
     msg.textContent = e.code === "permission-denied" ? "권한이 없습니다." : `불러오지 못했습니다. (${e.code || e})`;
   }
@@ -596,14 +615,15 @@ const TOKEN_REREAD_MS = 10 * 60 * 1000;
 // 그 PC 의 값이 바뀌었을 때(실행이 끝났다)와 10분마다만 다시 읽는다. 못 읽어도 다음 때까지 그대로 (현황마다 다시 읽으면 읽기 한도, 2026-10-14)
 // → undefined: 통장을 못 읽음, null: 통장 없음, {w, g, bal}: bal 은 합을 못 더했으면 null
 function serverTokens(t) {
-  const key = `${t?.balance}|${Math.floor(Date.now() / TOKEN_REREAD_MS)}`;
+  const cid = c.me.cid;   // 열쇠에 업체 코드 - 같은 탭에서 다른 업체로 다시 로그인해도 앞 업체 통장을 안 쓴다 (BugBuster M5)
+  const key = `${cid}|${t?.balance}|${Math.floor(Date.now() / TOKEN_REREAD_MS)}`;
   if (tokKey !== key || !tokP) {
     tokKey = key;
-    tokP = getDoc(doc(fs, "wallet", c.me.cid)).then(async (snap) => {
+    tokP = getDoc(doc(fs, "wallet", cid)).then(async (snap) => {
       const w = snap.data();
       if (!w) return null;
       const g = Number(w.granted) || 0;
-      const q = collection(fs, "runs", c.me.cid, "items");
+      const q = collection(fs, "runs", cid, "items");
       const spent = await getAggregateFromServer(w.since ? query(q, where("started_at", ">=", w.since)) : q, { s: sum("cost") })
         .then((r) => r.data().s ?? 0, () => null);
       return { w, g, bal: spent === null ? null : g - spent };
@@ -654,6 +674,10 @@ function paintRepeat() {
 // --- 이번 달 사용량 (토큰 3부, 관리자만 - 오른쪽 열): 이달 1일과 통장 시작 중 늦은 때부터, 업체 전체(PC 모두)를 서버가 더한다.
 // 남은 토큰이 바뀔 때(실행이 끝났거나 충전됐다)만 다시 읽는다. 로그인은 0개라 안 보인다. 새 모듈은 여기와 색인(firestore.indexes.json)에 더한다
 const USAGE_KEYS = [...MODULES.filter(([k]) => k !== "Login").map(([k, l]) => [k.toLowerCase(), l]), ["sites", "쇼핑몰·사이트 받기"]];
+// 웰라이프 업체는 웰라이프 모듈 횟수도 (이력 키 wellife_xxx - agent.history_key. 운송장번호 전송은 모든 업체용이라 위 invoicesend) (BugBuster L12)
+const WELLIFE_USAGE_KEYS = WELLIFE_MODULES.filter(([k]) => k !== "Login" && k !== "InvoiceSend")
+  .map(([k, l]) => [`wellife_${k.toLowerCase()}`, l.startsWith("웰라이프") ? l : `웰라이프 ${l}`]);
+const usageKeys = () => (wellifeOn(c.me.cid, c.policy) ? [...USAGE_KEYS, ...WELLIFE_USAGE_KEYS] : USAGE_KEYS);
 let usageFor = null, usageSeq = 0, usageRetryAt = 0;
 const USAGE_RETRY_MS = 5 * 60 * 1000;          // 못 읽으면 5분 뒤에 - 현황(1초)마다 다시 읽으면 하루 읽기 한도를 다 쓴다 (2026-10-14 색인 빠진 칸)
 async function paintUsage() {
@@ -673,12 +697,12 @@ async function paintUsage() {
     // 한 질의에 여러 칸을 같이 더하면 그 칸이 모두 있는 기록만 센다 (Firestore) - 칸마다 따로 (각각 읽기 1번 꼴)
     const one = (at, field) => getAggregateFromServer(query(collection(fs, "runs", c.me.cid, "items"), where("started_at", ">=", at)),
       { s: sum(field) }).then((r) => r.data().s ?? 0);
-    const keys = USAGE_KEYS.map(([k]) => k);
+    const list = usageKeys(), keys = list.map(([k]) => k);
     const [total, todayTotal, ...counts] = await Promise.all([
       one(from, "cost"), one(from > today ? from : today, "cost"), ...keys.map((k) => one(from, `used.${k}`).catch(() => 0))]);   // 한 칸이 안 돼도 나머지는 보인다
     if (seq !== usageSeq) return;
     const got = Object.fromEntries(keys.map((k, i) => [k, counts[i]]));
-    $("usage-list").replaceChildren(...USAGE_KEYS.filter(([k]) => got[k] > 0).map(([k, label]) => {
+    $("usage-list").replaceChildren(...list.filter(([k]) => got[k] > 0).map(([k, label]) => {
       const row = document.createElement("div"); row.className = "u-row";
       const name = document.createElement("span"); name.textContent = label;
       const n = document.createElement("span"); n.className = "num"; n.textContent = `${got[k]}회`;

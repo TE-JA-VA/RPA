@@ -73,7 +73,9 @@ def default_paths():
             "agent_config": secret.CONFIG_PATH, "template": os.path.join(prog, TEMPLATE_NAME),
             "agent_py": os.path.join(prog, "firebase", "agent", "agent.py"),
             "stop_file": os.path.join(st.data_dir(), background.STOP_NAME),
-            "mail_dir": os.path.dirname(st.mail_memory_path(1))}
+            "mail_dir": os.path.dirname(st.mail_memory_path(1)),
+            "backup_dir": os.path.dirname(st.preset_backup_path(1)),     # 업체를 바꿀 때 같이 옮긴다 (BugBuster M21)
+            "session_dir": os.path.dirname(st.session_path("PRESET1"))}
 
 
 # 관리자·계정 확인은 옵저버도 쓴다 - rpa_status 에 있다 (시험은 이 모듈의 이름을 바꿔 끼운다)
@@ -166,7 +168,7 @@ def task_xml(user, program_dir):
     script = os.path.join(agent_dir, "background.py")
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>AFTER MARKET RPA 에이전트 - 윈도우 로그인 때 창 없이 켠다 (설치 마법사가 등록)</Description></RegistrationInfo>
+  <RegistrationInfo><Description>오토파일럿 에이전트 - 윈도우 로그인 때 창 없이 켠다 (설치 마법사가 등록)</Description></RegistrationInfo>
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{escape(user)}</UserId></LogonTrigger></Triggers>
   <Principals>
     <Principal id="Author"><UserId>{escape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal>
@@ -342,7 +344,11 @@ def load_state(paths):
     import secret
     raw = read_agent_raw(paths["agent_config"])
     path = paths["user_config"] if os.path.isfile(paths["user_config"]) else paths["template"]
-    data = st.read_user_config(path) if os.path.isfile(path) else {}
+    broken = None
+    try:
+        data = st.read_user_config(path) if os.path.isfile(path) else {}
+    except ValueError as e:       # 깨진 설정 - 빈 값으로 창을 띄우고 까닭을 빨간 글로, [저장] 하면 새로 쓴다 (BugBuster L2)
+        data, broken = {}, str(e)
     login, erpia, logistic = _section(data, st.LOGIN_SECTION), _section(data, st.ERPIA_SECTION), _section(data, LOGISTIC_SECTION)
     exe = st._erpia_file(erpia.get("ExePath")) or next(
         (found for found in (st._erpia_file(d) for d in st._erpia_install_dirs()) if found), "")
@@ -359,7 +365,7 @@ def load_state(paths):
     state = {"agent_pw": agent_state,
              "erp_pw": pw_state(login.get("PW"), st.unseal),
              "saved": (raw.get("cid"), raw.get("pc_id")),
-             "stopped": stopped, "erpia_missing": not exe}
+             "stopped": stopped, "erpia_missing": not exe, "broken": broken}
     return form, state
 
 
@@ -403,6 +409,11 @@ def stash_presets(paths, cid, cfg):
     for src in (os.path.join(os.path.dirname(paths["user_config"]), st.PRESETS_NAME), paths.get("mail_dir")):
         if src and os.path.exists(src):
             shutil.move(src, dest)
+    for folder in (paths.get("backup_dir"), paths.get("session_dir")):   # 프리셋보관·쇼핑몰 세션의 PRESETn 도 - 새 업체에서 [되돌리기] 로 안 살아나게 (BugBuster M21)
+        names = [n for n in os.listdir(folder) if re.fullmatch(r"PRESET\d+\.json", n)] if folder and os.path.isdir(folder) else []
+        for n in names:
+            os.makedirs(os.path.join(dest, os.path.basename(folder)), exist_ok=True)
+            shutil.move(os.path.join(folder, n), os.path.join(dest, os.path.basename(folder), n))
     for k in keys:
         del sites[k]
     return dest
@@ -493,6 +504,9 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
     if problems:
         raise ValueError("\n".join(problems))
     base_path = paths["user_config"] if os.path.isfile(paths["user_config"]) else paths["template"]
+    if state["broken"] and base_path == paths["user_config"]:   # 깨진 설정은 .broken 으로 남기고 빈 틀에서 새로 쓴다 (BugBuster L2)
+        shutil.copyfile(base_path, base_path + ".broken")
+        base_path = paths["template"]
     if not os.path.isfile(base_path):
         raise RuntimeError(f"설정 기본 파일({TEMPLATE_NAME})이 없습니다. 설치 파일로 다시 설치하여 주십시오.")
     done = []
@@ -795,6 +809,8 @@ class SettingsWindow:
         self.vars["printer"].set(form["printer"] or DEFAULT_PRINTER)
         self.sync_printer()
         self.set_status()
+        if self.state.get("broken"):                # (BugBuster L2)
+            self.say(f"설정 파일이 깨져 있습니다. ({self.state['broken']}) 값을 다시 입력한 뒤 [저장]하면 새로 저장합니다.")
 
     def set_hint(self, key, text, color=PLACEHOLDER):
         self.hints[key][0].configure(text=text, fg=color)
@@ -1046,6 +1062,7 @@ def _main(args):
     paths = default_paths()
     problem = start_problem()
     if problem:
+        crash_log(RuntimeError(problem))   # 창 없이(업데이트 도우미) 실패해도 까닭이 남게 (BugBuster M22)
         if not quiet:
             show_error_box(problem)
         return 1
@@ -1053,6 +1070,7 @@ def _main(args):
         try:
             finish_upgrade(paths)
         except RuntimeError as e:
+            crash_log(e)                   # 도우미는 0 이 아니면 되돌린다 - 그 까닭을 기록 폴더에 (BugBuster M22)
             if not quiet:
                 show_error_box(str(e))
             return 1

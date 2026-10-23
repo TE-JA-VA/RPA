@@ -109,10 +109,12 @@ def log(msg, secret=False):
 # 인증번호 추출
 # ---------------------------------------------------------------------------
 # 괄호로 감싼 코드가 있으면 그게 가장 확실하다: 인증번호 [123456]
-BRACKET_CODE_RE = re.compile(r"[\[(<【]\s*([0-9A-Za-z]{4,8})\s*[\])>】]")
+BRACKET_CODE_RE = re.compile(r"[\[(<【]\s*([0-9]{4,8})\s*[\])>】]")     # 숫자만 - 휴대폰도 숫자만 보낸다 (BugBuster M9)
 # 맨숫자 코드. 앞뒤에 숫자나 '-' 가 붙어 있으면 전화번호/날짜일 가능성이 커서 제외한다.
+# 바로 뒤가 '.숫자'·':숫자'(2026.10.13·12:30) 나 초·분·년·시·원(1800초·50000원) 이면 날짜·시간·금액이라 건너뛰고
+# 조건에 맞는 다음 후보를 본다 (BugBuster M9). 문장 끝 마침표('123456.')는 그대로 잡는다.
 # 한글 바로 옆에 붙어 있어도 잡아야 하므로 \b 대신 전후방탐색을 쓴다.
-PLAIN_CODE_RE = re.compile(r"(?<![0-9\-])([0-9]{4,8})(?![0-9\-])")
+PLAIN_CODE_RE = re.compile(r"(?<![0-9\-])([0-9]{4,8})(?![0-9\-]|[.:][0-9]|[초분년시원])")
 
 FORWARD_WINDOW = 60   # '인증번호' 뒤로 이만큼 안에서 코드를 찾는다
 BACKWARD_WINDOW = 30  # 못 찾으면 앞쪽도 이만큼 본다
@@ -183,7 +185,7 @@ def parse_conversation_item(text):
 
 def mask(text, keep=12):
     """점검용 출력에서 남의 문자 내용이 통째로 찍히지 않게 가린다."""
-    text = (text or "").replace("\r", " ").replace("\n", " ")
+    text = re.sub(r"\d{4,8}", lambda m: "*" * len(m.group()), (text or "").replace("\r", " ").replace("\n", " "))  # 인증번호 (BugBuster L10)
     if len(text) <= keep:
         return text
     return f"{text[:keep]}... ({len(text)}자)"
@@ -341,8 +343,8 @@ class PhoneLinkReader:
             self._list = self.win.child_window(
                 auto_id=AID_CONV_LIST, control_type="List").wrapper_object()
         except Exception:
-            if self._list is None:
-                raise
+            self._list = None       # 낡은 요소를 돌려주면 다시 붙기가 영영 안 일어난다 (BugBuster K9)
+            raise
         return self._list
 
     def read_conversations(self):

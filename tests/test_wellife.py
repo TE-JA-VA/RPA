@@ -1513,6 +1513,10 @@ os.environ.update(RPA_REPEAT_UNTIL="18:00", RPA_REPEAT_REST="5")
 busy_msg = wellife.send_busy_reason(busy_rr, _dt.datetime(2026, 10, 19, 17, 40))
 check("반복 회차 - 다음 회차가 끝 시각 안이면 'N분 뒤 다시 확인', 이력은 평소대로",
       "10:05" in busy_msg and "5분 뒤 다시 확인" in busy_msg and not busy_kept, busy_msg)
+busy_msg = wellife.send_busy_reason(busy_rr, _dt.datetime(2026, 10, 19, 17, 54, 30))
+check("끝 30초 전에 다음 회차가 걸리는 회차(회차가 끝나면 대시보드가 안 띄운다)도 마지막으로 보고 이력에 남김 (BugBuster L5)",
+      wellife.SEND_BUSY_LAST in busy_msg and busy_kept == [1], busy_msg)
+busy_kept.clear()
 busy_msg = wellife.send_busy_reason(busy_rr, busy_now.replace(minute=56))
 check("끝 시각까지 다음 회차가 없으면 '마지막으로 HH:MM 에 전송요청을 눌렀고 ... 이후에는 전송하지 않습니다' + 이력에 남김",
       busy_msg.startswith("마지막으로 10:05에 전송요청을 눌렀고") and "18:00" in busy_msg and wellife.SEND_BUSY_LAST in busy_msg and busy_kept == [1], busy_msg)
@@ -2152,6 +2156,7 @@ def tog_sleep(_s):
         prep["on"] = False
 
 
+tsteps = []    # 찍힌 단계 (BugBuster L4)
 pops = []      # 업로드 차례 사이에 볼 때마다 닫힌다고 돌려줄 창 문구 (비면 창 없음)
 trr = types.SimpleNamespace(
     log=lambda m: None, UPLOAD_NO_KEYS=False, UploadStop=rr.UploadStop, UploadGridHidden=rr.UploadGridHidden,
@@ -2160,13 +2165,14 @@ trr = types.SimpleNamespace(
     collect_upload_files=tog_collect, run_excel_upload_step=tog_upload, win32con=_wc,
     win32gui=types.SimpleNamespace(GetWindowRect=lambda h: (0, 0, 1920, 1032),
                                    SetWindowPos=lambda h, after, *a: tev.append(("topmost", after == _wc.HWND_TOPMOST))),
-    status=types.SimpleNamespace(step=lambda *a, **k: None, metric=lambda *a, **k: None,
+    status=types.SimpleNamespace(step=lambda s, *a, **k: tsteps.append(s), metric=lambda *a, **k: None,
                                  release_prepare=lambda rect=None: tev.append(("release", rect)),
                                  running_programs=lambda: ["prepare"] if prep["on"] else []))
 _saved_tog = {n: getattr(wellife, n) for n in ("import_collect", "open_order_copy", "close_order_copy", "site_grid", "switch_tab",
                                                "keep_front",
                                                "no_popup", "time")}
-wellife.import_collect = lambda rr_, ctx_, live, wait=True: tev.append(("import start", wait)) or (lambda: ("done", "자동 수집 끝"))
+wellife.import_collect = lambda rr_, ctx_, live, wait=True: (tev.append(("import start", wait)) or rr_.status.step("wl_order_import")
+                                                            or (lambda: ("done", "자동 수집 끝")))
 wellife.open_order_copy = lambda rr_, ctx_: tev.append(("copy open",)) or "주문매핑 매출처리 (2)"
 wellife.close_order_copy = lambda rr_, ctx_, name: tev.append(("copy close", name))
 wellife.switch_tab = lambda rr_, ctx_, name: tev.append(("tab", name))
@@ -2188,10 +2194,13 @@ check("받은 엑셀은 들어오는 대로 (차례마다 새 파일만), 올리
 check("끝나면 '+' 로 연 화면을 닫는다, 결과는 받은 수 중 올린 수",
       tev[-1] == ("copy close", "주문매핑 매출처리 (2)")
       and res == ("done", "[실행] 엑셀 3건 중 3건 업로드 (사이트 수집과 함께)"), f"{tev[-3:]} {res}")
+check("함께 실행: 가져오기를 걸어 둔 뒤 엑셀 단계로 되돌려 찍는다 (BugBuster L4)",
+      tsteps == ["wl_order_excel", "wl_order_import", "wl_order_excel"], str(tsteps))
 _saved_os = wellife.order_screen
 wellife.order_screen = lambda rr_, ctx_, step, body: body()
 check("② 자동 수집 모듈은 걸어 둔 자동 수집이 끝나기를 기다린다 (다시 누르지 않는다)",
       wellife.module_import(trr, tctx, True) == ("done", "자동 수집 끝") and tctx.import_end is None)
+check("걸어 둔 끝 기다리기는 가져오기 단계에 붙는다 (BugBuster L4)", tsteps[-1] == "wl_order_import", str(tsteps))
 wellife.order_screen = _saved_os
 
 tev.clear()

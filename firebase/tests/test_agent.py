@@ -226,13 +226,26 @@ check(ag.clean_for_rtdb({"a": {"b$": 1, "c": 2}}) == {"a": {"c": 2}}, "깊은 �
 check(ag.clean_for_rtdb({"a": []}) == {"a": None}, "빈 목록은 None (RTDB 는 빈 값을 못 담는다)")
 check(ag.clean_for_rtdb({"a": [1, 2]}) == {"a": [1, 2]}, "값이 있는 목록은 그대로")
 
-snap = {"programs": {"routine": {"log": [f"줄{i}" for i in range(200)], "state": "running"},
+snap = {"programs": {"routine": {"log_tail": [f"줄{i}" for i in range(200)], "state": "running"},     # 실제 현황 키 (rpa_status.decorate)
                      "prepare": None}}
-out = ag.trim_logs(snap, lines=80)
-check(len(out["programs"]["routine"]["log"]) == 80, "로그는 80줄만 남는다")
-check(out["programs"]["routine"]["log"][0] == "줄120", "뒤에서 80줄")
+out = ag.trim_logs(snap)
+check("log_tail" not in out["programs"]["routine"] and out["programs"]["routine"]["state"] == "running",
+      "현황에서 RPA 원본 로그(log_tail)를 뺀다 - 아무도 안 읽는다 (BugBuster M3)")
 check(out["programs"]["prepare"] is None, "없는 프로그램은 그대로 None")
-check(len(snap["programs"]["routine"]["log"]) == 200, "원본은 건드리지 않는다")
+check(len(snap["programs"]["routine"]["log_tail"]) == 200, "원본은 건드리지 않는다")
+
+# BugBuster M3: 실행 중 매초 바뀌는 값은 '바뀌었나' 비교에서 뺀다
+v1 = {"state": "running", "elapsed_sec": 10, "idle_sec": 3, "updated_at": "2026-10-23T09:00:00", "log_tail": ["a"],
+      "steps": [{"key": "s1", "state": "running", "duration_sec": 10}], "modules": [{"key": "m1", "state": "running", "duration_sec": 10}],
+      "metrics": [{"key": "k", "duration_sec": 10}]}
+v2 = dict(v1, elapsed_sec=11, idle_sec=4, updated_at="2026-10-23T09:00:02", log_tail=["a", "b"],
+          steps=[{"key": "s1", "state": "running", "duration_sec": 11}], modules=[{"key": "m1", "state": "running", "duration_sec": 11}],
+          metrics=[{"key": "k", "duration_sec": 11}])
+b1, f1 = ag.live_bodies({"programs": {"routine": v1}})
+b2, f2 = ag.live_bodies({"programs": {"routine": v2}})
+check(b1 == b2 and f1 != f2, "경과·쉬는 시간·updated_at·단계 시간만 바뀌면 비교 값은 같고 전체는 다르다 (실행 중 5초마다만)")
+b3, _ = ag.live_bodies({"programs": {"routine": dict(v2, steps=[{"key": "s1", "state": "done", "duration_sec": 11}])}})
+check(b3 != b2, "단계 상태가 바뀌면 바로 올린다")
 
 import datetime as _dt
 rows = [{"started_at": "2026-09-14T13:55:00", "state": "success"},
@@ -303,6 +316,18 @@ with tempfile.TemporaryDirectory() as d:
     n = ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos)
     check(n == 1 and fcl.docs[-1][1] == "h3", "이어서 쓴 줄을 다음에 올린다")
     check(ag.upload_new_history(hist, upl, {"cid": "c_demo", "pc_id": "pc_office"}, pos) == 0, "바뀐 게 없으면 안 올린다")
+    # BugBuster L18: 5MB 회전 - history.1.jsonl 의 아직 안 올린 줄부터, 새 파일은 처음부터
+    me = {"cid": "c_demo", "pc_id": "pc_office"}
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="h4")) + "\n")             # 올리기 전에 회전된 줄
+    os.replace(hist, os.path.join(d, "history.1.jsonl"))
+    open(hist, "w", encoding="utf-8").close()
+    n = ag.upload_new_history(hist, upl, me, pos)
+    check(n == 1 and fcl.docs[-1][1] == "h4", f"회전되면 옛 파일의 남은 줄을 올린다 ({n})")
+    with open(hist, "a", encoding="utf-8") as f:
+        f.write(json.dumps(dict(rec, run_id="h5")) + "\n")
+    n = ag.upload_new_history(hist, upl, me, pos)
+    check(n == 1 and fcl.docs[-1][1] == "h5", f"새 파일은 처음부터 - 옛 파일을 다시 올리지 않는다 ({n}, {fcl.docs[-1][1]})")
 
 print("기록 올리기: 다른 업체·PC 의 기록은 안 올린다 (2026-10-12 사용자 - PC 가 업체를 옮기면 옛 기록이 새 업체로 가던 것)")
 with tempfile.TemporaryDirectory() as d:
@@ -572,20 +597,21 @@ with tempfile.TemporaryDirectory() as d:
     check(cl.puts[-1][0] == "apps/rpa/live/c_demo/pc_office", "현황은 live/회사/PC 로 간다")
 
     cl.ok = False
-    up.push_live({"host": "PC2"})
-    check(up.push_heartbeat({"at": 1}) is False and up.pending() == 1, "끊기면 현황은 큐에 쌓고 heartbeat 는 버린다")
+    check(up.push_live({"host": "PC2"}) is False and up.push_heartbeat({"at": 1}) is False and up.pending() == 0,
+          "끊기면 현황·heartbeat 는 큐에 넣지 않는다 - pump 가 다음 틱에 새 현황을 다시 보낸다 (BugBuster H3)")
     up.push_run(dict(doc, run_id="r9"))
-    check(up.pending() == 2, "이력도 큐에")
+    up.push_patch("apps/rpa/commands/c_demo/pc_office/k1", {"state": "done"})
+    check(up.pending() == 2, "이력·명령 결과는 큐에 (BugBuster L19)")
     check(os.path.exists(q), "큐는 파일로 남는다")
 
     cl.ok = True
     up.flush()
     check(up.pending() == 0, "연결되면 큐를 비운다")
-    check([p for p, _ in cl.puts][-2:] == ["apps/rpa/live/c_demo/pc_office", "runs/c_demo/items"],
+    check([p for p, _ in cl.puts][-2:] == ["runs/c_demo/items", "apps/rpa/commands/c_demo/pc_office/k1"],
           "쌓인 순서대로 보낸다")
 
     cl.ok = False
-    up.push_live({"host": "PC3"})
+    up.push_run(dict(doc, run_id="r10"))
     up2 = ag.Uploader(cl, "c_demo", "pc_office", q)
     check(up2.pending() == 1, "에이전트를 다시 켜도 큐가 남아 있다")
 
@@ -594,6 +620,15 @@ with tempfile.TemporaryDirectory() as d:
     up3 = ag.Uploader(cl2, "c_demo", "pc_office", q)
     up3.flush()
     check(up3.pending() == 0 and len(cl2.puts) == 1, "다시 켠 뒤 밀린 것을 보낸다")
+
+    # 옛 버전이 큐 파일에 남긴 현황·heartbeat 는 읽을 때 버린다 - 새 현황 뒤에 되보내 화면이 옛 상태로 남던 것 (BugBuster H3)
+    with open(q, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"path": "apps/rpa/live/c_demo/pc_office", "value": {"host": "OLD"}, "method": "patch"}) + "\n")
+        f.write(json.dumps({"path": "live/c_demo/pc_office/heartbeat", "value": {"at": 1}, "method": "put"}) + "\n")
+        f.write(json.dumps({"path": "runs/c_demo/items", "value": dict(doc, run_id="r11"), "method": "fs"}) + "\n")
+    cl3 = FlakyClient()
+    up6 = ag.Uploader(cl3, "c_demo", "pc_office", q)
+    check(up6.pending() == 1 and up6.flush() and cl3.puts == [("runs/c_demo/items", "r11")], f"옛 현황은 버리고 기록만 보낸다 ({cl3.puts})")
 
 
 class DenyClient:
@@ -612,12 +647,12 @@ class DenyClient:
 with tempfile.TemporaryDirectory() as d:
     q = os.path.join(d, "queue.jsonl")
     with open(q, "w", encoding="utf-8") as f:
-        f.write(json.dumps({"path": "live/c_demo/pc_office/heartbeat", "value": {"at": 1}, "method": "put"}) + "\n")
-        f.write(json.dumps({"path": "apps/rpa/live/c_demo/pc_office/heartbeat", "value": {"at": 2}, "method": "put"}) + "\n")
+        f.write(json.dumps({"path": "commands/c_demo/pc_office/k1", "value": {"state": "done"}, "method": "patch"}) + "\n")
+        f.write(json.dumps({"path": "apps/rpa/commands/c_demo/pc_office/k1", "value": {"state": "done"}, "method": "patch"}) + "\n")
     dc = DenyClient()
     up4 = ag.Uploader(dc, "c_demo", "pc_office", q)
     check(up4.flush() and up4.pending() == 0, "거부된 항목은 버리고 뒤 항목을 보낸다")
-    check(dc.puts == [("apps/rpa/live/c_demo/pc_office/heartbeat", {"at": 2})], "거부된 것은 다시 보내지 않는다")
+    check(dc.puts == [("apps/rpa/commands/c_demo/pc_office/k1", {"state": "done"})], "거부된 것은 다시 보내지 않는다")
     check(not os.path.exists(q), "큐 파일도 비운다")
     up4._send("live/x", {"a": 1})
     check(up4.pending() == 0, "거부된 것은 애초에 큐에 넣지 않는다")
@@ -658,6 +693,9 @@ class RecClient:
     def patch(self, path, value):
         self.patches.append((path, value))
 
+    def server_now(self):
+        return NOW
+
 
 def make_cmds(actions):
     cl = RecClient()
@@ -671,6 +709,43 @@ check(paths == ["apps/rpa/commands/c_demo/pc_office/k1"] * 2, "명령 자리에�
 check(cl.patches[0][1]["state"] == "running", "먼저 running 으로 바꾼다")
 check(cl.patches[1][1]["state"] == "done" and cl.patches[1][1]["result"] == "띄웠습니다", "끝나면 done")
 check("started_at" in cl.patches[0][1] and "ended_at" in cl.patches[1][1], "시각을 남긴다")
+
+# BugBuster M1: now 를 안 주면 PC 시계(time.time, 지금은 17억 초대)가 아니라 서버 시각(client.server_now)으로 판정한다
+cl, cmds = make_cmds({"launch": lambda args: "띄웠습니다"})
+check(cmds.handle("k1m", dict(ok_cmd)) == "done" and cl.patches[0][1]["started_at"] == int(NOW) and cl.patches[1][1]["ended_at"] == int(NOW),
+      f"만료 판정·시각은 서버 시각으로 ({cl.patches})")
+
+
+class LateClient(RecClient):
+    def server_now(self):
+        return 2600.0
+
+
+cl = LateClient()
+check(ag.Commands(cl, "c_demo", "pc_office", {}).handle("k1n", dict(ok_cmd)) == "expired", "서버 시각으로 지난 명령은 만료")
+
+
+class DoneFails(RecClient):
+    """running 표시는 되고 done 표시에서 끊김 (BugBuster L19)"""
+    def __init__(self):
+        super().__init__()
+        self.ok = True
+
+    def patch(self, path, value):
+        if not self.ok and value.get("state") in ("done", "failed"):
+            raise fb.HttpError(503, "끊김")
+        super().patch(path, value)
+
+
+with tempfile.TemporaryDirectory() as d:
+    dfc = DoneFails()
+    dfc.ok = False
+    upq = ag.Uploader(dfc, "c_demo", "pc_office", os.path.join(d, "q.jsonl"))
+    cmds = ag.Commands(dfc, "c_demo", "pc_office", {"launch": lambda args: "띄웠습니다"}, up=upq)
+    check(cmds.handle("k1q", dict(ok_cmd), NOW) == "done" and upq.pending() == 1, "done 표시가 실패하면 큐에 남긴다 (BugBuster L19)")
+    dfc.ok = True
+    check(upq.flush() and dfc.patches[-1] == ("apps/rpa/commands/c_demo/pc_office/k1q", {"state": "done", "result": "띄웠습니다", "ended_at": int(NOW)}),
+          f"연결되면 done 표시를 다시 보낸다 ({dfc.patches[-1]})")
 
 
 def boom(args):
@@ -1083,9 +1158,10 @@ print("\n9절 명령 구독 (토큰 만료·끊김)")
 class StreamClient:
     """stream() 이 미리 정한 이벤트를 내놓는 가짜 클라이언트"""
     def __init__(self, events):
-        self.events, self.renewed, self.closed = events, 0, False
+        self.events, self.renewed, self.closed, self.params = events, 0, False, None
 
-    def stream(self, path):
+    def stream(self, path, params=None):
+        self.params = params
         try:
             for ev in self.events:
                 yield ev
@@ -1101,11 +1177,13 @@ sc = StreamClient([("keep-alive", None),
                    ("put", {"path": "/", "data": {"c1": {"type": "launch"}, "c2": {"type": "stop_erpia"}}}),
                    ("patch", {"path": "/c3", "data": {"type": "launch"}}),
                    ("put", {"path": "/c1/state", "data": "done"}),
+                   ("put", {"path": "/c2", "data": None}),     # running 으로 바꿔 queued 구독에서 빠짐 - 지워짐 아님 (BugBuster I11)
                    ("auth_revoked", None),
                    ("put", {"path": "/c9", "data": {"type": "launch"}})])
 why = ag.watch_commands(sc, "apps/rpa/commands/c_demo/pc_office", lambda i, c: got.append(i))
 check(got == ["c1", "c2", "c3"], "처음 덩어리와 낱개 명령을 건네주고, 하위 값 변경은 건너뛴다")
 check(why == "auth_revoked" and sc.renewed == 1 and sc.closed, "토큰 만료 알림이 오면 토큰을 버리고 돌아온다 (다시 붙게)")
+check(sc.params == {"orderBy": '"state"', "equalTo": '"queued"'}, f"대기 중(queued) 명령만 구독한다 (BugBuster I11) ({sc.params})")
 check(ag.watch_commands(StreamClient([("keep-alive", None)]), "p", lambda i, c: None) == "ended", "서버가 닫으면 ended")
 
 import threading
@@ -1485,9 +1563,9 @@ with tempfile.TemporaryDirectory() as d:
         cc = CmdClient({"s1": {"type": "import_preset", "state": "running", "by": "u1"}, "s2": {"type": "launch", "state": "running"},
                         "s3": {"type": "restore_preset", "state": "running"}, "s4": "x"})
         n = ag.fail_stale_slow(cc, "c_demo", "pc_office", 4000)
-        check(n == 2 and sorted(p for p, _ in cc.patches) == ["apps/rpa/commands/c_demo/pc_office/s1", "apps/rpa/commands/c_demo/pc_office/s3"]
+        check(n == 3 and sorted(p for p, _ in cc.patches) == [f"apps/rpa/commands/c_demo/pc_office/{k}" for k in ("s1", "s2", "s3")]
               and all(v == {"state": "failed", "result": "PC 프로그램이 다시 시작되어 중단되었습니다. 다시 시도하여 주십시오.", "ended_at": 4000} for _, v in cc.patches),
-              f"running 인 import/restore_preset 만 failed ({n}, {cc.patches})")
+              f"running 인 명령은 모두 failed - 느린 명령만이 아니다 (BugBuster L19) ({n}, {cc.patches})")
         check(cc.get_calls == [("apps/rpa/commands/c_demo/pc_office", {"orderBy": '"state"', "equalTo": '"running"'})],
               f"명령함은 state=running 만 질의한다 (규칙 .indexOn state) ({cc.get_calls})")
         check(ag.fail_stale_slow(CmdClient(None), "c_demo", "pc_office", 4000) == 0 and ag.fail_stale_slow(CmdClient(OSError("망")), "c_demo", "pc_office", 4000) == 0,
@@ -1500,6 +1578,50 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         for k in ("RPA_USER_CONFIG", "RPA_PROGRAMDATA", "RPA_STATUS_DIR", "RPA_DASHBOARD_DRY_RUN"):
             os.environ.pop(k, None)
+
+print("\n13절 로그인 일시 차단·다른 PC 경고 (BugBuster M2·I13)")
+import secret as _secret
+_saved = (ag.single_instance, ag.run, _secret.load_config)
+try:
+    ag.single_instance = lambda: True
+    _secret.load_config = lambda: {"cid": "c_demo", "pc_id": "pc_office", "email": "a@b.c"}
+    got = []
+    for code in ("TOO_MANY_ATTEMPTS_TRY_LATER", "QUOTA_EXCEEDED", "USER_DISABLED"):
+        ag.run = lambda cfg, code=code: fb.AuthError(400, code)
+        got.append(ag.main())
+    check(got == [5, 5, 3], f"일시 차단은 5(감독이 기다렸다 다시 켬), 사용중지는 3(멈춤) ({got})")
+finally:
+    ag.single_instance, ag.run, _secret.load_config = _saved
+
+import background as bg
+check(ag.RETRY_LATER_CODE == bg.RETRY_LATER_CODE and bg.RETRY_LATER_CODE not in bg.STOP_CODES, "감독은 5 를 멈춤 코드로 보지 않는다")
+with tempfile.TemporaryDirectory() as d:
+    flag = os.path.join(d, "once")
+    prog = f"import os,sys; p={flag!r}; n=os.path.exists(p); open(p,'w').close(); sys.exit(0 if n else 5)"
+    waits = []
+    got = bg.main(cmd=[sys.executable, "-c", prog], sleep=waits.append, later_sec=7)
+    check(got == 0 and waits == [7], f"코드 5 면 later_sec 기다렸다 다시 켠다 ({got}, {waits})")
+
+
+class BeatClient:
+    def __init__(self, hb):
+        self.hb, self.asked = hb, []
+
+    def get(self, path, params=None):
+        self.asked.append(path)
+        if isinstance(self.hb, Exception):
+            raise self.hb
+        return self.hb
+
+
+bc = BeatClient({"at": 1000, "host": "PC-B", "boot": "a1b2c3d4"})
+check(ag.warn_other_boot(bc, "c_demo", "pc_office", host="PC-A", now=1060) is True and bc.asked == ["apps/rpa/live/c_demo/pc_office/heartbeat"],
+      "2분 안에 다른 PC 의 신호가 있으면 경고 (live/회사/PC/heartbeat)")
+check(ag.warn_other_boot(BeatClient({"at": 1000, "host": "PC-A", "boot": "x"}), "c_demo", "pc_office", host="PC-A", now=1010) is False,
+      "같은 PC 의 지난 신호(재시작)는 경고하지 않는다")
+check(ag.warn_other_boot(BeatClient({"at": 1000, "host": "PC-B"}), "c_demo", "pc_office", host="PC-A", now=1200) is False, "2분 넘은 신호는 넘어간다")
+check(ag.warn_other_boot(BeatClient(OSError("망")), "c_demo", "pc_office", host="PC-A", now=1) is False
+      and ag.warn_other_boot(BeatClient(None), "c_demo", "pc_office", host="PC-A", now=1) is False, "못 읽거나 없으면 넘어간다")
 
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:

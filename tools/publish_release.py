@@ -92,13 +92,18 @@ def _prune(site_dir, info, keep, deploy, set_releases):
     if deploy:
         deploy()                                                 # 배포가 먼저 - 실패하면 DB 목록은 그대로
     if set_releases:
-        set_releases(listing)
+        try:
+            set_releases(listing)
+        except Exception as e:                                   # 호스팅은 이미 바뀌었다 - 무엇을 하면 맞춰지는지 알린다 (BugBuster L25)
+            raise RuntimeError(f"호스팅은 올라갔고 DB 목록만 못 썼습니다 - 같은 버전으로 다시 내보내면 맞춰집니다. ({e})"[:500]) from None
     return listing, removed
 
 
 def keep_only(versions, site_dir, deploy=None, set_releases=None, get_stable=None):
     """사이트에 고른 판만 남긴다 (사용자 2026-10-12: 옛 판 정리). 없는 판을 고르거나 안정본이 지워지면 아무것도 안 하고 멈춘다
     - 안정본은 먼저 남길 판으로 바꾼다 (setup.js stable). 서명 열쇠는 안 쓴다."""
+    if not versions:
+        raise ValueError("남길 버전을 하나 이상 주세요")
     info_path = os.path.join(site_dir, "published.json")
     info = json.load(open(info_path, encoding="utf-8")) if os.path.isfile(info_path) else {}
     missing = [v for v in versions if v not in info]
@@ -143,7 +148,8 @@ def _deploy():
     mirror = os.environ.get("RPA_RELEASES_MIRROR")      # 회사 서버에도 같은 사이트 폴더를 올리는 명령 (서버 옮기는 동안, docs/server-move-stage1.md)
     if mirror:
         print("회사 서버에도 올립니다:", mirror)
-        subprocess.run(mirror, cwd=SITE_DIR, check=True, shell=True)
+        if subprocess.run(mirror, cwd=SITE_DIR, shell=True).returncode != 0:   # 호스팅은 이미 올라갔다 - DB 목록 쓰기는 계속 (BugBuster L25)
+            print("경고: 회사 서버에 올리지 못했습니다 - 호스팅은 올라갔고 DB 목록은 계속 씁니다. 같은 버전으로 다시 내보내면 맞춰집니다.")
 
 
 def main(argv=None):

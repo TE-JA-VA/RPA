@@ -345,7 +345,10 @@ def ensure_erpia_running():
 
     exe_path = load_exe_path()
     log(f"ERPiaMain.exe 미실행 -> 실행: {exe_path}")
-    subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
+    try:
+        subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
+    except OSError as e:
+        raise RuntimeError(f"ERPia 를 실행하지 못했습니다: {exe_path} ({e})") from e
 
     waited = 0.0
     while waited < PROCESS_WAIT_SECONDS:
@@ -855,6 +858,7 @@ def sort_grid_by_status_desc(hwnd, grid, status_col="상품상태",
         return False
     log(f"  누르기 전 화면: {len(before)}행 '{before[0]}' ~ '{before[-1]}'")
 
+    all_abnormal = 0
     for i in range(1, max_clicks + 1):
         log(f"  '{status_col}' 헤더 클릭 {i}회 (내림차순 확정)")
         ec.ensure_foreground(hwnd)
@@ -875,6 +879,14 @@ def sort_grid_by_status_desc(hwnd, grid, status_col="상품상태",
             log("  헤더를 눌러도 화면이 변경되지 않습니다. "
                 "(이 그리드는 정렬이 막혀 있을 수 있습니다).")
             return False
+        all_abnormal += normal_value not in vals
+
+    # 정렬 없음·오름·내림 세 상태 모두 맨 위에 '정상'이 없었다 = '정상'이 한 건도 없다 -> 순서와 상관없이
+    # 전부 보류 대상이라 확정. (전부 비정상인 첫 화면만 보고 확정하면 비정상이 한 화면보다 많은 오름차순을
+    # 내림차순으로 잘못 볼 수 있어 세 상태를 다 본다) (BugBuster L22)
+    if max_clicks >= 3 and all_abnormal == max_clicks:
+        log(f"  {max_clicks}번 모두 '{normal_value}'이(가) 없어 전부 비정상으로 보고 확정합니다.")
+        return True
 
     log(f"  {max_clicks}번 눌렀는데도 내림차순이 되지 않았습니다.")
     return False
@@ -1389,7 +1401,8 @@ def click_toolbar_button(win, hwnd, text):
         if b.window_text() != text:
             continue
         r = b.rectangle()
-        if r.left >= 0 and r.top >= 0 and r.right <= wr.right and r.bottom <= wr.bottom:
+        # 화면 0 이 아니라 창 기준 - 창이 음수 좌표 모니터에 있어도 찾게 (BugBuster M17)
+        if r.left >= wr.left and r.top >= wr.top and r.right <= wr.right and r.bottom <= wr.bottom:
             log(f"  '{text}' 클릭: {r}")
             ec.ensure_foreground(hwnd)
             b.click_input()
@@ -4879,7 +4892,9 @@ def run_hold_logistics_step(app, pid, hwnd):
         if b.window_text() != "조회(F)":
             continue
         r = b.rectangle()
-        if r.left >= 0 and r.top >= 0 and r.right <= win_rect.right and r.bottom <= win_rect.bottom:
+        # 창 기준 (BugBuster M17)
+        if (r.left >= win_rect.left and r.top >= win_rect.top
+                and r.right <= win_rect.right and r.bottom <= win_rect.bottom):
             query_btn = b
             break
 
@@ -5853,7 +5868,12 @@ def excel_upload_together(ctx, grid):
             new = wellife.upload_paths(rr) - tried
             if new:
                 late += between("업로드 사이 ")
-                u, e = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, grid, skip=tried)
+                try:
+                    u, e = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, grid, skip=tried)
+                except UploadGridHidden as h:     # 멈추기 전에 그때까지 올린 수·오류 수를 센다 (BugBuster M18)
+                    tried |= new
+                    uploaded, errors = uploaded + h.uploaded, errors + h.errors
+                    raise
                 tried |= new
                 uploaded, errors = uploaded + u, errors + e
             elif "prepare" in status.running_programs():

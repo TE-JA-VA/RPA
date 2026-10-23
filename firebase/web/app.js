@@ -2,6 +2,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, signInWithEmailAndPassword, signInWithCustomToken, signOut, onAuthStateChanged, connectAuthEmulator,
+  setPersistence, browserSessionPersistence, browserLocalPersistence,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getDatabase, ref, get, connectDatabaseEmulator,
@@ -59,6 +60,8 @@ $("login-form").addEventListener("submit", async (ev) => {
   const cid = $("cid").value.trim().replace(/^-$/, "");   // setup.js 관습대로 '-' 도 '회사 없음'
   try {
     await signInWithEmailAndPassword(auth, emailFor(cid, $("login-id").value.trim()), $("password").value);
+    // 관리 화면 열쇠가 탭 저장소로 바꿨을 수 있다 - 업체 계정은 브라우저에 남긴다. 로그인된 뒤에 바꿔 열쇠 계정이 브라우저에 옮겨지지 않게 (BugBuster I15)
+    await setPersistence(auth, browserLocalPersistence).catch(() => {});
     $("password").value = "";
     try {
       if ($("remember").checked) localStorage.setItem("login", JSON.stringify({ cid, id: $("login-id").value.trim() }));
@@ -82,21 +85,46 @@ window.addEventListener("beforeunload", (e) => { if (current?.dirty?.()) { e.pre
 // 관리 화면 [대시보드 보기] 가 주소 # 뒤에 붙인 1시간짜리 총괄 로그인 열쇠 (2026-10-16) - 주소창에서 곧바로 지우고 그 열쇠로 로그인한다.
 // 이미 다른 계정으로 로그인돼 있어도 바꾼다 (총괄 화면을 보려고 누른 것). 못 쓰면 (1시간 지남) 로그인 화면 안내
 const handoff = new URLSearchParams(location.hash.slice(1)).get("t");
+// 이 로그인은 탭 저장소에만 둔다 - 탭을 닫으면 끝나고, 로그인 1시간 뒤에는 스스로 로그아웃한다 (BugBuster I15, 아래 onAuthStateChanged)
+const CONSOLE_UID = "admin-console";   // ops.CONSOLE_UID 와 같다
+const CONSOLE_SEC = 3600;
+let consoleTimer = null;
 if (handoff) {
   history.replaceState(null, "", location.pathname + location.search);
-  try { await signInWithCustomToken(auth, handoff); } catch {
+  try {
+    await setPersistence(auth, browserSessionPersistence);
+    await signInWithCustomToken(auth, handoff);
+  } catch {
+    await setPersistence(auth, browserLocalPersistence).catch(() => {});   // 열쇠를 못 썼으면 원래대로
     $("login-alert").textContent = "관리 화면 로그인 정보가 만료되었습니다. 관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오."; show($("login-alert"), true);
   }
 }
 
 onAuthStateChanged(auth, async (user) => {
   unmount();
+  clearTimeout(consoleTimer); consoleTimer = null;
   if (!user) {
     me = null; company = null; pcId = null;
     show($("login"), true); show($("main"), false);
     return;
   }
-  const t = await user.getIdTokenResult(true);
+  let t;
+  try { t = await user.getIdTokenResult(true); } catch {   // 네트워크가 끊겨 토큰을 못 받으면 빈 화면에서 멈췄다 (BugBuster M4)
+    show($("login"), true); show($("main"), false);
+    $("login-alert").textContent = "네트워크 연결을 확인한 뒤 새로고침하여 주십시오."; show($("login-alert"), true);
+    return;
+  }
+  if (user.uid === CONSOLE_UID) {   // 관리 화면 [대시보드 보기] 로그인 - 로그인 1시간 뒤 로그아웃 (I15)
+    // 남은 시간은 서버 시각끼리(방금 받은 토큰의 iat - 로그인 auth_time)로 잰다 - 브라우저 시계가 틀려도 맞게
+    const left = (CONSOLE_SEC - ((Number(t.claims.iat) || 0) - (Number(t.claims.auth_time) || 0))) * 1000;
+    const end = async () => {
+      await signOut(auth);
+      $("login-alert").textContent = "관리 화면 로그인은 1시간 동안만 사용할 수 있습니다. 관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오.";
+      show($("login-alert"), true);
+    };
+    if (!(left > 0) || !t.claims.auth_time) { await end(); return; }
+    consoleTimer = setTimeout(end, left);
+  }
   if (t.claims.role === "agent") {   // 기계 계정은 PC 에이전트 전용. 화면에서 비밀번호를 바꾸면 그 PC 가 죽으니 아예 안 들인다
     await signOut(auth);
     $("login-alert").textContent = "에이전트 계정으로는 화면에 로그인할 수 없습니다."; show($("login-alert"), true);

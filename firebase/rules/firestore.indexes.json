@@ -30,7 +30,19 @@
     { "collectionGroup": "items", "queryScope": "COLLECTION",
       "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.invoicesend", "order": "ASCENDING" }] },
     { "collectionGroup": "items", "queryScope": "COLLECTION",
-      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.sites", "order": "ASCENDING" }] }
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.sites", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.wellife_excel", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.wellife_import", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.wellife_sales", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.wellife_hold", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.wellife_sap", "order": "ASCENDING" }] },
+    { "collectionGroup": "items", "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "started_at", "order": "ASCENDING" }, { "fieldPath": "used.wellife_wms", "order": "ASCENDING" }] }
   ],
   "fieldOverrides": []
 }

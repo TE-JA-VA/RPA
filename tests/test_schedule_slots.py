@@ -88,6 +88,13 @@ st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30",
 sv = d.schedule_view()
 check(sv["times"] == ["09:05", "13:30"] and sv["slots"][0] == {"at": "09:05"} and sv["version"] == st.SCHEDULE_VERSION,
       "화면 값: 줄은 시각 순, 옛 8765 화면용 times 도, 판 2 (줄이 0개여도 판으로 새 판을 안다 - Review Focus 5)")
+_keep = open(st.settings_path(), "rb").read()
+open(st.settings_path(), "wb").write(b"")   # 0바이트 (BugBuster M20)
+_bad = st.read_settings()
+check(_bad.get(st.SETTINGS_UNREADABLE) is True and st.write_settings(_bad) is False and d.ensure_accounts() in (True, False)
+      and open(st.settings_path(), "rb").read() == b"", "못 읽은 설정은 기본값으로 덮어쓰지 않는다 (M20)")
+open(st.settings_path(), "wb").write(_keep)
+check(st.SETTINGS_UNREADABLE not in st.read_settings(), "다시 읽히면 표시 없음 (M20)")
 
 print("\n=== 5. 적용 ===")
 for bad in ({"enabled": "yes", "days": WK, "times": ["09:00"]}, {"enabled": True, "days": [], "times": ["09:00"]},

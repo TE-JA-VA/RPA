@@ -75,7 +75,7 @@ GOT = []
 def get(url, host=HOST):
     GOT.append(url)
     if url not in host:
-        raise up.UpdateError(f"받지 못했습니다: {url.rsplit('/', 1)[-1]} (404)")
+        raise up.FetchError(f"받지 못했습니다: {url.rsplit('/', 1)[-1]} (404)")   # http_get 과 같은 종류
     return host[url]
 
 
@@ -160,6 +160,13 @@ try:
         check(False, "주소가 다 안 되면 거절 (거절 안 됨)")
     except up.UpdateError as e:
         check("404" in str(e) and not os.path.exists(STG), f"주소가 다 안 되면 마지막 까닭으로 거절 ({e})")
+    up.UPDATE_BASE_URLS = (BASE, "https://old.test")                # 첫 주소가 서명 거절 - 다음 주소의 404 로 덮지 않는다 (BugBuster L21)
+    GOT.clear()
+    try:
+        up.fetch_release("2026.10.07-2", PROG, STG, get=get, pub=us.keygen()[1])
+        check(False, "서명 거절은 다음 주소로 안 넘어간다 (거절 안 됨)")
+    except up.UpdateError as e:
+        check("서명" in str(e) and not any(u.startswith("https://old.test") for u in GOT), f"서명 거절은 그 자리에서 ({e})")
 finally:
     up.UPDATE_BASE_URLS = saved
 check(up.UPDATE_BASE_URLS[0] == up.server_info.UPDATE_BASE_URL or os.environ.get("RPA_UPDATE_BASE_URL"),
@@ -296,6 +303,13 @@ up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: N
               fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None,
               delete_task=lambda: dels.append(1))
 check(up.read_state()["state"] == "applying" and not dels, "도우미가 applying 으로 바꾸면 failed 로 안 만든다")
+up.write_state({})
+up.run_update("2026.10.07-2", "update", PROG, lambda: True, register=lambda r: None, run_task=lambda: None,
+              fetch=lambda v, p, s: up.fetch_release(v, p, s, base_url=BASE, get=get, pub=PK), sleep=lambda s: None,
+              delete_task=lambda: up.write_state({**up.read_state(), "state": "applying"}))   # 120초 끝에 도우미가 늦게 켜졌다
+check(up.read_state()["state"] == "applying" and os.path.isfile(up.path("staging", "plan.json")),
+      "120초 뒤 늦게 켜진 도우미가 바꾸는 중이면 staging 을 안 지우고 failed 도 안 적는다 (BugBuster K6)")
+shutil.rmtree(up.path("staging"), ignore_errors=True)
 
 print("\n--- A. 상태 파일 쓰기 실패는 소리 내어 ---")
 real_wja = st.write_json_atomic

@@ -60,13 +60,15 @@ const serial = (fn) => { const run = chain.then(fn); chain = run.catch(() => {})
 const BODY_MAX = 65536, PRESET_BODY_MAX = 8 * 1048576;   // 프리셋 파일(기록 수십~수백 KB)을 올리는 요청만 크게
 function readJson(req, max = BODY_MAX) {
   return new Promise((ok, fail) => {
+    // 너무 크면 본문을 버리며 끝까지 받은 뒤 거절한다 - 도중에 끊으면 화면엔 거절 글 대신 'Failed to fetch' 가 뜬다 (BugBuster L13)
     const chunks = [];
-    let size = 0;
+    let size = Number(req.headers["content-length"]) > max ? Infinity : 0;   // 머리글로 먼저 본다 - 그러면 한 조각도 모으지 않는다
     req.on("data", (c) => {
       size += c.length;
-      if (size > max) { fail(new ops.Refused("요청이 너무 큽니다.")); req.destroy(); } else chunks.push(c);
+      if (size <= max) chunks.push(c);
     });
     req.on("end", () => {
+      if (size > max) return fail(new ops.Refused("요청이 너무 큽니다."));
       try { ok(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); } catch { fail(new ops.Refused("요청 형식이 올바르지 않습니다.")); }
     });
     req.on("error", fail);

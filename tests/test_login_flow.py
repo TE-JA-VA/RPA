@@ -63,6 +63,11 @@ check(r["status"] != "success", f"다른 ERPia 의 메인 창은 성공이 아�
 r, _ = run([Win(1), Win(1)], {1: True, 5: False}, popup=Win(5), popup_text="Accordion Menu | lcg_sales", pids={1: 7, 5: 7})
 check(r["status"] != "success", f"숨은 메인 창은 성공이 아니다 ({r['status']})")
 
+print("=== 팝업 없이 응답 없음 (BugBuster L3) ===")
+r, calls = run([Win(1)] * (pl.MAX_TWO_FA_RETRIES + 1), {1: True})
+check(r["status"] == "max_retries" and "응답 없음" in r["message"] and "2차 인증" not in r["message"]
+      and calls["click"] == pl.MAX_TWO_FA_RETRIES, f"2차 인증 팝업이 한 번도 없으면 사유는 '로그인 응답 없음' ({r['message']})")
+
 print("=== 함께 실행: 칸에 치기 전 포커스가 ERPia 에 있는지 (검토 10-20) ===")
 
 

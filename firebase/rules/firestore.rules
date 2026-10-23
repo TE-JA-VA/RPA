@@ -44,7 +44,7 @@ service cloud.firestore {
       allow read: if sameCompany(cid);
       allow write: if false;
       match /grants/{gid} {
-        allow read: if sameCompany(cid);
+        allow read: if signedIn() && claims().role == 'super';   // 넣은 내역(memo)은 업체가 못 본다 (BugBuster L17)
         allow write: if false;
       }
     }

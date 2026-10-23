@@ -778,7 +778,11 @@ def set_policy(limit, off, wellife=False, presets=None, parallel=None):
         due = st.parse_iso(sch.get("next_run_at"))
         if due is None or due > NOW() or sch.get("next_slot") not in [s["at"] for s in active_slots(sch)]:
             advance(sch, NOW())
-        st.write_settings(cfg)
+        if st.write_settings(cfg) and old.get("presets") != new["presets"]:
+            try:
+                st.switch_off_over_limit(st.preset_limit())   # 한도가 줄면 한도 밖 켜진 칸을 끈다 (BugBuster M10)
+            except Exception:
+                pass                                          # 사용자 설정이 없거나 깨짐 - 정책은 적었다
         return True
 
 
@@ -1129,12 +1133,15 @@ class Scheduler(threading.Thread):
         # 사이트 수집만 고른 반복 회차는 프리페어가 돈다 - 그 상태로 센다 (사용자 2026-10-08: 반복에도 사이트 수집)
         program = "prepare" if win and slot_target(win, slot_off(sch0))[0] == "prepare" else "routine"
         v = st.read_json(st.status_path(program)) or {}
-        if v.get("state") == "running":
-            return
+        if v.get("state") == "running" or any_rpa_running():
+            return                               # 손잡이를 잃어도 (전체 줄의) 프리페어가 도는 중이면 기다린다 (BugBuster L9)
         started = st.parse_iso(v.get("started_at"))
         fresh = started is not None and started >= since
         if not fresh and now < since + datetime.timedelta(seconds=LAUNCH_GRACE_SEC):
             return                               # 띄운 프로그램이 아직 기록 전일 수 있다 (에이전트를 다시 켜 손잡이를 잃은 직후 등)
+        prep_end = st.parse_iso((st.read_json(st.status_path("prepare")) or {}).get("finished_at")) if program == "routine" else None
+        if not fresh and prep_end and since <= prep_end and now < prep_end + datetime.timedelta(seconds=LAUNCH_GRACE_SEC):
+            return                               # 프리페어가 막 끝나 루틴이 아직 기록 전 (BugBuster L9)
         with _settings_lock:
             cfg = st.read_settings()
             sch = cfg["schedule"]
@@ -1344,19 +1351,25 @@ def stop_rpa():
     if not roots:
         return 200, {"ok": True, "message": "이미 완료되어 중단할 수 없었습니다."}
     _active["checked"] = True                 # 끈 것을 '시작하지 못함' 으로 남기지 않게 (전체 실행의 안 띄운 루틴)
-    victims = process_tree(roots, keep_name=ERPIA_EXE)
-    for pid in victims:
-        terminate_pid(pid)                    # 그사이 스스로 끝난 것은 못 연다 - 아래에서 살아 있는지로 본다
-    end = time.time() + 5
-    while time.time() < end and any(st.process_alive(p) for p in victims):
-        time.sleep(0.2)
-    left = [p for p in victims if st.process_alive(p)]
-    if left:
-        return 500, {"ok": False, "error": f"중단 명령이 실패했습니다. (남은 프로세스 {len(left)}개)"}
-    if proc is not None:
-        proc.wait(timeout=5)
-    for p in running:
-        st.mark_stopped(p, STOPPED_TEXT)
+    for p in running:                         # 끄고 기다리는 사이 다른 쪽이 먼저 보아도 '중단' 으로 닫게 (BugBuster M19)
+        st.mark_stopping(p, snap["programs"][p].get("run_id"), STOPPED_TEXT)
+    try:
+        victims = process_tree(roots, keep_name=ERPIA_EXE)
+        for pid in victims:
+            terminate_pid(pid)                # 그사이 스스로 끝난 것은 못 연다 - 아래에서 살아 있는지로 본다
+        end = time.time() + 5
+        while time.time() < end and any(st.process_alive(p) for p in victims):
+            time.sleep(0.2)
+        left = [p for p in victims if st.process_alive(p)]
+        if left:
+            return 500, {"ok": False, "error": f"중단 명령이 실패했습니다. (남은 프로세스 {len(left)}개)"}
+        if proc is not None:
+            proc.wait(timeout=5)
+        for p in running:
+            st.mark_stopped(p, STOPPED_TEXT)
+    finally:
+        for p in running:
+            st.clear_stopping(p)
     names = ", ".join(st.PROGRAMS.get(p, p) for p in running) or TARGETS[_active["target"]][0]
     return 200, {"ok": True, "message": f"{st.josa(names)} 중단했습니다."}
 

@@ -502,7 +502,7 @@ with sync_playwright() as pw:
     check(len(launched) == 1, "명령이 하나 만들어졌다")
     c = launched[0] if launched else {}
     check(c.get("state") == "queued" and c.get("by") == admin_uid and c.get("args", {}).get("target") == "routine", "launch / queued / by / target")
-    check(590 <= c.get("expires_at", 0) - c.get("created_at", 0) <= 610, "만료 10분")
+    check(c.get("expires_at", 0) - c.get("created_at", 0) == 90, "실행 명령은 만료 90초 (끊긴 PC 가 사람이 자리를 뜬 뒤 실행하지 않게, BugBuster I12)")
     check(page.is_disabled("#run-routine") and page.is_disabled("#run-all"), "응답 대기 중 버튼 잠금")
     key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "launch")
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "PROCESS 오토파일럿을 실행합니다.", "started_at": 1, "ended_at": 2})

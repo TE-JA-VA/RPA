@@ -147,6 +147,8 @@ def apply(state, ops):
     try:
         ops.end_agent()
         os.makedirs(os.path.join(bnew, "files"), exist_ok=True)
+        with open(os.path.join(bnew, "plan.json"), "w", encoding="utf-8") as f:   # 되돌리기 계획 사본 - staging 이 지워져도 restore 한다 (BugBuster K6)
+            json.dump(plan, f, ensure_ascii=False)
         _copy_atomic(os.path.join(prog, st.MANIFEST_NAME), os.path.join(bnew, st.MANIFEST_NAME))
         for rel in plan["fetch"] + plan["remove"]:
             if os.path.isfile(_full(prog, rel)):
@@ -155,11 +157,13 @@ def apply(state, ops):
             _move(_full(os.path.join(stg, "files"), rel), _full(prog, rel))
         _copy_atomic(os.path.join(stg, "manifest.json"), os.path.join(prog, st.MANIFEST_NAME))
         ops.set_display_version(state["target"])
-        ops.after_install(prog)
-        alive = wait_alive(state["target"], started, ops)
+        rc = ops.after_install(prog)
+        alive = not rc and wait_alive(state["target"], started, ops)   # 설치 후 작업이 실패하면 3분 기다리지 않는다 (BugBuster M22)
     except Exception as e:                                    # 잠긴 파일·디스크 가득 등 - 끊김(BaseException)이 아닌 보통 오류
         up.log(f"바꾸는 중 오류 {type(e).__name__}: {e}"[:300])
         return rollback(state, ops, f"바꾸는 중 오류 ({type(e).__name__})")
+    if rc:
+        return rollback(state, ops, f"새 버전의 설치 후 작업이 실패하였습니다 (종료 코드 {rc}, {state['target']})")
     if not alive:
         return rollback(state, ops, f"새 판이 3분 안에 정상으로 켜지지 않았습니다 ({state['target']})")
     done = {"state": "done", "mode": state.get("mode"), "target": state["target"], "from": state["from"],
@@ -177,18 +181,22 @@ def rollback(state, ops, reason):
     state = {**state, "state": "rolling_back", "reason": reason, "at": started}
     up.write_state(state)
     up.log(f"되돌리기: {reason}")
-    err = None
+    err, rc = None, 0
     try:
         ops.end_agent()
         try:
             plan = _plan(state)
         except Exception:
-            plan = None                          # staging 이 없다 = 아직 아무것도 안 옮겼다
+            try:                                 # staging 이 지워졌다 - apply 가 보관에 둔 사본으로 (BugBuster K6)
+                with open(os.path.join(bnew, "plan.json"), encoding="utf-8") as f:
+                    plan = json.load(f)
+            except Exception:
+                plan = None                      # 사본도 없다 = 아직 아무것도 안 옮겼다
         if plan is not None:
             restore(prog, bnew, plan)
         ops.set_display_version(state["from"])
-        ops.after_install(prog)
-        ok = wait_alive(state["from"], started, ops)
+        rc = ops.after_install(prog)
+        ok = not rc and wait_alive(state["from"], started, ops)   # (BugBuster M22)
     except Exception as e:                       # 되돌리기도 실패 - 되풀이하지 말고 남기고 멈춘다
         up.log(f"되돌리기 오류 {type(e).__name__}: {e}"[:300])
         ok, err = False, e
@@ -196,6 +204,8 @@ def rollback(state, ops, reason):
         shutil.rmtree(bnew, ignore_errors=True)
         shutil.rmtree(state.get("staging") or up.path("staging"), ignore_errors=True)
     final = reason if ok else f"{reason} / 옛 판도 정상으로 켜지지 않았습니다 - 설치 파일로 다시 설치하세요"
+    if rc:
+        final = f"{reason} / 옛 버전의 설치 후 작업도 실패하였습니다 (종료 코드 {rc}) - 설치 파일로 다시 설치하여 주십시오"
     up.write_state({"state": "rolled_back", "mode": state.get("mode"), "target": state["target"], "from": state["from"],
                     "at": up.now_text(), "reason": final})
     up.log(f"되돌림 끝 ({'옛 판 정상' if ok else '옛 판도 점검 실패'})")

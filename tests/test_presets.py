@@ -363,6 +363,9 @@ put_presets([dict(good[0], no=i, code=f"{i:03d}") for i in range(1, 42)])
 check("41개면 ValueError (뒤를 잘라 읽지 않는다)", raises(ValueError, st.read_presets))
 put_presets([good[0], dict(good[1], code="012", record=REC1)])
 check("기록 있는 두 프리셋이 같은 사이트코드면 ValueError", raises(ValueError, st.read_presets))
+put_presets([dict(good[1], no=1, code="012"), dict(good[0], no=2)])
+check("앞 칸이 코드만 있고 기록이 없으면 뒤 칸이 같은 코드여도 읽힌다 (쓰는 쪽 규칙과 같게, BugBuster H1)",
+      [p["no"] for p in st.read_presets()] == [1, 2])
 put_presets([good[0], dict(good[1], saved_at=12)])
 check("저장 시각이 글자가 아니면 ValueError (대시보드 그리기가 멈추지 않게)", raises(ValueError, st.read_presets))
 put_presets(good)
@@ -537,6 +540,19 @@ wr.status.read_presets = lambda: [{"no": n, "code": "012", "record": REC} for n 
 over, under = wr._replay_problems("PRESET3", {"Preset": 3}), wr._replay_problems("PRESET2", {"Preset": 2})
 wr.status.read_presets = orig_read
 check("업체 프리셋 수를 넘는 프리셋은 ACTOR 오토파일럿이 돌리지 않는다 (까닭을 남김)", over and "프리셋 수" in over[0] and under == [], (over, under))
+_keep = {f: open(f, "rb").read() for f in (st.presets_path(), st.user_config_path()) if os.path.exists(f)}
+st.write_presets([{"no": n, "name": f"몰{n}", "code": f"0{n}9", "saved_at": None, "record": REC} for n in (1, 2, 3)])
+st.save_preset_sites(st.read_presets(), {n: (f"s{n}", PW) for n in (1, 2, 3)})
+e = raises(ValueError, st.set_preset_switches, {"PRESET3": True})
+check("업체 프리셋 수(2) 밖 칸은 켜지 않는다 (BugBuster M10)", e is not None and "프리셋 수(2개)" in str(e)
+      and st.set_preset_switches({"PRESET2": True}) == {2: True}, str(e))
+dash.set_policy(2, [], False, 3)
+st.set_preset_switches({"PRESET3": True})
+dash.set_policy(2, [], False, 2)
+_s = st.read_user_config()["Sites"]
+check("프리셋 수가 줄면 한도 밖의 켜진 칸을 끈다 - 지우지는 않는다 (BugBuster M10)", _s["PRESET3"]["Stts"] == 9 and _s["PRESET2"]["Stts"] == 0, str(_s))
+for f, b in _keep.items():
+    open(f, "wb").write(b)
 policy_presets(None)
 
 print("=== 업체별 동시 실행 창 수 (관리 화면, 사용자 2026-10-16) ===")

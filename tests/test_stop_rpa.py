@@ -99,6 +99,27 @@ print("=== 4. 다시 누르면 ===")
 code, body = d.stop_rpa()
 check(code == 200 and body.get("message") == "이미 완료되어 중단할 수 없었습니다.", "이미 멈췄으면 할 일 없음", str(body))
 
+print("=== 5. 끄는 사이 다른 쪽이 먼저 본 죽은 실행 (BugBuster M19) ===")
+dead = subprocess.Popen([sys.executable, "-c", "pass"]); dead.wait()
+st.write_json_atomic(st.status_path("prepare"), {"run_id": "prepare_m19", "program": "prepare", "state": "running", "pid": dead.pid,
+                                                 "modules": [{"key": "collect", "state": "running"}]})
+st.mark_stopping("prepare", "prepare_m19", d.STOPPED_TEXT)
+v = st.dashboard_snapshot()["programs"]["prepare"]
+check(v["state"] == "stopped" and v["reason"] == d.STOPPED_TEXT and v["modules"][0]["state"] == "stopped",
+      "중단 표시가 있으면 먼저 본 쪽도 '중단' 으로 닫는다", f"{v['state']} {v['reason']}")
+st.clear_stopping("prepare")
+st.write_json_atomic(st.status_path("prepare"), {"run_id": "prepare_m19b", "program": "prepare", "state": "running", "pid": dead.pid})
+check(st.dashboard_snapshot()["programs"]["prepare"]["state"] == "crashed", "표시가 없으면 지금처럼 '비정상 종료'")
+st.append_history({"run_id": "prepare_m19b", "program": "prepare", "state": "crashed", "reason": "둘째 줄"})
+rows = [r for r in st.read_history(program="prepare") if r.get("run_id") == "prepare_m19b"]
+check(len(rows) == 1 and rows[0]["reason"] == "둘째 줄", "같은 실행을 두 번 닫아도 이력은 한 줄 - 마지막 줄 (K12)", str(rows))
+_replace, _max = os.replace, st.HISTORY_MAX_BYTES
+def _locked(*a): raise PermissionError("잠김")  # noqa: E301,E704
+os.replace, st.HISTORY_MAX_BYTES = _locked, 0
+ok = st.append_history({"run_id": "l23", "program": "prepare", "state": "done"})
+os.replace, st.HISTORY_MAX_BYTES = _replace, _max
+check(ok and any(r.get("run_id") == "l23" for r in st.read_history()), "이력 넘기기가 실패해도 이번 한 건은 남는다 (L23)")
+
 d.terminate_pid(erpia_pid)
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")

@@ -70,14 +70,20 @@ def _code_clash(presets, no, code):
     return None if k is None else f"프리셋 {k}와(과) 같은 사이트코드 {code}를 사용합니다."
 
 
-def _write_backup(no, preset, site):
-    """보관 파일을 쓴다 → 됐나. 못 쓰면 그 칸은 바꾸지 않는다 (되돌릴 수 없는 변경을 만들지 않게)."""
-    path = backup_path(no)
+MEMORY_KINDS = (("mail", st.mail_memory_path), ("imap", st.imap_memory_path))   # 칸의 웹메일·IMAP 메일 기억 (BugBuster K13)
+
+
+def _write_backup(no, preset, site, suffix=""):
+    """보관 파일을 쓴다 → 됐나. 못 쓰면 그 칸은 바꾸지 않는다 (되돌릴 수 없는 변경을 만들지 않게).
+    메일 기억도 같이 담는다 - 다른 사이트를 넣으며 지운 기억을 [되돌리기] 가 되살려 옛 메일을 다시 받지 않게 (BugBuster K13).
+    suffix: apply 는 임시 이름(.new)에 쓰고 설정 쓰기가 끝난 뒤 제자리로 옮긴다 (BugBuster L20)."""
+    path = backup_path(no) + suffix
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
     except OSError:
         return False
-    return st.write_json_atomic(path, {"preset": preset, "site": site})
+    memory = {kind: (st.read_json(f(no)) if os.path.isfile(f(no)) else None) for kind, f in MEMORY_KINDS}
+    return st.write_json_atomic(path, {"preset": preset, "site": site, **memory})
 
 
 def _drop_backup(no):
@@ -153,6 +159,7 @@ def apply(items):
     sites = cfg.get(st.SITES_SECTION) if isinstance(cfg.get(st.SITES_SECTION), dict) else {}
     limit = st.preset_limit()
     done, rejected = [], []
+    staged, dropped, forget = [], [], []     # 보관 파일·메일 기억은 설정 쓰기가 끝난 뒤에 바꾼다 (BugBuster L20·K13)
     now = datetime.datetime.now().isoformat(timespec="seconds")
     for (obj, no), bad in zip(items, _bad_slots([no for _, no in items], limit)):
         if bad:
@@ -171,11 +178,14 @@ def apply(items):
         key = st.preset_site_key(no)
         old_site = sites.get(key) if isinstance(sites.get(key), dict) else None
         if old.get("record"):
-            if not _write_backup(no, old, old_site):
+            if not _write_backup(no, old, old_site, ".new"):
                 rejected.append((no, "이전 기록을 보관하지 못해 변경하지 않았습니다."))
                 continue
+            staged.append(no)
         else:
-            _drop_backup(no)            # 남아 있던 옛 보관 - [되돌리기]가 방금 넣은 것을 버리고 옛 계정을 되살리지 않게
+            dropped.append(no)          # 남아 있던 옛 보관 - [되돌리기]가 방금 넣은 것을 버리고 옛 계정을 되살리지 않게
+        if old.get("code") != obj["code"]:
+            forget.append(no)           # 다른 사이트 - 옛 사이트의 메일 기억과 키가 겹쳐 새 메일을 건너뛰지 않게 (BugBuster K13)
         while len(presets) < no:
             presets.append(st.blank_preset(len(presets) + 1))
         presets[no - 1] = {"no": no, "name": obj["name"], "code": obj["code"], "saved_at": now, "record": obj["record"]}
@@ -189,7 +199,23 @@ def apply(items):
                 sites[key].update(Phone=obj["phone"], SmsSenders=list(obj["senders"]))
         done.append(no)
     if done:
-        _write_all(cfg, sites, presets)
+        try:
+            _write_all(cfg, sites, presets)
+        except Exception:
+            for no in staged:           # 실패하면 칸·설정은 그대로 - 보관도 그대로 둔다 (BugBuster L20)
+                _remove(backup_path(no) + ".new")
+            raise
+        for no in staged:
+            try:
+                os.replace(backup_path(no) + ".new", backup_path(no))
+            except OSError:             # 못 옮기면 옛 보관도 지운다 - [되돌리기] 가 엉뚱한 때로 돌리지 않게
+                _remove(backup_path(no) + ".new")
+                _drop_backup(no)
+        for no in dropped:
+            _drop_backup(no)
+        for no in forget:
+            for _, f in MEMORY_KINDS:
+                _remove(f(no))
     return done, rejected
 
 
@@ -200,7 +226,7 @@ def restore(slots):
     if not cfg:
         raise FileNotFoundError(st.user_config_path())
     sites = cfg.get(st.SITES_SECTION) if isinstance(cfg.get(st.SITES_SECTION), dict) else {}
-    done, rejected, used = [], [], []
+    done, rejected, used, memories = [], [], [], []
     for no, bad in zip(slots, _bad_slots(list(slots), st.PRESET_MAX)):
         if bad:
             rejected.append((no, bad))
@@ -223,10 +249,20 @@ def restore(slots):
             sites[key] = {"Code": str(bk["preset"].get("code") or ""), **bk["site"], "Preset": no}
         else:
             sites.pop(key, None)
+        memories += [(f(no), bk[kind]) for kind, f in MEMORY_KINDS if kind in bk]   # 보관 때 메일 기억 (없던 옛 보관은 그대로, BugBuster K13)
         done.append(no)
         used.append(path)
     if done:
         _write_all(cfg, sites, presets)
+        for mpath, memory in memories:
+            if memory is None:
+                _remove(mpath)
+            else:
+                try:
+                    os.makedirs(os.path.dirname(mpath), exist_ok=True)
+                except OSError:
+                    pass
+                st.write_json_atomic(mpath, memory)
         for path in used:
             try:
                 os.remove(path)

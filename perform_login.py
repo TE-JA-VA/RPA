@@ -326,6 +326,7 @@ def login_flow(admin_code, user_id, password, log=None):
         log(f"필드 입력 실패: {e}")
         return {"status": "error", "message": f"필드 입력 실패: {e}", "error_log_path": None}
 
+    two_fa = 0   # 2차 인증 팝업을 본 횟수 - 한 번도 없으면 끝 사유는 '응답 없음' (BugBuster L3)
     for attempt in range(1, MAX_TWO_FA_RETRIES + 1):
         login_win = find_login_window()
         # 로그인 뒤 숨은 채 남는 잔재 창은 로그인 창이 아니다 - 그 창 단추 좌표를 누르면 메인 화면이 눌린다
@@ -364,6 +365,7 @@ def login_flow(admin_code, user_id, password, log=None):
         log(f"[시도 {attempt}] 팝업 발견: handle={popup_win.handle} 내용='{popup_text}'")
 
         if TWO_FA_KEYWORD in popup_text:
+            two_fa += 1
             log(f"  -> 2차 인증 안내 팝업으로 판단. 확인 클릭 후 {TWO_FA_WAIT_SECONDS}초 대기합니다.")
             ok_btn = next((b for b in popup_buttons if "확인" in b.window_text()), None)
             if ok_btn is None:
@@ -386,6 +388,10 @@ def login_flow(admin_code, user_id, password, log=None):
             return {"status": "popup_error", "message": f"예상 밖 팝업: {popup_text}", "error_log_path": path}
 
     log(f"최대 재시도({MAX_TWO_FA_RETRIES}회) 초과. 중단합니다.")
+    if not two_fa:   # 팝업도 창 변화도 없이 끝났다 - 2차 인증 탓이 아니다 (BugBuster L3)
+        path = write_error_log("로그인 단추를 눌러도 팝업·창 변화가 없어 최대 재시도 횟수를 초과함")
+        log(f"에러 로그 저장: {path}")
+        return {"status": "max_retries", "message": "로그인 응답 없음 (팝업·창 변화 없음)으로 최대 재시도 초과", "error_log_path": path}
     path = write_error_log("2차 인증 팝업이 반복적으로 발생하여 최대 재시도 횟수를 초과함")
     log(f"에러 로그 저장: {path}")
     return {"status": "max_retries", "message": "2차 인증 팝업 반복으로 최대 재시도 초과", "error_log_path": path}

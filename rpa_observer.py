@@ -41,7 +41,8 @@ import web_replay as rec
 REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
 RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
-MAIL_HINT = "엑셀파일을 받으려는 메일이 '메일 시작 문구'로 시작하는 경우, 그 글자로 시작하는 메일이 처리대상이 됩니다."   # 메일 첨부파일일 때 안내 (사용자 2026-10-14 검수)
+MAIL_HINT = ("엑셀파일을 받으려는 메일이 '메일 시작 문구'로 시작하는 경우, 그 글자로 시작하는 메일이 처리대상이 됩니다."   # 메일 첨부파일일 때 안내 (사용자 2026-10-14 검수)
+             " 메일이 많으면 제목으로 검색한 뒤 고르십시오.")      # (BugBuster I5)
 IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부파일을 받습니다. 아이디·비밀번호는 메일 계정의 것입니다 "
              "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣어 주십시오).")
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
@@ -550,10 +551,26 @@ def imap_problem(step):
     return None
 
 
+def imap_warn(step):
+    """메일 받기 조건의 경고 (막지 않고 보이기만 - 예: csv 첨부는 받기만 하고 업로드되지 않음). 없으면 빈 글자."""
+    if not step:
+        return ""
+    try:
+        return mail_imap.check_rules((step or {}).get("rules") or {}).get("warn") or ""
+    except ValueError:
+        return ""
+
+
 def stored_password(no):
     """저장된 비밀번호 (미리보기·저장 전 확인용, 화면에는 안 보인다). 없으면 빈 글자."""
     site = (st.read_user_config().get(st.SITES_SECTION) or {}).get(st.preset_site_key(no)) or {}
     return st.unseal(site.get("PW") or "") or ""
+
+
+def saved_no(p, cur):
+    """화면 cur 칸의 파일·저장된 비밀번호를 찾을 번호 = 불러올 때 번호(orig). 새 칸이거나, 프리셋을 지워 화면 번호가 당겨진 채
+    아직 저장 전이면 None - 화면 번호로 찾으면 다른 프리셋의 것을 쓴다 (BugBuster H2)."""
+    return p["orig"] if p["orig"] == cur + 1 else None
 
 
 def scrub_login(record, login_id):
@@ -590,11 +607,23 @@ def store(files, logins, fresh=(), phones=None, origs=None, dropped=()):
     메일 기억·로그인 세션·보관 파일도 따라 옮긴다. 순서는 프리셋 → 설정 → 파일: 설정 쓰기가 실패해도 Sites 는 옛 번호 그대로라
     다시 저장하면 같은 옛 번호로 다시 찾는다 (반대 순서면 두 번 당겨진다)."""
     try:
+        old_codes = {p["no"]: p["code"] for p in st.read_presets()}
+    except (OSError, ValueError):
+        old_codes = None                     # 옛 파일을 못 읽으면 메일 기억은 그대로 둔다
+    try:
         st.write_presets(files)
         st.save_preset_sites(files, logins, fresh=fresh, phones=phones, origs=origs)
     except (OSError, ValueError, RuntimeError) as e:
         return f"저장하지 못했습니다. ({e}) 잠시 후 다시 저장하여 주십시오."
     pt.move_preset_files(origs or {}, dropped)
+    for f in files if old_codes is not None else ():
+        # 같은 칸에 다른 사이트(또는 새 칸)를 저장하면 옛 사이트의 메일 기억을 지운다 - 키가 겹쳐 새 메일을 건너뛰지 않게 (BugBuster K13)
+        if f["record"] and old_codes.get(origs.get(f["no"]) if origs else f["no"]) != f["code"]:
+            for path in (st.mail_memory_path(f["no"]), st.imap_memory_path(f["no"])):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
     return None
 
 
@@ -1003,9 +1032,14 @@ class App:
         self.presets[self.cur]["otp"][sid] = on
         self.render()
 
+    SAVE_FIRST = "저장한 뒤에 해 주십시오."
+
     def clear_mail_memory(self):
         """[받은 메일 기억 지우기]: 다음 실행 때 메일함의 맞는 메일을 다시 받는다."""
-        mem = rec.MailMemory(st.mail_memory_path(self.cur + 1))
+        no = saved_no(self.presets[self.cur], self.cur)
+        if no is None:
+            return self.status.config(text=self.SAVE_FIRST, fg=RED)
+        mem = rec.MailMemory(st.mail_memory_path(no))
         if not self.ask("받은 메일 기억 지우기", f"이 프리셋의 메일 처리 기록({len(mem.keys)}통)을 삭제합니다. "
                         "다음 실행 때 메일함에서 조건에 맞는 메일을 다시 다운로드합니다. 삭제하시겠습니까?"):
             return
@@ -1087,9 +1121,11 @@ class App:
 
     # --- 메일 서버(IMAP) ---
     IMAP_TEXT = (("서버 주소", "host"), ("포트", "port"), ("메일함", "mailbox"), ("보낸 사람", "senders"), ("제목 시작 글자", "subject_prefix"),
-                 ("제목에 들어갈 말", "subject_has"), ("제목에서 뺄 말", "subject_not"), ("최근 며칠 (0 = 오늘)", "days"),
+                 ("제목에 들어갈 말", "subject_has"), ("제목에서 뺄 말", "subject_not"), ("처음 받을 때 최근 며칠 (0 = 오늘)", "days"),
                  ("첨부 종류", "exts"), ("한 번에 최대 메일 수", "max"))
     SECURITY = (("ssl", "SSL (포트 993)"), ("starttls", "STARTTLS (포트 143)"))
+    SENDER_NOTE = "보낸 사람을 이름만 넣으면 다른 사람이 흉내 낼 수 있습니다. 메일 주소(@ 포함)로 넣는 것을 권합니다."   # (BugBuster I10)
+    DAYS_NOTE = "기간은 처음 받을 때만 쓰고, 그 뒤는 지난번 받은 날부터 받습니다 (최대 30일)."      # mail_imap._days (BugBuster I8)
 
     def _render_imap(self, p):
         """기록한 단계 목록 자리에 메일 서버·조건 칸과 [찾아보기]. 칸을 고쳐도 다시 그리지 않는다 (치는 중에 칸이 사라지지 않게)."""
@@ -1118,7 +1154,7 @@ class App:
                 x.trace_add("write", lambda *a: self._imap_store(p, v, sec))
         sec.bind("<<ComboboxSelected>>", lambda e: self._imap_store(p, v, sec))
         tk.Label(self.inner, text="보낸 사람·제목 조건은 쉼표로 여러 개를 넣을 수 있습니다. 보낸 사람이나 제목 조건 가운데 하나는 꼭 넣어 주십시오. "
-                 "이미 받은 메일은 다시 받지 않습니다.", font=F_SMALL, bg=CARD, fg=MUTED, justify="left", anchor="w",
+                 "이미 받은 메일은 다시 받지 않습니다. " + self.DAYS_NOTE + " " + self.SENDER_NOTE, font=F_SMALL, bg=CARD, fg=MUTED, justify="left", anchor="w",
                  wraplength=self.panel_w - int(90 * self.scale)).pack(fill="x", padx=12, pady=(4, 6))
         row = tk.Frame(self.inner, bg=CARD)
         row.pack(fill="x", padx=12, pady=(0, 6))
@@ -1151,7 +1187,11 @@ class App:
         self._store_fields()
         i, p = self.cur, self.presets[self.cur]
         step = imap_record(p["imap"])["steps"][0]
-        pw = p["pw"] or (stored_password(i + 1) if p["has_pw"] else "")
+        no = saved_no(p, i)                      # (BugBuster H2)
+        if not p["pw"] and p["has_pw"] and no is None:
+            return self.status.config(text=self.SAVE_FIRST, fg=RED)
+        pw = p["pw"] or (stored_password(no) if p["has_pw"] else "")
+        memory = st.imap_memory_path(no) if no else None
         why = imap_problem(step) or (None if p["id"].strip() and pw else "메일 계정의 아이디·비밀번호를 넣어 주십시오.")
         if why:
             return self.status.config(text=why, fg=RED)
@@ -1160,7 +1200,7 @@ class App:
 
         def work():
             try:
-                res = mail_imap.find(server, step["rules"], st.imap_memory_path(i + 1))
+                res = mail_imap.find(server, step["rules"], memory)
             except mail_imap.MailError as e:
                 res = str(e)
             except Exception as e:
@@ -1175,14 +1215,18 @@ class App:
             self.status.config(text=res, fg=RED)
         else:
             done = sum(1 for x in res if x["done"])
+            warn = imap_warn(imap_record(self.presets[i]["imap"])["steps"][0]) if i < len(self.presets) and self.presets[i]["imap"] else ""
             self.status.config(text=f"조건에 맞는 메일 {len(res)}통" + (f" (이미 받은 메일 {done}통)" if done else "")
-                               + " - 찾아보기는 받거나 읽음 표시를 하지 않습니다.", fg=GREEN_D)
+                               + " - 찾아보기는 받거나 읽음 표시를 하지 않습니다." + (f" {warn}" if warn else ""), fg=GREEN_D)   # (BugBuster I6)
         if i == self.cur:
             self.render()
 
     def clear_imap_memory(self):
         """[받은 메일 기억 지우기] (메일 서버): 다음 실행 때 조건에 맞는 메일을 다시 받는다."""
-        path = st.imap_memory_path(self.cur + 1)
+        no = saved_no(self.presets[self.cur], self.cur)     # (BugBuster H2)
+        if no is None:
+            return self.status.config(text=self.SAVE_FIRST, fg=RED)
+        path = st.imap_memory_path(no)
         if not os.path.isfile(path):
             return self.status.config(text="받은 메일 기억이 없습니다.", fg=MUTED)
         if not self.ask("받은 메일 기억 지우기", "이 프리셋의 메일 처리 기록을 삭제합니다. 다음 실행 때 메일함에서 조건에 맞는 메일을 다시 "
@@ -1214,7 +1258,7 @@ class App:
         if (p["raw"] or p["loaded"] or p["head"]) and not self.ask(
                 "다시 기록", f"{circled(self.cur + 1)} {p['name']}의 기록을 삭제하고 처음부터 다시 기록하시겠습니까?"):
             return
-        p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set())
+        p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set(), otp={})
         self.recording, self.shown = self.cur, 0
         self.status.config(text="브라우저를 여는 중…", fg=MUTED)
         self.render()
@@ -1229,7 +1273,10 @@ class App:
         kept = self._kept(p, final)
         if not kept:
             return self.status.config(text="실행할 단계가 없습니다.", fg=RED)
-        pw = p["pw"] or (stored_password(self.cur + 1) if p["has_pw"] else "")
+        no = saved_no(p, self.cur)               # (BugBuster H2)
+        if not p["pw"] and p["has_pw"] and no is None:
+            return self.status.config(text=self.SAVE_FIRST, fg=RED)
+        pw = p["pw"] or (stored_password(no) if p["has_pw"] else "")
         if not p["id"].strip() or not pw:
             return self.status.config(text="프리셋에 아이디·비밀번호를 설정하신 후 미리보기를 진행해 주십시오.", fg=RED)
         r = rec.keep_steps(final, kept)
@@ -1310,9 +1357,9 @@ class App:
     def export_file(self):
         """[파일로 내보내기]: 저장된 지금 칸을 프리셋 파일(6절)로. 아이디·비밀번호·인증 휴대폰은 넣지 않는다 (pt.export_item)."""
         p = self.presets[self.cur]
-        if p.get("fresh") or not (p["loaded"] or p["raw"] or p["head"]):      # 기록한 칸은 저장 뒤에도 loaded 가 없다 (raw·head)
+        no = self.cur + 1                        # 지워 당겨진 번호(orig 가 다름)면 파일의 다른 프리셋을 내보낸다 (BugBuster H2) - 새 칸은 fresh 로 막힌다
+        if p.get("fresh") or not (p["loaded"] or p["raw"] or p["head"]) or p["orig"] not in (None, no):      # 기록한 칸은 저장 뒤에도 loaded 가 없다 (raw·head)
             return self.tell("파일로 내보내기", "저장한 뒤 내보내 주십시오.")
-        no = self.cur + 1
         try:
             item = pt.export_item(no)
         except ValueError as e:
@@ -1339,13 +1386,21 @@ class App:
         if not cfg:
             return self.status.config(text="이 PC의 사용자 설정이 없습니다. 시작 메뉴의 '오토파일럿 설정'에서 먼저 저장하여 주십시오.", fg=RED)
         now = datetime.datetime.now().isoformat(timespec="seconds")
-        out = []
+        out, warns = [], []
         for no, p in enumerate(self.presets, 1):
             final, r = self._final(p), None
             if final and final["steps"]:
-                r = rec.keep_steps(final, self._kept(p, final))
+                kept = self._kept(p, final)
+                r = rec.keep_steps(final, kept)
                 for s in r["steps"]:
                     s.pop("id", None)
+                # 막지 않고 알리기만: 날짜로 못 바꾼 날짜 모양 값 (BugBuster I3) - 번호는 단계 목록에 보이는 번호 (지운 단계 뺌)
+                for k, v in rec.date_like_fills(final["steps"]):
+                    if k in kept:
+                        n = sum(1 for s in final["steps"][:k + 1] if s["id"] not in p["deleted"])
+                        warns.append(f"{circled(no)} {n}단계 값 '{v}'은(는) 날짜로 바꾸지 못해 매일 같은 날짜를 넣습니다.")
+                if imap_warn(st.imap_step(final)):     # (BugBuster I6)
+                    warns.append(f"{circled(no)} {imap_warn(st.imap_step(final))}")
             out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"],
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"]})
         problem = validate_presets(out) or pick_problem(out)
@@ -1378,9 +1433,10 @@ class App:
             except RuntimeError as e:
                 return self.status.config(text=f"{circled(o['no'])} 저장된 비밀번호가 일치하지 않습니다. ({e}) - 비밀번호를 다시 "
                                             "설정해 주십시오.", fg=RED)
-            if any(password_in_record(f["record"], pw) for f in files):    # 비밀번호 칸이 아닌 곳에 비밀번호를 친 경우
-                self.select(o["no"] - 1)
-                return self.status.config(text=f"{circled(o['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다. "
+            hit = next((f for f in files if password_in_record(f["record"], pw)), None)    # 비밀번호 칸이 아닌 곳에 비밀번호를 친 경우
+            if hit:
+                self.select(hit["no"] - 1)               # 걸린 기록의 프리셋으로 (BugBuster L6)
+                return self.status.config(text=f"{circled(hit['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다. "
                                             "해당 단계를 수정해주십시오.", fg=RED)
         fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh,
@@ -1393,7 +1449,7 @@ class App:
             if f["record"]:
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
         self._load_fields()
-        self.status.config(text="저장했습니다.", fg=GREEN_D)     # 기록 때 보이던 메일도 실행 때 받는다 - '이미 처리' 로 미리 채우지 않는다 (사용자 2026-10-20, 중복은 주문번호로 막힌다)
+        self.status.config(text=" ".join(["저장했습니다."] + warns), fg=BLUE if warns else GREEN_D)     # 기록 때 보이던 메일도 실행 때 받는다 - '이미 처리' 로 미리 채우지 않는다 (사용자 2026-10-20, 중복은 주문번호로 막힌다)
         return st.presets_path()
 
     def browser_bounds(self):
@@ -1421,6 +1477,8 @@ class App:
                 elif m[0] == "viewport":
                     self.presets[m[1]]["viewport"] = m[2]
                 elif m[0] == "phones":
+                    if hasattr(self, "phone_box"):
+                        self._store_fields()     # 치던 아이디·비밀번호를 먼저 담는다 - 목록이 늦게 와도 안 지워지게 (BugBuster M12)
                     self.phones, self.phones_failed = m[1] or [], m[1] is None
                     self._load_fields()
                 elif m[0] == "status":

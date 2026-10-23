@@ -65,19 +65,45 @@ class PhoneRelay:
         self.req_path = f"apps/otp/requests/{cid}/{phone_id}/current"
         self.code_path = f"apps/otp/codes/{cid}/{phone_id}/current"
 
-    def open(self):
-        """요청을 연다 (그 휴대폰이 2분 동안 STAND BY). 지난번에 남은 번호는 먼저 지운다. req_id 를 돌려준다."""
-        self._quiet_delete(self.code_path)
+    def open(self, tick=time.sleep):
+        """요청을 연다 (그 휴대폰이 2분 동안 STAND BY). req_id 를 돌려준다.
+        다른 PC 가 요청을 쥐고 있으면 (규칙이 put 을 막는다) 빌 때까지 - 길어야 만료 2분 - 기다렸다 차지한다 (설계 2절 '뒤에 온 쪽이 기다린다').
+        지난번에 남은 번호는 요청을 차지한 뒤에만 지운다 - 먼저 지우면 남의 PC 가 받아 둔 번호가 사라진다 (BugBuster M7)."""
         req_id = "req_" + secrets.token_hex(8)
-        self.client.put(self.req_path, {"req_id": req_id, "site": self.site, "senders": self.senders,
-                                        "pcId": self.pc_id, "created_at": {".sv": "timestamp"}})
+        end = time.time() + OPEN_MS / 1000 + 10
+        while True:
+            try:
+                self.client.put(self.req_path, {"req_id": req_id, "site": self.site, "senders": self.senders,
+                                                "pcId": self.pc_id, "created_at": {".sv": "timestamp"}})
+                break
+            except Exception as e:
+                if getattr(e, "status", None) not in (401, 403) or time.time() >= end:
+                    raise
+            while time.time() < end:          # 남의 요청 - 비거나 만료될 때까지 읽어 보며 기다린다 (거부된 put 을 되풀이하면 매번 토큰 갱신)
+                tick(POLL)
+                try:
+                    cur = self.client.get(self.req_path)
+                except Exception:
+                    continue
+                now_ms = getattr(self.client, "server_now", time.time)() * 1000
+                if not isinstance(cur, dict) or cur.get("pcId") == self.pc_id or (cur.get("created_at") or 0) + OPEN_MS < now_ms:
+                    break
+        self._quiet_delete(self.code_path)
         return req_id
 
     def wait(self, req_id, seconds, tick, field=None):
         """req_id 가 맞는 번호가 오면 그 번호, seconds 안에 안 오면 None. tick(초) 로 쉰다 (재생기의 [■ 중단] 을 본다)."""
         end = time.time() + seconds
         while True:
-            got = self.client.get(self.code_path)
+            try:
+                got = self.client.get(self.code_path)
+            except Exception as e:            # (BugBuster M8) 망 오류·서버 5xx 는 다음 폴링에 다시, 권한 거부만 새 요청으로
+                st = getattr(e, "status", None)
+                if st in (401, 403):
+                    return None               # 요청이 남에게 넘어가 읽기 거부 → 재생기가 OtpRetry 로 새 요청
+                if not (isinstance(e, OSError) or (isinstance(st, int) and st >= 500)):
+                    raise
+                got = None
             if isinstance(got, dict) and got.get("req_id") == req_id and re.fullmatch(r"\d{4,8}", str(got.get("code") or "")):
                 return str(got["code"])
             if time.time() >= end:
@@ -103,7 +129,7 @@ class ManualOtp:
     def __init__(self, on_wait=None):
         self.on_wait = on_wait
 
-    def open(self):
+    def open(self, tick=None):
         return "manual"
 
     def wait(self, req_id, seconds, tick, field=None):

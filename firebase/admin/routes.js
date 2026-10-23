@@ -28,6 +28,8 @@ export const ROUTES = compile([
   ["GET", "/api/companies", () => ops.companyTable()],
   ["GET", "/api/companies/:cid", (b, p) => ops.companyDetail(p.cid)],
   ["POST", "/api/companies/:cid/dashboard", () => ops.dashboardToken(), (b, r, p) => `대시보드 보기 ${p.cid} (총괄 로그인 열쇠 발급)`],   // 열쇠는 기록에 안 남긴다
+  ["POST", "/api/console/revoke", () => ops.revokeConsole(),
+    (b, r) => `총괄 세션 끊기 (대시보드 보기 로그인${r.revoked ? " 모두 끊음" : " - 사용한 적 없음"})`],   // BugBuster I15
   ["POST", "/api/setup", (b) => ops.setupCompany(b),
     (b, r) => `신규 업체 ${b.cid}: ${r.steps.map((s) => `${s.ok ? "✓" : "✗"} ${s.label}`).join(", ")}`],
   ["POST", "/api/companies/:cid/pcs", async (b, p) => {

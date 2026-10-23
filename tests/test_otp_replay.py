@@ -72,7 +72,7 @@ class FakeRelay:
     def __init__(self, how):
         self.how, self.opened, self.closed, self.waits = how, 0, 0, 0
 
-    def open(self):
+    def open(self, tick=None):
         self.opened += 1
         return f"req{self.opened}"
 
@@ -153,6 +153,76 @@ check("사이트가 3번 다 거절하면 실패 - '사이트가 인증번호를
 
 ok, rp, lines = replay("no_relay", None)
 check("인증 휴대폰이 없으면 그 단계에서 까닭과 함께 멈춘다", not ok and "인증 휴대폰" in rp.results[-1][2], rp.results[-1:])
+
+# --- PC 쪽 중계 PhoneRelay - 가짜 서버로 (BugBuster M7·M8)
+import urllib.error  # noqa: E402
+import otp_relay  # noqa: E402
+
+T = [1000.0]                                   # 가짜 서버 시각 (초)
+REQ, CODE = "apps/otp/requests/c/ph/current", "apps/otp/codes/c/ph/current"
+
+
+class Denied(Exception):
+    def __init__(self, status):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+
+
+class FakeClient:
+    """규칙 흉내: 남의 요청이 2분 안이면 put 거부 (401)."""
+
+    def __init__(self):
+        self.db, self.log, self.fail_get = {}, [], []
+
+    def server_now(self):
+        return T[0]
+
+    def put(self, p, v):
+        cur = self.db.get(p)
+        if cur and cur["pcId"] != v["pcId"] and cur["created_at"] + otp_relay.OPEN_MS > T[0] * 1000:
+            self.log.append("put-denied")
+            raise Denied(401)
+        self.log.append("put")
+        self.db[p] = {**v, "created_at": T[0] * 1000}
+
+    def get(self, p):
+        if self.fail_get:
+            raise self.fail_get.pop(0)
+        return self.db.get(p)
+
+    def delete(self, p):
+        self.log.append("del-code" if p == CODE else "del-req")
+        self.db.pop(p, None)
+
+
+fc = FakeClient()
+fc.db[REQ] = {"req_id": "req_other", "pcId": "pc2", "created_at": T[0] * 1000}
+fc.db[CODE] = {"req_id": "req_other", "code": "123456"}
+ticks = []
+
+
+def tick_then_close(sec):
+    ticks.append(sec)
+    if len(ticks) == 3:                        # 남의 PC 가 번호를 받아 요청·번호를 지웠다
+        fc.db.pop(REQ), fc.db.pop(CODE)
+
+
+rid = otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰").open(tick=tick_then_close)
+check("남의 요청이 있으면 번호를 안 지우고 빌 때까지 기다렸다 차지한다 (M7)",
+      fc.log[0] == "put-denied" and "del-code" not in fc.log[:fc.log.index("put")] and len(ticks) == 3 and fc.db[REQ]["pcId"] == "pc1"
+      and fc.db[REQ]["req_id"] == rid, fc.log)
+fc = FakeClient()
+fc.db[REQ] = {"req_id": "req_other", "pcId": "pc2", "created_at": T[0] * 1000}
+ticks.clear()
+otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰").open(tick=lambda s: ticks.append(s) or T.__setitem__(0, T[0] + 30))
+check("남의 요청이 안 비어도 2분 만료 뒤에는 차지한다 (M7)", fc.db[REQ]["pcId"] == "pc1" and 4 <= len(ticks) <= 5, (len(ticks), fc.log))
+relay = otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰")
+rid = relay.open()
+fc.db[CODE] = {"req_id": rid, "code": "654321"}
+fc.fail_get = [urllib.error.URLError("끊김"), TimeoutError(), Denied(503)]
+check("번호 기다리는 중 망 오류·5xx 는 다음 폴링에 다시 (M8)", relay.wait(rid, 30, lambda s: None) == "654321" and not fc.fail_get)
+fc.fail_get = [Denied(401)]
+check("권한 거부(401)면 None - 새 요청으로 (M8)", relay.wait(rid, 30, lambda s: None) is None)
 
 srv.shutdown()
 print("실패:", fails if fails else "없음")

@@ -37,6 +37,10 @@ class UpdateError(Exception):
     """사람에게 보일 까닭 (한국어)."""
 
 
+class FetchError(UpdateError):
+    """받기 자체가 안 됐다 (망·404) - 이것만 다음 주소로 넘어간다 (BugBuster L21)."""
+
+
 def update_dir():
     return os.path.join(st.install_root(), "update")
 
@@ -86,7 +90,7 @@ def http_get(url, timeout=60):
             return r.read()
     except Exception as e:
         code = getattr(e, "code", None)
-        raise UpdateError(f"받지 못했습니다: {url.rsplit('/', 1)[-1]} ({code or type(e).__name__})") from None
+        raise FetchError(f"받지 못했습니다: {url.rsplit('/', 1)[-1]} ({code or type(e).__name__})") from None
 
 
 def _read_manifest(root):
@@ -122,11 +126,12 @@ def _need_bytes(cur_man, new_man, fetch, remove):
 
 def fetch_release(version, program_root, staging, base_url=None, get=http_get, pub=None):
     """새 판의 manifest·서명을 받아 확인하고, 바뀐 파일만 staging 에 받는다. 틀리면 staging 을 지우고 UpdateError.
-    주소가 여럿이면(UPDATE_BASE_URLS) 차례로 해 보고, 다 안 되면 마지막 까닭을 낸다."""
+    주소가 여럿이면(UPDATE_BASE_URLS) 받기 실패(FetchError)일 때만 다음 주소로, 다 안 되면 마지막 까닭을 낸다.
+    서명·형식·파이썬·디스크·지문 거절은 그 자리에서 낸다 - 다음 주소의 404 로 덮지 않는다 (BugBuster L21)."""
     for base in ([base_url] if base_url else UPDATE_BASE_URLS):
         try:
             return _fetch_from(base.rstrip("/"), version, program_root, staging, get, pub)
-        except UpdateError as e:
+        except FetchError as e:
             last = e
     raise last
 
@@ -287,6 +292,9 @@ def run_update(version, mode, program_root, idle, register, run_task, fetch=fetc
             raise UpdateError("업데이트 도우미가 실행되지 않았습니다. 다시 [업데이트]를 눌러 주십시오.")
     except Exception as e:
         reason = str(e) if isinstance(e, UpdateError) else f"업데이트 도우미에게 전달하지 못했습니다. 다시 [업데이트]를 눌러 주십시오."
+        if read_state().get("state") in ("applying", "rolling_back"):   # 늦게 켜진 도우미가 이미 바꾸는 중 - staging·상태는 도우미 몫 (BugBuster K6)
+            log(f"실패를 적지 않음 - 도우미가 이미 진행 중입니다: {reason}"[:300])
+            return
         shutil.rmtree(staging, ignore_errors=True)
         log(f"실패: {reason} [{type(e).__name__}: {e}]"[:300])
         try:

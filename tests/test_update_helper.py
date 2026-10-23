@@ -403,6 +403,41 @@ check(ran[0][:2] == ["schtasks", "/End"] and any(a[0] == "taskkill" and "AFTER_M
       f"에이전트 끄기는 작업을 끝낸 뒤 남은 감독·에이전트 프로세스도 끝낸다 ({ran})")
 shutil.rmtree(d, ignore_errors=True)
 
+print("\n=== 14. 설치 후 작업 실패 코드 → 기다리지 않고 까닭을 담아 되돌린다 (BugBuster M22) ===")
+setup_a_and_staged_b()
+ops = FakeOps()
+ops.after_install = lambda p: ops.calls.append("after") or 1
+waits = []
+real_wait, uh.wait_alive = uh.wait_alive, lambda *a: waits.append(a) or True
+try:
+    uh.main(ops)
+finally:
+    uh.wait_alive = real_wait
+s = up.read_state()
+check(s["state"] == "rolled_back" and "종료 코드 1" in s["reason"] and "옛 버전의 설치 후 작업도" in s["reason"] and not waits
+      and read(PROG, "a.py") == "A1", f"새·옛 버전 모두 코드 1 - 3분 점검 없이 되돌리고 까닭에 코드 ({s['reason']}, 기다림 {len(waits)})")
+
+print("\n=== 15. 바꾸는 중 staging 이 지워져도 보관의 계획 사본으로 되돌린다 (BugBuster K6) ===")
+setup_a_and_staged_b()
+n_moves = [0]
+
+
+def move_then_lose_staging(src, dst):
+    real_move(src, dst)
+    n_moves[0] += 1
+    if n_moves[0] == 2:                       # 보관 2번(a·b) 뒤, 넣기 전에 에이전트가 staging 을 지웠다
+        shutil.rmtree(up.path("staging"), ignore_errors=True)
+
+
+uh._move = move_then_lose_staging
+try:
+    uh.main(FakeOps())
+finally:
+    uh._move = real_move
+s = up.read_state()
+check(s["state"] == "rolled_back" and read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None,
+      f"옛 판 파일 그대로 돌아왔다 ({s.get('reason')}, a={read(PROG, 'a.py')} b={read(PROG, 'b.py')})")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

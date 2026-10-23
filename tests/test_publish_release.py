@@ -104,6 +104,33 @@ try:
 except RuntimeError:
     check(wrote == [], "배포가 실패하면 DB 목록을 안 쓴다")
 
+# --- 배포 뒤 DB 목록 쓰기가 실패하면 무엇을 하면 맞춰지는지 알린다 (BugBuster L25)
+def list_boom(l):
+    raise RuntimeError("release-set 실패")
+try:
+    d9, _ = make_release(1, True)
+    mf = os.path.join(d9, "manifest.json")
+    m = json.load(open(mf)); m["version"] = "2026.10.08-2"; open(mf, "w").write(json.dumps(m))
+    pr.publish("2026.10.08-2", d9, SITE2, KEY, deploy=lambda: None, set_releases=list_boom, get_stable=lambda: None, set_stable=lambda v: None)
+    check(False, "DB 목록 쓰기 실패인데 통과")
+except RuntimeError as e:
+    check("호스팅은 올라갔고" in str(e) and "같은 버전으로 다시 내보내면" in str(e), f"DB 목록 실패 안내 ({e})")
+runs = []
+real_run, pr.input = pr.subprocess.run, lambda *a: "예"
+pr.subprocess.run = lambda args, **kw: runs.append(args) or pr.subprocess.CompletedProcess(args, 1 if args == "mirror-cmd" else 0)
+os.environ["RPA_RELEASES_MIRROR"] = "mirror-cmd"
+out = io.StringIO()
+old_stdout, sys.stdout = sys.stdout, out
+err = None
+try:
+    pr._deploy()
+except Exception as e:
+    err = e
+finally:
+    sys.stdout, pr.subprocess.run = old_stdout, real_run
+    del pr.input, os.environ["RPA_RELEASES_MIRROR"]
+check(err is None and "회사 서버에 올리지 못했습니다" in out.getvalue() and len(runs) == 2, f"미러 실패는 경고만 - 예외 없이 계속 ({err} {runs})")
+
 # --- 보완 3: 잘린 blob 은 다시 복사
 SITE3 = os.path.join(tmp, "site3")
 d, m = make_release(3, True)
@@ -116,9 +143,10 @@ check(not [x for x in os.listdir(os.path.join(SITE3, "blobs")) if x.endswith(".t
 
 # --- 남길 판만 (keep_only, 2026-10-12 사용자: 옛 판 정리) - 고른 판만 남기고 배포가 먼저, DB 목록도
 n_before = len(os.listdir(os.path.join(SITE, "releases")))
-for bad, why in ((["2026.10.07-1"], "안정본"), (["2099.01.01-1"], "없는 판")):
+for bad, why, stable in ((["2026.10.07-1"], "안정본", "2026.10.02-1"), (["2099.01.01-1"], "없는 판", "2026.10.02-1"),
+                         ([], "남길 버전 없음 (안정본 미지정, BugBuster L24)", None)):
     try:
-        pr.keep_only(bad, SITE, deploy=lambda: None, set_releases=lambda l: None, get_stable=lambda: "2026.10.02-1")
+        pr.keep_only(bad, SITE, deploy=lambda: None, set_releases=lambda l: None, get_stable=lambda: stable)
         check(False, f"{why}: 멈춰야 한다")
     except ValueError as e:
         check(len(os.listdir(os.path.join(SITE, "releases"))) == n_before, f"{why}이면 아무것도 안 지우고 멈춘다 ({e})")

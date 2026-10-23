@@ -1380,11 +1380,17 @@ def _run_imap(name, site, p, step, dest):
     status.metric(f"{name}:files", "받은 엑셀", len(r["saved"]), unit="개")
     for what, why in r["skipped"]:
         log(f"  [{name}] 받지 못함: {what} ({why})")
-    if r["skipped"] and not r["saved"]:
-        raise RuntimeError(f"첨부파일을 받지 못했습니다. ({r['skipped'][0][1]})")
+    failed = [why for _, why in r["skipped"] if why != mail_imap.TOO_BIG]     # 크기 초과는 기억하고 넘긴다 - 실패가 아니다 (BugBuster M15)
+    if failed and not r["saved"]:
+        raise RuntimeError(f"첨부파일을 받지 못했습니다. ({failed[0]})")
     log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in r['saved']) or '없음'}")
-    if not r["saved"]:
-        step_done("skipped", "대상 없음")
+    if not r["saved"]:      # 메일이 없던 날과 첨부가 없던 날을 갈라 보인다 (BugBuster I9)
+        note = f"메일 {r['no_attach']}통 - 받을 첨부 없음" if r.get("no_attach") else "대상 없음"
+        big = len(r["skipped"]) - len(failed)
+        if big:
+            note += f" (50MB 를 넘는 메일 {big}통은 받지 않았습니다)"
+            log(f"  ! [{name}] 50MB 를 넘는 메일 {big}통은 받지 않았습니다. 메일함에서 직접 확인하여 주십시오.")
+        step_done("skipped", note)
     return True
 
 
@@ -1716,8 +1722,15 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
     else:
         chosen = [(n, s) for n, s in cfg.items()
                   if isinstance(s, dict) and site_will_run(s)]
+        # 프리셋 수 한도 밖 칸은 그 칸만 건너뛴다 - 하나 때문에 전체가 멈추지 않게. --site 로 콕 집으면 지금처럼 거부 (BugBuster M10)
+        limit = status.preset_limit()
+        over = [c for c in chosen if status.REPLAY_ACTION in site_actions(c[1])
+                and isinstance(c[1].get("Preset"), int) and c[1]["Preset"] > limit]
+        for name, site in over:
+            log(f"  {name}: 프리셋 {site['Preset']}은(는) 이 업체의 프리셋 수({limit}개)를 넘어 건너뜁니다.")
+        chosen = [c for c in chosen if c not in over]
         if not chosen:
-            log(f"실행할 사이트가 없습니다. (Stts={STTS_RUN}인 사이트가 없습니다)")
+            log("실행할 사이트가 없습니다." + ("" if over else f" (Stts={STTS_RUN}인 사이트가 없습니다)"))
             return 1
 
     chosen, skipped = split_mismatched(chosen)

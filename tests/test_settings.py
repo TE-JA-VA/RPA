@@ -246,6 +246,12 @@ Path(preset_file).write_text(json.dumps([{"no": 1, "name": "웰라이프 4", "co
                                                                      "saved_at": None, "record": None}]), encoding="utf-8")
 os.makedirs(PS["mail_dir"])
 Path(PS["mail_dir"], "PRESET1.json").write_text("{}", encoding="utf-8")
+Path(PS["mail_dir"], "PRESET1.imap.json").write_text("{}", encoding="utf-8")
+PS["backup_dir"] = os.path.join(TMP, "stash", "data", "프리셋보관")
+PS["session_dir"] = os.path.join(TMP, "stash", "data", "sessions")
+for _d, _n in ((PS["backup_dir"], "PRESET1.json"), (PS["session_dir"], "PRESET1.json"), (PS["session_dir"], "SITE1.json")):
+    os.makedirs(_d, exist_ok=True)
+    Path(_d, _n).write_text("{}", encoding="utf-8")
 _, state = rs.load_state(PS)
 check("기록 있는 프리셋 수를 센다 (빈 칸은 안 셈)", rs.preset_count(PS) == 1, rs.preset_count(PS))
 check("업체코드가 다를 때만 '바뀜'", rs.company_changed(good_form(cid="other"), state)
@@ -262,10 +268,21 @@ check("[예]: 프리셋 파일·메일 기억·쇼핑몰 계정을 'net_시각' 
       and not os.path.exists(preset_file) and not os.path.exists(PS["mail_dir"]) and rs.preset_count(PS) == 0
       and "PRESET1" not in cfg[st.SITES_SECTION] and cfg[st.SITES_SECTION].get("OLDSITE") == {"ID": "keep"}
       and "이전 업체 프리셋을 별도 폴더에 보관한 뒤 초기화하였습니다." in done, (got, cfg.get(st.SITES_SECTION), done))
+check("프리셋보관·세션의 PRESETn·IMAP 메일 기억도 같은 폴더로, 다른 세션은 그대로 (BugBuster M21)",
+      got and os.path.isfile(os.path.join(got[0], "프리셋보관", "PRESET1.json")) and os.path.isfile(os.path.join(got[0], "sessions", "PRESET1.json"))
+      and os.path.isfile(os.path.join(got[0], "메일기억", "PRESET1.imap.json")) and not os.listdir(PS["backup_dir"])
+      and os.listdir(PS["session_dir"]) == ["SITE1.json"], got)
 Path(preset_file).write_text("[]", encoding="utf-8")
 rs.save(good_form(cid="other", agent_pw="", erp_pw=""), PS, login=fake_login, run=Recorder(), running=Running(True),
         user="PC\\me", clear_presets=True)
 check("업체코드가 그대로면 clear_presets 여도 옮기지 않는다", len(os.listdir(stash)) == 1 and os.path.exists(preset_file))
+PB = paths_in("broken")
+Path(PB["user_config"]).write_text("{깨진", encoding="utf-8")
+bform, bstate = rs.load_state(PB)
+check("깨진 설정 파일이어도 빈 값으로 창을 채우고 까닭을 돌려준다 (BugBuster L2)", bform["admin_code"] == "" and "JSON" in (bstate["broken"] or ""), bstate)
+rs.save(good_form(), PB, login=fake_login, run=Recorder(), running=Running(False), user="PC\\me")
+check("[저장] 하면 새로 쓰고 깨진 파일은 .broken 으로 남는다 (BugBuster L2)", st.read_user_config(PB["user_config"])["LogIn"]["AdminCode"] == "AM001"
+      and Path(PB["user_config"] + ".broken").read_text(encoding="utf-8") == "{깨진" and rs.load_state(PB)[1]["broken"] is None)
 del logins[logins_before:]
 P2 = paths_in("loginfail")
 
@@ -572,6 +589,20 @@ try:
           and "일부러 깨뜨림" in open(crash, encoding="utf-8").read())
     shown.clear()
     check("--no-window 면 알림 창 없이 1", rs.main(["--after-install", "--no-window"]) == 1 and not shown, shown)
+    _more = (rs.start_problem, rs.configured, rs.finish_upgrade)
+
+    def _upgrade_fails(paths):
+        raise RuntimeError("작업을 등록하지 못했습니다 (M22 시험)")
+    try:
+        rs.default_paths, rs.start_problem, rs.configured, rs.finish_upgrade = dict, (lambda: None), (lambda p: True), _upgrade_fails
+        code = rs.main(["--after-install", "--no-window"])
+        check("창 없는 업데이트 마무리가 실패하면 1 이고 까닭이 설정창_오류.txt 에 남는다 (BugBuster M22)", code == 1 and not shown
+              and "M22 시험" in open(crash, encoding="utf-8").read(), code)
+        rs.start_problem = lambda: "설치 폴더 밖 (M22 문제 시험)"
+        check("창 없는 시작 점검 실패도 까닭이 남는다 (BugBuster M22)", rs.main(["--after-install", "--no-window"]) == 1
+              and "M22 문제 시험" in open(crash, encoding="utf-8").read())
+    finally:
+        rs.start_problem, rs.configured, rs.finish_upgrade = _more
 finally:
     rs.is_admin, rs.default_paths, rs.show_error_box = saved_funcs
 deleted = []
@@ -596,6 +627,7 @@ check(r"<Command>C:\ProgramData\AFTER MARKET\RPA\update\runner\python\pythonw.ex
       and '"C:\\ProgramData\\AFTER MARKET\\RPA\\update\\runner\\update_helper.py"' in x, "도우미는 runner 의 파이썬으로 (프로그램 폴더 밖)")
 check("<LogonTrigger>" in x and "<RunLevel>HighestAvailable</RunLevel>" in x and "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in x,
       "로그온 때마다 · 가장 높은 권한 · 시간 제한 없음 (끊긴 업데이트를 다음 로그온에 되돌린다)")
+check("오토파일럿 업데이트 도우미" in x and "에이전트 - 윈도우 로그인" not in x, "도우미 작업 설명은 도우미 것으로 (BugBuster L1)")
 check("background.py" not in x and rs.HELPER_TASK_NAME == r"AFTER MARKET\RPA Update" and rs.HELPER_TASK_NAME != rs.TASK_NAME,
       "에이전트 작업과 다른 이름·다른 명령 - /End 에 같이 안 죽는다 (Review Focus 1)")
 ran = []

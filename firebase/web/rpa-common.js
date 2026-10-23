@@ -56,15 +56,28 @@ export function sendPair(c, cmds, label, alive = () => true) {
   return sendTo(c, cmds, label, alive);
 }
 
+// 명령 시각은 서버 시각 = 이 브라우저 시각 + RTDB 가 알려 주는 차이 (BugBuster M1) - 브라우저 시계가 틀려도 규칙(서버 now±60초)·PC 판정이 맞게
+let skew = { db: null, ms: 0, ready: null };
+function serverNowMs(db) {
+  if (skew.db !== db) {
+    const s = skew = { db, ms: 0, ready: null };
+    s.ready = new Promise((ok) => onValue(ref(db, ".info/serverTimeOffset"), (snap) => { s.ms = Number(snap.val()) || 0; ok(); }, () => ok()));
+  }
+  return skew.ready.then(() => Date.now() + skew.ms);
+}
+// 바로 하는 명령은 90초 안에 못 받으면 버린다 (BugBuster I12) - 화면은 60초 뒤 '응답하지 않습니다' 로 끝나는데 늦게 붙은 PC 가 그 뒤에 실행하지 않게
+const QUICK = new Set(["launch", "stop_erpia", "stop_rpa"]);
+export const ttlOf = (type) => (QUICK.has(type) ? 90 : COMMAND_TTL_SEC);
+
 /** cmds = [[pcId, type, args], ...] 를 차례로 넣고 지켜본다 */
 async function sendTo(c, cmds, label, alive) {
   notify("info", `${label} 명령을 전송하였습니다. PC 응답을 기다리는 중입니다.`);
   try {
-    const now = Math.floor(Date.now() / 1000);
+    const now = Math.floor(await serverNowMs(c.db) / 1000);
     const sent = [];
     for (const [pcId, type, args] of cmds) {
       const node = await push(ref(c.db, P("commands", c.me.cid, pcId)), {
-        type, args: args ?? null, by: c.me.uid, created_at: now, expires_at: now + COMMAND_TTL_SEC, state: "queued",
+        type, args: args ?? null, by: c.me.uid, created_at: now, expires_at: now + ttlOf(type), state: "queued",
       });
       sent.push([pcId, node.key]);
     }
@@ -91,7 +104,7 @@ function watchCommands(c, sent, label, alive) {
         if (cmdKey === lastKey && v.state === "running" && !started) {
           started = true; notify("info", `${label} 진행 중`);
           clearTimeout(timer);
-          timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - Date.now()) + 5000);
+          timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - (Date.now() + skew.ms)) + 5000);   // 서버 시각으로 (M1)
         }
         if (v.state === "failed" || v.state === "expired") end("bad", v.result || v.state);
         else if (cmdKey === lastKey && v.state === "done") end("ok", v.result || v.state);
@@ -119,12 +132,16 @@ export function activeSlots(sch) {
   const lim = sch?.policy?.limit;
   return Number.isInteger(lim) && lim >= 0 ? all.slice(0, lim) : all;
 }
-/** 지금 열려 있는 반복 시간대 (그날 요일 + 시작 ≤ 지금 < 끝). 이 브라우저 시각으로 본다 */
+/** 지금 열려 있는 반복 시간대 (그 줄의 요일 + 시작 ≤ 지금 < 끝, 휴무일 아님). 이 브라우저 시각으로 본다.
+ *  줄별 요일(판 3)이 없으면 공통 요일, 오늘이 PC 가 알려 준 휴무일(next_off)이면 없음 (BugBuster M6) */
 export function openWindow(sch, now = new Date()) {
-  if (!sch?.enabled || !(sch.days || []).includes((now.getDay() + 6) % 7)) return null;
+  const wd = (now.getDay() + 6) % 7;
+  if (!sch?.enabled || sch.next_off?.date === isoDay(now)) return null;
   const hm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  return activeSlots(sch).find((s) => s.until && s.at <= hm && hm < s.until) || null;
+  return activeSlots(sch).find((s) => s.until && slotOn(sch, s, wd) && s.at <= hm && hm < s.until) || null;
 }
+/** 그 줄이 요일 wd(월=0)에 도나 - 줄별 days, 없으면 공통 days (M6) */
+export const slotOn = (sch, s, wd) => (Array.isArray(s.days) ? s.days : sch?.days || []).includes(wd);
 /** 오늘 그 시간대의 반복 상태 (PC 가 schedule.repeat 에 적는다). 다른 날·다른 시간대 것이면 null */
 export function repeatOf(sch, win, now = new Date()) {
   const r = sch?.repeat;

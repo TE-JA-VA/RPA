@@ -140,6 +140,33 @@ try:
     row = st.read_history(program="prepare")[0]
     check("다시 돌리면 이미 받은 메일은 건너뛰어 '대상 없음' (토큰을 쓰지 않는다)", code == 0 and sorted(os.listdir(DL)) == ["(012)주문.xlsx"]
           and row["steps"][0]["state"] == "skipped", str(row["steps"]))
+    check("메일이 없던 날은 '대상 없음'", row["steps"][0].get("note") == "대상 없음", str(row["steps"]))
+
+    srv.add(mail("[주문] 첨부 없음 둘째", files=()), NOW)
+    srv.add(mail("[주문] 큰 메일", files=(("큰.xlsx", b"z" * 4000),)), NOW)
+    real_max, mail_imap.MAX_SIZE = mail_imap.MAX_SIZE, 3000
+    time.sleep(1.1)
+    code = wr.cmd_run(["PRESET1"], headless=True)
+    mail_imap.MAX_SIZE = real_max
+    row = st.read_history(program="prepare")[0]
+    note = row["steps"][0].get("note") or ""
+    check("받을 첨부 없는 메일·50MB 넘는 메일뿐이면 실패가 아니라 건너뜀, 까닭을 갈라 보인다 (BugBuster I9·M15)",
+          code == 0 and row["steps"][0]["state"] == "skipped" and "메일 1통 - 받을 첨부 없음" in note and "50MB" in note
+          and any("50MB" in x and "!" in x for x in lines), str((code, row["steps"])))
+
+    real_cfg, real_limit = wr.load_config, st.preset_limit
+    wr.load_config = lambda: dict(real_cfg(), PRESET3={**real_cfg()["PRESET1"], "Preset": 3})
+    st.preset_limit = lambda: 2
+    lines.clear()
+    time.sleep(1.1)
+    try:
+        code_all, log_all = wr.cmd_run([], headless=True), list(lines)
+        code_one = wr.cmd_run(["PRESET3"], headless=True)
+    finally:
+        wr.load_config, st.preset_limit = real_cfg, real_limit
+    check("프리셋 수 한도 밖 칸은 로그만 남기고 건너뛰고 나머지는 실행 (BugBuster M10)",
+          code_all == 0 and any("PRESET3" in x and "넘어 건너뜁니다" in x for x in log_all), "\n".join(log_all))
+    check("한도 밖 칸을 --site 로 콕 집으면 지금처럼 거부", code_one == 1)
     st.save_preset_sites(st.read_presets(), {1: (USER, "틀린-비밀번호")})
     st.set_preset_switches({"PRESET1": True})
     lines.clear()
@@ -153,6 +180,103 @@ finally:
     wr.log = real_log
     ssl.create_default_context = real_ctx
     srv.close()
+
+print("=== 6. BugBuster H2·L6·I10·K13·I3·I5·I6·I8 (옵저버) ===")
+
+
+class FakeApp(ob.App):
+    """화면 없이 App 메서드만 - tk 칸·일꾼은 안 쓴다."""
+
+    def __init__(self, presets, cur=0):
+        self.presets, self.cur, self.said, self.told, self.picked = presets, cur, [], [], []
+        self.recording, self.previewing = None, False
+        self.status = SimpleNamespace(config=lambda **k: self.said.append(k.get("text")))
+
+    def _store_fields(self):
+        pass
+
+    def _kept(self, p, final):
+        return list(range(len(final["steps"])))
+
+    def select(self, i):
+        self.picked.append(i)
+
+    def tell(self, *a):
+        self.told.append(a)
+
+    def ask(self, *a):
+        return True
+
+
+pw_calls, real_pw = [], ob.stored_password
+ob.stored_password = lambda no: pw_calls.append(no) or "저장된-비번"
+shop = {"version": 1, "start_url": "https://x", "steps": [{"id": 0, "kind": "goto", "href": "https://x"}]}
+try:
+    moved = ob.new_preset(1, "옮겨진 칸", "013")     # ① 을 지워 ② 가 ① 자리로 당겨진 채 저장 전 (orig = 2)
+    moved.update(loaded=dict(shop), orig=2, has_pw=True, id="u", source="imap", imap=cfg)
+    a = FakeApp([moved])
+    os.makedirs(os.path.dirname(st.imap_memory_path(1)), exist_ok=True)
+    for path in (st.imap_memory_path(1), st.mail_memory_path(1)):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+    a.preview()
+    a.imap_find()
+    a.clear_imap_memory()
+    a.clear_mail_memory()
+    a.export_file()
+    check("H2: 당겨진 칸은 미리보기·찾아보기·기억 지우기 모두 '저장한 뒤에' 로 막고 다른 프리셋 비밀번호를 꺼내지 않는다",
+          a.said == [ob.App.SAVE_FIRST] * 4 and pw_calls == [], str((a.said, pw_calls)))
+    check("H2: 당겨진 칸의 내보내기도 막는다", len(a.told) == 1 and "저장한 뒤" in a.told[0][1], str(a.told))
+    check("H2: 막혔을 때 ① 번호의 메일 기억은 그대로", os.path.isfile(st.imap_memory_path(1)) and os.path.isfile(st.mail_memory_path(1)))
+    same = dict(moved, orig=1)
+    b2 = FakeApp([same])
+    check("H2: 저장된 번호 그대로인 칸은 그 번호로 찾는다", ob.saved_no(same, 0) == 1 and ob.saved_no(dict(moved, orig=None), 0) is None)
+    b2.clear_imap_memory()
+    check("H2: 번호가 맞으면 메일 기억을 지운다", not os.path.isfile(st.imap_memory_path(1)) and b2.said == ["받은 메일 기억을 지웠습니다."], str(b2.said))
+
+    p1 = ob.new_preset(1, "가", "021")
+    p1.update(loaded=dict(shop), orig=1, id="u1", pw="pw-one-1234")
+    p2 = ob.new_preset(2, "나", "022")
+    p2.update(loaded={"version": 1, "start_url": "https://y", "steps": [{"id": 0, "kind": "goto", "href": "https://y/?q=pw-one-1234"}]},
+              orig=2, id="u2", pw="pw-two-5678")
+    c = FakeApp([p1, p2])
+    c.save()
+    check("L6: ① 비밀번호가 ② 기록에 있으면 ② 를 고르고 ② 로 안내한다", c.picked == [1] and c.said and c.said[-1].startswith(ob.circled(2)),
+          str((c.picked, c.said)))
+    check("I10: 보낸 사람 안내에 이름은 흉내 낼 수 있다·주소(@) 권함", "흉내" in ob.App.SENDER_NOTE and "@" in ob.App.SENDER_NOTE)
+
+    for path in (st.imap_memory_path(1), st.mail_memory_path(1)):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+    keep = [dict(f) for f in st.read_presets()]
+    check("K13: 같은 사이트코드로 다시 저장하면 메일 기억은 그대로", ob.store(keep, {1: (USER, PASSWORD)}) is None
+          and os.path.isfile(st.imap_memory_path(1)) and os.path.isfile(st.mail_memory_path(1)))
+    keep[0]["code"] = "019"
+    check("K13: 같은 칸에 다른 사이트코드를 저장하면 그 칸의 웹메일·IMAP 기억을 지운다", ob.store(keep, {1: (USER, PASSWORD)}) is None
+          and not os.path.isfile(st.imap_memory_path(1)) and not os.path.isfile(st.mail_memory_path(1)))
+
+    d1 = ob.new_preset(1, "날짜몰", "031")
+    d1.update(orig=1, id="u1", pw="pw-a-111", deleted={1},
+              loaded={"version": 1, "start_url": "https://x", "steps": [
+                  {"id": 0, "kind": "goto", "href": "https://x"}, {"id": 1, "kind": "click", "page": 0},
+                  {"id": 2, "kind": "fill", "page": 0, "value": "기간 2026. 10. 21 부터"}]})
+    d2 = ob.new_preset(2, "csv 메일", "032")
+    d2.update(orig=2, id=USER, pw="pw-b-222", source="imap", imap=dict(cfg, rules=dict(cfg["rules"], exts=["xlsx", "csv"])))
+    e = FakeApp([d1, d2])
+    e._load_fields = lambda: None
+    e.save()
+    msg = e.said[-1] if e.said else ""
+    check("I3: 저장은 되고, 날짜로 못 바꾼 날짜 값은 보이는 단계 번호(지운 단계 뺌)로 알린다",
+          msg.startswith("저장했습니다.") and f"{ob.circled(1)} 2단계 값 '기간 2026. 10. 21 부터'" in msg, msg)
+    check("I6: 메일 서버 조건의 경고(csv)도 저장 때 보인다 (막지 않음)", f"{ob.circled(2)} " in msg and "csv" in msg, msg)
+    e.said.clear()
+    e.render = lambda: None
+    e._imap_found(1, [])
+    check("I6: [찾아보기] 결과에도 경고", e.said and "csv" in e.said[-1], str(e.said))
+    check("I8·I5: 기간 칸·안내, 메일마다 안내 글", "처음 받을 때" in dict((k, t) for t, k in ob.App.IMAP_TEXT)["days"]
+          and "지난번 받은 날부터" in ob.App.DAYS_NOTE and "제목으로 검색" in ob.MAIL_HINT)
+finally:
+    ob.stored_password = real_pw
 
 print()
 print(f"실패: {'없음' if not fails else fails}")

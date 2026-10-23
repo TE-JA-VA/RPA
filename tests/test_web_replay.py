@@ -123,9 +123,81 @@ def replay_check(srv, url, rec_obj, day, notice, want, label, creds=None, step_t
     return ok, r, mall
 
 
+def pure_checks():
+    """브라우저 없이 - BugBuster I2·I3·I4·I6·L8."""
+    print("=== 0. 날짜 모양·인증 차례·받은 파일 종류·목록 줄·모양 비교 (브라우저 없이)")
+    today = DAY + datetime.timedelta(days=21)
+    for value, want in (("2026.09.29.", "2026.10.20."), ("2026. 9. 29.", "2026. 10. 20."), ("2026-09-01 ~ 2026-09-30", "2026-09-22 ~ 2026-10-21"),
+                        ("2026-09-30 00:00", "2026-10-21 00:00"), ("2026/9/30", "2026/10/21"), ("20260930", "20261021"), ("2026-09-30", "2026-10-21")):
+        st = rec.finalize([{"kind": "fill", "page": 0, "frame": {}, "value": value, "t": 1, "target": {"inOverlay": False, "text": ""}}], DAY, "")["steps"][0]
+        got = rec.date_text(st["date"], today) if st.get("date") else None
+        check(f"I3: '{value}' 는 녹화한 모양 그대로 오늘 기준 → '{want}'", got == want, str((got, st.get("date"))))
+    check("I3: 옛 기록 (fmt 만) 은 그대로", rec.date_text({"offset": -1, "fmt": "%Y.%m.%d"}, today) == "2026.10.20")
+    check("I3: 날짜가 아닌 값·없는 날짜는 그대로", rec.parse_date("주문 2026-09-30 건") is None and rec.parse_date("2026-13-45") is None
+          and rec.parse_date("12345") is None)
+    rng = {"kind": "fill", "target": {"label": "기간", "placeholder": "", "aria": "", "title": "", "name": "", "tag": "input"},
+           "date": {"offset": -29, "offsets": [-29, 0]}}
+    check("I3: 범위 설명", rec.describe(rng) == "'기간' 칸에 오늘-29일~오늘 날짜 넣기", rec.describe(rng))
+    odd = rec.date_like_fills([{"kind": "fill", "value": "30.09.2026"}, {"kind": "fill", "value": "09/30"}, {"kind": "fill", "value": "2026년 9월 30일"},
+                               {"kind": "fill", "value": "2026-09-30", "date": {"offset": 0}}, {"kind": "fill", "value": "010-1234-5678"},
+                               {"kind": "fill", "value": "가방"}, {"kind": "click", "value": "2026.9"}])
+    check("I3: 못 바꾼 날짜 모양 값만 알린다 (전화번호·바꾼 날짜·누르기는 빼고)", [i for i, _ in odd] == [0, 1, 2], str(odd))
+    S = lambda *ks: [dict(k) if isinstance(k, dict) else {"kind": k} for k in ks]   # noqa: E731
+    check("L8: 인증 차례는 아이디 칸부터 - 앞의 검색어 넣기는 기다리지 않는다",
+          rec.auth_start(S("goto", "fill", "enter", "click", {"kind": "fill", "credential": "ID"}, {"kind": "secret", "credential": "PW"}, "otp")) == 5)
+    check("L8: 그 앞에 [인증번호 받기] 가 있으면 거기부터",
+          rec.auth_start(S("fill", {"kind": "click", "otpSend": True}, {"kind": "fill", "credential": "ID"}, "otp")) == 2)
+    check("I6: 엑셀 업로드가 못 올리는 종류는 알린다", rec.upload_warning("x/(012)a.xlsx") is None and rec.upload_warning("(012)a.XLS") is None
+          and "csv 파일" in (rec.upload_warning("(012)a.csv") or "") and "xlsm" in (rec.upload_warning("(012)a.xlsm") or "")
+          and "확장자가 없는 파일" in (rec.upload_warning("(012)a") or ""))
+    old = {"kind": "click", "target": {"text": "메일 제목>>> 주문"}, "row": {"sel": "li", "inner": "p", "key": "", "at": 1,
+           "list": [{"k": "", "t": "다른 사람 주문", "s": "다른 사람 주문"}, {"k": "", "t": "메일 제목>>> 주문", "s": ">>> 주문"}]}}
+    keyed = {"kind": "click", "target": {"text": "x"}, "row": {"sel": "li", "inner": "", "key": "k2", "at": 1,
+             "list": [{"k": "k1", "t": "남의 것", "s": ""}, {"k": "k2", "t": ">>> 내 것", "s": ""}]}}
+    steps = [rec.trim_row(json.loads(json.dumps(x))) for x in (old, keyed)]
+    check("I4: 옛 기록의 목록 줄 글자는 누른 줄만 남긴다 (위치 at 은 그대로)", all("list" not in s["row"] for s in steps)
+          and steps[0]["row"]["mine"] == [old["row"]["list"][1]] and steps[1]["row"]["mine"] == [keyed["row"]["list"][1]]
+          and steps[0]["row"]["at"] == 1 and "다른 사람" not in json.dumps(steps, ensure_ascii=False), str(steps))
+    check("I4: 줄인 뒤에도 auto_pick 은 같은 단계를 찾는다", rec.auto_pick(steps, ">>>") == 1 and rec.auto_pick(steps[:1], ">>>") == 0
+          and rec.auto_pick([old], ">>>") == 0)
+    set_old = [json.loads(json.dumps(old))]
+    rec.set_pick(set_old, 0, None)
+    check("I4: 저장 때(set_pick) 옛 기록도 줄인다", "list" not in set_old[0]["row"])
+
+    class Busy:                             # 다른 PC 가 같은 휴대폰을 쥐고 있다 - open 이 tick 으로 기다린다 (M7)
+        def open(self, tick=None):
+            tick(0.1)
+            tick(0.1)
+            return "req"
+    lines, stop = [], threading.Event()
+    rp = rec.Replayer(type("Ctx", (), {"pages": []})(), {}, {}, OUT, "000", log=lines.append)
+    rp.otp, rp.cancel = Busy(), stop
+    rp._otp_open()
+    stop.set()
+    try:
+        rp._otp_open()
+        stopped = False
+    except rec.Cancelled:
+        stopped = True
+    check("M7: 휴대폰 요청을 기다리는 동안 한 번 알리고, [■ 중단] 을 본다", stopped and lines.count("      다른 PC 가 같은 휴대폰을 쓰는 중이라 기다립니다.") == 2, str(lines))
+
+    class Loc:                              # _same 이 보는 것만 (태그·type, aria·title·name)
+        def __init__(self, attrs):
+            self.attrs = attrs
+
+        def evaluate(self, js):
+            return "a|" if "tagName" in js else "\0".join(self.attrs)
+    t = {"tag": "a", "type": "", "text": "", "aria": "", "title": "엑셀 다운로드", "name": ""}
+    same = rec.Replayer.__new__(rec.Replayer)._same
+    check("I2: 글자 없는 아이콘 - title 이 전혀 다르면 다른 것", not same(Loc(["", "삭제", ""]), t))
+    check("I2: 같거나 숫자만 다르거나 한쪽에 들었거나 없으면 같은 것", same(Loc(["", "엑셀 다운로드", ""]), t) and same(Loc(["", "", ""]), t)
+          and same(Loc(["", "엑셀 다운로드 (새 창)", ""]), t) and same(Loc(["메일 3", "", ""]), dict(t, title="", aria="메일 12")))
+
+
 def main():
     shutil.rmtree(OUT, ignore_errors=True)
     os.makedirs(OUT, exist_ok=True)
+    pure_checks()
     srv, url, _ = fake_mall.start(DAY, True)
     try:
         # ---------------- A: 단추로 기간 (1주일), 공지 뜬 날 기록 ----------------

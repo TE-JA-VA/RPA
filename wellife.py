@@ -394,7 +394,11 @@ def module_import(rr, ctx, live=False):
     end = getattr(ctx, "import_end", None)
     if end is not None:
         ctx.import_end = None
-        return order_screen(rr, ctx, "wl_import_screen", end)
+
+        def wait_end():
+            rr.status.step("wl_order_import")    # 끝 기다리기도 가져오기 단계에 붙인다 (BugBuster L4)
+            return end()
+        return order_screen(rr, ctx, "wl_import_screen", wait_end)
     return order_screen(rr, ctx, "wl_import_screen", lambda: import_collect(rr, ctx, live))
 
 
@@ -461,6 +465,7 @@ def excel_together(rr, ctx, import_live):
             end = import_collect(rr, ctx, True, wait=False)
             ctx.import_end = end if callable(end) else (lambda: end)    # 단추가 없어 건너뜀이면 그 결과를 그대로
             switch_tab(rr, ctx, copy)
+            rr.status.step("wl_order_excel")     # import_collect 가 찍은 가져오기 단계에서 엑셀 단계로 되돌린다 (BugBuster L4)
         sites = site_grid(rr, ctx)
         no_popup(rr, ctx, "엑셀 업로드 전")
         base = popup_windows(rr, ctx)
@@ -1073,6 +1078,7 @@ INVOICE_ICON = "lcg_InvoiceSend"
 INVOICE_SEND = "운송장번호 [전송요청(S)]"
 SEND_BUSY_WAIT = 60.0      # '전송 중' 인지 이만큼 1초마다 다시 본다 - 잠깐 막힌 것과 가리려고
 SEND_BUSY_LAST = "이후에는 전송하지 않습니다"   # 반복 끝 시각까지 전송 중일 때 사유 끝 (send_busy_reason)
+SEND_BUSY_LAST_MARGIN = 60      # 초 - '마지막 회차' 판정 여유 (회차 끝까지 남은 시간 + 대시보드 틱 5초, BugBuster L5)
 
 
 def module_invoice_send(rr, ctx, live=False):
@@ -1171,7 +1177,10 @@ def send_busy_reason(rr, now=None):
         end = now.replace(hour=int(until[:2]), minute=int(until[3:5]), second=0, microsecond=0)
     except ValueError:
         return f"앞서 {at}누른 전송이 아직 진행 중이라 이번에는 누르지 않습니다."
-    if now + datetime.timedelta(minutes=rest) >= end:
+    # 대시보드는 회차가 '끝난' 시각 + 쉬는 시간이 끝 시각 앞이어야(5초 틱) 다음 회차를 띄운다 - 지금은 회차가 끝나기 전이라
+    # 남은 단계·기록 시간과 틱만큼 여유를 두고 마지막으로 본다 (BugBuster L5)
+    # ponytail: 고정 여유 SEND_BUSY_LAST_MARGIN 초, 회차 뒤 단계가 이보다 오래 걸리면 늘릴 것
+    if now + datetime.timedelta(minutes=rest, seconds=SEND_BUSY_LAST_MARGIN) >= end:
         rr.status.keep_record()
         return f"마지막으로 {at}전송요청을 눌렀고, 반복 끝 시각({until})까지 전송 중이라 {SEND_BUSY_LAST}."
     return f"앞서 {at}누른 전송이 아직 진행 중이라 이번 회차는 누르지 않습니다. {rest}분 뒤 다시 확인합니다."
@@ -1534,8 +1543,8 @@ def same_stage(name, label):
 
 def stage_count(text):
     """대시보드 단추 이름 '매출전표\\r\\n(199)' -> 199. 건수가 없으면 None."""
-    m = re.search(r"\((\d+)\)\s*$", text or "")
-    return int(m.group(1)) if m else None
+    m = re.search(r"\(([\d,]+)\)\s*$", text or "")       # 1,000 이상이면 쉼표가 붙을 수 있다 (BugBuster K7)
+    return int(m.group(1).replace(",", "")) if m else None
 
 
 def review_tokens(value):

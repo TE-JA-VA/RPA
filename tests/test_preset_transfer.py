@@ -142,6 +142,8 @@ check("요약 has_login False", st.preset_summary()[0]["has_login"] is False)
 with open(pt.backup_path(1), encoding="utf-8") as f:
     bk = json.load(f)
 check("보관은 바로 전 것 하나 (지마켓 고침)", bk["preset"]["name"] == "지마켓 고침" and bk["site"]["ID"] == "seller01")
+check("다른 사이트면 옛 메일 기억은 지우고 보관에 담는다 (BugBuster K13)", not os.path.isfile(st.mail_memory_path(1))
+      and bk.get("mail") == {"done": ["mail-1"]} and bk.get("imap") is None and not os.path.isfile(pt.backup_path(1) + ".new"), str(bk.get("mail")))
 
 print("=== 5. 되돌리기 (restore) ===")
 before_p = copy.deepcopy(bk["preset"])
@@ -150,7 +152,7 @@ done, rejected = pt.restore([1, 2])
 check("1 은 되돌리고 2 는 보관 없음", done == [1] and rejected == [(2, "보관된 이전 기록이 없습니다.")], f"{done} {rejected}")
 check("칸 1 기록·Sites 가 바꾸기 전과 같음", st.read_presets()[0] == before_p and site(1) == before_s, str(site(1)))
 check("되돌린 뒤 보관은 없어진다 (요약 backup False)", not os.path.isfile(pt.backup_path(1)) and st.preset_summary()[0]["backup"] is False)
-check("메일 기억은 그대로", mail_memory() == '{"done": ["mail-1"]}')
+check("메일 기억은 보관에서 되살린다 (BugBuster K13)", mail_memory() == '{"done": ["mail-1"]}')
 
 print("=== 6. 칸 2개뿐인 PC 의 5번 칸·수를 넘는 칸 ===")
 cfg = st.read_settings()
@@ -231,11 +233,15 @@ def _boom(*a, **k):
     raise OSError("설정 쓰기 실패")
 
 
+_bk1 = open(pt.backup_path(1), "rb").read() if os.path.isfile(pt.backup_path(1)) else None
 st.write_user_config = _boom
 try:
     e = raises(OSError, pt.apply, [(dict(good, name="설정 실패", code="125", record=REC2), 9)])
+    e1 = raises(OSError, pt.apply, [(dict(good, name="설정 실패", code="127", record=REC2), 1)])
 finally:
     st.write_user_config = _orig_wuc
+check("L20: 설정 쓰기가 실패하면 기록 있던 칸의 보관도 그대로 (BugBuster L20)", e1 is not None and st.read_presets()[0]["record"]
+      and _bk1 is not None and open(pt.backup_path(1), "rb").read() == _bk1 and not os.path.isfile(pt.backup_path(1) + ".new"))
 check("A3: 설정 쓰기가 실패하면 프리셋 파일도 안 바뀐다 (설정 먼저, 프리셋 뒤)", e is not None and len(st.read_presets()) == 8 and site(9) is None,
       f"{e} {len(st.read_presets())}")
 keys = list(st.read_user_config()["Sites"])

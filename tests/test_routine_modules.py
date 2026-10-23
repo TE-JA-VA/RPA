@@ -605,6 +605,30 @@ print()
 print("=== 9. run_print_step / handle_print_popups 사슬 ===")
 rr.run_print_step = _real_run_print_step
 rr.current_auto_mode = lambda app, hwnd: True
+
+
+class TBtn:                                   # 툴바 단추 흉내 (BugBuster M17)
+    def __init__(self, text, l, t, r, b):
+        self.text, self.rect, self.clicked = text, types.SimpleNamespace(left=l, top=t, right=r, bottom=b), False
+
+    def window_text(self):
+        return self.text
+
+    def rectangle(self):
+        return self.rect
+
+    def click_input(self, **kw):
+        self.clicked = True
+
+
+_ec, rr.ec = rr.ec, types.SimpleNamespace(ensure_foreground=lambda *a, **k: True)
+_in = TBtn("출력", -1800, 150, -1740, 175)    # 창이 왼쪽(음수 좌표) 모니터 - 10-07 고객 PC 실측 환경
+_out = TBtn("출력", -3800, 150, -3740, 175)   # 숨은 탭의 같은 이름 단추 (창 밖)
+_twin = types.SimpleNamespace(rectangle=lambda: types.SimpleNamespace(left=-1920, top=0, right=0, bottom=1040),
+                              descendants=lambda control_type=None: [_out, _in])
+check("M17 툴바 단추: 창이 음수 좌표 모니터에 있어도 창 안 단추를 누른다 (창 밖 단추는 안 누름)",
+      rr.click_toolbar_button(_twin, 1, "출력") and _in.clicked and not _out.clicked)
+rr.ec = _ec
 rr.click_toolbar_button = lambda win, hwnd, text: True
 rr.pick_carrier = lambda pid, carrier, timeout=None: True
 rr.run_print_preview = lambda app, pid, hwnd, printer, timeout=None: True

@@ -64,6 +64,16 @@ export async function logToDb(line, by, via) {
 // 웹 관리 함수에서 부르려면 함수 서비스 계정에 '서비스 계정 토큰 생성자' 권한이 있어야 한다 (docs/admin-web-transition.md)
 export const CONSOLE_UID = "admin-console";
 export const dashboardToken = async () => ({ token: await auth.createCustomToken(CONSOLE_UID, { role: "super" }) });
+// [총괄 세션 끊기] - [대시보드 보기] 로 연 브라우저들의 갱신 토큰을 모두 회수한다. 이미 받은 ID 토큰은 1시간 안에 끝난다 (BugBuster I15)
+export async function revokeConsole() {
+  try {
+    await auth.revokeRefreshTokens(CONSOLE_UID);
+    return { revoked: true };
+  } catch (e) {
+    if (e.code === "auth/user-not-found") return { revoked: false };   // [대시보드 보기] 를 한 번도 안 썼다
+    throw e;
+  }
+}
 
 const KEY_RE = /^[a-z0-9_]+$/;
 export function checkKey(name, value) {
@@ -129,6 +139,7 @@ export async function addCompany(cid, name) {
 export async function addPc(cid, pcId, label) {
   checkKey("cid", cid); checkKey("pcId", pcId);
   await companyOf(cid);
+  if ((await companyOf(cid)).pcs?.[pcId]) throw new Refused(`PC코드 ${pcId}은(는) 이미 등록되어 있습니다. 에이전트 계정이 없으면 node setup.js agent ${cid} ${pcId}를 사용하여 주십시오.`);   // 이름을 말없이 덮어쓰지 않는다 (BugBuster L14)
   const clean = String(label ?? "").trim();
   await rtdb.ref(`meta/companies/${cid}/pcs/${pcId}`).update({ label: clean });
   return { cid, pcId, label: clean };
@@ -279,9 +290,14 @@ async function checkPc(cid, pcId) {
   checkKey("cid", cid); checkKey("pcId", pcId);
   if (!(await companyOf(cid)).pcs?.[pcId]) throw new Refused(`등록되지 않은 PC입니다: ${pcId}`);
 }
+// 서버 시각(초) - 이 PC 시계가 틀려도 명령 만료가 서버 기준이 되게 (BugBuster M1, 에이전트도 server_now 로 판정)
+async function serverNowSec() {
+  const offset = (await rtdb.ref(".info/serverTimeOffset").once("value")).val() ?? 0;
+  return Math.floor((Date.now() + offset) / 1000);
+}
 async function sendAdminCommand(cid, pcId, type, args) {
   await checkPc(cid, pcId);
-  const now = Math.floor(Date.now() / 1000);
+  const now = await serverNowSec();
   const ref = rtdb.ref(`apps/rpa/commands/${cid}/${pcId}`).push();
   await ref.set({ type, args: args ?? null, by: "admin-tool", created_at: now, expires_at: now + COMMAND_TTL_SEC, state: "queued" });
   return { key: ref.key };
@@ -401,6 +417,7 @@ export async function grantTokens(cid, amount, memo) {
   const wallet = store.doc(`wallet/${cid}`), at = nowKst();
   const created = await store.runTransaction(async (t) => {
     const cur = await t.get(wallet);
+    if (!cur.exists && n < 0) throw new Refused("토큰 정보가 없는 업체입니다. 처음에는 양수만 넣을 수 있습니다.");   // 음수 통장으로 그 업체 PC 가 모두 막히지 않게 (BugBuster L15)
     t.set(wallet, cur.exists ? { granted: (cur.data().granted ?? 0) + n } : { granted: n, since: at }, { merge: true });
     t.create(wallet.collection("grants").doc(), { amount: n, at, memo: String(memo ?? "").trim() });
     return !cur.exists;
@@ -550,7 +567,10 @@ export async function setupCompany(plan) {
   };
   const each = async (items, fn) => { for (const x of items) if (!await fn(x)) return false; return true; };
   const ok = await step(`업체 ${cid} ${String(plan.name).trim()}`, async () => { await addCompany(cid, plan.name); })
-    && await each(plan.pcs, (p) => step(`PC ${p.pcId} ${p.label ?? ""}`.trim(), async () => { await addPc(cid, p.pcId, p.label); }))
+    && await each(plan.pcs, (p) => step(`PC ${p.pcId} ${p.label ?? ""}`.trim(), async () => {
+      if ((await companyOf(cid)).pcs?.[p.pcId]) return "이미 등록되어 있어 건너뛰었습니다.";   // 다시 누르면 남은 것만 - addPc 는 이미 있는 PC 를 거절한다 (BugBuster L14)
+      await addPc(cid, p.pcId, p.label);
+    }))
     && await each(plan.users, (u) => step(`${u.role === "viewer" ? "유저" : "관리자"} 계정 ${String(u.id).trim()}`,
       () => skipExisting(async () => { made.users.push({ ...(await addUser(cid, String(u.id).trim(), u.role, u.name)), id: String(u.id).trim() }); })))
     && await each(plan.pcs, (p) => step(`에이전트 계정 ${p.pcId}`,

@@ -7,6 +7,7 @@
   미리보기: 기억과 상관없이 1통, 한 번에 최대 수, 시작 글자 바꾸기, 받기 단계가 없는 기록
     .venv\\Scripts\\python.exe tests\\test_mail_pick.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -25,8 +26,11 @@ PAGE = """<!doctype html><meta charset="utf-8"><title>메일</title>
 <ul id="list">__ROWS__</ul>
 <div id="view"><h3 id="vt"></h3><div class="att"><a href="javascript:;" id="att" onclick="location.href='/download?k=' + this.dataset.k"></a></div></div>
 <script>
+const ATT = document.querySelector('.att').innerHTML, NOATT = __NOATT__;
 function show() { const m = /ukey=(\\w+)/.exec(location.hash); document.getElementById('list').style.display = m ? 'none' : 'block';
   document.getElementById('view').style.display = m ? 'block' : 'none';
+  if (m && NOATT.includes(m[1])) { document.querySelector('.att').innerHTML = ''; document.getElementById('vt').textContent = 'no'; return; }
+  if (m && !document.getElementById('att')) document.querySelector('.att').innerHTML = ATT;
   if (m) { const li = document.querySelector('li[data-key=' + m[1] + ']') || [...document.querySelectorAll('li.m_data')].find(l => l.getAttribute('onclick').includes('ukey=' + m[1] + "'")); document.getElementById('vt').textContent = li.querySelector('.m_subject').textContent;
     const a = document.getElementById('att'); a.dataset.k = m[1]; a.textContent = 'file_' + m[1] + '.xlsx (3 KB)'; } }
 window.addEventListener('hashchange', show); show();
@@ -34,6 +38,9 @@ window.addEventListener('hashchange', show); show();
 
 
 MARKS = {}        # key → 제목 칸 앞에 붙는 것 (비즈메카: 아이콘·숨은 글자 span.blind '중요'·'전달')
+
+
+NOATT = []        # 첨부 없는 메일의 key (BugBuster M13)
 
 
 KEYLESS = {}      # 켜면 네이버 메일처럼: 줄에 고유 표시가 없고, 제목 칸 앞에 숨은 글자 '메일 제목', 뒤에 받은 시각 (사용자 2026-10-20)
@@ -60,7 +67,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Disposition", f"attachment; filename=file_{q.split('=')[1]}.xlsx")
         else:
-            b = PAGE.replace("__ROWS__", rows()).encode("utf-8")
+            b = PAGE.replace("__ROWS__", rows()).replace("__NOATT__", json.dumps(NOATT)).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(b)))
@@ -96,7 +103,9 @@ print("--- 기록: " + " / ".join(rec.describe(s) for s in steps))
 i = next((n for n, s in enumerate(steps) if s["kind"] == "click" and s.get("row")), None)
 check("메일 줄 누르기에 목록 줄 정보가 붙는다 (같은 모양의 줄·기록 때 보이던 줄)", i is not None
       and steps[i]["row"]["sel"] == "li.m_data" and steps[i]["row"]["key"] == "k1"
-      and [x["k"] for x in steps[i]["row"]["list"]] == ["k1", "k2", "k3"], steps[i].get("row") if i is not None else steps)
+      and [x["k"] for x in steps[i]["row"]["mine"]] == ["k1"], steps[i].get("row") if i is not None else steps)
+check("목록 줄 정보에 다른 줄의 글자를 담지 않는다 - 누른 줄과 위치만 (BugBuster I4)", "list" not in steps[i]["row"]
+      and steps[i]["row"]["at"] == 0 and "공지사항" not in json.dumps(steps, ensure_ascii=False), steps[i]["row"])
 check("받기 단계가 없으면 묶음이 없다 (저장을 막는 데 쓴다)", rec.pick_body(steps[:i + 1], i) is None)
 check("메일 시작 문구로 '메일마다' 단계를 스스로 찾는다 (프리셋 칸 - 사용자 2026-10-14)", rec.auto_pick(steps, ">>>") == i
       and rec.auto_pick(steps, "[긴급]") is None and rec.auto_pick(steps, "") is None, rec.auto_pick(steps, ">>>"))
@@ -108,13 +117,15 @@ mem_path = os.path.join(OUT, "mem", "PRESET1.json")      # 기록 때 보이던 
 MAILS.insert(0, ("k4", ">>> 주문 D"))      # 새로 온 메일 (맨 위)
 
 
-def replay(label, memory=None, preview=False):
+def replay(label, memory=None, preview=False, progress=None):
     lines = []
     orig = rec.Replayer.__init__
 
     def init(self, *a, **kw):
         orig(self, *a, **kw)
         self.mail_memory, self.pick_preview = memory, preview
+        if progress is not None:
+            self.progress = lambda *x: progress.append(x)
     rec.Replayer.__init__ = init
     try:
         ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "013", log=lines.append, step_timeout=6, step_tries=1)
@@ -172,6 +183,32 @@ m = rec.MailMemory(mem_path)
 n = len(m.keys)
 m.clear()
 check("기억 지우기", n >= 4 and not rec.MailMemory(mem_path).keys, n)
+
+# 첨부 없는 '>>>' 메일 (BugBuster M13·L7·I5)
+rec.set_pick(steps, i, ">>>")
+MAILS[:] = [("m1", ">>> 첨부 없음"), ("m2", ">>> 주문 M")]
+NOATT[:] = ["m1"]
+mem3 = os.path.join(OUT, "mem", "PRESET3.json")
+prog = []
+ok, rp, lines = replay("noatt", rec.MailMemory(mem3), progress=prog)
+check("M13: 첨부 없는 메일은 그 메일만 건너뛰고 기억, 다음 메일은 받는다", ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_m2.xlsx"]
+      and any("건너뜀(첨부 없음)" in x for x in lines) and {"m1", "m2"} <= set(rec.MailMemory(mem3).keys), (rp.results, rp.saved, lines[-6:]))
+last = {}
+for no, state, how in prog:
+    last[no] = state
+check("L7: 메일 고르기·묶음 단계의 진행 표시가 끝난다 (마지막 표시가 run 이 아니다)", len(last) == len(steps)
+      and all(v in ("ok", "skip") for v in last.values()), last)
+check("I5: 화면 마지막 줄까지 새 메일이면 '다음 쪽에 더 있을 수 있습니다'", any(rec.MAIL_MORE in x for x in lines)
+      and rec.MAIL_MORE in next(h for n_, st_, h in rp.results if n_ == i + 1), rp.results)
+MAILS[:] = [("m3", ">>> 첨부 없음 2"), ("m2", ">>> 주문 M")]
+NOATT[:] = ["m3"]
+prog = []
+ok, rp, lines = replay("noatt_only", rec.MailMemory(mem3), progress=prog)
+check("M13: 받은 메일이 하나도 없으면 실패, 기억하지 않는다 (사이트가 바뀌었을 수 있다)", not ok and "m3" not in rec.MailMemory(mem3).keys
+      and not any(rec.MAIL_MORE in x for x in lines), (rp.results, lines[-4:]))
+check("L7: 실패 번호는 묶음 안의 실제 단계", rp.results[-1][:2] == (end + 1, "fail") and prog[-1][:2] == (end + 1, "fail"), (rp.results[-1], prog[-1:]))
+NOATT[:] = []
+rec.set_pick(steps, i, None)
 
 # 네이버 메일처럼 줄에 고유 표시가 없는 목록 (사용자 2026-10-20): 저장 때 연 메일 제목은 숨은 글자 없이, 같은 제목 메일은 줄마다 따로
 MAILS[:] = [("n1", "[창민사이트]"), ("n2", "[공통사이트]"), ("n3", "[창민사이트]")]

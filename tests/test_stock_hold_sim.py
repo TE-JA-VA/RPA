@@ -526,5 +526,16 @@ print("\n=== 25. 일반 탭: 헤더는 내림차순이라는데 값이 뒤섞임
 g = FakeStatusGrid(["단종", "정상", "일시품절"], state="desc", fake_order=True)
 check(sort_status(g) is False, "값 순서가 틀리면 확정하지 않음")
 
+print("\n=== 26. 헤더 상태를 못 읽는 그리드: 전부 비정상이면 확정 / 비정상이 많은 오름차순은 내림차순까지 (BugBuster L22) ===")
+FakeStatusHeader.legacy_properties = lambda self: {"DefaultAction": ""}   # 이후 시험은 모두 폴백 경로
+g = FakeStatusGrid(["일시품절", "단종", "일시품절"])
+check(sort_status(g) is True and g.clicks == 3, f"전부 비정상 -> 세 상태를 다 보고 확정 (클릭 {g.clicks}회)")
+class ShortScreen(FakeStatusGrid):              # 화면에는 앞 3행만 보인다 (비정상이 한 화면보다 많음)
+    vals = property(lambda self: self._v[:3], lambda self, v: setattr(self, "_v", v))
+
+
+g = ShortScreen(["정상"] + ["단종"] * 5)
+check(sort_status(g) is True and g.state == "desc", f"오름차순 비정상 화면을 내림차순으로 보지 않음 (상태={g.state})")
+
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

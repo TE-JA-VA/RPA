@@ -150,10 +150,18 @@ def settings_path():
     return os.path.join(status_dir(), SETTINGS_NAME)
 
 
+SETTINGS_UNREADABLE = "_unreadable"   # 파일은 있는데 못 읽었다 - write_settings 가 이 값을 저장하지 않는다 (BugBuster M20)
+
+
 def read_settings():
-    """대시보드 환경설정. 없거나 깨졌으면 기본값으로 채운다. 옛 예약 {days, times} 는 줄(slots, 모두 '전체')로 바꿔 읽는다."""
-    data = read_json(settings_path())
+    """대시보드 환경설정. 없거나 깨졌으면 기본값으로 채운다. 옛 예약 {days, times} 는 줄(slots, 모두 '전체')로 바꿔 읽는다.
+    파일이 있는데 못 읽었으면(잠김·0바이트·깨짐) 기본값에 SETTINGS_UNREADABLE 표시를 달아 돌려준다 - 읽는 쪽은 지금처럼
+    기본값으로 돌고, 그 값을 고쳐 저장하려 하면 write_settings 가 거절한다 (계정·정책·반복 상태를 기본값으로 덮지 않게, BugBuster M20).
+    예외로 내지 않는 까닭: 에이전트 현황 올리기·예약기 등 예외를 안 잡는 읽는 곳이 많다 (기록이 RPA 를 멈추면 안 된다)."""
+    data = read_json(settings_path(), tries=20, broken=_BROKEN)   # 쓰기 재시도와 같은 1초 (BugBuster M20)
     out = json.loads(json.dumps(DEFAULT_SETTINGS))
+    if data is _BROKEN or (data is not None and not isinstance(data, dict)):
+        out[SETTINGS_UNREADABLE] = True
     if isinstance(data, dict):
         for section, values in data.items():
             if isinstance(values, dict) and isinstance(out.get(section), dict):
@@ -167,6 +175,8 @@ def read_settings():
 
 
 def write_settings(data):
+    if isinstance(data, dict) and data.get(SETTINGS_UNREADABLE):   # 못 읽은 기본값으로 덮지 않는다 (BugBuster M20)
+        return False
     return write_json_atomic(settings_path(), data)
 
 
@@ -1017,7 +1027,8 @@ def read_presets():
         p.update(name=str(d.get("name") or p["name"]), code=str(d.get("code") or ""), saved_at=d.get("saved_at"), record=r)
         if r and p["code"] in codes:
             raise ValueError(f"{PRESETS_NAME}의 프리셋 {codes[p['code']]}와(과) {i}이(가) 같은 사이트코드 {p['code']}를 사용합니다.")
-        codes[p["code"]] = i
+        if r:       # 기록 없는 칸의 코드는 겹침으로 안 본다 - 쓰는 쪽(옵저버 validate_presets·옮기기 _code_clash)과 같게 (BugBuster H1)
+            codes[p["code"]] = i
         out.append(p)
     while len(out) < PRESET_MIN:
         out.append(blank_preset(len(out) + 1))
@@ -1169,10 +1180,29 @@ def set_preset_switches(wanted):
     blocked = sorted(no for no, on in final.items() if on and no not in ready)
     if blocked:
         raise ValueError(f"프리셋에 기록된 아이디·비밀번호가 없습니다: {', '.join(str(n) for n in blocked)}번")
+    limit = preset_limit()
+    over = sorted(no for no, on in final.items() if on and no > limit)   # 한도 밖 칸은 켜지 않는다 (BugBuster M10)
+    if over:
+        raise ValueError(f"이 업체의 프리셋 수({limit}개)를 넘는 프리셋은 켤 수 없습니다: {', '.join(str(n) for n in over)}번")
     for no, on in final.items():
         sites[preset_site_key(no)]["Stts"] = 0 if on else 9
     write_user_config(data)
     return final
+
+
+def switch_off_over_limit(limit):
+    """프리셋 수 한도가 줄면 한도 밖의 켜진 PRESETn 칸을 끈다 (지우지는 않는다 - 사용자 2026-10-14). 끈 번호 목록 (BugBuster M10)."""
+    data = read_user_config()
+    sites = data.get(SITES_SECTION) if isinstance(data, dict) and isinstance(data.get(SITES_SECTION), dict) else {}
+    off = []
+    for key, site in sites.items():
+        m = re.fullmatch(r"PRESET(\d+)", str(key))
+        if m and int(m.group(1)) > limit and isinstance(site, dict) and str(site.get("Stts", "")).strip() == "0":
+            site["Stts"] = 9
+            off.append(int(m.group(1)))
+    if off:
+        write_user_config(data)
+    return sorted(off)
 
 
 # ---------------------------------------------------------------------------
@@ -1376,9 +1406,13 @@ def _seconds(a, b):
     return max(0, int((b - a).total_seconds()))
 
 
-def read_json(path):
-    """덮어쓰는 순간과 겹치면 잠깐 못 읽을 수 있어 몇 번 다시 시도한다."""
-    for _ in range(6):
+_BROKEN = object()   # read_json 의 '파일은 있는데 못 읽음' 표지 (BugBuster M20)
+
+
+def read_json(path, tries=6, broken=None):
+    """덮어쓰는 순간과 겹치면 잠깐 못 읽을 수 있어 몇 번 다시 시도한다. 파일이 없으면 None,
+    있는데 끝내 못 읽으면 broken (기본 None - '없음' 과 나눠야 하는 쪽만 _BROKEN 을 준다, BugBuster M20)."""
+    for _ in range(tries):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -1387,8 +1421,8 @@ def read_json(path):
         except (PermissionError, ValueError):
             time.sleep(0.05)
         except Exception:
-            return None
-    return None
+            return broken
+    return broken
 
 
 def write_json_atomic(path, data):
@@ -1397,6 +1431,8 @@ def write_json_atomic(path, data):
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False))
+            f.flush()
+            os.fsync(f.fileno())   # 전원이 나가도 0바이트 파일로 바꿔치지 않게 (BugBuster M20)
         for _ in range(20):
             try:
                 os.replace(tmp, path)
@@ -1448,7 +1484,10 @@ def append_history(record):
         folder = status_dir()
         path = os.path.join(folder, HISTORY_NAME)
         if os.path.exists(path) and os.path.getsize(path) > HISTORY_MAX_BYTES:
-            os.replace(path, os.path.join(folder, HISTORY_OLD_NAME))
+            try:
+                os.replace(path, os.path.join(folder, HISTORY_OLD_NAME))
+            except OSError:   # 넘기기는 다음 기록 때 다시 - 이번 한 건은 그대로 덧붙인다 (BugBuster L23)
+                pass
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         return True
@@ -1485,6 +1524,8 @@ def read_history(limit=0, program=None, since=None):
             continue
         except Exception:
             continue
+    last = {r.get("run_id"): i for i, r in enumerate(rows) if r.get("run_id")}   # 두 프로세스가 같은 실행을 닫았으면 한 줄만 - 마지막 줄 (BugBuster K12)
+    rows = [r for i, r in enumerate(rows) if not r.get("run_id") or last[r["run_id"]] == i]
     if program:
         rows = [r for r in rows if r.get("program") == program]
     if since:
@@ -1981,6 +2022,10 @@ def _close_dead(path, seen, state, reason, part_state, part_note, end=None):
             return cur or seen
         if process_alive(cur.get("pid"), cur.get("pid_created")) is not False:
             return cur
+        mark = read_json(path + STOPPING_SUFFIX) if state == "crashed" else None
+        if isinstance(mark, dict) and mark.get("run_id") == cur.get("run_id"):   # 대시보드가 끄는 중 - '중단' 으로 (BugBuster M19)
+            state, reason = "stopped", mark.get("reason") or reason
+            part_state, part_note = "stopped", reason
         end = end or cur.get("updated_at") or now_iso()
         for s in cur.get("steps") or []:
             if s.get("state") == "running":
@@ -2001,6 +2046,21 @@ def _close_dead(path, seen, state, reason, part_state, part_note, end=None):
 def _mark_vanished(path, seen):
     """'진행 중'으로 남은 채 프로세스가 사라진 실행을 '비정상 종료'로 (끝 시각은 마지막으로 살아 있던 때)."""
     return _close_dead(path, seen, "crashed", VANISHED_REASON, "failed", "여기서 중단되었습니다.")
+
+
+STOPPING_SUFFIX = ".stopping"   # 상태 파일 옆 - 도는 프로그램이 상태 파일을 덮어써 표시가 지워지지 않게 따로 둔다 (BugBuster M19)
+
+
+def mark_stopping(program, run_id, reason):
+    """대시보드가 끄기 직전에 적는다 - 끄고 기다리는 사이 다른 쪽이 먼저 죽은 것을 봐도 '비정상 종료' 가 아니라 '중단' 으로 닫게."""
+    return write_json_atomic(status_path(program) + STOPPING_SUFFIX, {"run_id": run_id, "reason": reason})
+
+
+def clear_stopping(program):
+    try:
+        os.remove(status_path(program) + STOPPING_SUFFIX)
+    except OSError:
+        pass
 
 
 def mark_stopped(program, reason):

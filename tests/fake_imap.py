@@ -54,6 +54,7 @@ class FakeIMAP:
         self.boxes = {"INBOX": []}
         self.commands = []
         self.stall = False
+        self.readonly = set()       # SELECT 해도 읽기 전용으로 여는 메일함 (진짜 서버의 공유·보관 메일함처럼)
         self.wake = threading.Event()
         self.servers = [self._listen(True), self._listen(False)]
 
@@ -65,10 +66,12 @@ class FakeIMAP:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         return srv
 
-    def add(self, raw, date, seen=False, box="INBOX"):
-        """메일 하나 (raw: CRLF bytes, date: PC 시각 = 서버가 받은 시각). uid 를 돌려준다."""
+    def add(self, raw, date, seen=False, box="INBOX", idate=None):
+        """메일 하나 (raw: CRLF bytes, date: PC 시각 = 서버가 받은 시각). uid 를 돌려준다.
+        idate: INTERNALDATE 로 보낼 글 그대로 (규격을 어긴 서버 흉내)."""
         msgs = self.boxes.setdefault(box, [])
-        msgs.append({"uid": len(msgs) + 1, "raw": raw, "date": date.astimezone(), "flags": {"\\Seen"} if seen else set()})
+        msgs.append({"uid": len(msgs) + 1, "raw": raw, "date": date.astimezone(), "flags": {"\\Seen"} if seen else set(),
+                     "idate": idate})
         return len(msgs)
 
     def server(self, security="ssl", **kw):
@@ -125,7 +128,7 @@ class _Handler(socketserver.BaseRequestHandler):
                 if name not in fake.boxes:
                     self.send(f"{tag} NO Mailbox does not exist")
                     continue
-                box, readonly = fake.boxes[name], cmd == "EXAMINE"
+                box, readonly = fake.boxes[name], cmd == "EXAMINE" or name in fake.readonly
                 self.send(f"* {len(box)} EXISTS")
                 self.send(f"* OK [UIDVALIDITY {UIDVALIDITY}] UIDs valid")
                 self.send(f"{tag} OK [{'READ-ONLY' if readonly else 'READ-WRITE'}] {cmd} completed")
@@ -186,7 +189,7 @@ class _Handler(socketserver.BaseRequestHandler):
             if "RFC822.SIZE" in up:
                 out.append(f"RFC822.SIZE {len(m['raw'])}")
             if "INTERNALDATE" in up:
-                out.append("INTERNALDATE " + imaplib.Time2Internaldate(m["date"]))
+                out.append("INTERNALDATE " + (m["idate"] or imaplib.Time2Internaldate(m["date"])))
             if not sec:
                 self.send(f"* {seq} FETCH ({' '.join(out)})")
                 continue
