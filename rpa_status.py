@@ -312,11 +312,39 @@ def user_config_path():
 # ---------------------------------------------------------------------------
 # 판 (배포판 구조 1부, docs/superpowers/specs/2026-09-29-release-layout-design.md 4·5절)
 # 프로그램 폴더의 manifest.json 에 판 번호와 우리 파일의 지문(SHA-256)을 적는다. tools/build_release.py 가 쓰고,
-# 에이전트가 켤 때 check_install() 로 맞춰 본다. 사고(섞임) 확인용이지 변조 방어가 아니다 - 서명은 3부.
+# 에이전트가 켤 때·주기적으로, 실행 직전에 check_install() 로 맞춰 본다.
+# 파일 변조 감지 (2026-10-23 사용자): 지문이 다른 파일이나 서명이 틀린 목록은 'tampered' 로 실행을 막는다. 서명은 업데이트
+# 사이트의 manifest.sig 를 받아 둔 것(installed_sig_path)으로 본다. 막는 것이 아니라 '들키게' 하는 단계 - 이 코드도 .py 라
+# 작정하면 같이 고칠 수 있다. 빠진 파일(백신 격리·끊긴 복사)은 'mixed' 로 경고만 한다 (고객 RPA 가 오탐으로 멈추지 않게).
 # ---------------------------------------------------------------------------
 MANIFEST_NAME = "manifest.json"
 MANIFEST_FORMAT = 1
 CHANGED_MAX = 10          # 화면에 보낼 다른 파일 이름 수 (전체 개수는 changed_count)
+INSTALLED_SIG_NAME = "installed_sig.json"   # {version, sig(hex)} - rpa_update.ensure_installed_sig 가 받아 둔다
+
+
+def installed_sig_path():
+    return os.path.join(install_root(), "update", INSTALLED_SIG_NAME)
+
+
+def _manifest_signature(root, version):
+    """설치된 manifest.json 의 서명: ok / bad / unknown (그 버전의 서명을 아직 못 받았다 - 망 끊김·옛 PC)."""
+    try:
+        data = read_json(installed_sig_path(), tries=2)
+        if not isinstance(data, dict) or not version or data.get("version") != version:
+            return "unknown"
+        import update_sign
+        key = update_sign.public_key()
+        if not key:
+            return "unknown"
+        try:
+            sig = bytes.fromhex(str(data.get("sig") or ""))
+        except ValueError:
+            return "bad"
+        with open(os.path.join(root, MANIFEST_NAME), "rb") as f:
+            return "ok" if update_sign.verify(key, f.read(), sig) else "bad"
+    except Exception:
+        return "unknown"
 
 
 def file_digest(path):
@@ -338,13 +366,15 @@ def manifest_path_ok(rel):
 def check_install(root=None):
     """프로그램 폴더를 판 목록과 맞춰 본다. 예외를 내보내지 않는다 (에이전트가 켤 때 부른다).
 
-    ok     목록의 모든 파일이 있고 지문이 같다
-    mixed  없거나 지문이 다른 파일이 있다 (몇 개만 손으로 넣었거나 덮어쓰다 끊김)
-    none   목록이 없다 (옛 배포 폴더, 개발 PC)
-    error  목록을 못 믿는다 (깨짐, 형식 번호가 다름, 밖을 가리키는 경로)
+    ok        목록의 모든 파일이 있고 지문이 같다 (서명은 맞거나 아직 모름)
+    tampered  지문이 다른 파일이 있거나 목록의 서명이 틀렸다 - 실행을 막는다 (install_block_reason)
+    mixed     지문이 다른 파일은 없고 빠진 파일만 있다 (백신 격리·끊긴 복사) - 경고만
+    none      목록이 없다 (옛 배포 폴더, 개발 PC)
+    error     목록을 못 믿는다 (깨짐, 형식 번호가 다름, 밖을 가리키는 경로)
+    changed 는 다른 파일과 빠진 파일을 함께 (다른 것 먼저), modified 는 다른 파일만, signature 는 ok/bad/unknown.
     """
-    out = {"version": None, "state": "none", "changed": [], "changed_count": 0,
-           "checked_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
+    out = {"version": None, "state": "none", "changed": [], "changed_count": 0, "modified": [], "missing_count": 0,
+           "signature": "unknown", "checked_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
     try:
         root = root or program_dir()
         path = os.path.join(root, MANIFEST_NAME)
@@ -356,17 +386,39 @@ def check_install(root=None):
         if man.get("format") != MANIFEST_FORMAT or not isinstance(files, dict):
             raise ValueError("버전 목록 형식이 올바르지 않습니다.")
         out["version"] = str(man.get("version") or "") or None
-        changed = []
+        modified, missing = [], []
         for rel, want in files.items():
             if not manifest_path_ok(rel) or not isinstance(want, dict):
                 raise ValueError(f"판 목록의 경로가 잘못되었습니다: {rel!r}")
             full = os.path.join(root, *rel.split("/"))
-            if not os.path.isfile(full) or file_digest(full)["sha256"] != want.get("sha256"):
-                changed.append(rel)
-        out.update(state="mixed" if changed else "ok", changed=changed[:CHANGED_MAX], changed_count=len(changed))
+            if not os.path.isfile(full):
+                missing.append(rel)
+            elif file_digest(full)["sha256"] != want.get("sha256"):
+                modified.append(rel)
+        sign = _manifest_signature(root, out["version"])
+        state = "tampered" if modified or sign == "bad" else "mixed" if missing else "ok"
+        out.update(state=state, changed=(modified + missing)[:CHANGED_MAX], changed_count=len(modified) + len(missing),
+                   modified=modified[:CHANGED_MAX], missing_count=len(missing), signature=sign)
     except Exception as e:
         out.update(state="error", changed=[], changed_count=0, error=f"{type(e).__name__}: {e}"[:200])
     return out
+
+
+def tamper_text(install):
+    """'tampered' 인 점검 결과를 사람이 읽을 까닭으로. 아니면 None."""
+    if not isinstance(install, dict) or install.get("state") != "tampered":
+        return None
+    names = install.get("modified") or []
+    n = int(install.get("changed_count") or 0) - int(install.get("missing_count") or 0)   # 바뀐 파일 전체 수 (목록은 10개까지)
+    what = ("버전 목록의 서명이 맞지 않습니다" if not names
+            else f"바뀐 파일: {', '.join(names[:3])}" + (f" 외 {n - 3}개" if n > 3 else ""))
+    return (f"프로그램 파일이 설치된 버전과 달라 실행하지 않습니다. ({what}) "
+            "관리자에게 [업데이트]를 요청하여 주십시오. 같은 버전으로 다시 받으면 원래 파일로 되돌립니다.")
+
+
+def install_block_reason(root=None):
+    """실행을 막을 까닭 (파일 변조 감지). 실행 단추·예약이 띄우기 직전에 부른다 - 바뀐 파일·틀린 서명만 막는다."""
+    return tamper_text(check_install(root))
 
 
 def _old_config_paths():

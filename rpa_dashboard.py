@@ -474,6 +474,9 @@ def launch(target, by, env=None):
         upd = rpa_update.busy_reason()     # 업데이트 대기·바꾸는 중 - 단추·예약·반복 모두 여기서 막힌다 (자동 업데이트 6절)
         if upd:
             raise RuntimeError(upd)
+        tampered = st.install_block_reason()   # 파일 변조 감지 (2026-10-23) - 단추·예약·반복 모두 여기를 지난다
+        if tampered:
+            raise RuntimeError(tampered)
         running = any_rpa_running()
         if running:
             names = ", ".join(st.PROGRAMS.get(p, p) for p in running)

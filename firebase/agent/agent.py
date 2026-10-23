@@ -310,7 +310,7 @@ def live_bodies(snap):
     """pump 의 '바뀌었나' 비교 - (매초 바뀌는 값을 뺀 것, 전체). 앞이 바뀌면 바로, 뒤만 바뀌었으면 실행 중 5초마다 올린다 (BugBuster M3).
     단계·모듈·지표의 duration_sec 도 뺀다 - 끝난 것의 값은 상태·finished_at 이 바뀔 때 같이 바뀐다."""
     parts = [snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("parallel"), snap.get("together"), snap.get("schedule"),
-             snap.get("recent"), snap.get("launching"), snap.get("tokens"), snap.get("update")]
+             snap.get("recent"), snap.get("launching"), snap.get("tokens"), snap.get("update"), snap.get("version")]
     full = json.dumps(parts, ensure_ascii=False, default=str)
     steady = json.loads(full)
     for view in (steady[0] or {}).values():
@@ -533,6 +533,18 @@ META_TYPES = ("export_preset", "import_preset", "restore_preset")   # handler �
 SLOW_TYPES = ("import_preset", "restore_preset")   # 옵저버·ACTOR 가 끝나길 기다린다 - running 표시 뒤 스레드에서 (명령 흐름을 막지 않게)
 TRANSFER_TTL_SEC = 6 * 3600
 TRANSFER_CLEAN_SEC = 600
+INSTALL_CHECK_SEC = 900        # 설치 파일을 버전 목록과 다시 맞춰 보는 간격 (파일 변조 감지, 2026-10-23). 실행 직전에도 따로 잰다
+
+
+def install_line(install):
+    """에이전트 기록에 남길 설치 점검 한 줄."""
+    import rpa_status as st
+    names = ", ".join(install.get("changed") or [])
+    detail = {"mixed": f", 빠진 파일 {install.get('missing_count')}개: {names}",
+              "tampered": f" - {st.tamper_text(install)}",
+              "error": f", {install.get('error')}"}.get(install["state"], "")
+    sign = {"ok": ", 서명 확인", "bad": ", 서명 불일치"}.get(install.get("signature"), "")
+    return f"버전: {install['version'] or '없음'} ({install['state']}{sign}{detail})"
 TRANSFER_RE = re.compile(r"^[A-Za-z0-9_-]{16,40}$")
 PRESET_TRANSFER = 1    # live 에 싣는 표시 - 업체 웹이 이 명령을 아는 PC 만 복사 상대로 고른다 (옛 버전 PC 는 키가 없다)
 BUSY_TEXT = "옵저버 또는 ACTOR가 실행 중이라 변경하지 못했습니다."
@@ -892,7 +904,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         if upd.read_state().get("state") in upd.ACTIVE_STATES:
             raise RuntimeError("이미 업데이트가 진행 중입니다.")
         install = st.check_install()
-        if install.get("state") != "ok":
+        if install.get("state") not in ("ok", "mixed", "tampered"):   # 바뀐·빠진 파일은 업데이트가 되돌린다 (파일 변조 감지)
             raise RuntimeError(f"설치 구조가 맞지 않아 업데이트하지 않습니다. ({install.get('state')}) 설치 파일로 다시 설치하여 주십시오.")
         return install
 
@@ -901,9 +913,12 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
             raise RuntimeError(f"버전 번호가 올바르지 않습니다. ({version})")
         install = check_can_update()
-        if install.get("version") == version:
+        repair = install.get("version") == version
+        if repair and install.get("state") == "ok":
             raise RuntimeError("이미 최신 업데이트를 사용하고 있습니다")
         start(version, "update")
+        if repair:      # 같은 버전 - 바뀐·빠진 파일만 다시 받아 되돌린다
+            return f"같은 버전({version})으로 다시 받아 바뀐 파일을 되돌리도록 예약하였습니다. 오토파일럿 실행이 끝나면 바로 적용됩니다."
         return f"업데이트를 예약하였습니다. ({install.get('version')} → {version}) 오토파일럿 실행이 끝나면 바로 적용됩니다."
 
     def do_rollback(args):
@@ -1276,12 +1291,13 @@ def run(cfg):
             "ERPia 설치 여부를 확인한 뒤 에이전트를 다시 실행하여 위치를 선택하여 주십시오.")
     except Exception as e:
         log(f"ERPia 위치를 확인하지 못했습니다. ({type(e).__name__})")
-    # 판: 프로그램 폴더를 판 목록(manifest.json)과 맞춰 PC 현황에 올린다 (배포판 구조 1부 5절).
-    # 파일은 업데이트나 손으로 넣을 때만 바뀌고 둘 다 에이전트를 다시 켜므로 켤 때 한 번이면 된다. 예외를 내지 않는다
+    # 판: 프로그램 폴더를 판 목록(manifest.json)과 맞춰 PC 현황에 올린다 (배포판 구조 1부 5절). 예외를 내지 않는다.
+    # 파일 변조 감지 (2026-10-23): 켤 때 서명을 받아 두고, pump 가 INSTALL_CHECK_SEC 마다 다시 잰다
+    upd.ensure_installed_sig(st.program_dir())
     install = st.check_install()
-    detail = {"mixed": f", 다른 파일 {install['changed_count']}개: {', '.join(install['changed'])}",
-              "error": f", {install.get('error')}"}.get(install["state"], "")
-    log(f"버전: {install['version'] or '없음'} ({install['state']}{detail})")
+    log(install_line(install))
+    if install["state"] == "tampered":
+        upd.log(f"파일 변조 감지: {st.tamper_text(install)}")
 
     # 자동 실행 예약은 PC 에서 돈다. 기존 대시보드의 Scheduler 그대로 (꺼져 있던 동안 지난 예약은 건너뛴다).
     # 8765 대시보드와 같이 띄우면 예약이 둘이 되어 두 번 실행될 수 있다 - 하나만 띄운다.
@@ -1303,6 +1319,7 @@ def run(cfg):
         last_clean = 0.0
         recent_key = [None, []]   # (이력 파일 mtime, 오늘) 과 그때 센 요약
         last_sched = None         # 마지막으로 제대로 읽은 schedule - settings.json 을 잠깐 못 읽으면 이것을 올린다 (BugBuster M20)
+        inst = [install, time.time()]   # 설치 점검 결과와 잰 때 - INSTALL_CHECK_SEC 마다 다시 (파일 변조 감지)
         while not stop.is_set():
             try:
                 snap = live_extras(st.dashboard_snapshot())
@@ -1349,7 +1366,16 @@ def run(cfg):
                 # 띄워 놓은 프로세스가 아직 살아 있나. 명령이 done 이 된 뒤 상태 파일에 'running' 이 찍히기까지의
                 # 몇 초를 이 값이 메운다 (그 틈에 화면의 실행 버튼이 풀리면 두 번 실행될 수 있다)
                 snap["launching"] = bool(dash.launch_state())
-                snap["version"] = install      # 켤 때 한 번 잰 판 (바뀌지 않으니 비교 body 에는 안 넣는다)
+                if time.time() - inst[1] >= INSTALL_CHECK_SEC and upd.read_state().get("state") not in upd.ACTIVE_STATES:
+                    inst[1] = time.time()          # 업데이트 중에는 파일이 바뀌는 중이라 재지 않는다
+                    upd.ensure_installed_sig(st.program_dir())
+                    now_inst = st.check_install()
+                    if (now_inst["state"], now_inst.get("changed")) != (inst[0]["state"], inst[0].get("changed")):
+                        log(install_line(now_inst))
+                        if now_inst["state"] == "tampered":
+                            upd.log(f"파일 변조 감지: {st.tamper_text(now_inst)}")
+                    inst[0] = now_inst
+                snap["version"] = inst[0]
                 snap["update"] = upd.live_view()
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
                 sent = upload_new_history(hist_path, up, cfg, prices=fresh_prices(prices))

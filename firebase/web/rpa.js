@@ -322,12 +322,18 @@ function verStat(v) {
   if (!v || typeof v !== "object") return null;
   const name = typeof v.version === "string" ? v.version : "";
   if (v.state === "ok" && name) return { text: `버전 ${name}`, title: "", warn: false };
-  if (v.state === "mixed") {
+  if (v.state === "mixed" || v.state === "tampered") {
     const list = Array.isArray(v.changed) ? v.changed.filter((x) => typeof x === "string") : [];
     const n = Number(v.changed_count) || list.length;
     const more = n > list.length ? ` 외 ${n - list.length}개` : "";
-    return { text: `버전 ${name || "?"} · 다른 파일 ${n}`, warn: true,
-             title: list.length ? `버전 목록과 다른 파일: ${list.join(", ")}${more}` : "" };
+    // 파일 변조 감지 (2026-10-23): tampered = 바뀐 파일·틀린 서명 → PC 가 실행을 막는다. mixed = 빠진 파일만 (경고)
+    if (v.state === "tampered") {
+      const why = v.signature === "bad" && !(Array.isArray(v.modified) && v.modified.length) ? "버전 목록의 서명이 맞지 않습니다" : `다른 파일: ${list.join(", ")}${more}`;
+      return { text: `버전 ${name || "?"} · 파일 변조됨 (실행 막힘)`, warn: true,
+               title: `${why}. [업데이트]에서 같은 버전을 다시 보내면 원래 파일로 되돌립니다.` };
+    }
+    return { text: `버전 ${name || "?"} · 빠진 파일 ${n}`, warn: true,
+             title: list.length ? `버전 목록에 있는데 없는 파일: ${list.join(", ")}${more}. [업데이트]에서 같은 버전을 다시 보내면 채웁니다.` : "" };
   }
   if (v.state === "error") return { text: "버전 확인 실패", title: typeof v.error === "string" ? v.error : "", warn: true };
   return null;

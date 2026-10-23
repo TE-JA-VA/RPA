@@ -246,6 +246,27 @@ d.LAUNCHED[:] = saved
 d._active["until"] = 0
 d._active["proc"] = None
 
+print("\n=== 6-3-1. 프로그램 파일이 바뀌었으면 (파일 변조 감지 2026-10-23) ===")
+saved, real_block = list(d.LAUNCHED), st.install_block_reason
+TAMPERED = "프로그램 파일이 설치된 버전과 달라 실행하지 않습니다. (바뀐 파일: rpa_dashboard.py)"
+st.install_block_reason = lambda root=None: TAMPERED
+try:
+    try:
+        d.launch("routine", "cloud")
+        check(False, "파일이 바뀌었는데 실행 단추가 띄움")
+    except RuntimeError as e:
+        check(str(e) == TAMPERED and d.LAUNCHED == saved, f"실행 단추는 까닭과 함께 거절: {e}")
+    set_next(-3)
+    sched.tick_safe()
+    sch = st.read_settings()["schedule"]
+    check(d.LAUNCHED == saved and sch["last_error"] == TAMPERED, f"예약도 건너뛰고 까닭을 남긴다 ({sch['last_error']})")
+finally:
+    st.install_block_reason = real_block
+check(st.install_block_reason() is None, "개발 PC(목록 없음)는 막지 않는다")
+d.LAUNCHED[:] = saved
+d._active["until"] = 0
+d._active["proc"] = None
+
 print("\n=== 6-4. 고르기 줄은 그 모듈만 넘긴다 ===")
 saved = list(d.LAUNCHED)
 d.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Logistics"]}]})

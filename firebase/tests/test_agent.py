@@ -1064,16 +1064,36 @@ with tempfile.TemporaryDirectory() as d:
                 acts["rollback"](None); check(False, "보관본 없이 되돌리기")
             except RuntimeError as e:
                 check("이전 버전" in str(e), f"보관본이 없으면 거절 ({e})")
-            st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "mixed"}
+            for bad in ("none", "error"):
+                st.check_install = lambda root=None, s=bad: {"version": "2026.10.07-4", "state": s}
+                try:
+                    acts["update"]({"version": "2026.10.07-5"}); check(False, f"{bad} 인데 업데이트")
+                except RuntimeError as e:
+                    check("설치 구조" in str(e), f"목록이 없거나 못 믿는 PC 는 거절 ({bad}: {e})")
+            # 파일 변조 감지 (2026-10-23): 바뀐·빠진 파일이 있어도 업데이트는 받는다 - 같은 버전으로 다시 받아 되돌린다
+            for s in ("mixed", "tampered"):
+                st.check_install = lambda root=None, s=s: {"version": "2026.10.07-4", "state": s}
+                started.clear()
+                upd.write_state({"state": "done"})
+                msg = acts["update"]({"version": "2026.10.07-4"})
+                check(started == [("2026.10.07-4", "update")] and "되돌리" in msg, f"{s}: 같은 버전으로 다시 받기 ({msg})")
+            st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "ok"}
             try:
-                acts["update"]({"version": "2026.10.07-5"}); check(False, "mixed 인데 업데이트")
+                acts["update"]({"version": "2026.10.07-4"}); check(False, "멀쩡한데 같은 버전")
             except RuntimeError as e:
-                check("설치 구조" in str(e), f"판 구조가 어긋난 PC 는 거절 ({e})")
+                check("이미 최신" in str(e), f"멀쩡한 PC 는 같은 버전을 거절 ({e})")
+            upd.write_state({"state": "done"})
         finally:
             st.check_install = orig
     finally:
         os.environ.pop("RPA_PROGRAMDATA", None)
 check("update" in ag.KNOWN_TYPES and "rollback" in ag.KNOWN_TYPES, "명령 종류에 update·rollback")
+line = ag.install_line({"version": "2026.10.07-4", "state": "tampered", "changed": ["a.py"], "modified": ["a.py"],
+                        "changed_count": 1, "missing_count": 0, "signature": "ok"})
+check("tampered" in line and "a.py" in line and "서명 확인" in line and "실행하지 않습니다" in line, f"기록 한 줄: 변조 ({line})")
+line = ag.install_line({"version": "2026.10.07-4", "state": "mixed", "changed": ["b.py"], "modified": [],
+                        "changed_count": 1, "missing_count": 1, "signature": "unknown"})
+check("빠진 파일 1개: b.py" in line, f"기록 한 줄: 빠진 파일 ({line})")
 
 print("\n7-3절 접속에 성공했을 때만 살아 있음")
 with tempfile.TemporaryDirectory() as d:

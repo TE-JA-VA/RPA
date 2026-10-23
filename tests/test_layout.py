@@ -157,16 +157,73 @@ check("목록에 없는 파일(__pycache__)은 무시한다", st.check_install(p
 with open(os.path.join(prog, "rpa_status.py"), "wb") as f:
     f.write(b"print(2)\n")
 r = st.check_install(prog)
-check("지문이 다르면 mixed, 그 파일 이름", r["state"] == "mixed" and r["changed"] == ["rpa_status.py"]
-      and r["changed_count"] == 1, str(r))
+check("지문이 다르면 tampered, 그 파일 이름 (파일 변조 감지)", r["state"] == "tampered" and r["changed"] == ["rpa_status.py"]
+      and r["modified"] == ["rpa_status.py"] and r["changed_count"] == 1 and r["missing_count"] == 0, str(r))
+why = st.tamper_text(r)
+check("변조 까닭: 파일 이름 + 같은 버전 다시 받기 안내", why and "rpa_status.py" in why and "실행하지 않습니다" in why
+      and "같은 버전" in why, why)
+check("실행 막기는 tampered 일 때", st.install_block_reason(prog) == why)
 os.remove(os.path.join(prog, "firebase", "agent", "에이전트_시작.bat"))
 r = st.check_install(prog)
-check("없는 파일도 mixed (한글 이름 그대로)", r["state"] == "mixed" and r["changed_count"] == 2
-      and "firebase/agent/에이전트_시작.bat" in r["changed"], str(r))
+check("바뀐 파일과 빠진 파일이 같이 있으면 tampered, 바뀐 것 먼저 (한글 이름 그대로)", r["state"] == "tampered"
+      and r["changed"] == ["rpa_status.py", "firebase/agent/에이전트_시작.bat"] and r["missing_count"] == 1, str(r))
+with open(os.path.join(prog, "rpa_status.py"), "wb") as f:
+    f.write(b"print(1)\n")
+r = st.check_install(prog)
+check("빠진 파일만이면 mixed (백신 격리·끊긴 복사 - 경고만, 실행은 안 막는다)", r["state"] == "mixed" and r["missing_count"] == 1
+      and r["modified"] == [] and st.install_block_reason(prog) is None and st.tamper_text(r) is None, str(r))
 write_manifest({f"f{i}.txt": {"sha256": "0" * 64, "size": 1} for i in range(15)})
 r = st.check_install(prog)
-check("다른 파일 이름은 10개까지, 개수는 따로", r["state"] == "mixed" and len(r["changed"]) == 10
-      and r["changed_count"] == 15, str(r))
+check("빠진 파일 이름은 10개까지, 개수는 따로", r["state"] == "mixed" and len(r["changed"]) == 10
+      and r["changed_count"] == 15 and r["missing_count"] == 15, str(r))
+for i in range(15):
+    with open(os.path.join(prog, f"f{i}.txt"), "w") as f:
+        f.write("x")
+r = st.check_install(prog)
+check("바뀐 파일이 많으면 까닭은 셋 + 외 n개", r["state"] == "tampered" and "외 12개" in (st.tamper_text(r) or ""), st.tamper_text(r))
+for i in range(15):
+    os.remove(os.path.join(prog, f"f{i}.txt"))
+with open(os.path.join(prog, "firebase", "agent", "에이전트_시작.bat"), "wb") as f:
+    f.write(files["firebase/agent/에이전트_시작.bat"])
+
+# --- 서명 (파일 변조 감지): 받아 둔 manifest.sig 로 설치된 목록을 확인한다. 공개 열쇠는 시험 열쇠로 바꿔 끼운다
+import update_sign  # noqa: E402
+real_pub, real_pd = update_sign.public_key, os.environ.get("RPA_PROGRAMDATA")
+os.environ["RPA_PROGRAMDATA"] = os.path.join(tmp, "programdata")
+secret, public = update_sign.keygen()
+update_sign.public_key = lambda: public
+try:
+    write_manifest(entries)
+    man_bytes = open(os.path.join(prog, st.MANIFEST_NAME), "rb").read()
+    good = update_sign.sign(secret, man_bytes).hex()
+    r = st.check_install(prog)
+    check("받아 둔 서명이 없으면 unknown - 막지 않는다 (옛 PC·망 끊김)", r["state"] == "ok" and r["signature"] == "unknown", str(r))
+    os.makedirs(os.path.dirname(st.installed_sig_path()), exist_ok=True)
+    st.write_json_atomic(st.installed_sig_path(), {"version": "2026.09.29-1", "sig": good})
+    r = st.check_install(prog)
+    check("서명이 맞으면 ok·서명 확인", r["state"] == "ok" and r["signature"] == "ok", str(r))
+    st.write_json_atomic(st.installed_sig_path(), {"version": "2026.09.28-1", "sig": good})
+    check("다른 버전의 서명이면 unknown", st.check_install(prog)["signature"] == "unknown")
+    st.write_json_atomic(st.installed_sig_path(), {"version": "2026.09.29-1", "sig": good})
+    tampered = dict(entries, **{"rpa_status.py": {"sha256": hashlib.sha256(b"print(2)\n").hexdigest(), "size": 9}})
+    write_manifest(tampered)          # 파일과 목록을 같이 고쳤다 - 지문은 맞지만 서명이 틀린다
+    with open(os.path.join(prog, "rpa_status.py"), "wb") as f:
+        f.write(b"print(2)\n")
+    r = st.check_install(prog)
+    check("파일과 목록을 같이 고치면 서명 불일치로 tampered", r["state"] == "tampered" and r["signature"] == "bad"
+          and r["modified"] == [], str(r))
+    check("서명 불일치 까닭", "서명이 맞지 않습니다" in (st.tamper_text(r) or ""), st.tamper_text(r))
+    st.write_json_atomic(st.installed_sig_path(), {"version": "2026.09.29-1", "sig": "zz"})
+    check("서명 글자가 깨져도 bad", st.check_install(prog)["signature"] == "bad")
+    with open(os.path.join(prog, "rpa_status.py"), "wb") as f:
+        f.write(b"print(1)\n")
+    write_manifest(entries)
+finally:
+    update_sign.public_key = real_pub
+    if real_pd is None:
+        os.environ.pop("RPA_PROGRAMDATA", None)
+    else:
+        os.environ["RPA_PROGRAMDATA"] = real_pd
 with open(os.path.join(prog, st.MANIFEST_NAME), "w", encoding="utf-8") as f:
     f.write("{깨짐")
 r = st.check_install(prog)

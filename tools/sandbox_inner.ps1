@@ -278,6 +278,14 @@ if (Test-Path "$T\site") {
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" } | Out-File "$O\py_procs.txt"
   }
   Check "다음 로그온(도우미 다시)에 되돌림 → 판 A (Review Focus 2)" (($s -eq "rolled_back") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
+  # 파일 변조 감지 (2026-10-23): 깔린 파일 하나를 메모장처럼 고치면 점검이 tampered, 실행 막기 까닭이 나온다 - 손으로 되돌린 뒤 ok
+  $dashPy = "$App\rpa_dashboard.py"; $orig = [IO.File]::ReadAllBytes($dashPy)
+  Add-Content -Path $dashPy -Value "# 손댐" -Encoding UTF8
+  $tam = & $py -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; r = st.check_install(r'$App'); print(r['state'], ','.join(r['modified']), bool(st.install_block_reason(r'$App')))" 2>&1
+  Check "파일 변조 감지: 깔린 rpa_dashboard.py 를 고치면 tampered + 실행 막기" ("$tam" -eq "tampered rpa_dashboard.py True") "$tam"
+  [IO.File]::WriteAllBytes($dashPy, $orig)
+  $tam = & $py -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; print(st.check_install(r'$App')['state'])" 2>&1
+  Check "파일 변조 감지: 되돌리면 다시 ok" ("$tam" -eq "ok") "$tam"
   Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
 }
 

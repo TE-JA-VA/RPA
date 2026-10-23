@@ -97,6 +97,38 @@ check(open(os.path.join(STG, "manifest.json"), "rb").read() == MB, "받은 manif
 check(not any(u.endswith(MAN_B["files"]["firebase/agent/agent.py"]["sha256"]) for u in GOT), "그대로인 파일은 내려받지도 않는다")
 check(tree_digest(PROG) == before, "받기만으로는 프로그램 폴더가 안 바뀐다")
 
+# 파일 변조 감지 (2026-10-23): 손댄·빠진 파일은 목록끼리 같아도 받아 되돌린다 - 같은 버전으로 다시 받기도 이 길
+put(PROG, "firebase/agent/agent.py", "G9")
+up.fetch_release("2026.10.07-2", PROG, STG, base_url=BASE, get=get, pub=PK)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check("firebase/agent/agent.py" in plan["fetch"] and "firebase/agent/agent.py" not in plan["new"]
+      and open(os.path.join(STG, "files", "firebase", "agent", "agent.py"), encoding="utf-8").read() == "G1",
+      f"손댄 파일은 목록이 같아도 받는다 (되돌리기 보관 대상, 새 파일 아님) ({plan})")
+check(up.disk_differs(PROG, MAN_A["files"]) == ["firebase/agent/agent.py"], "disk_differs: 지문이 다른 파일")
+put(PROG, "firebase/agent/agent.py", "G1")
+os.remove(os.path.join(PROG, "b.py"))
+check(up.disk_differs(PROG, MAN_A["files"]) == ["b.py"], "disk_differs: 빠진 파일")
+put(PROG, "b.py", "B1")
+up.fetch_release("2026.10.07-2", PROG, STG, base_url=BASE, get=get, pub=PK)    # 아래 시험이 쓰는 staging 을 원래대로
+check(tree_digest(PROG) == before, "프로그램 폴더를 원래대로")
+
+print("\n=== 2-1. 설치된 버전의 서명 받아 두기 (파일 변조 감지) ===")
+MA_BYTES = open(os.path.join(PROG, "manifest.json"), "rb").read()
+SIG_HOST = {f"{BASE}/releases/2026.10.07-1/manifest.sig": us.sign(SK, MA_BYTES).hex().encode()}
+saved_urls = up.UPDATE_BASE_URLS
+up.UPDATE_BASE_URLS = ("https://old.test", BASE)
+try:
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, {}) ) is None and not os.path.exists(st.installed_sig_path()),
+          "못 받으면 None - 아무것도 안 쓴다")
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, SIG_HOST)) == "saved", "첫 주소가 안 되면 다음 주소에서 받아 둔다")
+    have = st.read_json(st.installed_sig_path())
+    check(have["version"] == "2026.10.07-1" and us.verify(PK, MA_BYTES, bytes.fromhex(have["sig"])), "설치된 목록과 맞는 서명")
+    GOT.clear()
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, SIG_HOST)) == "kept" and not GOT, "이미 그 버전 것이 있으면 다시 안 받는다")
+    os.remove(st.installed_sig_path())
+finally:
+    up.UPDATE_BASE_URLS = saved_urls
+
 
 def refused(what, host=None, pub=PK, version="2026.10.07-2", contains=""):
     shutil.rmtree(STG, ignore_errors=True)

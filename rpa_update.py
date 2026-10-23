@@ -109,8 +109,49 @@ def _check_manifest(man, version=None):
             raise UpdateError(f"판 목록의 경로가 잘못되었습니다: {rel!r}")
 
 
-def _write_plan(staging, version, cur_man, new_man, man_bytes):
-    fetch, remove, new = plan_files(cur_man["files"], new_man["files"])
+def disk_differs(program_root, files, skip=()):
+    """목록과 디스크가 다른 파일 (없거나 지문이 다름) - 업데이트가 손댄 파일·빠진 파일도 받아 되돌리게 (파일 변조 감지)."""
+    out = []
+    for rel, want in files.items():
+        if rel in skip:
+            continue
+        full = os.path.join(program_root, *rel.split("/"))
+        if not os.path.isfile(full) or st.file_digest(full)["sha256"] != want.get("sha256"):
+            out.append(rel)
+    return out
+
+
+def ensure_installed_sig(program_root, get=None):
+    """설치된 버전 목록의 서명(manifest.sig)을 업데이트 사이트에서 받아 st.installed_sig_path() 에 둔다 (파일 변조 감지).
+    이미 그 버전 것이 있으면 그대로. 못 받으면(망 끊김·지운 버전) None - 점검은 서명을 '모름' 으로 본다. 예외를 내지 않는다."""
+    try:
+        version = _read_manifest(program_root).get("version")
+        if not version:
+            return None
+        have = st.read_json(st.installed_sig_path(), tries=2)
+        if isinstance(have, dict) and have.get("version") == version and have.get("sig"):
+            return "kept"
+        get = get or (lambda url: http_get(url, timeout=15))
+        for base in UPDATE_BASE_URLS:
+            try:
+                sig = get(f"{base.rstrip('/')}/releases/{version}/manifest.sig").decode("ascii").strip()
+                break
+            except FetchError:
+                continue
+        else:
+            return None
+        os.makedirs(update_dir(), exist_ok=True)
+        st.write_json_atomic(st.installed_sig_path(), {"version": version, "sig": sig, "at": now_text()})
+        return "saved"
+    except Exception:
+        return None
+
+
+def _write_plan(staging, version, cur_man, new_man, man_bytes, fetch=None):
+    _, remove, _ = plan_files(cur_man["files"], new_man["files"])
+    if fetch is None:
+        fetch = plan_files(cur_man["files"], new_man["files"])[0]
+    new = sorted(r for r in fetch if r not in cur_man["files"])
     with open(os.path.join(staging, "manifest.json"), "wb") as f:
         f.write(man_bytes)
     with open(os.path.join(staging, "plan.json"), "w", encoding="utf-8") as f:
@@ -156,6 +197,7 @@ def _fetch_from(base, version, program_root, staging, get, pub):
         if (new_man.get("runtime") or {}) != (cur_man.get("runtime") or {}):
             raise UpdateError("파이썬이 변경된 버전입니다. 설치 파일로 설치하여 주십시오.")
         fetch, remove, _ = plan_files(cur_man["files"], new_man["files"])
+        fetch = sorted(set(fetch) | set(disk_differs(program_root, new_man["files"], skip=fetch)))   # 손댄·빠진 파일도 되돌린다
         os.makedirs(update_dir(), exist_ok=True)
         need = _need_bytes(cur_man, new_man, fetch, remove)
         free = shutil.disk_usage(update_dir()).free
@@ -172,7 +214,7 @@ def _fetch_from(base, version, program_root, staging, get, pub):
             os.makedirs(os.path.dirname(full), exist_ok=True)
             with open(full, "wb") as f:
                 f.write(data)
-        _write_plan(staging, version, cur_man, new_man, man_bytes)
+        _write_plan(staging, version, cur_man, new_man, man_bytes, fetch)
         return new_man
     except UpdateError:
         shutil.rmtree(staging, ignore_errors=True)

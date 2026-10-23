@@ -1714,10 +1714,19 @@ with sync_playwright() as pw:
                  "버전 2026.09.29-1")
     check(t == "" and not warn() and page.is_visible("#ver"), "맞음이면 '버전 번호' 만, 보통 글씨")
     t = show_ver({"version": "2026.09.29-1", "state": "mixed", "changed": ["rpa_status.py", "firebase/agent/agent.py"],
-                  "changed_count": 2, "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 다른 파일 2")
-    check("rpa_status.py" in t and "firebase/agent/agent.py" in t and warn(), f"섞임이면 노란 글씨, 다른 파일은 마우스 글로 ({t})")
+                  "changed_count": 2, "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 빠진 파일 2")
+    check("rpa_status.py" in t and "firebase/agent/agent.py" in t and "같은 버전" in t and warn(),
+          f"빠진 파일만이면 노란 글씨, 파일 이름과 다시 받기 안내는 마우스 글로 ({t})")
+    # 파일 변조 감지 (2026-10-23): 바뀐 파일·틀린 서명 → PC 가 실행을 막는다
+    t = show_ver({"version": "2026.09.29-1", "state": "tampered", "changed": ["rpa_dashboard.py"], "modified": ["rpa_dashboard.py"],
+                  "changed_count": 1, "missing_count": 0, "signature": "ok", "checked_at": "2026-09-29T10:00:00"},
+                 "버전 2026.09.29-1 · 파일 변조됨 (실행 막힘)")
+    check("rpa_dashboard.py" in t and "같은 버전을 다시 보내면" in t and warn(), f"변조면 '실행 막힘', 바뀐 파일과 되돌리는 법은 마우스 글로 ({t})")
+    t = show_ver({"version": "2026.09.29-1", "state": "tampered", "changed": [], "modified": [], "changed_count": 0,
+                  "missing_count": 0, "signature": "bad", "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 파일 변조됨 (실행 막힘)")
+    check("서명이 맞지 않습니다" in t, f"목록과 파일을 같이 고쳤으면 서명 불일치로 ({t})")
     t = show_ver({"version": "2026.09.29-1", "state": "mixed", "changed": [f"f{i}.txt" for i in range(10)],
-                  "changed_count": 15, "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 다른 파일 15")
+                  "changed_count": 15, "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 빠진 파일 15")
     check("외 5개" in t, f"이름을 다 못 보냈으면 나머지 개수 ({t})")
     t = show_ver({"state": "error", "error": "ValueError: 판 목록 형식이 다릅니다", "changed_count": 0,
                   "checked_at": "2026-09-29T10:00:00"}, "버전 확인 실패")
@@ -1737,13 +1746,13 @@ with sync_playwright() as pw:
     show_ver({"state": "none", "changed_count": 0, "checked_at": "2026-09-29T10:00:00"}, None)
     check(page.is_hidden("#ver"), "목록이 없는 PC (개발 PC 등) 는 안 보인다")
     show_ver({"version": "<b>x</b>", "state": "mixed", "changed": ["<img src=x onerror=alert(1)>"], "changed_count": 1,
-              "checked_at": "2026-09-29T10:00:00"}, "버전 <b>x</b> · 다른 파일 1")
+              "checked_at": "2026-09-29T10:00:00"}, "버전 <b>x</b> · 빠진 파일 1")
     check(page.locator(".subnav img, .subnav b").count() == 0, "버전 이름·파일 이름은 글자로만 (이스케이프)")
     show_ver("이상한 값", None)
     check(page.is_hidden("#ver"), "version 이 객체가 아니어도 안 보인다 (오류 없음)")
     # 폰 폭: 버전은 탭 줄 안에 들고, 상태 카드 칸은 상태 글 아래 한 줄로 왼쪽부터
     show_ver({"version": "2026.09.29-1", "state": "mixed", "changed": ["rpa_status.py"], "changed_count": 1,
-              "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 다른 파일 1")
+              "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 빠진 파일 1")
     page.set_viewport_size({"width": 400, "height": 900}); page.wait_for_timeout(300)
     geo = page.evaluate("""() => { const h = document.getElementById('hero').getBoundingClientRect(),
         st = [...document.querySelectorAll('#hero-side .stat')].map(e => e.getBoundingClientRect()),
