@@ -1094,6 +1094,12 @@ check("tampered" in line and "a.py" in line and "서명 확인" in line and "실
 line = ag.install_line({"version": "2026.10.07-4", "state": "mixed", "changed": ["b.py"], "modified": [],
                         "changed_count": 1, "missing_count": 1, "signature": "unknown"})
 check("빠진 파일 1개: b.py" in line, f"기록 한 줄: 빠진 파일 ({line})")
+a = {"version": "v1", "state": "ok", "changed": [], "changed_count": 0, "signature": "ok", "checked_at": "2026-10-23T10:00:00"}
+check(ag.install_key(a) == ag.install_key(dict(a, checked_at="2026-10-23T10:15:00"))
+      and ag.install_key(a) != ag.install_key(dict(a, state="tampered")) and ag.install_key(a) != ag.install_key(dict(a, signature="bad")),
+      "15분 점검: 점검 시각만 바뀌면 같은 결과 - 현황을 다시 올리지 않는다 (RTDB 할당량)")
+snap = {"version": a}
+check(ag.live_bodies(snap)[0] == ag.live_bodies({"version": dict(a)})[0], "같은 점검 결과면 현황 비교 값도 같다")
 
 print("\n7-3절 접속에 성공했을 때만 살아 있음")
 with tempfile.TemporaryDirectory() as d:

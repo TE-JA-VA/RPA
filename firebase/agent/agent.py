@@ -536,6 +536,12 @@ TRANSFER_CLEAN_SEC = 600
 INSTALL_CHECK_SEC = 900        # 설치 파일을 버전 목록과 다시 맞춰 보는 간격 (파일 변조 감지, 2026-10-23). 실행 직전에도 따로 잰다
 
 
+def install_key(install):
+    """설치 점검 결과 가운데 화면에 뜻이 있는 것 (점검 시각 checked_at 은 뺀다) - 이것이 바뀔 때만 현황을 다시 올린다."""
+    return tuple(json.dumps(install.get(k), sort_keys=True, ensure_ascii=False)
+                 for k in ("version", "state", "changed", "changed_count", "modified", "missing_count", "signature", "error"))
+
+
 def install_line(install):
     """에이전트 기록에 남길 설치 점검 한 줄."""
     import rpa_status as st
@@ -1370,11 +1376,11 @@ def run(cfg):
                     inst[1] = time.time()          # 업데이트 중에는 파일이 바뀌는 중이라 재지 않는다
                     upd.ensure_installed_sig(st.program_dir())
                     now_inst = st.check_install()
-                    if (now_inst["state"], now_inst.get("changed")) != (inst[0]["state"], inst[0].get("changed")):
+                    if install_key(now_inst) != install_key(inst[0]):   # 결과가 같으면 그대로 둔다 - checked_at 만 바뀐 현황을 다시 올리지 않게
                         log(install_line(now_inst))
                         if now_inst["state"] == "tampered":
                             upd.log(f"파일 변조 감지: {st.tamper_text(now_inst)}")
-                    inst[0] = now_inst
+                        inst[0] = now_inst
                 snap["version"] = inst[0]
                 snap["update"] = upd.live_view()
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
