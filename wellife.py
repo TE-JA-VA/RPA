@@ -604,14 +604,22 @@ def open_order_copy(rr, ctx):
             plus = next((c for c in item.children() if c.element_info.control_type == "Button"), None) if item else None
             if plus is None:
                 raise Stop("failed", f"메뉴 검색 결과에서 '{ORDER_TAB}' 옆 '+' 를 찾지 못했습니다.")
+            before = set(numbered_tabs(ctx))
             click(rr, ctx, plus, f"'{ORDER_TAB}' 옆 + (같은 화면 하나 더)")
             end = time.time() + TAB_WAIT_SECONDS
             while time.time() < end:
-                active = (rr.get_active_main_tab(ctx.app, ctx.hwnd) or "").strip()
+                # active_tab - get_active_main_tab 은 번호 붙은 탭이 떠 있으면 서브탭 '일반' 을 돌려줘 끝까지 못 알아봤다 (10-14, BugBuster K8)
+                try:
+                    active = (active_tab(ctx) or "").strip()
+                except Exception:
+                    active = ""         # 탭이 새로 그려지는 순간의 UIA 오류 - 다시 본다
                 if active.startswith(ORDER_TAB) and active != ORDER_TAB and rr.get_onscreen_tables(visible_page(ctx)):
                     rr.log(f"  주문매핑 화면을 하나 더 열었습니다: '{active}' - 엑셀은 여기서 올립니다")
                     return active
                 time.sleep(0.3)
+            for name in sorted(set(numbered_tabs(ctx)) - before):     # 열렸지만 못 알아본 탭은 닫는다 - 다음 실행에 번호가 늘지 않게 (K8)
+                if name.startswith(ORDER_TAB):
+                    close_order_copy(rr, ctx, name)
             raise Stop("failed", f"'+' 를 눌렀으나 주문매핑 화면이 하나 더 열리지 않았습니다 ({TAB_WAIT_SECONDS}초).")
     finally:
         _clear_search(rr, ctx)

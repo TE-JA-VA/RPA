@@ -275,6 +275,21 @@ try:
     check("I6: [찾아보기] 결과에도 경고", e.said and "csv" in e.said[-1], str(e.said))
     check("I8·I5: 기간 칸·안내, 메일마다 안내 글", "처음 받을 때" in dict((k, t) for t, k in ob.App.IMAP_TEXT)["days"]
           and "지난번 받은 날부터" in ob.App.DAYS_NOTE and "제목으로 검색" in ob.MAIL_HINT)
+
+    f1 = ob.new_preset(1, "날짜몰", "039")          # ① 칸(031)을 다른 사이트로 다시 녹화, 비밀번호는 비움
+    f1.update(orig=1, id="u1", pw="", has_pw=True,
+              loaded={"version": 1, "start_url": "https://x", "steps": [
+                  {"id": 0, "kind": "goto", "href": "https://x"},
+                  {"id": 1, "kind": "secret", "page": 0, "host": "nid.naver.com"},
+                  {"id": 2, "kind": "secret", "page": 0, "host": "login.coupang.com"}]})
+    g = FakeApp([f1, dict(d2, pw="", has_pw=True, orig=2)])
+    g._load_fields = lambda: None
+    g.save()
+    msg = g.said[-1] if g.said else ""
+    check("I1: 저장은 되고, 비밀번호 단계가 다른 사이트에 섞였으면 알린다",
+          msg.startswith("저장했습니다.") and f"{ob.circled(1)} 비밀번호 단계가 서로 다른 사이트(coupang.com, naver.com)" in msg, msg)
+    check("I1: 사이트코드가 바뀌었는데 비밀번호를 비웠으면 이전 사이트 비밀번호를 쓴다고 알린다 (② 는 그대로라 안 알림)",
+          f"{ob.circled(1)} 사이트코드가 바뀌었지만" in msg and f"{ob.circled(2)} 사이트코드" not in msg, msg)
 finally:
     ob.stored_password = real_pw
 

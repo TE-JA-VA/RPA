@@ -1401,6 +1401,10 @@ class App:
                         warns.append(f"{circled(no)} {n}단계 값 '{v}'은(는) 날짜로 바꾸지 못해 매일 같은 날짜를 넣습니다.")
                 if imap_warn(st.imap_step(final)):     # (BugBuster I6)
                     warns.append(f"{circled(no)} {imap_warn(st.imap_step(final))}")
+                pw_sites = rec.password_sites([s for k, s in enumerate(final["steps"]) if k in kept])
+                if len(pw_sites) > 1:                  # (BugBuster I1)
+                    warns.append(f"{circled(no)} 비밀번호 단계가 서로 다른 사이트({', '.join(pw_sites)})에 있습니다. "
+                                 "실행할 때마다 모든 사이트에 이 프리셋의 비밀번호를 입력합니다.")
             out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"],
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"]})
         problem = validate_presets(out) or pick_problem(out)
@@ -1422,6 +1426,9 @@ class App:
         if (dropped or any(o is not None and o != no for no, o in origs.items())) and st.running_programs():
             return self.status.config(text="오토파일럿이 실행 중이라 저장하지 못했습니다. 끝난 뒤 저장하여 주십시오.", fg=RED)
         old = {no: old[o] for no, o in origs.items() if o in old}
+        for o in out:          # 같은 칸을 다른 사이트로 다시 녹화하고 비밀번호를 비웠다 - 옛 사이트 비밀번호를 쓴다, 짝 검사도 못 잡는다 (BugBuster I1)
+            if o["record"] and not o["pw"] and o["has_pw"] and o["no"] in old and old[o["no"]]["code"] != o["code"]:
+                warns.append(f"{circled(o['no'])} 사이트코드가 바뀌었지만 비밀번호를 새로 입력하지 않아 이전 사이트의 비밀번호를 사용합니다.")
         sites = cfg.get(st.SITES_SECTION)
         sites = sites if isinstance(sites, dict) else {}
         logins_changed = {o["no"] for o in out if o["pw"] or o["id"].strip() != (

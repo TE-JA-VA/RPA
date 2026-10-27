@@ -253,7 +253,8 @@ clicked = []
 cell = SimpleNamespace(rectangle=lambda: SimpleNamespace(left=0, top=0, right=10, bottom=10),
                        click_input=lambda: clicked.append("클릭"), double_click_input=lambda: clicked.append("더블클릭"))
 rr.ec = SimpleNamespace(ensure_foreground=lambda h: True)
-rr.wait_save_dialog = lambda *a, **k: 1
+REAL_WAIT_OPEN = rr.wait_open_dialog
+rr.wait_open_dialog = lambda *a, **k: (1, None)
 rr.win32gui = SimpleNamespace(WindowFromPoint=lambda pt: 99, GetAncestor=lambda h, f: h, GetWindowText=lambda h: "Edge")
 check("누를 자리를 다른 창이 덮고 있으면 누르지 않는다 (클릭이 그 창에 떨어진다)", REAL_OPEN(0, 2, cell) is None and not clicked,
       str(clicked))
@@ -274,6 +275,23 @@ clicked.clear()
 check("늦게 뜬 창이 닫히지 않으면 누르지 않는다 (파일은 그대로)", REAL_OPEN(0, 2, cell) is None and closed == [8] and not clicked,
       f"{closed} {clicked}")
 stale.clear()
+rr.wait_open_dialog = lambda *a, **k: (None, "사이트를 선택하여 주십시오.")
+clicked.clear()
+check("K3: 파일 열기 창 대신 메시지 창이 뜨면 닫고 더블클릭하지 않는다", REAL_OPEN(0, 2, cell) is None and clicked == ["클릭"], str(clicked))
+pressed, alive = [], {9}
+rr.find_top_hwnds_by_title = lambda pid, title, exact=True: [9]
+rr.find_open_dialog_filename_edit = lambda h: None
+rr.win32gui.IsWindow = lambda h: h in alive
+rr.invoke_popup_window = lambda h: pressed.append(h) or (True, "[확인]", "사이트를 선택하여 주십시오.")
+check("K3: 파일 이름 칸 없는 '#32770' 은 메시지 상자 - [확인] 을 누르고 문구를 돌려준다",
+      REAL_WAIT_OPEN(0, 1, interval=0.01, grace=0.05) == (None, "사이트를 선택하여 주십시오.") and pressed == [9], str(pressed))
+edits = iter([None, None, 77])
+rr.find_open_dialog_filename_edit = lambda h: next(edits, 77)
+pressed.clear()
+check("K3: 칸이 늦게 생기는 파일 열기 창은 기다렸다 받는다 (메시지 상자로 닫지 않는다)",
+      REAL_WAIT_OPEN(0, 1, interval=0.01, grace=0.5) == (9, None) and not pressed, str(pressed))
+rr.find_top_hwnds_by_title = lambda pid, title, exact=True: []
+check("K3: 아무 창도 없으면 (None, None)", REAL_WAIT_OPEN(0, 0.05, interval=0.01) == (None, None))
 
 
 print("--- 업로드 칸이 사이트코드와 같은 줄인지 (행 번호, 2026-10-19: 108 을 눌렀는데 109 에 올라갔다)")

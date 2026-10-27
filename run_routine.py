@@ -2382,11 +2382,13 @@ def find_jump_to_code(pid, hwnd, grid, code_col, code, geo):
             key.click_input()
             time.sleep(0.2)
             # 입력칸에 직접 보낸다(전역 send_keys 는 포그라운드 의존이라 불안정).
-            # ^a 로 기존 검색어를 지우고 코드 입력 후 Enter. 코드는 숫자라 특수문자 없음.
+            # ^a 로 기존 검색어를 지우고 코드 입력 후 Enter. 코드의 공백·괄호·+ ^ % ~ 는 글자 그대로 (BugBuster K2 -
+            # 안 감싸면 조합키로 읽혀 검색어가 바뀐다. 웰라이프 탭 검색과 같은 방식)
+            typed = ec.literal_keys(code)
             try:
-                key.type_keys("^a" + str(code) + "{ENTER}", set_foreground=True)
+                key.type_keys("^a" + typed + "{ENTER}", set_foreground=True, with_spaces=True)
             except Exception:
-                send_keys("^a"); send_keys(str(code)); send_keys("{ENTER}")
+                send_keys("^a"); send_keys(typed, with_spaces=True); send_keys("{ENTER}")
             time.sleep(1.0)
             ok = True
     finally:
@@ -3107,12 +3109,40 @@ def open_upload_dialog(pid, hwnd, cell):
         except Exception as e:
             log(f"    셀 {how} 실패: {e}")
             continue
-        dlg = wait_save_dialog(pid, timeout=OPEN_DIALOG_WAIT_SECONDS, interval=0.1)    # 창은 0.2~0.6초에 뜬다
+        dlg, msg = wait_open_dialog(pid, timeout=OPEN_DIALOG_WAIT_SECONDS)    # 창은 0.2~0.6초에 뜬다
         if dlg is not None:
             log(f"    파일 열기 창 확인 ({how}): hwnd={dlg}")
             return dlg
+        if msg is not None:     # 파일 열기 창 대신 메시지 상자 - 다시 누르지 않는다 (BugBuster K3)
+            log(f"    {how} 후 파일 열기 창 대신 메시지 창이 떠 닫았습니다: {msg}")
+            return None
         log(f"    {how} 후 파일 열기 창이 뜨지 않았습니다.")
     return None
+
+
+def wait_open_dialog(pid, timeout, interval=0.1, grace=1.0):
+    """파일 열기 창('#32770' 이면서 '파일 이름' 칸이 있는 창)을 기다린다 → (창, None). 칸 없는 '#32770' 은 윈도우 메시지 상자라
+    [확인]으로 닫고 (None, 문구) - 종류만 보면 메시지 상자를 파일 열기 창으로 받아 경로를 넣으려 한다 (BugBuster K3).
+    막 뜬 파일 열기 창은 칸이 늦게 생길 수 있어 grace 초 더 본 뒤에 메시지 상자로 친다. 둘 다 없으면 (None, None)."""
+    end = time.time() + timeout
+    while True:
+        found = open_dialogs(pid)
+        if found:
+            return found[0], None
+        h = find_save_dialog(pid)
+        if h is not None:
+            settle = time.time() + grace
+            while time.time() < settle and win32gui.IsWindow(h) and not find_open_dialog_filename_edit(h):
+                time.sleep(interval)
+            if not win32gui.IsWindow(h):
+                continue
+            if find_open_dialog_filename_edit(h):
+                return h, None
+            ok, why, msg = invoke_popup_window(h)
+            return None, msg or why
+        if time.time() >= end:
+            return None, None
+        time.sleep(interval)
 
 
 def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
@@ -5794,46 +5824,15 @@ def module_login(ctx):
 def goto_order_screen(ctx):
     """좌측 'lcg_OrderCollect' 아이콘으로 '주문매핑 매출처리' 화면에 들어간다. (ok, 사유)
 
-    로그인 직후에는 창이 다시 만들어져 UIA 오류가 날 수 있어, 그때는 ctx.refresh() 로 창을 다시 잡는다.
+    로그인 직후에는 창이 다시 만들어져 핸들이 죽을 수 있다 - goto_screen_by_icon 이 죽은 핸들을 찔러 보고 창을 다시 잡는다.
+    예전엔 find_by_text 가 예외를 삼켜 죽은 핸들에서 30초 None 만 받다 실패했다 (BugBuster K1).
     """
-    target = None
-    waited = 0.0
-    while waited < 30.0:
-        try:
-            target = find_by_text(ctx.window(), "lcg_OrderCollect", control_types=("Pane",))
-        except Exception as e:
-            # 창이 다시 만들어져 핸들이 무효가 됐다. 메인 창을 다시 잡는다.
-            log(f"  화면 이동 준비 중 UIA 오류 -> 메인 창을 다시 잡습니다: {type(e).__name__}")
-            if not ctx.refresh():
-                return False, "메인 창을 다시 잡지 못했습니다."
-            log(f"  메인 창 다시 확보: hwnd={ctx.hwnd}")
-            target = None
-        if target is not None:
-            break
-        time.sleep(1.0)
-        waited += 1.0
-    if target is None:
+    r = goto_screen_by_icon(ctx, "lcg_OrderCollect", "주문매핑", "주문매핑")
+    if r == "ok":
+        return True, None
+    if r == "absent":
         return False, "'lcg_OrderCollect' 아이콘을 찾지 못했습니다 (30초 대기 후)."
-
-    ec.ensure_foreground(ctx.hwnd)
-    try:
-        target.click_input()
-    except Exception as e:
-        log(f"  주문매핑 아이콘 클릭 중 오류 -> 메인 창을 다시 잡고 재시도: {type(e).__name__}")
-        if not ctx.refresh():
-            return False, "메인 창을 다시 잡지 못했습니다."
-        target = find_by_text(ctx.window(), "lcg_OrderCollect", control_types=("Pane",))
-        if target is None:
-            return False, "'lcg_OrderCollect' 아이콘을 다시 찾지 못했습니다."
-        ec.ensure_foreground(ctx.hwnd)
-        target.click_input()
-
-    ok, active = wait_for_active_main_tab(ctx.app, ctx.hwnd, "주문매핑", ctx=ctx)
-    if not ok:
-        tabs = [t.window_text() for t in ctx.window().descendants(control_type="TabItem")]
-        return False, f"화면 이동 실패 (활성 메인탭='{active}'). 탭 목록: {tabs}"
-    log(f"화면 이동 확인됨 (활성 메인탭='{active}')")
-    return True, None
+    return False, "주문매핑 매출처리 화면으로 이동하지 못했습니다. (로그에 활성 탭·탭 목록)"
 
 
 # 함께 실행 (모든 업체, 사용자 2026-10-20): 프리페어가 함께 띄운 루틴이면 main 이 업체가 고른 방식을 적는다. None 이면 예전 그대로.

@@ -18,7 +18,33 @@
           "$cid": {
             "$pcId": {
               ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
-              ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId"
+              ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId",
+              "server_time": { ".validate": "newData.isString() && newData.val().length <= 40" },
+              "host": { ".validate": "newData.isString() && newData.val().length <= 100" },
+              "launching": { ".validate": "newData.isBoolean()" },
+              "preset_transfer": { ".validate": "newData.isNumber()" },
+              "labels": { ".validate": "newData.hasChildren()" },
+              "programs": { ".validate": "newData.hasChildren()" },
+              "modules": { ".validate": "newData.hasChildren()" },
+              "modes": { ".validate": "newData.hasChildren()" },
+              "presets": { ".validate": "newData.hasChildren()" },
+              "parallel": { ".validate": "newData.hasChildren()" },
+              "together": { ".validate": "newData.hasChildren()" },
+              "schedule": { ".validate": "newData.hasChildren()" },
+              "recent": { ".validate": "newData.hasChildren()" },
+              "version": { ".validate": "newData.hasChildren()" },
+              "update": { ".validate": "newData.hasChildren()" },
+              "tokens": { ".validate": "newData.hasChildren()" },
+              "heartbeat": {
+                ".validate": "newData.hasChildren(['at'])",
+                "at": { ".validate": "newData.isNumber()" },
+                "every": { ".validate": "newData.isNumber()" },
+                "host": { ".validate": "newData.isString() && newData.val().length <= 100" },
+                "rpa_running": { ".validate": "newData.isBoolean()" },
+                "boot": { ".validate": "newData.isString() && newData.val().length <= 32" },
+                "$other": { ".validate": false }
+              },
+              "$other": { ".validate": false }
             }
           }
         },

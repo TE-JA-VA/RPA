@@ -7,6 +7,7 @@
   미리보기: 기억과 상관없이 1통, 한 번에 최대 수, 시작 글자 바꾸기, 받기 단계가 없는 기록
     .venv\\Scripts\\python.exe tests\\test_mail_pick.py
 """
+import datetime
 import json
 import os
 import sys
@@ -235,9 +236,18 @@ check("시작 문구 '[창민사이트' 로 그 단계를 찾는다 - 보이는 
       rec.auto_pick(steps2, "[창민사이트") == i2, rec.auto_pick(steps2, "[창민사이트"))
 old = [dict(x, row={k: v for k, v in x["row"].items() if k != "at"}) if x.get("row") else x for x in steps2]
 check("at 이 없는 옛 기록도 누른 칸 글자와 같은 줄의 보이는 제목으로 찾는다", rec.auto_pick(old, "[창민사이트") == i2)
-check("줄 기억 표시: 고유 표시가 없으면 보이는 줄 글자, 똑같은 줄은 몇 번째로 가른다",
-      rec.row_ids([("", "t", "[창민사이트]", "김창민 [창민사이트] 오후 01:57"), ("k", "t", "x", "y"), ("", "t", "[창민사이트]", "김창민 [창민사이트] 오후 01:57")])
-      == ["줄:김창민 [창민사이트] 오후 01:57", "k", "줄:김창민 [창민사이트] 오후 01:57#2"])
+D23 = datetime.date(2026, 10, 23)
+check("줄 기억 표시: 고유 표시가 없으면 보이는 줄 글자(받은 시각은 날짜로), 똑같은 줄은 아래부터 몇 번째로 가른다",
+      rec.row_ids([("", "t", "[창민사이트]", "김창민 [창민사이트] 오후 01:57"), ("k", "t", "x", "y"), ("", "t", "[창민사이트]", "김창민 [창민사이트] 오후 01:57")], D23)
+      == ["줄:김창민 [창민사이트] 2026-10-23#2", "k", "줄:김창민 [창민사이트] 2026-10-23"])
+day = lambda s, today=D23: rec.mail_day_line(s, today)   # noqa: E731
+check("받은 때를 날짜로: 오늘은 시각, 다음 날은 날짜·어제로 보여도 같은 표시 (BugBuster K5)",
+      day("a 13:57") == day("a 10.23", datetime.date(2026, 10, 24)) == day("a 어제 오후 01:57", datetime.date(2026, 10, 24))
+      == day("a 2026.10.23 13:57") == day("a 10-23 (금)") == day("a 10월 23일") == day("a 3분 전") == "a 2026-10-23",
+      [day("a 13:57"), day("a 10.23", datetime.date(2026, 10, 24)), day("a 어제 오후 01:57", datetime.date(2026, 10, 24))])
+check("날짜가 아닌 숫자는 그대로, 연도 없는 12.31 을 1월에 보면 지난해",
+      day("첨부 1.2MB 010-1234-5678 13.45") == "첨부 1.2MB 010-1234-5678 13.45"
+      and day("a 12.31", datetime.date(2027, 1, 2)) == "a 2026-12-31", (day("첨부 1.2MB 010-1234-5678 13.45"),))
 rec.set_pick(steps2, i2, "[창민사이트")
 MAILS.insert(0, ("n4", "[창민사이트]"))
 KEYLESS["n4"] = "오후 01:58"
@@ -247,6 +257,18 @@ check("같은 제목 메일 셋(n4·n1·n3)을 줄마다 따로 연다 - 예전�
       ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_n4.xlsx", "(013)file_n1.xlsx", "(013)file_n3.xlsx"], (rp.saved, [x for x in lines if "메일" in x]))
 ok, rp, lines = replay("keyless_again", rec.MailMemory(mem2))
 check("다시 돌리면 셋 다 기억해 대상 없음", ok and rp.no_target and not rp.saved, (rp.saved, rp.results[-2:]))
+times, today = dict(KEYLESS), datetime.date.today()
+KEYLESS.update({k: f"{today.month:02d}.{today.day:02d} {v}" for k, v in times.items()})   # 자정이 지나 시각 대신 날짜로 보인다
+ok, rp, lines = replay("keyless_nextday", rec.MailMemory(mem2))
+check("받은 시각이 날짜로 바뀌어 보여도 같은 메일 - 대상 없음 (BugBuster K5)", ok and rp.no_target and not rp.saved, (rp.saved, rp.results[-2:]))
+KEYLESS.update(times)
+new_ids, rec.row_ids = rec.row_ids, lambda rows, today=None: rec.old_row_ids(rows)   # 옛 버전이 받은 기억
+mem3 = os.path.join(OUT, "mem", "PRESET3.json")
+ok, rp, lines = replay("keyless_oldver", rec.MailMemory(mem3))
+rec.row_ids = new_ids
+ok2, rp2, lines = replay("keyless_upgraded", rec.MailMemory(mem3))
+check("옛 버전이 받아 기억한 메일은 업데이트 뒤에도 다시 받지 않는다",
+      ok and len(rp.saved) == 3 and ok2 and rp2.no_target and not rp2.saved, (rp.saved, rp2.saved))
 
 srv.shutdown()
 print("실패:", fails if fails else "없음")

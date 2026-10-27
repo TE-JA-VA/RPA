@@ -317,6 +317,15 @@ ctx = make_ctx()
 ctx.app = types.SimpleNamespace(window=lambda handle: DeadWin())
 r = rr.goto_screen_by_icon(ctx, "lcg_X", "엑스", "엑스", wait_seconds=5)
 check("죽은 핸들은 absent 가 아니라 창을 다시 잡고 진입 (진짜 find_by_text)", r == "ok" and ctx.hwnd == 778 and el.clicked == 1, str((r, ctx.hwnd, el.clicked)))
+el = type("OrderEl", (FakeEl,), {"window_text": lambda self: "lcg_OrderCollect"})()
+ctx = make_ctx()
+ctx.app = types.SimpleNamespace(window=lambda handle: DeadWin())
+_real_icon = rr.goto_screen_by_icon
+rr.goto_screen_by_icon = lambda ctx_, key, label, tab, wait_seconds=30: _real_icon(ctx_, key, label, tab, wait_seconds=5)
+r = rr.goto_order_screen(ctx)
+rr.goto_screen_by_icon = _real_icon
+check("K1: 주문매핑 이동도 죽은 핸들이면 창을 다시 잡고 진입 (예전엔 30초 None 만 받다 실패)", r == (True, None) and ctx.hwnd == 778 and el.clicked == 1,
+      str((r, ctx.hwnd, el.clicked)))
 rr.win32gui.IsWindow = lambda h: True
 
 check("goto_hold_screen 은 lcg_HoldLogistics", "lcg_HoldLogistics" in rr.goto_hold_screen.__doc__)
@@ -1146,5 +1155,21 @@ rr.run_modules = lambda selected: ("success", None)
 rec = DoneRec(["login"]); rr.status = rec; rr.main()
 check("정한 시각 실행은 대상 없음이어도 남긴다", rec.of("finish")[-1] == ("success", None), str(rec.of("finish")))
 os.environ.pop("RPA_RUN_TRIGGER", None)
+
+print("--- K2: 찾기 검색어는 글자 그대로")
+typed_k2 = []
+key_k2 = types.SimpleNamespace(element_info=types.SimpleNamespace(automation_id=rr.FIND_KEY_EDIT_ID), click_input=lambda: None,
+                               type_keys=lambda keys, **kw: typed_k2.append((keys, kw)))
+_saved_k2 = rr.open_find_dialog, rr.Application, rr.ec, rr.scan_column, rr.win32gui.PostMessage
+rr.open_find_dialog = lambda pid, hwnd, geo: 5
+rr.Application = lambda backend: types.SimpleNamespace(connect=lambda **k: types.SimpleNamespace(
+    window=lambda handle: types.SimpleNamespace(descendants=lambda control_type: [key_k2])))
+rr.ec = types.SimpleNamespace(ensure_foreground=lambda h: True, literal_keys=__import__("erpia_common").literal_keys)
+rr.scan_column = lambda geo, col: []
+rr.win32gui.PostMessage = lambda *a: None
+rr.find_jump_to_code(1, 2, None, 0, "A (1)+B^2", None)
+rr.open_find_dialog, rr.Application, rr.ec, rr.scan_column, rr.win32gui.PostMessage = _saved_k2
+check("K2: 공백·괄호·+ ^ 가 있는 상품코드도 찾기 칸에 글자 그대로 (조합키로 읽히지 않게)",
+      typed_k2 == [("^a" + "A {(}1{)}{+}B{^}2" + "{ENTER}", {"set_foreground": True, "with_spaces": True})], str(typed_k2))
 
 finish()

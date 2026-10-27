@@ -2399,4 +2399,38 @@ check("반복 회차를 띄울 때만 끝 시각·쉬는 시간을 넘긴다 (�
       sent_env[0].get("RPA_REPEAT_UNTIL") == "18:00" and sent_env[0].get("RPA_REPEAT_REST") == "5"
       and "RPA_REPEAT_UNTIL" not in sent_env[1], str(sent_env))
 
+print("=== '+' 로 연 주문매핑 화면 확인 (BugBuster K8)")
+names_k8 = ("keys", "click", "_focus_in", "_wait_tree_item", "_clear_search", "active_tab", "numbered_tabs", "close_order_copy",
+            "visible_page", "TAB_WAIT_SECONDS")
+_saved_k8 = {n: getattr(wellife, n) for n in names_k8}
+plus_btn = types.SimpleNamespace(element_info=types.SimpleNamespace(control_type="Button"))
+tabs_k8, closed_k8 = [], []
+wellife.keys = lambda rr_: contextlib.nullcontext()
+wellife.click = lambda rr_, ctx_, el, what: tabs_k8.append(wellife.ORDER_TAB + " (2)") if el is plus_btn else None
+wellife._focus_in = lambda rr_, aid: True
+wellife._wait_tree_item = lambda nav, name, sec: types.SimpleNamespace(children=lambda: [plus_btn])
+wellife._clear_search = lambda rr_, ctx_: None
+wellife.numbered_tabs = lambda ctx_: list(tabs_k8)
+wellife.close_order_copy = lambda rr_, ctx_, name: closed_k8.append(name)
+wellife.visible_page = lambda ctx_: None
+wellife.TAB_WAIT_SECONDS = 0.5
+rr_k8 = types.SimpleNamespace(prefetch_auto_ids=lambda *a: None, find_by_auto_id=lambda win, aid: types.SimpleNamespace(type_keys=lambda *a, **k: None),
+                              get_onscreen_tables=lambda page: [1], log=lambda *a: None, ec=rr.ec,
+                              get_active_main_tab=lambda app, h: "일반")    # 옛 방식은 서브탭 '일반' 을 돌려줬다 (10-14)
+ctx_k8 = types.SimpleNamespace(window=lambda: None)
+wellife.active_tab = lambda ctx_: tabs_k8[-1] if tabs_k8 else wellife.ORDER_TAB
+check("떠 있는 메인 탭으로 '(2)' 를 알아본다 (서브탭 '일반' 이 아니라)",
+      wellife.open_order_copy(rr_k8, ctx_k8) == wellife.ORDER_TAB + " (2)" and not closed_k8, str(closed_k8))
+tabs_k8.clear()
+wellife.active_tab = lambda ctx_: wellife.ORDER_TAB      # 열렸지만 원래 탭이 앞에 남았다
+try:
+    wellife.open_order_copy(rr_k8, ctx_k8)
+    stopped = False
+except wellife.Stop:
+    stopped = True
+check("못 알아보면 멈추고, 그새 열린 번호 탭은 닫는다 (다음 실행에 번호가 늘지 않게)",
+      stopped and closed_k8 == [wellife.ORDER_TAB + " (2)"], str(closed_k8))
+for n, f in _saved_k8.items():
+    setattr(wellife, n, f)
+
 finish()

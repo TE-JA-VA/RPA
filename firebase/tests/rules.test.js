@@ -56,6 +56,22 @@ test("live: 에이전트는 자기 PC 에 쓸 수 있다", async () => {
   await assertSucceeds(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), { host: "PC1", programs: {} }));
 });
 
+test("live: 에이전트 현황 칸은 모두 받고, 모르는 칸·큰 글자·틀린 꼴은 거부 (BugBuster K15)", async () => {
+  const obj = { a: 1 };
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), {
+    server_time: "2026-10-27T10:00:00", host: "PC1", labels: obj, programs: obj, preset_transfer: 1, modules: obj, modes: obj,
+    presets: [obj], parallel: obj, together: obj, schedule: obj, recent: [obj], launching: false, version: obj, update: obj, tokens: obj,
+  }));
+  await assertSucceeds(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/heartbeat"), { at: 1, every: 5, host: "PC1", rpa_running: false, boot: "a1b2c3d4" }));
+  await assertSucceeds(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/heartbeat"), { at: 1, host: "PC1", rpa_running: true }));   // 옛 에이전트
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), { tokens: null, modes: null }));
+  await assertFails(update(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), { junk: "x".repeat(1000) }));
+  await assertFails(update(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), { host: "x".repeat(101) }));
+  await assertFails(update(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), { programs: "x" }));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/heartbeat"), { at: 1, junk: "x" }));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/heartbeat/boot"), "x".repeat(33)));
+});
+
 test("live: 에이전트가 남의 PC 에 쓰면 거부", async () => {
   await assertFails(set(ref(asAgentA2(), "apps/rpa/live/ca/pc1"), { host: "위조" }));
 });

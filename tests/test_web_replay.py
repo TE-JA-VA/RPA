@@ -143,6 +143,11 @@ def pure_checks():
                                {"kind": "fill", "value": "가방"}, {"kind": "click", "value": "2026.9"}])
     check("I3: 못 바꾼 날짜 모양 값만 알린다 (전화번호·바꾼 날짜·누르기는 빼고)", [i for i, _ in odd] == [0, 1, 2], str(odd))
     S = lambda *ks: [dict(k) if isinstance(k, dict) else {"kind": k} for k in ks]   # noqa: E731
+    check("I1: 비밀번호 단계의 사이트 - 하위 도메인은 같은 사이트, 옛 기록(host 없음)은 뺀다",
+          rec.password_sites(S({"kind": "secret", "host": "nid.naver.com"}, {"kind": "secret", "host": "mail.naver.com"}, "secret",
+                               {"kind": "fill", "host": "x.com"})) == ["naver.com"]
+          and rec.password_sites(S({"kind": "secret", "host": "www.bizmeka.co.kr"}, {"kind": "secret", "host": "login.coupang.com"}))
+          == ["bizmeka.co.kr", "coupang.com"])
     check("L8: 인증 차례는 아이디 칸부터 - 앞의 검색어 넣기는 기다리지 않는다",
           rec.auth_start(S("goto", "fill", "enter", "click", {"kind": "fill", "credential": "ID"}, {"kind": "secret", "credential": "PW"}, "otp")) == 5)
     check("L8: 그 앞에 [인증번호 받기] 가 있으면 거기부터",
@@ -210,6 +215,8 @@ def main():
             print(f"    {i:2d}. {rec.describe(s)}")
         text = open(path_a, encoding="utf-8").read()
         check("기록에 비밀번호도 아이디도 없다", fake_mall.PASSWORD not in text and fake_mall.USER not in text)
+        check("I1: 비밀번호 단계에 사이트 호스트를 적는다", [s.get("host") for s in a["steps"] if s["kind"] == "secret"] == ["127.0.0.1"],
+              str([s.get("host") for s in a["steps"] if s["kind"] == "secret"]))
         kinds = [s["kind"] for s in a["steps"]]
         check("단계: 아이디·비밀번호·로그인·공지 닫기·메뉴에 마우스·메뉴·고르기·1주일·검색·요청·사유·요청·새로고침·다운로드 (제목·표 칸·빈 곳 누름은 안 적힘)",
               kinds == ["fill", "secret", "click", "click", "hover", "click", "select", "click", "click", "click", "fill", "click",

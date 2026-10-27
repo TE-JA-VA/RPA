@@ -497,6 +497,8 @@ class Recorder:
         for k in ("value", "option", "checked", "firstSeen"):
             if k in ev:
                 step[k] = ev[k]
+        if step["kind"] == "secret":       # 비밀번호를 넣는 사이트 - 저장 때 다른 사이트가 섞였나 본다 (password_sites, BugBuster I1)
+            step["host"] = urllib.parse.urlparse(ev["url"]).hostname or ""
         if ev.get("row"):
             step["row"] = ev["row"]        # 목록 줄을 눌렀다 - 메일 고르기 (set_pick)
         last = self.steps[-1] if self.steps else None
@@ -570,6 +572,20 @@ def date_like_fills(steps):
             if s["kind"] == "fill" and not s.get("date") and not s.get("credential") and DATE_LIKE.search(str(s.get("value", "")))]
 
 
+def site_domain(host):
+    """호스트의 등록 도메인 - nid.naver.com → naver.com, www.bizmeka.co.kr → bizmeka.co.kr.
+    ponytail: 두 글자 나라 + co·or·go 같은 2단 접미사만 본다 (공개 접미사 목록 없이) - 틀리면 경고가 덜 나거나 더 날 뿐이다."""
+    parts = (host or "").lower().split(".")
+    two = len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in ("co", "or", "go", "ne", "ac", "re", "pe", "com", "net")
+    return ".".join(parts[-3:] if two else parts[-2:])
+
+
+def password_sites(steps):
+    """비밀번호 단계가 비밀번호를 넣는 사이트(등록 도메인)들. 둘 이상이면 녹화 중 다른 사이트에도 로그인한 것 - 실행 때마다 이 프리셋
+    비밀번호를 그 사이트에도 넣는다 (BugBuster I1). 호스트를 적지 않던 옛 기록의 단계는 뺀다."""
+    return sorted({site_domain(s["host"]) for s in steps if s["kind"] == "secret" and s.get("host")})
+
+
 def navigated(before, s):
     """before 단계가 s 의 창(같은 틀)을 다른 주소로 넘겼다 (로그인 → 메인). 그러면 s 의 화면 것은 모두 그 뒤에 '새로 생긴 것' 이라
     그것으로 거르면 안 된다 - 재생은 before 앞의 화면을 적어 두는데, 머리 띠 아이콘처럼 두 화면에 같은 것이 있으면 '원래 있던 것' 으로
@@ -639,10 +655,59 @@ def pick_body(steps, i):
     return next((j for j in range(len(steps) - 1, i, -1) if steps[j].get("download")), None)
 
 
-def row_ids(rows):
-    """메일 목록 줄마다 처리 기억 표시 - 줄의 고유 표시(data-key 등), 없으면 보이는 줄 글자(보낸이·제목·시각) + 같은 글자 줄 중 몇 번째.
+# 메일 목록 줄의 받은 때: 날짜(+시각) · 'M월 D일' · 어제/그제(+시각) · 시각만(오늘) · 'n분 전' (BugBuster K5)
+_HM = r"(?:(?:오전|오후|AM|PM)\s*)?\d{1,2}:\d{2}(?::\d{2})?"
+MAIL_WHEN = re.compile(
+    r"(?<![\d.:/-])(?:(\d{4}|\d{2})[-./]\s*)?(\d{1,2})[-./]\s*(\d{1,2})\.?(?![\d.:/A-Za-z])(?:\s*\([월화수목금토일]\))?(?:\s+" + _HM + ")?"
+    r"|(?<![\d.:/-])(\d{1,2})월\s*(\d{1,2})일(?:\s+" + _HM + ")?"
+    r"|(어제|그제|그저께)(?:\s+" + _HM + ")?"
+    r"|(?<![\d.:])" + _HM + r"(?![\d:])|오늘|방금|\d+\s*(?:분|시간)\s*전")
+
+
+def mail_day_line(line, today):
+    """줄 글자 속 받은 때를 그 날짜(2026-10-23)로 - 네이버는 오늘 메일을 '13:57', 자정이 지나면 '10.23' 으로 보여 준다.
+    시각째 기억하면 날이 바뀌면 같은 메일을 또 받는다 (BugBuster K5). 날짜가 아닌 숫자(1.2MB·전화번호)는 그대로."""
+    def put(m):
+        try:
+            mo, dd = m.group(2) or m.group(4), m.group(3) or m.group(5)
+            if mo:
+                y = m.group(1)
+                d = datetime.date(int(y) + (2000 if len(y) == 2 else 0) if y else today.year, int(mo), int(dd))
+                if not y and d > today:     # 연도 없는 지난해 메일 (1월에 보는 12.31)
+                    d = d.replace(year=d.year - 1)
+            elif m.group(6):
+                d = today - datetime.timedelta(days=1 if m.group(6) == "어제" else 2)
+            else:
+                d = today
+        except ValueError:
+            return m.group(0)
+        return d.isoformat()
+    return MAIL_WHEN.sub(put, line)
+
+
+def row_ids(rows, today=None):
+    """메일 목록 줄마다 처리 기억 표시 - 줄의 고유 표시(data-key 등), 없으면 보이는 줄 글자(보낸이·제목·받은 날) + 같은 글자 줄 중 몇 번째.
     네이버 메일은 고유 표시가 없어 제목만으로는 같은 제목 메일이 한 통으로 보였다 - 한 통을 받으면 나머지는 '이미 처리',
-    목록에서 다시 찾을 때도 첫 줄만 (사용자 2026-10-20). rows = ROWS_JS 의 [(key, 칸 글자, 보이는 제목, 보이는 줄 글자)]."""
+    목록에서 다시 찾을 때도 첫 줄만 (사용자 2026-10-20). rows = ROWS_JS 의 [(key, 칸 글자, 보이는 제목, 보이는 줄 글자)].
+    받은 시각은 날짜로 바꾸고 (mail_day_line), 같은 글자 줄은 아래(옛 메일)부터 센다 - 새 메일이 위에 와도 옛 줄의 번호는 그대로 (K5).
+    ponytail: 같은 날 같은 줄이 목록 1쪽 아래로 밀려나면 남은 줄 번호가 당겨진다 - 그럴 일이 생기면 쪽 넘김까지 본다."""
+    today = today or datetime.date.today()
+    count, out = {}, [None] * len(rows)
+    for i in range(len(rows) - 1, -1, -1):
+        k, t, seen, line = rows[i]
+        if k:
+            out[i] = k
+            continue
+        base = mail_day_line(line, today) if line else seen or t
+        n = count.get(base, 0)
+        count[base] = n + 1
+        out[i] = f"줄:{base}" + (f"#{n + 1}" if n else "")
+    return out
+
+
+def old_row_ids(rows):
+    """2026.10.23-3 까지의 표시 (받은 시각 글자 그대로, 위부터 센다) - 업데이트 앞에 받은 메일을 또 받지 않게 함께 본다.
+    ponytail: MAIL_MEMORY_DAYS(90일) 지나면 옛 표시가 모두 빠진다 - 2027-02 뒤에 지운다."""
     count, out = {}, []
     for k, t, seen, line in rows:
         if k:
@@ -1560,9 +1625,10 @@ class Replayer:
         frame, rows = self._mail_rows(page, s, self.step_timeout * self.step_tries)
         if frame is None or not rows:
             raise NotFound(f"{self.step_timeout * self.step_tries:.0f}초 동안 메일 목록을 찾지 못했습니다.")
-        hits = [(rid, seen or t) for rid, (k, t, seen, line) in zip(row_ids(rows), rows) if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
+        hits = [(rid, seen or t, oid) for rid, oid, (k, t, seen, line) in zip(row_ids(rows), old_row_ids(rows), rows)
+                if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
         mem = None if self.pick_preview else self.mail_memory
-        todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or h[0] not in mem.keys]
+        todo = hits[:1] if self.pick_preview else [h for h in hits if mem is None or (h[0] not in mem.keys and h[2] not in mem.keys)]
         self.log(f"      제목이 '{prefix}' 로 시작하는 메일 {len(hits)}통 중 새 메일 {len(todo)}통")
         # 화면 마지막 줄까지 새 메일 - 다음 쪽(목록 2쪽)에 더 있을 수 있다. 첫 쪽만 본다 (BugBuster I5)
         more = mem is not None and bool(todo) and row_ids(rows)[-1] in {h[0] for h in todo}
@@ -1583,7 +1649,7 @@ class Replayer:
         if more:
             self.log(f"      [주의] {MAIL_MORE}")
         got, skipped = 0, []
-        for n, (rid, t) in enumerate(todo, 1):
+        for n, (rid, t, _) in enumerate(todo, 1):
             if n > 1:               # 앞 메일을 연 채다 - 목록으로 (메일 화면이 주소 # 만 바꾸는 비즈메카도 뒤로 가기로 돌아온다)
                 try:
                     page.go_back(timeout=MAIL_BACK_WAIT * 1000)
