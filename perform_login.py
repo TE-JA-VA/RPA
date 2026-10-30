@@ -119,6 +119,7 @@ def load_routine_modules(module_keys, off_by_default=()):
     사용자 설정의 "Routine" 섹션에 모듈 키마다 "Y"(켬) / "N"(끔) 을 적는다.
       예: {"Routine": {"Login": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y"}}
     섹션이나 키가 없으면 켠 것으로 본다 (예전 파일 그대로 돌아가게). off_by_default 의 키만 없으면 끔 (운송장번호 전송).
+    자동 수집·엑셀 수집(rpa_status.FOLLOW_SALES)이 없으면 주문매핑(Sales)을 따른다.
     그 밖의 값이면 RuntimeError - 사용자가 고치기 전에는 아무것도 돌리지 않는다.
     (어떤 모듈을 돌릴지는 사용자 설정이 정확히 지켜져야 하는 것이라, 어중간한 값을
      '켬'이나 '끔' 어느 쪽으로도 짐작하지 않는다.)
@@ -147,6 +148,9 @@ def load_routine_modules(module_keys, off_by_default=()):
             selected[key] = False
         else:
             bad.append(f"{key}={raw!r}")
+    for key in rpa_status.FOLLOW_SALES:     # 나누기 전 파일 (2026-10-30 전) - 주문매핑(Sales) 켬/끔을 따른다
+        if key in selected and key not in section:
+            selected[key] = selected.get("Sales", True)
     if bad:
         raise RuntimeError(
             f"{config_name()} 의 '{ROUTINE_SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")

@@ -123,23 +123,21 @@ check(dash.slot_target({"at": "10:00", "until": "18:00", "rest_min": 5, "run": [
 check(dash.slot_text({"at": "10:00", "run": ["Login", "InvoiceSend"]}).endswith("운송장 전송"),
       f"줄 이름에 운송장 전송 ({dash.slot_text({'at': '10:00', 'run': ['Login', 'InvoiceSend']})})")
 _sch["policy"] = {"limit": None, "off": [], "wellife": False}
-check(dash.slot_off(_sch) == ["Excel", "Import", "Sap", "Wms"], "보통 업체는 웰라이프 엑셀·자동 수집, SAP 연동·WMS 이관을 뺀다 (운송장 전송은 2026-10-13 모든 업체로)")
+check(dash.slot_off(_sch) == ["Sap", "Wms"], "보통 업체는 SAP 연동·WMS 이관만 뺀다 (운송장 전송 2026-10-13, 엑셀·자동 수집 2026-10-30 모든 업체로)")
+check(dash.slot_target({"at": "10:00", "run": ["Login", "Import", "Excel"]}, dash.slot_off(_sch))
+      == ("routine", {"RPA_RUN_MODULES": "Login,Import,Excel"}), "보통 업체도 자동·엑셀 수집만 고른 줄을 띄운다")
 check(dash.slot_target(_rows[1], dash.slot_off(_sch)) == (None, {}), "보통 업체에 ⑤ 만 있는 줄은 띄우지 않는다")
 
-# ② 를 셋으로 나눈 뒤 (2026-10-15): 웰라이프 PC 의 옛 예약 줄 'Sales' 에 엑셀·자동 수집을 한 번만 더한다
-_cfg = st.read_settings()
-_cfg["schedule"] = {"enabled": True, "days": [0], "policy": {"wellife": False},
-                    "slots": [{"at": "09:00", "run": ["Login", "Sales", "Hold"]}, {"at": "13:00", "run": ["Login", "Wms"]}]}
-st.write_settings(_cfg)
-check(dash.migrate_split_sales() is False and st.read_settings()["schedule"]["slots"][0]["run"] == ["Login", "Sales", "Hold"],
-      "웰라이프가 아닌 업체의 예약 줄은 손대지 않는다 (보통 PROCESS 의 Sales 는 나뉘지 않았다)")
-_cfg = st.read_settings()
-_cfg["schedule"]["policy"] = {"wellife": True}
-st.write_settings(_cfg)
-check(dash.migrate_split_sales() is True, "웰라이프 업체 PC 는 고친다")
-_slots = st.read_settings()["schedule"]["slots"]
-check(_slots[0]["run"] == ["Login", "Sales", "Hold", "Excel", "Import"] and _slots[1]["run"] == ["Login", "Wms"],
-      f"'Sales' 가 든 줄만 엑셀·자동 수집을 더한다 ({_slots})")
+# 주문매핑을 셋으로 나눈 뒤 (웰라이프 2026-10-15, 그 밖 업체 2026-10-30): 옛 예약 줄 'Sales' 에 엑셀·자동 수집을 한 번만 더한다
+for wl in (False, True):
+    _cfg = st.read_settings()
+    _cfg["schedule"] = {"enabled": True, "days": [0], "policy": {"wellife": wl},
+                        "slots": [{"at": "09:00", "run": ["Login", "Sales", "Hold"]}, {"at": "13:00", "run": ["Login", "Wms" if wl else "Logistics"]}]}
+    st.write_settings(_cfg)
+    check(dash.migrate_split_sales() is True, f"{'웰라이프' if wl else '보통'} 업체 PC 도 고친다")
+    _slots = st.read_settings()["schedule"]["slots"]
+    check(_slots[0]["run"] == ["Login", "Import", "Excel", "Sales", "Hold"] and _slots[1]["run"] == ["Login", "Wms" if wl else "Logistics"],
+          f"'Sales' 가 든 줄만 엑셀·자동 수집을 더한다 ({_slots})")
 _cfg = st.read_settings()
 _cfg["schedule"]["slots"][0]["run"] = ["Login", "Sales"]          # 그 뒤 사람이 매출처리만 고른 줄
 st.write_settings(_cfg)

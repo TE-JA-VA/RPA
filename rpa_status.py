@@ -786,6 +786,8 @@ PICK_NOTE = "이번 실행에서 안 고름"   # 예약 줄이 모듈을 골라 
 OFF_NOTES = (OFF_NOTE, PICK_NOTE)   # 둘 다 '할 일' 이 아니다
 ROUTINE_CONFIG_MODULES = (
     ("Login", "로그인"),
+    ("Import", "자동 수집"),         # 주문매핑을 셋으로 (모든 업체, 사용자 2026-10-30) - 빠지면 Sales 를 따른다 (FOLLOW_SALES)
+    ("Excel", "엑셀 수집"),
     ("Sales", "주문매핑 매출처리"),
     ("Hold", "물류대기 관리"),
     ("Logistics", "물류관리"),
@@ -802,7 +804,7 @@ DEFAULT_MODE = "리허설"
 WELLIFE_SECTION = "Wellife"    # 웰라이프 업체 PC 만 (설계 2026-10-07-wellife-gate). 키 이름은 wellife.MODULES 와 같다 - 바꾸면 둘 다
 WELLIFE_CONFIG_MODULES = (
     ("Login", "로그인"),
-    ("Excel", "엑셀 수집"),          # ② 주문매핑을 셋으로 (사용자 2026-10-15) - 빠지면 Sales 를 따른다 (WELLIFE_FOLLOW_SALES)
+    ("Excel", "엑셀 수집"),          # ② 주문매핑을 셋으로 (사용자 2026-10-15) - 빠지면 Sales 를 따른다 (FOLLOW_SALES)
     ("Import", "자동 수집"),
     ("Sales", "주문매핑 매출처리"),
     ("Hold", "물류대기 관리"),
@@ -810,7 +812,9 @@ WELLIFE_CONFIG_MODULES = (
     ("Wms", "웰라이프 WMS 이관관리"),
     ("InvoiceSend", "운송장번호 전송"),
 )
-WELLIFE_FOLLOW_SALES = ("Excel", "Import")   # 10-15 전 섹션에 없는 키 - 주문매핑(Sales) 켬/끔을 따른다 (wellife.FOLLOW_SALES 와 같다)
+# 나누기 전 섹션(웰라이프 10-15 전, 그 밖 10-30 전)에 없는 키 - 주문매핑(Sales) 켬/끔을 따른다 (wellife.FOLLOW_SALES 와 같다).
+# 업데이트만으로 수집이 빠지거나 켜지지 않게 (Routine·Wellife 섹션 모두, perform_login.load_routine_modules 도)
+FOLLOW_SALES = ("Excel", "Import")
 WELLIFE_DEFAULT = {"Login": True, "Excel": True, "Import": True, "Sales": True, "Hold": False, "Sap": False, "Wms": False,
                    "InvoiceSend": False}   # 처음 열릴 때 (사용자 2026-10-07)
 # 모든 업체용 모듈 (패키지 공용 화면 - 운송장번호 전송, 2026-10-13). 이력·토큰 키에 wellife_ 를 붙이지 않아
@@ -886,6 +890,9 @@ def read_routine_modules(path=None):
         else:
             selected[k] = None
             problems.append(f"{k} 값이 Y/N이 아닙니다. ({raw!r})")
+    for k in FOLLOW_SALES:
+        if k not in section:
+            selected[k] = selected["Sales"]
     return selected, problems
 
 
@@ -901,6 +908,9 @@ def write_routine_modules(selected, path=None):
     if unknown:
         raise ValueError(f"모르는 모듈 키: {', '.join(unknown)}")
     final = {k: bool(selected.get(k, k not in ROUTINE_OFF_BY_DEFAULT)) for k in keys}
+    for k in FOLLOW_SALES:          # 나누기 전 값을 보내면 (2026-10-30 전 화면) 주문매핑(Sales) 을 따른다
+        if k not in selected:
+            final[k] = final["Sales"]
     data = read_user_config(path)
     if not data:
         raise FileNotFoundError(path or user_config_path())
@@ -928,7 +938,7 @@ def read_wellife_modules(path=None):
         else:
             selected[k] = None
             problems.append(f"{k} 값이 Y/N이 아닙니다. ({raw!r})")
-    for k in WELLIFE_FOLLOW_SALES:
+    for k in FOLLOW_SALES:
         if k not in section:
             selected[k] = selected["Sales"]
     return selected, problems

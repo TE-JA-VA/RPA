@@ -87,12 +87,14 @@ print()
 print("=== 3. write_routine_modules ===")
 p = write_file("d.txt", BASE)
 out = st.write_routine_modules({"Sales": False, "Hold": True}, p)
-check("돌려주는 값은 6개 전부 (빠진 키는 켬, 운송장번호 전송은 끔)", out == {"Login": True, "Sales": False, "Hold": True, "Logistics": True, "Output": True,
-                                                       "InvoiceSend": False}, str(out))
+check("돌려주는 값은 8개 전부 (빠진 키는 켬, 운송장번호 전송은 끔, 자동·엑셀 수집은 주문매핑을 따른다)",
+      out == {"Login": True, "Import": False, "Excel": False, "Sales": False, "Hold": True, "Logistics": True, "Output": True,
+              "InvoiceSend": False}, str(out))
 text = open(p, encoding="utf-8").read()
 data = json.loads(text)
 check("옛 형식은 섹션 dict 로 풀려 쓰이고, 없던 Routine 은 끝에 붙는다", list(data) == ["LogIn", "Logistic", "Routine"], str(list(data)))
-check("Routine 은 {키: Y/N} + 빠진 모드 키는 '리허설'", data["Routine"] == {"Login": "Y", "Sales": "N", "Hold": "Y", "Logistics": "Y", "Output": "Y",
+check("Routine 은 {키: Y/N} + 빠진 모드 키는 '리허설'", data["Routine"] == {"Login": "Y", "Import": "N", "Excel": "N", "Sales": "N", "Hold": "Y",
+                                                         "Logistics": "Y", "Output": "Y",
                                                          "InvoiceSend": "N", "InvoiceMode": "리허설"},
       str(data["Routine"]))
 check("비밀번호는 잠겨서 들어간다 (파일에 평문이 없다)", PW not in text and data["LogIn"]["PW"].startswith(st.SEALED_PREFIX))
@@ -120,7 +122,7 @@ st.write_routine_modules({"Login": False}, p)
 data = json.loads(open(p, encoding="utf-8").read())
 check("Routine 뒤의 다른 섹션도 순서 그대로", list(data) == ["LogIn", "Logistic", "Routine", "Etc"], str(list(data)))
 check("아는 키는 제자리에서 바뀌고 모르는 키(Extra)는 보존된다 (루틴이 경고를 내 주도록)",
-      list(data["Routine"].items())[:2] == [("Login", "N"), ("Extra", "Y")] and list(data["Routine"]) == ["Login", "Extra", "Sales", "Hold", "Logistics", "Output", "InvoiceSend", "InvoiceMode"], str(data["Routine"]))
+      list(data["Routine"].items())[:2] == [("Login", "N"), ("Extra", "Y")] and list(data["Routine"]) == ["Login", "Extra", "Import", "Excel", "Sales", "Hold", "Logistics", "Output", "InvoiceSend", "InvoiceMode"], str(data["Routine"]))
 p = write_file("e1.txt", BASE + [{"Routine": [{"InvoiceSend": "Y"}, {"InvoiceMode": "실행"}]}])
 st.write_routine_modules({"Login": True}, p)
 check("적어 둔 모드 값은 그대로 둔다 (빠졌을 때만 '리허설')",
@@ -143,10 +145,24 @@ sel, _ = pl.load_routine_modules(KEYS)
 check("다시 쓴 파일을 루틴이 읽는다 (Output 끔)", sel["Output"] is False and sel["Login"] is True)
 pl.CONFIG_FILE = None
 
+# 주문매핑을 셋으로 (2026-10-30): 나누기 전 파일은 자동·엑셀 수집이 주문매핑(Sales) 을 따른다 - 읽기 둘(웹·루틴) 모두
+for sales in ("Y", "N"):
+    p = write_file(f"split_{sales}.txt", {"LogIn": {"PW": PW}, "Routine": {"Login": "Y", "Sales": sales, "Hold": "Y"}})
+    sel, _ = st.read_routine_modules(p)
+    pl.CONFIG_FILE = p
+    sel2, _ = pl.load_routine_modules(KEYS)
+    pl.CONFIG_FILE = None
+    want = sales == "Y"
+    check(f"나누기 전 파일 Sales={sales}: 자동·엑셀 수집도 {'켬' if want else '끔'} (웹·루틴 읽기 같음)",
+          sel["Import"] is want and sel["Excel"] is want and sel2["Import"] is want and sel2["Excel"] is want, f"{sel} {sel2}")
+p = write_file("split_own.txt", {"LogIn": {"PW": PW}, "Routine": {"Sales": "N", "Import": "Y"}})
+sel, _ = st.read_routine_modules(p)
+check("적어 둔 수집 값은 그대로 (Import=Y·Sales=N - 빠진 Excel 만 따른다)", sel["Import"] is True and sel["Excel"] is False, str(sel))
+
 p = write_file("g.txt", {"LogIn": {"PW": PW}})
 st.write_routine_modules({"Hold": False}, p)
 data = json.loads(open(p, encoding="utf-8").read())
-check("최상위 dict 형식은 키로 넣는다", data["Routine"] == {"Login": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y", "InvoiceSend": "N",
+check("최상위 dict 형식은 키로 넣는다", data["Routine"] == {"Login": "Y", "Import": "Y", "Excel": "Y", "Sales": "Y", "Hold": "N", "Logistics": "Y", "Output": "Y", "InvoiceSend": "N",
                                                   "InvoiceMode": "리허설"}
       and st.unseal(data["LogIn"]["PW"]) == PW)
 

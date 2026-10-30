@@ -165,7 +165,7 @@ const MODULE_NAMES = { Sales: "주문매핑 매출처리", Hold: "물류대기 �
 // 토큰 배율 묶음 (사용자 2026-10-08) - 키는 에이전트가 세는 모듈 키 (run_routine·wellife MODULES, 프리페어는 sites)
 const RATE_GROUPS = [
   { title: "ACTOR 오토파일럿", rows: [["sites", "사이트 수집"]] },
-  { title: "PROCESS 오토파일럿", plain: true, rows: [["login", "로그인"], ["sales", "주문매핑 매출처리"], ["hold", "물류대기 관리"],
+  { title: "PROCESS 오토파일럿", plain: true, rows: [["login", "로그인"], ["import", "자동 수집"], ["excel", "엑셀 수집"], ["sales", "주문매핑 매출처리"], ["hold", "물류대기 관리"],
     ["logistics", "물류관리"], ["output", "운송장 출력 / 엑셀 생성"], ["invoicesend", "운송장번호 전송"]] },
   { title: "PROCESS 오토파일럿 · 웰라이프 업체", wellife: true, rows: [["login", "로그인"], ["wellife_excel", "엑셀 수집"], ["wellife_import", "자동 수집"], ["wellife_sales", "주문매핑 매출처리"],
     ["wellife_hold", "물류대기 관리"], ["wellife_sap", "웰라이프 SAP 연동관리"], ["wellife_wms", "웰라이프 WMS 이관관리"],

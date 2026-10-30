@@ -6,8 +6,8 @@ import { toast } from "./toast.js";
 export const P = (kind, cid, pcId) => `apps/rpa/${kind}/${cid}/${pcId}`;
 // 에이전트·Firestore 에서 온 값은 innerHTML 에 넣기 전에 반드시 씌운다 (app.js 와 같은 구현)
 export const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
-export const MODULES = [
-  ["Login", "로그인"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
+export const MODULES = [   // 주문매핑은 자동 수집·엑셀 수집·매출처리 셋 (모든 업체 2026-10-30, PC 의 rpa_status.ROUTINE_CONFIG_MODULES 와 같은 순서)
+  ["Login", "로그인"], ["Import", "자동 수집"], ["Excel", "엑셀 수집"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],
   ["Logistics", "물류관리"], ["Output", "운송장 출력 / 엑셀 생성"], ["InvoiceSend", "운송장번호 전송"],
 ];
 // 웰라이프 업체 모듈 (설계 2026-10-07-wellife-gate) - PC 의 Wellife 섹션 키, wellife.MODULES 와 같다
@@ -114,7 +114,7 @@ function watchCommands(c, sent, label, alive) {
 }
 
 // 예약 줄 (2부). 단추 글은 PC 의 rpa_dashboard.SLOT_NAMES 와 같은 말
-export const RUN_CHIPS = [["Prepare", "사이트 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Logistics", "물류관리"], ["Output", "운송장"],
+export const RUN_CHIPS = [["Prepare", "사이트 수집"], ["Import", "자동 수집"], ["Excel", "엑셀 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Logistics", "물류관리"], ["Output", "운송장"],
   ["InvoiceSend", "운송장 전송"]];
 // 웰라이프 업체의 줄 단추 - 물류관리·운송장 대신 SAP 연동·WMS 이관 (PC 의 rpa_dashboard.WELLIFE_ONLY_KEYS) + 운송장 전송 (모든 업체용)
 export const WELLIFE_RUN_CHIPS = [["Prepare", "사이트 수집"], ["Excel", "엑셀 수집"], ["Import", "자동 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Sap", "SAP 연동"], ["Wms", "WMS 이관"],

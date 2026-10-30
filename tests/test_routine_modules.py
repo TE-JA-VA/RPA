@@ -256,8 +256,18 @@ def make_ctx():
     return ctx
 
 
-check("ROUTINE_MODULES 는 6개 (운송장번호 전송은 2026-10-13 모든 업체로)", [m[0] for m in rr.ROUTINE_MODULES] == ["login", "sales", "hold", "logistics", "output", "invoicesend"])
-check("비트는 1/2/4/8/16 고정 + 운송장번호 전송 512 (웰라이프와 같은 비트)", [m[4] for m in rr.ROUTINE_MODULES] == [1, 2, 4, 8, 16, 512], str([m[4] for m in rr.ROUTINE_MODULES]))
+check("ROUTINE_MODULES 는 8개 (운송장번호 전송 2026-10-13, 주문매핑 셋 2026-10-30 모든 업체로)",
+      [m[0] for m in rr.ROUTINE_MODULES] == ["login", "import", "excel", "sales", "hold", "logistics", "output", "invoicesend"])
+check("비트는 1/2/4/8/16 고정 + 자동 수집 2048·엑셀 수집 1024·운송장번호 전송 512 (웰라이프와 같은 비트)",
+      [m[4] for m in rr.ROUTINE_MODULES] == [1, 2048, 1024, 2, 4, 8, 16, 512], str([m[4] for m in rr.ROUTINE_MODULES]))
+check("설정 키 순서가 rpa_status.ROUTINE_CONFIG_MODULES 와 같다 (웹·설정 창 순서)",
+      [m[1] for m in rr.ROUTINE_MODULES] == [k for k, _ in st.ROUTINE_CONFIG_MODULES])
+for mode, want in ((None, ["import", "excel"]), ("excel_import", ["import", "excel"]), ("excel", ["excel", "import"])):
+    rr.TOGETHER_MODE = mode
+    order = [m[0] for m in rr.routine_modules()]
+    check(f"실행 순서 (함께 실행 {mode}): " + " -> ".join(want) + " -> 매출처리 (예전 sales_flow 차례 그대로)",
+          [k for k in order if k in ("import", "excel")] == want and order.index("sales") == 3 and len(order) == 8, str(order))
+rr.TOGETHER_MODE = None
 steps_keys = [k for k, _ in rr.ROUTINE_STEPS]
 check("logistics_screen 단계가 logistics 앞에", steps_keys.index("logistics_screen") + 1 == steps_keys.index("logistics"))
 check("모듈 단계 키를 모두 합치면 ROUTINE_STEPS 와 같다", sorted(k for m in rr.ROUTINE_MODULES for k in m[3]) == sorted(steps_keys))
@@ -417,24 +427,25 @@ def run(selected, results, attach=(True, None)):
             self.app = types.SimpleNamespace(window=lambda handle: FakeWin())
         return ok, reason
 
-    rr.MODULE_FUNCS = {k: fake(k) for k in ("login", "sales", "hold", "logistics", "output")}
+    rr.MODULE_FUNCS = {k: fake(k) for k in ("login", "import", "excel", "sales", "hold", "logistics", "output")}
     rr.RoutineContext.attach = fake_attach
     out = rr.run_modules(selected)
     return out, called, rec, attach_calls
 
 
-ALL_ON = {"Login": True, "Sales": True, "Hold": True, "Logistics": True, "Output": True}
+ALL_ON = {"Login": True, "Import": True, "Excel": True, "Sales": True, "Hold": True, "Logistics": True, "Output": True}
+ALL7 = ["login", "import", "excel", "sales", "hold", "logistics", "output"]
 out, called, rec, ac = run(ALL_ON, {})
-check("전부 켜면 5개 순서대로", called == ["login", "sales", "hold", "logistics", "output"], str(called))
+check("전부 켜면 7개 순서대로", called == ALL7, str(called))
 check("전부 done 이면 success", out == ("success", None), str(out))
-check("module_done 5번 전부 done", [r[1] for r in rec.of("module_done")] == ["done"] * 5)
+check("module_done 7번 전부 done", [r[1] for r in rec.of("module_done")] == ["done"] * 7)
 check("로그인이 켜져 있으면 attach 안 부름", ac == [])
 
 out, called, rec, ac = run({**ALL_ON, "Sales": False, "Hold": False}, {})
-check("끈 모듈은 부르지 않는다", called == ["login", "logistics", "output"], str(called))
+check("끈 모듈은 부르지 않는다 (주문매핑만 끄면 수집은 돈다)", called == ["login", "import", "excel", "logistics", "output"], str(called))
 check("끈 모듈은 module_off (칸이 없는 운송장번호 전송도 끔)", [r[0] for r in rec.of("module_off")] == ["sales", "hold", "invoicesend"])
 skipped = rec.of("skip")
-check("끈 모듈의 단계는 '설정에서 끔' 으로 skip", len(skipped) == 11 and all(s[1] == "설정에서 끔" for s in skipped), str(skipped))
+check("끈 모듈의 단계는 '설정에서 끔' 으로 skip", len(skipped) == 8 and all(s[1] == "설정에서 끔" for s in skipped), str(skipped))
 logged = []
 rr.log = lambda msg="": logged.append(msg)
 os.environ["RPA_RUN_MODULES"] = "Logistics,Output"
@@ -445,33 +456,33 @@ finally:
     rr.log = lambda msg="": None
 skipped = rec.of("skip")
 check("예약이 고른 실행이면 안 고른 모듈은 '이번 실행에서 안 고름' (설정과 상관없다)",
-      len(skipped) == 11 and all(s[1] == "이번 실행에서 안 고름" for s in skipped)
+      len(skipped) == 8 and all(s[1] == "이번 실행에서 안 고름" for s in skipped)
       and [r[1] for r in rec.of("module_off")] == ["이번 실행에서 안 고름"] * 3, str(skipped))
 check("로그도 '이번 실행에서 고르지 않아 건너뜁니다'",
       any("[주문매핑 매출처리] 이번 실행에서 고르지 않아 건너뜁니다" in m for m in logged) and not any("설정에서 꺼져" in m for m in logged), str(logged[:3]))
 
 out, called, rec, ac = run({**ALL_ON, "Login": False}, {})
-check("로그인을 끄면 ERPia 에 붙어서 계속", called == ["sales", "hold", "logistics", "output"] and out[0] == "success", str(called))
+check("로그인을 끄면 ERPia 에 붙어서 계속", called == ALL7[1:] and out[0] == "success", str(called))
 check("attach 는 한 번만", ac == [1], str(ac))
 out, called, rec, ac = run({**ALL_ON, "Login": False}, {}, attach=(False, "ERPia 가 실행되어 있지 않습니다."))
 check("붙기 실패면 아무 모듈도 안 돌고 stopped", called == [] and out[0] == "stopped" and "ERPia" in out[1], str(out))
-check("붙기 실패는 그 모듈의 첫 단계에 실패로 보인다", rec.of("step") == [("order_screen",)] and rec.of("module_done")[-1][:2] == ("sales", "failed"), str(rec.of("step")))
+check("붙기 실패는 그 모듈의 첫 단계에 실패로 보인다", rec.of("step") == [("order_screen",)] and rec.of("module_done")[-1][:2] == ("import", "failed"), str(rec.of("step")))
 check("rpa_status.OFF_NOTE 가 있고 run_routine 에 리터럴이 없다",
       st.OFF_NOTE == "설정에서 끔" and '"설정에서 끔"' not in Path(rr.__file__).read_text(encoding="utf-8"))
 check("rpa_status.PICK_NOTE 도 같은 자리에", st.PICK_NOTE == "이번 실행에서 안 고름" and set(st.OFF_NOTES) == {st.OFF_NOTE, st.PICK_NOTE})
 
 out, called, rec, ac = run(ALL_ON, {"hold": ("failed", "그리드 없음")})
-check("failed 면 뒤 모듈 안 돌고 stopped", called == ["login", "sales", "hold"] and out == ("stopped", "그리드 없음"), str((called, out)))
+check("failed 면 뒤 모듈 안 돌고 stopped", called == ALL7[:5] and out == ("stopped", "그리드 없음"), str((called, out)))
 out, called, rec, ac = run(ALL_ON, {"sales": ("stopped", "매출처리 실패: x")})
-check("stopped 도 멈춘다", called == ["login", "sales"] and out[0] == "stopped")
+check("stopped 도 멈춘다", called == ALL7[:4] and out[0] == "stopped")
 out, called, rec, ac = run(ALL_ON, {"hold": ("no_target", "행 없음")})
-check("no_target 은 계속 간다", called == ["login", "sales", "hold", "logistics", "output"] and out[0] == "success")
+check("no_target 은 계속 간다", called == ALL7 and out[0] == "success")
 out, called, rec, ac = run(ALL_ON, {"hold": ("skipped", "메뉴 없음")})
-check("skipped 도 계속 간다", len(called) == 5 and out[0] == "success")
+check("skipped 도 계속 간다", len(called) == 7 and out[0] == "success")
 
 out, called, rec, ac = run({k: False for k in ALL_ON}, {})
 check("전부 끄면 아무것도 안 돌고 stopped", called == [] and out[0] == "stopped" and "켜진 모듈" in out[1], str(out))
-check("전부 끄면 여섯 모듈이 off 로 표시된다", len(rec.of("module_off")) == 6 and len(rec.of("skip")) == 17, str(len(rec.of("skip"))))
+check("전부 끄면 여덟 모듈이 off 로 표시된다", len(rec.of("module_off")) == 8 and len(rec.of("skip")) == 17, str(len(rec.of("skip"))))
 
 out, called, rec, ac = run(ALL_ON, {"hold": ("failed", None)})
 check("사유 없는 failed 는 last_problem 으로 채우려 한다", ("last_problem",) in rec.calls, str(rec.calls[-3:]))
@@ -717,7 +728,7 @@ ran = []
 rr.run_modules = lambda selected: ran.append(selected) or ("success", None)
 rr.main()
 sm = rec.of("set_modules")
-check("정상이면 set_modules 에 (키, 이름, 단계, 비트) 6개", bool(sm) and [m[3] for m in sm[0][0]] == [1, 2, 4, 8, 16, 512], str(sm))
+check("정상이면 set_modules 에 (키, 이름, 단계, 비트) 8개", bool(sm) and [m[3] for m in sm[0][0]] == [1, 2048, 1024, 2, 4, 8, 16, 512], str(sm))
 check("정상이면 run_modules 로 간다 + finish(success)", ran and rec.of("finish")[-1] == ("success", None), str(rec.of("finish")))
 
 print()
@@ -739,7 +750,7 @@ ran = []
 rr.run_modules = lambda selected: ran.append(selected) or ("success", None)
 os.environ["RPA_RUN_MODULES"] = "Hold"
 rr.main()
-check("main 이 넘긴 모듈로 돈다", ran and ran[-1] == {"Login": True, "Sales": False, "Hold": True, "Logistics": False, "Output": False,
+check("main 이 넘긴 모듈로 돈다", ran and ran[-1] == {"Login": True, "Import": False, "Excel": False, "Sales": False, "Hold": True, "Logistics": False, "Output": False,
                                                   "InvoiceSend": False}, f"{ran}")
 os.environ["RPA_RUN_MODULES"] = "Login"
 rec = StatusRec(); rr.status = rec; ran.clear()
@@ -751,15 +762,14 @@ print()
 print("=== 13. 도중에 꺼진 ERPia 다시 띄워 잇기 / 관리자 권한 ERPia (2026-10-14) ===")
 ALIVE = [True]
 rr.ec.pid_alive = lambda pid: ALIVE[0]
-SALES_ON = {"Login": True, "Sales": True, "Hold": False, "Logistics": False, "Output": False}
+SALES_ON = {"Login": True, "Import": False, "Excel": False, "Sales": True, "Hold": False, "Logistics": False, "Output": False}
 seen = []
 
 
 def crash_once(ctx):
-    seen.append((ctx.resume, ctx.collected))
+    seen.append(ctx.resume)
     if len(seen) == 1:
-        ctx.collected = True         # 수집은 끝냈고 매출처리 중에 꺼졌다
-        ALIVE[0] = False
+        ALIVE[0] = False             # 매출처리 중에 꺼졌다
         return "failed", "그리드가 충분히 발견되지 않았습니다."
     return "done", None
 
@@ -786,7 +796,7 @@ def run_crash(sales, selected=SALES_ON):
 out, called, rec = run_crash(crash_once)
 check("매출처리 중 ERPia 가 꺼지면 다시 띄워 로그인하고 주문매핑을 다시 돈다",
       out == ("success", None) and called == ["login", "sales", "login", "sales"], f"{out} {called}")
-check("다시 돌 때 ctx.resume='sales', 수집 끝남(collected) 이 남아 매출처리부터", seen == [(None, False), ("sales", True)], str(seen))
+check("다시 돌 때 ctx.resume='sales' (수집은 따로 끝난 모듈이라 다시 안 한다)", seen == [None, "sales"], str(seen))
 check("꺼진 단계는 실패로 표시하고 모듈은 완료로 닫는다",
       len(rec.of("fail_step")) == 1 and [r[1] for r in rec.of("module_done")] == ["done", "done"], str(rec.calls[-6:]))
 
@@ -859,7 +869,7 @@ res = rr.run_module(ctx, "sales", "주문매핑", {"login": lambda c: ("failed",
 check("다시 띄우기(로그인)가 실패하면 그 사유로 실패", res[0] == "failed" and "로그인 실패: 흉내" in res[1] and ctx.resume is None, str(res))
 ALIVE[0] = True
 
-# 주문매핑 module_sales: 수집이 끝났으면 상단 전체선택·가져오기·엑셀을 건너뛴다
+# 주문매핑 세 모듈 (모든 업체, 사용자 2026-10-30): 자동 수집 / 엑셀 수집 / 매출처리 - 저마다 화면으로 가서 제 일만 한다
 _saved_s = {n: getattr(rr, n) for n in ("goto_order_screen", "get_onscreen_tables", "select_all_and_verify",
                                          "run_import_step", "run_excel_upload_step", "find_by_text")}
 sales_acts = []
@@ -873,56 +883,70 @@ class Tbl:
         return types.SimpleNamespace(top=self.top, left=0)
 
 
+EXCEL_RET = [(2, 0)]
+
+
+def fake_excel(*a):
+    sales_acts.append(("excel",))
+    if isinstance(EXCEL_RET[0], Exception):
+        raise EXCEL_RET[0]
+    return EXCEL_RET[0]
+
+
 rr.status = StatusRec()
-rr.goto_order_screen = lambda ctx: (True, None)
+rr.goto_order_screen = lambda ctx: sales_acts.append(("goto",)) or (True, None)
 rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300)]
 rr.select_all_and_verify = lambda name, *a: sales_acts.append(("select", name)) or 3
 rr.run_import_step = lambda *a: sales_acts.append(("import",)) or True
-rr.run_excel_upload_step = lambda *a: sales_acts.append(("excel",))
+rr.run_excel_upload_step = fake_excel
 rr.find_by_text = lambda *a, **k: None          # 매출처리 단추 없음 -> 여기서 멈춘다 (시험은 그 앞까지만 본다)
-for collected, want in ((False, [("select", "좌측상단"), ("import",), ("excel",), ("select", "하단")]),
-                        (True, [("select", "하단")])):
+for name, f, want, res_want in (("module_import", rr.module_import, [("goto",), ("select", "좌측상단"), ("import",)], "done"),
+                                ("module_excel", rr.module_excel, [("goto",), ("excel",)], "done"),
+                                ("module_sales", rr.module_sales, [("goto",), ("select", "하단")], "failed")):
     sales_acts.clear()
-    ctx = make_ctx()
-    ctx.collected = collected
-    res = rr.module_sales(ctx)
-    check(f"module_sales collected={collected}: " + ("상단 전체선택 -> 가져오기 -> 엑셀 -> 하단" if not collected
-                                                     else "수집을 건너뛰고 하단 전체선택(매출처리)부터"),
-          sales_acts == want and res[0] == "failed", f"{sales_acts} {res}")
-ctx = make_ctx()
-ALIVE[0] = False
-rr.module_sales(ctx)
-check("수집 도중 ERPia 가 꺼졌으면 collected 를 세우지 않는다 (다시 돌 때 수집부터)", ctx.collected is False)
-ALIVE[0] = True
+    rr.status = StatusRec()
+    res = f(make_ctx())
+    check(f"{name}: " + " -> ".join(a[0] if len(a) == 1 else a[1] for a in want) + f" ({res_want})",
+          sales_acts == want and res[0] == res_want, f"{sales_acts} {res}")
+check("매출처리 모듈은 하단 선택 단계부터 찍는다", rr.status.of("step")[0] == ("bottom_select",), str(rr.status.of("step")))
+for ret, want, why in (((0, 0), "skipped", "올릴 엑셀이 없으면 건너뜀 (토큰 0)"), ((0, 2), "skipped", "올린 게 없고 오류 폴더로만 가면 건너뜀 + 사유에 오류 수"),
+                       ((3, 1), "done", "올린 게 있으면 완료 + 사유에 수"), (RuntimeError("흉내"), "skipped", "오류가 나도 뒤 모듈은 이어간다 (예전 엑셀업로드와 같다)")):
+    EXCEL_RET[0] = ret
+    res = rr.module_excel(make_ctx())
+    check(f"엑셀 수집 {ret!r}: {why}", res[0] == want and (not isinstance(ret, tuple) or not ret[1] or f"{ret[1]}개" in res[1]), str(res))
+EXCEL_RET[0] = (2, 0)
+rr.goto_order_screen = lambda ctx: (False, "아이콘 없음")
+res = rr.module_sales(make_ctx())
+check("화면으로 못 가면 그 모듈이 실패 (사유 그대로)", res == ("failed", "아이콘 없음"), str(res))
+rr.goto_order_screen = lambda ctx: (True, None)
+rr.get_onscreen_tables = lambda win: [Tbl(10)]
+res = rr.module_import(make_ctx())
+check("그리드가 모자라면 실패", res[0] == "failed" and "그리드" in res[1], str(res))
+rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300)]
 
-# 함께 실행 (모든 업체, 사용자 2026-10-20): 엑셀은 받는 대로 - 'excel' 은 상단 전체선택 앞, 'excel_import' 는 가져오기를 끝까지 본 뒤
+# 함께 실행 (모든 업체, 사용자 2026-10-20): 엑셀은 받는 대로 (excel_upload_together). 차례는 routine_modules (위 4절)
 _saved_t = {n: getattr(rr, n) for n in ("excel_upload_together", "sales_flow", "find_popup_windows", "upload_popups",
                                          "excel_upload_dir", "time")}
 _saved_w = rr.wellife.on_top, rr.wellife.wait_prepare
-rr.excel_upload_together = lambda ctx, grid: sales_acts.append(("together",))
-for mode, want in (("excel", [("together",), ("select", "좌측상단"), ("import",), ("select", "하단")]),
-                   ("excel_import", [("select", "좌측상단"), ("import",), ("together",), ("select", "하단")])):
-    sales_acts.clear()
-    rr.TOGETHER_MODE = mode
-    rr.sales_flow(make_ctx())
-    check(f"함께 실행 '{mode}': " + ("받는 엑셀을 먼저 (수집이 끝날 때까지) -> 상단 전체선택 -> 가져오기 -> 하단" if mode == "excel"
-                                   else "상단 전체선택 -> 가져오기(끝까지) -> 받는 엑셀 -> 하단 (예전 엑셀업로드 자리, '+' 화면 없이)"),
-          sales_acts == want, str(sales_acts))
+rr.excel_upload_together = lambda ctx, grid: sales_acts.append(("together",)) or (1, 0)
 tops, prep = [], [["prepare"], ["prepare"], []]
 rr.wellife.on_top = lambda rr_, hwnd, on: tops.append(on)
 rr.status = StatusRec()
 rr.status.running_programs = lambda: prep.pop(0) if prep else []
 rr.time = types.SimpleNamespace(sleep=lambda s: None, time=_time.time)
 rr.TOGETHER_MODE = "excel"
-rr.sales_flow = lambda ctx: ("done", None)
-res = rr.module_sales(make_ctx())
-check("함께 실행이면 주문매핑 동안 ERPia 를 맨 위로 두고 끝나면 풀며, 사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 (키를 치는 뒤 모듈이 Edge 와 겹치지 않게)",
-      tops == [True, False] and not prep and res == ("done", None), f"{tops} {prep} {res}")
+sales_acts.clear()
+res = rr.module_excel(make_ctx())
+check("함께 실행 엑셀 수집: 받는 대로 올리고, 그동안 ERPia 를 맨 위로 두고 끝나면 풀며, 사이트 수집이 끝나기를 기다린 뒤 다음 모듈로",
+      sales_acts == [("together",)] and tops == [True, False] and not prep and res[0] == "done", f"{sales_acts} {tops} {prep} {res}")
+tops.clear()
+rr.TOGETHER_MODE = "excel_import"
+res = rr.module_import(make_ctx())
+check("함께 실행 자동 수집도 ERPia 를 맨 위로 (사이트 수집의 Edge 창이 누를 자리를 덮지 않게)", tops == [True, False] and res[0] == "done", f"{tops} {res}")
 rr.TOGETHER_MODE = None
 tops.clear()
 rr.module_sales(make_ctx())
 check("함께 실행이 아니면 맨 위만 푼다 (앞 함께 실행이 [중지] 로 남긴 맨 위 - 맨 위가 아니면 아무 일 없음)", tops == [False], str(tops))
-rr.sales_flow = _saved_t["sales_flow"]
 rr.excel_upload_together = _saved_t["excel_upload_together"]
 
 tdir = tempfile.mkdtemp(prefix="rpa_tog_")
@@ -982,14 +1006,14 @@ for mode, sales, want in (("excel", True, "excel"), ("excel_import", True, "exce
     rr.TOGETHER_MODE, rr.pl.KEYS_GUARD = None, contextlib.nullcontext
     waits.clear()
     rr.status.together_choice = lambda m=mode: m
-    rr.together_setup(rr, {"Sales": sales})
-    check(f"함께 띄운 루틴: 방식 '{mode}', 주문매핑 {'켬' if sales else '끔'} -> "
+    rr.together_setup(rr, {"Excel": sales})
+    check(f"함께 띄운 루틴: 방식 '{mode}', 엑셀 수집 {'켬' if sales else '끔'} -> "
           + (f"받는 대로 올림 ('{want}'), 로그인 키 입력 동안 키보드 차례" if want else "사이트 수집이 끝나기를 기다린 뒤 예전처럼"),
           rr.TOGETHER_MODE == want and len(waits) == (0 if want else 1) and (rr.pl.KEYS_GUARD is not contextlib.nullcontext) == bool(want),
           f"{rr.TOGETHER_MODE} {waits}")
 del os.environ[rr.TOGETHER_ENV]
 rr.TOGETHER_MODE, rr.pl.KEYS_GUARD = None, contextlib.nullcontext
-rr.together_setup(rr, {"Sales": True})
+rr.together_setup(rr, {"Excel": True})
 check("함께 띄운 루틴이 아니면 아무것도 바꾸지 않는다", rr.TOGETHER_MODE is None and rr.pl.KEYS_GUARD is contextlib.nullcontext)
 rr.pl.KEYS_GUARD = _saved_guard
 rr.wellife.on_top, rr.wellife.wait_prepare = _saved_w

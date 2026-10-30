@@ -732,6 +732,8 @@ def company_policy(client, cid, app=APP):
     if not (isinstance(parallel, int) and not isinstance(parallel, bool) and st.PARALLEL_MIN <= parallel <= st.PARALLEL_MAX):
         parallel = None
     off = {k for k, v in (got.get("modules") or {}).items() if v is False}
+    if "Sales" in off:                                # 2026-10-30 전 '주문매핑' 은 수집까지였다 - 막은 업체는 나눈 수집도 막는다
+        off |= set(st.FOLLOW_SALES)
     wl = wellife_on(cid, got.get("features"))
     if wl:
         off |= set(WELLIFE_BLOCKED)
@@ -761,7 +763,7 @@ class Policy:
         was = st.wellife_policy()                    # 적기 전의 값 - 열렸다 닫힌 업체인지 본다
         dash.set_policy(*got)
         try:
-            dash.migrate_split_sales()               # 웰라이프 ② 를 셋으로 나눈 뒤 옛 예약 줄 (한 번만)
+            dash.migrate_split_sales()               # 주문매핑을 셋으로 나눈 뒤 옛 예약 줄 (한 번만)
         except Exception as e:
             log(f"예약 설정을 수정하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
         if was and not got[2]:

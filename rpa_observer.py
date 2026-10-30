@@ -654,7 +654,7 @@ def validate_presets(presets):
             continue
         tag = f"{circled(p['no'])} {p['name']}"
         if not re.fullmatch(r"\d{3}", p.get("code") or ""):
-            return p["no"], f"{tag}: 사이트코드는 숫자 세 자리여야 합니다 (받은 엑셀파일 이름 앞에 붙어, 주문매핑 매출처리 단계에서 자동으로 처리하게 됩니다.)"
+            return p["no"], f"{tag}: 사이트코드는 숫자 세 자리여야 합니다 (받은 엑셀파일 이름 앞에 붙어, 엑셀 수집 모듈에서 자동으로 처리하게 됩니다.)"
         if p["code"] in codes:
             return p["no"], (f"{tag}: 사이트코드 {p['code']}을(를) {codes[p['code']]}에서도 사용하고 있습니다. "
                              "다른 사이트코드를 입력하여 주십시오.")

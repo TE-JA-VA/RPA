@@ -19,7 +19,7 @@ r"""ERPia 정해진 업무 루틴을 처음부터 끝까지 한 번에 실행한
       주문매핑은 주문 수집이 끝났으면 매출처리(하단 전체선택)부터. 일반 권한 RPA 가 로그인하려는데 관리자 권한
       ERPia 가 이미 로그인돼 있으면 끄고 새로 띄운다 (ensure_erpia_running, 2026-10-14).
     - 상태 파일(RPA_STATUS\status_routine.json)에 modules[] / module_flags / progress 를 남긴다.
-      module_flags 비트: login=1 sales=2 hold=4 logistics=8 output=16 (완료·대상없음·건너뜀이면 1).
+      module_flags 비트: login=1 sales=2 hold=4 logistics=8 output=16 invoicesend=512 excel=1024 import=2048 (완료·대상없음·건너뜀이면 1).
 
 흐름:
 1. 자격증명(업체코드/아이디/비밀번호) 로드 - exe 옆 RPA_UserConfig.json 의 LogIn (비밀번호는 잠긴 값을 풀어 쓴다)
@@ -205,12 +205,16 @@ ROUTINE_STEPS = (
 # (모듈 키, 설정 키, 화면 이름, 이 모듈이 맡는 ROUTINE_STEPS 키들, module_flags 비트)
 # 순서가 곧 실행 순서다. 비트는 명시 값이다 - 순서를 바꾸거나 모듈을 끼워 넣어도 기존 비트는 바꾸지 않는다
 # (이력의 module_flags 정수 의미가 달라지면 안 된다). 새 모듈은 다음 빈 비트(32, 64, ...)를 쓴다.
-# (32·64·128·256·512 는 웰라이프 실행이 쓴다 - wellife.MODULES. 여기 새 모듈은 1024 부터)
+# (32·64·128·256·512·1024·2048 는 웰라이프 실행이 쓴다 - wellife.MODULES. 여기 새 모듈은 4096 부터)
 # 모듈 안의 단계는 고를 수 없다 - 특히 물류관리의 배송정보설정(shipping_setup)은 로그인 세션마다
 # 초기화되므로 저장 앞에서 항상 돌아야 한다.
 ROUTINE_MODULES = (
     ("login",     "Login",     "로그인",              ("login",), 1),
-    ("sales",     "Sales",     "주문매핑 매출처리",     ("order_screen", "top_select", "excel_upload", "bottom_select", "sales"), 2),
+    # 주문매핑은 셋 - 자동 수집 / 엑셀 수집 / 매출처리 (모든 업체, 사용자 2026-10-30. 웰라이프 2026-10-15 와 같은 키·비트, 순서는 예전 그대로).
+    # 2026-10-30 전 sales(비트 2)는 셋 모두였다. 함께 실행 '엑셀 업로드' 는 엑셀 수집이 먼저 (routine_modules)
+    ("import",    "Import",    "자동 수집",            ("order_screen", "top_select"), 2048),
+    ("excel",     "Excel",     "엑셀 수집",            ("excel_upload",), 1024),
+    ("sales",     "Sales",     "주문매핑 매출처리",     ("bottom_select", "sales"), 2),
     ("hold",      "Hold",      "물류대기 관리",         ("hold_screen", "stock_review", "abnormal_hold", "hold_save"), 4),
     ("logistics", "Logistics", "물류관리",             ("logistics_screen", "logistics", "shipping_setup", "logistics_save"), 8),
     ("output",    "Output",    "운송장 출력 / 엑셀 생성", ("output",), 16),
@@ -429,7 +433,6 @@ class RoutineContext:
         self.win = None
         self.options = None      # 물류 설정 (사용자 설정 Logistic). 처음 필요할 때 읽는다.
         self.results = {}        # 이번 실행의 모듈 결과 {모듈 키: "done" | "no_target" | ...}
-        self.collected = False   # 주문매핑의 주문 수집(가져오기·엑셀)이 ERPia 가 떠 있는 채로 끝났다 - 다시 돌 때 매출처리부터
         self.resume = None       # ERPia 가 꺼져 다시 띄운 뒤 다시 도는 모듈 키 (run_module)
         self.restarts = 0        # 이번 실행에서 꺼진 ERPia 를 다시 띄운 횟수 (ERPIA_RESTARTS 까지)
         self.no_rerun = set()    # ERPia 가 꺼져도 다시 돌지 않는 모듈 키 - '1건' 모드 (다시 돌면 1건이 2건이 된다)
@@ -5842,14 +5845,24 @@ TOGETHER_MODE = None
 TOGETHER_ENV = status.TOGETHER_ENV   # 불러올 때 받아 둔다 (시험이 status 를 바꿔 끼운다)
 
 
+def routine_modules():
+    """이번 실행 순서. 함께 실행 'excel' 은 엑셀 수집을 자동 수집 앞으로 (2026-10-30 전 sales_flow 의 차례 그대로)."""
+    if TOGETHER_MODE != "excel":
+        return ROUTINE_MODULES
+    keys = [m[0] for m in ROUTINE_MODULES]
+    out = list(ROUTINE_MODULES)
+    i, j = keys.index("import"), keys.index("excel")
+    out[i], out[j] = out[j], out[i]
+    return tuple(out)
+
+
 def excel_upload_together(ctx, grid):
     """함께 실행: 사이트 수집(프리페어)이 넘기는 엑셀을 수집이 끝날 때까지 받는 대로 올린다 (웰라이프 wellife.excel_together 와 같은 규칙).
     파일 창·팝업은 키보드·마우스 없이(UPLOAD_NO_KEYS). 차례 사이에 새로 뜬 ERPia 창은 다음 차례 앞과 끝에서 닫고 그 수를 알린다 - 결과
     대기 뒤 늦게 뜬 실패 팝업이면 그 파일은 이미 완료 폴더에 있다. 앞 차례에 못 올려 남은 파일은 다시 누르지 않는다 (다음 실행에).
-    오류가 나도 매출처리는 이어간다 (예전 엑셀업로드와 같다) - 남은 파일은 업로드 폴더에 그대로."""
+    오류가 나도 매출처리는 이어간다 (예전 엑셀업로드와 같다) - 남은 파일은 업로드 폴더에 그대로. (올린 수, 오류 폴더로 간 수)."""
     global UPLOAD_NO_KEYS
     rr = sys.modules[__name__]
-    status.step("excel_upload")
     log("\n=== 엑셀업로드 (사이트 수집과 함께 - 받는 대로) ===")
     base = set(find_popup_windows(ctx.pid, ctx.hwnd))
     tried, uploaded, errors, late = set(), 0, 0, 0
@@ -5890,79 +5903,85 @@ def excel_upload_together(ctx, grid):
     status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개", note=", ".join(n for n in notes if n) or None)
     log(f"  엑셀 업로드 (사이트 수집과 함께): {len(tried)}건 중 {uploaded}건, 오류 폴더 {errors}건, 남은 파일 {left}건, "
         f"업로드 사이에 닫은 팝업 {late}개" + (f" ({wellife.LEFT_NOTE})" if left else ""))
+    return uploaded, errors
 
 
-def module_sales(ctx):
-    """주문매핑 매출처리 (sales_flow). 함께 실행이면 ERPia 를 맨 위로 두고(사이트 수집의 Edge 창이 누를 자리를 덮지 않게) 끝나면 풀고,
-    사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 간다 (뒤 모듈이 Edge 창과 겹치지 않게 - 예전 차례와 같다).
+def order_module(ctx, step, body):
+    """주문매핑 화면의 세 모듈 (자동 수집·엑셀 수집·매출처리 - 모든 업체, 사용자 2026-10-30) 이 함께 쓴다: step 을 찍고 화면으로 가서
+    body(win, 좌측 상단 그리드, 하단 그리드). 함께 실행이면 ERPia 를 맨 위로 두고(사이트 수집의 Edge 창이 누를 자리를 덮지 않게) 끝나면 푼다.
     함께 실행이 아니면 맨 위만 푼다 - 앞 함께 실행이 대시보드 [중지](강제 종료)로 끝나 finally 를 못 타면 맨 위로 남는다 (맨 위가 아니면
-    아무 일 없음, 웰라이프 login_free 와 같다)."""
+    아무 일 없음, 웰라이프 login_free 와 같다).
+    ERPia 가 도중에 꺼지면 run_module 이 다시 띄워 그 모듈만 다시 돈다 - 끝난 수집은 다시 하지 않는다."""
     rr = sys.modules[__name__]
-    if not TOGETHER_MODE:
-        wellife.on_top(rr, ctx.hwnd, False)
-        return sales_flow(ctx)
-    wellife.on_top(rr, ctx.hwnd, True)
+    wellife.on_top(rr, ctx.hwnd, bool(TOGETHER_MODE))
     try:
-        return sales_flow(ctx)
+        status.step(step)
+        log("\n=== 주문매핑 매출처리 화면 이동 ===")
+        ok, reason = goto_order_screen(ctx)
+        if not ok:
+            return "failed", reason
+        win = ctx.window()
+        onscreen_tables = get_onscreen_tables(win)
+        if len(onscreen_tables) < 2:
+            return "failed", "그리드가 충분히 발견되지 않았습니다."
+        top_left = min(onscreen_tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
+        bottom = max(onscreen_tables, key=lambda t: t.rectangle().top)
+        return body(win, top_left, bottom)
     finally:
-        wellife.on_top(rr, ctx.hwnd, False)
-        if "prepare" in status.running_programs():
+        if TOGETHER_MODE:
+            wellife.on_top(rr, ctx.hwnd, False)
+
+
+def module_import(ctx):
+    """자동 수집: 상단 전체선택 -> [가져오기]."""
+    def body(win, top_left, _bottom):
+        status.step("top_select")
+        log("\n=== 좌측 상단 그리드 전체선택 ===")
+        n_top = select_all_and_verify("좌측상단", ctx.hwnd, top_left, ["아이디"])
+        if n_top is not None:
+            status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
+        log("\n=== 주문 가져오기 ===")
+        if not run_import_step(ctx.app, ctx.pid, ctx.hwnd, win):
+            log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
+        return "done", None
+    return order_module(ctx, "order_screen", body)
+
+
+def module_excel(ctx):
+    """엑셀 수집: 바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만 올린다. 올린 게 없으면 건너뜀 (토큰 0).
+    오류가 나도 뒤 모듈은 이어간다 (예전 엑셀업로드와 같다). 함께 실행이면 사이트 수집이 넘기는 대로 (excel_upload_together) 올리고,
+    사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 간다 (뒤 모듈이 Edge 창과 겹치지 않게 - 예전 차례와 같다)."""
+    def body(_win, top_left, _bottom):
+        if TOGETHER_MODE:
+            uploaded, errors = excel_upload_together(ctx, top_left)
+        else:
+            log("\n=== 엑셀업로드 ===")
+            try:
+                uploaded, errors = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, top_left)
+            except Exception as e:
+                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
+                return "skipped", f"엑셀업로드 오류로 건너뜀: {e}"
+        note = f", 오류 폴더로 {errors}개 (확인할 것)" if errors else ""
+        return ("done", f"엑셀 {uploaded}개 업로드{note}") if uploaded else ("skipped", f"올릴 엑셀 없음{note}")
+    try:
+        return order_module(ctx, "excel_upload", body)
+    finally:
+        if TOGETHER_MODE and "prepare" in status.running_programs():
             log("사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 갑니다.")
             while "prepare" in status.running_programs():
                 time.sleep(2)
 
 
-def sales_flow(ctx):
-    """주문매핑 매출처리: 화면 이동 -> 상단 전체선택 -> 가져오기 -> 엑셀업로드 -> 하단 전체선택 -> 정상매출.
-    함께 실행(TOGETHER_MODE)이면 엑셀업로드는 받는 대로 (excel_upload_together) - 'excel' 은 상단 전체선택 앞, 'excel_import' 는 가져오기 뒤.
+def module_sales(ctx):
+    """주문매핑 매출처리: 하단 전체선택 -> 매출처리 ▼ 정상매출 (sales_flow)."""
+    return order_module(ctx, "bottom_select", lambda win, _top, bottom: sales_flow(ctx, win, bottom))
 
-    대상이 0건이어도 '정상매출'을 누른다 (예전 흐름 그대로. ERPia 가 어떤 팝업을 내는지 실측이 없어
-    '대상 없음' 판정은 넣지 않았다).
-    """
-    status.step("order_screen")
-    log("\n=== 주문매핑 매출처리 화면 이동 ===")
-    ok, reason = goto_order_screen(ctx)
-    if not ok:
-        return "failed", reason
+
+def sales_flow(ctx, win, bottom):
+    """하단 전체선택 -> 정상매출. 대상이 0건이어도 '정상매출'을 누른다 (예전 흐름 그대로. ERPia 가 어떤 팝업을 내는지 실측이 없어
+    '대상 없음' 판정은 넣지 않았다)."""
     app, pid, hwnd = ctx.app, ctx.pid, ctx.hwnd
-    win = ctx.window()
-
-    onscreen_tables = get_onscreen_tables(win)
-    if len(onscreen_tables) < 2:
-        return "failed", "그리드가 충분히 발견되지 않았습니다."
-    top_left = min(onscreen_tables, key=lambda t: (t.rectangle().top, t.rectangle().left))
-    bottom = max(onscreen_tables, key=lambda t: t.rectangle().top)
-
-    if ctx.collected:
-        log("주문 수집은 ERPia 가 꺼지기 전에 끝났습니다 - 하단 전체선택(매출처리)부터 이어갑니다")
-    else:
-        if TOGETHER_MODE == "excel":    # 받는 엑셀을 사이트 수집이 끝날 때까지 먼저 올린다 - 자동 수집은 그 뒤
-            excel_upload_together(ctx, top_left)
-        status.step("top_select")
-        log("\n=== 좌측 상단 그리드 전체선택 ===")
-        n_top = select_all_and_verify("좌측상단", hwnd, top_left, ["아이디"])
-        if n_top is not None:
-            status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
-
-        log("\n=== 주문 가져오기 ===")
-        if not run_import_step(app, pid, hwnd, win):
-            log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
-        win = app.window(handle=hwnd)
-
-        if TOGETHER_MODE == "excel_import":     # 자동 수집을 끝까지 본 뒤 같은 화면에서 받는 대로 - 사이트 수집이 끝날 때까지
-            excel_upload_together(ctx, top_left)
-        elif not TOGETHER_MODE:
-            # 7-1. 엑셀업로드 (바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만)
-            status.step("excel_upload")
-            log("\n=== 엑셀업로드 ===")
-            try:
-                run_excel_upload_step(app, pid, hwnd, top_left)
-            except Exception as e:
-                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
-        ctx.collected = ec.pid_alive(ctx.pid)   # 수집 도중 꺼졌으면 다시 돌 때 수집부터
-
-    # 8. 하단 전체선택
-    status.step("bottom_select")
+    # 8. 하단 전체선택 (단계는 order_module 이 찍었다)
     log("\n=== 하단 그리드 전체선택 ===")
     n_bottom = select_all_and_verify("하단", hwnd, bottom, ["주문번호", "마켓 상품명", "주문시간"])
     if n_bottom is not None:
@@ -6180,6 +6199,8 @@ def module_output(ctx):
 
 MODULE_FUNCS = {
     "login": module_login,
+    "import": module_import,
+    "excel": module_excel,
     "sales": module_sales,
     "hold": module_hold,
     "logistics": module_logistics,
@@ -6215,7 +6236,7 @@ def run_modules(selected, modules=None, funcs=None, section=None):
     modules / funcs / section 은 웰라이프 실행(wellife.run_main)이 자기 표를 넘길 때만 준다. 없으면 이 파일의
     ROUTINE_MODULES / MODULE_FUNCS / Routine 섹션 - 부를 때 찾는다 (시험이 MODULE_FUNCS 를 바꿔 끼운다).
     """
-    modules = ROUTINE_MODULES if modules is None else modules
+    modules = routine_modules() if modules is None else modules
     funcs = MODULE_FUNCS if funcs is None else funcs
     section = section or pl.ROUTINE_SECTION
     on = lambda cfg: selected.get(cfg, cfg not in ROUTINE_OFF_BY_DEFAULT)   # noqa: E731 - 칸이 없으면 켬, 운송장번호 전송만 끔
@@ -6265,7 +6286,7 @@ def run_modules(selected, modules=None, funcs=None, section=None):
 def run_module(ctx, key, label, funcs):
     """모듈 하나를 돌린다. (결과, 사유). 도중에 ERPia 가 꺼졌으면(프로세스가 사라짐) 다시 띄워 로그인하고 그 모듈을
     다시 돌린다 (실행 한 번에 ERPIA_RESTARTS 번까지). 끝난 모듈은 다시 돌지 않는다 - 꺼진 모듈부터 잇는다.
-    다시 돌 때 ctx.resume = 그 모듈 키. 주문매핑은 주문 수집이 끝났으면(ctx.collected) 매출처리부터 잇는다.
+    다시 돌 때 ctx.resume = 그 모듈 키.
     ERPia 가 떠 있는데 난 예외는 예전처럼 그대로 올린다."""
     try:
         while True:
@@ -6312,15 +6333,15 @@ def wellife_route(policy_on, has_section):
 
 def together_setup(rr, selected):
     """프리페어가 함께 띄운 루틴(TOGETHER_ENV)이면 업체가 고른 방식을 TOGETHER_MODE 에 적는다 (모든 업체, 사용자 2026-10-20).
-    주문매핑 매출처리를 안 하거나 '순서대로' 면 사이트 수집이 끝나기를 기다린 뒤 예전처럼 돈다 (예전 차례). 함께 올리면 로그인 창에
+    엑셀 수집을 안 하거나 '순서대로' 면 사이트 수집이 끝나기를 기다린 뒤 예전처럼 돈다 (예전 차례). 함께 올리면 로그인 창에
     키를 치는 동안 사이트 수집이 새 Edge 창을 띄우지 않게 키보드 차례를 잡는다 (wellife.keys - Edge 창이 포커스를 가져가면 비밀번호가 샌다)."""
     global TOGETHER_MODE
     if os.environ.get(TOGETHER_ENV) != "1":
         return
     mode = status.together_choice()
     log(f"전체 실행 방식: {status.TOGETHER_MODES.get(mode, mode)} (사이트 수집과 함께 띄워짐)")
-    if mode == "off" or not selected.get("Sales"):
-        wellife.wait_prepare(rr, "'순서대로' 라" if mode == "off" else "주문매핑 매출처리를 하지 않아")
+    if mode == "off" or not selected.get("Excel"):
+        wellife.wait_prepare(rr, "'순서대로' 라" if mode == "off" else "엑셀 수집을 하지 않아")
         return
     TOGETHER_MODE = mode
     pl.KEYS_GUARD = lambda: wellife.keys(rr)
