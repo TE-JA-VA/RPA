@@ -471,7 +471,7 @@ hidden_tab_ctx = types.SimpleNamespace(window=lambda: Nav([El(MENU, Rect(150, 10
 acts.clear()
 ok, reason = wellife.goto_screen_by_menu(menu_rr(Nav([El(MENU)])), hidden_tab_ctx, MENU)
 check("이미 열린 화면인데 탭이 잘려 있으면(넘친 탭바) 누르지 않고 멈춘다 - 메뉴로는 못 간다",
-      not ok and "다 보이지 않아" in reason and acts == [], f"{reason} {acts}")
+      not ok and "모두 보이지 않아" in reason and acts == [], f"{reason} {acts}")
 HIT[0] = types.SimpleNamespace(element_info=types.SimpleNamespace(control_type="Button"),
                                window_text=lambda: "닫기", parent=lambda: None)
 acts.clear()
@@ -605,9 +605,9 @@ check("▼ 만 누르고 '선택 항목만' 에는 마우스만 -> ESC 로 닫�
       f"{note} {err} {acts} {moves}")
 note, err = run_drop(Arrow(), found=False)
 check("항목이 없으면 실측 로그를 남기고 메뉴를 닫은 뒤 '확인할 것' 으로 다음 단계로 간다",
-      err is None and "확인할 것" in note and acts[-1] == ("keys", "{ESC}") and not WIN["open"], f"{note} {err} {acts}")
+      err is None and "확인하여 주십시오" in note and acts[-1] == ("keys", "{ESC}") and not WIN["open"], f"{note} {err} {acts}")
 note, err = run_drop(Arrow(opens=False), found=False)
-check("▼ 를 눌러도 메뉴가 안 뜨면 ESC 를 보내지 않는다", err is None and "뜨지 않음" in note
+check("▼ 를 눌러도 메뉴가 안 뜨면 ESC 를 보내지 않는다", err is None and "나타나지 않았습니다" in note
       and ("keys", "{ESC}") not in acts, f"{note} {err} {acts}")
 note, err = run_drop(Arrow(), closes=False)
 check("ESC 로 메뉴 창이 안 사라지면 멈춘다 (다음 클릭이 메뉴에 떨어지지 않게)",
@@ -619,12 +619,12 @@ note, err = run_drop(Arrow(), popup="before")
 check("팝업이 떠 있으면 ▼ 도 누르지 않는다", err is not None and acts == [], f"{err} {acts}")
 note, err = run_drop(Arrow(), fg_pid=99)
 check("맨 앞 창이 ERPia 가 아니면 ESC 를 보내지 않고 멈춘다",
-      err is not None and "ESC 를 보내지 않고" in str(err) and ("keys", "{ESC}") not in acts, f"{err} {acts}")
+      err is not None and "ESC를 전송하지 않고" in str(err) and ("keys", "{ESC}") not in acts, f"{err} {acts}")
 note, err = run_drop(Arrow(on=False))
 check("▼ 가 꺼져 있으면 누르지 않고 ▼ 위에 마우스만", err is None and acts == [] and moves == [(90, 15)], f"{acts} {moves}")
 acts.clear(); moves.clear()
 note = wellife.hover_menu_item(drop_rr(), actx, Split([El("지정")]), wellife.SELECTED_ONLY, "4-1 [지정▼]", True)
-check("▼ 자리를 못 고르면 누르지 않고 본체 위에 마우스만 ('확인할 것')", acts == [] and "확인할 것" in note, f"{note} {acts}")
+check("▼ 자리를 못 고르면 누르지 않고 본체 위에 마우스만 ('확인할 것')", acts == [] and "확인하여 주십시오" in note, f"{note} {acts}")
 TOP[0] = 99
 note, err = run_drop(Arrow())
 check("누를 자리를 다른 창(열린 메뉴·다른 프로그램)이 덮고 있으면 누르지 않고 멈춘다",
@@ -649,7 +649,7 @@ def _ui_boom(*_):
 
 wellife.sales_slip_stage = _ui_boom
 res = wellife.module_sap(types.SimpleNamespace(status=Rec(), log=lambda m: None), actx)
-check("SAP 화면의 UIA 오류는 ('failed', 'UI 오류: … - 문구')", res == ("failed", "UI 오류: RuntimeError - COMError 흉내"), str(res))
+check("SAP 화면의 UIA 오류는 ('failed', 'UI 오류: … (문구)')", res == ("failed", "UI 오류: RuntimeError (COMError 흉내)"), str(res))
 wellife.goto_screen_by_menu, wellife.sales_slip_stage = _saved
 
 
@@ -1161,7 +1161,7 @@ try:
     res = None
 except wellife.Stop as e:
     res = e.result, str(e)
-check("엑셀 업로드 중 누를 단추를 모르는 창이 뜨면 멈춤 (누르지 않음)", res is not None and res[0] == "stopped" and "모르는 창" in res[1],
+check("엑셀 업로드 중 누를 단추를 모르는 창이 뜨면 멈춤 (누르지 않음)", res is not None and res[0] == "stopped" and "알 수 없는 창" in res[1],
       str(res))
 press = ("click", "가져오기", "떠 있는 화면")
 for live in (True, False):
@@ -1187,7 +1187,7 @@ def collect_stop(rr_, ctx_=octx):
 IMPORTED[0] = False
 res = collect_stop(order_rr({}))
 check("[가져오기] 끝을 확인 못 하면 다음 모듈로 넘어가지 않고 멈춘다 ('확인할 것', 리뷰 10-14)",
-      res and res[0] == "stopped" and "확인할 것" in res[1], f"{res} {acts}")
+      res and res[0] == "stopped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
 IMPORTED[0] = True
 zero_rr = order_rr({})
 zero_rr.select_all_and_verify = lambda *a: None
@@ -1202,7 +1202,7 @@ FOUND[0] = None
 VIEW[0] = {"a": "unchecked", "b": "null"}
 res = collect_stop(order_rr({}))
 check("전체선택 뒤 화면이 다시 그려져 체크가 풀렸으면 [가져오기] 를 누르지 않고 멈춘다 ('항목을 선택하세요' - 10-19 실측 2차)",
-      res and res[0] == "failed" and "체크가 풀렸" in res[1] and not [a for a in acts if a[0] == "click"], f"{res} {acts}")
+      res and res[0] == "failed" and "체크가 해제되었" in res[1] and not [a for a in acts if a[0] == "click"], f"{res} {acts}")
 VIEW[0] = {"a": "checked", "b": "null"}
 ENABLED[:] = [False, False, True]
 _saved_sleep = wellife.time.sleep
@@ -1261,7 +1261,7 @@ check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원�
       acts == [] and sold is False and "0줄" in note, f"{note} {acts}")
 (note, sold), _ = run_ns(True, again=False)
 check("실행: 누르기 직전 다시 보니 체크가 풀려 있으면 정상매출을 누르지 않는다",
-      ("press", "정상매출", False) not in acts and sold is False and "확인할 것" in note, f"{note} {acts}")
+      ("press", "정상매출", False) not in acts and sold is False and "확인하여 주십시오" in note, f"{note} {acts}")
 _, err = run_ns(True, split=False)
 check("'매출처리' 단추가 없으면 멈춘다", err == "failed")
 (note, sold), _ = run_ns(wellife.ONE)
@@ -1269,7 +1269,7 @@ check("1건: 하단 첫 줄만 체크(전체선택 안 함) -> 정상매출",
       acts == [("one", "주문"), ("press", "정상매출", False), ("after",)] and sold and "첫 줄 1건" in note, f"{note} {acts}")
 (note, sold), _ = run_ns(wellife.ONE, one=False)
 check("1건: 첫 줄 체크를 못 했으면 다시 보기가 '한 줄 체크' 로 맞아도(이미 체크돼 있던 줄) 누르지 않는다",
-      ("press", "정상매출", False) not in acts and sold is False and "확인할 것" in note, f"{note} {acts}")
+      ("press", "정상매출", False) not in acts and sold is False and "확인하여 주십시오" in note, f"{note} {acts}")
 for n, f in _saved_n.items():
     setattr(wellife, n, f)
 
@@ -1300,7 +1300,7 @@ check("기다리는 중 실패 팝업이면 멈춘다", err and err[0] == "stopp
 aft, err = run_after(sep=("매출처리 실패", 1))
 check("따로 뜬 창의 실패 팝업이면 멈춘다", err and err[0] == "stopped", str(err))
 aft, err = run_after(**{"async": "timeout"})
-check("대기 시간 초과는 '확인할 것' 을 남기고 이어 간다 (원래와 같음)", err is None and "확인할 것" in aft, str(aft))
+check("대기 시간 초과는 '확인할 것' 을 남기고 이어 간다 (원래와 같음)", err is None and "확인하여 주십시오" in aft, str(aft))
 wellife.time.sleep = _sleep
 TOP[0] = 1
 
@@ -1442,13 +1442,13 @@ check("실행: 0건이면 체크도 전송요청도 하지 않는다 (no_target)
       res[0] == "no_target" and acts == [("click", "조회(F)")], f"{res} {acts}")
 res = inv_run(True, checked=False)
 check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
-      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인할 것" in res[1], f"{res} {acts}")
+      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
 res = inv_run(True, later="선택안됨")
 check("실행: 누르기 직전에 다시 보니 체크가 풀려 있으면 누르지 않는다 (조회가 늦게 끝난 경우)",
-      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인할 것" in res[1], f"{res} {acts}")
+      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
 res = inv_run(True, on=False)
 check("실행: 단추가 꺼져 있으면 누르지 않는다", ("click", "btn_SendRequest") not in acts and res[0] == "skipped"
-      and "꺼짐" in res[1], f"{res} {acts}")
+      and "꺼져 있습니다" in res[1], f"{res} {acts}")
 try:
     inv_run(True, popup=[El("예")])
     res = None
@@ -1556,7 +1556,7 @@ for icon, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")
           icons == [wellife.INVOICE_ICON] and res[0] == want, f"{res} {icons}")
 wellife.invoice_send = lambda rr_, ctx_, live: (_ for _ in ()).throw(RuntimeError("COMError 흉내"))
 res = wellife.module_invoice_send(nav_rr(), ictx, True)
-check("UI 오류는 ('failed', 'UI 오류: … - 문구')", res == ("failed", "UI 오류: RuntimeError - COMError 흉내"), str(res))
+check("UI 오류는 ('failed', 'UI 오류: … (문구)')", res == ("failed", "UI 오류: RuntimeError (COMError 흉내)"), str(res))
 wellife.open_tab, wellife.invoice_send = _saved_inv
 wellife.time.sleep = _sleep
 
@@ -2026,7 +2026,7 @@ check("번호 붙은 탭이 있는데 아이콘이 정말 없으면 'absent'", r
 stuck = erpia(TABS, "물류대기 관리 (2)")
 wellife.click = lambda rr_, ctx_, el, what: clicked.append(el.window_text())     # 눌러도 안 바뀐다
 res = go(stuck, "물류대기 관리", "lcg_HoldLogistics")
-check("탭을 눌렀는데 그 화면이 안 되면 실패 사유 (떠 있는 화면 이름과)", "바뀌지 않았습니다" in res and "(2)" in res, res)
+check("탭을 눌렀는데 그 화면이 안 되면 실패 사유 (떠 있는 화면 이름과)", "전환되지 않았습니다" in res and "(2)" in res, res)
 broken = types.SimpleNamespace(window=lambda: (_ for _ in ()).throw(RuntimeError("COMError 흉내")), hwnd=1, app=None)
 res = go(broken, "주문매핑 매출처리", "lcg_OrderCollect")
 check("탭을 읽다 UIA 오류(로그인 직후 등)면 원래 화면 이동으로", res == "ok" and orig_calls == ["주문매핑 매출처리"], f"{res} {orig_calls}")
@@ -2272,7 +2272,7 @@ check(f"그리드가 계속 사라지면 {wellife.HIDDEN_MAX}번 넘어 멈추�
       stop is not None and stop[0] == "stopped" and os.path.exists(os.path.join(tog, "(112)f.xlsx"))
       and not trr.UPLOAD_NO_KEYS, str(stop))
 check("멈추면 올리지 못하고 남은 파일 수를 사유에 붙인다 (수집이 뒤에 넘기는 파일도 이번 실행에서는 안 올라감 - 검토 10-20)",
-      stop is not None and "올리지 못한 파일 1개" in stop[1] and wellife.LEFT_NOTE in stop[1], str(stop))
+      stop is not None and "업로드하지 못한 파일이 1개" in stop[1] and wellife.LEFT_NOTE in stop[1], str(stop))
 os.remove(os.path.join(tog, "(112)f.xlsx"))
 
 tev.clear()
@@ -2319,7 +2319,7 @@ try:
 except wellife.Stop as e:
     stop = (e.result, str(e))
 check("다시 봐도 누를 단추가 없으면 누르지 않고 멈추고, 올리지 못한 파일 수를 알린다",
-      stop is not None and stop[0] == "stopped" and "올리지 못한 파일 1개" in stop[1], str(stop))
+      stop is not None and stop[0] == "stopped" and "업로드하지 못한 파일이 1개" in stop[1], str(stop))
 os.remove(os.path.join(tog, "(115)i.xlsx"))
 trr.upload_popups = lambda pid, hwnd, before=(), label="": []
 tev.clear()
@@ -2330,7 +2330,7 @@ res = wellife.excel_together(trr, tctx, False)
 check("앞서 올려 옮겨진 파일과 같은 이름이 다시 들어오면 이번 실행에서는 올리지 않고 남은 파일로 알린다 (경로로 세므로 - 지금 동작 "
       "기록, 다음 실행에 올라감)",
       [e[1] for e in tev if e[0] == "upload"] == [["(116)j.xlsx"]] and os.path.exists(os.path.join(tog, "(116)j.xlsx"))
-      and "올리지 못해 남은 파일 1개" in res[1], f"{tev} {res}")
+      and "업로드하지 못해 남은 파일 1개" in res[1], f"{tev} {res}")
 os.remove(os.path.join(tog, "(116)j.xlsx"))
 tev.clear()
 _saved_os = wellife.order_screen

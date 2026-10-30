@@ -2,7 +2,7 @@
 
 관문: `docs/superpowers/specs/2026-10-07-wellife-gate-design.md` - 섹션은 에이전트가 쓴다, 업체코드에 wellife 또는 관리 화면에서 연 업체만.
 
-작성 2026-10-07 · 고침 2026-10-14 · 상태: **리허설 / 1건 / 실행 모드** (설정 `SalesMode`·`NormalSalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode` 로 모듈마다 정한다. 빠지면 리허설)
+작성 2026-10-07 · 고침 2026-10-14 · 상태: **리허설 / 1건 / 실행 모드** (설정 `SalesMode`·`ImportMode`·`NormalSalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode` 로 모듈마다 정한다. 빠지면 리허설, `ImportMode` 는 빠지면 `SalesMode`)
 
 ## 1. 요약
 
@@ -31,7 +31,7 @@
     - ② `SalesMode`(엑셀 업로드)는 줄이 없어 '1건' 을 쓸 수 없다 (설정 오류).
     - '1건' 은 한 번 실행에 1건이다. 반복 회차(`RPA_RUN_TRIGGER=repeat`)에서 이번에 도는 모듈의 모드가 '1건' 이면 돌지 않고 '설정 확인' 으로 멈춘다 (회차마다 1건씩 계속 넘어가지 않게 - 10-14 PR #6 검토). 보통 PROCESS 의 `Routine.InvoiceMode` 도 같다.
   - 모드는 대시보드·웹의 단계 이름 앞 `[리허설]`/`[1건]`/`[실행]`, 모듈 사유 앞, 시작 로그의 별표 줄로 보인다. 웹 환경설정의 '실행 모듈' 카드에도 여섯 모드가 보인다 - **보기만** 한다 (시험 기간용, 10-13. 바꾸기는 PC 설정 파일).
-- ② 주문 수집: 미리 둔 엑셀이 있을 때만 올린다. 자동 수집은 원래 PROCESS 와 같이 상단(사이트) 전체선택 → [가져오기] 다 (10-14 사용자 - 10-08 의 '누르지 않는다' 를 바꿈. 모드는 `SalesMode`, 리허설은 전체선택만 하고 [가져오기] 에 마우스만. 끝날 때까지 기다리고 안내 팝업은 원래 `run_import_step` 규칙대로). 실행은 원래 PROCESS 와 달리 상단 전체선택을 확인 못 하면 누르지 않고, 떠 있는 화면의 단추만 누를 자리를 확인한 뒤 누르며(숨은 화면의 같은 이름 단추를 누르지 않게), 끝을 확인 못 하면 정상매출로 넘어가지 않고 멈춘다 (10-14 검토). 그 뒤 원래 PROCESS 와 같이 하단 전체선택 → 매출처리 ▼ → 정상매출 (10-14 사용자 - 10-08 의 '범위 밖' 을 바꿈. 모드는 `NormalSalesMode`, '1건' 이면 하단 첫 줄만). ② 화면에 있는 동안은 예상 못 한 팝업도 [예](없으면 [확인]) 로 넘기고 이어간다 - 단계 사이(no_popup → pass_popups)·[가져오기]·정상매출 뒤 별도 창 모두 (2026-10-15 사용자, 그 전엔 단계 사이는 멈춤·별도 창 예/아니오는 [아니오]). 매출처리 실패 문구면 닫고 멈추고, [예]/[확인] 이 없는 팝업은 5초 다시 본 뒤 멈춘다. 하단이 0줄이면 누르지 않는다 (원래는 0건이어도 누른다).
+- ② 주문 수집: 미리 둔 엑셀이 있을 때만 올린다. 자동 수집은 원래 PROCESS 와 같이 상단(사이트) 전체선택 → [가져오기] 다 (10-14 사용자 - 10-08 의 '누르지 않는다' 를 바꿈. 모드는 `ImportMode` - 빠지면 `SalesMode` (10-15 세 모듈로 나눔, 이슈 #9), 리허설은 전체선택만 하고 [가져오기] 에 마우스만. 끝날 때까지 기다리고 안내 팝업은 원래 `run_import_step` 규칙대로). 실행은 원래 PROCESS 와 달리 상단 전체선택을 확인 못 하면 누르지 않고, 떠 있는 화면의 단추만 누를 자리를 확인한 뒤 누르며(숨은 화면의 같은 이름 단추를 누르지 않게), 끝을 확인 못 하면 정상매출로 넘어가지 않고 멈춘다 (10-14 검토). 그 뒤 원래 PROCESS 와 같이 하단 전체선택 → 매출처리 ▼ → 정상매출 (10-14 사용자 - 10-08 의 '범위 밖' 을 바꿈. 모드는 `NormalSalesMode`, '1건' 이면 하단 첫 줄만). ② 화면에 있는 동안은 예상 못 한 팝업도 [예](없으면 [확인]) 로 넘기고 이어간다 - 단계 사이(no_popup → pass_popups)·[가져오기]·정상매출 뒤 별도 창 모두 (2026-10-15 사용자, 그 전엔 단계 사이는 멈춤·별도 창 예/아니오는 [아니오]). 매출처리 실패 문구면 닫고 멈추고, [예]/[확인] 이 없는 팝업은 5초 다시 본 뒤 멈춘다. 하단이 0줄이면 누르지 않는다 (원래는 0건이어도 누른다).
 - ③ 물류대기: 일반 탭 조회 → 전체선택 → 저장 (보류는 하지 않는다).
 
 ## 2. 업무 흐름
@@ -83,7 +83,7 @@ SAP전송전체·성공·실패·완료·이관오류, 송장X·API실패·WMS�
 
 - 갈래를 `main` 안에서 고르므로 예약·웹 단추·`Run_All.bat`·에이전트는 고치지 않는다.
 - 실행 기록은 지금처럼 program `"routine"` 으로 남는다. 그래서 1PC 1프로그램 잠금, 웹 현황, 토큰이 지금 규칙대로 동작한다.
-- 모듈별 실행 (10-08 사용자): 예약 줄이 모듈을 고르면(`RPA_RUN_MODULES`) 웰라이프 실행도 `Wellife` 섹션의 켬·끔 대신 그 모듈만 돈다 - 기존 루틴과 같은 규칙. 그래서 ② 주문매핑·③ 물류대기·④ SAP 연동·⑤ WMS 이관을 줄마다 따로 띄울 수 있다. 모드(`SalesMode`·`NormalSalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode`)는 늘 섹션에서 읽는다. '전체' 줄과 웹 [PROCESS] 는 지금처럼 섹션에서 켠 모듈을 돈다.
+- 모듈별 실행 (10-08 사용자): 예약 줄이 모듈을 고르면(`RPA_RUN_MODULES`) 웰라이프 실행도 `Wellife` 섹션의 켬·끔 대신 그 모듈만 돈다 - 기존 루틴과 같은 규칙. 그래서 ② 주문매핑·③ 물류대기·④ SAP 연동·⑤ WMS 이관을 줄마다 따로 띄울 수 있다. 모드(`SalesMode`·`ImportMode`·`NormalSalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode`)는 늘 섹션에서 읽는다. '전체' 줄과 웹 [PROCESS] 는 지금처럼 섹션에서 켠 모듈을 돈다.
 - ① 웰라이프 사이트 엑셀 받기는 아직 없다. 전체 실행이면 ACTOR 오토파일럿(엑셀 받기, Prepare_RPA)이 먼저 돌지만, 웰라이프 사이트는 붙이지 않았다.
 - ⑤ 는 반복 시간대로 돌린다 (7절).
 
@@ -487,7 +487,7 @@ SAP 에서 넘어온 건은 WMS 이관관리에 한꺼번에 들어오지 않고
 - 모듈 키는 `invoicesend` (설정 키 `InvoiceSend` 의 소문자, `wellife_` 없음). `rpa_status.SHARED_MODULES` 에 있는 키는 `agent.history_key` 가 업체와 상관없이 같은 이력·토큰 키로 센다 - 나중에 모든 업체로 열어도 토큰 배율 키가 같다.
 - **2026-10-13 모든 업체로 열었다** (사용자): 보통 PROCESS 의 `run_routine.ROUTINE_MODULES` 맨 뒤에 같은 키·비트(`invoicesend`, 512)로, `MODULE_FUNCS["invoicesend"]` 는 `run_routine.module_invoice_send` → `wellife.module_invoice_send`. 보통 PROCESS 도 모드가 있다 - `Routine` 섹션의 `InvoiceMode` (`"리허설"`·`"1건"`·`"실행"`, **빠지면 리허설**, 사용자 10-13. 그 전 빌드 2026.10.13-6 은 모드 없이 늘 실제로 [전송요청(S)] 을 눌렀다). 설치 틀(`RPA_UserConfig.template.json`)과 웹 '실행 모듈' 로 쓸 때 `"InvoiceMode": "리허설"` 을 적어 둔다. `rpa_status.ROUTINE_CONFIG_MODULES` 에 `InvoiceSend`, `rpa_dashboard.WELLIFE_ONLY_KEYS` 에서 뺌, 웹 `MODULES`·`RUN_CHIPS`, 관리 화면 토큰 배율의 PROCESS 묶음에도 같은 키 (로그인처럼 두 묶음에 같이). 웰라이프 업체는 그대로 `Wellife` 섹션·`InvoiceMode`.
 - **칸이 없으면 끔** (`rpa_status.ROUTINE_OFF_BY_DEFAULT`, `perform_login.load_routine_modules(off_by_default=)`): Routine 섹션의 다른 모듈은 칸이 없으면 켬이지만, 운송장번호 전송은 택배사로 나가 되돌릴 수 없어 업데이트를 받자마자 모든 업체가 보내지 않게 했다. 업체 웹 환경설정 '실행 모듈' 에서 켠 PC 만 돈다.
-- 모드 보기 (시험 기간용): 에이전트가 `Wellife` 섹션의 `SalesMode`·`NormalSalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode` 를 `live.modes` 로 올리고(`rpa_status.read_wellife_modes`), 웹 '실행 모듈' 카드가 보여 준다. 실행이 하나라도 있으면 경고 색. 바꾸는 길은 없다 (PC 설정 파일). 옛 에이전트는 값을 안 올려 줄이 숨는다. 걷어낼 때는 `read_wellife_modes`·`WELLIFE_MODES`, 에이전트의 `snap["modes"]`, 웹의 `mod-modes` 를 지운다.
+- 모드 보기 (시험 기간용): 에이전트가 `Wellife` 섹션의 `SalesMode`·`ImportMode`·`NormalSalesMode`·`Mode`·`SapMode`·`WmsMode`·`InvoiceMode` 를 `live.modes` 로 올리고(`rpa_status.read_wellife_modes`), 웹 '실행 모듈' 카드가 보여 준다. 실행이 하나라도 있으면 경고 색. 바꾸는 길은 없다 (PC 설정 파일). 옛 에이전트는 값을 안 올려 줄이 숨는다. 걷어낼 때는 `read_wellife_modes`·`WELLIFE_MODES`, 에이전트의 `snap["modes"]`, 웹의 `mod-modes` 를 지운다.
 
 ### 9.4 조회 조건 기본값 (⑤ WMS·⑥ 운송장, 10-14)
 
