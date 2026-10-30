@@ -63,6 +63,13 @@ print("=== 2. 재생: 서버가 이렇게 줄 때 ===")
 MODE = {"m": "ok"}
 HITS = []                                  # /file 요청 - 느린 받기를 두 번 누르지 않나
 PAGE = """<!doctype html><meta charset="utf-8"><title>주문</title><p>주문 내역</p><a id="dl" href="/file">엑셀 받기</a>"""
+CLICK = {   # 받기 단추가 파일 대신 알림창을 띄우는 몰 ('주문 없음' 헛된 기다림, 사용자 2026-10-21)
+    "nodata": "alert('조회된 데이터가 없습니다.');return false",
+    "nodata_late": "alert('조회된 데이터가 없습니다.');setTimeout(function(){location.href='/file'},1500);return false",
+    "otheralert": "alert('엑셀 파일을 만드는 중입니다');return false",
+    # 확인 질문은 [확인] 을 눌러 몰이 파일을 만든다 - 유예(시험 4초)보다 늦게 와도 받아야 한다 (검토 10-22)
+    "nodata_confirm": "if(confirm('조회된 데이터가 없습니다.'))setTimeout(function(){location.href='/file'},6000);return false",
+}
 CHUNK = 4096
 BIG = xlsx_bytes(os.urandom(120_000).hex())   # 무작위라 압축이 덜 돼 100KB 남짓 - 몇 초에 걸쳐 보낼 만큼
 
@@ -85,7 +92,8 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self.path.startswith("/file"):
-            b = PAGE.encode("utf-8")
+            click = CLICK.get(MODE.get("m"))
+            b = (PAGE.replace('href="/file"', f'href="/file" onclick="{click}"') if click else PAGE).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(b)))
@@ -171,6 +179,34 @@ check(f"아주 느리게 내려받기 ({sec:.0f}초): 끝까지 받은 뒤에야
 ok, rp, lines, files, sec = replay("toolate", timeout_ms=4000, wait=8)
 check("시작이 기다림보다 늦으면 실패 - '초 안에 파일이 오지 않았습니다'", not ok and any("파일 다운로드가 시작되지 않았습니다" in str(x) for x in rp.results[-1:]),
       rp.results[-1:])
+
+saved_grace = rec.NO_DATA_GRACE
+rec.NO_DATA_GRACE = 4
+ok, rp, lines, files, sec = replay("nodata")
+check(f"받기 단추 뒤 '자료 없음' 알림창 ({sec:.0f}초): 5분 기다리지 않고 '주문 없음' 으로 그 단계를 끝낸다 - 실패가 아니다 (사용자 2026-10-21)",
+      ok and rp.no_target and not files and sec < 30 and "주문 없음 (알림창: 조회된 데이터가 없습니다.)" == rp.no_target_why
+      and rp.results[-1][1] == "ok", (rp.results[-1:], rp.no_target_why, sec))
+ok, rp, lines, files, sec = replay("nodata_late")
+check("'자료 없음' 알림창 뒤라도 유예 안에 파일이 오면 받는다", ok and files == ["(012)orders.xlsx"] and not rp.no_target, (rp.results[-1:], files))
+ok, rp, lines, files, sec = replay("otheralert", timeout_ms=6000)
+check("다른 알림창('엑셀 파일을 만드는 중')이면 예전처럼 끝까지 기다린다", not ok and not rp.no_target and sec >= 5
+      and "파일 다운로드가 시작되지 않았습니다" in str(rp.results[-1]), (rp.results[-1:], sec))
+ok, rp, lines, files, sec = replay("nodata_confirm")
+check("'자료 없음' 글이라도 확인 질문(confirm)이면 '주문 없음' 으로 보지 않고 늦게 오는 파일을 받는다 (검토 10-22)",
+      ok and files == ["(012)orders.xlsx"] and not rp.no_target, (rp.results[-1:], files, sec))
+rec.NO_DATA_GRACE = saved_grace
+check("문구 판정: 자료 없음만 - 선택·권한·로그인·오류 낱말이 있으면 아니다",
+      [rec.no_data(m) for m in ("검색 결과가 없습니다", "주문 내역이 존재하지 않습니다.", "선택된 주문이 없습니다.", "권한이 없습니다",
+                                "로그인 세션이 없습니다", "오류가 발생했습니다. 데이터가 없습니다", "조회된 건이 없습니다", "조건에 맞는 값이 없습니다",
+                                "동의 내역이 없습니다", " 검색 결과 없음 \n", "데이터가 존재하지 않습니다!")]
+      == [True, True, False, False, False, False, True, False, False, True, True])
+# 파일이 오는 글 - '주문 없음' 으로 보면 늦게 온 파일을 버려 주문이 빠진다 (검토 10-22)
+FILE_COMING = ("주문 내역이 없는 상품은 제외하고 다운로드합니다", "결과가 없으면 빈 파일이 내려갑니다", "주문 상태 변경 없이 다운로드합니다",
+               "신규 주문이 없습니다. 전체 주문을 다운로드합니다.", "미처리 주문이 없습니다. 전체 주문을 다운로드하시겠습니까?",
+               "출고지시 주문이 없는 경우 빈 엑셀이 다운로드됩니다", "주문서 다운로드 내역이 없습니다. 새로 생성합니다",
+               "엑셀 파일을 생성하였습니다\n미처리 주문이 없습니다")     # 줄바꿈도 문장 경계
+check("문구 판정: 다른 말이 이어지는 글(없는·없으면·없이, 두 문장)은 자료 없음이 아니다", not any(rec.no_data(m) for m in FILE_COMING),
+      [m for m in FILE_COMING if rec.no_data(m)])
 
 for mode, why, word in (("drop", "중간에 끊김 (크기를 알려 놓고)", "끊겼"), ("cutclose", "반만 보내고 닫음 (크기 모름)", "완료되지"),
                         ("empty", "빈 파일", "빈 파일"), ("login", "엑셀 대신 로그인 화면", "웹 화면")):

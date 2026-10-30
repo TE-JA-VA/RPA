@@ -1311,6 +1311,7 @@ def run(cfg):
     # 8765 대시보드와 같이 띄우면 예약이 둘이 되어 두 번 실행될 수 있다 - 하나만 띄운다.
     # 비밀번호를 다시 물은 뒤의 재시작에서는 이미 돌고 있다 - 프로세스에서 한 번만 start 한다.
     if not dash.SCHEDULER.is_alive():
+        dash.LOG = log              # 예약기 글(절전 깨우기 등)을 에이전트 기록에 (사용자 2026-10-21)
         dash.SCHEDULER.resync()
         dash.SCHEDULER.start()
     sch = st.read_settings()["schedule"]

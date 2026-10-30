@@ -233,6 +233,19 @@ code = wr.cmd_run(["PRESET1", "PRESET2"], headless=True)
 row = st.read_history(program="prepare")[0]
 check("앞 사이트 실패·마지막 사이트 성공: 실행은 중단, 마지막 사이트 단계는 완료로 남는다", code == 1 and row["state"] == "stopped"
       and [s["state"] for s in row["steps"]] == ["failed", "done"], str([(s["key"], s["state"]) for s in row["steps"]]))
+# 설정에 문제가 있는 칸(기록 없는 프리셋)은 그 칸만 건너뛰고 나머지는 받는다 - 전엔 칸 하나 때문에 수집 전체가 시작하지 않았다 (사용자 2026-10-21)
+cfg = st.read_user_config()
+cfg["Sites"]["PRESET1"]["PW"] = fake_mall.PASSWORD
+st.write_user_config(cfg)
+st.write_presets([{"no": 1, "name": "가짜몰", "code": "012", "saved_at": None, "record": rec_e}, st.blank_preset(2)])
+srv.mall = mall = fake_mall.Mall(TODAY, False)
+code = wr.cmd_run(["PRESET1", "PRESET2"], headless=True)
+row = st.read_history(program="prepare")[0]
+steps = {s["key"]: s for s in row["steps"]}
+check("설정 문제 칸만 건너뛰고 나머지는 받는다: 실행은 중단, 문제 칸은 '건너뜀' 과 까닭", code == 1 and row["state"] == "stopped"
+      and mall.ship_downloads == [TODAY.isoformat()] and steps.get("PRESET1:replay", {}).get("state") == "done"
+      and steps.get("PRESET2:replay", {}).get("state") == "skipped" and "기록이 없습니다" in (steps["PRESET2:replay"].get("note") or ""),
+      str([(s["key"], s["state"], s.get("note")) for s in row["steps"]]))
 
 
 def human_alert(page):

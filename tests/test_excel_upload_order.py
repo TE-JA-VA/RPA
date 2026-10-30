@@ -141,7 +141,7 @@ normal = rr.upload_result_wait()
 rr.UPLOAD_NO_KEYS = True
 together = rr.upload_result_wait()
 rr.UPLOAD_NO_KEYS = False
-check("결과 팝업 대기는 평소 10초 그대로, 함께 실행만 3초 (느린 PC 의 늦은 실패 팝업, 검토 10-20)", (normal, together) == (10, 3),
+check("결과 팝업 대기는 평소 10초 그대로, 함께 실행만 5초 (느린 PC 의 늦은 실패 팝업, 검토 10-20 · 3초에서 5초로 사용자 10-21)", (normal, together) == (10, 5),
       (normal, together))
 
 
