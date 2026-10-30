@@ -605,6 +605,25 @@ try:
         rs.start_problem, rs.configured, rs.finish_upgrade = _more
 finally:
     rs.is_admin, rs.default_paths, rs.show_error_box = saved_funcs
+# 설정 창은 하나만 - 두 창이 각자 저장하면 늦은 창이 앞 창의 업체코드·계정을 옛 값으로 덮는다 (2026-10-22)
+saved_funcs = (rs.SETTINGS_LOCK, rs.is_admin, rs.start_problem, rs.show_error_box, rs.run_window)
+opened = []
+try:
+    rs.SETTINGS_LOCK = rf"Local\AFTER_MARKET_RPA_SETTINGS_TEST_{os.getpid()}"
+    rs.is_admin, rs.start_problem, rs.show_error_box = (lambda: True), (lambda: None), shown.append
+    rs.run_window = lambda paths, after_install=False: opened.append(after_install) or 0
+    shown.clear()
+    first = rs.main([])
+    check("설정 창: 처음 열면 창을 띄운다", first == 0 and opened == [False] and not shown, (first, opened, shown))
+    _saved_locks = dict(st._LOCKS)      # 다른 프로세스가 연 창처럼: 잡은 표시만 지우면 잠금(손잡이)은 그대로라 '이미 있다' 가 된다
+    st._LOCKS.clear()
+    second = rs.main([])
+    st._LOCKS.update(_saved_locks)
+    check("설정 창이 이미 열려 있으면 알리고 새 창은 띄우지 않는다", second == 0 and opened == [False]
+          and len(shown) == 1 and "이미 열려" in shown[0], (second, opened, shown))
+finally:
+    rs.SETTINGS_LOCK, rs.is_admin, rs.start_problem, rs.show_error_box, rs.run_window = saved_funcs
+    shown.clear()
 deleted = []
 saved_funcs = (rs.stop_agent, rs.delete_task)
 

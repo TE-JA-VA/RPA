@@ -26,6 +26,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import unicodedata
 from ctypes import wintypes
 from tkinter import filedialog, messagebox, ttk
 
@@ -653,7 +654,7 @@ def validate_presets(presets):
         if not p.get("record"):
             continue
         tag = f"{circled(p['no'])} {p['name']}"
-        if not re.fullmatch(r"\d{3}", p.get("code") or ""):
+        if not re.fullmatch(r"[0-9]{3}", p.get("code") or ""):       # \d 는 전각·다른 글자의 숫자도 받는다
             return p["no"], f"{tag}: 사이트코드는 숫자 세 자리여야 합니다 (받은 엑셀파일 이름 앞에 붙어, 엑셀 수집 모듈에서 자동으로 처리하게 됩니다.)"
         if p["code"] in codes:
             return p["no"], (f"{tag}: 사이트코드 {p['code']}을(를) {codes[p['code']]}에서도 사용하고 있습니다. "
@@ -929,7 +930,8 @@ class App:
         p = self.presets[self.cur]
         i = self.phone_box.current()
         source, prefix = self.source_var.get(), self.prefix_var.get().strip()
-        p.update(name=self.name_var.get().strip() or p["name"], code=self.code_var.get().strip(),
+        p.update(name=self.name_var.get().strip() or p["name"],
+                 code=unicodedata.normalize("NFKC", self.code_var.get()).strip(),     # 전각 '１０１' → '101' (ERPia 사이트코드와 맞게, 2026-10-22)
                  id=self.id_var.get(), pw=self.pw_var.get(), senders=self.senders_var.get(),
                  phone=self.phone_ids[i] if 0 <= i < len(self.phone_ids) else p["phone"], source=source, prefix=prefix)
 

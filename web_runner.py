@@ -368,7 +368,7 @@ def _replay_problems(name, site):
         return [f"{name}: 프리셋 파일을 읽지 못했습니다. ({e})"]
     if p is None or not p.get("record"):
         return [f"{name}: 프리셋 {no}의 기록이 없습니다. (옵저버에서 기록한 뒤 저장하여 주십시오)"]
-    if not re.fullmatch(r"\d{3}", p.get("code") or ""):
+    if not re.fullmatch(r"[0-9]{3}", p.get("code") or ""):           # \d 는 전각 숫자도 받는다 - ERPia 사이트코드와 안 맞는다
         return [f"{name}: 프리셋 {no}의 사이트코드가 숫자 세 자리가 아닙니다. ({p.get('code')!r})"]
     if status.login_mismatch(site, p["code"]):       # 번호만 믿지 않는다 - 옛 계정으로 다른 사이트에 들어가지 않게 (이슈 #13 검토)
         return [f"{name}: 프리셋 {no}의 아이디·비밀번호가 다른 사이트의 것입니다. 옵저버에서 다시 입력하여 주십시오."]

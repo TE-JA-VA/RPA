@@ -134,7 +134,7 @@ const isToday = (v) => ((v?.started_at || v?.finished_at || "").slice(0, 10)) ==
 export function mount(el, context) {
   root = el; c = context;
   root.innerHTML = HTML;
-  busy = false; live = null; seenRun = {}; boots = {}; lastBoot = null; dupUntil = 0;
+  busy = false; live = null; seenRun = {}; boots = {}; lastBoot = null; dupUntil = 0; tokBal = undefined;
   fs = getFirestore(c.db.app);
   if (location.hostname === "127.0.0.1" && new URLSearchParams(location.search).get("emu") === "1") {
     try { connectFirestoreEmulator(fs, "127.0.0.1", 8080); } catch {}   // 두 번째 mount 부터는 이미 붙어 있다
@@ -591,11 +591,15 @@ const RUN_LABELS = { "run-prepare": ["prepare", "ACTOR 오토파일럿"], "run-r
 function paintButtons() {
   const off = !c.isAdmin || busy || !c.pcId;
   const running = rpaRunning();
-  const empty = typeof live?.tokens?.balance === "number" && live.tokens.balance <= 0;   // 에이전트도 거절한다 (2부)
+  // 화면이 센 남은 토큰(tokBal)을 먼저 본다 - PC 가 올린 값은 10분마다라 충전 직후에도 단추가 까닭 없이 잠겼다 (2026-10-22).
+  // 에이전트도 띄우기 직전에 서버에서 다시 세어 0 이하면 거절한다 (2부, agent.Tokens.gate)
+  const bal = typeof tokBal === "number" ? tokBal : live?.tokens?.balance;
+  const empty = typeof bal === "number" && bal <= 0;
   const upd = updBusy();
   for (const id of ["run-prepare", "run-routine", "run-all"]) {
     $(id).disabled = off || running || empty || upd;     // 다른 사람이 이미 돌리는 중이면 못 누른다
-    $(id).title = upd && !off ? "업데이트 중이어서 잠시 실행할 수 없습니다." : running && !off ? "오토파일럿이 실행 중이어서 실행할 수 없습니다." : "";
+    $(id).title = upd && !off ? "업데이트 중이어서 잠시 실행할 수 없습니다." : running && !off ? "오토파일럿이 실행 중이어서 실행할 수 없습니다."
+      : empty && !off ? "토큰이 없어 실행할 수 없습니다. 토큰을 충전한 뒤 실행하여 주십시오." : "";
   }
   for (const [id, [key, name]] of Object.entries(RUN_LABELS)) {
     const on = live?.programs?.[key]?.state === "running";
@@ -614,7 +618,7 @@ function paintButtons() {
 // 막대 = 충전 합계(wallet.granted) 대비 남은 양을 채운다. 색은 환경설정 안내와 같은 ECAM - 남은 것이 20% 미만이거나 다음 실행에
 // 모자라면 호박색, 0 이하면 빨강 (사용자 2026-10-19). 관리자는 '실행' 위 카드, 유저는 본문 맨 위 카드
 const TOKEN_LOW = 0.2;
-let tokKey, tokP = null, tokSeq = 0;
+let tokKey, tokP = null, tokSeq = 0, tokBal;     // tokBal: 화면이 마지막으로 센 남은 토큰 (실행 단추 잠금도 이 값)
 const TOKEN_REREAD_MS = 10 * 60 * 1000;
 // 남은 토큰 = 충전 합계 - 토큰 정보 생성(since) 뒤 실행 기록의 쓴 토큰 합 (agent.balance 와 같은 셈). PC 가 올린 값(live.tokens.balance)은
 // PC 마다 마지막으로 센 때가 달라 계정마다 다르게 보였다 (사용자 2026-10-20) - 화면이 직접 센다.
@@ -643,11 +647,16 @@ function paintTokens() {
   paintUsage();                                          // 통장이 사라졌을 때 카드를 숨기는 것도 여기서
   const has = typeof t?.balance === "number";
   show($("token-card"), has);
-  if (!has) { tokSeq++; return; }
+  if (!has) {
+    tokSeq++;
+    if (tokBal !== undefined) { tokBal = undefined; if (root) paintButtons(); }   // 통장이 사라졌다 - 센 값으로 잠근 단추를 풀어 둔다
+    return;
+  }
   const seq = ++tokSeq;
   serverTokens(t).then((sv) => {
     if (seq !== tokSeq) return;                  // 읽는 사이 현황이 다시 왔다
     const bal = typeof sv?.bal === "number" ? sv.bal : t.balance;     // 못 셌으면 PC 가 올린 값
+    if (bal !== tokBal) { tokBal = bal; if (root) paintButtons(); }   // 단추 잠금을 이 값으로 다시 (같은 값이면 안 불러 되돌지 않는다)
     const all = t.cost?.all ?? 0, state = bal <= 0 ? "bad" : bal < all ? "warn" : "good";
     if (state === "bad") line.textContent = `토큰이 없습니다. (남은 토큰 ${count(bal)}개) 토큰을 충전한 뒤 실행하여 주십시오.`;
     else if (state === "warn") line.textContent = `남은 토큰 ${count(bal)}개 · 전체 실행 1번에 ${count(all)}개. 잔여 토큰이 마이너스가 될 수 있습니다.`;

@@ -104,6 +104,7 @@ bad_cases = {
     "name 이 문자열 아님": dict(good, name=3),
     "code 가 빈 문자열": dict(good, code=""),
     "code 가 숫자 세 자리 아님": dict(good, code="ab"),
+    "code 가 전각 숫자 (ERPia 사이트코드 101 과 안 맞음, 2026-10-22)": dict(good, code="１０１"),
     "dict 아님": [good],
 }
 for label, obj in bad_cases.items():
