@@ -307,11 +307,14 @@ class FakeProc:
     def __init__(self, cmd, env=None):
         spawned.append((cmd, env))
         self.rc = None
+        self.pid = 4242
 
     def poll(self):
         return self.rc
 
-    def wait(self):
+    def wait(self, timeout=None):
+        if self.rc is None and timeout is not None:     # Popen 처럼 - 시간 안에 안 끝나면 TimeoutExpired
+            raise web_runner.subprocess.TimeoutExpired("fake", timeout)
         return 3 if self.rc is None else self.rc
 
 
@@ -362,6 +365,67 @@ held_now = kp.is_set()
 web_runner.log = _saved_log
 check("일시정지가 풀리면 멈춘 시간을 한 번 남긴다 (인증 사이트가 기다린 시간 실측, 검토 10-20)",
       not held_now and sum("일시정지" in m for m in logs) == 1, str(logs))
+# 키보드 차례를 상한 넘게 쥐고 있으면(ERPia 응답 없음 등) 루틴을 끝내고 수집은 이어 간다 - 실행기가 여럿이어도 한 번만 (사용자 2026-10-21)
+killed, closed, unpinned = [], [], []
+_saved_stuck = web_runner.KEYS_MAX_SECONDS, web_runner.pl.ec.terminate_pid, status.mark_stopped, web_runner.unpin_erpia
+
+
+def fake_terminate(pid):
+    killed.append(pid)
+    web_runner._together[0].rc = 1
+    return None
+
+
+web_runner.KEYS_MAX_SECONDS = 0.3
+web_runner.pl.ec.terminate_pid = fake_terminate
+status.mark_stopped = lambda program, reason: closed.append((program, reason))
+web_runner.unpin_erpia = lambda: unpinned.append(1)
+web_runner._together[0].rc = None
+status.keys_held = lambda since: True
+t0 = time.time()
+web_runner.wait_keys()
+check("새 창 앞: 키보드 차례를 상한 넘게 쥐고 있으면 루틴을 끝내고 이어 간다 - 루틴 기록은 '중단', 맨 위는 풂",
+      time.time() - t0 < 2 and 4242 in killed and closed == [("routine", web_runner.KEYS_STUCK_REASON)] and unpinned,
+      str((killed, closed, unpinned)))
+killed.clear()
+closed.clear()
+web_runner._together[0].rc = None
+kp_a, kp_b = web_runner.KeysPause(), web_runner.KeysPause()
+kp_a.is_set()
+kp_b.is_set()
+time.sleep(0.4)
+held_a, held_b = kp_a.is_set(), kp_b.is_set()
+check("재생 단계 사이: 실행기 둘이 같이 상한을 넘겨도 루틴은 한 번만 끝내고 둘 다 이어 간다",
+      not held_a and not held_b and len(closed) == 1 and 4242 in killed, str((held_a, held_b, killed, closed)))
+# 설치판: 띄운 껍데기(4242)와 실제 프로그램(상태 파일 pid 7777)이 다르다 - 실제 프로그램을 먼저 끄고 껍데기는 스스로 끝나기를 본다 (검토 10-22)
+_saved_alive = status.read_json, status.process_alive, status.mark_stopping, status.clear_stopping
+alive, events = {}, []
+status.read_json = lambda path: {"state": "running", "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                                 "pid": 7777, "pid_created": 1, "run_id": "r1"}
+status.process_alive = lambda pid, created=None: alive.get(pid, False)
+status.mark_stopping = lambda program, run_id, reason: events.append(("stopping", program, run_id, reason))
+status.clear_stopping = lambda program: events.append(("clear", program))
+for shell_exits in (True, False):
+    killed.clear()
+    events.clear()
+    alive[7777] = True
+    web_runner._together[0].rc = None
+
+    def fake_terminate2(pid, shell_exits=shell_exits):
+        killed.append(pid)
+        events.append(("kill", pid))
+        alive[pid] = False
+        if pid == 7777 and shell_exits or pid == 4242:
+            web_runner._together[0].rc = 0
+
+    web_runner.pl.ec.terminate_pid = fake_terminate2
+    web_runner.end_stuck_routine(100)
+    check(f"설치판: 실제 프로그램을 먼저 끄고, 껍데기는 {'스스로 끝나면 끄지 않는다' if shell_exits else '안 끝나면 그때 끈다'}",
+          killed == ([7777] if shell_exits else [7777, 4242]), killed)
+check("끄기 전에 '끄는 중' 을 적고 끝에 지운다 - 그사이 에이전트가 먼저 봐도 '비정상 종료' 가 아니라 '중단' (대시보드 [중지] 와 같이, PR 검토 10-30)",
+      events == [("stopping", "routine", "r1", web_runner.KEYS_STUCK_REASON), ("kill", 7777), ("kill", 4242), ("clear", "routine")], events)
+status.read_json, status.process_alive, status.mark_stopping, status.clear_stopping = _saved_alive
+web_runner.KEYS_MAX_SECONDS, web_runner.pl.ec.terminate_pid, status.mark_stopped, web_runner.unpin_erpia = _saved_stuck
 rcs = []
 for prep, rt in ((0, 0), (0, 3), (1, 0), (1, -1073741819), (0, 3221225477)):     # 비정상 종료 0xC0000005 (cmd 는 음수로 본다)
     web_runner._together[0].rc = rt

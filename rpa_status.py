@@ -1567,6 +1567,20 @@ def record_start_failure(program, started_at, reason, log_tail=()):
     }))
 
 
+def record_schedule_miss(program, due_at, reason, kind, trigger="auto"):
+    """예약이 돌지 않았다 - 꺼져 있던 동안 지남·띄우기 직전 거절·앞 실행을 기다리다 지남 (대시보드 예약기가 부른다, 사용자 2026-10-21).
+    record_start_failure 처럼 이력만 남긴다: 웹이 아는 상태(crashed - '오류', 최근 도넛은 노랑 '환경')만 쓰고, 끝난 모듈이 없어 토큰은 0.
+    시작·끝 시각은 예약 시각 (소요 0). run_id 는 예약 시각·kind·PC 이름 - 같은 업체 PC 여럿이 같은 시각을 놓쳐도 겹치지 않는다
+    (기록 DB 는 같은 이름을 409 로 버린다, 검토 10-21). 같은 PC 에서는 예약기가 다음 예약으로 넘긴 뒤에 부르므로 두 번 남지 않는다."""
+    at = (due_at if isinstance(due_at, datetime.datetime) else parse_iso(due_at) or datetime.datetime.now()).replace(microsecond=0)
+    return append_history(history_record({
+        "run_id": f"{program}_{at:%Y%m%d_%H%M%S}_{kind}_{socket.gethostname()}", "program": program,
+        "program_label": LABELS.get(program, program),
+        "host": socket.gethostname(), "trigger": trigger, "state": "crashed", "reason": reason,
+        "started_at": at.isoformat(), "finished_at": at.isoformat(),
+    }))
+
+
 def read_history(limit=0, program=None, since=None):
     """이력을 최신순으로 돌려준다. since 는 'YYYY-MM-DDTHH:MM:SS' 문자열."""
     folder = status_dir(create=False)

@@ -58,7 +58,11 @@ MAX_BODY = 64 * 1024
 SCHEDULER_TICK = 5.0
 # 대시보드를 다시 켰을 때 이만큼 안에 지난 예약은 그대로 돌리고, 더 오래된 것은 건너뛴다
 MISSED_GRACE_SEC = 120
+MISSED_RECORD_MAX = 20      # 돌지 않은 예약을 실행 기록에 남기는 최대 줄 수 (오래 꺼져 있던 PC - 넘으면 '그 밖 n회' 한 줄, 사용자 2026-10-21)
+OFF_TEXT = "그 시각에 오토파일럿이 돌고 있지 않았습니다. (PC 꺼짐·절전·다시 시작 등)"     # 켤 때 건너뛴 예약의 까닭 - 원인을 단정하지 않는다
 NOW = datetime.datetime.now   # 예약 계산의 지금 - 시험이 가짜 시계로 바꾼다 (tests/test_schedule_repeat.py)
+LOG = print                   # 예약기가 남기는 글 - 에이전트가 자기 기록(agent.log)으로 바꾼다
+WAKE_BEFORE = datetime.timedelta(minutes=3)   # 다음 실행 3분 전에 절전에서 깨운다 - 깨어난 뒤 무선망이 다시 붙을 틈 (사용자 2026-10-21)
 WEEKDAY_NAMES = "월화수목금토일"
 ACCOUNT_CACHE_SEC = 30.0
 
@@ -513,6 +517,7 @@ def launch(target, by, env=None):
         _active.update(target=target, by=by, at=now_t, proc=proc, checked=False,
                        until=now_t + (3 if DRY_RUN else LAUNCH_GRACE_SEC))
         now = NOW()
+        merged = []
         with _settings_lock:
             cfg = st.read_settings()
             sch = cfg["schedule"]
@@ -523,8 +528,14 @@ def launch(target, by, env=None):
             if sch.get("enabled") and by == "auto":
                 # 이번 예약을 썼으니 다음 예약 시각으로 넘긴다.
                 # 수동 실행은 예약을 건드리지 않는다 (정해진 시각에는 정해진 대로 돈다).
+                # 늦게 띄우는 사이(앞 실행을 기다림·절전 등) 지난 다른 예약은 함께 넘어간다 - 기록에 남긴다 (사용자 2026-10-21)
+                due = st.parse_iso(sch.get("next_run_at"))
+                if due is not None and due <= now:
+                    merged = due_between(sch, due + datetime.timedelta(seconds=1), now)
                 advance(sch, now)
             st.write_settings(cfg)
+        record_missed(sch, merged, lambda t, s: f"{due_text(t, s)} 실행되지 않았습니다. 그 시각에 실행할 수 없었습니다. (앞 실행·절전 등) "
+                                                f"{now:%m-%d %H:%M}에 {due:%m-%d %H:%M} 예약을 실행했습니다.", "merged")
     return path
 
 
@@ -871,11 +882,50 @@ def slot_off(sch):
     return list(policy.get("off") or []) + ([] if policy.get("wellife") is True else list(WELLIFE_ONLY_KEYS))
 
 
+def due_between(sch, start, end):
+    """start(포함)부터 end(포함)까지 지난 예약 [(시각, 줄)] - 공휴일·업체 휴무일은 next_due 가 건너뛴다.
+    반복 시간대는 끝 시각까지 지난 것만 (아직 열려 있으면 반복이 이어 돈다)."""
+    out, t = [], start - datetime.timedelta(seconds=1)
+    for _ in range(5000):                    # 몇 달 꺼져 있던 PC 도 끝나게
+        t, s = next_due(sch, t)
+        if t is None or t > end:
+            break
+        if not s.get("until") or datetime.datetime.combine(t.date(), datetime.time(*map(int, s["until"].split(":")))) <= end:
+            out.append((t, s))
+    return out
+
+
+def due_text(t, s):
+    """기록 글의 예약 이름 - '06:00 예약이' / '06:00~09:00 반복 시간대가'."""
+    return st.josa(f"{t:%H:%M}~{s['until']} 반복 시간대" if s.get("until") else f"{t:%H:%M} 예약", ("이", "가"))
+
+
+def record_missed(sch, missed, reason, kind, trigger="auto"):
+    """돌지 않은 예약을 실행 기록에 남긴다 (사용자 2026-10-21: 놓친 예약은 어쩔 수 없으니 기록만 잘 남긴다). missed = [(시각, 줄)],
+    reason(시각, 줄) → 까닭 글. 프로그램 칸은 그 줄이 먼저 띄우는 것 (전체 실행·사이트 수집은 ACTOR). MISSED_RECORD_MAX 줄까지 남기고
+    넘으면 '그 밖 n회' 한 줄. 기록이 예약을 멈추게 하면 안 된다."""
+    def program(s):
+        return "prepare" if slot_target(s, slot_off(sch))[0] in ("all", "prepare") else "routine"
+    try:
+        missed = [(t, s) for t, s in missed if slot_target(s, slot_off(sch))[0] is not None]    # 업체가 안 쓰는 모듈만 든 줄은 설정대로 - 남기지 않는다 (검토 10-22)
+        for t, s in missed[:MISSED_RECORD_MAX]:
+            st.record_schedule_miss(program(s), t, " ".join(reason(t, s).split()), kind, trigger)
+        if len(missed) > MISSED_RECORD_MAX:
+            (t, s), last = missed[MISSED_RECORD_MAX], missed[-1][0]
+            st.record_schedule_miss(program(s), t, f"그 밖에 예약 {len(missed) - MISSED_RECORD_MAX}회가 실행되지 않았습니다. "
+                                                   f"({t:%m-%d %H:%M}~{last:%m-%d %H:%M})", f"{kind}_more", trigger)
+    except Exception:
+        pass
+
+
+UNUSED_ONLY = "업체가 사용하지 않는 모듈만 남아 건너뜁니다."   # 설정대로라 '돌지 않은 예약' 기록에는 남기지 않는다 (검토 10-21)
+
+
 def launch_slot(slot, by="auto", trigger="auto"):
     """예약 줄 하나를 띄운다. 업체가 안 쓰는 모듈만 남으면 RuntimeError (사람에게 보일 글 - 예약 칸의 까닭이 된다)."""
     target, env = slot_target(slot, slot_off(st.read_settings()["schedule"]))
     if target is None:
-        raise RuntimeError("업체가 사용하지 않는 모듈만 남아 건너뜁니다.")
+        raise RuntimeError(UNUSED_ONLY)
     env = dict(env, RPA_RUN_TRIGGER=trigger)
     if trigger == "repeat" and slot.get("until"):   # 반복 회차: 끝 시각·쉬는 시간 - 운송장번호 전송이 마지막 기회인지 안다 (wellife.send_busy_reason)
         env.update(RPA_REPEAT_UNTIL=slot["until"], RPA_REPEAT_REST=str(slot.get("rest_min", REST_MIN_DEFAULT)))
@@ -994,6 +1044,76 @@ def schedule_label(sch):
     return shown if per_slot else f"{days_label(sch.get('days'))} {shown}".strip()
 
 
+class Power:
+    """절전·꺼진 화면 (사용자 2026-10-21 - 잠금 화면은 다루지 않는다: 윈도우가 막아 프로그램이 풀 수 없다).
+    wake_at: 그 시각에 절전에서 깨우는 타이머 (손잡이를 들고 있어야 한다 - 닫으면 취소). '깨우기 타이머 허용' 전원 설정이 꺼져 있으면 안 깬다.
+    keep_awake: 켜 두는 동안 잠들지 않고 화면도 켜 둔다 (부른 스레드 기준이라 예약기 스레드에서만 부른다).
+    시험은 api 를 바꿔 끼운다: (타이머 만들기, 타이머 맞추기(손잡이, filetime) → 깨우기 되나, 타이머 끄기, 실행 상태(값))."""
+    ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
+    ERROR_NOT_SUPPORTED = 50
+
+    def __init__(self, api=None):
+        self.api = api
+        self.timer, self.wake, self.awake, self.told = None, None, False, set()
+
+    def _win(self):
+        if self.api is None:
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            k.CreateWaitableTimerW.restype = ctypes.c_void_p
+            k.CreateWaitableTimerW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+            k.SetWaitableTimer.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_longlong), ctypes.c_long,
+                                           ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int)
+            k.CancelWaitableTimer.argtypes = (ctypes.c_void_p,)
+            k.SetThreadExecutionState.restype = ctypes.c_uint32
+            k.SetThreadExecutionState.argtypes = (ctypes.c_uint32,)
+
+            def arm(h, ft):
+                ctypes.set_last_error(0)
+                ok = k.SetWaitableTimer(h, ctypes.byref(ctypes.c_longlong(ft)), 0, None, None, 1)
+                return bool(ok) and ctypes.get_last_error() != self.ERROR_NOT_SUPPORTED
+            self.api = (lambda: k.CreateWaitableTimerW(None, 1, None), arm, k.CancelWaitableTimer, k.SetThreadExecutionState)
+        return self.api
+
+    def tell(self, key, text):
+        if key not in self.told:
+            self.told.add(key)
+            LOG(text)
+
+    def wake_at(self, when):
+        """when(지역 시각)에 깨우도록 맞춘다. None 이면 끈다. 같은 시각이면 다시 부르지 않는다."""
+        if when == self.wake:
+            return
+        create, arm, cancel, _ = self._win()
+        if when is None:
+            if self.timer:
+                cancel(self.timer)
+            self.wake = None
+            return
+        if not self.timer:
+            self.timer = create()
+        ft = int((when.timestamp() + 11644473600) * 10_000_000)     # 1601 년부터 100ns (양수 = 절대 시각, UTC)
+        ok = arm(self.timer, ft)                # 예외면 self.wake 를 그대로 두어 다음 차례에 다시 맞춘다
+        self.wake = when
+        if not ok:
+            self.tell("wake", "절전에서 깨우는 타이머를 쓸 수 없습니다. 전원 옵션의 '깨우기 타이머 허용'을 확인하여 주십시오.")
+            return
+        LOG(f"예약 {when + WAKE_BEFORE:%m-%d %H:%M} 실행 3분 전({when:%H:%M})에 PC를 절전에서 깨우도록 맞췄습니다.")
+
+    def keep_awake(self, on):
+        if on != self.awake:
+            self._win()[3](self.ES_CONTINUOUS | (self.ES_SYSTEM_REQUIRED | self.ES_DISPLAY_REQUIRED if on else 0))
+            self.awake = on
+
+
+def wake_plan(sch, now, running):
+    """(깨울 시각, 깨어 있을지) - 다음 실행(next_run_at: 고정 예약·반복 시간대 시작) 3분 전에 깨우고, 그때부터 실행이 끝날 때까지와
+    반복 시간대가 열린 동안(쉬는 시간에 잠들지 않게)은 깨어 있는다. 자동 실행을 껐으면 실행 중일 때만 (사용자 2026-10-21)."""
+    due = st.parse_iso(sch.get("next_run_at")) if sch.get("enabled") else None
+    wake = due - WAKE_BEFORE if due is not None and due - WAKE_BEFORE > now else None
+    soon = due is not None and now >= due - WAKE_BEFORE
+    return wake, bool(running or soon or open_window(sch, now))
+
+
 class Scheduler(threading.Thread):
     """settings.json 의 schedule (요일 + 줄) 대로 띄운다. 줄마다 무엇을 띄울지는 slot_target.
 
@@ -1009,9 +1129,11 @@ class Scheduler(threading.Thread):
         self.stop = threading.Event()
         self.waiting_reason = None
         self.skipped_at = None   # resync 가 건너뛴 예약 시각 (시작 안내용)
+        self.power = Power()
 
     def resync(self):
-        """저장된 다음 실행 시각이 오래전에 지났으면 지금 이후의 예약으로 다시 잡는다."""
+        """저장된 다음 실행 시각이 오래전에 지났으면 지금 이후의 예약으로 다시 잡는다. 건너뛴 예약은 실행 기록에 남긴다 (사용자 2026-10-21)."""
+        missed = []
         with _settings_lock:
             cfg = st.read_settings()
             sch = cfg["schedule"]
@@ -1023,12 +1145,27 @@ class Scheduler(threading.Thread):
                 return
             if nxt is not None:
                 self.skipped_at = nxt
+                missed = due_between(sch, nxt, now)
             advance(sch, now)
             st.write_settings(cfg)
+        record_missed(sch, missed, lambda t, s: f"{due_text(t, s)} 실행되지 않았습니다. {OFF_TEXT}", "missed")
 
     def run(self):
         while not self.stop.wait(SCHEDULER_TICK):
             self.tick_safe()
+            self.power_safe()
+
+    def power_safe(self):
+        """절전에서 깨우기·깨어 있기 (wake_plan). 예약과 따로 감싼다 - 여기 오류가 예약을 넘기면 안 된다."""
+        try:
+            wake, awake = wake_plan(st.read_settings()["schedule"], NOW(), any_rpa_running() or launch_state() is not None)
+            self.power.keep_awake(awake)        # 깨어 있기가 먼저 - 타이머 오류에 실행 중 잠들지 않게 (검토 10-22)
+            self.power.wake_at(wake)
+        except Exception as e:
+            try:                                # 알림 글이 실패해도 예약기 스레드는 살아 있게
+                self.power.tell("error", f"절전 깨우기를 맞추지 못했습니다. ({type(e).__name__}: {e})")
+            except Exception:
+                pass
 
     def tick_safe(self):
         try:
@@ -1043,8 +1180,12 @@ class Scheduler(threading.Thread):
             cfg = st.read_settings()
             sch = cfg["schedule"]
             sch["last_error"] = text
-            advance(sch, NOW())             # 같은 오류로 5초마다 되풀이하지 않게 다음 예약으로
+            now = NOW()
+            due, slot = st.parse_iso(sch.get("next_run_at")), slot_of(sch)
+            advance(sch, now)               # 같은 오류로 5초마다 되풀이하지 않게 다음 예약으로
             st.write_settings(cfg)
+        if due is not None and due <= now and slot is not None and not slot.get("until") and text != UNUSED_ONLY:   # 띄울 차례의 예약을 넘겼다 - 기록에도 (사용자 2026-10-21)
+            record_missed(sch, [(due, slot)], lambda t, s: f"{due_text(t, s)} 실행되지 않았습니다. {text}", "rejected")
 
     def _advance_now(self, now):
         with _settings_lock:
@@ -1080,7 +1221,10 @@ class Scheduler(threading.Thread):
                 return
         elif now >= next_run and (day_off(sch, next_run.date()) or day_off(sch, now.date())):
             # 공휴일을 모르던 버전이 잡아 둔 시각·잡은 뒤 넣은 휴무일, 또는 자던 PC 가 휴무일에 깨어 밀린 실행 - 띄우지 않고 다음 날로
+            missed = [] if day_off(sch, next_run.date()) else due_between(sch, next_run, now)    # 밀린 평일 예약은 기록에 (사용자 2026-10-21)
             self._advance_now(now)
+            record_missed(sch, missed, lambda t, s: f"{due_text(t, s)} 실행되지 않았습니다. 그 시각에 실행할 수 없었고(절전 등), "
+                                                    f"깨어난 날({now:%m-%d})이 쉬는 날이라 늦게 실행하지 않았습니다.", "missed")
         elif now >= next_run:
             slot = slot_of(sch)
             if slot is not None and not slot.get("until"):
@@ -1088,7 +1232,9 @@ class Scheduler(threading.Thread):
                 if self.waiting_reason is None:
                     self.launch(slot)
                 return
+            missed = due_between(sch, next_run, now)     # 열려 있는 반복 시간대는 빠진다 - 깨우기가 안 먹어 자다 깬 PC 의 밀린 예약만 (검토 10-22)
             self._advance_now(now)               # 가리키던 줄이 없어졌거나 반복 시간대 - 다음 줄로 (시간대는 아래 반복이 맡는다)
+            record_missed(sch, missed, lambda t, s: f"{due_text(t, s)} 실행되지 않았습니다. 그 시각에 실행할 수 없었습니다. (절전 등)", "missed")
         win = open_window(st.read_settings()["schedule"], now)
         if win is None:
             self.waiting_reason = None
@@ -1121,6 +1267,8 @@ class Scheduler(threading.Thread):
             launch_slot(win, trigger="repeat")
         except Exception as e:                   # 토큰이 없음·업체가 안 쓰는 모듈만·exe 없음 - 넘기지 않고 멈춘다 (5초마다 다시 띄우지 않게)
             self.mark_repeat(stopped={"at": stamp, "reason": f"{now:%H:%M} {e or type(e).__name__}"})
+            record_missed(st.read_settings()["schedule"], [(now, win)],
+                          lambda t, s: f"{t:%H:%M} 반복 회차가 실행되지 않았습니다. {e or type(e).__name__}", "rejected", "repeat")
             return
         self.mark_repeat(pending=stamp, last_launch_at=stamp)
 

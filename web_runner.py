@@ -368,7 +368,7 @@ def _replay_problems(name, site):
         return [f"{name}: 프리셋 파일을 읽지 못했습니다. ({e})"]
     if p is None or not p.get("record"):
         return [f"{name}: 프리셋 {no}의 기록이 없습니다. (옵저버에서 기록한 뒤 저장하여 주십시오)"]
-    if not re.fullmatch(r"\d{3}", p.get("code") or ""):
+    if not re.fullmatch(r"[0-9]{3}", p.get("code") or ""):           # \d 는 전각 숫자도 받는다 - ERPia 사이트코드와 안 맞는다
         return [f"{name}: 프리셋 {no}의 사이트코드가 숫자 세 자리가 아닙니다. ({p.get('code')!r})"]
     if status.login_mismatch(site, p["code"]):       # 번호만 믿지 않는다 - 옛 계정으로 다른 사이트에 들어가지 않게 (이슈 #13 검토)
         return [f"{name}: 프리셋 {no}의 아이디·비밀번호가 다른 사이트의 것입니다. 옵저버에서 다시 입력하여 주십시오."]
@@ -928,6 +928,13 @@ STAGE_DIR_NAME = "받는중"
 ROUTINE_EXE = "ERPia_RPA.exe"
 TOGETHER_RC = 100           # 함께 실행이면 종료 코드 100~103 (Run_All.bat 이 루틴을 다시 띄우지 않게) - finish_together
 _together = None            # 함께 띄운 루틴 (프로세스, 띄운 시각)
+# 키보드 차례를 이보다 오래 기다리면 ERPia 쪽이 차례를 쥔 채 멈춘 것(응답 없음 등)으로 보고 루틴을 끝낸다 (사용자 2026-10-21).
+# 실측은 로그인 4~6초·메뉴 검색 8초·'(2)' 열기 10~15초, 코드상 정상 최장 약 38초 (wellife 메뉴·탭 기다림 합)
+KEYS_MAX_SECONDS = 90
+KEYS_STUCK_REASON = (f"ERPia 쪽이 키보드 차례를 {KEYS_MAX_SECONDS}초 넘게 끝내지 않아 사이트 수집 쪽에서 종료했습니다. (ERPia 응답 없음 등) "
+                     "다운로드한 엑셀은 업로드 폴더에 남아 있습니다. 다음 실행 전에 확인하여 주십시오. "
+                     "같은 사이트의 새 파일이 오면 남은 파일은 중복으로 처리되어 오류 폴더로 이동합니다")   # wellife.LEFT_NOTE 와 같은 안내 (검토 10-22)
+_keys_stuck = threading.Lock()  # 병렬 수집의 실행기 여럿이 같이 넘겨도 한 번만 끝낸다
 
 
 def site_dest():
@@ -995,8 +1002,71 @@ def wait_keys():
     log("  ERPia 쪽이 키보드를 쓰는 동안 기다립니다.")
     t = time.time()
     while _together[0].poll() is None and status.keys_held(_together[1]):
+        if time.time() - t > KEYS_MAX_SECONDS:
+            end_stuck_routine(time.time() - t)
+            break
         time.sleep(0.2)
     log(f"  ERPia 쪽 키보드 차례가 끝나 이어 갑니다 ({time.time() - t:.1f}초 기다림).")
+
+
+def end_stuck_routine(waited):
+    """키보드 차례를 KEYS_MAX_SECONDS 넘게 기다렸다 - 함께 띄운 루틴을 끝내고 수집은 이어 간다 (사용자 2026-10-21).
+    차례는 로그인 입력·메뉴 검색·'(2)' 열기처럼 자료를 바꾸지 않는 동안만 잡으므로 끝내도 반쯤 바뀐 자료가 남지 않는다.
+    대시보드 [중지] 처럼 ERPia 는 두고 루틴만 끈다 - 설치판은 한 파일 exe 라 띄운 프로세스와 실제 프로그램(상태 파일의 pid)이 다르다.
+    루틴 기록은 '중단' 으로 닫는다. 받은 파일은 업로드 폴더에 남는다 (Run_All.bat 은 100~103 이라 다시 띄우지 않는다) - 같은 사이트의 새 파일이
+    먼저 오면 남은 파일은 중복으로 오류 폴더로 가므로 '다음 실행 전에 확인' 을 안내한다 (KEYS_STUCK_REASON)."""
+    with _keys_stuck:
+        proc = _together[0]
+        if proc.poll() is not None:     # 다른 실행기가 이미 끝냈다
+            return
+        log(f"  ERPia 쪽이 키보드 차례를 {waited:.0f}초 동안 끝내지 않아 PROCESS를 종료합니다. (ERPia 응답 없음 등) 사이트 수집은 계속합니다.")
+        state = status.read_json(status.status_path("routine")) or {}
+        started = status.parse_iso(state.get("started_at"))
+        pid = state.get("pid")      # 이번에 띄운 루틴이 아직 그 번호로 살아 있을 때만 (끝난 뒤 다른 프로세스가 번호를 다시 쓸 수 있다)
+        if not (state.get("state") == "running" and started is not None and started.timestamp() >= _together[1] - 2
+                and status.process_alive(pid, state.get("pid_created"))):
+            pid = None
+        if pid:     # 끄고 기다리는 사이 에이전트·예약기가 먼저 죽은 것을 봐도 '비정상 종료' 가 아니라 '중단' 으로 닫게 (대시보드 [중지] 와 같이, BugBuster M19)
+            status.mark_stopping("routine", state.get("run_id"), KEYS_STUCK_REASON)
+        try:
+            for p in dict.fromkeys(x for x in (pid, proc.pid) if x):    # 실제 프로그램부터 - 띄운 exe 는 그게 끝나면 스스로 끝난다
+                if p == proc.pid:
+                    try:        # 설치판 껍데기는 실제 프로그램이 끝나면 풀어 둔 임시 폴더를 치우고 끝난다 - 바로 끄면 남을 수 있어 5초 본다 (검토 10-22)
+                        proc.wait(5 if pid and pid != p else 0)
+                        continue
+                    except subprocess.TimeoutExpired:
+                        pass
+                why = pl.ec.terminate_pid(p)
+                if why:
+                    log(f"  PROCESS를 종료하지 못했습니다: {why}")
+            end = time.time() + 5       # 끝날 때까지 본 뒤 닫는다 - 살아 있으면 mark_stopped 가 건너뛰어 '비정상 종료' 로 남는다
+            while time.time() < end and (proc.poll() is None or (pid and status.process_alive(pid))):
+                time.sleep(0.2)
+            status.mark_stopped("routine", KEYS_STUCK_REASON)
+        finally:
+            status.clear_stopping("routine")
+        unpin_erpia()
+
+
+def unpin_erpia():
+    """ERPia 창의 맨 위 고정을 푼다 - 도중에 끝낸 루틴은 걸어 둔 맨 위를 못 푼다 (wellife.on_top). 응답 없는 ERPia 에 막히지 않게 비동기로."""
+    import win32con
+    import win32gui
+    import win32process
+    try:
+        pids = set(pl.ec.erpia_pids())
+    except Exception:
+        return
+
+    def each(h, _):
+        if (win32process.GetWindowThreadProcessId(h)[1] in pids
+                and win32gui.GetWindowLong(h, win32con.GWL_EXSTYLE) & win32con.WS_EX_TOPMOST):
+            win32gui.SetWindowPos(h, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                                  | win32con.SWP_NOACTIVATE | win32con.SWP_ASYNCWINDOWPOS)
+    try:
+        win32gui.EnumWindows(each, None)
+    except Exception:
+        pass
 
 
 class KeysPause:
@@ -1010,7 +1080,10 @@ class KeysPause:
         held = bool(_together) and _together[0].poll() is None and status.keys_held(_together[1])
         if held and self.since is None:
             self.since = time.time()
-        elif not held and self.since is not None:
+        elif held and time.time() - self.since > KEYS_MAX_SECONDS:      # 차례를 쥔 채 멈췄다 (사용자 2026-10-21)
+            end_stuck_routine(time.time() - self.since)
+            held = False
+        if not held and self.since is not None:
             log(f"  키보드 차례가 끝나 이어 갑니다 ({time.time() - self.since:.1f}초 일시정지).")
             self.since = None
         return held
@@ -1363,7 +1436,7 @@ def action_replay(page, name, site):
         raise RuntimeError(f"{i}단계에서 멈췄습니다: {why}")
     log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in rp.saved) or '없음'}")
     if rp.no_target and not rp.saved:
-        step_done("skipped", "대상 없음")       # 받을 새 메일이 없었다 - 토큰을 쓰지 않는다
+        step_done("skipped", rp.no_target_why)  # 받을 새 메일·주문이 없었다 - 토큰을 쓰지 않는다
     return True
 
 
@@ -1734,18 +1807,22 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
             return 1
 
     chosen, skipped = split_mismatched(chosen)
+    why = {}        # 건너뛰는 칸 → 까닭 (기록의 단계 목록에 '건너뜀' 으로 남긴다)
     for name, site in skipped:
-        log(f"  ! {name}: 프리셋 {site.get('Preset')}의 아이디·비밀번호가 다른 사이트의 것이라 이 프리셋은 건너뜁니다. 옵저버에서 다시 입력하여 주십시오.")
+        log(f"  ! {name}: 프리셋 {site.get('Preset')}의 아이디·비밀번호가 다른 사이트의 것이라 이 프리셋은 실행하지 않습니다. 옵저버에서 다시 입력하여 주십시오.")
+        why[name] = "아이디·비밀번호가 다른 사이트의 것 - 옵저버에서 다시 입력하여 주십시오"
+    # 설정에 문제가 있는 칸도 그 칸만 건너뛰고 나머지는 실행한다 - 칸 하나 때문에 그날 수집 전체가 서지 않게 (사용자 2026-10-21)
+    for name, site in chosen:
+        problems = validate_site(name, site)
+        if problems:
+            log(f"  ! {name}: 설정에 문제가 있어 이 칸은 실행하지 않습니다.")    # '않습니다' - 모든 칸이 이러면 기록의 중단 사유가 된다 (검토 10-22)
+            for p in problems:
+                log(f"    - {p}")
+            why[name] = problems[0].removeprefix(f"{name}: ")
+            skipped.append((name, site))
+    chosen = [c for c in chosen if c[0] not in why]
     total = len(chosen) + len(skipped)      # 건너뛴 칸은 실패로 센다 - '성공 n / 전체' 와 끝 상태에 드러나게
     if not chosen:
-        return 1
-    problems = []
-    for name, site in chosen:
-        problems += validate_site(name, site)
-    if problems:
-        log("설정에 문제가 있어 실행하지 않습니다:")
-        for p in problems:
-            log(f"  ! {p}")
         return 1
 
     # 설정에 KeepOpen 이 있으면 그것도 따른다. --no-keep-open 은 그보다 우선한다.
@@ -1761,7 +1838,11 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         presets = status.read_presets()
         chosen.sort(key=lambda item: not needs_auth(item[1], presets))     # 하나씩 돌 때도 인증 사이트 먼저 (순서는 그대로)
         avoid = erpia_rect()
-    status.set_steps(prepare_steps(chosen))
+    shown = [c for c in skipped if isinstance(c[1], dict)]
+    status.set_steps(prepare_steps(chosen + shown))
+    for name, site in shown:
+        for act in site_actions(site):
+            status.skip(step_key(name, act), why[name])
     n = min(parallel_count(parallel), len(chosen))
     if n > 1:
         if keep_open:

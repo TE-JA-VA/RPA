@@ -43,7 +43,7 @@ def check_file(obj):
         raise ValueError("아이디·비밀번호가 든 파일은 받지 않습니다.")
     if not isinstance(obj.get("name"), str) or not isinstance(obj.get("code"), str):
         raise ValueError("프리셋 이름·사이트코드가 올바르지 않습니다.")
-    if not re.fullmatch(r"\d{3}", obj["code"]):      # 옵저버 validate_presets 와 같은 규칙 (빈 코드는 read_presets 가 빈 칸과 겹친다고 본다)
+    if not re.fullmatch(r"[0-9]{3}", obj["code"]):   # 옵저버 validate_presets 와 같은 규칙 (\d 는 전각 숫자도 받는다) (빈 코드는 read_presets 가 빈 칸과 겹친다고 본다)
         raise ValueError("사이트코드는 숫자 세 자리여야 합니다.")
     rec = obj.get("record")
     if not isinstance(rec, dict) or not isinstance(rec.get("steps"), list):

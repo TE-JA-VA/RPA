@@ -37,6 +37,8 @@ TASK_NAME = r"AFTER MARKET\RPA Agent"
 TEMPLATE_NAME = "RPA_UserConfig.template.json"   # 설치 파일이 빈 틀 RPA_UserConfig.json 을 이 이름으로 넣는다
 AGENT_CONFIG_NAME = "agent_config.json"
 PRESET_STASH = "이전 업체 프리셋"     # 업체코드를 바꾸며 비운 프리셋을 옮겨 두는 폴더 (config 안, 사용자 2026-10-15)
+# 설정 창은 하나만 - 두 창이 각자 저장하면 늦은 창이 앞 창의 업체코드·계정을 연 때의 옛 값으로 덮는다 (2026-10-22)
+SETTINGS_LOCK = os.environ.get("RPA_SETTINGS_LOCK") or r"Local\AFTER_MARKET_RPA_SETTINGS"
 LOGISTIC_SECTION = "Logistic"
 KEY_RE = re.compile(r"[a-z0-9_]+")               # 업체코드·PC코드 (agent.ask_key 와 같은 규칙)
 AGENT_PY_RE = re.compile(r"""(^|[\\/\s"'])agent\.py\b""", re.IGNORECASE)
@@ -1076,6 +1078,9 @@ def _main(args):
             return 1
         return 0
     if quiet:
+        return 0
+    if not st.hold_lock(SETTINGS_LOCK):
+        show_error_box("오토파일럿 설정 창이 이미 열려 있습니다. 열려 있는 창에서 설정하여 주십시오.")
         return 0
     return run_window(paths, after_install=after)
 

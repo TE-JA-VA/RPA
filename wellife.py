@@ -177,7 +177,7 @@ def load_switches(rr):
     Y/N 이 아닌 값은 RuntimeError (고치기 전에는 아무것도 돌리지 않는다)."""
     section = rr.pl.load_settings().get(SECTION)
     if not isinstance(section, dict):
-        raise RuntimeError(f"{rr.pl.config_name()} 의 '{SECTION}' 은 값이 아니라 섹션이어야 합니다. "
+        raise RuntimeError(f"{rr.pl.config_name()}의 '{SECTION}'은(는) 값이 아니라 섹션이어야 합니다. "
                            f'예: {{"{SECTION}": {{"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "InvoiceSend": "Y"}}}}')
     keys = [m[1] for m in MODULES]
     selected, bad = {}, []
@@ -192,7 +192,7 @@ def load_switches(rr):
             selected[key] = selected["Sales"]
     if bad:
         raise RuntimeError(
-            f"{rr.pl.config_name()} 의 '{SECTION}' 섹션 값은 Y 또는 N 이어야 합니다: {', '.join(bad)}")
+            f"{rr.pl.config_name()}의 '{SECTION}' 섹션 값은 Y 또는 N이어야 합니다. ({', '.join(bad)})")
     return selected, sorted(k for k in section if k not in keys and k not in MODE_NAMES)
 
 
@@ -207,8 +207,8 @@ def load_mode(rr, key=MODE_KEY, section=SECTION):
     value = str(raw).strip()
     allowed = [m for m in MODES if not (key in (SALES_MODE_KEY, IMPORT_MODE_KEY) and MODES[m] == ONE)]   # 줄이 없어 '1건' 을 못 쓴다
     if value not in allowed:
-        raise RuntimeError(f"{rr.pl.config_name()} 의 '{section}' 섹션 {key} 값은 "
-                           f"{' 또는 '.join(repr(m) for m in allowed)} 이어야 합니다: {raw!r}")
+        raise RuntimeError(f"{rr.pl.config_name()}의 '{section}' 섹션 {key} 값은 "
+                           f"{' 또는 '.join(repr(m) for m in allowed)}이어야 합니다. ({raw!r})")
     return MODES[value]
 
 
@@ -225,8 +225,8 @@ def repeat_ones(modes):
 
 
 def repeat_one_reason(keys):
-    return (f"설정 확인: 반복 회차에서는 '1건' 을 쓸 수 없습니다 ({', '.join(keys)}) - 회차마다 1건씩 계속 넘어갑니다. "
-            f"'실행' 으로 바꾸거나 반복 시간대에서 빼십시오")
+    return (f"설정 확인: 반복 회차에서는 '1건'을 사용할 수 없습니다. ({', '.join(keys)}) 회차마다 1건씩 계속 넘어갑니다. "
+            f"'실행'으로 변경하거나 반복 시간대에서 삭제하여 주십시오.")
 
 
 def run_main(rr):
@@ -262,18 +262,18 @@ def run_main(rr):
     log("*" * 70)
     for k, (name, what) in MODE_NAMES.items():
         v = modes[k]
-        log(f"*  {name} 모드({k}): [{mode_tag(v)}] - " + (
-            f"{what} 누르지 않고 마우스만" if not v else f"{what} 실제로 누르고, 팝업은 [예]/[확인]"
-            + (" - 체크는 첫 줄 하나만" if v == ONE else "")))
+        log(f"*  {name} 모드({k}): [{mode_tag(v)}] " + (
+            f"{what}을(를) 누르지 않고 마우스만 올립니다." if not v else f"{what}을(를) 실제로 누르고, 팝업은 [예]/[확인]을 누릅니다."
+            + (" 체크는 첫 줄 하나만 합니다." if v == ONE else "")))
     log("*" * 70)
     for k in unknown:
-        log(f"경고: '{SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
+        log(f"경고: '{SECTION}' 섹션의 '{k}'은(는) 알 수 없는 키여서 무시합니다.")
     if picked is not None:
         for k in picked_unknown:
-            log(f"경고: 예약에서 넘긴 '{k}' 는 모르는 모듈이라 무시합니다.")
+            log(f"경고: 예약에서 넘긴 '{k}'은(는) 알 수 없는 모듈이어서 무시합니다.")
         if not any(selected.values()):
-            log("이번 실행 모듈이 비었습니다 (예약에서 넘긴 값)")
-            status.finish("stopped", "이번 실행 모듈이 비었습니다")
+            log("이번 실행 모듈이 비었습니다. (예약에서 전달한 값)")
+            status.finish("stopped", "이번 실행 모듈이 비었습니다.")
             log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
             return
         log("이번 실행 모듈 (예약): " + " / ".join(label for _, cfg, label, _, _ in MODULES if selected[cfg]))
@@ -290,14 +290,14 @@ def run_main(rr):
     if rr.ec.screen_locked():   # 잠긴 화면에서는 클릭이 헛돌아 엉뚱한 실패가 난다 (10-07 실측)
         log("윈도우 화면이 잠겨 있어 실행하지 않았습니다.")
         # 반복 회차는 PC 가 이 회차만 건너뛰고 쉬는 시간 뒤 다시 띄운다 - 잠긴 동안 회차마다 이력이 쌓이지 않게 (사용자 10-08)
-        status.finish("stopped", "윈도우 화면이 잠겨 있어 실행하지 않았습니다 (화면을 풀고 다시 실행)",
+        status.finish("stopped", "윈도우 화면이 잠겨 있어 실행하지 않았습니다. (화면 잠금을 해제한 뒤 다시 실행하여 주십시오)",
                       record=os.environ.get("RPA_RUN_TRIGGER") != "repeat")
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
     pids = rr.ec.erpia_pids()
     if len(pids) > 1:   # 어느 ERPia 에 붙을지 몰라 다른 세션을 조작할 수 있다 (10-07: 다른 계정 ERPia 가 함께 떠 있었다)
-        log(f"ERPia 가 {len(pids)}개 떠 있어 실행하지 않았습니다: {pids}")
-        status.finish("stopped", f"ERPia 가 {len(pids)}개 떠 있어 실행하지 않았습니다 (하나만 남기거나 모두 닫고 다시 실행)")
+        log(f"ERPia가 {len(pids)}개 열려 있어 실행하지 않았습니다. ({pids})")
+        status.finish("stopped", f"ERPia가 {len(pids)}개 열려 있어 실행하지 않았습니다. (하나만 남기거나 모두 닫은 뒤 다시 실행하여 주십시오)")
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
 
@@ -334,7 +334,7 @@ def run_main(rr):
     # 반복 회차(⑤ 를 시간대 동안 N분마다)는 처리한 것이 없으면 이력에 남기지 않는다 - 지금 루틴 main 과 같은 규칙
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
             and not [k for k in (status.done_modules() or []) if k != "login"]:
-        log("반복 회차 - 처리한 것이 없어 기록에 남기지 않습니다")
+        log("반복 회차에서 처리한 것이 없어 기록에 남기지 않습니다.")
         status.finish(result, reason, record=False)
     else:
         status.finish(result, reason)
@@ -431,16 +431,16 @@ def excel_collect(rr, ctx, live):
         cell, _ = rr.find_site_upload_cell(ctx.hwnd, sites, code)
         if cell is not None:
             hover(rr, ctx, cell, f"엑셀 업로드 칸 (사이트 {code})", True)
-        return "skipped", f"[{mode_tag(live)}] 엑셀 {len(files)}건 있음 (사이트 {names}) - 올리지 않음"
+        return "skipped", f"[{mode_tag(live)}] 엑셀 {len(files)}건 있음 (사이트 {names}, 업로드하지 않음)"
     no_popup(rr, ctx, "엑셀 업로드 전")
     front(rr, ctx, "엑셀 업로드")
     rr.log(f"  [실행] 엑셀 업로드: 사이트 {names}")
     try:
         uploaded, errors = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites)
     except rr.UploadStop as e:
-        raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 모르는 창이 떠 멈춤 (누르지 않음): {e}") from e
+        raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 알 수 없는 창이 나타나 누르지 않고 중단하였습니다. ({e})") from e
     return ("done" if uploaded else "skipped"), (f"[{mode_tag(live)}] 엑셀 {len(files)}건 중 {uploaded}건 업로드"
-                                                 + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else ""))
+                                                 + (f", {errors}건은 오류 폴더로 이동 (확인하여 주십시오)" if errors else ""))
 
 
 def excel_together(rr, ctx, import_live):
@@ -483,7 +483,7 @@ def excel_together(rr, ctx, import_live):
 
         rr.UPLOAD_NO_KEYS = True
         try:
-            rr.log("  [실행] 엑셀 업로드: 사이트 수집과 함께 - 사이트마다 받은 엑셀을 받는 대로 올립니다")
+            rr.log("  [실행] 엑셀 업로드: 사이트 수집과 함께 실행합니다. 사이트마다 다운로드한 엑셀을 바로 업로드합니다.")
             while True:
                 new = upload_paths(rr) - tried
                 if new:
@@ -496,7 +496,7 @@ def excel_together(rr, ctx, import_live):
                     except rr.UploadGridHidden as h:     # 남은 파일은 그 자리에 있다 - 다음 차례에 화면을 되돌려 이어서 올린다
                         u, e, hidden = h.uploaded, h.errors, hidden + 1
                         if not copy or hidden > HIDDEN_MAX:
-                            raise Stop("stopped", f"엑셀 업로드 중 사이트 그리드가 계속 화면에서 사라져({hidden}번) 멈춤") from h
+                            raise Stop("stopped", f"엑셀 업로드 중 사이트 그리드가 계속 화면에서 사라져({hidden}번) 중단하였습니다.") from h
                     uploaded, errors = uploaded + u, errors + e
                 elif "prepare" in rr.status.running_programs():
                     time.sleep(1)
@@ -504,7 +504,7 @@ def excel_together(rr, ctx, import_live):
                     break
             between("업로드 끝 ")
         except rr.UploadStop as e:
-            raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 모르는 창이 떠 멈춤 (누르지 않음): {e}") from e
+            raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 알 수 없는 창이 나타나 누르지 않고 중단하였습니다. ({e})") from e
         finally:
             rr.UPLOAD_NO_KEYS = False
         left = len(upload_paths(rr))
@@ -514,15 +514,15 @@ def excel_together(rr, ctx, import_live):
     except Stop as e:
         left = len(upload_paths(rr))
         if left:
-            raise Stop(e.result, f"{e} - 업로드 폴더에 올리지 못한 파일 {left}개: 사이트 수집이 이 뒤에 넘기는 파일도 이번 실행에서는 "
-                                 f"올라가지 않습니다 ({LEFT_NOTE})") from e
+            raise Stop(e.result, f"{e} 업로드 폴더에 업로드하지 못한 파일이 {left}개 있습니다. 사이트 수집이 이후에 전달하는 파일도 이번 실행에서는 "
+                                 f"업로드되지 않습니다. ({LEFT_NOTE})") from e
         raise
     finally:
         if copy:    # 멈춰도 닫는다 - 남으면 다음 실행이 '(3)' 을 연다 (검토 10-20)
             close_order_copy(rr, ctx, copy)
     return ("done" if uploaded else "skipped"), (f"[{mode_tag(True)}] 엑셀 {len(tried)}건 중 {uploaded}건 업로드 (사이트 수집과 함께)"
-                                                 + (f", {errors}건은 오류 폴더로 (확인할 것)" if errors else "")
-                                                 + (f", 올리지 못해 남은 파일 {left}개 ({LEFT_NOTE})" if left else "")
+                                                 + (f", {errors}건은 오류 폴더로 이동 (확인하여 주십시오)" if errors else "")
+                                                 + (f", 업로드하지 못해 남은 파일 {left}개 ({LEFT_NOTE})" if left else "")
                                                  + (f", 업로드 사이에 ERPia 팝업 {late}개를 닫음 (앞서 완료 폴더로 옮긴 파일이 실패였을 수 "
                                                     "있습니다. 결과 기록을 확인하여 주십시오)" if late else ""))
 
@@ -538,7 +538,7 @@ def upload_paths(rr):
 
 def wait_prepare(rr, why):
     """함께 실행인데 엑셀을 함께 올리지 않는다 - 수집(프리페어)이 끝날 때까지 기다린다 (예전 차례 그대로)."""
-    rr.log(f"사이트 수집과 함께 띄웠지만 {why} 수집이 끝나기를 기다린 뒤 시작합니다.")
+    rr.log(f"사이트 수집과 함께 실행되었으나 {why} 수집이 끝나기를 기다린 뒤 시작합니다.")
     while "prepare" in rr.status.running_programs():
         time.sleep(2)
 
@@ -549,7 +549,7 @@ def on_top(rr, hwnd, on):
         rr.win32gui.SetWindowPos(hwnd, rr.win32con.HWND_TOPMOST if on else rr.win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
                                  rr.win32con.SWP_NOMOVE | rr.win32con.SWP_NOSIZE | rr.win32con.SWP_NOACTIVATE)
     except Exception as e:
-        rr.log(f"  ERPia 창을 {'맨 위로 두지' if on else '맨 위에서 풀지'} 못했습니다: {e}")
+        rr.log(f"  ERPia 창을 {'맨 위로 두지' if on else '맨 위에서 해제하지'} 못했습니다. ({e})")
 
 
 @contextlib.contextmanager
@@ -603,7 +603,7 @@ def open_order_copy(rr, ctx):
             item = _wait_tree_item(nav, ORDER_TAB, MENU_WAIT_SECONDS)
             plus = next((c for c in item.children() if c.element_info.control_type == "Button"), None) if item else None
             if plus is None:
-                raise Stop("failed", f"메뉴 검색 결과에서 '{ORDER_TAB}' 옆 '+' 를 찾지 못했습니다.")
+                raise Stop("failed", f"메뉴 검색 결과에서 '{ORDER_TAB}' 옆 '+'를 찾지 못했습니다.")
             before = set(numbered_tabs(ctx))
             click(rr, ctx, plus, f"'{ORDER_TAB}' 옆 + (같은 화면 하나 더)")
             end = time.time() + TAB_WAIT_SECONDS
@@ -614,13 +614,13 @@ def open_order_copy(rr, ctx):
                 except Exception:
                     active = ""         # 탭이 새로 그려지는 순간의 UIA 오류 - 다시 본다
                 if active.startswith(ORDER_TAB) and active != ORDER_TAB and rr.get_onscreen_tables(visible_page(ctx)):
-                    rr.log(f"  주문매핑 화면을 하나 더 열었습니다: '{active}' - 엑셀은 여기서 올립니다")
+                    rr.log(f"  주문매핑 화면을 하나 더 열었습니다. ('{active}') 엑셀은 이 화면에서 업로드합니다.")
                     return active
                 time.sleep(0.3)
             for name in sorted(set(numbered_tabs(ctx)) - before):     # 열렸지만 못 알아본 탭은 닫는다 - 다음 실행에 번호가 늘지 않게 (K8)
                 if name.startswith(ORDER_TAB):
                     close_order_copy(rr, ctx, name)
-            raise Stop("failed", f"'+' 를 눌렀으나 주문매핑 화면이 하나 더 열리지 않았습니다 ({TAB_WAIT_SECONDS}초).")
+            raise Stop("failed", f"'+'를 눌렀으나 주문매핑 화면이 하나 더 열리지 않았습니다. ({TAB_WAIT_SECONDS}초)")
     finally:
         _clear_search(rr, ctx)
 
@@ -631,7 +631,7 @@ def keep_front(rr, ctx, name):
     active = (active_tab(ctx) or "").strip()
     if active == name:
         return False
-    rr.log(f"  '{name}' 화면이 뒤로 갔습니다 (떠 있는 탭='{active}') - 되돌립니다")
+    rr.log(f"  '{name}' 화면이 뒤로 갔습니다. (활성 탭='{active}') 다시 앞으로 가져옵니다.")
     switch_tab(rr, ctx, name)
     return True
 
@@ -658,7 +658,7 @@ def close_order_copy(rr, ctx, name):
         if any(t.window_text().strip() == name for t in main_tab_bar(ctx)[1]):
             rr.log(f"  '{name}' 탭의 닫기를 눌렀으나 닫히지 않아 열어 둡니다.")
     except Stop as e:
-        rr.log(f"  '{name}' 탭을 닫지 못해 열어 둡니다: {e}")
+        rr.log(f"  '{name}' 탭을 닫지 못해 열어 둡니다. ({e})")
 
 
 def import_collect(rr, ctx, live, wait=True):
@@ -678,18 +678,18 @@ def import_collect(rr, ctx, live, wait=True):
     no_popup(rr, ctx, "상단 전체선택")
     if not live:
         hover(rr, ctx, imp, what, True)
-        return "skipped", f"[{mode_tag(live)}] 자동 수집: 사이트 {n or 0}줄 전체선택, [{rr.IMPORT_BUTTON_NAME}] 는 누르지 않음"
+        return "skipped", f"[{mode_tag(live)}] 자동 수집: 사이트 {n or 0}줄 전체선택, [{rr.IMPORT_BUTTON_NAME}]는 누르지 않음"
     if not n:   # 원래 PROCESS 는 그래도 누르지만 웰라이프는 모르면 멈춘다
-        raise Stop("failed", f"상단 전체선택을 확인하지 못해 {what} 를 누르지 않고 멈춤")
+        raise Stop("failed", f"상단 전체선택을 확인하지 못해 {what}를 누르지 않고 중단하였습니다.")
     wait_idle(rr, imp, what)
     # ponytail: 다시 본 뒤 run_import_step 이 단추를 다시 찾아 누르기까지(1~3초) 다시 그려지면 못 막는다 - 그때는 그 함수 안에서 다시 볼 것
     if not sites_checked(rr, sites):
-        raise Stop("failed", f"상단 전체선택 뒤 화면이 다시 그려져 체크가 풀렸습니다 - {what} 를 누르지 않고 멈춤 (확인할 것)")
+        raise Stop("failed", f"상단 전체선택 뒤 화면이 다시 그려져 체크가 해제되었습니다. {what}를 누르지 않고 중단하였습니다. 확인하여 주십시오.")
     # run_import_step 은 넘긴 범위에서 첫 같은 이름 단추를 다시 찾아 누른다 - 떠 있는 화면만 넘기고, 그 단추가
     # 확인한 단추와 같은 자리인지, 그 자리가 창 안에 보이고 덮이지 않았는지 본 뒤 누른다 (숨은 화면 단추를 누르지 않게)
     again = rr.find_by_text(page, rr.IMPORT_BUTTON_NAME, control_types=("Button",))
     if again is None or again.rectangle() != imp.rectangle():
-        raise Stop("failed", f"{what}: 누를 단추가 떠 있는 화면의 단추와 달라 누르지 않고 멈춤")
+        raise Stop("failed", f"{what}: 누를 단추가 현재 화면의 단추와 달라 누르지 않고 중단하였습니다.")
     front(rr, ctx, what)
     clear_point(rr, ctx, imp, what)
     rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
@@ -697,8 +697,8 @@ def import_collect(rr, ctx, live, wait=True):
 
     def end(ok):
         if not ok:
-            raise Stop("stopped", f"{what} 를 눌렀으나 끝난 것을 확인하지 못해 다음 모듈로 넘어가지 않고 멈춤 (확인할 것)")
-        return "done", f"[{mode_tag(live)}] 자동 수집: 사이트 {n}줄 전체선택 -> [{rr.IMPORT_BUTTON_NAME}] 완료"
+            raise Stop("stopped", f"{what}를 눌렀으나 완료를 확인하지 못해 다음 모듈로 넘어가지 않고 중단하였습니다. 확인하여 주십시오.")
+        return "done", f"[{mode_tag(live)}] 자동 수집: 사이트 {n}줄 전체선택 → [{rr.IMPORT_BUTTON_NAME}] 완료"
     if wait:
         return end(started)
     # 함께 실행: 끝은 ② 자동 수집 모듈에서 (module_import) - 시작을 못 봤으면 그때 멈춘다
@@ -717,7 +717,7 @@ def wait_idle(rr, button, what):
         if since is not None and time.time() - since >= rr.IMPORT_SETTLE_SECONDS:
             return
         if time.time() > end:
-            raise Stop("failed", f"{what}: {IDLE_WAIT_SECONDS}초 동안 화면이 조회를 끝내지 않아(단추가 꺼져 있음) 누르지 않고 멈춤")
+            raise Stop("failed", f"{what}: {IDLE_WAIT_SECONDS}초 동안 화면이 조회를 마치지 않아 누르지 않고 중단하였습니다. (단추가 꺼져 있음)")
         time.sleep(0.3)
 
 
@@ -746,8 +746,8 @@ def normal_sales(rr, ctx, live):
         raise Stop("failed", "주문매핑 하단 그리드를 찾지 못했습니다.")
     bottom = max(tables, key=lambda t: t.rectangle().top)
     if not rr.grid_rows(bottom):
-        rr.log("  주문매핑 하단 0줄 - 매출처리 하지 않음")
-        return "하단 0줄 - 매출처리 하지 않음", False
+        rr.log("  주문매핑 하단이 0줄이어서 매출처리하지 않았습니다.")
+        return "하단 0줄 (매출처리하지 않음)", False
     no_popup(rr, ctx, "하단 전체선택 전")
     front(rr, ctx, "하단 전체선택")
     if live == ONE:     # 첫 줄 하나만 (다른 단계의 '1건' 과 같다). 못 했으면 이미 체크돼 있던 한 줄로 누르지 않게 n 으로도 막는다
@@ -764,9 +764,9 @@ def normal_sales(rr, ctx, live):
         raise Stop("failed", f"'{SALES_SPLIT}' 단추를 찾지 못했습니다.")
     what = f"{SALES_SPLIT} ▼"
     if not live:
-        return head + hover_menu_item(rr, ctx, split, SALES_ITEM, what, checked) + " - 정상매출은 누르지 않음", False
+        return head + hover_menu_item(rr, ctx, split, SALES_ITEM, what, checked) + " (정상매출은 누르지 않음)", False
     if not checked:
-        return head + " - 체크가 안 돼 매출처리하지 않음 (확인할 것)", False
+        return head + " (체크가 되지 않아 매출처리하지 않았습니다. 확인하여 주십시오)", False
     baseline = rr.visible_child_windows(ctx.hwnd)      # 스피너 비교 기준 (원래 코드와 같이 누르기 전)
     note, pressed = press_menu_item(rr, ctx, split, SALES_ITEM, what, confirm=False)
     if not pressed:
@@ -783,23 +783,23 @@ def after_normal_sales(rr, ctx, baseline):
     win = ctx.window()
     btn = rr.find_popup_ok_button(win)
     if btn is None:
-        rr.log("  확인 팝업이 뜨지 않았습니다. 비동기 대기 단계로 넘어갑니다.")
+        rr.log("  확인 팝업이 나타나지 않았습니다. 비동기 대기 단계로 넘어갑니다.")
     else:
         failure = rr.find_popup_failure(win)
         rr.ec.ensure_foreground(hwnd)
         btn.click_input()
         if failure:
             raise Stop("stopped", f"매출처리 실패: {failure}")
-        rr.log(f"  확인 팝업 -> '{btn.window_text()}' 누름")
+        rr.log(f"  확인 팝업에서 '{btn.window_text()}'을(를) 눌렀습니다.")
         time.sleep(1.5)
-    rr.status.note("매출 처리가 끝나기를 기다리는 중")
+    rr.status.note("매출 처리가 끝나기를 기다리는 중입니다.")
     rr.probe_spinner(hwnd, baseline)
     result = rr.wait_async_then_confirm(ctx.app, hwnd, baseline)
     if result == "sales_failed":
-        raise Stop("stopped", "정상매출이 실패했습니다")
+        raise Stop("stopped", "정상매출 처리에 실패하였습니다.")
     if result == "timeout":
-        rr.log(f"  확인할 것: 정상매출 대기 시간({rr.ASYNC_MAX_WAIT_SECONDS}초)을 넘었습니다")
-        notes.append("대기 시간 초과 (확인할 것)")
+        rr.log(f"  정상매출 대기 시간({rr.ASYNC_MAX_WAIT_SECONDS}초)을 넘었습니다. 확인하여 주십시오.")
+        notes.append("대기 시간 초과 (확인하여 주십시오)")
     time.sleep(2)
     failure, _ = rr.handle_sales_popups(ctx.pid, hwnd, {})
     if failure:
@@ -812,8 +812,8 @@ def after_normal_sales(rr, ctx, baseline):
         extra.click_input()
         if failure:
             raise Stop("stopped", f"매출처리 실패: {failure}")
-        rr.log(f"  추가 팝업 -> '{extra.window_text()}' 누름")
-    return f" (완료{'' if result != 'no_popup' else ' - 팝업 없음'}{', ' + ', '.join(notes) if notes else ''})"
+        rr.log(f"  추가 팝업에서 '{extra.window_text()}'을(를) 눌렀습니다.")
+    return f" (완료{'' if result != 'no_popup' else ', 팝업 없음'}{', ' + ', '.join(notes) if notes else ''})"
 
 
 def excel_files(rr):
@@ -837,7 +837,7 @@ def module_hold(rr, ctx, live=False):
     except Stop as e:
         return e.result, str(e)
     if r == "absent":
-        return "failed", "물류대기 아이콘(lcg_HoldLogistics)이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
+        return "failed", "물류대기 아이콘(lcg_HoldLogistics)이 없습니다. 이 ERPia의 화면 구성을 확인하여 주십시오."
     if r != "ok":
         return "failed", r
     try:
@@ -869,27 +869,27 @@ def hold_save(rr, ctx, live):
         raise Stop("failed", f"물류대기 조회가 {QUERY_WAIT_SECONDS}초 안에 끝나지 않았습니다.")
     no_popup(rr, ctx, "물류대기 조회")
     if not grid.descendants(control_type="DataItem"):
-        rr.log("  물류대기 0건 - 저장하지 않음")
-        return "no_target", f"[{tag}] 물류대기 0건 - 저장할 것 없음"
+        rr.log("  물류대기가 0건이어서 저장하지 않았습니다.")
+        return "no_target", f"[{tag}] 물류대기 0건 (저장할 것 없음)"
     front(rr, ctx, "물류대기 전체선택")
     if not check_rows(rr, ctx, grid, "물류대기", live):    # 머리글 자리 확인·팝업 확인은 다른 단계와 같다
-        raise Stop("failed", "물류대기 첫 줄만 체크하지 못했습니다 (1건) - 저장하지 않음." if live == ONE
-                   else "물류대기 전체선택(머리글 체크)에 실패했습니다.")
+        raise Stop("failed", "물류대기 첫 줄만 체크하지 못해 저장하지 않았습니다. (1건)" if live == ONE
+                   else "물류대기 전체선택(머리글 체크)에 실패하였습니다.")
     no_popup(rr, ctx, "물류대기 전체선택")
     save = onscreen_button(visible_page(ctx), "저장(S)")
     if save is None:
         raise Stop("failed", "물류대기 '저장(S)' 단추를 찾지 못했습니다.")
     again = recheck(rr, grid, "물류대기", live)
     if live and not again:
-        raise Stop("failed", "물류대기 저장 직전 다시 보니 체크가 맞지 않아 저장하지 않음 (확인할 것).")
+        raise Stop("failed", "물류대기 저장 직전 다시 보니 체크가 맞지 않아 저장하지 않았습니다. 확인하여 주십시오.")
     if not live:
         hover(rr, ctx, save, "물류대기 '저장(S)'", True)
-        return "skipped", f"[{tag}] 물류대기 조회 -> 전체선택 (저장은 누르지 않음)" + ("" if again else RECHECK_NOTE)
+        return "skipped", f"[{tag}] 물류대기 조회 → 전체선택 (저장은 누르지 않음)" + ("" if again else RECHECK_NOTE)
     before = popup_windows(rr, ctx)
-    rr.log("  [실행] 물류대기 '저장(S)' 누름")
+    rr.log("  [실행] 물류대기 '저장(S)'을 누릅니다.")
     click(rr, ctx, save, "물류대기 '저장(S)'")
     texts = confirm_popups(rr, ctx, "물류대기 저장", grid, idle, before)
-    return "done", f"[{tag}] 물류대기 조회 -> {'첫 줄만 체크' if live == ONE else '전체선택'} -> 저장" + popup_note(texts)
+    return "done", f"[{tag}] 물류대기 조회 → {'첫 줄만 체크' if live == ONE else '전체선택'} → 저장" + popup_note(texts)
 
 
 def module_sap(rr, ctx, live=False):
@@ -939,7 +939,7 @@ def ui_error(rr, e):
     (run_modules 가 failed 에서 뒤 모듈을 멈춘다)."""
     rr.log(f"  UI 오류: {type(e).__name__}: {e}")
     detail = str(e).strip().splitlines()[0][:120] if str(e).strip() else ""
-    return "failed", f"UI 오류: {type(e).__name__}" + (f" - {detail}" if detail else "")   # 웹에도 원인이 보이게
+    return "failed", f"UI 오류: {type(e).__name__}" + (f" ({detail})" if detail else "")   # 웹에도 원인이 보이게
 
 
 SLIP_SEND = "4-2 매출전표 → 넘기기"
@@ -961,7 +961,7 @@ def sales_slip_stage(rr, ctx, live=False):
         head += hover_menu_item(rr, ctx, ctl.get("btn_CopyInsert"), SELECTED_ONLY, "4-1 [지정▼]", checked)
         pressed = False
     elif not checked:
-        return head + " - 전체 체크가 안 돼 지정하지 않음 (확인할 것)", False
+        return head + " (전체 체크가 되지 않아 지정하지 않았습니다. 확인하여 주십시오)", False
     else:
         note, pressed = press_menu_item(rr, ctx, ctl.get("btn_CopyInsert"), SELECTED_ONLY, "4-1 [지정▼]",
                                         ctl.get("gridCtrl_List"))
@@ -971,9 +971,9 @@ def sales_slip_stage(rr, ctx, live=False):
         ctl = controls(rr, ctx, SAP_FORM)    # 지정 뒤 그리드가 다시 그려진다 - 컨트롤을 새로 잡는다
     marks, bad = mark_rows(rr, ctx, ctl["gridCtrl_List"], count, slip_target, limit=1 if live == ONE else None)
     targets = sum(1 for v in marks.values() if v == "선택")
-    rr.log(f"  매출전표: 그리드 {len(marks)}줄 - 넘길 줄(검토 빈 칸) {targets}줄{f', 못 맞춘 줄 {len(bad)}' if bad else ''}")
-    rr.status.note(f"매출전표 {count}건 / {len(marks)}줄 - 넘길 줄 {targets}")
-    head += f" / 넘길 줄 {targets}" + (f" (못 맞춘 줄 {len(bad)} - 넘기지 않음)" if bad else "")
+    rr.log(f"  매출전표: 그리드 {len(marks)}줄, 넘길 줄(검토 빈 칸) {targets}줄{f', 못 맞춘 줄 {len(bad)}' if bad else ''}")
+    rr.status.note(f"매출전표 {count}건 / {len(marks)}줄 / 넘길 줄 {targets}")
+    head += f" / 넘길 줄 {targets}" + (f" (못 맞춘 줄 {len(bad)}, 넘기지 않음)" if bad else "")
     held = bool(not targets or bad) or marks_held(rr, ctl["gridCtrl_List"], marks, SLIP_SEND)   # 화살표 직전 다시 보기
     head += "" if held else RECHECK_NOTE
     note, sent = press_arrow(rr, ctx, ctl, "btn_FirstSend", SLIP_SEND, bool(targets) and not bad and held, targets, live)
@@ -1013,7 +1013,7 @@ def check_one_row(rr, ctx, grid, label):
     states = {n: rr.legacy_value(c[CHECK_COL]) for n, c in rows.items() if CHECK_COL in c}
     # 보이는 줄 중 가장 위 (사용자 10-13). 못 읽은 체크 값이 있으면 이미 체크된 줄인지 몰라 누르지 않는다
     if not states or any(v != "선택안됨" for v in states.values()):
-        rr.log(f"  확인할 것: {label} - 첫 줄만 체크하려는데 줄이 없거나, 이미 체크됐거나 못 읽은 줄이 있어 누르지 않음 ({states})")
+        rr.log(f"  {label}: 첫 줄만 체크하려 했으나 줄이 없거나, 이미 체크되었거나 읽지 못한 줄이 있어 누르지 않았습니다. ({states}) 확인하여 주십시오.")
         return False
     first = min(states)
     cell = rows[first][CHECK_COL]
@@ -1025,7 +1025,7 @@ def check_one_row(rr, ctx, grid, label):
     no_popup(rr, ctx, f"{label} {first}행 체크")
     others = [n for n, c in rows.items() if n != first and CHECK_COL in c and rr.legacy_value(c[CHECK_COL]) == "선택"]
     ok = rr.legacy_value(cell) == "선택" and not others
-    rr.log(f"  [1건] {label}: {first}행만 체크 - {'됨' if ok else '실패 (확인할 것)'}"
+    rr.log(f"  [1건] {label}: {first}행만 체크 {'완료' if ok else '실패 (확인하여 주십시오)'}"
            + (f", 다른 줄도 체크됨 {others}" if others else ""))
     return ok
 
@@ -1039,7 +1039,7 @@ def check_all_rows(rr, ctx, grid, label):
     checked = rr.select_all_by_header_checkbox(ctx.hwnd, grid)
     no_popup(rr, ctx, f"{label} 전체 체크")
     if not checked:
-        rr.log(f"  확인할 것: {label} - 머리글로 전체 체크하지 못했습니다")
+        rr.log(f"  {label}: 머리글로 전체 체크하지 못했습니다. 확인하여 주십시오.")
     return checked
 
 
@@ -1059,21 +1059,21 @@ def press_arrow(rr, ctx, ctl, arrow_id, what, want, count, live):
         hover(rr, ctx, arrow, what, want)
         return "", False
     if not want:
-        rr.log(f"  [실행] {what}: 누를 대상이 없어 누르지 않음 ({count}건)")
+        rr.log(f"  [실행] {what}: 누를 대상이 없어 누르지 않았습니다. ({count}건)")
         return "", False
     if arrow is None:
         raise Stop("failed", f"{what} 단추({arrow_id})를 찾지 못했습니다.")
     if not arrow.is_enabled():
-        rr.log(f"  확인할 것: {what} - 대상이 있는데 단추가 꺼져 있어 누르지 않음")
-        return " (단추 꺼짐 - 확인할 것)", False
+        rr.log(f"  {what}: 대상이 있으나 단추가 꺼져 있어 누르지 않았습니다. 확인하여 주십시오.")
+        return " (단추가 꺼져 있습니다. 확인하여 주십시오)", False
     grid = ctl.get("gridCtrl_List")
     idle = rr.grid_overlay_count(ctx.hwnd, grid) if grid is not None else 0
     no_popup(rr, ctx, f"{what} 누르기 전")
     before = popup_windows(rr, ctx)
-    rr.log(f"  [실행] {what}: 누름 ({count}건)")
+    rr.log(f"  [실행] {what}: 누릅니다. ({count}건)")
     click(rr, ctx, arrow, what)
     texts = confirm_popups(rr, ctx, what, grid, idle, before)
-    return " -> 누름" + popup_note(texts), True
+    return " → 누름" + popup_note(texts), True
 
 
 # ---------------------------------------------------------------------------
@@ -1099,7 +1099,7 @@ def module_invoice_send(rr, ctx, live=False):
         r = goto_screen(rr, ctx, INVOICE_TAB, INVOICE_ICON,     # 이미 열린 화면은 그 탭 (SAP·WMS 와 같다)
                         lambda: rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB))
         if r == "absent":
-            return "failed", f"'{INVOICE_TAB}' 아이콘({INVOICE_ICON})이 없습니다 - 이 ERPia 의 화면 구성을 확인하세요."
+            return "failed", f"'{INVOICE_TAB}' 아이콘({INVOICE_ICON})이 없습니다. 이 ERPia의 화면 구성을 확인하여 주십시오."
         if r != "ok":
             return "failed", r
         rr.status.step("inv_send")
@@ -1135,16 +1135,16 @@ def invoice_send(rr, ctx, live):
     rr.log(f"  {INVOICE_TAB}: 그리드 {count}줄")
     rr.status.note(f"운송장 {count}건")
     if not count:
-        return "no_target", f"[{tag}] 운송장 0건 - 전송할 것 없음" + query_note(fixed)
+        return "no_target", f"[{tag}] 운송장 0건 (전송할 것 없음)" + query_note(fixed)
     checked = check_rows(rr, ctx, grid, INVOICE_TAB, live)
     ctl = controls(rr, ctx, INVOICE_FORM)
     # 누르기 직전에 체크를 다시 본다 - 새로 잡은 그리드로 (조회가 늦게 끝나 그리드가 새로 그려지면 체크가 풀린다)
     checked = checked and recheck(rr, ctl.get("gridCtrl_List") or grid, INVOICE_TAB, live)
     note, pressed = press_arrow(rr, ctx, ctl, "btn_SendRequest", INVOICE_SEND, checked, 1 if live == ONE else count, live)
     head = f"[{tag}] 운송장 {count}건" + (" 중 첫 줄 1건" if live == ONE and pressed else "") + (
-        "" if checked else " - 체크가 안 돼 전송하지 않음 (확인할 것)")
+        "" if checked else " (체크가 되지 않아 전송하지 않았습니다. 확인하여 주십시오)")
     if not live:
-        head += " - 전송요청은 누르지 않음"
+        head += " (전송요청은 누르지 않음)"
     return ("done" if pressed else "skipped"), head + note + query_note(fixed)
 
 
@@ -1160,7 +1160,7 @@ def send_busy(rr, ctx, wait=None):
         if not off:
             return False
         if time.time() >= end:
-            rr.log(f"  {INVOICE_TAB}: {', '.join(off)} 이(가) 꺼져 있습니다 - 앞서 누른 전송이 아직 진행 중으로 봅니다.")
+            rr.log(f"  {INVOICE_TAB}: {', '.join(off)}이(가) 꺼져 있습니다. 앞서 누른 전송이 아직 진행 중인 것으로 판단합니다.")
             return True
         time.sleep(1)
 
@@ -1184,14 +1184,14 @@ def send_busy_reason(rr, now=None):
         rest = int(os.environ.get("RPA_REPEAT_REST") or "")
         end = now.replace(hour=int(until[:2]), minute=int(until[3:5]), second=0, microsecond=0)
     except ValueError:
-        return f"앞서 {at}누른 전송이 아직 진행 중이라 이번에는 누르지 않습니다."
+        return f"앞서 {at}누른 전송이 아직 진행 중이어서 이번에는 누르지 않습니다."
     # 대시보드는 회차가 '끝난' 시각 + 쉬는 시간이 끝 시각 앞이어야(5초 틱) 다음 회차를 띄운다 - 지금은 회차가 끝나기 전이라
     # 남은 단계·기록 시간과 틱만큼 여유를 두고 마지막으로 본다 (BugBuster L5)
     # ponytail: 고정 여유 SEND_BUSY_LAST_MARGIN 초, 회차 뒤 단계가 이보다 오래 걸리면 늘릴 것
     if now + datetime.timedelta(minutes=rest, seconds=SEND_BUSY_LAST_MARGIN) >= end:
         rr.status.keep_record()
-        return f"마지막으로 {at}전송요청을 눌렀고, 반복 끝 시각({until})까지 전송 중이라 {SEND_BUSY_LAST}."
-    return f"앞서 {at}누른 전송이 아직 진행 중이라 이번 회차는 누르지 않습니다. {rest}분 뒤 다시 확인합니다."
+        return f"마지막으로 {at}전송요청을 눌렀고, 반복 끝 시각({until})까지 전송 중이어서 {SEND_BUSY_LAST}."
+    return f"앞서 {at}누른 전송이 아직 진행 중이어서 이번 회차는 누르지 않습니다. {rest}분 뒤 다시 확인합니다."
 
 
 def last_send_at(rr, now):
@@ -1215,14 +1215,14 @@ def reopen_icon(rr, ctx):
     """⑥ 다시 열기 - 좌측 아이콘 (조회 조건을 화면 기본값으로 되돌릴 때)."""
     r = goto_screen(rr, ctx, INVOICE_TAB, INVOICE_ICON, lambda: rr.goto_screen_by_icon(ctx, INVOICE_ICON, INVOICE_TAB, INVOICE_TAB))
     if r != "ok":
-        raise Stop("failed", f"'{INVOICE_TAB}' 화면을 다시 열지 못했습니다 ({r}).")
+        raise Stop("failed", f"'{INVOICE_TAB}' 화면을 다시 열지 못했습니다. ({r})")
 
 
 def reopen_menu(rr, ctx, menu):
     """메뉴 검색으로 다시 열기 (⑤ - 조회 조건을 화면 기본값으로 되돌릴 때)."""
     ok, reason = goto_screen_by_menu(rr, ctx, menu)
     if not ok:
-        raise Stop("failed", f"'{menu}' 화면을 다시 열지 못했습니다: {reason}")
+        raise Stop("failed", f"'{menu}' 화면을 다시 열지 못했습니다. ({reason})")
 
 
 def rows_checked(rr, grid, one=False):
@@ -1233,7 +1233,7 @@ def rows_checked(rr, grid, one=False):
     return bool(states) and all(s == "선택" for s in states)
 
 
-RECHECK_NOTE = " (누르기 직전 다시 보니 체크가 맞지 않음 - 확인할 것)"
+RECHECK_NOTE = " (누르기 직전 다시 보니 체크가 맞지 않았습니다. 확인하여 주십시오)"
 
 
 def recheck(rr, grid, label, live):
@@ -1241,8 +1241,8 @@ def recheck(rr, grid, label, live):
     풀린다 - 풀린 채로 저장·화살표·전송을 누르지 않게. 리허설도 같은 것을 읽어 '실행이었다면 누르지 않음' 을 남긴다."""
     ok = rows_checked(rr, grid, one=live == ONE)
     if not ok:
-        rr.log(f"  확인할 것: {label} - 누르기 직전 다시 보니 체크가 맞지 않음"
-               f" ({'누르지 않음' if live else '리허설 - 실행이었다면 누르지 않음'})")
+        rr.log(f"  {label}: 누르기 직전 다시 보니 체크가 맞지 않았습니다. 확인하여 주십시오."
+               f" ({'누르지 않음' if live else '리허설, 실행이었다면 누르지 않음'})")
     return ok
 
 
@@ -1251,7 +1251,7 @@ def marks_held(rr, grid, marks, label):
     seen = {n: rr.legacy_value(c[CHECK_COL]) for n, c in rr.grid_rows(grid).items() if CHECK_COL in c and n in marks}
     off = sorted(n for n, v in seen.items() if v != marks[n])
     if not seen or off:
-        rr.log(f"  확인할 것: {label} - 누르기 직전 다시 보니 체크가 맞춘 값과 다름 (행 {off or '못 읽음'})")
+        rr.log(f"  {label}: 누르기 직전 다시 보니 체크가 맞춘 값과 다릅니다. (행 {off or '못 읽음'}) 확인하여 주십시오.")
     return bool(seen) and not off
 
 
@@ -1270,7 +1270,7 @@ def count_rows(rr, ctx, grid):
         rows = next_page(rr, ctx, grid, rows)
         if rows is None:
             return last
-    raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 못 셈")
+    raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 세지 못했습니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -1316,7 +1316,7 @@ def query_defaults(rr, screen):
         want = default if kind == "fixed" else conf.get(key, default)
         if (kind == "date" and not isinstance(want, int)) or (kind == "check" and want not in ("Y", "N")) \
                 or (kind in ("combo", "text") and not isinstance(want, str)):
-            raise RuntimeError(f"{rr.pl.config_name()} 의 '{QUERY_SECTION}.{screen}.{key}' 값이 틀립니다: {want!r}")
+            raise RuntimeError(f"{rr.pl.config_name()}의 '{QUERY_SECTION}.{screen}.{key}' 값이 올바르지 않습니다. ({want!r})")
         out.append((key, aid, kind, want))
     return out
 
@@ -1428,8 +1428,8 @@ def ensure_query(rr, ctx, screen, form_id, reopen):
         if not stale:
             break
         if attempt:
-            raise Stop("failed", f"조회 조건 {', '.join(stale)} 이(가) 화면을 다시 열어도 기본값이 아니어서 조회하지 않음.")
-        rr.log(f"  조회 조건 {', '.join(stale)} 이(가) 기본값이 아니거나 못 읽어 화면을 닫고 다시 엽니다")
+            raise Stop("failed", f"조회 조건 {', '.join(stale)}이(가) 화면을 다시 열어도 기본값이 아니어서 조회하지 않았습니다.")
+        rr.log(f"  조회 조건 {', '.join(stale)}이(가) 기본값이 아니거나 읽지 못해 화면을 닫고 다시 엽니다.")
         close_screen(rr, ctx, ctl, form_id)
         reopen()
         changed.append(f"화면 다시 열기({', '.join(stale)})")
@@ -1446,8 +1446,8 @@ def ensure_query(rr, ctx, screen, form_id, reopen):
             if kind == "check":     # 눌렀는데 그림이 기대와 다르다 - 그림을 잘못 읽는 PC 일 수 있다. 켠 채 남기지 않게 화면을 다시 열어 둔다
                 close_screen(rr, ctx, ctl, form_id)
                 reopen()
-            raise Stop("failed", f"조회 조건 {key} 를 기본값({want!r})으로 맞추지 못해 조회하지 않음 (지금 {got!r}"
-                       + (" - 화면을 다시 열어 두었다, 체크 상자 그림을 이 PC 에서 확인할 것" if kind == "check" else "") + ").")
+            raise Stop("failed", f"조회 조건 {key}를 기본값({want!r})으로 맞추지 못해 조회하지 않았습니다. (현재 {got!r}"
+                       + (". 화면을 다시 열어 두었습니다. 체크 상자 그림을 이 PC에서 확인하여 주십시오" if kind == "check" else "") + ")")
         changed.append(f"{key} {now!r}→{want!r}")
     rr.log(f"  조회 조건({screen}): " + ("기본값 그대로" if not changed else "기본값으로 고침 - " + ", ".join(changed)))
     return changed
@@ -1457,7 +1457,7 @@ def set_cond(rr, ctx, ctl, key, aid, kind, want):
     """조회 조건 하나를 기본값으로. 키는 포커스가 그 칸 안일 때만 보낸다 (메뉴 검색과 같다)."""
     el = ctl[aid]
     what = f"조회 조건 {key}"
-    no_popup(rr, ctx, f"{what} 바꾸기 전")
+    no_popup(rr, ctx, f"{what} 변경 전")
     if kind == "check":
         click(rr, ctx, el, what)            # 누를 때마다 켬/끔
         time.sleep(0.6)
@@ -1474,7 +1474,7 @@ def set_cond(rr, ctx, ctl, key, aid, kind, want):
         keys = "^a{BACKSPACE}" + rr.ec.literal_keys(want) + "{TAB}"
     click(rr, ctx, edit, what)
     if not _focus_in(rr, aid):
-        raise Stop("failed", f"{what}: 칸에 포커스가 오지 않아 입력하지 않았습니다 (포커스: {_focus_chain(rr)[:2]}).")
+        raise Stop("failed", f"{what}: 칸에 포커스가 오지 않아 입력하지 않았습니다. (포커스: {_focus_chain(rr)[:2]})")
     edit.type_keys(keys, with_spaces=True)
     time.sleep(0.6)
 
@@ -1498,15 +1498,15 @@ def pick_item(rr, ctx, combo, item, what):
     opened = _menu_windows(rr, ctx) - before
     if found is None:
         _close_menu(rr, ctx, opened, what)
-        raise Stop("failed", f"{what}: 목록에 '{item}' 이(가) 없어 바꾸지 않고 멈춤")
+        raise Stop("failed", f"{what}: 목록에 '{item}'이(가) 없어 변경하지 않고 중단하였습니다.")
     h, hit = found
     r = hit.rectangle()
     pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
     if rr.ec.screen_locked():           # 목록을 연 사이에 잠겼으면 누르지 않는다 (front() 는 목록을 닫을 수 있어 잠김만 본다)
-        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤")
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
     if _top_window(rr, pt) != h:        # 목록 창이 맨 위일 때만 (다른 창이 덮었으면 그것이 눌린다)
         _close_menu(rr, ctx, opened, what)
-        raise Stop("failed", f"{what}: 목록 항목 자리를 다른 창이 덮고 있어 누르지 않고 멈춤")
+        raise Stop("failed", f"{what}: 목록 항목 자리를 다른 창이 덮고 있어 누르지 않고 중단하였습니다.")
     hit.click_input(coords=pt, absolute=True)
     deadline = time.time() + DROPDOWN_WAIT_SECONDS
     while any(_shown(rr, w) for w in opened) and time.time() < deadline:
@@ -1518,7 +1518,7 @@ def close_screen(rr, ctx, ctl, form_id):
     """화면의 [닫기(X)](btn_Close) - 팝업 없이 탭이 닫힌다 (10-14 ⑥ 실측). 닫혔는지(폼이 안 보이는지) 본다."""
     btn = ctl.get("btn_Close")
     if btn is None:
-        raise Stop("failed", f"화면({form_id})의 [닫기(X)] 단추를 찾지 못해 다시 열지 않음")
+        raise Stop("failed", f"화면({form_id})의 [닫기(X)] 단추를 찾지 못해 다시 열지 않았습니다.")
     no_popup(rr, ctx, f"화면({form_id}) 닫기 전")
     click(rr, ctx, btn, f"화면({form_id}) [닫기(X)]")
     deadline = time.time() + STAGE_WAIT_SECONDS
@@ -1530,7 +1530,7 @@ def close_screen(rr, ctx, ctl, form_id):
         except Stop:
             return      # 화면이 사라졌다
         if time.time() > deadline:
-            raise Stop("failed", f"화면({form_id}) [닫기(X)] 를 눌렀으나 닫히지 않았습니다.")
+            raise Stop("failed", f"화면({form_id}) [닫기(X)]를 눌렀으나 닫히지 않았습니다.")
 
 
 # ---------------------------------------------------------------------------
@@ -1634,7 +1634,7 @@ def open_stage(rr, ctx, form_id, dash_id):
     ctl = controls(rr, ctx, form_id)
     btn, stage = ctl.get(dash_id), ctl.get("cbo_stage")
     if btn is None or stage is None:
-        raise Stop("failed", f"단계 단추({dash_id})나 cbo_stage 를 찾지 못했습니다.")
+        raise Stop("failed", f"단계 단추({dash_id})나 cbo_stage를 찾지 못했습니다.")
     label = btn.window_text().split("\r\n")[0].strip()
     already = same_stage(stage_name(rr.legacy_value(stage)), label)
     grid = ctl.get("gridCtrl_List")
@@ -1645,7 +1645,7 @@ def open_stage(rr, ctx, form_id, dash_id):
     deadline = time.time() + STAGE_WAIT_SECONDS
     while not same_stage(stage_name(rr.legacy_value(stage)), label):
         if time.time() > deadline:
-            raise Stop("failed", f"'{label}' 조회가 끝나지 않았습니다 (cbo_stage={rr.legacy_value(stage)!r}).")
+            raise Stop("failed", f"'{label}' 조회가 끝나지 않았습니다. (cbo_stage={rr.legacy_value(stage)!r})")
         time.sleep(0.3)
     if already and grid is not None:   # 이미 그 단계 - 콤보 값이 그대로라 스피너가 뜨는지 잠깐 본다 (빠른 조회는 안 뜬다)
         probe = time.time() + 2
@@ -1667,9 +1667,9 @@ def front(rr, ctx, what):
     """누르기(또는 마우스 올리기) 직전: 화면이 잠겼거나 ERPia 를 앞으로 가져오지 못하면 누르지 않고 멈춘다
     - 좌표 클릭이 잠금 화면이나 다른 프로그램 창에 떨어지지 않게 (10-07 실측: 잠긴 화면에서 화면 이동이 헛돌았다)."""
     if rr.ec.screen_locked():
-        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤")
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
     if not rr.ec.ensure_foreground(ctx.hwnd):
-        raise Stop("failed", f"{what}: ERPia 창을 앞으로 가져오지 못해 누르지 않고 멈춤{front_note(rr, ctx)}")
+        raise Stop("failed", f"{what}: ERPia 창을 앞으로 가져오지 못해 누르지 않고 중단하였습니다.{front_note(rr, ctx)}")
 
 
 def front_note(rr, ctx):
@@ -1678,7 +1678,7 @@ def front_note(rr, ctx):
     try:
         pid = rr.win32process.GetWindowThreadProcessId(rr.win32gui.GetForegroundWindow())[1]
         if pid == ctx.pid:
-            return " (맨 앞 창: ERPia 의 다른 창)"
+            return " (맨 앞 창: ERPia의 다른 창)"
         return " (맨 앞 창: Edge)" if (rr.ec.get_process_name(pid) or "").lower() == "msedge.exe" else " (맨 앞 창: 다른 프로그램)"
     except Exception:
         return ""
@@ -1698,7 +1698,7 @@ def no_popup(rr, ctx, after):
     if buttons:
         ctx.calm_children = None
         text = rr.collect_popup_text(buttons[0])
-        raise Stop("stopped", f"{after} 뒤 팝업이 떠서 멈춤 (누르지 않음): {text[:200]}")
+        raise Stop("stopped", f"{after} 뒤 팝업이 나타나 누르지 않고 중단하였습니다. ({text[:200]})")
     # 훑는 사이에 창 구성이 바뀌었으면(막 뜨는 팝업) 기억하지 않는다 - 다음에 다시 훑는다
     ctx.calm_children = sig if sig is not None and sig == _calm_sig(rr, ctx) else None
 
@@ -1717,16 +1717,16 @@ def pass_popups(rr, ctx, after):
             if time.time() - unknown < POPUP_SETTLE_SECONDS:   # 막 뜬 팝업은 단추가 아직 안 그려졌을 수 있다
                 time.sleep(0.3)
                 continue
-            raise Stop("stopped", f"{after} 뒤 [예]/[확인] 이 없는 팝업이라 멈춤: {text[:200]}")
+            raise Stop("stopped", f"{after} 뒤 [예]/[확인]이 없는 팝업이어서 중단하였습니다. ({text[:200]})")
         unknown = None
         if passed >= MAX_POPUPS:
-            raise Stop("stopped", f"{after} 뒤 팝업이 {MAX_POPUPS}개를 넘어 멈춤 (마지막: {text[:200]})")
+            raise Stop("stopped", f"{after} 뒤 팝업이 {MAX_POPUPS}개를 넘어 중단하였습니다. (마지막: {text[:200]})")
         front(rr, ctx, f"{after} 팝업")
-        rr.log(f"  {after} 뒤 팝업: {text[:300]} -> [{button.window_text()}] 누름")
+        rr.log(f"  {after} 뒤 팝업에서 [{button.window_text()}]을(를) 눌렀습니다. ({text[:300]})")
         button.click_input()
         passed += 1
         if rr.match_sales_failure(text):
-            raise Stop("stopped", f"{after} 뒤 매출처리 실패 팝업이라 닫고 멈춤: {text[:200]}")
+            raise Stop("stopped", f"{after} 뒤 매출처리 실패 팝업이어서 닫고 중단하였습니다. ({text[:200]})")
         time.sleep(0.5)
 
 
@@ -1785,21 +1785,21 @@ def mark_rows(rr, ctx, grid, expected, want, limit=None):
                 reviews[review] = reviews.get(review, 0) + 1
             else:
                 failed.add(n)
-                rr.log(f"  {n}행 체크 칸이 '{value}' 가 되지 않았습니다 (지금 {rr.legacy_value(cell)!r})")
+                rr.log(f"  {n}행 체크 칸이 '{value}'이(가) 되지 않았습니다. (현재 {rr.legacy_value(cell)!r})")
         rows = next_page(rr, ctx, grid, rows)
         if rows is None:
             break
     else:
-        raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 못 맞춤")
+        raise Stop("failed", f"그리드가 {MAX_PAGES}페이지를 넘어 끝까지 맞추지 못했습니다.")
     # 본 줄 중 못 맞춘 줄(잘린 칸·칸 없음·안 바뀜)과 중간에 빠진 번호. 끝까지 이어져 있으면 그리드가 거기서 끝난 것이다 -
     # 단추 건수와 달라도 그리드 기준으로 한다 (10-07 실측: 매출전표 단추 201건, 그리드 198행에서 끝. 차이는 무시 - 사용자 결정)
     bad = sorted(failed | (set(range(1, max(seen, default=0) + 1)) - set(out)))
     # 검토 값별 줄 수 - 고른 줄이 맞는지 로그로 확인하게 (빈 칸은 '' 로 보인다)
     rr.log(f"  검토 값: {', '.join(f'{v!r} {c}줄' for v, c in sorted(reviews.items(), key=lambda x: -x[1]))}")
     if bad:
-        rr.log(f"  확인할 것: 체크를 맞추지 못한 줄 {bad[:20]}{' …' if len(bad) > 20 else ''}")
+        rr.log(f"  체크를 맞추지 못한 줄이 있습니다. 확인하여 주십시오. ({bad[:20]}{' …' if len(bad) > 20 else ''})")
     elif expected and len(out) != expected:
-        rr.log(f"  그리드 {len(out)}줄을 끝까지 맞춤 (단추 {expected}건과 다름 - 그리드 기준)")
+        rr.log(f"  그리드 {len(out)}줄을 끝까지 맞추었습니다. (단추 {expected}건과 다름, 그리드 기준)")
     return out, bad
 
 
@@ -1814,10 +1814,10 @@ def clear_all_checks(rr, ctx, grid, header, rows):
     deadline = time.time() + CHECK_WAIT_SECONDS
     while time.time() < deadline:
         if all(rr.legacy_value(c[CHECK_COL]) == "선택안됨" for c in rows.values() if CHECK_COL in c):
-            rr.log("  머리글로 전체 체크를 풀었습니다")
+            rr.log("  머리글로 전체 체크를 해제하였습니다.")
             return
         time.sleep(0.2)
-    rr.log("  머리글로 전체 체크를 다 풀지 못해 줄마다 맞춥니다")
+    rr.log("  머리글로 전체 체크를 모두 해제하지 못해 줄마다 맞춥니다.")
 
 
 def settled_rows(rr, grid, moved_from=None, first=None):
@@ -1857,9 +1857,9 @@ def next_page(rr, ctx, grid, rows):
     except Exception:
         more = None
     if more is None:
-        raise Stop("failed", "페이지를 내렸는데 그리드가 움직이지 않았고 스크롤바도 읽지 못해 멈춤 (끝인지 모름 - 뒤 줄은 못 맞춤)")
+        raise Stop("failed", "페이지를 내렸으나 그리드가 움직이지 않았고 스크롤바도 읽지 못해 중단하였습니다. (끝인지 알 수 없어 뒤 줄은 맞추지 못함)")
     if more:
-        raise Stop("failed", "페이지를 내렸는데 그리드가 움직이지 않아 멈춤 (뒤 줄은 못 맞춤)")
+        raise Stop("failed", "페이지를 내렸으나 그리드가 움직이지 않아 중단하였습니다. (뒤 줄은 맞추지 못함)")
     return None
 
 
@@ -1886,15 +1886,15 @@ def hover_menu_item(rr, ctx, split, item_text, what, would_press):
     if item is None:
         return menu     # 열지 못했다 - 사유 글
     if rr.ec.screen_locked():   # front() 는 쓰지 않는다 - 메인 창을 앞으로 가져오면 메뉴가 닫힌다
-        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 멈춤 (메뉴가 열려 있을 수 있음)")
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 중단하였습니다. (메뉴가 열려 있을 수 있음)")
     r = item.rectangle()
     mouse.move(coords=((r.left + r.right) // 2, (r.top + r.bottom) // 2))
     try:
         active = item.is_enabled()
     except Exception:
         active = None
-    rr.log(f"  [리허설] {what}: 내림 메뉴를 열고 '{item.window_text()}' 에 마우스만 올림 (누르지 않음, 활성={active}"
-           f"{'' if would_press else ', 전체 체크가 안 돼 실제 실행에서는 지정하지 않는 자리'})")
+    rr.log(f"  [리허설] {what}: 내림 메뉴를 열고 '{item.window_text()}'에 마우스만 올렸습니다. (누르지 않음, 활성={active}"
+           f"{'' if would_press else ', 전체 체크가 되지 않아 실제 실행에서는 지정하지 않는 자리'})")
     time.sleep(HOVER_SECONDS)
     _close_menu(rr, ctx, {menu}, what)
     return ""
@@ -1908,35 +1908,35 @@ def press_menu_item(rr, ctx, split, item_text, what, grid=None, confirm=True):
     if item is None:
         return menu, False
     if rr.ec.screen_locked():
-        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 멈춤 (메뉴가 열려 있을 수 있음)")
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 중단하였습니다. (메뉴가 열려 있을 수 있음)")
     try:
         active = item.is_enabled()
     except Exception:
         active = None
     if active is False:
-        rr.log(f"  확인할 것: {what} - '{item.window_text()}' 가 꺼져 있어 누르지 않음")
+        rr.log(f"  {what}: '{item.window_text()}'이(가) 꺼져 있어 누르지 않았습니다. 확인하여 주십시오.")
         _close_menu(rr, ctx, {menu}, what)
-        return f" (확인할 것: '{item_text}' 꺼짐 - 누르지 않음)", False
+        return f" ('{item_text}'이(가) 꺼져 있어 누르지 않았습니다. 확인하여 주십시오)", False
     r = item.rectangle()
     pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
     mouse.move(coords=pt)
     top = _top_window(rr, pt)
     if top != menu:
         _close_menu(rr, ctx, {menu}, what)
-        raise Stop("failed", f"{what}: '{item_text}' 자리를 다른 창({top})이 덮고 있어 누르지 않고 멈춤")
+        raise Stop("failed", f"{what}: '{item_text}' 자리를 다른 창({top})이 덮고 있어 누르지 않고 중단하였습니다.")
     idle = rr.grid_overlay_count(ctx.hwnd, grid) if grid is not None else 0
     before = popup_windows(rr, ctx) - {menu}
-    rr.log(f"  [실행] {what}: '{item.window_text()}' 누름")
+    rr.log(f"  [실행] {what}: '{item.window_text()}'을(를) 누릅니다.")
     item.click_input(coords=pt, absolute=True)
     deadline = time.time() + DROPDOWN_WAIT_SECONDS
     while _shown(rr, menu):
         if time.time() > deadline:
-            raise Stop("failed", f"{what}: '{item_text}' 를 눌렀는데 메뉴가 닫히지 않아 멈춤")
+            raise Stop("failed", f"{what}: '{item_text}'을(를) 눌렀으나 메뉴가 닫히지 않아 중단하였습니다.")
         time.sleep(0.2)
     if not confirm:
-        return f" -> '{item_text}' 누름", True
+        return f" → '{item_text}' 누름", True
     texts = confirm_popups(rr, ctx, what, grid, idle, before)
-    return f" -> '{item_text}' 누름" + popup_note(texts), True
+    return f" → '{item_text}' 누름" + popup_note(texts), True
 
 
 def _open_menu(rr, ctx, split, item_text, what, would_press):
@@ -1951,12 +1951,12 @@ def _open_menu(rr, ctx, split, item_text, what, would_press):
     arrow = split_open_button(split)
     if arrow is None:
         try:
-            rr.log(f"  {what}: ▼ 자리 확인 실패 - 본체 {split.rectangle()}, 자식 "
+            rr.log(f"  {what}: ▼ 자리를 확인하지 못했습니다. 본체 {split.rectangle()}, 자식 "
                    f"{[(k.window_text(), str(k.rectangle())) for k in split.children()]}")
         except Exception:
             pass
         hover(rr, ctx, split, f"{what} (▼ 자리를 확인하지 못해 열지 않음)", would_press)
-        return None, " (확인할 것: ▼ 자리를 확인하지 못해 메뉴를 열지 않음)"
+        return None, " (▼ 자리를 확인하지 못해 메뉴를 열지 않았습니다. 확인하여 주십시오)"
     try:
         arrow_on = arrow.is_enabled()
     except Exception:
@@ -1965,7 +1965,7 @@ def _open_menu(rr, ctx, split, item_text, what, would_press):
         hover(rr, ctx, arrow, f"{what} ▼ (꺼져 있어 열지 않음)", would_press)
         return None, " (▼ 꺼짐)"
 
-    no_popup(rr, ctx, f"{what} ▼ 를 누르기 전")
+    no_popup(rr, ctx, f"{what} ▼를 누르기 전")
     before = _menu_windows(rr, ctx)
     click(rr, ctx, arrow, f"{what} ▼")
     item, menu = None, None
@@ -1978,16 +1978,16 @@ def _open_menu(rr, ctx, split, item_text, what, would_press):
                 break
     opened = _menu_windows(rr, ctx) - before
     if item is None:
-        rr.log(f"  확인할 것: {what} - 내림 메뉴에서 '{item_text}' 를 찾지 못했습니다. "
-               f"새로 뜬 창 {len(opened)}개: {_window_texts(rr, opened)}")
-        no_popup(rr, ctx, f"{what} ▼ 를 누른 뒤")
+        rr.log(f"  {what}: 내림 메뉴에서 '{item_text}'을(를) 찾지 못했습니다. "
+               f"확인하여 주십시오. (새로 나타난 창 {len(opened)}개: {_window_texts(rr, opened)})")
+        no_popup(rr, ctx, f"{what} ▼를 누른 뒤")
         menus = {h for h in opened if _has_buttons(rr, h)}   # 툴팁 같은 창은 메뉴가 아니다 - ESC 를 보낼 까닭이 없다
         if not menus:
-            return None, " (확인할 것: ▼ 를 눌렀으나 메뉴가 뜨지 않음)"
+            return None, " (▼를 눌렀으나 메뉴가 나타나지 않았습니다. 확인하여 주십시오)"
         _close_menu(rr, ctx, menus, what)
-        return None, f" (확인할 것: 메뉴에 '{item_text}' 가 없음 - 로그의 실측 글자 참고)"
+        return None, f" (메뉴에 '{item_text}'이(가) 없습니다. 로그의 실측 글자를 확인하여 주십시오)"
     if menu not in opened:   # 누르기 전부터 떠 있던 메뉴 창 - 무엇이 열렸는지 모르니 멈춘다
-        raise Stop("failed", f"{what}: ▼ 를 누르기 전부터 떠 있던 메뉴에서 항목이 잡혀 멈춤 (창 {menu})")
+        raise Stop("failed", f"{what}: ▼를 누르기 전부터 열려 있던 메뉴에서 항목을 찾아 중단하였습니다. (창 {menu})")
     return item, menu
 
 
@@ -2002,12 +2002,12 @@ def _close_menu(rr, ctx, windows, what):
     except Exception:
         fg_pid = None
     if fg_pid != ctx.pid:
-        raise Stop("failed", f"{what}: 맨 앞 창이 ERPia 가 아니라 ESC 를 보내지 않고 멈춤 (메뉴가 열려 있을 수 있음)")
+        raise Stop("failed", f"{what}: 맨 앞 창이 ERPia가 아니어서 ESC를 전송하지 않고 중단하였습니다. (메뉴가 열려 있을 수 있음)")
     rr.send_keys("{ESC}")
     deadline = time.time() + DROPDOWN_WAIT_SECONDS
     while any(_shown(rr, h) for h in windows):
         if time.time() > deadline:
-            raise Stop("failed", f"{what}: 내림 메뉴가 ESC 로 닫히지 않아 멈춤 (다음 클릭이 메뉴에 떨어질 수 있다)")
+            raise Stop("failed", f"{what}: 내림 메뉴가 ESC로 닫히지 않아 중단하였습니다. (다음 클릭이 메뉴에 떨어질 수 있음)")
         time.sleep(0.2)
 
 
@@ -2073,13 +2073,13 @@ def clear_point(rr, ctx, el, what):
     pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
     wr = ctx.window().rectangle()
     if r.width() <= 0 or r.height() <= 0 or not (wr.left <= pt[0] < wr.right and wr.top <= pt[1] < wr.bottom):
-        raise Stop("failed", f"{what}: 누를 자리가 창 안에 보이지 않아 누르지 않고 멈춤 ({r})")
+        raise Stop("failed", f"{what}: 누를 자리가 창 안에 보이지 않아 누르지 않고 중단하였습니다. ({r})")
     mouse.move(coords=pt)
     deadline = time.time() + 1.0
     top = _top_window(rr, pt)
     while top != ctx.hwnd:
         if time.time() > deadline:
-            raise Stop("failed", f"{what}: 누를 자리를 다른 창({top})이 덮고 있어 누르지 않고 멈춤")
+            raise Stop("failed", f"{what}: 누를 자리를 다른 창({top})이 덮고 있어 누르지 않고 중단하였습니다.")
         time.sleep(0.1)
         top = _top_window(rr, pt)
     return pt
@@ -2105,10 +2105,10 @@ def hover(rr, ctx, el, what, would_press):
         active = el.is_enabled()
     except Exception:
         active = None
-    rr.log(f"  [마우스만] {what}: 누르지 않고 마우스만 올림 (활성={active}"
+    rr.log(f"  [마우스만] {what}: 누르지 않고 마우스만 올렸습니다. (활성={active}"
            f"{', 대상이 없어 실제 실행에서도 누르지 않는 자리' if would_press is False else ''})")
     if would_press and active is False:
-        rr.log(f"  확인할 것: {what} - 대상이 있는데 단추가 비활성입니다")
+        rr.log(f"  {what}: 대상이 있으나 단추가 비활성입니다. 확인하여 주십시오.")
     time.sleep(HOVER_SECONDS)
 
 
@@ -2150,18 +2150,18 @@ def confirm_popups(rr, ctx, what, grid=None, idle=0, before=frozenset()):
                 if time.time() - unknown < POPUP_SETTLE_SECONDS:   # 아직 그려지는 중일 수 있다 - 다시 본다
                     time.sleep(0.3)
                     continue
-                raise Stop("stopped", f"{what}: [예]/[확인] 이 없는 팝업이라 멈춤: {text[:200]}")
+                raise Stop("stopped", f"{what}: [예]/[확인]이 없는 팝업이어서 중단하였습니다. ({text[:200]})")
             unknown = None
             if len(texts) >= MAX_POPUPS:
-                raise Stop("stopped", f"{what}: 팝업이 {MAX_POPUPS}개를 넘어 멈춤 (마지막: {text[:200]})")
+                raise Stop("stopped", f"{what}: 팝업이 {MAX_POPUPS}개를 넘어 중단하였습니다. (마지막: {text[:200]})")
             front(rr, ctx, f"{what} 팝업")    # 잠김·포커스 - 좌표 클릭이 다른 프로그램 창에 떨어지지 않게
             r = button.rectangle()
             pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
             top = _top_window(rr, pt)
             if top != ctx.hwnd and top not in popup_windows(rr, ctx):
-                raise Stop("failed", f"{what}: 팝업 단추 자리를 다른 창({top})이 덮고 있어 누르지 않고 멈춤: {text[:200]}")
+                raise Stop("failed", f"{what}: 팝업 단추 자리를 다른 창({top})이 덮고 있어 누르지 않고 중단하였습니다. ({text[:200]})")
             name = button.window_text()
-            rr.log(f"  [실행] {what} 팝업: {text[:300]} -> [{name}] 누름")
+            rr.log(f"  [실행] {what} 팝업에서 [{name}]을(를) 눌렀습니다. ({text[:300]})")
             button.click_input(coords=pt, absolute=True)
             texts.append(text)
             calm = None
@@ -2175,10 +2175,10 @@ def confirm_popups(rr, ctx, what, grid=None, idle=0, before=frozenset()):
         elif time.time() - calm >= QUIET_SECONDS:
             failed = [t for t in texts if any(k in t for k in ("실패", "오류", "에러"))]
             if failed:     # 넘기기는 했지만 처리가 잘못됐을 수 있다 - 뒤 단계(지정 뒤 4-2 화살표 등)로 가지 않는다
-                raise Stop("stopped", f"{what}: 팝업에 실패/오류 문구가 있어 뒤 단계는 하지 않고 멈춤: {failed[0][:200]}")
+                raise Stop("stopped", f"{what}: 팝업에 실패/오류 문구가 있어 뒤 단계를 진행하지 않고 중단하였습니다. ({failed[0][:200]})")
             return texts
         time.sleep(0.3)
-    raise Stop("failed", f"{what}: {CONFIRM_WAIT_SECONDS}초 안에 처리가 끝나지 않았습니다 (넘긴 팝업 {len(texts)}개)")
+    raise Stop("failed", f"{what}: {CONFIRM_WAIT_SECONDS}초 안에 처리가 끝나지 않았습니다. (넘긴 팝업 {len(texts)}개)")
 
 
 def _next_popup(rr, ctx, before):
@@ -2252,15 +2252,15 @@ def _open_by_menu(rr, ctx, menu):
     with keys(rr):      # 입력부터 메뉴 항목을 누를 때까지 (open_order_copy 와 같은 까닭)
         click(rr, ctx, search, "메뉴 검색 칸")
         if not _focus_in(rr, "sch_Menus"):
-            return False, f"메뉴 검색 칸에 포커스가 오지 않아 입력하지 않았습니다 (포커스: {_focus_chain(rr)[:2]})."
+            return False, f"메뉴 검색 칸에 포커스가 오지 않아 입력하지 않았습니다. (포커스: {_focus_chain(rr)[:2]})"
         search.type_keys("^a{BACKSPACE}")
         search.type_keys(rr.ec.literal_keys(menu), with_spaces=True)
         item = _wait_tree_item(nav, menu, MENU_WAIT_SECONDS)
         if item is None:
             _log_menu_state(rr, ctx, search, nav)
             _clear_search(rr, ctx)
-            return False, (f"메뉴 검색 결과에 '{menu}' 가 없습니다 ({MENU_WAIT_SECONDS}초 대기) - "
-                           "이 업체에 메뉴가 없거나 이름이 다릅니다 (로그의 검색 칸 값으로 입력이 들어갔는지 확인).")
+            return False, (f"메뉴 검색 결과에 '{menu}'이(가) 없습니다. ({MENU_WAIT_SECONDS}초 대기) "
+                           "이 업체에 메뉴가 없거나 이름이 다릅니다. (로그의 검색 칸 값으로 입력되었는지 확인하여 주십시오)")
         log(f"  메뉴 항목 클릭: {item.rectangle()}")
         click(rr, ctx, item, "메뉴 항목")
 
@@ -2269,7 +2269,7 @@ def _open_by_menu(rr, ctx, menu):
         _log_menu_state(rr, ctx, search, nav)
     _clear_search(rr, ctx)
     if not ok:
-        return False, f"'{menu}' 메뉴를 눌렀으나 화면이 열리지 않았습니다 (활성 메인탭='{active}')."
+        return False, f"'{menu}' 메뉴를 눌렀으나 화면이 열리지 않았습니다. (활성 메인탭='{active}')"
     log(f"'{menu}' 화면 열림 확인 (활성 메인탭='{active}')")
     return True, None
 
@@ -2294,8 +2294,8 @@ def open_tab(rr, ctx, name):
         except Exception:
             continue
     if found:
-        raise Stop("failed", f"'{name}' 화면이 이미 열려 있지만 탭이 다 보이지 않아 누르지 않았습니다 "
-                             "(탭을 몇 개 닫고 다시 실행)")
+        raise Stop("failed", f"'{name}' 화면이 이미 열려 있으나 탭이 모두 보이지 않아 누르지 않았습니다. "
+                             "(탭을 몇 개 닫은 뒤 다시 실행하여 주십시오)")
     return None
 
 
@@ -2385,7 +2385,7 @@ def numbered_tabs(ctx):
 def dup_note(ctx):
     """화면 이동 실패 사유에 덧붙일 글 - 번호 붙은 탭이 있으면 그것 때문일 수 있다."""
     dup = numbered_tabs(ctx)
-    return f" (같은 화면이 여러 개 열려 있음: {', '.join(dup)} - 번호 붙은 화면을 닫고 다시 실행)" if dup else ""
+    return f" (같은 화면이 여러 개 열려 있습니다. {', '.join(dup)} 화면을 닫은 뒤 다시 실행하여 주십시오)" if dup else ""
 
 
 def find_icon(ctx, key):
@@ -2406,11 +2406,11 @@ def goto_open_tab(rr, ctx, name):
     tab = open_tab(rr, ctx, name)
     if tab is None:
         return None
-    rr.log(f"'{name}' 화면이 이미 열려 있어 그 탭을 누릅니다: {tab.rectangle()}")
+    rr.log(f"'{name}' 화면이 이미 열려 있어 그 탭을 누릅니다. ({tab.rectangle()})")
     click(rr, ctx, tab, f"'{name}' 탭")
     ok, active = wait_tab(rr, ctx, name)
     if not ok:
-        return False, f"'{name}' 탭을 눌렀으나 그 화면으로 바뀌지 않았습니다 (떠 있는 화면='{active}')."
+        return False, f"'{name}' 탭을 눌렀으나 그 화면으로 전환되지 않았습니다. (활성 화면='{active}')"
     rr.log(f"'{name}' 화면으로 이동 확인")
     return True, None
 
@@ -2427,14 +2427,14 @@ def goto_screen(rr, ctx, name, icon, original):
     except Stop:
         raise
     except Exception as e:
-        rr.log(f"  '{name}' 탭을 읽지 못해 원래 화면 이동으로 갑니다: {type(e).__name__}")
+        rr.log(f"  '{name}' 탭을 읽지 못해 원래 화면 이동 방식으로 진행합니다. ({type(e).__name__})")
         went, dup = None, []
     if went is not None:
         return "ok" if went[0] else went[1]
     if not dup:
         r = original()
         return r if r in ("ok", "absent") else (f"'{name}' 화면으로 이동하지 못했습니다." if r == "failed" else r)
-    rr.log(f"  같은 화면이 여러 개 열려 있어({', '.join(dup)}) 좌측 아이콘을 자식을 따라 찾습니다")
+    rr.log(f"  같은 화면이 여러 개 열려 있어({', '.join(dup)}) 좌측 아이콘을 자식을 따라 찾습니다.")
     try:
         el = find_icon(ctx, icon)
         if el is None:
@@ -2445,8 +2445,8 @@ def goto_screen(rr, ctx, name, icon, original):
         raise
     except Exception as e:      # UIA 오류는 실행 전체를 죽이지 않고 이 화면 이동의 실패로 (원래 아이콘 이동과 같다)
         rr.log(f"  '{name}' 아이콘 이동 중 UI 오류: {type(e).__name__}: {e}")
-        return f"'{name}' 화면으로 이동하지 못했습니다 (UI 오류: {type(e).__name__})" + dup_note(ctx)
-    return "ok" if ok else f"'{name}' 아이콘을 눌렀으나 그 화면으로 바뀌지 않았습니다 (떠 있는 화면='{active}')."
+        return f"'{name}' 화면으로 이동하지 못했습니다. (UI 오류: {type(e).__name__})" + dup_note(ctx)
+    return "ok" if ok else f"'{name}' 아이콘을 눌렀으나 그 화면으로 전환되지 않았습니다. (활성 화면='{active}')"
 
 
 def _ok_or_reason(result):
@@ -2540,13 +2540,13 @@ def _clear_search(rr, ctx):
     try:
         search = rr.find_by_auto_id(ctx.window(), "sch_Menus")
         if search is None:
-            rr.log("  메뉴 검색 칸을 비우지 않았습니다 (검색 칸이 없음).")
+            rr.log("  메뉴 검색 칸을 비우지 않았습니다. (검색 칸이 없음)")
             return
         with keys(rr):
             click(rr, ctx, search, "메뉴 검색 칸 비우기")   # 잠김·앞 창·덮인 자리를 보고 누른다 (Stop 도 아래에서 로그만)
             if not _focus_in(rr, "sch_Menus"):
-                rr.log(f"  메뉴 검색 칸에 포커스가 오지 않아 비우지 않았습니다 (포커스: {_focus_chain(rr)[:2]}).")
+                rr.log(f"  메뉴 검색 칸에 포커스가 오지 않아 비우지 않았습니다. (포커스: {_focus_chain(rr)[:2]})")
                 return
             search.type_keys("^a{BACKSPACE}")
     except Exception as e:
-        rr.log(f"  메뉴 검색 칸을 비우지 못했습니다(무시): {type(e).__name__}")
+        rr.log(f"  메뉴 검색 칸을 비우지 못했습니다. (무시, {type(e).__name__})")

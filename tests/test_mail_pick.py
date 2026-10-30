@@ -25,9 +25,9 @@ PAGE = """<!doctype html><meta charset="utf-8"><title>메일</title>
 <script>Map = function() { this.map = new Object(); }; Map.prototype = { put: function(k, v) { this.map[k] = v; } };</script>
 <style>li.m_data{cursor:pointer;padding:6px} li.unread{font-weight:bold} #view{display:none}</style>
 <ul id="list">__ROWS__</ul>
-<div id="view"><h3 id="vt"></h3><div class="att"><a href="javascript:;" id="att" onclick="location.href='/download?k=' + this.dataset.k"></a></div></div>
+<div id="view"><h3 id="vt"></h3><div class="att"><a href="javascript:;" id="att" onclick="if (NODATA.includes(this.dataset.k)) alert('조회된 데이터가 없습니다.'); else location.href='/download?k=' + this.dataset.k"></a></div></div>
 <script>
-const ATT = document.querySelector('.att').innerHTML, NOATT = __NOATT__;
+const ATT = document.querySelector('.att').innerHTML, NOATT = __NOATT__, NODATA = __NODATA__;
 function show() { const m = /ukey=(\\w+)/.exec(location.hash); document.getElementById('list').style.display = m ? 'none' : 'block';
   document.getElementById('view').style.display = m ? 'block' : 'none';
   if (m && NOATT.includes(m[1])) { document.querySelector('.att').innerHTML = ''; document.getElementById('vt').textContent = 'no'; return; }
@@ -42,6 +42,9 @@ MARKS = {}        # key → 제목 칸 앞에 붙는 것 (비즈메카: 아이�
 
 
 NOATT = []        # 첨부 없는 메일의 key (BugBuster M13)
+
+
+NODATA = []       # 받기를 누르면 몰이 '자료 없음' 알림창을 띄우는 메일의 key (PR 검토 10-30)
 
 
 KEYLESS = {}      # 켜면 네이버 메일처럼: 줄에 고유 표시가 없고, 제목 칸 앞에 숨은 글자 '메일 제목', 뒤에 받은 시각 (사용자 2026-10-20)
@@ -68,7 +71,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Disposition", f"attachment; filename=file_{q.split('=')[1]}.xlsx")
         else:
-            b = PAGE.replace("__ROWS__", rows()).replace("__NOATT__", json.dumps(NOATT)).encode("utf-8")
+            b = PAGE.replace("__ROWS__", rows()).replace("__NOATT__", json.dumps(NOATT)).replace("__NODATA__", json.dumps(NODATA)).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(b)))
@@ -209,6 +212,21 @@ check("M13: 받은 메일이 하나도 없으면 실패, 기억하지 않는다 
       and not any(rec.MAIL_MORE in x for x in lines), (rp.results, lines[-4:]))
 check("L7: 실패 번호는 묶음 안의 실제 단계", rp.results[-1][:2] == (end + 1, "fail") and prog[-1][:2] == (end + 1, "fail"), (rp.results[-1], prog[-1:]))
 NOATT[:] = []
+
+# 메일을 열어 받기를 눌렀더니 몰이 '자료 없음' 알림창 - 그 메일만 '주문 없음', 모두 그렇게 끝나면 대상 없음 (토큰 안 씀, PR 검토 10-30)
+rec.NO_DATA_GRACE, saved_grace = 2, rec.NO_DATA_GRACE
+MAILS[:] = [("d1", ">>> 자료 없음"), ("d2", ">>> 주문 N")]
+NODATA[:] = ["d1", "d3"]
+mem4 = os.path.join(OUT, "mem", "PRESET4.json")
+ok, rp, lines = replay("nodata", rec.MailMemory(mem4))
+check("'자료 없음' 알림창 메일은 그 메일만 넘기고 다음 메일은 받는다 (받은 파일이 있으니 토큰을 쓴다)",
+      ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_d2.xlsx"], (rp.results, rp.saved, lines[-6:]))
+MAILS[:] = [("d3", ">>> 자료 없음 2")]
+ok, rp, lines = replay("nodata_only", rec.MailMemory(mem4))
+check("모든 메일이 '자료 없음' 이면 받은 파일 없이 대상 없음 - 토큰을 쓰지 않는다 (묶음 밖과 같이)",
+      ok and not rp.saved and rp.no_target and rp.no_target_why.startswith("주문 없음"), (rp.results, rp.no_target_why, lines[-4:]))
+NODATA[:] = []
+rec.NO_DATA_GRACE = saved_grace
 rec.set_pick(steps, i, None)
 
 # 네이버 메일처럼 줄에 고유 표시가 없는 목록 (사용자 2026-10-20): 저장 때 연 메일 제목은 숨은 글자 없이, 같은 제목 메일은 줄마다 따로
