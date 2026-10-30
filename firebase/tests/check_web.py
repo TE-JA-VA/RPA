@@ -314,7 +314,7 @@ with sync_playwright() as pw:
     l1 = page.text_content("#h-line1")
     check(l1 == "13:55 PROCESS 오토파일럿 · 2분 33초", f"헤더 한 줄 ({l1})")
     l2 = page.text_content("#h-line2")
-    check(l2 == "수집 30건 · 재고검토 보류 8/8건 · 비정상 보류 ≈376건", f"요약 한 줄 ({l2})")
+    check(l2 == "", f"타일에 있는 처리 건수는 상태 띠에 다시 쓰지 않는다 (2026-10-30) ({l2})")
     check(page.query_selector("#hero button") is None, "상태 카드에 버튼 없음 (실행 카드와 중복)")
     check(page.locator("#toasts .toast").count() == 0, "처음 열 때는 옛 결과로 토스트가 울리지 않는다")
     tiles = page.text_content("#tiles")
@@ -342,10 +342,8 @@ with sync_playwright() as pw:
     pair = page.evaluate("""() => { const p = document.querySelector('.pair'); const [a, b] = p.children;
       return [a.id, b.id, a.getBoundingClientRect().top === b.getBoundingClientRect().top, a.getBoundingClientRect().left < b.getBoundingClientRect().left]; }""")
     check(pair[0] == "steps-prepare" and pair[1] == "steps-routine" and pair[2] and pair[3], f"ACTOR 오토파일럿이 왼쪽, PROCESS 가 오른쪽에 나란히 ({pair})")
-    log = page.text_content("#log")
-    check("3줄" in page.text_content("#log-meta"), f"로그 줄 수는 단계 수 ({page.text_content('#log-meta')})")
-    check(log.splitlines()[0] == "[13:56:30] ERPia 로그인 성공", f"단계마다 한 줄 ({log.splitlines()[0]})")
-    check("===" not in log, "RPA 원본 로그는 안 싣는다")
+    at1 = page.text_content("#list-routine li:nth-child(1) .at")
+    check(at1 == "13:56:30" and page.query_selector("#log-box") is None, f"로그 카드 대신 단계 줄 끝에 시각 (2026-10-30) ({at1})")
     # 띠는 최근 20일 전부. 왼쪽 끝부터 오늘 도넛까지 채우되 15칸까지만 보이고(칸 48~72px, 남으면 간격), 나머지는 가로 스크롤
     def strip_geo():
         return page.evaluate("""() => { const s = document.getElementById('recent-strip'), d = document.getElementById('recent-donut');
@@ -395,13 +393,13 @@ with sync_playwright() as pw:
     check(page.locator("#list-routine li").count() == 0 and "오늘 실행 없음" in page.text_content("#meta-routine"),
           f"단계 목록도 어제 것을 안 보여 준다 ({page.text_content('#meta-routine')})")
     check("마지막" in page.text_content("#meta-routine"), "대신 마지막이 언제였는지 적는다")
-    check(page.text_content("#log") == "" and page.text_content("#log-meta") == "없음", "로그도 어제 것을 안 보여 준다")
+    check("hide" in page.get_attribute("#tiles", "class"), "처리 건수 타일도 어제 것을 안 보여 준다 (2026-10-30)")
     db_patch(f"{LIVE}/programs/routine", {"started_at": f"{TODAY}T13:55:49", "finished_at": f"{TODAY}T13:58:22"})
     page.wait_for_function("document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
     d14 = page.get_attribute("#recent-strip .day[data-date='2026-09-14'] svg circle:nth-child(2)", "stroke-dasharray")
     check(d14 and abs(float(d14.split()[0]) - 33.33) < 0.1, f"9/14 도넛은 성공 1/3 ({d14})")
     check("09/14" in page.text_content("#recent-strip"), "날짜 표시")
-    check(page.text_content("#recent-meta") == "오늘 성공 1 · 실패 2", f"큰 도넛은 오늘 ({page.text_content('#recent-meta')})")
+    check(page.text_content("#recent-meta") == "", f"오늘 숫자는 범례에만 - 머리글에 다시 쓰지 않는다 ({page.text_content('#recent-meta')})")
     check(page.locator("#recent-donut svg text").count() == 0, "도넛에 퍼센트 글자 없음")
     dash = page.get_attribute("#recent-donut svg circle:nth-child(2)", "stroke-dasharray")
     check(dash and abs(float(dash.split()[0]) - 33.33) < 0.1, f"오늘 도넛 호 길이 1/3 ({dash})")
@@ -412,7 +410,7 @@ with sync_playwright() as pw:
     check(page.get_attribute("#recent-donut svg circle", "stroke") == "url(#hatch)" and page.locator("#recent-donut .legend").count() == 0,
           "실행 없는 날은 큰 자리에도 빗금 도넛 (글자 대신)")
     db_patch(f"{LIVE}/recent/19", {"success": 1, "failed": 2, "crashed": 0})
-    page.wait_for_function("document.getElementById('recent-meta')?.textContent !== '오늘 실행 없음'", timeout=10000)
+    page.wait_for_function("document.getElementById('recent-meta')?.textContent === ''", timeout=10000)
     # 9/13 = 성공 1 · 실패 1 · 오류 1 → 초록 1/3 (12시부터), 노랑 1/3 (초록 다음부터), 나머지 빨강
     c13 = page.evaluate("""(() => { const cs = document.querySelectorAll("#recent-strip .day[data-date='2026-09-13'] svg circle");
       return [...cs].map((c) => [c.getAttribute('stroke'), c.getAttribute('stroke-dasharray'), c.getAttribute('stroke-dashoffset')]); })()""")
@@ -445,7 +443,7 @@ with sync_playwright() as pw:
     check(page.text_content("#h-state") == "오류", "상태 카드 제목도 '오류' (도넛·기록 표와 같은 말)")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW - 900})
     page.wait_for_function("document.getElementById('h-state')?.textContent === 'PC 연결 끊김'", timeout=10000)
-    check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--warn-fill"), "연결 끊김도 노랑")
+    check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--soft"), "연결 끊김은 실행 결과가 아니라 중립 바탕 (2026-10-30)")
     check("15분 전부터" in page.text_content("#h-line1"), "끊긴 시간")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600})
     db_patch(f"{LIVE}/programs/routine", routine)
@@ -518,8 +516,8 @@ with sync_playwright() as pw:
 
     print("5절 실행 모듈 (관리 > 환경설정)")
     goto(page, "settings")
-    check(page.text_content("#page-title") == "환경설정" and page.text_content(".app-settings .app-title") == "오토파일럿",
-          "환경설정 페이지: 제목과 앱 이름 머리")
+    check(page.text_content("#page-title") == "환경설정" and page.query_selector(".app-settings .app-title") is None,
+          "환경설정 페이지: 제목, 앱이 하나면 앱 이름 머리는 없다 (2026-10-30)")
     page.wait_for_function("document.getElementById('mod-meta')?.textContent === '4/5 켬'", timeout=10000)
     check(page.is_disabled("#mod-apply"), "바뀐 게 없으면 적용 비활성")
     login_cb = page.locator("#mod-list input[aria-label='로그인']")
@@ -653,7 +651,7 @@ with sync_playwright() as pw:
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('시작하였습니다')", timeout=10000)
     check(page.locator("#toasts .toast.info", has_text="시작하였습니다").count() == 1, "오토파일럿이 시작되면 파란 토스트")
     check(lu("#toasts .toast.info svg.lu")[:2] == ["info", "x"], f"토스트 아이콘: 안내 info + 닫기 x ({lu('#toasts .toast.info svg.lu')})")
-    check(lu(".pc-pick .chev") in ([], ["chevron-down"]) and lu("#log-box summary .chev") == ["chevron-right"], "접기 꺾쇠: PC 고르기 chevron-down, 로그 chevron-right")
+    check(lu(".pc-pick .chev") in ([], ["chevron-down"]), "접기 꺾쇠: PC 고르기 chevron-down")
     check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
     check("실행 중이어서" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
@@ -686,7 +684,7 @@ with sync_playwright() as pw:
                                           "steps": [{"key": "login", "label": "ERPia 로그인", "state": "done"},
                                                     {"key": "sales", "label": "주문매핑 화면 이동", "state": "running", "note": "주문 가져오는 중"},
                                                     {"key": "top", "label": "상단 선택", "state": "pending"}]})
-    page.wait_for_function("(document.getElementById('log')?.textContent || '').includes('주문매핑 화면 이동 진행 중')", timeout=10000)
+    page.wait_for_function("document.querySelector('#list-routine li.running .note')?.textContent === '주문 가져오는 중'", timeout=10000)
     check(page.evaluate(f"window.__mark === {mark_id}"), "메모가 바뀌어도 진행 중 점은 그대로 (애니메이션이 안 끊긴다)")
     check(page.evaluate("""() => { const n = document.querySelector('#list-routine li.running .note');
       return getComputedStyle(n).textOverflow === 'ellipsis' && n.title === '주문 가져오는 중'; }"""), "긴 메모는 … 로 자르고 제목으로 전체를 보여 준다")
@@ -700,6 +698,9 @@ with sync_playwright() as pw:
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('PROCESS 오토파일럿 중단')", timeout=10000)
     check(page.locator("#toasts .toast.info", has_text="PROCESS 오토파일럿 중단 · 대시보드에서 중단했습니다").count() == 1
           and page.locator("#toasts .toast.bad", has_text="PROCESS 오토파일럿 실패").count() == 0, "대시보드에서 중단하면 '실패' 가 아니라 파란 '중단' 토스트")
+    page.wait_for_function("document.getElementById('h-state')?.textContent === '중단'", timeout=10000)
+    check(page.get_attribute("#hero", "data-state") == "halted" and hero_hex() == token("--soft") and "중단" in page.text_content("#meta-routine"),
+          "상태 띠·단계 요약도 '중단', 바탕은 중립 (실패 빨강 아님, 2026-10-30)")
     page.wait_for_function("document.querySelector('#stop-erpia .t')?.textContent === 'ERPia 종료'", timeout=10000)
     check(True, "멈추면 단추가 다시 [ERPia 종료]")
     db_patch(f"{LIVE}/programs/routine", {"state": "running", "reason": None, "finished_at": None})
@@ -755,9 +756,9 @@ with sync_playwright() as pw:
           f"막대: 남은 120 / 충전 500 = 24% 채움, 초록 ({bar[:6]})")
     check(bar[6], "관리자는 오른쪽 열 '실행' 카드 바로 위")
     gaps = page.evaluate("""() => { const r = (s) => document.querySelector(s).getBoundingClientRect();
-      return [Math.round(r('.card.recent').top - r('#token-card').top), Math.round(r('#act-card').top - r('#token-card').bottom),
-              Math.round(r('.pair').top - r('.card.recent').bottom), Math.round(document.querySelector('#log-box').closest('.card').getBoundingClientRect().top - r('.pair').bottom)] }""")
-    check(gaps == [0, 14, 14, 14], f"두 열의 첫 카드 위가 같고 카드 사이는 모두 14px (사용자 2026-10-19) ({gaps})")
+      return [Math.round(r('.pair').top - r('#token-card').top), Math.round(r('#act-card').top - r('#token-card').bottom),
+              Math.round(r('.card.recent').top - r('.pair').bottom)] }""")
+    check(gaps == [0, 14, 14], f"두 열의 첫 카드 위가 같고 카드 사이는 모두 14px (사용자 2026-10-19, 단계 카드가 위 2026-10-30) ({gaps})")
     ecam = page.evaluate("""() => { const t = document.createElement('i'); t.style.color = 'var(--ecam-green)'; document.body.append(t);
       const want = getComputedStyle(t).color; t.remove();
       return [want, getComputedStyle(document.querySelector('#tok-bar .fill')).backgroundColor] }""")
@@ -796,7 +797,8 @@ with sync_playwright() as pw:
     goto(page, "settings")
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('남은 토큰 3개')", timeout=10000)
     check("다음 예약 실행에 6개 · 남은 토큰 3개. 잔여 토큰이 마이너스가 될 수 있습니다." in page.text_content("#sch-info")
-          and "warn" in page.get_attribute("#sch-info", "class"), f"예약 칸에도 노란 글 ({page.text_content('#sch-info')})")
+          and page.locator("#sch-info > .warn", has_text="다음 예약 실행에 6개").count() == 1
+          and page.locator("#sch-info > div:not(.warn):not(.bad)").count() >= 1, f"예약 칸에도 노란 글 - 그 줄만 (2026-10-30) ({page.text_content('#sch-info')})")
     goto(page, "rpa")
     call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "380"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
     db_patch(LIVE, {"tokens": {"balance": 0, "cost": cost}})
@@ -811,7 +813,7 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"last_error": "토큰이 없습니다 (남은 0개). 충전한 뒤 실행하세요"})   # PC 의 예약기가 토큰 0 으로 거절했다
     goto(page, "settings")
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('토큰이 없어')", timeout=10000)
-    check("토큰이 없어 예약 실행을 건너뜁니다" in page.text_content("#sch-info") and "bad" in page.get_attribute("#sch-info", "class"),
+    check(page.locator("#sch-info > .bad", has_text="토큰이 없어 예약 실행을 건너뜁니다").count() == 1,
           f"예약 칸: 건너뛴다고 빨간 글 ({page.text_content('#sch-info')})")
     check("오류: 토큰이 없습니다" not in page.text_content("#sch-info"), f"PC 의 토큰 오류는 같은 말이라 한 번만 ({page.text_content('#sch-info')})")
     call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "430"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
@@ -1171,7 +1173,7 @@ with sync_playwright() as pw:
       const f = b.querySelector('.fly').getBoundingClientRect(), t = b.querySelector('.t');
       return [Math.round(f.left + f.width / 2 - r.left), Math.round(r.width / 2),
               Number(getComputedStyle(t).opacity), getComputedStyle(b.querySelector('.fly')).animationName]; }""")
-    check(abs(fly[0] - fly[1]) <= 2 and fly[2] < 0.2, f"올리면 표시가 버튼 한가운데로 가고 글자는 사라진다 ({fly})")
+    check(fly[0] < fly[1] - 20 and fly[2] == 1, f"올려도 표시는 왼쪽 그대로, 글자도 그대로 - 세 단추가 구분된다 (2026-10-30) ({fly})")
     check(fly[3] == "none", "표시는 떠다니지 않는다 (흔들림 없음)")
     if os.environ.get("SHOT_DIR"):   # 눈으로 볼 때: 실행 카드 (PROCESS 에 올린 상태 / 종료에 올린 상태)
         page.locator("#act-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "act_hover_run.png"))
@@ -1251,7 +1253,8 @@ with sync_playwright() as pw:
           f"화면이 잠겨 건너뛴 회차 수 (멈춘 것이 아니라 빨간 글 아님 - 사용자 2026-10-08) ({page.text_content('#sch-info')})")
     db_patch(f"{LIVE}/schedule/repeat", {"stopped": {"at": f"{TODAY}T10:23:00", "reason": "10:23 물류관리 실패로 반복을 멈췄습니다: 저장 실패"}})
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('멈췄습니다')", timeout=10000)
-    check("bad" in page.get_attribute("#sch-info", "class"), "멈췄으면 그 까닭을 빨간 글로")
+    check(page.locator("#sch-info > .bad", has_text="멈췄습니다").count() == 1
+          and page.locator("#sch-info > .bad", has_text="오늘 반복").count() == 0, "멈췄으면 그 까닭 줄만 빨간 글로 (2026-10-30)")
     if os.environ.get("SHOT_DIR"): page.locator("#settings-grid").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "settings_repeat.png"))
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
     # RPA 화면: 지금 열린 시간대가 멈췄으면 까닭과 [반복 다시 시작]. 시간대를 지금 시각 둘레로 (23시 뒤면 건너뜀)
@@ -1462,14 +1465,14 @@ with sync_playwright() as pw:
     check("주소를 입력하세요" in rows.nth(1).text_content(), "중단 사유가 처리 칸에")
     heads = page.locator("#view-history thead th").all_text_contents()
     cell = lambda i: (rows.nth(i).locator("td").all_text_contents() + [None] * 6)[5]
-    check(heads == ["시각", "프로그램", "결과", "소요", "상세 정보", "토큰 사용량"] and (cell(0), cell(1), cell(3)) == ("3", "0", "-"),
+    check(heads == ["결과", "시각", "프로그램", "소요", "상세 정보", "토큰 사용량"] and (cell(0), cell(1), cell(3)) == ("3", "0", "-"),
           f"'처리' → '상세 정보', 토큰 사용량 칸: 쓴 토큰, 0 은 0, 토큰 전 옛 기록은 - (사용자 2026-10-08) ({heads}, {[cell(i) for i in (0, 1, 3)]})")
     # 열 너비: 시각·프로그램·결과·소요는 줄바꿈 없이 한 줄, 알약도 한 줄. 프로그램 이름은 'RPA' 를 뗀다
     # 줄 수는 글자 범위의 사각형 개수로 센다 (칸 높이는 여백 때문에 한 줄이어도 36px)
     one_line = lambda sel: page.evaluate(f"""(() => {{ const el = document.querySelector("{sel}"); const r = document.createRange();
       r.selectNodeContents(el); return r.getClientRects().length; }})()""") == 1
-    check(rows.nth(0).locator("td").nth(1).text_content() == "PROCESS" and rows.nth(2).locator("td").nth(1).text_content() == "ACTOR 오토파일럿", "프로그램 칸은 PROCESS/ACTOR 오토파일럿")
-    check(one_line("#view-history thead th:nth-child(2)") and one_line("#hist-rows tr.hist td:nth-child(1)"), "시각·프로그램 칸이 한 줄")
+    check(rows.nth(0).locator("td").nth(2).text_content() == "PROCESS" and rows.nth(2).locator("td").nth(2).text_content() == "ACTOR 오토파일럿", "프로그램 칸은 PROCESS/ACTOR 오토파일럿")
+    check(one_line("#view-history thead th:nth-child(3)") and one_line("#hist-rows tr.hist td:nth-child(2)"), "시각·프로그램 칸이 한 줄")
     crash = rows.nth(5).locator(".pill")
     check("crash" in (crash.get_attribute("class") or "") and crash.text_content() == "오류", "죽은 실행은 '오류' 알약")
     check(rows.nth(1).locator(".pill").text_content() == "실패", "단계에서 멈춘 실행은 '실패' 알약 (중단이라 안 쓴다)")
@@ -1482,7 +1485,7 @@ with sync_playwright() as pw:
     stop_pill = page.evaluate("getComputedStyle(document.querySelector('#hist-rows .pill.bad')).backgroundColor")
     check(rgb2hex(stop_pill) == token("--bad-bg"), "중단은 옅은 빨강 (구분됨)")
     page.set_viewport_size({"width": 420, "height": 900}); page.wait_for_timeout(300)
-    check(one_line("#hist-rows .pill.crash") and one_line("#hist-rows tr.hist td:nth-child(2)"), "좁은 창에서도 알약·프로그램 칸이 한 줄")
+    check(one_line("#hist-rows .pill.crash") and one_line("#hist-rows tr.hist td:nth-child(3)"), "좁은 창에서도 알약·프로그램 칸이 한 줄")
     check(one_line("#view-history thead th:nth-child(6)"), "좁은 창에서도 '토큰 사용량' 머리글이 한 줄")
     check(page.evaluate("document.querySelector('#hist-rows tr.hist td:nth-child(5)').getBoundingClientRect().width") >= 200,
           "좁은 창에서 처리 칸은 최소 폭을 지킨다 (표가 옆으로 스크롤)")
@@ -1496,6 +1499,12 @@ with sync_playwright() as pw:
     check(page.is_visible("#hist-rows tr.hist-detail:nth-child(4)"), "행을 누르면 상세가 펼쳐진다")
     detail = page.text_content("#hist-rows tr.hist-detail:nth-child(4)")
     check("물류 관리 저장" in detail and "[13:39:05] 주소를 입력하세요" in detail, "상세에 단계와 로그")
+    page.click("#hist-bad")
+    bad_n = page.locator("#hist-rows tr.hist").count()
+    check(0 < bad_n < 6 and all(p in ("실패", "오류") for p in page.locator("#hist-rows .pill").all_text_contents())
+          and page.text_content("#hist-msg") == f"실패·오류 {bad_n}건 / 전체 6건", f"[실패·오류만] 은 실패·오류 줄만 ({page.text_content('#hist-msg')})")
+    page.click("#hist-bad")
+    check(page.locator("#hist-rows tr.hist").count() == 6 and page.get_attribute("#hist-bad", "aria-pressed") == "false", "다시 누르면 전체")
     page.fill("#hist-date", "2026-09-13"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-13'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
@@ -1725,9 +1734,13 @@ with sync_playwright() as pw:
     t = show_ver({"version": "2026.09.29-1", "state": "tampered", "changed": [], "modified": [], "changed_count": 0,
                   "missing_count": 0, "signature": "bad", "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 파일 변조됨 (실행 막힘)")
     check("서명이 맞지 않습니다" in t, f"목록과 파일을 같이 고쳤으면 서명 불일치로 ({t})")
+    page.wait_for_function("!document.getElementById('ver-alert')?.classList.contains('hide')", timeout=5000)
+    check("서명이 맞지 않습니다" in page.text_content("#ver-alert") and page.is_disabled("#run-routine") and page.is_disabled("#run-all")
+          and "변조" in (page.get_attribute("#run-routine", "title") or ""), "변조면 상태 띠 아래 빨간 줄에 까닭, 실행 단추 잠금 (2026-10-30)")
     t = show_ver({"version": "2026.09.29-1", "state": "mixed", "changed": [f"f{i}.txt" for i in range(10)],
                   "changed_count": 15, "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 빠진 파일 15")
     check("외 5개" in t, f"이름을 다 못 보냈으면 나머지 개수 ({t})")
+    check(page.is_hidden("#ver-alert"), "빠진 파일만이면 빨간 줄은 없다 (실행은 된다)")
     t = show_ver({"state": "error", "error": "ValueError: 판 목록 형식이 다릅니다", "changed_count": 0,
                   "checked_at": "2026-09-29T10:00:00"}, "버전 확인 실패")
     check("형식" in t and warn(), f"확인 실패면 노란 글씨, 이유는 마우스 글로 ({t})")
@@ -1776,12 +1789,12 @@ with sync_playwright() as pw:
     page.fill("#hist-date", "2026-09-09"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-09'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
-    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "옵저버", "기록 표의 프로그램 칸이 '옵저버'")
+    check(page.text_content("#hist-rows tr.hist td:nth-child(3)") == "옵저버", "기록 표의 프로그램 칸이 '옵저버'")
     seed_run("r_rep_0908", "routine", "success", "2026-09-08T10:24:00", 40, trigger="repeat")
     page.fill("#hist-date", "2026-09-08"); page.dispatch_event("#hist-date", "change")
     page.wait_for_function("document.getElementById('hist-title')?.textContent === '기록 · 2026-09-08'", timeout=15000)
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
-    check(page.text_content("#hist-rows tr.hist td:nth-child(2)") == "PROCESS · 반복", "처리한 반복 회차는 기록 표에 'PROCESS · 반복'")
+    check(page.text_content("#hist-rows tr.hist td:nth-child(3)") == "PROCESS · 반복", "처리한 반복 회차는 기록 표에 'PROCESS · 반복'")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")

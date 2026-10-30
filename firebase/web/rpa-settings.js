@@ -714,34 +714,34 @@ function paintScheduleMeta() {
   for (const id of ["sch-days-lbl", "sch-presets", "sch-days"]) show($(id), !isV3());
   $("sch-meta").textContent = !live ? "" : !s.enabled ? "비활성화"
     : isV3() ? savedSlots().map((x) => `${labelDays(x.days)} ${slotText(x)}`).join(", ") : `${labelDays(s.days)} ${savedSlots().map(slotText).join(", ")}`;
+  // 안내는 한 줄에 하나씩, 색은 문제 줄에만 (2026-10-30 - 예전엔 한 줄로 이어 하나라도 오류면 '다음 실행' 까지 빨갰다). [글, 색]
   const info = [];
   if (s.enabled && s.next_run_at) {
     const wd = (new Date(s.next_run_at).getDay() + 6) % 7;     // 월=0 - 같은 시각 줄이 요일별로 여럿이면 그날 줄
     const names = slotNames((Array.isArray(s.slots) ? s.slots : []).find((x) => x && x.at === s.next_slot && (!Array.isArray(x.days) || x.days.includes(wd))));
-    info.push(`다음 ${when(s.next_run_at)}${names ? ` (${names})` : ""}`);
+    info.push([`다음 ${when(s.next_run_at)}${names ? ` (${names})` : ""}`, ""]);
   }
-  if (s.last_launch_at) info.push(`마지막 ${when(s.last_launch_at)}${s.last_launch_by === "auto" ? " (자동)" : ""}`);
+  if (s.last_launch_at) info.push([`마지막 ${when(s.last_launch_at)}${s.last_launch_by === "auto" ? " (자동)" : ""}`, ""]);
   // PC 의 토큰 거절 글은 아래 토큰 글과 같은 말이고, 충전한 뒤엔 지난 일이다 - 토큰을 아는 PC 면 보이지 않는다
   const t = live?.tokens, knowTokens = typeof t?.balance === "number";
   const tokenErr = (x) => knowTokens && /^(\d\d:\d\d )?토큰이 없습니다/.test(x || "");
   const err = s.last_error && !tokenErr(s.last_error) ? s.last_error : null;
-  if (err) info.push(`오류: ${err}`);
-  let cls = err ? " bad" : "";
+  if (err) info.push([`오류: ${err}`, "bad"]);
   const rep = s.repeat;                                  // 반복 상태 (PC 가 적는다) - 오늘 것만
   if (rep && rep.date === isoDay(new Date())) {
-    info.push(`오늘 반복 ${rep.runs || 0}회 · 처리 ${rep.done || 0}회` + (rep.skipped ? ` · 화면 잠김으로 건너뜀 ${rep.skipped}회` : ""));   // 잠긴 회차는 건너뛰고 잇는다 (사용자 2026-10-08)
+    info.push([`오늘 반복 ${rep.runs || 0}회 · 처리 ${rep.done || 0}회` + (rep.skipped ? ` · 화면 잠김으로 건너뜀 ${rep.skipped}회` : ""), ""]);   // 잠긴 회차는 건너뛰고 잇는다 (사용자 2026-10-08)
     if (rep.stopped) {
       const why = rep.stopped.reason || "반복 실행을 중단하였습니다.";
-      info.push(tokenErr(why) && t.balance <= 0 ? "반복 실행을 중단하였습니다." : why); cls = " bad";
+      info.push([tokenErr(why) && t.balance <= 0 ? "반복 실행을 중단하였습니다." : why, "bad"]);
     }
   }
   if (s.enabled && knowTokens) {                         // 예약 실행은 지켜볼 사람이 없다 - 토큰이 모자라면 여기에도 (토큰 2부)
     const need = t.cost?.next ?? t.cost?.all ?? 0;       // 다음 줄이 '고르기' 면 그 줄의 토큰 (에이전트가 cost.next)
-    if (t.balance <= 0) { info.push("토큰이 없어 예약 실행을 건너뜁니다."); cls = " bad"; }
-    else if (t.balance < need) { info.push(`다음 예약 실행에 ${need}개 · 남은 토큰 ${t.balance}개. 잔여 토큰이 마이너스가 될 수 있습니다.`); cls = cls || " warn"; }
+    if (t.balance <= 0) info.push(["토큰이 없어 예약 실행을 건너뜁니다.", "bad"]);
+    else if (t.balance < need) info.push([`다음 예약 실행에 ${need}개 · 남은 토큰 ${t.balance}개. 잔여 토큰이 마이너스가 될 수 있습니다.`, "warn"]);
   }
-  $("sch-info").textContent = info.join(" · ");
-  $("sch-info").className = "msg" + cls;
+  $("sch-info").replaceChildren(...info.map(([text, cls]) => Object.assign(document.createElement("div"), { textContent: text, className: cls })));
+  $("sch-info").className = "msg";
   $("sch-apply").disabled = dis || !scheduleDirty() || problem;
 }
 function labelDays(days) {

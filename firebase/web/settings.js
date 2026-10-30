@@ -10,12 +10,13 @@ let mounted = [];
 
 export function mount(el, c) {
   if (!c.isAdmin) { el.innerHTML = `<p class="muted">관리자만 볼 수 있습니다</p>`; return; }
-  mounted = c.apps.filter((a) => a.settings).map((a) => {
+  const apps = c.apps.filter((a) => a.settings);
+  mounted = apps.map((a) => {
     const sec = document.createElement("section");
     sec.className = "app-settings";
-    const h = Object.assign(document.createElement("h2"), { className: "app-title", textContent: a.settings.title || a.label });
     const body = document.createElement("div");
-    sec.append(h, body);
+    if (apps.length > 1) sec.append(Object.assign(document.createElement("h2"), { className: "app-title", textContent: a.settings.title || a.label }));   // 앱이 하나면 앱 이름 머리는 군더더기 (2026-10-30)
+    sec.append(body);
     el.append(sec);
     a.settings.mount(body, c);
     return a.settings;

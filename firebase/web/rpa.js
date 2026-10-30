@@ -3,7 +3,7 @@
 import { ref, onValue } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 import {
   getFirestore, collection, query, where, orderBy, limit, getDocs, connectFirestoreEmulator,
-  doc, getDoc, getAggregateFromServer, sum,
+  doc, getDoc, getAggregateFromServer, sum, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
@@ -47,6 +47,7 @@ const HTML = `
       <div class="stats" id="hero-side"></div>
     </section>
     <div class="msg bad hide" id="dup-agent">같은 에이전트 계정이 PC 두 대에서 켜져 있는 것 같습니다.</div>
+    <div class="msg bad hide" id="ver-alert"></div>
     <div class="tiles" id="tiles"></div>
     <div class="cols">
       <div>
@@ -58,6 +59,11 @@ const HTML = `
             <div class="msg" id="token-line"></div>
           </div>
         </div>
+        <!-- 지금 실행 단계가 최근 20일보다 먼저 (2026-10-30). 단계 줄에 시각이 붙어 따로 있던 로그 카드는 없앴다 -->
+        <div class="pair">
+          <div class="card" id="steps-prepare"><h2>ACTOR 오토파일럿 <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
+          <div class="card" id="steps-routine"><h2>PROCESS 오토파일럿 <span class="muted" id="meta-routine"></span></h2><ul class="steps" id="list-routine"></ul></div>
+        </div>
         <div class="card recent">
           <h2>최근 20일 <span class="muted" id="recent-meta"></span></h2>
           <div class="recent-body">
@@ -65,11 +71,6 @@ const HTML = `
             <div class="donut" id="recent-donut"></div>
           </div>
         </div>
-        <div class="pair">
-          <div class="card" id="steps-prepare"><h2>ACTOR 오토파일럿 <span class="muted" id="meta-prepare"></span></h2><ul class="steps" id="list-prepare"></ul></div>
-          <div class="card" id="steps-routine"><h2>PROCESS 오토파일럿 <span class="muted" id="meta-routine"></span></h2><ul class="steps" id="list-routine"></ul></div>
-        </div>
-        <div class="card"><details id="log-box"><summary>로그 <span><span class="muted" id="log-meta"></span> &nbsp;${lucide("chevron-right", "chev")}</span></summary><pre class="num" id="log" style="font-size:12px;white-space:pre-wrap;margin:10px 0 0;color:var(--muted)"></pre></details></div>
       </div>
       <div id="sidecol">
         <div class="card" id="act-card">
@@ -94,10 +95,10 @@ const HTML = `
 
   <div id="view-history" class="hide">
     <div class="card">
-      <h2><span id="hist-title">기록</span> <span class="row" style="gap:6px"><input type="date" id="hist-date" class="num" style="width:auto"><button id="hist-all">전체</button></span></h2>
+      <h2><span id="hist-title">기록</span> <span class="row" style="gap:6px"><button id="hist-bad" aria-pressed="false">실패·오류만</button><input type="date" id="hist-date" class="num" style="width:auto"><button id="hist-all">전체</button></span></h2>
       <div class="msg" id="hist-msg"></div>
       <div class="tbl"><table>
-        <thead><tr><th>시각</th><th>프로그램</th><th>결과</th><th>소요</th><th>상세 정보</th><th>토큰 사용량</th></tr></thead>
+        <thead><tr><th>결과</th><th>시각</th><th>프로그램</th><th>소요</th><th>상세 정보</th><th>토큰 사용량</th></tr></thead>
         <tbody id="hist-rows"></tbody>
       </table></div>
     </div>
@@ -105,13 +106,17 @@ const HTML = `
 `;
 
 let root = null, c = null;
-let stopLive = null;
+let stopLive = null, stopWallet = null;
 let busy = false;
 let live = null;
 let fs = null;
 let resizeObs = null;
 let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 - 진행 시간이 올라가고, 에이전트가 죽어도(값이 안 바뀜) 끊김이 보이게
 const STOPPED_TEXT = "대시보드에서 중단했습니다";   // rpa_dashboard.STOPPED_TEXT 와 같다
+// 사람이 [중단] 을 누른 실행은 '실패' 가 아니라 '중단' (회색) - 토스트·상태 띠·기록 표가 같은 말을 쓴다 (2026-10-30, 09-22 의 '실패에 포함' 을 바꿈)
+const halted = (v) => v?.state === "stopped" && v.reason === STOPPED_TEXT;
+const stateText = (v) => halted(v) ? "중단" : STATE_LABEL[v?.state] || v?.state || "";
+const isBad = (v) => ["failed", "stopped", "crashed"].includes(v?.state) && !halted(v);   // 기록 표 '실패·오류만'
 let seenRun = {};  // 프로그램별로 마지막에 본 "run_id:상태" (토스트를 두 번 울리지 않게)
 let paintedRecent = null;   // 마지막으로 그린 최근 20일 (같으면 다시 안 그린다 - 스크롤이 튀지 않게)
 // 같은 에이전트 계정을 PC 두 대에 넣었나 (BugBuster I13): heartbeat.boot(켤 때마다 바뀌는 번호)가 3분 안에 앞서 본 값으로 돌아오면
@@ -131,8 +136,13 @@ const dur = (sec) => sec == null ? "" : sec >= 60 ? `${Math.floor(sec / 60)}분 
 // 현황은 하루 단위다. 어제 실행을 오늘 것처럼 띄우지 않는다 (상태 띠·단계·로그 모두)
 const isToday = (v) => ((v?.started_at || v?.finished_at || "").slice(0, 10)) === isoDay(new Date());
 
+// PC 가 없는 업체: 빈 카드·눌리는 단추를 늘어놓지 않고 안내 한 장만 (2026-10-30)
+const NO_PC_HTML = `<div class="card"><h2>등록된 PC가 없습니다.</h2>
+  <div class="msg">PC에 오토파일럿을 설치하고 에이전트 계정을 연결하면 이곳에 현황과 기록이 표시됩니다.</div></div>`;
+
 export function mount(el, context) {
   root = el; c = context;
+  if (!c.pcId) { root.innerHTML = NO_PC_HTML; return; }
   root.innerHTML = HTML;
   busy = false; live = null; seenRun = {}; boots = {}; lastBoot = null; dupUntil = 0; tokBal = undefined;
   fs = getFirestore(c.db.app);
@@ -143,6 +153,7 @@ export function mount(el, context) {
   $("tab-history").onclick = () => showView("history");
   $("hist-date").onchange = () => loadHistory($("hist-date").value || null);
   $("hist-all").onclick = () => { $("hist-date").value = ""; loadHistory(null); };
+  $("hist-bad").onclick = () => { const b = $("hist-bad"); b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true"); paintHist(); };
   $("run-routine").onclick = () => send("launch", { target: "routine" }, "PROCESS 오토파일럿");
   $("run-prepare").onclick = () => send("launch", { target: "prepare" }, "ACTOR 오토파일럿");
   $("run-all").onclick = () => send("launch", { target: "all" }, "전체 실행");
@@ -165,20 +176,23 @@ export function mount(el, context) {
     strip.scrollLeft += e.deltaY; e.preventDefault();
   }, { passive: false });
   tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); paintRepeat(); } }, 1000);   // 시간대가 열리고 닫히는 것은 시각이 정한다
-  if (!c.pcId) { $("h-state").textContent = "등록된 PC가 없습니다."; return; }
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const v = snap.val();
     const first = live == null;
     live = v || {};
     seeBoot(live.heartbeat?.boot);   // (I13)
     runToasts(first);
-    paintHero(); paintTiles(); paintRecent(); paintSteps(); paintLog();
+    paintHero(); paintTiles(); paintRecent(); paintSteps();
     paintButtons();
   }, (e) => { $("h-state").textContent = e.code === "PERMISSION_DENIED" ? "권한 없음" : "읽지 못했습니다."; });
+  // 충전하면 남은 토큰을 바로 다시 센다 - PC 값(10분마다)을 기다리면 충전 직후 실행 단추가 잠겨 있었다 (PR #29 검토, 2026-10-30).
+  // 통장 문서가 바뀔 때만 읽기 1번
+  stopWallet = onSnapshot(doc(fs, "wallet", c.me.cid), () => { tokKey = undefined; if (root && live) paintTokens(); }, () => {});
 }
 
 export function unmount() {
   if (stopLive) { stopLive(); stopLive = null; }
+  if (stopWallet) { stopWallet(); stopWallet = null; }
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (tick) { clearInterval(tick); tick = null; }
   usageSeq++; usageFor = null;   // 읽는 중인 사용량은 버린다 (화면을 떠난 뒤 늦게 온 결과가 없는 칸을 고치지 않게)
@@ -246,18 +260,18 @@ function paintHero() {
   if (off == null || off > staleSec()) {
     state = "offline";
     title = "PC 연결 끊김";
-    l1 = off == null ? "에이전트 기록 없음" : `${ago(off)} 전부터 응답 없음` + (v ? ` · 마지막 ${STATE_LABEL[v.state] || v.state} ${hhmm(v.finished_at || v.updated_at)}` : "");
+    l1 = off == null ? "에이전트 기록 없음" : `${ago(off)} 전부터 응답 없음` + (v ? ` · 마지막 ${stateText(v)} ${hhmm(v.finished_at || v.updated_at)}` : "");
     l2 = "PC가 꺼져 있거나 윈도우에 로그인되어 있지 않습니다. PC를 켜고 로그인한 뒤에도 연결되지 않으면 시작 메뉴의 '오토파일럿 설정'에서 [저장]을 눌러 주십시오.";   // 저장하면 다시 켠다 (rpa_settings.restart_agent)
   } else if (!v) {
     state = ""; title = "기록 없음"; l1 = "PC 연결됨"; l2 = "";
   } else if (v.state !== "running" && !isToday(v)) {
     // 오늘 실행이 아직 없으면 어제 결과를 그대로 띄우지 않는다 (지금 상태는 '대기중')
     state = ""; title = "대기중";
-    l1 = `마지막 실행 ${when(v.finished_at || v.started_at)} · ${STATE_LABEL[v.state] || v.state}`;
+    l1 = `마지막 실행 ${when(v.finished_at || v.started_at)} · ${stateText(v)}`;
     l2 = v.reason || summaryText(v);
   } else {
-    state = v.state;
-    title = HERO_TITLE[v.state] || v.state;
+    state = halted(v) ? "halted" : v.state;              // 사람이 중단 - 중립 바탕 (CSS 에 칠이 없다)
+    title = halted(v) ? "중단" : HERO_TITLE[v.state] || v.state;
     if (v.state === "running") {
       l1 = `${hhmm(v.started_at)} ${v.program_label} · ${v.steps_done ?? 0}/${v.steps_total ?? 0} 단계`;
       // 흐른 시간 | 지금 단계. 시간은 1초마다 올라간다 (mm:ss, 1시간 넘으면 HH:mm:ss). 긴 단계 이름은 CSS 가 … 로 자른다
@@ -266,7 +280,7 @@ function paintHero() {
       const stopped = (v.steps || []).find((s) => s.state === "stopped" || s.state === "failed");
       l1 = [`${hhmm(v.started_at)} ${v.program_label}`, dur(v.duration_sec), stopped ? `${stopped.label}에서 멈춤` : ""]
         .filter(Boolean).join(" · ");
-      l2 = v.reason ? v.reason : summaryText(v);
+      l2 = v.reason ? v.reason : summaryText(v, true);   // 처리 건수는 아래 타일에 있다 - 띠에는 그 밖의 것만
     }
   }
   hero.dataset.state = state;
@@ -296,15 +310,16 @@ function ago(sec) {
 }
 
 // 한 줄 요약. 루틴: "수집 30건 (자동 12건, 엑셀 2개) · 재고검토 보류 8/8 · 비정상 보류 ≈376건". 프리페어: 메일·첨부.
-function summaryText(v) {
+// tiles: 같은 숫자를 타일이 보여 줄 때(오늘 실행) - 타일에 없는 수집 내역만 "수집 내역: 자동 12건 · 엑셀 2개" (2026-10-30)
+const TILE_KEYS = ["bottom_selected", "stock_hold", "abnormal_hold"];
+function summaryText(v, tiles = false) {
   const m = (k) => metric(v, k);
   const parts = [];
   if (v.program === "routine") {
     const got = m("bottom_selected"), auto = m("top_selected"), xl = m("excel_upload");
-    if (got) {
-      const inner = [auto ? `자동 ${auto.value}건` : "", xl ? `엑셀 ${xl.value}개` : ""].filter(Boolean).join(", ");
-      parts.push(`수집 ${got.value}건` + (inner ? ` (${inner})` : ""));
-    }
+    const inner = [auto ? `자동 ${auto.value}건` : "", xl ? `엑셀 ${xl.value}개` : ""].filter(Boolean);
+    if (tiles) return inner.length ? `수집 내역: ${inner.join(" · ")}` : (v.metrics || []).some((x) => TILE_KEYS.includes(x.key)) ? "" : metricText(v);
+    if (got) parts.push(`수집 ${got.value}건` + (inner.length ? ` (${inner.join(", ")})` : ""));
     for (const k of ["stock_hold", "abnormal_hold"]) {
       const x = m(k);
       if (x) parts.push(`${x.label} ${x.approx ? "≈" : ""}${x.value}${x.total != null ? "/" + x.total : ""}${x.unit || "건"}`);
@@ -359,7 +374,14 @@ function paintVer() {
   el.title = [v?.title, u?.title].filter(Boolean).join(" / ");
   el.classList.toggle("warn", !!v?.warn || ["failed", "rolled_back"].includes(live?.update?.state));
   el.classList.toggle("hide", !v && !u);
+  // 실행이 막히는 변조·업데이트 실패는 탭 줄 작은 글·마우스 글에만 두지 않고 상태 띠 아래 빨간 줄로 까닭까지 (휴대폰에서도 보이게, 2026-10-30)
+  const failed = ["failed", "rolled_back"].includes(live?.update?.state);
+  const alert = [live?.version?.state === "tampered" ? `${v.text}. ${v.title}` : "",
+                 failed ? `${u.text}.${u.title ? ` (${u.title})` : ""}` : ""].filter(Boolean);
+  $("ver-alert").textContent = alert.join(" ");
+  show($("ver-alert"), alert.length > 0);
 }
+const tampered = () => live?.version?.state === "tampered";   // PC 가 실행을 막는다 - 단추도 잠근다
 
 /** 상태 띠 '다음 자동 실행'. 열린 반복 시간대면 '반복 중 · 12:00까지' (다음 회차) / '반복 멈춤'.
  *  아니면 다음 줄 - '고르기' 면 모듈 이름까지 (예: 10월 7일 (화) 11:00 · 물류관리). 옛 판 PC 는 줄이 없어 시각만 */
@@ -377,7 +399,8 @@ function nextRunText(sch) {
   return when(sch.next_run_at) + (slot?.until ? " 반복" : "") + (names ? ` · ${names}` : "");
 }
 function paintTiles() {
-  const r = live?.programs?.routine;
+  const rr = live?.programs?.routine;
+  const r = rr && (rr.state === "running" || isToday(rr)) ? rr : null;   // 어제 건수는 띄우지 않는다 (상태 띠·단계와 같게)
   const off = offlineSec();
   const tiles = [];
   const m1 = metric(r, "bottom_selected"), m2 = metric(r, "stock_hold"), m3 = metric(r, "abnormal_hold");
@@ -441,9 +464,14 @@ function paintRecent() {
   paintedRecent = key;
   const today = days[days.length - 1] || {};
   const ok = today.success || 0, bad = today.failed || 0, crash = today.crashed || 0;   // 옛 에이전트는 crashed 를 안 올린다 (실패에 합산)
-  $("recent-meta").textContent = days.length
-    ? (ok + bad + crash ? `오늘 성공 ${ok} · 실패 ${bad}` + (crash ? ` · 오류 ${crash}` : "") : "오늘 실행 없음") : "";
+  // 오늘 숫자는 큰 도넛 범례가 보여 준다 - 머리글에는 실행이 없을 때만 (2026-10-30)
+  $("recent-meta").textContent = days.length && !(ok + bad + crash) ? "오늘 실행 없음" : "";
   const strip = $("recent-strip");
+  show($("recent-donut"), days.length > 0);
+  if (!days.length) {                                     // 기록이 하나도 없다 - 빈 띠 대신 안내
+    strip.replaceChildren(Object.assign(document.createElement("div"), { className: "msg", textContent: "최근 실행 기록이 없습니다." }));
+    return;
+  }
   strip.replaceChildren(...days.map((d) => {
     const cell = document.createElement("button");
     const n = (d.success || 0) + (d.failed || 0) + (d.crashed || 0);
@@ -468,14 +496,17 @@ function paintStepsInto(ul, steps) {
     && list.every((s, i) => rows[i].children[1].textContent === (s.label || s.key));
   if (!same) { ul.replaceChildren(...stepList(list).children); return; }
   list.forEach((s, i) => {
-    const li = rows[i], note = li.children[2];
+    const li = rows[i], note = li.children[2], at = li.children[3];
     if (li.className !== stepClass(s)) li.className = stepClass(s);
     if (note.textContent !== stepNote(s)) { note.textContent = stepNote(s); note.title = stepNote(s); }
+    if (at.textContent !== stepAt(s)) at.textContent = stepAt(s);
   });
 }
 const stepClass = (s) => (s.state === "skipped" && s.note === "설정에서 끔") ? "skipped" : (s.state || "pending");
 const stepNote = (s) => (s.state === "skipped" && s.note === "설정에서 끔") ? "설정에서 끔"
   : (s.note || (s.state === "running" ? "진행 중" : ""));
+// 단계 줄 끝의 시각 (시:분:초) - 끝난 단계는 끝난 때, 진행 중은 시작한 때. 따로 있던 로그 카드가 하던 일 (2026-10-30)
+const stepAt = (s) => ["running", "done", "failed", "stopped"].includes(s.state) ? (s.finished_at || s.started_at || "").slice(11, 19) : "";
 
 function stepList(steps) {
   const ul = document.createElement("ul");
@@ -485,7 +516,8 @@ function stepList(steps) {
     li.className = stepClass(s);
     li.append(Object.assign(document.createElement("span"), { className: "mark" }),
               Object.assign(document.createElement("span"), { textContent: s.label || s.key }),
-              Object.assign(document.createElement("span"), { className: "note", textContent: stepNote(s), title: stepNote(s) }));
+              Object.assign(document.createElement("span"), { className: "note", textContent: stepNote(s), title: stepNote(s) }),
+              Object.assign(document.createElement("span"), { className: "at num", textContent: stepAt(s) }));
     return li;
   }));
   return ul;
@@ -502,37 +534,20 @@ function paintSteps() {
       continue;
     }
     const steps = v.steps || [];
-    meta.textContent = `${STATE_LABEL[v.state] || v.state} · ${v.steps_done ?? 0}/${v.steps_total ?? steps.length}` + (v.duration_sec != null ? ` · ${dur(v.duration_sec)}` : "");
+    meta.textContent = `${stateText(v)} · ${v.steps_done ?? 0}/${v.steps_total ?? steps.length}` + (v.duration_sec != null ? ` · ${dur(v.duration_sec)}` : "");
     paintStepsInto(ul, steps);
   }
 }
 
-/** 로그는 단계별 한 줄로만 보여준다. RPA 원본 로그(log_tail)는 화면에 담기엔 너무 길다 - PC 의 로그 파일에 그대로 남는다 */
-function logLines(v) {
-  return (v?.steps || []).filter((s) => ["running", "done", "failed", "stopped"].includes(s.state)).map((s) => {
-    const label = s.label || s.key;
-    const at = (s.finished_at || s.started_at || "").slice(11, 19) || "--:--:--";
-    if (s.state === "running") return `[${at}] ${label} 진행 중`;
-    if (s.state === "done") return `[${at}] ${label} 성공`;
-    return `[${at}] ${label} ${STATE_LABEL[s.state] || s.state} : ${s.note || `${label} 단계에서 오류가 발생했습니다.`}`;
-  });
-}
-
-function paintLog() {
-  const v = latest();
-  const lines = (v && (v.state === "running" || isToday(v))) ? logLines(v) : [];
-  $("log").textContent = lines.join("\n");
-  $("log-meta").textContent = lines.length ? `${v.program_label} · ${lines.length}줄` : "없음";
-}
-
 // --- 기록 (Firestore) ------------------------------------------------
 let histSeq = 0;   // 빠르게 연달아 누르면 늦게 온 옛 응답은 버린다 (BugBuster K10)
+let histItems = null;   // 마지막으로 받은 기록 - '실패·오류만' 은 다시 읽지 않고 이것을 거른다
 async function loadHistory(date) {
   const seq = ++histSeq;
   const rows = $("hist-rows"), msg = $("hist-msg");
   $("hist-title").textContent = date ? `기록 · ${date}` : "기록";
   msg.textContent = "불러오는 중"; msg.className = "msg";
-  rows.replaceChildren();
+  rows.replaceChildren(); histItems = null;
   try {
     const col = collection(fs, "runs", c.me.cid, "items");
     const q = date
@@ -540,14 +555,24 @@ async function loadHistory(date) {
       : query(col, where("pcId", "==", c.pcId), orderBy("started_at", "desc"), limit(HISTORY_LIMIT));
     const snap = await getDocs(q);
     if (seq !== histSeq || !root) return;
-    const items = snap.docs.map((d) => d.data());
-    msg.textContent = items.length ? `${items.length}건` + (items.length >= HISTORY_LIMIT ? " (최근 것만)" : "") : "기록이 없습니다.";
-    rows.replaceChildren(...items.flatMap(histRow));
+    histItems = snap.docs.map((d) => d.data());
+    paintHist();
   } catch (e) {
     if (seq !== histSeq || !root) return;
     msg.className = "msg bad";
     msg.textContent = e.code === "permission-denied" ? "권한이 없습니다." : `불러오지 못했습니다. (${e.code || e})`;
   }
+}
+
+// 기록 표 - [실패·오류만] 을 누르면 실패·오류 줄만 (사람이 중단한 것은 빼고, 2026-10-30)
+function paintHist() {
+  if (!histItems) return;
+  const bad = $("hist-bad").getAttribute("aria-pressed") === "true", all = histItems;
+  const items = bad ? all.filter(isBad) : all, cut = all.length >= HISTORY_LIMIT ? " (최근 것만)" : "";
+  $("hist-msg").textContent = !all.length ? "기록이 없습니다."
+    : bad ? (items.length ? `실패·오류 ${items.length}건 / 전체 ${all.length}건${cut}` : `실패·오류 기록이 없습니다. (전체 ${all.length}건${cut})`)
+    : `${all.length}건${cut}`;
+  $("hist-rows").replaceChildren(...items.flatMap(histRow));
 }
 
 function histRow(r) {
@@ -556,11 +581,12 @@ function histRow(r) {
   const ms = (payload.metrics || []).slice(0, 3).map((m) => `${m.label} ${m.approx ? "≈" : ""}${m.value}${m.total != null ? "/" + m.total : ""}`).join(" · ");
   const tr = document.createElement("tr");
   tr.className = "hist";
-  // 오류(crashed)는 노랑 채움 알약, 실패(stopped·failed)는 옅은 빨강 알약
-  const cls = r.state === "success" ? "good" : r.state === "running" ? "run" : r.state === "crashed" ? "crash" : "bad";
+  // 오류(crashed)는 노랑 채움 알약, 실패(stopped·failed)는 옅은 빨강 알약, 사람이 중단은 회색
+  const cls = halted(r) ? "halt" : r.state === "success" ? "good" : r.state === "running" ? "run" : r.state === "crashed" ? "crash" : "bad";
   const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
   const prog = (PROGRAM_SHORT[r.program] || r.program_label || r.program || "") + (payload.trigger === "repeat" ? " · 반복" : "");   // 표에선 '오토파일럿' 을 뗀다. 처리한 반복 회차 (빈 회차는 기록에 없다)
-  tr.innerHTML = `<td class="num">${esc(t)}</td><td>${esc(prog)}</td><td><span class="pill ${cls}">${esc(STATE_LABEL[r.state] || r.state || "")}</span></td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td><td class="num">${typeof r.cost === "number" ? r.cost.toLocaleString("ko-KR") : "-"}</td>`;   // 토큰 전 옛 기록은 cost 가 없다
+  // 결과가 첫 칸 - 실패 줄을 눈으로 훑어 찾게 (2026-10-30)
+  tr.innerHTML = `<td><span class="pill ${cls}">${esc(stateText(r))}</span></td><td class="num">${esc(t)}</td><td>${esc(prog)}</td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td><td class="num">${typeof r.cost === "number" ? r.cost.toLocaleString("ko-KR") : "-"}</td>`;   // 토큰 전 옛 기록은 cost 가 없다
   const detail = document.createElement("tr");
   detail.className = "hist-detail hide";
   const td = document.createElement("td"); td.colSpan = 6;
@@ -595,10 +621,11 @@ function paintButtons() {
   // 에이전트도 띄우기 직전에 서버에서 다시 세어 0 이하면 거절한다 (2부, agent.Tokens.gate)
   const bal = typeof tokBal === "number" ? tokBal : live?.tokens?.balance;
   const empty = typeof bal === "number" && bal <= 0;
-  const upd = updBusy();
+  const upd = updBusy(), bad = tampered();               // 변조: PC 가 실행을 거절한다 - 누를 수 없게 (2026-10-30)
   for (const id of ["run-prepare", "run-routine", "run-all"]) {
-    $(id).disabled = off || running || empty || upd;     // 다른 사람이 이미 돌리는 중이면 못 누른다
-    $(id).title = upd && !off ? "업데이트 중이어서 잠시 실행할 수 없습니다." : running && !off ? "오토파일럿이 실행 중이어서 실행할 수 없습니다."
+    $(id).disabled = off || running || empty || upd || bad;     // 다른 사람이 이미 돌리는 중이면 못 누른다
+    $(id).title = bad && !off ? "파일이 변조되어 실행할 수 없습니다. 같은 버전으로 다시 업데이트하면 원래 파일로 되돌립니다."
+      : upd && !off ? "업데이트 중이어서 잠시 실행할 수 없습니다." : running && !off ? "오토파일럿이 실행 중이어서 실행할 수 없습니다."
       : empty && !off ? "토큰이 없어 실행할 수 없습니다. 토큰을 충전한 뒤 실행하여 주십시오." : "";
   }
   for (const [id, [key, name]] of Object.entries(RUN_LABELS)) {

@@ -120,18 +120,20 @@
     .shell { display:block; }
     .side { width:auto; border-right:0; border-bottom:1px solid var(--line); flex-direction:row; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 12px; position:static; height:auto; }
     .nav { display:flex; gap:4px; } .nav .sec { display:none; }
+    #app-nav, #admin-nav { display:contents; }   /* 안쪽 묶음도 풀어야 링크가 한 줄로 선다 (2026-10-30) */
     .side .foot { margin:0 0 0 auto; order:1; }   /* 휴대폰 폭에선 메뉴 오른쪽 끝 그대로 */
     .main { padding:16px; }
   }
 
   /* 상태 헤더: 상태 색으로 통째로 채운 카드 하나. 나머지 카드는 비운다 */
-  /* 성공 초록 / 진행 중 파랑 / 실패(중단) 빨강 / 오류(비정상 종료·연결 끊김) 노랑 */
+  /* 성공 초록 / 진행 중 파랑 / 실패 빨강 / 오류(비정상 종료) 노랑 / 연결 끊김·사람이 중단 - 중립 (실행 결과가 아니다, 2026-10-30) */
   /* 채움은 상태 색보다 한 단계 진한 --*-fill (흰 글자로 4.5:1 이상) */
   .hero { border-radius:18px; margin-bottom:14px; background:var(--soft); color:var(--strong); overflow:hidden; --on:var(--strong);
           display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
   .hero[data-state="success"] { background:var(--good-fill); --on:var(--on-fill); }
   .hero[data-state="stopped"], .hero[data-state="failed"] { background:var(--bad-fill); --on:var(--on-fill); }
-  .hero[data-state="crashed"], .hero[data-state="offline"] { background:var(--warn-fill); --on:var(--on-fill); }
+  .hero[data-state="crashed"] { background:var(--warn-fill); --on:var(--on-fill); }
+  .hero[data-state="offline"] .dot { background:transparent; border:2px dashed var(--muted); }   /* 끊김: 빈 점선 고리 */
   .hero[data-state="running"] { background:var(--run-fill); --on:var(--on-fill); }
   .hero .body { padding:22px 24px; display:grid; gap:4px; min-width:0; flex:1 1 320px; color:var(--on); }
   /* 연결·다음 자동 실행은 상태 띠 오른쪽에. 띠 색 위라 글자색은 --on 을 따른다 */
@@ -223,7 +225,7 @@
   details[open] summary .chev { transform:rotate(90deg); }
   @media (prefers-reduced-motion: reduce) { details summary .chev, .switch span.knob, .switch span.knob::after { transition:none; } }
   ul.steps { list-style:none; margin:10px 0 0; padding:0; }
-  ul.steps li { display:grid; grid-template-columns:18px auto minmax(0, 1fr); gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:14px; }
+  ul.steps li { display:grid; grid-template-columns:18px auto minmax(0, 1fr) auto; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:14px; }
   ul.steps li .mark { width:10px; height:10px; border-radius:50%; background:var(--line); justify-self:center; }
   ul.steps li.done .mark { background:var(--good); }
   ul.steps li.stopped .mark, ul.steps li.failed .mark { background:var(--bad); }
@@ -237,9 +239,9 @@
   ul.steps li.skipped, ul.steps li.pending { color:var(--muted); }
   ul.steps li .note { color:var(--muted); font-size:13px; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   ul.steps li.stopped .note, ul.steps li.failed .note { color:var(--bad); }
+  ul.steps li .at { color:var(--muted); font-size:12px; min-width:5.2em; text-align:right; }   /* 단계 시각 (로그 카드 대신, 2026-10-30) */
 
-  /* 실행 버튼: 초록으로 채운 네모. 마우스를 올리면 글자는 오른쪽으로 밀려 사라지고
-     표시가 버튼 한가운데로 옮겨 간다 (Uiverse 'Send' 꼴에서 흔들림·회전은 뺐다).
+  /* 실행 버튼: 초록으로 채운 네모. 마우스를 올리면 바탕만 진해진다 - 글자를 숨기면 아이콘이 같은 세 단추가 구분되지 않는다 (2026-10-30).
      표시는 자리로 잡아 두어 네 버튼(실행 play·전원 power·중단 square) 모두 같은 자리에 선다 */
   .actions { display:grid; gap:8px; }
   .actions button { --fill:var(--good-fill); --ink:var(--on-fill);
@@ -247,15 +249,10 @@
     padding:.7em 1em .7em 2.6em; border:0; border-radius:12px;
     background:var(--fill); color:var(--ink); font:inherit; font-size:14px; font-weight:700;
     text-align:left; overflow:hidden; transition:background-color .2s, transform .1s; }
-  .actions button .fly { position:absolute; left:.9em; top:50%; translate:0 -50%;
-    transition:left .3s ease-in-out, translate .3s ease-in-out; }
-  .actions button svg { display:block; width:18px; height:18px; transform-origin:center; transition:transform .3s ease-in-out; }
-  .actions button .t { display:block; color:inherit; line-height:1.5;
-    transition:transform .3s ease-in-out, opacity .3s ease-in-out; }
+  .actions button .fly { position:absolute; left:.9em; top:50%; translate:0 -50%; }
+  .actions button svg { display:block; width:18px; height:18px; }
+  .actions button .t { display:block; color:inherit; line-height:1.5; }
   .actions button:hover:not(:disabled) { background:color-mix(in srgb, var(--fill) 85%, #000); }
-  .actions button:hover:not(:disabled) .fly { left:50%; translate:-50% -50%; }
-  .actions button:hover:not(:disabled) svg { transform:scale(1.12); }
-  .actions button:hover:not(:disabled) .t { transform:translateX(9em); opacity:0; }
   .actions button:active:not(:disabled) { transform:scale(.97); }
   .actions button:disabled { opacity:.45; cursor:default; }
   /* 도는 RPA 의 단추: 화살표 없이 '… 실행중', 흐리게 하지 않는다 (지금 도는 것이 무엇인지 읽히게 - 다른 단추만 흐림) */
@@ -264,8 +261,6 @@
   /* 전체 실행은 더 진한 초록, 종료는 빨강으로 떨어뜨려 다른 묶음으로 읽히게 */
   .actions button.primary { --fill:color-mix(in srgb, var(--good-fill) 62%, #06231f); }
   .actions button.danger { --fill:var(--bad-fill); margin-top:6px; }
-  @media (prefers-reduced-motion: reduce) {
-    .actions button .fly, .actions button svg, .actions button .t { transition:none; } }
   .switch { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--line); gap:10px; margin:0; }
   .switch.first { border-top:0; }
   .switch input { position:absolute; opacity:0; width:0; height:0; }
@@ -322,6 +317,7 @@
   tr.hist td:nth-child(-n+4), thead th:nth-child(-n+4), tr.hist td:nth-child(6), #view-history thead th:nth-child(6) { white-space:nowrap; }
   tr.hist td:nth-child(5), thead th:nth-child(5) { width:100%; min-width:220px; }   /* 좁으면 한 글자씩 세로로 내려가지 않게 */
   tr.hist:hover td { background:var(--soft); }
+  #hist-bad[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); font-weight:700; }   /* 실패·오류만 */
   tr.hist-detail td { background:var(--soft); padding:10px 12px; }
   tr.hist-detail pre { font-size:12px; white-space:pre-wrap; margin:10px 0 0; color:var(--muted); max-height:320px; overflow:auto; }
   /* 프리페어·루틴 나란히 */
@@ -364,6 +360,7 @@
   .days-mini button { min-width:28px; padding:3px 6px; font-size:12px; }   /* 줄마다 요일 (판 3 PC) */   /* 요일 단추와 '시간' 사이를 띄운다 (사용자 2026-10-08) */
   /* 환경설정 안내 글자만 AIRBUS ECAM 색 - 중요도 빨강 > 호박색 > 초록 (사용자 2026-10-08). 밝은 모드는 같은 색상을 대비 4.5:1 까지 어둡게 */
   .app-settings .msg.bad { color:var(--ecam-red); } .app-settings .msg.warn { color:var(--ecam-amber); } .app-settings .msg.good { color:var(--ecam-green); }
+  .app-settings .msg > .bad { color:var(--ecam-red); } .app-settings .msg > .warn { color:var(--ecam-amber); }   /* 줄마다 색 (#sch-info) */
   .settings-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.25fr); gap:14px; align-items:start; }
   @media (max-width:1000px) { .settings-grid { grid-template-columns:minmax(0,1fr); } }
   /* 자동 실행 줄: 시각 · 전체/고르기 · 모듈 단추 · 빼기. 좁으면 다음 줄로 넘어간다. 한도를 넘는 줄은 흐리게 */
@@ -382,6 +379,7 @@
   .pill.bad { background:var(--bad-bg); color:var(--bad); }
   .pill.crash { background:var(--warn-pill); color:var(--warn-pill-ink); }   /* 비정상 종료 = 오류(노랑). 채워서 중단(옅은 빨강)과 구분 */
   .pill.run { background:var(--run-bg); color:var(--run); }
+  .pill.halt { background:var(--soft); color:var(--muted); }   /* 사람이 중단 (STOPPED_TEXT) - 실패가 아니다 */
   .narrow { max-width:420px; }
 </style>
 </head>

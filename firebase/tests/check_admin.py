@@ -415,7 +415,7 @@ with sync_playwright() as pw:
     slot = "document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")"
     page.evaluate(f"{slot}.dataset.old = '1'")     # 저장하면 업체 상세를 다시 그린다 - 다시 그려졌는지 보려고
     page.fill("#detail input[aria-label='자동 실행 슬롯 수']", "4")
-    page.click("#detail .row:has(input[aria-label='자동 실행 슬롯 수']) button")
+    page.click("#detail button.mod-apply")   # 업체 정책 [적용] 하나 (2026-10-30)
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='자동 실행 슬롯 수']\")?.value === '4'", timeout=10000)
     # 다시 그려질 때까지 (새 칸에 4) - 그 전에 다음 칸에 표시하거나 채우면 다시 그리며 지워진다
     page.wait_for_function(f"{slot} && !{slot}.dataset.old && {slot}.value === '4'", timeout=10000)
@@ -424,18 +424,21 @@ with sync_playwright() as pw:
     preset = "document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")"
     page.evaluate(f"{preset}.dataset.old = '1'")     # 저장하면 업체 상세를 다시 그린다 - 다시 그려졌는지 보려고
     page.fill("#detail input[aria-label='옵저버 프리셋 수']", "7")
-    page.click("#detail .row:has(input[aria-label='옵저버 프리셋 수']) button")
+    page.click("#detail button.mod-apply")
     page.wait_for_function("document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")?.value === '7'", timeout=10000)
     # 다시 그려질 때까지 (새 칸에 7) - 그 전에 다음 칸을 채우면 다시 그리며 지워진다
     page.wait_for_function(f"{preset} && !{preset}.dataset.old && {preset}.value === '7'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/presets") == 7, "화면: 업체 상세에서 옵저버 프리셋 수 저장")
     check("1이면 허용하지 않으며 업체 화면에도 보이지 않습니다. (1~16, 기본 1)" in page.text_content("#detail"), "병렬 실행 허용 설명")
     page.fill("#detail input[aria-label='병렬 실행 최대 창 수']", "6")
-    page.click("#detail .row:has(input[aria-label='병렬 실행 최대 창 수']) button")
+    page.click("#detail button.mod-apply")
     # 칸 값은 채우자마자 6 이라 저장을 못 기다린다 - 저장 뒤 다시 그린 제목의 허용 상태를 기다린다
-    page.wait_for_function("[...document.querySelectorAll('#detail h3')].some((h) => h.textContent.includes('6개까지 허용'))", timeout=10000)
+    page.wait_for_function("(document.querySelector('#detail #policy tr[data-limit=parallel]')?.textContent || '').includes('6개까지 허용')", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/parallel") == 6 and "6개까지 허용" in page.text_content("#detail"),
-          "화면: 업체 상세에서 병렬 실행 허용 저장 (제목 옆에 허용 상태)")
+          "화면: 업체 상세에서 병렬 실행 허용 저장 (값 옆에 허용 상태)")
+    check(page.locator("#detail .sec h3", has_text="업체 정책").count() == 1 and page.locator("#detail button.mod-apply").count() == 1
+          and page.locator("#detail .sec h3", has_text="자동 실행 슬롯 수").count() == 0,
+          "모듈 정책·슬롯 수·프리셋 수·병렬 실행은 '업체 정책' 한 상자, [적용] 하나 (2026-10-30)")
 
     print("자동 업데이트 (설계 8절)")
     CID, PC = "t_new", "pc_a"
@@ -456,7 +459,7 @@ with sync_playwright() as pw:
     heads = [h.strip() for h in page.locator("#detail table.pcs th").all_text_contents()]
     check(heads == ["PC 이름", "PC코드", "버전", "업데이트 상태", "프리셋", "업데이트"], f"PC 는 표로 - 칸이 맞춰진다 ({heads})")
     cells = [c.strip() for c in page.locator(f"#pc-{PC} td").all_text_contents()]
-    check(cells[1] == PC and cells[2] == "2026.10.07-4 (안정본)" and cells[3] == "업데이트됨 10/7 14:03", f"PC 줄 칸: 코드·버전·상태 ({cells})")
+    check(cells[1] == PC and cells[2] == "2026.10.07-4 (안정본)" and cells[3] == "업데이트됨 2026-10-07 14:03", f"PC 줄 칸: 코드·버전·상태 ({cells})")
     check(page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4"
           and "(최신본)" in page.text_content(f"#pc-{PC} select.upd-ver option[value='2026.10.07-5']"), "판 고르기: 처음은 안정본, 최신본 표시")
     # 줄이 자연스럽게 (사용자 2026-10-08): 고르기 칸엔 버전만, 비고는 칸 아래 작은 글로. 머리·칸·단추는 한 줄
@@ -525,6 +528,16 @@ with sync_playwright() as pw:
     cells = [c.strip() for c in page.locator(f"#pc-{PC} td").all_text_contents()]
     check(cells[2] == "버전 정보 없음" and page.input_value(f"#pc-{PC} select.upd-ver") == "2026.10.07-4",
           f"버전을 모르면 '버전 정보 없음'·안정본 ({cells[2]})")
+    db_put(f"apps/rpa/live/{CID}/{PC}/version", {"version": "2026.10.07-4", "state": "ok"})
+    db_put(f"apps/rpa/live/{CID}/{PC}/version", {"version": "2026.10.07-4", "state": "tampered", "changed": ["rpa_dashboard.py"], "changed_count": 1})
+    open_company(page, CID)
+    cells = [c.strip() for c in page.locator(f"#pc-{PC} td").all_text_contents()]
+    row = page.text_content(f"#companies tr[data-cid='{CID}'] td.checks")
+    check(cells[2] == "2026.10.07-4 (안정본) · 파일 변조됨 (실행 제한)" and page.locator(f"#pc-{PC} td:nth-child(3) .bad").count() == 1
+          and "변조 PC 1" in row and page.locator(f"#companies tr[data-cid='{CID}'] td.checks .bad").count() >= 1
+          and page.evaluate(f"""(() => {{ const rs = [...document.querySelectorAll('#companies tr')], i = rs.findIndex((r) => r.dataset.cid === '{CID}');
+            return i >= 0 && rs.slice(0, i).every((r) => r.querySelector('td.checks .bad')); }})()"""),   # 앞에는 확인할 업체만
+          f"변조 PC: 버전 칸에 빨간 '파일 변조됨', 업체 표 '확인 필요' 에 '변조 PC 1' 이고 맨 위로 (2026-10-30) ({cells[2]}, {row})")
     db_put(f"apps/rpa/live/{CID}/{PC}/version", {"version": "2026.10.07-4", "state": "ok"})
     page.click("#releases-open")
     page.click("#releases button[data-stable='2026.10.07-5']")

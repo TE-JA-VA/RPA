@@ -493,14 +493,29 @@ export async function usageRows(cid) {
 
 // --- 관리 화면 (AFTERMARKET_SETUP) ---------------------------------------------
 const signedIn = (u) => (u.metadata.lastSignInTime ? new Date(u.metadata.lastSignInTime).toISOString() : null);
+// 업체 표의 '확인 필요' (2026-10-30): PC 마다 버전 상태·업데이트 상태·살아 있음 신호만 읽는다 (live 전체는 크다 - RTDB 다운로드 한도).
+// 연결 끊김 기준은 업체 웹과 같다 (firebase-config HEARTBEAT_EVERY_DEFAULT 30초 × HEARTBEAT_MISS 3 + 5초)
+async function pcChecks(cid, pcIds, nowSec = Date.now() / 1000) {
+  const live = (pcId, k) => rtdb.ref(`apps/rpa/live/${cid}/${pcId}/${k}`).get().then((s) => s.val(), () => null);
+  const out = { tampered: 0, missing: 0, updateFailed: 0, offline: 0 };
+  await Promise.all(pcIds.map(async (pcId) => {
+    const [ver, upd, hb] = await Promise.all([live(pcId, "version/state"), live(pcId, "update/state"), live(pcId, "heartbeat")]);
+    if (ver === "tampered") out.tampered++;
+    else if (ver === "mixed") out.missing++;
+    if (upd === "failed" || upd === "rolled_back") out.updateFailed++;
+    if (!hb?.at || nowSec - hb.at > (hb.every || 30) * 3 + 5) out.offline++;
+  }));
+  return out;
+}
 export async function companyTable() {
   const [rows, users] = await Promise.all([usageRows(), usersOf()]);
   const companies = (await rtdb.ref("meta/companies").get()).val() ?? {};
-  return rows.map((r) => {
+  return Promise.all(rows.map(async (r) => {
     const mine = users.filter((u) => u.customClaims?.cid === r.cid);
-    return { ...r, pcs: Object.keys(companies[r.cid]?.pcs ?? {}).length, users: mine.length,
+    const pcIds = Object.keys(companies[r.cid]?.pcs ?? {});
+    return { ...r, pcs: pcIds.length, users: mine.length, checks: await pcChecks(r.cid, pcIds),
       lastSignIn: mine.map(signedIn).filter(Boolean).sort().at(-1) ?? null };
-  });
+  }));
 }
 export async function companyDetail(cid) {
   checkKey("cid", cid);
