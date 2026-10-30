@@ -1026,20 +1026,25 @@ def end_stuck_routine(waited):
         if not (state.get("state") == "running" and started is not None and started.timestamp() >= _together[1] - 2
                 and status.process_alive(pid, state.get("pid_created"))):
             pid = None
-        for p in dict.fromkeys(x for x in (pid, proc.pid) if x):    # 실제 프로그램부터 - 띄운 exe 는 그게 끝나면 스스로 끝난다
-            if p == proc.pid:
-                try:        # 설치판 껍데기는 실제 프로그램이 끝나면 풀어 둔 임시 폴더를 치우고 끝난다 - 바로 끄면 남을 수 있어 5초 본다 (검토 10-22)
-                    proc.wait(5 if pid and pid != p else 0)
-                    continue
-                except subprocess.TimeoutExpired:
-                    pass
-            why = pl.ec.terminate_pid(p)
-            if why:
-                log(f"  PROCESS를 종료하지 못했습니다: {why}")
-        end = time.time() + 5       # 끝날 때까지 본 뒤 닫는다 - 살아 있으면 mark_stopped 가 건너뛰어 '비정상 종료' 로 남는다
-        while time.time() < end and (proc.poll() is None or (pid and status.process_alive(pid))):
-            time.sleep(0.2)
-        status.mark_stopped("routine", KEYS_STUCK_REASON)
+        if pid:     # 끄고 기다리는 사이 에이전트·예약기가 먼저 죽은 것을 봐도 '비정상 종료' 가 아니라 '중단' 으로 닫게 (대시보드 [중지] 와 같이, BugBuster M19)
+            status.mark_stopping("routine", state.get("run_id"), KEYS_STUCK_REASON)
+        try:
+            for p in dict.fromkeys(x for x in (pid, proc.pid) if x):    # 실제 프로그램부터 - 띄운 exe 는 그게 끝나면 스스로 끝난다
+                if p == proc.pid:
+                    try:        # 설치판 껍데기는 실제 프로그램이 끝나면 풀어 둔 임시 폴더를 치우고 끝난다 - 바로 끄면 남을 수 있어 5초 본다 (검토 10-22)
+                        proc.wait(5 if pid and pid != p else 0)
+                        continue
+                    except subprocess.TimeoutExpired:
+                        pass
+                why = pl.ec.terminate_pid(p)
+                if why:
+                    log(f"  PROCESS를 종료하지 못했습니다: {why}")
+            end = time.time() + 5       # 끝날 때까지 본 뒤 닫는다 - 살아 있으면 mark_stopped 가 건너뛰어 '비정상 종료' 로 남는다
+            while time.time() < end and (proc.poll() is None or (pid and status.process_alive(pid))):
+                time.sleep(0.2)
+            status.mark_stopped("routine", KEYS_STUCK_REASON)
+        finally:
+            status.clear_stopping("routine")
         unpin_erpia()
 
 

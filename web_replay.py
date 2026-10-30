@@ -1705,6 +1705,7 @@ class Replayer:
                         how = f"건너뜀 ({e})"
                     except NoOrders as e:   # 그 메일에서 받을 것이 없다 - 이 메일만 넘기고 다음 메일로 (사용자 2026-10-21)
                         how = self._no_orders_why(e)
+                        self.no_target, self.no_target_why = True, how     # 모든 메일이 이렇게 끝나 받은 파일이 없으면 토큰을 쓰지 않는다 (묶음 밖과 같이)
                     except (Cancelled, EditHere):
                         raise
                     except Exception as e:
