@@ -501,6 +501,8 @@ def _pw_slots(data):
     for site in (sites.values() if isinstance(sites, dict) else ()):
         if isinstance(site, dict) and "PW" in site:
             yield site, "PW"
+        if isinstance(site, dict) and "MailPW" in site:     # 메일 2차인증 메일함 비밀번호 (설계 2026-11-02)
+            yield site, "MailPW"
 
 
 def _read_json(path):
@@ -1167,7 +1169,7 @@ def login_mismatch(site, code):
     return c is not None and str(c) != str(code or "")
 
 
-def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None):
+def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None, mail_logins=None):
     """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
     presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
     기록이 있는 프리셋만 칸을 둔다 - 새 칸과 fresh (이번에 다시 기록한 번호) 는 꺼짐(Stts 9), 나머지 있던 칸의 켬/끔은 그대로
@@ -1175,6 +1177,8 @@ def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None):
     phones: {번호: (인증 휴대폰 phoneId, [발신번호])} - 문자 2차인증 (휴대폰 중계 설계 13절). 없는 번호는 있던 값 그대로.
     origs: {번호: 있던 값을 찾을 옛 번호} - 옵저버가 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13). 없는 번호는 같은 번호,
     None 이면 새 칸 (옛 값 없음). 칸마다 Code 에 프리셋 사이트코드를 적는다 - 읽는 쪽이 login_mismatch 로 짝을 확인한다.
+    mail_logins: {번호: (메일 아이디, 메일 비밀번호 또는 None = 저장된 것 그대로)} - 메일 2차인증 메일함 계정 MailID·MailPW (잠김).
+    기록에 메일함 로그인(MAIL_PW)이 있는 프리셋만 둔다. 없는 번호는 있던 값 그대로.
     사용자 설정이 아예 없으면 FileNotFoundError (자격증명 없는 설정을 새로 만들지 않는다 - write_routine_modules 와 같다)."""
     data = read_user_config()
     if not data:
@@ -1196,6 +1200,9 @@ def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None):
         phone, senders = (phones or {}).get(p["no"]) or (old.get("Phone"), old.get("SmsSenders"))
         if phone and senders:
             mine[key].update(Phone=phone, SmsSenders=list(senders))
+        if any(s.get("credential") == "MAIL_PW" for s in p["record"].get("steps") or []):
+            mail_id, mail_pw = (mail_logins or {}).get(p["no"], (old.get("MailID", ""), None))
+            mine[key].update(MailID=(mail_id or "").strip(), MailPW=mail_pw or old.get("MailPW", ""))
     data[SITES_SECTION] = {**others, **mine}       # 프리페어는 이 순서로 돈다 (번호 순)
     write_user_config(data)
 

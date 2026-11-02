@@ -940,6 +940,60 @@ rr.App.save(app)
 rr.App.quit(app)
 check("저장한 뒤에는 묻지 않고 닫는다", closed == [1] and len(app.asked) == 2 and app.said[-1] == "저장했습니다.", str((closed, app.asked, app.said)))
 
+print("=== 메일 2차인증 계정 (설계 2026-11-02 5절) ===")
+_keep_mail = {f: open(f, "rb").read() for f in (st.presets_path(), st.user_config_path()) if os.path.exists(f)}
+MAIL_PW_T = "메일-비밀번호-유출금지"
+MAIL_R = {"version": 2, "start_url": "https://shop.example.com/login", "record_date": "2026-11-02",
+          "steps": [{"kind": "secret", "page": 0, "credential": "PW", "host": "shop.example.com"},
+                    {"kind": "click", "page": 0, "otpSend": True, "mailSend": True},
+                    {"kind": "secret", "page": 1, "credential": "MAIL_PW", "host": "mail.example.net"},
+                    {"kind": "copyCode", "page": 1, "shape": {"chars": "digit", "len": 6}},
+                    {"kind": "otp", "page": 0, "source": "copy"}]}
+st.write_user_config(BASE)
+st.write_presets([{"no": 1, "name": "메일몰", "code": "021", "saved_at": None, "record": MAIL_R},
+                  {"no": 2, "name": "보통몰", "code": "022", "saved_at": None, "record": REC}])
+mps = st.read_presets()
+st.save_preset_sites(mps, {1: ("seller", PW), 2: ("s2", PW)}, mail_logins={1: ("inbox", MAIL_PW_T), 2: ("x", "y")})
+sites = st.read_user_config()["Sites"]
+check("메일 계정: 아이디는 그대로, 비밀번호는 잠겨서 (풀면 같다)", sites["PRESET1"].get("MailID") == "inbox"
+      and MAIL_PW_T not in raw_config() and st.unseal(sites["PRESET1"].get("MailPW")) == MAIL_PW_T, str(sites["PRESET1"]))
+check("메일 인증이 없는 프리셋에는 메일 계정 칸이 없다", "MailID" not in sites["PRESET2"] and "MailPW" not in sites["PRESET2"])
+st.save_preset_sites(mps, {1: ("seller", None)}, mail_logins={1: ("inbox2", None)})
+s1 = st.read_user_config()["Sites"]["PRESET1"]
+check("다시 저장: 메일 비밀번호를 안 주면 그대로", s1.get("MailID") == "inbox2" and st.unseal(s1.get("MailPW")) == MAIL_PW_T)
+st.save_preset_sites(mps, {1: ("seller", None)})
+s1 = st.read_user_config()["Sites"]["PRESET1"]
+check("메일 계정을 안 넘기면 있던 값 그대로", s1.get("MailID") == "inbox2" and st.unseal(s1.get("MailPW")) == MAIL_PW_T)
+
+orig_read = wr.status.read_presets
+wr.status.read_presets = lambda: [{"no": 2, "code": "012", "record": MAIL_R}]
+no_mail = wr._replay_problems("PRESET2", {"Preset": 2})
+with_mail = wr._replay_problems("PRESET2", {"Preset": 2, "MailID": "inbox", "MailPW": "pw"})
+wr.status.read_presets = orig_read
+check("메일 계정이 비면 시작하지 않는다 (설계 6절 글), 휴대폰은 묻지 않는다",
+      no_mail == ["PRESET2: 인증 메일 계정이 입력되지 않았습니다. 옵저버에서 입력하여 주십시오."] and with_mail == [], (no_mail, with_mail))
+
+import preset_transfer as ptx  # noqa: E402
+good_file = {"kind": ptx.FILE_KIND, "version": ptx.FILE_VERSION, "name": "메일몰", "code": "021", "record": MAIL_R}
+check("메일 인증 기록(버전 2) 파일은 받는다", raises(ValueError, ptx.check_file, dict(good_file)) is None, raises(ValueError, ptx.check_file, dict(good_file)))
+for k in ("MailID", "MailPW"):
+    check(f"'{k}' 가 든 프리셋 파일은 거절", raises(ValueError, ptx.check_file, dict(good_file, **{k: "x"})) is not None)
+item = ptx.export_item(1, with_phone=True)
+check("내보내기 파일에 메일 계정이 없다", "inbox2" not in json.dumps(item, ensure_ascii=False) and "MailPW" not in json.dumps(item))
+print("=== 메일 2차인증 - 옵저버 저장 전 검사 (설계 2026-11-02 6절) ===")
+MP = dict(P(1, record=MAIL_R), phone="", senders="")
+check("메일 인증 기록인데 메일 계정이 비면 막는다 (휴대폰은 묻지 않는다)", rr.validate_presets([dict(MP)])
+      == (1, "① 몰1: 인증 메일 계정이 입력되지 않았습니다. 인증 메일 아이디와 비밀번호를 입력하여 주십시오."), rr.validate_presets([dict(MP)]))
+check("메일 계정이 있으면 통과", rr.validate_presets([dict(MP, mail_id="inbox", mail_pw="pw")]) is None
+      and rr.validate_presets([dict(MP, mail_id="inbox", has_mail_pw=True)]) is None, rr.validate_presets([dict(MP, mail_id="inbox", mail_pw="pw")]))
+TWICE = {"steps": MAIL_R["steps"] + [{"kind": "otp", "page": 0, "source": "copy"}]}
+check("메일 인증 둘이면 막는다 (설계 6절 글)", rr.validate_presets([dict(MP, record=TWICE, mail_id="i", mail_pw="p")])
+      == (1, "① 몰1: 프리셋 하나에는 메일 인증을 하나만 기록할 수 있습니다. 다시 기록하여 주십시오."))
+check("메일 계정 칸은 메일함 로그인이 있는 기록에만", rr.has_mail_login(MAIL_R) and not rr.has_mail_login(R)
+      and rr.has_mail_login({"steps": [{"kind": "secret", "host": "a.shop.com"}, {"kind": "secret", "host": "mail.naver.com"}]}))
+for f, b in _keep_mail.items():
+    open(f, "wb").write(b)
+
 print()
 print(f"실패: {'없음' if not fails else fails}")
 sys.exit(1 if fails else 0)

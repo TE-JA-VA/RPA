@@ -42,6 +42,8 @@ import web_replay as rec
 REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)
 RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
+# 메일 2차인증 메일함 계정 칸 안내 (설계 2026-11-02 6절 - 사용자 검수)
+MAIL_ACCOUNT_HINT = "인증 메일을 받는 메일 계정입니다. 이 PC에만 암호화하여 저장되며, 오토파일럿이 인증번호를 확인하는 데만 사용합니다."
 MAIL_HINT = ("엑셀파일을 받으려는 메일이 '메일 시작 문구'로 시작하는 경우, 그 글자로 시작하는 메일이 처리대상이 됩니다."   # 메일 첨부파일일 때 안내 (사용자 2026-10-14 검수)
              " 메일이 많으면 제목으로 검색한 뒤 고르십시오.")      # (BugBuster I5)
 IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부파일을 받습니다. 아이디·비밀번호는 메일 계정의 것입니다 "
@@ -383,8 +385,10 @@ class Worker(threading.Thread):
             rp.first_page = ctx.pages[0] if ctx.pages else None
             rp.page_hook = lambda pg: self._set_bounds(pg, where)               # 기록 창 자리에 겹쳐 띄운다
             rp.cancel, rp.pause, rp.edit = self.cancel, self.pause, self.edit
-            if any(s["kind"] == "otp" for s in steps):
+            if any(s["kind"] == "otp" and s.get("source") != "copy" for s in steps):   # 휴대폰 문자 인증만 (메일 인증은 메일함에서)
                 rp.otp = self._otp_relay(creds, label, stamp)
+            if any(s.get("mailOpen") for s in steps):   # 메일 2차인증 - 미리보기는 기억 없이 받은 시각으로 새 메일 (설계 2026-11-02 4절)
+                rp.pick_preview = True
             if any(s.get("pick") for s in steps):     # 메일 고르기 - 기억과 상관없이 맞는 메일 1통 (사용자 2026-10-14)
                 rp.pick_preview = True
                 st.log_line(f"{stamp()} {PICK_NOTE}")
@@ -454,6 +458,7 @@ def new_preset(no, name=None, code=""):
     return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "head": None, "start_url": None,
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
+            "mail_id": "", "mail_pw": "", "has_mail_pw": False,   # 메일 2차인증 메일함 계정 (설계 2026-11-02, 비밀번호는 저장하면 비우고 has_mail_pw)
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
             "imap": None,       # 메일 서버(IMAP) 칸 {host, port, security, rules} - source 가 imap 일 때 (2026-10-22)
             "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
@@ -467,7 +472,7 @@ def load_file_into(p, obj):
     for k, s in enumerate(r["steps"]):
         s["id"] = k
     if obj["code"] != p["code"]:
-        p.update(id="", pw="", has_pw=False, phone="", senders="")
+        p.update(id="", pw="", has_pw=False, phone="", senders="", mail_id="", mail_pw="", has_mail_pw=False)
     pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
     p.update(name=obj["name"], code=obj["code"], loaded=r, raw=[], head=None, start_url=None, viewport=r.get("viewport"),
              enabled={}, deleted=set(), otp={}, fresh=True,
@@ -509,6 +514,7 @@ def load_presets():
         if isinstance(site, dict):
             if not st.login_mismatch(site, p["code"]):     # 다른 사이트의 계정이면 비워 둔다 - 다시 저장해도 잘못된 짝이 굳지 않게 (이슈 #13 검토)
                 q["id"], q["has_pw"] = site.get("ID") or "", bool(site.get("PW"))
+                q["mail_id"], q["has_mail_pw"] = site.get("MailID") or "", bool(site.get("MailPW"))
             q["phone"], q["senders"] = site.get("Phone") or "", ", ".join(site.get("SmsSenders") or [])
         out.append(q)
     return out
@@ -520,7 +526,15 @@ def senders_list(text):
 
 
 def has_otp(record):
-    return any(s.get("kind") == "otp" for s in (record or {}).get("steps") or [])
+    """휴대폰 문자 인증 단계가 있나 (메일에서 복사한 번호를 넣는 칸 source=copy 는 휴대폰이 필요 없다)."""
+    return any(s.get("kind") == "otp" and s.get("source") != "copy" for s in (record or {}).get("steps") or [])
+
+
+def has_mail_login(record):
+    """메일 2차인증 메일함 로그인이 있나 - 저장 화면에 '인증 메일 아이디·비밀번호' 칸을 보인다 (다듬기 전 기록도: 쇼핑몰이 아닌 사이트의 비밀번호)."""
+    steps = (record or {}).get("steps") or []
+    return (any(s.get("credential") == "MAIL_PW" for s in steps)
+            or len({rec.site_domain(s["host"]) for s in steps if s.get("kind") == "secret" and s.get("host")}) > 1)
 
 
 def blank_imap(login_id=""):
@@ -562,10 +576,10 @@ def imap_warn(step):
         return ""
 
 
-def stored_password(no):
-    """저장된 비밀번호 (미리보기·저장 전 확인용, 화면에는 안 보인다). 없으면 빈 글자."""
+def stored_password(no, key="PW"):
+    """저장된 비밀번호 (미리보기·저장 전 확인용, 화면에는 안 보인다). 없으면 빈 글자. key="MailPW" 면 메일 2차인증 메일함 비밀번호."""
     site = (st.read_user_config().get(st.SITES_SECTION) or {}).get(st.preset_site_key(no)) or {}
-    return st.unseal(site.get("PW") or "") or ""
+    return st.unseal(site.get(key) or "") or ""
 
 
 def saved_no(p, cur):
@@ -602,7 +616,7 @@ def keep_dates(files, old, logins_changed, now):
     return files
 
 
-def store(files, logins, fresh=(), phones=None, origs=None, dropped=()):
+def store(files, logins, fresh=(), phones=None, origs=None, dropped=(), mail_logins=None):
     """프리셋 파일과 Sites 의 PRESETn 을 쓴다. 못 쓰면 화면에 보일 문장 (콘솔 없는 exe 라 조용히 넘어가면 안 된다), 되면 None.
     origs: {번호: 불러올 때 번호}·dropped: 지운 옛 번호 - 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13) Sites 의 옛 값은 옛 번호에서 찾고,
     메일 기억·로그인 세션·보관 파일도 따라 옮긴다. 순서는 프리셋 → 설정 → 파일: 설정 쓰기가 실패해도 Sites 는 옛 번호 그대로라
@@ -613,7 +627,7 @@ def store(files, logins, fresh=(), phones=None, origs=None, dropped=()):
         old_codes = None                     # 옛 파일을 못 읽으면 메일 기억은 그대로 둔다
     try:
         st.write_presets(files)
-        st.save_preset_sites(files, logins, fresh=fresh, phones=phones, origs=origs)
+        st.save_preset_sites(files, logins, fresh=fresh, phones=phones, origs=origs, mail_logins=mail_logins)
     except (OSError, ValueError, RuntimeError) as e:
         return f"저장하지 못했습니다. ({e}) 잠시 후 다시 저장하여 주십시오."
     pt.move_preset_files(origs or {}, dropped)
@@ -663,6 +677,11 @@ def validate_presets(presets):
         step = st.imap_step(p["record"])
         if step and imap_problem(step):
             return p["no"], f"{tag}: {imap_problem(step)}"
+        why = rec.mail_auth_problem(p["record"].get("steps") or [])     # 메일 2차인증 기록 규칙 (설계 2026-11-02 6절)
+        if why:
+            return p["no"], f"{tag}: {why}"
+        if has_mail_login(p["record"]) and not ((p.get("mail_id") or "").strip() and (p.get("mail_pw") or p.get("has_mail_pw"))):
+            return p["no"], f"{tag}: 인증 메일 계정이 입력되지 않았습니다. 인증 메일 아이디와 비밀번호를 입력하여 주십시오."
         if has_otp(p["record"]) and not (p.get("phone") and senders_list(p.get("senders"))):
             return p["no"], f"{tag}: 인증번호 단계가 있습니다. 인증 휴대폰과 발신번호를 정해 주십시오."
         if not (p.get("id") or "").strip():
@@ -714,6 +733,7 @@ class App:
         root.geometry(f"{self.panel_w}x{B - T - int(32 * scale)}+{L + self.browser_w}+{T}")
         self.name_var, self.code_var = tk.StringVar(root), tk.StringVar(root)
         self.id_var, self.pw_var = tk.StringVar(root), tk.StringVar(root)
+        self.mail_id_var, self.mail_pw_var = tk.StringVar(root), tk.StringVar(root)   # 메일 2차인증 메일함 계정
         self.senders_var, self.phones, self.phone_ids = tk.StringVar(root), None, [""]
         self.source_var, self.prefix_var = tk.StringVar(root, value="shop"), tk.StringVar(root)
         self._build()
@@ -777,6 +797,11 @@ class App:
         self.del_btn = button(src, "프리셋 삭제", RED, RED_D, self.remove_preset)
         self.del_btn.config(font=F_SMALL, padx=10, pady=2)   # 제목 줄 [−] 와 같은 일 - 찾기 쉬운 자리에 빨간 단추로 하나 더 (사용자 2026-10-20)
         self.del_btn.pack(side="right")
+        # 메일 2차인증 (설계 2026-11-02): 기록에 메일함 로그인이 있을 때만 보인다 (_show_mail)
+        self.mail_widgets = [tk.Label(form, text="인증 메일 아이디", font=F, bg=CARD, fg=MUTED), self._entry(form, self.mail_id_var, 12),
+                             tk.Label(form, text="인증 메일 비밀번호", font=F, bg=CARD, fg=MUTED), self._entry(form, self.mail_pw_var, 12, show="•"),
+                             tk.Label(form, text=MAIL_ACCOUNT_HINT, font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
+                                      wraplength=self.panel_w - 2 * pad - 26)]
         self.prefix_label = tk.Label(form, text="메일 시작 문구", font=F, bg=CARD, fg=MUTED)
         self.prefix_entry = self._entry(form, self.prefix_var, 12)
         self.prefix_var.trace_add("write", lambda *a: self._field_changed())
@@ -897,6 +922,8 @@ class App:
         self.code_var.set(p["code"])
         self.id_var.set(p["id"])
         self.pw_var.set(p["pw"])
+        self.mail_id_var.set(p["mail_id"])
+        self.mail_pw_var.set(p["mail_pw"])
         self.senders_var.set(p["senders"])
         self.source_var.set(p["source"])
         self.prefix_var.set(p["prefix"])
@@ -933,6 +960,7 @@ class App:
         p.update(name=self.name_var.get().strip() or p["name"],
                  code=unicodedata.normalize("NFKC", self.code_var.get()).strip(),     # 전각 '１０１' → '101' (ERPia 사이트코드와 맞게, 2026-10-22)
                  id=self.id_var.get(), pw=self.pw_var.get(), senders=self.senders_var.get(),
+                 mail_id=self.mail_id_var.get(), mail_pw=self.mail_pw_var.get(),
                  phone=self.phone_ids[i] if 0 <= i < len(self.phone_ids) else p["phone"], source=source, prefix=prefix)
 
     def _field_changed(self):
@@ -946,6 +974,17 @@ class App:
                 p["imap"].update(host=guess[0], port=guess[1], security=guess[2])
             if (p["source"], p["prefix"]) != before or guess:
                 self.render()                       # '메일마다' 단계가 바뀐다
+
+    def _show_mail(self, record):
+        """기록에 메일함 로그인이 있으면 '인증 메일 아이디·비밀번호' 칸과 안내를 보인다 (5·6번째 줄)."""
+        if has_mail_login(record):
+            for k, w in enumerate(self.mail_widgets[:4]):
+                w.grid(row=5, column=k, sticky="w" if k % 2 == 0 else "we", padx=(12 if k == 2 else 6 if k else 0, 0), pady=(6, 0),
+                       **({"ipady": 3} if k % 2 else {}))
+            self.mail_widgets[4].grid(row=6, column=0, columnspan=4, sticky="we", pady=(2, 0))
+        else:
+            for w in self.mail_widgets:
+                w.grid_remove()
 
     def _show_prefix(self):
         """메일 첨부파일일 때만 '메일 시작 문구' 칸 (쇼핑몰이면 감춘다)."""
@@ -1064,11 +1103,13 @@ class App:
         self.labels, self.base = {}, {}
         p = self.presets[self.cur]
         if p["source"] == "imap":
+            self._show_mail(None)
             self._render_imap(p)
             self._title()
             self.paint_buttons()
             return
         final = self._final(p)
+        self._show_mail(final)
         n, body = 0, set()
         for k, s in enumerate(final["steps"] if final else []):
             end = rec.pick_body(final["steps"], k) if s.get("pick") else None
@@ -1291,8 +1332,12 @@ class App:
         self.failed_at, self.editing = None, False
         self.paint_buttons()
         self.status.config(text=PICK_NOTE if any(s.get("pick") for s in r["steps"]) else "미리보기 중", fg=BLUE)
+        mail_pw = p["mail_pw"] or (stored_password(no, "MailPW") if p["has_mail_pw"] and no is not None else "")
+        if has_mail_login(r) and not (p["mail_id"].strip() and mail_pw):
+            return self.status.config(text="인증 메일 계정이 입력되지 않았습니다. 인증 메일 아이디와 비밀번호를 입력하여 주십시오.", fg=RED)
         self.worker.cmd.put(("preview", self.cur, r, ids, {"ID": p["id"].strip(), "PW": pw, "Phone": p["phone"],
-                                                            "SmsSenders": senders_list(p["senders"])}, p["code"] or "000",
+                                                            "SmsSenders": senders_list(p["senders"]),
+                                                            "MAIL_ID": p["mail_id"].strip(), "MAIL_PW": mail_pw}, p["code"] or "000",
                              f"{circled(self.cur + 1)} {p['name']}"))
 
     def toggle_pause(self):
@@ -1408,7 +1453,8 @@ class App:
                     warns.append(f"{circled(no)} 비밀번호 단계가 서로 다른 사이트({', '.join(pw_sites)})에 있습니다. "
                                  "실행할 때마다 모든 사이트에 이 프리셋의 비밀번호를 입력합니다.")
             out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"],
-                        "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"]})
+                        "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"],
+                        "mail_id": p["mail_id"], "mail_pw": p["mail_pw"], "has_mail_pw": p["has_mail_pw"]})
         problem = validate_presets(out) or pick_problem(out)
         if problem:
             self.select(problem[0] - 1)
@@ -1449,14 +1495,16 @@ class App:
                                             "해당 단계를 수정해주십시오.", fg=RED)
         fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh,
-                        phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]}, origs=origs, dropped=dropped)
+                        phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]}, origs=origs, dropped=dropped,
+                        mail_logins={o["no"]: (o["mail_id"].strip(), o["mail_pw"] or None) for o in out if o["record"]})
         if problem:
             return self.status.config(text=problem, fg=RED)
         self.unsaved_drop = False
         for p, f in zip(self.presets, files):
             p["orig"] = f["no"]                  # 이제부터는 이 번호가 옛 번호
             if f["record"]:
-                p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False)
+                p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False,
+                         mail_pw="", has_mail_pw=has_mail_login(f["record"]) and bool(p["mail_pw"] or p["has_mail_pw"]))
         self._load_fields()
         self.status.config(text=" ".join(["저장했습니다."] + warns), fg=BLUE if warns else GREEN_D)     # 기록 때 보이던 메일도 실행 때 받는다 - '이미 처리' 로 미리 채우지 않는다 (사용자 2026-10-20, 중복은 주문번호로 막힌다)
         return st.presets_path()

@@ -330,6 +330,8 @@ def load_config(path=None):
             continue
         if isinstance(site, dict) and site.get("PW"):
             site = dict(site, PW=status.unseal(site["PW"]))
+        if isinstance(site, dict) and site.get("MailPW"):           # 메일 2차인증 메일함 비밀번호 (설계 2026-11-02)
+            site = dict(site, MailPW=status.unseal(site["MailPW"]))
         out[name] = site
     return out
 
@@ -372,7 +374,10 @@ def _replay_problems(name, site):
         return [f"{name}: 프리셋 {no}의 사이트코드가 숫자 세 자리가 아닙니다. ({p.get('code')!r})"]
     if status.login_mismatch(site, p["code"]):       # 번호만 믿지 않는다 - 옛 계정으로 다른 사이트에 들어가지 않게 (이슈 #13 검토)
         return [f"{name}: 프리셋 {no}의 아이디·비밀번호가 다른 사이트의 것입니다. 옵저버에서 다시 입력하여 주십시오."]
-    if any(s.get("kind") == "otp" for s in p["record"].get("steps") or []) and not (site.get("Phone") and site.get("SmsSenders")):
+    steps = p["record"].get("steps") or []
+    if any(s.get("credential") == "MAIL_PW" for s in steps) and not (site.get("MailID") and site.get("MailPW")):
+        return [f"{name}: {web_replay.MAIL_NO_CREDS}"]
+    if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in steps) and not (site.get("Phone") and site.get("SmsSenders")):
         return [f"{name}: 프리셋 {no}에 인증번호 단계가 있으나 인증 휴대폰·발신번호가 설정되지 않았습니다. "
                 "(옵저버 저장 화면에서 설정하여 주십시오)"]
     if no > status.preset_limit():
@@ -1409,20 +1414,23 @@ def action_replay(page, name, site):
         return _run_imap(name, site, p, imap, dest)
     log(f"  [{name}] 프리셋 {p['no']} '{p['name']}' 재생 ({len(p['record']['steps'])}단계) → {dest}")
     many = getattr(_here, "parallel", False)
-    rp = web_replay.Replayer(page.context, p["record"], {"ID": site["ID"], "PW": site["PW"]}, dest, p["code"],
+    creds = {"ID": site["ID"], "PW": site["PW"], "MAIL_ID": site.get("MailID") or "", "MAIL_PW": site.get("MailPW") or ""}
+    rp = web_replay.Replayer(page.context, p["record"], creds, dest, p["code"],
                              log=(lambda m: log(f"  [{name}]{m}")) if many else log, hide_values=True, shot_dir=BASE_DIR)
     end = web_replay.auth_end(p["record"]["steps"])
-    if many and end is not None:     # 인증 사이트 - 로그인부터 인증 [확인] 까지는 같은 휴대폰 사이트끼리 한 번에 하나 (그 앞 검색·이동은 먼저)
-        rp.gate = (_here.gates.lock(site.get("Phone")), web_replay.auth_start(p["record"]["steps"]), end)
+    if many and end is not None:     # 인증 사이트 - 로그인부터 인증 [확인] 까지는 같은 휴대폰(메일 인증은 같은 메일함) 사이트끼리 한 번에 하나
+        key = site.get("Phone") or (f"mail:{site.get('MailID')}" if site.get("MailID") else None)
+        rp.gate = (_here.gates.lock(key), web_replay.auth_start(p["record"]["steps"]), end)
     rp.first_page = page
     rp.fit_viewport = True
     if _together:       # 루틴이 ERPia 에 키보드를 쓰는 동안은 다음 단계로 가지 않는다 (단계가 새 창을 띄우면 포커스를 가져간다)
         rp.pause = KeysPause()
-    if any(s.get("kind") == "otp" for s in p["record"]["steps"]):     # 2차인증 - 휴대폰 중계 (설계 13절, 에이전트 계정으로)
+    if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in p["record"]["steps"]):   # 2차인증 - 휴대폰 중계 (설계 13절)
         import otp_relay
         rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
         log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']}(으)로 수신합니다.")
-    if any(s.get("pick") for s in p["record"]["steps"]):     # 메일 고르기 - 처리한 메일은 건너뛰고 기억 (2026-10-14)
+    # 메일 고르기·메일 2차인증 - 처리한(연) 메일은 건너뛰고 기억 (2026-10-14, 2026-11-02)
+    if any(s.get("pick") or s.get("mailOpen") for s in p["record"]["steps"]):
         rp.mail_memory = web_replay.MailMemory(status.mail_memory_path(p["no"]))
     # 알림창은 재생기 하나만 받는다 - 둘이 받으면 로그가 두 줄이고, 대시보드로 가는 글이 줄지 않았다 (2026-10-01 검토)
     page.remove_listener("dialog", on_dialog)

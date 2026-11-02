@@ -13,7 +13,7 @@ import rpa_status as st
 
 FILE_KIND = "autopilot-preset"
 FILE_VERSION = 1
-LOGIN_KEYS = ("id", "pw", "ID", "PW")        # 파일에 있으면 안 되는 칸
+LOGIN_KEYS = ("id", "pw", "ID", "PW", "MailID", "MailPW", "mail_id", "mail_pw")   # 파일에 있으면 안 되는 칸 (메일 계정 2026-11-02)
 backup_path = st.preset_backup_path
 
 
