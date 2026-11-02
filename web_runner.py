@@ -375,7 +375,9 @@ def _replay_problems(name, site):
     if status.login_mismatch(site, p["code"]):       # 번호만 믿지 않는다 - 옛 계정으로 다른 사이트에 들어가지 않게 (이슈 #13 검토)
         return [f"{name}: 프리셋 {no}의 아이디·비밀번호가 다른 사이트의 것입니다. 옵저버에서 다시 입력하여 주십시오."]
     steps = p["record"].get("steps") or []
-    if any(s.get("credential") == "MAIL_PW" for s in steps) and not (site.get("MailID") and site.get("MailPW")):
+    host = status.record_mail_host(p["record"])
+    if host and not (site.get("MailID") and site.get("MailPW")
+                     and (not site.get("MailHost") or status.site_domain(site["MailHost"]) == status.site_domain(host))):   # 다른 메일함의 계정 (검토 I6)
         return [f"{name}: {web_replay.MAIL_NO_CREDS}"]
     if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in steps) and not (site.get("Phone") and site.get("SmsSenders")):
         return [f"{name}: 프리셋 {no}에 인증번호 단계가 있으나 인증 휴대폰·발신번호가 설정되지 않았습니다. "

@@ -991,6 +991,31 @@ check("메일 인증 둘이면 막는다 (설계 6절 글)", rr.validate_presets
       == (1, "① 몰1: 프리셋 하나에는 메일 인증을 하나만 기록할 수 있습니다. 다시 기록하여 주십시오."))
 check("메일 계정 칸은 메일함 로그인이 있는 기록에만", rr.has_mail_login(MAIL_R) and not rr.has_mail_login(R)
       and not rr.has_mail_login({"steps": [{"kind": "secret", "host": "a.shop.com"}, {"kind": "secret", "host": "mail.naver.com"}]}))   # 메일 인증 없는 두 사이트 = I1 경고
+print("=== 메일 2차인증 - 최종 검토 고침 (I4·I6) ===")
+TWO_STEP = {"steps": [{"kind": "fill", "page": 0, "value": "seller01"}, {"kind": "secret", "page": 0, "credential": "PW", "host": "shop.example.com"},
+                      {"kind": "fill", "page": 1, "value": "someone@gmail.com"}, {"kind": "click", "page": 1},
+                      {"kind": "secret", "page": 1, "credential": "MAIL_PW", "host": "accounts.google.com"}]}
+rr.scrub_login(TWO_STEP, "seller01", "someone@gmail.com")
+check("I4: 두 쪽 메일함 로그인의 메일 아이디도 '설정의 인증 메일 아이디' 로 (기록에 안 남는다)",
+      [s.get("credential") for s in TWO_STEP["steps"]] == ["ID", "PW", "MAIL_ID", None, "MAIL_PW"]
+      and "someone@gmail.com" not in json.dumps(TWO_STEP), [s.get("credential") for s in TWO_STEP["steps"]])
+st.write_user_config(BASE)
+st.write_presets([{"no": 1, "name": "메일몰", "code": "021", "saved_at": None, "record": MAIL_R}, st.blank_preset(2)])
+st.save_preset_sites(st.read_presets(), {1: ("seller", PW)}, mail_logins={1: ("inbox", MAIL_PW_T)})
+s1 = st.read_user_config()["Sites"]["PRESET1"]
+check("I6: 메일 계정과 함께 그 메일함 호스트를 적는다", s1.get("MailHost") == "mail.example.net", s1.get("MailHost"))
+other = json.loads(json.dumps(MAIL_R))
+other["steps"][2]["host"] = "nid.naver.com"            # 같은 사이트코드로 다른 메일함을 다시 기록
+st.write_presets([{"no": 1, "name": "메일몰", "code": "021", "saved_at": None, "record": other}, st.blank_preset(2)])
+st.save_preset_sites(st.read_presets(), {1: ("seller", None)}, mail_logins={1: ("inbox", None)})
+s1 = st.read_user_config()["Sites"]["PRESET1"]
+check("I6: 메일함이 바뀌었는데 비밀번호를 새로 안 넣으면 옛 메일 비밀번호를 버린다", not s1.get("MailPW") and s1.get("MailHost") == "nid.naver.com",
+      (bool(s1.get("MailPW")), s1.get("MailHost")))
+orig_read = wr.status.read_presets
+wr.status.read_presets = lambda: [{"no": 2, "code": "012", "record": MAIL_R}]
+moved = wr._replay_problems("PRESET2", {"Preset": 2, "MailID": "inbox", "MailPW": "pw", "MailHost": "nid.naver.com"})
+wr.status.read_presets = orig_read
+check("I6: 계정의 메일함과 기록의 메일함이 다르면 실행하지 않는다", moved == ["PRESET2: 인증 메일 계정이 입력되지 않았습니다. 옵저버에서 입력하여 주십시오."], moved)
 for f, b in _keep_mail.items():
     open(f, "wb").write(b)
 

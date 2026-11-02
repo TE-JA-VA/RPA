@@ -1161,6 +1161,19 @@ def is_preset_site(key):
     return bool(re.fullmatch(r"PRESET\d+", str(key)))
 
 
+def site_domain(host):
+    """호스트의 등록 도메인 - nid.naver.com → naver.com, www.bizmeka.co.kr → bizmeka.co.kr.
+    ponytail: 두 글자 나라 + co·or·go 같은 2단 접미사만 본다 (공개 접미사 목록 없이) - 틀리면 경고가 덜 나거나 더 날 뿐이다."""
+    parts = (host or "").lower().split(".")
+    two = len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in ("co", "or", "go", "ne", "ac", "re", "pe", "com", "net")
+    return ".".join(parts[-3:] if two else parts[-2:])
+
+
+def record_mail_host(record):
+    """기록의 메일 2차인증 메일함 호스트 (첫 MAIL_PW 단계) - 없으면 None."""
+    return next((s.get("host") for s in (record or {}).get("steps") or [] if s.get("credential") == "MAIL_PW" and s.get("host")), None)
+
+
 def login_mismatch(site, code):
     """Sites 칸의 아이디·비밀번호가 다른 사이트 것인가 - 칸의 Code(쓸 때 적은 그 칸 프리셋의 사이트코드)가 지금 프리셋의 code 와
     다르면. 번호만 믿지 않는다 (이슈 #13 검토: 프리셋 → 설정 쓰기 사이에 실패하거나 보관본을 되돌리면 번호가 어긋난다).
@@ -1200,9 +1213,12 @@ def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None, mail_l
         phone, senders = (phones or {}).get(p["no"]) or (old.get("Phone"), old.get("SmsSenders"))
         if phone and senders:
             mine[key].update(Phone=phone, SmsSenders=list(senders))
-        if any(s.get("credential") == "MAIL_PW" for s in p["record"].get("steps") or []):
+        host = record_mail_host(p["record"])
+        if host:
             mail_id, mail_pw = (mail_logins or {}).get(p["no"], (old.get("MailID", ""), None))
-            mine[key].update(MailID=(mail_id or "").strip(), MailPW=mail_pw or old.get("MailPW", ""))
+            # 계정은 그 메일함에 묶는다 - 다른 메일함으로 다시 기록했는데 비밀번호를 새로 안 넣었으면 옛 비밀번호를 버린다 (최종 검토 I6)
+            same = not old.get("MailHost") or site_domain(old["MailHost"]) == site_domain(host)
+            mine[key].update(MailID=(mail_id or "").strip(), MailPW=mail_pw or (old.get("MailPW", "") if same else ""), MailHost=host)
     data[SITES_SECTION] = {**others, **mine}       # 프리페어는 이 순서로 돈다 (번호 순)
     write_user_config(data)
 

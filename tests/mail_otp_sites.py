@@ -25,6 +25,9 @@ class State:
         self.delay, self.never = 0.0, False
         self.mfa_on_mailbox, self.show_time, self.subject_with_code, self.alnum = False, True, False, False
         self.bad_links = False            # 링크를 눌러도 늘 '만료' (링크로 3번 실패)
+        self.sms_on_mailbox = False       # 메일함 로그인 뒤 휴대폰 문자 인증 (기록에 있는 사슬 - 검토 I5)
+        self.sms = []                     # 메일함이 보낸 문자 번호
+        self.link_url_text = False        # 인증 링크 글자가 주소 그대로 (검토 I3)
         self.sent = 0
         for i, subj in enumerate(("[공지] 서비스 점검 안내", "주문하신 상품이 발송되었습니다")):   # 상관없는 메일 (목록 줄 알아보기에 두 줄 이상)
             self.mails.append({"id": i + 1, "at": time.time() - 86400 * (i + 1), "code": "", "token": "", "subject": subj})
@@ -81,6 +84,8 @@ def start():
         def do_POST(self):
             if self.path.startswith("/api/a/send"):
                 st.send()
+            if self.path.startswith("/api/mail/sms"):
+                st.sms.append(f"{random.randint(0, 999999):06d}")
             self._send("{}", "application/json")
 
         def do_GET(self):
@@ -110,8 +115,16 @@ def start():
                 return self._page("인증", "<p>인증되었습니다.</p>" if st.confirmed else "<p>만료된 링크입니다.</p>")
             if path == "/a/done":
                 return self._page("주문 관리", "<h1>주문 관리</h1><button>주문 엑셀</button>")
+            if path == "/api/mail/sms_check":
+                return self._send(json.dumps({"ok": bool(st.sms) and arg.get("c") == st.sms[-1]}), "application/json")
+            if path == "/mail/sms":
+                return self._page("휴대폰 인증", "<button id=smssend onclick=\"fetch('/api/mail/sms',{method:'POST'}).then(()=>"
+                                  "document.getElementById('m').textContent='보냈습니다')\">인증번호 받기</button><p id=m></p>"
+                                  "<input id=smscode placeholder='인증번호 6자리' autocomplete=off>"
+                                  "<button onclick=\"fetch('/api/mail/sms_check?c='+document.getElementById('smscode').value).then(r=>r.json())"
+                                  ".then(j=>{if(j.ok)location.href='/mail/list';else alert('인증번호가 일치하지 않습니다.')})\">확인</button>")
             if path == "/mail/login":
-                nxt = "/mail/mfa" if st.mfa_on_mailbox else "/mail/list"
+                nxt = "/mail/mfa" if st.mfa_on_mailbox else "/mail/sms" if st.sms_on_mailbox else "/mail/list"
                 return self._page("메일 로그인", "<input id=mid placeholder='메일 아이디'><input id=mpw type=password placeholder='메일 비밀번호'>"
                                   f"<button onclick=\"location.href='{nxt}'\">로그인</button>")
             if path == "/mail/mfa":
@@ -129,7 +142,9 @@ def start():
                     return self._page("메일", "<p>없는 메일입니다.</p>")
                 if st.mode == "link":
                     return self._page("메일", f"<h2>{html.escape(m['subject'])}</h2><p>아래 링크를 눌러 인증을 마쳐 주십시오.</p>"
-                                      f"<a href='{a}/a/confirm?t={m['token']}' target='_blank'>인증하기</a>")
+                                      f"<a href='{a}/a/confirm?t={m['token']}' target='_blank'>"
+                                      + (f"{a}/a/confirm?t={m['token']}" if st.link_url_text else "인증하기") + "</a>"
+                                      "<p><a href='/mail/unsubscribe'>수신거부</a></p>")
                 return self._page("메일", f"<h2>{html.escape(m['subject'])}</h2><p>인증번호는 <b id=code>{m['code']}</b> 입니다.</p>")
             self._page(path, f"<h1>{path}</h1>")
 

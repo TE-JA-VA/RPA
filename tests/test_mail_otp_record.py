@@ -122,6 +122,56 @@ nested = copy_paste_steps()[:7] + [st("click", 1, "인증 메일 보내기"),
 check("메일함 안의 메일 인증", rec.mail_auth_problem(rec.finalize(nested, TODAY, "https://shop.example/")["steps"])
       == "인증 메일함의 로그인에 다시 메일 인증이 필요한 경우는 지원하지 않습니다.")
 
+# --- 최종 검토 고침 (2026-11-02)
+# C1: [수정]으로 메일함 로그인부터 이어 기록 - 쇼핑몰 비밀번호가 메일함 칸에 가면 안 된다. 복사는 앞부분, 붙여넣기는 새 부분이어도
+head = rec.finalize(copy_paste_steps()[:4], TODAY, "https://shop.example/login")
+full = rec.finalize(copy_paste_steps(), TODAY, "https://shop.example/login")
+head_mail = dict(full, steps=full["steps"][:9])      # [수정] 의 앞부분 = 다듬은 기록을 자른 것 (짝이 맞은 복사가 남아 있다)
+cont = rec.continue_record(head, copy_paste_steps()[4:], TODAY)
+check("C1: 이어 기록해도 쇼핑몰 ID·PW, 메일함 MAIL_ID·MAIL_PW", [x.get("credential") for x in cont["steps"] if x.get("credential")]
+      == ["ID", "PW", "MAIL_ID", "MAIL_PW"] and rec.mail_host(cont["steps"]) == "mail.example" and cont["version"] == 2,
+      [x.get("credential") for x in cont["steps"] if x.get("credential")])
+cont2 = rec.continue_record(head_mail, copy_paste_steps()[9:], TODAY)
+paste2 = next((x for x in cont2["steps"] if x["kind"] == "otp"), {})
+check("C1: 복사는 앞부분·붙여넣기는 새 부분이어도 메일 번호 칸 (값 없음)", paste2.get("source") == "copy" and CODE not in json.dumps(cont2), paste2)
+raw_link = copy_paste_steps()[4:8] + [st("click", 1, "인증하기", url="/mail/read", href="https://shop.example/a/confirm?t=secret-token-abc"),
+                                       st("click", 0, "인증 완료")]
+cont3 = rec.continue_record(head, raw_link, TODAY)
+check("C1: 메일함 로그인이 새 부분이어도 링크 인증을 알아보고 표를 남기지 않는다",
+      any(x.get("mailLink") for x in cont3["steps"]) and "secret-token-abc" not in json.dumps(cont3))
+cont4 = rec.continue_record(head_mail, [st("click", 1, "인증하기", url="/mail/read", href="https://shop.example/a/confirm?t=tok-xyz"),
+                                        st("click", 0, "인증 완료")], TODAY)
+check("C1: 메일함 로그인이 앞부분이어도 링크 인증", any(x.get("mailLink") for x in cont4["steps"]) and "tok-xyz" not in json.dumps(cont4))
+
+# I2: 로그인 사이트와 메일 사이트가 다른 메일함 (다음: accounts.kakao.com → mail.daum.net) - 메일함 자신의 링크는 인증 링크가 아니다
+daum = [st("fill", 0, ph="아이디"), st("secret", 0, host="shop.example"), st("click", 0, "로그인"), st("click", 0, "인증 메일 보내기"),
+        st("fill", 1, ph="카카오계정"), st("secret", 1, host="accounts.kakao.com"), st("click", 1, "로그인"),
+        st("click", 1, "[가짜몰] 인증번호 안내", href="https://mail.daum.net/read/77", pageHost="mail.daum.net", row=row("[가짜몰] 인증번호 안내")),
+        st("click", 1, "인증하기", href="https://shop.example/a/confirm?t=t1", pageHost="mail.daum.net"), st("click", 0, "인증 완료")]
+ds = rec.finalize(daum, TODAY, "https://shop.example/")["steps"]
+check("I2: 메일함 안 링크(같은 사이트)는 인증 링크가 아니고, 쇼핑몰로 가는 링크만",
+      [bool(x.get("mailLink")) for x in ds[7:9]] == [False, True] and rec.mail_auth_problem(ds) is None, [x.get("mailLink") for x in ds])
+
+# I3: 링크 글자가 주소 그대로 - 표가 글자로도 남지 않는다
+url_text = copy_paste_steps()[:8] + [st("click", 1, "https://shop.example/verify?t=SECRETTOKEN123", url="/mail/read",
+                                        href="https://shop.example/verify?t=SECRETTOKEN123"), st("click", 0, "인증 완료")]
+ru = rec.finalize(url_text, TODAY, "https://shop.example/")
+lk = next(x for x in ru["steps"] if x.get("mailLink"))
+check("I3: 주소 모양 링크 글자는 남기지 않는다 (호스트로 찾는다)", "SECRETTOKEN123" not in json.dumps(ru) and lk["mailLink"] == {"text": "", "host": "shop.example"},
+      lk.get("mailLink"))
+
+# M4(→중요): 같은 창 안 복사·붙여넣기(주문번호를 검색칸에)는 메일 인증이 아니다
+same = rec.finalize([st("click", 0, "주문 조회"), st("copy", 0, copied="20261102"), st("fill", 0, ph="검색어", value="20261102", pasted=True),
+                     st("click", 0, "검색")], TODAY, "https://x/")
+check("M4: 같은 창 복사·붙여넣기는 평범한 칸 (버전 1)", same["steps"][1]["kind"] == "fill" and same["steps"][1].get("value") == "20261102"
+      and same["version"] == 1, [x["kind"] for x in same["steps"]])
+
+# I7: 받은 시각 꼴 (영어 AM/PM 앞뒤, 오전·오후, 24시)
+sent = datetime.datetime.now().replace(hour=14, minute=4, second=0, microsecond=0).timestamp()
+got = {t: rec.mail_time_ok(t, sent) for t in ("2:05 PM", "PM 2:05", "오후 2:05", "14:05", "02:05 AM", "오전 9:30", "13:50")}
+check("I7: 받은 시각 - 오후 2:05 는 새 메일, 오전·이른 시각은 옛 메일",
+      got == {"2:05 PM": True, "PM 2:05": True, "오후 2:05": True, "14:05": True, "02:05 AM": False, "오전 9:30": False, "13:50": False}, got)
+
 # --- 줄 모양
 check("줄 모양: 숫자·날짜·시각을 뺀다", rec.mail_fp("[몰] 인증번호 [482913] 안내 2026.11.02 10:42") == "[몰] 인증번호 [] 안내",
       rec.mail_fp("[몰] 인증번호 [482913] 안내 2026.11.02 10:42"))

@@ -518,6 +518,8 @@ class Recorder:
                 step[k] = ev[k]
         if ev.get("pasted"):
             step["pasted"] = True
+        if step["kind"] == "click" and (ev.get("target") or {}).get("href"):   # 누른 창의 사이트 - 메일함 안 링크와 인증 링크를 가린다 (검토 I2)
+            step["pageHost"] = urllib.parse.urlparse(ev["url"]).hostname or ""
         if step["kind"] == "secret":       # 비밀번호를 넣는 사이트 - 저장 때 다른 사이트가 섞였나 본다 (password_sites, BugBuster I1)
             step["host"] = urllib.parse.urlparse(ev["url"]).hostname or ""
         if ev.get("row"):
@@ -595,12 +597,7 @@ def date_like_fills(steps):
             if s["kind"] == "fill" and not s.get("date") and not s.get("credential") and DATE_LIKE.search(str(s.get("value", "")))]
 
 
-def site_domain(host):
-    """호스트의 등록 도메인 - nid.naver.com → naver.com, www.bizmeka.co.kr → bizmeka.co.kr.
-    ponytail: 두 글자 나라 + co·or·go 같은 2단 접미사만 본다 (공개 접미사 목록 없이) - 틀리면 경고가 덜 나거나 더 날 뿐이다."""
-    parts = (host or "").lower().split(".")
-    two = len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in ("co", "or", "go", "ne", "ac", "re", "pe", "com", "net")
-    return ".".join(parts[-3:] if two else parts[-2:])
+site_domain = rpa_status.site_domain       # 호스트의 등록 도메인 (rpa_status 에 - 메일 계정의 메일함 비교도 쓴다)
 
 
 def password_sites(steps):
@@ -660,6 +657,25 @@ def mail_auth_problem(steps):
     if len({site_domain(s["host"]) for s in steps if s.get("credential") == "MAIL_PW" and s.get("host")}) > 1:
         return "쇼핑몰과 인증 메일함이 아닌 다른 사이트에 로그인한 기록은 저장할 수 없습니다. 다시 기록하여 주십시오."
     return None
+
+
+_MAIL_TIME = re.compile(r"(오전|오후|AM|PM)?\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?", re.I)
+
+
+def mail_time_ok(line, sent_at):
+    """메일 줄에 받은 시각(14:05 · 오후 2:05 · 2:05 PM · PM 2:05)이 보이면 메일을 요청한 때(1분 여유) 뒤의 것인가.
+    안 보이면 참 (기억·다시 시도가 거른다). ponytail: 자정 넘어 온 메일·제목 속 다른 시각(유효시간 10:00)은 못 가린다 - 잦으면 날짜·칸을 본다."""
+    m = _MAIL_TIME.search(line or "")
+    if not m:
+        return True
+    ampm = (m.group(1) or m.group(4) or "").upper()
+    h = int(m.group(2))
+    if ampm in ("오후", "PM") and h < 12:
+        h += 12
+    elif ampm in ("오전", "AM") and h == 12:
+        h = 0
+    at = datetime.datetime.now().replace(hour=h % 24, minute=int(m.group(3)), second=0, microsecond=0).timestamp()
+    return at >= sent_at - 60
 
 
 def record_version(steps):
@@ -949,11 +965,14 @@ def set_otp(steps, i, on):
     return steps
 
 
-def finalize(steps, record_date, start_url, viewport=None):
-    """기록을 다듬는다: 기다린 시간, 날짜는 오늘 기준, 공지 닫기는 '있을 때만', 아이디·비밀번호는 설정 값."""
+def finalize(steps, record_date, start_url, viewport=None, prior=()):
+    """기록을 다듬는다: 기다린 시간, 날짜는 오늘 기준, 공지 닫기는 '있을 때만', 아이디·비밀번호는 설정 값.
+    prior = [수정]으로 남긴 앞부분(다듬은 단계) - 메일 2차인증의 메일함 로그인·복사가 앞부분에 있어도 알아보게 (최종 검토 C1)."""
     out, prev = [], None
+    prior = list(prior)
     ts = [s["t"] for s in steps]
     copied = None                         # 메일에서 복사한 글 - 붙여넣기와 맞춰 보는 데만, 기록에는 남기지 않는다
+    copy_at = None                        # 그 복사 단계 (out 안) - 다른 창에 붙여넣은 것만 메일 인증 (같은 창 복사·붙여넣기는 평범한 칸, 검토 M4)
     for i, s in enumerate(steps):
         s = dict(s)
         seen = s.pop("firstSeen", None)
@@ -965,24 +984,35 @@ def finalize(steps, record_date, start_url, viewport=None):
         prev = s.pop("t")
         trim_row(s)                       # (BugBuster I4)
         text = s.pop("copied", None)
+        page_host = s.pop("pageHost", None)                 # 누른 창의 주소 호스트 (기록기 - 링크를 누를 때)
         href = (s.pop("href", None) or (s.get("target") or {}).get("href")) if s["kind"] == "click" else None
         if s["kind"] == "copy":           # 인증번호처럼 보이는 복사만 단계로 (모양만), 그 밖의 복사는 버린다
             shape = code_shape(text)
             if shape:
-                copied = str(text).strip()
-                out.append(dict(s, kind="copyCode", shape=shape))
+                copied, copy_at = str(text).strip(), dict(s, kind="copyCode", shape=shape)
+                out.append(copy_at)
             continue
-        if s.pop("pasted", False) and s["kind"] == "fill" and copied and str(s.get("value", "")).strip() == copied:
+        pasted = s.pop("pasted", False) and s["kind"] == "fill"
+        value = str(s.get("value", "")).strip()
+        last_copy = copy_at or next((x for x in reversed(prior) if x["kind"] == "copyCode"), None)
+        if pasted and last_copy is not None and last_copy["page"] != s["page"] and (
+                value == copied if copied else code_shape(value) == last_copy.get("shape")):   # 앞부분 복사([수정])는 모양으로
             s["kind"], s["source"] = "otp", "copy"          # 메일에서 복사한 번호 - 휴대폰 문자 인증(set_otp)과 다르다
             s.pop("value", None)
+            last_copy["paired"] = True
             out.append(s)
             continue
         if href:                          # 메일함(쇼핑몰이 아닌 사이트에 로그인한 창)에서 다른 사이트로 가는 링크 = 인증 링크
-            pw = [x for x in out if x["kind"] == "secret" and x.get("host")]
+            pw = [x for x in prior + out if x["kind"] == "secret" and x.get("host")]
             here = next((site_domain(x["host"]) for x in pw if x["page"] == s["page"]), None)
+            shown = site_domain(page_host) if page_host else here     # 누른 창의 사이트 (다음 메일: 로그인 kakao, 메일 daum - 검토 I2)
             host = urllib.parse.urlparse(href).hostname or ""
-            if pw and here and host and here != site_domain(pw[0]["host"]) and site_domain(host) != here:   # 상대 주소(호스트 없음)는 같은 사이트
-                s["mailLink"] = {"text": s["target"].get("text") or "", "host": host}   # 주소의 나머지(메일마다 다른 표)는 남기지 않는다
+            if pw and here and host and here != site_domain(pw[0]["host"]) and site_domain(host) not in (here, shown):   # 상대 주소는 같은 사이트
+                label = s["target"].get("text") or ""
+                if re.match(r"(https?://|www\.)", label, re.I):     # 글자가 주소 그대로 - 표가 들어 있다, 호스트로 찾는다 (검토 I3)
+                    label = ""
+                    s["target"] = dict(s["target"], text="")
+                s["mailLink"] = {"text": label, "host": host}   # 주소의 나머지(메일마다 다른 표)는 남기지 않는다
                 s["target"] = dict(s["target"], href="")         # 대상 정보의 링크 주소도 (재생은 글자·호스트로 찾는다)
         if otp_like(s, steps[i + 1] if i + 1 < len(steps) else None):
             set_otp(out + [s], len(out), True)
@@ -1007,7 +1037,11 @@ def finalize(steps, record_date, start_url, viewport=None):
                 p["credential"] = "ID"
                 p.pop("value", None)
                 break
-    _mark_mail(out)
+    # 붙여넣기와 짝이 안 된 복사는 버린다 (메일 인증이 아니다 - 같은 창 복사·붙여넣기, 복사만 하고 손으로 친 것)
+    out = [x for x in out if not (x["kind"] == "copyCode" and not x.pop("paired", False))]
+    _mark_mail(prior + out)               # 앞부분과 함께 - 쇼핑몰·메일함 계정 가리기, 메일 열기·보내기 표시 (검토 C1)
+    for x in prior:
+        x.pop("paired", None)
     rec_obj = {"version": record_version(out), "start_url": start_url, "record_date": record_date.isoformat(), "steps": out}
     if viewport:
         rec_obj["viewport"] = viewport       # 기록 때 창 안쪽 크기 - 프리페어가 같은 크기로 연다
@@ -1024,7 +1058,8 @@ def continue_record(head, raw_new, record_date):
     것(기록기를 붙이기 전에 이미 있던 것 - 요청 뒤 늦게 뜬 새 줄에서 미리보기가 멈춘 뒤 [수정]) 은 그 번호를 이어받는다. 결과에 cut 은 없다."""
     n = len(head["steps"])
     cut = head.get("cut")
-    new = finalize(raw_new, record_date, head["start_url"], head.get("viewport"))["steps"]
+    head_steps = [dict(s) for s in head["steps"]]          # 앞부분 사본 - 메일 표시를 합쳐서 다시 매긴다 (검토 C1)
+    new = finalize(raw_new, record_date, head["start_url"], head.get("viewport"), prior=head_steps)["steps"]
     for s in new:
         if "appearsAfter" in s:
             s["appearsAfter"] += n
@@ -1032,7 +1067,7 @@ def continue_record(head, raw_new, record_date):
             s["appearsAfter"] = cut["appearsAfter"]
     if new:
         new[0]["gap"] = STEP_GAP_AFTER_EDIT
-    out = dict(head, steps=[trim_row(dict(s)) for s in head["steps"]] + new)    # 옛 기록의 앞부분도 (BugBuster I4)
+    out = dict(head, steps=[trim_row(dict(s)) for s in head_steps] + new)    # 옛 기록의 앞부분도 (BugBuster I4)
     out.pop("cut", None)
     out["version"] = record_version(out["steps"])      # 이어 기록한 쪽에 메일 인증이 들면 버전 2
     return out
@@ -1275,9 +1310,9 @@ def xq(s):
 class OtpRetry(Exception):
     """인증번호를 못 받았거나 사이트가 거절했다 - '인증번호 받기' 부터 다시 (모두 OTP_TRIES 번). final = 다 실패했을 때의 글 (메일 인증)."""
 
-    def __init__(self, why, rejected=False, final=None):
+    def __init__(self, why, rejected=False, final=None, mail=False):
         super().__init__(why)
-        self.rejected, self.final = rejected, final
+        self.rejected, self.final, self.mail = rejected, final, mail   # mail = 메일 2차인증 쪽 - '인증 메일 보내기' 부터, 메일 횟수로
 
 
 class MailFail(Exception):
@@ -1320,6 +1355,7 @@ class Replayer:
         # 메일 2차인증 (설계 2026-11-02): mail_code = 메일에서 뽑은 번호 (재생기마다 - 병렬 수집에서 섞이지 않게), 메일함 창 번호·'인증 메일 열기' 단계
         self.mail_code, self.mail_before, self.mail_opened, self.otp_sent_at = None, set(), set(), 0.0
         self.mail_page, self.mail_open_i, self.link_check = None, None, None
+        self.mail_try, self.mail_send_i = 0, None   # 메일 쪽 횟수·'인증 메일 보내기' 단계 - 메일함의 휴대폰 인증과 섞이지 않게 (검토 I5)
         self.dialogs = []           # 재생 중 뜬 알림창 글 (사이트가 인증번호를 거절했나 본다)
         self.alerts = []            # 그 가운데 알림(alert)만 - '자료 없음' 판정 (확인 질문은 [확인] 을 눌러 파일이 올 수 있다)
         # 메일 고르기: mail_memory = MailMemory (ACTOR - 처리한 메일을 건너뛰고 기억), pick_preview = 기억과 상관없이 1통 (옵저버 미리보기)
@@ -1617,7 +1653,7 @@ class Replayer:
             self._fill(loc, self._cred(page, s.get("credential") or "PW"))
         elif k == "otp" and s.get("source") == "copy":     # 메일에서 뽑아 든 번호 (클립보드는 쓰지 않는다)
             if not self.mail_code:
-                raise OtpRetry(MAIL_NO_CODE, final=MAIL_NO_CODE)
+                raise OtpRetry(MAIL_NO_CODE, final=MAIL_NO_CODE, mail=True)
             self.otp_mark = len(self.dialogs)
             self._fill(loc, self.mail_code)
         elif k == "otp":
@@ -1647,7 +1683,7 @@ class Replayer:
     def _mail_send(self):
         """'인증 메일 보내기' 누르기 전: 시도 횟수, 보낸 시각. 다시 시도면(메일함 탭이 열려 있다) 지금 목록의 같은 모양 메일을 적어 둔다 -
         그 메일들은 다시 보내기 전에 온 옛 번호다 (받은 시각이 안 보이는 메일함에서 늦게 온 옛 메일을 열지 않게)."""
-        self.otp_try += 1
+        self.mail_try += 1
         self.mail_code, self.mail_before = None, set()
         pg = self.pages.get(self.mail_page) if self.mail_page is not None else None
         if pg is not None and not pg.is_closed() and self.mail_open_i:
@@ -1655,7 +1691,7 @@ class Replayer:
             frame, rows = self._mail_list(pg, s, 5)
             self.mail_before = {rid for rid, r in zip(row_ids(rows), rows) if mail_fp(r[2] or r[1]) == s["mailOpen"]["fp"]}
         self.otp_sent_at = time.time()
-        self.log(f"      인증 메일을 요청합니다. ({self.otp_try}/{OTP_TRIES})")
+        self.log(f"      인증 메일을 요청합니다. ({self.mail_try}/{OTP_TRIES})")
 
     def _mail_list(self, page, s, wait):
         """메일 목록 줄들 - 메일을 연 화면이면 뒤로 가서."""
@@ -1669,14 +1705,7 @@ class Replayer:
         return frame, rows
 
     def _mail_new_enough(self, line):
-        """줄에 받은 시각(14:05 · 오후 2:05)이 보이면 메일을 요청한 때(1분 여유) 뒤의 것인가. 안 보이면 참 (기억·다시 시도가 거른다).
-        ponytail: 자정 넘어 온 메일은 시각만으로는 어제 것과 못 가린다 - 그런 일이 잦으면 날짜 칸도 본다."""
-        m = re.search(r"(오전|오후)?\s*(\d{1,2}):(\d{2})", line or "")
-        if not m:
-            return True
-        h = int(m.group(2)) % 12 + (12 if m.group(1) == "오후" else 0) if m.group(1) else int(m.group(2))
-        at = datetime.datetime.now().replace(hour=h % 24, minute=int(m.group(3)), second=0, microsecond=0).timestamp()
-        return at >= self.otp_sent_at - 60
+        return mail_time_ok(line, self.otp_sent_at)
 
     def _mail_open(self, i, s):
         """인증 메일 열기: 기록한 줄 자리가 아니라 같은 줄 모양의 '새 메일' (기억·다시 보내기 전 목록·이번 실행에 연 것 제외, 받은 시각).
@@ -1689,7 +1718,7 @@ class Replayer:
         frame, rows = self._mail_list(page, s, self.step_timeout * self.step_tries)
         if frame is None or not rows:
             raise MailFail(MAIL_LOGIN_FAIL)
-        end, told, settled = time.time() + self.otp_wait, False, self.otp_try < 2
+        end, told, settled = time.time() + self.otp_wait, False, self.mail_try < 2
         while True:
             for idx, (rid, (k, t, seen, line)) in enumerate(zip(row_ids(rows), rows)):
                 if (mail_fp(seen or t) != fp or rid in self.mail_before or rid in self.mail_opened
@@ -1713,19 +1742,19 @@ class Replayer:
                 if mem is not None:             # 실패해도 기억한다 - 다음 시도·다음 실행에 같은 메일을 다시 열지 않게
                     mem.add_all([rid])
                     mem.save()
-                return f"인증 메일 열기 ({self.otp_try}/{OTP_TRIES})"
+                return f"인증 메일 열기 ({self.mail_try}/{OTP_TRIES})"
             else:
                 rows = None                 # 이번 목록에 새 메일이 없다 - 아래에서 기다렸다 새로 고친다
             if rows is not None:
                 continue                    # 방금 기다렸다 새로 읽었다
             if not told:
                 told = True
-                wait = f"인증 메일 기다리는 중 ({self.otp_try}/{OTP_TRIES})"
+                wait = f"인증 메일 기다리는 중 ({self.mail_try}/{OTP_TRIES})"
                 self.log(f"      {wait}")
                 if self.progress:
                     self.progress(i, "run", wait)
             if time.time() > end:
-                raise OtpRetry("인증 메일이 오지 않았습니다.", final=MAIL_NONE)
+                raise OtpRetry("인증 메일이 오지 않았습니다.", final=MAIL_NONE, mail=True)
             self._wait(page, 2000)
             try:
                 page.reload(wait_until="domcontentloaded")
@@ -1737,7 +1766,7 @@ class Replayer:
         """메일에서 인증번호 뽑기: 기록 때 복사한 요소(못 찾으면 본문)의 글에서 같은 모양(숫자/영문+숫자, 길이)의 낱말."""
         page = self.pages.get(s["page"])
         if page is None or page.is_closed():
-            raise OtpRetry(MAIL_NO_CODE, final=MAIL_NO_CODE)
+            raise OtpRetry(MAIL_NO_CODE, final=MAIL_NO_CODE, mail=True)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=10000)
         except Exception:
@@ -1764,11 +1793,44 @@ class Replayer:
                 if s["shape"]["chars"] == "digit" or (re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())):
                     self.mail_code = m.group()
                     return "인증번호 복사"
-        raise OtpRetry(MAIL_NO_CODE, final=MAIL_NO_CODE)
+        raise OtpRetry(MAIL_NO_CODE, final=MAIL_NO_CODE, mail=True)
+
+    def _mail_link(self, i, s):
+        """메일의 인증 링크: 기록한 글자(주소 모양이면 빈 글자)이고 주소가 같은 사이트(호스트의 등록 도메인)인 링크를 누른다.
+        위치로 짐작해 다른 링크(수신거부 등)를 누르지 않는다 (검토 I2). 못 찾으면 다시 시도."""
+        page = self.pages.get(s["page"])
+        if page is None or page.is_closed():
+            raise OtpRetry(MAIL_NO_LINK, final=MAIL_NO_LINK, mail=True)
+        self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
+        want, dom = " ".join((s["mailLink"].get("text") or "").split()), site_domain(s["mailLink"]["host"])
+        end = time.time() + self.step_timeout * self.step_tries
+        while True:
+            self._check_cancel()
+            for frame in [self._frame(page, s["frame"]) or page.main_frame] + [f for f in page.frames if f is not page.main_frame]:
+                try:
+                    links = json.loads(frame.evaluate("() => JSON.stringify([...document.querySelectorAll('a[href]')].map(a => "
+                                                      "[(a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim(), a.href]))"))
+                except Exception:
+                    continue
+                for n, (t, href) in enumerate(links):
+                    if site_domain(urllib.parse.urlparse(href).hostname or "") == dom and (not want or t == want):
+                        loc = frame.locator("a[href]").nth(n)
+                        if s.get("opens"):
+                            with page.expect_popup(timeout=15000) as pi:
+                                self._click(page, loc)
+                            self.pages[s["opens"]] = pi.value
+                            self._watch(pi.value)
+                            pi.value.wait_for_load_state("domcontentloaded")
+                        else:
+                            self._click(page, loc)
+                        return "인증 링크 누르기"
+            if time.time() > end:
+                raise OtpRetry(MAIL_NO_LINK, final=MAIL_NO_LINK, mail=True)
+            self._wait(page, 500)
 
     def _link_failed(self):
         """인증 링크를 누르고 쇼핑몰로 돌아와 다음을 누른 뒤: 3초 뒤에도 '인증 메일 보내기' 가 그대로 보이면 인증되지 않은 것."""
-        send = self.rec["steps"][self.otp_send - 1] if self.otp_send else None
+        send = self.rec["steps"][self.mail_send_i - 1] if self.mail_send_i else None
         page = self.pages.get(send["page"]) if send else None
         if page is None or page.is_closed():
             return False
@@ -1787,7 +1849,7 @@ class Replayer:
 
     def _skip_mail_login(self, i, s):
         """다시 시도 때 메일함 로그인 단계는 건너뛴다 - 메일함 탭이 그대로 열려 있다 (로그인된 메일함의 로그인 화면은 보통 다른 데로 넘긴다)."""
-        if self.otp_try < 2 or self.mail_page is None or not self.mail_open_i or s.get("page") != self.mail_page or i >= self.mail_open_i:
+        if self.mail_try < 2 or self.mail_page is None or not self.mail_open_i or s.get("page") != self.mail_page or i >= self.mail_open_i:
             return False
         pg = self.pages.get(self.mail_page)
         return pg is not None and not pg.is_closed()
@@ -2094,7 +2156,7 @@ class Replayer:
                 if self.progress:
                     self.progress(i, "run", "")
                 if s.get("mailSend"):
-                    self.otp_send = i
+                    self.mail_send_i = i
                     self._mail_send()
                 elif s.get("otpSend") and self.otp is not None:
                     self.otp_send = i
@@ -2113,10 +2175,7 @@ class Replayer:
                 elif s["kind"] == "copyCode":
                     how = self._copy_code(i, s)
                 elif s.get("mailLink"):
-                    try:
-                        how = self._step(i - 1, s)
-                    except NotFound:
-                        raise OtpRetry(MAIL_NO_LINK, final=MAIL_NO_LINK)
+                    how = self._mail_link(i, s)
                     self.link_check = next((j + 1 for j in range(i, len(steps)) if steps[j]["kind"] in ("click", "enter")
                                             and steps[j]["page"] not in (s["page"], s.get("opens"))), None)
                 else:
@@ -2126,20 +2185,21 @@ class Replayer:
                 elif self.link_check == i:          # 인증 링크 뒤 쇼핑몰에서 누른 [인증 완료] 등 - 아직 인증 화면이면 다시
                     self.link_check = None
                     if self._link_failed():
-                        raise OtpRetry("인증 링크로 인증되지 않았습니다.", rejected=True, final=MAIL_LINK_FAIL)
+                        raise OtpRetry("인증 링크로 인증되지 않았습니다.", rejected=True, final=MAIL_LINK_FAIL, mail=True)
                 elif self.otp_check == i:
                     self.otp_check = None
                     otp_i = next(j for j in range(i - 1, 0, -1) if steps[j - 1]["kind"] == "otp")
                     if self._otp_rejected(self.pages.get(s["page"]), steps[otp_i - 1], s):
-                        raise OtpRetry("사이트에서 인증번호가 승인되지 않았습니다.", rejected=True)
+                        raise OtpRetry("사이트에서 인증번호가 승인되지 않았습니다.", rejected=True, mail=steps[otp_i - 1].get("source") == "copy")
                     self._otp_close()               # 통과 - 요청·번호를 지운다
                 self.results.append((i, "ok", how))
                 self.log(f"  {i:2d}/{len(steps)} {text}  [{how}]")
             except OtpRetry as e:
                 self.results.append((i, "ok" if e.rejected else "fail", str(e)))
-                if self.otp_try < OTP_TRIES:
-                    back = self.otp_send or next(j for j in range(i, 0, -1) if steps[j - 1]["kind"] == "otp")
-                    self.log(f"  {i:2d}/{len(steps)} {text}  - {e}. {back}단계부터 다시 ({self.otp_try + 1}/{OTP_TRIES})")
+                tries = self.mail_try if e.mail else self.otp_try
+                if tries < OTP_TRIES:
+                    back = (self.mail_send_i if e.mail else self.otp_send) or next(j for j in range(i, 0, -1) if steps[j - 1]["kind"] == "otp")
+                    self.log(f"  {i:2d}/{len(steps)} {text}  - {e}. {back}단계부터 다시 ({tries + 1}/{OTP_TRIES})")
                     del self.results[back - 1:]
                     self.otp_check = self.link_check = None
                     self._otp_close()               # 다시 열 때 새 요청 (받기 단추가 없는 기록이면 인증번호 칸에서 연다)

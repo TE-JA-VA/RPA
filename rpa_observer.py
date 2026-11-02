@@ -587,12 +587,21 @@ def saved_no(p, cur):
     return p["orig"] if p["orig"] == cur + 1 else None
 
 
-def scrub_login(record, login_id):
+def scrub_login(record, login_id, mail_id=""):
     """아이디를 친 칸을 '설정의 아이디' 로 바꾸고 값을 지운다. 기록 때는 비밀번호 바로 앞 칸만 알아보므로 두 쪽 로그인
-    (아이디 → 다음 → 비밀번호)·비밀번호 먼저 치기 등은 아이디가 글자로 남았다 (2026-10-01 검토). 같은 dict 를 돌려준다."""
-    login_id = (login_id or "").strip()
-    for s in (record or {}).get("steps", []):
-        if login_id and s.get("kind") == "fill" and not s.get("credential") and (s.get("value") or "").strip() == login_id:
+    (아이디 → 다음 → 비밀번호)·비밀번호 먼저 치기 등은 아이디가 글자로 남았다 (2026-10-01 검토). 같은 dict 를 돌려준다.
+    mail_id: 메일 2차인증 메일함 창(MAIL_PW 가 있는 창)에서 친 메일 아이디는 '설정의 인증 메일 아이디' 로 (최종 검토 I4)."""
+    login_id, mail_id = (login_id or "").strip(), (mail_id or "").strip()
+    steps = (record or {}).get("steps", [])
+    mail_pages = {s.get("page") for s in steps if s.get("credential") == "MAIL_PW"}
+    for s in steps:
+        if s.get("kind") != "fill" or s.get("credential"):
+            continue
+        v = (s.get("value") or "").strip()
+        if mail_id and v == mail_id and s.get("page") in mail_pages:
+            s["credential"] = "MAIL_ID"
+            s.pop("value", None)
+        elif login_id and v == login_id:
             s["credential"] = "ID"
             s.pop("value", None)
     return record
@@ -1460,7 +1469,7 @@ class App:
             return self.status.config(text=problem[1], fg=RED)
         for o in out:
             if o["record"]:
-                scrub_login(o["record"], o["id"])      # 아이디는 기록에 글자로 안 남긴다 (설정의 아이디로 친다)
+                scrub_login(o["record"], o["id"], o["mail_id"])      # 아이디(메일함 아이디도)는 기록에 글자로 안 남긴다 (설정 값으로 친다)
         try:
             old = {p["no"]: p for p in st.read_presets()}
         except ValueError:

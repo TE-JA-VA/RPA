@@ -63,6 +63,13 @@ def record(mode, **opts):
         b.click("#mpw")
         b.keyboard.type(MAIL_PW, delay=5)
         b.click("text=로그인")
+        if ST.sms_on_mailbox:                              # 메일함의 휴대폰 문자 인증 - 사람이 문자를 보고 친다
+            b.wait_for_url("**/mail/sms")
+            b.click("#smssend")
+            b.wait_for_function("document.getElementById('m').textContent === '보냈습니다'")
+            b.click("#smscode")
+            b.keyboard.type(ST.sms[-1], delay=20)
+            b.click("text=확인")
         b.wait_for_url("**/mail/list")
         b.wait_for_timeout(300)
         b.click("ul.mails li:first-child .subj")
@@ -70,7 +77,7 @@ def record(mode, **opts):
         b.wait_for_timeout(300)
         if mode == "link":
             with ctx.expect_page() as pi:
-                b.click("text=인증하기")
+                b.click("a[target=_blank]")
             pi.value.wait_for_load_state()
             a.bring_to_front()
             a.click("text=인증 완료")
@@ -126,7 +133,7 @@ check("링크 방식도 메일 보내기에 otpSend·mailSend, 버전 2",
 CREDS = {"ID": "shopper", "PW": SHOP_PW, "MAIL_ID": "inbox-user", "MAIL_PW": MAIL_PW}
 
 
-def replay(label, r, wait=20, preview=False, memory=True, **opts):
+def replay(label, r, wait=20, preview=False, memory=True, relay=None, **opts):
     """r 을 재생한다. opts 는 가짜 사이트 상태 (reset 뒤에 켠다 - before 는 재생 전에 부를 함수)."""
     before = opts.pop("before", None)
     ST.reset("link" if any(x.get("mailLink") for x in r["steps"]) else "code")
@@ -143,6 +150,8 @@ def replay(label, r, wait=20, preview=False, memory=True, **opts):
         self.otp_wait = wait
         self.pick_preview = preview
         self.mail_memory = rec.MailMemory(mem_path) if memory else None
+        if relay is not None:
+            self.otp = relay                       # 메일함의 휴대폰 문자 인증 흉내 (사슬)
         ctx["rp"] = self
     rec.Replayer.__init__ = init
     try:
@@ -221,6 +230,32 @@ check("재생기마다 번호를 따로 든다 (병렬 수집, Review Focus 5)",
 
 ok, rp, lines = replay("preview", r_code, preview=True, before=lambda: ST.add_old())
 check("미리보기: 기억 없이도 받은 시각으로 새 메일", ok and ST.sent == 1, (last_why(rp), ST.sent))
+
+class SmsRelay:
+    """휴대폰 중계 흉내 - 메일함이 마지막으로 보낸 문자 번호를 준다."""
+    def open(self, tick=None):
+        return {"req": len(ST.sms)}
+
+    def wait(self, req, seconds, tick, field=None):
+        return ST.sms[-1] if len(ST.sms) > req["req"] else None
+
+    def close(self, req):
+        pass
+
+
+print("--- 최종 검토 고침: 메일함에 휴대폰 문자 인증이 붙은 사슬 (I5), 주소 모양 인증 링크 (I3)")
+r_sms, _ = record("code", sms_on_mailbox=True)
+ks = [(x["kind"], x.get("source")) for x in r_sms["steps"] if x["kind"] == "otp"]
+check("사슬 기록: 메일함 문자 인증칸(휴대폰) + 쇼핑몰 번호칸(메일)", ks == [("otp", None), ("otp", "copy")], ks)
+ok, rp, lines = replay("chain", r_sms, relay=SmsRelay(), sms_on_mailbox=True)
+check("사슬: 한 번에 통과 (문자 1번, 메일 1번)", ok and ST.sent == 1 and len(ST.sms) == 1, (last_why(rp), ST.sent, len(ST.sms)))
+ok, rp, lines = replay("chain_retry", r_sms, relay=SmsRelay(), sms_on_mailbox=True, show_time=False, delay=4, before=lambda: ST.add_old())
+check("사슬: 쇼핑몰이 번호를 거절하면 '인증 메일 보내기' 부터 다시 (메일함 문자는 다시 안 함)",
+      ok and ST.sent >= 2 and len(ST.sms) == 1, (last_why(rp), ST.sent, len(ST.sms)))
+r_url, text = record("link", link_url_text=True)
+check("주소 모양 링크: 기록에 표가 없다", ST.tokens[-1] not in text)
+ok, rp, lines = replay("link_url_text", r_url, link_url_text=True)
+check("주소 모양 링크: 호스트로 찾아 통과 (수신거부 링크는 안 누른다)", ok and ST.sent == 1, (last_why(rp), ST.sent))
 
 print("실패: " + (", ".join(fails) if fails else "없음"))
 sys.exit(1 if fails else 0)
