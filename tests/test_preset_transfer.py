@@ -94,7 +94,7 @@ bad_cases = {
     "kind 다름": dict(good, kind="other"),
     "version 2": dict(good, version=2),
     "steps 가 dict": dict(good, record=dict(REC, steps={})),
-    "기록 모양(version) 다름": dict(good, record=dict(REC, version=st.RECORD_VERSION + 1)),
+    "기록 모양(version) 다름": dict(good, record=dict(REC, version=max(st.RECORD_VERSIONS) + 1)),   # 2 는 메일 인증 기록 (2026-11-02)
     "비밀번호 값이 든 secret 단계": dict(good, record=dict(REC, steps=REC["steps"][:2] + [step("secret", credential="PW", value="x")])),
     "credential PW 인 fill 에 값": dict(good, record=dict(REC, steps=[step("fill", credential="PW", value="x")])),
     "PW 키": dict(good, PW="x"),

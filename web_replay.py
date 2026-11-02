@@ -320,6 +320,7 @@ LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 
                         # 옛 화면에서 태그·글자가 같은 다른 것(헤더의 로그인 등)을 집지 않게 (검토 2026-10-17). 마우스 올리기(3초)보다 짧게
 STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
 RECORD_VERSION = rpa_status.RECORD_VERSION   # 기록 모양 - rpa_status 에 있다 (에이전트도 본다)
+MAIL_RECORD_VERSION, RECORD_VERSIONS = rpa_status.MAIL_RECORD_VERSION, rpa_status.RECORD_VERSIONS
 DOWNLOAD_TIMEOUT_MS = 300000  # 파일이 오기 시작할 때까지 기다리는 시간 (안 오면 그 단계 실패). 쇼핑몰이 엑셀을 만드는 데 오래 걸려 60초 → 5분,
                               # 기다리는 동안 로그를 남긴다 (2026-10-15 메모 5). 오기 시작한 뒤에는 다 받을 때까지 기다린다 (느려도)
 # 받기 단추를 누른 뒤 몰이 '자료 없음' 알림창을 띄우면 5분을 다 기다리지 않고 그 단계를 '주문 없음' 으로 끝낸다 (사용자 2026-10-21).
@@ -590,8 +591,96 @@ def site_domain(host):
 
 def password_sites(steps):
     """비밀번호 단계가 비밀번호를 넣는 사이트(등록 도메인)들. 둘 이상이면 녹화 중 다른 사이트에도 로그인한 것 - 실행 때마다 이 프리셋
-    비밀번호를 그 사이트에도 넣는다 (BugBuster I1). 호스트를 적지 않던 옛 기록의 단계는 뺀다."""
-    return sorted({site_domain(s["host"]) for s in steps if s["kind"] == "secret" and s.get("host")})
+    비밀번호를 그 사이트에도 넣는다 (BugBuster I1). 호스트를 적지 않던 옛 기록의 단계는 뺀다. 메일 2차인증의 메일함(MAIL_PW)은 따로 센다."""
+    return sorted({site_domain(s["host"]) for s in steps
+                   if s["kind"] == "secret" and s.get("host") and s.get("credential") != "MAIL_PW"})
+
+
+# --- 메일 2차인증 (설계 docs/superpowers/specs/2026-11-02-email-otp-design.md) -----------------------------------
+# 사람이 쇼핑몰(A)을 기록하다 새 탭에서 메일함(B)에 로그인해 인증 메일을 열고 번호를 복사 → A 에 붙여넣기 (또는 메일의 링크 누르기).
+# 기록: copyCode(번호 모양만) · otp source=copy(값 없음) · mailOpen(줄 모양) · mailLink(글자·호스트) · credential MAIL_ID/MAIL_PW
+_FP_DROP = [re.compile(p) for p in (r"(오전|오후)\s*\d{1,2}:\d{2}(:\d{2})?", r"\d{2,4}[-./]\s*\d{1,2}[-./]\s*\d{1,2}\.?",
+                                    r"\d{1,2}월\s*\d{1,2}일", r"\d{1,2}:\d{2}(:\d{2})?", r"\d{1,2}[-./]\d{1,2}", r"\d+")]
+
+
+def mail_fp(text):
+    """메일 목록 줄의 모양 - 숫자·날짜·시각을 뺀 글 (제목에 번호가 든 메일도 매번 같은 모양). 재생은 같은 모양의 새 메일을 연다."""
+    t = str(text or "")
+    for p in _FP_DROP:
+        t = p.sub("", t)
+    return " ".join(t.split())
+
+
+def code_shape(text):
+    """복사한 글이 인증번호로 보이면 그 모양 {chars, len} (숫자 / 영문+숫자, 4~10자), 아니면 None (평범한 복사)."""
+    t = str(text or "").strip()
+    if re.fullmatch(r"\d{4,10}", t):
+        return {"chars": "digit", "len": len(t)}
+    if re.fullmatch(r"[A-Za-z0-9]{4,10}", t) and re.search(r"\d", t) and re.search(r"[A-Za-z]", t):
+        return {"chars": "alnum", "len": len(t)}
+    return None
+
+
+def is_mail_auth(s):
+    """메일 2차인증 단계 (번호를 넣는 칸 또는 메일의 링크)."""
+    return (s["kind"] == "otp" and s.get("source") == "copy") or bool(s.get("mailLink"))
+
+
+def has_mail_auth(steps):
+    return any(is_mail_auth(s) or s["kind"] == "copyCode" for s in steps)
+
+
+def mail_host(steps):
+    """메일 계정을 넣는 메일함 호스트 (첫 MAIL_PW 단계) - 재생은 이 등록 도메인의 칸에만 메일 계정을 넣는다."""
+    return next((s.get("host") for s in steps if s.get("credential") == "MAIL_PW" and s.get("host")), None)
+
+
+def mail_auth_problem(steps):
+    """저장하면 안 되는 메일 2차인증 기록이면 그 까닭 (설계 6절 글), 아니면 None. 프리셋 하나에 메일 인증 하나·메일 계정 한 벌."""
+    mail_pages = {s["page"] for s in steps if s.get("credential") == "MAIL_PW"}
+    auths = [s for s in steps if is_mail_auth(s)]
+    if any(s["kind"] == "otp" and s["page"] in mail_pages for s in auths):
+        return "인증 메일함의 로그인에 다시 메일 인증이 필요한 경우는 지원하지 않습니다."
+    if len(auths) > 1:
+        return "프리셋 하나에는 메일 인증을 하나만 기록할 수 있습니다. 다시 기록하여 주십시오."
+    if len({site_domain(s["host"]) for s in steps if s.get("credential") == "MAIL_PW" and s.get("host")}) > 1:
+        return "쇼핑몰과 인증 메일함이 아닌 다른 사이트에 로그인한 기록은 저장할 수 없습니다. 다시 기록하여 주십시오."
+    return None
+
+
+def record_version(steps):
+    return MAIL_RECORD_VERSION if has_mail_auth(steps) else RECORD_VERSION
+
+
+def _mark_mail(out):
+    """finalize 끝: 메일 인증 단계 앞뒤를 표시한다 - 인증 메일 열기(mailOpen), 메일 보내기(otpSend·mailSend), 메일함 계정(MAIL_*)."""
+    first = next((s for s in out if s["kind"] == "secret"), None)
+    a_dom = site_domain(first.get("host")) if first and first.get("host") else None
+    for i, s in enumerate(out):                           # 쇼핑몰이 아닌 사이트의 비밀번호 = 메일함 (등록 도메인으로 - A 가 팝업에서 로그인해도)
+        if s["kind"] == "secret" and a_dom and s.get("host") and site_domain(s["host"]) != a_dom:
+            s["credential"] = "MAIL_PW"
+            for p in reversed(out[max(0, i - 3):i]):
+                if p.get("credential") == "ID" and p["page"] == s["page"] and p["frame"] == s["frame"]:
+                    p["credential"] = "MAIL_ID"
+                    break
+    for i, s in enumerate(out):
+        if not (s["kind"] == "copyCode" or s.get("mailLink")):
+            continue
+        row = next((j for j in range(i - 1, -1, -1) if out[j]["page"] == s["page"] and out[j]["kind"] == "click" and out[j].get("row")), None)
+        if row is not None:
+            mine = (out[row]["row"].get("mine") or [{}])[0]
+            out[row]["mailOpen"] = {"fp": mail_fp(mine.get("s") or mine.get("t") or out[row]["target"].get("text"))}
+        if s.get("mailLink"):                             # 링크: 메일함 창이 처음 나온 바로 앞, 다른 창(쇼핑몰)의 마지막 누르기
+            enter = next(j for j in range(i + 1) if out[j]["page"] == s["page"])
+            send = next((j for j in range(enter - 1, -1, -1) if out[j]["kind"] == "click" and out[j]["page"] != s["page"]), None)
+            if send is not None:
+                out[send].update(otpSend=True, mailSend=True)
+    for i, s in enumerate(out):                           # 붙여넣기: 같은 창의 앞 마지막 누르기 = 인증 메일 보내기
+        if s["kind"] == "otp" and s.get("source") == "copy":
+            send = next((j for j in range(i - 1, -1, -1) if out[j]["kind"] == "click" and out[j]["page"] == s["page"]), None)
+            if send is not None:
+                out[send].update(otpSend=True, mailSend=True)
+    return out
 
 
 def navigated(before, s):
@@ -606,7 +695,7 @@ def navigated(before, s):
 def auth_start(steps):
     """인증 차례를 잡는 단계 번호(1부터) - 인증번호 단계 앞의 첫 칸 넣기(아이디). 그 앞의 검색·이동은 차례를 기다리지 않는다
     (사용자 2026-10-16: 빙 검색으로 들어가는 사이트가 앞 사이트의 인증이 끝난 뒤에야 검색부터 시작해 오래 걸렸다)."""
-    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=0)
+    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp" or s.get("mailLink")), default=0)   # 메일 링크도 인증 (2026-11-02)
     # 아이디·비밀번호(credential)가 달린 첫 단계부터 - 앞의 검색어 넣기는 차례를 기다리지 않는다 (BugBuster L8).
     # [인증번호 받기](otpSend) 가 그보다 앞인 기록이면 거기부터 - 문자가 차례 밖에서 나가지 않게 (검토 2026-10-17)
     cred = next((i for i in range(last) if steps[i].get("credential")), None)
@@ -619,7 +708,7 @@ def auth_end(steps):
     """2차 인증이 끝나는 단계 번호(1부터) - 인증번호 단계 다음의 누르기·엔터([확인])까지. 인증번호 단계가 없으면 None.
     병렬 수집(사용자 2026-10-15): 인증 사이트는 첫 단계(로그인)부터 여기까지를 한 번에 하나씩 - 앞 사이트가 인증 중이면
     뒤 인증 사이트는 로그인 앞에서 기다린다. 인증 없는 사이트는 기다리지 않는다."""
-    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp"), default=None)
+    last = max((i for i, s in enumerate(steps) if s["kind"] == "otp" or s.get("mailLink")), default=None)
     if last is None:
         return None
     return next((i for i in range(last + 1, len(steps)) if steps[i]["kind"] in ("click", "enter")), last) + 1
@@ -842,6 +931,7 @@ def finalize(steps, record_date, start_url, viewport=None):
     """기록을 다듬는다: 기다린 시간, 날짜는 오늘 기준, 공지 닫기는 '있을 때만', 아이디·비밀번호는 설정 값."""
     out, prev = [], None
     ts = [s["t"] for s in steps]
+    copied = None                         # 메일에서 복사한 글 - 붙여넣기와 맞춰 보는 데만, 기록에는 남기지 않는다
     for i, s in enumerate(steps):
         s = dict(s)
         seen = s.pop("firstSeen", None)
@@ -852,6 +942,24 @@ def finalize(steps, record_date, start_url, viewport=None):
         s["gap"] = s["t"] - prev if prev else 0
         prev = s.pop("t")
         trim_row(s)                       # (BugBuster I4)
+        text, href = s.pop("copied", None), s.pop("href", None) if s["kind"] == "click" else None
+        if s["kind"] == "copy":           # 인증번호처럼 보이는 복사만 단계로 (모양만), 그 밖의 복사는 버린다
+            shape = code_shape(text)
+            if shape:
+                copied = str(text).strip()
+                out.append(dict(s, kind="copyCode", shape=shape))
+            continue
+        if s.pop("pasted", False) and s["kind"] == "fill" and copied and str(s.get("value", "")).strip() == copied:
+            s["kind"], s["source"] = "otp", "copy"          # 메일에서 복사한 번호 - 휴대폰 문자 인증(set_otp)과 다르다
+            s.pop("value", None)
+            out.append(s)
+            continue
+        if href:                          # 메일함(쇼핑몰이 아닌 사이트에 로그인한 창)에서 다른 사이트로 가는 링크 = 인증 링크
+            pw = [x for x in out if x["kind"] == "secret" and x.get("host")]
+            here = next((site_domain(x["host"]) for x in pw if x["page"] == s["page"]), None)
+            host = urllib.parse.urlparse(href).hostname or ""
+            if pw and here and here != site_domain(pw[0]["host"]) and site_domain(host) != here:
+                s["mailLink"] = {"text": s["target"].get("text") or "", "host": host}   # 주소의 나머지(메일마다 다른 표)는 남기지 않는다
         if otp_like(s, steps[i + 1] if i + 1 < len(steps) else None):
             set_otp(out + [s], len(out), True)
             out.append(s)
@@ -875,7 +983,8 @@ def finalize(steps, record_date, start_url, viewport=None):
                 p["credential"] = "ID"
                 p.pop("value", None)
                 break
-    rec_obj = {"version": RECORD_VERSION, "start_url": start_url, "record_date": record_date.isoformat(), "steps": out}
+    _mark_mail(out)
+    rec_obj = {"version": record_version(out), "start_url": start_url, "record_date": record_date.isoformat(), "steps": out}
     if viewport:
         rec_obj["viewport"] = viewport       # 기록 때 창 안쪽 크기 - 프리페어가 같은 크기로 연다
     return rec_obj
@@ -901,6 +1010,7 @@ def continue_record(head, raw_new, record_date):
         new[0]["gap"] = STEP_GAP_AFTER_EDIT
     out = dict(head, steps=[trim_row(dict(s)) for s in head["steps"]] + new)    # 옛 기록의 앞부분도 (BugBuster I4)
     out.pop("cut", None)
+    out["version"] = record_version(out["steps"])      # 이어 기록한 쪽에 메일 인증이 들면 버전 2
     return out
 
 
@@ -988,6 +1098,16 @@ def describe(s, hide_values=False):
         d = "뒤로 가기"
     elif k == "newtab":
         d = "새 탭 열기"
+    elif k == "click" and s.get("mailOpen"):
+        d = f"인증 메일 열기 (제목: {_cut(s['mailOpen']['fp'], hide_values)})"
+    elif k == "click" and s.get("mailLink"):
+        d = f"메일의 '{n}' 링크 누르기"
+    elif k == "copyCode":
+        d = "메일에서 인증번호 복사"
+    elif s.get("credential") == "MAIL_ID":
+        d = "인증 메일 아이디 입력"
+    elif s.get("credential") == "MAIL_PW":
+        d = "인증 메일 비밀번호 입력"
     elif k == "click" and s.get("pick"):
         d = f"제목이 '{s['pick']['prefix']}' 로 시작하는 메일마다 ↓"
     elif k == "click":
@@ -1011,11 +1131,15 @@ def describe(s, hide_values=False):
         d = f"'{n}' 에서 Enter"
     elif k == "hover":
         d = f"'{n}' 에 마우스 올리기 (하위 메뉴 열기)"
+    elif k == "otp" and s.get("source") == "copy":
+        d = f"'{n}' 칸에 메일로 받은 번호 넣기"
     elif k == "otp":
         d = f"'{n}' 칸에 문자로 받은 인증번호 넣기"
     else:
         d = k
-    if s.get("otpSend"):
+    if s.get("mailSend"):
+        d += " (메일 요청)"
+    elif s.get("otpSend"):
         d += " (인증번호 문자 요청)"
     if s.get("optional"):
         d += " (떠 있을 때만)"
@@ -1595,7 +1719,7 @@ class Replayer:
         return how
 
     def run(self):
-        if self.rec.get("version") != RECORD_VERSION:
+        if self.rec.get("version") not in RECORD_VERSIONS:
             raise ValueError(f"알 수 없는 기록 형식입니다. (version {self.rec.get('version')!r}) "
                              "옵저버와 ACTOR 오토파일럿을 같은 버전으로 업데이트하여 주십시오.")
         page = self.first_page or self.context.new_page()

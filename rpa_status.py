@@ -1014,7 +1014,9 @@ def wellife_policy():
 PRESETS_NAME = "RPA_Presets.json"
 PRESET_MIN, PRESET_MAX = 2, 40           # PRESET_MAX = PC 가 받는 최대 - 보통 업체는 관리 화면에서 10 까지(ops.PRESET_LIMIT_MAX),
 PRESET_WELLIFE = 40                      # 업체코드에 wellife 가 든 업체는 늘 40 (사용자 2026-10-15, agent.company_policy)
-RECORD_VERSION = 1                        # 기록 모양. 다르면 재생하지 않는다 (옛 ACTOR 가 새 기록을 잘못 따라 하지 않게). web_replay·preset_transfer 가
+MAIL_RECORD_VERSION = 2                   # 메일 2차인증 단계가 든 기록 (설계 2026-11-02) - 옛 ACTOR 는 1 만 알아 거절한다
+RECORD_VERSIONS = (1, MAIL_RECORD_VERSION)  # 이 PC 가 재생·받을 수 있는 기록 버전
+RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지 않는다 (옛 ACTOR 가 새 기록을 잘못 따라 하지 않게). web_replay·preset_transfer 가
                                           # 여기서 읽는다 - 에이전트(내장 파이썬, playwright 없음)가 web_replay 를 끌어오지 않게 (2026-10-19)
 PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)
 REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름

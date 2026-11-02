@@ -48,7 +48,7 @@ def check_file(obj):
     rec = obj.get("record")
     if not isinstance(rec, dict) or not isinstance(rec.get("steps"), list):
         raise ValueError("기록 형식이 올바르지 않습니다.")
-    if rec.get("version") != st.RECORD_VERSION:
+    if rec.get("version") not in st.RECORD_VERSIONS:
         raise ValueError(f"기록 버전이 다릅니다. (파일 {rec.get('version')}, 이 PC {st.RECORD_VERSION})")
     for s in rec["steps"]:
         if not isinstance(s, dict):
