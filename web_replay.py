@@ -258,8 +258,17 @@ JS = r"""
   document.addEventListener('input', e => {
     const el = e.target;
     if (!e.isTrusted || !['INPUT', 'TEXTAREA'].includes(el.tagName) || ['checkbox', 'radio'].includes(el.type)) return;
-    if (el.type === 'password') send('secret', el); else send('fill', el, {value: el.value});
+    if (el.type === 'password') send('secret', el);
+    else send('fill', el, {value: el.value, pasted: Date.now() - (el.__pasted || 0) < 3000});   // 붙여넣기로 채웠다 (메일 2차인증)
   }, true);
+  // 메일 2차인증 (2026-11-02): 메일에서 번호를 복사(copy) → 쇼핑몰 칸에 붙여넣기(paste - Ctrl+V 도 오른쪽 메뉴도). 클립보드는 읽지 않는다
+  document.addEventListener('copy', e => {
+    if (!e.isTrusted) return;
+    const sel = getSelection(), t = ((sel && sel.toString()) || '').trim(), n = sel && sel.anchorNode;
+    const el = n && (n.nodeType === 1 ? n : n.parentElement);
+    if (t && t.length <= 40 && el) send('copy', el, {copied: t});     // 글은 붙여넣기와 맞춰 보는 데만 - finalize 가 모양만 남긴다
+  }, true);
+  document.addEventListener('paste', e => { if (e.isTrusted && e.target) e.target.__pasted = Date.now(); }, true);
   document.addEventListener('change', e => {
     const el = e.target;
     if (!e.isTrusted) return;
@@ -503,9 +512,11 @@ class Recorder:
             ev = json.loads(ev)         # 페이지는 JSON 글자로 보낸다 (JS 의 send)
         step = {"kind": ev["kind"], "page": self._no(source["page"]), "frame": frame_info(source["frame"]),
                 "url": url_path(ev["url"]), "target": ev["target"], "t": ev["t"]}
-        for k in ("value", "option", "checked", "firstSeen"):
+        for k in ("value", "option", "checked", "firstSeen", "copied"):
             if k in ev:
                 step[k] = ev[k]
+        if ev.get("pasted"):
+            step["pasted"] = True
         if step["kind"] == "secret":       # 비밀번호를 넣는 사이트 - 저장 때 다른 사이트가 섞였나 본다 (password_sites, BugBuster I1)
             step["host"] = urllib.parse.urlparse(ev["url"]).hostname or ""
         if ev.get("row"):
@@ -517,6 +528,8 @@ class Recorder:
             return
         if last and step["kind"] in KINDS_MERGE and last["kind"] == step["kind"] and same_target(last, step):
             last.update({k: step[k] for k in ("value", "option", "t") if k in step})
+            if step.get("pasted"):
+                last["pasted"] = True
             return
         for hv in (ev.get("hovers") or []) if step["kind"] == "click" else []:
             if last is None or last["t"] < hv["t"]:
@@ -667,9 +680,15 @@ def _mark_mail(out):
         if not (s["kind"] == "copyCode" or s.get("mailLink")):
             continue
         row = next((j for j in range(i - 1, -1, -1) if out[j]["page"] == s["page"] and out[j]["kind"] == "click" and out[j].get("row")), None)
+        if s["kind"] == "copyCode":                       # 복사한 요소의 글자 = 그 번호 - 남기지 않는다 (재생은 자리로 찾는다)
+            s["target"] = dict(s["target"], text="")
         if row is not None:
             mine = (out[row]["row"].get("mine") or [{}])[0]
-            out[row]["mailOpen"] = {"fp": mail_fp(mine.get("s") or mine.get("t") or out[row]["target"].get("text"))}
+            fp = mail_fp(mine.get("s") or mine.get("t") or out[row]["target"].get("text"))
+            out[row]["mailOpen"] = {"fp": fp}
+            # 제목에 번호가 든 메일함 - 줄 글자도 모양으로 (재생은 fp 로 찾는다)
+            out[row]["target"] = dict(out[row]["target"], text=fp)
+            out[row]["row"] = dict(out[row]["row"], mine=[dict(m, t=fp, s=fp) for m in out[row]["row"].get("mine") or []])
         if s.get("mailLink"):                             # 링크: 메일함 창이 처음 나온 바로 앞, 다른 창(쇼핑몰)의 마지막 누르기
             enter = next(j for j in range(i + 1) if out[j]["page"] == s["page"])
             send = next((j for j in range(enter - 1, -1, -1) if out[j]["kind"] == "click" and out[j]["page"] != s["page"]), None)
@@ -942,7 +961,8 @@ def finalize(steps, record_date, start_url, viewport=None):
         s["gap"] = s["t"] - prev if prev else 0
         prev = s.pop("t")
         trim_row(s)                       # (BugBuster I4)
-        text, href = s.pop("copied", None), s.pop("href", None) if s["kind"] == "click" else None
+        text = s.pop("copied", None)
+        href = (s.pop("href", None) or (s.get("target") or {}).get("href")) if s["kind"] == "click" else None
         if s["kind"] == "copy":           # 인증번호처럼 보이는 복사만 단계로 (모양만), 그 밖의 복사는 버린다
             shape = code_shape(text)
             if shape:
@@ -958,8 +978,9 @@ def finalize(steps, record_date, start_url, viewport=None):
             pw = [x for x in out if x["kind"] == "secret" and x.get("host")]
             here = next((site_domain(x["host"]) for x in pw if x["page"] == s["page"]), None)
             host = urllib.parse.urlparse(href).hostname or ""
-            if pw and here and here != site_domain(pw[0]["host"]) and site_domain(host) != here:
+            if pw and here and host and here != site_domain(pw[0]["host"]) and site_domain(host) != here:   # 상대 주소(호스트 없음)는 같은 사이트
                 s["mailLink"] = {"text": s["target"].get("text") or "", "host": host}   # 주소의 나머지(메일마다 다른 표)는 남기지 않는다
+                s["target"] = dict(s["target"], href="")         # 대상 정보의 링크 주소도 (재생은 글자·호스트로 찾는다)
         if otp_like(s, steps[i + 1] if i + 1 < len(steps) else None):
             set_otp(out + [s], len(out), True)
             out.append(s)
@@ -1104,6 +1125,8 @@ def describe(s, hide_values=False):
         d = f"메일의 '{n}' 링크 누르기"
     elif k == "copyCode":
         d = "메일에서 인증번호 복사"
+    elif k == "copy":
+        d = "복사"                        # 기록 중 (다듬기 전) - 인증번호로 보이면 다듬을 때 '메일에서 인증번호 복사'
     elif s.get("credential") == "MAIL_ID":
         d = "인증 메일 아이디 입력"
     elif s.get("credential") == "MAIL_PW":
