@@ -24,6 +24,7 @@ class State:
         self.confirmed = False
         self.delay, self.never = 0.0, False
         self.mfa_on_mailbox, self.show_time, self.subject_with_code, self.alnum = False, True, False, False
+        self.bad_links = False            # 링크를 눌러도 늘 '만료' (링크로 3번 실패)
         self.sent = 0
         for i, subj in enumerate(("[공지] 서비스 점검 안내", "주문하신 상품이 발송되었습니다")):   # 상관없는 메일 (목록 줄 알아보기에 두 줄 이상)
             self.mails.append({"id": i + 1, "at": time.time() - 86400 * (i + 1), "code": "", "token": "", "subject": subj})
@@ -105,7 +106,7 @@ def start():
             if path == "/api/a/state":
                 return self._send(json.dumps({"ok": st.confirmed}), "application/json")
             if path == "/a/confirm":
-                st.confirmed = bool(st.tokens) and arg.get("t") == st.tokens[-1]
+                st.confirmed = not st.bad_links and bool(st.tokens) and arg.get("t") == st.tokens[-1]
                 return self._page("인증", "<p>인증되었습니다.</p>" if st.confirmed else "<p>만료된 링크입니다.</p>")
             if path == "/a/done":
                 return self._page("주문 관리", "<h1>주문 관리</h1><button>주문 엑셀</button>")
@@ -118,7 +119,7 @@ def start():
             if path == "/mail/list":
                 rows = sorted(st.mails, key=lambda m: -m["at"])         # 실제 메일함처럼 받은 시각 최신순
                 lis = "".join(
-                    f"<li data-id='{m['id']}'><a href='/mail/read?id={m['id']}'><span class=subj>{html.escape(m['subject'])}</span>"
+                    f"<li><a href='/mail/read?id={m['id']}'><span class=subj>{html.escape(m['subject'])}</span>"
                     + (f" <span class=time>{time.strftime('%H:%M', time.localtime(m['at']))}</span>" if st.show_time else "")
                     + "</a></li>" for m in rows)
                 return self._page("받은 메일함", f"<button id=refresh onclick='location.reload()'>새로 고침</button><ul class=mails>{lis}</ul>")
