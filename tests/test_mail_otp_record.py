@@ -95,6 +95,14 @@ r3 = rec.finalize([st("click", 0, "인증번호 받기"), st("fill", 0, ph="인�
 check("손으로 친 인증번호 칸은 휴대폰 otp (source 없음)", r3["steps"][1]["kind"] == "otp" and "source" not in r3["steps"][1]
       and r3["version"] == 1, r3["steps"][1])
 
+# --- 메일 인증이 없는 보통 기록: 다른 사이트 비밀번호는 지금처럼 PW (I1 경고가 그대로 뜨게)
+plain = rec.finalize([st("fill", 0, ph="아이디"), st("secret", 0, host="shop.example"), st("click", 0, "로그인"),
+                      st("fill", 1, ph="아이디"), st("secret", 1, host="other.example"), st("click", 1, "로그인")], TODAY, "https://shop.example/")
+check("메일 인증이 없으면 메일 계정 칸으로 바꾸지 않는다 (I1 경고 유지)",
+      [x.get("credential") for x in plain["steps"] if x.get("credential")] == ["ID", "PW", "ID", "PW"]
+      and rec.password_sites(plain["steps"]) == ["other.example", "shop.example"] and plain["version"] == 1,
+      [x.get("credential") for x in plain["steps"]])
+
 # --- 쇼핑몰 로그인이 팝업 창
 r4 = rec.finalize(copy_paste_steps(mail_page=2, a_login_page=1), TODAY, "https://shop.example/login")
 check("쇼핑몰 로그인이 팝업(page 1)이어도 그것이 ID·PW, 메일함(page 2)이 MAIL_*",

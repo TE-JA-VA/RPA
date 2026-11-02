@@ -531,10 +531,9 @@ def has_otp(record):
 
 
 def has_mail_login(record):
-    """메일 2차인증 메일함 로그인이 있나 - 저장 화면에 '인증 메일 아이디·비밀번호' 칸을 보인다 (다듬기 전 기록도: 쇼핑몰이 아닌 사이트의 비밀번호)."""
-    steps = (record or {}).get("steps") or []
-    return (any(s.get("credential") == "MAIL_PW" for s in steps)
-            or len({rec.site_domain(s["host"]) for s in steps if s.get("kind") == "secret" and s.get("host")}) > 1)
+    """메일 2차인증 메일함 로그인이 있나 - 저장 화면에 '인증 메일 아이디·비밀번호' 칸을 보인다. 다듬은 기록(finalize)이 메일 인증이 있을
+    때만 메일함 칸을 MAIL_PW 로 둔다 - 사이트 둘에 로그인한 보통 기록은 아니다 (I1 경고로 알린다)."""
+    return any(s.get("credential") == "MAIL_PW" for s in (record or {}).get("steps") or [])
 
 
 def blank_imap(login_id=""):

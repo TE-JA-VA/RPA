@@ -668,6 +668,8 @@ def record_version(steps):
 
 def _mark_mail(out):
     """finalize 끝: 메일 인증 단계 앞뒤를 표시한다 - 인증 메일 열기(mailOpen), 메일 보내기(otpSend·mailSend), 메일함 계정(MAIL_*)."""
+    if not has_mail_auth(out):                # 메일 인증이 없는 보통 기록은 그대로 - 다른 사이트 비밀번호 경고(I1)가 떠야 한다
+        return out
     first = next((s for s in out if s["kind"] == "secret"), None)
     a_dom = site_domain(first.get("host")) if first and first.get("host") else None
     for i, s in enumerate(out):                           # 쇼핑몰이 아닌 사이트의 비밀번호 = 메일함 (등록 도메인으로 - A 가 팝업에서 로그인해도)

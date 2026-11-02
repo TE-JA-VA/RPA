@@ -990,7 +990,7 @@ TWICE = {"steps": MAIL_R["steps"] + [{"kind": "otp", "page": 0, "source": "copy"
 check("메일 인증 둘이면 막는다 (설계 6절 글)", rr.validate_presets([dict(MP, record=TWICE, mail_id="i", mail_pw="p")])
       == (1, "① 몰1: 프리셋 하나에는 메일 인증을 하나만 기록할 수 있습니다. 다시 기록하여 주십시오."))
 check("메일 계정 칸은 메일함 로그인이 있는 기록에만", rr.has_mail_login(MAIL_R) and not rr.has_mail_login(R)
-      and rr.has_mail_login({"steps": [{"kind": "secret", "host": "a.shop.com"}, {"kind": "secret", "host": "mail.naver.com"}]}))
+      and not rr.has_mail_login({"steps": [{"kind": "secret", "host": "a.shop.com"}, {"kind": "secret", "host": "mail.naver.com"}]}))   # 메일 인증 없는 두 사이트 = I1 경고
 for f, b in _keep_mail.items():
     open(f, "wb").write(b)
 
