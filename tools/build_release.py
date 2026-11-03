@@ -10,6 +10,7 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 4. D:\AX\배포_<판 번호>.zip 으로 압축한다 (맨 위 폴더도 같은 이름 - 손으로 넘기는 대비책)
 5. 스스로 확인한다: 압축 목록·지문·들어가면 안 되는 파일·빈 배포 틀, 풀어서 exe 셋 --check, 내장 파이썬 tkinter
 6. 설치 파일 D:\AX\AFTER_MARKET_RPA_Setup_<판 번호>.exe 를 만든다 (Inno Setup, release/installer.iss). --no-setup 이면 건너뛴다
+7. 옵저버 단독 판 폴더 D:\AX\배포_옵저버_<판 번호>\ 를 모은다 (같은 exe, 설치 파일은 tools/build_observer.py 가 PC 한 대 용으로)
 비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다. 설치 파일은 5번을 통과한 판 폴더로만 만든다).
 """
 import argparse
@@ -127,6 +128,22 @@ NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-ic
                 "Prepare_Observer.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
                                          *PLAYWRIGHT, TK_PLUGIN, *AGENT_MODULES]}
 ISS_PATH = os.path.join(REPO, "release", "installer.iss")
+# 옵저버 단독 버전 (설계 2026-11-03 4.2·4.8): 같은 exe 둘 + observer_hub.py 와 그것이 부르는 .py + 화면(hub/) + 내장 파이썬.
+# 판 목록·서명·zip 은 없다 (업데이트 없음). 설치 파일은 tools/build_observer.py 가 PC 한 대 용으로 따로 만든다 (Task 10)
+OBSERVER_EXES = ("Prepare_RPA.exe", "Prepare_Observer.exe")
+OBSERVER_HUB_EXE = "Observer_Hub.exe"
+OBSERVER_BRANDED = {OBSERVER_HUB_EXE: ("pythonw.exe", "오토파일럿 옵저버 관제")}   # 작업 관리자에 보이는 이름 (BRANDED 와 같은 방식)
+OBSERVER_SKIP = ("rpa_settings.py",)      # rpa_update 가 함수 안에서만 부른다 (업데이트 길 - 단독은 안 간다). 설정 창·에이전트 파일이 딸려 오지 않게
+OBSERVER_STATIC = [
+    ("hub/index.html", "hub/index.html"), ("hub/hub.js", "hub/hub.js"), ("hub/hub.css", "hub/hub.css"),
+    (st.STANDALONE_FLAG, f"release/{st.STANDALONE_FLAG}"),                   # 빈 표시 파일 - 설치 파일은 PC번호를 채운 사본을 넣는다
+    ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),       # 옵저버 exe·관제 exe·바로 가기·설치 파일
+    ("AUTOPILOT_ACTOR.ico", "release/AUTOPILOT_ACTOR.ico"),
+    ("playwright/node.exe", ".venv/Lib/site-packages/playwright/driver/node.exe"),
+    ("옵저버_안내.txt", "release/옵저버_안내.txt"),
+    ("PC번호_확인.bat", "release/PC번호_확인.bat"),                           # 설치할 PC 의 번호를 담당자에게 (CP949+CRLF)
+]
+OBSERVER_ISS = os.path.join(REPO, "release", "observer.iss")
 # Inno Setup 6 의 ISCC.exe 를 찾는 자리 (이 PC 는 winget 사용자 설치 → LOCALAPPDATA)
 ISCC_DIRS = (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6"),
              os.path.join(os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)", "Inno Setup 6"),
@@ -148,19 +165,23 @@ _VER = r"(\d{4}\.\d\d\.\d\d)-(\d+)"
 def prune_local(out_root, keep=LOCAL_KEEP, protect=()):
     """out_root 의 판 묶음(배포_<판> 폴더·zip·설치 파일)을 최신 keep 개만 남기고 지운다. protect 는 남길 판 폴더
     (--exes-from 이 가져온 판). 지운 판 목록 (오래된 것부터). 판이 아닌 파일·폴더는 안 건드린다."""
-    found = {}
+    found, names = {}, {}
     for name in os.listdir(out_root) if os.path.isdir(out_root) else []:
-        m = re.fullmatch(rf"배포_{_VER}(?:\.zip)?", name) or re.fullmatch(rf"AUTOPILOT_Setup_{_VER}\.exe", name)
+        m = (re.fullmatch(rf"배포_(?:옵저버_)?{_VER}(?:\.zip)?", name) or re.fullmatch(rf"AUTOPILOT_Setup_{_VER}\.exe", name)
+             or re.fullmatch(rf"AUTOPILOT_Observer_Setup_{_VER}(?:_[0-9a-f]{{4}})?\.exe", name))   # 단독 폴더·PC 용 설치 파일도 판 묶음 (Task 10)
         if m:
             found[f"{m.group(1)}-{m.group(2)}"] = (m.group(1), int(m.group(2)))
+            names.setdefault(f"{m.group(1)}-{m.group(2)}", []).append(name)
     order = sorted(found, key=found.get)
     kept = set(order[-keep:]) | {os.path.basename(os.path.normpath(p)).removeprefix("배포_") for p in protect if p}
     removed = [v for v in order if v not in kept]
     for v in removed:
-        shutil.rmtree(os.path.join(out_root, f"배포_{v}"), ignore_errors=True)
-        for f in (f"배포_{v}.zip", setup_name(v)):
-            if os.path.exists(os.path.join(out_root, f)):
-                os.remove(os.path.join(out_root, f))
+        for name in names[v]:
+            path = os.path.join(out_root, name)
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            elif os.path.exists(path):
+                os.remove(path)
     return removed
 
 
@@ -237,6 +258,62 @@ def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0
                   icon=os.path.join(out_dir, "AFTER_MARKET.ico"))
         program.append(f"python/{name}")
     return program
+
+
+def observer_files(repo=REPO):
+    """단독 판에 들어가는 (판 안 자리, 저장소 원본): observer_hub.py 와 그것이 부르는 저장소 .py 전부 (local_imports - 설정 창 길은 끊는다) + 정적 파일."""
+    pys = [os.path.relpath(p, repo).replace(os.sep, "/") for p in local_imports(os.path.join(repo, "observer_hub.py"), roots=(repo,), skip=OBSERVER_SKIP)]
+    return [(rel, rel) for rel in pys] + list(OBSERVER_STATIC)
+
+
+def collect_observer(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version=BRAND_VERSION):
+    """단독 판 폴더를 모은다 (판 목록·서명 없음). 넣은 상대 경로('/')를 돌려준다. 이미 있으면 멈춘다."""
+    if os.path.exists(out_dir):
+        raise FileExistsError(out_dir)
+    os.makedirs(out_dir)
+    got = []
+    for name in OBSERVER_EXES:
+        _copy(os.path.join(exe_dir, name), out_dir, name)
+        got.append(name)
+    for rel, src in observer_files(repo):
+        _copy(os.path.join(repo, *src.split("/")), out_dir, rel)
+        got.append(rel)
+    for d in RUNTIME_DIRS:
+        shutil.copytree(os.path.join(runtime_root, d), os.path.join(out_dir, d))
+    for name, (src, desc) in OBSERVER_BRANDED.items():
+        brand_exe(os.path.join(out_dir, "python", src), os.path.join(out_dir, "python", name), desc, version,
+                  icon=os.path.join(out_dir, "AFTER_MARKET_PREPARE.ico"))
+        got.append(f"python/{name}")
+    return got
+
+
+def observer_setup_name(version, pc=""):
+    """AUTOPILOT_Observer_Setup_<버전>[_<PC번호 끝 4글자>].exe (사용자 2026-11-03: 이름에는 끝 4글자만)."""
+    return f"AUTOPILOT_Observer_Setup_{version}" + (f"_{pc[-4:]}" if pc else "") + ".exe"
+
+
+def observer_iscc_command(iscc, out_dir, version, bound_pc, flag_file, out_root=OUT_ROOT, iss=OBSERVER_ISS):
+    return [iscc, "/Qp", f"/DAppVersion={version}", f"/DNumVersion={num_version(version)}", f"/DSourceDir={out_dir}",
+            f"/DBoundPC={bound_pc}", f"/DFlagFile={flag_file}",
+            f"/O{out_root}", f"/F{observer_setup_name(version, bound_pc)[:-4]}", iss]
+
+
+def build_observer_setup(out_dir, version, bound_pc, out_root=OUT_ROOT, run=subprocess.run, iscc=None):
+    """단독 판 폴더로 PC 한 대 용 설치 파일을 만든다. 표시 파일은 PC번호를 채운 사본(임시 폴더)으로 - 판 폴더는 안 바꾼다.
+    경로를 돌려준다. ISCC 가 없거나 컴파일이 안 되면 RuntimeError."""
+    iscc = iscc or find_iscc()
+    if not iscc:
+        raise RuntimeError("Inno Setup(ISCC.exe) 이 없습니다. winget install JRSoftware.InnoSetup --scope user 로 설치하세요")
+    with tempfile.TemporaryDirectory(prefix="rpa_obs_flag_") as tmp:
+        flag = os.path.join(tmp, st.STANDALONE_FLAG)
+        with open(flag, "w", encoding="utf-8", newline="\n") as f:
+            f.write(bound_pc)
+        r = run(observer_iscc_command(iscc, out_dir, version, bound_pc, flag, out_root), capture_output=True)
+    path = os.path.join(out_root, observer_setup_name(version, bound_pc))
+    if r.returncode != 0 or not os.path.isfile(path):
+        raise RuntimeError(f"단독 설치 파일을 만들지 못했습니다 (ISCC {r.returncode}): "
+                           f"{(r.stdout + r.stderr)[-500:].decode('utf-8', 'replace')}")
+    return path
 
 
 def _runtime_python(out_dir):
@@ -385,12 +462,13 @@ def nuitka_command(py, exe, work_dir, tk_dirs=None):
             os.path.join(REPO, EXES[exe])]
 
 
-def local_imports(entry, roots=(REPO, AGENT_DIR)):
-    """entry 가 차례로 import 하는 저장소 안 .py 파일들 (자기 포함, 함수 안 import 도). exe 재료 지문에 쓴다."""
+def local_imports(entry, roots=(REPO, AGENT_DIR), skip=()):
+    """entry 가 차례로 import 하는 저장소 안 .py 파일들 (자기 포함, 함수 안 import 도). exe 재료 지문에 쓴다.
+    skip 에 든 파일 이름은 따라 들어가지 않는다 (단독 판 - 설정 창 길)."""
     seen, todo = set(), [os.path.abspath(entry)]
     while todo:
         path = todo.pop()
-        if path in seen:
+        if path in seen or os.path.basename(path) in skip:
             continue
         seen.add(path)
         with open(path, encoding="utf-8") as f:
@@ -602,6 +680,9 @@ def main(argv=None):
             print("  문제:", e)
             return 1
         print(f"  설치 파일 {setup}  ({os.path.getsize(setup) // 2 ** 20}MB)")
+    obs_dir = os.path.join(OUT_ROOT, f"배포_옵저버_{version}")       # 단독 판 폴더 (설치 파일은 tools/build_observer.py <PC번호> 로 PC 마다)
+    collect_observer(obs_dir, work, version=BRAND_VERSION)
+    print(f"  옵저버 단독 판 폴더 {obs_dir}  (설치 파일: tools\\build_observer.py <PC번호>)")
     if args.to_dist:
         for exe in EXES:
             shutil.copy2(os.path.join(out_dir, exe), os.path.join(REPO, "dist", exe))

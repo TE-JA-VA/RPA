@@ -83,6 +83,13 @@ n = len(d.LAUNCHED)
 e = raises(RuntimeError, d.launch_slot, {"at": "09:00", "presets": [1, 3]})
 check(str(e) == "돌릴 프리셋이 없습니다. 예약 줄의 프리셋을 확인하여 주십시오." and len(d.LAUNCHED) == n, "slot_presets_gone: 모두 꺼지면 RuntimeError", e)
 
+_pcp = st.standalone_pc_problem
+st.standalone_pc_problem = lambda: st.STANDALONE_PC_PROBLEM
+n = len(d.LAUNCHED)
+e = raises(RuntimeError, d.launch, "prepare", "manual")
+check(str(e) == st.STANDALONE_PC_PROBLEM and len(d.LAUNCHED) == n, "launch: 이 PC 용이 아니면 거절 (Task 10)", e)
+st.standalone_pc_problem = _pcp
+
 print("\n=== 3. 예약기 - 모두 꺼진 줄은 기록하고 다음 예약으로 ===")
 import datetime as dt  # noqa: E402
 now = dt.datetime.now().replace(second=0, microsecond=0)

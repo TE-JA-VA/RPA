@@ -91,6 +91,25 @@ check("no_tamper_block: 판 목록·서명이 없는 설치 폴더는 막지 않
 os.environ.pop("RPA_STATUS_DIR", None)
 on(False)
 
+print("\n=== 1-2. 그 PC 에서만 (Task 10) ===")
+_guid = st.machine_guid
+st.machine_guid = lambda: "0f1e2d3c-4b5a-4968-8776-655443329f1c"
+st.program_dir = lambda: _flag_dir
+on(True)
+check("빈 표시 파일(개발·시험)이면 묻지 않는다", st.standalone_pc_problem() is None)
+with open(os.path.join(_flag_dir, st.STANDALONE_FLAG), "w", encoding="utf-8") as f:
+    f.write("0F1E2D3C-4B5A-4968-8776-655443329F1C\r\n")
+check("같은 번호(대소문자·공백 무시)면 None", st.standalone_pc_problem() is None)
+with open(os.path.join(_flag_dir, st.STANDALONE_FLAG), "w", encoding="utf-8") as f:
+    f.write("11111111-2222-3333-4444-555555555555")
+check("다른 번호면 글", st.standalone_pc_problem() == "이 PC 에 설치된 옵저버 단독 버전이 아닙니다. 담당자에게 문의하여 주십시오.")
+on(False)
+st.program_dir = _orig           # 표시 파일이 없는 폴더
+check("단독이 아니면 None", st.standalone_pc_problem() is None)
+open(os.path.join(_flag_dir, st.STANDALONE_FLAG), "w").close()
+st.machine_guid = _guid
+check("진짜 MachineGuid 는 GUID 꼴 소문자", bool(__import__("re").fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", st.machine_guid())), st.machine_guid())
+
 print("\n=== 2. ACTOR 단독 실행 (web_runner) ===")
 import web_runner as wr  # noqa: E402
 
