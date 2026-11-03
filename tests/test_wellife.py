@@ -1257,7 +1257,7 @@ check("실행: 하단 전체선택 -> ▼ '정상매출' 누름 (팝업은 원�
       acts == [("select_all", "주문", tuple(wellife.BOTTOM_ID_COLUMNS)), ("press", "정상매출", False), ("after",)] and sold,
       f"{note} {acts}")
 (note, sold), _ = run_ns(True, rows={})
-check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원래는 0건이어도 누름 - 웰라이프는 안 누름)",
+check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원래 PROCESS 도 2026-11-02 부터 같다)",
       acts == [] and sold is False and "0줄" in note, f"{note} {acts}")
 (note, sold), _ = run_ns(True, again=False)
 check("실행: 누르기 직전 다시 보니 체크가 풀려 있으면 정상매출을 누르지 않는다",

@@ -215,6 +215,7 @@ _real_find_by_text = rr.find_by_text      # 죽은 핸들 시험에서 진짜를
 _real_handle_print_popups = rr.handle_print_popups   # 9절에서 진짜를 쓴다
 _real_run_print_step = rr.run_print_step             # 6절이 가짜로 바꾸므로 9절에서 되살린다
 _real_run_logistics_step = rr.run_logistics_step     # 7절이 가짜로 바꾸므로 8절에서 되살린다
+_real_run_hold_logistics_step = rr.run_hold_logistics_step   # 8절이 가짜로 바꾸므로 조회 대기 시험(A13)에서 진짜를 쓴다
 
 print()
 print("=== 3. 모듈 표 / 컨텍스트 / 화면 진입 ===")
@@ -601,6 +602,66 @@ rr.get_onscreen_tables = lambda win: [Grid(None)]
 rr.select_all_by_header_checkbox = lambda hwnd, grid: False
 check("run_hold_save: 셀 수를 못 세면 예전처럼 전체선택으로 진행 (실패하면 failed)", rr.run_hold_save(make_ctx().app, 4242, 777) == "failed")
 
+
+# run_hold_save 저장 뒤 (사용자 2026-11-02, 검수 A4): 저장 끝을 확인 못 했거나 실패·오류 팝업이면 failed - 물류관리로 넘어가지 않는다
+class PBtn:
+    def __init__(self, text="확인"):
+        self.text, self.clicked = text, 0
+
+    def window_text(self):
+        return self.text
+
+    def click_input(self, **kw):
+        self.clicked += 1
+
+
+_saved_h = {n: getattr(rr, n) for n in ("get_onscreen_tables", "select_all_by_header_checkbox", "visible_child_windows", "click_toolbar_button",
+                                         "probe_spinner", "wait_async_then_confirm", "find_popup_ok_button", "collect_popup_text",
+                                         "PopupGate", "win32process", "find_popup_failure")}
+rr.get_onscreen_tables = lambda win: [Grid([object()])]
+rr.select_all_by_header_checkbox = lambda hwnd, grid: True
+rr.visible_child_windows = lambda hwnd: {}
+rr.click_toolbar_button = lambda win, hwnd, text: True
+rr.probe_spinner = lambda hwnd, base: None
+asked = []
+for res_async, popups, want, why in (("timeout", [], "failed", "저장 끝을 확인 못 하면 failed"),
+                                     ("popup_failed", [], "failed", "실패 팝업이면 failed"),
+                                     ("clicked", ["저장 중 오류가 발생했습니다."], "failed", "뒤에 뜬 팝업에 오류 글이 있으면 닫고 failed"),
+                                     ("clicked", ["저장되었습니다."], "done", "보통 팝업이면 예전처럼 done")):
+    rr.wait_async_then_confirm = lambda app, hwnd, base, r=res_async, **k: asked.append(k) or r
+    btns = [PBtn() for _ in popups]
+    said = {id(b): t for b, t in zip(btns, popups)}
+    rr.find_popup_ok_button = lambda win, b=list(btns): b.pop(0) if b else None
+    rr.collect_popup_text = lambda btn, s=said: s.get(id(btn), "")
+    got = rr.run_hold_save(make_ctx().app, 4242, 777)
+    check(f"run_hold_save {res_async} {popups}: {why}", got == want and all(b.clicked for b in btns), (got, [b.clicked for b in btns]))
+check("run_hold_save 는 저장 뒤 첫 팝업 글도 본다 (wait_async_then_confirm 에 fail_words)", asked and all(k.get("fail_words") for k in asked), asked)
+rr.wait_async_then_confirm = _saved_h["wait_async_then_confirm"]
+rr.PopupGate = lambda hwnd: types.SimpleNamespace(should_scan=lambda: True)
+rr.win32process = types.SimpleNamespace(GetWindowThreadProcessId=lambda h: (_ for _ in ()).throw(RuntimeError("창 없음")))
+pb = PBtn()
+rr.find_popup_ok_button = lambda win: pb
+rr.find_popup_failure = lambda win: None
+rr.collect_popup_text = lambda btn: "저장 중 오류가 발생했습니다."
+r1 = rr.wait_async_then_confirm(make_ctx().app, 777, {}, poll=0, max_wait=1, fail_words=rr.HOLD_FAIL_WORDS)
+r2 = rr.wait_async_then_confirm(make_ctx().app, 777, {}, poll=0, max_wait=1)
+check("wait_async_then_confirm: fail_words 를 주면 그 글이 든 팝업을 닫고 popup_failed, 안 주면 예전처럼 clicked (정상매출 쪽은 그대로)",
+      r1 == "popup_failed" and r2 == "clicked" and pb.clicked == 2, (r1, r2, pb.clicked))
+# 별도 창 팝업도 같은 낱말로 본다 (물류대기 저장 중 ERPia 가 오류를 별도 창으로 띄울 때)
+_saved_hp = rr.handle_sales_popups, rr.popups_to_try, rr.dismiss_popup_window
+rr.popups_to_try = lambda pid, hwnd, tried: [(1, 1)]
+rr.dismiss_popup_window = lambda h: (True, "'확인' 클릭", "저장 중 오류가 발생했습니다.")
+check("handle_sales_popups: 넘긴 낱말로 별도 창 실패를 가린다, 안 넘기면 예전처럼 매출처리 실패만",
+      rr.handle_sales_popups(4242, 777, {}, rr.HOLD_FAIL_WORDS)[0] and rr.handle_sales_popups(4242, 777, {})[0] is None)
+seen_kw = []
+rr.win32process = types.SimpleNamespace(GetWindowThreadProcessId=lambda h: (1, 4242))
+rr.handle_sales_popups = lambda pid, hwnd, tried, keywords=rr.SALES_FAIL_KEYWORDS: seen_kw.append(keywords) or ("저장 중 오류", 1)
+r3 = rr.wait_async_then_confirm(make_ctx().app, 777, {}, poll=0, max_wait=1, fail_words=rr.HOLD_FAIL_WORDS)
+check("wait_async_then_confirm: 별도 창 팝업도 fail_words 로 보고 popup_failed", r3 == "popup_failed" and seen_kw == [rr.HOLD_FAIL_WORDS], (r3, seen_kw))
+rr.handle_sales_popups, rr.popups_to_try, rr.dismiss_popup_window = _saved_hp
+for n, f in _saved_h.items():
+    setattr(rr, n, f)
+
 # run_logistics_step 자체: 하단 0건 -> no_target
 rr.run_logistics_step = _real_run_logistics_step
 rr.prefetch_auto_ids = lambda win, ids: None
@@ -617,8 +678,41 @@ class LGrid(Grid):
 
 
 rr.get_onscreen_tables = lambda win: [LGrid([object()], 10), LGrid([], 500)]
-rr.wait_grid_spinner_gone = lambda *a, **k: None
+rr.wait_grid_spinner_gone = lambda *a, **k: True
 check("run_logistics_step: 하단 0건이면 no_target", rr.run_logistics_step(make_ctx().app, 4242, 777, options={}) == "no_target")
+
+# 조회가 끝나기 전에는 진행하지 않는다 (사용자 2026-11-02, 검수 A13): 10분이 아니라 끝까지 기다리고, 그래도 끝을 못 보면 failed
+waits = []
+rr.wait_grid_spinner_gone = lambda *a, **k: waits.append(k.get("max_wait")) or False
+check("run_logistics_step: 하단 조회가 끝나지 않으면 덜 불러온 목록으로 진행하지 않고 failed",
+      rr.run_logistics_step(make_ctx().app, 4242, 777, options={}) == "failed" and waits == [rr.QUERY_DONE_MAX_WAIT_SECONDS]
+      and rr.QUERY_DONE_MAX_WAIT_SECONDS > rr.ASYNC_MAX_WAIT_SECONDS, waits)
+_saved_q = {n: getattr(rr, n) for n in ("click_subtab", "grid_overlay_count", "click_toolbar_button", "run_stock_review_step",
+                                         "scroll_grid_right_to_column", "run_hold_save", "collect_shortage_rows", "get_onscreen_tables")}
+rr.click_subtab = lambda app, hwnd, name: True
+rr.collect_shortage_rows = lambda hwnd, grid: ([], True)
+rr.grid_overlay_count = lambda hwnd, grid: 0
+rr.click_toolbar_button = lambda win, hwnd, text: True
+check("run_stock_review_step: 재고검토 조회가 끝나지 않으면 None (부족수량을 덜 읽은 채 보류하지 않는다)",
+      rr.run_stock_review_step(make_ctx().app, 4242, 777) is None)
+qbtn = types.SimpleNamespace(window_text=lambda: "조회(F)", click_input=lambda **k: None,
+                             rectangle=lambda: types.SimpleNamespace(left=10, top=10, right=20, bottom=20))
+hold_app = types.SimpleNamespace(window=lambda handle: types.SimpleNamespace(
+    rectangle=lambda: types.SimpleNamespace(left=0, top=0, right=100, bottom=100), descendants=lambda control_type=None: [qbtn]))
+rr.get_onscreen_tables = lambda win: [Grid([object()])]
+rr.scroll_grid_right_to_column = lambda *a: False
+rr.run_hold_save = lambda app, pid, hwnd: "done"
+rr.run_stock_review_step = lambda app, pid, hwnd: None
+rr.wait_grid_spinner_gone = lambda *a, **k: True      # 일반 탭 조회는 끝난다 - 멈춤이 재고검토 때문인지만 본다
+check("run_hold_logistics_step: 재고검토 조회가 끝나지 않으면 일반 탭·저장으로 가지 않고 failed",
+      _real_run_hold_logistics_step(hold_app, 4242, 777) == "failed")
+rr.wait_grid_spinner_gone = lambda *a, **k: False
+rr.run_stock_review_step = lambda app, pid, hwnd: (0, 0)
+check("run_hold_logistics_step: 일반 탭 조회가 끝나지 않으면 저장하지 않고 failed",
+      _real_run_hold_logistics_step(hold_app, 4242, 777) == "failed")
+for n, f in _saved_q.items():
+    setattr(rr, n, f)
+rr.wait_grid_spinner_gone = lambda *a, **k: True
 
 # ---------------------------------------------------------------------------
 print()
@@ -876,11 +970,16 @@ sales_acts = []
 
 
 class Tbl:
-    def __init__(self, top):
-        self.top = top
+    def __init__(self, top, rows=None):
+        self.top, self.rows = top, rows      # rows None = 줄을 셀 수 없음 (예전처럼 진행)
 
     def rectangle(self):
         return types.SimpleNamespace(top=self.top, left=0)
+
+    def descendants(self, control_type=None):
+        if self.rows is None:
+            raise RuntimeError("COMError 흉내")
+        return self.rows
 
 
 EXCEL_RET = [(2, 0)]
@@ -915,6 +1014,22 @@ for ret, want, why in (((0, 0), "skipped", "올릴 엑셀이 없으면 건너뜀
     res = rr.module_excel(make_ctx())
     check(f"엑셀 수집 {ret!r}: {why}", res[0] == want and (not isinstance(ret, tuple) or not ret[1] or f"{ret[1]}개" in res[1]), str(res))
 EXCEL_RET[0] = (2, 0)
+# 자동 수집: [가져오기] 를 누르지 못했으면(단추 없음·클릭 실패 - None) 건너뜀(토큰 0), 누른 뒤 끝을 못 봤으면(False) 예전처럼 완료 (사용자 2026-11-02)
+for ret, want, why in ((None, "skipped", "누르지 못했으면 건너뜀 (토큰 0)"), (False, "done", "눌렀으면 끝을 못 봐도 완료 (토큰)")):
+    rr.run_import_step = lambda *a, r=ret: r
+    res = rr.module_import(make_ctx())
+    check(f"자동 수집 {ret!r}: {why}", res[0] == want, str(res))
+rr.run_import_step = lambda *a: sales_acts.append(("import",)) or True
+# 매출처리: 하단이 0줄이면 전체선택도 정상매출도 하지 않고 건너뜀 (토큰 0 - 사용자 2026-11-02). 줄을 못 세면 예전처럼 진행 (위 시험)
+rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300, rows=[])]
+sales_acts.clear()
+res = rr.module_sales(make_ctx())
+check("매출처리: 하단 0줄이면 누르지 않고 건너뜀", res[0] == "skipped" and "0줄" in res[1] and sales_acts == [("goto",)], f"{sales_acts} {res}")
+rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300, rows=[object()])]
+sales_acts.clear()
+res = rr.module_sales(make_ctx())
+check("매출처리: 하단에 줄이 있으면 전체선택으로 간다", sales_acts == [("goto",), ("select", "하단")], f"{sales_acts} {res}")
+rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300)]
 rr.goto_order_screen = lambda ctx: (False, "아이콘 없음")
 res = rr.module_sales(make_ctx())
 check("화면으로 못 가면 그 모듈이 실패 (사유 그대로)", res == ("failed", "아이콘 없음"), str(res))

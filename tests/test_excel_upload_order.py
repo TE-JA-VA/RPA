@@ -338,8 +338,8 @@ rr.upload_file_in_dialog = lambda dlg, path, pid=None: sent.append(os.path.basen
 rr.win32gui = SimpleNamespace(IsWindow=lambda h: False, IsWindowVisible=lambda h: False)
 res = rr.run_excel_upload_step(None, 0, 0, None)
 done_dir = os.path.join(d, rr.EXCEL_UPLOAD_DONE_DIR, time.strftime("%Y%m%d"))
-check("같은 사이트코드면 마지막에 받은(수정 시각이 늦은) 파일만 올리고 먼저 받은 파일은 오류 폴더 '중복' - 메일을 최신순으로 받으면 "
-      "가장 오래된 메일이 올라간다",
+check("같은 사이트코드면 마지막에 받은(수정 시각이 늦은) 파일만 올리고 먼저 받은 파일은 오류 폴더 '중복' - 메일 받기는 파일 시각을 "
+      "메일 순서로 매겨 가장 새 메일이 올라간다 (메일 서버 I7, 웹메일 검수 A1)",
       sent == ["(107)나중받음.xlsx", "(108)b.xlsx"] and res == (2, 1)
       and os.path.exists(os.path.join(d, rr.EXCEL_UPLOAD_ERROR_DIR, "(107)먼저받음.xlsx"))
       and sorted(os.listdir(done_dir)) == ["(107)나중받음.xlsx", "(108)b.xlsx"], f"{sent} {res}")

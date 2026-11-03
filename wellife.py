@@ -737,7 +737,7 @@ def normal_sales(rr, ctx, live):
     - 하단 전체선택은 원래 select_all_and_verify 그대로 - 리허설도 한다 (체크는 데이터를 바꾸지 않는다). '1건' 은 첫 줄만.
     - 리허설은 ▼ 로 메뉴를 열어 '정상매출' 에 마우스만 올리고 ESC (hover_menu_item). 실행은 ▼ → '정상매출' 을 [지정▼] 와
       같은 자리 확인으로 누르고, 뒤 팝업·비동기 대기는 원래 코드 그대로 (after_normal_sales - 사용자 10-14 '원래 규칙').
-    - 하단이 0줄이면 누르지 않는다 (원래는 0건이어도 누른다 - 웰라이프는 0건이면 누르지 않는다).
+    - 하단이 0줄이면 누르지 않는다 (원래 PROCESS sales_flow 도 2026-11-02 부터 같다 - 그 전엔 0건이어도 눌렀다).
     - 누르기 직전에 보이는 줄이 모두 체크인지 다시 본다 (recheck)."""
     rr.status.step("wl_order_sales")
     page = visible_page(ctx)        # 떠 있는 화면 안만 훑는다

@@ -314,6 +314,11 @@ MAIL_PICK_MAX = 20           # 한 번에 처리하는 메일 수 (나머지는 
 MAIL_MEMORY_DAYS = 90        # 처리한 메일을 기억하는 날 수
 MAIL_BACK_WAIT = 10          # 메일을 연 뒤 목록으로 돌아와 줄이 다시 보이기까지 기다리는 초
 MAIL_MORE = "목록의 마지막 줄까지 새 메일입니다. 다음 쪽에 더 있을 수 있습니다."   # 첫 쪽만 본다 (BugBuster I5)
+# 목록에 줄이 하나도 없을 때 몰이 보이는 글 (안읽은 메일 보기·검색 결과에서 녹화, 검수 A5) - 이 글이 보여야 '대상 없음', 아니면 예전처럼 실패.
+# ponytail: 몰마다 글이 달라 아는 꼴만 - 못 알아보는 몰은 예전처럼 실패. 그런 몰이 나오면 녹화 때 빈 목록 모양을 함께 남긴다
+MAIL_EMPTY = re.compile(r"(메일|편지|검색\s*결과)(이|가)\s*없습니다|편지함이\s*비어\s*있습니다")
+MAIL_EMPTY_HOLD = 5.0        # 그 글이 이만큼 계속 보여야 빈 목록 - 목록을 불러오기 전에 잠깐 비어 보이는 화면이 있어서. 잘못 보아도
+                             # 그 실행만 '대상 없음' 이고 기억하지 않아 다음 실행에서 받는다
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 OPTIONAL_WAIT = 3.0
 LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 것' 에서 찾기는 이만큼 찾아도 없을 때부터 - 화면이 덜 뜬 사이 넘어가는
@@ -698,7 +703,9 @@ def row_ids(rows, today=None):
     네이버 메일은 고유 표시가 없어 제목만으로는 같은 제목 메일이 한 통으로 보였다 - 한 통을 받으면 나머지는 '이미 처리',
     목록에서 다시 찾을 때도 첫 줄만 (사용자 2026-10-20). rows = ROWS_JS 의 [(key, 칸 글자, 보이는 제목, 보이는 줄 글자)].
     받은 시각은 날짜로 바꾸고 (mail_day_line), 같은 글자 줄은 아래(옛 메일)부터 센다 - 새 메일이 위에 와도 옛 줄의 번호는 그대로 (K5).
-    ponytail: 같은 날 같은 줄이 목록 1쪽 아래로 밀려나면 남은 줄 번호가 당겨진다 - 그럴 일이 생기면 쪽 넘김까지 본다."""
+    ponytail: 같은 날 같은 줄이 목록 1쪽 아래로 밀려나면 남은 줄 번호가 당겨진다 - 그럴 일이 생기면 쪽 넘김까지 본다.
+    알려진 한계 (검수 A2, 사용자 2026-11-02 그대로 둠): 받은 메일이 목록에서 빠지면(안읽은 메일 보기로 녹화·지움) 같은 날 같은 줄 글자로
+    새로 온 메일이 그 표시를 물려받아 '이미 처리' 로 건너뛴다 - 고유 표시가 없어 두 메일을 가를 단서가 없다. 그런 목록은 전체 받은편지함으로 녹화한다."""
     today = today or datetime.date.today()
     count, out = {}, [None] * len(rows)
     for i in range(len(rows) - 1, -1, -1):
@@ -711,6 +718,11 @@ def row_ids(rows, today=None):
         count[base] = n + 1
         out[i] = f"줄:{base}" + (f"#{n + 1}" if n else "")
     return out
+
+
+def mail_list_empty(text):
+    """화면 글에 '메일이 없습니다' 같은 빈 목록 글이 있는가 (MAIL_EMPTY) - 짧은 줄만 본다 (긴 안내문 속 낱말은 아니다)."""
+    return any(len(line.strip()) <= 40 and MAIL_EMPTY.search(line) for line in (text or "").splitlines())
 
 
 def old_row_ids(rows):
@@ -1148,6 +1160,7 @@ class Replayer:
         self.edit = None            # threading.Event - 일시정지 중 켜지면 EditHere(다음 단계) 를 던진다 (옵저버 [수정])
         self.download_timeout_ms = DOWNLOAD_TIMEOUT_MS
         self.downloads = []         # 지금 단계에서 온 파일 - 어느 창에서 왔든 (누른 창 말고 팝업이 내려 줄 때가 있다)
+        self.file_time = None       # 메일마다: 받은 파일의 수정 시각 - 새 메일일수록 늦게 (_run_pick, 검수 A1)
         self.elapsed = 0.0
         # 2차인증 (설계 13절): otp = 휴대폰 중계 (open() → 요청, wait(요청, 초, tick, field) → 번호|None, close(요청)). 없으면 인증번호 칸에서 멈춘다
         self.otp, self.otp_wait = None, OTP_WAIT
@@ -1545,6 +1558,11 @@ class Replayer:
         warn = upload_warning(path)
         if warn:
             self.log(f"      [주의] {warn}")      # (BugBuster I6)
+        if self.file_time is not None:
+            try:
+                os.utime(path, (self.file_time, self.file_time))
+            except OSError:
+                pass
         self.saved.append(path)
         return path
 
@@ -1625,15 +1643,23 @@ class Replayer:
         return all(r[1] != "fail" for r in self.results) and len(self.results) == len(steps)
 
     # --- 메일 고르기 (사용자 2026-10-14) ---
-    def _mail_rows(self, page, s, wait):
-        """s 를 기록한 목록의 줄들 [(key, 칸 글자, 보이는 제목, 보이는 줄 글자)]. wait 초 안에 줄이 안 보이면 빈 목록."""
-        row, end = s["row"], time.time() + wait
+    def _mail_rows(self, page, s, wait, empty_ok=False):
+        """s 를 기록한 목록의 줄들 [(key, 칸 글자, 보이는 제목, 보이는 줄 글자)]. wait 초 안에 줄이 안 보이면 빈 목록.
+        empty_ok(첫 목록 읽기만): 줄 없이 몰이 '메일이 없습니다' 를 MAIL_EMPTY_HOLD 초 보이면 None (정말 빈 목록 - 검수 A5).
+        메일을 연 뒤 돌아올 때는 끄고 예전처럼 줄을 기다린다 (돌아가는 동안 잠깐 빈 화면이 보일 수 있다)."""
+        row, end, empty_at = s["row"], time.time() + wait, None
         while True:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
             try:
                 if frame is not None and frame.locator(row["sel"]).first.is_visible():
                     return frame, [tuple(x) for x in json.loads(frame.evaluate(ROWS_JS, json.dumps(row)))]
+                if empty_ok and frame is not None and mail_list_empty(frame.evaluate("() => document.body ? document.body.innerText : ''")):
+                    empty_at = empty_at or time.time()
+                    if time.time() - empty_at >= MAIL_EMPTY_HOLD:
+                        return frame, None
+                else:
+                    empty_at = None
             except Exception:
                 pass                # 화면이 바뀌는 중
             if time.time() > end:
@@ -1651,8 +1677,11 @@ class Replayer:
         if page is None or page.is_closed():
             raise NotFound(f"창 {s['page']}이(가) 없습니다.")
         self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
-        frame, rows = self._mail_rows(page, s, self.step_timeout * self.step_tries)
-        if frame is None or not rows:
+        frame, rows = self._mail_rows(page, s, self.step_timeout * self.step_tries, empty_ok=True)
+        if rows is None:
+            self.log("      메일 목록이 비어 있습니다.")
+            rows = []               # 아래에서 대상 없음 (검수 A5)
+        elif frame is None or not rows:
             raise NotFound(f"{self.step_timeout * self.step_tries:.0f}초 동안 메일 목록을 찾지 못했습니다.")
         hits = [(rid, seen or t, oid) for rid, oid, (k, t, seen, line) in zip(row_ids(rows), old_row_ids(rows), rows)
                 if title_starts(prefix, seen, t)]   # 제목 = 보이는 글자 (중요·전달 표시 뺌)
@@ -1677,8 +1706,12 @@ class Replayer:
             return end + 1
         if more:
             self.log(f"      [주의] {MAIL_MORE}")
-        got, skipped = 0, []
+        got, skipped, started = 0, [], time.time()
         for n, (rid, t, _) in enumerate(todo, 1):
+            # 목록 위(새 메일)부터 연다 - 받은 파일 시각은 거꾸로 매겨 가장 새 메일의 파일이 가장 늦게. 같은 사이트코드면 업로드가 가장 늦은
+            # 파일을 고른다 (run_routine.collect_upload_files, 메일 서버 받기 BugBuster I7 과 같이 - 검수 A1). 여는 차례는 그대로 둔다
+            # (아래부터 열면 고유 표시 없는 목록에서 연 메일이 목록에서 빠질 때 위 줄 번호가 당겨진다 - row_ids)
+            self.file_time = started - n
             if n > 1:               # 앞 메일을 연 채다 - 목록으로 (메일 화면이 주소 # 만 바꾸는 비즈메카도 뒤로 가기로 돌아온다)
                 try:
                     page.go_back(timeout=MAIL_BACK_WAIT * 1000)
@@ -1727,6 +1760,7 @@ class Replayer:
             if mem is not None:
                 mem.add_all([rid])   # 받기까지 다 한 메일만 - 실패한 메일은 다음 실행에서 다시
                 mem.save()
+        self.file_time = None       # 묶음 밖 받기는 받은 때 그대로
         if mem is not None and skipped:     # 받은 메일이 있을 때만 - 첨부 없는 메일이 매 실행을 막지 않게 (BugBuster M13)
             mem.add_all(skipped)
             mem.save()
@@ -1820,7 +1854,7 @@ class Replayer:
                     self.progress(*self.results[-1])
                 try:
                     os.makedirs(self.shot_dir, exist_ok=True)
-                    shot = os.path.join(self.shot_dir, f"실패_{i}단계.png")
+                    shot = os.path.join(self.shot_dir, f"실패_({self.code})_{i}단계.png")   # 사이트마다 - 같은 단계에서 실패한 다른 몰 사진이 덮지 않게 (검수 A20)
                     self.pages.get(s["page"], self.pages[0]).screenshot(path=shot)
                     self.log(f"      화면 사진: {shot}")
                 except Exception:
