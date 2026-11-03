@@ -147,11 +147,16 @@ SALES_FAIL_KEYWORDS = ("정상매출실패", "정상매출 실패", "매출처�
 # 사용자 규칙: '확인'을 누르고 계속 기다린다. 뒤이어 '정상매출처리 실패' 팝업이 뜨면 그때 멈춘다.
 ERROR_POPUP_KEYWORDS = ("개체 참조가 개체의 인스턴스로 설정되지 않았습니다",
                         "Object reference not set to an instance of an object")
+# 물류대기 저장 뒤 팝업 글에 이 낱말이 있으면 멈춘다 - 물류관리로 넘어가지 않는다 (사용자 2026-11-02, 웰라이프 confirm_popups 와 같다)
+HOLD_FAIL_WORDS = ("실패", "오류", "에러")
 # 비동기 처리 대기 폴링 간격/최대 대기
 # 스피너 검사(grid_overlay_count/detect_spinner)는 win32 호출이라 사실상 공짜다.
 # 촘촘히 봐도 비용이 들지 않고, 끝난 것을 늦게 알아차리는 손해만 줄어든다.
 ASYNC_POLL_SECONDS = 2
 ASYNC_MAX_WAIT_SECONDS = 600
+# 물류관리·재고검토·물류대기 조회는 끝날 때까지 기다린 뒤 진행한다 - 덜 불러온 목록으로 가지 않는다 (사용자 2026-11-02, 예전엔
+# 10분이 지나면 그대로 진행). 이만큼 지나도 안 끝나면 그 모듈을 실패로 멈춘다 (스피너를 잘못 보면 영영 기다리지 않게)
+QUERY_DONE_MAX_WAIT_SECONDS = 3600
 # '스피너가 없다'를 완료로 인정하기 전에 이만큼은 계속 없어야 한다.
 # (폴링 간격을 줄여도 완료 판정이 성급해지지 않도록 시간으로 못박는다)
 ASYNC_IDLE_SECONDS = 15
@@ -1460,19 +1465,26 @@ def run_hold_save(app, pid, hwnd):
 
     log("비동기 처리 대기 및 팝업 처리")
     probe_spinner(hwnd, baseline_children)
-    result = wait_async_then_confirm(app, hwnd, baseline_children)
+    result = wait_async_then_confirm(app, hwnd, baseline_children, fail_words=HOLD_FAIL_WORDS)
     log(f"  비동기 대기 결과: {result}")
+    if result in ("timeout", "popup_failed"):     # 저장 끝을 확인 못 했거나 실패 팝업 - 물류관리로 넘어가지 않는다 (사용자 2026-11-02)
+        log("저장이 끝난 것을 확인하지 못했거나 실패 팝업이 떠 중단합니다.")
+        return "failed"
 
-    # 연속으로 뜨는 팝업이 더 있으면 처리
+    # 연속으로 뜨는 팝업이 더 있으면 처리 - 글에 실패·오류가 있으면 닫고 멈춘다 (사용자 2026-11-02)
     for _ in range(3):
         time.sleep(1.5)
         win = app.window(handle=hwnd)
         btn = find_popup_ok_button(win)
         if btn is None:
             break
-        log(f"  추가 팝업 -> '{btn.window_text()}' 클릭")
+        said = popup_says(btn, HOLD_FAIL_WORDS)
+        log(f"  추가 팝업 -> '{btn.window_text()}' 클릭" + (f" ({said})" if said else ""))
         ec.ensure_foreground(hwnd)
         btn.click_input()
+        if said:
+            log("저장 뒤 실패 팝업이 떠 중단합니다.")
+            return "failed"
     return "done"
 
 
@@ -1627,7 +1639,10 @@ def run_logistics_step(app, pid, hwnd, options=None):
 
     # 1) 하단 그리드 조회 완료 대기
     log("하단 그리드 조회 완료 대기")
-    wait_grid_spinner_gone(hwnd, bottom_grid, LOGISTICS_BOTTOM_IDLE_OVERLAYS, label="하단")
+    if not wait_grid_spinner_gone(hwnd, bottom_grid, LOGISTICS_BOTTOM_IDLE_OVERLAYS, label="하단",
+                                  max_wait=QUERY_DONE_MAX_WAIT_SECONDS):
+        log("하단 그리드 조회가 끝나지 않아 중단합니다.")
+        return "failed"
 
     # 하단이 비어 있으면 개별 배송을 만들 것이 없다 (앞 모듈 없이 이 모듈만 돌릴 때 흔하다).
     # 개수를 못 세면 예전처럼 그냥 진행한다.
@@ -1661,7 +1676,9 @@ def run_logistics_step(app, pid, hwnd, options=None):
 
     # 4) 상단 그리드 비동기 확인
     log("상단 그리드 비동기 처리 확인")
-    wait_grid_spinner_gone(hwnd, top_grid, top_overlays_before, label="상단")
+    if not wait_grid_spinner_gone(hwnd, top_grid, top_overlays_before, label="상단", max_wait=QUERY_DONE_MAX_WAIT_SECONDS):
+        log("상단 그리드 처리가 끝나지 않아 저장하지 않고 중단합니다.")
+        return "failed"
 
     # 팝업이 떴으면 처리
     for _ in range(3):
@@ -3365,7 +3382,7 @@ def run_stock_review_step(app, pid, hwnd):
     되돌리려면 화면에서 '배송보류해지'를 해야 하므로, 대상 선별이 틀리지 않았는지를
     누르기 전에 확인한다.
 
-    반환: (처리건수, 전체대상건수)
+    반환: (처리건수, 전체대상건수). 조회가 끝나지 않았으면 None (사용자 2026-11-02 - 부른 쪽이 물류대기를 멈춘다)
     """
     if not click_subtab(app, hwnd, STOCK_TAB_NAME):
         return 0, 0
@@ -3385,7 +3402,9 @@ def run_stock_review_step(app, pid, hwnd):
     log("  '조회(F)' 클릭 (상품별 재고검토)")
     click_toolbar_button(win, hwnd, "조회(F)")
     time.sleep(2)
-    wait_grid_spinner_gone(hwnd, top_grid, base_overlays, label="재고검토 상단")
+    if not wait_grid_spinner_gone(hwnd, top_grid, base_overlays, label="재고검토 상단", max_wait=QUERY_DONE_MAX_WAIT_SECONDS):
+        log("  재고검토 조회가 끝나지 않아 중단합니다.")
+        return None             # 부족수량을 덜 읽은 채 보류하지 않는다 - 부른 쪽이 물류대기를 멈춘다 (사용자 2026-11-02)
 
     targets, reached_bottom = collect_shortage_rows(hwnd, top_grid)
     log(f"  부족수량이 있는 행 {len(targets)}건 "
@@ -4908,7 +4927,10 @@ def run_hold_logistics_step(app, pid, hwnd):
     status.step("stock_review")
     log("\n=== 물류대기: 상품별 재고검토 (부족수량 건 배송보류) ===")
     try:
-        done, total = run_stock_review_step(app, pid, hwnd)
+        got = run_stock_review_step(app, pid, hwnd)
+        if got is None:         # 재고검토 조회가 끝나지 않았다 - 일반 탭·저장으로 가지 않는다 (사용자 2026-11-02)
+            return "failed"
+        done, total = got
         if total and done < total:
             log(f"경고: 상품별 재고검토 {total}건 중 {total - done}건을 처리하지 못했습니다.")
     except Exception as e:
@@ -4950,7 +4972,9 @@ def run_hold_logistics_step(app, pid, hwnd):
     ec.ensure_foreground(hwnd)
     query_btn.click_input()
     time.sleep(2)
-    wait_grid_spinner_gone(hwnd, grid, base_overlays, label="일반 탭")
+    if not wait_grid_spinner_gone(hwnd, grid, base_overlays, label="일반 탭", max_wait=QUERY_DONE_MAX_WAIT_SECONDS):
+        log("일반 탭 조회가 끝나지 않아 중단합니다.")
+        return "failed"
 
     # '상품상태' 컬럼이 보이도록 가로 스크롤.
     # 사용자 지시: 상품상태 컬럼이 안 보이면(=비정상을 판별할 수 없으면) 루틴을 종료하지 말고
@@ -5169,8 +5193,9 @@ def handle_import_popups(pid, hwnd, tried):
     return closed
 
 
-def handle_sales_popups(pid, hwnd, tried):
+def handle_sales_popups(pid, hwnd, tried, keywords=SALES_FAIL_KEYWORDS):
     """정상매출 대기 중 '별도 창'으로 뜬 팝업을 닫는다. (실패 문구, 닫은 개수) 를 돌려준다.
+    keywords: 실패로 볼 낱말 (물류대기 저장은 HOLD_FAIL_WORDS - wait_async_then_confirm 의 fail_words).
 
     이 팝업은 메인 창의 자식이 아니라서 PopupGate 로는 보이지 않는다.
     (2026-09-15 16:52: 개체 참조 오류 팝업을 못 보고 414초를 기다렸다)
@@ -5187,9 +5212,9 @@ def handle_sales_popups(pid, hwnd, tried):
             continue
         closed += 1
         tried[h] = (time.time(), POPUP_MAX_ATTEMPTS)
-        failure = match_sales_failure(msg)
+        failure = match_sales_failure(msg, keywords)
         if failure:
-            log(f"  매출처리 실패 팝업(별도 창): {why}")
+            log(f"  {'매출처리 ' if keywords is SALES_FAIL_KEYWORDS else ''}실패 팝업(별도 창): {why}")
             return failure, closed
         kind = "오류 팝업" if match_error_popup(msg) else "안내 팝업"
         log(f"  {kind} 처리, 계속 기다립니다: {why}")
@@ -5208,11 +5233,14 @@ def run_import_step(app, pid, hwnd, win, wait=True):
 
     도중에 뜨는 안내 팝업은 규칙대로 닫는다. 팝업이 떠 있는 동안에는 메인 창이
     잠겨 버튼도 비활성으로 보이므로, 닫지 않으면 영영 기다리게 된다.
+
+    돌려주는 값: 끝남 True / 눌렀지만 끝을 확인 못 함 False / 누르지 못함(단추 없음·클릭 실패) None
+    - 자동 수집 모듈이 누르지 못한 것만 건너뜀(토큰 0)으로 가른다 (사용자 2026-11-02).
     """
     imp = find_by_text(win, IMPORT_BUTTON_NAME, control_types=("Button",))
     if imp is None:
         log(f"'{IMPORT_BUTTON_NAME}' 버튼을 찾지 못했습니다. 주문 가져오기를 건너뜁니다.")
-        return False
+        return None
     sal = find_by_text(win, "매출처리", control_types=("SplitButton", "Button"))
     if sal is None:
         log("'매출처리' 버튼을 찾지 못했습니다. '가져오기' 상태만으로 판단합니다.")
@@ -5272,7 +5300,7 @@ def run_import_step(app, pid, hwnd, win, wait=True):
         imp.click_input()
     except Exception as e:
         log(f"  '{IMPORT_BUTTON_NAME}' 클릭 실패: {e}")
-        return False
+        return None
     t0 = time.time()
     status.note("주문 가져오는 중")
 
@@ -5389,6 +5417,15 @@ def find_popup_error(win):
     return _find_popup_text(win, match_error_popup)
 
 
+def popup_says(button, words):
+    """그 단추가 든 팝업 글이 실패 안내(words)면 한 줄로 편 글을, 아니면 None - 창 전체가 아니라 팝업 글만 본다
+    (창 전체를 보는 find_popup_failure 는 다른 화면 글에 걸릴 수 있다)."""
+    try:
+        return match_sales_failure(collect_popup_text(button), words)
+    except Exception:
+        return None
+
+
 def visible_child_windows(hwnd):
     """메인 창의 보이는 자식 창 목록 {hwnd: (class, rect)}"""
     out = {}
@@ -5444,14 +5481,17 @@ def probe_spinner(hwnd, baseline_children, seconds=5.0, interval=0.5):
 
 
 def wait_async_then_confirm(app, hwnd, baseline_children, poll=ASYNC_POLL_SECONDS,
-                            max_wait=ASYNC_MAX_WAIT_SECONDS):
+                            max_wait=ASYNC_MAX_WAIT_SECONDS, fail_words=None):
     """비동기 처리(스피너)가 끝나기를 기다리고, 팝업이 뜨면 '예/확인'을 누른다.
 
     - 팝업이 이미 떠 있으면 즉시 누른다.
     - 아니면 poll초 간격으로 스피너가 사라졌는지 확인한다.
     - 스피너가 사라진 뒤 팝업이 뜨면 누른다.
-    반환: "clicked" | "no_popup" | "timeout" | "sales_failed"
+    - fail_words: 주면 별도 창·메인 창 팝업 글에 이 낱말이 있을 때 닫고 "popup_failed" (물류대기 저장 HOLD_FAIL_WORDS).
+      안 주면 예전 그대로 매출처리 실패 문구만 보고 "sales_failed".
+    반환: "clicked" | "no_popup" | "timeout" | "sales_failed" | "popup_failed"
     """
+    fail_result, fail_what = ("popup_failed", "실패 팝업") if fail_words else ("sales_failed", "매출처리 실패 팝업")
     idle_since = None
     waited = 0.0
     reported = None
@@ -5466,10 +5506,10 @@ def wait_async_then_confirm(app, hwnd, baseline_children, poll=ASYNC_POLL_SECOND
         # 별도 창 팝업 (개체 참조 오류 등). 메인 창의 자식이 아니라 gate 로는 안 보인다.
         # 모달이라 닫지 않으면 뒤이은 실패 팝업도 뜨지 않는다.
         if pid:
-            failure, closed = handle_sales_popups(pid, hwnd, tried)
+            failure, closed = handle_sales_popups(pid, hwnd, tried, fail_words or SALES_FAIL_KEYWORDS)
             if failure:
-                log(f"  [{waited:.0f}s] 매출처리 실패 팝업: {failure}")
-                return "sales_failed"
+                log(f"  [{waited:.0f}s] {fail_what}: {failure}")
+                return fail_result
             if closed:
                 idle_since = None   # 닫은 뒤 뜰 팝업을 기다릴 시간을 다시 준다
 
@@ -5478,13 +5518,13 @@ def wait_async_then_confirm(app, hwnd, baseline_children, poll=ASYNC_POLL_SECOND
             win = app.window(handle=hwnd)
             btn = find_popup_ok_button(win)
             if btn is not None:
-                failure = find_popup_failure(win)
+                failure = popup_says(btn, fail_words) if fail_words else find_popup_failure(win)
                 if failure:
                     # 팝업은 닫아 화면을 정리하고, 판단은 호출한 쪽에 맡긴다.
-                    log(f"  [{waited:.0f}s] 매출처리 실패 팝업: {failure}")
+                    log(f"  [{waited:.0f}s] {fail_what}: {failure}")
                     ec.ensure_foreground(hwnd)
                     btn.click_input()
-                    return "sales_failed"
+                    return fail_result
                 error = find_popup_error(win)
                 if error:
                     # 내부 오류는 끝이 아니다. 닫고 계속 기다린다 (뒤에 실패 팝업이 올 수 있다).
@@ -5789,7 +5829,8 @@ def run_uia_check():
 # 화면 모듈. 각 모듈은 ctx 하나를 받아 (결과, 사유) 를 돌려준다.
 #   결과: "done"      처리함
 #         "no_target" 할 것이 없었음 (정상)
-#         "skipped"   업체에 그 메뉴가 없어 건너뜀 (정상)
+#         "skipped"   업체에 그 메뉴가 없어 건너뜀 (정상). 돈 것이 없어 건너뜀도 - 올릴 엑셀 없음·[가져오기] 를 못 누름·
+#                     매출처리 하단 0줄 (토큰 0, 사용자 2026-11-02)
 #         "stopped"   업무 규칙상 중단 (매출처리 실패, 저장 검증 오류 등) -> 뒤 모듈을 돌리지 않는다
 #         "failed"    기술적 실패 (화면/버튼을 못 찾음 등) -> 뒤 모듈을 돌리지 않는다
 # 모듈 안의 대시보드 단계(status.step)는 모듈 함수가 스스로 찍는다. finish 는 main 이 부른다.
@@ -5942,7 +5983,10 @@ def module_import(ctx):
         if n_top is not None:
             status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
         log("\n=== 주문 가져오기 ===")
-        if not run_import_step(ctx.app, ctx.pid, ctx.hwnd, win):
+        ok = run_import_step(ctx.app, ctx.pid, ctx.hwnd, win)
+        if ok is None:      # 누르지 못했다 - 돈 것이 없으니 토큰을 쓰지 않는다 (사용자 2026-11-02, 엑셀 수집의 '올릴 엑셀 없음' 과 같이)
+            return "skipped", f"'{IMPORT_BUTTON_NAME}'를 누르지 못해 건너뛰었습니다."
+        if not ok:
             log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
         return "done", None
     return order_module(ctx, "order_screen", body)
@@ -5979,9 +6023,21 @@ def module_sales(ctx):
 
 
 def sales_flow(ctx, win, bottom):
-    """하단 전체선택 -> 정상매출. 대상이 0건이어도 '정상매출'을 누른다 (예전 흐름 그대로. ERPia 가 어떤 팝업을 내는지 실측이 없어
-    '대상 없음' 판정은 넣지 않았다)."""
+    """하단 전체선택 -> 정상매출. 하단이 0줄이면 누르지 않고 건너뛴다 (토큰 0 - 사용자 2026-11-02, 예전엔 0건이어도 눌렀다.
+    웰라이프 normal_sales 와 같은 판단)."""
     app, pid, hwnd = ctx.app, ctx.pid, ctx.hwnd
+    # 줄 수는 run_hold_save 와 같이 센다 - 0줄이면 다시 그려지는 중일 수 있어 한 번 더 보고, 못 세면 예전처럼 진행
+    try:
+        rows = len(bottom.descendants(control_type="DataItem"))
+        if rows == 0:
+            time.sleep(2.0)
+            rows = len(bottom.descendants(control_type="DataItem"))
+    except Exception as e:
+        log(f"  하단 그리드 행 수를 세지 못했습니다(진행): {type(e).__name__}")
+        rows = None
+    if rows == 0:
+        log("\n주문매핑 하단이 0줄이어서 매출처리하지 않았습니다.")
+        return "skipped", "하단 0줄 (매출처리하지 않음)"
     # 8. 하단 전체선택 (단계는 order_module 이 찍었다)
     log("\n=== 하단 그리드 전체선택 ===")
     n_bottom = select_all_and_verify("하단", hwnd, bottom, ["주문번호", "마켓 상품명", "주문시간"])

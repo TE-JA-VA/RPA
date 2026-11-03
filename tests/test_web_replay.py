@@ -312,8 +312,10 @@ def main():
         # ---------------- 실패하는 모습: 비밀번호가 바뀐 날 ----------------
         ok, r, m = replay_check(srv, url, a, day, False, None, "C_비밀번호틀림", creds={"ID": fake_mall.USER, "PW": "wrong"},
                                 step_timeout=5)
-        check("C: 비밀번호가 틀리면 멈추고 사진을 남긴다", not ok and m.logins == [(fake_mall.USER, False)]
-              and any(n.startswith("실패_") for n in os.listdir(os.path.join(OUT, "C_비밀번호틀림"))), str(r.results[-2:]))
+        check("C: 비밀번호가 틀리면 멈추고 사진을 남긴다 - 이름에 사이트코드 (여러 몰이 같은 단계에서 실패해도 덮지 않게, 검수 A20)",
+              not ok and m.logins == [(fake_mall.USER, False)]
+              and any(n.startswith("실패_(012)_") for n in os.listdir(os.path.join(OUT, "C_비밀번호틀림"))),
+              str((r.results[-2:], os.listdir(os.path.join(OUT, "C_비밀번호틀림")))))
 
         # ---------------- F: 주소줄 단계 (goto·back·newtab) 와 기록 때 창 크기 ----------------
         print("=== F. 주소줄 단계와 창 크기")

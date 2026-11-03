@@ -1257,7 +1257,7 @@ check("실행: 하단 전체선택 -> ▼ '정상매출' 누름 (팝업은 원�
       acts == [("select_all", "주문", tuple(wellife.BOTTOM_ID_COLUMNS)), ("press", "정상매출", False), ("after",)] and sold,
       f"{note} {acts}")
 (note, sold), _ = run_ns(True, rows={})
-check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원래는 0건이어도 누름 - 웰라이프는 안 누름)",
+check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원래 PROCESS 도 2026-11-02 부터 같다)",
       acts == [] and sold is False and "0줄" in note, f"{note} {acts}")
 (note, sold), _ = run_ns(True, again=False)
 check("실행: 누르기 직전 다시 보니 체크가 풀려 있으면 정상매출을 누르지 않는다",
@@ -1746,10 +1746,39 @@ _v = {(x, y) for x in range(4, 11) for y in range(6, 13) if abs((x - 4) - (y - 6
 check("상자 안쪽만 잰다: 테두리(회색·주황)는 세지 않고, 체크(주황 V)는 센다",
       wellife.box_ink(*_box(set())) == 0.0 and wellife.box_ink(*_box(set(), border=(240, 150, 30))) == 0.0
       and wellife.check_state(wellife.box_ink(*_box(_v))) == "Y", str(wellife.box_ink(*_box(_v))))
-settings({"QueryDefaults": {"InvoiceSend": {"DateFrom": -30, "Sales": "매출구분 : 쿠팡", "SendStatus": "전체"}}})
+settings({"QueryDefaults": {"InvoiceSend": {"DateFrom": -30, "SendStatus": "전체"}, "Wms": {"Sales": "매출구분 : 쿠팡"}}})
 qd = {k: w for k, _, _, w in wellife.query_defaults(rr, "InvoiceSend")}
+qw = {k: w for k, _, _, w in wellife.query_defaults(rr, "Wms")}
 check("설정 QueryDefaults 가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로)",
-      qd["DateFrom"] == -30 and qd["SendStatus"] == "전체" and qd["Sales"] == "매출구분 : 전체" and qd["DateTo"] == 0, str(qd))
+      qd["DateFrom"] == -30 and qd["SendStatus"] == "전체" and qd["Sales"] == "매출구분 : 전체" and qd["DateTo"] == 0
+      and qw["Sales"] == "매출구분 : 전체", str((qd, qw)))
+# ⑥ 매출구분: '켠 사이트만' 예약(RPA_INVOICE_SITES=1)이면 사이트 수집에서 켠 프리셋의 사이트코드만 (사용자 2026-11-02)
+_saved_st = wellife.st
+PRESETS = [{"no": 1, "code": "012", "on": True}, {"no": 2, "code": "034", "on": False}, {"no": 3, "code": " 056 ", "on": True},
+           {"no": 4, "code": "012", "on": True}, {"no": 5, "code": "", "on": True}, {"no": 6, "code": "078", "on": True}]
+wellife.st = types.SimpleNamespace(preset_summary=lambda: PRESETS, preset_limit=lambda: 5)
+
+
+def sales_cond():
+    try:
+        return {k: (kind, w) for k, _, kind, w in wellife.query_defaults(rr, "InvoiceSend")}["Sales"]
+    except wellife.Stop as e:
+        return (e.result, str(e))
+
+
+os.environ.pop(wellife.INVOICE_SITES_ENV, None)
+check("⑥ 매출구분: '켠 사이트만' 예약이 아니면 지금처럼 '전체'", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+os.environ[wellife.INVOICE_SITES_ENV] = "1"
+check("⑥ 매출구분: '켠 사이트만' 이면 켠 프리셋의 사이트코드만 (끈 것·업체 프리셋 수를 넘는 번호·빈 코드 빼고, 겹친 코드는 하나)",
+      sales_cond() == ("sites", ["012", "056"]), str(sales_cond()))
+PRESETS[0]["on"] = PRESETS[2]["on"] = PRESETS[3]["on"] = False
+got = sales_cond()
+check("⑥ 매출구분: 켠 사이트가 없으면 전체로 보내지 않고 건너뛴다", got[0] == "skipped" and "켠 사이트가 없어" in got[1], str(got))
+wellife.st = types.SimpleNamespace(preset_summary=lambda: None, preset_limit=lambda: 5)
+got = sales_cond()
+check("⑥ 매출구분: 프리셋을 못 읽으면 조회하지 않고 멈춘다", got[0] == "failed", str(got))
+os.environ.pop(wellife.INVOICE_SITES_ENV, None)
+wellife.st = _saved_st
 settings({})
 check("설정이 없으면 ERPia 를 새로 연 화면 값 (⑥ 10일 전~오늘·미전송, ⑤ 내일~내일·납품예정일)",
       {k: w for k, _, _, w in wellife.query_defaults(rr, "InvoiceSend")}["DateFrom"] == -10
@@ -1813,7 +1842,7 @@ def _set(rr_, ctx_, ctl, key, aid, kind, want):
 def _reopen():
     LOG14.append(("reopen",))
     for _, aid, kind, want in wellife.QUERY_CONDITIONS["InvoiceSend"]:
-        if kind in ("fixed", "check") and aid not in STUCK:
+        if kind in ("fixed", "sites", "check") and aid not in STUCK:
             STATE[aid] = want
 
 
@@ -1855,6 +1884,17 @@ got, err = run14(chk_UnstoringStand="Y")
 check("체크 상자를 눌렀는데 그림이 그대로면 (그림을 잘못 읽는 PC) 켠 채 남기지 않게 화면을 다시 열고 멈춘다",
       err and err[0] == "failed" and LOG14 == [("set", "UnstoringOnly"), ("close",), ("reopen",)], f"{err} {LOG14}")
 STUCK = set()
+_saved_ps, _saved_is = wellife.pick_sites, wellife.invoice_sites
+wellife.invoice_sites = lambda: ["012"]
+wellife.pick_sites = lambda rr_, ctx_, form, key, aid, codes: LOG14.append(("pick", key, tuple(codes))) or "Sales '매출구분 : 전체'→'매출구분 : 옥션'"
+got, err = run14(ccc_Sales="매출구분 : 2개 선택됨")
+check("⑥ 켠 사이트만: 매출구분이 '전체' 가 아니어도 화면을 다시 열지 않고 목록에서 고르며, 고친 것을 남긴다",
+      err is None and LOG14 == [("pick", "Sales", ("012",))] and got == ["Sales '매출구분 : 전체'→'매출구분 : 옥션'"],
+      f"{got} {err} {LOG14}")
+wellife.pick_sites = lambda *a: LOG14.append(("pick",)) or None
+got, err = run14(ccc_Sales="매출구분 : 옥션")
+check("⑥ 켠 사이트만: 이미 맞으면 고친 것 없음", err is None and LOG14 == [("pick",)] and got == [], f"{got} {err} {LOG14}")
+wellife.pick_sites, wellife.invoice_sites = _saved_ps, _saved_is
 wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen = _saved14
 
 # 입력 안전장치 그대로 (가짜로 바꿔 끼우지 않음): 날짜·글 칸은 포커스가 그 칸 안일 때만 키, 목록 항목은 목록 창이 맨 위일 때만
@@ -1903,6 +1943,190 @@ for top, want in ((55, ["미전송", "ESC"]), (99, ["ESC"])):
     check(f"목록 항목: 그 자리의 맨 위 창이 {'목록 창이면 누른다' if top == 55 else '다른 창이면 누르지 않고 목록을 닫고 멈춘다'}",
           pressed14 == want and (res is None if top == 55 else res == "failed"), f"{pressed14} {res}")
 wellife.click, wellife._menu_windows, wellife._top_window, wellife._close_menu, wellife._shown = _saved_pick
+
+
+# ⑥ 매출구분 목록 (11-02 실측): ▼('오픈') 로 메인 창 밖에 따로 뜬다 - 'popup' 안 그리드 gridCtrl(row Check Box·마켓·아이디·명칭)·
+# [닫기](btn_Close)·[선택취소](btn_SelectionClear). [닫기] 는 체크를 칸에 반영하고 ESC 는 버린다.
+# 칸 글: 하나면 '매출구분 : <명칭>', 여럿이면 '매출구분 : N개 선택됨'. 명칭은 겹칠 수 있다 (같은 이름에 아이디 둘)
+class ListBox:
+    def __init__(self, lst, key, top):
+        self.lst, self.key, self.rect = lst, key, Rect(0, top, 10, top + 10)
+
+    @property
+    def v(self):
+        return "선택" if self.key in self.lst.on else "선택안됨"
+
+    def rectangle(self):
+        return self.rect
+
+    def click_input(self, **kw):
+        self.lst.log.append(("체크",) + self.key)
+        self.lst.on ^= {self.key}
+
+
+class ListBtn(El):
+    def __init__(self, name, fn):
+        super().__init__(name)
+        self.fn = fn
+        self.element_info = types.SimpleNamespace(automation_id=name)
+
+    def click_input(self, **kw):
+        self.fn()
+
+
+class SalesList:
+    """rows [(마켓, 아이디, 명칭, 사이트코드)], on = 목록 체크 {(마켓, 아이디)}, page = 한 번에 다 보이는 줄 수 (그 아래 반쯤 걸친
+    줄이 하나 더 그려진다), first = 맨 위 줄 (스크롤된 채로 열릴 수 있다). apply=False 면 [닫기] 가 칸 글을 바꾸지 않는다.
+    code=False 면 사이트코드 칸이 없다 (11-03 ERPia 업데이트 전). step = '페이지 아래로' 한 번에 내려가는 줄 수 (기본 page),
+    stuck 이면 '페이지 아래로' 를 눌러도 안 움직인다."""
+    def __init__(self, rows, on=(), page=None, first=0, apply=True, code=True, step=None, stuck=False):
+        self.rows, self.on, self.page, self.first, self.apply = rows, set(on), page or len(rows), first, apply
+        self.code, self.step, self.stuck = code, step or self.page, stuck
+        self.kept = set(self.on)
+        self.text = self.label()
+        self.shown, self.log = False, []
+        self.grid = types.SimpleNamespace(element_info=types.SimpleNamespace(automation_id="gridCtrl"),
+                                          rectangle=lambda: Rect(0, 0, 300, 15 * self.page))
+        self.buttons = [ListBtn("btn_SelectionClear", lambda: self.log.append(("선택취소",)) or self.on.clear()),
+                        ListBtn("btn_Close", self.close)]
+        self.win = types.SimpleNamespace(
+            children=lambda: [types.SimpleNamespace(element_info=types.SimpleNamespace(automation_id="popup"))],
+            descendants=lambda control_type=None: {"Table": [self.grid], "Button": self.buttons}.get(control_type, []))
+
+    def label(self):
+        names = [n for m, i, n, _ in self.rows if (m, i) in self.kept]
+        return "매출구분 : " + ("전체" if not names else names[0] if len(names) == 1 else f"{len(names)}개 선택됨")
+
+    def visible(self):
+        out = {}
+        for idx in range(self.first, min(self.first + self.page + 1, len(self.rows))):
+            m, i, n, c = self.rows[idx]
+            top = 15 * (idx - self.first)
+            out[idx + 1] = {wellife.CHECK_COL: ListBox(self, (m, i), top), "마켓": Cell(m, top), "아이디": Cell(i, top),
+                            "명칭": Cell(n, top)}
+            if self.code:
+                out[idx + 1][wellife.SITE_CODE_COL] = Cell(c, top)
+        return out
+
+    def scrollbar(self):
+        if self.page >= len(self.rows):
+            return None
+        up = [ListBtn("페이지 위로", lambda: self.scroll(-1))] if self.first > 0 else []
+        down = [ListBtn("페이지 아래로", lambda: self.scroll(1))] if self.first + self.page < len(self.rows) else []
+        return types.SimpleNamespace(descendants=lambda: up + down)
+
+    def scroll(self, d):
+        self.log.append(("위로" if d < 0 else "아래로",))
+        if d > 0 and self.stuck:
+            return
+        self.first = max(0, min(len(self.rows) - self.page, self.first + d * (self.step if d > 0 else self.page)))
+
+    def open(self):
+        self.log.append(("열기",))
+        self.shown = True
+
+    def close(self):
+        self.log.append(("닫기",))
+        self.shown = False
+        if self.apply:
+            self.kept = set(self.on)
+            self.text = self.label()
+
+    def esc(self):
+        if self.shown:
+            self.log.append(("ESC",))
+            self.shown, self.on = False, set(self.kept)
+
+
+_arrow = El("오픈")
+_field = types.SimpleNamespace(descendants=lambda control_type=None: [_arrow] if control_type == "Button" else [])
+SL, TOP_SL = [None], [77]
+srr = types.SimpleNamespace(
+    grid_rows=lambda g: SL[0].visible(), legacy_value=lambda el: el.v, log=lambda m: None,
+    grid_vertical_scrollbar=lambda g: SL[0].scrollbar(), ec=types.SimpleNamespace(screen_locked=lambda: False),
+    Desktop=lambda backend=None: types.SimpleNamespace(
+        window=lambda handle=None: types.SimpleNamespace(wrapper_object=lambda: SL[0].win)))
+_saved_sl = (wellife.controls, wellife.cond_value, wellife.click, wellife._menu_windows, wellife._top_window,
+             wellife._close_menu, wellife._shown, wellife.no_popup)
+wellife.controls = lambda rr_, ctx_, form: {"ccc_Sales": _field}
+wellife.cond_value = lambda rr_, ctl, aid, kind: SL[0].text
+wellife.click = lambda rr_, ctx_, el, what: SL[0].open() if el is _arrow else None
+wellife._menu_windows = lambda rr_, ctx_: {77} if SL[0].shown else set()
+wellife._top_window = lambda rr_, pt: TOP_SL[0]
+wellife._close_menu = lambda rr_, ctx_, wins, what: SL[0].esc()
+wellife._shown = lambda rr_, h: SL[0].shown
+wellife.no_popup = lambda *a: None
+SROWS = [("공통엑셀양식", "1234", "공통사이트", "001"), ("옥션", "zz", "창민사이트", "002"), ("옥션", "yy", "창민사이트", "003"),
+         ("쿠팡", "c1", "쿠팡몰", "004"), ("쿠팡", "c2", "쿠팡몰2", "004")]
+
+
+def run_pick(lst, codes, top=77):
+    SL[0], TOP_SL[0] = lst, top
+    try:
+        return wellife.pick_sites(srr, actx, wellife.INVOICE_FORM, "Sales", "ccc_Sales", codes), None
+    except wellife.Stop as e:
+        return None, (e.result, str(e))
+
+
+L = SalesList(SROWS, on={("옥션", "zz")})
+got, err = run_pick(L, ["002"])
+check("⑥ 매출구분: 이미 그 사이트만 체크돼 있으면 [선택취소] 없이 그대로 [닫기] (고친 것 없음)",
+      got is None and err is None and L.log == [("열기",), ("닫기",)] and L.text == "매출구분 : 창민사이트", f"{got} {err} {L.log}")
+L = SalesList(SROWS, on={("쿠팡", "c1")})
+got, err = run_pick(L, ["001", "003"])
+check("⑥ 매출구분: 다른 사이트가 체크돼 있으면 그 줄만 풀고 사이트코드가 맞는 줄을 체크한 뒤 [닫기], 칸 글 'N개 선택됨' 을 확인",
+      err is None and L.log == [("열기",), ("체크", "공통엑셀양식", "1234"), ("체크", "옥션", "yy"), ("체크", "쿠팡", "c1"), ("닫기",)]
+      and L.text == "매출구분 : 2개 선택됨" and got and "2개 선택됨" in got, f"{got} {err} {L.log}")
+L = SalesList(SROWS, on={("옥션", "zz")})
+got, err = run_pick(L, ["003"])
+check("⑥ 매출구분: 명칭이 같아도 사이트코드로 가린다 (칸 글이 그대로여도 고친 것으로 남김)",
+      err is None and L.on == {("옥션", "yy")} and L.text == "매출구분 : 창민사이트" and got, f"{got} {err} {L.log}")
+L = SalesList(SROWS)
+got, err = run_pick(L, ["004"])
+check("⑥ 매출구분: 한 사이트코드에 계정 줄이 여럿이면 모두 고르고 칸 글은 그 줄 수 ('2개 선택됨')",
+      err is None and L.on == {("쿠팡", "c1"), ("쿠팡", "c2")} and L.text == "매출구분 : 2개 선택됨", f"{got} {err} {L.log}")
+L = SalesList(SROWS, on={("쿠팡", "c1")})
+got, err = run_pick(L, ["002", "999"])
+check("⑥ 매출구분: 목록에 없는 사이트코드가 있으면 ESC 로 닫고(바꾼 체크는 버려짐) 조회하지 않고 멈춘다",
+      err and err[0] == "failed" and "999" in err[1] and L.log[-1] == ("ESC",) and ("닫기",) not in L.log
+      and L.text == "매출구분 : 쿠팡몰" and L.on == {("쿠팡", "c1")}, f"{err} {L.log}")
+L = SalesList(SROWS, code=False)
+got, err = run_pick(L, ["002"])
+check("⑥ 매출구분: 목록에 사이트코드 칸이 없으면(ERPia 업데이트 전) 아무것도 누르지 않고 ESC 로 닫고 멈춘다",
+      err and err[0] == "failed" and wellife.SITE_CODE_COL in err[1] and L.log == [("열기",), ("ESC",)], f"{err} {L.log}")
+L = SalesList(SROWS, apply=False)
+got, err = run_pick(L, ["002"])
+check("⑥ 매출구분: [닫기] 뒤 칸 글이 기대('매출구분 : 창민사이트')와 다르면 멈춘다",
+      err and err[0] == "failed" and "창민사이트" in err[1], f"{err} {L.log}")
+L = SalesList(SROWS)
+got, err = run_pick(L, ["002"], top=99)
+check("⑥ 매출구분: 누를 자리의 맨 위 창이 목록 창이 아니면 누르지 않고 ESC 로 닫고 멈춘다",
+      err and err[0] == "failed" and L.log == [("열기",), ("ESC",)], f"{err} {L.log}")
+ROWS7 = [(f"마켓{k}", f"id{k}", f"이름{k}", f"{k:03d}") for k in range(7)]
+L = SalesList(ROWS7, on={("마켓4", "id4")}, page=3, first=3)
+got, err = run_pick(L, ["000", "006"])
+check("⑥ 매출구분: 목록에 스크롤이 있으면 맨 위로 올린 뒤 페이지를 넘기며 맞춘다 (반쯤 걸친 줄은 다음 페이지에서)",
+      err is None and L.on == {("마켓0", "id0"), ("마켓6", "id6")} and L.log[1] == ("위로",) and ("아래로",) in L.log
+      and L.text == "매출구분 : 2개 선택됨" and sum(1 for a in L.log if a[0] == "체크") == 3, f"{got} {err} {L.log}")
+L = SalesList(ROWS7, on={("마켓4", "id4")}, page=3, step=2)
+got, err = run_pick(L, ["000", "006"])
+check("⑥ 매출구분: 페이지가 겹쳐 넘어가도 겹친 줄은 다시 보지 않는다 (같은 줄을 두 번 누르거나 세지 않음)",
+      err is None and L.on == {("마켓0", "id0"), ("마켓6", "id6")} and sum(1 for a in L.log if a[0] == "체크") == 3
+      and L.text == "매출구분 : 2개 선택됨", f"{got} {err} {L.log}")
+L = SalesList(ROWS7, page=2, step=4)
+got, err = run_pick(L, ["000"])
+check("⑥ 매출구분: 넘기다 줄을 건너뛰면(못 본 줄) ESC 로 닫고 조회하지 않고 멈춘다",
+      err and err[0] == "failed" and "빠짐없이" in err[1] and L.log[-1] == ("ESC",) and L.on == set(), f"{err} {L.log}")
+L = SalesList(ROWS7, page=3, stuck=True)
+got, err = run_pick(L, ["000"])
+check("⑥ 매출구분: '페이지 아래로' 를 눌러도 안 움직이면 끝으로 보지 않고 멈춘다 (next_page 와 같다)",
+      err and err[0] == "failed" and "움직이지 않아" in err[1] and L.log[-1] == ("ESC",), f"{err} {L.log}")
+L = SalesList(SROWS, apply=False)
+got, err = run_pick(L, ["001", "002", "003", "004"])
+check("⑥ 매출구분: 목록 전부를 골라도 칸 글 '매출구분 : 전체' 는 받지 않는다 (체크 없음 = 모든 사이트)",
+      err and err[0] == "failed" and "전체" in err[1], f"{err} {L.log}")
+(wellife.controls, wellife.cond_value, wellife.click, wellife._menu_windows, wellife._top_window,
+ wellife._close_menu, wellife._shown, wellife.no_popup) = _saved_sl
 
 # ⑥·⑤ 에 붙었는가: 조회 전에 ensure_query, 고친 것은 사유에
 _saved14 = wellife.ensure_query, wellife.controls, wellife.count_rows, wellife.check_all_rows
@@ -2395,10 +2619,15 @@ dash.launch = lambda target, by, env=None: sent_env.append(env)
 dash.slot_target = lambda slot, off: ("routine", {"RPA_RUN_MODULES": "InvoiceSend"})
 dash.launch_slot({"at": "09:00", "until": "18:00", "rest_min": 5}, trigger="repeat")
 dash.launch_slot({"at": "09:00"})
+dash.launch_slot({"at": "09:00", "until": "18:00", "rest_min": 5, "inv_sites": True}, trigger="repeat")
+dash.launch_slot({"at": "09:00", "inv_sites": True}, trigger="missed")
 dash.launch, dash.slot_target = _saved_dash
 check("반복 회차를 띄울 때만 끝 시각·쉬는 시간을 넘긴다 (운송장번호 전송이 마지막 기회인지 안다)",
       sent_env[0].get("RPA_REPEAT_UNTIL") == "18:00" and sent_env[0].get("RPA_REPEAT_REST") == "5"
       and "RPA_REPEAT_UNTIL" not in sent_env[1], str(sent_env))
+check("'켠 사이트만' 줄은 반복 회차·놓친 예약에도 RPA_INVOICE_SITES=1 을 넘기고, 아닌 줄은 넘기지 않는다",
+      "RPA_INVOICE_SITES" not in sent_env[0] and "RPA_INVOICE_SITES" not in sent_env[1]
+      and sent_env[2].get("RPA_INVOICE_SITES") == "1" and sent_env[3].get("RPA_INVOICE_SITES") == "1", str(sent_env))
 
 print("=== '+' 로 연 주문매핑 화면 확인 (BugBuster K8)")
 names_k8 = ("keys", "click", "_focus_in", "_wait_tree_item", "_clear_search", "active_tab", "numbered_tabs", "close_order_copy",

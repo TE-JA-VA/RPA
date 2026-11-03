@@ -50,7 +50,12 @@ NODATA = []       # 받기를 누르면 몰이 '자료 없음' 알림창을 띄�
 KEYLESS = {}      # 켜면 네이버 메일처럼: 줄에 고유 표시가 없고, 제목 칸 앞에 숨은 글자 '메일 제목', 뒤에 받은 시각 (사용자 2026-10-20)
 
 
+EMPTY = [""]      # 메일이 하나도 없을 때 몰이 목록 자리에 보이는 글 (안읽은 메일 보기·검색 결과, 검수 A5)
+
+
 def rows():
+    if not MAILS:
+        return f'<li class="none">{EMPTY[0]}</li>' if EMPTY[0] else ""
     if KEYLESS:
         return "".join(f'<li class="m_data unread" onclick="location.hash=\'act=VIEW&ukey={k}\'">'
                        f'<span class="m_write">김창민</span> <p class="m_subject"><span class="blind">메일 제목</span>{t}</p>'
@@ -143,6 +148,9 @@ check("첫 실행은 기록 때 보이던 메일(A·C, 기록 중 연 A 포함)�
       ok and [os.path.basename(x) for x in rp.saved] == ["(013)file_k4.xlsx", "(013)file_k1.xlsx", "(013)file_k3.xlsx"], (rp.results[-2:], rp.saved))
 check("로그: 고른 결과·메일마다", any("제목이 '>>>' 로 시작하는 메일 3통 중 새 메일 3통" in x for x in lines)
       and any("[1/3] 메일 열기: >>> 주문 D" in x for x in lines), [x for x in lines if "메일" in x])
+check("가장 새 메일(맨 위 D)의 파일이 수정 시각이 가장 늦다 - 같은 사이트코드면 업로드가 가장 늦은 파일을 고른다 (검수 A1, 메일 서버 받기 I7 과 같이)",
+      [os.path.basename(x) for x in sorted(rp.saved, key=os.path.getmtime)] == ["(013)file_k3.xlsx", "(013)file_k1.xlsx", "(013)file_k4.xlsx"],
+      [(os.path.basename(x), os.path.getmtime(x)) for x in rp.saved])
 check("받은 메일을 기억한다", {"k1", "k3", "k4"} <= set(rec.MailMemory(mem_path).keys))
 
 ok, rp, lines = replay("again", rec.MailMemory(mem_path))
@@ -227,6 +235,35 @@ check("모든 메일이 '자료 없음' 이면 받은 파일 없이 대상 없�
       ok and not rp.saved and rp.no_target and rp.no_target_why.startswith("주문 없음"), (rp.results, rp.no_target_why, lines[-4:]))
 NODATA[:] = []
 rec.NO_DATA_GRACE = saved_grace
+
+# 목록이 비었다 (안읽은 메일 보기·검색 결과에서 녹화, 검수 A5): 몰이 '메일이 없습니다' 를 보이면 대상 없음, 아무 글도 없으면 예전처럼 실패
+MAILS[:] = []
+EMPTY[0] = "안 읽은 메일이 없습니다."
+ok, rp, lines = replay("empty", rec.MailMemory(mem4))
+check("목록이 비고 '메일이 없습니다' 가 보이면 대상 없음 (실패 아님, 토큰 안 씀)", ok and rp.no_target and not rp.saved, (rp.results, lines[-4:]))
+EMPTY[0] = ""
+ok, rp, lines = replay("empty_blank", rec.MailMemory(mem4))
+check("목록이 비었는데 그런 글도 없으면 예전처럼 실패 (화면이 바뀌었을 수 있다)", not ok and not rp.no_target, (rp.results, lines[-4:]))
+check("빈 목록 글 알아보기 - 짧은 줄만", rec.mail_list_empty("받은편지함\n메일이 없습니다.") and rec.mail_list_empty("검색 결과가 없습니다")
+      and not rec.mail_list_empty("새 메일 3통") and not rec.mail_list_empty("스팸 메일이 없습니다 " + "가" * 60))
+
+
+class EmptyFrame:     # 줄은 안 보이고 '메일이 없습니다' 만 보이는 목록
+    def locator(self, sel):
+        return type("L", (), {"first": type("F", (), {"is_visible": lambda self: False})()})()
+
+    def evaluate(self, js, *a):
+        return "메일이 없습니다."
+
+
+fake = rec.Replayer(None, {"steps": []}, {}, OUT, "013")
+fake._frame = lambda page, f: EmptyFrame()
+pg = type("P", (), {"wait_for_timeout": lambda self, ms: None})()
+row0 = {"row": {"sel": "li.m_data"}, "frame": None}
+rec.MAIL_EMPTY_HOLD, hold = 0, rec.MAIL_EMPTY_HOLD
+check("빈 목록 판정은 첫 목록 읽기에서만 - 메일을 연 뒤 목록으로 돌아올 때는 예전처럼 줄을 기다린다 (검토 11-02)",
+      fake._mail_rows(pg, row0, 5, empty_ok=True)[1] is None and fake._mail_rows(pg, row0, 0.3)[1] == [])
+rec.MAIL_EMPTY_HOLD = hold
 rec.set_pick(steps, i, None)
 
 # 네이버 메일처럼 줄에 고유 표시가 없는 목록 (사용자 2026-10-20): 저장 때 연 메일 제목은 숨은 글자 없이, 같은 제목 메일은 줄마다 따로
