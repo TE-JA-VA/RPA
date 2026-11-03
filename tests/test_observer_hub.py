@@ -90,7 +90,10 @@ check(code == 200 and body["presets"][0]["name"] == "가몰" and body["limits"] 
       and body["settings"]["download_dir"] == st.download_dir_choice() and body["running"] is False and body["observer_open"] is False
       and "schedule" in body and "snapshot" in body, "state: 프리셋·설정·한도·예약·현황", body if code != 200 else "")
 code, body = call("/")
-check(code == 200 and isinstance(body, str) and "옵저버 관제" in body, "GET / 는 관제 화면", body[:80] if isinstance(body, str) else body)
+check(code == 200 and isinstance(body, str) and "옵저버(Stand Alone) 관제" in body and 'href="/favicon.png"' in body, "GET / 는 관제 화면 (이름·favicon 링크)", body[:80] if isinstance(body, str) else body)
+with urllib.request.urlopen(f"{BASE}/favicon.png", timeout=10) as r:      # 이진이라 call() 로는 못 읽는다
+    png = r.read()
+    check(r.status == 200 and r.headers.get("Content-Type") == "image/png" and png[:8] == b"\x89PNG\r\n\x1a\n", "GET /favicon.png 는 200 image/png", (r.status, r.headers.get("Content-Type")))
 
 print("\n=== 2. Host·Origin (Review Focus 3) ===")
 code, body = call("/api/run", {"presets": [1]}, origin="http://evil.example")

@@ -132,13 +132,14 @@ ISS_PATH = os.path.join(REPO, "release", "installer.iss")
 # 판 목록·서명·zip 은 없다 (업데이트 없음). 설치 파일은 tools/build_observer.py 가 PC 한 대 용으로 따로 만든다 (Task 10)
 OBSERVER_EXES = ("Prepare_RPA.exe", "Prepare_Observer.exe")
 OBSERVER_HUB_EXE = "Observer_Hub.exe"
-OBSERVER_BRANDED = {OBSERVER_HUB_EXE: ("pythonw.exe", "오토파일럿 옵저버 관제")}   # 작업 관리자에 보이는 이름 (BRANDED 와 같은 방식)
+OBSERVER_BRANDED = {OBSERVER_HUB_EXE: ("pythonw.exe", "옵저버(Stand Alone) 관제")}   # 작업 관리자에 보이는 이름 (BRANDED 와 같은 방식)
 OBSERVER_SKIP = ("rpa_settings.py",)      # rpa_update 가 함수 안에서만 부른다 (업데이트 길 - 단독은 안 간다). 설정 창·에이전트 파일이 딸려 오지 않게
 OBSERVER_STATIC = [
-    ("hub/index.html", "hub/index.html"), ("hub/hub.js", "hub/hub.js"), ("hub/hub.css", "hub/hub.css"),
+    ("hub/index.html", "hub/index.html"), ("hub/hub.js", "hub/hub.js"), ("hub/hub.css", "hub/hub.css"), ("hub/favicon.png", "hub/favicon.png"),
     (st.STANDALONE_FLAG, f"release/{st.STANDALONE_FLAG}"),                   # 빈 표시 파일 - 설치 파일은 PC번호를 채운 사본을 넣는다
     ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),       # 옵저버 exe·관제 exe·바로 가기·설치 파일
     ("AUTOPILOT_ACTOR.ico", "release/AUTOPILOT_ACTOR.ico"),
+    ("OBSERVER_SA.ico", "release/OBSERVER_SA.ico"),                         # 옵저버(Stand Alone) 등대 - 창·바로 가기·관제 exe·설치 파일
     ("playwright/node.exe", ".venv/Lib/site-packages/playwright/driver/node.exe"),
     ("옵저버_안내.txt", "release/옵저버_안내.txt"),
     ("PC번호_확인.bat", "release/PC번호_확인.bat"),                           # 설치할 PC 의 번호를 담당자에게 (CP949+CRLF)
@@ -168,7 +169,7 @@ def prune_local(out_root, keep=LOCAL_KEEP, protect=()):
     found, names = {}, {}
     for name in os.listdir(out_root) if os.path.isdir(out_root) else []:
         m = (re.fullmatch(rf"배포_(?:옵저버_)?{_VER}(?:\.zip)?", name) or re.fullmatch(rf"AUTOPILOT_Setup_{_VER}\.exe", name)
-             or re.fullmatch(rf"AUTOPILOT_Observer_Setup_{_VER}(?:_[0-9a-f]{{4}})?\.exe", name))   # 단독 폴더·PC 용 설치 파일도 판 묶음 (Task 10)
+             or re.fullmatch(rf"(?:AUTOPILOT_Observer|Observer_StandAlone)_Setup_{_VER}(?:_[0-9a-f]{{4}})?\.exe", name))   # 단독 폴더·PC 용 설치 파일(옛 이름 포함)도 판 묶음 (Task 10)
         if m:
             found[f"{m.group(1)}-{m.group(2)}"] = (m.group(1), int(m.group(2)))
             names.setdefault(f"{m.group(1)}-{m.group(2)}", []).append(name)
@@ -282,7 +283,7 @@ def collect_observer(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, ver
         shutil.copytree(os.path.join(runtime_root, d), os.path.join(out_dir, d))
     for name, (src, desc) in OBSERVER_BRANDED.items():
         brand_exe(os.path.join(out_dir, "python", src), os.path.join(out_dir, "python", name), desc, version,
-                  icon=os.path.join(out_dir, "AFTER_MARKET_PREPARE.ico"))
+                  icon=os.path.join(out_dir, "OBSERVER_SA.ico"))
         got.append(f"python/{name}")
     return got
 
@@ -303,8 +304,8 @@ def forbidden_in(out_dir):
 
 
 def observer_setup_name(version, pc=""):
-    """AUTOPILOT_Observer_Setup_<버전>[_<PC번호 끝 4글자>].exe (사용자 2026-11-03: 이름에는 끝 4글자만)."""
-    return f"AUTOPILOT_Observer_Setup_{version}" + (f"_{pc[-4:]}" if pc else "") + ".exe"
+    """Observer_StandAlone_Setup_<버전>[_<PC번호 끝 4글자>].exe (사용자 2026-11-03: 이름에는 끝 4글자만)."""
+    return f"Observer_StandAlone_Setup_{version}" + (f"_{pc[-4:]}" if pc else "") + ".exe"
 
 
 def observer_iscc_command(iscc, out_dir, version, bound_pc, flag_file, out_root=OUT_ROOT, iss=OBSERVER_ISS):

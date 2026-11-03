@@ -53,6 +53,7 @@ MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limi
 PRESETS_PER_ROW = 10                    # 프리셋 단추 한 줄에 10개, 11개부터 줄을 더한다 (사용자 2026-10-14)
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 옵저버 회색 AP (tools/make_icon.py)
+ICON_NAME_SA = "OBSERVER_SA.ico"                        # 옵저버(Stand Alone) 등대 (tools/make_icon_lighthouse.py)
 CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
 PROFILE_PREFIX = "rec_prof_"                            # 기록·미리보기 브라우저의 새 프로필 (로그인 쿠키가 든다 - 끝나면 지운다)
 UI = "맑은 고딕"
@@ -736,7 +737,7 @@ class App:
         L, T, R, B = L + m, T + m, R - m, B - m
         self.panel_w = max(int((R - L) * 0.30), int(460 * scale))
         self.browser_w = (R - L) - self.panel_w
-        root.title("옵저버")
+        root.title("옵저버(Stand Alone)" if st.standalone() else "옵저버")
         root.configure(bg=BG)
         root.geometry(f"{self.panel_w}x{B - T - int(32 * scale)}+{L + self.browser_w}+{T}")
         self.name_var, self.code_var = tk.StringVar(root), tk.StringVar(root)
@@ -1660,8 +1661,9 @@ class App:
 
 def icon_path():
     """주황 A 아이콘 파일 (설치 폴더, 없으면 저장소 release). 없으면 None."""
-    for path in (os.path.join(st.program_dir(), ICON_NAME),
-                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "release", ICON_NAME)):
+    name = ICON_NAME_SA if st.standalone() else ICON_NAME
+    for path in (os.path.join(st.program_dir(), name),
+                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "release", name)):
         if os.path.isfile(path):
             return path
     return None

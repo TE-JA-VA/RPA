@@ -67,6 +67,7 @@ with sync_playwright() as p:
         print("페이지 오류:", errs)
         raise
     print("=== 1. 메뉴 ===")
+    check(pg.title() == "옵저버(Stand Alone) 관제" and pg.inner_text(".brand h1") == "옵저버(Stand Alone) 관제", "제목·브랜드 '옵저버(Stand Alone) 관제'", (pg.title(), pg.inner_text(".brand h1")))
     menus = [a.inner_text() for a in pg.query_selector_all("#nav a")]
     check(menus == ["현황", "프리셋", "예약", "기록", "설정"], "메뉴 다섯", menus)
     check(pg.inner_text("#hero-title") == "실행 기록 없음", "현황: 기록 없음", pg.inner_text("#hero-title"))

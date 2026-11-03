@@ -42,7 +42,7 @@ HUB_EXE = "Observer_Hub.exe"          # 내장 pythonw 의 브랜딩 사본 (too
 OBSERVER_EXE = "Prepare_Observer.exe"
 HUB_DIR = os.path.join(HERE, "hub")
 PAGES = {"/": ("index.html", "text/html; charset=utf-8"), "/hub.js": ("hub.js", "text/javascript; charset=utf-8"),
-         "/hub.css": ("hub.css", "text/css; charset=utf-8")}
+         "/hub.css": ("hub.css", "text/css; charset=utf-8"), "/favicon.png": ("favicon.png", "image/png")}
 HTML_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; "
             "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 CREATE_NO_WINDOW = 0x08000000
@@ -374,7 +374,7 @@ def remove_task(run=run_quiet):
 
 def show_error(text):
     import ctypes
-    ctypes.windll.user32.MessageBoxW(None, text, "옵저버 관제", 0x10)
+    ctypes.windll.user32.MessageBoxW(None, text, "옵저버(Stand Alone) 관제", 0x10)
 
 
 def open_page(run=run_quiet, tell=show_error, wait_sec=10):
@@ -395,7 +395,7 @@ def open_page(run=run_quiet, tell=show_error, wait_sec=10):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="오토파일럿 옵저버 관제")
+    ap = argparse.ArgumentParser(description="옵저버(Stand Alone) 관제")
     ap.add_argument("--port", type=int, help=f"포트 (기본 {PORTS[0]}, 쓰고 있으면 {PORTS[1]}~{PORTS[-1]} 중 빈 것)")
     ap.add_argument("--open", action="store_true", help="관제 화면을 브라우저로 연다 (서버가 없으면 띄운 뒤)")
     ap.add_argument("--install-task", action="store_true", help=f"작업 스케줄러 '{TASK_NAME}' 등록 (설치 파일이 부른다)")
@@ -433,7 +433,7 @@ def main(argv=None):
         return 2
     d.SCHEDULER.resync()
     d.SCHEDULER.start()
-    print(f"옵저버 관제: http://127.0.0.1:{httpd.server_address[1]}  (이 PC 에서만)  기록 폴더: {st.status_dir()}", flush=True)
+    print(f"옵저버(Stand Alone) 관제: http://127.0.0.1:{httpd.server_address[1]}  (이 PC 에서만)  기록 폴더: {st.status_dir()}", flush=True)
     try:
         while True:
             time.sleep(1)

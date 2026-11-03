@@ -3,7 +3,7 @@ r"""옵저버 단독 설치 파일을 PC 한 대 용으로 만든다 (설계 202
     .venv\Scripts\python.exe tools\build_observer.py <PC번호> [--version <버전>]
 
 PC번호 = 그 PC 의 윈도우 MachineGuid (release/PC번호_확인.bat 이 보여 준다, 8-4-4-4-12 16진수). 가장 새(또는 --version 의)
-D:\AX\배포_옵저버_<버전> 폴더로 D:\AX\AUTOPILOT_Observer_Setup_<버전>_<PC번호 끝 4글자>.exe 를 만든다.
+D:\AX\배포_옵저버_<버전> 폴더로 D:\AX\Observer_StandAlone_Setup_<버전>_<PC번호 끝 4글자>.exe 를 만든다.
 표시 파일 OBSERVER_STANDALONE 은 PC번호를 채운 사본을 넣는다 (원본 판 폴더는 안 바꾼다). ISCC 에 /DBoundPC 로 넘겨
 설치 파일이 그 PC 의 MachineGuid 와 견준다 (release/observer.iss InitializeSetup).
 알려진 한계: 설치 파일을 풀어 고치면 우회할 수 있다 - 사내용이라 받아들임.

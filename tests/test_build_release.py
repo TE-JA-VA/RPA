@@ -502,7 +502,7 @@ check("단독 파일: observer_hub 와 그것이 부르는 .py (rpa_dashboard·r
       {"observer_hub.py", "rpa_dashboard.py", "rpa_status.py", "rpa_update.py", "kr_holidays.py", "server_info.py", "update_sign.py"} <= rels
       and "rpa_settings.py" not in rels and "preset_transfer.py" not in rels and not any(r.startswith("firebase/") for r in rels), sorted(rels))
 check("단독 파일: 화면·표시 파일·아이콘·node·안내·PC번호 bat",
-      {"hub/index.html", "hub/hub.js", "hub/hub.css", st.STANDALONE_FLAG, "AFTER_MARKET_PREPARE.ico", "AUTOPILOT_ACTOR.ico", "playwright/node.exe",
+      {"hub/index.html", "hub/hub.js", "hub/hub.css", "hub/favicon.png", st.STANDALONE_FLAG, "AFTER_MARKET_PREPARE.ico", "AUTOPILOT_ACTOR.ico", "OBSERVER_SA.ico", "playwright/node.exe",
        "옵저버_안내.txt", "PC번호_확인.bat"} <= rels, sorted(rels))
 check("저장소에 그 원본이 다 있다", all(os.path.isfile(os.path.join(br.REPO, *src.split("/"))) for _, src in obs_files),
       [src for _, src in obs_files if not os.path.isfile(os.path.join(br.REPO, *src.split("/")))])
@@ -537,19 +537,27 @@ check("forbidden_in: 깨끗한 단독 판은 문제 없음, 찌꺼기(세션·__
       and br.forbidden_in(obs_out) == ["들어가면 안 되는 파일: sessions/PRESET1.json"], br.forbidden_in(obs_out))
 shutil.rmtree(os.path.join(obs_out, "sessions"))
 langs, got_desc, company = version_info(os.path.join(obs_out, "python", "Observer_Hub.exe"))
-check("Observer_Hub.exe 는 pythonw 사본, 설명 '오토파일럿 옵저버 관제'", got_desc == "오토파일럿 옵저버 관제" and company == "오토파일럿", (got_desc, company))
-check("단독 설치 파일 이름: 버전 + PC번호 끝 4글자", br.observer_setup_name("2026.11.03-3", "0f1e2d3c-4b5a-4968-8776-655443329f1c") == "AUTOPILOT_Observer_Setup_2026.11.03-3_9f1c.exe"
-      and br.observer_setup_name("2026.11.03-3") == "AUTOPILOT_Observer_Setup_2026.11.03-3.exe")
+check("Observer_Hub.exe 는 pythonw 사본, 설명 '옵저버(Stand Alone) 관제'", got_desc == "옵저버(Stand Alone) 관제" and company == "오토파일럿", (got_desc, company))
+check("단독 판 폴더에 등대 아이콘·favicon 이 있다", {"OBSERVER_SA.ico", "hub/favicon.png"} <= have and {"OBSERVER_SA.ico", "hub/favicon.png"} <= set(got), sorted(have)[:40])
+check("단독 설치 파일 이름: 버전 + PC번호 끝 4글자", br.observer_setup_name("2026.11.03-3", "0f1e2d3c-4b5a-4968-8776-655443329f1c") == "Observer_StandAlone_Setup_2026.11.03-3_9f1c.exe"
+      and br.observer_setup_name("2026.11.03-3") == "Observer_StandAlone_Setup_2026.11.03-3.exe")
 ocmd = br.observer_iscc_command("ISCC.exe", obs_out, "2026.11.03-3", "0f1e2d3c-4b5a-4968-8776-655443329f1c", os.path.join(tmp, "flag"), out_root=r"D:\AX")
 check("단독 ISCC 명령: BoundPC·FlagFile·observer.iss", "/DBoundPC=0f1e2d3c-4b5a-4968-8776-655443329f1c" in ocmd and f"/DFlagFile={os.path.join(tmp, 'flag')}" in ocmd
-      and ocmd[-1].endswith("observer.iss") and "/FAUTOPILOT_Observer_Setup_2026.11.03-3_9f1c" in ocmd, ocmd)
+      and ocmd[-1].endswith("observer.iss") and "/FObserver_StandAlone_Setup_2026.11.03-3_9f1c" in ocmd, ocmd)
 oiss = (ROOT / "release" / "observer.iss").read_text(encoding="utf-8-sig")
 check("observer.iss: AppId 가 오토파일럿과 다르다, 설치·데이터 자리는 Observer", "C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52" not in oiss
       and "DefaultDirName={commonpf64}\\AFTER MARKET\\Observer" in oiss and "{commonappdata}\\AFTER MARKET\\Observer\\config" in oiss
       and "{commonappdata}\\AFTER MARKET\\Observer\\data" in oiss and "uninsneveruninstall" in oiss)
-check("observer.iss: 바로가기 '옵저버'·'옵저버 관제'(--open), 작업 등록·제거, 권한은 오토파일럿과 같게",
-      '"{group}\\옵저버"' in oiss and "옵저버 관제" in oiss and "--open" in oiss and "--install-task" in oiss and "--remove-task" in oiss
+check("observer.iss: 바로가기 '옵저버(Stand Alone)'·'옵저버(Stand Alone) 관제'(--open), 작업 등록·제거, 권한은 오토파일럿과 같게",
+      '"{group}\\옵저버(Stand Alone)"' in oiss and '"{group}\\옵저버(Stand Alone) 관제"' in oiss and '"{commondesktop}\\옵저버(Stand Alone) 관제"' in oiss
+      and "AppName=옵저버(Stand Alone)" in oiss and "AppVerName=옵저버(Stand Alone) {#AppVersion}" in oiss and "DefaultGroupName=옵저버(Stand Alone)" in oiss
+      and "--open" in oiss and "--install-task" in oiss and "--remove-task" in oiss
       and "*S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F" in oiss and "Observer_Hub.exe" in oiss)
+check("observer.iss: 등대 아이콘 (설치 파일·제거·바로가기 셋), 옛 이름 바로가기는 덮어 설치 때 지운다, 작업 이름은 그대로",
+      "SetupIconFile=OBSERVER_SA.ico" in oiss and "UninstallDisplayIcon={app}\\OBSERVER_SA.ico" in oiss and oiss.count("IconFilename: \"{app}\\OBSERVER_SA.ico\"") == 3
+      and "AFTER_MARKET_PREPARE.ico" not in oiss and "OutputBaseFilename=Observer_StandAlone_Setup_{#AppVersion}" in oiss
+      and 'Type: filesandordirs; Name: "{commonprograms}\\오토파일럿 옵저버"' in oiss and 'Type: files; Name: "{commondesktop}\\옵저버 관제.lnk"' in oiss
+      and oiss.find("[InstallDelete]") != -1 and "TASK_NAME = '오토파일럿 옵저버 관제'" in oiss)
 check("observer.iss: 그 PC 에서만 (MachineGuid ≠ BoundPC 면 설치하지 않음, 조용한 설치면 메시지 없이), 잠금 이름은 단독용",
       "MachineGuid" in oiss and "BoundPC" in oiss and "function InitializeSetup" in oiss and "이 설치 파일은 다른 PC 용입니다" in oiss
       and "WizardSilent" in oiss[oiss.find("function InitializeSetup"):] and f"'{st.STANDALONE_LOCK}'" in oiss)
@@ -571,7 +579,7 @@ def fake_iscc(cmd, **kw):
 
 path = bo.make("0F1E2D3C-4B5A-4968-8776-655443329F1C", out_root=out_root, run=fake_iscc, iscc="ISCC.exe")
 check("build_observer: 가장 새 판으로 PC번호를 채운 표시 파일 사본 → 설치 파일 (원본 판 폴더는 그대로)",
-      path == os.path.join(out_root, "AUTOPILOT_Observer_Setup_2026.09.29-3_9f1c.exe") and os.path.isfile(path)
+      path == os.path.join(out_root, "Observer_StandAlone_Setup_2026.09.29-3_9f1c.exe") and os.path.isfile(path)
       and calls[1] == "0f1e2d3c-4b5a-4968-8776-655443329f1c" and open(os.path.join(obs_out, st.STANDALONE_FLAG), "rb").read() == b""
       and "/DBoundPC=0f1e2d3c-4b5a-4968-8776-655443329f1c" in calls[0] and f"/DSourceDir={obs_out}" in calls[0], (path, calls[:2]))
 check("build_observer: --version 으로 판을 고른다, 없는 판·틀린 번호는 거절",
@@ -581,7 +589,7 @@ if iscc:
     with tempfile.TemporaryDirectory() as d:
         src = os.path.join(d, "배포_옵저버_시험")
         for rel in ("observer_hub.py", "hub/index.html", "OBSERVER_STANDALONE", "옵저버_안내.txt", "python/python.exe", "python/pythonw.exe",
-                    "python/Observer_Hub.exe", "Prepare_Observer.exe", "Prepare_RPA.exe", "AFTER_MARKET_PREPARE.ico"):
+                    "python/Observer_Hub.exe", "Prepare_Observer.exe", "Prepare_RPA.exe", "AFTER_MARKET_PREPARE.ico", "OBSERVER_SA.ico", "hub/favicon.png"):
             write(os.path.join(src, *rel.split("/")), b"x")
         write(os.path.join(d, "flag"), b"0f1e2d3c-4b5a-4968-8776-655443329f1c")
         r = subprocess.run(br.observer_iscc_command(iscc, src, "2026.09.29-99", "0f1e2d3c-4b5a-4968-8776-655443329f1c", os.path.join(d, "flag"), out_root=d),
@@ -595,9 +603,12 @@ with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, f"배포_옵저버_{v}"))
         open(os.path.join(d, br.observer_setup_name(v, "0f1e2d3c-4b5a-4968-8776-655443329f1c")), "wb").close()
     open(os.path.join(d, br.observer_setup_name("2026.10.07-8")), "wb").close()
+    open(os.path.join(d, "AUTOPILOT_Observer_Setup_2026.10.07-8_9f1c.exe"), "wb").close()       # 이름을 바꾸기 전 설치 파일
+    open(os.path.join(d, "AUTOPILOT_Observer_Setup_2026.10.12-2_9f1c.exe"), "wb").close()
     removed = br.prune_local(d, keep=4)
     left = sorted(os.listdir(d))
-    check("prune_local: 옛 판의 단독 폴더·단독 설치 파일(PC번호 붙은 것 포함)도 지운다", removed == ["2026.10.07-8"]
-          and not any("2026.10.07-8" in n for n in left) and "배포_옵저버_2026.10.08-1" in left, left)
+    check("prune_local: 옛 판의 단독 폴더·단독 설치 파일(PC번호 붙은 것, 옛 이름 포함)도 지운다", removed == ["2026.10.07-8"]
+          and not any("2026.10.07-8" in n for n in left) and "배포_옵저버_2026.10.08-1" in left
+          and "AUTOPILOT_Observer_Setup_2026.10.12-2_9f1c.exe" in left, left)
 
 finish()

@@ -216,7 +216,7 @@
 **Interfaces:**
 - Produces: `OBSERVER_EXES = ("Prepare_RPA.exe", "Prepare_Observer.exe")` (exe 는 Nuitka onefile 이라 제 import 를 안에 담는다);
   `OBSERVER_FILES` = `observer_hub.py` 와 그것이 import 하는 저장소 .py 전부 (`local_imports(observer_hub.py)` 로 구한다 - rpa_dashboard 가 rpa_update 를 부르므로 함께 들어간다), `hub/index.html`·`hub/hub.js`·`hub/hub.css`, `OBSERVER_STANDALONE`, `AFTER_MARKET_PREPARE.ico`, `AUTOPILOT_ACTOR.ico`, `playwright/node.exe`, 내장 `python/` + 브랜딩 `Observer_Hub.exe` (pythonw 사본, 설명 '오토파일럿 옵저버 관제').
-  `collect_observer(out_dir, exe_dir, ...) -> list[str]`, `observer_setup_name(version) -> "AUTOPILOT_Observer_Setup_<ver>.exe"`, `build_observer_setup(out_dir, version) -> path`.
+  `collect_observer(out_dir, exe_dir, ...) -> list[str]`, `observer_setup_name(version) -> "Observer_StandAlone_Setup_<ver>.exe"`, `build_observer_setup(out_dir, version) -> path`.
   판 목록(manifest)·서명·zip 은 만들지 않는다 (업데이트 없음).
 - observer.iss: 설치 `{commonpf64}\AFTER MARKET\Observer`, `{commonappdata}\AFTER MARKET\Observer\config|data` (`uninsneveruninstall`, icacls 는 오토파일럿 iss 85~87 과 같게), 바로가기 '옵저버'·'옵저버 관제'(`Observer_Hub.exe observer_hub.py --open`), [Run] `--install-task` 후 작업 실행, [UninstallRun] `--remove-task`. 오토파일럿 iss 와 AppId 가 달라야 한다.
 
@@ -239,7 +239,7 @@
   `Program Files\AFTER MARKET\Observer\OBSERVER_STANDALONE` 있음, 작업 스케줄러 '오토파일럿 옵저버 관제' 등록, `hub_port.txt` 의 주소로 `/api/state` 200,
   샌드박스의 다른 IP 로는 연결 안 됨, `POST /api/schedule` 저장, `POST /api/run {presets:null}` → ACTOR 가 '프리셋 없음'으로 끝나고 기록 1줄,
   `ERPia_RPA.exe`·에이전트 파일 없음, 제거 뒤 시작 메뉴·작업 없음·`ProgramData\...\Observer\config` 남음.
-- [ ] **Step 2:** `tools/build_release.py` 로 빌드 → `tools/sandbox_test.py --observer D:/AX/AUTOPILOT_Observer_Setup_<ver>.exe` 실패 0, 그리고 오토파일럿 `--update` 샌드박스도 실패 0 (Global Constraints 첫 줄).
+- [ ] **Step 2:** `tools/build_release.py` 로 빌드 → `tools/sandbox_test.py --observer D:/AX/Observer_StandAlone_Setup_<ver>.exe` 실패 0, 그리고 오토파일럿 `--update` 샌드박스도 실패 0 (Global Constraints 첫 줄).
 - [ ] **Step 3:** 전체 단위 시험(`tests/test_*.py`, `test_import_step` 뺌)·`check_web.py`·`check_hub_web.py` 통과.
 - [ ] **Step 4: Commit** `옵저버 단독 9 - 샌드박스 시험·문서`
 
@@ -256,7 +256,7 @@
   `observer_hub.py` 는 시작할 때, `rpa_dashboard.launch` 는 단독일 때 이것이 있으면 거절(RuntimeError 그 글). 옵저버도 켤 때 보여 주고 닫는다.
 - `release/PC번호_확인.bat`: 그 PC 의 MachineGuid 를 보여 주고 클립보드에 복사(`clip`), "이 번호를 담당자에게 보내 주십시오." 관리자 권한 없이 (`reg query`).
 - 일반 빌드(`tools/build_release.py`)는 단독 설치 파일을 만들지 않고 `배포_옵저버_<ver>` 폴더까지만 모은다.
-- `tools/build_observer.py <PC번호> [--version <ver>]`: 가장 새(또는 지정한) `D:\AX\배포_옵저버_<ver>` 로 `D:\AX\AUTOPILOT_Observer_Setup_<ver>_<PC번호 끝 4글자>.exe` (소문자 16진수 4자리). PC번호는 GUID 꼴(8-4-4-4-12 16진수)만 - 아니면 거절.
+- `tools/build_observer.py <PC번호> [--version <ver>]`: 가장 새(또는 지정한) `D:\AX\배포_옵저버_<ver>` 로 `D:\AX\Observer_StandAlone_Setup_<ver>_<PC번호 끝 4글자>.exe` (소문자 16진수 4자리). PC번호는 GUID 꼴(8-4-4-4-12 16진수)만 - 아니면 거절.
   ISCC 에 `/DBoundPC=<PC번호>`·`/DFlagFile=<PC번호를 채운 OBSERVER_STANDALONE 사본>` 으로 넘긴다 (원본 판 폴더는 안 바꾼다).
 - `observer.iss` `InitializeSetup`: 레지스트리 MachineGuid 가 BoundPC 와 다르면 `이 설치 파일은 다른 PC 용입니다. 담당자에게 이 PC 의 번호(PC번호_확인.bat)를 보내 새 설치 파일을 받아 주십시오.` 를 보이고 설치하지 않는다 (조용한 설치면 메시지 없이 실패 코드). 같은 PC 에 다시 깔기·덮어쓰기는 된다.
 - 샌드박스 `--observer` (Task 9): 샌드박스 안에서 MachineGuid 를 먼저 읽어 호스트가 `build_observer` 로 그 PC 용을 만든 뒤 깔게 하고, 다른 번호로 만든 파일은 설치가 거절되는지도 본다.

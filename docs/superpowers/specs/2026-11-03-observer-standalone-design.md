@@ -40,7 +40,7 @@
 ## 4. 어떻게 (Claude 판단 - 사용자 확인 대상)
 
 ### 4.1 저장소
-같은 저장소·같은 develop. 빌드가 설치 파일을 둘 낸다 (`AUTOPILOT_Setup_<버전>.exe`, `AUTOPILOT_Observer_Setup_<버전>.exe`).
+같은 저장소·같은 develop. 빌드가 설치 파일을 둘 낸다 (`AUTOPILOT_Setup_<버전>.exe`, `Observer_StandAlone_Setup_<버전>.exe`).
 까닭: 옵저버·재생·메일 2차인증·예약기가 공용이라 떼면 고침을 두 곳에 옮겨야 한다.
 단독 전용 코드는 새 파일로 두고, 공용 코드에는 '단독인가' 한 가지 표시만 본다.
 

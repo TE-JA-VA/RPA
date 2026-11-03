@@ -21,7 +21,7 @@ function Finish() {
 $App = "C:\Program Files\AFTER MARKET\Observer"
 $PD = "C:\ProgramData\AFTER MARKET\Observer"
 $Py = "$App\python\python.exe"
-$SM = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\오토파일럿 옵저버"
+$SM = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\옵저버(Stand Alone)"
 $Task = "오토파일럿 옵저버 관제"
 
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -50,7 +50,8 @@ Check "표시 파일 OBSERVER_STANDALONE 에 이 PC 의 번호" ($flag -eq $guid
 Check "새 자리 config·data (Observer)" ((Test-Path "$PD\config") -and (Test-Path "$PD\data"))
 $acl = (icacls "$PD\config") -join "`n"
 Check "config 는 관리자·SYSTEM 만" (($acl -match "Administrators") -and ($acl -match "SYSTEM") -and -not ($acl -match "Users")) $acl
-Check "시작 메뉴 '옵저버'·'옵저버 관제', 바탕화면 '옵저버 관제'" ((Test-Path "$SM\옵저버.lnk") -and (Test-Path "$SM\옵저버 관제.lnk") -and (Test-Path "C:\Users\Public\Desktop\옵저버 관제.lnk"))
+Check "시작 메뉴 '옵저버(Stand Alone)'·'옵저버(Stand Alone) 관제', 바탕화면 '옵저버(Stand Alone) 관제'" ((Test-Path "$SM\옵저버(Stand Alone).lnk") -and (Test-Path "$SM\옵저버(Stand Alone) 관제.lnk") -and (Test-Path "C:\Users\Public\Desktop\옵저버(Stand Alone) 관제.lnk"))
+Check "등대 아이콘과 favicon 이 설치됐다" ((Test-Path "$App\OBSERVER_SA.ico") -and (Test-Path "$App\hub\favicon.png"))
 $q = (schtasks /Query /TN $Task /XML) -join "`n"
 $q | Set-Content "$O\task.xml" -Encoding UTF8
 Check "작업 스케줄러 '$Task' (가장 높은 권한·대화형·Observer_Hub.exe)" (($q -match "<RunLevel>HighestAvailable</RunLevel>") -and ($q -match "InteractiveToken") -and ($q -match "Observer_Hub\.exe"))
@@ -76,7 +77,7 @@ if ($ip) { try { Invoke-RestMethod "http://${ip}:$port/api/state" -TimeoutSec 5 
 Check "다른 IP($ip)로는 연결되지 않는다 (127.0.0.1 에만)" (-not $lan)
 $html = ""
 try { $html = (Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 10).Content } catch { }
-Check "관제 화면 html 이 나온다" ($html -match "옵저버 관제")
+Check "관제 화면 html 이 나온다" ($html.Contains("옵저버(Stand Alone) 관제"))
 $body = '{"enabled":true,"days":[0,1,2,3,4],"slots":[{"at":"09:00","presets":[1]}],"skip_holidays":true,"off_dates":[]}'
 $sch = $null
 try { $sch = Invoke-RestMethod "http://127.0.0.1:$port/api/schedule" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 10 } catch { $err = "$_" }
@@ -108,6 +109,6 @@ for ($i = 0; ($i -lt 60) -and (Test-Path $App); $i++) { Start-Sleep 1 }
 Check "제거: 프로그램 폴더가 없다" (-not (Test-Path $App))
 schtasks /Query /TN $Task *> $null
 Check "제거: 작업이 없다" ($LASTEXITCODE -ne 0)
-Check "제거: 시작 메뉴·바탕화면 바로 가기가 없다" (-not (Test-Path $SM) -and -not (Test-Path "C:\Users\Public\Desktop\옵저버 관제.lnk"))
+Check "제거: 시작 메뉴·바탕화면 바로 가기가 없다" (-not (Test-Path $SM) -and -not (Test-Path "C:\Users\Public\Desktop\옵저버(Stand Alone) 관제.lnk"))
 Check "제거: 설정·기록은 남는다" ((Test-Path "$PD\config") -and (Test-Path "$PD\data\status\settings.json"))
 Finish
