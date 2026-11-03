@@ -185,7 +185,50 @@ check("사람이 연 Edge 새 탭 (MSN 새 탭 주소로 바로 생김) 은 '새
 check("주소 없이 생겼다가 MSN 새 탭 주소가 붙은 탭도 '새 탭' 단계로",
       [s.get("kind") for s in late] == ["click", "newtab"] and "opens" not in late[0], err or str(late))
 
-print("=== 4. Edge 가 없는 PC ===")
+print("=== 4. Alt+Tab 에 탭을 올리지 않는다 (2026-11-03 다른 PC 에 '메일' 빈 항목 수십 개) ===")
+
+
+def disabled_features():
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<p>x")
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with rec.sync_playwright() as p:
+            b = rec.edge(p.chromium.launch, headless=True, args=["--disable-features=WebShare"])   # 함께 실행이 넘기는 것처럼
+            try:
+                page = b.new_page()
+                page.goto(f"http://127.0.0.1:{srv.server_port}/")          # navigator.share 는 안전한 주소에서만 있다
+                share = page.evaluate("'share' in navigator")
+                page.goto("edge://version")
+                return page.inner_text("body"), share
+            finally:
+                b.close()
+    finally:
+        srv.shutdown()
+
+
+pw = rec._playwright_disabled()
+check("Playwright 가 넘기는 --disable-features 목록을 읽는다 (Playwright 를 올려 못 읽으면 Alt+Tab 을 못 끈다)",
+      bool(pw) and "PaintHolding" in pw, str(pw))
+got, err = attempt(disabled_features)
+about, share = got or ("", None)
+line = re.findall(r"--disable-features=(\S+)", about)
+feats = line[-1].split(",") if line else []
+check("Edge 명령줄의 마지막 --disable-features 에 Playwright 것·넘겨받은 것·Alt+Tab 기능이 모두 있다 (마지막 하나만 먹는다)",
+      rec.NO_ALT_TAB in feats and "WebShare" in feats and set(pw or ["?"]) <= set(feats), err or str(line))
+check("넘겨받은 기능도 실제로 꺼진다 (navigator.share 없음)", share is False, err or f"share={share}")
+
+print("=== 5. Edge 가 없는 PC ===")
 EDGE_GONE = r"""
 import os, sys, tempfile
 sys.path.insert(0, os.getcwd())

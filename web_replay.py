@@ -56,13 +56,46 @@ if _compiled is not None and not os.environ.get("PLAYWRIGHT_NODEJS_PATH"):
 EDGE_MISSING = "Microsoft Edge가 설치되어 있지 않습니다. Edge를 설치한 뒤 다시 실행하여 주십시오."
 
 
+# Edge 가 탭마다 Windows Alt+Tab 에 항목을 올리는 기능. 자동화 Edge 가 정리 못 하고 꺼지면 탐색기를 다시 시작할 때까지
+# '메일' 같은 빈 항목이 수십 개 남는다 (2026-11-03 다른 PC 실화면). 기능 이름은 msedge.dll 의 'msWindowTabManagerPublic is not enabled'
+NO_ALT_TAB = "msWindowTabManagerPublic"
+
+
+def _playwright_disabled():
+    """Playwright 가 스스로 넘기는 --disable-features 목록 (driver 의 chromiumSwitches). 못 읽으면 None - 그때는 손대지 않는다."""
+    global _PW_DISABLED
+    if _PW_DISABLED is False:
+        import playwright
+        lib = os.path.join(os.path.dirname(playwright.__file__), "driver", "package", "lib")
+        _PW_DISABLED = None
+        for rel in ("coreBundle.js", os.path.join("server", "chromium", "chromiumSwitches.js")):
+            try:
+                with open(os.path.join(lib, rel), encoding="utf-8") as f:
+                    m = re.search(r"disabledFeatures = \[(.*?)\]", f.read(), re.S)
+            except OSError:
+                continue
+            if m:
+                _PW_DISABLED = re.findall(r'^\s*"(\w+)",?\s*$', m.group(1), re.M) or None
+                break
+    return _PW_DISABLED
+
+
+_PW_DISABLED = False
+
+
 def edge(launch, *args, **kw):
     """PC 에 깔린 Edge 로 띄운다 - 기록·재생·옵저버·프리페어가 모두 여기로 (2026-10-06 부터. 그 전에는 Playwright 의
     Chromium 713MB 를 배포판에 같이 실었다). launch 는 p.chromium.launch 나 launch_persistent_context.
     Edge 가 없으면 사람 말로 멈춘다 (Playwright 는 'playwright install msedge' 하라는 개발자 말을 한다).
     navigator.webdriver 를 끈다 - 켜져 있으면 봇을 막는 사이트가 접근을 막는다 (2026-10-12 옵저버 기록 중 실측).
     --test-type 은 그 옵션이 띄우는 '지원되지 않는 명령줄 플래그' 띠를 끈다 (기록 화면을 가린다)."""
-    kw["args"] = [*kw.get("args", []), "--disable-blink-features=AutomationControlled", "--test-type"]
+    flags = [*kw.get("args", []), "--disable-blink-features=AutomationControlled", "--test-type"]
+    pw = _playwright_disabled()
+    if pw is not None:     # --disable-features 는 마지막 하나만 먹는다 (2026-11-03 실측) - Playwright 것·넘겨받은 것·Alt+Tab 을 한 줄로
+        given = [f for a in flags if a.startswith("--disable-features=") for f in a.split("=", 1)[1].split(",") if f]
+        flags = [a for a in flags if not a.startswith("--disable-features=")]
+        flags.append("--disable-features=" + ",".join(dict.fromkeys(pw + given + [NO_ALT_TAB])))
+    kw["args"] = flags
     try:
         return launch(*args, channel="msedge", **kw)
     except Exception as e:
