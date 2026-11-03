@@ -379,7 +379,8 @@ def _replay_problems(name, site):
     if host and not (site.get("MailID") and site.get("MailPW")
                      and (not site.get("MailHost") or status.site_domain(site["MailHost"]) == status.site_domain(host))):   # 다른 메일함의 계정 (검토 I6)
         return [f"{name}: {web_replay.MAIL_NO_CREDS}"]
-    if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in steps) and not (site.get("Phone") and site.get("SmsSenders")):
+    if (any(s.get("kind") == "otp" and s.get("source") != "copy" for s in steps) and not (site.get("Phone") and site.get("SmsSenders"))
+            and not status.standalone()):     # 단독은 휴대폰 중계 없이 사람이 넣는다 (manual_otp_note)
         return [f"{name}: 프리셋 {no}에 인증번호 단계가 있으나 인증 휴대폰·발신번호가 설정되지 않았습니다. "
                 "(옵저버 저장 화면에서 설정하여 주십시오)"]
     if no > status.preset_limit():
@@ -925,8 +926,41 @@ def download_dir():
 
     바탕화면\ERPIA_AI\ERPIA_AI_EXCEL 이다. 루틴과 같은 함수(pl.find_ai_dir)를 써서
     두 프로그램이 같은 폴더를 보도록 맞춘다.
+    옵저버 단독 버전은 관제 화면에서 정한 폴더 (status.download_dir_choice) - 못 만들면 RuntimeError (그 실행만 실패로 기록).
     """
+    if status.standalone():
+        path = status.download_dir_choice()
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            raise RuntimeError(f"받은 파일 폴더를 만들 수 없습니다: {path}") from None
+        return path
     return os.path.join(pl.find_ai_dir(), DOWNLOAD_DIR_NAME)
+
+
+RUN_PRESETS_ENV = "RPA_RUN_PRESETS"     # 단독 예약 줄·[지금 실행] 이 고른 프리셋 번호 "1,3" (rpa_dashboard.launch_slot) - --all 때만 본다
+
+
+def run_targets(all_flag, sites, env):
+    """--all 이고 env 에 고른 프리셋이 있으면 그 PRESETn 칸만, 아니면 sites 그대로 (None = Stts 0 모두). 숫자가 아니면 ValueError."""
+    raw = env.get(RUN_PRESETS_ENV) if all_flag else None
+    if not raw:
+        return sites
+    try:
+        return [status.preset_site_key(int(x)) for x in raw.split(",")]
+    except ValueError:
+        raise ValueError(f"{RUN_PRESETS_ENV} 값이 프리셋 번호가 아닙니다: {raw!r}") from None
+
+
+def manual_otp_note(page, waiting):
+    """단독 ACTOR 의 사람 인증 (web_replay.Replayer.otp_manual): 기다리는 동안 현황에 알리고 브라우저 창을 앞으로."""
+    name = getattr(_here, "preset_name", "")
+    status.note(f"인증번호 입력 대기 - {name}" if waiting else "")
+    if waiting:
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
 
 
 # 함께 실행 (사용자 2026-10-19, rpa_status 의 '함께 실행' 절): 사이트에서 받은 파일은 그 사이트를 다 돌 때까지 이 아래에 두었다가
@@ -980,7 +1014,7 @@ def start_routine_together():
     올리고, '함께 (엑셀 업로드·자동 수집)' 이면 자동 수집도 그동안 돈다. 루틴은 엑셀 수집을 안 하면 프리페어가 끝나기를 기다렸다가
     예전처럼 돈다. (프로세스, 띄운 시각) - 띄우지 않았으면 None (예전처럼 Run_All.bat 이 수집 뒤에 띄운다 - '순서대로')."""
     global _together
-    if os.environ.get(status.ALL_RUN_ENV) != "1":
+    if os.environ.get(status.ALL_RUN_ENV) != "1" or status.standalone():    # 단독은 ERPia 쪽이 없다
         return None
     mode = status.together_choice()
     if mode == "off":
@@ -1420,14 +1454,21 @@ def action_replay(page, name, site):
     rp = web_replay.Replayer(page.context, p["record"], creds, dest, p["code"],
                              log=(lambda m: log(f"  [{name}]{m}")) if many else log, hide_values=True, shot_dir=BASE_DIR)
     end = web_replay.auth_end(p["record"]["steps"])
+    sms = any(s.get("kind") == "otp" and s.get("source") != "copy" for s in p["record"]["steps"])   # 문자 2차인증
     if many and end is not None:     # 인증 사이트 - 로그인부터 인증 [확인] 까지는 같은 휴대폰(메일 인증은 같은 메일함) 사이트끼리 한 번에 하나
         key = site.get("Phone") or (f"mail:{site.get('MailID')}" if site.get("MailID") else None)
+        if sms and status.standalone():
+            key = f"manual:{p['no']}"           # 휴대폰이 없다 - 사람이 넣는 사이트는 저마다 (설계 4.4)
         rp.gate = (_here.gates.lock(key), web_replay.auth_start(p["record"]["steps"]), end)
     rp.first_page = page
     rp.fit_viewport = True
     if _together:       # 루틴이 ERPia 에 키보드를 쓰는 동안은 다음 단계로 가지 않는다 (단계가 새 창을 띄우면 포커스를 가져간다)
         rp.pause = KeysPause()
-    if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in p["record"]["steps"]):   # 2차인증 - 휴대폰 중계 (설계 13절)
+    if sms and status.standalone():     # 단독: 휴대폰 중계 대신 사람이 번호를 넣고 [확인]까지 (설계 4.4, OTP_MANUAL_WAIT)
+        _here.preset_name = p["name"]
+        rp.otp_manual = manual_otp_note
+        log(f"  [{name}] 인증번호는 사람이 브라우저 창에 직접 입력합니다. (최대 {web_replay.OTP_MANUAL_WAIT // 60}분)")
+    elif sms:   # 2차인증 - 휴대폰 중계 (설계 13절)
         import otp_relay
         rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
         log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']}(으)로 수신합니다.")
@@ -1922,7 +1963,12 @@ def main():
             override = False
         elif args.session:
             override = True
-        return finish_together(cmd_run(args.site, args.headless,
+        try:
+            targets = run_targets(args.all, args.site, os.environ)   # 단독 예약·[지금 실행] 이 고른 프리셋만 (RPA_RUN_PRESETS)
+        except ValueError as e:
+            log(str(e))
+            return 1
+        return finish_together(cmd_run(targets, args.headless,
                                        session_override=override, keep_open=args.keep_open,
                                        force_close=args.no_keep_open, parallel=args.parallel))
 
