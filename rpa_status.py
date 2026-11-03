@@ -592,6 +592,8 @@ def read_user_config(path=None):
     if path or os.path.isfile(user_config_path()):
         path = path or user_config_path()
         return _sections(_read_json(path), os.path.basename(path)) if os.path.isfile(path) else {}
+    if standalone():     # 옵저버 단독은 설정 창이 없다 - 빈 사이트 칸으로 시작하고 옵저버가 처음 저장할 때 파일을 만든다 (2026-11-03 실화면)
+        return {SITES_SECTION: {}}
     cred, web, lm = _old_config_paths()
     out = _sections(_read_json(cred), CRED_FILE_NAME) if os.path.isfile(cred) else {}
     if os.path.isfile(web):

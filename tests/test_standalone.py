@@ -165,5 +165,22 @@ pl.find_ai_dir()
 check("no_erpia_dir: 꺼지면 지금처럼 만든다", os.path.isdir(os.path.join(_desk, pl.AI_DIR_NAME)))
 pl.find_desktop_dir = _fd
 
+print("\n=== 2-2. 설정 파일 없이 시작 (실화면 2026-11-03) ===")
+_pd = os.environ.get("RPA_PROGRAMDATA")
+_uc = {k: os.environ.pop(k, None) for k in ("RPA_USER_CONFIG", "RPA_CRED_FILE")}
+os.environ["RPA_PROGRAMDATA"] = tempfile.mkdtemp(prefix="sa_nocfg_")     # 빈 단독 폴더 - 이 PC 의 실제 설정은 안 본다
+on(True)
+check("no_config: 단독이고 사용자 설정 파일이 없으면 빈 사이트 칸", st.read_user_config() == {st.SITES_SECTION: {}}, st.read_user_config())
+check("no_config: 프리셋 표는 빈 칸만 (None 아님 - 옵저버가 저장할 수 있다)", st.preset_summary() is not None
+      and all(p["steps"] == 0 for p in st.preset_summary()), st.preset_summary())
+on(False)
+if _pd is None:
+    os.environ.pop("RPA_PROGRAMDATA", None)
+else:
+    os.environ["RPA_PROGRAMDATA"] = _pd
+for _k, _v in _uc.items():
+    if _v is not None:
+        os.environ[_k] = _v
+
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
