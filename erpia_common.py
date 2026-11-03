@@ -3,6 +3,7 @@ PID/창은 매번 바뀔 수 있으므로 항상 새로 찾고, 클릭/키 입�
 반드시 ERPia 창을 foreground(활성)로 전환한 뒤 진행한다.
 """
 import ctypes
+import os
 import time
 import win32api
 import win32com.client
@@ -34,18 +35,32 @@ def screen_locked():
         return False
 
 
+def session_id():
+    """이 프로세스의 윈도우 세션 번호. 못 읽으면 None (그때는 예전처럼 세션을 가리지 않는다)."""
+    sid = ctypes.c_ulong()
+    try:
+        return sid.value if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(sid)) else None
+    except Exception:
+        return None
+
+
+def _erpia_procs(process_name):
+    """이 윈도우 세션의 ERPia 프로세스만. 다른 계정(사용자 전환·원격 접속)에 떠 있는 ERPia 는 이 RPA 가 창을 잡지도 끄지도
+    못하는데, 세면 일반 업체는 매 실행 붙기 실패, 웰라이프는 'ERPia 2개' 로 멈췄다 (R6, 2026-11-03)."""
+    sid = session_id()
+    where = f"Name='{process_name}'" + (f" AND SessionId={sid}" if sid is not None else "")
+    return win32com.client.GetObject("winmgmts:").ExecQuery(f"SELECT ProcessId FROM Win32_Process WHERE {where}")
+
+
 def find_erpia_pid(process_name="ERPiaMain.exe"):
-    wmi = win32com.client.GetObject("winmgmts:")
-    procs = wmi.ExecQuery(f"SELECT ProcessId FROM Win32_Process WHERE Name='{process_name}'")
-    for p in procs:
+    for p in _erpia_procs(process_name):
         return int(p.ProcessId)
     raise RuntimeError(f"{process_name} 프로세스를 찾지 못했습니다.")
 
 
 def erpia_pids(process_name="ERPiaMain.exe"):
-    """떠 있는 ERPia 프로세스 번호 목록 (find_erpia_pid 는 그중 첫 번째만 본다)."""
-    wmi = win32com.client.GetObject("winmgmts:")
-    return [int(p.ProcessId) for p in wmi.ExecQuery(f"SELECT ProcessId FROM Win32_Process WHERE Name='{process_name}'")]
+    """이 세션에 떠 있는 ERPia 프로세스 번호 목록 (find_erpia_pid 는 그중 첫 번째만 본다)."""
+    return [int(p.ProcessId) for p in _erpia_procs(process_name)]
 
 
 def _kernel32():

@@ -252,6 +252,7 @@ with sync_playwright() as pw:
       .every((n) => { const r = document.createRange(); r.selectNodeContents(n); return r.getClientRects().length === 1; }))"""),
           "휴대폰 폭에서도 [밝게]·[로그아웃] 글자가 한 줄 (아이콘 옆 글자만 잰다)")
     if os.environ.get("SHOT_DIR"): page.locator("aside.side").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "side_390.png"))
+    check(box("#act-card")[1] < box("#steps-routine")[1], f"휴대폰 폭에선 실행 카드가 단계 카드보다 위 (W9, 2026-11-03) ({box('#act-card')}, {box('#steps-routine')})")
     page.set_viewport_size({"width": 1280, "height": 720}); page.wait_for_timeout(300)
     check(page.text_content("#page-title") == "오토파일럿", "페이지 제목")
     check(page.is_hidden("#pc-pick"), "PC 가 하나면 고르기 숨김")
@@ -526,24 +527,24 @@ with sync_playwright() as pw:
     check(login_cb.is_checked() and "4/5 켬" in page.text_content("#mod-meta"), "눌러도 안 꺼진다")
     page.click("#mod-list label:nth-child(2)")     # 스위치의 input 은 숨겨져 있어 label 을 누른다
     check("5/5 켬" in page.text_content("#mod-meta") and not page.is_disabled("#mod-apply"), "켜면 요약·적용 활성")
-    # 운송장 출력은 물류관리가 켜져 있어야 쓸 수 있다 (켜져 있어도 끄는 건 자유)
+    # 운송장 출력은 물류관리를 켰을 때만 그 아래 들여 쓴 줄로 보인다 (사용자 2026-11-03 - 전엔 잠긴 채 보였다). 켜져 있어도 끄는 건 자유
     out_cb = page.locator("#mod-list input[aria-label='운송장 출력 / 엑셀 생성']")
-    logi_row, out_row = "#mod-list label:nth-child(4)", "#mod-list label:nth-child(5)"
-    check(out_cb.is_checked() and not out_cb.is_disabled(), "물류관리가 켜져 있으면 출력 스위치는 자유")
+    logi_row, out_row = "#mod-list label:has(input[aria-label='물류관리'])", "#mod-list label:has(input[aria-label='운송장 출력 / 엑셀 생성'])"
+    order = page.evaluate("[...document.querySelectorAll('#mod-list label')].map((l) => l.querySelector('input').getAttribute('aria-label'))")
+    check(out_cb.is_checked() and not out_cb.is_disabled() and order.index("운송장 출력 / 엑셀 생성") == order.index("물류관리") + 1
+          and page.locator(f"{out_row}.sub").count() == 1 and page.locator(f"{out_row} .why").count() == 0,
+          f"물류관리가 켜져 있으면 출력 스위치는 그 바로 아래 들여 쓴 줄, 설명 글 없음 ({order})")
+    indent = page.evaluate(f"""[getComputedStyle(document.querySelector("{out_row}")).marginLeft, getComputedStyle(document.querySelector("{logi_row}")).marginLeft]""")
+    check(indent == ["22px", "0px"], f"딸린 줄만 실제로 들여 쓴다 ({indent})")
     page.click(out_row)
     check(not out_cb.is_checked() and not out_cb.is_disabled(), "물류관리가 켜져 있어도 출력만 끌 수 있다")
     page.click(out_row)
-    page.click(logi_row)                                   # 물류관리 끄기 → 출력도 따라 꺼지고 잠긴다
-    check(not out_cb.is_checked() and out_cb.is_disabled(), "물류관리를 끄면 출력도 꺼지고 잠긴다")
-    check("3/5 켬" in page.text_content("#mod-meta"), f"둘 다 꺼진 개수 ({page.text_content('#mod-meta')})")
-    why = page.text_content(f"{out_row} .why") if page.locator(f"{out_row} .why").count() else None
-    check(why == "물류관리를 켜야 사용할 수 있습니다." and page.is_visible(f"{out_row} .why"),
-          f"잠긴 이유를 줄 아래 글로 보여 준다 - 휴대폰에는 마우스 글(title)이 없다 ({why})")
-    if os.environ.get("SHOT_DIR"): page.locator("#mod-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "mod_why.png"))
-    page.click(out_row, force=True)   # 잠긴 스위치라 Playwright 가 '비활성' 으로 본다
-    check(not out_cb.is_checked(), "잠긴 동안은 눌러도 안 켜진다")
+    page.click(logi_row)                                   # 물류관리 끄기 → 출력도 따라 꺼지고 숨는다
+    check(out_cb.count() == 0, "물류관리를 끄면 출력 스위치는 숨는다")
+    check("3/5 켬" in page.text_content("#mod-meta"), f"둘 다 꺼진 개수 - 숨은 출력도 모듈이라 센다 ({page.text_content('#mod-meta')})")
+    if os.environ.get("SHOT_DIR"): page.locator("#mod-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "mod_out_hidden.png"))
     page.click(logi_row)                                   # 물류관리 다시 켜기
-    check(not out_cb.is_checked() and not out_cb.is_disabled(), "물류관리를 켜도 출력은 꺼진 채, 잠금만 풀린다")
+    check(out_cb.count() == 1 and not out_cb.is_checked() and not out_cb.is_disabled(), "물류관리를 다시 켜면 출력 줄이 꺼진 채 보인다")
     page.click(out_row)
     check(out_cb.is_checked() and "5/5 켬" in page.text_content("#mod-meta"), "그 뒤에 출력을 켤 수 있다")
     page.click("#mod-apply")
@@ -577,6 +578,54 @@ with sync_playwright() as pw:
     db_patch("meta/companies/c_demo/apps/rpa", {"modules": None})   # null 로 PATCH = 그 자리 지우기 (PUT 은 본문이 비면 400)
     reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     check(page.locator("#mod-list label").count() == 5, "정책을 지우면 다시 보인다")
+    # 손으로 고친 PC 파일 (물류관리 N · 출력 Y): 출력 줄은 숨고, 숨은 줄 때문에 '바뀜' 이 되지 않는다 (검토 2026-11-03)
+    db_patch(f"{LIVE}/modules", {"Logistics": False})
+    page.wait_for_function("document.querySelector(\"#mod-list input[aria-label='물류관리']\")?.checked === false", timeout=10000)
+    check(page.locator(out_row).count() == 0 and page.is_disabled("#mod-apply"), "물류관리 N · 출력 Y 인 PC: 출력 줄은 숨고 적용 비활성 (숨은 바뀜 없음)")
+    db_patch(f"{LIVE}/modules", {"Logistics": True})
+    page.wait_for_function("document.querySelector(\"#mod-list input[aria-label='물류관리']\")?.checked === true", timeout=10000)
+    # 물류대기 '상품별 재고검토' (사용자 2026-11-03): PC 가 hold_review 를 올릴 때만, 물류대기를 켰을 때 그 바로 아래에
+    hr_sel, hold_row = "#mod-list input[aria-label='상품별 재고검토']", "#mod-list label:has(input[aria-label='물류대기 관리'])"
+    check(page.locator(hr_sel).count() == 0, "옛 PC (hold_review 없음) 에는 재고검토 스위치가 없다")
+    db_patch(LIVE, {"hold_review": True})
+    page.wait_for_function(f"document.querySelector(\"{hr_sel}\") !== null", timeout=10000)
+    order = page.evaluate("[...document.querySelectorAll('#mod-list label')].map((l) => l.querySelector('input').getAttribute('aria-label'))")
+    hr_row = "#mod-list label:has(input[aria-label='상품별 재고검토'])"
+    check(order.index("상품별 재고검토") == order.index("물류대기 관리") + 1 and page.locator(hr_sel).is_checked()
+          and page.locator(f"{hr_row}.sub").count() == 1 and page.locator(f"{hr_row} .why").count() == 0, f"물류대기 바로 아래 들여 쓴 줄, 켜진 채, 설명 글 없음 ({order})")
+    check(page.is_disabled("#mod-apply") and "5/5 켬" in page.text_content("#mod-meta"), "PC 값 그대로면 적용 비활성, 모듈 개수에는 안 든다")
+    page.click(hr_row)
+    check(not page.locator(hr_sel).is_checked() and not page.is_disabled("#mod-apply"), "끄면 적용 활성")
+    page.click("#mod-apply"); time.sleep(1.5)
+    sent = cmds_of("set_modules")[-1]["args"]
+    check(sent.get("HoldSaveOnly") is True and sent.get("Hold") is True, f"같은 set_modules 명령에 HoldSaveOnly 로 실린다 ({sent})")
+    check("HoldSaveOnly" not in (db_get(f"{SETTINGS}/modules") or {}), "settings.modules 기록에는 모듈만")
+    key = max(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_modules" and v.get("state") == "queued")   # 방금 보낸 것 (밀어 넣기 열쇠는 시간 순)
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "모듈 수정 사항을 저장했습니다.", "started_at": 1, "ended_at": 2})
+    db_patch(LIVE, {"hold_review": False})
+    page.wait_for_function("document.getElementById('mod-apply')?.disabled === true"
+                           " && document.querySelector(\"#mod-list input[aria-label='물류대기 관리']\")?.disabled === false", timeout=10000)
+    check(not page.locator(hr_sel).is_checked(), "PC 값(끔)이 돌아오면 기준값 갱신")
+    page.click(hold_row)
+    check(page.locator(hr_sel).count() == 0, "물류대기를 끄면 재고검토 스위치는 숨는다")
+    page.click(hold_row)
+    check(page.locator(hr_sel).count() == 1 and not page.locator(hr_sel).is_checked() and page.is_disabled("#mod-apply"),
+          "다시 켜면 고른 값 그대로 (바뀐 것 없음)")
+    # PC 응답을 기다리는 동안 물류대기를 눌러 다시 그린 스위치도, 기다림이 끝나면 풀린다 (검토 2026-11-03 - 전엔 새로고침까지 잠긴 채)
+    logi_in = "#mod-list input[aria-label='물류관리']"
+    page.click(hold_row); page.click("#mod-apply")
+    page.wait_for_function("document.getElementById('mod-apply')?.disabled === true", timeout=5000)
+    page.click(hold_row)
+    check(page.is_disabled(logi_in), "기다리는 동안 다시 그린 스위치는 잠긴다")
+    key = max(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_modules" and v.get("state") == "queued")
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "모듈 수정 사항을 저장했습니다.", "started_at": 1, "ended_at": 2})
+    try:
+        page.wait_for_function(f"document.querySelector(\"{logi_in}\")?.disabled === false", timeout=10000); unlocked = True
+    except Exception:
+        unlocked = False
+    check(unlocked and page.is_disabled("#mod-apply"), "기다림이 끝나면 스위치가 풀리고, PC 값과 같으니 적용은 잠긴 채")
+    db_patch(LIVE, {"hold_review": None})
+    reload_to(page, "settings"); page.wait_for_selector("#mod-list label")
     # 웰라이프 업체 (설계 2026-10-07-wellife-gate, 사용자 10-08): 모듈 다섯, 줄 고르기·반복. 줄 고르기는 v2 PC 에서만 보이니 v2 live 를 먼저 만든다
     rule = page.evaluate("import('./rpa-common.js').then(m => [m.wellifeOn('WELLIFE_x', null), m.wellifeOn('my_wellife', {}), m.wellifeOn('wel_life', null),"
                          "m.wellifeOn('c_demo', {rpa: {features: {wellife: true}}}), m.wellifeOn('c_demo', {rpa: {features: {wellife: false}}})])")
@@ -591,12 +640,20 @@ with sync_playwright() as pw:
     check(len(names) == 6 and any("웰라이프 SAP 연동관리" in n for n in names) and any("웰라이프 WMS 이관관리" in n for n in names)
           and any("운송장번호 전송" in n for n in names) and not any("물류관리" == n or "운송장 출력" in n for n in names),
           f"웰라이프 업체: 모듈 여섯 (물류관리·운송장 출력 없음, 운송장번호 전송 있음) ({names})")
-    # 웰라이프 모드는 보기만 (시험 기간용, 사용자 2026-10-13) - PC 가 올린 값을 그대로, 실행이 있으면 경고 색
+    db_patch(LIVE, {"hold_review": True}); time.sleep(1)
+    check(page.locator(hr_sel).count() == 0 and page.locator("#mod-list input[aria-label='물류대기 관리']").count() == 1,
+          "웰라이프 업체: PC 가 hold_review 를 올려도 상품별 재고검토 스위치는 없다 (웰라이프 물류대기는 재고검토가 없다)")
+    db_patch(LIVE, {"hold_review": None})
+    # 웰라이프 모드는 보기만 (시험 기간용, 사용자 2026-10-13) - PC 가 올린 값을 그대로, 실행이 아닌 것(리허설·1건)이 있으면 경고 색
+    # (기본이 실행 - 사용자 2026-11-03)
     db_patch(LIVE, {"modes": [["주문매핑", "리허설"], ["정상매출", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "실행"],
                               ["WMS 이관", "1건"], ["운송장번호 전송", "리허설"]]})     # 에이전트가 올리는 모양 (rpa_status.WELLIFE_MODES 여섯)
     page.wait_for_function("(document.getElementById('mod-modes')?.textContent || '').includes('운송장번호 전송')", timeout=10000)
     check(page.is_visible("#mod-modes") and "SAP 연동 실행" in page.text_content("#mod-modes")
           and "warn" in (page.get_attribute("#mod-modes", "class") or ""), f"웰라이프 업체: 모드 보기 ({page.text_content('#mod-modes')})")
+    db_patch(LIVE, {"modes": [["주문매핑", "실행"], ["SAP 연동", "실행"], ["운송장번호 전송", "실행"]]})
+    page.wait_for_function("!(document.getElementById('mod-modes')?.textContent || '').includes('리허설')", timeout=10000)
+    check("warn" not in (page.get_attribute("#mod-modes", "class") or ""), "웰라이프 업체: 모두 실행이면 경고 색 없음")
     db_patch(LIVE, {"modes": None})
     page.wait_for_function("document.getElementById('mod-modes')?.classList.contains('hide')", timeout=10000)
     check(page.is_visible("#sch-add-win") and page.locator("#sch-times select.mode").count() == 1,
@@ -655,6 +712,13 @@ with sync_playwright() as pw:
     check(all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")), "도는 중에는 실행 버튼 셋 다 잠김")
     check(not page.is_disabled("#stop-erpia"), "ERPia 종료는 도는 중에도 누를 수 있다")
     check("실행 중이어서" in (page.get_attribute("#run-all", "title") or ""), "잠긴 이유를 알려 준다")
+    check(page.is_hidden("#act-why"), "실행 중일 때는 단추 글('… 실행중')이 알리므로 아래 글은 없다 (W13)")
+    # R10 (2026-11-03): 완료 모듈의 사유는 PC 가 단계 메모에 안 적는다 - 그 모듈 마지막 단계 메모로 보인다
+    db_patch(f"{LIVE}/programs/routine", {"modules": [{"key": "login", "label": "로그인", "steps": ["login"], "state": "done",
+                                                       "reason": "[실행] 일부 줄은 확인하여 주십시오 (시험)"}]})
+    page.wait_for_function("(document.querySelector('#list-routine li .note')?.textContent || '').includes('확인하여 주십시오')", timeout=10000)
+    check(True, "완료 모듈의 사유가 마지막 단계 메모로 보인다 (R10)")
+    db_patch(f"{LIVE}/programs/routine", {"modules": None})
     check(page.text_content("#run-routine .t") == "PROCESS 오토파일럿 실행중" and page.is_hidden("#run-routine .fly")
           and page.text_content("#run-prepare .t") == "ACTOR 오토파일럿" and page.is_visible("#run-prepare .fly"),
           f"도는 RPA 의 단추는 '… 실행중' (화살표 없이), 다른 단추는 그대로 ({page.text_content('#run-routine .t')})")
@@ -733,7 +797,8 @@ with sync_playwright() as pw:
     usage_runs = {"u_month": (f"{month}-01T00:00:01", {"hold": 4}, 4),
                   "u_today1": (f"{TODAY}T08:00:00", {"login": 1, "sales": 1, "logistics": 1}, 2),
                   "u_today2": (f"{TODAY}T09:00:00", {"logistics": 1, "sites": 2}, 3),
-                  "u_big": (f"{month}-01T00:00:02", {}, 371)}     # 모듈 칸 없이 쓴 토큰만 - 이달 쓴 합 380 (남은 = 500 - 380 = 120)
+                  "u_big": (f"{month}-01T00:00:02", {}, 371),     # 모듈 칸 없이 쓴 토큰만 - 이달 쓴 합 380 (남은 = 500 - 380 = 120)
+                  "u_future": ("2099-01-01T00:00:00", {"hold": 7}, 0)}   # 시계가 틀린 PC 의 미래 시각 기록 - 이번 달 사용량에 안 든다 ((c), 2026-11-03)
     call("PATCH", f"{FS}/wallet/c_demo", {"fields": {"granted": {"integerValue": "500"}, "since": {"stringValue": f"{month}-01T00:00:00"}}}, OWNER)
     for rid, (started, used, spent) in usage_runs.items():
         call("POST", f"{FS}/runs/c_demo/items?documentId={rid}", {"fields": {
@@ -796,7 +861,7 @@ with sync_playwright() as pw:
     check(ecam[0] == ecam[1] and ecam[2] == "사용 380개", f"다음 실행에 모자라면 막대 ECAM 호박색 ({ecam})")
     goto(page, "settings")
     page.wait_for_function("(document.getElementById('sch-info')?.textContent || '').includes('남은 토큰 3개')", timeout=10000)
-    check("다음 예약 실행에 6개 · 남은 토큰 3개. 잔여 토큰이 마이너스가 될 수 있습니다." in page.text_content("#sch-info")
+    check("다음 예약 실행에 6개 · 남은 토큰 3개 (PC가 마지막으로 확인한 값). 잔여 토큰이 마이너스가 될 수 있습니다." in page.text_content("#sch-info")
           and page.locator("#sch-info > .warn", has_text="다음 예약 실행에 6개").count() == 1
           and page.locator("#sch-info > div:not(.warn):not(.bad)").count() >= 1, f"예약 칸에도 노란 글 - 그 줄만 (2026-10-30) ({page.text_content('#sch-info')})")
     goto(page, "rpa")
@@ -807,6 +872,8 @@ with sync_playwright() as pw:
           and "bad" in page.get_attribute("#token-line", "class")
           and all(page.is_disabled(f"#{i}") for i in ("run-all", "run-prepare", "run-routine")) and not page.is_disabled("#stop-erpia"),
           "0 이하면 빨간 글, 실행 단추 셋 잠김 (ERPia 종료는 그대로)")
+    check(page.is_visible("#act-why") and "토큰이 없어 실행할 수 없습니다" in page.text_content("#act-why"),
+          f"잠긴 까닭을 단추 아래 글로도 - 휴대폰엔 마우스 글이 없다 (W13, 2026-11-03) ({page.text_content('#act-why')})")
     page.wait_for_function("document.getElementById('tok-bar')?.dataset.state === 'bad' && document.querySelector('#tok-bar .fill').style.width === '0%'", timeout=10000)
     check(page.evaluate("document.querySelector('#tok-bar .fill').style.width") == "0%"
           and page.text_content("#tok-left") == "남은 토큰 0개", "0 이하면 막대가 비고 빨강")
@@ -901,6 +968,7 @@ with sync_playwright() as pw:
     page.once("dialog", lambda dlg: (asked.append(dlg.message), dlg.accept()))
     page.click("#copy-send")
     page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('프리셋 복사 명령을 전송하였습니다')", timeout=10000)
+    check("사무실 PC · 프리셋 복사" in (page.text_content("#toasts") or ""), "PC 가 여럿이면 안내 앞에 지금 PC 이름 (W7, 2026-11-03)")
     check(asked == ["창고 PC의 프리셋 1, 5을(를) 이 PC의 프리셋으로 변경합니다. 기록이 있으면 덮어쓰며 아이디·비밀번호는 복사되지 않습니다. 진행하시겠습니까?"], f"확인 창 ({asked})")
     time.sleep(1)
     exp = cmds_of("export_preset")
@@ -1018,6 +1086,16 @@ with sync_playwright() as pw:
     db_put(f"{LIVE}/together/chosen", "excel")
     page.wait_for_function("document.getElementById('tog-apply')?.disabled === true", timeout=10000)
     check("함께 (엑셀 업로드)" in page.text_content("#tog-meta"), "PC 값이 돌아오면 기준값 갱신")
+    # W2 (2026-11-03): 보낸 뒤 화면을 떠나도 PC 가 거절하면 알린다 (전엔 떠나면 흔적이 없었다)
+    page.select_option("#tog-mode", "excel_import"); page.click("#tog-apply"); time.sleep(1.0)
+    key = max(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_together" and v.get("state") == "queued")
+    page.once("dialog", lambda d: d.accept())       # 보낸 뒤라 '적용 안 한 변경' 확인은 없어야 하지만, 떠도 넘긴다
+    goto(page, "rpa")
+    db_patch(f"{CMDS}/{key}", {"state": "failed", "result": "시험 거절", "started_at": 1, "ended_at": 2})
+    page.wait_for_function("(document.getElementById('toasts')?.textContent || '').includes('전체 실행 방식: 시험 거절')", timeout=10000)
+    check(True, "화면을 떠난 뒤 PC 가 거절해도 토스트로 알린다 (W2)")
+    goto(page, "settings")
+    page.wait_for_function("document.getElementById('tog-meta')?.textContent.includes('함께 (엑셀 업로드)')", timeout=10000)
     db_patch(LIVE, {"together": None})
     page.wait_for_function("document.getElementById('tog-card')?.classList.contains('hide')", timeout=10000)
     check(True, "PC 가 방식을 올리지 않게 되면 카드가 바로 사라진다")
@@ -1197,8 +1275,20 @@ with sync_playwright() as pw:
     check(True, "자동 실행이 꺼져 있으면 '비활성화' (전 '꺼짐')")
     db_patch(f"{LIVE}/schedule", {"enabled": was_on})
     grps = [x.strip() for x in page.locator("#settings-grid h3.grp").all_text_contents()]
-    check(grps == ["ACTOR 오토파일럿 (사이트 수집)", "PROCESS 오토파일럿", "자동 실행"], f"환경설정 오토파일럿은 ACTOR 오토파일럿·PROCESS·자동 실행으로 나뉜다 (사용자 2026-10-08) ({grps})")
+    check(grps == ["ACTOR 오토파일럿 (사이트 수집)", "자동 실행", "PROCESS 오토파일럿"], f"환경설정 오토파일럿은 ACTOR 오토파일럿·자동 실행·PROCESS 로 나뉜다 (사용자 2026-10-08, 순서 11-03) ({grps})")
+    lay = page.evaluate("""() => { const hs = [...document.querySelectorAll('#settings-grid h3.grp')].map((h) => h.getBoundingClientRect());
+      const s = document.getElementById('sch-card').getBoundingClientRect();
+      return [Math.round(hs[0].top - hs[1].top), hs[1].left > hs[0].left + 100, hs[2].top > s.bottom, Math.round(hs[2].left - hs[1].left)] }""")
+    check(lay[0] == 0 and lay[1] and lay[2] and lay[3] == 0,
+          f"왼쪽 사이트 수집 | 오른쪽 자동 실행, 그 아래 PROCESS (사용자 2026-11-03) ({lay})")
+    page.set_viewport_size({"width": 400, "height": 900})
+    tops = page.evaluate("[...document.querySelectorAll('#settings-grid h3.grp')].map((h) => [Math.round(h.getBoundingClientRect().top), Math.round(h.getBoundingClientRect().left)])")
+    check(tops[0][0] < tops[1][0] < tops[2][0] and tops[0][1] == tops[1][1] == tops[2][1],
+          f"좁은 화면은 사이트 수집 → 자동 실행 → PROCESS 한 줄로 쌓인다 ({tops})")
+    page.set_viewport_size({"width": 1280, "height": 720})
     check(page.evaluate("import('./rpa-common.js').then(m => m.RUN_NAMES.Prepare)") == "사이트 수집", "자동 실행 단추 이름 '사이트 수집' (전 '쇼핑몰 받기')")
+    check(page.evaluate("import('./rpa-common.js').then(m => [m.RUN_NAMES.Sales, m.RUN_NAMES.Output])") == ["매출처리", "운송장 출력"],
+          "예약 줄 단추 '매출처리'·'운송장 출력' (W4, 2026-11-03 - 전 '주문매핑'·'운송장')")
     page.click("#sch-add-win")
     win = "#sch-times .t:nth-child(3)"
     check(page.locator(f"{win} select").count() == 0 and page.locator(f"{win} .chips button[data-k='Prepare']").count() == 1
@@ -1377,6 +1467,13 @@ with sync_playwright() as pw:
         page.click("#sch-off-add")
     chip = page.locator("#sch-off-list button")
     check(chip.count() == 1 and not page.is_disabled("#sch-apply"), f"휴무일 추가 - 같은 날·지난 날은 안 들어감 → 적용 가능 ({chip.all_text_contents()})")
+    toast = page.text_content("#toasts") or ""
+    check("지난 날짜는 추가할 수 없습니다" in toast, f"못 넣은 까닭을 알린다 (W10, 2026-11-03) ({toast})")
+    page.fill("#sch-off-date", future)
+    page.wait_for_function("(document.getElementById('sch-limit')?.textContent || '').includes('[+ 휴무일 추가]')", timeout=5000)
+    check(page.is_disabled("#sch-apply"), "날짜만 고르고 [+ 휴무일 추가] 를 안 누르면 [적용] 을 막고 알린다 (W10)")
+    page.fill("#sch-off-date", "")
+    page.wait_for_function("!(document.getElementById('sch-limit')?.textContent || '').includes('[+ 휴무일 추가]')", timeout=5000)
     page.click("label:has(#sch-holidays)")
     check(not page.is_checked("#sch-holidays"), "공휴일 휴무 적용 끄기")
     page.click("#sch-apply"); time.sleep(1.5)
@@ -1417,6 +1514,8 @@ with sync_playwright() as pw:
     box = page.locator("#sch-times .inv-sites input")
     check(page.locator("#sch-times .inv-sites").count() == 1 and not box.is_checked() and page.is_disabled("#sch-apply"),
           "판 5 PC: 운송장 전송 줄에 '켠 사이트만' (꺼짐), 바뀜 없음")
+    check("수집된 사이트만 전송사이트 수집으로 수집된 사이트만 전송합니다. 비활성화 시 모든 사이트를 전송합니다." in page.text_content("#sch-times .inv-sites"),
+          "이름·설명 글 (사용자 2026-11-03)")
     page.click("#sch-times .inv-sites")
     check(box.is_checked() and not page.is_disabled("#sch-apply"), "켜면 적용 가능")
     page.click("#sch-apply"); time.sleep(1.5)
@@ -1442,6 +1541,25 @@ with sync_playwright() as pw:
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
     db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:00", "days": [0, 1, 2, 3, 4]}]})
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    print("6-7절 1분 단위 시각 (판 6 PC, 사용자 2026-11-03)")
+    el = page.query_selector("#sch-times input[type=time]"); el.fill("09:03"); el.dispatch_event("change")
+    check("5분 단위" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "판 5 PC 는 09:03 을 막는다 (PC 가 거절한다)")
+    db_patch(f"{LIVE}/schedule", {"version": 6})
+    for _ in range(30):                  # 현황이 닿은 뒤 바꾸면 줄을 다시 그려 step 이 1분이 된다
+        el = page.query_selector("#sch-times input[type=time]"); el.fill("09:03"); el.dispatch_event("change")
+        if page.get_attribute("#sch-times input[type=time]", "step") == "60":
+            break
+        time.sleep(0.3)
+    check("5분 단위" not in page.text_content("#sch-limit") and not page.is_disabled("#sch-apply")
+          and page.get_attribute("#sch-times input[type=time]", "step") == "60", "판 6 PC 는 09:03 을 받는다 (1분 단위)")
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = ((cmds_of("set_schedule") or [{}])[-1].get("args") or {}).get("slots") or [{}]
+    check(args[0].get("at") == "09:03", f"09:03 을 PC 로 보냄 ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4]}]})
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    check(page.input_value("#sch-times input[type=time]") == "09:03", "PC 가 돌려준 09:03 그대로 보이고 바뀜 없음")
     db_patch(f"{LIVE}/modules", {"InvoiceSend": None})
     db_patch(f"{LIVE}/schedule", {"version": 2, "days": [0, 1, 2, 3, 4, 5, 6], "slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}]})
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
@@ -1608,6 +1726,22 @@ with sync_playwright() as pw:
     check(vt[0] and not page.is_hidden("#token-card") and vt[1] == "100%" and vt[2] == "전체 실행 1번에 6개 · 약 33번 더 실행할 수 있습니다." and vt[3],
           f"유저: 본문 맨 위 토큰 카드에 같은 막대 ('최근 20일' 위) ({vt})")
     check(page.text_content("#tok-left") == "남은 토큰 200개", f"PC 가 올린 값(150)이 아니라 충전 합계 - 쓴 합을 화면이 센다 - 어느 계정이든 같다 (사용자 2026-10-20) ({page.text_content('#tok-left')})")
+    # W12·R4·R5 (2026-11-03): 반복 멈춤 까닭·예약 안내는 유저에게도 (관리자만 보는 오른쪽 열 밖)
+    check(page.evaluate("!document.getElementById('sidecol').contains(document.getElementById('repeat-line'))"
+                        " && !document.getElementById('sidecol').contains(document.getElementById('sched-note'))"),
+          "반복 멈춤 줄·예약 안내는 오른쪽 열 밖 (유저도 본다)")
+    db_patch(f"{LIVE}/schedule", {"waiting_reason": "옵저버가 실행 중이어서 종료를 기다리는 중입니다."})
+    page.wait_for_function("(document.getElementById('sched-note')?.textContent || '').includes('옵저버')", timeout=10000)
+    check(page.is_visible("#sched-note") and "자동 실행 대기" in page.text_content("#sched-note"), "띄울 차례인데 막힌 까닭 (R5)")
+    db_patch(f"{LIVE}/schedule", {"waiting_reason": None, "unreadable": True})
+    page.wait_for_function("(document.getElementById('sched-note')?.textContent || '').includes('설정 파일')", timeout=10000)
+    check("bad" in (page.get_attribute("#sched-note", "class") or "") and "설정 파일 오류" in page.text_content("#hero .stats"),
+          f"PC 설정 파일을 못 읽으면 빨간 글, 다음 자동 실행 자리에 '설정 파일 오류' (R4) ({page.text_content('#hero .stats')})")
+    db_patch(f"{LIVE}/schedule", {"unreadable": None, "tz": "+0000"})
+    page.wait_for_function("(document.getElementById('sched-note')?.textContent || '').includes('시간대')", timeout=10000)
+    check("UTC+0000" in page.text_content("#sched-note"), "PC 시간대가 한국 표준시가 아니면 알린다 (R13)")
+    db_patch(f"{LIVE}/schedule", {"tz": None})
+    page.wait_for_function("document.getElementById('sched-note')?.hidden === true", timeout=10000)
     db_patch(LIVE, {"tokens": None})
     page.wait_for_function("document.getElementById('token-card')?.classList.contains('hide')", timeout=10000)
     call("DELETE", f"{FS}/wallet/c_demo", None, OWNER)
@@ -1766,7 +1900,8 @@ with sync_playwright() as pw:
     t = show_ver({"version": "2026.09.29-1", "state": "tampered", "changed": ["rpa_dashboard.py"], "modified": ["rpa_dashboard.py"],
                   "changed_count": 1, "missing_count": 0, "signature": "ok", "checked_at": "2026-09-29T10:00:00"},
                  "버전 2026.09.29-1 · 파일 변조됨 (실행 막힘)")
-    check("rpa_dashboard.py" in t and "같은 버전을 다시 보내면" in t and warn(), f"변조면 '실행 막힘', 바뀐 파일과 되돌리는 법은 마우스 글로 ({t})")
+    check("rpa_dashboard.py" in t and "ERPia에 문의" in t and "[업데이트]" not in t and warn(),
+          f"변조면 '실행 막힘', 바뀐 파일과 되돌리는 법은 마우스 글로 - 업체 웹엔 없는 [업데이트] 대신 'ERPia에 문의' (W5) ({t})")
     t = show_ver({"version": "2026.09.29-1", "state": "tampered", "changed": [], "modified": [], "changed_count": 0,
                   "missing_count": 0, "signature": "bad", "checked_at": "2026-09-29T10:00:00"}, "버전 2026.09.29-1 · 파일 변조됨 (실행 막힘)")
     check("서명이 맞지 않습니다" in t, f"목록과 파일을 같이 고쳤으면 서명 불일치로 ({t})")

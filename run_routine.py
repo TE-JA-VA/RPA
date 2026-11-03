@@ -531,7 +531,13 @@ def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
     반환: "ok" | "absent"(아이콘 자체가 없음 - 업체에 그 메뉴가 없다) | "failed"(눌렀지만 진입 확인 실패)
     'absent' 와 'failed' 를 구분하는 이유: 앞의 것은 모듈을 건너뛰어도 되지만 뒤의 것은 실패다.
     조회 중 UIA 오류가 한 번이라도 있었으면 'absent' 로 보지 않는다 (메뉴 없음으로 오판하지 않기 위해).
+    '(2)' 처럼 번호 붙은 같은 화면 탭이 있으면 아이콘이 UIA 에 잡히지 않아 'absent' - 물류대기는 '메뉴가 없는 업체' 로 건너뛰고
+    성공이 됐다 (R7, 2026-11-03). 그래서 찾기 전에 'failed' 로 멈춘다 (탭을 못 읽으면 예전대로. 웰라이프는 번호 탭이 없을 때만 부른다).
     """
+    dup = wellife.numbered_tabs(ctx)
+    if dup:
+        log(f"같은 화면이 여러 개 열려 있어({', '.join(dup)}) '{label}' 아이콘을 찾을 수 없습니다.")
+        return "failed"
     target = None
     waited = 0.0
     errors = 0          # 연속 UIA 오류 횟수
@@ -1743,6 +1749,7 @@ UPLOAD_FILE_RELEASE_WAIT = 10
 
 STOCK_TAB_NAME = "상품별 재고검토"
 STOCK_GENERAL_TAB_NAME = "일반"
+HOLD_SAVE_ONLY_NOTE = "업체 설정: 보류 없이 저장만"   # Routine HoldSaveOnly=Y (사용자 2026-11-03)
 STOCK_SHORTAGE_COL = "부족수량"
 # 상단 그리드에서 한 행을 식별하는 컬럼들
 # (가상화된 '행 N'은 스크롤하면 다른 데이터에 재사용되므로 식별자로 쓸 수 없다)
@@ -4911,34 +4918,44 @@ def check_excel_open_prompt(app, hwnd, rounds=3, wait=1.5):
     return True
 
 
-def run_hold_logistics_step(app, pid, hwnd):
+def run_hold_logistics_step(app, pid, hwnd, save_only=False):
     """물류대기 관리 화면에서의 처리:
     10초 대기
     -> '상품별 재고검토' 탭: 부족수량이 있는 건마다 하단에서 상품코드 일치 행만 체크 + 배송보류
        (STOCK_EXCLUDED_CODES 의 상품코드는 부족수량이 있어도 건너뛴다)
     -> '일반' 탭: 조회 -> 상품상태!=정상 행 체크 -> 우클릭 -> 배송보류
+    save_only (업체 설정 HoldSaveOnly, 사용자 2026-11-03): 보류 두 단계 없이 '일반' 탭 조회 -> 전체선택 -> 저장.
     반환: "done" | "no_target" | "failed"
     """
     log("10초 대기...")
     time.sleep(10)
 
-    # 먼저 '상품별 재고검토' 탭에서 부족수량 건들을 배송보류 처리한다.
-    # (탭이 없거나 대상이 없어도 이어지는 '일반' 탭 루틴은 계속 진행한다)
-    status.step("stock_review")
-    log("\n=== 물류대기: 상품별 재고검토 (부족수량 건 배송보류) ===")
-    try:
-        got = run_stock_review_step(app, pid, hwnd)
-        if got is None:         # 재고검토 조회가 끝나지 않았다 - 일반 탭·저장으로 가지 않는다 (사용자 2026-11-02)
+    if save_only:
+        for key in ("stock_review", "abnormal_hold"):
+            status.skip(key, HOLD_SAVE_ONLY_NOTE)
+        status.step("hold_save")
+        log(f"\n=== 물류대기: 일반 탭 조회 -> 전체선택 -> 저장 ({HOLD_SAVE_ONLY_NOTE}) ===")
+        if not click_subtab(app, hwnd, STOCK_GENERAL_TAB_NAME):   # 못 가면 다른 서브탭의 조회·저장을 누르게 된다 (웰라이프 hold_save 와 같다)
+            log(f"물류대기 '{STOCK_GENERAL_TAB_NAME}' 탭을 찾지 못해 조회·저장하지 않습니다.")
             return "failed"
-        done, total = got
-        if total and done < total:
-            log(f"경고: 상품별 재고검토 {total}건 중 {total - done}건을 처리하지 못했습니다.")
-    except Exception as e:
-        log(f"경고: 상품별 재고검토 처리 중 오류가 발생해 건너뜁니다: {e}")
-        click_subtab(app, hwnd, STOCK_GENERAL_TAB_NAME)
+    else:
+        # 먼저 '상품별 재고검토' 탭에서 부족수량 건들을 배송보류 처리한다.
+        # (탭이 없거나 대상이 없어도 이어지는 '일반' 탭 루틴은 계속 진행한다)
+        status.step("stock_review")
+        log("\n=== 물류대기: 상품별 재고검토 (부족수량 건 배송보류) ===")
+        try:
+            got = run_stock_review_step(app, pid, hwnd)
+            if got is None:         # 재고검토 조회가 끝나지 않았다 - 일반 탭·저장으로 가지 않는다 (사용자 2026-11-02)
+                return "failed"
+            done, total = got
+            if total and done < total:
+                log(f"경고: 상품별 재고검토 {total}건 중 {total - done}건을 처리하지 못했습니다.")
+        except Exception as e:
+            log(f"경고: 상품별 재고검토 처리 중 오류가 발생해 건너뜁니다: {e}")
+            click_subtab(app, hwnd, STOCK_GENERAL_TAB_NAME)
 
-    status.step("abnormal_hold")
-    log("\n=== 물류대기: 일반 탭 처리 ===")
+        status.step("abnormal_hold")
+        log("\n=== 물류대기: 일반 탭 처리 ===")
     win = app.window(handle=hwnd)
     win_rect = win.rectangle()
 
@@ -4979,8 +4996,8 @@ def run_hold_logistics_step(app, pid, hwnd):
     # '상품상태' 컬럼이 보이도록 가로 스크롤.
     # 사용자 지시: 상품상태 컬럼이 안 보이면(=비정상을 판별할 수 없으면) 루틴을 종료하지 말고
     # 배송보류를 건너뛰고 전체 선택 후 저장으로 진행한다.
-    do_hold = scroll_grid_right_to_column(hwnd, grid, "상품상태")
-    if not do_hold:
+    do_hold = not save_only and scroll_grid_right_to_column(hwnd, grid, "상품상태")
+    if not do_hold and not save_only:
         log("'상품상태' 컬럼을 찾지 못해 비정상 배송보류를 건너뛰고 전체 저장으로 진행합니다.")
 
     if do_hold:
@@ -5024,7 +5041,8 @@ def run_hold_logistics_step(app, pid, hwnd):
                 log("  배송보류 실행에 실패하여 전체 저장으로 진행합니다.")
 
     # 후반 처리: 전체선택 -> 저장 -> 비동기 대기 (배송보류 여부와 무관하게 항상 실행)
-    status.step("hold_save")
+    if not save_only:                 # 저장만은 조회 전에 이미 이 단계 (다시 부르면 시작 시각이 조회 뒤로 밀린다)
+        status.step("hold_save")
     log("\n=== 물류대기: 전체선택 -> 저장 ===")
     return run_hold_save(app, pid, hwnd)
 
@@ -5729,8 +5747,9 @@ def run_self_check():
         log("실행 모듈   : " + " / ".join(
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
         for k in unknown:
-            if k not in ROUTINE_MODE_KEYS:
+            if k not in ROUTINE_MODE_KEYS and k != pl.HOLD_SAVE_ONLY_KEY:
                 log(f"  -> 경고: '{pl.ROUTINE_SECTION}' 섹션의 '{k}' 는 모르는 키입니다 (무시됨)")
+        log(f"물류대기    : {'일반 탭 조회 -> 전체선택 -> 저장만' if pl.load_hold_save_only() else '재고검토·비정상 배송보류 뒤 저장'}")
     except Exception as e:
         log(f"실행 모듈   : 읽기 실패 - {e}")
 
@@ -5877,7 +5896,7 @@ def goto_order_screen(ctx):
         return True, None
     if r == "absent":
         return False, "'lcg_OrderCollect' 아이콘을 찾지 못했습니다 (30초 대기 후)."
-    return False, "주문매핑 매출처리 화면으로 이동하지 못했습니다. (로그에 활성 탭·탭 목록)"
+    return False, "주문매핑 매출처리 화면으로 이동하지 못했습니다. (로그에 활성 탭·탭 목록)" + wellife.dup_note(ctx)
 
 
 # 함께 실행 (모든 업체, 사용자 2026-10-20): 프리페어가 함께 띄운 루틴이면 main 이 업체가 고른 방식을 적는다. None 이면 예전 그대로.
@@ -6005,9 +6024,19 @@ def module_excel(ctx):
                 uploaded, errors = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, top_left)
             except Exception as e:
                 log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
+                status.keep_record()      # 반복 회차라도 기록에 남긴다 - 못 올린 파일은 폴더에 그대로 (R2, 2026-11-03)
                 return "skipped", f"엑셀업로드 오류로 건너뜀: {e}"
         note = f", 오류 폴더로 {errors}개 (확인할 것)" if errors else ""
-        return ("done", f"엑셀 {uploaded}개 업로드{note}") if uploaded else ("skipped", f"올릴 엑셀 없음{note}")
+        if uploaded:
+            return "done", f"엑셀 {uploaded}개 업로드{note}"
+        # 하나도 못 올렸는데 파일은 있었다 (모두 오류 폴더로·파일 창을 못 엶) - '올릴 엑셀 없음' 과 가르고, 반복 회차라도 기록에 남긴다.
+        # 토큰은 그대로 0 (건너뜀) - R2, 2026-11-03
+        left = len(wellife.upload_paths(sys.modules[__name__]))
+        if errors or left:
+            status.keep_record()
+            return "skipped", (f"엑셀을 하나도 올리지 못했습니다{note}"
+                               + (f", 올리지 못해 남은 파일 {left}개 ({wellife.LEFT_NOTE})" if left else ""))
+        return "skipped", "올릴 엑셀 없음"
     try:
         return order_module(ctx, "excel_upload", body)
     finally:
@@ -6144,7 +6173,12 @@ def sales_flow(ctx, win, bottom):
 
 
 def module_hold(ctx):
-    """물류대기 관리: 화면 이동 -> 재고검토 배송보류 -> 일반 탭 비정상 배송보류 -> 저장."""
+    """물류대기 관리: 화면 이동 -> 재고검토 배송보류 -> 일반 탭 비정상 배송보류 -> 저장.
+    업체가 Routine HoldSaveOnly=Y 로 고르면 보류 두 단계 없이 일반 탭 조회 -> 전체선택 -> 저장 (사용자 2026-11-03)."""
+    try:
+        save_only = pl.load_hold_save_only()
+    except Exception as e:
+        return "failed", f"설정 오류: {e}"
     status.step("hold_screen")
     log("\n=== 물류대기 화면 이동 ===")
     r = goto_hold_screen(ctx)
@@ -6154,10 +6188,11 @@ def module_hold(ctx):
             status.skip(key, "물류대기 메뉴가 없는 업체")
         return "skipped", "물류대기 메뉴가 없는 업체"
     if r != "ok":
-        return "failed", "물류대기 화면으로 이동하지 못했습니다."
+        return "failed", "물류대기 화면으로 이동하지 못했습니다." + wellife.dup_note(ctx)
 
     log("\n=== 물류대기 처리 ===")
-    result = run_hold_logistics_step(ctx.app, ctx.pid, ctx.hwnd)
+    result = (run_hold_logistics_step(ctx.app, ctx.pid, ctx.hwnd, save_only=True) if save_only
+              else run_hold_logistics_step(ctx.app, ctx.pid, ctx.hwnd))
     if result == "no_target":
         return "no_target", "물류대기 그리드에 행이 없어 저장하지 않았습니다."
     if result != "done":
@@ -6178,7 +6213,7 @@ def module_logistics(ctx):
     if r == "absent":
         return "failed", "'물류처리' 아이콘을 찾지 못했습니다."
     if r != "ok":
-        return "failed", "물류 관리 화면으로 이동하지 못했습니다."
+        return "failed", "물류 관리 화면으로 이동하지 못했습니다." + wellife.dup_note(ctx)
 
     options = ctx.logistic_options()
     log(f"\n물류 관리 설정값: {options}")
@@ -6234,7 +6269,7 @@ def module_output(ctx):
         r = goto_logistics_screen(ctx)
         if r != "ok":
             return "failed", ("'물류처리' 아이콘을 찾지 못했습니다." if r == "absent"
-                              else "물류 관리 화면으로 이동하지 못했습니다.")
+                              else "물류 관리 화면으로 이동하지 못했습니다." + wellife.dup_note(ctx))
         prefetch_auto_ids(ctx.window(), [AUTO_MODE_COMBO])
         log("자동/수동 모드 설정")
         _, mode_ok = apply_auto_mode(ctx.app, ctx.hwnd, ctx.logistic_options())
@@ -6388,6 +6423,18 @@ def wellife_route(policy_on, has_section):
     return ("stop", "이 업체는 웰라이프 실행이 열려 있지 않습니다 (관리 화면)") if has_section else ("routine", None)
 
 
+def config_problem():
+    """관문이 멈출 때 설정 파일을 못 읽은 것이면 그 까닭. 메모장으로 고치다 깨진 파일을 '웰라이프 설정이 없습니다' 나
+    '열려 있지 않습니다 (관리 화면)' 로 잘못 알리지 않게 (사용자 2026-11-03). 둘 다 읽히면 None."""
+    if status.read_settings().get(status.SETTINGS_UNREADABLE):
+        return f"설정 파일 오류: {os.path.basename(status.settings_path())}을(를) 읽지 못했습니다."
+    try:
+        pl.load_settings()
+    except Exception as e:
+        return f"설정 파일 오류: {e}"
+    return None
+
+
 def together_setup(rr, selected):
     """프리페어가 함께 띄운 루틴(TOGETHER_ENV)이면 업체가 고른 방식을 TOGETHER_MODE 에 적는다 (모든 업체, 사용자 2026-10-20).
     엑셀 수집을 안 하거나 '순서대로' 면 사이트 수집이 끝나기를 기다린 뒤 예전처럼 돈다 (예전 차례). 함께 올리면 로그인 창에
@@ -6417,6 +6464,7 @@ def main():
         wellife.run_main(rr)
         return
     if route == "stop":
+        why = config_problem() or why
         status.start("routine", ROUTINE_STEPS)
         log(f"웰라이프 관문: {why}")
         status.finish("stopped", why)
@@ -6443,7 +6491,7 @@ def main():
             log(f"=== PROCESS 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
             return
     for k in unknown:
-        if k in ROUTINE_MODE_KEYS and not from_env:
+        if (k in ROUTINE_MODE_KEYS or k == pl.HOLD_SAVE_ONLY_KEY) and not from_env:   # 모듈이 아닌 업체 설정 - 모르는 키가 아니다
             continue
         log(f"경고: 예약에서 넘긴 '{k}' 는 모르는 모듈이라 무시합니다." if from_env
             else f"경고: '{pl.ROUTINE_SECTION}' 섹션의 '{k}' 는 모르는 키라 무시합니다.")
@@ -6460,6 +6508,13 @@ def main():
     together_setup(rr, selected)
 
     result, reason = run_modules(selected)
+    if result == "success" and reason is None and selected.get("InvoiceSend"):   # 운송장번호 전송이 리허설·1건이면 사유에 (R9, 2026-11-03)
+        try:
+            live = wellife.load_mode(rr, wellife.INVOICE_MODE_KEY, pl.ROUTINE_SECTION)
+        except Exception:
+            live = True     # 모드를 못 읽었으면 그 모듈이 이미 실패로 멈췄다
+        if live is not True:
+            reason = f"시험 모드 포함: 운송장번호 전송 {wellife.mode_tag(live)}"
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
             and not [k for k in (status.done_modules() or []) if k != "login"]:
         log("반복 회차 - 처리한 것이 없어 기록에 남기지 않습니다")

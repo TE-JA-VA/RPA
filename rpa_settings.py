@@ -39,6 +39,7 @@ AGENT_CONFIG_NAME = "agent_config.json"
 PRESET_STASH = "이전 업체 프리셋"     # 업체코드를 바꾸며 비운 프리셋을 옮겨 두는 폴더 (config 안, 사용자 2026-10-15)
 # 설정 창은 하나만 - 두 창이 각자 저장하면 늦은 창이 앞 창의 업체코드·계정을 연 때의 옛 값으로 덮는다 (2026-10-22)
 SETTINGS_LOCK = os.environ.get("RPA_SETTINGS_LOCK") or r"Local\AFTER_MARKET_RPA_SETTINGS"
+RECHECK_MS = 90_000   # 저장 뒤 에이전트 상태를 다시 보는 때 - 감독이 켜고 로그인하기까지 약 1분 (S11)
 LOGISTIC_SECTION = "Logistic"
 KEY_RE = re.compile(r"[a-z0-9_]+")               # 업체코드·PC코드 (agent.ask_key 와 같은 규칙)
 AGENT_PY_RE = re.compile(r"""(^|[\\/\s"'])agent\.py\b""", re.IGNORECASE)
@@ -364,11 +365,27 @@ def load_state(paths):
     agent_state = pw_state(raw.get("password_dpapi"), secret.unprotect)
     if stopped and stopped.get("code") == 3 and agent_state == "ok":
         agent_state = "refused"          # 저장된 값은 풀리지만 Firebase 가 거부했다 - 새 비밀번호가 있어야 다시 켤 수 있다
+    # 쇼핑몰 프리셋 비밀번호도 본다 - 윈도우 계정이 바뀌면 이 창의 두 칸만 다시 받고, 프리셋은 옵저버에서 다시 넣어야 한다 (S5, 2026-11-03)
+    sites = _section(data, st.SITES_SECTION)
+    bad_presets = sorted(int(k[6:]) for k, s in sites.items() if st.is_preset_site(k) and isinstance(s, dict)
+                         and "bad" in (pw_state(s.get("PW"), st.unseal), pw_state(s.get("MailPW"), st.unseal)))
     state = {"agent_pw": agent_state,
              "erp_pw": pw_state(login.get("PW"), st.unseal),
              "saved": (raw.get("cid"), raw.get("pc_id")),
-             "stopped": stopped, "erpia_missing": not exe, "broken": broken}
+             "stopped": stopped, "erpia_missing": not exe, "broken": broken, "bad_presets": bad_presets,
+             # 다른 윈도우 계정에서 저장한 설정 - 예약(바탕화면 RPA_STATUS)은 옛 계정 바탕화면에 남아 옮기지 못한다 (S5)
+             "other_user": bool(raw.get("windows_user")) and str(raw.get("windows_user")).lower() != WINDOWS_USER().lower()}
     return form, state
+
+
+WINDOWS_USER = lambda: f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}"   # noqa: E731 - secret.save 가 적는 windows_user 와 같은 모양 (시험이 바꿔 끼운다)
+
+
+def preset_pw_note(state):
+    """못 푸는 쇼핑몰 프리셋 비밀번호 안내 한 줄 (없으면 "")."""
+    nos = state.get("bad_presets") or []
+    return (f"쇼핑몰 프리셋 {''.join(map(st.circled, nos))}의 비밀번호를 이 윈도우 계정에서 읽을 수 없습니다. "
+            "옵저버에서 다시 입력한 뒤 [저장]하여 주십시오.") if nos else ""
 
 
 def read_stop(path):
@@ -525,6 +542,10 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
     done.append("설정을 저장하였습니다.")
     if not st._erpia_file(_section(merged, st.ERPIA_SECTION).get("ExePath")):
         done.append("ERPia를 아직 찾지 못했습니다. ERPia를 설치한 뒤 '오토파일럿 설정'에서 위치를 선택하여 주십시오.")
+    if preset_pw_note(state):
+        done.append(preset_pw_note(state))
+    if state.get("other_user"):
+        done.append("윈도우 계정이 바뀌었습니다. 자동 실행 예약이 비어 있으면 웹 환경설정 '자동 실행'에서 다시 [적용]하여 주십시오.")
     register_task(task_xml(user or process_user(), paths["program_dir"]), paths["config_dir"], run)
     running = running or agent_running
     if relogin or not running():
@@ -538,9 +559,11 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
 
 
 def configured(paths):
-    """두 설정 파일이 다 있고 읽히나 - 에이전트 계정 비밀번호까지 풀려야 한다 (판을 올린 설치면 참)."""
+    """두 설정 파일이 다 있고 읽히나 - 에이전트 계정 비밀번호까지 풀려야 한다 (판을 올린 설치면 참).
+    에이전트가 로그인을 거부당해(멈춤 코드 3 - 비밀번호 재발급 등) 멈춘 PC 는 아니다 - 다시 설치하면 새 비밀번호를 받는 창을 띄운다 (S6, 2026-11-03).
+    거부된 에이전트는 원격 업데이트 명령을 받지 못하므로 업데이트 도우미의 --after-install 에는 영향이 없다."""
     import secret
-    if not os.path.isfile(paths["user_config"]):
+    if not os.path.isfile(paths["user_config"]) or (read_stop(paths.get("stop_file")) or {}).get("code") == 3:
         return False
     try:
         secret.load_config(paths["agent_config"])
@@ -813,6 +836,8 @@ class SettingsWindow:
         self.set_status()
         if self.state.get("broken"):                # (BugBuster L2)
             self.say(f"설정 파일이 깨져 있습니다. ({self.state['broken']}) 값을 다시 입력한 뒤 [저장]하면 새로 저장합니다.")
+        elif preset_pw_note(self.state):            # 윈도우 계정이 바뀐 PC (S5)
+            self.say(preset_pw_note(self.state), AMBER)
 
     def set_hint(self, key, text, color=PLACEHOLDER):
         self.hints[key][0].configure(text=text, fg=color)
@@ -947,8 +972,15 @@ class SettingsWindow:
         self.reload()
         if "에이전트를 실행하였습니다." in value:
             self.set_status(starting=True)       # 감독이 인증서를 채우고 잠금을 잡기까지 '꺼져 있음' 으로 보이지 않게
+            self.root.after(RECHECK_MS, self.recheck_status)
         self.say(" ".join(value), GREEN)
         self.after_saved()
+
+    def recheck_status(self):
+        """저장하고 에이전트를 켠 뒤 한 번 다시 본다 - 그대로 두면 창을 닫을 때까지 '실행 준비 중' 에 머물렀다 (S11, 2026-11-03).
+        로그인이 거부되면 감독이 남긴 멈춤 까닭이 보인다."""
+        self.state["stopped"] = read_stop(self.paths.get("stop_file"))
+        self.set_status()
 
     def after_saved(self):
         if self.imported_from:
@@ -990,7 +1022,7 @@ class SettingsWindow:
         bad = [label for key, label in (("agent_pw", "에이전트 계정"), ("erp_pw", "ERPia")) if self.state[key] == "bad"]
         self.say(f"설정값을 가져왔습니다. ({', '.join(names)}) "
                  + (f"다른 PC·계정에서 암호화한 비밀번호이므로 다시 입력하여 주십시오: {', '.join(bad)}. " if bad else "")
-                 + "확인한 뒤 [저장]을 눌러 주십시오.", GREEN)
+                 + "확인한 뒤 [저장]을 눌러 주십시오." + (" " + preset_pw_note(self.state) if preset_pw_note(self.state) else ""), GREEN)
 
     def on_close(self):
         if self.busy_now:

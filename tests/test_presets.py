@@ -437,10 +437,15 @@ st.write_user_config({"LogIn": {"AdminCode": "t", "ID": "erp", "PW": "erp-pw"},
                                             "Stts": 0, "Preset": 1, "note": "몰1"}}})
 st.save_preset_sites(good, {1: ("seller01", None)})
 kept = st.read_user_config()["Sites"]["PRESET1"]["Stts"]
-st.save_preset_sites(good, {1: ("seller01", None)}, fresh={1})
-fresh = st.read_user_config()["Sites"]["PRESET1"]["Stts"]
-check("다시 기록한 프리셋은 꺼진 채로 (확인 전에 자동 실행에 끼지 않게), 손대지 않은 것은 켬 그대로",
-      kept == 0 and fresh == 9, f"kept={kept} fresh={fresh}")
+st.save_preset_sites(good, {1: ("seller01", None)})       # 다시 기록·[수정] 한 뒤 저장도 같은 길 (fresh 를 넘기지 않는다)
+again = st.read_user_config()["Sites"]["PRESET1"]["Stts"]
+check("다시 기록·[수정] 한 프리셋도 켬/끔 그대로 (사용자 2026-11-03)", kept == 0 and again == 0, f"kept={kept} again={again}")
+other = [dict(good[0], code="999")]
+st.save_preset_sites(other, {1: ("seller01", None)})
+moved = st.read_user_config()["Sites"]["PRESET1"]["Stts"]
+st.save_preset_sites(other + [dict(good[0], no=2)], {1: ("seller01", None), 2: ("seller02", "pw2")})
+new = st.read_user_config()["Sites"]["PRESET2"]["Stts"]
+check("사이트코드가 바뀐 칸(다른 사이트를 불러와 덮음)·새 칸은 꺼짐", moved == 9 and new == 9, f"moved={moved} new={new}")
 
 with web_replay.sync_playwright() as pw_:
     browser = web_replay.edge(pw_.chromium.launch)
@@ -721,6 +726,10 @@ check("A8: 마지막 단계가 성공해 [수정] 이 무시되면 상태 글로
 f.editing, f.previewing = False, True
 rr.App._preview_done(f, True, [], 3.0, None)
 check("A8: [수정] 을 안 눌렀으면 지금 글 그대로", said[-1] == "미리보기 성공 (3초) - 받은 파일: 없음", str(said))
+f.previewing = True
+rr.App._preview_done(f, True, ["(012)주문.csv"], 3.0, None)
+check("(iii) 2026-11-03: 업로드 안 되는 csv 를 받았으면 미리보기 상태 줄에도 [주의] (예전엔 로그에만)",
+      "[주의]" in said[-1] and "csv" in said[-1], str(said))
 f.closing = True
 check("A8: 닫는 중이면 _close_now 로 True", rr.App._preview_done(f, False, [], 0, None) is True)
 asked = []
@@ -939,6 +948,18 @@ check("삭제만 하고 저장하지 않은 채 닫으면 묻는다 - 아니오�
 rr.App.save(app)
 rr.App.quit(app)
 check("저장한 뒤에는 묻지 않고 닫는다", closed == [1] and len(app.asked) == 2 and app.said[-1] == "저장했습니다.", str((closed, app.asked, app.said)))
+# 칸만 고치고 닫기 (사용자 2026-11-03 - 비밀번호만 바꾸고 X 를 누르면 묻지 않고 버렸다)
+for what, edit in (("비밀번호", lambda p: p.update(pw="새-비밀번호")), ("사이트코드", lambda p: p.update(code="099")),
+                   ("발신번호", lambda p: p.update(senders="1588-0000")), ("단계 빼기", lambda p: p["deleted"].add("s9"))):
+    closed.clear(); app.asked.clear(); answers[:] = [False]
+    edit(app.presets[0])
+    rr.App.quit(app)
+    check(f"{what}만 고치고 닫으면 묻는다 - 아니오면 안 닫는다", closed == [] and len(app.asked) == 1 and "저장하지 않은 변경" in app.asked[0],
+          str((closed, app.asked)))
+    rr.App.save(app)
+closed.clear(); app.asked.clear()
+rr.App.quit(app)
+check("고친 것을 저장한 뒤에는 묻지 않는다", closed == [1] and app.asked == [], str((closed, app.asked)))
 
 print("=== 메일 2차인증 계정 (설계 2026-11-02 5절) ===")
 _keep_mail = {f: open(f, "rb").read() for f in (st.presets_path(), st.user_config_path()) if os.path.exists(f)}

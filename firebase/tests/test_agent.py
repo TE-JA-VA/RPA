@@ -788,6 +788,17 @@ ran = []
 cmds = ag.Commands(DenyRunning(), "c_demo", "pc_office", {"launch": lambda args: ran.append(1)})
 check(cmds.handle("k7", dict(ok_cmd), NOW) == "deferred" and ran == [], "running 표시를 못 하면 실행하지 않고 deferred")
 
+# R4·R5 (2026-11-03): 웹에 올리는 예약 - 못 읽으면 마지막 값 + unreadable, 막힌 까닭은 waiting_reason
+import rpa_status as _st  # noqa: E402
+good = {"schedule": {"enabled": True, "slots": [{"at": "09:00"}]}}
+last, up_ = ag.live_schedule(good, None, None)
+check(up_.get("enabled") is True and up_.get("unreadable") is None and up_.get("waiting_reason") is None, "읽히면 그대로, 표시 없음")
+bad = {"schedule": {"enabled": False, "slots": []}, _st.SETTINGS_UNREADABLE: True}
+last2, up2 = ag.live_schedule(bad, last, "옵저버가 실행 중이어서 종료를 기다리는 중입니다.")
+check(last2 is last and up2.get("enabled") is True and up2.get("unreadable") is True and "옵저버" in up2.get("waiting_reason"),
+      "못 읽으면 마지막 예약 + unreadable (예약기는 그동안 멈춰 있다), 막힌 까닭도")
+check(ag.live_schedule(good, last2, None)[1].get("unreadable") is None, "다시 읽히면 표시가 없어진다")
+
 print("\n5절 실제 동작 - 실행 모듈 (가짜 자격증명 파일)")
 with tempfile.TemporaryDirectory() as d:
     cred = os.path.join(d, "ERPIA_AI.txt")
@@ -831,6 +842,19 @@ with tempfile.TemporaryDirectory() as d:
         check(st.read_routine_modules()[0]["Output"] is True, "물류관리가 켜져 있으면 출력을 켤 수 있다")
         acts["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": False})
         check(st.read_routine_modules()[0]["Output"] is False, "물류관리가 켜져 있어도 출력만 끌 수 있다")
+        # 물류대기 '재고검토 사용' (HoldSaveOnly, 사용자 2026-11-03) - 같은 명령에 실어 온다. 옛 화면(키 없음)은 손대지 않는다
+        check(st.read_hold_save_only() is False, "처음엔 재고검토 사용 (HoldSaveOnly 없음)")
+        acts["set_modules"]({"Sales": True, "Hold": True, "HoldSaveOnly": True})
+        check(st.read_hold_save_only() is True and st.read_routine_modules()[0]["Hold"] is True, "재고검토 끔 → HoldSaveOnly=Y, 모듈은 그대로")
+        acts["set_modules"]({"Sales": True, "Hold": True})
+        check(st.read_hold_save_only() is True, "옛 화면이 키 없이 보내면 HoldSaveOnly 는 그대로")
+        acts["set_modules"]({"Sales": True, "Hold": True, "HoldSaveOnly": "Y"})
+        check(st.read_hold_save_only() is True, "참/거짓이 아닌 값은 무시")
+        acts["set_modules"]({"Sales": True, "Hold": True, "HoldSaveOnly": False})
+        check(st.read_hold_save_only() is False and json.load(open(new, encoding="utf-8"))["Routine"]["HoldSaveOnly"] == "N",
+              "재고검토 켬 → HoldSaveOnly=N")
+        check("hold_review" in str(ag.live_bodies({"hold_review": False})[0]) or ag.live_bodies({"hold_review": False})[0] != ag.live_bodies({})[0],
+              "재고검토 값만 바뀌어도 현황을 올린다")
         # 업체 정책 (총괄이 정한 '이 업체는 안 씀'). 화면을 우회한 명령도 여기서 막힌다
         strict = ag.real_actions(lambda: {"Hold": False})
         strict["set_modules"]({"Sales": True, "Hold": True, "Logistics": True, "Output": True})

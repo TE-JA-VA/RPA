@@ -217,6 +217,20 @@ _real_run_print_step = rr.run_print_step             # 6절이 가짜로 바꾸�
 _real_run_logistics_step = rr.run_logistics_step     # 7절이 가짜로 바꾸므로 8절에서 되살린다
 _real_run_hold_logistics_step = rr.run_hold_logistics_step   # 8절이 가짜로 바꾸므로 조회 대기 시험(A13)에서 진짜를 쓴다
 
+# R6 (2026-11-03): ERPia 는 이 윈도우 세션 것만 센다 - 다른 계정의 ERPia 는 창을 잡지도 끄지도 못한다. 세션을 못 읽으면 예전처럼
+_real_ec = rr.ec
+_queries = []
+_orig_get = _real_ec.win32com.client.GetObject
+_real_ec.win32com.client.GetObject = lambda name: types.SimpleNamespace(ExecQuery=lambda q: _queries.append(q) or [])
+_real_ec.erpia_pids()
+_orig_sid = _real_ec.session_id
+_real_ec.session_id = lambda: None
+_real_ec.erpia_pids()
+_real_ec.session_id = _orig_sid
+_real_ec.win32com.client.GetObject = _orig_get
+check("ERPia 프로세스는 이 세션 것만 (세션을 못 읽으면 이름만)",
+      len(_queries) == 2 and f"SessionId={_orig_sid()}" in _queries[0] and "SessionId" not in _queries[1], str(_queries))
+
 print()
 print("=== 3. 모듈 표 / 컨텍스트 / 화면 진입 ===")
 rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime=_time.strftime)
@@ -275,6 +289,20 @@ check("모듈 단계 키를 모두 합치면 ROUTINE_STEPS 와 같다", sorted(k
 
 rr.find_by_text = lambda win, key, control_types=(): None
 check("아이콘 없음 -> absent", rr.goto_screen_by_icon(make_ctx(), "lcg_X", "엑스", "엑스", wait_seconds=2) == "absent")
+# R7 (2026-11-03): 번호 붙은 같은 화면 탭이 있으면 아이콘이 안 잡혀 'absent'(메뉴 없는 업체 = 건너뜀·성공)로 오판했다 - 찾지 않고 failed
+_saved_nt = rr.wellife.numbered_tabs
+rr.wellife.numbered_tabs = lambda ctx: ["물류대기 관리 (2)"]
+looked = []
+rr.find_by_text = lambda win, key, control_types=(): looked.append(key)
+check("번호 붙은 탭이 있으면 아이콘을 찾지 않고 failed", rr.goto_screen_by_icon(make_ctx(), "lcg_X", "엑스", "엑스", wait_seconds=2) == "failed"
+      and looked == [])
+_saved_gh = rr.goto_hold_screen
+rr.goto_hold_screen = lambda ctx: "failed"
+res = rr.module_hold(make_ctx())
+check("물류대기 실패 사유에 '여러 개 열려' 안내", res[0] == "failed" and "여러 개 열려" in res[1] and "(2)" in res[1], str(res))
+rr.goto_hold_screen = _saved_gh
+rr.wellife.numbered_tabs = _saved_nt
+rr.find_by_text = lambda win, key, control_types=(): None
 
 el = FakeEl()
 rr.find_by_text = lambda win, key, control_types=(): el
@@ -345,7 +373,8 @@ check("goto_logistics(폴백형) 는 없어졌다", not hasattr(rr, "goto_logist
 check("run_hold_save_and_goto_logistics 도 없어졌다", not hasattr(rr, "run_hold_save_and_goto_logistics"))
 
 rr.pl = types.SimpleNamespace(find_login_window=lambda: None, load_logistic_options=lambda: {},
-                              load_credentials=pl.load_credentials, ROUTINE_SECTION="Routine")
+                              load_credentials=pl.load_credentials, ROUTINE_SECTION="Routine",
+                              load_hold_save_only=lambda: pl.load_hold_save_only(), HOLD_SAVE_ONLY_KEY=pl.HOLD_SAVE_ONLY_KEY)
 ctx = make_ctx()
 rr.acquire_main_window = lambda pid, tries=12: (None, None, None)
 ok, reason = ctx.attach()
@@ -580,6 +609,23 @@ res = rr.module_hold(make_ctx())
 check("저장할 행이 없으면 no_target", res[0] == "no_target" and "행이 없어" in res[1], str(res))
 rr.run_hold_logistics_step = lambda app, pid, hwnd: "done"
 check("정상이면 done", rr.module_hold(make_ctx()) == ("done", None))
+# 업체 설정 '저장만' (Routine HoldSaveOnly, 사용자 2026-11-03) - 없으면 예전대로, Y 면 save_only, 이상한 값이면 화면에 가기 전에 멈춤
+_saved_settings = pl.load_settings
+seen = []
+rr.run_hold_logistics_step = lambda app, pid, hwnd, save_only=False: seen.append(save_only) or "done"
+with_settings({"Routine": {"Hold": "Y"}})
+check("HoldSaveOnly 가 없으면 예전 흐름 (보류 뒤 저장)", rr.module_hold(make_ctx()) == ("done", None) and seen == [False], str(seen))
+seen.clear()
+with_settings({"Routine": {"HoldSaveOnly": " y "}})
+check("HoldSaveOnly=Y 면 저장만", rr.module_hold(make_ctx()) == ("done", None) and seen == [True], str(seen))
+seen.clear()
+rec = StatusRec()
+rr.status = rec
+with_settings({"Routine": {"HoldSaveOnly": "yes"}})
+res = rr.module_hold(make_ctx())
+check("HoldSaveOnly 가 Y/N 이 아니면 화면에 가지 않고 failed", res[0] == "failed" and "HoldSaveOnly" in res[1] and seen == []
+      and not rec.of("step"), str(res))
+pl.load_settings = _saved_settings
 
 
 # run_hold_save 자체: 0건 -> no_target, 세기 실패 -> 예전처럼 진행
@@ -710,6 +756,22 @@ rr.wait_grid_spinner_gone = lambda *a, **k: False
 rr.run_stock_review_step = lambda app, pid, hwnd: (0, 0)
 check("run_hold_logistics_step: 일반 탭 조회가 끝나지 않으면 저장하지 않고 failed",
       _real_run_hold_logistics_step(hold_app, 4242, 777) == "failed")
+# 저장만 (HoldSaveOnly, 사용자 2026-11-03): 재고검토·상품상태 정렬 없이 일반 탭 → 조회 → 전체선택·저장
+rr.wait_grid_spinner_gone = lambda *a, **k: True
+tabs, stock, scroll = [], [], []
+rr.click_subtab = lambda app, hwnd, name: tabs.append(name) or True
+rr.run_stock_review_step = lambda app, pid, hwnd: stock.append(1) or (0, 0)
+rr.scroll_grid_right_to_column = lambda *a: scroll.append(1) or True
+rec = StatusRec()
+rr.status = rec
+check("run_hold_logistics_step 저장만: 일반 탭 조회 뒤 저장, 재고검토·비정상 보류는 '건너뜀'",
+      _real_run_hold_logistics_step(hold_app, 4242, 777, save_only=True) == "done" and tabs == ["일반"] and stock == [] and scroll == []
+      and [s[0] for s in rec.of("skip")] == ["stock_review", "abnormal_hold"], str((tabs, stock, scroll, rec.of("skip"))))
+rr.click_subtab = lambda app, hwnd, name: False
+saves = []
+rr.run_hold_save = lambda app, pid, hwnd: saves.append(1) or "done"
+check("run_hold_logistics_step 저장만: 일반 탭으로 못 가면 다른 탭을 저장하지 않고 failed",
+      _real_run_hold_logistics_step(hold_app, 4242, 777, save_only=True) == "failed" and saves == [])
 for n, f in _saved_q.items():
     setattr(rr, n, f)
 rr.wait_grid_spinner_gone = lambda *a, **k: True
@@ -824,6 +886,14 @@ rr.main()
 sm = rec.of("set_modules")
 check("정상이면 set_modules 에 (키, 이름, 단계, 비트) 8개", bool(sm) and [m[3] for m in sm[0][0]] == [1, 2048, 1024, 2, 4, 8, 16, 512], str(sm))
 check("정상이면 run_modules 로 간다 + finish(success)", ran and rec.of("finish")[-1] == ("success", None), str(rec.of("finish")))
+# R9 (2026-11-03): 운송장번호 전송이 리허설·1건이면 '성공' 사유에 시험 모드 (빠지면 리허설 - Routine)
+for sec, want in (({"InvoiceSend": "Y"}, "시험 모드 포함: 운송장번호 전송 리허설"), ({"InvoiceSend": "Y", "InvoiceMode": "실행"}, None)):
+    rr.pl.load_settings = lambda s=sec: {"Routine": s}
+    rr.pl.config_name, rr.pl.LOGIN_SECTION = (lambda: "RPA_UserConfig.json"), "LogIn"
+    rec = StatusRec(); rr.status = rec
+    rr.main()
+    check(f"운송장번호 전송 {sec.get('InvoiceMode', '모드 없음')} → 성공 사유 {want!r}", rec.of("finish")[-1] == ("success", want), str(rec.of("finish")))
+del rr.pl.load_settings, rr.pl.config_name, rr.pl.LOGIN_SECTION
 
 print()
 print("=== 11. 예약이 넘긴 이번 실행 모듈 (RPA_RUN_MODULES, 2026-10-07) ===")
@@ -1008,11 +1078,24 @@ for name, f, want, res_want in (("module_import", rr.module_import, [("goto",), 
     check(f"{name}: " + " -> ".join(a[0] if len(a) == 1 else a[1] for a in want) + f" ({res_want})",
           sales_acts == want and res[0] == res_want, f"{sales_acts} {res}")
 check("매출처리 모듈은 하단 선택 단계부터 찍는다", rr.status.of("step")[0] == ("bottom_select",), str(rr.status.of("step")))
+_saved_up = rr.wellife.upload_paths
+rr.wellife.upload_paths = lambda r: set()      # 진짜 바탕화면 폴더를 읽지 않게 (R2 의 남은 파일 수)
 for ret, want, why in (((0, 0), "skipped", "올릴 엑셀이 없으면 건너뜀 (토큰 0)"), ((0, 2), "skipped", "올린 게 없고 오류 폴더로만 가면 건너뜀 + 사유에 오류 수"),
                        ((3, 1), "done", "올린 게 있으면 완료 + 사유에 수"), (RuntimeError("흉내"), "skipped", "오류가 나도 뒤 모듈은 이어간다 (예전 엑셀업로드와 같다)")):
     EXCEL_RET[0] = ret
     res = rr.module_excel(make_ctx())
     check(f"엑셀 수집 {ret!r}: {why}", res[0] == want and (not isinstance(ret, tuple) or not ret[1] or f"{ret[1]}개" in res[1]), str(res))
+# R2 (2026-11-03): 하나도 못 올렸는데 파일이 있었으면 '올릴 엑셀 없음' 과 가르고 반복 회차라도 기록에 남긴다 (토큰은 그대로 0)
+for ret, left, keep, word in (((0, 0), set(), False, "올릴 엑셀 없음"), ((0, 2), set(), True, "하나도 올리지 못했습니다"),
+                              ((0, 0), {"a.xlsx"}, True, "남은 파일 1개"), ((3, 0), {"a.xlsx"}, False, "3개 업로드"),
+                              (RuntimeError("흉내"), set(), True, "오류로 건너뜀")):
+    EXCEL_RET[0] = ret
+    rr.wellife.upload_paths = lambda r, s=left: set(s)
+    rr.status = StatusRec()
+    res = rr.module_excel(make_ctx())
+    check(f"엑셀 수집 {ret!r} 남은 {len(left)}: 기록 남김 {keep}, 사유 '{word}'",
+          word in res[1] and bool(rr.status.of("keep_record")) == keep, f"{res} {rr.status.of('keep_record')}")
+rr.wellife.upload_paths = _saved_up
 EXCEL_RET[0] = (2, 0)
 # 자동 수집: [가져오기] 를 누르지 못했으면(단추 없음·클릭 실패 - None) 건너뜀(토큰 0), 누른 뒤 끝을 못 봤으면(False) 예전처럼 완료 (사용자 2026-11-02)
 for ret, want, why in ((None, "skipped", "누르지 못했으면 건너뜀 (토큰 0)"), (False, "done", "눌렀으면 끝을 못 봐도 완료 (토큰)")):

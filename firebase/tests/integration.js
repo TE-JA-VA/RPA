@@ -120,6 +120,8 @@ await waitFor("heartbeat 가 올라온다", async () =>
   typeof (await db.ref("apps/rpa/live/c_demo/pc_office/heartbeat/at").get()).val() === "number");
 const live = (await db.ref("apps/rpa/live/c_demo/pc_office").get()).val();
 check(live?.heartbeat?.every === 5, `heartbeat 에 신호 주기 (${live?.heartbeat?.every})`);
+// 진짜 규칙으로 올린 현황 - 칸 하나라도 규칙에 없으면 덩어리 전체가 거부된다 (2026-11-03 hold_review 가 규칙에 빠졌던 것)
+check(live?.hold_review === true, `물류대기 상품별 재고검토 값도 올라온다 (${live?.hold_review})`);
 check(typeof live?.launching === "boolean", `띄우는 중인지도 올린다 (${live?.launching})`);
 const ver = live?.version;
 check(ver && ["none", "ok", "mixed"].includes(ver.state) && typeof ver.checked_at === "string",

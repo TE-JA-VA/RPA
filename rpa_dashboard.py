@@ -449,7 +449,7 @@ def _note_start_failure(code):
         for program in (("prepare", "routine") if target == "all" else (target,)):
             started = st.parse_iso((st.read_json(st.status_path(program)) or {}).get("started_at"))
             if started is None or started < since:
-                st.record_start_failure(program, since.isoformat(), reason, tail)
+                st.record_start_failure(program, since.isoformat(), reason, tail, _active.get("trigger"))
     except Exception:
         pass   # 기록은 RPA·에이전트를 멈추게 하면 안 된다
 
@@ -514,7 +514,7 @@ def launch(target, by, env=None):
                 if err_fh is not None:
                     err_fh.close()   # 자식이 손잡이를 물려받았으므로 여기서는 닫아도 된다
         now_t = time.time()
-        _active.update(target=target, by=by, at=now_t, proc=proc, checked=False,
+        _active.update(target=target, by=by, at=now_t, proc=proc, checked=False, trigger=(env or {}).get("RPA_RUN_TRIGGER"),
                        until=now_t + (3 if DRY_RUN else LAUNCH_GRACE_SEC))
         now = NOW()
         merged = []
@@ -555,8 +555,8 @@ ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Impo
 # ROUTINE_KEYS 에 있다 (웰라이프는 Wellife 섹션의 같은 키)
 WELLIFE_ONLY_KEYS = ("Sap", "Wms")
 RUN_KEYS = ("Prepare",) + ROUTINE_KEYS + WELLIFE_ONLY_KEYS         # 줄의 run 에 쓰는 키. 이 순서로 저장한다
-SLOT_NAMES = {"Prepare": "사이트 수집", "Excel": "엑셀 수집", "Import": "자동 수집", "Sales": "주문매핑", "Hold": "물류대기",
-              "Logistics": "물류관리", "Output": "운송장",
+SLOT_NAMES = {"Prepare": "사이트 수집", "Excel": "엑셀 수집", "Import": "자동 수집", "Sales": "매출처리", "Hold": "물류대기",
+              "Logistics": "물류관리", "Output": "운송장 출력",
               "Sap": "SAP 연동", "Wms": "WMS 이관", "InvoiceSend": "운송장 전송"}   # 화면 단추와 같은 말
 REST_MIN_DEFAULT = 2
 REST_MIN_RANGE = (1, 60)   # 반복 시간대 쉬는 시간 (분)
@@ -591,12 +591,12 @@ def normalize_days(days):
 
 
 def _check_time(t):
-    """"HH:MM" 5분 단위 → 고친 글. 틀리면 ValueError (사람에게 보일 글)."""
+    """"HH:MM" (1분 단위, 2026-11-03) → 고친 글. 틀리면 ValueError (사람에게 보일 글)."""
     if not isinstance(t, str) or len(t) != 5 or t[2] != ":" or not (t[:2] + t[3:]).isdigit():
         raise ValueError(f"시간 형식이 잘못되었습니다: {t!r}")
     hh, mm = int(t[:2]), int(t[3:])
     if hh > 23 or mm > 59 or mm % st.SCHEDULE_MINUTE_STEP:
-        raise ValueError(f"시간은 00:00~23:55 사이 {st.SCHEDULE_MINUTE_STEP}분 단위여야 합니다: {t}")
+        raise ValueError(f"시간은 00:00~23:59 사이여야 합니다: {t}")
     return f"{hh:02d}:{mm:02d}"
 
 
@@ -705,9 +705,16 @@ def day_off(sch, day):
 
 def schedule_live(sch, today):
     """에이전트가 웹(live/schedule)에 올리는 예약 - settings.json 값 복사본에 화면 안내를 더한다 (검토 2026-10-16: 원본만 올려
-    '가까운 휴무일'·'공휴일 표 끝' 안내가 화면에 안 떴다). 지난 휴무일은 뺀다 (다음 [적용] 때 PC 도 뺀다)."""
+    '가까운 휴무일'·'공휴일 표 끝' 안내가 화면에 안 떴다). 지난 휴무일은 뺀다 (다음 [적용] 때 PC 도 뺀다).
+    tz: PC 시간대가 한국 표준시가 아니면 '+0000' 같은 글 - 예약은 PC 시각으로 돌아 웹에 보이는 시각과 다르다 (R13, 2026-11-03)."""
     return dict(sch, off_dates=[x for x in sch.get("off_dates") or [] if x >= today.isoformat()],
-                next_off=next_off(sch, today), holidays_until=f"{kr_holidays.LAST_YEAR}-12-31")
+                next_off=next_off(sch, today), holidays_until=f"{kr_holidays.LAST_YEAR}-12-31", tz=pc_timezone())
+
+
+def pc_timezone():
+    """PC 시간대가 한국 표준시(+09:00)면 None, 아니면 '+0000' 꼴 (웹 안내용)."""
+    off = time.localtime().tm_gmtoff
+    return None if off == 9 * 3600 else f"{'+' if off >= 0 else '-'}{abs(off) // 3600:02d}{abs(off) % 3600 // 60:02d}"
 
 
 def next_off(sch, today):
@@ -1136,6 +1143,7 @@ class Scheduler(threading.Thread):
         super().__init__(name="rpa-scheduler", daemon=True)
         self.stop = threading.Event()
         self.waiting_reason = None
+        self.held = (None, 0.0)  # 띄울 차례인데 막힌 까닭과 본 때 (monotonic) - 웹에 올린다 (held_reason, R5)
         self.skipped_at = None   # resync 가 건너뛴 예약 시각 (시작 안내용)
         self.power = Power()
 
@@ -1202,6 +1210,19 @@ class Scheduler(threading.Thread):
             st.write_settings(cfg)
         return cfg["schedule"]
 
+    def blocked(self):
+        """띄울 차례에 busy() 를 보고 그 까닭을 적어 둔다 (held_reason)."""
+        why = self.busy()
+        self.held = (why, time.monotonic())
+        return why
+
+    def held_reason(self):
+        """띄울 차례인데 막혀 기다리는 까닭 - 옵저버 켜 둠·앞 실행·업데이트 (웹 live/schedule.waiting_reason, R5 2026-11-03).
+        반복 회차를 기다리는 것처럼 정상 대기는 뺀다. 몇 틱 동안 다시 적지 않았으면(띄웠거나 차례가 지남) None.
+        막힌 동안 기다리기만 하고 건너뛰지 않는 것은 그대로다 (설계 - 클래스 설명)."""
+        why, at = self.held
+        return why if why and time.monotonic() - at < 3 * SCHEDULER_TICK else None
+
     def busy(self):
         """지금 띄우면 안 되는 까닭 (없으면 None)."""
         upd = rpa_update.busy_reason()
@@ -1236,7 +1257,7 @@ class Scheduler(threading.Thread):
         elif now >= next_run:
             slot = slot_of(sch)
             if slot is not None and not slot.get("until"):
-                self.waiting_reason = self.busy()
+                self.waiting_reason = self.blocked()
                 if self.waiting_reason is None:
                     self.launch(slot)
                 return
@@ -1267,7 +1288,7 @@ class Scheduler(threading.Thread):
         if end is not None and (resumed is None or resumed < end) and now < end + datetime.timedelta(minutes=win.get("rest_min", REST_MIN_DEFAULT)):
             self.waiting_reason = None
             return
-        self.waiting_reason = self.busy()
+        self.waiting_reason = self.blocked()
         if self.waiting_reason is not None:
             return
         stamp = now.isoformat(timespec="seconds")

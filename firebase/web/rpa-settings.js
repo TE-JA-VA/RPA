@@ -1,7 +1,7 @@
 // RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 프리페어 RPA(사이트 수집: 쇼핑몰 프리셋) · 루틴 RPA(실행 모듈) · 자동 실행 (PC 마다).
 // 값의 기준은 PC 가 올린 live. 적용 = settings 에 쓰고 명령을 넣는다 - PC 가 반영해 live 로 돌려준다
 import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, dict, josa, switchText, notify, sendCommand, sendPair, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay } from "./rpa-common.js";
+import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, switchText, notify, sendCommand, sendPair, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay, schedNote } from "./rpa-common.js";
 
 export const title = "오토파일럿";
 
@@ -46,15 +46,6 @@ const HTML = `
         <button class="apply" id="tog-apply" disabled>적용</button>
       </div>
       </div>
-      <h3 class="grp">PROCESS 오토파일럿</h3>
-      <div class="msg grp-note">다운로드한 주문을 ERPia에서 처리합니다.</div>
-      <div class="card" id="mod-card">
-        <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
-        <div class="msg">전체 실행과 '전체 모듈 실행' 예약은 이 모듈을 실행합니다.</div>
-        <div id="mod-list"></div>
-        <div class="msg hide" id="mod-modes"></div>
-        <button class="apply" id="mod-apply" disabled>적용</button>
-      </div>
     </div>
     <div>
       <h3 class="grp">자동 실행</h3>
@@ -83,6 +74,15 @@ const HTML = `
         <div class="msg" id="sch-old" hidden>이 PC를 새 버전으로 업데이트하면 시각별 모듈·반복 실행을 사용할 수 있습니다.</div>
         <div class="msg" id="sch-info"></div>
         <button class="apply" id="sch-apply" disabled>적용</button>
+      </div>
+      <h3 class="grp">PROCESS 오토파일럿</h3>
+      <div class="msg grp-note">다운로드한 주문을 ERPia에서 처리합니다.</div>
+      <div class="card" id="mod-card">
+        <h2>실행 모듈 <span class="muted" id="mod-meta"></span></h2>
+        <div class="msg">전체 실행과 '전체 모듈 실행' 예약은 이 모듈을 실행합니다.</div>
+        <div id="mod-list"></div>
+        <div class="msg hide" id="mod-modes"></div>
+        <button class="apply" id="mod-apply" disabled>적용</button>
       </div>
     </div>
   </div>
@@ -126,11 +126,15 @@ export function mount(el, context) {
   $("sch-holidays").onchange = (e) => { form.sch.holidays = e.target.checked; paintScheduleMeta(); };
   $("sch-off-add").onclick = () => {
     const v = $("sch-off-date").value;                  // "YYYY-MM-DD", 안 골랐으면 ""
-    if (!/^\d{4}-\d\d-\d\d$/.test(v) || v < isoDay(new Date()) || form.sch.offDates.includes(v)) return;
+    // 까닭을 알린다 - 전엔 말없이 넘어갔다 (W10, 2026-11-03)
+    const why = !/^\d{4}-\d\d-\d\d$/.test(v) ? "날짜를 선택하여 주십시오." : v < isoDay(new Date()) ? "지난 날짜는 추가할 수 없습니다."
+      : form.sch.offDates.includes(v) ? "이미 추가된 휴무일입니다." : "";
+    if (why) { notify("warn", why); $("sch-off-date").value = ""; paintScheduleMeta(); return; }   // 못 넣는 날은 비운다 - [적용] 을 막지 않게
     form.sch.offDates = [...form.sch.offDates, v].sort();
     $("sch-off-date").value = "";
     paintOffDates(); paintScheduleMeta();
   };
+  $("sch-off-date").oninput = () => paintScheduleMeta();   // 고르기만 하고 [+ 휴무일 추가] 를 안 누르면 [적용] 을 막고 알린다 (W10)
   $("sch-add").onclick = () => { if (form.sch.slots.length >= limitOf()) return; form.sch.slots.push({ at: "09:00", run: null, ...newDays() }); paintTimes(); paintScheduleMeta(); };
   $("sch-add-win").onclick = () => {
     if (form.sch.slots.length >= limitOf()) return;
@@ -201,7 +205,7 @@ export function dirty() {
     || (shopsDirty() && sent.shops !== keyOf.shops()) || (scheduleDirty() && sent.sch !== keyOf.sch())
     || (parDirty() && sent.par !== keyOf.par()) || (togDirty() && sent.tog !== keyOf.tog()));
 }
-const keyOf = { modules: () => JSON.stringify(form.modules), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()),
+const keyOf = { modules: () => JSON.stringify([form.modules, form.holdReview]), shops: () => JSON.stringify(form.shops), sch: () => JSON.stringify(payloadOf()),
   par: () => String(form.parallel), tog: () => form.together };
 
 // 카드 차례: 모듈·프리셋·자동 실행·동시 실행·전체 실행 방식 (I14). PC 값 열쇠에는 사람이 고치는 칸만 (next_run_at 처럼 저절로 바뀌는 것은 뺀다)
@@ -209,7 +213,7 @@ const SENT_KEYS = ["modules", "shops", "sch", "par", "tog"];
 const dirtyList = () => [modulesDirty(), shopsDirty(), scheduleDirty(), parDirty(), togDirty()];
 const savedKeys = () => {
   const s = savedSch();
-  return [JSON.stringify(savedModules()), JSON.stringify(savedShops().map((p) => [p.no, !!p.on])),
+  return [JSON.stringify([savedModules(), live?.hold_review ?? null]), JSON.stringify(savedShops().map((p) => [p.no, !!p.on])),
     JSON.stringify([!!s.enabled, s.days || [], slotsKey(savedSlots()), s.skip_holidays, savedOff()]), String(savedPar()), savedTog()];
 };
 /** [다시 불러오기] - 폼을 모두 PC 값으로 (I14) */
@@ -227,9 +231,15 @@ async function locked(run) {
   if (busy) return;
   busy = true; paintAll();
   try { await run(); }
-  finally { busy = false; if (root) paintAll(); }
+  finally { busy = false; if (root) { paintAll(); paintModules(); } }   // 기다리는 동안 물류대기·물류관리를 눌러 잠긴 채 다시 그려진 스위치를 푼다
 }
-const send = (type, args, label) => sendCommand(c, type, args, label, () => !!root);   // 부르는 쪽이 locked 안에서 (K11)
+// 부르는 쪽이 locked 안에서 (K11). PC 가 거절하면 보낸 표시(sent)를 지운다 - 고친 칸이 다시 '안 보냄' 으로 보여 떠날 때 묻는다 (W2)
+// 보낸 화면이 아직 그대로인가 - PC 를 바꾸면 mount 가 새 c·sent 를 만든다. 앞 PC 의 결과가 지금 PC 일처럼 뜨거나 새 화면의 sent 를 지우지 않게 (검토 2026-11-03)
+const here = () => { const mine = c; return () => !!root && c === mine; };
+const send = (type, args, label, key) => {
+  const mineSent = sent;
+  return sendCommand(c, type, args, label, here()).then((k) => { if (k === "bad" && key) delete mineSent[key]; });
+};
 
 // --- 실행 모듈 ------------------------------------------------------
 
@@ -249,30 +259,45 @@ function applyNeeds(mods) {
   return mods;
 }
 const savedModules = () => live?.modules || {};
+// 물류대기 '상품별 재고검토' (사용자 2026-11-03) - PC 가 올린 값이 있을 때만 (옛 에이전트·웰라이프는 없다 - 웰라이프 물류대기는 재고검토가 없다)
+const holdFeature = () => !isWellife() && typeof live?.hold_review === "boolean";
 function resetModules() {
   form.modules = applyNeeds(Object.fromEntries(ownModules().map(([k]) => [k, LOCKED.has(k) || savedModules()[k] !== false])));
+  form.holdReview = live?.hold_review !== false;
   paintModules();
 }
+// PC 값도 화면 규칙대로 읽는다 - 물류관리 N · 출력 Y (손으로 고친 파일) 이면 숨은 출력 줄 때문에 '바뀜' 이 되지 않게
+const savedOn = (k) => !offByCompany(k) && savedModules()[k] !== false && (!NEEDS[k] || savedOn(NEEDS[k]));
 function modulesDirty() {
-  return ownModules().some(([k]) => !!form.modules[k] !== (!offByCompany(k) && savedModules()[k] !== false));
+  return ownModules().some(([k]) => !!form.modules[k] !== savedOn(k))
+    || (holdFeature() && form.holdReview !== live.hold_review);
+}
+/** 물류대기를 켰을 때 그 아래 '상품별 재고검토'. 끄면 PC 가 일반 탭 조회 → 전체선택 → 저장만 한다 (Routine HoldSaveOnly) */
+function holdReviewRow() {
+  const row = document.createElement("label"); row.className = "switch sub";
+  const cb = Object.assign(document.createElement("input"), { type: "checkbox", checked: !!form.holdReview, disabled: !c.isAdmin || busy });
+  cb.setAttribute("aria-label", "상품별 재고검토");
+  cb.onchange = () => { form.holdReview = cb.checked; paintModuleMeta(); };
+  row.append(switchText("상품별 재고검토"), cb,
+    Object.assign(document.createElement("span"), { className: "knob" }));
+  return row;
 }
 function paintModules() {
-  $("mod-list").replaceChildren(...shownModules().map(([k, text], i) => {
-    const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
+  $("mod-list").replaceChildren(...shownModules().flatMap(([k, text], i) => {
+    // 딸린 모듈 (운송장 출력) 은 앞 모듈 (물류관리) 을 켰을 때만 그 아래 들여 쓴 줄로 보인다 (사용자 2026-11-03 - 전엔 잠긴 채 보였다)
+    if (NEEDS[k] && !form.modules[NEEDS[k]]) return [];
+    const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "") + (NEEDS[k] ? " sub" : "");
     const cb = document.createElement("input");
-    const needOff = NEEDS[k] && !form.modules[NEEDS[k]];   // 앞 모듈이 꺼져 있으면 이 스위치는 잠근다
-    cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k) || needOff;
+    cb.type = "checkbox"; cb.checked = !!form.modules[k]; cb.disabled = !c.isAdmin || busy || LOCKED.has(k);
     cb.setAttribute("aria-label", text);
-    const need = needOff ? dict(modList())[NEEDS[k]] : "";
     cb.onchange = () => {
       form.modules[k] = cb.checked;
-      // 딸린 모듈이 있는 스위치면 다시 그린다 (끄면 딸린 것도 꺼지고 잠기고, 켜면 잠금만 풀린다)
-      if (Object.values(NEEDS).includes(k)) { applyNeeds(form.modules); paintModules(); return; }
+      // 딸린 줄이 있는 스위치면 다시 그린다 (끄면 딸린 것도 꺼지고 숨고, 다시 켜면 꺼진 채 보인다). 물류대기는 '상품별 재고검토' 를 보이고 숨긴다
+      if (Object.values(NEEDS).includes(k) || k === "Hold") { applyNeeds(form.modules); paintModules(); return; }
       paintModuleMeta();
     };
-    row.append(switchText(text, need && `${need}${josa(need)} 켜야 사용할 수 있습니다.`), cb,
-      Object.assign(document.createElement("span"), { className: "knob" }));
-    return row;
+    row.append(switchText(text), cb, Object.assign(document.createElement("span"), { className: "knob" }));
+    return k === "Hold" && holdFeature() && form.modules.Hold ? [row, holdReviewRow()] : [row];
   }));
   paintModuleMeta();
 }
@@ -283,7 +308,7 @@ function paintModuleMeta() {
   // 웰라이프 모드 - 보기만 (시험 기간용, 사용자 2026-10-13). 바꾸기는 PC 설정 파일. 옛 에이전트는 안 올려서 숨는다
   const modes = isWellife() && Array.isArray(live?.modes) ? live.modes : [];
   $("mod-modes").textContent = modes.length ? `모드 (PC 설정 파일에서 바꿈): ${modes.map(([k, v]) => `${k} ${v}`).join(" · ")}` : "";
-  $("mod-modes").classList.toggle("warn", modes.some(([, v]) => v !== "리허설"));
+  $("mod-modes").classList.toggle("warn", modes.some(([, v]) => v !== "실행"));   // 기본이 실행이라 (사용자 2026-11-03) 리허설·1건·오류를 눈에 띄게
   show($("mod-modes"), modes.length > 0);
   $("mod-apply").disabled = !c.isAdmin || busy || !modulesDirty() || on === 0;
 }
@@ -294,13 +319,15 @@ async function applyModules() {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.modules = keyOf.modules();
-  await send("set_modules", wanted, "실행 모듈");
+  // 상품별 재고검토는 같은 명령에 실어 보낸다 (새 명령 종류는 RTDB 규칙을 바꿔야 한다). 물류대기를 꺼도 고른 값은 그대로 둔다
+  await send("set_modules", holdFeature() ? { ...wanted, HoldSaveOnly: !form.holdReview } : wanted, "실행 모듈", "modules");
 }
 
 // --- 쇼핑몰 프리셋 --------------------------------------------------
 // PC 의 옵저버가 저장한 프리셋 (에이전트가 이름·코드·단계 수·켬만 올린다). 켜면 다음 프리페어부터 그 쇼핑몰에서 엑셀을 받는다.
 // 명령 키는 "PRESET1" - 숫자 키는 Realtime DB 가 배열로 바꿔 읽는다
-const circled = (n) => String.fromCharCode(0x2460 + n - 1);
+// ① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄 (1~20, 21~35, 36~50). 웰라이프 40개 (rpa_status.circled 와 같은 규칙, 2026-11-03)
+const circled = (n) => String.fromCharCode(n <= 20 ? 0x2460 + n - 1 : n <= 35 ? 0x3251 + n - 21 : 0x32B1 + n - 36);
 const savedShops = () => (Array.isArray(live?.presets) ? live.presets : []);
 const shopReady = (p) => p.steps > 0 && p.has_login;
 function resetShops() {
@@ -360,7 +387,7 @@ async function applyShops() {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/presets`), wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.shops = keyOf.shops();
-  await send("set_presets", wanted, "쇼핑몰 프리셋");
+  await send("set_presets", wanted, "쇼핑몰 프리셋", "shops");
 }
 
 // --- 프리셋 복사 (설계 2026-10-19 4.3절) --------------------------------
@@ -431,7 +458,7 @@ async function copyPresets() {
   // 전송 id: 영문 소문자·숫자 20자 (ops.newTid·agent.TRANSFER_RE 와 같은 꼴)
   const tid = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, "0")).join("");
   await locked(() => sendPair(c, [[c.pcId, "export_preset", { tid, nos: picked.map(([n]) => n), with_phone: true }],
-                                  [to, "import_preset", { tid, slots, from_label: pcLabel(c.pcId) }]], "프리셋 복사", () => !!root));   // 결과 글에 PC 이름 (사용자 2026-10-20)
+                                  [to, "import_preset", { tid, slots, from_label: pcLabel(c.pcId) }]], "프리셋 복사", here()));   // 결과 글에 PC 이름 (사용자 2026-10-20)
 }
 
 // --- 동시 실행 (사용자 2026-10-16) ---------------------------------
@@ -467,7 +494,7 @@ async function applyParallel() {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/parallel`), n);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.par = keyOf.par();
-  await send("set_parallel", { parallel: n }, "동시 실행");
+  await send("set_parallel", { parallel: n }, "동시 실행", "par");
 }
 
 // --- 전체 실행 방식 (모든 업체, 사용자 2026-10-20 - 웰라이프만이던 것을 같은 날 넓힘) -----------------
@@ -508,7 +535,7 @@ async function applyTogether() {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/together`), mode);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.tog = keyOf.tog();
-  await send("set_together", { mode }, "전체 실행 방식");
+  await send("set_together", { mode }, "전체 실행 방식", "tog");
 }
 
 // --- 자동 실행 (2부: 줄마다 전체/고르기, 업체 한도) ----------------------------------------
@@ -518,6 +545,8 @@ const isV2 = () => (live?.schedule?.version ?? 0) >= 2;
 const isV3 = () => (live?.schedule?.version ?? 0) >= 3;
 const isV4 = () => (live?.schedule?.version ?? 0) >= 4;   // 공휴일·업체 휴무일 쉬기 (2026-10-15)
 const isV5 = () => (live?.schedule?.version ?? 0) >= 5;   // 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02)
+const isV6 = () => (live?.schedule?.version ?? 0) >= 6;   // 1분 단위 시각 (2026-11-03) - 그 전 판 PC 는 5분 단위만 받는다
+const offStep = (t) => !isV6() && /^\d\d:\d\d$/.test(t || "") && +t.slice(3) % 5 !== 0;
 /** 이 줄이 운송장 전송을 골랐는가 - '켠 사이트만' 은 그 줄에만 (PC 의 normalize_slots 와 같은 규칙) */
 const sendsInvoice = (s) => !!s.run?.includes("InvoiceSend");
 const OFF_DATES_MAX = 100;                                // rpa_dashboard.OFF_DATES_MAX
@@ -593,7 +622,7 @@ function paintDays() {
 }
 const sortedForm = () => [...form.sch.slots].sort((a, b) => a.at.localeCompare(b.at));
 function timeInput(value, label, apply) {
-  const inp = document.createElement("input"); inp.type = "time"; inp.step = 300; inp.value = value; inp.className = "num";
+  const inp = document.createElement("input"); inp.type = "time"; inp.step = isV6() ? 60 : 300; inp.value = value; inp.className = "num";
   inp.setAttribute("aria-label", label);
   inp.onchange = () => { apply(inp.value); paintTimes(); paintScheduleMeta(); };
   return inp;
@@ -633,11 +662,11 @@ function runChips(s) {
 /** 운송장 전송을 고른 줄의 '켠 사이트만' 켬/끔 (사용자 2026-11-02) - 켜면 PC 가 사이트 수집에서 켠 사이트만 매출구분으로 골라 조회·전송 */
 function invSitesSwitch(s) {
   const l = document.createElement("label"); l.className = "switch first inv-sites";   // 줄 안이라 위 선 없이
-  const text = Object.assign(document.createElement("span"), { textContent: "켠 사이트만 조회·전송" });
+  const text = Object.assign(document.createElement("span"), { textContent: "수집된 사이트만 전송" });
   text.append(Object.assign(document.createElement("span"), { className: "why",
-    textContent: "사이트 수집에서 켠 사이트만 골라 조회한 뒤 전송합니다. 끄면 모든 사이트를 조회합니다." }));
+    textContent: "사이트 수집으로 수집된 사이트만 전송합니다. 비활성화 시 모든 사이트를 전송합니다." }));   // 문구 사용자 2026-11-03
   const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: !!s.inv_sites });
-  box.setAttribute("aria-label", "운송장 전송: 켠 사이트만");
+  box.setAttribute("aria-label", "운송장 전송: 수집된 사이트만");
   box.onchange = () => { if (box.checked) s.inv_sites = true; else delete s.inv_sites; paintScheduleMeta(); };
   l.append(text, box, Object.assign(document.createElement("span"), { className: "knob" }));
   return l;
@@ -685,8 +714,10 @@ function scheduleProblems() {
   const lim = limitOf(), slots = form.sch.slots, out = [];
   if (form.sch.enabled && slots.length > lim) out.push(lim ? `자동 실행은 최대 ${lim}개까지입니다. 줄을 줄여야 적용할 수 있습니다.` : "자동 실행을 쓰려면 ERPia에 문의해주세요.");
   if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) out.push("시간을 확인하여 주십시오.");
+  if (slots.some((s) => offStep(s.at) || offStep(s.until))) out.push("이 PC는 5분 단위로만 예약할 수 있습니다. (예: 09:05)");
   if (isV3() && slots.some((s) => !s.days.length)) out.push("요일을 하나 이상 선택하여 주십시오.");
   if (isV4() && form.sch.offDates.length > OFF_DATES_MAX) out.push(`휴무일은 최대 ${OFF_DATES_MAX}개까지 등록할 수 있습니다.`);
+  if (isV4() && $("sch-off-date")?.value) out.push("선택한 날짜를 [+ 휴무일 추가]로 추가하여 주십시오.");
   slots.forEach((w, wi) => {
     if (w.until === undefined) return;
     if (!/^\d\d:\d\d$/.test(w.until) || w.until <= w.at) { out.push(`반복 끝 시각은 시작 시각(${w.at})보다 늦어야 합니다.`); return; }
@@ -735,6 +766,8 @@ function paintScheduleMeta() {
     : isV3() ? savedSlots().map((x) => `${labelDays(x.days)} ${slotText(x)}`).join(", ") : `${labelDays(s.days)} ${savedSlots().map(slotText).join(", ")}`;
   // 안내는 한 줄에 하나씩, 색은 문제 줄에만 (2026-10-30 - 예전엔 한 줄로 이어 하나라도 오류면 '다음 실행' 까지 빨갰다). [글, 색]
   const info = [];
+  const note = schedNote(s);                             // 설정 파일을 못 읽음(R4)·막혀 기다림(R5)·PC 시간대(R13) - 2026-11-03
+  if (note) info.push(note);
   if (s.enabled && s.next_run_at) {
     const wd = (new Date(s.next_run_at).getDay() + 6) % 7;     // 월=0 - 같은 시각 줄이 요일별로 여럿이면 그날 줄
     const names = slotNames((Array.isArray(s.slots) ? s.slots : []).find((x) => x && x.at === s.next_slot && (!Array.isArray(x.days) || x.days.includes(wd))));
@@ -756,8 +789,9 @@ function paintScheduleMeta() {
   }
   if (s.enabled && knowTokens) {                         // 예약 실행은 지켜볼 사람이 없다 - 토큰이 모자라면 여기에도 (토큰 2부)
     const need = t.cost?.next ?? t.cost?.all ?? 0;       // 다음 줄이 '고르기' 면 그 줄의 토큰 (에이전트가 cost.next)
-    if (t.balance <= 0) info.push(["토큰이 없어 예약 실행을 건너뜁니다.", "bad"]);
-    else if (t.balance < need) info.push([`다음 예약 실행에 ${need}개 · 남은 토큰 ${t.balance}개. 잔여 토큰이 마이너스가 될 수 있습니다.`, "warn"]);
+    // PC 가 10분마다 센 값이다 - 충전한 직후엔 옛 값일 수 있어 그렇게 적는다 (W8, 2026-11-03. 실행 직전엔 PC 가 서버에서 다시 센다)
+    if (t.balance <= 0) info.push(["토큰이 없어 예약 실행을 건너뜁니다. (PC가 마지막으로 확인한 값 - 충전하면 10분 안에 반영됩니다)", "bad"]);
+    else if (t.balance < need) info.push([`다음 예약 실행에 ${need}개 · 남은 토큰 ${t.balance}개 (PC가 마지막으로 확인한 값). 잔여 토큰이 마이너스가 될 수 있습니다.`, "warn"]);
   }
   $("sch-info").replaceChildren(...info.map(([text, cls]) => Object.assign(document.createElement("div"), { textContent: text, className: cls })));
   $("sch-info").className = "msg";
@@ -785,5 +819,5 @@ async function applySchedule() {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/schedule`), payload);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.sch = keyOf.sch();
-  await send("set_schedule", payload, "자동 실행");
+  await send("set_schedule", payload, "자동 실행", "sch");
 }

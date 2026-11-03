@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import sys
 import tempfile
 
@@ -74,6 +75,20 @@ check("line 108" in " ".join(r.get("log_tail") or []), "오류 출력을 로그 
 check(r.get("run_id") and r.get("started_at") and r.get("finished_at") and r.get("program_label") == "PROCESS 오토파일럿", "이력 필수 칸", r)
 d.launch_state()
 check(len(st.read_history()) == 1, "다시 물어도 한 번만 남긴다")
+# R11 (2026-11-03): 상태 파일도 '오류' 로 - 웹 알림·상태 띠가 안다. R15: run_id 에 PC 이름 (같은 초 두 PC 가 409 로 사라지지 않게)
+v = st.read_json(st.status_path("routine")) or {}
+check(v.get("state") == "crashed" and "시작하지 못했습니다" in (v.get("reason") or "") and v.get("started_at") == r.get("started_at"),
+      "상태 파일도 '오류' + 까닭 (R11)", v)
+check(r["run_id"].endswith("_nostart_" + socket.gethostname()) and v.get("run_id") == r["run_id"], "run_id 에 PC 이름 (R15)", r["run_id"])
+os.remove(st.status_path("routine"))     # 같은 초에 다시 띄우므로 (실제로는 몇 초 뒤)
+d.launch("routine", "auto", env={"RPA_RUN_TRIGGER": "repeat"})
+stderr("routine", TRACE)
+ended(1)
+check((st.read_json(st.status_path("routine")) or {}).get("trigger") == "repeat",
+      "띄운 까닭을 상태 파일에 - 반복 회차면 그 회차의 실패로 세어 반복을 멈춘다 (빠지면 쉬는 시간마다 다시 띄운다)")
+first = written()[0]
+with open(os.path.join(tmp, st.HISTORY_NAME), "w", encoding="utf-8") as f:   # 아래 개수 셈은 첫 건만 있는 것으로
+    f.write(json.dumps(first, ensure_ascii=False) + "\n")
 
 # 2. 제대로 시작한 실행 (띄운 뒤 상태 파일을 썼다) - 끝나고 나면 건드리지 않는다
 d.launch("routine", "cloud")
@@ -92,7 +107,8 @@ h = written()[-2:]
 check(sorted(x["program"] for x in h) == ["prepare", "routine"] and all("win32ui" in x["reason"] for x in h),
       "전체 실행: 프리페어·루틴 각각 '시작하지 못함'", [(x["program"], x["reason"]) for x in h])
 
-# 4. 오류 출력도 없이 끝난 경우
+# 4. 오류 출력도 없이 끝난 경우 (3 이 남긴 프리페어 '오류' 상태는 같은 초라 지운다 - 실제로는 앞 실행이 끝난 뒤 몇 초 지나 띄운다)
+os.remove(st.status_path("prepare"))
 d.launch("prepare", "cloud")
 stderr("prepare", "")
 ended(3)

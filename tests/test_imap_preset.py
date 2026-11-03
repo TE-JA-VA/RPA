@@ -290,6 +290,37 @@ try:
           msg.startswith("저장했습니다.") and f"{ob.circled(1)} 비밀번호 단계가 서로 다른 사이트(coupang.com, naver.com)" in msg, msg)
     check("I1: 사이트코드가 바뀌었는데 비밀번호를 비웠으면 이전 사이트 비밀번호를 쓴다고 알린다 (② 는 그대로라 안 알림)",
           f"{ob.circled(1)} 사이트코드가 바뀌었지만" in msg and f"{ob.circled(2)} 사이트코드" not in msg, msg)
+
+    # 2026-11-03: 저장은 그대로 하고 알리기만 - O8 단서 없는 인증번호 칸, (ii) 받기 단계 둘, O12 메일함 조건 겹침, O6 메일 기억 지움
+    h1 = ob.new_preset(1, "숫자몰", "041")
+    h1.update(orig=None, id="u1", pw="pw-h-111", loaded={"version": 1, "start_url": "https://x", "steps": [
+        {"id": 0, "kind": "goto", "href": "https://x"}, {"id": 1, "kind": "secret", "page": 0, "host": "x.com"},
+        {"id": 2, "kind": "fill", "page": 0, "value": "482913"},
+        {"id": 3, "kind": "click", "page": 0, "download": True}, {"id": 4, "kind": "click", "page": 0, "download": True}]})
+    h2 = ob.new_preset(2, "메일 A", "042")
+    h2.update(orig=None, id=USER, pw="pw-h-222", source="imap", imap=dict(cfg))
+    h3 = ob.new_preset(3, "메일 B", "043")
+    h3.update(orig=None, id=USER, pw="pw-h-333", source="imap", imap=dict(cfg))
+    k = FakeApp([h1, h2, h3])
+    k._load_fields = lambda: None
+    k.save()
+    msg = k.said[-1] if k.said else ""
+    check("O8: 비밀번호 뒤 숫자 6자리를 그대로 넣은 칸은 [인증번호 칸] 을 안내 (저장은 된다)",
+          msg.startswith("저장했습니다.") and f"{ob.circled(1)} 3단계 값 '482913'" in msg and "[인증번호 칸]" in msg, msg)
+    check("(ii): 받기 단계가 둘이면 같은 사이트코드 파일은 하나만 올린다고 안내", f"{ob.circled(1)} 파일 받기 단계가 2개" in msg, msg)
+    check("O12: 같은 메일함·같은 조건의 메일 서버 프리셋 둘은 겹친다고 안내", f"{ob.circled(2)}·{ob.circled(3)} 같은 메일함의 조건이 겹쳐" in msg, msg)
+    mine = dict(cfg, rules=dict(cfg["rules"], senders=["order@shop.example"]))
+    other = dict(cfg, rules=dict(cfg["rules"], senders=["other@else.example"]))
+    check("O12: 보낸 사람이 서로 다르면 겹치지 않는다 (한쪽이 보낸 사람 조건이 없으면 겹친다)",
+          ob.imap_overlap([{"no": 2, "id": USER, "record": ob.imap_record(mine)}, {"no": 3, "id": USER, "record": ob.imap_record(other)}]) == []
+          and ob.imap_overlap([{"no": 2, "id": USER, "record": ob.imap_record(cfg)}, {"no": 3, "id": USER, "record": ob.imap_record(other)}]) == [(2, 3)])
+    k2 = FakeApp([dict(h1, code="049", orig=1, has_pw=True, pw=""), dict(h2, orig=2, has_pw=True, pw=""), dict(h3, code="048", orig=3, has_pw=True, pw="")])
+    k2._load_fields = lambda: None
+    k2.save()
+    msg = k2.said[-1] if k2.said else ""
+    check("O6: 메일 프리셋의 사이트코드를 바꾸면 메일 기억을 지웠다고 알린다 (쇼핑몰 ①·코드 그대로인 ② 는 안 알림)",
+          f"{ob.circled(3)} 사이트코드가 바뀌어 받은 메일 기억을 지웠습니다" in msg and f"{ob.circled(1)} 사이트코드가 바뀌어" not in msg
+          and f"{ob.circled(2)} 사이트코드가 바뀌어" not in msg, msg)
 finally:
     ob.stored_password = real_pw
 

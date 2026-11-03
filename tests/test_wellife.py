@@ -122,9 +122,9 @@ rr.status = rec
 rr.run_modules = fake_run_modules
 settings(ALL_Y)
 wellife.run_main(rr)
-check("기록은 program 'routine' 에 웰라이프 단계로 시작 (모드가 없으면 단계 이름 앞에 [리허설])",
+check("기록은 program 'routine' 에 웰라이프 단계로 시작 (모드가 없으면 단계 이름 앞에 [실행] - 사용자 2026-11-03)",
       rec.of("start") and rec.of("start")[0][0] == "routine"
-      and rec.of("start")[0][1] == tuple((k, "[리허설] " + v) for k, v in wellife.STEPS), str(rec.of("start")[:1]))
+      and rec.of("start")[0][1] == tuple((k, "[실행] " + v) for k, v in wellife.STEPS), str(rec.of("start")[:1]))
 check("웰라이프 모듈 표를 등록", rec.of("set_modules") and [m[0] for m in rec.of("set_modules")[0][0]] == [m[0] for m in wellife.MODULES])
 check("run_modules 에 웰라이프 표·섹션을 넘김", got.get("modules") is wellife.MODULES and got.get("section") == "Wellife")
 check("함수 표의 키 = 모듈 키", set(got.get("funcs") or ()) == {m[0] for m in wellife.MODULES})
@@ -211,6 +211,11 @@ check("웰라이프에 없는 모듈만 넘어오면 run_modules 를 부르지 �
 picked_run("Wms", section={"Wellife": {"Mode": "실험"}})
 check("예약 줄이 골라도 섹션 값이 틀리면 설정 파일 오류 (모드는 섹션에서 읽는다)",
       not got and fins and "설정 파일 오류" in fins[-1][0][1], str(fins))
+picked_run("Wms", section={"Wellife": dict(ALL_Y["Wellife"], WmsMode="리허설", SapMode="1건")})
+check("리허설이 섞인 실행은 '성공' 사유에 이번에 돈 모듈의 시험 모드만 (R9, 2026-11-03)",
+      fins and fins[-1][0][0] == "success" and fins[-1][0][1] == "시험 모드 포함: WMS 이관 리허설", str(fins))
+picked_run("Wms")
+check("모두 실행이면 사유 없음 (예전처럼)", fins and fins[-1][0][0] == "success" and fins[-1][0][1] is None, str(fins))
 picked_run("Wms", trigger="repeat")
 check("반복 회차가 처리한 것이 없으면 이력에 남기지 않는다 (record=False)",
       fins and fins[-1][0][0] == "success" and fins[-1][1].get("record") is False, str(fins))
@@ -830,7 +835,7 @@ _, unknown = wellife.load_switches(rr)
 check("Mode 는 모르는 키가 아니다", unknown == [], str(unknown))
 check("Mode '실행' -> 실제로 누름", wellife.load_mode(rr) is True)
 settings({"Wellife": {"Login": "Y"}})
-check("Mode 가 없으면 리허설 (누르지 않는 쪽)", wellife.load_mode(rr) is False)
+check("Mode 가 없으면 실행 (사용자 2026-11-03 - 그 전엔 리허설)", wellife.load_mode(rr) is True)
 settings({"Wellife": {"Login": "Y", "Mode": "run"}})
 try:
     wellife.load_mode(rr)
@@ -842,11 +847,11 @@ settings({"Wellife": {"Login": "Y", "Mode": "실행", "SalesMode": "리허설"}}
 check("SalesMode 는 Mode 와 따로 읽는다",
       wellife.load_mode(rr) is True and wellife.load_mode(rr, wellife.SALES_MODE_KEY) is False
       and wellife.load_switches(rr)[1] == [])
-settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
-check("SalesMode 가 없으면 Mode 를 따르지 않고 리허설", wellife.load_mode(rr, wellife.SALES_MODE_KEY) is False)
-settings({"Wellife": {"Login": "Y", "SalesMode": "실행"}})
-check("SalesMode '실행' 이어도 정상매출(NormalSalesMode)은 빠지면 리허설 - 업데이트만으로 매출처리를 시작하지 않는다 (PR #6 검토)",
-      wellife.load_mode(rr, wellife.SALES_MODE_KEY) is True and wellife.load_mode(rr, wellife.NORMAL_SALES_MODE_KEY) is False
+settings({"Wellife": {"Login": "Y", "Mode": "리허설"}})
+check("SalesMode 가 없으면 Mode(리허설)를 따르지 않고 실행", wellife.load_mode(rr, wellife.SALES_MODE_KEY) is True)
+settings({"Wellife": {"Login": "Y", "SalesMode": "리허설"}})
+check("SalesMode '리허설' 이어도 정상매출(NormalSalesMode)은 따로 - 빠지면 실행",
+      wellife.load_mode(rr, wellife.SALES_MODE_KEY) is False and wellife.load_mode(rr, wellife.NORMAL_SALES_MODE_KEY) is True
       and wellife.load_switches(rr)[1] == [])
 settings({"Wellife": {"Login": "Y", "NormalSalesMode": "1건"}})
 check("정상매출은 '1건'(하단 첫 줄)을 쓸 수 있다", wellife.load_mode(rr, wellife.NORMAL_SALES_MODE_KEY) == wellife.ONE)
@@ -855,20 +860,20 @@ rec = Rec()
 rr.status = rec
 got.clear()
 rr.run_modules = fake_run_modules
-settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
+settings({"Wellife": {"Login": "Y", "Mode": "리허설"}})
 wellife.run_main(rr)
 start = rec.of("start")[0]
 own_keys = {k for m in wellife.MODULES if m[0] in wellife.MODULE_MODES for k in m[3]}
-check("단계 이름 앞에 모드 - ②④⑤⑥ 은 제 키(빠져서 [리허설]), 로그인·③ 은 Mode([실행])",
-      all(label.startswith("[리허설] " if k in own_keys else "[실행] ") for k, label in start[1]), str(start[1][:4]))
+check("단계 이름 앞에 모드 - ②④⑤⑥ 은 제 키(빠져서 [실행]), 로그인·③ 은 Mode([리허설])",
+      all(label.startswith("[실행] " if k in own_keys else "[리허설] ") for k, label in start[1]), str(start[1][:4]))
 rec = Rec()
 rr.status = rec
-settings({"Wellife": {"Login": "Y", "SalesMode": "실행"}})
+settings({"Wellife": {"Login": "Y", "SalesMode": "리허설"}})
 wellife.run_main(rr)
 labels = dict(rec.of("start")[0][1])
-check("② 엑셀 수집은 SalesMode([실행]), 자동 수집은 ImportMode 가 없으면 SalesMode 를 따르고([실행]), 매출처리는 NormalSalesMode([리허설])",
-      labels["wl_order_excel"].startswith("[실행] ") and labels["wl_order_import"].startswith("[실행] ")
-      and labels["wl_order_sales"].startswith("[리허설] "), str(labels))
+check("② 엑셀 수집은 SalesMode([리허설]), 자동 수집은 ImportMode 가 없으면 SalesMode 를 따르고([리허설]), 매출처리는 NormalSalesMode(빠져서 [실행])",
+      labels["wl_order_excel"].startswith("[리허설] ") and labels["wl_order_import"].startswith("[리허설] ")
+      and labels["wl_order_sales"].startswith("[실행] "), str(labels))
 seen = []
 _saved_ms = {n: getattr(wellife, n) for n in ("module_excel", "module_import", "module_sales")}
 wellife.module_excel = lambda rr_, ctx_, live, *_: seen.append(("excel", live)) or ("skipped", None)
@@ -878,7 +883,7 @@ for k in ("wellife_excel", "wellife_import", "wellife_sales"):
     got["funcs"][k](None)
 for n, f in _saved_ms.items():
     setattr(wellife, n, f)
-check("② 세 모듈에 각자의 모드를 넘긴다", seen == [("excel", True), ("import", True), ("sales", False)], str(seen))
+check("② 세 모듈에 각자의 모드를 넘긴다", seen == [("excel", False), ("import", False), ("sales", True)], str(seen))
 settings({"Wellife": {"Login": "Y", "SalesMode": "실행", "ImportMode": "리허설"}})
 check("ImportMode 를 적어 두면 SalesMode 와 따로 (자동 수집만 리허설)", wellife.load_mode(rr, wellife.IMPORT_MODE_KEY) is False
       and wellife.load_mode(rr, wellife.SALES_MODE_KEY) is True)
@@ -1370,8 +1375,8 @@ settings({"Wellife": {"Login": "Y", "Mode": "실행", "InvoiceMode": "리허설"
 check("InvoiceMode 는 Mode 와 따로 읽고 모르는 키가 아니다",
       wellife.load_mode(rr) is True and wellife.load_mode(rr, wellife.INVOICE_MODE_KEY) is False
       and wellife.load_switches(rr)[1] == [])
-settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
-check("InvoiceMode 가 없으면 Mode 를 따르지 않고 리허설", wellife.load_mode(rr, wellife.INVOICE_MODE_KEY) is False)
+settings({"Wellife": {"Login": "Y", "Mode": "리허설"}})
+check("InvoiceMode 가 없으면 Mode(리허설)를 따르지 않고 실행", wellife.load_mode(rr, wellife.INVOICE_MODE_KEY) is True)
 
 rr.run_modules = fake_run_modules
 rec, starts, seen = Rec(), [], []
@@ -1380,11 +1385,12 @@ rr.status = rec
 got.clear()
 _saved_inv = wellife.module_invoice_send
 wellife.module_invoice_send = lambda rr_, ctx_, live: seen.append(live) or ("skipped", None)
-settings({"Wellife": {"Login": "Y", "InvoiceSend": "Y", "InvoiceMode": "실행"}})
+settings({"Wellife": {"Login": "Y", "InvoiceSend": "Y", "InvoiceMode": "실행", "Mode": "리허설", "SalesMode": "리허설",
+                     "NormalSalesMode": "리허설", "SapMode": "리허설", "WmsMode": "리허설"}})
 wellife.run_main(rr)
 got["funcs"]["invoicesend"](None)
 wellife.module_invoice_send = _saved_inv
-check("⑥ 은 InvoiceMode 로 돈다 (Mode 가 빠져 리허설이어도 실행)", seen == [True], str(seen))
+check("⑥ 은 InvoiceMode 로 돈다 (Mode 가 리허설이어도 실행)", seen == [True], str(seen))
 labels = dict(starts[0][0][1]) if starts else {}
 check("⑥ 단계 이름 앞은 [실행], 그 밖은 [리허설] / 제목에 운송장 전송 모드",
       labels.get("inv_send", "").startswith("[실행] ") and labels.get("wl_wms_so", "").startswith("[리허설] ")
@@ -1557,6 +1563,37 @@ for icon, want in (("ok", "skipped"), ("absent", "failed"), ("failed", "failed")
 wellife.invoice_send = lambda rr_, ctx_, live: (_ for _ in ()).throw(RuntimeError("COMError 흉내"))
 res = wellife.module_invoice_send(nav_rr(), ictx, True)
 check("UI 오류는 ('failed', 'UI 오류: … (문구)')", res == ("failed", "UI 오류: RuntimeError (COMError 흉내)"), str(res))
+# 운송장 출력(엑셀 생성)이 남긴 '엑셀파일을 여시겠습니까?' - 전송 전에 [아니오] 로 닫고 넘어간다 (사용자 2026-11-03)
+wellife.invoice_send = lambda rr_, ctx_, live: ("done", None)
+wellife.open_tab = lambda rr_, ctx_, name: El(name)
+TOP[0] = ictx.hwnd
+excel_kw = dict(EXCEL_OPEN_PROMPT_KEYWORDS=rr.EXCEL_OPEN_PROMPT_KEYWORDS, NO_BUTTON_TEXTS=rr.NO_BUTTON_TEXTS)
+
+
+def excel_rr(**kw):
+    base = vars(nav_rr())
+    base.update(excel_kw, **kw)
+    return types.SimpleNamespace(**base)
+
+
+acts.clear()
+POP[:] = [El("예(Y)"), Click("아니오(N)", on_click=POP.clear)]
+res = wellife.module_invoice_send(excel_rr(collect_popup_text=lambda b: "생성한 엑셀파일을 여시겠습니까?"), ictx, True)
+check("'엑셀파일을 여시겠습니까?' 는 [아니오] 로 닫고 전송으로", res == ("done", None) and acts[0] == ("click", "아니오(N)") and not POP,
+      f"{res} {acts}")
+acts.clear()
+POP[:] = [El("예(Y)"), El("아니오(N)")]
+res = wellife.module_invoice_send(excel_rr(), ictx, True)                # 다른 팝업 ('저장하시겠습니까?')
+check("다른 팝업은 누르지 않고 지금처럼 멈춘다", res[0] == "stopped" and not acts, f"{res} {acts}")
+POP[:] = [El("예(Y)"), El("아니오(N)")]
+res = wellife.module_invoice_send(excel_rr(collect_popup_text=lambda b: "엑셀파일을 여러 개로 나눠 저장할까요?"), ictx, True)
+check("'엑셀파일을 여러 …' 같은 다른 질문은 [아니오] 를 누르지 않는다 ('여시겠습니까' 까지 본다)", res[0] == "stopped" and not acts, f"{res} {acts}")
+POP[:] = [El("예(Y)"), El("아니오(N)")]
+TOP[0] = 99                                                               # 단추 자리를 다른 창이 덮음
+res = wellife.module_invoice_send(excel_rr(collect_popup_text=lambda b: "생성한 엑셀파일을 여시겠습니까?"), ictx, True)
+check("덮여 있으면 누르지 않고 멈춘다", res[0] == "stopped" and not acts, f"{res} {acts}")
+POP.clear()
+TOP[0] = actx.hwnd
 wellife.open_tab, wellife.invoice_send = _saved_inv
 wellife.time.sleep = _sleep
 
@@ -1585,10 +1622,10 @@ check("그리드 안 스크롤바는 캐시에서 그대로", rr.grid_vertical_s
 # ---------------------------------------------------------------------------
 print("=== 13. SAP·WMS 모드 따로, 실행 '1건' (사용자 10-13) ===")
 ONE = wellife.ONE
-settings({"Wellife": {"Login": "Y", "Mode": "실행"}})
-check("SapMode·WmsMode 가 빠지면 Mode(실행)를 따르지 않고 리허설",
-      wellife.load_mode(rr) is True and wellife.load_mode(rr, wellife.SAP_MODE_KEY) is False
-      and wellife.load_mode(rr, wellife.WMS_MODE_KEY) is False)
+settings({"Wellife": {"Login": "Y", "Mode": "리허설"}})
+check("SapMode·WmsMode 가 빠지면 Mode(리허설)를 따르지 않고 실행 (사용자 2026-11-03)",
+      wellife.load_mode(rr) is False and wellife.load_mode(rr, wellife.SAP_MODE_KEY) is True
+      and wellife.load_mode(rr, wellife.WMS_MODE_KEY) is True)
 settings({"Wellife": {"Login": "Y", "SapMode": "실행", "WmsMode": "1건", "InvoiceMode": "1건"}})
 check("SapMode·WmsMode 는 따로 읽고, '1건' 은 ONE(참) - 모르는 키가 아니다",
       wellife.load_mode(rr, wellife.SAP_MODE_KEY) is True and wellife.load_mode(rr, wellife.WMS_MODE_KEY) == ONE
@@ -1610,7 +1647,7 @@ _saved_mods = wellife.module_hold, wellife.module_sap, wellife.module_wms
 wellife.module_hold = lambda rr_, ctx_, live: seen.update(hold=live) or ("skipped", None)
 wellife.module_sap = lambda rr_, ctx_, live: seen.update(sap=live) or ("skipped", None)
 wellife.module_wms = lambda rr_, ctx_, live: seen.update(wms=live) or ("skipped", None)
-settings({"Wellife": {"Login": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "Mode": "실행", "SapMode": "1건"}})
+settings({"Wellife": {"Login": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "Mode": "실행", "SapMode": "1건", "WmsMode": "리허설"}})
 wellife.run_main(rr)
 for k in ("wellife_hold", "wellife_sap", "wellife_wms"):
     got["funcs"][k](None)
@@ -1791,6 +1828,14 @@ try:
 except wellife.Stop as e:
     res = (e.result, str(e))
 check("설정 값 모양이 틀리면 조회하지 않고 '설정 오류' 로 멈춘다", res and res[0] == "failed" and "설정 오류" in res[1], str(res))
+for bad in ({"QueryDefaults": "x"}, {"QueryDefaults": {"Wms": [1]}}):   # 섹션 자리에 글자·목록 (2026-11-03 - 전엔 UI 오류: AttributeError)
+    settings(bad)
+    try:
+        wellife.ensure_query(rr, actx, "Wms", wellife.WMS_FORM, lambda: None)
+        res = None
+    except wellife.Stop as e:
+        res = (e.result, str(e))
+    check(f"섹션 모양이 틀려도 '설정 오류' ({bad})", res and res[0] == "failed" and "설정 오류" in res[1] and "섹션" in res[1], str(res))
 settings({})
 
 

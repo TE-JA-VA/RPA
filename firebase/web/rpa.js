@@ -8,7 +8,7 @@ import {
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
 import { icon as lucide } from "./icons.js";
-import { P, esc, MODULES, WELLIFE_MODULES, wellifeOn, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf } from "./rpa-common.js";
+import { P, esc, MODULES, WELLIFE_MODULES, wellifeOn, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf, pcWho, schedNote } from "./rpa-common.js";
 export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 이 앱의 설정 화면을 붙인다 (settings.js)
 
 export const key = "rpa";
@@ -48,6 +48,8 @@ const HTML = `
     </section>
     <div class="msg bad hide" id="dup-agent">같은 에이전트 계정이 PC 두 대에서 켜져 있는 것 같습니다.</div>
     <div class="msg bad hide" id="ver-alert"></div>
+    <div class="msg bad" id="repeat-line" hidden></div>
+    <div class="msg warn" id="sched-note" hidden></div>
     <div class="tiles" id="tiles"></div>
     <div class="cols">
       <div>
@@ -81,7 +83,7 @@ const HTML = `
             ${runBtn("run-routine", PLAY, "PROCESS 오토파일럿")}
             ${runBtn("stop-erpia", POWER, "ERPia 종료", "danger")}
           </div>
-          <div class="msg bad" id="repeat-line" hidden></div>
+          <div class="msg warn" id="act-why" hidden></div>
           <button class="apply" id="repeat-resume" hidden>반복 다시 시작</button>
         </div>
         <div class="card hide" id="usage-card">
@@ -159,8 +161,8 @@ export function mount(el, context) {
   $("run-all").onclick = () => send("launch", { target: "all" }, "전체 실행");
   // RPA 가 도는 동안엔 같은 자리가 [RPA 중단] (2026-10-12 사용자: 하던 단계를 기다리지 않고 바로 끔, ERPia 는 그대로)
   $("stop-erpia").onclick = () => {
-    if (rpaRunning()) { if (confirm("실행 중인 오토파일럿을 중단할까요? 하던 단계는 끝까지 가지 않습니다.")) send("stop_rpa", null, "오토파일럿 중단"); }
-    else if (confirm("ERPia를 종료하시겠습니까?")) send("stop_erpia", null, "ERPia 종료");
+    if (rpaRunning()) { if (confirm(`${pcWho(c)}실행 중인 오토파일럿을 중단할까요? 하던 단계는 끝까지 가지 않습니다.`)) send("stop_rpa", null, "오토파일럿 중단"); }
+    else if (confirm(`${pcWho(c)}ERPia를 종료하시겠습니까?`)) send("stop_erpia", null, "ERPia 종료");   // PC 가 여럿이면 어느 PC 인지 (W7)
   };
   $("repeat-resume").onclick = () => send("resume_repeat", null, "반복 다시 시작");
   show($("sidecol"), c.isAdmin);   // 열람 계정은 오른쪽 열이 통째로 빠지고 본문이 그 자리를 쓴다 (.cols:has)
@@ -345,10 +347,10 @@ function verStat(v) {
     if (v.state === "tampered") {
       const why = v.signature === "bad" && !(Array.isArray(v.modified) && v.modified.length) ? "버전 목록의 서명이 맞지 않습니다" : `다른 파일: ${list.join(", ")}${more}`;
       return { text: `버전 ${name || "?"} · 파일 변조됨 (실행 막힘)`, warn: true,
-               title: `${why}. [업데이트]에서 같은 버전을 다시 보내면 원래 파일로 되돌립니다.` };
+               title: `${why}. ERPia에 문의하여 주십시오. (같은 버전으로 다시 업데이트하면 원래 파일로 되돌립니다)` };   // 업체 웹엔 [업데이트] 가 없다 (W5)
     }
     return { text: `버전 ${name || "?"} · 빠진 파일 ${n}`, warn: true,
-             title: list.length ? `버전 목록에 있는데 없는 파일: ${list.join(", ")}${more}. [업데이트]에서 같은 버전을 다시 보내면 채웁니다.` : "" };
+             title: list.length ? `버전 목록에 있는데 없는 파일: ${list.join(", ")}${more}. ERPia에 문의하여 주십시오. (같은 버전으로 다시 업데이트하면 채웁니다)` : "" };
   }
   if (v.state === "error") return { text: "버전 확인 실패", title: typeof v.error === "string" ? v.error : "", warn: true };
   return null;
@@ -386,6 +388,7 @@ const tampered = () => live?.version?.state === "tampered";   // PC 가 실행�
 /** 상태 띠 '다음 자동 실행'. 열린 반복 시간대면 '반복 중 · 12:00까지' (다음 회차) / '반복 멈춤'.
  *  아니면 다음 줄 - '고르기' 면 모듈 이름까지 (예: 10월 7일 (화) 11:00 · 물류관리). 옛 판 PC 는 줄이 없어 시각만 */
 function nextRunText(sch) {
+  if (sch?.unreadable) return "설정 파일 오류";
   const win = openWindow(sch), rep = repeatOf(sch, win);
   if (win) {
     if (rep?.stopped) return "반복 멈춤";
@@ -396,7 +399,9 @@ function nextRunText(sch) {
   const wd = (new Date(sch.next_run_at).getDay() + 6) % 7;   // 같은 시각 줄이 요일별로 여럿이면 그날 줄 (BugBuster M6, rpa-settings 와 같게)
   const slot = (Array.isArray(sch.slots) ? sch.slots : []).find((s) => s && s.at === sch.next_slot && (!Array.isArray(s.days) || s.days.includes(wd)));
   const names = slotNames(slot);
-  return when(sch.next_run_at) + (slot?.until ? " 반복" : "") + (names ? ` · ${names}` : "");
+  const bal = typeof tokBal === "number" ? tokBal : live?.tokens?.balance;   // 토큰이 없으면 그 시각에 거절된다 (W8)
+  return when(sch.next_run_at) + (slot?.until ? " 반복" : "") + (names ? ` · ${names}` : "") + (sch.waiting_reason ? " · 대기 중" : "")
+    + (typeof bal === "number" && bal <= 0 ? " · 토큰 없음" : "");
 }
 function paintTiles() {
   const rr = live?.programs?.routine;
@@ -490,25 +495,28 @@ function paintRecent() {
 }
 
 /** 이미 있는 목록은 제자리에서 고친다. 통째로 새로 그리면 진행 중 점의 애니메이션이 매번 처음부터 다시 돈다 */
-function paintStepsInto(ul, steps) {
+function paintStepsInto(ul, steps, extra = {}) {
   const list = steps || [], rows = ul.children;
   const same = rows.length === list.length
     && list.every((s, i) => rows[i].children[1].textContent === (s.label || s.key));
-  if (!same) { ul.replaceChildren(...stepList(list).children); return; }
+  if (!same) { ul.replaceChildren(...stepList(list, extra).children); return; }
   list.forEach((s, i) => {
-    const li = rows[i], note = li.children[2], at = li.children[3];
+    const li = rows[i], note = li.children[2], at = li.children[3], text = stepNote(s, extra);
     if (li.className !== stepClass(s)) li.className = stepClass(s);
-    if (note.textContent !== stepNote(s)) { note.textContent = stepNote(s); note.title = stepNote(s); }
+    if (note.textContent !== text) { note.textContent = text; note.title = text; }
     if (at.textContent !== stepAt(s)) at.textContent = stepAt(s);
   });
 }
 const stepClass = (s) => (s.state === "skipped" && s.note === "설정에서 끔") ? "skipped" : (s.state || "pending");
-const stepNote = (s) => (s.state === "skipped" && s.note === "설정에서 끔") ? "설정에서 끔"
-  : (s.note || (s.state === "running" ? "진행 중" : ""));
+const stepNote = (s, extra = {}) => (s.state === "skipped" && s.note === "설정에서 끔") ? "설정에서 끔"
+  : (s.note || extra[s.key] || (s.state === "running" ? "진행 중" : ""));
+// 완료 모듈의 사유 (웰라이프 '[실행] … 확인하여 주십시오' 등) - PC 는 완료 단계에 메모를 달지 않아 웹에 안 보였다. 그 모듈의 마지막 단계 메모로 (R10, 2026-11-03)
+const doneNotes = (v) => Object.fromEntries((v?.modules || []).filter((m) => m && m.state === "done" && m.reason && Array.isArray(m.steps) && m.steps.length)
+  .map((m) => [m.steps.at(-1), m.reason]));
 // 단계 줄 끝의 시각 (시:분:초) - 끝난 단계는 끝난 때, 진행 중은 시작한 때. 따로 있던 로그 카드가 하던 일 (2026-10-30)
 const stepAt = (s) => ["running", "done", "failed", "stopped"].includes(s.state) ? (s.finished_at || s.started_at || "").slice(11, 19) : "";
 
-function stepList(steps) {
+function stepList(steps, extra = {}) {
   const ul = document.createElement("ul");
   ul.className = "steps";
   ul.replaceChildren(...(steps || []).map((s) => {
@@ -516,7 +524,7 @@ function stepList(steps) {
     li.className = stepClass(s);
     li.append(Object.assign(document.createElement("span"), { className: "mark" }),
               Object.assign(document.createElement("span"), { textContent: s.label || s.key }),
-              Object.assign(document.createElement("span"), { className: "note", textContent: stepNote(s), title: stepNote(s) }),
+              Object.assign(document.createElement("span"), { className: "note", textContent: stepNote(s, extra), title: stepNote(s, extra) }),
               Object.assign(document.createElement("span"), { className: "at num", textContent: stepAt(s) }));
     return li;
   }));
@@ -535,7 +543,7 @@ function paintSteps() {
     }
     const steps = v.steps || [];
     meta.textContent = `${stateText(v)} · ${v.steps_done ?? 0}/${v.steps_total ?? steps.length}` + (v.duration_sec != null ? ` · ${dur(v.duration_sec)}` : "");
-    paintStepsInto(ul, steps);
+    paintStepsInto(ul, steps, doneNotes(v));
   }
 }
 
@@ -591,6 +599,9 @@ function histRow(r) {
   detail.className = "hist-detail hide";
   const td = document.createElement("td"); td.colSpan = 6;
   td.append(stepList(payload.steps));
+  // 기록의 모듈에는 단계 목록이 없어(rpa_status.history_record) 완료 모듈의 사유는 단계 목록 아래 줄로 (R10)
+  const notes = (payload.modules || []).filter((m) => m && m.state === "done" && m.reason);
+  if (notes.length) td.append(...notes.map((m) => Object.assign(document.createElement("div"), { className: "msg done-note", textContent: `${m.label}: ${m.reason}` })));
   const pre = document.createElement("pre"); pre.className = "num"; pre.textContent = (payload.log || []).join("\n");
   td.append(pre);
   detail.append(td);
@@ -603,7 +614,8 @@ function histRow(r) {
 async function send(type, args, label) {
   if (busy || !c.pcId) return;
   busy = true; paintButtons();
-  try { await sendCommand(c, type, args, label, () => !!root); }
+  const mine = c;           // PC 를 바꾸면 mount 가 새 c 를 만든다 - 앞 PC 의 결과는 PC 이름을 붙여 알린다 (검토 2026-11-03)
+  try { await sendCommand(c, type, args, label, () => !!root && c === mine); }
   finally { busy = false; if (root) paintButtons(); }
 }
 
@@ -622,12 +634,16 @@ function paintButtons() {
   const bal = typeof tokBal === "number" ? tokBal : live?.tokens?.balance;
   const empty = typeof bal === "number" && bal <= 0;
   const upd = updBusy(), bad = tampered();               // 변조: PC 가 실행을 거절한다 - 누를 수 없게 (2026-10-30)
+  // 잠긴 까닭은 마우스 글(title)과 단추 아래 글 둘 다 - 휴대폰엔 마우스 글이 없다 (W13, 2026-11-03)
+  const why = bad && !off ? "파일이 변조되어 실행할 수 없습니다. ERPia에 문의하여 주십시오."
+    : upd && !off ? "업데이트 중이어서 잠시 실행할 수 없습니다." : running && !off ? "오토파일럿이 실행 중이어서 실행할 수 없습니다."
+    : empty && !off ? "토큰이 없어 실행할 수 없습니다. 토큰을 충전한 뒤 실행하여 주십시오." : "";
   for (const id of ["run-prepare", "run-routine", "run-all"]) {
     $(id).disabled = off || running || empty || upd || bad;     // 다른 사람이 이미 돌리는 중이면 못 누른다
-    $(id).title = bad && !off ? "파일이 변조되어 실행할 수 없습니다. 같은 버전으로 다시 업데이트하면 원래 파일로 되돌립니다."
-      : upd && !off ? "업데이트 중이어서 잠시 실행할 수 없습니다." : running && !off ? "오토파일럿이 실행 중이어서 실행할 수 없습니다."
-      : empty && !off ? "토큰이 없어 실행할 수 없습니다. 토큰을 충전한 뒤 실행하여 주십시오." : "";
+    $(id).title = why;
   }
+  $("act-why").textContent = running ? "" : why;                 // 실행 중은 단추 글('… 실행중')이 이미 알린다
+  $("act-why").hidden = !$("act-why").textContent;
   for (const [id, [key, name]] of Object.entries(RUN_LABELS)) {
     const on = live?.programs?.[key]?.state === "running";
     $(id).querySelector(".t").textContent = on ? `${name} 실행중` : name;
@@ -707,8 +723,13 @@ function paintTokens() {
 function paintRepeat() {
   const sch = live?.schedule, rep = repeatOf(sch, openWindow(sch));
   const stopped = !!rep?.stopped;
+  // 반복 멈춤 까닭은 열람 계정에도 (전엔 관리자만 보는 오른쪽 열 안이라 숨었다 - W12, 2026-11-03). [반복 다시 시작] 은 관리자만
   $("repeat-line").hidden = !stopped;
   $("repeat-line").textContent = stopped ? `반복 멈춤: ${rep.stopped.reason || ""}`.trim() : "";
+  const note = schedNote(sch);
+  $("sched-note").textContent = note?.[0] || "";
+  $("sched-note").className = `msg ${note?.[1] || "warn"}`;
+  $("sched-note").hidden = !note;
   $("repeat-resume").hidden = !stopped || !c.isAdmin;
   $("repeat-resume").disabled = busy || !c.pcId;
 }
@@ -737,8 +758,11 @@ async function paintUsage() {
     const month = `${kst.slice(0, 7)}-01T00:00:00`, today = `${kst.slice(0, 10)}T00:00:00`;
     const from = w.since > month ? w.since : month;
     // 한 질의에 여러 칸을 같이 더하면 그 칸이 모두 있는 기록만 센다 (Firestore) - 칸마다 따로 (각각 읽기 1번 꼴)
-    const one = (at, field) => getAggregateFromServer(query(collection(fs, "runs", c.me.cid, "items"), where("started_at", ">=", at)),
-      { s: sum(field) }).then((r) => r.data().s ?? 0);
+    // 오늘 끝까지만 - 시계가 틀린 PC 가 남긴 미래 시각 기록이 다음 달에도 '이번 달' 로 세어졌다 ((c), 2026-11-03).
+    // 같은 칸(started_at)의 범위라 색인은 그대로 (started_at + used.<키>)
+    const end = `${kst.slice(0, 10)}T23:59:59`;
+    const one = (at, field) => getAggregateFromServer(query(collection(fs, "runs", c.me.cid, "items"), where("started_at", ">=", at),
+      where("started_at", "<=", end)), { s: sum(field) }).then((r) => r.data().s ?? 0);
     const list = usageKeys(), keys = list.map(([k]) => k);
     const [total, todayTotal, ...counts] = await Promise.all([
       one(from, "cost"), one(from > today ? from : today, "cost"), ...keys.map((k) => one(from, `used.${k}`).catch(() => 0))]);   // 한 칸이 안 돼도 나머지는 보인다

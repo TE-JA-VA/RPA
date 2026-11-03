@@ -209,6 +209,22 @@ check("물류 칸이 설정 파일에 (자동 = Y)", saved_logistic == {"cboBS_A
                                                     "cboTagAmt": "대", "cboBeasong_Gu_Apply": "신용"}, saved_logistic)
 check("작업 등록 → 켜기", calls == ["/Create", "/End", "/Run"], calls)
 check("막 켰으면 상태 줄은 '켜는 중' (감독이 인증서를 채우고 켜기까지 1분쯤)", "실행 준비 중" in win.status.get(), win.status.get())
+# S11 (2026-11-03): 저장 뒤 한 번 다시 본다 - 켜졌으면 '실행 중', 로그인이 거부돼 멈췄으면 그 까닭 (전엔 '실행 준비 중' 에 머물렀다)
+_running = win.running
+win.running = lambda: True
+win.recheck_status()
+check("다시 보면 '실행 중'", "실행 중" in win.status.get() and "준비" not in win.status.get(), win.status.get())
+win.running = lambda: False
+import background as _bg  # noqa: E402
+with open(paths["stop_file"], "w", encoding="utf-8") as _f:
+    import json as _json
+    _json.dump({"code": 3, "reason": _bg.STOP_CODES[3], "at": "2026-11-03 15:00:00"}, _f, ensure_ascii=False)
+win.recheck_status()
+check("로그인이 거부돼 멈췄으면 그 까닭 (노란 글)", "중단됨" in win.status.get(), win.status.get())
+os.remove(paths["stop_file"])
+win.running = _running
+win.state["stopped"] = None
+win.set_status(starting=True)
 check("저장 뒤 비밀번호 칸은 비고, 칸 안에 흐린 '저장됨 - 바꿀 때만 입력'", all(win.vars[k].get() == "" for k in rs.PASSWORD_KEYS)
       and rs.PW_HINTS["ok"] == "저장됨 - 바꿀 때만 입력" and all(shown(k) == rs.PW_HINTS["ok"] for k in rs.PASSWORD_KEYS),
       [shown(k) for k in rs.PASSWORD_KEYS])

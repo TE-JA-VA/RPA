@@ -53,7 +53,8 @@ for bad_days in ([], [7], [-1], ["1"], [True], None, "0,1"):
         d.normalize_days(bad_days); check(False, f"요일 거부 {bad_days!r}")
     except ValueError:
         check(True, f"요일 거부 {bad_days!r}")
-for bad_t in ([], ["9:00"], ["24:00"], ["09:03"], ["09:60"], ["0900"], [900], ["ab:cd"], None,
+check(d.normalize_times(["09:03", "23:59"]) == ["09:03", "23:59"], "1분 단위 시각을 받는다 (사용자 2026-11-03)")
+for bad_t in ([], ["9:00"], ["24:00"], ["09:60"], ["0900"], [900], ["ab:cd"], None,
               [f"{h:02d}:00" for h in range(13)]):
     label = bad_t if not isinstance(bad_t, list) or len(bad_t) < 5 else f"{len(bad_t)}개"
     try:
@@ -75,7 +76,7 @@ check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
 check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
-      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 5, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 5 (운송장 '켠 사이트만')")
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 6, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 6 (1분 단위 시각)")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
@@ -98,7 +99,7 @@ check(st.SETTINGS_UNREADABLE not in st.read_settings(), "다시 읽히면 표시
 
 print("\n=== 5. 적용 ===")
 for bad in ({"enabled": "yes", "days": WK, "times": ["09:00"]}, {"enabled": True, "days": [], "times": ["09:00"]},
-            {"enabled": True, "days": WK, "times": ["09:07"]}, {"enabled": True, "interval_min": 60}, "x", None):
+            {"enabled": True, "days": WK, "times": ["09:60"]}, {"enabled": True, "interval_min": 60}, "x", None):
     try:
         d.apply_schedule(bad); check(False, f"적용 거부 {bad!r}")
     except ValueError:
@@ -129,7 +130,9 @@ for bad, why in ((["Output"], "물류관리 모듈과 함께"), (["Login"], "하
         check(why in str(e), f"run 거부 {bad!r} ({e})")
 slots = d.normalize_slots([{"at": "11:00", "run": ["Logistics"]}, {"at": "10:00"}])
 check(slots == [{"at": "10:00"}, {"at": "11:00", "run": ["Login", "Logistics"]}], f"줄은 시각 순, '전체' 줄엔 run 이 없다 ({slots})")
-for bad, why in (([{"at": "10:00"}, {"at": "10:00", "run": ["Hold"]}], "같은 시각"), ([{"at": "10:03"}], "5분"),
+slots = d.normalize_slots([{"at": "09:03", "until": "11:57", "rest_min": 3, "run": ["Hold"]}])
+check(slots[0]["at"] == "09:03" and slots[0]["until"] == "11:57", f"1분 단위 시작·끝 시각 ({slots})")
+for bad, why in (([{"at": "10:00"}, {"at": "10:00", "run": ["Hold"]}], "같은 시각"), ([{"at": "10:60"}], "00:00~23:59"),
                  ([{"at": f"{h:02d}:00"} for h in range(13)], "12개"), ([], "하나 이상"), (["10:00"], "자동 실행 설정이 올바르지")):
     try:
         d.normalize_slots(bad); check(False, f"줄 거부 {why}")
@@ -206,6 +209,12 @@ check(st.hold_lock(st.OBSERVER_LOCK) is False, "옵저버는 둘이 못 뜬다")
 set_next(-3)
 sched.tick()
 check(d.LAUNCHED == saved and "옵저버" in (sched.waiting_reason or ""), f"예약 시각이 와도 기다림: {sched.waiting_reason}")
+# R5 (2026-11-03): 띄울 차례인데 막힌 까닭을 웹에 올린다 (held_reason) - 몇 틱 동안 다시 안 적으면 지운다
+check("옵저버" in (sched.held_reason() or ""), f"막힌 까닭을 웹에 올릴 값으로: {sched.held_reason()}")
+_held = sched.held
+sched.held = (_held[0], _held[1] - 4 * d.SCHEDULER_TICK)
+check(sched.held_reason() is None, "띄울 차례가 지나 다시 적지 않으면 지운다")
+sched.held = _held
 try:
     d.launch_run_all("cloud")
     check(False, "옵저버가 떠 있는데 실행 단추가 띄움")
@@ -334,7 +343,7 @@ print("\n=== 8. 화면에 주는 값 ===")
 sess = {"user_id": "admin", "role": "admin", "admin_code": "erpiatest2"}
 try:
     tv = d.settings_view(sess)
-    check("schedule_limits" in tv and tv["schedule_limits"]["minute_step"] == 5 and "interval_min_limits" not in tv, "settings_view 제한값")
+    check("schedule_limits" in tv and tv["schedule_limits"]["minute_step"] == 1 and "interval_min_limits" not in tv, "settings_view 제한값")
 except Exception as e:
     check(False, f"settings_view 호출 실패: {type(e).__name__}: {e}")
 
@@ -351,6 +360,13 @@ for state in up.BUSY_STATES:
     check(sched.busy() == "업데이트 중입니다. 잠시 후 다시 실행해주십시오.", f"{state}: 예약·반복도 기다린다")
 up.write_state({"state": "done"})
 check(sched.busy() is None, "done 이면 다시 띄울 수 있다")
+# R13 (2026-11-03): PC 시간대가 한국 표준시가 아니면 웹에 알린다 (예약은 PC 시각으로 돈다)
+_lt = d.time.localtime
+for off, want in ((9 * 3600, None), (0, "+0000"), (-5 * 3600, "-0500"), (int(5.5 * 3600), "+0530")):
+    d.time.localtime = lambda o=off: type("T", (), {"tm_gmtoff": o})()
+    check(d.pc_timezone() == want, f"시간대 {off} -> {want!r} ({d.pc_timezone()!r})")
+d.time.localtime = _lt
+check("tz" in d.schedule_live({"enabled": False}, d.datetime.date.today()), "웹에 올리는 예약에 tz 칸")
 os.environ.pop("RPA_PROGRAMDATA")
 
 print("\n=== 줄마다 요일 (사용자 2026-10-08) ===")

@@ -80,7 +80,7 @@ for bad, why in (
         ([dict(WIN), {"at": "11:30", "until": "12:30", "run": ["Hold"]}], "겹칩니다"),
         ([dict(WIN), {"at": "11:30"}], "11:30 은 반복 시간대(11:00~12:00) 와 겹칩니다. 반복 시간대와 겹치지 않도록 수정해주십시오."),
         ([dict(WIN), {"at": "11:00"}], "11:00 은 반복 시간대(11:00~12:00) 와 겹칩니다."),
-        ([{"at": "23:00", "until": "24:00", "run": ["Hold"]}], "23:55")):
+        ([{"at": "23:00", "until": "24:00", "run": ["Hold"]}], "23:59")):
     try:
         d.normalize_slots(bad); check(False, f"거부: {why}")
     except ValueError as e:

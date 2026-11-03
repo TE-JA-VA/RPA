@@ -73,9 +73,7 @@ GUIDE = """<!doctype html><meta charset="utf-8"><title>오토파일럿 기록</t
 <p style="margin:0;color:#6b7280;font-size:14px">{hint}</p></div>"""
 
 
-def circled(n):
-    """① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄로 나뉘어 있다 (1~20, 21~35, 36~50). 웰라이프 업체 40개 (2026-10-15)."""
-    return chr(0x2460 + n - 1) if n <= 20 else chr(0x3251 + n - 21) if n <= 35 else chr(0x32B1 + n - 36)
+circled = st.circled     # ① ~ ㊿ (웰라이프 40개) - 에이전트와 같은 함수
 
 
 def dpi_scale():
@@ -462,7 +460,17 @@ def new_preset(no, name=None, code=""):
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
             "imap": None,       # 메일 서버(IMAP) 칸 {host, port, security, rules} - source 가 imap 일 때 (2026-10-22)
             "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
-            "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (저장하면 그 프리셋은 꺼진 채로)
+            "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (닫을 때 묻고 내보내기를 막는다. 켬/끔은 저장해도 그대로 - 2026-11-03)
+
+
+def edit_view(presets):
+    """닫을 때 '저장하지 않은 변경' 을 가르는 칸 값 - 사람이 고치는 것만 (2026-11-03: 비밀번호만 바꾸고 닫으면 묻지 않고 버렸다).
+    기록이 없는 칸은 저장하지 않으니 뺀다. 비밀번호는 새로 친 글자가 있으면 바뀐 것. 단계 체크는 끈 것만 (켬은 그릴 때 채워진다).
+    이름·사이트코드·메일 시작 문구는 _store_fields 와 같이 다듬어 견준다 - 고르기만 한 칸(옛 전각 코드 등)을 고친 것으로 보지 않게."""
+    return [(p["name"].strip(), unicodedata.normalize("NFKC", p["code"]).strip(), p["id"], bool(p["pw"]), p["phone"], p["senders"],
+             p["mail_id"], bool(p["mail_pw"]), p["source"], p["prefix"].strip(), repr(p["imap"]), sorted(p["deleted"]), sorted(p["otp"].items()),
+             sorted(k for k, v in p["enabled"].items() if not v.get()))
+            for p in presets if p["loaded"] or p["raw"] or p["head"]]
 
 
 def load_file_into(p, obj):
@@ -624,7 +632,7 @@ def keep_dates(files, old, logins_changed, now):
     return files
 
 
-def store(files, logins, fresh=(), phones=None, origs=None, dropped=(), mail_logins=None):
+def store(files, logins, phones=None, origs=None, dropped=(), mail_logins=None):
     """프리셋 파일과 Sites 의 PRESETn 을 쓴다. 못 쓰면 화면에 보일 문장 (콘솔 없는 exe 라 조용히 넘어가면 안 된다), 되면 None.
     origs: {번호: 불러올 때 번호}·dropped: 지운 옛 번호 - 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13) Sites 의 옛 값은 옛 번호에서 찾고,
     메일 기억·로그인 세션·보관 파일도 따라 옮긴다. 순서는 프리셋 → 설정 → 파일: 설정 쓰기가 실패해도 Sites 는 옛 번호 그대로라
@@ -635,7 +643,7 @@ def store(files, logins, fresh=(), phones=None, origs=None, dropped=(), mail_log
         old_codes = None                     # 옛 파일을 못 읽으면 메일 기억은 그대로 둔다
     try:
         st.write_presets(files)
-        st.save_preset_sites(files, logins, fresh=fresh, phones=phones, origs=origs, mail_logins=mail_logins)
+        st.save_preset_sites(files, logins, phones=phones, origs=origs, mail_logins=mail_logins)
     except (OSError, ValueError, RuntimeError) as e:
         return f"저장하지 못했습니다. ({e}) 잠시 후 다시 저장하여 주십시오."
     pt.move_preset_files(origs or {}, dropped)
@@ -648,6 +656,29 @@ def store(files, logins, fresh=(), phones=None, origs=None, dropped=(), mail_log
                 except OSError:
                     pass
     return None
+
+
+def imap_overlap(out):
+    """같은 메일함·같은 계정의 메일 서버 프리셋 둘의 조건이 겹치면 [(앞 번호, 뒤 번호)] - 한 메일을 두 사이트코드로 올릴 수 있다.
+    받는 규칙은 바꾸지 않는다 (어느 프리셋 몫인지 가를 근거가 없다) - 저장 때 알리기만 (O12, 2026-11-03).
+    제목 포함·제외 조건은 보지 않아 실제보다 넓게 알릴 수 있다."""
+    seen, hits, n = [], [], mail_imap._norm
+    for o in out:
+        s = st.imap_step(o["record"])
+        if not s:
+            continue
+        try:
+            r = mail_imap.check_rules(s.get("rules"))
+        except ValueError:
+            continue                        # 조건이 틀린 것은 imap_warn·validate 가 따로 알린다
+        key = ((s.get("host") or "").strip().lower(), o["id"].strip().lower(), r["mailbox"])
+        mine = {n(x) for x in r["senders"]}
+        for no, k, q, theirs in seen:
+            pa, pb = n(r["subject_prefix"]), n(q["subject_prefix"])
+            if k == key and (not mine or not theirs or mine & theirs) and (pa.startswith(pb) or pb.startswith(pa)):
+                hits.append((no, o["no"]))
+        seen.append((o["no"], key, r, mine))
+    return hits
 
 
 def pick_problem(presets):
@@ -747,6 +778,8 @@ class App:
         self._build()
         threading.Thread(target=self._load_phones, daemon=True).start()
         self._load_fields()
+        self._store_fields()                    # 닫을 때와 같은 다듬기를 거친 값으로 견준다
+        self.saved_view = edit_view(self.presets)
         root.update()
         self.worker = Worker(self.browser_bounds(), self.ui, hint)
         self.worker.start()
@@ -1454,6 +1487,15 @@ class App:
                     if k in kept:
                         n = sum(1 for s in final["steps"][:k + 1] if s["id"] not in p["deleted"])
                         warns.append(f"{circled(no)} {n}단계 값 '{v}'은(는) 날짜로 바꾸지 못해 매일 같은 날짜를 넣습니다.")
+                for k, v in rec.otp_suspects(final["steps"]):     # 단서 없는 인증번호 칸 (O8)
+                    if k in kept:
+                        n = sum(1 for s in final["steps"][:k + 1] if s["id"] not in p["deleted"])
+                        warns.append(f"{circled(no)} {n}단계 값 '{v}'은(는) 매일 같은 값을 넣습니다. 문자로 받는 인증번호면 "
+                                     "그 단계의 [인증번호 칸]을 눌러 주십시오.")
+                dl = sum(1 for k, s in enumerate(final["steps"]) if k in kept and s.get("download"))
+                if dl > 1:                             # 같은 사이트코드 파일은 하나만 올린다 (run_routine.collect_upload_files)
+                    warns.append(f"{circled(no)} 파일 받기 단계가 {dl}개입니다. 같은 사이트코드의 파일은 가장 나중에 받은 1개만 "
+                                 "업로드하고 나머지는 오류 폴더로 옮깁니다.")
                 if imap_warn(st.imap_step(final)):     # (BugBuster I6)
                     warns.append(f"{circled(no)} {imap_warn(st.imap_step(final))}")
                 pw_sites = rec.password_sites([s for k, s in enumerate(final["steps"]) if k in kept])
@@ -1467,6 +1509,9 @@ class App:
         if problem:
             self.select(problem[0] - 1)
             return self.status.config(text=problem[1], fg=RED)
+        for a, b in imap_overlap(out):                 # (O12)
+            warns.append(f"{circled(a)}·{circled(b)} 같은 메일함의 조건이 겹쳐 한 메일을 두 사이트코드로 올릴 수 있습니다. "
+                         "보낸 사람이나 제목 조건을 나눠 주십시오.")
         for o in out:
             if o["record"]:
                 scrub_login(o["record"], o["id"], o["mail_id"])      # 아이디(메일함 아이디도)는 기록에 글자로 안 남긴다 (설정 값으로 친다)
@@ -1485,6 +1530,8 @@ class App:
         for o in out:          # 같은 칸을 다른 사이트로 다시 녹화하고 비밀번호를 비웠다 - 옛 사이트 비밀번호를 쓴다, 짝 검사도 못 잡는다 (BugBuster I1)
             if o["record"] and not o["pw"] and o["has_pw"] and o["no"] in old and old[o["no"]]["code"] != o["code"]:
                 warns.append(f"{circled(o['no'])} 사이트코드가 바뀌었지만 비밀번호를 새로 입력하지 않아 이전 사이트의 비밀번호를 사용합니다.")
+            if o["record"] and o["source"] in ("mail", "imap") and o["no"] in old and old[o["no"]]["code"] != o["code"]:   # (O6 - 지우는 것은 store, K13)
+                warns.append(f"{circled(o['no'])} 사이트코드가 바뀌어 받은 메일 기억을 지웠습니다. 다음 실행에 기간 안의 메일을 다시 받습니다.")
         sites = cfg.get(st.SITES_SECTION)
         sites = sites if isinstance(sites, dict) else {}
         logins_changed = {o["no"] for o in out if o["pw"] or o["id"].strip() != (
@@ -1501,8 +1548,7 @@ class App:
                 self.select(hit["no"] - 1)               # 걸린 기록의 프리셋으로 (BugBuster L6)
                 return self.status.config(text=f"{circled(hit['no'])} 기록에 비밀번호로 보이는 글자가 있어 저장하지 않았습니다. "
                                             "해당 단계를 수정해주십시오.", fg=RED)
-        fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
-        problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh,
+        problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]},
                         phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]}, origs=origs, dropped=dropped,
                         mail_logins={o["no"]: (o["mail_id"].strip(), o["mail_pw"] or None) for o in out if o["record"]})
         if problem:
@@ -1514,6 +1560,7 @@ class App:
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False,
                          mail_pw="", has_mail_pw=has_mail_login(f["record"]) and bool(p["mail_pw"] or p["has_mail_pw"]))
         self._load_fields()
+        self.saved_view = edit_view(self.presets)
         self.status.config(text=" ".join(["저장했습니다."] + warns), fg=BLUE if warns else GREEN_D)     # 기록 때 보이던 메일도 실행 때 받는다 - '이미 처리' 로 미리 채우지 않는다 (사용자 2026-10-20, 중복은 주문번호로 막힌다)
         return st.presets_path()
 
@@ -1597,8 +1644,10 @@ class App:
             return True
         self.paint_buttons()
         if ok:
+            warn = next(filter(None, map(rec.upload_warning, saved)), None)   # csv·zip 등 - 예전엔 로그에만 ((iii), 2026-11-03)
             self.status.config(text=("마지막 단계까지 끝나 수정할 자리가 없습니다. " if was_editing else "")
-                               + f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}", fg=GREEN_D)
+                               + f"미리보기 성공 ({sec:.0f}초) - 받은 파일: {', '.join(saved) or '없음'}"
+                               + (f" [주의] {warn}" if warn else ""), fg=BLUE if warn else GREEN_D)
         elif stopped:
             self.status.config(text="미리보기를 중단하였습니다.", fg=MUTED)
         else:
@@ -1634,7 +1683,9 @@ class App:
             return
         if self.previewing and not (self.paused or self.stopping or self.failed_at is not None) or self.editing:
             return self.tell("미리보기 중", "미리보기 중에는 창을 닫을 수 없습니다.\n[Ⅱ 일시정지] 나 [■ 중단] 을 누른 후 다시 시도해 주십시오.")
-        if (any(p.get("fresh") for p in self.presets) or self.unsaved_drop) and not self.ask(
+        self._store_fields()                    # 보고 있는 칸에 친 값까지
+        edited = getattr(self, "saved_view", None) not in (None, edit_view(self.presets))
+        if (any(p.get("fresh") for p in self.presets) or self.unsaved_drop or edited) and not self.ask(
                 "저장하지 않은 변경", "저장하지 않은 변경이 있습니다. 저장하지 않고 닫으시겠습니까?"):
             return
         if self.previewing:

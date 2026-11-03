@@ -364,6 +364,14 @@ MAIL_EMPTY_HOLD = 5.0        # 그 글이 이만큼 계속 보여야 빈 목록 
                              # 그 실행만 '대상 없음' 이고 기억하지 않아 다음 실행에서 받는다
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 OPTIONAL_WAIT = 3.0
+NOTICE_WAIT = 8.0       # 기록 때 로그인 뒤 저절로 뜬 공지 창을 기다리는 시간 - 로그인 화면이 다 뜬 뒤 여는 느린 사이트도 잡게 (O2, 검토 2026-11-03)
+
+
+def notice_popup(steps, n):
+    """창 n 이 공지 창인가 - 그 창에서 한 일이 없거나 마우스 올리기·닫기류 누르기뿐 (로그인 때 사이트가 스스로 연 공지 창이 기록에
+    '새 창' 으로 남아, 공지가 내려간 날 15초 기다린 뒤 실패했다 - O2, 2026-11-03)."""
+    return all(x["kind"] == "hover" or (x["kind"] == "click" and (x.get("target", {}).get("text") or "").strip().lower() in CLOSE_TEXTS)
+               for x in steps if x.get("page") == n)
 LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 것' 에서 찾기는 이만큼 찾아도 없을 때부터 - 화면이 덜 뜬 사이 넘어가는
                         # 옛 화면에서 태그·글자가 같은 다른 것(헤더의 로그인 등)을 집지 않게 (검토 2026-10-17). 마우스 올리기(3초)보다 짧게
 STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
@@ -465,6 +473,22 @@ def url_path(url):
 
 def frame_info(frame):
     return {"main": frame.parent_frame is None, "name": frame.name or "", "path": url_path(frame.url)}
+
+
+ID_FIELD = re.compile(r"아이디|이메일|계정|user|login|mail|account|member|(?<![a-z])id(?![a-z])", re.I)
+
+
+def id_like(s):
+    """칸 단서(이름·자리표시 글·이름표 등)가 아이디 칸 같은가."""
+    t = s.get("target") or {}
+    return bool(ID_FIELD.search(" ".join(str(t.get(k) or "") for k in ("name", "id", "placeholder", "label", "aria", "title"))))
+
+
+def same_screen(a, b):
+    """a(글자 칸)와 b(비밀번호)가 아이디·비밀번호 짝인 화면인가. 같은 프레임이면 예전처럼 짝. 본 프레임끼리는 주소가 달라도
+    a 가 아이디 칸 같으면 짝 - 두 쪽(/login → /login/pw)에서 받는 사이트의 아이디가 기록한 글자로 굳었다 (O7, 2026-11-03).
+    단서를 보는 까닭: 아이디가 미리 채워진 사이트에서 다른 쪽의 검색 칸이 아이디로 바뀌면 재생 때 그 칸에 아이디를 친다 (검토 2026-11-03)."""
+    return a["page"] == b["page"] and (a["frame"] == b["frame"] or (a["frame"].get("main") and b["frame"].get("main") and id_like(a)))
 
 
 def same_target(a, b):
@@ -628,6 +652,14 @@ def date_text(info, today):
     return re.sub(r"\{(\d)\}", lambda m: vals[int(m.group(1))], info["shape"])
 
 
+def otp_suspects(steps):
+    """비밀번호 뒤에 숫자 4~8자리를 그대로 넣은 칸 [(단계 번호, 값)] - 칸에 단서가 없어 인증번호 칸으로 못 알아본 것일 수 있다.
+    그대로면 매일 기록 날의 번호를 넣는다. 막지 않고 저장 때 알린다 (O8, 2026-11-03 - 상품코드 같은 숫자 칸도 걸릴 수 있다)."""
+    pw = next((i for i, s in enumerate(steps) if s["kind"] == "secret"), None)
+    return [] if pw is None else [(i, s["value"]) for i, s in enumerate(steps) if i > pw and s["kind"] == "fill"
+                                  and not s.get("credential") and not s.get("date") and OTP_VALUE.match(str(s.get("value", "")).strip())]
+
+
 def date_like_fills(steps):
     """오늘 기준으로 못 바꾼 날짜 모양 값의 칸 넣기 [(단계 번호 0부터, 값)] - 옵저버가 저장 때 경고할 수 있게 (BugBuster I3).
     그대로 두면 매일 녹화한 날의 기간을 넣는다 (새 주문이 조용히 빠진다)."""
@@ -730,7 +762,7 @@ def _mark_mail(out):
         if s["kind"] == "secret" and a_dom and s.get("host") and site_domain(s["host"]) != a_dom:
             s["credential"] = "MAIL_PW"
             for p in reversed(out[max(0, i - 3):i]):
-                if p.get("credential") == "ID" and p["page"] == s["page"] and p["frame"] == s["frame"]:
+                if p.get("credential") == "ID" and same_screen(p, s):
                     p["credential"] = "MAIL_ID"
                     break
     for i, s in enumerate(out):
@@ -1078,7 +1110,7 @@ def finalize(steps, record_date, start_url, viewport=None, prior=()):
             continue
         s["credential"] = "PW"
         for p in reversed(out[max(0, i - 3):i]):         # 비밀번호 바로 앞 같은 화면의 글자 칸 = 아이디
-            if p["kind"] == "fill" and p["page"] == s["page"] and p["frame"] == s["frame"]:
+            if p["kind"] == "fill" and same_screen(p, s):
                 p["credential"] = "ID"
                 p.pop("value", None)
                 break
@@ -2003,6 +2035,8 @@ class Replayer:
             self.pages[s["page"]] = pg
             return "새 탭"
         page = self.pages.get(s["page"])
+        if page is None and s["page"] in self.pages:   # 오늘은 뜨지 않은 공지 창 (act - notice_popup)
+            raise Skip("공지 창이 뜨지 않았습니다")
         if page is None or page.is_closed():
             raise NotFound(f"창 {s['page']}이(가) 없습니다.")
         # 사람이 기다린 시간의 절반 (0.3~3초): 화면이 따라올 틈
@@ -2028,8 +2062,19 @@ class Replayer:
         def act():
             if not s.get("opens"):
                 return self._act(page, loc, s)
-            with page.expect_popup(timeout=15000) as pi:
-                self._act(page, loc, s)
+            # 공지 창이면 짧게 기다리고, 안 뜨면 그 창 번호를 비워 두고 넘어간다 - 비워 둔 번호는 [수정] adopt 가 새 탭에 다시 주지 않는다
+            notice = not s.get("download") and notice_popup(self.rec["steps"], s["opens"])
+            acted = False
+            try:
+                with page.expect_popup(timeout=NOTICE_WAIT * 1000 if notice else 15000) as pi:
+                    self._act(page, loc, s)
+                    acted = True
+            except PWTimeout:
+                if not (notice and acted):       # 누르기 자체가 안 됐거나 일하는 창이면 예전처럼 실패
+                    raise
+                self.pages[s["opens"]] = None
+                self.log("      (공지 창이 뜨지 않아 넘어갑니다)")
+                return
             self.pages[s["opens"]] = pi.value
             self._watch(pi.value)
             if not s.get("download"):       # 파일만 내려 주는 팝업은 곧 스스로 닫힌다

@@ -565,7 +565,7 @@ const PROGRAM_ORDER = ["prepare", "routine"];
 const PROGRAM_LABEL = {prepare: "ACTOR 오토파일럿", routine: "PROCESS 오토파일럿"};
 const WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];   // 서버와 같이 월=0
 const DAY_PRESETS = [["all", "매일", [0, 1, 2, 3, 4, 5, 6]], ["weekdays", "평일", [0, 1, 2, 3, 4]], ["weekend", "주말", [5, 6]]];
-const MINUTE_STEP = 5;
+const MINUTE_STEP = 1;   // rpa_status.SCHEDULE_MINUTE_STEP (2026-11-03: 1분 단위)
 const MAX_TIMES = 3;   // 서버 SCHEDULE_MAX_TIMES 와 같아야 한다
 const THEME_COLOR = {dark: "#002b36", light: "#eee8d5"};
 // Solarized accent colors (Ethan Schoonover)

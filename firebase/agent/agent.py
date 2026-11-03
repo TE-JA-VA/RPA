@@ -158,8 +158,9 @@ class Prices:
 
     def get(self, fresh=False):
         """fresh 면 10분을 기다리지 않고 새로 읽는다 - 기록에 쓴 토큰을 셀 때 (fresh_prices)."""
-        if fresh or self._at is None or time.time() - self._at >= self._every:
-            self._at = time.time()
+        # 간격은 time.monotonic - PC 시계를 뒤로 돌리면 time.time 차이로 재던 10분 주기·살아 있음 신호가 그만큼 멈췄다 (R14, 2026-11-03)
+        if fresh or self._at is None or time.monotonic() - self._at >= self._every:
+            self._at = time.monotonic()
             self._base = self._read("meta/prices", self._base)
             if self._cid:
                 self._company = self._read(f"prices/{self._cid}", self._company)
@@ -233,8 +234,8 @@ class Tokens:
 
     def refresh(self, force=False):
         """10분마다 (우리가 넣은 것), force 면 바로 (실행 직전·기록을 올린 뒤)."""
-        if force or self._at is None or time.time() - self._at >= self._every:
-            self._at = time.time()
+        if force or self._at is None or time.monotonic() - self._at >= self._every:
+            self._at = time.monotonic()
             try:
                 self.balance = balance(self._client, self._cid)
                 self._err = None
@@ -306,11 +307,25 @@ LIVE_TICK_KEYS = ("elapsed_sec", "idle_sec", "updated_at")   # 실행 중 매초
 LIVE_RUNNING_SEC = 5            # 실행 중 매초 바뀌는 값만 바뀌었으면 이 간격으로만 올린다 (heartbeat 와 같게, BugBuster M3)
 
 
+def live_schedule(settings, last, waiting):
+    """웹에 올릴 예약 (live/schedule). (다음 last, 올릴 값).
+    settings.json 을 못 읽으면 마지막으로 읽은 예약을 그대로 올리되 unreadable 을 붙인다 - 예약기는 그동안 기본값(꺼짐)으로 돌아
+    예약이 멈춰 있는데 웹은 옛 예약을 보였다 (R4, 2026-11-03. 꺼진 기본값을 보이지 않는 것은 BugBuster M20 그대로).
+    waiting: 띄울 차례인데 막혀 기다리는 까닭 (Scheduler.held_reason, R5) - 없으면 None (RTDB 는 빈 칸을 지운다)."""
+    import rpa_dashboard as dash
+    import rpa_status as st
+    bad = bool(settings.get(st.SETTINGS_UNREADABLE))
+    if not bad or last is None:
+        last = dash.schedule_live(settings["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝·PC 시간대 (화면 안내)
+    return last, dict(last, unreadable=bad or None, waiting_reason=waiting)
+
+
 def live_bodies(snap):
     """pump 의 '바뀌었나' 비교 - (매초 바뀌는 값을 뺀 것, 전체). 앞이 바뀌면 바로, 뒤만 바뀌었으면 실행 중 5초마다 올린다 (BugBuster M3).
     단계·모듈·지표의 duration_sec 도 뺀다 - 끝난 것의 값은 상태·finished_at 이 바뀔 때 같이 바뀐다."""
     parts = [snap.get("programs"), snap.get("modules"), snap.get("presets"), snap.get("parallel"), snap.get("together"), snap.get("schedule"),
-             snap.get("recent"), snap.get("launching"), snap.get("tokens"), snap.get("update"), snap.get("version")]
+             snap.get("recent"), snap.get("launching"), snap.get("tokens"), snap.get("update"), snap.get("version"),
+             snap.get("modes"), snap.get("hold_review")]   # 모드·재고검토만 바뀌어도 바로 올린다 (2026-11-03 - 전엔 모드만 바뀐 것은 다른 값이 바뀔 때까지 안 올라갔다)
     full = json.dumps(parts, ensure_ascii=False, default=str)
     steady = json.loads(full)
     for view in (steady[0] or {}).values():
@@ -749,9 +764,9 @@ class Policy:
 
     def refresh(self, force=False):
         """읽었으면 (limit, off, wellife, presets, parallel), 아직 때가 아니거나 못 읽었으면 None."""
-        if not force and self._at is not None and time.time() - self._at < self._every:
+        if not force and self._at is not None and time.monotonic() - self._at < self._every:
             return None
-        self._at = time.time()
+        self._at = time.monotonic()
         try:
             got = company_policy(self._client, self._cid)
         except fb.AuthError:
@@ -834,7 +849,10 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         wanted["Login"] = True           # 로그인은 항상 켬 (관리자도 못 끈다)
         if wanted.get("Logistics") is False:
             wanted["Output"] = False     # 운송장 출력은 물류관리가 꺼져 있으면 돌 수 없다 (빠진 키는 Y 로 쓰이므로 여기서 못 박는다)
-        st.write_routine_modules(wanted)
+        # 물류대기 '상품별 재고검토' 끔 = HoldSaveOnly (사용자 2026-11-03). 같은 명령에 실어 온다 - 새 명령 종류는 RTDB 규칙을 바꿔야 한다.
+        # 옛 화면은 이 키를 안 보낸다 (None - 손대지 않는다)
+        hold = args.get(st.HOLD_SAVE_ONLY_KEY)
+        st.write_routine_modules(wanted, hold_save_only=hold if isinstance(hold, bool) else None)
         return "모듈 수정 사항을 저장했습니다."
 
     def do_presets(args):
@@ -847,7 +865,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         except ValueError as e:
             raise RuntimeError(str(e)) from None
         names = {p["no"]: p["name"] for p in (st.preset_summary() or [])}
-        on = [f"{chr(0x2460 + no - 1)} {names.get(no, no)}" for no, v in sorted(final.items()) if v]
+        on = [f"{st.circled(no)} {names.get(no, no)}" for no, v in sorted(final.items()) if v]
         return f"프리셋을 변경하였습니다. ({', '.join(on) or '없음'})"
 
     def do_parallel(args):
@@ -873,7 +891,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
 
     def do_schedule(args):
         # 업체 한도 '자동 실행 개수' - 화면을 거치지 않은 명령도 여기서 막힌다 (설계 5-3). 끄기는 한도와 상관없이 된다. 못 읽으면 PC 에 적힌 마지막 값,
-        # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 5분 단위, PC 상한 12)
+        # 한 번도 못 읽었으면 자르지 않는다. 검증·저장·다음 시각 계산은 apply_schedule (요일 0~6, 1분 단위, PC 상한 12)
         got = limits() if limits else None
         # 줄의 모듈은 업체 종류에 맞게 - 웰라이프 업체는 물류관리·운송장 없이 SAP 연동·WMS 이관·운송장 전송, 그 밖의 업체는 반대 (limits() 가 정책을 새로 적은 뒤에 본다)
         wl = st.wellife_policy()
@@ -1323,12 +1341,12 @@ def run(cfg):
     def pump():
         """상태와 heartbeat. 1초마다 상태 파일을 보고 바뀌었을 때만 올린다 (실행 중 매초 바뀌는 값만 바뀌었으면 5초마다)."""
         last = None
-        last_full, last_live = None, 0.0
-        last_beat = 0.0
-        last_clean = 0.0
+        last_full, last_live = None, float("-inf")
+        last_beat = float("-inf")    # monotonic 은 부팅부터 센다 - 0.0 이면 부팅 직후 첫 신호가 늦는다 (R14)
+        last_clean = float("-inf")
         recent_key = [None, []]   # (이력 파일 mtime, 오늘) 과 그때 센 요약
         last_sched = None         # 마지막으로 제대로 읽은 schedule - settings.json 을 잠깐 못 읽으면 이것을 올린다 (BugBuster M20)
-        inst = [install, time.time()]   # 설치 점검 결과와 잰 때 - INSTALL_CHECK_SEC 마다 다시 (파일 변조 감지)
+        inst = [install, time.monotonic()]   # 설치 점검 결과와 잰 때 - INSTALL_CHECK_SEC 마다 다시 (파일 변조 감지)
         while not stop.is_set():
             try:
                 snap = live_extras(st.dashboard_snapshot())
@@ -1340,6 +1358,10 @@ def run(cfg):
                     snap["modes"] = st.read_wellife_modes() if st.wellife_policy() else None   # 웰라이프 모드 - 웹은 보기만 (시험 기간용)
                 except Exception:
                     snap["modes"] = None
+                try:   # 물류대기 '상품별 재고검토' (HoldSaveOnly 의 반대, 사용자 2026-11-03) - 웰라이프는 재고검토가 없어 안 올린다. 없으면 화면이 이 칸을 모른다
+                    snap["hold_review"] = None if st.wellife_policy() else not st.read_hold_save_only()
+                except Exception:
+                    snap["hold_review"] = None
                 try:
                     snap["presets"] = st.preset_summary()   # 이름·코드·단계 수·켬 (기록 내용·아이디·비밀번호는 안 싣는다)
                 except Exception:
@@ -1354,14 +1376,11 @@ def run(cfg):
                     snap["together"] = None
                 # settings.json 에서 schedule 절만. accounts(비밀번호 해시)는 절대 안 올린다
                 policy.refresh()
-                if time.time() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
-                    last_clean = time.time()
+                if time.monotonic() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
+                    last_clean = time.monotonic()
                     cleanup_transfers(client, cfg["cid"], int(client.server_now() * 1000))   # 서버 시각 - PC 시계가 앞서도 남의 전송을 일찍 안 지운다
                 settings = st.read_settings()
-                if settings.get(st.SETTINGS_UNREADABLE) and last_sched is not None:   # 못 읽은 기본값(예약 꺼짐)을 웹에 보이지 않는다 (BugBuster M20)
-                    snap["schedule"] = last_sched
-                else:
-                    snap["schedule"] = last_sched = dash.schedule_live(settings["schedule"], datetime.date.today())   # + 가까운 휴무일·공휴일 표 끝 (화면 안내)
+                last_sched, snap["schedule"] = live_schedule(settings, last_sched, dash.SCHEDULER.held_reason())
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다
                 hist_path = os.path.join(st.status_dir(create=False), st.HISTORY_NAME)
                 try:
@@ -1375,8 +1394,8 @@ def run(cfg):
                 # 띄워 놓은 프로세스가 아직 살아 있나. 명령이 done 이 된 뒤 상태 파일에 'running' 이 찍히기까지의
                 # 몇 초를 이 값이 메운다 (그 틈에 화면의 실행 버튼이 풀리면 두 번 실행될 수 있다)
                 snap["launching"] = bool(dash.launch_state())
-                if time.time() - inst[1] >= INSTALL_CHECK_SEC and upd.read_state().get("state") not in upd.ACTIVE_STATES:
-                    inst[1] = time.time()          # 업데이트 중에는 파일이 바뀌는 중이라 재지 않는다
+                if time.monotonic() - inst[1] >= INSTALL_CHECK_SEC and upd.read_state().get("state") not in upd.ACTIVE_STATES:
+                    inst[1] = time.monotonic()          # 업데이트 중에는 파일이 바뀌는 중이라 재지 않는다
                     upd.ensure_installed_sig(st.program_dir())
                     now_inst = st.check_install()
                     if install_key(now_inst) != install_key(inst[0]):   # 결과가 같으면 그대로 둔다 - checked_at 만 바뀐 현황을 다시 올리지 않게
@@ -1393,10 +1412,10 @@ def run(cfg):
                 up.flush()     # 밀린 기록 먼저, 현황은 그 뒤 - 옛 것이 새 현황을 덮지 않게 (BugBuster H3)
                 running = bool([p for p, v in (snap.get("programs") or {}).items() if v and v.get("state") == "running"])
                 body, full = live_bodies(snap)
-                if body != last or (running and full != last_full and time.time() - last_live >= LIVE_RUNNING_SEC):   # BugBuster M3
+                if body != last or (running and full != last_full and time.monotonic() - last_live >= LIVE_RUNNING_SEC):   # BugBuster M3
                     if up.push_live(snap):           # 못 올렸으면 last 를 그대로 두어 다음 틱에 다시 (큐에 안 넣는다, H3)
-                        last, last_full, last_live = body, full, time.time()
-                if time.time() - last_beat >= HEARTBEAT_SEC:
+                        last, last_full, last_live = body, full, time.monotonic()
+                if time.monotonic() - last_beat >= HEARTBEAT_SEC:
                     send_heartbeat(up, {
                         "at": int(time.time()),
                         "every": HEARTBEAT_SEC,   # 화면이 이 값으로 끊김 기준을 잡는다 (옛 에이전트는 없어서 30초로 본다)
@@ -1404,7 +1423,7 @@ def run(cfg):
                         "rpa_running": running,
                         "boot": boot,             # 켤 때마다 바뀌는 실행 번호 (I13)
                     }, install, alive)
-                    last_beat = time.time()
+                    last_beat = time.monotonic()
             except fb.AuthError as e:
                 dead.append(e)
                 stop.set()

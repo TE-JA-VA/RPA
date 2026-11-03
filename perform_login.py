@@ -158,6 +158,18 @@ def load_routine_modules(module_keys, off_by_default=()):
     return selected, unknown
 
 
+HOLD_SAVE_ONLY_KEY = rpa_status.HOLD_SAVE_ONLY_KEY
+
+
+def load_hold_save_only():
+    """물류대기를 '일반 탭 조회 -> 전체선택 -> 저장' 만 할지 (Routine 섹션 HoldSaveOnly - 웹 '상품별 재고검토' 끔, 사용자 2026-11-03).
+    없거나 "N" 이면 예전대로 재고검토·비정상 배송보류 뒤 저장. Y/N 이 아니면 RuntimeError."""
+    try:
+        return rpa_status.hold_save_only(load_settings().get(ROUTINE_SECTION))
+    except ValueError as e:
+        raise RuntimeError(f"{config_name()} 의 {e}") from None
+
+
 def find_login_window():
     """로그인 창을 찾는다. 닫힌 뒤에도 숨겨진 채 남아있는 잔재 창을 잘못 고르지 않도록
     visible한 것을 우선한다."""

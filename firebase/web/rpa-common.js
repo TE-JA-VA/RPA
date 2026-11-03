@@ -69,8 +69,12 @@ function serverNowMs(db) {
 const QUICK = new Set(["launch", "stop_erpia", "stop_rpa"]);
 export const ttlOf = (type) => (QUICK.has(type) ? 90 : COMMAND_TTL_SEC);
 
-/** cmds = [[pcId, type, args], ...] 를 차례로 넣고 지켜본다 */
+/** PC 가 여럿인 업체는 안내 앞에 PC 이름 - PC 를 바꾼 뒤 앞 PC 의 결과가 지금 PC 일처럼 보이지 않게 (W7, 2026-11-03) */
+export const pcWho = (c) => (Object.keys(c?.pcs || {}).length > 1 && c.pcLabel ? `${c.pcLabel} · ` : "");
+
+/** cmds = [[pcId, type, args], ...] 를 차례로 넣고 지켜본다. 결과 종류("ok"|"info"|"warn"|"bad")를 돌려준다 */
 async function sendTo(c, cmds, label, alive) {
+  label = pcWho(c) + label;
   notify("info", `${label} 명령을 전송하였습니다. PC 응답을 기다리는 중입니다.`);
   try {
     const now = Math.floor(await serverNowMs(c.db) / 1000);
@@ -81,28 +85,37 @@ async function sendTo(c, cmds, label, alive) {
       });
       sent.push([pcId, node.key]);
     }
-    await watchCommands(c, sent, label, alive);
+    return await watchCommands(c, sent, label, alive, ttlOf(cmds.at(-1)[1]));
   } catch (e) {
     notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `전송하지 못했습니다. (${e.code || e})`);
+    return "bad";
   }
 }
 
 /** 마지막 명령의 응답(queued → running)은 60초 안에 와야 한다. running 뒤엔 명령 만료(expires_at)까지 지켜본다 - 받을 PC 는 옵저버·ACTOR 가
  *  끝나길 몇 분 기다릴 수 있다 (import·restore_preset, 설계 2026-10-19 4.3·4.4절). 앞 명령은 failed·expired 만 본다.
  *  시험은 window.__replyWaitMs 로 60초를 줄인다 */
-function watchCommands(c, sent, label, alive) {
+function watchCommands(c, sent, label, alive, ttl) {
   return new Promise((resolve) => {
     const offs = [];
-    const end = (kind, text) => { clearTimeout(timer); for (const off of offs) off(); if (alive()) notify(kind, text); resolve(); };
-    let timer = setTimeout(() => end("bad", "PC가 응답하지 않습니다."), window.__replyWaitMs ?? 60000);
+    // 실패·무응답은 화면을 떠나도 알린다 - 예전엔 떠나면 흔적이 없었다 (W2, 2026-11-03). 성공·진행 중은 그 화면에서만 (상태 카드가 보여 준다)
+    const end = (kind, text) => {
+      clearTimeout(timer); for (const off of offs) off();
+      if (alive() || kind === "bad" || kind === "warn") notify(kind, alive() ? text : `${label}: ${text}`);
+      resolve(kind);
+    };
+    // 명령은 만료(ttl)까지 PC 를 기다린다 - 오래 사는 명령(설정 바꾸기 10분)은 그 사이 PC 가 연결되면 적용되므로 '실패' 가 아니라 알림 (W2)
+    let timer = setTimeout(() => (ttl > 90 ? end("warn", `PC가 응답하지 않습니다. ${Math.round(ttl / 60)}분 안에 PC가 연결되면 그때 적용됩니다.`)
+      : end("bad", "PC가 응답하지 않습니다.")), window.__replyWaitMs ?? 60000);
     let started = false;
     const lastKey = sent.at(-1)[1];
     for (const [pcId, cmdKey] of sent) {
       offs.push(onValue(ref(c.db, `${P("commands", c.me.cid, pcId)}/${cmdKey}`), (snap) => {
         const v = snap.val();
-        if (!v || !alive()) return;
+        if (!v) return;
         if (cmdKey === lastKey && v.state === "running" && !started) {
-          started = true; notify("info", `${label} 진행 중`);
+          started = true;
+          if (alive()) notify("info", `${label} 진행 중`);
           clearTimeout(timer);
           timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - (Date.now() + skew.ms)) + 5000);   // 서버 시각으로 (M1)
         }
@@ -113,17 +126,26 @@ function watchCommands(c, sent, label, alive) {
   });
 }
 
-// 예약 줄 (2부). 단추 글은 PC 의 rpa_dashboard.SLOT_NAMES 와 같은 말
-export const RUN_CHIPS = [["Prepare", "사이트 수집"], ["Import", "자동 수집"], ["Excel", "엑셀 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Logistics", "물류관리"], ["Output", "운송장"],
-  ["InvoiceSend", "운송장 전송"]];
+// 예약 줄 (2부). 단추 글은 PC 의 rpa_dashboard.SLOT_NAMES 와 같은 말. '주문매핑' 은 수집을 나눈 뒤(10-30) 매출처리만이라 '매출처리',
+// '운송장' 은 '운송장 전송' 과 헷갈려 '운송장 출력' (W4, 2026-11-03)
+export const RUN_CHIPS = [["Prepare", "사이트 수집"], ["Import", "자동 수집"], ["Excel", "엑셀 수집"], ["Sales", "매출처리"], ["Hold", "물류대기"], ["Logistics", "물류관리"],
+  ["Output", "운송장 출력"], ["InvoiceSend", "운송장 전송"]];
 // 웰라이프 업체의 줄 단추 - 물류관리·운송장 대신 SAP 연동·WMS 이관 (PC 의 rpa_dashboard.WELLIFE_ONLY_KEYS) + 운송장 전송 (모든 업체용)
-export const WELLIFE_RUN_CHIPS = [["Prepare", "사이트 수집"], ["Excel", "엑셀 수집"], ["Import", "자동 수집"], ["Sales", "주문매핑"], ["Hold", "물류대기"], ["Sap", "SAP 연동"], ["Wms", "WMS 이관"],
+export const WELLIFE_RUN_CHIPS = [["Prepare", "사이트 수집"], ["Excel", "엑셀 수집"], ["Import", "자동 수집"], ["Sales", "매출처리"], ["Hold", "물류대기"], ["Sap", "SAP 연동"], ["Wms", "WMS 이관"],
   ["InvoiceSend", "운송장 전송"]];
 export const RUN_NAMES = dict([...RUN_CHIPS, ...WELLIFE_RUN_CHIPS]);
 /** '고르기' 줄의 모듈 이름 (로그인은 늘 붙으니 안 적는다). '전체' 거나 줄이 없으면 "" */
 export const slotNames = (slot) => (slot?.run ? slot.run.filter((k) => k !== "Login").map((k) => RUN_NAMES[k] || k).join("·") : "");
 /** 줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' (PC 의 slot_text 와 같다) */
 export const slotText = (s) => (s.until ? `${s.at}~${s.until} 반복` : s.at) + (s.run ? ` ${slotNames(s)}` : "");
+
+/** 예약 안내 한 줄 [글, 색] - PC 설정 파일을 못 읽음(R4) / 띄울 차례인데 막혀 기다림(R5) / PC 시간대가 한국이 아님(R13). 없으면 null */
+export function schedNote(sch) {
+  if (sch?.unreadable) return ["PC의 설정 파일을 읽지 못해 자동 실행이 멈춰 있습니다. ERPia에 문의하여 주십시오.", "bad"];
+  if (typeof sch?.waiting_reason === "string" && sch.waiting_reason) return [`자동 실행 대기: ${sch.waiting_reason}`, "warn"];
+  if (typeof sch?.tz === "string" && sch.tz) return [`PC 시간대가 한국 표준시가 아닙니다 (UTC${sch.tz}). 자동 실행은 PC 시각으로 실행됩니다.`, "warn"];
+  return null;
+}
 
 // 반복 시간대 (3부)
 /** 도는 줄 (시각 순, 업체 한도로 자른 것 - PC 의 rpa_dashboard.active_slots 와 같은 규칙) */

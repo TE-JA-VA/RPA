@@ -38,10 +38,10 @@ print("=== 1. Wellife 섹션 ===")
 write_cfg({"LogIn": {"AdminCode": "x"}, "Routine": {"Logistics": "Y"}})
 check(st.has_wellife_section() is False, "섹션이 없으면 False")
 check(st.ensure_wellife_section() is True and read_cfg()["Wellife"] == {"Login": "Y", "Excel": "Y", "Import": "Y", "Sales": "Y", "Hold": "N", "Sap": "N", "Wms": "N",
-                                                                   "InvoiceSend": "N", "SalesMode": "리허설", "ImportMode": "리허설", "NormalSalesMode": "리허설",
-                                                                   "Mode": "리허설", "SapMode": "리허설", "WmsMode": "리허설",
-                                                                   "InvoiceMode": "리허설"},
-      "처음 열리면 로그인·주문매핑(엑셀 수집·자동 수집·매출처리)만 켬, 모드는 모두 '리허설' 로 적음")
+                                                                   "InvoiceSend": "N", "SalesMode": "실행", "ImportMode": "실행", "NormalSalesMode": "실행",
+                                                                   "Mode": "실행", "SapMode": "실행", "WmsMode": "실행",
+                                                                   "InvoiceMode": "실행"},
+      "처음 열리면 로그인·주문매핑(엑셀 수집·자동 수집·매출처리)만 켬, 모드는 모두 '실행' 으로 적음 (사용자 2026-11-03)")
 check(read_cfg()["LogIn"] == {"AdminCode": "x"} and read_cfg()["Routine"] == {"Logistics": "Y"}, "다른 섹션은 그대로")
 check(st.ensure_wellife_section() is False, "있으면 안 바꾼다")
 got = st.write_wellife_modules({"Login": False, "Sales": True, "Hold": True, "Sap": True})
@@ -56,16 +56,28 @@ write_cfg({"LogIn": {}, "Wellife": {"Sales": "Y", "Hold": "maybe"}})
 sel, problems = st.read_wellife_modules()
 check(sel["Hold"] is None and problems and sel["Sap"] is False, f"Y/N 아닌 값은 None·문제, 빠진 키는 끔 ({sel}, {problems})")
 check(sel["Excel"] is True and sel["Import"] is True, f"엑셀·자동 수집이 빠진 섹션(10-15 전)은 주문매핑(Sales) 켬을 따른다 ({sel})")
-check(st.read_wellife_modes() == [["엑셀 수집", "리허설"], ["자동 수집", "리허설"], ["정상매출", "리허설"], ["물류대기", "리허설"], ["SAP 연동", "리허설"],
-                                  ["WMS 이관", "리허설"], ["운송장번호 전송", "리허설"]],
-      f"모드(웹 보기): 빠지면 리허설 ({st.read_wellife_modes()})")
+check(st.read_wellife_modes() == [["엑셀 수집", "실행"], ["자동 수집", "실행"], ["정상매출", "실행"], ["물류대기", "실행"], ["SAP 연동", "실행"],
+                                  ["WMS 이관", "실행"], ["운송장번호 전송", "실행"]],
+      f"모드(웹 보기): 빠지면 실행 (사용자 2026-11-03) ({st.read_wellife_modes()})")
 write_cfg({"LogIn": {}, "Wellife": {"Mode": " 실행 ", "SapMode": "1건", "SalesMode": "1건", "NormalSalesMode": "1건",
-                                    "InvoiceMode": "보냄"}})
+                                    "InvoiceMode": "보냄", "WmsMode": "리허설"}})
 check(st.read_wellife_modes() == [["엑셀 수집", "설정 오류 (1건)"], ["자동 수집", "설정 오류 (1건)"], ["정상매출", "1건"], ["물류대기", "실행"], ["SAP 연동", "1건"],
                                   ["WMS 이관", "리허설"], ["운송장번호 전송", "설정 오류 (보냄)"]],
       f"모드(웹 보기): 실행·1건·잘못된 값 (엑셀 수집·자동 수집은 1건을 못 쓴다 - ImportMode 가 없으면 SalesMode, 정상매출은 쓴다) ({st.read_wellife_modes()})")
 write_cfg({"LogIn": {}})
 check(st.read_wellife_modes() is None, "Wellife 섹션이 없으면 모드 None (웹에 안 보인다)")
+# 웹 [적용] 이 ImportMode 를 기본값으로 적어 자동 수집 모드가 바뀌던 것 (2026-11-03) - 읽을 때처럼 SalesMode 를 따라 적는다
+for sales in ("리허설", "실행"):
+    write_cfg({"LogIn": {}, "Wellife": {"Login": "Y", "Import": "Y", "SalesMode": sales}})
+    before = st.read_wellife_modes()[1]
+    st.write_wellife_modules({"Import": True, "Hold": True})
+    w = read_cfg()["Wellife"]
+    check(w["ImportMode"] == sales and st.read_wellife_modes()[1] == before == ["자동 수집", sales] and w["SapMode"] == "실행",
+          f"[적용] 뒤에도 자동 수집 모드 그대로 (SalesMode {sales}), 빠진 다른 모드는 실행 ({w})")
+write_cfg({"LogIn": {}, "Wellife": {"Login": "Y", "SalesMode": "리허설", "ImportMode": "실행", "WmsMode": "리허설"}})
+st.write_wellife_modules({"Wms": True})
+w = read_cfg()["Wellife"]
+check(w["ImportMode"] == "실행" and w["WmsMode"] == "리허설", f"적혀 있던 모드는 그대로 ({w})")
 
 write_cfg({"LogIn": {}})
 check(st.remove_wellife_section() is False, "지울 섹션이 없으면 False")
@@ -80,6 +92,15 @@ check(dash.set_policy(2, ["Logistics", "Output"], wellife=True) is True and st.w
 check(dash.set_policy(2, ["Logistics", "Output"], wellife=True) is False, "같으면 안 쓴다")
 check(dash.set_policy(2, [], wellife=False) is True and st.wellife_policy() is False, "꺼지면 False")
 check(dash.set_policy(2, []) is False, "wellife 를 안 넘기면 False 로 본다 (옛 부르는 쪽)")
+dash.set_policy(2, [], wellife=True)
+with open(st.settings_path(), encoding="utf-8") as f:
+    _plain = f.read()
+with open(st.settings_path(), "w", encoding="utf-8-sig") as f:       # 메모장 'UTF-8(BOM)' 저장 (2026-11-03)
+    f.write(_plain)
+cfg = st.read_settings()
+check(st.SETTINGS_UNREADABLE not in cfg and st.wellife_policy() is True, "settings.json 에 BOM 이 붙어도 읽는다 (예약이 조용히 꺼지지 않게)")
+check(st.write_settings(cfg) and open(st.settings_path(), "rb").read(3) != b"\xef\xbb\xbf", "다시 쓰면 BOM 없이")
+dash.set_policy(2, [], wellife=False)
 
 print("=== 3. 루틴 갈래 ===")
 import run_routine as rr  # noqa: E402
@@ -104,6 +125,31 @@ finally:
     rr.wellife.run_main, rr.status.start, rr.status.finish = orig_run, orig_start, orig_finish
 check("wellife" not in called and finished and finished[-1][0] == "stopped" and "웰라이프 설정이 없습니다" in finished[-1][1],
       f"main: 정책 켬·섹션 없음 → 보통 루틴 안 돌고 멈춤 ({called}, {finished})")
+
+
+def _main_reason():
+    finished.clear()
+    rr.wellife.run_main = lambda r: called.append("wellife")
+    rr.status.start, rr.status.finish = (lambda *a, **k: None), (lambda result, reason=None, **k: finished.append((result, reason)))
+    try:
+        rr.main()
+    finally:
+        rr.wellife.run_main, rr.status.start, rr.status.finish = orig_run, orig_start, orig_finish
+    return finished[-1] if finished else None
+
+
+with open(CFG, "w", encoding="utf-8") as f:                   # 메모장으로 모드를 고치다 쉼표를 빠뜨림
+    f.write('{"LogIn": {}, "Wellife": {"Login": "Y" "SalesMode": "실행"}}')
+got = _main_reason()
+check(got and got[0] == "stopped" and got[1].startswith("설정 파일 오류:") and "JSON" in got[1],
+      f"main: 사용자 설정이 깨졌으면 '설정 파일 오류' (에이전트가 다시 쓴다고 하지 않는다, 사용자 2026-11-03) ({got})")
+write_cfg({"LogIn": {}, "Wellife": {"Login": "Y"}})
+with open(st.settings_path(), "w", encoding="utf-8") as f:
+    f.write('{"schedule": {"policy": {"wellife": true}')       # 예약 설정이 깨짐 → 정책을 못 읽어 '안 열림' 으로 보인다
+got = _main_reason()
+check(got and got[1].startswith("설정 파일 오류:") and "settings" in got[1], f"main: 예약 설정이 깨졌으면 '설정 파일 오류' ({got})")
+os.remove(st.settings_path())
+write_cfg({"LogIn": {}})
 dash.set_policy(2, [], wellife=False)
 
 print("=== 4. 웰라이프 업체도 모듈별 줄·반복 시간대 (사용자 10-08: ②③④⑤ 따로, ⑤ 는 반복) ===")

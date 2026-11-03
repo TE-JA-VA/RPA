@@ -22,6 +22,7 @@
               "server_time": { ".validate": "newData.isString() && newData.val().length <= 40" },
               "host": { ".validate": "newData.isString() && newData.val().length <= 100" },
               "launching": { ".validate": "newData.isBoolean()" },
+              "hold_review": { ".validate": "newData.isBoolean()" },
               "preset_transfer": { ".validate": "newData.isNumber()" },
               "labels": { ".validate": "newData.hasChildren()" },
               "programs": { ".validate": "newData.hasChildren()" },

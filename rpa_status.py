@@ -72,9 +72,9 @@ ERPIA_EXE_NAME = "ERPiaMain.exe"
 SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
 # 자동 실행 예약: 요일(월=0 … 일=6, 모든 줄이 같이 씀) + 줄(slots). 줄 = {at:"HH:MM", run?:[모듈 키]} - run 이 없으면 '전체'.
 # (2026-10-07 시각별 모듈 - 설계 docs/superpowers/specs/2026-10-06-settings-schedule-design.md 5절. 옛 모양 {days, times} 는 read_settings 가 바꾼다)
-SCHEDULE_MINUTE_STEP = 5
+SCHEDULE_MINUTE_STEP = 1    # 1분 단위 (사용자 2026-11-03 - 그 전엔 5분: 웹이 통과시킨 09:03 을 PC 가 거절해 예약이 안 바뀌었다)
 SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
-SCHEDULE_VERSION = 5        # 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
+SCHEDULE_VERSION = 6        # 6: 1분 단위 시각 (2026-11-03, 그 전 판 PC 는 5분 단위만 받는다). 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
     "prepare": {
         "parallel": 1,              # 업체가 웹에서 고른 동시 실행 창 수 (명령 set_parallel) - 관리 화면이 허용한 최대(policy.parallel)까지만 쓴다
@@ -158,7 +158,8 @@ def read_settings():
     파일이 있는데 못 읽었으면(잠김·0바이트·깨짐) 기본값에 SETTINGS_UNREADABLE 표시를 달아 돌려준다 - 읽는 쪽은 지금처럼
     기본값으로 돌고, 그 값을 고쳐 저장하려 하면 write_settings 가 거절한다 (계정·정책·반복 상태를 기본값으로 덮지 않게, BugBuster M20).
     예외로 내지 않는 까닭: 에이전트 현황 올리기·예약기 등 예외를 안 잡는 읽는 곳이 많다 (기록이 RPA 를 멈추면 안 된다)."""
-    data = read_json(settings_path(), tries=20, broken=_BROKEN)   # 쓰기 재시도와 같은 1초 (BugBuster M20)
+    # 쓰기 재시도와 같은 1초 (BugBuster M20). 메모장 'UTF-8(BOM)' 저장도 읽는다 - 못 읽으면 예약이 조용히 꺼졌다 (2026-11-03)
+    data = read_json(settings_path(), tries=20, broken=_BROKEN, encoding="utf-8-sig")
     out = json.loads(json.dumps(DEFAULT_SETTINGS))
     if data is _BROKEN or (data is not None and not isinstance(data, dict)):
         out[SETTINGS_UNREADABLE] = True
@@ -803,6 +804,8 @@ ROUTINE_OFF_BY_DEFAULT = ("InvoiceSend",)
 # 모드는 기본 리허설 - 설정을 쓸 때 빠진 모드 키를 '리허설' 로 적어 둔다 (사용자 2026-10-13)
 ROUTINE_MODES = (("InvoiceMode", "운송장번호 전송"),)
 DEFAULT_MODE = "리허설"
+# Wellife 섹션은 빠진 모드가 실행 - 리허설은 필요할 때 파일에 적어서 쓴다 (사용자 2026-11-03, wellife.load_mode 와 같다)
+WELLIFE_DEFAULT_MODE = "실행"
 WELLIFE_SECTION = "Wellife"    # 웰라이프 업체 PC 만 (설계 2026-10-07-wellife-gate). 키 이름은 wellife.MODULES 와 같다 - 바꾸면 둘 다
 WELLIFE_CONFIG_MODULES = (
     ("Login", "로그인"),
@@ -845,9 +848,10 @@ def cred_file_path():
     return os.path.join(desktop, AI_DIR_NAME, CRED_FILE_NAME)
 
 
-def _merge_routine_section(existing, final, modes=()):
+def _merge_routine_section(existing, final, modes=(), default_mode=DEFAULT_MODE):
     """기존 Routine 섹션에서 아는 키만 Y/N 으로 바꾸고, 모르는 키는 그대로 둔다. 없던 키는 뒤에 붙인다.
-    modes ((모드 키, 이름) 목록) 중 빠진 키는 DEFAULT_MODE('리허설') 로 적는다 - 있던 값은 그대로 (사용자 2026-10-13).
+    modes ((모드 키, 이름) 목록) 중 빠진 키는 default_mode 로 적는다 - 있던 값은 그대로 (사용자 2026-10-13).
+    Routine 은 '리허설', Wellife 는 '실행' (WELLIFE_DEFAULT_MODE, 사용자 2026-11-03).
 
     모르는 키를 지우지 않는 이유: 루틴이 '모르는 키' 경고를 내 주는데, 대시보드가 조용히 지워 버리면
     사용자가 오타를 알 길이 없어진다.
@@ -855,7 +859,7 @@ def _merge_routine_section(existing, final, modes=()):
     out = dict(existing) if isinstance(existing, dict) else {}
     out.update({k: ("Y" if final[k] else "N") for k in final})
     for k, _ in modes:
-        out.setdefault(k, DEFAULT_MODE)
+        out.setdefault(k, default_mode)
     return out
 
 
@@ -898,8 +902,28 @@ def read_routine_modules(path=None):
     return selected, problems
 
 
-def write_routine_modules(selected, path=None):
+# Routine 섹션의 업체 설정 (모듈이 아니다): 물류대기를 '일반 탭 조회 -> 전체선택 -> 저장' 만 - 재고검토·비정상 배송보류를
+# 하지 않는다 (사용자 2026-11-03, 웹 '상품별 재고검토' 끔). 없거나 N 이면 예전대로
+HOLD_SAVE_ONLY_KEY = "HoldSaveOnly"
+
+
+def hold_save_only(section):
+    """Routine 섹션(dict) 의 HoldSaveOnly - 없으면 False. Y/N 이 아니면 ValueError (모듈 켬·끔과 같이 짐작하지 않는다)."""
+    raw = section.get(HOLD_SAVE_ONLY_KEY) if isinstance(section, dict) else None
+    value = "N" if raw is None else str(raw).strip().upper()
+    if value not in ("Y", "N"):
+        raise ValueError(f"'{ROUTINE_SECTION}' 섹션 {HOLD_SAVE_ONLY_KEY} 값은 Y 또는 N 이어야 합니다: {raw!r}")
+    return value == "Y"
+
+
+def read_hold_save_only(path=None):
+    """사용자 설정의 HoldSaveOnly (에이전트가 웹에 올린다). 못 읽거나 값이 이상하면 예외."""
+    return hold_save_only((read_user_config(path) or {}).get(ROUTINE_SECTION))
+
+
+def write_routine_modules(selected, path=None, hold_save_only=None):
     """Routine 섹션만 바꿔 쓴다. 나머지(비밀번호 포함)는 그대로 둔다. 새로 쓴 {키: True/False} 를 돌려준다.
+    hold_save_only 가 True/False 면 HoldSaveOnly 도 Y/N 으로 (웹 '상품별 재고검토', None 이면 손대지 않는다).
 
     selected: {설정 키: True/False}. 모르는 키는 ValueError. 빠진 키는 켬(Y)으로 쓴다.
     path 를 안 주면 사용자 설정에 쓴다 - 아직 옛 파일뿐이면 이때 합쳐 만든다 (write_user_config).
@@ -917,6 +941,8 @@ def write_routine_modules(selected, path=None):
     if not data:
         raise FileNotFoundError(path or user_config_path())
     data[ROUTINE_SECTION] = _merge_routine_section(data.get(ROUTINE_SECTION), final, ROUTINE_MODES)
+    if hold_save_only is not None:
+        data[ROUTINE_SECTION][HOLD_SAVE_ONLY_KEY] = "Y" if hold_save_only else "N"
     write_user_config(data, path)
     return final
 
@@ -947,7 +973,7 @@ def read_wellife_modules(path=None):
 
 
 def read_wellife_modes(path=None):
-    """Wellife 섹션의 모드를 [[이름, 값]] 으로 (웹에 보기만 - 시험 기간용). 빠지면 '리허설' (wellife.load_mode 와 같다),
+    """Wellife 섹션의 모드를 [[이름, 값]] 으로 (웹에 보기만 - 시험 기간용). 빠지면 '실행' (wellife.load_mode 와 같다),
     '리허설'/'실행'/'1건' 이 아니면 '설정 오류' (SalesMode 는 '1건' 도 오류). 섹션이 없거나 설정을 못 읽으면 None."""
     try:
         section = (read_user_config(path) or {}).get(WELLIFE_SECTION)
@@ -957,7 +983,8 @@ def read_wellife_modes(path=None):
         return None
     out = []
     for key, label in WELLIFE_MODES:
-        value = str(section.get(key, section.get("SalesMode", "리허설") if key == "ImportMode" else "리허설")).strip()   # ImportMode 가 없으면 SalesMode
+        miss = section.get("SalesMode", WELLIFE_DEFAULT_MODE) if key == "ImportMode" else WELLIFE_DEFAULT_MODE   # ImportMode 가 없으면 SalesMode
+        value = str(section.get(key, miss)).strip()
         ok = ("리허설", "실행") if key in ("SalesMode", "ImportMode") else ("리허설", "실행", "1건")
         out.append([label, value if value in ok else f"설정 오류 ({value})"])
     return out
@@ -973,7 +1000,10 @@ def write_wellife_modules(selected, path=None):
     data = read_user_config(path)
     if not data:
         raise FileNotFoundError(path or user_config_path())
-    data[WELLIFE_SECTION] = _merge_routine_section(data.get(WELLIFE_SECTION), final, WELLIFE_MODES)
+    old = data.get(WELLIFE_SECTION)
+    if isinstance(old, dict) and "ImportMode" not in old and "SalesMode" in old:
+        old = dict(old, ImportMode=old["SalesMode"])   # 읽을 때처럼 SalesMode 를 따라 적는다 - 기본값으로 적으면 웹 [적용] 만으로 자동 수집 모드가 바뀐다
+    data[WELLIFE_SECTION] = _merge_routine_section(old, final, WELLIFE_MODES, WELLIFE_DEFAULT_MODE)
     write_user_config(data, path)
     return final
 
@@ -1016,7 +1046,15 @@ def wellife_policy():
 PRESETS_NAME = "RPA_Presets.json"
 PRESET_MIN, PRESET_MAX = 2, 40           # PRESET_MAX = PC 가 받는 최대 - 보통 업체는 관리 화면에서 10 까지(ops.PRESET_LIMIT_MAX),
 PRESET_WELLIFE = 40                      # 업체코드에 wellife 가 든 업체는 늘 40 (사용자 2026-10-15, agent.company_policy)
-MAIL_RECORD_VERSION = 2                   # 메일 2차인증 단계가 든 기록 (설계 2026-11-02) - 옛 ACTOR 는 1 만 알아 거절한다
+
+
+def circled(n):
+    """프리셋 번호 ① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄로 나뉘어 있다 (1~20, 21~35, 36~50). 웰라이프 업체 40개 (2026-10-15).
+    옵저버·에이전트가 같이 쓴다 (웹은 rpa-settings.js circled 가 같은 규칙)."""
+    return chr(0x2460 + n - 1) if n <= 20 else chr(0x3251 + n - 21) if n <= 35 else chr(0x32B1 + n - 36)
+
+
+MAIL_RECORD_VERSION = 2                  # 메일 2차인증 단계가 든 기록 (설계 2026-11-02) - 옛 ACTOR 는 1 만 알아 거절한다
 RECORD_VERSIONS = (1, MAIL_RECORD_VERSION)  # 이 PC 가 재생·받을 수 있는 기록 버전
 RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지 않는다 (옛 ACTOR 가 새 기록을 잘못 따라 하지 않게). web_replay·preset_transfer 가
                                           # 여기서 읽는다 - 에이전트(내장 파이썬, playwright 없음)가 web_replay 를 끌어오지 않게 (2026-10-19)
@@ -1182,11 +1220,12 @@ def login_mismatch(site, code):
     return c is not None and str(c) != str(code or "")
 
 
-def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None, mail_logins=None):
+def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None):
     """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
     presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
-    기록이 있는 프리셋만 칸을 둔다 - 새 칸과 fresh (이번에 다시 기록한 번호) 는 꺼짐(Stts 9), 나머지 있던 칸의 켬/끔은 그대로
-    (확인 안 한 기록이 다음 자동 실행에 끼지 않게 - 2026-10-01 검토). 기록이 없거나 빠진 번호의 칸은 지운다.
+    기록이 있는 프리셋만 칸을 둔다 - 새 칸은 꺼짐(Stts 9), 있던 칸은 다시 기록·[수정] 했어도 켬/끔 그대로 (사용자 2026-11-03 -
+    그 전엔 다시 기록하면 꺼졌다: 2026-10-01 검토). 사이트코드가 바뀐 칸(다른 사이트 파일을 불러와 덮음)은 새 칸처럼 꺼짐.
+    기록이 없거나 빠진 번호의 칸은 지운다.
     phones: {번호: (인증 휴대폰 phoneId, [발신번호])} - 문자 2차인증 (휴대폰 중계 설계 13절). 없는 번호는 있던 값 그대로.
     origs: {번호: 있던 값을 찾을 옛 번호} - 옵저버가 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13). 없는 번호는 같은 번호,
     None 이면 새 칸 (옛 값 없음). 칸마다 Code 에 프리셋 사이트코드를 적는다 - 읽는 쪽이 login_mismatch 로 짝을 확인한다.
@@ -1206,10 +1245,11 @@ def save_preset_sites(presets, logins, fresh=(), phones=None, origs=None, mail_l
         src = (origs or {}).get(p["no"], p["no"])
         old = sites.get(preset_site_key(src)) if src else None
         old = old if isinstance(old, dict) else {}
+        same_site = bool(old) and not login_mismatch(old, p["code"])   # 다른 사이트코드를 불러와 덮은 칸은 새 칸처럼 꺼짐 (읽는 쪽과 같은 비교)
         login_id, pw = logins.get(p["no"], (old.get("ID", ""), None))
         mine[key] = {"URL": p["record"].get("start_url") or old.get("URL", ""), "ID": (login_id or "").strip(),
                      "PW": pw or old.get("PW", ""), "Action": [REPLAY_ACTION],
-                     "Stts": 9 if (not old or p["no"] in fresh) else old.get("Stts", 9), "Preset": p["no"], "Code": p["code"], "note": p["name"]}
+                     "Stts": old.get("Stts", 9) if same_site else 9, "Preset": p["no"], "Code": p["code"], "note": p["name"]}
         phone, senders = (phones or {}).get(p["no"]) or (old.get("Phone"), old.get("SmsSenders"))
         if phone and senders:
             mine[key].update(Phone=phone, SmsSenders=list(senders))
@@ -1496,12 +1536,13 @@ def _seconds(a, b):
 _BROKEN = object()   # read_json 의 '파일은 있는데 못 읽음' 표지 (BugBuster M20)
 
 
-def read_json(path, tries=6, broken=None):
+def read_json(path, tries=6, broken=None, encoding="utf-8"):
     """덮어쓰는 순간과 겹치면 잠깐 못 읽을 수 있어 몇 번 다시 시도한다. 파일이 없으면 None,
-    있는데 끝내 못 읽으면 broken (기본 None - '없음' 과 나눠야 하는 쪽만 _BROKEN 을 준다, BugBuster M20)."""
+    있는데 끝내 못 읽으면 broken (기본 None - '없음' 과 나눠야 하는 쪽만 _BROKEN 을 준다, BugBuster M20).
+    encoding: 사람이 메모장으로 고칠 수 있는 파일은 'utf-8-sig' (BOM 이 붙어도 읽는다 - BOM 없는 파일은 똑같이 읽힌다)."""
     for _ in range(tries):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding=encoding) as f:
                 return json.load(f)
         except FileNotFoundError:
             return None
@@ -1582,14 +1623,21 @@ def append_history(record):
         return False
 
 
-def record_start_failure(program, started_at, reason, log_tail=()):
-    """프로그램이 기록을 시작하기도 전에 끝났다 (띄운 쪽이 부른다). 이력만 남기고 상태 파일은 건드리지 않는다."""
+def record_start_failure(program, started_at, reason, log_tail=(), trigger=None):
+    """프로그램이 기록을 시작하기도 전에 끝났다 (띄운 쪽이 부른다). 이력과 함께 상태 파일도 '오류' 로 쓴다 - 예전엔 이력만 남겨
+    웹 알림·상태 띠가 몰랐다 (R11, 2026-11-03). trigger 는 띄운 까닭 - 반복 회차면 그 회차의 실패로 세어 반복을 멈춘다
+    (빠지면 '다른 실행' 으로 보고 쉬는 시간마다 다시 띄운다). run_id 에 PC 이름 - 같은 업체 PC 둘이 같은 초에 실패해도
+    기록 DB 가 하나를 409 로 버리지 않게 (R15, 놓친 예약 기록과 같다)."""
     stamp = (parse_iso(started_at) or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
-    return append_history(history_record({
-        "run_id": f"{program}_{stamp}_nostart", "program": program, "program_label": LABELS.get(program, program),
-        "host": socket.gethostname(), "state": "crashed", "reason": reason,
-        "started_at": started_at, "finished_at": now_iso(), "log_tail": list(log_tail),
-    }))
+    now = now_iso()
+    rec = {"run_id": f"{program}_{stamp}_nostart_{socket.gethostname()}", "program": program,
+           "program_label": LABELS.get(program, program), "host": socket.gethostname(), "trigger": trigger, "state": "crashed",
+           "reason": reason, "started_at": started_at, "finished_at": now, "updated_at": now, "steps": [], "metrics": [], "modules": []}
+    try:
+        write_json_atomic(status_path(program), rec)
+    except Exception:
+        pass        # 기록은 띄운 쪽을 멈추게 하면 안 된다 - 이력은 그대로 남긴다
+    return append_history(history_record(dict(rec, log_tail=list(log_tail))))
 
 
 def record_schedule_miss(program, due_at, reason, kind, trigger="auto"):

@@ -325,6 +325,26 @@ check("새 비밀번호로 저장하면 멈춘 기록을 지우고 켠다", not 
 write_stop(S, 2)
 _, state = rs.load_state(S)
 check("설정 문제(2)로 멈춘 것도 까닭을 들고 온다 (비밀번호 칸은 그대로)", state["stopped"]["code"] == 2 and state["agent_pw"] == "ok")
+os.remove(S["stop_file"])
+
+# S5 (2026-11-03): 윈도우 계정이 바뀌어 못 푸는 쇼핑몰 프리셋 비밀번호를 미리 알린다 - 이 창은 두 칸만 받는다
+cfg = st.read_user_config(S["user_config"])
+cfg[st.SITES_SECTION] = {"PRESET1": {"PW": "dpapi:AAAA"}, "PRESET2": {"PW": st.seal("x")}, "PRESET21": {"MailPW": "dpapi:BBBB"},
+                         "OLDSITE": {"PW": "dpapi:CCCC"}}
+st.write_user_config(cfg, S["user_config"])
+_, state = rs.load_state(S)
+check("못 푸는 프리셋 번호만 (PW·MailPW, 프리셋 칸만)", state["bad_presets"] == [1, 21], state["bad_presets"])
+check("안내 글은 번호와 옵저버를 알려 준다", "①㉑" in rs.preset_pw_note(state) and "옵저버" in rs.preset_pw_note(state), rs.preset_pw_note(state))
+done = rs.save(good_form(agent_pw="", erp_pw=""), S, login=fake_login, run=Recorder(), running=Running(True), user="PC\\me")
+check("저장 결과에도 같은 안내", rs.preset_pw_note(state) in done, done)
+check("같은 계정이면 예약 안내 없음", not any("윈도우 계정이 바뀌었습니다" in x for x in done), done)
+raw = json.load(open(S["agent_config"], encoding="utf-8"))
+json.dump(dict(raw, windows_user="OTHERPC\\old"), open(S["agent_config"], "w", encoding="utf-8"))
+_, state = rs.load_state(S)
+check("다른 윈도우 계정에서 저장한 설정이면 알아본다", state["other_user"] is True)
+cfg[st.SITES_SECTION] = {}
+st.write_user_config(cfg, S["user_config"])
+check("못 푸는 프리셋이 없으면 안내 없음", rs.preset_pw_note(rs.load_state(S)[1]) == "")
 E = paths_in("noerpia")
 data = st.read_user_config(str(TEMPLATE))
 data["ERPia"] = {"ExePath": "C:/없는 폴더/ERPiaMain.exe"}
@@ -532,6 +552,12 @@ with open(R["agent_config"], "w", encoding="utf-8") as f:
     f.write('{"project_id": "p", "api_key": "k", "database_url": "u", "cid": "net", "pc_id": "test", '
             '"email": "e", "password_dpapi": "AAAA"}')
 check("기계 계정 비밀번호가 안 풀리면 판 올림이 아니다 (창을 띄운다)", not rs.configured(R))
+# S6 (2026-11-03): 로그인 거부(코드 3)로 멈춘 PC 를 다시 설치하면 창을 띄운다. 다른 멈춤은 판 올림 그대로
+write_stop(P, 3)
+check("로그인 거부(코드 3)로 멈춘 PC 는 판 올림이 아니다 (새 비밀번호 창)", not rs.configured(P))
+write_stop(P, 2)
+check("다른 까닭으로 멈춘 PC 는 판 올림 그대로", rs.configured(P))
+os.remove(P["stop_file"])
 rec = Recorder()
 rs.finish_upgrade(P, run=rec, running=Running(False), user="PC\\me")
 check("판 올림: 파일 권한 되돌리기 → 작업 다시 등록 → 켜기",

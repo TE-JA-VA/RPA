@@ -77,7 +77,7 @@ try:
         check([s.input_value() for s in sels] == ["09", "00"], "09:00")
         check(len(sels[0].query_selector_all("option")) == 24, "시 24개 (00~23)")
         mins = [o.get_attribute("value") for o in sels[1].query_selector_all("option")]
-        check(mins == [f"{m:02d}" for m in range(0, 60, 5)], f"분은 5분 단위 12개: {mins[:4]}…{mins[-1]}")
+        check(mins == [f"{m:02d}" for m in range(60)], f"분은 1분 단위 60개: {mins[:4]}…{mins[-1]}")
         check(pg.is_disabled("#set-times .time-del"), "시간이 하나면 삭제 잠김")
         check(pg.is_hidden("#set-dirty") and pg.is_disabled("#set-apply"), "바꾸기 전: 경고 없음, 적용 잠김")
         pg.screenshot(path=os.path.join(OUT, "v7_schedule_initial.png"), clip={"x": 0, "y": 60, "width": 660, "height": 520})
@@ -156,7 +156,7 @@ try:
         print("\n=== 서버가 틀린 값 거부 ===")
         ck = {c["name"]: c["value"] for c in pg.context.cookies()}
         for body_, what in ((b'{"schedule":{"enabled":true,"days":[],"times":["09:00"]}}', "요일 없음"),
-                            (b'{"schedule":{"enabled":true,"days":[0],"times":["09:07"]}}', "5분 단위 아님"),
+                            (b'{"schedule":{"enabled":true,"days":[0],"times":["09:60"]}}', "분이 59 넘음"),
                             (json.dumps({"schedule": {"enabled": True, "days": [0], "times": [f"{h:02d}:00" for h in range(13)]}}).encode(), "시간 13개")):
             req = urllib.request.Request(BASE + "/api/settings", data=body_, method="POST",
                                          headers={"Content-Type": "application/json", "X-RPA-Action": "1", "Cookie": f"rpa_session={ck['rpa_session']}"})

@@ -4,12 +4,12 @@
 사용자 설정(RPA_UserConfig.json)에 "Wellife" 섹션이 있는 PC 에서만 run_routine.main 이 이리로 온다.
 섹션이 없는 PC(다른 업체)는 지금 루틴 그대로 돈다 - ROUTINE_MODULES 와 Routine 섹션은 건드리지 않는다.
     예: {"Wellife": {"Login": "Y", "Sales": "Y", "Hold": "Y", "Sap": "Y", "Wms": "Y", "InvoiceSend": "Y",
-                     "SalesMode": "리허설", "NormalSalesMode": "리허설", "Mode": "리허설", "SapMode": "리허설",
-                     "WmsMode": "리허설", "InvoiceMode": "리허설"}}
+                     "SalesMode": "실행", "NormalSalesMode": "실행", "Mode": "리허설", "SapMode": "실행",
+                     "WmsMode": "실행", "InvoiceMode": "실행"}}
 
-모드 (사용자 10-08) - 데이터를 바꾸는 단추를 누를지 정한다. 빠지면 리허설.
+모드 (사용자 10-08) - 데이터를 바꾸는 단추를 누를지 정한다. 빠지면 실행 (사용자 2026-11-03 - 그 전엔 리허설).
 모듈마다 키가 따로다: "SalesMode" ② 엑셀 업로드, "NormalSalesMode" ② 하단 정상매출, "Mode" ③ 물류대기 저장,
-"SapMode" ④ 지정·화살표, "WmsMode" ⑤ 화살표, "InvoiceMode" ⑥ [전송요청(S)] (사용자 10-13 - 빠지면 리허설, Mode 를 따르지 않는다).
+"SapMode" ④ 지정·화살표, "WmsMode" ⑤ 화살표, "InvoiceMode" ⑥ [전송요청(S)] (사용자 10-13 - Mode 를 따르지 않는다).
 - "리허설": 데이터를 바꾸는 단추(엑셀 업로드·물류대기 저장·[지정]·화살표·[전송요청(S)])는 누르지 않고 마우스만 올린다.
 - "실행": 실제로 누르고, 뜨는 팝업은 [예](없으면 [확인])를 누른다 - [아니오] 가 함께 있어도 [예] (사용자 10-08).
   팝업 문구는 모두 로그와 모듈 사유에 남긴다.
@@ -198,13 +198,15 @@ def load_switches(rr):
 
 
 def load_mode(rr, key=MODE_KEY, section=SECTION):
-    """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 리허설 - 잘 모르면 누르지 않는 쪽.
-    key: MODE_NAMES 의 키 하나 (모듈마다 따로 - 빠지면 Mode 를 따르지 않고 리허설). "1건" 이면 ONE (참 - 실행하되 한 줄만).
+    """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 Wellife 섹션은 실행 (사용자 2026-11-03 -
+    리허설은 필요할 때 적어서 쓴다), Routine 섹션(보통 PROCESS 운송장번호 전송)은 리허설 (사용자 10-13 그대로).
+    key: MODE_NAMES 의 키 하나 (모듈마다 따로 - 빠져도 Mode 를 따르지 않는다). "1건" 이면 ONE (참 - 실행하되 한 줄만).
     ② SalesMode(엑셀 업로드)는 줄이 없어 "1건" 을 못 쓴다 (NormalSalesMode 는 하단 첫 줄 1건).
     section: 보통 PROCESS 의 운송장번호 전송은 Routine 섹션의 InvoiceMode (run_routine.module_invoice_send, 사용자 10-13).
     "리허설"/"실행" 이 아닌 값은 RuntimeError (load_switches 뒤에 부른다 - 섹션 모양은 거기서 본다)."""
     found = rr.pl.load_settings().get(section) or {}
-    raw = found.get(key, found.get(SALES_MODE_KEY, "리허설") if key == IMPORT_MODE_KEY else "리허설")   # ImportMode 가 없으면 SalesMode
+    miss = st.WELLIFE_DEFAULT_MODE if section == SECTION else st.DEFAULT_MODE
+    raw = found.get(key, found.get(SALES_MODE_KEY, miss) if key == IMPORT_MODE_KEY else miss)   # ImportMode 가 없으면 SalesMode
     value = str(raw).strip()
     allowed = [m for m in MODES if not (key in (SALES_MODE_KEY, IMPORT_MODE_KEY) and MODES[m] == ONE)]   # 줄이 없어 '1건' 을 못 쓴다
     if value not in allowed:
@@ -332,6 +334,9 @@ def run_main(rr):
              "invoicesend": lambda ctx: module_invoice_send(rr, ctx, modes[INVOICE_MODE_KEY])}
     funcs = {k: (f if k == "login" else once(k, f)) for k, f in funcs.items()}
     result, reason = rr.run_modules(selected, MODULES, funcs, SECTION)
+    if result == "success" and reason is None:   # 리허설·1건이 섞인 실행은 '성공' 만으로는 다 누른 줄 안다 - 기록·현황 사유에 (R9, 2026-11-03)
+        trial = [f"{MODE_NAMES[k][0][2:]} {mode_tag(modes[k])}" for k in MODE_NAMES if k in used and modes[k] is not True]
+        reason = ("시험 모드 포함: " + ", ".join(trial)) if trial else None
     # 반복 회차(⑤ 를 시간대 동안 N분마다)는 처리한 것이 없으면 이력에 남기지 않는다 - 지금 루틴 main 과 같은 규칙
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
             and not [k for k in (status.done_modules() or []) if k != "login"]:
@@ -1095,6 +1100,7 @@ def module_invoice_send(rr, ctx, live=False):
     [미전송 완료처리] 등 나머지 단추는 누르지 않는다. 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (물류대기와 같다)."""
     rr.status.step("inv_send_screen")
     try:
+        close_excel_prompt(rr, ctx)
         no_popup(rr, ctx, f"'{INVOICE_TAB}' 화면 이동 전")
         front(rr, ctx, f"'{INVOICE_TAB}' 화면 이동")
         r = goto_screen(rr, ctx, INVOICE_TAB, INVOICE_ICON,     # 이미 열린 화면은 그 탭 (SAP·WMS 와 같다)
@@ -1315,7 +1321,12 @@ CHECKED_AT, UNCHECKED_BELOW = 0.25, 0.05   # 체크 상자 안쪽의 색 있는 
 def query_defaults(rr, screen):
     """[(키, auto_id, 종류, 기본값)]. 설정에 같은 키가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로).
     'sites' 는 '켠 사이트만' 예약이면 사이트코드 목록 (invoice_sites), 아니면 'fixed' (전체). 값 모양이 틀리면 RuntimeError (설정 오류)."""
-    conf = (rr.pl.load_settings().get(QUERY_SECTION) or {}).get(screen) or {}
+    sec = rr.pl.load_settings().get(QUERY_SECTION) or {}
+    if not isinstance(sec, dict):    # 섹션 자리에 글자·목록 - 예전엔 .get 에서 'UI 오류: AttributeError' 로 보였다 (2026-11-03)
+        raise RuntimeError(f"{rr.pl.config_name()}의 '{QUERY_SECTION}'은(는) 섹션이어야 합니다. ({sec!r})")
+    conf = sec.get(screen) or {}
+    if not isinstance(conf, dict):
+        raise RuntimeError(f"{rr.pl.config_name()}의 '{QUERY_SECTION}.{screen}'은(는) 섹션이어야 합니다. ({conf!r})")
     out = []
     for key, aid, kind, default in QUERY_CONDITIONS[screen]:
         want = default if kind == "fixed" else conf.get(key, default)
@@ -1903,6 +1914,33 @@ def no_popup(rr, ctx, after):
         raise Stop("stopped", f"{after} 뒤 팝업이 나타나 누르지 않고 중단하였습니다. ({text[:200]})")
     # 훑는 사이에 창 구성이 바뀌었으면(막 뜨는 팝업) 기억하지 않는다 - 다음에 다시 훑는다
     ctx.calm_children = sig if sig is not None and sig == _calm_sig(rr, ctx) else None
+
+
+def close_excel_prompt(rr, ctx):
+    """운송장 출력(엑셀 생성)이 일부러 남겨 둔 '생성한 엑셀파일을 여시겠습니까?' (run_routine.check_excel_open_prompt) 를
+    [아니오] 로 닫는다 - 같은 실행에서 이어 도는 운송장번호 전송이 그 팝업에 멈추지 않게 (사용자 2026-11-03).
+    엑셀은 열지 않는다 (원래 뜻 그대로). 다른 팝업·덮인 단추는 건드리지 않는다 - 뒤 no_popup 이 멈춘다."""
+    sig = _calm_sig(rr, ctx)
+    if sig is not None and getattr(ctx, "calm_children", None) == sig:
+        return
+    buttons = rr.find_popup_buttons(ctx.window())
+    text = rr.collect_popup_text(buttons[0]) if buttons else ""
+    if "여시겠습니까" not in text or not any(k in text for k in rr.EXCEL_OPEN_PROMPT_KEYWORDS):   # '엑셀파일을 여러 …' 같은 다른 질문은 아니다
+        return
+    no = next((b for b in buttons if b.window_text() in rr.NO_BUTTON_TEXTS), None)
+    if no is None:
+        return
+    front(rr, ctx, "'엑셀파일 열기' 팝업")
+    r = no.rectangle()
+    pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    top = _top_window(rr, pt)
+    if top != ctx.hwnd and top not in popup_windows(rr, ctx):
+        rr.log(f"  '엑셀파일을 여시겠습니까?' 팝업의 [아니오] 자리를 다른 창({top})이 덮고 있어 누르지 않았습니다.")
+        return
+    rr.log(f"  운송장 출력이 남긴 '엑셀파일을 여시겠습니까?' 팝업을 [{no.window_text()}]로 닫고 운송장번호 전송으로 넘어갑니다.")
+    no.click_input(coords=pt, absolute=True)
+    ctx.calm_children = None
+    time.sleep(0.5)
 
 
 def pass_popups(rr, ctx, after):

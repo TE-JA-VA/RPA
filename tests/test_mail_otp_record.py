@@ -178,5 +178,25 @@ check("줄 모양: 숫자·날짜·시각을 뺀다", rec.mail_fp("[몰] 인증�
 check("줄 모양: 오후 2:05·11월 2일 꼴도", rec.mail_fp("인증 메일 오후 2:05") == rec.mail_fp("인증 메일 11월 2일") == "인증 메일",
       (rec.mail_fp("인증 메일 오후 2:05"), rec.mail_fp("인증 메일 11월 2일")))
 
+# O7 (2026-11-03): 아이디·비밀번호를 두 쪽(/login → /login/pw)에서 받는 사이트 - 본 프레임은 주소가 바뀌어도 같은 화면
+def at(s, path):
+    return dict(s, frame={"main": True, "name": "", "path": path})
+
+
+two = rec.finalize([at(st("fill", 0, ph="아이디", value="다른계정"), "/login"), st("click", 0, "다음"),
+                    at(st("secret", 0, host="shop.example"), "/login/pw"), st("click", 0, "로그인")], TODAY, "https://shop.example/login")["steps"]
+check("두 쪽 로그인의 아이디도 ID - 기록한 글자를 남기지 않는다 (O7)", two[0].get("credential") == "ID" and "value" not in two[0], two[0])
+mail2 = copy_paste_steps()
+mail2[4], mail2[5] = at(mail2[4], "/mail/id"), at(mail2[5], "/mail/pw")
+s5 = rec.finalize(mail2, TODAY, "https://shop.example/login")["steps"]
+check("메일함 두 쪽 로그인도 MAIL_ID·MAIL_PW (쇼핑몰 아이디를 메일함에 치지 않게)",
+      [x.get("credential") for x in s5[4:6]] == ["MAIL_ID", "MAIL_PW"], [x.get("credential") for x in s5])
+srch = rec.finalize([at(st("fill", 0, ph="검색어", value="여름 신상"), "/main"), st("click", 0, "로그인"),
+                     at(st("secret", 0, host="shop.example"), "/login"), st("click", 0, "확인")], TODAY, "https://shop.example/")["steps"]
+check("다른 쪽의 검색 칸은 아이디로 바꾸지 않는다 - 아이디가 미리 채워진 사이트 (검토 2026-11-03)",
+      srch[0].get("credential") is None and srch[0].get("value") == "여름 신상", srch[0])
+check("안쪽 프레임이 다르면 예전처럼 같은 화면이 아니다",
+      not rec.same_screen({"page": 0, "frame": {"main": False, "name": "a", "path": "/x"}}, {"page": 0, "frame": {"main": False, "name": "b", "path": "/x"}}))
+
 print("실패: " + (", ".join(fails) if fails else "없음"))
 sys.exit(1 if fails else 0)

@@ -324,15 +324,23 @@ def load_config(path=None):
         raise RuntimeError(str(e)) from None
     if not isinstance(sites, dict):
         raise RuntimeError(f"사이트 설정이 없습니다: {path or status.user_config_path()} 의 '{status.SITES_SECTION}'")
-    out = {}
+    out, bad = {}, []
     for name, site in sites.items():
         if not status.is_preset_site(name):   # 프리셋 칸만 - 주석('_')과 옛 SITEn(설치 틀의 빈 예시가 켜진 채 남아 실행을 막았다)은 안 본다
             continue
-        if isinstance(site, dict) and site.get("PW"):
-            site = dict(site, PW=status.unseal(site["PW"]))
-        if isinstance(site, dict) and site.get("MailPW"):           # 메일 2차인증 메일함 비밀번호 (설계 2026-11-02)
-            site = dict(site, MailPW=status.unseal(site["MailPW"]))
+        try:
+            if isinstance(site, dict) and site.get("PW"):
+                site = dict(site, PW=status.unseal(site["PW"]))
+            if isinstance(site, dict) and site.get("MailPW"):           # 메일 2차인증 메일함 비밀번호 (설계 2026-11-02)
+                site = dict(site, MailPW=status.unseal(site["MailPW"]))
+        except RuntimeError:     # 못 푸는 프리셋을 모두 모아 한 번에 알린다 - 윈도우 계정이 바뀐 PC 는 여럿이 함께 안 풀린다 (S5, 2026-11-03)
+            bad.append(name)
+            continue
         out[name] = site
+    if bad:
+        nos = "".join(status.circled(int(n[6:])) for n in sorted(bad, key=lambda n: int(n[6:])))
+        raise RuntimeError(f"쇼핑몰 프리셋 {nos}의 비밀번호를 이 윈도우 계정에서 풀 수 없습니다 (다른 PC나 다른 윈도우 계정에서 암호화한 값). "
+                           "옵저버에서 비밀번호를 다시 입력하고 [저장]하여 주십시오.")
     return out
 
 
