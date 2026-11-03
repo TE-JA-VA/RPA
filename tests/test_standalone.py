@@ -152,5 +152,18 @@ check("no_phone_needed: 단독이면 휴대폰 없이도 통과", probs == [], p
 st.read_presets = _read
 on(False)
 
+print("\n=== 2-1. 바탕화면 ERPIA_AI 를 만들지 않는다 (샌드박스 2026-11-03) ===")
+import perform_login as pl  # noqa: E402
+_desk = tempfile.mkdtemp(prefix="sa_desk_")
+_fd = pl.find_desktop_dir
+pl.find_desktop_dir = lambda: _desk
+on(True)
+pl.find_ai_dir()
+check("no_erpia_dir: 단독이면 find_ai_dir 가 바탕화면 ERPIA_AI 를 만들지 않는다", not os.path.exists(os.path.join(_desk, pl.AI_DIR_NAME)))
+on(False)
+pl.find_ai_dir()
+check("no_erpia_dir: 꺼지면 지금처럼 만든다", os.path.isdir(os.path.join(_desk, pl.AI_DIR_NAME)))
+pl.find_desktop_dir = _fd
+
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

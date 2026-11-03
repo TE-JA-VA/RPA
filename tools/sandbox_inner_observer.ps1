@@ -68,7 +68,7 @@ for ($i = 0; ($i -lt 60) -and ($port -eq ""); $i++) {
 Check "관제가 떠 있다 (/healthz 서명)" ($port -match "^\d+$") "port '$port'"
 $hubOk = $false; $state = $null
 try { $state = Invoke-RestMethod "http://127.0.0.1:$port/api/state" -TimeoutSec 10; $hubOk = $true } catch { $err = "$_" }
-Check "GET /api/state 200 (127.0.0.1)" ($hubOk -and ($null -ne $state.presets) -and ($null -ne $state.schedule)) "$err"
+Check "GET /api/state 200 (127.0.0.1)" ($hubOk -and ($state.PSObject.Properties.Name -contains "presets") -and ($null -ne $state.schedule)) "$err"
 Check "단독 한도: 프리셋 40·동시 실행 16" (($state.limits.presets -eq 40) -and ($state.limits.parallel_max -eq 16)) "$($state.limits | ConvertTo-Json -Compress)"
 $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } | Select-Object -First 1).IPAddress
 $lan = $false
