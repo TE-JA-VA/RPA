@@ -302,6 +302,18 @@ check("인증번호 단계가 있는데 인증 휴대폰이나 발신번호가 �
       (rr.validate_presets([P(1, record=OTP_R)]) or (0, ""))[0] == 1
       and "인증 휴대폰" in (rr.validate_presets([dict(P(1, record=OTP_R), phone="kim", senders=" , ")]) or (0, ""))[1]
       and rr.validate_presets([dict(P(1, record=OTP_R), phone="kim", senders="1588-1234")]) is None)
+os.environ["RPA_STANDALONE"] = "1"       # 옵저버 단독 (설계 2026-11-03 4.5): 휴대폰 없이 통과, 잠금은 단독 이름
+check("단독이면 인증번호 단계가 있어도 휴대폰·발신번호 없이 통과", rr.validate_presets([dict(P(1, record=OTP_R), phone="", senders="")]) is None
+      and rr.validate_presets([P(1, record=OTP_R)]) is None, rr.validate_presets([P(1, record=OTP_R)]))
+check("단독이면 오토파일럿 설정(에이전트 계정)을 묻지 않는다", rr.setup_problem(load=lambda: 1 / 0) is None)
+_lock_env = os.environ.pop("RPA_OBSERVER_LOCK")
+check("단독 옵저버가 잡는 잠금은 observer_lock_name()", rr.st.observer_lock_name() == rr.st.STANDALONE_LOCK and rr.busy_problem() is None
+      and rr.st.lock_held(rr.st.STANDALONE_LOCK), rr.st.observer_lock_name())
+rr.st._LOCKS.clear()
+os.environ["RPA_OBSERVER_LOCK"] = _lock_env
+del os.environ["RPA_STANDALONE"]
+check("꺼지면 휴대폰 글 그대로", "인증 휴대폰" in (rr.validate_presets([dict(P(1, record=OTP_R), phone="", senders="")]) or (0, ""))[1]
+      and "오토파일럿 설정" in (rr.setup_problem(load=lambda: 1 / 0) or ""))
 check("발신번호는 숫자만, 쉼표로 여러 개, +82 는 0 으로 (휴대폰과 같은 꼴)",
       rr.senders_list("1588-1234, 02 123 4567; +82 90-258-0002") == ["15881234", "021234567", "0902580002"], rr.senders_list("+82 90-258-0002"))
 check("휴대폰 앱·단축어와 같은 꼴 다섯 (맥 세션이 돌려 본 것, 2026-10-13)",
