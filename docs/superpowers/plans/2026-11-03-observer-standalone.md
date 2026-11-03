@@ -242,3 +242,25 @@
 - [ ] **Step 2:** `tools/build_release.py` 로 빌드 → `tools/sandbox_test.py --observer D:/AX/AUTOPILOT_Observer_Setup_<ver>.exe` 실패 0, 그리고 오토파일럿 `--update` 샌드박스도 실패 0 (Global Constraints 첫 줄).
 - [ ] **Step 3:** 전체 단위 시험(`tests/test_*.py`, `test_import_step` 뺌)·`check_web.py`·`check_hub_web.py` 통과.
 - [ ] **Step 4: Commit** `옵저버 단독 9 - 샌드박스 시험·문서`
+
+### Task 10: 단독 설치 파일은 미리 받은 PC 한 대에만 설치된다 (사용자 2026-11-03, Task 8 뒤·Task 9 앞)
+
+**Files:**
+- Modify: `rpa_status.py` (`machine_guid`, `standalone_pc_problem`), `rpa_dashboard.py` (`launch`), `rpa_observer.py` (`main`), `observer_hub.py` (`main`), `tools/build_release.py` (`collect_observer` 까지만, `observer_setup_name`, `build_observer_setup`, `prune_local`), `release/observer.iss` (`InitializeSetup`)
+- Create: `release/PC번호_확인.bat` (CP949+CRLF, 괄호 블록 안 echo 에 ( ) 금지), `tools/build_observer.py`
+- Test: `tests/test_build_release.py`, `tests/test_standalone.py`, `tests/test_standalone_schedule.py` 에 더함
+
+**Interfaces:**
+- PC 번호 = 윈도우 MachineGuid (`HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`, 소문자, 앞뒤 공백 없음). `rpa_status.machine_guid() -> str` (시험이 바꿔 끼운다).
+- `rpa_status.standalone_pc_problem() -> str|None` - 단독이고 `OBSERVER_STANDALONE` 내용(PC번호)이 이 PC 와 다르면 `이 PC 에 설치된 옵저버 단독 버전이 아닙니다. 담당자에게 문의하여 주십시오.`. 내용이 비어 있으면(개발·시험) None.
+  `observer_hub.py` 는 시작할 때, `rpa_dashboard.launch` 는 단독일 때 이것이 있으면 거절(RuntimeError 그 글). 옵저버도 켤 때 보여 주고 닫는다.
+- `release/PC번호_확인.bat`: 그 PC 의 MachineGuid 를 보여 주고 클립보드에 복사(`clip`), "이 번호를 담당자에게 보내 주십시오." 관리자 권한 없이 (`reg query`).
+- 일반 빌드(`tools/build_release.py`)는 단독 설치 파일을 만들지 않고 `배포_옵저버_<ver>` 폴더까지만 모은다.
+- `tools/build_observer.py <PC번호> [--version <ver>]`: 가장 새(또는 지정한) `D:\AX\배포_옵저버_<ver>` 로 `D:\AX\AUTOPILOT_Observer_Setup_<ver>_<PC번호 끝 4글자>.exe` (소문자 16진수 4자리). PC번호는 GUID 꼴(8-4-4-4-12 16진수)만 - 아니면 거절.
+  ISCC 에 `/DBoundPC=<PC번호>`·`/DFlagFile=<PC번호를 채운 OBSERVER_STANDALONE 사본>` 으로 넘긴다 (원본 판 폴더는 안 바꾼다).
+- `observer.iss` `InitializeSetup`: 레지스트리 MachineGuid 가 BoundPC 와 다르면 `이 설치 파일은 다른 PC 용입니다. 담당자에게 이 PC 의 번호(PC번호_확인.bat)를 보내 새 설치 파일을 받아 주십시오.` 를 보이고 설치하지 않는다 (조용한 설치면 메시지 없이 실패 코드). 같은 PC 에 다시 깔기·덮어쓰기는 된다.
+- 샌드박스 `--observer` (Task 9): 샌드박스 안에서 MachineGuid 를 먼저 읽어 호스트가 `build_observer` 로 그 PC 용을 만든 뒤 깔게 하고, 다른 번호로 만든 파일은 설치가 거절되는지도 본다.
+- 알려진 한계: 설치 파일을 풀어 고치면 우회할 수 있다 (사내용이라 받아들임).
+
+- [x] 시험: GUID 검사, 가짜 판 폴더로 `build_observer` 가 사본 표시 파일에 PC번호를 넣는지, `observer.iss` 가 BoundPC 정의로 컴파일되는지(ISCC 있을 때), `standalone_pc_problem` 같은 번호 None·다른 번호 글·빈 내용 None, `launch` 거절, GUID 끝 4글자가 파일 이름에 들어간다.
+- [x] **Commit** `옵저버 단독 8·10 - 단독 판 폴더·PC 한 대 용 설치 파일 (AUTOPILOT_Observer_Setup, build_observer, BoundPC)`
