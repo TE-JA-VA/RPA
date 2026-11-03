@@ -517,6 +517,9 @@ const isV2 = () => (live?.schedule?.version ?? 0) >= 2;
 // 판 3 PC 는 줄마다 요일 (slots[i].days, 사용자 2026-10-08). 옛 판 PC 에는 지금처럼 카드의 공통 요일 하나
 const isV3 = () => (live?.schedule?.version ?? 0) >= 3;
 const isV4 = () => (live?.schedule?.version ?? 0) >= 4;   // 공휴일·업체 휴무일 쉬기 (2026-10-15)
+const isV5 = () => (live?.schedule?.version ?? 0) >= 5;   // 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02)
+/** 이 줄이 운송장 전송을 골랐는가 - '켠 사이트만' 은 그 줄에만 (PC 의 normalize_slots 와 같은 규칙) */
+const sendsInvoice = (s) => !!s.run?.includes("InvoiceSend");
 const OFF_DATES_MAX = 100;                                // rpa_dashboard.OFF_DATES_MAX
 const savedOff = () => [...(live?.schedule?.off_dates || [])].sort();
 /** '12월 31일 (목)' */
@@ -551,6 +554,7 @@ function savedSlots() {
     at: x.at, run: Array.isArray(x.run) ? x.run.filter((k) => k !== "Login") : null,
     ...(x.until ? { until: x.until, rest_min: x.rest_min ?? 2 } : {}),
     ...(isV3() ? { days: [...(Array.isArray(x.days) ? x.days : s.days || [])].sort() } : {}),
+    ...(isV5() && x.inv_sites === true ? { inv_sites: true } : {}),
   }));
 }
 /** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관·운송장 전송 (사용자 10-08: ②~⑥ 따로, ⑤⑥ 은 반복도) */
@@ -566,7 +570,8 @@ function resetSchedule() {
   paintDays(); paintTimes(); paintOffDates(); paintScheduleMeta();
 }
 const runKey = (run) => (run ? [...run].filter((k) => k !== "Login").sort().join() : "*");
-const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}${s.days ? `@${[...s.days].sort()}` : ""}`;
+const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}${s.days ? `@${[...s.days].sort()}` : ""}`
+  + (s.inv_sites && sendsInvoice(s) ? "+inv" : "");
 const slotsKey = (slots) => slots.map(slotKey).sort().join("|");
 function scheduleDirty() {
   const s = savedSch();
@@ -618,11 +623,24 @@ function runChips(s) {
     b.onclick = () => {
       s.run = s.run.includes(k) ? s.run.filter((x) => x !== k) : [...s.run, k];
       if (!s.run.includes("Logistics")) s.run = s.run.filter((x) => x !== "Output");
+      if (!sendsInvoice(s)) delete s.inv_sites;
       paintTimes(); paintScheduleMeta();
     };
     box.append(b);
   }
   return box;
+}
+/** 운송장 전송을 고른 줄의 '켠 사이트만' 켬/끔 (사용자 2026-11-02) - 켜면 PC 가 사이트 수집에서 켠 사이트만 매출구분으로 골라 조회·전송 */
+function invSitesSwitch(s) {
+  const l = document.createElement("label"); l.className = "switch first inv-sites";   // 줄 안이라 위 선 없이
+  const text = Object.assign(document.createElement("span"), { textContent: "켠 사이트만 조회·전송" });
+  text.append(Object.assign(document.createElement("span"), { className: "why",
+    textContent: "사이트 수집에서 켠 사이트만 골라 조회한 뒤 전송합니다. 끄면 모든 사이트를 조회합니다." }));
+  const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: !!s.inv_sites });
+  box.setAttribute("aria-label", "운송장 전송: 켠 사이트만");
+  box.onchange = () => { if (box.checked) s.inv_sites = true; else delete s.inv_sites; paintScheduleMeta(); };
+  l.append(text, box, Object.assign(document.createElement("span"), { className: "knob" }));
+  return l;
 }
 function paintTimes() {
   const over = new Set(sortedForm().slice(limitOf()));      // 시각 순으로 한도를 넘는 줄 (PC 도 이 줄은 안 돌린다)
@@ -655,9 +673,10 @@ function paintTimes() {
       const mode = document.createElement("select"); mode.className = "mode"; mode.setAttribute("aria-label", "돌릴 모듈");
       mode.append(new Option("전체 모듈 실행", "all"), new Option("선택 모듈만 실행", "pick"));
       mode.value = s.run ? "pick" : "all";
-      mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; paintTimes(); paintScheduleMeta(); };
+      mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; delete s.inv_sites; paintTimes(); paintScheduleMeta(); };
       row.append(line("모듈", mode, ...(s.run ? [runChips(s)] : [])));
     }
+    if (isV5() && sendsInvoice(s)) row.append(line("운송장 전송", invSitesSwitch(s)));
     return row;
   }));
 }
@@ -757,7 +776,8 @@ function payloadOf() {
   const base = { enabled: form.sch.enabled, days: [...new Set(isV3() ? form.sch.slots.flatMap((s) => s.days) : form.sch.days)].sort(),
     ...(isV4() ? { skip_holidays: form.sch.holidays, off_dates: [...form.sch.offDates] } : {}) };   // 옛 판 PC 는 모르는 값 - 안 보낸다
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
-  return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}) })) };
+  return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}),
+    ...(isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}) })) };
 }
 async function applySchedule() {
   const payload = payloadOf();

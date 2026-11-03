@@ -40,6 +40,7 @@ import time
 
 from pywinauto import mouse
 
+import rpa_status as st
 from rpa_status import TOGETHER_ENV, TOGETHER_MODES   # 사이트 수집이 함께 띄운 실행·업체가 고른 전체 실행 방식 (run_main)
 
 SECTION = "Wellife"
@@ -1279,11 +1280,15 @@ def count_rows(rr, ctx, grid):
 # 설정 QueryDefaults.<화면>.<키> 가 있으면 그 값 (웹에는 안 보인다). 'fixed' 는 목록 창이 복잡해(체크 목록·상품) 고치지
 # 않고, 기본값이 아니면 화면을 닫고 다시 연다 (사용자 10-14). 체크 상자 '출고대기만' 은 UIA·MSAA 로 상태가 안 읽혀
 # 컨트롤이 그린 그림(PrintWindow)으로 본다 - 애매하면 화면을 다시 연다.
+# 'sites' (⑥ 매출구분): '켠 사이트만' 예약이면 사이트 수집에서 켠 프리셋의 사이트코드만 목록에서 체크한다 (pick_sites,
+# 사용자 2026-11-02). 아니면 'fixed' 와 같다.
 # ---------------------------------------------------------------------------
 QUERY_SECTION = "QueryDefaults"
+INVOICE_SITES_ENV = "RPA_INVOICE_SITES"   # 예약 줄 '켠 사이트만' 이면 "1" (rpa_dashboard.launch_slot, 사용자 2026-11-02)
+SITE_CODE_COL = "사이트코드"     # 매출구분 목록에서 사이트를 가리는 칸 (11-03 ERPia 업데이트로 생김, 값은 세 자리 - 개발기 실측)
 QUERY_CONDITIONS = {      # 화면 -> (설정 키, auto_id, 종류, 기본값)
     "InvoiceSend": (
-        ("Sales", "ccc_Sales", "fixed", "매출구분 : 전체"),
+        ("Sales", "ccc_Sales", "sites", "매출구분 : 전체"),
         ("Delivery", "ccc_Delivery", "fixed", "택배사 : 전체"),
         ("UnstoringOnly", "chk_UnstoringStand", "check", "N"),
         ("DateBasis", "cboCondition", "combo", "배송일"),
@@ -1309,16 +1314,36 @@ CHECKED_AT, UNCHECKED_BELOW = 0.25, 0.05   # 체크 상자 안쪽의 색 있는 
 
 def query_defaults(rr, screen):
     """[(키, auto_id, 종류, 기본값)]. 설정에 같은 키가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로).
-    값 모양이 틀리면 RuntimeError (설정 오류)."""
+    'sites' 는 '켠 사이트만' 예약이면 사이트코드 목록 (invoice_sites), 아니면 'fixed' (전체). 값 모양이 틀리면 RuntimeError (설정 오류)."""
     conf = (rr.pl.load_settings().get(QUERY_SECTION) or {}).get(screen) or {}
     out = []
     for key, aid, kind, default in QUERY_CONDITIONS[screen]:
         want = default if kind == "fixed" else conf.get(key, default)
+        if kind == "sites":
+            want = invoice_sites()
+            if want is None:
+                kind, want = "fixed", default
         if (kind == "date" and not isinstance(want, int)) or (kind == "check" and want not in ("Y", "N")) \
                 or (kind in ("combo", "text") and not isinstance(want, str)):
             raise RuntimeError(f"{rr.pl.config_name()}의 '{QUERY_SECTION}.{screen}.{key}' 값이 올바르지 않습니다. ({want!r})")
         out.append((key, aid, kind, want))
     return out
+
+
+def invoice_sites():
+    """'켠 사이트만' 예약(INVOICE_SITES_ENV)이면 사이트 수집 프리셋 중 켠 것(이 업체가 쓰는 번호까지)의 사이트코드, 아니면 None
+    (전체). 켠 사이트가 없으면 보내지 않고 건너뛴다 - 전체로 보내지 않게. 프리셋을 못 읽으면 멈춘다."""
+    if os.environ.get(INVOICE_SITES_ENV) != "1":
+        return None
+    presets = st.preset_summary()
+    if presets is None:
+        raise Stop("failed", "'켠 사이트만' 예약인데 사이트 수집 프리셋을 읽지 못해 조회하지 않았습니다.")
+    limit = st.preset_limit()
+    codes = list(dict.fromkeys(str(p["code"]).strip() for p in presets
+                               if p["on"] and p["no"] <= limit and str(p["code"] or "").strip()))
+    if not codes:
+        raise Stop("skipped", "'켠 사이트만' 예약인데 사이트 수집에서 켠 사이트가 없어 전송하지 않았습니다.")
+    return codes
 
 
 def date_days(value, today=None):
@@ -1436,6 +1461,12 @@ def ensure_query(rr, ctx, screen, form_id, reopen):
     for key, aid, kind, want in conds:
         if kind == "fixed":
             continue
+        if kind == "sites":     # 화면을 다시 열지 않고 목록에서 고른다 - 지난 회차가 고른 그대로면 건드리지 않는다
+            note = pick_sites(rr, ctx, form_id, key, aid, want)
+            if note:
+                changed.append(note)
+            ctl = controls(rr, ctx, form_id)
+            continue
         now = cond_value(rr, ctl, aid, kind)
         if now == want:
             continue
@@ -1512,6 +1543,177 @@ def pick_item(rr, ctx, combo, item, what):
     while any(_shown(rr, w) for w in opened) and time.time() < deadline:
         time.sleep(0.2)
     _close_menu(rr, ctx, opened, what)     # 이미 닫혔으면 아무것도 안 한다
+
+
+SALES_PANE = "popup"        # 매출구분 ▼ 로 따로 뜬 목록 창 안 패널 (11-02 실측)
+
+
+def pick_sites(rr, ctx, form_id, key, aid, codes):
+    """⑥ 매출구분(aid) 목록에서 사이트코드가 codes 인 줄만 체크된 채로 [닫기] 하고 칸 글로 확인한다 (사용자 2026-11-02).
+    - 목록은 ▼('오픈') 로 메인 창 밖에 따로 뜬다: 'popup' 안 그리드 gridCtrl (row Check Box·사이트코드·마켓·아이디·명칭),
+      [닫기] btn_Close. [닫기] 가 체크를 칸에 반영하고 ESC 는 버린다 (11-02·11-03 실측). 사이트코드 칸이 없는 옛 ERPia 는
+      멈춘다. 한 사이트코드에 줄(계정)이 여럿이면 모두 고른다.
+    - 이미 맞게 체크된 줄은 건드리지 않는다 - [선택취소] 를 먼저 누르지 않는다 (사용자 2026-11-02).
+    - 목록에 없는 사이트코드가 있거나 무엇이든 틀리면 ESC 로 닫고(바꾼 체크는 버려진다) 멈춘다 - 조회하지 않는다.
+    - [닫기] 뒤 칸 글이 '매출구분 : <명칭>'(한 줄)·'매출구분 : N개 선택됨'(여러 줄) 이 아니면 멈춘다 - 목록에서 못 본 줄에
+      남은 체크도 개수로 여기서 걸린다. '매출구분 : 전체' 는 받지 않는다 (체크 없음 = 모든 사이트).
+    고쳤으면 고친 것 글, 그대로면 None."""
+    what = f"조회 조건 {key}"
+    ctl = controls(rr, ctx, form_id)
+    before = cond_value(rr, ctl, aid, "fixed")
+    field = ctl.get(aid)
+    arrow = None if field is None else next((b for b in field.descendants(control_type="Button") if b.window_text() == "오픈"), None)
+    if arrow is None:
+        raise Stop("failed", f"{what}: 매출구분 목록을 여는 ▼ 단추를 찾지 못해 조회하지 않았습니다.")
+    no_popup(rr, ctx, f"{what} 목록 열기 전")
+    old = _menu_windows(rr, ctx)
+    click(rr, ctx, arrow, f"{what} ▼")
+    h, win = _sales_list(rr, ctx, old, what)
+    try:
+        names, flips = _match_sites(rr, h, win, codes, what)
+        missing = [c for c in codes if c not in names]
+        if missing:
+            raise Stop("failed", f"{what}: 매출구분 목록에 사이트코드 {', '.join(missing)}이(가) 없어 조회하지 않았습니다. "
+                                 "사이트 수집에서 켠 사이트를 확인하여 주십시오.")
+        close = next((b for b in win.descendants(control_type="Button") if b.element_info.automation_id == "btn_Close"), None)
+        if close is None:
+            raise Stop("failed", f"{what}: 매출구분 목록의 [닫기]를 찾지 못해 조회하지 않았습니다.")
+        _click_in(rr, h, close, f"{what} 목록 [닫기]")
+        deadline = time.time() + DROPDOWN_WAIT_SECONDS
+        while _shown(rr, h):
+            if time.time() > deadline:
+                raise Stop("failed", f"{what}: 매출구분 목록이 [닫기]로 닫히지 않아 조회하지 않았습니다.")
+            time.sleep(0.2)
+    except Exception:       # UI 오류도 - 체크를 반쯤 바꾼 목록을 열어 둔 채 두지 않게 (ESC 는 바꾼 체크를 버린다)
+        with contextlib.suppress(Exception):
+            _close_menu(rr, ctx, {h}, what)
+        raise
+    picked = [n for c in codes for n in names[c]]
+    want = [f"매출구분 : {picked[0]}" if len(picked) == 1 else f"매출구분 : {len(picked)}개 선택됨"]
+    deadline = time.time() + CHECK_WAIT_SECONDS     # 목록이 닫힌 뒤 칸 글이 늦게 바뀔 수 있다
+    while (after := cond_value(rr, controls(rr, ctx, form_id), aid, "fixed")) not in want and time.time() < deadline:
+        time.sleep(0.2)
+    if after not in want:
+        raise Stop("failed", f"{what}: 고른 뒤 칸 글이 {want[0]!r}이(가) 아니어서 조회하지 않았습니다. (현재 {after!r})")
+    rr.log(f"  {what}: 사이트코드 {', '.join(codes)} ({', '.join(map(str, picked))}) - "
+           f"{f'체크 {flips}곳을 고침' if flips else '이미 그대로'} → {after!r}")
+    return f"{key} {before!r}→{after!r}" if flips or before != after else None
+
+
+def _sales_list(rr, ctx, before, what):
+    """▼ 뒤 새로 뜬 매출구분 목록 창 (h, 창) - 그리드까지 생긴 뒤 (화면을 새로 연 뒤 처음 열면 창이 먼저 뜨고 그리드가 늦다,
+    11-02 실측). 안 뜨면 새로 뜬 창을 ESC 로 닫고 멈춘다."""
+    deadline = time.time() + DROPDOWN_WAIT_SECONDS
+    while time.time() < deadline:
+        time.sleep(0.2)
+        for h in _menu_windows(rr, ctx) - before:
+            try:
+                win = rr.Desktop(backend="uia").window(handle=h).wrapper_object()
+                if any(c.element_info.automation_id == SALES_PANE for c in win.children()) and any(
+                        t.element_info.automation_id == "gridCtrl" for t in win.descendants(control_type="Table")):
+                    return h, win
+            except Exception:
+                continue    # 그새 닫힌 창 (그림자 창 등)
+    _close_menu(rr, ctx, _menu_windows(rr, ctx) - before, what)
+    raise Stop("failed", f"{what}: ▼를 눌렀으나 매출구분 목록이 나타나지 않아 조회하지 않았습니다.")
+
+
+def _match_sites(rr, h, win, codes, what):
+    """목록을 맨 위부터 끝까지 넘기며 체크를 codes 에 맞춘다 (사이트코드가 codes 면 체크, 아니면 풂).
+    ({사이트코드: [명칭]}, 누른 수). 사이트코드 칸이 없으면 멈춘다 (옛 ERPia).
+    체크 칸이 그리드 안에 다 보이는 줄만 읽고 누른다 - 반쯤 걸친 줄의 가운데는 그리드 밖(아래 단추)일 수 있다. 그 줄은
+    다음 페이지에서 본다. 본 줄 번호를 기억해 겹친 줄은 다시 보지 않고, 끝에서 1번부터 빠진 줄이 있으면 멈춘다.
+    넘겼는데 안 움직이면 '페이지 아래로' 가 없을 때만 끝이다 (next_page 와 같다).
+    스크롤은 목록 창 자신의 스크롤 단추로 넘긴다 (11-03 개발기 75줄, 한 화면 26줄 실측)."""
+    grid = next((t for t in win.descendants(control_type="Table") if t.element_info.automation_id == "gridCtrl"), None)
+    if grid is None:
+        raise Stop("failed", f"{what}: 매출구분 목록의 그리드(gridCtrl)를 찾지 못해 조회하지 않았습니다.")
+
+    def code_of(cells):
+        if SITE_CODE_COL not in cells:
+            raise Stop("failed", f"{what}: 매출구분 목록에 '{SITE_CODE_COL}' 칸이 없어 사이트를 가릴 수 없어 조회하지 않았습니다. "
+                                 "ERPia 를 업데이트하여 주십시오.")
+        return str(rr.legacy_value(cells[SITE_CODE_COL]) or "").strip()
+
+    for _ in range(MAX_PAGES):
+        if not _list_scroll(rr, h, grid, "페이지 위로", what):
+            break
+    names, seen, flips = {}, set(), 0
+    rows = settled_rows(rr, grid)
+    for _ in range(MAX_PAGES):
+        g, clicked = grid.rectangle(), []
+        for n, cells in sorted(rows.items()):
+            box = cells.get(CHECK_COL)
+            r = box.rectangle() if box is not None else None
+            if n in seen or r is None or not (g.top <= r.top and r.bottom <= g.bottom):
+                continue
+            seen.add(n)
+            code = code_of(cells)
+            name = rr.legacy_value(cells["명칭"]) if "명칭" in cells else None
+            if code in codes:
+                names.setdefault(code, []).append(name)
+            if (rr.legacy_value(box) == "선택") != (code in codes):
+                _click_in(rr, h, box, f"{what} 목록 {name}({code}) 체크")
+                clicked.append(n)
+        flips += len(clicked)
+        deadline = time.time() + CHECK_WAIT_SECONDS
+        while clicked:
+            now = rr.grid_rows(grid)
+            clicked = [n for n in clicked if n not in now or CHECK_COL not in now[n]
+                       or (rr.legacy_value(now[n][CHECK_COL]) == "선택") != (code_of(now[n]) in codes)]
+            if clicked and time.time() > deadline:
+                raise Stop("failed", f"{what}: 매출구분 목록 체크를 눌렀으나 바뀌지 않아 조회하지 않았습니다. (행 {clicked})")
+            if clicked:
+                time.sleep(0.2)
+        first = min(rows, default=None)
+        if not _list_scroll(rr, h, grid, "페이지 아래로", what):
+            break
+        rows = settled_rows(rr, grid, moved_from=first)
+        if min(rows, default=None) == first:
+            if _list_button(rr, grid, "페이지 아래로") is not None:
+                raise Stop("failed", f"{what}: 매출구분 목록 페이지를 내렸으나 움직이지 않아 조회하지 않았습니다. (뒤 줄을 보지 못함)")
+            break
+    else:
+        raise Stop("failed", f"{what}: 매출구분 목록이 {MAX_PAGES}페이지를 넘어 끝까지 보지 못해 조회하지 않았습니다.")
+    if sorted(seen) != list(range(1, len(seen) + 1)):
+        raise Stop("failed", f"{what}: 매출구분 목록을 빠짐없이 읽지 못해 조회하지 않았습니다. "
+                             f"(읽은 줄 {len(seen)}개, 마지막 줄 {max(seen, default=0)})")
+    return names, flips
+
+
+def _list_scroll(rr, h, grid, name, what):
+    """목록 창 자신의 세로 스크롤바 단추(name)를 누른다. 단추가 없으면 False (스크롤바가 없거나 그 끝).
+    rr.grid_page_down 은 메인 창을 앞으로 가져와서 쓰지 않는다 (따로 뜬 목록이 닫히거나 가려질 수 있다)."""
+    btn = _list_button(rr, grid, name)
+    if btn is None:
+        return False
+    _click_in(rr, h, btn, f"{what} 목록 {name}")
+    time.sleep(0.4)
+    return True
+
+
+def _list_button(rr, grid, name):
+    """목록 그리드 세로 스크롤바의 그 이름 단추 ('페이지 위로'·'페이지 아래로'). 스크롤바나 단추가 없으면 None."""
+    vsb = rr.grid_vertical_scrollbar(grid)
+    return None if vsb is None else next((c for c in vsb.descendants() if c.window_text() == name), None)
+
+
+def _click_in(rr, h, el, what):
+    """메인 창 밖에 따로 뜬 창 h 안의 el 을 누른다 - 누를 점의 맨 위 창이 h 일 때만 (clear_point 와 같은 까닭).
+    front() 는 쓰지 않는다 (메인 창을 앞으로 가져오면 따로 뜬 창이 닫히거나 가려질 수 있다)."""
+    if rr.ec.screen_locked():
+        raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
+    r = el.rectangle()
+    pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    if r.width() <= 0 or r.height() <= 0:
+        raise Stop("failed", f"{what}: 누를 자리가 보이지 않아 누르지 않고 중단하였습니다. ({r})")
+    mouse.move(coords=pt)
+    deadline = time.time() + 1.0
+    while _top_window(rr, pt) != h:
+        if time.time() > deadline:
+            raise Stop("failed", f"{what}: 누를 자리를 다른 창이 덮고 있어 누르지 않고 중단하였습니다.")
+        time.sleep(0.1)
+    el.click_input(coords=pt, absolute=True)
 
 
 def close_screen(rr, ctx, ctl, form_id):
