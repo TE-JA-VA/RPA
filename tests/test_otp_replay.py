@@ -6,18 +6,56 @@
   재생: 흉내 중계가 번호를 준다 / 처음엔 틀린 번호 / 안 준다 / 늘 틀린 번호 / 중계 없음.
     .venv\\Scripts\\python.exe tests\\test_otp_replay.py
 """
+import json
 import os
+import random
 import sys
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import fake_otp_site as site  # noqa: E402  - 가짜 인증 사이트 (test_otp_manual 과 같이 쓴다)
 import web_replay as rec  # noqa: E402
 
-srv, BASE = site.start()
-SENT = site.SENT
+SENT = []          # 사이트가 보낸 번호들 (문자)
+VERIFY = """<!doctype html><meta charset="utf-8"><title>본인 인증</title>
+<p>휴대폰으로 받은 인증번호를 넣어 주십시오.</p>
+<button type="button" id="send" onclick="fetch('/api/send',{method:'POST'}).then(()=>document.getElementById('msg').textContent='보냈습니다')">인증번호 받기</button>
+<input id="otp" placeholder="인증번호 6자리" autocomplete="off">
+<button type="button" onclick="fetch('/api/check?c='+document.getElementById('otp').value).then(r=>r.json()).then(j=>{
+  if (j.ok) { alert('인증번호가 일치합니다. 다시 로그인 해주세요.'); location.href='/done'; } else { alert('인증번호가 일치하지 않습니다. 다시 받아 주십시오'); document.getElementById('otp').value=''; } })">확인</button>
+<p id="msg"></p>"""
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, body, ctype="text/html; charset=utf-8"):
+        b = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        path, _, q = self.path.partition("?")
+        if path == "/verify":
+            return self._send(VERIFY)
+        if path == "/api/check":
+            return self._send(json.dumps({"ok": bool(SENT) and q == f"c={SENT[-1]}"}), "application/json")
+        self._send(f"<!doctype html><meta charset='utf-8'><title>{path}</title><h1>{path}</h1>")
+
+    def do_POST(self):
+        SENT.append(f"{random.randint(0, 999999):06d}")
+        self._send("{}", "application/json")
+
+
+srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+BASE = f"http://127.0.0.1:{srv.server_address[1]}"
 OUT = tempfile.mkdtemp(prefix="otp_replay_")
 fails = []
 
@@ -51,7 +89,17 @@ class FakeRelay:
         self.closed += 1
 
 
-r = rec.record(BASE + "/verify", os.path.join(OUT, "rec.json"), headless=True, human=site.human)
+def human(page):
+    page.wait_for_timeout(500)
+    page.click("#send")
+    page.wait_for_function("document.getElementById('msg').textContent === '보냈습니다'")
+    page.click("#otp")
+    page.keyboard.type(SENT[-1], delay=20)           # 사람이 휴대폰을 보고 친다
+    page.get_by_role("button", name="확인").click()
+    page.wait_for_url("**/done")
+
+
+r = rec.record(BASE + "/verify", os.path.join(OUT, "rec.json"), headless=True, human=human)
 print("--- 기록: " + " / ".join(rec.describe(s) for s in r["steps"]))
 kinds = [s["kind"] for s in r["steps"]]
 check("인증번호 칸은 'otp' 단계, 바로 앞 누르기는 '인증번호 받기'", kinds == ["click", "otp", "click"] and r["steps"][0].get("otpSend") is True,

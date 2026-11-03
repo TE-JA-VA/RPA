@@ -690,7 +690,7 @@ def validate_presets(presets):
             return p["no"], f"{tag}: {why}"
         if has_mail_login(p["record"]) and not ((p.get("mail_id") or "").strip() and (p.get("mail_pw") or p.get("has_mail_pw"))):
             return p["no"], f"{tag}: 인증 메일 계정이 입력되지 않았습니다. 인증 메일 아이디와 비밀번호를 입력하여 주십시오."
-        if has_otp(p["record"]) and not st.standalone() and not (p.get("phone") and senders_list(p.get("senders"))):   # 단독은 사람이 넣는다 (설계 4.5)
+        if has_otp(p["record"]) and not (p.get("phone") and senders_list(p.get("senders"))):
             return p["no"], f"{tag}: 인증번호 단계가 있습니다. 인증 휴대폰과 발신번호를 정해 주십시오."
         if not (p.get("id") or "").strip():
             return p["no"], f"{tag}: 아이디가 필요합니다."
@@ -745,8 +745,7 @@ class App:
         self.senders_var, self.phones, self.phone_ids = tk.StringVar(root), None, [""]
         self.source_var, self.prefix_var = tk.StringVar(root, value="shop"), tk.StringVar(root)
         self._build()
-        if not st.standalone():          # 단독은 휴대폰 칸이 없다 (사람이 인증번호를 넣는다 - 설계 4.5)
-            threading.Thread(target=self._load_phones, daemon=True).start()
+        threading.Thread(target=self._load_phones, daemon=True).start()
         self._load_fields()
         root.update()
         self.worker = Worker(self.browser_bounds(), self.ui, hint)
@@ -790,14 +789,13 @@ class App:
             self._entry(form, lvar, 12).grid(row=r, column=1, sticky="we", padx=(6, 0), pady=y, ipady=3)
             tk.Label(form, text=right, font=F, bg=CARD, fg=MUTED).grid(row=r, column=2, sticky="w", padx=(12, 0), pady=y)
             self._entry(form, rvar, 12, show=show).grid(row=r, column=3, sticky="we", padx=(6, 0), pady=y, ipady=3)
-        if not st.standalone():          # 인증 휴대폰·발신번호 - 단독은 휴대폰 중계가 없어 칸을 두지 않는다 (설계 4.5)
-            tk.Label(form, text="인증 휴대폰", font=F, bg=CARD, fg=MUTED).grid(row=2, column=0, sticky="w", pady=(6, 0))
-            self.phone_box = ttk.Combobox(form, state="readonly", width=10, font=F, values=["(없음)"])
-            self.phone_box.grid(row=2, column=1, sticky="we", padx=(6, 0), pady=(6, 0))
-            self.phone_box.bind("<<ComboboxSelected>>", lambda e: self._field_changed())
-            tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(6, 0))
-            self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
-            self.senders_var.trace_add("write", lambda *a: self._field_changed())
+        tk.Label(form, text="인증 휴대폰", font=F, bg=CARD, fg=MUTED).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.phone_box = ttk.Combobox(form, state="readonly", width=10, font=F, values=["(없음)"])
+        self.phone_box.grid(row=2, column=1, sticky="we", padx=(6, 0), pady=(6, 0))
+        self.phone_box.bind("<<ComboboxSelected>>", lambda e: self._field_changed())
+        tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(6, 0))
+        self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
+        self.senders_var.trace_add("write", lambda *a: self._field_changed())
         src = tk.Frame(form, bg=CARD)               # 주문 수집용 엑셀파일 경로 (사용자 2026-10-14)
         src.grid(row=3, column=0, columnspan=4, sticky="we", pady=(8, 0))
         tk.Label(src, text="주문 수집용 엑셀파일 경로", font=F, bg=CARD, fg=MUTED).pack(side="left")
@@ -943,7 +941,6 @@ class App:
         self.pw_hint.config(text=("저장된 비밀번호가 있습니다. " if p["has_pw"] else "")
                             + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.\n"
                             + (IMAP_HINT if p["source"] == "imap" else
-                               "문자 인증번호를 받는 사이트는 실행 때 사람이 브라우저 창에 번호를 넣습니다." if st.standalone() else
                                "문자 인증번호를 받는 사이트면 인증 휴대폰과 발신번호(여러 개면 쉼표로)를 정해 주십시오.")
                             + ("\n" + MAIL_HINT if p["source"] == "mail" else "")
                             + (" (휴대폰 목록을 불러오지 못했습니다)" if self.phones == [] and getattr(self, "phones_failed", False) else ""))
@@ -956,8 +953,6 @@ class App:
             self.ui.put(("phones", None))
 
     def _fill_phone_box(self):
-        if not hasattr(self, "phone_box"):      # 단독 - 칸이 없다
-            return
         p = self.presets[self.cur]
         pairs = list(self.phones or [])
         if p["phone"] and p["phone"] not in [k for k, _ in pairs]:
@@ -968,7 +963,7 @@ class App:
 
     def _store_fields(self):
         p = self.presets[self.cur]
-        i = self.phone_box.current() if hasattr(self, "phone_box") else -1
+        i = self.phone_box.current()
         source, prefix = self.source_var.get(), self.prefix_var.get().strip()
         p.update(name=self.name_var.get().strip() or p["name"],
                  code=unicodedata.normalize("NFKC", self.code_var.get()).strip(),     # 전각 '１０１' → '101' (ERPia 사이트코드와 맞게, 2026-10-22)
@@ -1508,8 +1503,7 @@ class App:
                                             "해당 단계를 수정해주십시오.", fg=RED)
         fresh = {o["no"] for p, o in zip(self.presets, out) if o["record"] and p.get("fresh")}
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]}, fresh,
-                        phones=None if st.standalone() else {o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]},
-                        origs=origs, dropped=dropped,
+                        phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]}, origs=origs, dropped=dropped,
                         mail_logins={o["no"]: (o["mail_id"].strip(), o["mail_pw"] or None) for o in out if o["record"]})
         if problem:
             return self.status.config(text=problem, fg=RED)
@@ -1699,10 +1693,7 @@ def start_problem(me=None, session=None):
 
 def setup_problem(load=None):
     """오토파일럿 설정(이 PC 의 에이전트 계정)을 마쳤나 - 안 했거나 깨졌으면 사람에게 보일 문장, 됐으면 None.
-    설정 없이 옵저버만 다른 용도로 쓰지 못하게 (사용자 2026-10-14). 설정 내용은 보지도 찍지도 않는다. load 는 시험용.
-    옵저버 단독 버전은 에이전트가 없다 - 묻지 않는다."""
-    if st.standalone():
-        return None
+    설정 없이 옵저버만 다른 용도로 쓰지 못하게 (사용자 2026-10-14). 설정 내용은 보지도 찍지도 않는다. load 는 시험용."""
     try:
         (load or (lambda: otp_relay._agent_modules()[1].load_config()))()
         return None
@@ -1713,7 +1704,7 @@ def setup_problem(load=None):
 def busy_problem():
     """다른 옵저버·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는
     RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
-    if not st.hold_lock(st.observer_lock_name()):
+    if not st.hold_lock(st.OBSERVER_LOCK):
         return "옵저버가 이미 켜져 있습니다."
     # ponytail: 예약이 RPA 를 띄우고 RPA 가 '도는 중' 을 적기까지 몇 초 틈은 못 막는다 (그 사이 켜면 둘 다 뜬다)
     running = [st.PROGRAMS.get(p, p) for p in st.running_programs()]
@@ -1782,7 +1773,7 @@ def main(argv=None):
             return 0
         show_error("관리자 권한이 있어야 기록을 저장할 수 있습니다. 관리자 권한으로 실행하여 주십시오.")
         return 1
-    problem = st.standalone_pc_problem() or start_problem() or setup_problem() or busy_problem()   # 단독은 그 PC 에서만 (설계 Task 10)
+    problem = start_problem() or setup_problem() or busy_problem()
     if problem:
         show_error(problem)
         return 1

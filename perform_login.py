@@ -46,8 +46,6 @@ def find_ai_dir():
     한 폴더로 모아 두면 다른 PC 로 옮길 때 헷갈릴 일이 없다.
     """
     path = os.path.join(find_desktop_dir(), AI_DIR_NAME)
-    if rpa_status.standalone():     # 옵저버 단독은 ERPia 폴더를 쓰지 않는다 - 불러오기만 해도 바탕화면에 만들지 않게 (샌드박스 2026-11-03)
-        return path
     try:
         os.makedirs(path, exist_ok=True)
     except Exception:

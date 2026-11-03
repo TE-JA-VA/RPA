@@ -132,9 +132,8 @@ def find_desktop_dir():
 
 
 def status_dir(create=True):
-    path = os.environ.get("RPA_STATUS_DIR") or (
-        os.path.join(data_dir(), "status") if standalone() else          # 단독은 바탕화면 ERPIA_AI 를 안 쓴다
-        os.path.join(find_desktop_dir(), AI_DIR_NAME, STATUS_DIR_NAME))
+    path = os.environ.get("RPA_STATUS_DIR") or os.path.join(
+        find_desktop_dir(), AI_DIR_NAME, STATUS_DIR_NAME)
     if create:
         try:
             os.makedirs(path, exist_ok=True)
@@ -235,53 +234,6 @@ def read_account():
 #   - 시험은 RPA_USER_CONFIG(또는 옛 RPA_CRED_FILE)로 임시 폴더를 가리킨다. 그러면 새 파일·옛 파일 모두 그 폴더만 본다.
 # ---------------------------------------------------------------------------
 PRODUCT_DIRS = ("AFTER MARKET", "RPA")   # 새 구조 폴더: Program Files\AFTER MARKET\RPA, ProgramData\AFTER MARKET\RPA
-# 옵저버 단독 버전 (설계 2026-11-03): ERPia 없이 옵저버 + ACTOR 만. 설치 폴더의 표시 파일 OBSERVER_STANDALONE 이 있으면 단독 -
-# 설정·기록·잠금을 오토파일럿과 따로 쓴다 (같은 PC 에 둘 다 깔려도 서로 안 본다). 표시가 없으면 아래 함수들은 예전 그대로
-STANDALONE_FLAG = "OBSERVER_STANDALONE"
-STANDALONE_DIRS = ("AFTER MARKET", "Observer")   # Program Files\AFTER MARKET\Observer, ProgramData\AFTER MARKET\Observer
-STANDALONE_LOCK = r"Local\AFTER_MARKET_OBSERVER_SA"
-STANDALONE_PC_PROBLEM = "이 PC 에 설치된 옵저버 단독 버전이 아닙니다. 담당자에게 문의하여 주십시오."
-
-
-def standalone():
-    """옵저버 단독 버전인가 - 설치 폴더에 표시 파일이 있거나 RPA_STANDALONE=1 (시험용). 매번 본다 (시험이 환경 변수를 바꾼다)."""
-    return os.environ.get("RPA_STANDALONE") == "1" or os.path.isfile(os.path.join(program_dir(), STANDALONE_FLAG))
-
-
-def machine_guid():
-    """이 PC 의 윈도우 MachineGuid (소문자). 못 읽으면 ''. 시험이 바꿔 끼운다."""
-    try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as k:
-            return str(winreg.QueryValueEx(k, "MachineGuid")[0]).strip().lower()
-    except Exception:
-        return ""
-
-
-def standalone_pc_problem():
-    """단독 설치 파일은 한 PC 용으로 만든다 (표시 파일 안에 그 PC 번호). 단독이고 번호가 이 PC 와 다르면 사람에게 보일 글, 아니면 None.
-    내용이 비어 있으면(개발·시험) 묻지 않는다. ponytail: 표시 파일을 고치면 우회된다 - 사내용이라 받아들임 (사용자 2026-11-03)."""
-    if not standalone():
-        return None
-    try:
-        with open(os.path.join(program_dir(), STANDALONE_FLAG), encoding="utf-8-sig") as f:
-            bound = f.read().strip().lower()
-    except OSError:
-        return None
-    return STANDALONE_PC_PROBLEM if bound and bound != machine_guid() else None
-
-
-def observer_lock_name():
-    """옵저버가 켤 때 잡는 잠금 이름 - 단독이면 단독용 (오토파일럿 옵저버가 떠 있어도 단독 예약은 막히지 않는다). 시험은 RPA_OBSERVER_LOCK."""
-    return os.environ.get("RPA_OBSERVER_LOCK") or (STANDALONE_LOCK if standalone() else OBSERVER_LOCK)
-
-
-def download_dir_choice():
-    """단독 ACTOR 가 받은 파일을 둘 곳 - 관제 화면 설정 prepare.download_dir, 없으면 바탕화면\\AI (사용자 2026-11-03)."""
-    try:
-        v = read_settings()["prepare"].get("download_dir")
-    except Exception:
-        v = None
-    return v if isinstance(v, str) and v.strip() else os.path.join(find_desktop_dir(), "AI")
 
 
 def _nuitka():
@@ -319,12 +271,12 @@ def program_dir():
 def install_root():
     """새 구조의 설정·기록 뿌리 %ProgramData%\\AFTER MARKET\\RPA. 시험용 RPA_PROGRAMDATA 가 있으면 그 폴더."""
     return os.environ.get("RPA_PROGRAMDATA") or os.path.join(
-        os.environ.get("ProgramData") or r"C:\ProgramData", *(STANDALONE_DIRS if standalone() else PRODUCT_DIRS))
+        os.environ.get("ProgramData") or r"C:\ProgramData", *PRODUCT_DIRS)
 
 
 def new_layout():
-    """설치 마법사(2부)가 install_root()\\config 를 만든 PC 인가. 아니면 옛 구조 (설정·기록 = exe 옆). 단독은 옛 구조가 없다."""
-    return standalone() or os.path.isdir(os.path.join(install_root(), "config"))
+    """설치 마법사(2부)가 install_root()\\config 를 만든 PC 인가. 아니면 옛 구조 (설정·기록 = exe 옆)."""
+    return os.path.isdir(os.path.join(install_root(), "config"))
 
 
 def config_dir():
@@ -1079,9 +1031,7 @@ PARALLEL_DEFAULT = 1                      # 허용하지 않은 업체·에이�
 
 def parallel_limit():
     """관리 화면이 이 업체에 허용한 동시 실행 창 수의 최대 (에이전트가 적은 업체 정책 policy.parallel, 사용자 2026-10-16).
-    1 = 허용하지 않음 (업체 웹에 설정이 안 보인다). 없거나 이상하면 PARALLEL_DEFAULT. 단독은 정책을 적어 줄 에이전트가 없다 - 최대."""
-    if standalone():
-        return PARALLEL_MAX
+    1 = 허용하지 않음 (업체 웹에 설정이 안 보인다). 없거나 이상하면 PARALLEL_DEFAULT."""
     try:
         v = (read_settings()["schedule"].get("policy") or {}).get("parallel")
     except Exception:
@@ -1101,9 +1051,7 @@ def parallel_choice():
 
 def preset_limit():
     """이 업체가 쓸 수 있는 프리셋 수 - 에이전트가 적은 업체 정책(policy.presets, 관리 화면에서 정함). 없거나 이상하면 PRESET_DEFAULT.
-    옵저버는 이만큼까지 늘리고, ACTOR 오토파일럿은 이 번호까지만 돌린다 (넘는 프리셋은 지우지 않는다 - 사용자 2026-10-14). 단독은 최대."""
-    if standalone():
-        return PRESET_MAX
+    옵저버는 이만큼까지 늘리고, ACTOR 오토파일럿은 이 번호까지만 돌린다 (넘는 프리셋은 지우지 않는다 - 사용자 2026-10-14)."""
     try:
         v = (read_settings()["schedule"].get("policy") or {}).get("presets")
     except Exception:
@@ -1520,9 +1468,9 @@ def lock_held(name):
 
 
 def observer_open():
-    """옵저버가 떠 있나 (옵저버가 켤 때 hold_lock(observer_lock_name()) 을 잡는다). 떠 있는 동안 대시보드는 RPA 를
+    """옵저버가 떠 있나 (옵저버가 켤 때 hold_lock(OBSERVER_LOCK) 을 잡는다). 떠 있는 동안 대시보드는 RPA 를
     띄우지 않는다 - RPA 가 화면·마우스를 잡으면 기록하던 사람과 부딪힌다."""
-    return lock_held(observer_lock_name())
+    return lock_held(OBSERVER_LOCK)
 
 
 # ---------------------------------------------------------------------------

@@ -317,10 +317,6 @@ OTP_HINT = re.compile(r"인증|otp|auth|cert|verif", re.I)
 OTP_REJECT = re.compile(r"인증.*(틀|일치하지|불일치|잘못|만료|다시|실패)|(틀|일치하지|불일치|잘못|만료).*인증")
 OTP_TRIES = 3                # 모두 합쳐 (처음 + 2번 더, 사용자 2026-10-13)
 OTP_WAIT = 120               # 번호 하나를 기다리는 초 (요청이 열려 있는 2분)
-# 사람 인증 (옵저버 단독 설계 4.4): 휴대폰 중계 없이 사람이 번호를 넣고 [확인]까지. 인증 한 번에 5분, 다시 보내지 않는다 (사용자 2026-11-03)
-OTP_MANUAL_WAIT = 300
-OTP_MANUAL_TIMEOUT = "인증번호 입력을 5분 동안 기다렸으나 다음 화면으로 넘어가지 않았습니다."
-OTP_MANUAL_DONE = "사람이 입력"
 # 메일 고르기 (사용자 2026-10-14): 목록 줄 누르기를 '제목이 이 글자로 시작하는 메일마다' 로. 그 아래 받기 단계까지가 메일마다 되풀이할 묶음
 MAIL_PICK_DEFAULT = ">>>"
 MAIL_PICK_MAX = 20           # 한 번에 처리하는 메일 수 (나머지는 다음 실행)
@@ -1335,10 +1331,6 @@ class MailFail(Exception):
     """메일 2차인증에서 다시 시도해도 소용없는 실패 - 글 그대로 결과에 (설계 2026-11-02 6절)."""
 
 
-class OtpManualTimeout(Exception):
-    """사람 인증을 OTP_MANUAL_WAIT 초 기다렸으나 안 넘어갔다 - 글 그대로 결과에, 다시 시도 없음 (단독 설계 4.4)."""
-
-
 # 메일 2차인증 결과 글 (설계 6절 - 사용자 검수)
 MAIL_NONE = f"인증 메일을 {OTP_TRIES}번 받지 못했습니다."
 MAIL_NO_CODE = "인증 메일에서 인증번호를 찾지 못했습니다."
@@ -1373,7 +1365,6 @@ class Replayer:
         # 2차인증 (설계 13절): otp = 휴대폰 중계 (open() → 요청, wait(요청, 초, tick, field) → 번호|None, close(요청)). 없으면 인증번호 칸에서 멈춘다
         self.otp, self.otp_wait = None, OTP_WAIT
         self.otp_req, self.otp_try, self.otp_send, self.otp_check, self.otp_mark = None, 0, None, None, 0
-        self.otp_manual = None      # 사람 인증 콜백 (page, waiting) - otp 가 없을 때 인증번호 칸에서 사람을 기다린다 (단독 ACTOR, 설계 4.4)
         # 메일 2차인증 (설계 2026-11-02): mail_code = 메일에서 뽑은 번호 (재생기마다 - 병렬 수집에서 섞이지 않게), 메일함 창 번호·'인증 메일 열기' 단계
         self.mail_code, self.mail_before, self.mail_opened, self.otp_sent_at = None, set(), set(), 0.0
         self.mail_page, self.mail_open_i, self.link_check = None, None, None
@@ -1911,41 +1902,6 @@ class Replayer:
         self.otp_mark = len(self.dialogs)
         return code
 
-    def _otp_gone(self, frame, loc, otp_step):
-        """사람이 인증을 넘겼나 - 찾아 둔 칸의 프레임 주소 경로가 기록과 다르거나 그 칸이 안 보인다 (_otp_rejected 의 마지막 판정과 같은 기준).
-        프레임·칸이 사라졌어도(화면이 바뀜) 넘어간 것."""
-        try:
-            return url_path(frame.url) != otp_step["url"] or not loc.is_visible()
-        except Exception:
-            return True
-
-    def _otp_by_hand(self, i, steps):
-        """i 단계(인증번호 칸)에서 칸을 채우지 않고 사람이 번호를 넣어 [확인]까지 누르기를 기다린다 (OTP_MANUAL_WAIT 초, 0.5초마다
-        넘어갔나·[중단]). 넘어가면 인증번호 단계와 바로 뒤 누르기([확인]) 단계를 '사람이 입력' 으로 적고 이어 갈 단계 번호를 돌려준다.
-        시간을 넘기면 OtpManualTimeout - 다시 보내지 않는다."""
-        s = steps[i - 1]
-        page = self.pages.get(s["page"])
-        if page is None or page.is_closed():
-            raise NotFound(f"창 {s['page']}이(가) 없습니다.")
-        frame, loc, _ = self._find(page, s, self.baseline.get(i - 1), (i - 1) in self.loose)   # 칸이 뜰 때까지 (XHR 뒤에 뜨는 사이트) - 없으면 NotFound 실패
-        self.log(f"      인증번호를 사람이 입력하기를 기다립니다. (최대 {OTP_MANUAL_WAIT // 60}분)")
-        self.otp_manual(page, True)
-        end = time.time() + OTP_MANUAL_WAIT
-        try:
-            while not self._otp_gone(frame, loc, s):
-                if time.time() > end:
-                    raise OtpManualTimeout(OTP_MANUAL_TIMEOUT)
-                self._wait(page, 500)
-        finally:
-            self.otp_manual(page, False)
-        last = i + 1 if i < len(steps) and steps[i]["kind"] in ("click", "enter") and steps[i]["page"] == s["page"] else i
-        for j in range(i, last + 1):
-            self.results.append((j, "ok", OTP_MANUAL_DONE))
-            self.log(f"  {j:2d}/{len(steps)} {describe(steps[j - 1], self.hide_values)}  [{OTP_MANUAL_DONE}]")
-            if self.progress:
-                self.progress(*self.results[-1])
-        return last
-
     def _otp_rejected(self, page, otp_step, check_step):
         """인증번호를 넣고 [확인] 한 뒤: 사이트가 거절했나 - 알림창에 '인증 … 틀림·불일치·만료' 가 떴거나, 3초 뒤에도 같은 주소에 그 칸이 그대로.
         기록 때 사람이 통과하며 본 알림창(check_step 의 dialogs)과 같은 글이 뜨면 통과 - 사이트마다 성공 말투가 달라서."""
@@ -2248,9 +2204,6 @@ class Replayer:
                 if s.get("pick"):
                     i = self._run_pick(i, steps)    # 메일마다 묶음 단계까지 - 결과도 거기서 적는다
                     continue
-                if s["kind"] == "otp" and s.get("source") != "copy" and self.otp is None and self.otp_manual is not None:
-                    i = self._otp_by_hand(i, steps)  # 사람 인증 - 인증번호·[확인] 단계까지 결과도 거기서 적는다 (단독 ACTOR)
-                    continue
                 if s.get("mailOpen"):
                     how = self._mail_open(i, s)
                 elif s["kind"] == "copyCode":
@@ -2314,7 +2267,7 @@ class Replayer:
                     i, s = e.step, steps[e.step - 1]
                     text = describe(s, self.hide_values)
                 why = f"{type(e).__name__}: {str(e).splitlines()[0]}"
-                if isinstance(e, (MailFail, OtpManualTimeout)):
+                if isinstance(e, MailFail):
                     why = str(e)
                 elif self.mail_page is not None and s.get("page") == self.mail_page and self.mail_open_i and i < self.mail_open_i:
                     why = MAIL_LOGIN_FAIL           # 메일함 로그인 중 기록대로 안 됨 - 기록에 없던 2차인증 등 (다시 시도하지 않는다)

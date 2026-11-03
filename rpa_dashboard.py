@@ -470,8 +470,6 @@ def launch(target, by, env=None):
     """
     if target not in TARGETS:
         raise ValueError("실행 대상이 올바르지 않습니다.")
-    if st.standalone() and target != "prepare":       # 옵저버 단독 - ERPia 쪽이 없다 (설계 2026-11-03)
-        raise ValueError("옵저버 단독 버전에서는 ACTOR 만 실행할 수 있습니다.")
     label, name, args = TARGETS[target]
     path = target_path(target)
     if not os.path.isfile(path):
@@ -480,7 +478,7 @@ def launch(target, by, env=None):
         upd = rpa_update.busy_reason()     # 업데이트 대기·바꾸는 중 - 단추·예약·반복 모두 여기서 막힌다 (자동 업데이트 6절)
         if upd:
             raise RuntimeError(upd)
-        tampered = st.install_block_reason() or st.standalone_pc_problem()   # 파일 변조 감지 (2026-10-23)·단독은 그 PC 에서만 - 단추·예약·반복 모두 여기를 지난다
+        tampered = st.install_block_reason()   # 파일 변조 감지 (2026-10-23) - 단추·예약·반복 모두 여기를 지난다
         if tampered:
             raise RuntimeError(tampered)
         running = any_rpa_running()
@@ -635,27 +633,12 @@ def normalize_run(run):
     return [k for k in RUN_KEYS if k in picked]
 
 
-STANDALONE_NO_MODULES = "옵저버 단독 버전에서는 모듈을 고를 수 없습니다."
-
-
-def normalize_presets(presets):
-    """단독 줄의 presets (돌릴 프리셋 번호 목록). None 이면 '켠 프리셋 모두'. 중복 없이 정렬. 틀리면 ValueError."""
-    if presets is None:
-        return None
-    if (not isinstance(presets, list) or not presets
-            or not all(isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= st.PRESET_MAX for n in presets)):
-        raise ValueError(f"프리셋 번호는 1~{st.PRESET_MAX} 사이여야 합니다.")
-    return sorted(set(presets))
-
-
 def normalize_slots(slots):
-    """줄 목록 검사 → 시각 순으로 정렬한 새 목록. 틀리면 ValueError (사람에게 보일 글).
-    옵저버 단독은 run·inv_sites 대신 presets (돌릴 프리셋, 없으면 켠 것 모두) - 설계 2026-11-03."""
+    """줄 목록 검사 → 시각 순으로 정렬한 새 목록. 틀리면 ValueError (사람에게 보일 글)."""
     if not isinstance(slots, list) or not slots:
         raise ValueError("실행 시간을 하나 이상 골라주십시오")
     if len(slots) > st.SCHEDULE_MAX_SLOTS:
         raise ValueError(f"최대 자동 실행 슬롯은 {st.SCHEDULE_MAX_SLOTS}개입니다")
-    sa = st.standalone()
     out = []
     for s in slots:
         if not isinstance(s, dict):
@@ -663,10 +646,7 @@ def normalize_slots(slots):
         item = {"at": _check_time(s.get("at"))}
         if s.get("days") is not None:
             item["days"] = normalize_days(s.get("days"))
-        if sa and (s.get("run") is not None or s.get("inv_sites") is not None):
-            raise ValueError(STANDALONE_NO_MODULES)
         run = normalize_run(s.get("run"))
-        presets = normalize_presets(s.get("presets")) if sa else None
         if s.get("until") is not None:                 # 반복 시간대 (설계 6-1)
             item["until"] = _check_time(s.get("until"))
             if item["until"] <= item["at"]:
@@ -676,13 +656,11 @@ def normalize_slots(slots):
                 raise ValueError("반복 작업 간 쉬는 시간은 1~60분 사이의 값이어야 합니다")
             if s.get("on_fail", "stop") != "stop":
                 raise ValueError("실패 시 동작은 '중단'만 선택할 수 있습니다.")
-            if run is None and not sa:
+            if run is None:
                 raise ValueError("반복 실행에서는 '전체' 모듈을 사용할 수 없습니다 - 모듈을 선택해 주십시오")
             item.update(rest_min=rest, on_fail="stop")
         if run is not None:
             item["run"] = run
-        if presets is not None:
-            item["presets"] = presets
         if s.get("inv_sites") is not None:          # 운송장 전송: 사이트 수집에서 켠 사이트만 (사용자 2026-11-02)
             if not isinstance(s["inv_sites"], bool):
                 raise ValueError("운송장 전송 '켠 사이트만' 값이 올바르지 않습니다.")
@@ -887,10 +865,7 @@ def slot_of(sch):
 
 
 def slot_target(slot, off=()):
-    """줄 하나 → (띄울 target, 자식 환경). '전체' 줄은 ('all', {}). 업체가 안 쓰는 모듈(off)을 빼고 나서 돌릴 게 없으면 (None, {}).
-    옵저버 단독은 늘 ACTOR (고른 프리셋은 launch_slot 이 env 에)."""
-    if st.standalone():
-        return "prepare", {}
+    """줄 하나 → (띄울 target, 자식 환경). '전체' 줄은 ('all', {}). 업체가 안 쓰는 모듈(off)을 빼고 나서 돌릴 게 없으면 (None, {})."""
     run = slot.get("run")
     if run is None:
         return "all", {}
@@ -950,18 +925,6 @@ def record_missed(sch, missed, reason, kind, trigger="auto"):
 
 
 UNUSED_ONLY = "업체가 사용하지 않는 모듈만 남아 건너뜁니다."   # 설정대로라 '돌지 않은 예약' 기록에는 남기지 않는다 (검토 10-21)
-NO_PRESETS = "돌릴 프리셋이 없습니다. 예약 줄의 프리셋을 확인하여 주십시오."   # 단독: 줄의 프리셋이 모두 꺼졌거나 지워졌다 (기록에 남긴다 - Review Focus 2)
-RUN_PRESETS_ENV = "RPA_RUN_PRESETS"      # web_runner.RUN_PRESETS_ENV 와 같다 (playwright 를 안 끌어오게 여기 적는다)
-
-
-def slot_presets(slot):
-    """단독 줄이 돌릴 프리셋 번호 - 지금 켜져 있고 한도 안인 것만. presets 가 없으면 None ('켠 프리셋 모두' - ACTOR 가 고른다)."""
-    wanted = slot.get("presets")
-    if wanted is None:
-        return None
-    limit = st.preset_limit()
-    on = {s["no"] for s in st.preset_summary() or [] if s["on"] and s["no"] <= limit}
-    return [n for n in wanted if n in on]
 
 
 def launch_slot(slot, by="auto", trigger="auto"):
@@ -969,15 +932,6 @@ def launch_slot(slot, by="auto", trigger="auto"):
     target, env = slot_target(slot, slot_off(st.read_settings()["schedule"]))
     if target is None:
         raise RuntimeError(UNUSED_ONLY)
-    if st.standalone():
-        nos = slot_presets(slot)
-        for n in (slot.get("presets") or []):
-            if nos is not None and n not in nos:
-                LOG(f"프리셋 {n}은(는) 꺼져 있거나 없어 건너뜁니다.")
-        if nos == []:
-            raise RuntimeError(NO_PRESETS)
-        if nos:
-            env[RUN_PRESETS_ENV] = ",".join(str(n) for n in nos)
     env = dict(env, RPA_RUN_TRIGGER=trigger)
     if trigger == "repeat" and slot.get("until"):   # 반복 회차: 끝 시각·쉬는 시간 - 운송장번호 전송이 마지막 기회인지 안다 (wellife.send_busy_reason)
         env.update(RPA_REPEAT_UNTIL=slot["until"], RPA_REPEAT_REST=str(slot.get("rest_min", REST_MIN_DEFAULT)))
@@ -1082,10 +1036,8 @@ def days_label(days):
 
 
 def slot_text(s):
-    """줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' (로그인은 안 적는다). 단독: '09:00 프리셋 1·3'."""
+    """줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' (로그인은 안 적는다)."""
     head = f"{s['at']}~{s['until']} 반복" if s.get("until") else s["at"]
-    if s.get("presets"):
-        return f"{head} 프리셋 {'·'.join(str(n) for n in s['presets'])}"
     if s.get("run") is None:
         return head
     return f"{head} {'·'.join(SLOT_NAMES[k] for k in s['run'] if k != 'Login')}".strip()

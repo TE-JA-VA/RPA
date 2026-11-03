@@ -12,11 +12,6 @@ r"""설치 파일을 윈도우 샌드박스에서 시험한다 (설계 9절). �
 시험용 열쇠로 서명해 작업 폴더의 site\ 에 넣는다. 샌드박스 안에서 가짜 호스팅으로 업데이트·되돌리기·켜지지 않는 판·
 도중 끊김을 시험한다 (설계 12절). 시험용 비밀 열쇠는 서명 뒤 지우고 공개 열쇠만 site\pub.txt 에 둔다.
 --from <옛 판 설치 파일>: 그 옛 판을 깔고 판 B = 새 판 그대로로 업데이트한다 (구조가 바뀐 판으로 넘어가는 전환 시험).
-
-    .venv\Scripts\python.exe tools\sandbox_test.py --observer D:\AX\배포_옵저버_<판>   (또는 판 번호만)
-
---observer: 옵저버 단독 (설계 2026-11-03, Task 9·10). 단독 설치 파일은 PC 한 대 용이라 샌드박스 안에서 먼저 MachineGuid 를 읽어
-(tools/sandbox_inner_observer.ps1 1단계) 호스트가 그 번호로 build_observer 를 돌려 넣고, 다른 번호로 만든 파일은 거절되는지도 본다.
 """
 import json
 import os
@@ -95,64 +90,8 @@ def build_site(version_a, release_dir, work, a_manifest=None):
     return vb, vc, pub
 
 
-OTHER_PC = "11111111-2222-3333-4444-555555555555"   # 다른 PC 용 설치 파일 (거절되어야 한다)
-
-
-def observer_release(arg):
-    """--observer 인자 (판 폴더 경로 또는 판 번호) → (판 폴더, 판 번호). 없으면 (None, None)."""
-    folder = arg if os.path.isdir(arg) else os.path.join(r"D:\AX", f"배포_옵저버_{arg}")
-    m = re.search(r"배포_옵저버_(.+)$", os.path.basename(os.path.normpath(folder)))
-    return (folder, m.group(1)) if m and os.path.isfile(os.path.join(folder, "observer_hub.py")) else (None, None)
-
-
-def wait_file(path, seconds):
-    until = time.time() + seconds
-    while time.time() < until and not os.path.exists(path):
-        time.sleep(2)
-    return os.path.exists(path)
-
-
-def observer_main(arg):
-    """단독 설치 파일 샌드박스 시험. 샌드박스가 guid.txt 를 적으면 그 번호(와 다른 번호)로 설치 파일을 만들어 넣고 ready.txt 를 둔다."""
-    import build_release as br
-    release, version = observer_release(arg)
-    if not release:
-        print(f"단독 판 폴더를 찾지 못했습니다: {arg} (tools/build_release.py 가 D:\\AX\\배포_옵저버_<판> 을 만든다)")
-        return 2
-    if not os.path.isfile(SANDBOX):
-        print("윈도우 샌드박스가 꺼져 있습니다 (위 설명의 명령으로 켜고 재부팅)")
-        return 2
-    work = tempfile.mkdtemp(prefix="rpa_sbx_obs_")
-    shutil.copy2(os.path.join(HERE, "sandbox_inner_observer.ps1"), os.path.join(work, "inner.ps1"))
-    wsb = os.path.join(work, "test.wsb")
-    with open(wsb, "w", encoding="utf-8") as f:
-        f.write(WSB.format(work=work))
-    print(f"샌드박스를 띄웁니다. 결과 폴더: {work}\\out (창을 건드리지 마세요, 끝나면 저절로 닫힙니다)")
-    subprocess.Popen([SANDBOX, wsb])
-    guid_file = os.path.join(work, "guid.txt")
-    if not wait_file(guid_file, 5 * 60):
-        print("샌드박스가 PC 번호를 적지 않았습니다 (guid.txt 없음)")
-        return 1
-    guid = open(guid_file, encoding="ascii").read().strip().lower()
-    print(f"샌드박스 PC 번호 {guid} - 그 PC 용 설치 파일을 만듭니다")
-    mine = br.build_observer_setup(release, version, guid, out_root=work)
-    other = br.build_observer_setup(release, version, OTHER_PC, out_root=work)
-    os.replace(mine, os.path.join(work, "setup.exe"))
-    os.replace(other, os.path.join(work, "setup_other.exe"))
-    open(os.path.join(work, "ready.txt"), "w").close()
-    done = os.path.join(work, "done.txt")
-    results = os.path.join(work, "out", "results.txt")
-    wait_file(done, 30 * 60)
-    text = open(results, encoding="utf-8-sig").read() if os.path.exists(results) else "(결과 없음)"
-    print(text)
-    return 0 if os.path.exists(done) and text.rstrip().endswith("실패: 0") else 1
-
-
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
-    if "--observer" in args:                             # 옵저버 단독 (설계 2026-11-03)
-        i = args.index("--observer")
-        return observer_main(args[i + 1] if i + 1 < len(args) else "")
     update = "--update" in args
     args = [a for a in args if a != "--update"]
     old = None
