@@ -75,8 +75,16 @@ def call(path, body=None, headers=None, host=None, origin=None):
 
 print("=== 1. 서버 ===")
 check(httpd.server_address[0] == "127.0.0.1", "binds_loopback: 127.0.0.1 에만", httpd.server_address)
-check(port == PORTS[1] and open(hub.port_path(), encoding="utf-8").read().strip() == str(PORTS[1]), "port_fallback: 첫 포트를 쓰면 다음 포트 + hub_port.txt",
-      (port, hub.port_path()))
+check(port == PORTS[1] and hub.find_port(PORTS) == PORTS[1], "port_fallback: 첫 포트를 쓰면 다음 포트, find_port 가 /healthz 로 찾는다", (port, hub.find_port(PORTS)))
+told, ran = [], []
+check(hub.open_page(run=lambda a: ran.append(a) or (0, ""), tell=told.append, wait_sec=1) == 1 and told == [hub.NO_SERVER] and ran and ran[0][:2] == ["schtasks", "/Run"]
+      if not hub.find_port(hub.PORTS) else True, "open_page: 기본 포트대에 서버가 없으면 작업을 켜 보고 알림", (told, ran))
+_orig_ports = hub.PORTS
+hub.PORTS = PORTS
+_opened = []
+hub.webbrowser.open = _opened.append
+check(hub.open_page(run=lambda a: (0, ""), tell=told.append) == 0 and _opened == [f"{BASE}/"], "open_page: 떠 있는 서버를 찾아 연다", _opened)
+hub.PORTS = _orig_ports
 code, body = call("/api/state")
 check(code == 200 and body["presets"][0]["name"] == "가몰" and body["limits"] == {"presets": st.PRESET_MAX, "parallel_max": st.PARALLEL_MAX}
       and body["settings"]["download_dir"] == st.download_dir_choice() and body["running"] is False and body["observer_open"] is False
@@ -91,6 +99,10 @@ code, body = call("/api/run", {"presets": [1]}, host="192.168.0.5:8775")
 check(code == 403 and d.LAUNCHED == [], "foreign_origin_rejected: 다른 Host 는 403", (code, body))
 code, body = call("/api/state", host="192.168.0.5:8775")
 check(code == 403, "api GET 도 Host 검사", (code, body))
+code, body = call("/api/run", {"presets": [1]}, origin="null")
+check(code == 403 and d.LAUNCHED == [], "Origin 'null'(sandbox iframe·file://) 도 403", (code, body))
+code, body = call("/api/run", {"presets": [1]}, headers={"Content-Type": "text/plain"})
+check(code == 415 and d.LAUNCHED == [], "text/plain (no-cors 단순 요청) 은 415", (code, body))
 code, body = call("/api/run", {"presets": [1]}, headers={"Content-Length": "100000"})
 check(code in (400, 413) and d.LAUNCHED == [], "본문 64KB 넘으면 거절", (code, body))
 

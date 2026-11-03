@@ -7,7 +7,7 @@ ERPia 없이 옵저버(기록) + ACTOR(재생)만 쓰는 PC 의 로컬 서버 + 
 
     Observer_Hub.exe observer_hub.py [--port N] [--open] [--install-task | --remove-task]
 
-뜰 때 실제 포트를 data_dir()\hub_port.txt 에 적는다. --open 은 그 주소를 기본 브라우저로 연다 (서버가 없으면 띄운 뒤).
+--open 은 떠 있는 서버를 포트 8775~8784 의 /healthz 로 찾아 기본 브라우저로 연다 (없으면 작업 스케줄러 작업을 켠 뒤).
 --install-task 는 작업 스케줄러 '오토파일럿 옵저버 관제' 를 로그온 시·현재 사용자·대화형·가장 높은 권한으로 등록한다 (설치 파일이 부른다).
 """
 import argparse
@@ -34,8 +34,8 @@ import rpa_status as st  # noqa: E402
 
 PORTS = tuple(range(8775, 8785))      # 오토파일럿(8765)과 다른 번호. 8775 를 쓰고 있으면 다음 빈 것
 SIGNATURE = "AUTOPILOT_OBSERVER_HUB"
-PORT_FILE = "hub_port.txt"
 MAX_BODY = 64 * 1024
+NO_SERVER = "관제 서버가 실행되고 있지 않습니다. PC 를 다시 시작하거나 담당자에게 문의하여 주십시오."
 HISTORY_PERIODS = ("7", "30", "90")   # 기록 탭의 기간 (일)
 TASK_NAME = "오토파일럿 옵저버 관제"
 HUB_EXE = "Observer_Hub.exe"          # 내장 pythonw 의 브랜딩 사본 (tools/build_release.py BRANDED)
@@ -50,16 +50,10 @@ OBSERVER_RUNNING = "옵저버가 이미 실행 중입니다."
 NOT_STANDALONE = "옵저버 단독 버전이 아닙니다. (설치 폴더에 OBSERVER_STANDALONE 표시 파일이 없습니다)"
 
 
-def port_path():
-    return os.path.join(st.data_dir(), PORT_FILE)
-
-
-def saved_port():
-    try:
-        with open(port_path(), encoding="utf-8") as f:
-            return int(f.read().strip())
-    except (OSError, ValueError):
-        return None
+def find_port(ports=None):
+    """떠 있는 관제 서버의 포트 - PORTS 를 차례로 /healthz 서명으로 찾는다 (포트 파일은 관리자 전용 ProgramData 에 있어 승격 안 한
+    바로가기가 못 읽는다 - 검토 2026-11-03). 없으면 None."""
+    return next((p for p in (PORTS if ports is None else ports) if alive(p)), None)
 
 
 def alive(port):
@@ -183,12 +177,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return (self.headers.get("Host") or "").lower() in (f"127.0.0.1:{port}", f"localhost:{port}")
 
     def _same_origin(self):
-        """Origin 이 없거나 (브라우저 밖·같은 문서) 이 서버 주소 - 다른 페이지의 fetch 는 거절 (관리 화면 AFTERMARKET_SETUP 과 같은 방식)."""
+        """Origin 이 없거나 (브라우저 밖·같은 문서) 이 서버 주소 - 다른 페이지의 fetch 는 거절 (관리 화면 AFTERMARKET_SETUP 과 같은 방식).
+        'null'(sandbox iframe·file:// 페이지)도 거절 (검토 2026-11-03)."""
         origin = (self.headers.get("Origin") or "").lower().rstrip("/")
         port = self.server.server_address[1]
-        return origin in ("", "null") or origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+        return origin == "" or origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
 
     def _read_body(self):
+        if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):   # no-cors 단순 요청(text/plain)은 거절
+            return None, (415, {"ok": False, "error": "JSON 요청만 받습니다."})
         length = int(self.headers.get("Content-Length") or 0)
         if length < 0 or length > MAX_BODY:
             return None, (413, {"ok": False, "error": "요청이 너무 큽니다."})
@@ -290,7 +287,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def start(ports=PORTS):
-    """빈 포트에 서버를 연다 (127.0.0.1 에만, 독점 - rpa_dashboard.DashboardServer 와 같다). 실제 포트를 hub_port.txt 에 적는다."""
+    """빈 포트에 서버를 연다 (127.0.0.1 에만, 독점 - rpa_dashboard.DashboardServer 와 같다). 찾는 쪽은 find_port (/healthz)."""
     for port in ports:
         try:
             httpd = d.DashboardServer(("127.0.0.1", port), Handler)
@@ -299,9 +296,6 @@ def start(ports=PORTS):
             continue
     else:
         raise OSError(f"포트 {ports[0]}~{ports[-1]} 를 모두 쓰고 있습니다.")
-    os.makedirs(st.data_dir(), exist_ok=True)
-    with open(port_path(), "w", encoding="utf-8") as f:
-        f.write(f"{httpd.server_address[1]}\n")
     threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.5}, name="observer-hub", daemon=True).start()
     return httpd
 
@@ -378,22 +372,24 @@ def remove_task(run=run_quiet):
     run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
 
 
-def open_page():
-    """hub_port.txt 의 주소를 기본 브라우저로. 서버가 없으면 이 파일을 창 없이 띄우고 뜰 때까지 (10초) 기다린다."""
-    port = saved_port()
-    if port is None or not alive(port):
-        exe, script = hub_command(st.program_dir())
-        if not os.path.isfile(exe):
-            exe = sys.executable
-        subprocess.Popen([exe, script], cwd=st.program_dir(), close_fds=True, creationflags=CREATE_NO_WINDOW)
-        for _ in range(40):
-            time.sleep(0.25)
-            port = saved_port()
-            if port is not None and alive(port):
-                break
-        else:
-            print("관제 서버가 뜨지 않았습니다.")
-            return 1
+def show_error(text):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(None, text, "옵저버 관제", 0x10)
+
+
+def open_page(run=run_quiet, tell=show_error, wait_sec=10):
+    """떠 있는 관제 서버(find_port)를 기본 브라우저로 연다. 없으면 작업 스케줄러 작업을 켜고(관리자 권한은 작업이 가진다 - 이 바로가기는
+    승격 없이 돈다) 잠깐 기다렸다 다시 찾는다. 그래도 없으면 알림 창."""
+    port = find_port()
+    if port is None:
+        run(["schtasks", "/Run", "/TN", TASK_NAME])
+        end = time.time() + wait_sec
+        while port is None and time.time() < end:
+            time.sleep(0.5)
+            port = find_port()
+    if port is None:
+        tell(NO_SERVER)
+        return 1
     webbrowser.open(f"http://127.0.0.1:{port}/")
     return 0
 
@@ -410,13 +406,13 @@ def main(argv=None):
     if not st.standalone():
         print(NOT_STANDALONE)
         return 2
+    if args.remove_task:            # 제거는 이 PC 용이 아니어도 (검토 2026-11-03)
+        remove_task()
+        return 0
     problem = st.standalone_pc_problem()
     if problem:
         print(problem)
         return 3
-    if args.remove_task:
-        remove_task()
-        return 0
     if args.install_task:
         try:
             install_task()
@@ -426,8 +422,8 @@ def main(argv=None):
         return 0
     if args.open:
         return open_page()
-    port = saved_port()
-    if port is not None and alive(port):
+    port = find_port()
+    if port is not None:
         print(f"관제가 이미 실행 중입니다: http://127.0.0.1:{port}")
         return 0
     try:

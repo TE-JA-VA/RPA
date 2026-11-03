@@ -952,10 +952,18 @@ def run_targets(all_flag, sites, env):
         raise ValueError(f"{RUN_PRESETS_ENV} 값이 프리셋 번호가 아닙니다: {raw!r}") from None
 
 
+MANUAL_OTP_PREFIX = "인증번호 입력 대기 - "    # 관제 화면(hub.js)이 이 글로 띠를 보인다
+_manual_waiting = set()                       # 병렬 수집: 지금 사람을 기다리는 프리셋 이름표 - 둘이면 둘 다 보인다 (검토 2026-11-03)
+_manual_lock = threading.Lock()
+
+
 def manual_otp_note(page, waiting):
-    """단독 ACTOR 의 사람 인증 (web_replay.Replayer.otp_manual): 기다리는 동안 현황에 알리고 브라우저 창을 앞으로."""
-    name = getattr(_here, "preset_name", "")
-    status.note(f"인증번호 입력 대기 - {name}" if waiting else "")
+    """단독 ACTOR 의 사람 인증 (web_replay.Replayer.otp_manual): 기다리는 동안 현황에 '인증번호 입력 대기 - 프리셋 N (<이름>)' 을 알리고
+    브라우저 창을 앞으로. 끝나면 그 이름표만 뺀다."""
+    label = getattr(_here, "preset_label", "")
+    with _manual_lock:
+        (_manual_waiting.add if waiting else _manual_waiting.discard)(label)
+        status.note(MANUAL_OTP_PREFIX + ", ".join(sorted(_manual_waiting)) if _manual_waiting else "")
     if waiting:
         try:
             page.bring_to_front()
@@ -1465,7 +1473,7 @@ def action_replay(page, name, site):
     if _together:       # 루틴이 ERPia 에 키보드를 쓰는 동안은 다음 단계로 가지 않는다 (단계가 새 창을 띄우면 포커스를 가져간다)
         rp.pause = KeysPause()
     if sms and status.standalone():     # 단독: 휴대폰 중계 대신 사람이 번호를 넣고 [확인]까지 (설계 4.4, OTP_MANUAL_WAIT)
-        _here.preset_name = p["name"]
+        _here.preset_label = f"프리셋 {p['no']} ({p['name']})"
         rp.otp_manual = manual_otp_note
         log(f"  [{name}] 인증번호는 사람이 브라우저 창에 직접 입력합니다. (최대 {web_replay.OTP_MANUAL_WAIT // 60}분)")
     elif sms:   # 2차인증 - 휴대폰 중계 (설계 13절)
@@ -1826,6 +1834,13 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
     except Exception as e:
         log(f"설정을 읽지 못했습니다: {e}")
         return 1
+    if status.standalone():         # 받은 파일 폴더를 못 만들면 이 실행만 실패로 기록하고 끝 (관제 기록에 글이 보이게 - 검토 2026-11-03)
+        try:
+            download_dir()
+        except RuntimeError as e:
+            log(str(e))
+            status.finish("stopped", str(e))
+            return 1
 
     if targets:
         missing = [t for t in targets if t not in cfg]

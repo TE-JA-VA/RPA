@@ -31,8 +31,9 @@ check("기록: 인증번호 받기 → otp → 확인", [s["kind"] for s in r["s
 check("상수: 사람 대기 5분·실패 글", rec.OTP_MANUAL_WAIT == 300 and "5분" in rec.OTP_MANUAL_TIMEOUT)
 
 
-def replay(label, on_wait, cancel=None, wait=None):
+def replay(label, on_wait, cancel=None, wait=None, record=None):
     """on_wait(page) 는 waiting=True 콜백에서 한다. calls 에 콜백의 waiting 값이 차례로 쌓인다."""
+    record = record or r
     lines, calls, ctx = [], [], {}
     orig = rec.Replayer.__init__
 
@@ -52,7 +53,7 @@ def replay(label, on_wait, cancel=None, wait=None):
         rec.OTP_MANUAL_WAIT = wait
     try:
         t = time.time()
-        ok, rp = rec.replay(r, {"ID": "", "PW": ""}, os.path.join(OUT, label), "000", log=lines.append, step_timeout=5, step_tries=1)
+        ok, rp = rec.replay(record, {"ID": "", "PW": ""}, os.path.join(OUT, label), "000", log=lines.append, step_timeout=5, step_tries=1)
         return ok, rp, lines, calls, time.time() - t
     finally:
         rec.Replayer.__init__ = orig
@@ -76,6 +77,16 @@ ok, rp, lines, calls, sec = replay("timeout", lambda page: None, wait=2)
 check("manual_otp_timeout: 기다려도 안 넘어가면 그 단계 실패 (다시 보내지 않음)", not ok and rp.results[-1][1:] == ("fail", rec.OTP_MANUAL_TIMEOUT)
       and len(SENT) - n0 == 1 and 1.5 < sec < 15, (rp.results[-1:], len(SENT) - n0, sec))
 check("manual_otp_timeout: 콜백은 대기 끝에도 waiting=False", calls == [True, False], calls)
+
+# 칸이 [인증번호 받기] 뒤 0.5초 지나 나타나는 사이트 - 칸이 뜨기 전 판정으로 '넘어감' 이 되지 않는다 (검토 2026-11-03 I2)
+r_late = rec.record(BASE + "/verify_late", os.path.join(OUT, "rec_late.json"), headless=True, human=site.human)
+check("늦게 뜨는 칸 기록: 인증번호 받기 → otp → 확인", [s["kind"] for s in r_late["steps"]] == ["click", "otp", "click"], [s["kind"] for s in r_late["steps"]])
+n0 = len(SENT)
+ok, rp, lines, calls, sec = replay("late_timeout", lambda page: None, wait=2, record=r_late)
+check("늦게 뜨는 칸: 칸을 기다린 뒤 사람을 기다린다 (바로 '넘어감' 으로 치지 않는다)", not ok and rp.results[-1][1:] == ("fail", rec.OTP_MANUAL_TIMEOUT)
+      and calls == [True, False] and len(SENT) - n0 == 1, (rp.results[-1:], calls))
+ok, rp, lines, calls, sec = replay("late_pass", person_types, record=r_late)
+check("늦게 뜨는 칸: 사람이 넣으면 통과", ok and [x[2] for x in rp.results[1:]] == ["사람이 입력", "사람이 입력"], rp.results)
 
 ev = threading.Event()
 ok, rp, lines, calls, sec = replay("cancel", lambda page: threading.Timer(0.3, ev.set).start(), cancel=ev)

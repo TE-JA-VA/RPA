@@ -971,6 +971,9 @@ def launch_slot(slot, by="auto", trigger="auto"):
         raise RuntimeError(UNUSED_ONLY)
     if st.standalone():
         nos = slot_presets(slot)
+        for n in (slot.get("presets") or []):
+            if nos is not None and n not in nos:
+                LOG(f"프리셋 {n}은(는) 꺼져 있거나 없어 건너뜁니다.")
         if nos == []:
             raise RuntimeError(NO_PRESETS)
         if nos:

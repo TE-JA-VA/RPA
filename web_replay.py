@@ -1911,31 +1911,28 @@ class Replayer:
         self.otp_mark = len(self.dialogs)
         return code
 
-    def _otp_passed(self, page, otp_step):
-        """사람이 인증을 넘겼나 - 그 창의 주소 경로가 기록과 다르거나 인증번호 칸이 안 보인다 (_otp_rejected 의 마지막 판정과 같은 기준)."""
-        frame = self._frame(page, otp_step["frame"])
-        if frame is None or url_path(frame.url) != otp_step["url"]:
+    def _otp_gone(self, frame, loc, otp_step):
+        """사람이 인증을 넘겼나 - 찾아 둔 칸의 프레임 주소 경로가 기록과 다르거나 그 칸이 안 보인다 (_otp_rejected 의 마지막 판정과 같은 기준).
+        프레임·칸이 사라졌어도(화면이 바뀜) 넘어간 것."""
+        try:
+            return url_path(frame.url) != otp_step["url"] or not loc.is_visible()
+        except Exception:
             return True
-        for how, sel, nth in candidates(otp_step["target"]):
-            try:
-                loc = frame.locator(sel)
-                if loc.count() == 1 and loc.first.is_visible():
-                    return False
-            except Exception:
-                continue
-        return True
 
     def _otp_by_hand(self, i, steps):
         """i 단계(인증번호 칸)에서 칸을 채우지 않고 사람이 번호를 넣어 [확인]까지 누르기를 기다린다 (OTP_MANUAL_WAIT 초, 0.5초마다
         넘어갔나·[중단]). 넘어가면 인증번호 단계와 바로 뒤 누르기([확인]) 단계를 '사람이 입력' 으로 적고 이어 갈 단계 번호를 돌려준다.
         시간을 넘기면 OtpManualTimeout - 다시 보내지 않는다."""
         s = steps[i - 1]
-        page = self.pages.get(s["page"], self.pages[0])
+        page = self.pages.get(s["page"])
+        if page is None or page.is_closed():
+            raise NotFound(f"창 {s['page']}이(가) 없습니다.")
+        frame, loc, _ = self._find(page, s, self.baseline.get(i - 1), (i - 1) in self.loose)   # 칸이 뜰 때까지 (XHR 뒤에 뜨는 사이트) - 없으면 NotFound 실패
         self.log(f"      인증번호를 사람이 입력하기를 기다립니다. (최대 {OTP_MANUAL_WAIT // 60}분)")
         self.otp_manual(page, True)
         end = time.time() + OTP_MANUAL_WAIT
         try:
-            while not self._otp_passed(page, s):
+            while not self._otp_gone(frame, loc, s):
                 if time.time() > end:
                     raise OtpManualTimeout(OTP_MANUAL_TIMEOUT)
                 self._wait(page, 500)

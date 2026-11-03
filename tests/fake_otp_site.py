@@ -17,6 +17,13 @@ VERIFY = """<!doctype html><meta charset="utf-8"><title>본인 인증</title>
 <p id="msg"></p>"""
 
 
+# 인증번호 칸이 [인증번호 받기] 뒤 0.5초 지나서 나타나는 사이트 (XHR 뒤에 칸이 뜨는 꼴 - 재생기 사람 인증이 칸을 기다리는지, 검토 2026-11-03)
+VERIFY_LATE = VERIFY.replace('<input id="otp" placeholder="인증번호 6자리" autocomplete="off">', '<span id="slot"></span>').replace(
+    "document.getElementById('msg').textContent='보냈습니다'",
+    "setTimeout(()=>{document.getElementById('slot').innerHTML='<input id=\"otp\" placeholder=\"인증번호 6자리\" autocomplete=\"off\">';"
+    "document.getElementById('msg').textContent='보냈습니다'},500)")
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -33,6 +40,8 @@ class H(BaseHTTPRequestHandler):
         path, _, q = self.path.partition("?")
         if path == "/verify":
             return self._send(VERIFY)
+        if path == "/verify_late":
+            return self._send(VERIFY_LATE)
         if path == "/api/check":
             return self._send(json.dumps({"ok": bool(SENT) and q == f"c={SENT[-1]}"}), "application/json")
         self._send(f"<!doctype html><meta charset='utf-8'><title>{path}</title><h1>{path}</h1>")

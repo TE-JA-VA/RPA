@@ -532,6 +532,10 @@ check("collect_observer: exe 둘·파일·내장 파이썬·Observer_Hub.exe", s
 check("collect_observer: ERPia exe·에이전트·업데이트 도우미·설정 창·판 목록·빈 틀은 없다",
       not ({"ERPia_RPA.exe", "rpa_settings.py", "update_helper.py", "manifest.json", "RPA_UserConfig.json", "Run_All.bat"} & have)
       and not any(h.startswith("firebase/") for h in have), sorted(have))
+check("forbidden_in: 깨끗한 단독 판은 문제 없음, 찌꺼기(세션·__pycache__)는 잡는다 (런타임 안은 그대로)", br.forbidden_in(obs_out) == []
+      and (write(os.path.join(obs_out, "sessions", "PRESET1.json"), b"{}") or True)
+      and br.forbidden_in(obs_out) == ["들어가면 안 되는 파일: sessions/PRESET1.json"], br.forbidden_in(obs_out))
+shutil.rmtree(os.path.join(obs_out, "sessions"))
 langs, got_desc, company = version_info(os.path.join(obs_out, "python", "Observer_Hub.exe"))
 check("Observer_Hub.exe 는 pythonw 사본, 설명 '오토파일럿 옵저버 관제'", got_desc == "오토파일럿 옵저버 관제" and company == "오토파일럿", (got_desc, company))
 check("단독 설치 파일 이름: 버전 + PC번호 끝 4글자", br.observer_setup_name("2026.11.03-3", "0f1e2d3c-4b5a-4968-8776-655443329f1c") == "AUTOPILOT_Observer_Setup_2026.11.03-3_9f1c.exe"

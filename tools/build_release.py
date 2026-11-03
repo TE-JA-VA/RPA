@@ -287,6 +287,21 @@ def collect_observer(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, ver
     return got
 
 
+def forbidden_in(out_dir):
+    """판 폴더(런타임 폴더 밖)에 들어가면 안 되는 파일(FORBIDDEN) 목록 - verify_zip 과 같은 검사, 압축이 없는 단독 판에."""
+    out = []
+    for base, dirs, files in os.walk(out_dir):
+        rel_base = os.path.relpath(base, out_dir).replace(os.sep, "/")
+        if rel_base.split("/")[0] in RUNTIME_DIRS:
+            dirs[:] = []
+            continue
+        for name in files:
+            rel = name if rel_base == "." else f"{rel_base}/{name}"
+            if any(fnmatch.fnmatch(part, pat) for part in rel.split("/") for pat in FORBIDDEN):
+                out.append(f"들어가면 안 되는 파일: {rel}")
+    return sorted(out)
+
+
 def observer_setup_name(version, pc=""):
     """AUTOPILOT_Observer_Setup_<버전>[_<PC번호 끝 4글자>].exe (사용자 2026-11-03: 이름에는 끝 4글자만)."""
     return f"AUTOPILOT_Observer_Setup_{version}" + (f"_{pc[-4:]}" if pc else "") + ".exe"
@@ -681,8 +696,15 @@ def main(argv=None):
             return 1
         print(f"  설치 파일 {setup}  ({os.path.getsize(setup) // 2 ** 20}MB)")
     obs_dir = os.path.join(OUT_ROOT, f"배포_옵저버_{version}")       # 단독 판 폴더 (설치 파일은 tools/build_observer.py <PC번호> 로 PC 마다)
-    collect_observer(obs_dir, work, version=BRAND_VERSION)
-    print(f"  옵저버 단독 판 폴더 {obs_dir}  (설치 파일: tools\\build_observer.py <PC번호>)")
+    obs_problems = []
+    try:
+        collect_observer(obs_dir, work, version=BRAND_VERSION)
+        obs_problems = forbidden_in(obs_dir)
+        print(f"  옵저버 단독 판 폴더 {obs_dir}  (설치 파일: tools\\build_observer.py <PC번호>)")
+    except Exception as e:                      # 단독 쪽이 실패해도 오토파일럿 쪽 마무리는 계속 (검토 2026-11-03)
+        obs_problems = [f"옵저버 단독 판 폴더를 모으지 못했습니다 ({type(e).__name__}: {e})"]
+    for p in obs_problems:
+        print("  문제:", p)
     if args.to_dist:
         for exe in EXES:
             shutil.copy2(os.path.join(out_dir, exe), os.path.join(REPO, "dist", exe))
@@ -691,6 +713,9 @@ def main(argv=None):
     print(f"판 {version}  {zip_path}  ({os.path.getsize(zip_path) // 2 ** 20}MB)")
     removed = prune_local(OUT_ROOT, protect=[args.exes_from])      # 새 판이 다 만들어진 뒤에만 옛 판을 찾아 지운다
     print(f"  {OUT_ROOT} 의 옛 판을 지웠습니다: {', '.join(removed)}" if removed else f"  {OUT_ROOT} 에 지울 옛 판이 없습니다 (최신 {LOCAL_KEEP}개)")
+    if obs_problems:
+        print(f"옵저버 단독 판에 문제가 {len(obs_problems)}건 있습니다. {obs_dir} 로 설치 파일을 만들지 마세요")
+        return 1
     return 0
 
 

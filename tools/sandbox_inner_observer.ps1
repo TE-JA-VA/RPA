@@ -57,11 +57,15 @@ Check "작업 스케줄러 '$Task' (가장 높은 권한·대화형·Observer_Hu
 $sa = & $Py -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; print(st.standalone(), st.standalone_pc_problem(), st.install_root())" 2>&1
 Check "내장 파이썬에서 단독 표시 켜짐·이 PC 통과·ProgramData Observer" ("$sa" -like "True None *Observer*") "$sa"
 
-# 4. 관제 서버 - 작업이 켠 Observer_Hub 가 hub_port.txt 를 적는다
-$portFile = "$PD\data\hub_port.txt"
-for ($i = 0; ($i -lt 60) -and -not (Test-Path $portFile); $i++) { Start-Sleep 1 }
-$port = if (Test-Path $portFile) { (Get-Content $portFile -Raw).Trim() } else { "" }
-Check "관제가 떠서 hub_port.txt 를 적었다" ($port -match "^\d+$") "port '$port'"
+# 4. 관제 서버 - 작업이 켠 Observer_Hub 를 포트 8775~8784 의 /healthz 서명으로 찾는다 (observer_hub.find_port 와 같다)
+$port = ""
+for ($i = 0; ($i -lt 60) -and ($port -eq ""); $i++) {
+    foreach ($p in 8775..8784) {
+        try { if ((Invoke-WebRequest "http://127.0.0.1:$p/healthz" -UseBasicParsing -TimeoutSec 2).Content.Trim() -eq "AUTOPILOT_OBSERVER_HUB") { $port = "$p"; break } } catch { }
+    }
+    if ($port -eq "") { Start-Sleep 1 }
+}
+Check "관제가 떠 있다 (/healthz 서명)" ($port -match "^\d+$") "port '$port'"
 $hubOk = $false; $state = $null
 try { $state = Invoke-RestMethod "http://127.0.0.1:$port/api/state" -TimeoutSec 10; $hubOk = $true } catch { $err = "$_" }
 Check "GET /api/state 200 (127.0.0.1)" ($hubOk -and ($null -ne $state.presets) -and ($null -ne $state.schedule)) "$err"

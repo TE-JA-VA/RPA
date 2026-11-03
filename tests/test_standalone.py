@@ -127,9 +127,17 @@ cfg["prepare"]["download_dir"] = "Q:\\없는드라이브\\x"
 st.write_settings(cfg)
 e = raises(RuntimeError, wr.download_dir)
 check("download_dir_bad: 만들 수 없는 폴더면 RuntimeError (Review Focus 5)", e is not None and str(e).startswith("받은 파일 폴더를 만들 수 없습니다: "), e)
+st.write_user_config({"LogIn": {"AdminCode": "", "ID": "", "PW": ""}, "Sites": {}})
+rc = wr.cmd_run(None, True)
+rows = st.read_history()
+check("download_dir_bad: 실행은 트레이스백 없이 '중단' 으로 기록되고 끝난다 (관제 기록에 글이 보인다)", rc == 1 and rows and rows[0]["state"] == "stopped"
+      and rows[0]["reason"].startswith("받은 파일 폴더를 만들 수 없습니다: "), (rc, [r.get("reason") for r in rows[:1]]))
+cfg = st.read_settings()
+cfg["prepare"]["download_dir"] = os.path.join(TMP, "받은것")
+st.write_settings(cfg)
 os.environ.pop("RPA_STATUS_DIR", None)
 
-OTP_SITE = {"URL": "https://shop.example.com", "ID": "a", "PW": "b", "Action": ["replay"], "Stts": 0, "Preset": 1, "Code": "012"}
+OTP_SITE ={"URL": "https://shop.example.com", "ID": "a", "PW": "b", "Action": ["replay"], "Stts": 0, "Preset": 1, "Code": "012"}
 _read = st.read_presets
 st.read_presets = lambda: [{"no": 1, "name": "인증몰", "code": "012", "saved_at": None,
                             "record": {"version": 1, "start_url": "https://shop.example.com", "steps": [

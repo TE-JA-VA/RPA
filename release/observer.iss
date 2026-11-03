@@ -113,10 +113,21 @@ begin
   end;
 end;
 
-// 덮어 설치: 관제(작업)를 끝내고 파일을 덮는다. 옵저버가 켜 있으면 멈춘다
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+// 설치 폴더에서 도는 프로그램(Observer_Hub.exe·Prepare_RPA.exe·Prepare_Observer.exe)을 끝낸다 - 경로로 걸러서 (taskkill /IM 은
+// 오토파일럿 쪽 같은 이름 exe 도 죽인다). 작업 스케줄러 작업도 끝낸다. 도는 파일은 덮지도 지우지도 못한다 (검토 2026-11-03)
+procedure StopAppProcesses();
 var
   Code: Integer;
+  Cmd: String;
+begin
+  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "' + TASK_NAME + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Cmd := '-NoProfile -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $_.Path -like ''' + ExpandConstant('{app}') + '\*'' } | Stop-Process -Force"';
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Cmd, '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(1500);
+end;
+
+// 덮어 설치: 옵저버가 켜 있으면 멈춘다. 관제·ACTOR 는 끝내고 파일을 덮는다
+function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   if CheckForMutexes(OBSERVER_LOCK) then
@@ -124,8 +135,7 @@ begin
     Result := OBSERVER_OPEN + '설치하세요.';
     exit;
   end;
-  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "' + TASK_NAME + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
-  Sleep(1500);
+  StopAppProcesses();
 end;
 
 function InitializeUninstall(): Boolean;
@@ -135,7 +145,9 @@ begin
   begin
     SuppressibleMsgBox(OBSERVER_OPEN + '지우세요.', mbError, MB_OK, IDOK);
     Result := False;
+    exit;
   end;
+  StopAppProcesses();
 end;
 
 // 끝에 설정·기록을 지울지 묻는다 (기본 아니요 - 조용한 제거면 남긴다)
