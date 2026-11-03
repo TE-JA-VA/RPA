@@ -1704,7 +1704,7 @@ def setup_problem(load=None):
 def busy_problem():
     """다른 옵저버·RPA 와 부딪히면 사람에게 보일 문장, 아니면 None. 먼저 옵저버 잠금을 쥔다 - 쥔 동안 대시보드는
     RPA 를 안 띄우고 자동 실행은 닫힐 때까지 기다린다 (rpa_dashboard). 잠금은 이 프로세스가 끝나면 (죽어도) 윈도우가 푼다."""
-    if not st.hold_lock(st.OBSERVER_LOCK):
+    if not st.hold_lock(st.observer_lock_name()):
         return "옵저버가 이미 켜져 있습니다."
     # ponytail: 예약이 RPA 를 띄우고 RPA 가 '도는 중' 을 적기까지 몇 초 틈은 못 막는다 (그 사이 켜면 둘 다 뜬다)
     running = [st.PROGRAMS.get(p, p) for p in st.running_programs()]
