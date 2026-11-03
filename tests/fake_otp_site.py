@@ -17,10 +17,10 @@ VERIFY = """<!doctype html><meta charset="utf-8"><title>본인 인증</title>
 <p id="msg"></p>"""
 
 
-# 인증번호 칸이 [인증번호 받기] 뒤 0.5초 지나서 나타나는 사이트 (XHR 뒤에 칸이 뜨는 꼴 - 재생기 사람 인증이 칸을 기다리는지, 검토 2026-11-03)
+# 인증번호 칸이 [인증번호 받기] 뒤 0.5초 지나서 나타나는 사이트 (onclick="…" 속성 안이라 따옴표는 &quot;) (XHR 뒤에 칸이 뜨는 꼴 - 재생기 사람 인증이 칸을 기다리는지, 검토 2026-11-03)
 VERIFY_LATE = VERIFY.replace('<input id="otp" placeholder="인증번호 6자리" autocomplete="off">', '<span id="slot"></span>').replace(
     "document.getElementById('msg').textContent='보냈습니다'",
-    "setTimeout(()=>{document.getElementById('slot').innerHTML='<input id=\"otp\" placeholder=\"인증번호 6자리\" autocomplete=\"off\">';"
+    "setTimeout(()=>{document.getElementById('slot').innerHTML='<input id=&quot;otp&quot; placeholder=&quot;인증번호 6자리&quot; autocomplete=&quot;off&quot;>';"
     "document.getElementById('msg').textContent='보냈습니다'},500)")
 
 
