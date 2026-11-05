@@ -169,8 +169,9 @@ def stops(fn):
 
 rr.find_popup_windows = lambda pid, hwnd: list(wins)
 rr.invoke_popup_window = press
+titles = {}
 rr.win32gui = SimpleNamespace(GetClassName=lambda h: wins[h][0], IsWindow=lambda h: h in wins,
-                              IsWindowVisible=lambda h: h in wins)
+                              IsWindowVisible=lambda h: h in wins, GetWindowText=lambda h: titles.get(h, ""))
 rr.upload_popups, rr.wait_upload_result = REAL_POPUPS, REAL_WAIT
 
 rr.find_open_dialog_filename_edit = lambda h: 77 if h == 2 else None     # 2 만 파일 이름 칸이 있는 파일 열기 창
@@ -210,6 +211,38 @@ wins.clear()
 pressed.clear()
 wins[5] = ("popup", False, True)
 check("눌러도 안 닫히면 거듭 누르지 않고 멈춘다", stops(lambda: rr.upload_popups(0, 0)) and pressed == [5], str(pressed))
+
+print("--- 엑셀 비밀번호 (웹 환경설정, 사용자 2026-11-05)")
+typed, logged, real_log, real_pw = [], [], rr.log, rr.status.excel_password
+rr.log = logged.append
+rr.status.excel_password = lambda code: {"013": "1234"}.get(code)
+
+
+def pw_popup(h):
+    wins.clear()
+    pressed.clear()
+    wins[h], titles[h] = ("popup", True, True), "비밀번호 입력"
+    edit = SimpleNamespace(iface_value=SimpleNamespace(SetValue=typed.append), handle=0)
+    ok = SimpleNamespace(window_text=lambda: "확인", invoke=lambda: wins.pop(h))
+    w = SimpleNamespace(descendants=lambda control_type=None, **k: [edit] if control_type == "Edit" else [ok])
+    rr.Desktop = lambda backend: SimpleNamespace(window=lambda handle: w)
+
+
+pw_popup(9)
+rr.upload_pw.update(code="013", at=0.0)
+texts = rr.upload_popups(0, 0)
+check("프리셋의 값을 넣고 [확인] - 실패로 세지 않고 결과를 그때부터 기다린다", typed == ["1234"] and texts == [] and pressed == [] and rr.upload_pw["at"] > 0, f"{typed} {texts} {pressed}")
+check("값은 로그에 남지 않는다", not any("1234" in str(x) for x in logged), logged)
+pw_popup(9)
+texts = rr.upload_popups(0, 0)
+check("틀려서 다시 뜨면 같은 값을 거듭 넣지 않고 그 파일은 실패", typed == ["1234"] and pressed == [9] and bool(texts), f"{typed} {pressed} {texts}")
+pw_popup(9)
+rr.upload_pw.update(code="014", at=0.0)
+texts = rr.upload_popups(0, 0)
+check("값이 없는 사이트는 예전처럼 빈 칸으로 [확인] - 그 파일은 실패", typed == ["1234"] and pressed == [9] and bool(texts), f"{typed} {pressed} {texts}")
+rr.upload_pw.update(code=None, at=0.0)
+rr.log, rr.status.excel_password = real_log, real_pw
+titles.clear()
 
 wins.clear()
 calls = []

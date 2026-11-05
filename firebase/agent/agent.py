@@ -858,8 +858,11 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
     def do_presets(args):
         if not isinstance(args, dict) or not args:
             raise RuntimeError("프리셋이 비어있거나 알 수 없는 프리셋입니다.")
+        pw = args.get("excel_pw")       # 프리셋별 엑셀 비밀번호 - 같은 명령에 실어 온다 (옛 화면은 안 보낸다, 사용자 2026-11-05)
         try:
-            final = st.set_preset_switches(args)
+            final = st.set_preset_switches({k: v for k, v in args.items() if k != "excel_pw"})
+            if isinstance(pw, dict):
+                st.set_preset_excel_pw(pw)
         except FileNotFoundError:
             raise RuntimeError("이 PC의 사용자 설정이 없습니다.") from None
         except ValueError as e:

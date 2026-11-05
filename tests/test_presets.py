@@ -78,6 +78,15 @@ check("기록 있는 프리셋만 칸이 생긴다, 처음엔 꺼짐 (Stts 9)", 
       and site.get("Stts") == 9 and site.get("Action") == ["replay"] and site.get("Preset") == 1 and site.get("note") == "지마켓"
       and site.get("URL") == REC["start_url"] and site.get("ID") == "seller01", str(site))
 check("비밀번호는 잠겨서 들어가고 풀면 같다", PW not in raw_config() and st.unseal(site.get("PW")) == PW)
+check("엑셀 비밀번호: 처음엔 없고 요약에는 빈 글자 (화면이 새 PC 로 알아본다)", st.preset_summary()[0]["excel_pw"] == "" and st.excel_password(ps[0]["code"]) is None)
+st.set_preset_excel_pw({"PRESET1": " 1234 ", "PRESET9": "없는칸"})
+check("엑셀 비밀번호: 쓰면 사이트코드로 찾고 요약에도 보인다, 없는 칸은 넘어간다",
+      st.excel_password(ps[0]["code"]) == "1234" and st.preset_summary()[0]["excel_pw"] == "1234" and "PRESET9" not in st.read_user_config()["Sites"])
+st.save_preset_sites(ps, {1: ("seller01", None)})
+check("엑셀 비밀번호: 옵저버로 다시 저장해도 남는다", st.excel_password(ps[0]["code"]) == "1234")
+st.set_preset_excel_pw({"PRESET1": ""})
+check("엑셀 비밀번호: 비우면 지운다", "ExcelPW" not in st.read_user_config()["Sites"]["PRESET1"] and st.excel_password(ps[0]["code"]) is None)
+cfg = st.read_user_config()
 check("다른 섹션·다른 사이트는 그대로", cfg["LogIn"]["ID"] == "erp" and cfg["Routine"] == {"Login": "Y"}
       and st.unseal(cfg["Sites"]["SITE1"]["PW"]) == "mail-pw" and cfg["Sites"]["SITE1"]["Stts"] == 9)
 cfg["Sites"]["PRESET1"]["Stts"] = 0
@@ -89,9 +98,9 @@ check("다시 저장: 비밀번호를 안 주면 그대로, 켬/끔도 그대로
       and site["Stts"] == 0 and site["note"] == "지마켓 판매자" and site["ID"] == "seller02", str(site))
 summary = st.preset_summary()
 check("요약: 번호·이름·코드·단계 수·저장 시각·아이디 여부·켬·보관", summary[0] == {
-      "no": 1, "name": "지마켓", "code": "012", "steps": 1, "saved_at": "2026-09-30T18:20:00", "imap": False, "has_login": True, "on": True, "backup": False}
+      "no": 1, "name": "지마켓", "code": "012", "steps": 1, "saved_at": "2026-09-30T18:20:00", "imap": False, "has_login": True, "on": True, "excel_pw": "", "backup": False}
       and summary[1]["steps"] == 0 and summary[1]["has_login"] is False, str(summary))
-check("요약에는 기록 내용·아이디·비밀번호가 없다", all(set(s) == {"no", "name", "code", "steps", "saved_at", "imap", "has_login", "on", "backup"}
+check("요약에는 기록 내용·아이디·비밀번호가 없다", all(set(s) == {"no", "name", "code", "steps", "saved_at", "imap", "has_login", "on", "excel_pw", "backup"}
                                                   for s in summary) and "seller" not in json.dumps(summary, ensure_ascii=False))
 check("켜기·끄기는 Stts 0/9 (키는 PRESET1·'1'·1 모두)",
       st.set_preset_switches({"PRESET1": False}) == {1: False} and st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 9

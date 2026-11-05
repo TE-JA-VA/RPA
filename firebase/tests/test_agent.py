@@ -1327,6 +1327,8 @@ with tempfile.TemporaryDirectory() as d:
         check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 0 and "① 지마켓" in msg, f"켜면 Stts 0, 결과에 이름 ({msg})")
         acts["set_presets"]({"PRESET1": False})
         check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 9, "끄면 Stts 9")
+        acts["set_presets"]({"PRESET1": False, "excel_pw": {"PRESET1": "1234"}})
+        check(st.read_user_config()["Sites"]["PRESET1"].get("ExcelPW") == "1234", "같은 명령의 excel_pw 는 프리셋 번호가 아니라 엑셀 비밀번호로 저장")
         for args, why in (({"PRESET7": True}, "알 수 없는 프리셋"), ({"PRESET2": True}, "아이디·비밀번호가 없습니다")):
             try:
                 acts["set_presets"](args)

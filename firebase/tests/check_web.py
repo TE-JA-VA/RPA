@@ -929,6 +929,27 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
     check("1/2 켬" in page.text_content("#shop-meta"), "PC 값이 돌아오면 기준값 갱신")
 
+    print("5-2-0절 엑셀 비밀번호 (사용자 2026-11-05)")
+    check(page.locator(".xl-pw").count() == 0, "옛 PC (excel_pw 를 안 올림) 는 칸이 없다")
+    db_put(f"{LIVE}/presets/0/excel_pw", "")
+    page.wait_for_selector(".xl-pw input", timeout=10000)
+    check(page.locator(".xl-pw").count() == 1 and page.is_disabled("#shop-apply"), "새 PC 는 기록이 있는 줄에만 칸, 고치기 전엔 적용 비활성")
+    page.fill(".xl-pw input", " 1234 ")
+    check(not page.is_disabled("#shop-apply"), "값을 넣으면 적용 활성")
+    page.click("#shop-apply")
+    time.sleep(1.5)
+    sent = [x for x in cmds_of("set_presets") if "excel_pw" in x["args"]]
+    check(len(sent) == 1 and sent[0]["args"]["excel_pw"] == {"PRESET1": "1234"} and sent[0]["args"]["PRESET1"] is True, f"같은 명령에 프리셋별로 실어 보낸다 ({sent})")
+    check("excel_pw" not in (db_get(f"{SETTINGS}/presets") or {}), "settings 에는 켬/끔만")
+    key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_presets" and "excel_pw" in v.get("args", {}))
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "프리셋을 변경하였습니다.", "started_at": 1, "ended_at": 2})
+    db_put(f"{LIVE}/presets/0/excel_pw", "1234")
+    page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
+    check(page.input_value(".xl-pw input").strip() == "1234", "PC 값이 돌아오면 그 값이 칸에 보인다")
+    page.evaluate("document.activeElement?.blur?.()")
+    db_put(f"{LIVE}/presets/0/excel_pw", None)
+    page.wait_for_function("!document.querySelector('.xl-pw')", timeout=10000)
+
     print("5-2-1절 프리셋 복사·되돌리기 (설계 2026-10-19 4.3절)")
     check(page.is_hidden("#copy-card"), "PC 하나뿐인 업체는 복사 카드가 없다")
     # pc_x 는 새 버전(preset_transfer 1), pc_y 는 옛 버전 (키 없음). 키 이름순에서 pc_office 가 맨 앞이어야 지금 PC 가 안 바뀐다

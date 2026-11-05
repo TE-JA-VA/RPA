@@ -2781,9 +2781,42 @@ def invoke_popup_window(popup_hwnd):
     return True, f"[{title}] {msg[:300]} -> '{label}' 누름", msg
 
 
+UPLOAD_PW_TITLE = "비밀번호 입력"
+upload_pw = {"code": None, "at": 0.0}   # 넘기는 파일의 사이트코드 (창마다 비운다 - 파일당 한 번만 넣는다), 비밀번호를 넣은 때
+
+
+def fill_excel_password(popup_hwnd):
+    """'비밀번호 입력' 창에 그 파일 프리셋의 엑셀 비밀번호(웹 환경설정, 사용자 2026-11-05)를 넣고 [확인]. 넣었으면 True.
+    못 넣으면 False - 예전처럼 빈 칸으로 [확인] 을 눌러 그 파일은 실패다. 틀려서 창이 다시 떠도 같은 값을 거듭 넣지 않는다.
+    창이 ERPia 뒤에 깔려도 되게 키보드를 쓰지 않는다. 값은 로그에 남기지 않고, 넣은 뒤 창 글자를 읽지 않는다."""
+    code, upload_pw["code"] = upload_pw["code"], None
+    try:
+        pw = status.excel_password(code) if code is not None else None
+        if not pw:
+            log(f"    사이트코드 {code} 프리셋에 엑셀 비밀번호가 없습니다. (웹 환경설정 '엑셀 비밀번호')")
+            return False
+        w = Desktop(backend="uia").window(handle=popup_hwnd)
+        edit = w.descendants(control_type="Edit")[0]
+        btn = next(b for b in w.descendants(control_type="Button") if b.window_text() in OK_BUTTON_TEXTS)
+        try:
+            edit.iface_value.SetValue(pw)
+        except Exception:                # 비밀번호 칸은 UIA 값 쓰기를 막는 종류가 있다
+            win32gui.SendMessage(edit.handle, win32con.WM_SETTEXT, 0, pw)
+    except Exception as e:
+        log(f"    엑셀 비밀번호를 넣지 못했습니다. ({type(e).__name__})")
+        return False
+    try:
+        btn.invoke()
+    except Exception as e:
+        raise UploadStop(f"비밀번호 창의 [확인]을 누르지 못했습니다. ({type(e).__name__})") from None
+    upload_pw["at"] = time.time()
+    return True
+
+
 def upload_popups(pid, hwnd, before=(), label=""):
     """업로드 뒤 ERPia 가 따로 띄운 창(실패 팝업 'ERPia', '비밀번호 입력' 등)을 [확인]/[예] 로 닫고 (invoke_popup_window)
-    문구를 돌려준다. 실패 팝업은 메인 창의 자식이 아니라 메인 창이 소유한 별도 창이라 (2026-10-19 개발기 실측) PopupGate 로는
+    문구를 돌려준다. '비밀번호 입력' 은 엑셀 비밀번호를 넣을 수 있으면 넣는다 (실패가 아니다 - 문구에 안 넣는다, fill_excel_password).
+ 실패 팝업은 메인 창의 자식이 아니라 메인 창이 소유한 별도 창이라 (2026-10-19 개발기 실측) PopupGate 로는
     안 보이고, 메인 창 전체를 UIA 로 훑으면 한 번에 수 초 - 그래서 창 목록(win32, 거의 0초)으로 찾는다.
     before(업로드 전부터 있던 창)와 파일 열기 창은 뺀다. 누를 단추가 없거나 눌러도 안 닫히면 UploadStop.
     파일 열기 창은 '파일 이름' 칸으로 가린다 - 윈도우 표준 메시지 상자도 같은 '#32770' 이라 종류만 보면 실패 팝업을 놓친다 (검토 10-20)."""
@@ -2792,18 +2825,25 @@ def upload_popups(pid, hwnd, before=(), label=""):
         try:
             if h in before or (win32gui.GetClassName(h) == SAVE_DIALOG_CLASS and find_open_dialog_filename_edit(h)):
                 continue
+            title = win32gui.GetWindowText(h)
         except Exception:
             continue    # 그새 닫힌 창
-        ok, why, msg = invoke_popup_window(h)
-        log(f"    {label}팝업: {why}")
-        if not ok:
-            raise UploadStop(why)
+        filled = UPLOAD_PW_TITLE in title and fill_excel_password(h)
+        if filled:
+            why, msg = "엑셀 비밀번호를 넣고 [확인] 누름", ""
+            log(f"    {label}팝업: {why}")
+        else:
+            ok, why, msg = invoke_popup_window(h)
+            log(f"    {label}팝업: {why}")
+            if not ok:
+                raise UploadStop(why)
         end = time.time() + 2
         while win32gui.IsWindow(h) and win32gui.IsWindowVisible(h):
             if time.time() > end:
                 raise UploadStop(f"눌러도 닫히지 않는 팝업: {why}")
             time.sleep(0.05)
-        texts.append(msg or why)
+        if not filled:
+            texts.append(msg or why)
     return texts
 
 
@@ -2814,7 +2854,7 @@ def wait_upload_result(pid, hwnd, before=(), timeout=None, interval=0.1):
     end = time.time() + timeout
     while True:
         texts = upload_popups(pid, hwnd, before, label="업로드 결과 ")
-        if texts or time.time() >= end:
+        if texts or time.time() >= max(end, upload_pw["at"] + timeout):    # 비밀번호를 넣었으면 그때부터 결과를 기다린다
             break
         time.sleep(interval)
     if not texts:
@@ -3247,7 +3287,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
         """pending 의 결과: 팝업이 있었으면 실패(오류 폴더), 없으면 완료.
         팝업이 없어도 창이 닫힌 뒤 UPLOAD_RESULT_WAIT_SECONDS 가 지나기 전이면 남은 시간만큼 결과 팝업을 기다린다."""
         nonlocal pending, seen, seen_at, uploaded, failed, errors
-        left = closed_at + upload_result_wait() - time.time()
+        left = max(closed_at, upload_pw["at"]) + upload_result_wait() - time.time()
         if not popups and left > 0:
             popups = wait_upload_result(pid, hwnd, before, timeout=left)
         at = (seen_at or time.time()) - closed_at
@@ -3322,6 +3362,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
             hidden = True
             break
 
+        upload_pw["code"] = code
         if not upload_file_in_dialog(dlg, path, pid=pid):
             log("    파일을 전달하지 못했습니다. 창을 닫고 파일은 그대로 둡니다.")
             close_upload_dialog(pid, dlg)

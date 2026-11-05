@@ -1048,6 +1048,9 @@ PRESET_MIN, PRESET_MAX = 2, 40           # PRESET_MAX = PC 가 받는 최대 - �
 PRESET_WELLIFE = 40                      # 업체코드에 wellife 가 든 업체는 늘 40 (사용자 2026-10-15, agent.company_policy)
 
 
+EXCEL_PW_KEY, EXCEL_PW_MAX = "ExcelPW", 100   # Sites 칸의 엑셀 비밀번호 (excel_password)
+
+
 def circled(n):
     """프리셋 번호 ① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄로 나뉘어 있다 (1~20, 21~35, 36~50). 웰라이프 업체 40개 (2026-10-15).
     옵저버·에이전트가 같이 쓴다 (웹은 rpa-settings.js circled 가 같은 규칙)."""
@@ -1250,6 +1253,8 @@ def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None
         mine[key] = {"URL": p["record"].get("start_url") or old.get("URL", ""), "ID": (login_id or "").strip(),
                      "PW": pw or old.get("PW", ""), "Action": [REPLAY_ACTION],
                      "Stts": old.get("Stts", 9) if same_site else 9, "Preset": p["no"], "Code": p["code"], "note": p["name"]}
+        if same_site and old.get(EXCEL_PW_KEY):     # 웹 환경설정에서 넣은 값 - 옵저버 저장에 지워지지 않게
+            mine[key][EXCEL_PW_KEY] = old[EXCEL_PW_KEY]
         phone, senders = (phones or {}).get(p["no"]) or (old.get("Phone"), old.get("SmsSenders"))
         if phone and senders:
             mine[key].update(Phone=phone, SmsSenders=list(senders))
@@ -1263,8 +1268,37 @@ def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None
     write_user_config(data)
 
 
+def excel_password(code):
+    """사이트코드 code 프리셋의 엑셀 비밀번호 (웹 환경설정 '엑셀 비밀번호', 사용자 2026-11-05). 없으면 None.
+    로그인 비밀번호가 아니라 쇼핑몰이 엑셀에 의무로 거는 값(1234 등)이라 잠그지 않고 웹에도 보인다 (사용자)."""
+    sites = (read_user_config() or {}).get(SITES_SECTION)
+    for key, s in (sites if isinstance(sites, dict) else {}).items():
+        if is_preset_site(key) and isinstance(s, dict) and str(s.get("Code") or "") == str(code) and s.get(EXCEL_PW_KEY):
+            return str(s[EXCEL_PW_KEY])
+    return None
+
+
+def set_preset_excel_pw(wanted):
+    """{"PRESET1": 값} 대로 Sites 의 엑셀 비밀번호를 쓴다 (빈 값은 지운다). 칸이 없는 번호는 넘어간다."""
+    data = read_user_config()
+    if not data:
+        raise FileNotFoundError(user_config_path())
+    sites = data.get(SITES_SECTION) if isinstance(data.get(SITES_SECTION), dict) else {}
+    changed = False
+    for key, value in wanted.items():
+        site, value = sites.get(key), str(value or "").strip()[:EXCEL_PW_MAX]
+        if isinstance(site, dict) and is_preset_site(key) and site.get(EXCEL_PW_KEY, "") != value:
+            site.pop(EXCEL_PW_KEY, None)
+            if value:
+                site[EXCEL_PW_KEY] = value
+            changed = True
+    if changed:
+        write_user_config(data)
+
+
 def preset_summary():
-    """대시보드용 [{no, name, code, steps, saved_at, has_login, on, backup}] - 기록 내용·아이디·비밀번호는 싣지 않는다.
+    """대시보드용 [{no, name, code, steps, saved_at, has_login, on, backup, excel_pw}] - 기록 내용·아이디·비밀번호는 싣지 않는다.
+    excel_pw: 엑셀 비밀번호 (로그인 비밀번호가 아니다 - excel_password). 이 칸이 있으면 화면이 새 PC 로 알아본다.
     backup: 넣어 주기·복사 전 기록이 보관돼 있어 되돌릴 수 있다 (preset_transfer).
     사용자 설정이 없거나 프리셋 파일이 깨졌으면 None (화면이 카드를 숨긴다 - 빈 목록으로 속이지 않는다)."""
     try:
@@ -1283,7 +1317,7 @@ def preset_summary():
                     "steps": len((p["record"] or {}).get("steps") or []), "saved_at": p["saved_at"],
                     "imap": bool(imap_step(p["record"])),      # 메일 받기 - 화면이 'N단계' 대신 '메일 받기' (2026-10-22)
                     "has_login": bool(site.get("ID")) and bool(site.get("PW")) and not login_mismatch(site, p["code"]),
-                    "on": str(site.get("Stts", "")).strip() == "0",
+                    "on": str(site.get("Stts", "")).strip() == "0", "excel_pw": str(site.get(EXCEL_PW_KEY) or ""),
                     "backup": os.path.isfile(preset_backup_path(p["no"]))})
     return out
 
