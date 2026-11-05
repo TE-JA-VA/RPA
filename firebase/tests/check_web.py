@@ -931,7 +931,7 @@ with sync_playwright() as pw:
 
     print("5-2-0절 엑셀 비밀번호 (사용자 2026-11-05)")
     check(page.locator(".xl-pw").count() == 0, "옛 PC (excel_pw 를 안 올림) 는 칸이 없다")
-    db_put(f"{LIVE}/presets/0/excel_pw", "")
+    db_patch(f"{LIVE}/presets/0", {"excel_pw": ""})
     page.wait_for_selector(".xl-pw input", timeout=10000)
     check(page.locator(".xl-pw").count() == 1 and page.is_disabled("#shop-apply"), "새 PC 는 기록이 있는 줄에만 칸, 고치기 전엔 적용 비활성")
     page.fill(".xl-pw input", " 1234 ")
@@ -947,7 +947,7 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
     check(page.input_value(".xl-pw input").strip() == "1234", "PC 값이 돌아오면 그 값이 칸에 보인다")
     page.evaluate("document.activeElement?.blur?.()")
-    db_put(f"{LIVE}/presets/0/excel_pw", None)
+    db_patch(f"{LIVE}/presets/0", {"excel_pw": None})
     page.wait_for_function("!document.querySelector('.xl-pw')", timeout=10000)
 
     print("5-2-1절 프리셋 복사·되돌리기 (설계 2026-10-19 4.3절)")
