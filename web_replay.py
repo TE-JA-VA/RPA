@@ -1491,6 +1491,13 @@ class Replayer:
                 return
             self._idle(min(200, left * 1000), page)
 
+    def _step_wait(self, s):
+        """단계 뒤 'n초 대기' (옵저버 단계 목록의 wait_sec) - 사이트가 엑셀을 만드는 동안 등 (사용자 2026-11-05). 기다리는 동안도 [■ 중단] 을 본다."""
+        n = s.get("wait_sec")
+        if n:
+            self.log(f"      ({n}초 대기)")
+            self._wait(self.pages.get(s.get("page")), n * 1000)
+
     def _hold(self, i):
         """다음 단계 앞: 중단이면 Cancelled, 일시정지면 풀릴 때까지 기다린다 (하던 단계는 끝까지 한다).
         인증 차례(gate)가 있으면 첫 단계부터 끝 단계까지는 차례를 잡고 간다 - 인증번호를 다시 받으러 앞 단계로 돌아가도 잡은 채로."""
@@ -2206,12 +2213,14 @@ class Replayer:
             if s["row"]["inner"]:
                 loc = loc.locator(s["row"]["inner"]).first
             self._click(page, loc)
+            self._step_wait(s)
             try:
                 for j in body:
                     if self.progress:
                         self.progress(j + 1, "run", "")
                     try:
                         how = self._step(j, dict(steps[j], loose=True))
+                        self._step_wait(steps[j])
                     except Skip as e:
                         how = f"건너뜀 ({e})"
                     except NoOrders as e:   # 그 메일에서 받을 것이 없다 - 이 메일만 넘기고 다음 메일로 (사용자 2026-10-21)
@@ -2304,6 +2313,7 @@ class Replayer:
                     if self._otp_rejected(self.pages.get(s["page"]), steps[otp_i - 1], s):
                         raise OtpRetry("사이트에서 인증번호가 승인되지 않았습니다.", rejected=True, mail=steps[otp_i - 1].get("source") == "copy")
                     self._otp_close()               # 통과 - 요청·번호를 지운다
+                self._step_wait(s)
                 self.results.append((i, "ok", how))
                 self.log(f"  {i:2d}/{len(steps)} {text}  [{how}]")
             except OtpRetry as e:

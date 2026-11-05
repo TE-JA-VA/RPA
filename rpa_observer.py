@@ -456,6 +456,7 @@ def new_preset(no, name=None, code=""):
     return {"name": name or f"프리셋 {no}", "code": code, "raw": [], "loaded": None, "head": None, "start_url": None,
             "enabled": {}, "deleted": set(), "id": "", "pw": "", "has_pw": False, "saved_at": None, "viewport": None,
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
+            "wait": {},         # 단계 목록에서 바꾼 'n초 대기' {sid: (켬, 글자)} (apply_waits)
             "mail_id": "", "mail_pw": "", "has_mail_pw": False,   # 메일 2차인증 메일함 계정 (설계 2026-11-02, 비밀번호는 저장하면 비우고 has_mail_pw)
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
             "imap": None,       # 메일 서버(IMAP) 칸 {host, port, security, rules} - source 가 imap 일 때 (2026-10-22)
@@ -469,8 +470,18 @@ def edit_view(presets):
     이름·사이트코드·메일 시작 문구는 _store_fields 와 같이 다듬어 견준다 - 고르기만 한 칸(옛 전각 코드 등)을 고친 것으로 보지 않게."""
     return [(p["name"].strip(), unicodedata.normalize("NFKC", p["code"]).strip(), p["id"], bool(p["pw"]), p["phone"], p["senders"],
              p["mail_id"], bool(p["mail_pw"]), p["source"], p["prefix"].strip(), repr(p["imap"]), sorted(p["deleted"]), sorted(p["otp"].items()),
-             sorted(k for k, v in p["enabled"].items() if not v.get()))
+             sorted(k for k, v in p["enabled"].items() if not v.get()), sorted(p["wait"].items()))
             for p in presets if p["loaded"] or p["raw"] or p["head"]]
+
+
+def apply_waits(steps, waits):
+    """단계 목록에서 바꾼 'n초 대기' {sid: (켬, 글자)} 를 기록 단계의 wait_sec 으로. 켰고 0 이상의 정수일 때만 - 아니면 대기 없음 (사용자 2026-11-05)."""
+    for s in steps:
+        if s.get("id") in waits:
+            on, text = waits[s["id"]]
+            s.pop("wait_sec", None)
+            if on and text.isdecimal():
+                s["wait_sec"] = int(text)
 
 
 def load_file_into(p, obj):
@@ -483,7 +494,7 @@ def load_file_into(p, obj):
         p.update(id="", pw="", has_pw=False, phone="", senders="", mail_id="", mail_pw="", has_mail_pw=False)
     pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
     p.update(name=obj["name"], code=obj["code"], loaded=r, raw=[], head=None, start_url=None, viewport=r.get("viewport"),
-             enabled={}, deleted=set(), otp={}, fresh=True,
+             enabled={}, deleted=set(), otp={}, wait={}, fresh=True,
              source="mail" if pick else "shop", prefix=pick["prefix"] if pick else "")
     load_imap(p, r)
     return p
@@ -1102,6 +1113,8 @@ class App:
             i = next((k for k, s in enumerate(final["steps"]) if s["id"] == sid), None) if final else None
             if i is not None and (final["steps"][i]["kind"] == "otp") != on:
                 rec.set_otp(final["steps"], i, on)
+        if final:
+            apply_waits(final["steps"], p["wait"])
         if final:                                 # 메일 첨부파일 - 메일 시작 문구로 '메일마다' 단계를 스스로 찾는다 (사용자 2026-10-14)
             for k in range(len(final["steps"])):
                 rec.set_pick(final["steps"], k, None)
@@ -1141,7 +1154,7 @@ class App:
     def render(self):
         for c in self.inner.winfo_children():
             c.destroy()
-        self.labels, self.base = {}, {}
+        self.labels, self.base, self.wait_vars = {}, {}, []
         p = self.presets[self.cur]
         if p["source"] == "imap":
             self._show_mail(None)
@@ -1170,6 +1183,7 @@ class App:
             tk.Button(row, text="✕", font=(UI, 10), fg="#9ca3af", bg=CARD, activebackground=RED_L, activeforeground=RED,
                       relief="flat", bd=0, cursor="hand2", command=lambda sid=sid: self.delete(sid)
                       ).pack(side="right", anchor="n", padx=6, pady=4)
+            self._wait_box(row, p, s)
             if s["kind"] in ("fill", "otp"):        # 글자 칸 - 문자로 받는 인증번호 칸인지 사람이 바꿀 수 있다
                 is_otp = s["kind"] == "otp"
                 tk.Button(row, text="인증번호 칸 해제" if is_otp else "인증번호 칸", font=F_SMALL, fg=BLUE if is_otp else MUTED,
@@ -1180,7 +1194,7 @@ class App:
             warn = s["kind"] == "goto" and "로그인 세션 값을 감지" in text
             lab = tk.Label(row, text=text, font=F, bg=CARD, anchor="w", justify="left",
                            fg=(RED_D if warn else INK) if on else "#9ca3af",
-                           wraplength=self.panel_w - int(170 * self.scale))
+                           wraplength=self.panel_w - int(270 * self.scale))
             lab.pack(side="left", fill="x", expand=True, padx=(6, 0), pady=6)
             self.labels[sid], self.base[sid] = lab, text
         if final and any(s.get("pick") for s in final["steps"]):
@@ -1198,6 +1212,22 @@ class App:
             self.canvas.yview_moveto(1.0)       # 새 단계가 생기면 맨 아래로
         self.shown = n
         self.paint_buttons()
+
+    def _wait_box(self, row, p, s):
+        """단계 줄 오른쪽의 [ ] [  ] 초 대기 (사용자 2026-11-05). 고쳐도 다시 그리지 않는다 - 치는 중인 칸을 잃지 않게."""
+        sid = s["id"]
+        on, text = p["wait"].get(sid, ("wait_sec" in s, str(s.get("wait_sec", ""))))
+        on_var, text_var = tk.BooleanVar(self.root, value=on), tk.StringVar(self.root, value=text)
+        self.wait_vars.append((on_var, text_var))
+        tk.Label(row, text="초 대기", font=F_SMALL, bg=CARD, fg=MUTED).pack(side="right", anchor="n", pady=6)
+        tk.Entry(row, textvariable=text_var, width=4, font=F_SMALL, justify="right", relief="solid", bd=1, validate="key",
+                 validatecommand=(row.register(lambda t: not t or t.isdecimal()), "%P")).pack(side="right", anchor="n", padx=(0, 3), pady=6)
+        tk.Checkbutton(row, variable=on_var, bg=CARD, activebackground=CARD, cursor="hand2").pack(side="right", anchor="n", pady=4)
+
+        def changed(*_):
+            p["wait"][sid] = (on_var.get(), text_var.get())
+        on_var.trace_add("write", changed)
+        text_var.trace_add("write", changed)
 
     def delete(self, sid):
         self.presets[self.cur]["deleted"].add(sid)
@@ -1342,7 +1372,7 @@ class App:
         if (p["raw"] or p["loaded"] or p["head"]) and not self.ask(
                 "다시 기록", f"{circled(self.cur + 1)} {p['name']}의 기록을 삭제하고 처음부터 다시 기록하시겠습니까?"):
             return
-        p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set(), otp={})
+        p.update(raw=[], loaded=None, head=None, start_url=self.start_url, enabled={}, deleted=set(), otp={}, wait={})
         self.recording, self.shown = self.cur, 0
         self.status.config(text="브라우저를 여는 중…", fg=MUTED)
         self.render()
@@ -1412,7 +1442,7 @@ class App:
         k = next((i for i, s in enumerate(final["steps"]) if s["id"] == cut), len(final["steps"]))
         p.update(head=dict(final, steps=final["steps"][:k], cut=final["steps"][k] if k < len(final["steps"]) else None), raw=[], fresh=True,
                  deleted={d for d in p["deleted"] if d < cut}, enabled={d: v for d, v in p["enabled"].items() if d < cut},
-                 otp={d: v for d, v in p["otp"].items() if d < cut})
+                 otp={d: v for d, v in p["otp"].items() if d < cut}, wait={d: v for d, v in p["wait"].items() if d < cut})
         self.previewing = self.paused = self.stopping = self.editing = False
         self.failed_at = None
         self.recording, self.shown = no, 0
