@@ -558,12 +558,13 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
     return done
 
 
-def configured(paths):
+def configured(paths, updating=False):
     """두 설정 파일이 다 있고 읽히나 - 에이전트 계정 비밀번호까지 풀려야 한다 (판을 올린 설치면 참).
     에이전트가 로그인을 거부당해(멈춤 코드 3 - 비밀번호 재발급 등) 멈춘 PC 는 아니다 - 다시 설치하면 새 비밀번호를 받는 창을 띄운다 (S6, 2026-11-03).
-    거부된 에이전트는 원격 업데이트 명령을 받지 못하므로 업데이트 도우미의 --after-install 에는 영향이 없다."""
+    updating: 업데이트 도우미(--no-window)는 이 멈춤을 보지 않는다 - 창을 띄울 수 없어 finish_upgrade 를 건너뛰면 에이전트가 안 켜져 업데이트가
+    되돌려진다 (2026-11-05 샌드박스. 멈춤 기록은 설정 창 저장 때만 지워져 그 뒤 살아난 PC 에도 남아 있을 수 있다)."""
     import secret
-    if not os.path.isfile(paths["user_config"]) or (read_stop(paths.get("stop_file")) or {}).get("code") == 3:
+    if not os.path.isfile(paths["user_config"]) or (not updating and (read_stop(paths.get("stop_file")) or {}).get("code") == 3):
         return False
     try:
         secret.load_config(paths["agent_config"])
@@ -1100,7 +1101,7 @@ def _main(args):
         if not quiet:
             show_error_box(problem)
         return 1
-    if after and configured(paths):
+    if after and configured(paths, updating=quiet):
         try:
             finish_upgrade(paths)
         except RuntimeError as e:

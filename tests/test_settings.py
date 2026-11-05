@@ -555,6 +555,7 @@ check("기계 계정 비밀번호가 안 풀리면 판 올림이 아니다 (창�
 # S6 (2026-11-03): 로그인 거부(코드 3)로 멈춘 PC 를 다시 설치하면 창을 띄운다. 다른 멈춤은 판 올림 그대로
 write_stop(P, 3)
 check("로그인 거부(코드 3)로 멈춘 PC 는 판 올림이 아니다 (새 비밀번호 창)", not rs.configured(P))
+check("그래도 업데이트 도우미(--no-window)는 판 올림으로 본다 - 안 그러면 에이전트가 안 켜져 업데이트가 되돌려진다 (2026-11-05 샌드박스)", rs.configured(P, updating=True))
 write_stop(P, 2)
 check("다른 까닭으로 멈춘 PC 는 판 올림 그대로", rs.configured(P))
 os.remove(P["stop_file"])
