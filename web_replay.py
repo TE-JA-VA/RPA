@@ -1616,6 +1616,8 @@ class Replayer:
         if s.get("loose"):          # 메일 고르기 묶음 - 메일마다 글자(첨부 이름 등)가 달라 글자 말고 자리·속성으로
             t = dict(t, text="", textCount=0)
         cands = candidates(t)
+        # 글자가 숫자뿐이면 보통 쪽 번호라 바뀌면 다른 것이지만, id 가 같거나 파일을 받는 단계면 숫자만 바뀐 같은 것 (현대이지웰 주문 수 링크 '3' → '6', 2026-11-05)
+        number = t["text"].isdigit()
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
         started = time.time()
         deadline, tries = started + (OPTIONAL_WAIT if optional else self.step_timeout), 1
@@ -1632,7 +1634,7 @@ class Replayer:
                         loc = self._pick(loc, loc.count(), nth, pv)
                     except Exception:
                         continue            # 화면이 바뀌는 중
-                    if loc is not None and self._same(loc, t, how.startswith("숫자 뺀 글자")):
+                    if loc is not None and self._same(loc, t, how.startswith("숫자 뺀 글자") or number and (how == "id" or how == "위치" and s.get("download"))):
                         return frame, loc, how + (", 새로 생긴 것" if pv is not None else "")
             if time.time() > deadline:
                 if optional:
