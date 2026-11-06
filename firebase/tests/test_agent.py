@@ -1678,6 +1678,21 @@ check(ag.warn_other_boot(BeatClient({"at": 1000, "host": "PC-B"}), "c_demo", "pc
 check(ag.warn_other_boot(BeatClient(OSError("망")), "c_demo", "pc_office", host="PC-A", now=1) is False
       and ag.warn_other_boot(BeatClient(None), "c_demo", "pc_office", host="PC-A", now=1) is False, "못 읽거나 없으면 넘어간다")
 
+print("아이콘 새로 고침 (2026-11-06 - 업데이트로 아이콘이 바뀐 뒤 윈도우가 옛 그림을 들고 있지 않게)")
+with tempfile.TemporaryDirectory() as icon_dir:
+    icon_mark = os.path.join(icon_dir, "icons.txt")
+    icon_calls = []
+    check(ag.refresh_icons(lambda: "v1", icon_mark, lambda: icon_calls.append(1)) is True and icon_calls == [1], "새 버전이면 한 번 알린다")
+    check(ag.refresh_icons(lambda: "v1", icon_mark, lambda: icon_calls.append(1)) is False and icon_calls == [1], "같은 버전이면 다시 알리지 않는다")
+    check(ag.refresh_icons(lambda: "v2", icon_mark, lambda: icon_calls.append(1)) is True and icon_calls == [1, 1], "다음 버전이면 또 알린다")
+    check(ag.refresh_icons(lambda: None, icon_mark, lambda: icon_calls.append(1)) is False and icon_calls == [1, 1], "버전이 없으면(개발 PC) 알리지 않는다")
+
+    def icon_fail():
+        raise OSError("알리기 실패")
+    check(ag.refresh_icons(lambda: "v3", icon_mark, icon_fail) is False, "알리기가 실패해도 예외를 내지 않는다")
+    check(ag.refresh_icons(lambda: "v3", icon_mark, lambda: icon_calls.append(1)) is True, "실패한 버전은 다음 시작에 다시 한다")
+    check(ag.refresh_icons(icon_fail, icon_mark, lambda: icon_calls.append(1)) is False, "버전을 못 읽어도 예외를 내지 않는다")
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

@@ -1085,6 +1085,38 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
 OTHER_BOOT_SEC = 120
 
 
+def notify_icons_changed():
+    """윈도우에 아이콘이 바뀌었다고 알린다. 아이콘 저장소는 사용자마다 있어 로그인한 사용자로 도는 에이전트가 해야 한다 (업데이트 도우미 말고)."""
+    import ctypes
+    import subprocess
+    subprocess.run([os.path.join(os.environ.get("SystemRoot", r"C:\\Windows"), "System32", "ie4uinit.exe"), "-show"],
+                   timeout=30, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
+    ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)     # SHCNE_ASSOCCHANGED
+
+
+def refresh_icons(version_of, mark, notify=notify_icons_changed):
+    """버전마다 한 번 윈도우가 아이콘을 새로 읽게 한다 (2026-11-06 - 업데이트로 아이콘이 바뀌어도 옛 그림이 남는다).
+    알렸으면 True. 실패는 기록만 남기고 다음 시작에 다시 한다 - RPA 를 막지 않는다.
+    ponytail: 작업 표시줄에 고정한 아이콘은 재부팅 전까지 옛 그림이 남을 수 있다."""
+    try:
+        version = version_of()
+        if not version:
+            return False
+        try:
+            with open(mark, encoding="utf-8") as f:
+                if f.read().strip() == version:
+                    return False
+        except OSError:
+            pass
+        notify()
+        with open(mark, "w", encoding="utf-8") as f:
+            f.write(version)
+        return True
+    except Exception as e:
+        log(f"아이콘 새로 고침을 건너뜁니다 ({type(e).__name__})")
+        return False
+
+
 def warn_other_boot(client, cid, pc_id, host=None, now=None):
     """켤 때 한 번 (BugBuster I13): 이 계정의 heartbeat 를 읽어 2분 안에 다른 PC(호스트 이름이 다름)가 신호를 올렸으면 기록에 경고 →
     경고했으면 True. 지난번 이 PC 의 신호는 호스트 이름이 같아 넘어간다 (재시작마다 경고하지 않게). 못 읽으면 False, 인증이 죽었으면 AuthError."""
@@ -1274,6 +1306,9 @@ def run(cfg):
     import rpa_update as upd
     alive = [False]
     upd.clear_stale()                          # 지난번 에이전트가 받기·대기 중에 끝났다면 멈춘 채 남은 것을 정리
+    threading.Thread(target=refresh_icons, daemon=True, name="icons",      # 기다리지 않는다 - 에이전트 시작을 늦추면 업데이트 점검이 밀린다
+                     args=(lambda: upd._read_manifest(st.program_dir()).get("version"),
+                           os.path.join(st.data_dir(), "icons_refreshed.txt"))).start()
     if upd.health_local():                     # 샌드박스 시험: 로그인 없이 판 점검만 (자동 업데이트 계획 Task 9)
         alive[0] = upd.mark_alive(st.check_install())
 
