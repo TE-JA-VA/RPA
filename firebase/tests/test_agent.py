@@ -949,15 +949,16 @@ check(ag.company_policy(AppClient({"limits": {"schedule": "9"}}), "c_x")[0] == 2
 for cid, feats, want in (("WELLIFE_x", None, True), ("my_wellife", None, True), ("Wellife", {}, True), ("wel_life", None, False),
                          ("c_demo", {"wellife": True}, True), ("c_demo", {"wellife": False}, False), ("c_demo", None, False)):
     check(ag.wellife_on(cid, feats) is want, f"웰라이프 판정 {cid} {feats} → {want}")
-check(ag.company_policy(AppClient({"modules": {"Hold": False}}), "wellife_a") == (2, ["Hold", "Logistics", "Output"], True, 40, None),
+check(ag.company_policy(AppClient({"modules": {"Hold": False}}), "wellife_a") == (2, ["Hold", "Logistics", "Output"], True, 50, None),
       "웰라이프 업체: 물류관리·운송장 출력을 안 쓰는 모듈에 더한다")
 check(ag.company_policy(AppClient({"features": {"wellife": True}}), "c_demo")[2] is True, "관리 화면에서 연 업체도 웰라이프")
 check(ag.company_policy(AppClient({"modules": {"Sales": False}}), "c_x")[1] == ["Excel", "Import", "Sales"],
       "주문매핑을 막은 업체는 나눈 수집(엑셀·자동)도 막는다 (2026-10-30 전 주문매핑은 수집까지)")
-got = [ag.company_policy(AppClient({"limits": {"presets": v}}), "c_x")[3] for v in (5, 10, 40, 1, 41, "5", True)]
-check(got == [5, 10, 40, None, None, None, None], f"업체 프리셋 수: 2~40 정수만 (보통 업체는 관리 화면이 10 까지), 아니면 None (PC 가 기본 2) {got}")
-check([ag.company_policy(AppClient(v), "Test_Wellife_test")[3] for v in ({}, {"limits": {"presets": 5}})] == [40, 40],
-      "업체코드에 wellife 가 든 업체는 프리셋 40 (관리 화면 값 대신, 사용자 2026-10-15)")
+got = [ag.company_policy(AppClient({"limits": {"presets": v}}), "c_x")[3] for v in (5, 10, 50, 1, 51, "5", True)]
+check(got == [5, 10, 50, None, None, None, None], f"업체 프리셋 수: 2~50 정수만, 아니면 None (PC 가 기본 2) {got}")
+check(ag.live_extras({})["preset_max"] == 50, "현황에 PC 가 받는 프리셋 최대 (관리 화면이 41개 이상을 열기 전에 본다)")
+check([ag.company_policy(AppClient(v), "Test_Wellife_test")[3] for v in ({}, {"limits": {"presets": 5}})] == [50, 50],
+      "업체코드에 wellife 가 든 업체는 프리셋 50 (관리 화면 값 대신)")
 got = [ag.company_policy(AppClient({"limits": {"parallel": v}}), "c_x")[4] for v in (1, 4, 16, 0, 17, "4", True)]
 check(got == [1, 4, 16, None, None, None, None], f"동시 실행 창 수: 1~16 정수만, 아니면 None (PC 가 하나씩) {got}")
 with tempfile.TemporaryDirectory() as d:

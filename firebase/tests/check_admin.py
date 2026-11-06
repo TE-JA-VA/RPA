@@ -249,9 +249,20 @@ code, d = api("GET", "/api/companies/t_new")
 check(code == 200 and d.get("presetLimit") is None, "옵저버 프리셋 수: 값이 없으면 null (화면은 기본 2)", str(d.get("presetLimit")))
 code, r = api("POST", "/api/companies/t_new/presets", {"presets": "5"})
 check(code == 200 and r == {"cid": "t_new", "presets": 5} and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, "옵저버 프리셋 수 5", r)
-for bad in ("1", "11", "2.5", "", "셋"):
+for bad in ("1", "51", "2.5", "", "셋"):
     code, r = api("POST", "/api/companies/t_new/presets", {"presets": bad})
-    check(code == 400 and "2~10" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, f"옵저버 프리셋 수 거절 {bad!r}", r)
+    check(code == 400 and "2~50" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 5, f"옵저버 프리셋 수 거절 {bad!r}", r)
+code, r = api("POST", "/api/companies/t_new/presets", {"presets": "40"})
+check(code == 200 and r["presets"] == 40, "옵저버 프리셋 수 40 - 옛 PC 도 받는 값이라 버전을 안 본다", r)
+code, r = api("POST", "/api/companies/t_new/presets", {"presets": "41"})
+check(code == 400 and "pc_a" in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 40, "41개 이상: 업데이트되지 않은 PC(preset_max 없음)가 있으면 거절하고 어느 PC 인지 알린다", r)
+db_put("apps/rpa/live/t_new/pc_a/preset_max", 50)
+code, r = api("POST", "/api/companies/t_new/presets", {"presets": "50"})
+check(code == 400 and "pc_b" in r.get("error", "") and "pc_a" not in r.get("error", ""), "업데이트된 PC 는 빼고 남은 PC 만 알린다", r)
+db_put("apps/rpa/live/t_new/pc_b/preset_max", 50)
+code, r = api("POST", "/api/companies/t_new/presets", {"presets": "50"})
+check(code == 200 and db_get("meta/companies/t_new/apps/rpa/limits/presets") == 50, "모든 PC 가 50 을 받으면 연다", r)
+code, r = api("POST", "/api/companies/t_new/presets", {"presets": "5"})
 check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 3, "프리셋 수를 바꿔도 자동 실행 개수는 그대로")
 code, d = api("GET", "/api/companies/t_new")
 check(code == 200 and d.get("parallelLimit") is None, "병렬 실행 최대 창 수: 값이 없으면 null (화면은 기본 1 = 허용 안 함)", str(d.get("parallelLimit")))
@@ -420,7 +431,7 @@ with sync_playwright() as pw:
     # 다시 그려질 때까지 (새 칸에 4) - 그 전에 다음 칸에 표시하거나 채우면 다시 그리며 지워진다
     page.wait_for_function(f"{slot} && !{slot}.dataset.old && {slot}.value === '4'", timeout=10000)
     check(db_get("meta/companies/t_new/apps/rpa/limits/schedule") == 4, "화면: 업체 상세에서 자동 실행 개수 저장")
-    check("옵저버에서 만들 수 있는 프리셋 수를 결정합니다. (2~10, 기본 2)" in page.text_content("#detail"), "옵저버 프리셋 수 설명")
+    check("옵저버에서 만들 수 있는 프리셋 수를 결정합니다. 41개 이상은 업체의 모든 PC가 업데이트된 뒤에 열 수 있습니다. (2~50, 기본 2)" in page.text_content("#detail"), "옵저버 프리셋 수 설명")
     preset = "document.querySelector(\"#detail input[aria-label='옵저버 프리셋 수']\")"
     page.evaluate(f"{preset}.dataset.old = '1'")     # 저장하면 업체 상세를 다시 그린다 - 다시 그려졌는지 보려고
     page.fill("#detail input[aria-label='옵저버 프리셋 수']", "7")
@@ -634,7 +645,7 @@ with sync_playwright() as pw:
         check("비밀번호" in page.text_content("#flash") and len([v for v in (db_get(CMDS) or {}).values() if v.get("type") == "import_preset"]) == 1
               and "secret-pw-value" not in tr_all and "hunter2-pw" not in tr_all, f"{label}가 든 파일은 거절 (명령·전송 없음) ({page.text_content('#flash')})")
         page.evaluate("document.getElementById('flash').classList.add('hide')")
-    for label, body in (("칸 번호 41", {"file": FILE, "slot": 41}), ("칸 번호 글자", {"file": FILE, "slot": "셋"}), ("파일 아님", {"file": "x", "slot": 1})):
+    for label, body in (("칸 번호 51", {"file": FILE, "slot": 51}), ("칸 번호 글자", {"file": FILE, "slot": "셋"}), ("파일 아님", {"file": "x", "slot": 1})):
         code, r = api("POST", f"/api/companies/{CID}/pcs/{PC}/presets/import", body)
         check(code == 400, f"넣어 주기 거절: {label}", (code, r))
     check(len([v for v in (db_get(CMDS) or {}).values() if v.get("type") == "import_preset"]) == 1, "거절된 것은 명령을 만들지 않는다")
@@ -663,7 +674,7 @@ with sync_playwright() as pw:
     db_patch(f"{CMDS}/{rk}", {"state": "done", "started_at": int(time.time()), "ended_at": int(time.time()), "result": "프리셋 2을(를) 이전 기록으로 되돌렸습니다."})
     page.wait_for_function("document.getElementById('flash').textContent.includes('되돌렸습니다')", timeout=15000)
     check(True, "앞에 보낸 [되돌리기] 의 결과도 알린다")
-    # 최종 고침 B3: 파일 대화상자 취소는 조용히, 칸 번호가 1~40 정수가 아니면 확인 창 전에 안내
+    # 최종 고침 B3: 파일 대화상자 취소는 조용히, 칸 번호가 1~50 정수가 아니면 확인 창 전에 안내
     page.evaluate("document.getElementById('flash').classList.add('hide')")
     page.set_input_files(f"{box} input[type=file]", [])
     page.wait_for_timeout(500)
@@ -671,13 +682,13 @@ with sync_playwright() as pw:
     page.set_input_files(f"{box} input[type=file]", big_path)
     page.wait_for_function(f"document.querySelector('{box} input.preset-slot')?.value === '2'", timeout=10000)
     dialogs.clear()
-    for bad in ("", "0", "41", "2.5"):
+    for bad in ("", "0", "51", "2.5"):
         page.fill(f"{box} input.preset-slot", bad)
         page.click(f"{box} button.preset-import")
         page.wait_for_timeout(300)
     check(page.text_content("#flash") == "칸 번호를 입력하여 주십시오." and "bad" in (page.get_attribute("#flash", "class") or "") and dialogs == []
           and len([v for v in (db_get(CMDS) or {}).values() if v.get("type") == "import_preset"]) == 1,
-          f"칸 번호가 1~40 정수가 아니면 확인 창 전에 안내 (명령 없음) ({page.text_content('#flash')}, {dialogs})")
+          f"칸 번호가 1~50 정수가 아니면 확인 창 전에 안내 (명령 없음) ({page.text_content('#flash')}, {dialogs})")
     # 최종 고침 B1: 등록되지 않은 PC 면 전송 자리를 쓰기 전에 거절 (전송 자리에 6시간 남는 찌꺼기 없음)
     code, r = api("POST", f"/api/companies/{CID}/pcs/pc_zz/presets/import", {"file": FILE, "slot": 1})
     left = list(db_get(f"apps/rpa/transfers/{CID}") or {})

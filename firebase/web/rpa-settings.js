@@ -326,7 +326,7 @@ async function applyModules() {
 // --- 쇼핑몰 프리셋 --------------------------------------------------
 // PC 의 옵저버가 저장한 프리셋 (에이전트가 이름·코드·단계 수·켬만 올린다). 켜면 다음 프리페어부터 그 쇼핑몰에서 엑셀을 받는다.
 // 명령 키는 "PRESET1" - 숫자 키는 Realtime DB 가 배열로 바꿔 읽는다
-// ① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄 (1~20, 21~35, 36~50). 웰라이프 40개 (rpa_status.circled 와 같은 규칙, 2026-11-03)
+// ① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄 (1~20, 21~35, 36~50). 프리셋 최대 50개 (rpa_status.circled 와 같은 규칙, 2026-11-03)
 const circled = (n) => String.fromCharCode(n <= 20 ? 0x2460 + n - 1 : n <= 35 ? 0x3251 + n - 21 : 0x32B1 + n - 36);
 const savedShops = () => (Array.isArray(live?.presets) ? live.presets : []);
 const shopReady = (p) => p.steps > 0 && p.has_login;
@@ -407,7 +407,7 @@ async function applyShops() {
 // --- 프리셋 복사 (설계 2026-10-19 4.3절) --------------------------------
 // 관리자가 이 PC 의 프리셋을 같은 업체의 다른 PC 로. 보낼 PC 에 export_preset, 받을 PC 에 import_preset 을 같은 tid 로 한꺼번에 넣는다.
 // 기록만 오간다 (아이디·비밀번호는 안 간다, 인증 휴대폰은 업체 안이라 따라간다 - with_phone). 받을 번호는 프리셋마다 (기본 같은 번호)
-const SLOT_MAX = 40;   // ops.importPreset 과 같다
+const SLOT_MAX = 50;   // ops.importPreset 과 같다
 const copyPeers = () => Object.keys(c?.pcs || {}).filter((k) => k !== c.pcId);
 const copyShown = () => !!c?.isAdmin && copyPeers().length > 0 && Array.isArray(live?.presets);
 const copyable = () => savedShops().filter((p) => p.steps > 0);

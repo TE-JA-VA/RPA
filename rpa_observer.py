@@ -28,11 +28,12 @@ import time
 import tkinter as tk
 import unicodedata
 from ctypes import wintypes
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
 
 from playwright.sync_api import sync_playwright
 
 import mail_imap
+import observer_widgets as w
 import otp_relay
 import preset_transfer as pt
 import rpa_status as st
@@ -50,21 +51,16 @@ IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부
              "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣어 주십시오).")
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
 MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
-PRESETS_PER_ROW = 10                    # 프리셋 단추 한 줄에 10개, 11개부터 줄을 더한다 (사용자 2026-10-14)
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 옵저버 회색 AP (tools/make_icon.py)
 CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
 PROFILE_PREFIX = "rec_prof_"                            # 기록·미리보기 브라우저의 새 프로필 (로그인 쿠키가 든다 - 끝나면 지운다)
-UI = "맑은 고딕"
-F = (UI, 10)
-F_SMALL = (UI, 9)
-F_BOLD = (UI, 10, "bold")
-BG, CARD, LINE = "#f3f4f6", "#ffffff", "#e5e7eb"
-INK, MUTED = "#111827", "#6b7280"
-BLUE, BLUE_D, BLUE_L = "#2563eb", "#1d4ed8", "#dbeafe"
-GREEN, GREEN_D = "#16a34a", "#15803d"
-RED, RED_D, RED_L = "#dc2626", "#b91c1c", "#fee2e2"
-GRAY_BTN = "#d1d5db"
+UI, F, F_SMALL, F_BOLD = w.UI, w.F, w.F_SMALL, w.F_BOLD
+BG, CARD, LINE = w.PAGE, w.CARD, w.SPLIT                # Ant Design (설계 2026-11-06, observer_widgets)
+INK, MUTED = w.TEXT, w.TEXT2
+BLUE = w.PRIMARY
+GREEN_D = "#389e0d"
+RED, RED_D = "#cf1322", "#a8071a"                       # 글자용 - 단추 빨강(w.DANGER)은 작은 글자로 쓰기에 흐리다
 GUIDE = """<!doctype html><meta charset="utf-8"><title>오토파일럿 기록</title>
 <body style="margin:0;font-family:'Malgun Gothic',sans-serif;background:#f3f4f6;color:#111827">
 <div style="padding:28px 40px"><div style="font-size:40px;line-height:1">⬆</div>
@@ -741,26 +737,29 @@ def validate_presets(presets):
     return None
 
 
-def button(parent, text, color, dark, command, **kw):
-    b = tk.Button(parent, text=text, command=command, bg=color, fg="white", activebackground=dark, activeforeground="white",
-                  disabledforeground="#f9fafb", relief="flat", bd=0, cursor="hand2", font=F_BOLD, padx=16, pady=7, **kw)
-    b.colors = (color, dark)
-    return b
+def button(parent, text, kind, command, **kw):
+    return w.Btn(parent, text, kind, command, **kw)
 
 
 def enable(b, on):
-    b.config(state="normal" if on else "disabled", bg=b.colors[0] if on else GRAY_BTN, cursor="hand2" if on else "arrow")
+    b.config(state="normal" if on else "disabled")
 
 
-def skin(b, text, color, dark, command):
-    """같은 단추를 다른 일에 (미리보기 중에는 [▶ 미리보기]·[저장] 자리가 [Ⅱ 일시정지]·[■ 중단]). 색은 enable 이 칠한다."""
-    b.config(text=text, command=command, activebackground=dark)
-    b.colors = (color, dark)
+def skin(b, text, kind, command):
+    """같은 단추를 다른 일에 (미리보기 중에는 [▶ 미리보기]·[저장] 자리가 [Ⅱ 일시정지]·[■ 중단])."""
+    b.config(text=text, command=command, kind=kind)
+
+
+def tab_text(i, p):
+    """프리셋 탭 글자 - 50개면 번호만으로는 못 찾는다. 긴 이름은 줄인다."""
+    name = p["name"]
+    return f"{circled(i + 1)} {name[:10] + '…' if len(name) > 11 else name}"
 
 
 class App:
     def __init__(self, root, scale, presets, hint="", fake_creds=None):
         self.root, self.scale = root, scale
+        w.init(scale)
         self.presets = presets
         self.max_presets = st.preset_limit()     # 업체 프리셋 수 (에이전트가 적은 업체 정책) - 켤 때 한 번
         if fake_creds and not any(p["loaded"] for p in self.presets):      # 시험: 가짜 쇼핑몰 계정
@@ -800,91 +799,105 @@ class App:
 
     # --- 화면 ---
     def _entry(self, parent, var, width, show=""):
-        return tk.Entry(parent, textvariable=var, width=width, show=show, font=F, relief="flat", bg=CARD, fg=INK,
-                        highlightthickness=1, highlightbackground=LINE, highlightcolor=BLUE, insertbackground=INK)
+        return w.Field(parent, width=width, textvariable=var, show=show)
 
     def _build(self):
         root, s = self.root, self.scale
-        pad = int(14 * s)
+        narrow = self.panel_w < int(560 * s)             # 좁은 화면은 여백부터 줄인다 (설계 5절)
+        pad, card_pad = int((14 if narrow else 20) * s), int((12 if narrow else 20) * s)
         head = tk.Frame(root, bg=BG)
-        head.pack(fill="x", padx=pad, pady=(pad, 6))
-        tk.Label(head, text="사용자 행위 기록", font=(UI, 14, "bold"), bg=BG, fg=INK).pack(anchor="w")
+        head.pack(fill="x", padx=pad, pady=(int(14 * s), int(8 * s)))
+        tk.Label(head, text="사용자 행위 기록", font=(UI, 15, "bold"), bg=BG, fg=INK).pack(anchor="w")
         tk.Label(head, text="각 프리셋마다 로그인부터 엑셀 파일 다운로드까지 보여주시면 다음 번부터 자동으로 엑셀파일을 수집합니다.",
                  font=F_SMALL, bg=BG, fg=MUTED, anchor="w", justify="left", wraplength=self.panel_w - 2 * pad).pack(fill="x")
 
-        # 프리셋 줄
-        card = tk.Frame(root, bg=CARD, highlightthickness=1, highlightbackground=LINE)
-        card.pack(fill="x", padx=pad, pady=6)
-        inner = tk.Frame(card, bg=CARD)
-        inner.pack(fill="x", padx=12, pady=10)
-        head = tk.Frame(inner, bg=CARD)              # 제목 줄 오른쪽에 개수·[+][−] - 단추 줄에는 번호 단추 10개만 (2026-10-15)
+        # 프리셋: 탭 줄 + 프리셋마다 따로인 칸
+        card = w.Card(root, card_pad)
+        card.pack(fill="x", padx=pad)
+        inner = card.inner
+        head = tk.Frame(inner, bg=CARD)
         head.pack(fill="x")
-        tk.Label(head, text="프리셋", font=F_BOLD, bg=CARD, fg=INK).pack(side="left")
-        self.preset_tools = tk.Frame(head, bg=CARD)
-        self.preset_tools.pack(side="right")
-        self.preset_bar = tk.Frame(inner, bg=CARD)
-        self.preset_bar.pack(fill="x", pady=(6, 8))
+        self.preset_tools = tk.Frame(head, bg=CARD)      # 탭이 스크롤돼도 오른쪽에 그대로
+        self.preset_tools.pack(side="right", anchor="n")
+        self.del_btn = button(self.preset_tools, "프리셋 삭제", "danger_ghost", self.remove_preset, h=26, pad=9, font=F_SMALL)
+        self.del_btn.pack(side="right")
+        self.add_btn = w.Icon(self.preset_tools, "plus", self.add_preset, color=w.TEXT3)
+        self.count_label = tk.Label(self.preset_tools, font=F_SMALL, bg=CARD, fg=w.TEXT3)
+        self.count_label.pack(side="right", padx=(int(8 * s), int(6 * s)))
+        self.tabs = w.Tabs(head, self.select)
+        self.tabs.pack(side="left", fill="x", expand=True)
+        tk.Frame(inner, bg=LINE, height=1).pack(fill="x", pady=(0, int(10 * s)))
         form = tk.Frame(inner, bg=CARD)          # 프리셋마다 따로인 칸은 모두 여기 (아이디·비밀번호도 - 2026-10-02)
         form.pack(fill="x")
         for r, (left, lvar, right, rvar, show) in enumerate((("이름", self.name_var, "사이트코드", self.code_var, ""),
                                                              ("아이디", self.id_var, "비밀번호", self.pw_var, "•"))):
-            y = (6 if r else 0, 0)
+            y = (3 if r else 0, 0)
             tk.Label(form, text=left, font=F, bg=CARD, fg=MUTED).grid(row=r, column=0, sticky="w", pady=y)
-            self._entry(form, lvar, 12).grid(row=r, column=1, sticky="we", padx=(6, 0), pady=y, ipady=3)
+            self._entry(form, lvar, 12).grid(row=r, column=1, sticky="we", padx=(6, 0), pady=y)
             tk.Label(form, text=right, font=F, bg=CARD, fg=MUTED).grid(row=r, column=2, sticky="w", padx=(12, 0), pady=y)
-            self._entry(form, rvar, 12, show=show).grid(row=r, column=3, sticky="we", padx=(6, 0), pady=y, ipady=3)
-        tk.Label(form, text="인증 휴대폰", font=F, bg=CARD, fg=MUTED).grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.phone_box = ttk.Combobox(form, state="readonly", width=10, font=F, values=["(없음)"])
-        self.phone_box.grid(row=2, column=1, sticky="we", padx=(6, 0), pady=(6, 0))
+            self._entry(form, rvar, 12, show=show).grid(row=r, column=3, sticky="we", padx=(6, 0), pady=y)
+        tk.Label(form, text="인증 휴대폰", font=F, bg=CARD, fg=MUTED).grid(row=2, column=0, sticky="w", pady=(3, 0))
+        self.phone_box = w.Select(form, values=["(없음)"])
+        self.phone_box.grid(row=2, column=1, sticky="we", padx=(6, 0), pady=(3, 0))
         self.phone_box.bind("<<ComboboxSelected>>", lambda e: self._field_changed())
-        tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(6, 0))
-        self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
+        tk.Label(form, text="발신번호", font=F, bg=CARD, fg=MUTED).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(3, 0))
+        self._entry(form, self.senders_var, 12).grid(row=2, column=3, sticky="we", padx=(6, 0), pady=(3, 0))
         self.senders_var.trace_add("write", lambda *a: self._field_changed())
         src = tk.Frame(form, bg=CARD)               # 주문 수집용 엑셀파일 경로 (사용자 2026-10-14)
         src.grid(row=3, column=0, columnspan=4, sticky="we", pady=(8, 0))
-        tk.Label(src, text="주문 수집용 엑셀파일 경로", font=F, bg=CARD, fg=MUTED).pack(side="left")
-        for value, label in (("shop", "쇼핑몰"), ("mail", "메일 첨부파일"), ("imap", "메일 서버")):
-            tk.Radiobutton(src, text=label, value=value, variable=self.source_var, font=F, bg=CARD, activebackground=CARD,
-                           cursor="hand2", command=self._source_changed).pack(side="left", padx=(12, 0))
-        self.del_btn = button(src, "프리셋 삭제", RED, RED_D, self.remove_preset)
-        self.del_btn.config(font=F_SMALL, padx=10, pady=2)   # 제목 줄 [−] 와 같은 일 - 찾기 쉬운 자리에 빨간 단추로 하나 더 (사용자 2026-10-20)
-        self.del_btn.pack(side="right")
+        tk.Label(src, text="주문 수집용 엑셀파일 경로", font=F, bg=CARD, fg=MUTED).pack(side="top" if narrow else "left", anchor="w")
+        picks = tk.Frame(src, bg=CARD)              # 좁은 창에서는 다음 줄로
+        picks.pack(side="top" if narrow else "left", anchor="w", pady=(4, 0) if narrow else 0)
+        for k, (value, label) in enumerate((("shop", "쇼핑몰"), ("mail", "메일 첨부파일"), ("imap", "메일 서버"))):
+            w.Radio(picks, label, value, self.source_var, self._source_changed).pack(side="left", padx=(12 if k or not narrow else 0, 0))
         # 메일 2차인증 (설계 2026-11-02): 기록에 메일함 로그인이 있을 때만 보인다 (_show_mail)
         self.mail_widgets = [tk.Label(form, text="인증 메일 아이디", font=F, bg=CARD, fg=MUTED), self._entry(form, self.mail_id_var, 12),
                              tk.Label(form, text="인증 메일 비밀번호", font=F, bg=CARD, fg=MUTED), self._entry(form, self.mail_pw_var, 12, show="•"),
                              tk.Label(form, text=MAIL_ACCOUNT_HINT, font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
-                                      wraplength=self.panel_w - 2 * pad - 26)]
+                                      wraplength=self.panel_w - 2 * (pad + card_pad))]
         self.prefix_label = tk.Label(form, text="메일 시작 문구", font=F, bg=CARD, fg=MUTED)
         self.prefix_entry = self._entry(form, self.prefix_var, 12)
         self.prefix_var.trace_add("write", lambda *a: self._field_changed())
         form.columnconfigure(0, minsize=self.prefix_label.winfo_reqwidth())    # '메일 시작 문구' 가 나타나도 칸이 옆으로 밀리지 않게 (사용자 2026-10-20)
         for col in (1, 3):              # 왼쪽(이름·아이디·인증 휴대폰)·오른쪽(사이트코드·비밀번호·발신번호) 칸을 같은 너비로 (사용자 2026-10-13)
             form.columnconfigure(col, weight=1, uniform="field")
-        self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
-                                wraplength=self.panel_w - 2 * pad - 26)
+        self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=w.TEXT3, anchor="w", justify="left",
+                                wraplength=self.panel_w - 2 * (pad + card_pad))
         self.pw_hint.pack(fill="x", pady=(6, 0))
         self.name_var.trace_add("write", lambda *a: self._field_changed())
         self.code_var.trace_add("write", lambda *a: self._field_changed())
 
         # 안내 한 줄 (기록·미리보기·저장 모두 여기 - 두 곳이면 지난 일이 남는다, 2026-10-02) + 기록 단추
         bar = tk.Frame(root, bg=BG)
-        bar.pack(fill="x", padx=pad, pady=(6, 4))
-        self.rec_btn = button(bar, "●  기록 시작", RED, RED_D, self.toggle_record)
+        bar.pack(fill="x", padx=pad, pady=int(8 * s))
+        self.rec_btn = button(bar, "●  기록 시작", "primary", self.toggle_record)
         self.rec_btn.pack(side="right")
-        self.status = tk.Label(bar, text="브라우저 준비 중…", font=F, bg=BG, fg=MUTED, anchor="w", justify="left",
+        self.status = w.Status(bar, text="브라우저 준비 중…", font=F, bg=BG, fg=MUTED, anchor="w", justify="left",
                                wraplength=self.panel_w - int(190 * s))
         self.status.pack(side="left", fill="x", expand=True)
 
+        # 단추 (목록보다 먼저 붙여 목록이 남는 자리를 쓴다)
+        btns = tk.Frame(root, bg=BG)
+        btns.pack(side="bottom", fill="x", padx=pad, pady=(int(8 * s), int(14 * s)))
+        self.save_btn = button(btns, "저장", "primary", self.save, width=8)
+        self.save_btn.pack(side="right")
+        self.prev_btn = button(btns, "▶  미리보기", "default", self.preview, width=12)
+        self.prev_btn.pack(side="right", padx=8)
+        self.edit_btn = button(btns, "수정", "default", self.edit_preview, width=8)      # 미리보기가 멈춰 있을 때만 보인다
+        self.import_btn, self.export_btn = (w.Link(btns, t, c) for t, c in (("파일에서 불러오기", self.import_file), ("파일로 내보내기", self.export_file)))
+        self.import_btn.pack(side="left")
+        self.export_btn.pack(side="left", padx=(int(12 * s), 0))
+
         # 기록 목록
-        mid = tk.Frame(root, bg=CARD, highlightthickness=1, highlightbackground=LINE)
-        mid.pack(fill="both", expand=True, padx=pad, pady=4)
-        self.list_title = tk.Label(mid, text="", font=F_BOLD, bg=CARD, fg=INK, anchor="w")
-        self.list_title.pack(fill="x", padx=12, pady=(8, 4))
-        tk.Frame(mid, bg=LINE, height=1).pack(fill="x")
-        body = tk.Frame(mid, bg=CARD)
+        mid = w.Card(root, int(14 * s), fill=True)
+        mid.pack(fill="both", expand=True, padx=pad)
+        self.list_title = tk.Label(mid.inner, text="", font=F_BOLD, bg=CARD, fg=INK, anchor="w")
+        self.list_title.pack(fill="x", pady=(0, int(8 * s)))
+        tk.Frame(mid.inner, bg=LINE, height=1).pack(fill="x")
+        body = tk.Frame(mid.inner, bg=CARD)
         body.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(body, highlightthickness=0, bg=CARD)
-        sb = tk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
+        sb = w.Bar(body, "vertical", self.canvas.yview)
         self.canvas.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
@@ -894,61 +907,26 @@ class App:
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.win, width=e.width))
         self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta / 120), "units"))
 
-        # 단추
-        btns = tk.Frame(root, bg=BG)
-        btns.pack(fill="x", padx=pad, pady=(8, pad))
-        self.save_btn = button(btns, "저장", GREEN, GREEN_D, self.save, width=8)
-        self.save_btn.pack(side="right")
-        self.prev_btn = button(btns, "▶  미리보기", BLUE, BLUE_D, self.preview, width=12)
-        self.prev_btn.pack(side="right", padx=8)
-        self.edit_btn = button(btns, "수정", BLUE, BLUE_D, self.edit_preview, width=8)      # 미리보기가 멈춰 있을 때만 보인다
-        self.import_btn, self.export_btn = (tk.Button(btns, text=t, command=c, font=F_SMALL, fg=MUTED, bg=BG, activebackground=LINE,
-                                                      relief="flat", bd=0, cursor="hand2")
-                                            for t, c in (("파일에서 불러오기", self.import_file), ("파일로 내보내기", self.export_file)))
-        self.import_btn.pack(side="left")
-        self.export_btn.pack(side="left", padx=(8, 0))
-
     def paint_presets(self):
-        for c in self.preset_bar.winfo_children() + self.preset_tools.winfo_children():
-            c.destroy()
         busy = self.recording is not None or self.previewing
-        rows = [tk.Frame(self.preset_bar, bg=CARD) for _ in range(max(1, -(-len(self.presets) // PRESETS_PER_ROW)))]
-        for r, row in enumerate(rows):
-            row.pack(fill="x", pady=(0 if r == 0 else 4, 0))
-            for c in range(PRESETS_PER_ROW):      # 한 줄 10칸을 같은 폭으로 나눠 창 폭에 맞춘다 (40개 - 4줄, 2026-10-15)
-                row.columnconfigure(c, weight=1, uniform="preset")
-        for i, p in enumerate(self.presets):
-            has = bool(p["raw"] or p["loaded"])
-            sel = i == self.cur
-            bg, fg = (BLUE, "white") if sel else ((BLUE_L, BLUE_D) if has else ("#f3f4f6", MUTED))
-            if self.recording == i:
-                bg, fg = RED, "white"
-            b = tk.Button(rows[i // PRESETS_PER_ROW], text=circled(i + 1), font=(UI, 14, "bold"), bg=bg, fg=fg, activebackground=bg,
-                          activeforeground=fg, relief="flat", bd=0, padx=0, pady=2, cursor="hand2" if not busy else "arrow",
-                          disabledforeground=fg, command=lambda i=i: self.select(i))
-            b.config(state="disabled" if busy and not sel else "normal")
-            b.grid(row=0, column=i % PRESETS_PER_ROW, sticky="we", padx=(0, 4))
-        small = dict(font=(UI, 13, "bold"), relief="flat", bd=0, width=3, pady=1, bg=CARD, fg=MUTED, activebackground=LINE,
-                     highlightthickness=1, highlightbackground=LINE)
-        can_del = len(self.presets) > MIN_PRESETS and not busy
-        enable(self.del_btn, can_del)
-        if len(self.presets) > MIN_PRESETS:
-            tk.Button(self.preset_tools, text="−", command=self.remove_preset, state="disabled" if busy else "normal",
-                      cursor="hand2", **small).pack(side="right", padx=(2, 0))
+        self.tabs.show([(tab_text(i, p), bool(p["raw"] or p["loaded"])) for i, p in enumerate(self.presets)], self.cur, self.recording, busy)
+        enable(self.del_btn, len(self.presets) > MIN_PRESETS and not busy)
+        self.count_label.config(text=f"{len(self.presets)}/{self.max_presets}")
         if len(self.presets) < self.max_presets:
-            tk.Button(self.preset_tools, text="+", command=self.add_preset, state="disabled" if busy else "normal",
-                      cursor="hand2", **small).pack(side="right", padx=2)
-        tk.Label(self.preset_tools, text=f"{len(self.presets)}/{self.max_presets}", font=F_SMALL, bg=CARD, fg=MUTED).pack(side="right", padx=(0, 6))
+            self.add_btn.pack(side="right", before=self.count_label)
+            self.add_btn.set_state("disabled" if busy else "normal")
+        else:
+            self.add_btn.pack_forget()
 
     def paint_buttons(self):
         rec_on = self.recording is not None
-        self.rec_btn.config(text="■  기록 완료" if rec_on else "●  기록 시작")
+        self.rec_btn.config(text="■  기록 완료" if rec_on else "●  기록 시작", kind="danger" if rec_on else "primary")
         imap = self.presets[self.cur]["source"] == "imap"     # 메일 서버 - 기록·미리보기 대신 [찾아보기]
         enable(self.rec_btn, not self.previewing and (not rec_on or self.recording == self.cur) and not (imap and not rec_on))
         if self.previewing:         # 창을 닫는 대신 멈추는 단추 (2026-10-02 - 미리보기 중에는 창이 안 닫힌다)
             idle = not (self.stopping or self.closing or self.editing)
-            skin(self.prev_btn, "▶  계속" if self.paused else "Ⅱ  일시정지", BLUE, BLUE_D, self.toggle_pause)
-            skin(self.save_btn, "■  중단", RED, RED_D, self.stop_preview)
+            skin(self.prev_btn, "▶  계속" if self.paused else "Ⅱ  일시정지", "default", self.toggle_pause)
+            skin(self.save_btn, "■  중단", "danger", self.stop_preview)
             enable(self.prev_btn, idle and self.failed_at is None)      # 못 찾아 멈춘 자리에서는 이어 갈 수 없다
             enable(self.save_btn, not (self.stopping or self.closing))  # [수정] 뒤 기다리는 동안(파일 받기 최대 5분)에도 멈출 수 있게
             if self.paused or self.failed_at is not None:               # 멈춰 있을 때만 [수정] (설계 2026-10-19 4.2절)
@@ -959,8 +937,8 @@ class App:
         else:
             self.edit_btn.pack_forget()
             kept = not rec_on and self._has_kept(self.presets[self.cur])
-            skin(self.prev_btn, "▶  미리보기", BLUE, BLUE_D, self.preview)
-            skin(self.save_btn, "저장", GREEN, GREEN_D, self.save)
+            skin(self.prev_btn, "▶  미리보기", "default", self.preview)
+            skin(self.save_btn, "저장", "primary", self.save)
             enable(self.prev_btn, kept and not imap)
             enable(self.save_btn, kept)     # 기록이 끝나 있고 켜 둔 단계가 한 줄은 있어야 (2026-10-02)
         for b in (self.import_btn, self.export_btn):
@@ -1021,6 +999,7 @@ class App:
             before = (p["source"], p["prefix"])
             self._store_fields()
             self._title()
+            self.paint_presets()                    # 탭에 이름이 보인다
             guess = p["source"] == "imap" and p["imap"] and not p["imap"]["host"] and mail_imap.guess_server(p["id"].strip())
             if guess:                               # 메일 주소를 아이디로 넣으면 서버 칸을 채운다
                 p["imap"].update(host=guess[0], port=guess[1], security=guess[2])
@@ -1030,19 +1009,18 @@ class App:
     def _show_mail(self, record):
         """기록에 메일함 로그인이 있으면 '인증 메일 아이디·비밀번호' 칸과 안내를 보인다 (5·6번째 줄)."""
         if has_mail_login(record):
-            for k, w in enumerate(self.mail_widgets[:4]):
-                w.grid(row=5, column=k, sticky="w" if k % 2 == 0 else "we", padx=(12 if k == 2 else 6 if k else 0, 0), pady=(6, 0),
-                       **({"ipady": 3} if k % 2 else {}))
+            for k, x in enumerate(self.mail_widgets[:4]):
+                x.grid(row=5, column=k, sticky="w" if k % 2 == 0 else "we", padx=(12 if k == 2 else 6 if k else 0, 0), pady=(3, 0))
             self.mail_widgets[4].grid(row=6, column=0, columnspan=4, sticky="we", pady=(2, 0))
         else:
-            for w in self.mail_widgets:
-                w.grid_remove()
+            for x in self.mail_widgets:
+                x.grid_remove()
 
     def _show_prefix(self):
         """메일 첨부파일일 때만 '메일 시작 문구' 칸 (쇼핑몰이면 감춘다)."""
         if self.source_var.get() == "mail":
-            self.prefix_label.grid(row=4, column=0, sticky="w", pady=(6, 0))
-            self.prefix_entry.grid(row=4, column=1, sticky="we", padx=(6, 0), pady=(6, 0), ipady=3)
+            self.prefix_label.grid(row=4, column=0, sticky="w", pady=(3, 0))
+            self.prefix_entry.grid(row=4, column=1, sticky="we", padx=(6, 0), pady=(3, 0))
         else:
             self.prefix_label.grid_remove()
             self.prefix_entry.grid_remove()
@@ -1177,29 +1155,26 @@ class App:
             on = var.get()
             row = tk.Frame(self.inner, bg=CARD)
             row.pack(fill="x")
-            tk.Frame(self.inner, bg="#f3f4f6", height=1).pack(fill="x")
-            tk.Checkbutton(row, variable=var, bg=CARD, activebackground=CARD, cursor="hand2",
-                           command=self.render).pack(side="left", anchor="n", padx=(6, 0), pady=4)
-            tk.Button(row, text="✕", font=(UI, 10), fg="#9ca3af", bg=CARD, activebackground=RED_L, activeforeground=RED,
-                      relief="flat", bd=0, cursor="hand2", command=lambda sid=sid: self.delete(sid)
-                      ).pack(side="right", anchor="n", padx=6, pady=4)
+            tk.Frame(self.inner, bg=LINE, height=1).pack(fill="x")
+            w.Check(row, variable=var, command=self.render).pack(side="left", anchor="n", padx=(4, 8), pady=10)
+            w.Icon(row, "x", lambda sid=sid: self.delete(sid), hover=w.DANGER).pack(side="right", anchor="n", padx=(8, 4), pady=11)
             self._wait_box(row, p, s)
             if s["kind"] in ("fill", "otp"):        # 글자 칸 - 문자로 받는 인증번호 칸인지 사람이 바꿀 수 있다
                 is_otp = s["kind"] == "otp"
-                tk.Button(row, text="인증번호 칸 해제" if is_otp else "인증번호 칸", font=F_SMALL, fg=BLUE if is_otp else MUTED,
-                          bg=CARD, activebackground=BLUE_L, relief="flat", bd=0, cursor="hand2",
-                          command=lambda sid=sid, on=not is_otp: self.toggle_otp(sid, on)).pack(side="right", anchor="n", padx=2, pady=4)
-            tk.Label(row, text=f"{n:2d}", font=F_SMALL, bg=CARD, fg=MUTED, width=3, anchor="e").pack(side="left", anchor="n", pady=6)
+                w.Link(row, "인증번호 칸 해제" if is_otp else "인증번호 칸", lambda sid=sid, on=not is_otp: self.toggle_otp(sid, on),
+                       fg=BLUE if is_otp else MUTED).pack(side="right", anchor="n", padx=2, pady=9)
+            w.badge(row, n, on).pack(side="left", anchor="n", pady=7)
             text = ("↳ " if k in body else "") + re.sub(r" \(\d+단계 뒤에 새로 생긴 것\)", " (새로 생긴 것)", rec.describe(s))
             warn = s["kind"] == "goto" and "로그인 세션 값을 감지" in text
             lab = tk.Label(row, text=text, font=F, bg=CARD, anchor="w", justify="left",
-                           fg=(RED_D if warn else INK) if on else "#9ca3af",
-                           wraplength=self.panel_w - int(270 * self.scale))
-            lab.pack(side="left", fill="x", expand=True, padx=(6, 0), pady=6)
+                           fg=(RED_D if warn else INK) if on else w.TEXT4,
+                           wraplength=self.panel_w - int(310 * self.scale))
+            lab.pack(side="left", fill="x", expand=True, padx=(8, 0), pady=8)
+            lab.bind("<Configure>", lambda e, lab=lab: lab.config(wraplength=e.width))   # 오른쪽 칸을 뺀 폭 - [인증번호 칸] 이 있는 줄·좁은 창에서 글이 잘리지 않게
+            w.hover_row(row)
             self.labels[sid], self.base[sid] = lab, text
         if final and any(s.get("pick") for s in final["steps"]):
-            tk.Button(self.inner, text="받은 메일 기억 지우기", font=F_SMALL, fg=MUTED, bg=CARD, activebackground=LINE,
-                      relief="flat", bd=0, cursor="hand2", command=self.clear_mail_memory).pack(anchor="e", padx=8, pady=6)
+            w.Link(self.inner, "받은 메일 기억 지우기", self.clear_mail_memory, fg=MUTED).pack(anchor="e", padx=8, pady=6)
         if not n:
             tip = ("[● 기록 시작] 을 누르고 쇼핑몰 사이트 주소를 입력하는 것부터 시작해주세요.\n"
                    "모두 완료하였다면 [■ 기록 완료] 버튼을 누른 다음 저장해주세요.") if self.recording is None else \
@@ -1219,10 +1194,10 @@ class App:
         on, text = p["wait"].get(sid, ("wait_sec" in s, str(s.get("wait_sec", ""))))
         on_var, text_var = tk.BooleanVar(self.root, value=on), tk.StringVar(self.root, value=text)
         self.wait_vars.append((on_var, text_var))
-        tk.Label(row, text="초 대기", font=F_SMALL, bg=CARD, fg=MUTED).pack(side="right", anchor="n", pady=6)
-        tk.Entry(row, textvariable=text_var, width=4, font=F_SMALL, justify="right", relief="solid", bd=1, validate="key",
-                 validatecommand=(row.register(lambda t: not t or t.isdecimal()), "%P")).pack(side="right", anchor="n", padx=(0, 3), pady=6)
-        tk.Checkbutton(row, variable=on_var, bg=CARD, activebackground=CARD, cursor="hand2").pack(side="right", anchor="n", pady=4)
+        tk.Label(row, text="초 대기", font=F_SMALL, bg=CARD, fg=w.TEXT3).pack(side="right", anchor="n", pady=9)
+        w.Field(row, width=3, h=24, font=F_SMALL, textvariable=text_var, justify="right", validate="key",
+                validatecommand=(row.register(lambda t: not t or t.isdecimal()), "%P")).pack(side="right", anchor="n", padx=(0, 2), pady=6)
+        w.Check(row, variable=on_var).pack(side="right", anchor="n", padx=(0, 2), pady=10)
 
         def changed(*_):
             p["wait"][sid] = (on_var.get(), text_var.get())
@@ -1252,16 +1227,15 @@ class App:
         for i, (label, key) in enumerate(self.IMAP_TEXT):
             v[key] = tk.StringVar(self.root, value=show(cfg[key] if key in ("host", "port") else r[key]))
             tk.Label(box, text=label, font=F, bg=CARD, fg=MUTED).grid(row=i, column=0, sticky="w", pady=2)
-            self._entry(box, v[key], 20).grid(row=i, column=1, sticky="we", padx=(8, 0), pady=2, ipady=2)
+            self._entry(box, v[key], 20).grid(row=i, column=1, sticky="we", padx=(8, 0), pady=1)
         n = len(self.IMAP_TEXT)
         tk.Label(box, text="보안 방식", font=F, bg=CARD, fg=MUTED).grid(row=n, column=0, sticky="w", pady=2)
-        sec = ttk.Combobox(box, state="readonly", font=F, values=[t for _, t in self.SECURITY])
+        sec = w.Select(box, values=[t for _, t in self.SECURITY])
         sec.current(next((k for k, (x, _) in enumerate(self.SECURITY) if x == cfg["security"]), 0))
         sec.grid(row=n, column=1, sticky="we", padx=(8, 0), pady=2)
         v["unseen_only"], v["mark_seen"] = tk.BooleanVar(self.root, value=bool(r["unseen_only"])), tk.BooleanVar(self.root, value=bool(r["mark_seen"]))
         for k, (key, text) in enumerate((("unseen_only", "안 읽은 메일만"), ("mark_seen", "받은 뒤 읽음으로 표시"))):
-            tk.Checkbutton(box, text=text, variable=v[key], font=F, bg=CARD, activebackground=CARD, cursor="hand2",
-                           command=lambda: self._imap_store(p, v, sec)).grid(row=n + 1 + k, column=0, columnspan=2, sticky="w")
+            w.Check(box, text=text, variable=v[key], command=lambda: self._imap_store(p, v, sec)).grid(row=n + 1 + k, column=0, columnspan=2, sticky="w", pady=2)
         box.columnconfigure(1, weight=1)
         for x in v.values():
             if isinstance(x, tk.StringVar):
@@ -1272,16 +1246,15 @@ class App:
                  wraplength=self.panel_w - int(90 * self.scale)).pack(fill="x", padx=12, pady=(4, 6))
         row = tk.Frame(self.inner, bg=CARD)
         row.pack(fill="x", padx=12, pady=(0, 6))
-        button(row, "찾아보기", BLUE, BLUE_D, self.imap_find).pack(side="left")
-        tk.Button(row, text="받은 메일 기억 지우기", font=F_SMALL, fg=MUTED, bg=CARD, activebackground=LINE, relief="flat", bd=0,
-                  cursor="hand2", command=self.clear_imap_memory).pack(side="right")
+        button(row, "찾아보기", "primary", self.imap_find).pack(side="left")
+        w.Link(row, "받은 메일 기억 지우기", self.clear_imap_memory, fg=MUTED).pack(side="right")
         found = getattr(self, "imap_found", None)
         if found and found[0] == self.cur and isinstance(found[1], list):
             for it in found[1]:
                 text = (f"{it['date']:%m-%d %H:%M}  {it['sender']}\n    {it['subject'][:60]}"
                         + (f"\n    첨부: {', '.join(it['attachments'])}" if it["attachments"] else "\n    받을 첨부 없음")
                         + ("  (이미 받음)" if it["done"] else ""))
-                tk.Label(self.inner, text=text, font=F_SMALL, bg=CARD, fg="#9ca3af" if it["done"] else INK, justify="left", anchor="w",
+                tk.Label(self.inner, text=text, font=F_SMALL, bg=CARD, fg=w.TEXT4 if it["done"] else INK, justify="left", anchor="w",
                          wraplength=self.panel_w - int(90 * self.scale)).pack(fill="x", padx=14, pady=2)
 
     def _imap_store(self, p, v, sec):
@@ -1833,6 +1806,11 @@ def check():
         root.destroy()
     except Exception as e:
         print(f"문제: Tcl/Tk를 불러오지 못했습니다. ({type(e).__name__}: {e})")
+    try:                                                # exe 에서 Pillow·PNG 가 빠지면 창이 안 뜬다 - 끝 줄을 안 찍어 빌드·샌드박스가 잡게
+        assert w.self_check()
+    except Exception as e:
+        print(f"문제: 화면 그림을 만들지 못했습니다. ({type(e).__name__}: {e})")
+        return 1
     print(otp_relay.check_line())
     print(CHECK_DONE, flush=True)
     return 0

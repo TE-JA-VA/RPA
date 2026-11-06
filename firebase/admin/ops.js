@@ -23,7 +23,8 @@ const randomPassword = () => randomBytes(18).toString("base64url");   // 24자
 export const POLICY_KEYS = ["Sales", "Hold", "Logistics", "Output", "InvoiceSend"];   // Login 은 언제나 켬이라 정책 대상이 아니다. InvoiceSend 는 Routine·Wellife 같은 키
 export const SCHEDULE_LIMIT_DEFAULT = 2;   // 자동 실행 개수 - 값이 없을 때 (agent.SCHEDULE_LIMIT_DEFAULT 와 같다)
 export const SCHEDULE_LIMIT_MAX = 12;      // PC 쪽 절대 상한 (rpa_status.SCHEDULE_MAX_SLOTS)
-export const PRESET_LIMIT_MIN = 2, PRESET_LIMIT_MAX = 10;   // 옵저버 프리셋 수 - 보통 업체. 업체코드에 wellife 가 든 업체는 PC 가 늘 40 (agent.company_policy, 2026-10-15)
+export const PRESET_LIMIT_MIN = 2, PRESET_LIMIT_MAX = 50;   // 옵저버 프리셋 수 (2026-11-06 10 → 50). 업체코드에 wellife 가 든 업체는 PC 가 늘 50 (agent.company_policy)
+const PRESET_OLD_MAX = 40;                                   // 옛 PC 가 받는 최대 - 넘는 값은 버려 기본 2개로 줄고, 3번 이후의 켠 프리셋이 꺼진 채로 남는다
 export const PARALLEL_LIMIT_MIN = 1, PARALLEL_LIMIT_MAX = 16;   // 병렬 실행 허용 최대 창 수 - 1 = 허용 안 함 (rpa_status.PARALLEL_MIN/MAX, 2026-10-16)
 export const PRICE_BASE = { default: 1, login: 0 };                    // 에이전트에 박힌 처음 토큰 배율 (agent.PRICES) - 서버 값이 위에 덮인다
 
@@ -254,6 +255,12 @@ export async function setPresetLimit(cid, n) {
   const s = String(n ?? "").trim();
   if (!/^\d+$/.test(s) || Number(s) < PRESET_LIMIT_MIN || Number(s) > PRESET_LIMIT_MAX)
     throw new Refused(`옵저버 프리셋 수는 ${PRESET_LIMIT_MIN}~${PRESET_LIMIT_MAX} 사이의 정수여야 합니다. (받은 값: ${s})`);
+  if (Number(s) > PRESET_OLD_MAX) {               // 한 번도 안 켠 PC 도 옛 설치본일 수 있어 막는다 (live.preset_max 는 에이전트가 올린다)
+    const pcIds = Object.keys((await companyOf(cid, { removed: true })).pcs ?? {});
+    const maxes = await Promise.all(pcIds.map((pc) => rtdb.ref(`apps/rpa/live/${cid}/${pc}/preset_max`).get().then((v) => v.val())));
+    const old = pcIds.filter((_, i) => !(maxes[i] >= Number(s)));
+    if (old.length) throw new Refused(`업데이트되지 않은 PC가 있어 프리셋 수를 ${PRESET_OLD_MAX}개보다 많이 열 수 없습니다. 먼저 업데이트하여 주십시오. (${old.join(", ")})`);
+  }
   await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/presets`).set(Number(s));
   return { cid, presets: Number(s) };
 }
@@ -360,7 +367,7 @@ export async function pcUpdateStatus(cid, pcId) {
 const PRESET_TYPES = ["export_preset", "import_preset", "restore_preset"];
 export const TRANSFER_TTL_SEC = 6 * 3600;        // agent.TRANSFER_TTL_SEC 와 같다
 const PRESET_FILE_MAX = 8 * 1048576;
-const PRESET_SLOT_MAX = 40;                       // 웰라이프 업체의 프리셋 수 (rpa_status) - 칸 번호 상한
+const PRESET_SLOT_MAX = 50;                       // PC 가 받는 프리셋 수 (rpa_status.PRESET_MAX) - 칸 번호 상한
 const TID_RE = /^[a-z0-9]{20}$/;                   // routes 의 :tid 와 agent.TRANSFER_RE 를 둘 다 지난다
 const newTid = () => randomBytes(10).toString("hex");
 function presetNo(no, what = "프리셋 번호") {

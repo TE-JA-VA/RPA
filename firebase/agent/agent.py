@@ -582,6 +582,8 @@ def live_extras(snap):
     '바뀌었다' 고 보고 현황 전체(15KB 안팎)를 다시 올려, 그 PC 를 연 업체 웹 탭마다 하루 1GB 를 내려받았다
     (2026-10-19 RTDB 다운로드 한도 10GB 초과)."""
     snap["preset_transfer"] = PRESET_TRANSFER
+    import rpa_status as st
+    snap["preset_max"] = st.PRESET_MAX    # 관리 화면이 41개 이상을 열기 전에 본다 - 옛 PC 는 41 이상을 버려 기본 2개로 줄고 켠 프리셋이 꺼진다 (2026-11-06)
     for v in (snap.get("programs") or {}).values():
         if isinstance(v, dict):
             v.pop("age_sec", None)
@@ -741,7 +743,7 @@ def company_policy(client, cid, app=APP):
     presets = limits.get("presets")
     if not (isinstance(presets, int) and not isinstance(presets, bool) and st.PRESET_MIN <= presets <= st.PRESET_MAX):
         presets = None
-    if "wellife" in str(cid or "").lower():          # 업체코드에 wellife 가 든 업체는 40 (사용자 2026-10-15 - 관리 화면 값 대신)
+    if "wellife" in str(cid or "").lower():          # 업체코드에 wellife 가 든 업체는 PC 고정값 (사용자 2026-10-15 - 관리 화면 값 대신)
         presets = st.PRESET_WELLIFE
     parallel = limits.get("parallel")
     if not (isinstance(parallel, int) and not isinstance(parallel, bool) and st.PARALLEL_MIN <= parallel <= st.PARALLEL_MAX):

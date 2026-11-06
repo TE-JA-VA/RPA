@@ -423,7 +423,7 @@ async function exportPreset(d, p, no) {
   throw new Error("PC가 응답하지 않습니다.");
 }
 function presetPanel(d, p) {
-  const file = el("input", { type: "file", accept: ".json" }), slot = el("input", { class: "preset-slot", type: "number", min: 1, max: 40, style: "width:5em" });
+  const file = el("input", { type: "file", accept: ".json" }), slot = el("input", { class: "preset-slot", type: "number", min: 1, max: 50, style: "width:5em" });
   const old = p.preset_transfer !== 1;   // 옛 에이전트는 프리셋 명령을 모른다 - 보내면 queued 로만 남는다
   let loaded = null;
   file.onchange = async () => {
@@ -434,7 +434,7 @@ function presetPanel(d, p) {
   const put = el("button", { class: "preset-import", disabled: old, onclick: () => act(put, async () => {
     if (!loaded) throw new Error("프리셋 파일을 선택하여 주십시오.");
     const n = Number(slot.value);
-    if (!Number.isInteger(n) || n < 1 || n > 40) throw new Error("칸 번호를 입력하여 주십시오.");
+    if (!Number.isInteger(n) || n < 1 || n > 50) throw new Error("칸 번호를 입력하여 주십시오.");
     if (!confirm(`프리셋 ${n}을(를) 이 파일로 변경합니다. 기록이 있으면 덮어쓰며 이전 기록은 PC에 보관됩니다. 진행하시겠습니까?`)) return;
     const r = await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/presets/import`, { file: loaded, slot: n });
     flash(`프리셋 ${n} 넣어 주기 명령을 전송하였습니다. PC의 응답을 기다리는 중입니다.`);
@@ -583,14 +583,14 @@ function policySection(d) {
     okTimer = setTimeout(() => span.classList.add("hide"), 2000);
   };
   const num = (label, value) => el("input", { value, size: 4, inputmode: "numeric", "aria-label": label });
-  const fixedPresets = d.cid.toLowerCase().includes("wellife");      // 업체코드에 wellife 가 든 업체는 PC 가 늘 40 (에이전트, 2026-10-15)
+  const fixedPresets = d.cid.toLowerCase().includes("wellife");      // 업체코드에 wellife 가 든 업체는 PC 가 늘 50 (에이전트)
   const par = d.parallelLimit ?? 1;
   // [이름, 칸(없으면 고정), 보낼 곳, 보낼 열쇠, 설명]
   const limits = [
     ["자동 실행 슬롯 수", num("자동 실행 슬롯 수", d.scheduleLimit ?? 2), "limits", "schedule",
       "예약 실행, 반복 실행 슬롯을 몇 개까지 열어줄 지 결정합니다. (0~12, 기본 2)"],
     ["옵저버 프리셋 수", fixedPresets ? null : num("옵저버 프리셋 수", d.presetLimit ?? 2), "presets", "presets",
-      fixedPresets ? "업체코드에 wellife 가 들어간 업체는 옵저버 프리셋을 40개까지 만들 수 있습니다. (고정)" : "옵저버에서 만들 수 있는 프리셋 수를 결정합니다. (2~10, 기본 2)"],
+      fixedPresets ? "업체코드에 wellife 가 들어간 업체는 옵저버 프리셋을 50개까지 만들 수 있습니다. (고정)" : "옵저버에서 만들 수 있는 프리셋 수를 결정합니다. 41개 이상은 업체의 모든 PC가 업데이트된 뒤에 열 수 있습니다. (2~50, 기본 2)"],
     ["병렬 실행 허용", num("병렬 실행 최대 창 수", par), "parallel", "parallel",
       "업체가 ACTOR 오토파일럿으로 쇼핑몰 사이트(프리셋)를 동시에 여러 개 열어 엑셀을 다운로드할 수 있게 허용합니다. "
       + "2 이상이면 업체 웹 대시보드의 설정에 '동시 실행'이 보이고 이 수까지 선택할 수 있습니다. 1이면 허용하지 않으며 업체 화면에도 보이지 않습니다. (1~16, 기본 1)"],

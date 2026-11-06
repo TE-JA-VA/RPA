@@ -1044,15 +1044,15 @@ def wellife_policy():
 # 쇼핑몰 프리셋 (옵저버가 쓰고, 프리페어가 재생하고, 대시보드가 켠다 - 2026-09-30 설계 5절)
 # ---------------------------------------------------------------------------
 PRESETS_NAME = "RPA_Presets.json"
-PRESET_MIN, PRESET_MAX = 2, 40           # PRESET_MAX = PC 가 받는 최대 - 보통 업체는 관리 화면에서 10 까지(ops.PRESET_LIMIT_MAX),
-PRESET_WELLIFE = 40                      # 업체코드에 wellife 가 든 업체는 늘 40 (사용자 2026-10-15, agent.company_policy)
+PRESET_MIN, PRESET_MAX = 2, 50           # PRESET_MAX = PC 가 받는 최대 (2026-11-06 40 → 50, 현황 live.preset_max 로 올린다) - 업체는 관리 화면에서 정한다(ops.PRESET_LIMIT_MAX),
+PRESET_WELLIFE = 50                      # 업체코드에 wellife 가 든 업체는 늘 50 (사용자 2026-10-15 40, 2026-11-06 50, agent.company_policy)
 
 
 EXCEL_PW_KEY, EXCEL_PW_MAX = "ExcelPW", 100   # Sites 칸의 엑셀 비밀번호 (excel_password)
 
 
 def circled(n):
-    """프리셋 번호 ① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄로 나뉘어 있다 (1~20, 21~35, 36~50). 웰라이프 업체 40개 (2026-10-15).
+    """프리셋 번호 ① ~ ㊿ - 유니코드 동그라미 숫자는 세 줄로 나뉘어 있다 (1~20, 21~35, 36~50). 프리셋 최대 50개 (2026-11-06).
     옵저버·에이전트가 같이 쓴다 (웹은 rpa-settings.js circled 가 같은 규칙)."""
     return chr(0x2460 + n - 1) if n <= 20 else chr(0x3251 + n - 21) if n <= 35 else chr(0x32B1 + n - 36)
 

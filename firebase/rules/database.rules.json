@@ -24,6 +24,7 @@
               "launching": { ".validate": "newData.isBoolean()" },
               "hold_review": { ".validate": "newData.isBoolean()" },
               "preset_transfer": { ".validate": "newData.isNumber()" },
+              "preset_max": { ".validate": "newData.isNumber()" },
               "labels": { ".validate": "newData.hasChildren()" },
               "programs": { ".validate": "newData.hasChildren()" },
               "modules": { ".validate": "newData.hasChildren()" },
