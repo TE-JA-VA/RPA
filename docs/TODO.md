@@ -24,7 +24,7 @@
 ## 2. 말하면 시작
 
 - [ ] **exe 셋 동시 빌드 (보류)** - 2026-10-21 실측: 동시 337초 vs 차례 496초 (약 2분 40초 빠름) 이지만 동시로 만든 Prepare_RPA.exe 가 늘 'No module named base64' 로 켜지지 않는다. Nuitka 분석 캐시(module-cache·library_dependencies·adapted_headers·scons-msvc-config)를 exe 마다 따로 줘도 같았고, 같은 코드를 차례로 만들면 멀쩡 (115초). 원인 모름 - 남은 공유: downloads·zig 캐시, 작업 폴더 build\release. 하려면 exe 마다 작업 폴더도 따로 + 원인부터 (코드는 6d8a6c3)
-- [ ] **옵저버 디자인 바꾸기** (Figma)
+- [ ] **운송장번호 전송 메뉴 고치기 + 사이트 엑셀 업로드 켜기** - 옵저버 다운로드/업로드 기능은 2026-11-06 에 코드가 들어갔고 `rpa_status.EXCEL_UPLOAD_ON = False` 로 숨겨 뒀다. 메뉴를 고칠 때 [설계](superpowers/specs/2026-11-06-excel-upload-design.md) 3절 약속·9절 켜는 순서대로
 - [ ] **회사 서버로 옮기기** - 1단계 업데이트·웹 정적 파일은 준비 끝, 서버가 오면 docs/server-move-stage1.md 순서로 (2026-10-21). 2단계 전부(큰 일)는 회사 답 뒤. 2단계 때 토큰 판정을 서버로 옮긴다 - 지금은 PC 의 .py 를 고치면 우회되고, 2026-10-23 파일 변조 감지는 '들키게' 할 뿐 막지 못한다 (rpa-1d REA 모의 분석)
 - [ ] **PROCESS 건수 집계 보완** - 배송장 생성 건수 없음, 주문 수집 건수는 화면 줄 기준이라 부정확 (2026-09-21 메모)
 
@@ -34,7 +34,6 @@
 - [ ] **휴대폰 앱 인증번호 규칙 맞추기 (맥을 가져오면)** - RPA 의 sms_watch 규칙(BugBuster M9)과 같게 RPA-PhoneRelay 를 고쳐 커밋해 둠: `D:\AX\RPA-PhoneRelay` 브랜치 `fix/auth-code-rule` (d046c22, 이 PC 에만 있음 - push 해야 맥에서 받는다). 파이썬 기준 41/41·단축어 정규식 = swift·안드로이드 단위 시험(이 PC 의 Android Studio, 2026-10-23)은 확인. 맥에서 남은 것: `swift tools/check_shortcut_regex.swift` → 서명 키(BUSINESS/Keys)로 `assembleRelease` (키를 옮기면 이 PC 에서도 된다) → 직원 휴대폰에 덮어 설치 → `build_shortcuts.py` 로 아이폰 단축어 다시 만들어 넣기 → main 에 합치기. 그 전까지는 날짜·'1800초' 같은 숫자가 번호 앞에 붙은 드문 문자만 옛 규칙으로 틀린다
 - [ ] **메일 서버(IMAP) 실제 확인** - 2026.10.22-1 에 넣음. 업체·시험용 메일 계정으로 옵저버 [찾아보기] 부터 (서버 주소표는 실제 접속 확인 전). Microsoft 365·회사 Google 이면 OAuth 가 필요할 수 있다
 - [ ] **동료 PR: ACTOR 프리셋 동시 실행** - 앞 프리셋의 로그인·2차인증이 끝나면 다음을 시작하는 방식. 오면 검토
-- [ ] **동료 PR: wellife.py 기록 글을 업무 서식으로** - 이슈 #11, 기준표 [ui-wording.md](ui-wording.md). '화면이 잠겨' 같은 코드가 보는 글을 건드렸는지 확인
 - [ ] **웰라이프 목표 시간** - 다음 회의에서 결정 → 프리셋 수와 함께 PC 대수 계산 (PC 여러 대 허용, 엑셀수집만)
 - [ ] **엑셀 연속 업로드 오류 팝업 지연 실측** - PR #12 작성자가 개발기에서 잰다. 재면 지금의 결과 대기 10초(`UPLOAD_RESULT_WAIT_SECONDS`)를 줄인다
 

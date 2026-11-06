@@ -4,6 +4,7 @@
 둥근 모양은 Pillow 로 크게 그려 줄인 PNG 를 tk.PhotoImage 로 넣는다. PIL.ImageTk 는 쓰지 않는다 -
 exe 의 Tcl/Tk 9 는 DLL 안 zipfs 구조라 _imagingtk 가 위험하다 ([[nuitka-tkinter-tcl9]])."""
 import base64
+import ctypes
 import io
 import tkinter as tk
 from tkinter import font as tkfont
@@ -18,6 +19,8 @@ PRIMARY, P_HOVER, P_ACTIVE, P_BG = "#1677ff", "#4096ff", "#0958d9", "#e6f4ff"
 DANGER, D_HOVER, D_ACTIVE, D_BG = "#ff4d4f", "#ff7875", "#d9363e", "#fff2f0"
 TEXT, TEXT2, TEXT3, TEXT4 = "#1f1f1f", "#595959", "#8c8c8c", "#bfbfbf"
 BORDER, SPLIT, PAGE, CARD, ROW_HOVER = "#d9d9d9", "#f0f0f0", "#f5f5f5", "#ffffff", "#fafafa"
+STEP_INK, STEP_LINE, STEP_MUTE, STEP_DONE, STEP_SKIP = "#0f172a", "#e2e8f0", "#94a3b8", "#16a34a", "#fbbf24"    # 작업 순서 동그라미
+UP_TAB, UP_ON, UP_EMPTY, SWITCH_OFF, SWITCH_ON = "#1f9d4d", "#15803d", "#dcf5e3", "#e9e9eb", "#34c759"           # 업로드 프리셋 탭·스위치
 SS = 4         # 모서리를 매끄럽게 - 네 배로 그려 줄인다
 S = 1.0        # 화면 배율 (init)
 
@@ -80,11 +83,25 @@ def glyph(widget, kind, size, color):
         elif kind == "plus":
             d.line([(n * .5, n * .2), (n * .5, n * .8)], fill=color, width=round(n * .09))
             d.line([(n * .2, n * .5), (n * .8, n * .5)], fill=color, width=round(n * .09))
+        elif kind == "minus":
+            d.line([(n * .2, n * .5), (n * .8, n * .5)], fill=color, width=round(n * .09))
         elif kind == "more":
             for x in (.22, .5, .78):
                 d.ellipse((n * (x - .08), n * .42, n * (x + .08), n * .58), fill=color)
         return im.resize((size, size), Image.LANCZOS)
     return _photo(widget, ("glyph", kind, size, color), make)
+
+
+def at_once(root, fn):
+    """창 그리기를 멈추고 fn 을 끝낸 뒤 한 번에 그린다 - 여러 곳이 차례로 바뀌어 끊겨 보이지 않게."""
+    user, hwnd = ctypes.windll.user32, root.winfo_id()
+    user.SendMessageW(hwnd, 0x000B, 0, 0)        # WM_SETREDRAW 끔
+    try:
+        fn()
+        root.update_idletasks()
+    finally:
+        user.SendMessageW(hwnd, 0x000B, 1, 0)
+        user.RedrawWindow(hwnd, None, None, 0x0001 | 0x0004 | 0x0080 | 0x0100)   # INVALIDATE·ERASE·ALLCHILDREN·UPDATENOW
 
 
 class Btn(tk.Canvas):
@@ -453,9 +470,9 @@ class Tabs(tk.Frame):
 
     def _open(self):
         menu = tk.Menu(self, tearoff=0, font=self.font, bd=0, activebackground=P_BG, activeforeground=TEXT)
-        for i, (text, *_) in enumerate(self.items):
+        for i, (text, _, *up) in enumerate(self.items):
             menu.add_command(label=text, command=lambda i=i: self.on_select(i), columnbreak=i > 0 and i % 25 == 0,
-                             state="disabled" if self.busy and i != self.cur else "normal")
+                             foreground=UP_ON if up and up[0] else TEXT, state="disabled" if self.busy and i != self.cur else "normal")
         menu.tk_popup(self.more.winfo_rootx(), self.more.winfo_rooty() + self.more.winfo_height())
 
     def _new_tab(self, i):
@@ -480,14 +497,24 @@ class Tabs(tk.Frame):
             self.on_select(i)
 
     def show(self, items, cur, recording, busy):
-        """items: [(글자, 기록 있음)]. 선택 파랑, 기록 중 빨강, 기록 있음 파란 점, 비어 있음 흐린 글자."""
+        """items: [(글자, 기록 있음, 업로드)]. 선택 파랑, 기록 중 빨강, 기록 있음 파란 점, 비어 있음 흐린 글자. 업로드 프리셋은 초록 둥근 바탕."""
         while len(self.tabs) < len(items):
             self._new_tab(len(self.tabs))
         while len(self.tabs) > len(items):
             self.tabs.pop()[0].destroy()
         moved = cur != self.cur
         self.items, self.cur, self.busy = items, cur, busy
-        for i, ((text, has), (t, lab, dot, line)) in enumerate(zip(items, self.tabs)):
+        for i, ((text, has, *up), (t, lab, dot, line)) in enumerate(zip(items, self.tabs)):
+            if up and up[0] and recording != i:
+                on = i == cur
+                shown, font = text + ("  •" if has and not on else ""), self.bold if on else self.font
+                fill = UP_ON if on else UP_TAB if has else UP_EMPTY
+                lab.config(text=shown, image=box(lab, _font_of(lab, font).measure(shown) + px(20), px(24), px(6), fill), compound="center",
+                           fg="#ffffff" if on or has else UP_ON, font=font, cursor="arrow" if busy and not on else "hand2")
+                line.config(bg=UP_ON if on else self.cget("bg"))
+                dot.pack_forget()
+                continue
+            lab.config(image="", compound="none")
             color = DANGER if recording == i else PRIMARY if i == cur else TEXT if has else TEXT3
             lab.config(text=text, fg=color, font=self.bold if i == cur or recording == i else self.font,
                        cursor="arrow" if busy and i != cur else "hand2")
@@ -526,18 +553,146 @@ class Status(tk.Label):
     config = configure
 
 
-def badge(parent, n, on=True):
-    """단계 번호 동그라미."""
-    size = px(22)
-    c = tk.Canvas(parent, width=size, height=size, bg=parent.cget("bg"), highlightthickness=0)
-    c.create_image(0, 0, anchor="nw", image=box(parent, size, size, 11, P_BG if on else PAGE))
-    c.create_text(size / 2, size / 2, text=str(n), fill=PRIMARY if on else TEXT4, font=(UI, 8, "bold"))
-    return c
+class Switch(tk.Canvas):
+    """켜고 끄는 스위치 36x20, 손잡이 16, 0.2초 ease-out. 놓을 때 command(켬) - 화면을 먼저 바꾸고 손잡이가 움직인다."""
+    W, H, K, FRAMES = 36, 20, 16, 10
+
+    def __init__(self, parent, command):
+        super().__init__(parent, width=px(self.W), height=px(self.H), bg=parent.cget("bg"), highlightthickness=0, cursor="hand2")
+        self.on, self.t, self.command, self.job = False, 0.0, command, None
+        self.item = self.create_image(0, 0, anchor="nw")
+        self.bind("<Button-1>", lambda e: self.command(not self.on))
+        self._paint()
+
+    def _frame(self, n):
+        def make():
+            ss, t = 4, n / self.FRAMES
+            W, H, K = px(self.W) * ss, px(self.H) * ss, px(self.K) * ss
+            im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(im)
+            d.rounded_rectangle((0, 0, W - 1, H - 1), H // 2, fill=tuple(round(a + (b - a) * t) for a, b in zip(ImageColor.getrgb(SWITCH_OFF), ImageColor.getrgb(SWITCH_ON))))
+            x, y = round((W - K) / 2 + (t * 2 - 1) * ((W - K) / 2 - 2 * ss)), (H - K) // 2
+            d.ellipse((x, y, x + K, y + K), fill="#ffffff")
+            return im.resize((W // ss, H // ss), Image.LANCZOS)
+        return _photo(self, ("switch", n, self.W), make)
+
+    def _paint(self):
+        self.itemconfigure(self.item, image=self._frame(round(self.t * self.FRAMES)))
+
+    def set(self, on, animate=False):
+        """animate 가 아니면 바로 그 자리로 (프리셋을 옮겼을 때)."""
+        self.on = on
+        if self.job:
+            self.after_cancel(self.job)
+            self.job = None
+        if not animate:
+            self.t = 1.0 if on else 0.0
+            return self._paint()
+
+        def step(k, start):
+            e = 1 - (1 - (k + 1) / self.FRAMES) ** 3             # ease-out
+            self.t = start + ((1.0 if on else 0.0) - start) * e
+            self._paint()
+            self.job = self.after(20, step, k + 1, start) if k + 1 < self.FRAMES else None
+        step(0, self.t)
 
 
-def hover_row(row):
-    """줄과 그 안 부품에 올림 색. 부품끼리 옮겨 다녀도 깜빡이지 않게 나가자마자 다시 들어온다."""
-    parts = [row, *row.winfo_children()]
+def mark(widget, kind, size, color="#ffffff"):
+    """동그라미 안 표시: x·minus·skip. 얇은 획을 줄이면 자글자글해 굵게, 끝을 둥글게, 8배로 그려 줄인다."""
+    def make():
+        ss = 8
+        n = size * ss
+        im = Image.new("L", (n, n), 0)
+        d = ImageDraw.Draw(im)
+        if kind == "skip":                      # 삼각형 + 막대 하나
+            tri = [(n * .2, n * .22), (n * .2, n * .78), (n * .62, n * .5)]
+            d.polygon(tri, fill=255)
+            d.line(tri + tri[:2], fill=255, width=round(n * .08), joint="curve")
+            d.rounded_rectangle((n * .7, n * .18, n * .84, n * .82), round(n * .04), fill=255)
+        else:
+            strokes = [((.22, .22), (.78, .78)), ((.78, .22), (.22, .78))] if kind == "x" else [((.2, .5), (.8, .5))]
+            width = round(n * .15)
+            for a, b in strokes:
+                ends = ((a[0] * n, a[1] * n), (b[0] * n, b[1] * n))
+                d.line(ends, fill=255, width=width)
+                for x, y in ends:
+                    d.ellipse((x - width / 2, y - width / 2, x + width / 2, y + width / 2), fill=255)
+        out = Image.new("RGBA", (size, size), (*ImageColor.getrgb(color), 0))
+        out.putalpha(im.resize((size, size), Image.BOX))
+        return out
+    return _photo(widget, ("mark", kind, size, color), make)
+
+
+def spin_frames(widget, n=30):
+    """진행 중 고리: 굵기 3, 지름 20, 왼쪽 1/4 비움, 1초에 한 바퀴. 바탕이 비치게 (줄 올림 색)."""
+    def frame(f):
+        def make():
+            ss, size = 4, px(StepDot.SIZE)
+            big, inset = size * ss, px(2) * ss
+            mask = Image.new("L", (big, big), 0)
+            turn = 360 * f / n
+            ImageDraw.Draw(mask).arc((inset, inset, big - 1 - inset, big - 1 - inset), 225 + turn, 135 + turn + 360, fill=255, width=px(3) * ss)
+            out = Image.new("RGBA", (size, size), (*ImageColor.getrgb(STEP_INK), 0))
+            out.putalpha(mask.resize((size, size), Image.BOX))
+            return out
+        return _photo(widget, ("spin", f, n), make)
+    return [frame(f) for f in range(n)]
+
+
+class StepDot(tk.Canvas):
+    """작업 순서의 단계 동그라미와 잇는 줄. 상태만 바꾸면 그 동그라미만 다시 그린다 (목록을 새로 만들지 않아 반짝이지 않는다).
+    idle 평소 / wait 대기 / run 진행 중 / done 완료 / off 체크 해제 / auto 화면에 없어 건너뜀 / stop 사람이 중단 / fail 실패."""
+    SIZE, OFF = 24, 6        # OFF: 같은 줄의 체크·대기 칸과 가운데를 맞춘다
+    FILLS = {"idle": STEP_INK, "done": STEP_DONE, "off": STEP_SKIP, "auto": STEP_MUTE, "stop": STEP_MUTE, "fail": "#cf1322"}
+    MARKS = {"off": "skip", "auto": "minus", "fail": "x"}
+
+    def __init__(self, parent, n, state, first, last):
+        size, off = px(self.SIZE), px(self.OFF)
+        super().__init__(parent, width=size, height=size + 2 * off, bg=parent.cget("bg"), highlightthickness=0)
+        self.n, self.state, self.first, self.last, self.job = n, state, first, last, None
+        self.bind("<Configure>", lambda e: self._draw())
+
+    def set_state(self, state):
+        if state != self.state:
+            self.state = state
+            self._draw()
+
+    def _draw(self):
+        size, off, state = px(self.SIZE), px(self.OFF), self.state
+        mid = off + size / 2
+        self.delete("all")
+        if self.job:
+            self.after_cancel(self.job)
+            self.job = None
+        top, bottom = off + size if self.first else 0, off if self.last else self.winfo_height()
+        if top < bottom:
+            self.create_rectangle(size // 2 - 1, top, size // 2 + 1, bottom, fill=STEP_LINE, outline="")
+        if state == "run":
+            frames = spin_frames(self)
+            item = self.create_image(0, off, anchor="nw", image=frames[0])
+
+            def spin(k):
+                if not self.winfo_exists():          # 목록을 새로 그렸다
+                    return
+                self.itemconfigure(item, image=frames[k % len(frames)])
+                self.job = self.after(1000 // len(frames), spin, k + 1)
+            return spin(0)
+        fill = self.FILLS.get(state)
+        self.create_image(0, off, anchor="nw", image=box(self, size, size, size // 2, fill) if fill else box(self, size, size, size // 2, "#ffffff", STEP_LINE, 2))
+        if state == "done":
+            self.create_image(size / 2, mid, image=glyph(self, "check", px(14), "#ffffff"))
+        elif state == "stop":
+            q = px(4)
+            self.create_rectangle(size / 2 - q, mid - q, size / 2 + q, mid + q, fill="#ffffff", outline="")
+        elif state in self.MARKS:
+            self.create_image(size / 2, mid, image=mark(self, self.MARKS[state], px(16 if state == "off" else 14)))
+        else:
+            self.create_text(size / 2, mid, text=str(self.n), font=(UI, 8, "bold"), fill="#ffffff" if state == "idle" else STEP_MUTE)
+
+
+def hover_row(row, *more):
+    """줄과 그 안 부품에 올림 색. 부품끼리 옮겨 다녀도 깜빡이지 않게 나가자마자 다시 들어온다. more: 줄 안 틀의 부품."""
+    parts = [row, *row.winfo_children(), *more]
 
     def tint(color):
         for x in parts:
@@ -553,7 +708,8 @@ def self_check():
     root.withdraw()
     init(1.0)
     try:
-        ok = box(root, 32, 32, 6, PRIMARY).width() == 32 and glyph(root, "check", 16, "#ffffff").height() == 16
+        ok = (box(root, 32, 32, 6, PRIMARY).width() == 32 and glyph(root, "check", 16, "#ffffff").height() == 16
+              and mark(root, "skip", 16).width() == 16 and len(spin_frames(root)) == 30)
     finally:
         root.destroy()
     return ok

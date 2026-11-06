@@ -113,7 +113,7 @@ def usage(rec):
     """실행 기록 한 건이 쓴 것 {키: 횟수}. 루틴은 완료인 모듈 (로그인도 세고 값표에서 0), 프리페어는 단계가 모두
     완료인 사이트(프리셋) 수 'sites'. 옵저버 미리보기는 시험이라 안 센다."""
     import rpa_status as st
-    if rec.get("program") in st.HISTORY_ONLY:
+    if rec.get("program") in st.HISTORY_ONLY or rec.get("title") == st.UPLOAD_TITLE:   # 사이트 엑셀 업로드는 운송장번호 전송에 포함
         return {}
     used = {}
     for m in rec.get("modules") or []:

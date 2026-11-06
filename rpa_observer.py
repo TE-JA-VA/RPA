@@ -51,6 +51,8 @@ IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부
              "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣어 주십시오).")
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
 MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
+HEAD_DOWN = "각 프리셋마다 로그인부터 엑셀 파일 다운로드까지 보여주시면 다음 번부터 자동으로 엑셀파일을 수집합니다."
+HEAD_UP = "각 프리셋마다 로그인부터 엑셀 파일 업로드까지 보여주시면 다음 번부터 자동으로 사이트에 엑셀파일을 올립니다."
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 ICON_NAME = "AFTER_MARKET_PREPARE.ico"                  # 옵저버 주황 날개 (tools/make_icon.py)
 CHECK_DONE = "옵저버 점검 끝"                              # --check 끝 줄 (build_release.MARKERS·sandbox_inner.ps1)
@@ -455,9 +457,14 @@ def new_preset(no, name=None, code=""):
             "wait": {},         # 단계 목록에서 바꾼 'n초 대기' {sid: (켬, 글자)} (apply_waits)
             "mail_id": "", "mail_pw": "", "has_mail_pw": False,   # 메일 2차인증 메일함 계정 (설계 2026-11-02, 비밀번호는 저장하면 비우고 has_mail_pw)
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
+            "upload": False,    # 사이트에 엑셀을 올리는 프리셋 (st.EXCEL_UPLOAD_ON 이 꺼져 있으면 무시 - is_up)
             "imap": None,       # 메일 서버(IMAP) 칸 {host, port, security, rules} - source 가 imap 일 때 (2026-10-22)
             "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
             "fresh": False}     # fresh = 이번에 기록하고 아직 저장 안 함 (닫을 때 묻고 내보내기를 막는다. 켬/끔은 저장해도 그대로 - 2026-11-03)
+
+
+def is_up(p):
+    return st.EXCEL_UPLOAD_ON and p["upload"]
 
 
 def edit_view(presets):
@@ -491,7 +498,7 @@ def load_file_into(p, obj):
     pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
     p.update(name=obj["name"], code=obj["code"], loaded=r, raw=[], head=None, start_url=None, viewport=r.get("viewport"),
              enabled={}, deleted=set(), otp={}, wait={}, fresh=True,
-             source="mail" if pick else "shop", prefix=pick["prefix"] if pick else "")
+             source="mail" if pick else "shop", prefix=pick["prefix"] if pick else "", upload=bool(r.get("upload")))
     load_imap(p, r)
     return p
 
@@ -520,7 +527,7 @@ def load_presets():
         if r and r.get("steps"):
             for k, s in enumerate(r["steps"]):
                 s["id"] = k
-            q["loaded"], q["viewport"] = r, r.get("viewport")
+            q["loaded"], q["viewport"], q["upload"] = r, r.get("viewport"), bool(r.get("upload"))
             pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
             if pick:
                 q["source"], q["prefix"] = "mail", pick["prefix"]
@@ -716,10 +723,13 @@ def validate_presets(presets):
         tag = f"{circled(p['no'])} {p['name']}"
         if not re.fullmatch(r"[0-9]{3}", p.get("code") or ""):       # \d 는 전각·다른 글자의 숫자도 받는다
             return p["no"], f"{tag}: 사이트코드는 숫자 세 자리여야 합니다 (받은 엑셀파일 이름 앞에 붙어, 엑셀 수집 모듈에서 자동으로 처리하게 됩니다.)"
-        if p["code"] in codes:
-            return p["no"], (f"{tag}: 사이트코드 {p['code']}을(를) {codes[p['code']]}에서도 사용하고 있습니다. "
+        key = (p["code"], bool(p.get("upload")))      # 같은 사이트의 다운로드·업로드 프리셋은 코드가 같다 (사용자 2026-11-06)
+        if key in codes:
+            return p["no"], (f"{tag}: 사이트코드 {p['code']}을(를) {codes[key]}에서도 사용하고 있습니다. "
                              "다른 사이트코드를 입력하여 주십시오.")
-        codes[p["code"]] = tag
+        codes[key] = tag
+        if p.get("upload") and not any(s["kind"] == "file" for s in p["record"].get("steps") or []):
+            return p["no"], f"{tag}: 파일을 넣는 단계가 기록되지 않았습니다. 사이트의 파일 칸에 엑셀 파일을 넣는 것까지 기록하여 주십시오."
         step = st.imap_step(p["record"])
         if step and imap_problem(step):
             return p["no"], f"{tag}: {imap_problem(step)}"
@@ -808,8 +818,8 @@ class App:
         head = tk.Frame(root, bg=BG)
         head.pack(fill="x", padx=pad, pady=(int(14 * s), int(8 * s)))
         tk.Label(head, text="사용자 행위 기록", font=(UI, 15, "bold"), bg=BG, fg=INK).pack(anchor="w")
-        tk.Label(head, text="각 프리셋마다 로그인부터 엑셀 파일 다운로드까지 보여주시면 다음 번부터 자동으로 엑셀파일을 수집합니다.",
-                 font=F_SMALL, bg=BG, fg=MUTED, anchor="w", justify="left", wraplength=self.panel_w - 2 * pad).pack(fill="x")
+        self.head_note = tk.Label(head, text=HEAD_DOWN, font=F_SMALL, bg=BG, fg=MUTED, anchor="w", justify="left", wraplength=self.panel_w - 2 * pad)
+        self.head_note.pack(fill="x")
 
         # 프리셋: 탭 줄 + 프리셋마다 따로인 칸
         card = w.Card(root, card_pad)
@@ -819,14 +829,26 @@ class App:
         head.pack(fill="x")
         self.preset_tools = tk.Frame(head, bg=CARD)      # 탭이 스크롤돼도 오른쪽에 그대로
         self.preset_tools.pack(side="right", anchor="n")
-        self.del_btn = button(self.preset_tools, "프리셋 삭제", "danger_ghost", self.remove_preset, h=26, pad=9, font=F_SMALL)
-        self.del_btn.pack(side="right")
         self.add_btn = w.Icon(self.preset_tools, "plus", self.add_preset, color=w.TEXT3)
+        self.sub_btn = w.Icon(self.preset_tools, "minus", self.remove_preset, color=w.TEXT3)
         self.count_label = tk.Label(self.preset_tools, font=F_SMALL, bg=CARD, fg=w.TEXT3)
         self.count_label.pack(side="right", padx=(int(8 * s), int(6 * s)))
         self.tabs = w.Tabs(head, self.select)
         self.tabs.pack(side="left", fill="x", expand=True)
         tk.Frame(inner, bg=LINE, height=1).pack(fill="x", pady=(0, int(10 * s)))
+        top = tk.Frame(inner, bg=CARD)           # 어느 폭에서나 남는 줄 - 경로 줄에 두면 FHD 에서 [프리셋 삭제] 가 '메일 서버' 를 가린다 (사용자 2026-11-06)
+        top.pack(fill="x", pady=(0, int(10 * s)))
+        top.columnconfigure(3, weight=1)
+        self.del_btn = button(top, "프리셋 삭제", "danger_ghost", self.remove_preset, h=26, pad=9, font=F_SMALL)
+        self.del_btn.grid(row=0, column=3, sticky="e")
+        if st.EXCEL_UPLOAD_ON:
+            self.down_label = tk.Label(top, text="엑셀 다운로드", font=F, bg=CARD)
+            self.down_label.grid(row=0, column=0, sticky="w")
+            top.columnconfigure(0, minsize=w._font_of(top, F_BOLD).measure("엑셀 다운로드") + 2)    # 글자가 굵어져도 스위치가 밀리지 않게
+            self.switch = w.Switch(top, self._switch)
+            self.switch.grid(row=0, column=1, padx=8)
+            self.up_label = tk.Label(top, text="엑셀 업로드", font=F, bg=CARD)
+            self.up_label.grid(row=0, column=2, sticky="w")
         form = tk.Frame(inner, bg=CARD)          # 프리셋마다 따로인 칸은 모두 여기 (아이디·비밀번호도 - 2026-10-02)
         form.pack(fill="x")
         for r, (left, lvar, right, rvar, show) in enumerate((("이름", self.name_var, "사이트코드", self.code_var, ""),
@@ -845,6 +867,12 @@ class App:
         self.senders_var.trace_add("write", lambda *a: self._field_changed())
         src = tk.Frame(form, bg=CARD)               # 주문 수집용 엑셀파일 경로 (사용자 2026-10-14)
         src.grid(row=3, column=0, columnspan=4, sticky="we", pady=(8, 0))
+        self.src_row = src
+        if st.EXCEL_UPLOAD_ON:                      # 같은 칸에 겹쳐 두고 앞뒤만 바꾼다 - 높이가 안 변한다
+            self.up_note = tk.Label(form, font=F_SMALL, bg=CARD, fg=MUTED, anchor="w", justify="left",
+                                    wraplength=self.panel_w - 2 * (pad + card_pad))
+            self.up_note.grid(row=3, column=0, columnspan=4, sticky="nsew", pady=(8, 0))
+            self.code_var.trace_add("write", lambda *a: self._paint_direction())
         tk.Label(src, text="주문 수집용 엑셀파일 경로", font=F, bg=CARD, fg=MUTED).pack(side="top" if narrow else "left", anchor="w")
         picks = tk.Frame(src, bg=CARD)              # 좁은 창에서는 다음 줄로
         picks.pack(side="top" if narrow else "left", anchor="w", pady=(4, 0) if narrow else 0)
@@ -892,7 +920,13 @@ class App:
         mid = w.Card(root, int(14 * s), fill=True)
         mid.pack(fill="both", expand=True, padx=pad)
         self.list_title = tk.Label(mid.inner, text="", font=F_BOLD, bg=CARD, fg=INK, anchor="w")
-        self.list_title.pack(fill="x", pady=(0, int(8 * s)))
+        self.list_title.pack(fill="x", pady=(0, int(2 * s)))
+        self.col_head = tk.Frame(mid.inner, bg=CARD, height=w.px(20))     # 칸 이름 - 스크롤해도 그대로, 자리는 첫 줄에 맞춘다 (_align_columns)
+        self.col_head.pack_propagate(False)
+        self.col_head.pack(fill="x", pady=int(4 * s))
+        self.col_names = {t: tk.Label(self.col_head, text=t, font=F_SMALL, bg=CARD, fg=w.TEXT3) for t in ("실행", "단계", "설명", "대기", "삭제")}
+        self.col_head.bind("<Configure>", lambda e: self._align_columns())
+        self.col_refs = None
         tk.Frame(mid.inner, bg=LINE, height=1).pack(fill="x")
         body = tk.Frame(mid.inner, bg=CARD)
         body.pack(fill="both", expand=True)
@@ -909,14 +943,16 @@ class App:
 
     def paint_presets(self):
         busy = self.recording is not None or self.previewing
-        self.tabs.show([(tab_text(i, p), bool(p["raw"] or p["loaded"])) for i, p in enumerate(self.presets)], self.cur, self.recording, busy)
+        self.tabs.show([(tab_text(i, p), bool(p["raw"] or p["loaded"]), is_up(p)) for i, p in enumerate(self.presets)], self.cur, self.recording, busy)
         enable(self.del_btn, len(self.presets) > MIN_PRESETS and not busy)
+        self.sub_btn.set_state("normal" if len(self.presets) > MIN_PRESETS and not busy else "disabled")
         self.count_label.config(text=f"{len(self.presets)}/{self.max_presets}")
         if len(self.presets) < self.max_presets:
             self.add_btn.pack(side="right", before=self.count_label)
             self.add_btn.set_state("disabled" if busy else "normal")
         else:
             self.add_btn.pack_forget()
+        self.sub_btn.pack(side="right", padx=(0, int(6 * self.scale)), before=self.count_label)
 
     def paint_buttons(self):
         rec_on = self.recording is not None
@@ -945,8 +981,31 @@ class App:
             b.config(state="disabled" if rec_on or self.previewing else "normal", cursor="arrow" if rec_on or self.previewing else "hand2")
         self.paint_presets()
 
+    def _switch(self, on):
+        """[엑셀 다운로드 / 업로드] 스위치. 글자·탭·안내를 한 번에 바꾼 뒤 손잡이가 움직인다."""
+        p = self.presets[self.cur]
+        if self.recording is not None or self.previewing:
+            return
+        if on and p["source"] != "shop":
+            return self.status.config(text="쇼핑몰 기록만 업로드 프리셋으로 사용할 수 있습니다.", fg=RED)
+        p["upload"] = on
+        w.at_once(self.root, lambda: (self._paint_direction(), self.paint_presets()))
+        self.switch.set(on, animate=True)
+
+    def _paint_direction(self):
+        if not st.EXCEL_UPLOAD_ON:
+            return
+        on = self.presets[self.cur]["upload"]
+        self.down_label.config(fg=MUTED if on else INK, font=F if on else F_BOLD)
+        self.up_label.config(fg=INK if on else MUTED, font=F_BOLD if on else F)
+        self.head_note.config(text=HEAD_UP if on else HEAD_DOWN)
+        self.up_note.config(text=f"올릴 파일: 바탕화면\\ERPIA_AI\\{st.UPLOAD_DIR_NAME} 폴더의 ({self.code_var.get() or '사이트코드'})로 시작하는 파일")
+        (self.up_note if on else self.src_row).tkraise()
+
     def _load_fields(self):
         p = self.presets[self.cur]
+        if st.EXCEL_UPLOAD_ON:
+            self.switch.set(p["upload"])
         self._loading = True
         self.name_var.set(p["name"])
         self.code_var.set(p["code"])
@@ -1134,18 +1193,22 @@ class App:
             c.destroy()
         self.labels, self.base, self.wait_vars = {}, {}, []
         p = self.presets[self.cur]
+        self.rows, self.col_refs = {}, None
         if p["source"] == "imap":
+            self.col_head.pack_forget()
             self._show_mail(None)
             self._render_imap(p)
             self._title()
             self.paint_buttons()
             return
+        self.col_head.pack(fill="x", pady=int(4 * self.scale), after=self.list_title)
         final = self._final(p)
         self._show_mail(final)
         n, body = 0, set()
         for k, s in enumerate(final["steps"] if final else []):
             end = rec.pick_body(final["steps"], k) if s.get("pick") else None
             body |= set(range(k + 1, end + 1)) if end is not None else set()
+        last = max((k for k, s in enumerate(final["steps"] if final else []) if s["id"] not in p["deleted"]), default=None)
         for k, s in enumerate(final["steps"] if final else []):
             sid = s["id"]
             if sid in p["deleted"]:
@@ -1154,25 +1217,36 @@ class App:
             var = self._var(p, sid)
             on = var.get()
             row = tk.Frame(self.inner, bg=CARD)
-            row.pack(fill="x")
-            tk.Frame(self.inner, bg=LINE, height=1).pack(fill="x")
-            w.Check(row, variable=var, command=self.render).pack(side="left", anchor="n", padx=(4, 8), pady=10)
-            w.Icon(row, "x", lambda sid=sid: self.delete(sid), hover=w.DANGER).pack(side="right", anchor="n", padx=(8, 4), pady=11)
-            self._wait_box(row, p, s)
+            row.pack(fill="x", pady=(int(4 * self.scale) if n == 1 else 0, 0))
+            chk = w.Check(row, variable=var, command=lambda sid=sid: self._check_changed(sid))
+            chk.pack(side="left", anchor="n", padx=(4, 10), pady=10)
+            del_x = w.Icon(row, "x", lambda sid=sid: self.delete(sid), hover=w.DANGER)
+            del_x.pack(side="right", anchor="n", padx=(8, 4), pady=11)
+            wait_on, wait_unit = self._wait_box(row, p, s)
             if s["kind"] in ("fill", "otp"):        # 글자 칸 - 문자로 받는 인증번호 칸인지 사람이 바꿀 수 있다
                 is_otp = s["kind"] == "otp"
                 w.Link(row, "인증번호 칸 해제" if is_otp else "인증번호 칸", lambda sid=sid, on=not is_otp: self.toggle_otp(sid, on),
                        fg=BLUE if is_otp else MUTED).pack(side="right", anchor="n", padx=2, pady=9)
-            w.badge(row, n, on).pack(side="left", anchor="n", pady=7)
+            dot = w.StepDot(row, n, "idle" if on else "off", n == 1, k == last)
+            dot.pack(side="left", fill="y")
+            cell = tk.Frame(row, bg=CARD)
+            cell.pack(side="left", fill="x", expand=True, padx=(10, 8), pady=8)
             text = ("↳ " if k in body else "") + re.sub(r" \(\d+단계 뒤에 새로 생긴 것\)", " (새로 생긴 것)", rec.describe(s))
             warn = s["kind"] == "goto" and "로그인 세션 값을 감지" in text
-            lab = tk.Label(row, text=text, font=F, bg=CARD, anchor="w", justify="left",
-                           fg=(RED_D if warn else INK) if on else w.TEXT4,
-                           wraplength=self.panel_w - int(310 * self.scale))
-            lab.pack(side="left", fill="x", expand=True, padx=(8, 0), pady=8)
-            lab.bind("<Configure>", lambda e, lab=lab: lab.config(wraplength=e.width))   # 오른쪽 칸을 뺀 폭 - [인증번호 칸] 이 있는 줄·좁은 창에서 글이 잘리지 않게
-            w.hover_row(row)
+            lab = tk.Label(cell, text=text, font=F_BOLD, bg=CARD, anchor="w", justify="left",
+                           fg=(RED_D if warn else w.STEP_INK) if on else w.STEP_MUTE,
+                           wraplength=self.panel_w - int(330 * self.scale))
+            lab.pack(fill="x")
+            why = tk.Label(cell, font=F_SMALL, bg=CARD, fg=RED, anchor="w", justify="left")     # 실패 사유 (_progress)
+
+            def fit(e, lab=lab, why=why):        # 오른쪽 칸을 뺀 폭 - [인증번호 칸] 이 있는 줄·좁은 창에서 글이 잘리지 않게
+                lab.config(wraplength=e.width)
+                why.config(wraplength=e.width)
+            lab.bind("<Configure>", fit)
+            w.hover_row(row, lab, why)
             self.labels[sid], self.base[sid] = lab, text
+            self.rows[sid] = {"dot": dot, "lab": lab, "why": why, "row": row, "warn": warn}
+            self.col_refs = self.col_refs or (chk, dot, cell, wait_on, wait_unit, del_x)
         if final and any(s.get("pick") for s in final["steps"]):
             w.Link(self.inner, "받은 메일 기억 지우기", self.clear_mail_memory, fg=MUTED).pack(anchor="e", padx=8, pady=6)
         if not n:
@@ -1183,26 +1257,57 @@ class App:
                      wraplength=self.panel_w - int(90 * self.scale)).pack(fill="x", padx=14, pady=14)
         self._title()
         self.canvas.update_idletasks()
+        self._align_columns()
         if n > self.shown:
             self.canvas.yview_moveto(1.0)       # 새 단계가 생기면 맨 아래로
         self.shown = n
         self.paint_buttons()
 
+    def _align_columns(self):
+        """칸 이름을 첫 줄의 칸 자리에 맞춘다. 줄이 없으면 숨긴다."""
+        names, refs = self.col_names, self.col_refs
+        if not refs or not refs[0].winfo_exists():
+            for x in names.values():
+                x.place_forget()
+            return
+        chk, dot, cell, wait_on, wait_unit, del_x = refs
+        base = self.col_head.winfo_rootx()
+        left = lambda x: x.winfo_rootx() - base                      # noqa: E731
+        mid = lambda x: left(x) + x.winfo_width() // 2                # noqa: E731
+        names["실행"].place(x=max(mid(chk), w.px(14)), y=0, anchor="n")
+        names["단계"].place(x=mid(dot), y=0, anchor="n")
+        names["설명"].place(x=left(cell), y=0, anchor="nw")
+        names["대기"].place(x=(left(wait_on) + left(wait_unit) + wait_unit.winfo_width()) // 2, y=0, anchor="n")
+        names["삭제"].place(x=mid(del_x), y=0, anchor="n")
+
+    def _check_changed(self, sid):
+        """단계 체크: 그 줄만 고친다 - 목록을 다시 만들면 반짝인다. 미리보기 중에는 지금 도는 내용이 그대로라 표시도 그대로."""
+        r = self.rows[sid]
+        on = self._var(self.presets[self.cur], sid).get()
+        if not self.previewing:
+            r["dot"].set_state("idle" if on else "off")
+            r["lab"].config(fg=(RED_D if r["warn"] else w.STEP_INK) if on else w.STEP_MUTE)
+        self.paint_buttons()
+
     def _wait_box(self, row, p, s):
-        """단계 줄 오른쪽의 [ ] [  ] 초 대기 (사용자 2026-11-05). 고쳐도 다시 그리지 않는다 - 치는 중인 칸을 잃지 않게."""
+        """단계 줄 오른쪽의 [ ] [  ] 초 대기 (사용자 2026-11-05). 고쳐도 다시 그리지 않는다 - 치는 중인 칸을 잃지 않게.
+        (체크, '초' 글자) 를 돌려준다 - 칸 이름 자리를 맞춘다."""
         sid = s["id"]
         on, text = p["wait"].get(sid, ("wait_sec" in s, str(s.get("wait_sec", ""))))
         on_var, text_var = tk.BooleanVar(self.root, value=on), tk.StringVar(self.root, value=text)
         self.wait_vars.append((on_var, text_var))
-        tk.Label(row, text="초 대기", font=F_SMALL, bg=CARD, fg=w.TEXT3).pack(side="right", anchor="n", pady=9)
+        unit = tk.Label(row, text="초", font=F_SMALL, bg=CARD, fg=w.TEXT3)      # 칸 이름에 '대기' 가 있다
+        unit.pack(side="right", anchor="n", pady=9)
         w.Field(row, width=3, h=24, font=F_SMALL, textvariable=text_var, justify="right", validate="key",
                 validatecommand=(row.register(lambda t: not t or t.isdecimal()), "%P")).pack(side="right", anchor="n", padx=(0, 2), pady=6)
-        w.Check(row, variable=on_var).pack(side="right", anchor="n", padx=(0, 2), pady=10)
+        box = w.Check(row, variable=on_var)
+        box.pack(side="right", anchor="n", padx=(0, 2), pady=10)
 
         def changed(*_):
             p["wait"][sid] = (on_var.get(), text_var.get())
         on_var.trace_add("write", changed)
         text_var.trace_add("write", changed)
+        return box, unit
 
     def delete(self, sid):
         self.presets[self.cur]["deleted"].add(sid)
@@ -1323,15 +1428,20 @@ class App:
         return self.status.config(text="받은 메일 기억을 지웠습니다.", fg=GREEN_D)
 
     def _progress(self, sid, st, how):
-        lab = self.labels.get(sid)
-        if lab is None:
+        r = self.rows.get(sid)
+        if r is None:
             return
-        mark, color = {"run": ("▶ ", BLUE), "ok": ("✓ ", GREEN_D), "skip": ("– ", MUTED), "fail": ("✗ ", RED)}[st]
-        tail = {"ok": f"  [{how}]", "skip": "  (건너뜀 - 화면에 없음)", "fail": f"\n    {how}"}.get(st, "")
+        state, tail = {"run": ("run", ""), "ok": ("done", f"  [{how}]"), "skip": ("auto", "  (건너뜀 - 화면에 없음)"), "fail": ("fail", "")}[st]
         if st == "fail" and self.worker.cancel.is_set():
-            mark, color, tail = "■ ", MUTED, "  (중단)"      # 사람이 멈춘 것 - 고칠 단계가 아니다
-        lab.config(text=mark + self.base[sid] + tail, fg=color)
-        y = lab.winfo_y() + lab.master.winfo_y()
+            state, tail = "stop", "  (중단)"                 # 사람이 멈춘 것 - 고칠 단계가 아니다
+        r["dot"].set_state(state)
+        r["lab"].config(text=self.base[sid] + tail, fg=RED if state == "fail" else w.STEP_MUTE if state in ("auto", "stop") else w.STEP_INK)
+        if state == "fail":
+            r["why"].config(text=how)
+            r["why"].pack(fill="x")
+        else:
+            r["why"].pack_forget()
+        y = r["row"].winfo_y()
         h = max(self.inner.winfo_height(), 1)
         self.canvas.yview_moveto(max(0, (y - 60) / h))
 
@@ -1369,6 +1479,9 @@ class App:
         r = rec.keep_steps(final, kept)
         ids = [s["id"] for s in r["steps"]]
         self.render()
+        for sid in ids:
+            self.rows[sid]["dot"].set_state("wait")
+            self.rows[sid]["lab"].config(fg=w.STEP_MUTE)
         self.worker.cancel.clear()          # 명령보다 먼저 - 일꾼이 받기 전에 누른 [■ 중단] 을 지우지 않게
         self.worker.pause.clear()
         self.worker.edit.clear()
@@ -1483,6 +1596,8 @@ class App:
             if final and final["steps"]:
                 kept = self._kept(p, final)
                 r = rec.keep_steps(final, kept)
+                if is_up(p):
+                    r["upload"] = True
                 for s in r["steps"]:
                     s.pop("id", None)
                 # 막지 않고 알리기만: 날짜로 못 바꾼 날짜 모양 값 (BugBuster I3) - 번호는 단계 목록에 보이는 번호 (지운 단계 뺌)
@@ -1505,7 +1620,7 @@ class App:
                 if len(pw_sites) > 1:                  # (BugBuster I1)
                     warns.append(f"{circled(no)} 비밀번호 단계가 서로 다른 사이트({', '.join(pw_sites)})에 있습니다. "
                                  "실행할 때마다 모든 사이트에 이 프리셋의 비밀번호를 입력합니다.")
-            out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"],
+            out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"], "upload": is_up(p),
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"],
                         "mail_id": p["mail_id"], "mail_pw": p["mail_pw"], "has_mail_pw": p["has_mail_pw"]})
         problem = validate_presets(out) or pick_problem(out)

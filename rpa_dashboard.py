@@ -393,6 +393,8 @@ TARGETS = {
     "prepare": ("ACTOR 오토파일럿", "Prepare_RPA.exe", ("--all", "--no-keep-open")),
     "routine": ("PROCESS 오토파일럿", "ERPia_RPA.exe", ()),
 }
+RUNNABLE = {**TARGETS, "upload": ("사이트 엑셀 업로드", "Prepare_RPA.exe", ("--all", "--upload", "--no-keep-open"))}   # upload 는 Scheduler.tick_upload 만 띄운다 - 단추·원격 명령 목록(TARGETS)에 없다
+UPLOAD_WAIT_SEC = 60    # PROCESS 가 끝나고 이만큼 조용하면 업로드를 띄운다 (사용자 2026-11-06)
 _active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
 # 토큰 확인 (2026-10-06): 에이전트가 agent.Tokens.gate 를 단다 - 띄우기 직전에 target 으로 부르고, 남은 토큰이 없으면
 # RuntimeError(사람에게 보일 글). 에이전트 없이 도는 옛 8765 대시보드·시험은 None (막지 않는다)
@@ -402,7 +404,7 @@ _check_lock = threading.Lock()   # 에이전트 순환과 명령 처리가 같�
 
 def target_path(target):
     folder = os.path.dirname(run_command_path())
-    return os.path.join(folder, TARGETS[target][1])
+    return os.path.join(folder, RUNNABLE[target][1])
 
 
 def launch_state():
@@ -446,7 +448,7 @@ def _note_start_failure(code):
             text = raw.decode("cp949", "replace")     # 파일로 받은 exe 출력이 CP949 일 때가 있다 (샌드박스 실측)
         tail = [ln for ln in text.splitlines() if ln.strip()][-20:]
         reason = "시작하지 못했습니다. " + (tail[-1].strip() if tail else f"오류 출력 없음, 종료 코드 {code}")
-        for program in (("prepare", "routine") if target == "all" else (target,)):
+        for program in (("prepare", "routine") if target == "all" else ("prepare" if target == "upload" else target,)):
             started = st.parse_iso((st.read_json(st.status_path(program)) or {}).get("started_at"))
             if started is None or started < since:
                 st.record_start_failure(program, since.isoformat(), reason, tail, _active.get("trigger"))
@@ -468,9 +470,9 @@ def launch(target, by, env=None):
     target: all / prepare / routine,  by: 'auto' 또는 'manual:<아이디>'
     env: 자식에게 더할 환경 변수 - 예약 줄의 이번 실행 모듈(RPA_RUN_MODULES)·띄운 까닭(RPA_RUN_TRIGGER)
     """
-    if target not in TARGETS:
+    if target not in RUNNABLE:
         raise ValueError("실행 대상이 올바르지 않습니다.")
-    label, name, args = TARGETS[target]
+    label, name, args = RUNNABLE[target]
     path = target_path(target)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{name} 이(가) 없습니다: {path}")
@@ -487,7 +489,7 @@ def launch(target, by, env=None):
             raise RuntimeError(f"{names}이(가) 이미 실행 중입니다.")
         ls = launch_state()
         if ls:
-            raise RuntimeError(f"{TARGETS[ls['target']][0]}이(가) 아직 실행 중입니다. ({ls['sec']}초 경과)")
+            raise RuntimeError(f"{RUNNABLE[ls['target']][0]}이(가) 아직 실행 중입니다. ({ls['sec']}초 경과)")
         if st.observer_open():
             raise RuntimeError("옵저버가 실행 중입니다. 옵저버를 종료한 뒤 실행하여 주십시오.")
         if TOKEN_GATE is not None:
@@ -1145,6 +1147,7 @@ class Scheduler(threading.Thread):
         self.waiting_reason = None
         self.held = (None, 0.0)  # 띄울 차례인데 막힌 까닭과 본 때 (monotonic) - 웹에 올린다 (held_reason, R5)
         self.skipped_at = None   # resync 가 건너뛴 예약 시각 (시작 안내용)
+        self.upload_for = None   # 업로드를 시도한 PROCESS 의 끝 시각. ponytail: 메모리만 - 에이전트를 다시 켜면 그 PROCESS 몫을 한 번 더 시도한다
         self.power = Power()
 
     def resync(self):
@@ -1236,8 +1239,22 @@ class Scheduler(threading.Thread):
             return "옵저버가 실행 중이어서 종료를 기다리는 중입니다."
         return None
 
+    def tick_upload(self, now):
+        """PROCESS 가 끝나고 1분 동안 아무것도 안 돌면 업로드 폴더의 엑셀을 사이트에 올린다 - 누가 PROCESS 를 띄웠든 (단추·예약·반복).
+        PROCESS 가 끝날 때마다 한 번만: 로그인 실패로 파일이 남아도 다음 PROCESS 까지 다시 안 한다 (사이트 계정이 잠기지 않게)."""
+        if not st.EXCEL_UPLOAD_ON:
+            return
+        v = st.read_json(st.status_path("routine")) or {}
+        end = st.parse_iso(v.get("finished_at")) if v.get("state") != "running" else None
+        if end is None or end == self.upload_for or now < end + datetime.timedelta(seconds=UPLOAD_WAIT_SEC) or self.busy():
+            return
+        self.upload_for = end
+        if st.upload_files():
+            launch("upload", "auto")
+
     def tick(self):
         now = NOW()
+        self.tick_upload(now)                    # 자동 실행을 꺼 둔 PC 도 - 그래서 아래 '꺼져 있음' 보다 먼저
         self.check_repeat_result(now)            # 띄운 반복 회차가 끝났으면 센다 (시간대가 끝났어도, 자동 실행을 껐어도)
         sch = st.read_settings()["schedule"]
         if not sch.get("enabled"):
@@ -1548,7 +1565,7 @@ def stop_rpa():
     finally:
         for p in running:
             st.clear_stopping(p)
-    names = ", ".join(st.PROGRAMS.get(p, p) for p in running) or TARGETS[_active["target"]][0]
+    names = ", ".join(st.PROGRAMS.get(p, p) for p in running) or RUNNABLE[_active["target"]][0]
     return 200, {"ok": True, "message": f"{st.josa(names)} 중단했습니다."}
 
 

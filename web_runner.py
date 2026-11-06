@@ -1419,6 +1419,12 @@ def action_replay(page, name, site):
         raise RuntimeError(problems[0])
     p = next(x for x in status.read_presets() if x["no"] == site.get("Preset"))
     dest = site_dest()
+    upload = status.is_upload(p["record"])
+    if upload:
+        file = upload_file_of(p["code"])
+        if not file:
+            step_done("skipped", "올릴 파일이 없습니다")     # 토큰을 쓰지 않는다
+            return True
     imap = status.imap_step(p["record"])
     if imap:
         return _run_imap(name, site, p, imap, dest)
@@ -1433,6 +1439,8 @@ def action_replay(page, name, site):
         rp.gate = (_here.gates.lock(key), web_replay.auth_start(p["record"]["steps"]), end)
     rp.first_page = page
     rp.fit_viewport = True
+    if upload:
+        rp.upload_file = file
     if _together:       # 루틴이 ERPia 에 키보드를 쓰는 동안은 다음 단계로 가지 않는다 (단계가 새 창을 띄우면 포커스를 가져간다)
         rp.pause = KeysPause()
     if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in p["record"]["steps"]):   # 2차인증 - 휴대폰 중계 (설계 13절)
@@ -1444,18 +1452,68 @@ def action_replay(page, name, site):
         rp.mail_memory = web_replay.MailMemory(status.mail_memory_path(p["no"]))
     # 알림창은 재생기 하나만 받는다 - 둘이 받으면 로그가 두 줄이고, 대시보드로 가는 글이 줄지 않았다 (2026-10-01 검토)
     page.remove_listener("dialog", on_dialog)
+    ok = False
     try:
         ok = rp.run()
     finally:
         page.on("dialog", on_dialog)
-    status.metric(f"{name}:files", "받은 엑셀", len(rp.saved), unit="개")
+        if upload:
+            settle_upload(file, rp.upload_tried, ok)
+    if not upload:
+        status.metric(f"{name}:files", "받은 엑셀", len(rp.saved), unit="개")
     if not ok:
         i, _, why = rp.results[-1] if rp.results else (0, "fail", "알 수 없음")
         raise RuntimeError(f"{i}단계에서 멈췄습니다: {why}")
+    if upload:
+        return True
     log(f"  [{name}] 받은 파일: {', '.join(os.path.basename(x) for x in rp.saved) or '없음'}")
     if rp.no_target and not rp.saved:
         step_done("skipped", rp.no_target_why)  # 받을 새 메일·주문이 없었다 - 토큰을 쓰지 않는다
     return True
+
+
+def move_upload(path, folder):
+    """올린 엑셀을 치운다. 이름이 겹치면 시각을 붙인다."""
+    os.makedirs(folder, exist_ok=True)
+    dest = os.path.join(folder, os.path.basename(path))
+    if os.path.exists(dest):
+        stem, ext = os.path.splitext(dest)
+        dest = f"{stem}_{time.strftime('%H%M%S')}{ext}"
+    os.replace(path, dest)
+    log(f"  파일 이동: {dest}")
+
+
+def upload_file_of(code):
+    """이 사이트코드로 올릴 파일. 여러 개면 가장 새 것 - 나머지는 오류 폴더로 (ERPia 엑셀 업로드와 같은 규칙)."""
+    paths = status.upload_files().get(code) or []
+    for old in paths[1:]:
+        move_upload(old, os.path.join(os.path.dirname(old), "오류"))
+    return paths[0] if paths else None
+
+
+def settle_upload(path, tried, ok):
+    """파일을 넣었으면 다시 올리지 않게 옮긴다: 끝까지 갔으면 완료 (시도 = 성공, 사이트마다 달라 결과는 보지 않는다), 넣은 뒤 멈췄으면
+    오류 (반영됐는지 알 수 없어 사람이 본다). 넣기 전에 멈췄으면(로그인 실패 등) 그대로 둬 다음 회차에 다시 한다."""
+    if tried:
+        folder = os.path.dirname(path)
+        move_upload(path, os.path.join(folder, "완료", time.strftime("%Y%m%d")) if ok else os.path.join(folder, "오류"))
+
+
+def upload_choice(chosen, upload):
+    """보통 실행은 업로드 프리셋을 빼고, --upload 는 올릴 파일이 있는 업로드 프리셋만 남긴다."""
+    if not status.EXCEL_UPLOAD_ON:
+        return [] if upload else chosen
+    try:
+        presets = {x["no"]: x for x in status.read_presets()}
+    except ValueError:
+        return [] if upload else chosen           # validate_site 가 알린다
+    files = status.upload_files() if upload else {}
+    out = []
+    for c in chosen:
+        p = presets.get(c[1].get("Preset")) or {}
+        if status.is_upload(p.get("record")) == upload and (not upload or p["code"] in files):
+            out.append(c)
+    return out
 
 
 def _run_imap(name, site, p, step, dest):
@@ -1785,9 +1843,9 @@ def run_parallel(chosen, n, headless, session_override, avoid=None):
 
 
 def cmd_run(targets, headless, session_override=None, keep_open=False,
-            force_close=False, parallel=None):
+            force_close=False, parallel=None, upload=False):
     # 대시보드 기록을 시작한다. 설정 오류로 바로 끝나도 '중단'과 사유가 남는다.
-    status.start("prepare")
+    status.start("prepare", title=status.UPLOAD_TITLE if upload else None)
     try:
         cfg = load_config()
     except Exception as e:
@@ -1819,7 +1877,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
                 and isinstance(c[1].get("Preset"), int) and c[1]["Preset"] > limit]
         for name, site in over:
             log(f"  {name}: 프리셋 {site['Preset']}은(는) 이 업체의 프리셋 수({limit}개)를 넘어 건너뜁니다.")
-        chosen = [c for c in chosen if c not in over]
+        chosen = upload_choice([c for c in chosen if c not in over], upload)
         if not chosen:
             log("실행할 사이트가 없습니다." + ("" if over else f" (Stts={STTS_RUN}인 사이트가 없습니다)"))
             return 1
@@ -1851,7 +1909,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
 
     recover_stage()
     avoid = None
-    if start_routine_together():    # ERPia 쪽은 그대로 두고 수집을 바로 시작한다 - 인증 사이트부터 (사용자 10-19: 1순위)
+    if not upload and start_routine_together():    # ERPia 쪽은 그대로 두고 수집을 바로 시작한다 - 인증 사이트부터 (사용자 10-19: 1순위)
         keep_open = False           # 창을 열어 둔 채 기다리면 루틴이 수집이 끝나기를 영영 기다린다
         presets = status.read_presets()
         chosen.sort(key=lambda item: not needs_auth(item[1], presets))     # 하나씩 돌 때도 인증 사이트 먼저 (순서는 그대로)
@@ -1916,6 +1974,8 @@ def main():
     ap.add_argument("--no-keep-open", action="store_true", dest="no_keep_open",
                     help="설정의 KeepOpen 을 무시하고 끝나면 바로 닫는다 "
                          "(PROCESS 오토파일럿으로 이어서 실행할 때 필요)")
+    ap.add_argument("--upload", action="store_true",
+                    help="업로드 프리셋만 실행 (PROCESS 가 폴더에 넣은 운송장 엑셀을 사이트에 올린다)")
     ap.add_argument("--parallel", type=int, metavar="N",
                     help="사이트를 N 개씩 동시에 (시험용 - 관리 화면의 '동시 실행 창 수' 보다 먼저, 1 이면 하나씩)")
     args = ap.parse_args()
@@ -1932,7 +1992,7 @@ def main():
             override = True
         return finish_together(cmd_run(args.site, args.headless,
                                        session_override=override, keep_open=args.keep_open,
-                                       force_close=args.no_keep_open, parallel=args.parallel))
+                                       force_close=args.no_keep_open, parallel=args.parallel, upload=args.upload))
 
     ap.print_help()
     return 0

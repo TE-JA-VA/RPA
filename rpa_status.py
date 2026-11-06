@@ -1063,6 +1063,41 @@ RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지
                                           # 여기서 읽는다 - 에이전트(내장 파이썬, playwright 없음)가 web_replay 를 끌어오지 않게 (2026-10-19)
 PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)
 REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
+# 사이트 엑셀 업로드 (사용자 2026-11-06, docs/superpowers/specs/2026-11-06-excel-upload-design.md).
+# 운송장번호 전송 메뉴가 사이트별 엑셀을 폴더에 넣게 고쳐진 뒤 True 로 바꾼다. 그 전까지 모든 프리셋은 다운로드 전용 -
+# 옵저버 스위치·예약·ACTOR 업로드가 모두 이 값 하나로 꺼져 있다.
+EXCEL_UPLOAD_ON = False
+UPLOAD_DIR_NAME = "ERPIA_AI_UPLOAD"       # 바탕화면\ERPIA_AI 아래. ERPIA_AI_EXCEL 과 나눈다 - 거기 파일은 PROCESS 가 ERPia 로 올린다
+UPLOAD_TITLE = "사이트 엑셀 업로드"        # 상태 기록 제목 - 토큰은 운송장번호 전송에 포함이라 agent.usage 가 이 실행을 세지 않는다
+
+
+def is_upload(record):
+    """이 기록이 사이트에 엑셀을 올리는 프리셋인가. 스위치가 꺼져 있으면 언제나 아니다."""
+    return EXCEL_UPLOAD_ON and bool((record or {}).get("upload"))
+
+
+def upload_dir():
+    return os.path.join(find_desktop_dir(), "ERPIA_AI", UPLOAD_DIR_NAME)
+
+
+def upload_files(folder=None):
+    """업로드 폴더의 (nnn)~.xls(x) 를 사이트코드별로 {코드: [경로, 최신 순]}. 폴더가 없으면 빈 dict."""
+    folder = folder or upload_dir()
+    out = {}
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return out
+    for name in names:
+        m = re.match(r"\((\d{3})\).*\.xlsx?$", name, re.I)
+        path = os.path.join(folder, name)
+        if m and os.path.isfile(path):
+            out.setdefault(m.group(1), []).append(path)
+    for paths in out.values():
+        paths.sort(key=os.path.getmtime, reverse=True)
+    return out
+
+
 _PRESET_KEY = re.compile(r"(?:PRESET)?(\d+)")
 
 
@@ -1625,6 +1660,7 @@ def history_record(state):
         "run_id": state.get("run_id"),
         "program": state.get("program"),
         "program_label": state.get("program_label"),
+        "title": state.get("title"),
         "host": state.get("host"),
         "account": state.get("account"),
         "trigger": state.get("trigger"),

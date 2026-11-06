@@ -307,6 +307,7 @@ JS = r"""
     if (!e.isTrusted) return;
     if (el.tagName === 'SELECT') { const o = el.options[el.selectedIndex]; send('select', el, {value: el.value, option: norm(o && o.text)}); }
     else if (['checkbox', 'radio'].includes(el.type)) send('check', el, {checked: el.checked});
+    else if (el.type === 'file' && el.files && el.files.length) send('file', el, {value: el.files[0].name});   // 파일 이름만 - 경로는 브라우저도 안 준다
   }, true);
   document.addEventListener('keydown', e => {
     if (e.isTrusted && e.key === 'Enter' && e.target.tagName === 'INPUT') { lastEnter = Date.now(); send('enter', e.target); }
@@ -1232,6 +1233,8 @@ def describe(s, hide_values=False):
             d += " (주소에 로그인 세션 값을 감지했습니다. 다음 회차부터 실행에 문제가 발생할 수 있습니다.)"
     elif k == "back":
         d = "뒤로 가기"
+    elif k == "file":
+        d = "엑셀 파일 넣기" + ("" if hide_values or not s.get("value") else f" (기록 때: {s['value']})")
     elif k == "newtab":
         d = "새 탭 열기"
     elif k == "click" and s.get("mailOpen"):
@@ -1417,6 +1420,7 @@ class Replayer:
         self.shot_dir = shot_dir or out_dir  # 실패 사진 자리 (프리페어는 받은 파일 폴더에 사진을 두지 않는다)
         self.pages, self.watched, self.saved, self.results, self.baseline = {}, set(), [], [], {}
         self.progress = None        # (번호, run/ok/skip/fail, 설명) - 화면이 단계마다 표시
+        self.upload_file, self.upload_tried, self.upload_steps = None, False, False   # 사이트 엑셀 업로드: 올릴 파일, 파일을 넣었나, 'file' 단계가 있나
         self.page_hook = None       # 첫 창이 뜨면 (창 자리 맞추기)
         self.first_page = None      # 이미 있는 창에서 시작 (옵저버·프리페어가 연 창)
         self.fit_viewport = False   # 기록 때 창 안쪽 크기로 (프리페어. 옵저버 미리보기는 창 자리를 맞춘다)
@@ -1458,6 +1462,8 @@ class Replayer:
                 pass                # 그 사이 사이트가 닫았다
         page.on("dialog", on_dialog)
         page.on("download", lambda dl: self.downloads.append(dl))
+        if self.upload_steps:
+            page.on("filechooser", lambda chooser: None)    # 받는 쪽이 있으면 윈도우 파일 창이 안 뜬다 - 파일은 'file' 단계가 넣는다
 
     # --- 중단·일시정지 ---
     def _gate_release(self):
@@ -1697,6 +1703,26 @@ class Replayer:
             break
         self.log("      (눌리지 않아 스크립트로 누름)")
         loc.evaluate("e => e.click()")
+
+    def _put_file(self, page, s):
+        """사이트의 파일 칸에 엑셀을 넣는다. 파일 칸은 숨겨 둔 사이트가 많아 보이는지 보지 않는다.
+        upload_file 이 없으면(옵저버 미리보기) 여기서 멈춘다 - 미리보기가 실제 사이트에 파일을 올리면 안 된다."""
+        if not self.upload_file:
+            raise NotFound("미리보기에서는 파일을 올리지 않습니다. 이 단계 앞까지 확인하였습니다.")
+        frame = self._frame(page, s["frame"])
+        if frame is None:
+            raise NotFound("파일을 넣을 화면을 찾지 못했습니다.")
+        css = (s.get("target") or {}).get("css") or ""
+        loc = frame.locator(css) if css else frame.locator("input[type=file]")
+        try:
+            if not loc.count():
+                loc = frame.locator("input[type=file]")
+            loc.first.wait_for(state="attached", timeout=self.step_timeout * 1000)
+            loc.first.set_input_files(self.upload_file)
+        except PWTimeout:
+            raise NotFound("파일 칸을 찾지 못했습니다.") from None
+        self.upload_tried = True        # 여기부터는 사이트가 파일을 받았을 수 있다 - 멈춰도 다시 올리지 않는다
+        return f"파일 {os.path.basename(self.upload_file)}"
 
     def _hover(self, page, loc):
         """마우스를 올려 둔다 (다음 단계가 누를 하위 메뉴가 그때 만들어진다). 가리면 닫고, 가려진 메뉴면 위 칸부터."""
@@ -2056,6 +2082,8 @@ class Replayer:
         if s["kind"] == "back":
             page.go_back(wait_until="domcontentloaded")
             return "뒤로"
+        if s["kind"] == "file":
+            return self._put_file(page, s)
         frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose)
         if url_path(frame.url) != s["url"]:
             self.log(f"      (주소가 다름: 기록 {s['url']} / 지금 {url_path(frame.url)})")
@@ -2103,6 +2131,7 @@ class Replayer:
             self.page_hook(page)
         if self.fit_viewport and self.rec.get("viewport"):
             page.set_viewport_size(self.rec["viewport"])        # 기록 때 창 안쪽 크기 (반응형 사이트의 메뉴 모양)
+        self.upload_steps = any(s["kind"] == "file" for s in self.rec["steps"])
         self._watch(page)
         self.context.on("page", self._watch)                    # 기록에 없던 새 창도 - 알림창을 받고 파일을 기다린다
         self.pages[0] = page
