@@ -54,6 +54,38 @@ def copy_paste_steps(mail_page=1, a_login_page=0):
     ]
 
 
+# --- 메일 본문이 표이고 번호 칸을 누르고 복사한 기록 (2026-11-06 실사용: 18단계 '인증 메일 열기 (제목: )' 로 못 찾음)
+def table_row(text):
+    return dict(row(text), sel="table > tr", key="")
+
+
+def body_click_steps(code_cell=CODE):
+    steps = [st("fill", 0, ph="아이디"), st("secret", 0, host="shop.example"), st("click", 0, "로그인"), st("click", 0, "인증 메일 보내기"),
+             st("fill", 1, ph="메일 아이디", url="/mail/login"), st("secret", 1, host="mail.example", url="/mail/login"), st("click", 1, "로그인", url="/mail/login"),
+             st("click", 1, "일회용 확인 코드", url="/mail/list", row=row("일회용 확인 코드")),
+             st("click", 1, code_cell, url="/mail/read", row=table_row(code_cell)),
+             st("copy", 1, url="/mail/read", copied=CODE),
+             st("click", 1, code_cell, url="/mail/read", row=table_row(code_cell)),
+             st("fill", 0, ph="인증번호", value=CODE, pasted=True), st("click", 0, "확인"), st("click", 0, "주문 엑셀", firstSeen=T[0] + 1)]
+    return steps
+
+
+r = rec.finalize(body_click_steps(), TODAY, "https://shop.example/login")
+s = r["steps"]
+opened = [x for x in s if x.get("mailOpen")]
+check("본문 번호 칸을 눌러도 목록의 메일 줄이 인증 메일 열기", [x["mailOpen"]["fp"] for x in opened] == ["일회용 확인 코드"], [x.get("mailOpen") for x in s])
+check("번호를 고르려고 누른 단계는 남기지 않는다 (번호는 매번 바뀐다)", CODE not in json.dumps(r, ensure_ascii=False) and len(s) == 12, [rec.describe(x) for x in s])
+check("뒤 단계의 '몇 단계 뒤에 나타남' 번호를 함께 당긴다", s[-1].get("appearsAfter") == 10, s[-1].get("appearsAfter"))
+check("메일 인증 문제 없음 (본문 표)", rec.mail_auth_problem(s) is None)
+r = rec.finalize(body_click_steps(f"인증번호 {CODE}"), TODAY, "https://shop.example/login")
+check("번호가 든 글 칸을 눌러도 같다", [x["mailOpen"]["fp"] for x in r["steps"] if x.get("mailOpen")] == ["일회용 확인 코드"], [rec.describe(x) for x in r["steps"]])
+only_date = body_click_steps()
+del only_date[8], only_date[9]
+only_date[7:7] = [st("click", 1, "11-06 10:42", url="/mail/list", row=row("11-06 10:42"))]
+r = rec.finalize(only_date, TODAY, "https://shop.example/login")
+check("목록의 날짜 칸을 눌렀어도 제목이 빈 인증 메일 열기를 만들지 않는다", all(x["mailOpen"]["fp"] for x in r["steps"] if x.get("mailOpen")), [x.get("mailOpen") for x in r["steps"]])
+check("제목이 빈 옛 기록은 저장을 막는다", "제목" in (rec.mail_auth_problem([{"kind": "click", "page": 1, "mailOpen": {"fp": ""}}]) or ""))
+
 # --- 번호 복사·붙여넣기
 r = rec.finalize(copy_paste_steps(), TODAY, "https://shop.example/login")
 s = r["steps"]

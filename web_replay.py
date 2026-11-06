@@ -717,10 +717,15 @@ def mail_host(steps):
     return next((s.get("host") for s in steps if s.get("credential") == "MAIL_PW" and s.get("host")), None)
 
 
+MAIL_NO_SUBJECT = "인증 메일 제목이 기록되지 않았습니다. 인증 메일을 여는 단계부터 다시 기록하여 주십시오."
+
+
 def mail_auth_problem(steps):
     """저장하면 안 되는 메일 2차인증 기록이면 그 까닭 (설계 6절 글), 아니면 None. 프리셋 하나에 메일 인증 하나·메일 계정 한 벌."""
     mail_pages = {s["page"] for s in steps if s.get("credential") == "MAIL_PW"}
     auths = [s for s in steps if is_mail_auth(s)]
+    if any(s.get("mailOpen") and not s["mailOpen"].get("fp") for s in steps):
+        return MAIL_NO_SUBJECT
     if any(s["kind"] == "otp" and s["page"] in mail_pages for s in auths):
         return "인증 메일함의 로그인에 다시 메일 인증이 필요한 경우는 지원하지 않습니다."
     if len(auths) > 1:
@@ -753,6 +758,12 @@ def record_version(steps):
     return MAIL_RECORD_VERSION if has_mail_auth(steps) else RECORD_VERSION
 
 
+def row_fp(s):
+    """누른 목록 줄의 모양 (mail_fp). 줄 글자가 숫자·날짜뿐이면 빈 글자 - 메일 제목으로 쓸 수 없다."""
+    mine = (s["row"].get("mine") or [{}])[0]
+    return mail_fp(mine.get("s") or mine.get("t") or s["target"].get("text"))
+
+
 def _mark_mail(out):
     """finalize 끝: 메일 인증 단계 앞뒤를 표시한다 - 인증 메일 열기(mailOpen), 메일 보내기(otpSend·mailSend), 메일함 계정(MAIL_*)."""
     if not has_mail_auth(out):                # 메일 인증이 없는 보통 기록은 그대로 - 다른 사이트 비밀번호 경고(I1)가 떠야 한다
@@ -769,12 +780,11 @@ def _mark_mail(out):
     for i, s in enumerate(out):
         if not (s["kind"] == "copyCode" or s.get("mailLink")):
             continue
-        row = next((j for j in range(i - 1, -1, -1) if out[j]["page"] == s["page"] and out[j]["kind"] == "click" and out[j].get("row")), None)
+        row = next((j for j in range(i - 1, -1, -1) if out[j]["page"] == s["page"] and out[j]["kind"] == "click" and out[j].get("row") and row_fp(out[j])), None)
         if s["kind"] == "copyCode":                       # 복사한 요소의 글자 = 그 번호 - 남기지 않는다 (재생은 자리로 찾는다)
             s["target"] = dict(s["target"], text="")
         if row is not None:
-            mine = (out[row]["row"].get("mine") or [{}])[0]
-            fp = mail_fp(mine.get("s") or mine.get("t") or out[row]["target"].get("text"))
+            fp = row_fp(out[row])
             out[row]["mailOpen"] = {"fp": fp}
             # 제목에 번호가 든 메일함 - 줄 글자도 모양으로 (재생은 fp 로 찾는다)
             out[row]["target"] = dict(out[row]["target"], text=fp)
@@ -1049,10 +1059,13 @@ def finalize(steps, record_date, start_url, viewport=None, prior=()):
     out, prev = [], None
     prior = list(prior)
     ts = [s["t"] for s in steps]
+    raw_no = {}                           # 다듬은 단계 → 원 번호 (아래에서 번호 고르기 누르기를 뺄 때 appearsAfter 를 당긴다)
+    codes = []                            # (창, 복사해 붙여 넣은 번호)
     copied = None                         # 메일에서 복사한 글 - 붙여넣기와 맞춰 보는 데만, 기록에는 남기지 않는다
     copy_at = None                        # 그 복사 단계 (out 안) - 다른 창에 붙여넣은 것만 메일 인증 (같은 창 복사·붙여넣기는 평범한 칸, 검토 M4)
     for i, s in enumerate(steps):
         s = dict(s)
+        raw_no[id(s)] = i
         seen = s.pop("firstSeen", None)
         if seen is not None:              # 몇 번째 단계를 한 뒤에 나타났나 (그 단계 전에는 없었다)
             k = max((j for j in range(i) if ts[j] < seen), default=None)
@@ -1078,6 +1091,8 @@ def finalize(steps, record_date, start_url, viewport=None, prior=()):
             s["kind"], s["source"] = "otp", "copy"          # 메일에서 복사한 번호 - 휴대폰 문자 인증(set_otp)과 다르다
             s.pop("value", None)
             last_copy["paired"] = True
+            if copied:
+                codes.append((last_copy["page"], copied))
             out.append(s)
             continue
         if href:                          # 메일함(쇼핑몰이 아닌 사이트에 로그인한 창)에서 다른 사이트로 가는 링크 = 인증 링크
@@ -1117,6 +1132,15 @@ def finalize(steps, record_date, start_url, viewport=None, prior=()):
                 break
     # 붙여넣기와 짝이 안 된 복사는 버린다 (메일 인증이 아니다 - 같은 창 복사·붙여넣기, 복사만 하고 손으로 친 것)
     out = [x for x in out if not (x["kind"] == "copyCode" and not x.pop("paired", False))]
+    # 메일의 번호를 고르려고 그 칸을 누른 것은 조작이 아니다 - 번호가 매번 바뀌어 재생이 못 찾고, 메일이 표로 된 메일함에서는 '목록 줄' 로
+    # 잘못 보여 인증 메일 열기가 된다 (2026-11-06 실사용). 복사해 붙여 넣은 번호가 든 글자를 누른 것만 뺀다
+    gone = [x for x in out if x["kind"] == "click" and any(p == x["page"] and c in (x["target"].get("text") or "") for p, c in codes)]
+    if gone:
+        nos = [raw_no[id(x)] for x in gone]
+        out = [x for x in out if not any(x is y for y in gone)]
+        for x in out:
+            if "appearsAfter" in x:
+                x["appearsAfter"] -= sum(1 for n in nos if n <= x["appearsAfter"])
     _mark_mail(prior + out)               # 앞부분과 함께 - 쇼핑몰·메일함 계정 가리기, 메일 열기·보내기 표시 (검토 C1)
     for x in prior:
         x.pop("paired", None)
@@ -1828,6 +1852,8 @@ class Replayer:
             raise MailFail(MAIL_LOGIN_FAIL)
         self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
         fp, mem = s["mailOpen"]["fp"], None if self.pick_preview else self.mail_memory
+        if not fp:                      # 고치기 전에 저장한 기록 - 어떤 메일과도 안 맞아 기다려도 소용없다
+            raise MailFail(MAIL_NO_SUBJECT)
         frame, rows = self._mail_list(page, s, self.step_timeout * self.step_tries)
         if frame is None or not rows:
             raise MailFail(MAIL_LOGIN_FAIL)
