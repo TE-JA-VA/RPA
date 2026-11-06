@@ -48,7 +48,7 @@ $urlIcon = Select-String -Path "$SM\오토파일럿 대시보드.url" -Pattern "
 $unIcon = if ($un) { $un.GetValue("DisplayIcon") }
 Check "아이콘: 설정·대시보드 바로 가기, 앱 및 기능 목록" ((Test-Path $Ico) -and ($lnkIcon -like "$Ico*") -and ($urlIcon -eq $Ico) -and ($unIcon -eq $Ico)) "lnk=$lnkIcon url=$urlIcon un=$unIcon"
 $recLnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$SM\옵저버.lnk")
-Check "시작 메뉴 '옵저버' (옵저버 exe, 회색 아이콘)" (($recLnk.TargetPath -eq "$App\Prepare_Observer.exe") -and ($recLnk.IconLocation -like "$App\AFTER_MARKET_PREPARE.ico*")) "target=$($recLnk.TargetPath) icon=$($recLnk.IconLocation)"
+Check "시작 메뉴 '옵저버' (옵저버 exe, 주황 아이콘)" (($recLnk.TargetPath -eq "$App\Prepare_Observer.exe") -and ($recLnk.IconLocation -like "$App\AFTER_MARKET_PREPARE.ico*")) "target=$($recLnk.TargetPath) icon=$($recLnk.IconLocation)"
 $tk = & $Py -c "import tkinter; r = tkinter.Tk(); r.destroy(); print('tk ok')"
 Check "내장 파이썬 tkinter" ("$tk" -eq "tk ok") "$tk"
 # exe 가 새 윈도우에서 켜지는가 (2026-09-29 노트북: System32 에만 있던 mfc140u.dll 이 exe 에 안 들어가 win32ui 에서 죽었다).
@@ -140,7 +140,7 @@ Check "작업이 오토파일럿 감독 사본으로 띄운다" ($q -match "AFTE
 $desc = @($Brand.Keys | Where-Object { (Get-Item "$App\python\$_").VersionInfo.FileDescription -eq $Brand[$_] })
 Check "오토파일럿 사본 설명 둘 (작업 관리자 '프로세스' 탭 글자)" ($desc.Count -eq 2) ($Brand.Keys | ForEach-Object { "$_=" + (Get-Item "$App\python\$_" -ErrorAction SilentlyContinue).VersionInfo.FileDescription })
 # 탐색기·작업 관리자가 보여 주는 아이콘을 ico 파일의 것과 견준다. 루틴·프리페어 exe 는 Nuitka 로 새로 빌드한 판이어야 맞다 (--exes-from 옛 exe 면 실패)
-# 프로그램마다 바탕색이 다르다 (2026-10-13 오토파일럿): PROCESS·옵저버·ACTOR 는 각자, 감독·에이전트는 오토파일럿 것
+# 프로그램마다 날개 색이 다르다 (2026-11-06): PROCESS·옵저버·ACTOR 는 각자 파일, 오토파일럿과 PROCESS 는 같은 파랑, 감독·에이전트는 오토파일럿 것
 Add-Type -AssemblyName System.Drawing
 function IconPng($path) { $ms = New-Object IO.MemoryStream; [Drawing.Icon]::ExtractAssociatedIcon($path).ToBitmap().Save($ms, [Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()) }
 $IcoPrep = "$App\AFTER_MARKET_PREPARE.ico"
@@ -148,7 +148,7 @@ $IcoProc = "$App\AUTOPILOT_PROCESS.ico"; $IcoObs = "$App\AUTOPILOT_ACTOR.ico"
 $want = @{ "ERPia_RPA.exe" = $IcoProc; "Prepare_RPA.exe" = $IcoObs; "Prepare_Observer.exe" = $IcoPrep }
 $Brand.Keys | ForEach-Object { $want["python\$_"] = $Ico }
 $plain = @($want.Keys | Where-Object { (-not (Test-Path "$App\$_")) -or (-not (Test-Path $want[$_])) -or ((IconPng "$App\$_") -ne (IconPng $want[$_])) })
-Check "exe 다섯의 아이콘: PROCESS·ACTOR 오토파일럿·옵저버 는 각자 색, 감독·에이전트는 오토파일럿 색" (($plain.Count -eq 0) -and (@($Ico, $IcoProc, $IcoObs, $IcoPrep | ForEach-Object { IconPng $_ } | Select-Object -Unique).Count -eq 4)) ($plain -join ", ")
+Check "exe 다섯의 아이콘: PROCESS·ACTOR 오토파일럿·옵저버 는 각자 아이콘, 감독·에이전트는 오토파일럿 아이콘" (($plain.Count -eq 0) -and (@($Ico, $IcoProc, $IcoObs, $IcoPrep | ForEach-Object { IconPng $_ } | Select-Object -Unique).Count -eq 3)) ($plain -join ", ")
 
 # 3. 감독 → 에이전트. 인터넷이 있으면: 가짜 비밀번호라 로그인이 거부되고(3) 감독도 같이 끝난다 (틀린 비밀번호로
 #    되풀이하지 않는다). 없으면 (2026-09-29 첫 시험의 샌드박스가 그랬다): 에이전트는 죽지 않고 다시 붙으려 한다

@@ -97,7 +97,7 @@ BRANDED = {bg.SUPERVISOR_EXE: ("pythonw.exe", "오토파일럿 에이전트 감�
 BRAND_VERSION = "1.0.0.0"
 # 1단계 시험(2026-09-29)에서 쓴 옵션 그대로 - 설계 문서 7절 '시험 결과'
 ICON = os.path.join(REPO, "release", "AFTER_MARKET.ico")
-ICON_PROCESS = os.path.join(REPO, "release", "AUTOPILOT_PROCESS.ico")       # 프로그램마다 바탕색이 다르다 (2026-10-13 오토파일럿)
+ICON_PROCESS = os.path.join(REPO, "release", "AUTOPILOT_PROCESS.ico")       # 프로그램마다 날개 색이 다르다 (tools/make_icon.py 의 ICONS)
 ICON_ACTOR = os.path.join(REPO, "release", "AUTOPILOT_ACTOR.ico")          # ACTOR 오토파일럿 (Prepare_RPA)
 ICON_PREPARE = os.path.join(REPO, "release", "AFTER_MARKET_PREPARE.ico")    # 옵저버 = Prepare_Observer (옛 파일 이름 그대로 - 설치된 바로 가기가 본다)
 NUITKA_COMMON = (["--onefile", "--assume-yes-for-downloads", "--remove-output",

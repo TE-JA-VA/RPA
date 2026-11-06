@@ -263,7 +263,7 @@ check("아이콘: PROCESS·ACTOR 오토파일럿·옵저버 exe 는 각자 색 �
                     "Prepare_RPA.exe": [f"--windows-icon-from-ico={icons[2]}"],
                     "Prepare_Observer.exe": [f"--windows-icon-from-ico={prep}"]}
       and all(os.path.isfile(p) and br.icon_resources(p)[1] for p in icons)
-      and len({open(p, "rb").read() for p in icons}) == 4
+      and len({open(p, "rb").read() for p in icons}) == 3     # 오토파일럿과 PROCESS 는 같은 파랑 (사용자 2026-11-06)
       and all((os.path.basename(p), "release/" + os.path.basename(p)) in br.PROGRAM_FILES for p in icons), icon_opts)
 console = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-console-mode=")]
            for exe in br.EXES}
