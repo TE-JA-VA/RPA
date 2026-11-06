@@ -19,6 +19,7 @@
 //   node setup.js releases                                         올라간 판 목록·안정본·최신본 (JSON 한 줄)
 //   node setup.js release-set <json 파일>                          판 목록 통째로 쓰기 (tools/publish_release.py 가 부른다)
 //   node setup.js stable   <판>                                    안정본 지정 (목록에 있는 판만)
+//   node setup.js hosting-prune                                    업데이트 전용 호스팅의 옛 배포 기록 지우기 (tools/publish_release.py 가 부른다)
 //
 // 업체 상태 stts: 0(또는 없음) 사용중, 9 비활성. 비활성화된 업체엔 pc·user·agent 를 못 만든다.
 // 비밀번호는 명령줄로 받지 않는다. 무작위로 만들어 딱 한 번 찍고, 잃으면 passwd 로 다시 발급한다.
@@ -29,7 +30,7 @@ import { fileURLToPath } from "node:url";
 // 인수 개수 [최소, 최대]. 옛 꼴(user <이메일> <비밀번호> …, agent <이메일> <비밀번호> …)은 받지 않는다.
 const ARGC = { company: [2], pc: [3], user: [4], agent: [2, 2], passwd: [2, 2], disable: [2, 2], enable: [2, 2], show: [2, 2], list: [0, 1], modules: [2], slots: [1, 2], remove: [1, 1], restore: [1, 1],
   tokens: [1], price: [0, 2], usage: [0, 1],
-  releases: [0, 0], "release-set": [1, 1], stable: [1, 1] };
+  releases: [0, 0], "release-set": [1, 1], stable: [1, 1], "hosting-prune": [0, 0] };
 
 const [, , cmdName, ...rest] = process.argv;
 const [min, max = Infinity] = ARGC[cmdName] ?? [];
@@ -119,6 +120,9 @@ try {
     console.log(`판 목록 ${r.count}개 · 최신본 ${r.newest ?? "-"} · 안정본 ${r.stable ?? "-"}`);
   } else if (cmdName === "stable") {
     console.log(`안정본: ${(await ops.setStable(rest[0])).stable}`);
+  } else if (cmdName === "hosting-prune") {
+    const r = await ops.pruneReleaseHosting();
+    console.log(`배포 기록 ${r.kept}개 남김 · ${r.removed}개 지움` + (r.failed ? ` · ${r.failed}개 못 지움` : ""));
   }
 } catch (e) {
   if (!(e instanceof ops.Refused)) throw e;

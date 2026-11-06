@@ -285,6 +285,37 @@ export async function setReleases(list) {
     { version: x.version, published_at: x.published_at ?? null, bytes: Number(x.bytes) || 0, memo: x.memo ?? "" }])), stable, newest });
   return { count: list.length, newest, stable };
 }
+// 업데이트 전용 호스팅의 옛 배포 기록 지우기 - 배포마다 0.3~0.6GB 쌓여 저장 공간 10GB 를 두 번 채웠고(2026-10-15·11-06), 콘솔의 보관 수는 이 사이트에 안 먹는다.
+// 버전 파일은 최신 배포에 다 들어 있어 지워도 업데이트·되돌리기는 그대로다. tools/publish_release.py 가 배포 뒤에 부른다
+export const HOSTING_KEEP = 4;
+async function hostingCall(path, method = "GET") {
+  const { access_token: token } = await app.options.credential.getAccessToken();
+  const r = await fetch(`https://firebasehosting.googleapis.com/v1beta1/${path}`, { method, headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) throw new Error(`Hosting ${method} ${r.status}`);
+  return r.json();
+}
+export async function pruneReleaseHosting(call = hostingCall) {
+  const base = `sites/${PROJECT}-releases`;
+  const all = async (path, key) => {
+    const out = [];
+    let tok = "";
+    do {
+      const d = await call(`${base}/${path}?pageSize=100${tok ? `&pageToken=${tok}` : ""}`);
+      out.push(...(d[key] ?? []));
+      tok = d.nextPageToken ?? "";
+    } while (tok);
+    return out;
+  };
+  const inUse = new Set((await all("channels", "channels")).map((c) => c.release?.version?.name).filter(Boolean));
+  if (!inUse.size) throw new Refused("사용 중인 배포를 찾지 못해 지우지 않습니다.");
+  const live = (await all("versions", "versions")).filter((v) => v.status === "FINALIZED").sort((a, b) => b.createTime.localeCompare(a.createTime));
+  const stale = live.slice(HOSTING_KEEP).filter((v) => !inUse.has(v.name));
+  let removed = 0;
+  for (const v of stale) {
+    try { await call(v.name, "DELETE"); removed++; } catch { /* 다음 내보내기 때 다시 지운다 */ }
+  }
+  return { kept: live.length - removed, removed, failed: stale.length - removed };
+}
 const COMMAND_TTL_SEC = 600;     // 웹 화면(firebase-config.js)과 같은 값 - PC 가 받자마자 '예약했습니다' 로 끝낸다
 async function checkPc(cid, pcId) {
   checkKey("cid", cid); checkKey("pcId", pcId);

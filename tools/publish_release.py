@@ -150,6 +150,10 @@ def _deploy():
         print("회사 서버에도 올립니다:", mirror)
         if subprocess.run(mirror, cwd=SITE_DIR, shell=True).returncode != 0:   # 호스팅은 이미 올라갔다 - DB 목록 쓰기는 계속 (BugBuster L25)
             print("경고: 회사 서버에 올리지 못했습니다 - 호스팅은 올라갔고 DB 목록은 계속 씁니다. 같은 버전으로 다시 내보내면 맞춰집니다.")
+    try:
+        print(_node("hosting-prune").strip())
+    except Exception as e:                              # 호스팅은 이미 올라갔다 - 정리 실패로 내보내기를 멈추지 않는다
+        print(f"경고: 옛 배포 기록을 지우지 못했습니다 - 다음 내보내기 때 다시 지웁니다. ({e})"[:500])
 
 
 def main(argv=None):

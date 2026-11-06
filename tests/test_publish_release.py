@@ -117,7 +117,7 @@ except RuntimeError as e:
     check("호스팅은 올라갔고" in str(e) and "같은 버전으로 다시 내보내면" in str(e), f"DB 목록 실패 안내 ({e})")
 runs = []
 real_run, pr.input = pr.subprocess.run, lambda *a: "예"
-pr.subprocess.run = lambda args, **kw: runs.append(args) or pr.subprocess.CompletedProcess(args, 1 if args == "mirror-cmd" else 0)
+pr.subprocess.run = lambda args, **kw: runs.append(args) or pr.subprocess.CompletedProcess(args, 1 if args == "mirror-cmd" or "hosting-prune" in args else 0, "", "오류")
 os.environ["RPA_RELEASES_MIRROR"] = "mirror-cmd"
 out = io.StringIO()
 old_stdout, sys.stdout = sys.stdout, out
@@ -129,7 +129,8 @@ except Exception as e:
 finally:
     sys.stdout, pr.subprocess.run = old_stdout, real_run
     del pr.input, os.environ["RPA_RELEASES_MIRROR"]
-check(err is None and "회사 서버에 올리지 못했습니다" in out.getvalue() and len(runs) == 2, f"미러 실패는 경고만 - 예외 없이 계속 ({err} {runs})")
+check(err is None and "회사 서버에 올리지 못했습니다" in out.getvalue() and len(runs) == 3, f"미러 실패는 경고만 - 예외 없이 계속 ({err} {runs})")
+check(runs[-1][-1:] == ["hosting-prune"] and "옛 배포 기록을 지우지 못했습니다" in out.getvalue(), f"배포 뒤 옛 배포 기록 지우기 - 실패해도 경고만 ({runs})")
 
 # --- 보완 3: 잘린 blob 은 다시 복사
 SITE3 = os.path.join(tmp, "site3")
