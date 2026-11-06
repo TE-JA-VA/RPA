@@ -1089,7 +1089,7 @@ def notify_icons_changed():
     """윈도우에 아이콘이 바뀌었다고 알린다. 아이콘 저장소는 사용자마다 있어 로그인한 사용자로 도는 에이전트가 해야 한다 (업데이트 도우미 말고)."""
     import ctypes
     import subprocess
-    subprocess.run([os.path.join(os.environ.get("SystemRoot", r"C:\\Windows"), "System32", "ie4uinit.exe"), "-show"],
+    subprocess.run([os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "ie4uinit.exe"), "-show"],
                    timeout=30, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
     ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)     # SHCNE_ASSOCCHANGED
 
