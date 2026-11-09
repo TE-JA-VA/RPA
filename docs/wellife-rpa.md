@@ -601,7 +601,7 @@ SAP 에서 넘어온 건은 WMS 이관관리에 한꺼번에 들어오지 않고
 
 예약 줄 방식 `excel` (9.6). 사이트 수집 사이트는 [전송요청(S)] 으로 운송장이 안 가므로, ERPia 에서 마켓업로드용 엑셀을 받아 사이트에 올린다.
 사이트에 올리는 쪽(옵저버 업로드 기록·ACTOR `--upload`)은 upstream 2026-11-06 에 들어가 `rpa_status.EXCEL_UPLOAD_ON = False` 로 숨겨져 있다 (`docs/superpowers/specs/2026-11-06-excel-upload-design.md`).
-이 절은 PROCESS 쪽 - 엑셀을 받아 `바탕화면\ERPIA_AI\ERPIA_AI_EXCEL\운송장` 에 넣는 데까지다.
+이 절은 PROCESS 쪽 - 엑셀을 받아 `바탕화면\ERPIA_AI\ERPIA_AI_UPLOAD` 에 넣는 데까지다.
 
 - **받을 사이트** (`wellife.excel_targets`): 옵저버에서 프리셋마다 고른 '운송장 전송 마켓' (upstream `10087ee`·`0245f18` - `RPA_Presets.json` 의 `market`, `rpa_status.INVOICE_MARKETS`, `wellife.invoice_markets()`) 중 사이트 수집에서 켠 프리셋 (사용자 2026-11-09).
   - 고른 사이트가 없으면 ERPia 를 누르지 않고 `skipped` ('운송장 전송 마켓을 고른 사이트 수집 사이트가 없어 받지 않았습니다').
@@ -615,15 +615,15 @@ SAP 에서 넘어온 건은 WMS 이관관리에 한꺼번에 들어오지 않고
   3. 따로 뜬 창 '엑셀 다운로드 받기' (`PopupFrmExportExcel`): 먼저 미리보기 그리드 `gridCtrl_01` 에 줄이 있는지 본다 (3초까지 기다림) - 없으면(0건) [닫기(X)] → '엑셀 다운로드 받기 창을 닫으시겠습니까?' [예] 로 닫고 받지 않는다 (데이터가 있을 때만 받는다 - 사용자 2026-11-09. 0건이면 머리글만 있는 파일이 나온다. `wellife._download`). 아무것도 입력하지 않은 창은 확인 없이 바로 닫힌다 (개발기 실제 업체 11-09 실측 - `_close_download` 는 확인 창과 창 사라짐 둘 다 받는다). 있으면 비밀번호 `txt_password`, 사유 `cbo_reason` '원본데이터 확인 목적', [엑셀 다운로드] `btn_ExportExcel`.
      - 비밀번호: `RPA_UserConfig.json` 의 `InvoiceExcel.Password`, 없거나 비면 `0000` (사용자 2026-11-09, `wellife.export_password`). 모양이 틀리면 ERPia 를 누르지 않고 `failed` '설정 오류' (글에 값은 넣지 않는다).
      - 비밀번호와 다운로드 사유는 대시보드(웹)에 보이지 않는다. 비밀번호는 로그·사유에도 남기지 않는다.
-  4. 저장 창 '엑셀 저장' → `ERPIA_AI_EXCEL\운송장` 에 ERPia 가 채운 이름(`<마켓>송장<시작일>~<끝일>.xlsx`)으로 저장 (`run_routine.save_dialog_to_jobs(folder=)`). '내보내기' 진행 창 → '엑셀파일을 여시겠습니까?' [아니오] (글이 다르면 누르지 않고 멈춤) → 다운로드 창이 저절로 닫힌다 → '송장양식' [닫기(X)].
+  4. 저장 창 '엑셀 저장' → `ERPIA_AI_UPLOAD` 에 ERPia 가 채운 이름(`<마켓>송장<시작일>~<끝일>.xlsx`)으로 저장 (`run_routine.save_dialog_to_jobs(folder=)`). '내보내기' 진행 창 → '엑셀파일을 여시겠습니까?' [아니오] (글이 다르면 누르지 않고 멈춤) → 다운로드 창이 저절로 닫힌다 → '송장양식' [닫기(X)].
      - 저장에 실패하면 ERPia 가 '엑셀 저장 실패 - 저장경로 : … 엑셀파일을 다운로드에 실패했습니다.' 를 띄운다. 그 글을 사유에 남기고 [확인] 한다 (그러면 저장 창도 저절로 닫힌다, 남으면 [취소]).
   5. 이름 앞에 `(사이트코드)` 를 붙인다 (`wellife.upload_name`) - 업로드(`rpa_status.upload_files`)가 그 코드의 업로드 프리셋으로 올린다. 이름이 겹치면 `_시각` 을 붙인다.
 - **시작 전 정리:** 남은 '엑셀 저장 실패' 안내·저장 창·'엑셀 다운로드 받기'·'송장양식' 을 먼저 닫는다 (`wellife._close_export_windows`, 멈출 때도). 실행 전부터 열려 있던 '송장양식' 이 조회 조건 칸을 덮어 멈춘 일이 있다 (11-09 실측).
 - **결과:** 받은 파일이 있으면 실행 `done`·리허설 `skipped`(토큰 없음), 모든 사이트가 0건이면 `no_target`, 한 사이트라도 못 받으면 `failed` (받은 것·0건·못 받은 까닭을 모두 사유에). 화면 잠김 같은 `stopped` 는 다음 사이트로 가지 않고 바로 멈춘다. [전송요청(S)]·[미전송 완료처리] 는 누르지 않는다.
   - 사유 예: `[실행] 사이트 수집으로 선택된 사이트의 엑셀 출력 - 받음 YES24(107) (107)YES24송장2025-10-05~2026-11-09.xlsx / 0건 이지웰(109). 전송요청은 누르지 않음`
 - **리허설:** 데이터를 바꾸지 않아 실제로 받는다 (사용자 2026-11-09). 이름 앞에 `리허설_` 을 더 붙여(`리허설_(107)…`) 업로드를 켜도 올라가지 않게 한다. ERPia 에는 다운로드 사유가 기록된다.
-- **폴더 (사용자 2026-11-09: ERPIA_AI_EXCEL 에 저장):** `ERPIA_AI_EXCEL` 바로 아래의 `(nnn)` 파일은 PROCESS 가 주문 엑셀로 ERPia 에 올린다 (`run_routine.collect_upload_files` - 하위 폴더는 보지 않는다). 그래서 하위 폴더 `운송장` 에 둔다.
-  - 사이트에 올리는 쪽(ACTOR `--upload`, `rpa_status.upload_dir`)도 같은 폴더를 본다 (`rpa_status.UPLOAD_DIR_NAME`, 2026-11-06 설계의 `ERPIA_AI_UPLOAD` 를 바꿈). 올린 뒤에는 그 안의 `완료\YYYYMMDD`·`오류` 로 옮겨진다.
+- **폴더:** `바탕화면\ERPIA_AI\ERPIA_AI_UPLOAD` (`rpa_status.UPLOAD_DIR_NAME`, 2026-11-06 설계 3절 - 사용자 2026-11-09 설계대로). `ERPIA_AI_EXCEL` 에 넣으면 안 된다 - 거기 `(nnn)` 파일은 PROCESS 가 주문 엑셀로 ERPia 에 올린다 (`run_routine.collect_upload_files`). 없으면 만든다.
+  - 사이트에 올리는 쪽(ACTOR `--upload`, `rpa_status.upload_dir`)이 같은 폴더를 본다. 올린 뒤에는 그 안의 `완료\YYYYMMDD`·`오류` 로 옮겨진다.
 - **11-05 화면 조사 (PC 설정 업체)**:
   - '송장양식' 목록은 마켓 이름 39개이고 사이트코드도 `공통엑셀양식` 도 없다 (upstream `INVOICE_MARKETS` 는 'LG라이프케어' 를 더한 40개). 매출구분 '마켓' 과 이름이 1:1 이 아니다 (옥션 → '옥션(A낙찰-B운송장)', 11번가·G마켓은 없음).
   - 양식마다 머리글이 다르다 (예: 옥션 '주문번호·송장번호', 이지웰 '주문번호·장바구니번호·택배사명·송장번호'). 힙합퍼는 '조회에 실패했습니다.'.
