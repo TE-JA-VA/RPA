@@ -1069,16 +1069,16 @@ REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 # 옵저버 스위치·예약(PROCESS 끝나고 1분 뒤)·ACTOR 업로드가 모두 이 값 하나로 켜고 끈다. False 면 모든 프리셋이 다운로드 전용.
 EXCEL_UPLOAD_ON = True
 UPLOAD_DIR_NAME = "ERPIA_AI_UPLOAD"       # 바탕화면\ERPIA_AI 아래. ERPIA_AI_EXCEL 과 나눈다 - 거기 파일은 PROCESS 가 ERPia 로 올린다 (설계 2026-11-06)
-# 예약 줄의 운송장 전송 방식 (사용자 2026-11-09). 줄에 없으면 전체 조회 후 전송 (예전 그대로).
+# 예약 줄의 운송장 전송 방식 (사용자 2026-11-09). 줄에 없으면 전체 전송 (예전 그대로).
 # 예전 '수집된 사이트만 전송'(inv_sites: true)은 엑셀로 수집한 주문이라 [전송요청] 으로 안 가서(ERPia 도움말) 'excel' 로 읽는다.
-# 순서·이름은 사용자 2026-11-09: 1. 전체 조회 후 전송 (줄에 값 없음) 2. auto 3. excel. auto·excel 은 사이트 수집에서 끈 사이트를 전송도 출력도 하지 않는다 -
+# 순서·이름은 사용자 2026-11-09: 1. 전체 전송 (줄에 값 없음) 2. auto 3. excel. auto·excel 은 사이트 수집에서 끈 사이트를 전송도 출력도 하지 않는다 -
 # auto 는 사이트 수집 프리셋을 켬·끔 모두 빼고 (wellife.invoice_sites), excel 은 켠 것만 (wellife.excel_targets).
-INVOICE_OPTIONS = {"auto": "쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송", "excel": "쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력"}
+INVOICE_OPTIONS = {"auto": "자동수집 사이트만 전송", "excel": "수집 사이트 엑셀출력"}
 INVOICE_OPTION_ENV = "RPA_INVOICE_OPTION"   # 띄울 때 줄의 방식을 넘긴다 (rpa_dashboard.launch_slot → wellife.invoice_option)
 
 
 def slot_invoice(slot):
-    """줄의 운송장 전송 방식 - 'excel' / 'auto' / None (전체 조회 후 전송). 판 5·6 이 저장한 inv_sites: true 는 'excel'."""
+    """줄의 운송장 전송 방식 - 'excel' / 'auto' / None (전체 전송). 판 5·6 이 저장한 inv_sites: true 는 'excel'."""
     inv = slot.get("inv")
     return inv if inv in INVOICE_OPTIONS else ("excel" if slot.get("inv_sites") is True else None)
 
