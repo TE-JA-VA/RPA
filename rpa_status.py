@@ -1065,7 +1065,7 @@ RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지
 PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)
 REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 # 사이트 엑셀 업로드 (사용자 2026-11-06, docs/superpowers/specs/2026-11-06-excel-upload-design.md).
-# 운송장번호 전송 메뉴가 사이트별 엑셀을 폴더에 넣게 고쳐져(PR #32 '쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력') 2026-11-09 켰다.
+# 운송장번호 전송 메뉴가 사이트별 엑셀을 폴더에 넣게 고쳐져(PR #32 '수집 사이트 엑셀출력') 2026-11-09 켰다.
 # 옵저버 스위치·예약(PROCESS 끝나고 1분 뒤)·ACTOR 업로드가 모두 이 값 하나로 켜고 끈다. False 면 모든 프리셋이 다운로드 전용.
 EXCEL_UPLOAD_ON = True
 UPLOAD_DIR_NAME = "ERPIA_AI_UPLOAD"       # 바탕화면\ERPIA_AI 아래. ERPIA_AI_EXCEL 과 나눈다 - 거기 파일은 PROCESS 가 ERPia 로 올린다 (설계 2026-11-06)
