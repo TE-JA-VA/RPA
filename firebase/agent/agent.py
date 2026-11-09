@@ -305,6 +305,9 @@ def trim_logs(snapshot):
 
 LIVE_TICK_KEYS = ("elapsed_sec", "idle_sec", "updated_at")   # 실행 중 매초(updated_at 은 2초마다) 바뀌는 현황 값 - 웹은 started_at 으로 센다
 LIVE_RUNNING_SEC = 5            # 실행 중 매초 바뀌는 값만 바뀌었으면 이 간격으로만 올린다 (heartbeat 와 같게, BugBuster M3)
+# 바뀐 게 없어도 이만큼마다 현황 전체를 다시 올린다 (2026-11-09). 다른 PC 가 같은 에이전트 계정으로 이 자리에 자기 현황을 올리면
+# 이 PC 는 자기가 마지막에 올린 것과만 비교해 다시 안 올렸다 - 업체 화면이 남의 PC 현황인 채 설정을 바꿀 때까지 남았다.
+LIVE_REFRESH_SEC = 600
 
 
 def live_schedule(settings, last, waiting):
@@ -1117,23 +1120,31 @@ def refresh_icons(version_of, mark, notify=notify_icons_changed):
         return False
 
 
-def warn_other_boot(client, cid, pc_id, host=None, now=None):
-    """켤 때 한 번 (BugBuster I13): 이 계정의 heartbeat 를 읽어 2분 안에 다른 PC(호스트 이름이 다름)가 신호를 올렸으면 기록에 경고 →
-    경고했으면 True. 지난번 이 PC 의 신호는 호스트 이름이 같아 넘어간다 (재시작마다 경고하지 않게). 못 읽으면 False, 인증이 죽었으면 AuthError."""
+def other_pc(client, cid, pc_id, host=None, now=None):
+    """이 계정의 heartbeat 를 2분 안에 다른 PC(호스트 이름이 다름)가 올렸으면 (호스트, 몇 초 전, 실행 번호), 아니면 None.
+    지난번 이 PC 의 신호는 호스트 이름이 같아 넘어간다 (재시작). 못 읽으면 None, 인증이 죽었으면 AuthError."""
     import socket
     try:
         hb = client.get(f"{app_path('live', cid, pc_id)}/heartbeat")
     except fb.AuthError:
         raise
     except Exception:
-        return False
+        return None
     if not isinstance(hb, dict) or not isinstance(hb.get("at"), (int, float)) or isinstance(hb.get("at"), bool):
-        return False
+        return None
     host = host or socket.gethostname()
     now = time.time() if now is None else now
     if hb.get("host") == host or abs(now - hb["at"]) > OTHER_BOOT_SEC:
+        return None
+    return hb.get("host"), max(0, int(now - hb["at"])), hb.get("boot")
+
+
+def warn_other_boot(client, cid, pc_id, host=None, now=None):
+    """켤 때 한 번 (BugBuster I13): 다른 PC 가 이 계정을 쓰고 있으면(other_pc) 기록에 경고 → 경고했으면 True."""
+    other = other_pc(client, cid, pc_id, host, now)
+    if other is None:
         return False
-    log(f"경고: 이 에이전트 계정({cid}/{pc_id})을 다른 PC({hb.get('host')}, 실행 번호 {hb.get('boot') or '없음'})가 {max(0, int(now - hb['at']))}초 전에 "
+    log(f"경고: 이 에이전트 계정({cid}/{pc_id})을 다른 PC({other[0]}, 실행 번호 {other[2] or '없음'})가 {other[1]}초 전에 "
         "사용했습니다. 같은 계정을 PC 두 대에서 사용하면 자동 실행이 두 번 진행되고 진행 중인 명령이 중단될 수 있습니다. 한 대에서만 사용하여 주십시오.")
     return True
 
@@ -1199,7 +1210,8 @@ def first_run(path, cid, pc_id, password, client=None, email=None):
     칸이 없으니 토큰이 다르면 run() 처럼 토큰 값을 쓴다 (클레임을 옮기고 비밀번호도 바꾼 경우)."""
     import secret
     cfg = dict(secret.PUBLIC, email=email or email_for(cid, pc_id), password=password, cid=cid, pc_id=pc_id)
-    c = fb.claims((client or fb.Client(cfg)).token())
+    client = client or fb.Client(cfg)
+    c = fb.claims(client.token())
     if c.get("role") != "agent":
         raise ValueError("에이전트 계정(agent-…)이 아닙니다. 사용자 계정으로는 에이전트를 실행할 수 없습니다.")
     if (c.get("cid"), c.get("pcId")) != (cid, pc_id):
@@ -1207,6 +1219,12 @@ def first_run(path, cid, pc_id, password, client=None, email=None):
             raise ValueError(f"이 계정은 {c.get('cid')}/{c.get('pcId')}의 계정입니다. 업체코드·PC코드를 확인하여 주십시오.")
         log(f"토큰의 회사·PC({c['cid']}/{c['pcId']})가 설정({cid}/{pc_id})과 다릅니다. 토큰 값을 씁니다")
         cfg.update(cid=c["cid"], pc_id=c["pcId"])
+    # 다른 PC 가 지금 쓰는 계정이면 저장하지 않는다 (2026-11-09) - 두 PC 가 한 자리에 현황을 올려 업체 화면에 남의 PC 현황이 보였다
+    other = other_pc(client, cfg["cid"], cfg["pc_id"])
+    if other is not None:
+        raise ValueError(f"이 에이전트 계정({cfg['cid']}/{cfg['pc_id']})은 다른 PC({other[0]})가 {other[1]}초 전에 사용했습니다. "
+                         "같은 계정을 PC 두 대에서 사용하면 업체 대시보드에 다른 PC의 현황이 보이고 자동 실행이 두 번 진행될 수 있습니다. "
+                         "그 PC의 오토파일럿을 끄고 2분 뒤 다시 저장하거나, 이 PC용 에이전트 계정을 따로 받아 주십시오.")
     secret.write_config(path, cfg, password)
     return secret.load_config(path)
 
@@ -1452,7 +1470,8 @@ def run(cfg):
                 up.flush()     # 밀린 기록 먼저, 현황은 그 뒤 - 옛 것이 새 현황을 덮지 않게 (BugBuster H3)
                 running = bool([p for p, v in (snap.get("programs") or {}).items() if v and v.get("state") == "running"])
                 body, full = live_bodies(snap)
-                if body != last or (running and full != last_full and time.monotonic() - last_live >= LIVE_RUNNING_SEC):   # BugBuster M3
+                if body != last or (running and full != last_full and time.monotonic() - last_live >= LIVE_RUNNING_SEC) \
+                        or time.monotonic() - last_live >= LIVE_REFRESH_SEC:   # BugBuster M3 · 남이 덮은 현황 되돌리기 (2026-11-09)
                     if up.push_live(snap):           # 못 올렸으면 last 를 그대로 두어 다음 틱에 다시 (큐에 안 넣는다, H3)
                         last, last_full, last_live = body, full, time.monotonic()
                 if time.monotonic() - last_beat >= HEARTBEAT_SEC:

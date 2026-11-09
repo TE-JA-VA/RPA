@@ -1157,11 +1157,14 @@ def jwt(payload):
 
 
 class TokenClient:
-    def __init__(self, tok):
-        self.tok = tok
+    def __init__(self, tok, hb=None):
+        self.tok, self.hb = tok, hb
 
     def token(self):
         return self.tok
+
+    def get(self, path, params=None):     # 다른 PC 가 쓰는 계정인지 (first_run → other_pc)
+        return self.hb if path.endswith("/heartbeat") else None
 
 
 check(fb.claims(jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"}))["pcId"] == "pc_y", "토큰에서 클레임을 읽는다")
@@ -1204,6 +1207,19 @@ with tempfile.TemporaryDirectory() as d:
         check(False, "토큰의 회사·PC 가 친 값과 다르면 거부한다")
     except ValueError as e:
         check("c_x/pc_y" in str(e) and not os.path.exists(bad), "토큰의 회사·PC 가 친 값과 다르면 거부한다")
+    import time
+    agent_tok = jwt({"cid": "c_x", "pcId": "pc_y", "role": "agent"})
+    try:     # 2026-11-09: 다른 PC 가 쓰는 계정으로 설정 창에서 로그인하면 업체 화면에 남의 PC 현황이 보였다
+        ag.first_run(bad, "c_x", "pc_y", "pw", TokenClient(agent_tok, {"at": time.time() - 10, "host": "OTHER-PC-XYZ", "boot": "b1"}))
+        check(False, "다른 PC 가 2분 안에 쓴 계정은 저장하지 않는다")
+    except ValueError as e:
+        check("OTHER-PC-XYZ" in str(e) and "c_x/pc_y" in str(e) and not os.path.exists(bad), f"다른 PC 가 2분 안에 쓴 계정은 저장하지 않는다 ({e})")
+    cfg = ag.first_run(bad, "c_x", "pc_y", "pw", TokenClient(agent_tok, {"at": time.time() - 600, "host": "OTHER-PC-XYZ"}))
+    check(cfg["pc_id"] == "pc_y", "그 PC 가 꺼진 지 2분이 넘었으면 저장한다 (PC 바꾸기)")
+    os.remove(bad)
+    import socket
+    cfg = ag.first_run(bad, "c_x", "pc_y", "pw", TokenClient(agent_tok, {"at": time.time() - 3, "host": socket.gethostname()}))
+    check(cfg["pc_id"] == "pc_y", "이 PC 가 막 쓰던 계정(설정 다시 저장)은 그대로 저장한다")
 
 print("\n9절 명령 구독 (토큰 만료·끊김)")
 
