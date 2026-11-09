@@ -166,6 +166,7 @@ with sync_playwright() as p:
     page.wait_for_timeout(300)
     raw = [s for s in recorder.steps if s["kind"] == "file"]
     check("파일 칸에 넣은 것을 기록한다 (이름만)", len(raw) == 1 and raw[0].get("value") == "(012)운송장.xlsx", recorder.steps)
+    check("#39: 파일 칸을 '글자 넣기' 로 함께 적지 않는다", not [s for s in recorder.steps if s["kind"] == "fill"], recorder.steps)
     ctx.close()
 
     record = rec.finalize(list(raw), datetime.date(2026, 11, 6), url)
@@ -192,7 +193,19 @@ with sync_playwright() as p:
     check("숨긴 파일 칸에 넣고 끝까지 간다", ok and tried and title == "(012)운송장.xlsx" and sent == "올림", (ok, tried, title, sent))
     ok, tried, title, sent, last = replay(None)
     check("미리보기는 파일을 안 올리고 그 단계에서 멈춘다", not ok and not tried and title == "시작" and sent == "" and "미리보기" in last[2], last)
+    # #39: 고치기 전 기록기로 저장한 프리셋 - 파일 칸 'fill'(C:\fakepath\…) 이 'file' 앞에 있다. 다시 기록하지 않아도 끝까지 간다
+    fi = next(i for i, s in enumerate(record["steps"]) if s["kind"] == "file")
+    old = dict(record["steps"][fi], kind="fill", value="C:\\fakepath\\(012)운송장.xlsx")
+    record["steps"].insert(fi, old)
+    ok, tried, title, sent, _ = replay(sample)
+    check("#39: 옛 기록의 파일 칸 '글자 넣기' 는 건너뛰고 끝까지 간다", ok and tried and sent == "올림", (ok, tried, title, sent))
     browser.close()
+
+_wr = run
+_site = {"Preset": 1, "note": "가짜몰"}
+_wr.site_actions = lambda site: [st.REPLAY_ACTION]
+check("#39: 업로드 실행의 대시보드 단계 이름은 '엑셀 올리기'", _wr.prepare_steps([("PRESET1", _site)], True)[0][1] == "가짜몰 엑셀 올리기"
+      and _wr.prepare_steps([("PRESET1", _site)])[0][1] == "가짜몰 엑셀 받기")
 
 shutil.rmtree(OUT, ignore_errors=True)
 print("=== 실패", len(fails), fails)

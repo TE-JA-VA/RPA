@@ -290,7 +290,7 @@ JS = r"""
   }, true);
   document.addEventListener('input', e => {
     const el = e.target;
-    if (!e.isTrusted || !['INPUT', 'TEXTAREA'].includes(el.tagName) || ['checkbox', 'radio'].includes(el.type)) return;
+    if (!e.isTrusted || !['INPUT', 'TEXTAREA'].includes(el.tagName) || ['checkbox', 'radio', 'file'].includes(el.type)) return;   // 파일 칸은 change 가 'file' 로 (#39)
     if (el.type === 'password') send('secret', el);
     else send('fill', el, {value: el.value, pasted: Date.now() - (el.__pasted || 0) < 3000});   // 붙여넣기로 채웠다 (메일 2차인증)
   }, true);
@@ -2114,6 +2114,8 @@ class Replayer:
             return "뒤로"
         if s["kind"] == "file":
             return self._put_file(page, s)
+        if s["kind"] == "fill" and (s.get("target") or {}).get("type") == "file":
+            return "파일 칸 - 건너뜀"     # #39 전 기록기가 파일 칸에 함께 적은 글자 넣기 (fakepath) - 파일은 'file' 단계가 넣는다
         frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose)
         if url_path(frame.url) != s["url"]:
             self.log(f"      (주소가 다름: 기록 {s['url']} / 지금 {url_path(frame.url)})")

@@ -1591,13 +1591,13 @@ def step_key(name, act):
     return f"{name}:{act}"
 
 
-def prepare_steps(chosen):
-    """대시보드에 보여줄 단계 목록. 사이트가 하나뿐이면 이름을 앞에 붙이지 않는다."""
+def prepare_steps(chosen, upload=False):
+    """대시보드에 보여줄 단계 목록. 사이트가 하나뿐이면 이름을 앞에 붙이지 않는다. upload - 사이트 엑셀 업로드 실행 (#39 '엑셀 올리기')."""
     many = len(chosen) > 1
     out = []
     for name, site in chosen:
         for act in site_actions(site):
-            label = ACTION_LABELS.get(act, act)
+            label = "엑셀 올리기" if upload and act == status.REPLAY_ACTION else ACTION_LABELS.get(act, act)
             if act == status.REPLAY_ACTION:     # 칸 이름(PRESET1) 대신 프리셋 이름
                 out.append((step_key(name, act), f"{site.get('note') or name} {label}"))
             else:
@@ -1915,7 +1915,7 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         chosen.sort(key=lambda item: not needs_auth(item[1], presets))     # 하나씩 돌 때도 인증 사이트 먼저 (순서는 그대로)
         avoid = erpia_rect()
     shown = [c for c in skipped if isinstance(c[1], dict)]
-    status.set_steps(prepare_steps(chosen + shown))
+    status.set_steps(prepare_steps(chosen + shown, upload))
     for name, site in shown:
         for act in site_actions(site):
             status.skip(step_key(name, act), why[name])
