@@ -1449,9 +1449,22 @@ check("실행: 0건이면 체크도 전송요청도 하지 않는다 (no_target)
 # '수집 사이트 엑셀출력' 줄 (사용자 2026-11-09): 전체 조회·체크·[전송요청(S)] 없이 사이트별 엑셀 받기로 간다 (invoice_excel 이 사이트마다 조회 → 엑셀 → 미전송 완료처리)
 _saved_xl = wellife.invoice_excel
 wellife.invoice_excel = lambda rr_, ctx_, live: acts.append(("excel", live)) or ("done" if live else "skipped", "엑셀")
-os.environ["RPA_INVOICE_OPTION"] = "excel"
+os.environ["RPA_INVOICE_OPTION"] = "none,excel"
 res = inv_run(True)
-check("엑셀 다운로드 줄: 전체 조회·체크·전송요청 없이 사이트별 엑셀 받기로 간다", acts == [("excel", True)] and res[0] == "done", f"{res} {acts}")
+check("엑셀출력만 켠 줄: 전체 조회·체크·전송요청 없이 사이트별 엑셀 받기로 간다", acts == [("excel", True)] and res[0] == "done", f"{res} {acts}")
+os.environ["RPA_INVOICE_OPTION"] = "auto,excel"
+res = inv_run(True)
+check("엑셀출력 + 전송요청을 함께 켠 줄 (사용자 2026-11-09 저녁): 엑셀을 먼저 받고 이어서 조회 → 전체 체크 → [전송요청(S)], 사유는 ' / ' 로 잇는다",
+      acts == [("excel", True), ("click", "조회(F)"), ("check_all",), ("click", "btn_SendRequest"), ("click", "예")] and res[0] == "done"
+      and res[1].startswith("엑셀 / [실행] 운송장 3건"), f"{res} {acts}")
+wellife.invoice_excel = lambda rr_, ctx_, live: acts.append(("excel", live)) or ("failed", "엑셀 실패")
+res = inv_run(True)
+check("둘 다 켠 줄: 엑셀이 실패해도 전송요청은 하고, 결과는 failed (둘 다 사유에)", acts[0] == ("excel", True) and ("click", "btn_SendRequest") in acts
+      and res[0] == "failed" and "엑셀 실패 / [실행] 운송장 3건" in res[1], f"{res} {acts}")
+os.environ["RPA_INVOICE_OPTION"] = "none"
+res = inv_run(True)
+check("전송요청 안 함 + 엑셀 없음 (예약은 거절하지만 환경 변수로 오면): 아무것도 누르지 않고 skipped", acts == [] and res[0] == "skipped" and "할 일이 없어" in res[1], f"{res} {acts}")
+os.environ["RPA_INVOICE_OPTION"] = "none,excel"
 wellife.invoice_excel = _saved_xl
 # 엑셀 비밀번호 (사용자 2026-11-09): 고정 0000, RPA_UserConfig.json 의 InvoiceExcel.Password 로 바꿈 - 웹에는 없다
 _pw_rr = lambda cfg: types.SimpleNamespace(pl=types.SimpleNamespace(load_settings=lambda: cfg, config_name=lambda: "RPA_UserConfig.json"))
@@ -1505,11 +1518,12 @@ except RuntimeError:
     check("업로드 코드: 프리셋을 못 읽으면 멈춘다", True)
 wellife.st = _saved_x[0]
 
-# 사이트마다 그 사이트만 조회 → 0건이면 넘김 → 고른 마켓으로 받아 '(사이트코드)' 이름 → 전체 체크 → [미전송 완료처리](실행만) → 다시 조회. 리허설은 '리허설_' 을 앞에 (업로드가 집지 않게)
+# 사이트마다 그 사이트만 조회 → 0건이면 넘김 → 고른 마켓으로 받아 '(사이트코드)' 이름 → 전체 체크 → [미전송 완료처리](실행만) → 다음 사이트 (다시 조회하지 않는다, 사용자 2026-11-09 저녁).
+# 첫 사이트만 조회 조건 전부(ensure_query), 뒤 사이트는 매출구분만(pick_sites). 리허설은 '리허설_' 을 앞에 (업로드가 집지 않게)
 _xl_dir = tempfile.mkdtemp(prefix="inv_xl_")
 _saved_loop = (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
               wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow,
-              wellife.upload_codes)
+              wellife.upload_codes, wellife.pick_sites)
 _XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True, "no_up": set()}
 _XLLOG = []
 
@@ -1530,15 +1544,15 @@ wellife.export_password = lambda rr_: "0000"
 wellife.excel_targets = lambda: list(_XL["targets"])
 wellife.upload_codes = lambda: {t["code"] for t in _XL["targets"]} - _XL["no_up"]
 wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen, sites=None: _XLLOG.append(("query", sites)) or []
+wellife.pick_sites = lambda rr_, ctx_, form, key, aid, codes, exclude=False: _XLLOG.append(("pick", (list(codes), exclude), key, aid)) or None
 wellife.export_market = _fake_export
 wellife._close_export_windows = lambda rr_, ctx_: _XLLOG.append(("cleanup",))
 
 
 def _fake_runq(rr_, ctx_):
-    code = next(x for x in reversed(_XLLOG) if x[0] == "query")[1][0][0]
-    again = _XLLOG[-1][0] == "press"          # 완료처리 뒤 다시 조회 - 남은 줄 없음
+    code = next(x for x in reversed(_XLLOG) if x[0] in ("query", "pick"))[1][0][0]
     _XLLOG.append(("runq", code))
-    return (0 if again else _XL["rows"].get(code, 0)), "grid"
+    return _XL["rows"].get(code, 0), "grid"
 
 
 wellife.run_query = _fake_runq
@@ -1563,20 +1577,20 @@ res = xl_run(True, [], {})
 check("엑셀: 마켓을 고른 사이트가 없으면 ERPia 를 누르지 않고 건너뛴다", res[0] == "skipped" and "운송장 전송 마켓" in res[1] and _XLLOG == [], f"{res} {_XLLOG}")
 res = xl_run(True, T2, {"109": 3, "110": 0})
 check("엑셀: 사이트를 돌기 전에 남은 내보내기 창부터 닫는다 (열린 '송장양식' 이 조회 조건 칸을 덮지 않게)", _XLLOG[:1] == [("cleanup",)], str(_XLLOG))
-check("엑셀(실행): 사이트마다 그 사이트코드만 골라 조회하고, 0건 사이트는 받지도 완료처리하지도 않는다",
-      [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False)), ("query", (["110"], False))]
+check("엑셀(실행): 사이트마다 그 사이트코드만 골라 조회하고(첫 사이트만 조회 조건 전부, 뒤는 매출구분만), 0건 사이트는 받지도 완료처리하지도 않는다",
+      [x[:2] for x in _XLLOG if x[0] in ("query", "pick")] == [("query", (["109"], False)), ("pick", (["110"], False))]
       and [x for x in _XLLOG if x[0] == "export"] == [("export", "이지웰", "0000")]
       and [x for x in _XLLOG if x[0] == "press"] == [("press", "btn_NotSendCompletionProcessing", True, 3, True)], f"{_XLLOG}")
-check("엑셀(실행): 받은 뒤 전체 체크 → [미전송 완료처리] → 다시 조회 (받은 사이트만, 순서대로 한 사이트씩)",
-      [x for x in _XLLOG if x[0] in ("runq", "export", "press")] == [("runq", "109"), ("export", "이지웰", "0000"), ("press", "btn_NotSendCompletionProcessing", True, 3, True), ("runq", "109"), ("runq", "110")],
-      f"{_XLLOG}")
-check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로드가 그 코드의 프리셋으로 올린다), 결과 done·사유에 받은 것·완료처리·남은 줄·0건",
+check("엑셀(실행): 받은 뒤 전체 체크 → [미전송 완료처리] → 다음 사이트 (받은 사이트만, 순서대로 한 사이트씩, 완료처리 뒤 다시 조회하지 않는다)",
+      [x for x in _XLLOG if x[0] in ("runq", "export", "press")] == [("runq", "109"), ("export", "이지웰", "0000"), ("press", "btn_NotSendCompletionProcessing", True, 3, True), ("runq", "110")]
+      and [x[2:] for x in _XLLOG if x[0] == "pick"] == [("Sales", "ccc_Sales")], f"{_XLLOG}")
+check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로드가 그 코드의 프리셋으로 올린다), 결과 done·사유에 받은 것·완료처리·0건",
       res[0] == "done" and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"]
-      and "이지웰(109) 3건 (109)이지웰송장" in res[1] and "완료처리 → 누름, 남은 0건" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1],
+      and "이지웰(109) 3건 (109)이지웰송장" in res[1] and "완료처리 → 누름" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1],
       f"{res} {os.listdir(_xl_dir)}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, no_up={"110"})
 check("엑셀(실행): 업로드 프리셋이 없는 사이트도 조회·받기·완료처리는 하고, 사유에 '업로드 프리셋 없음' 과 저절로 안 올라간다는 안내를 남긴다 (사용자 2026-11-09 오후)",
-      [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False)), ("query", (["110"], False))]
+      [x[:2] for x in _XLLOG if x[0] in ("query", "pick")] == [("query", (["109"], False)), ("pick", (["110"], False))]
       and [x[1] for x in _XLLOG if x[0] == "press"] == ["btn_NotSendCompletionProcessing"] * 2 and res[0] == "done"
       and "업로드 프리셋 없음 YES24(110) (받은 파일은 사이트에 저절로 올라가지 않습니다" in res[1] and "이지웰(109) 3건" in res[1], f"{res} {_XLLOG}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, no_up={"109", "110"})
@@ -1609,7 +1623,7 @@ except wellife.Stop as e:
     check("엑셀: 화면 잠김 같은 'stopped' 는 다음 사이트로 가지 않고 바로 멈춘다", e.result == "stopped" and [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False))], str(_XLLOG))
 (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
  wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow,
- wellife.upload_codes) = _saved_loop
+ wellife.upload_codes, wellife.pick_sites) = _saved_loop
 res = inv_run(True, checked=False)
 check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
       ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
@@ -1960,7 +1974,7 @@ PRESETS = [{"no": 1, "code": "012", "on": True, "steps": 5}, {"no": 2, "code": "
            {"no": 5, "code": "", "on": True, "steps": 4}, {"no": 6, "code": "078", "on": True, "steps": 0},
            {"no": 7, "code": "090", "on": False, "steps": 0, "imap": True}]
 wellife.st = types.SimpleNamespace(preset_summary=lambda: PRESETS, INVOICE_OPTION_ENV="RPA_INVOICE_OPTION",
-                                   INVOICE_OPTIONS=_saved_st.INVOICE_OPTIONS)
+                                   invoice_flags=_saved_st.invoice_flags, INVOICE_EXCEL=_saved_st.INVOICE_EXCEL)
 
 
 def sales_cond():
@@ -1981,11 +1995,13 @@ check("⑥ 매출구분: '사이트 수집 사이트 제외' 면 기록한 프�
       sales_cond() == ("sites", (["012", "034", "056", "090"], True)), str(sales_cond()))
 PRESETS[:] = [p for p in PRESETS if not (p["steps"] or p.get("imap"))]
 check("⑥ 매출구분: 기록한 프리셋이 없으면 뺄 것이 없어 '전체'", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
-wellife.st = types.SimpleNamespace(preset_summary=lambda: None, INVOICE_OPTION_ENV="RPA_INVOICE_OPTION", INVOICE_OPTIONS=_saved_st.INVOICE_OPTIONS)
+wellife.st = types.SimpleNamespace(preset_summary=lambda: None, INVOICE_OPTION_ENV="RPA_INVOICE_OPTION", invoice_flags=_saved_st.invoice_flags, INVOICE_EXCEL=_saved_st.INVOICE_EXCEL)
 got = sales_cond()
 check("⑥ 매출구분: 프리셋을 못 읽으면 사이트 수집 사이트까지 보내지 않게 조회하지 않고 멈춘다", got[0] == "failed", str(got))
 os.environ["RPA_INVOICE_OPTION"] = "nope"
-check("⑥ 매출구분: 모르는 방식 값은 전체 전송으로 본다", wellife.invoice_option() is None and sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+check("⑥ 매출구분: 모르는 할 일 값은 전체 전송으로 본다", wellife.invoice_flags() == set() and sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+os.environ["RPA_INVOICE_OPTION"] = "auto,excel"
+check("⑥ 매출구분: 엑셀출력과 함께 켠 '수집 사이트 제외' 도 뺀다 (플래그 글은 ',' 로 잇는다)", wellife.invoice_flags() == {"auto", "excel"} and sales_cond()[0] == "failed", str(sales_cond()))
 os.environ.pop("RPA_INVOICE_OPTION", None)
 wellife.st = _saved_st
 settings({})
@@ -2473,10 +2489,13 @@ res = go(dctx, "물류대기 관리", "lcg_HoldLogistics")
 check("열려 있지 않은 화면 + 번호 붙은 탭이 있음: 원래 함수(못 찾고 몇 분 기다림) 대신 자식을 따라 찾은 아이콘",
       res == "ok" and clicked == ["lcg_HoldLogistics"] and not orig_calls, f"{res} {clicked} {orig_calls}")
 res = go(erpia(["메인페이지"], "메인페이지", icons=()), "물류대기 관리", "lcg_HoldLogistics", r="absent")
-check("번호 붙은 탭이 없으면 원래 아이콘 이동 그대로 (원래 결과 'absent' 를 그대로)",
+check("아이콘을 자식 따라 못 찾으면 원래 아이콘 이동 그대로 (원래 결과 'absent' 를 그대로)",
       res == "absent" and orig_calls == ["물류대기 관리"] and not clicked, f"{res} {clicked} {orig_calls}")
-res = go(erpia(["메인페이지"], "메인페이지"), "물류대기 관리", "lcg_HoldLogistics", r="failed")
+res = go(erpia(["메인페이지"], "메인페이지", icons=()), "물류대기 관리", "lcg_HoldLogistics", r="failed")
 check("원래 함수의 'failed' 는 사유 글로", res == "'물류대기 관리' 화면으로 이동하지 못했습니다.", res)
+res = go(erpia(["메인페이지"], "메인페이지"), "물류대기 관리", "lcg_HoldLogistics", r="failed")
+check("열려 있지 않은 화면: 아이콘을 자식 따라 찾아 누르고 떠 있는 탭으로 확인한다 - 원래 함수 안 씀 (11-09 17:35 예약 실행: 창 전체 훑기 도착 확인이 None 만 줘 2분 기다림)",
+      res == "ok" and clicked == ["lcg_HoldLogistics"] and not orig_calls, f"{res} {clicked} {orig_calls}")
 res = go(erpia(["메인페이지", "웰라이프 SAP 연동관리 (2)", "웰라이프 SAP 연동관리"], "메인페이지", icons=()), "물류대기 관리", "lcg_HoldLogistics")
 check("번호 붙은 탭이 있는데 아이콘이 정말 없으면 'absent'", res == "absent" and not clicked and not orig_calls, f"{res} {clicked}")
 stuck = erpia(TABS, "물류대기 관리 (2)")
@@ -2529,6 +2548,38 @@ prr.visible_child_windows = lambda h: (_ for _ in ()).throw(OSError("못 읽음"
 wellife.no_popup(prr, pctx, "마")
 wellife.no_popup(prr, pctx, "바")
 check("자식 창 목록을 못 읽으면 늘 훑는다", len(scans) == 5, str(scans))
+# 11-09 실측 (ERPia 를 오래 띄워 요소 3,800개 - 창 전체 훑기 7초): 운송장번호 전송 들어갈 때 close_excel_prompt 와 no_popup 이 같은 창을 잇달아 훑었다
+prr.visible_child_windows = lambda h: kids15[0]
+kids15[0] = {1: ("a", (0, 0, 9, 9))}
+del scans[:]
+prr.EXCEL_OPEN_PROMPT_KEYWORDS = ("엑셀",)
+wellife.close_excel_prompt(prr, pctx)
+wellife.no_popup(prr, pctx, "사")
+check("엑셀 안내 닫기가 '팝업 없음' 을 보면 기억해 바로 뒤 no_popup 은 훑지 않는다", len(scans) == 1, str(scans))
+# 누른 뒤 기다리기(confirm_popups): 0.3초마다 창 전체를 훑던 것을 - 마지막 '팝업 없음' 창 구성에서 자식 창·별도 창이 사라지기만 했으면(스피너가 걷힘) 안 훑는다
+_saved16 = wellife.QUIET_SECONDS, wellife.time.sleep
+wellife.QUIET_SECONDS, wellife.time.sleep = 0.05, lambda s: _saved16[1](0.005)
+calls16 = [0]
+
+
+def kids_seq(first, later):
+    calls16[0] = 0
+
+    def f(h):
+        calls16[0] += 1
+        return first if calls16[0] <= 2 else later
+    return f
+
+
+del scans[:]
+prr.visible_child_windows = kids_seq({1: 0, 2: 0, 3: 0}, {1: 0, 2: 0})
+check("누른 뒤: 한 번 훑어 팝업이 없고 그 뒤 자식 창(스피너)이 사라지기만 하면 다시 훑지 않는다",
+      wellife.confirm_popups(prr, pctx, "시험") == [] and len(scans) == 1, str(scans))
+del scans[:]
+prr.visible_child_windows = kids_seq({1: 0, 2: 0}, {1: 0, 2: 0, 4: 0})
+check("누른 뒤: 자식 창이 새로 생기면(팝업일 수 있다) 다시 훑는다", wellife.confirm_popups(prr, pctx, "시험") == [] and len(scans) == 2, str(scans))
+wellife.QUIET_SECONDS, wellife.time.sleep = _saved16
+prr.visible_child_windows = lambda h: kids15[0]
 
 # 화면 컨트롤: 떠 있는 화면 안에서 폼을 자식을 따라 찾고, 그리드(Table) 속 칸은 내려가지 않는다
 cell = UI("DataItem", "칸", aid="inner_cell", rect=Rect(60, 200, 100, 220))
@@ -2854,14 +2905,17 @@ dash.launch_slot({"at": "09:00"})
 dash.launch_slot({"at": "09:00", "until": "18:00", "rest_min": 5, "inv": "auto"}, trigger="repeat")
 dash.launch_slot({"at": "09:00", "inv_sites": True}, trigger="missed")
 dash.launch_slot({"at": "09:00", "inv": "excel"})
+dash.launch_slot({"at": "09:00", "inv": "auto", "xl": True})
+dash.launch_slot({"at": "09:00", "xl": True})
 dash.launch, dash.slot_target = _saved_dash
 check("반복 회차를 띄울 때만 끝 시각·쉬는 시간을 넘긴다 (운송장번호 전송이 마지막 기회인지 안다)",
       sent_env[0].get("RPA_REPEAT_UNTIL") == "18:00" and sent_env[0].get("RPA_REPEAT_REST") == "5"
       and "RPA_REPEAT_UNTIL" not in sent_env[1], str(sent_env))
-check("운송장 전송 방식 줄은 반복 회차·놓친 예약에도 RPA_INVOICE_OPTION 을 넘기고(판 7 전에 저장한 inv_sites 는 excel), 아닌 줄은 넘기지 않는다",
+check("운송장 전송 할 일 줄은 반복 회차·놓친 예약에도 RPA_INVOICE_OPTION 을 넘기고(판 8 전에 저장한 inv_sites·excel 은 전송요청 없이 엑셀), 아닌 줄은 넘기지 않는다",
       "RPA_INVOICE_OPTION" not in sent_env[0] and "RPA_INVOICE_OPTION" not in sent_env[1]
-      and sent_env[2].get("RPA_INVOICE_OPTION") == "auto" and sent_env[3].get("RPA_INVOICE_OPTION") == "excel"
-      and sent_env[4].get("RPA_INVOICE_OPTION") == "excel", str(sent_env))
+      and sent_env[2].get("RPA_INVOICE_OPTION") == "auto" and sent_env[3].get("RPA_INVOICE_OPTION") == "none,excel"
+      and sent_env[4].get("RPA_INVOICE_OPTION") == "none,excel" and sent_env[5].get("RPA_INVOICE_OPTION") == "auto,excel"
+      and sent_env[6].get("RPA_INVOICE_OPTION") == "excel", str(sent_env))
 
 print("=== '+' 로 연 주문매핑 화면 확인 (BugBuster K8)")
 names_k8 = ("keys", "click", "_focus_in", "_wait_tree_item", "_clear_search", "active_tab", "numbered_tabs", "close_order_copy",

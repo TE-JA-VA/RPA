@@ -76,7 +76,7 @@ check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
 check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
-      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 7, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 7 (운송장 전송 방식)")
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 8, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 8 (운송장 전송 할 일)")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
@@ -138,16 +138,18 @@ for bad, why in (([{"at": "10:00"}, {"at": "10:00", "run": ["Hold"]}], "같은 �
         d.normalize_slots(bad); check(False, f"줄 거부 {why}")
     except ValueError as e:
         check(why in str(e), f"줄 거부 {why} ({e})")
-# 운송장 전송 방식 (사용자 2026-11-09, 판 7): 운송장 전송을 고른 줄에만 남는다. 판 5·6 화면의 '켠 사이트만'(inv_sites: true)은
-# 엑셀로 수집한 주문이라 전송이 안 돼(ERPia 도움말) '엑셀 다운로드' 로 바꿔 저장한다
-slots = d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], "inv": "excel"}, {"at": "10:00", "inv": "auto"},
-                           {"at": "11:00", "run": ["Hold"], "inv": "excel"}, {"at": "12:00", "run": ["InvoiceSend"], "inv_sites": False},
-                           {"at": "13:00", "run": ["InvoiceSend"], "inv": "auto"}, {"at": "14:00", "run": ["InvoiceSend"], "inv_sites": True}])
-check(slots == [{"at": "09:00", "run": ["Login", "InvoiceSend"], "inv": "excel"}, {"at": "10:00"},
+# 운송장 전송 할 일 (사용자 2026-11-09, 판 8): 운송장 전송을 고른 줄에만 남는다. 판 7 의 inv: excel 과 판 5·6 화면의 '켠 사이트만'(inv_sites: true)은
+# 엑셀로 수집한 주문이라 전송이 안 돼(ERPia 도움말) '전송요청 안 함 + 엑셀 출력' 으로 바꿔 저장한다. 전송요청과 엑셀 출력은 함께 켤 수 있다 (저녁)
+slots = d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], "inv": "excel"}, {"at": "10:00", "inv": "auto", "xl": True},
+                           {"at": "11:00", "run": ["Hold"], "inv": "excel"}, {"at": "12:00", "run": ["InvoiceSend"], "inv_sites": False, "xl": False},
+                           {"at": "13:00", "run": ["InvoiceSend"], "inv": "auto"}, {"at": "14:00", "run": ["InvoiceSend"], "inv_sites": True},
+                           {"at": "15:00", "run": ["InvoiceSend"], "inv": "auto", "xl": True}, {"at": "16:00", "run": ["InvoiceSend"], "xl": True}])
+check(slots == [{"at": "09:00", "run": ["Login", "InvoiceSend"], "inv": "none", "xl": True}, {"at": "10:00"},
                 {"at": "11:00", "run": ["Login", "Hold"]}, {"at": "12:00", "run": ["Login", "InvoiceSend"]},
-                {"at": "13:00", "run": ["Login", "InvoiceSend"], "inv": "auto"}, {"at": "14:00", "run": ["Login", "InvoiceSend"], "inv": "excel"}],
-      f"운송장 전송 방식은 운송장 전송을 고른 줄에만, 옛 '켠 사이트만' 은 'excel' 로 ({slots})")
-for bad, why in (({"inv_sites": "Y"}, "켠 사이트만"), ({"inv": "all"}, "운송장 전송 방식")):
+                {"at": "13:00", "run": ["Login", "InvoiceSend"], "inv": "auto"}, {"at": "14:00", "run": ["Login", "InvoiceSend"], "inv": "none", "xl": True},
+                {"at": "15:00", "run": ["Login", "InvoiceSend"], "inv": "auto", "xl": True}, {"at": "16:00", "run": ["Login", "InvoiceSend"], "xl": True}],
+      f"운송장 전송 할 일은 운송장 전송을 고른 줄에만, 옛 'excel'·'켠 사이트만' 은 전송요청 안 함 + 엑셀로, 전송요청과 엑셀은 함께 ({slots})")
+for bad, why in (({"inv_sites": "Y"}, "켠 사이트만"), ({"inv": "all"}, "운송장 전송 방식"), ({"xl": "Y"}, "엑셀 출력"), ({"inv": "none"}, "할 일이 없습니다")):
     try:
         d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], **bad}]); check(False, f"값 거부 {bad}")
     except ValueError as e:

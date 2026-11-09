@@ -548,7 +548,7 @@ def launch_run_all(by):
 # ---------------------------------------------------------------------------
 # 자동 실행 예약 (2026-10-07 시각별 모듈, 설계 2026-10-06-settings-schedule 5절)
 #   schedule = {enabled, days(월=0, 요일을 안 적은 줄이 쓴다), slots:[{at, days?, run?, inv?}], next_run_at, next_slot, policy?, last_*}
-#   inv: 운송장 전송 방식 (st.INVOICE_OPTIONS, 2026-11-09) - 띄울 때 RPA_INVOICE_OPTION. 판 5·6 의 inv_sites: true 는 'excel' 로 읽는다
+#   inv·xl: 운송장 전송 할 일 (st.INVOICE_SEND·INVOICE_EXCEL, 2026-11-09) - 띄울 때 RPA_INVOICE_OPTION (st.invoice_env). 판 7 의 inv: excel·판 5·6 의 inv_sites: true 는 전송요청 없이 엑셀만
 #   줄마다 요일 slots[i].days (2026-10-08 사용자) - 없으면 위 days (옛 저장 값·옛 화면)
 #   run 이 없는 줄은 '전체' (사이트 수집 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
 # ---------------------------------------------------------------------------
@@ -663,13 +663,20 @@ def normalize_slots(slots):
             item.update(rest_min=rest, on_fail="stop")
         if run is not None:
             item["run"] = run
-        if s.get("inv") is not None and s["inv"] not in st.INVOICE_OPTIONS:     # 운송장 전송 방식 (사용자 2026-11-09)
+        if s.get("inv") is not None and s["inv"] not in st.INVOICE_SEND and s["inv"] != st.INVOICE_EXCEL:   # 전송 방식 (판 7 의 'excel' 도 받는다)
             raise ValueError("운송장 전송 방식 값이 올바르지 않습니다.")
+        if s.get("xl") is not None and not isinstance(s["xl"], bool):     # 엑셀 출력 (판 8, 사용자 2026-11-09 저녁)
+            raise ValueError("운송장 엑셀 출력 값이 올바르지 않습니다.")
         if s.get("inv_sites") is not None and not isinstance(s["inv_sites"], bool):   # 판 5·6 화면
             raise ValueError("운송장 전송 '켠 사이트만' 값이 올바르지 않습니다.")
-        inv = st.slot_invoice(s)
-        if inv and run is not None and "InvoiceSend" in run:   # 운송장 전송을 고른 줄에만 (웹 줄 단추와 같다)
-            item["inv"] = inv
+        inv, xl = st.slot_invoice(s)
+        if run is not None and "InvoiceSend" in run:   # 운송장 전송을 고른 줄에만 (웹 줄 단추와 같다)
+            if inv == "none" and not xl:
+                raise ValueError("운송장 전송 줄에 할 일이 없습니다 - 전송요청이나 수집 사이트 엑셀출력을 켜 주십시오.")
+            if inv:
+                item["inv"] = inv
+            if xl:
+                item["xl"] = True
         out.append(item)
     out.sort(key=lambda x: x["at"])
     for w in (x for x in out if "until" in x):
@@ -946,7 +953,7 @@ def launch_slot(slot, by="auto", trigger="auto"):
     env = dict(env, RPA_RUN_TRIGGER=trigger)
     if trigger == "repeat" and slot.get("until"):   # 반복 회차: 끝 시각·쉬는 시간 - 운송장번호 전송이 마지막 기회인지 안다 (wellife.send_busy_reason)
         env.update(RPA_REPEAT_UNTIL=slot["until"], RPA_REPEAT_REST=str(slot.get("rest_min", REST_MIN_DEFAULT)))
-    inv = st.slot_invoice(slot)   # 운송장 전송 방식 (wellife.invoice_option) - 판을 올리기 전에 저장한 inv_sites 도
+    inv = st.invoice_env(slot)   # 운송장 전송 할 일 (wellife.invoice_flags) - 판을 올리기 전에 저장한 inv: excel·inv_sites 도
     if inv:
         env[st.INVOICE_OPTION_ENV] = inv
     return launch(target, by, env)
@@ -1252,7 +1259,7 @@ class Scheduler(threading.Thread):
         if end is None or end == self.upload_for or now < end + datetime.timedelta(seconds=UPLOAD_WAIT_SEC) or self.busy():
             return
         self.upload_for = end
-        if st.upload_files():
+        if st.upload_pending():     # 올릴 파일 + 같은 코드의 업로드 프리셋이 있을 때만 (없으면 ACTOR 가 바로 끝나 '중단' 기록만 남는다, 11-09 실측)
             launch("upload", "auto")
 
     def tick(self):

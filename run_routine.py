@@ -377,10 +377,21 @@ def is_main_app_window(hwnd):
     앱을 막 실행한 직후에는 로그인 창이 뜨기 전에 스플래시/초기 창이
     '텍스트 있는 최상위 창'으로 먼저 잡힐 수 있어, 이를 메인 창으로 오인하면 안 된다.
     좌측 메뉴(Accordion Menu / lcg_* 아이콘)가 있는지로 판별한다.
+    좌측 메뉴는 화면 영역(sdPnlMain) 밖에 있으므로 자식을 따라 sdPnlMain 을 건너뛰며 먼저 찾는다 (wellife.find_icon 과 같은 길).
+    개발기 11-09 실측: ERPia 를 1시간 반 띄워 요소가 3,800개면 창 전체 descendants 가 13초(로그인 모듈에서 두 번, 26초), 이 길은 1초.
+    못 찾으면 예전대로 창 전체를 한 번 훑는다 - 판정은 같다 (로그인 창·스플래시는 어느 길로도 False).
     """
     try:
         app = Application(backend="uia").connect(handle=hwnd)
         win = app.window(handle=hwnd)
+        stack = [win]
+        while stack:
+            for c in stack.pop().children():
+                t = c.window_text()
+                if t == "Accordion Menu" or t.startswith("lcg_"):
+                    return True
+                if c.element_info.automation_id != "sdPnlMain":
+                    stack.append(c)
         for c in win.descendants():
             t = c.window_text()
             if t == "Accordion Menu" or t.startswith("lcg_"):
