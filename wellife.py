@@ -1129,7 +1129,7 @@ def invoice_send(rr, ctx, live):
     # 반복 회차이고 오늘 전송을 누른 기록이 있을 때만 본다 - 하루 한 번·수동 실행·반복 첫 회차는 화면이 느려도 예전대로 (PR #15 검토 2026-10-20)
     if os.environ.get("RPA_REPEAT_UNTIL") and last_send_at(rr, datetime.datetime.now()) and send_busy(rr, ctx):
         return "skipped", f"[{tag}] {send_busy_reason(rr)}"
-    if invoice_option() == "excel":     # 사이트 수집으로 선택된 사이트의 엑셀 출력 - 사이트마다 조회 → 엑셀 → 전체 체크 → [미전송 완료처리], [전송요청(S)] 없음 (사용자 2026-11-09)
+    if invoice_option() == "excel":     # 쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력 - 사이트마다 조회 → 엑셀 → 전체 체크 → [미전송 완료처리], [전송요청(S)] 없음 (사용자 2026-11-09)
         return invoice_excel(rr, ctx, live)
     fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
     count, grid = run_query(rr, ctx)
@@ -1167,7 +1167,7 @@ def run_query(rr, ctx):
 
 
 # ---------------------------------------------------------------------------
-# ⑥ 사이트 수집으로 선택된 사이트의 엑셀 출력 (예약 줄 운송장 전송 방식 'excel', 사용자 2026-11-09). 실측: docs/wellife-rpa.md 9.7.
+# ⑥ 쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력 (예약 줄 운송장 전송 방식 'excel', 사용자 2026-11-09). 실측: docs/wellife-rpa.md 9.7.
 # 받을 사이트는 옵저버에서 '운송장 전송 마켓' 을 고른 사이트 수집 프리셋 중 켠 것 (excel_targets - upstream invoice_markets).
 # 고른 사이트가 없으면 받지 않는다. 사이트마다 (한 번에 한 사이트, 사용자 2026-11-09): 매출구분에서 그 사이트만 골라 [조회(F)] → 0건이면 넘어감 →
 # [마켓업로드용 엑셀출력] → 따로 뜬 '송장양식'(마켓 이름 목록) 에서 고른 마켓 → [엑셀출력] → '엑셀 다운로드 받기' 미리보기에 줄이 없으면
@@ -1186,20 +1186,20 @@ REHEARSAL_PREFIX = "리허설_"
 
 
 def invoice_excel(rr, ctx, live):
-    """사이트 수집으로 선택된 사이트의 엑셀 출력 (위 설명). [전송요청(S)] 은 누르지 않는다. (결과, 사유):
+    """쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력 (위 설명). [전송요청(S)] 은 누르지 않는다. (결과, 사유):
     받은 파일이 있으면 실행 done·리허설 skipped (토큰 없음), 모두 0건이면 no_target, 고른 사이트가 없으면 skipped,
     한 사이트라도 못 받았으면 failed (받은 것도 사유에 남긴다). 사이트 하나가 실패해도 나머지는 받는다 - 화면이 잠기는 등
     'stopped' 는 바로 멈춘다. 사이트마다 조회해 0건이면 받지 않고, 양식 미리보기에 줄이 없어도 받지 않는다 (머리글만 나온다).
     받은 사이트는 전체 체크 → [미전송 완료처리] (실행만 누른다, 리허설은 마우스만) → 다시 조회해 남은 줄 수를 사유에 남긴다."""
     tag = mode_tag(live)
-    head = f"[{tag}] 사이트 수집 엑셀 출력"
+    head = f"[{tag}] 쇼핑몰 프리셋 엑셀 출력"
     try:
         pw = export_password(rr)
         targets = excel_targets()
     except RuntimeError as e:
         return "failed", f"{head} - 설정 오류: {e}"
     if not targets:
-        return "skipped", f"{head} - 옵저버에서 '운송장 전송 마켓' 을 고른 사이트 수집 사이트가 없어 받지 않았습니다."
+        return "skipped", f"{head} - 쇼핑몰 프리셋에서 수집 설정된 사이트 중 옵저버에서 '운송장 전송 마켓' 을 고른 사이트가 없어 받지 않았습니다."
     _close_export_windows(rr, ctx)     # 지난 실행·사람이 열어 둔 내보내기 창이 조회 조건 칸을 덮지 않게 (11-09 실측)
     got, empty, bad, pressed_any = [], [], [], False
     for t in targets:
@@ -1245,12 +1245,12 @@ def invoice_excel(rr, ctx, live):
 
 
 def excel_targets():
-    """'사이트 수집으로 선택된 사이트의 엑셀 출력' 로 받을 사이트 [{no, code, market}] - 옵저버에서 '운송장 전송 마켓' 을 고른 프리셋
+    """'쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력' 로 받을 사이트 [{no, code, market}] - 옵저버에서 '운송장 전송 마켓' 을 고른 프리셋
     (invoice_markets - 업체 프리셋 수까지) 중 사이트 수집에서 켠 것 (사용자 2026-11-09). 사이트코드가 없는 칸은 업로드할 파일
     이름을 지을 수 없어 뺀다. 같은 (사이트코드, 마켓)은 한 번. 프리셋을 못 읽으면 RuntimeError (전체로 받지 않게)."""
     summary = st.preset_summary()
     if summary is None:
-        raise RuntimeError("사이트 수집 프리셋을 읽지 못했습니다.")
+        raise RuntimeError("쇼핑몰 프리셋을 읽지 못했습니다.")
     on = {p["no"] for p in summary if p["on"]}
     out, seen = [], set()
     for m in invoice_markets():
@@ -1647,7 +1647,7 @@ def count_rows(rr, ctx, grid):
 # 설정 QueryDefaults.<화면>.<키> 가 있으면 그 값 (웹에는 안 보인다). 'fixed' 는 목록 창이 복잡해(체크 목록·상품) 고치지
 # 않고, 기본값이 아니면 화면을 닫고 다시 연다 (사용자 10-14). 체크 상자 '출고대기만' 은 UIA·MSAA 로 상태가 안 읽혀
 # 컨트롤이 그린 그림(PrintWindow)으로 본다 - 애매하면 화면을 다시 연다.
-# 'sites' (⑥ 매출구분): 예약 줄의 운송장 전송 방식이 '사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송' 이면 사이트 수집 프리셋의 사이트코드를
+# 'sites' (⑥ 매출구분): 예약 줄의 운송장 전송 방식이 '쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송' 이면 사이트 수집 프리셋의 사이트코드를
 # 뺀 나머지를 목록에서 체크한다 (pick_sites, 사용자 2026-11-09). 아니면 'fixed' 와 같다.
 # ---------------------------------------------------------------------------
 QUERY_SECTION = "QueryDefaults"
@@ -1680,7 +1680,7 @@ CHECKED_AT, UNCHECKED_BELOW = 0.25, 0.05   # 체크 상자 안쪽의 색 있는 
 
 def query_defaults(rr, screen, sites=None):
     """[(키, auto_id, 종류, 기본값)]. 설정에 같은 키가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로).
-    'sites' 는 sites (사이트코드 목록, 빼기인가) 를 주면 그 값 ('사이트 수집으로 선택된 사이트의 엑셀 출력' 가 사이트마다 고른다),
+    'sites' 는 sites (사이트코드 목록, 빼기인가) 를 주면 그 값 ('쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력' 가 사이트마다 고른다),
     아니면 '사이트 수집 사이트 제외' 예약일 때 (뺄 사이트코드 목록, True) (invoice_sites), 그 밖에는 'fixed' (전체).
     값 모양이 틀리면 RuntimeError (설정 오류)."""
     sec = rr.pl.load_settings().get(QUERY_SECTION) or {}
@@ -1705,7 +1705,7 @@ def query_defaults(rr, screen, sites=None):
 
 def invoice_option():
     """예약 줄의 운송장 전송 방식 (st.INVOICE_OPTION_ENV, rpa_dashboard.launch_slot, 사용자 2026-11-09):
-    'excel' (사이트 수집으로 선택된 사이트의 엑셀 출력) / 'auto' (사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송) / None (전체 조회 후 전송 - 단추 실행도)."""
+    'excel' (쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력) / 'auto' (쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송) / None (전체 조회 후 전송 - 단추 실행도)."""
     v = os.environ.get(st.INVOICE_OPTION_ENV)
     return v if v in st.INVOICE_OPTIONS else None
 
@@ -1719,7 +1719,7 @@ def invoice_sites():
         return None
     presets = st.preset_summary()
     if presets is None:
-        raise Stop("failed", "'사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송' 예약인데 사이트 수집 프리셋을 읽지 못해 조회하지 않았습니다.")
+        raise Stop("failed", "'쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송' 예약인데 쇼핑몰 프리셋을 읽지 못해 조회하지 않았습니다.")
     codes = list(dict.fromkeys(str(p["code"]).strip() for p in presets
                                if (p["steps"] or p.get("imap")) and str(p["code"] or "").strip()))
     return (codes, True) if codes else None
@@ -1941,7 +1941,7 @@ SALES_PANE = "popup"        # 매출구분 ▼ 로 따로 뜬 목록 창 안 패
 
 def pick_sites(rr, ctx, form_id, key, aid, codes, exclude=False):
     """⑥ 매출구분(aid) 목록에서 사이트코드가 codes 인 줄만 체크된 채로 [닫기] 하고 칸 글로 확인한다 (사용자 2026-11-02).
-    exclude 면 거꾸로 codes 가 아닌 줄을 모두 체크한다 ('사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송', 사용자 2026-11-09) - 남는 줄이 없으면
+    exclude 면 거꾸로 codes 가 아닌 줄을 모두 체크한다 ('쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송', 사용자 2026-11-09) - 남는 줄이 없으면
     ESC 로 닫고 건너뛴다. 목록의 모든 줄이 남으면 칸 글 '매출구분 : 전체' 도 받는다 (모두 고름 = 전체).
     - 목록은 ▼('오픈') 로 메인 창 밖에 따로 뜬다: 'popup' 안 그리드 gridCtrl (row Check Box·사이트코드·마켓·아이디·명칭),
       [닫기] btn_Close. [닫기] 가 체크를 칸에 반영하고 ESC 는 버린다 (11-02·11-03 실측). 사이트코드 칸이 없는 옛 ERPia 는
@@ -1966,10 +1966,10 @@ def pick_sites(rr, ctx, form_id, key, aid, codes, exclude=False):
         names, flips, total = _match_sites(rr, h, win, (lambda c: c not in codes) if exclude else (lambda c: c in codes), what)
         missing = [] if exclude else [c for c in codes if c not in names]
         if exclude and not names:
-            raise Stop("skipped", f"{what}: 매출구분 목록에 사이트 수집 사이트를 뺀 사이트가 없어 전송하지 않았습니다.")
+            raise Stop("skipped", f"{what}: 매출구분 목록에 쇼핑몰 프리셋에 등록된 사이트를 뺀 사이트가 없어 전송하지 않았습니다.")
         if missing:
             raise Stop("failed", f"{what}: 매출구분 목록에 사이트코드 {', '.join(missing)}이(가) 없어 조회하지 않았습니다. "
-                                 "사이트 수집에서 켠 사이트를 확인하여 주십시오.")
+                                 "쇼핑몰 프리셋에서 수집 설정된 사이트를 확인하여 주십시오.")
         close = next((b for b in win.descendants(control_type="Button") if b.element_info.automation_id == "btn_Close"), None)
         if close is None:
             raise Stop("failed", f"{what}: 매출구분 목록의 [닫기]를 찾지 못해 조회하지 않았습니다.")

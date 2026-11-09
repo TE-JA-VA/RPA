@@ -564,10 +564,10 @@ const isV6 = () => (live?.schedule?.version ?? 0) >= 6;   // 1분 단위 시각 
 // 엑셀 다운로드의 비밀번호·사유는 PC 설정 파일 값이라 여기에 보이지 않는다 (사용자 2026-11-09)
 const isV7 = () => (live?.schedule?.version ?? 0) >= 7;
 // 순서·이름은 사용자 2026-11-09 그대로 (st.INVOICE_OPTIONS). 2·3 은 사이트 수집에서 끈 사이트를 전송·출력하지 않는다 - 2 는 켬·끔 모두 빼고, 3 은 켠 것만
-const INV_OPTIONS = [["", "전체 조회 후 전송"], ["auto", "사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송"], ["excel", "사이트 수집으로 선택된 사이트의 엑셀 출력"]];
+const INV_OPTIONS = [["", "전체 조회 후 전송"], ["auto", "쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송"], ["excel", "쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력"]];
 const INV_WHY = { "": "모든 사이트를 조회해 운송장을 전송합니다.",
-  auto: "사이트 수집에 있는 사이트(켬·끔 모두)를 빼고 조회해 운송장을 전송합니다.",
-  excel: "사이트 수집에서 켠 사이트 중 옵저버에서 운송장 전송 마켓을 고른 사이트를 하나씩 조회해 그 마켓 양식 엑셀을 받고, 받은 운송장은 미전송 완료처리합니다 (운송장이 없으면 받지 않습니다). 전송요청은 하지 않습니다." };
+  auto: "쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 빼고 조회해 운송장을 전송합니다.",
+  excel: "쇼핑몰 프리셋에서 수집 설정된 사이트 중 옵저버에서 운송장 전송 마켓을 고른 사이트를 하나씩 조회해 그 마켓 양식 엑셀을 받고, 받은 운송장은 미전송 완료처리합니다 (운송장이 없으면 받지 않습니다). 전송요청은 하지 않습니다." };
 const offStep = (t) => !isV6() && /^\d\d:\d\d$/.test(t || "") && +t.slice(3) % 5 !== 0;
 /** 이 줄이 운송장 전송을 골랐는가 - '켠 사이트만' 은 그 줄에만 (PC 의 normalize_slots 와 같은 규칙) */
 const sendsInvoice = (s) => !!s.run?.includes("InvoiceSend");
@@ -686,11 +686,11 @@ function runChips(s) {
 /** 운송장 전송을 고른 줄의 '켠 사이트만' 켬/끔 (사용자 2026-11-02) - 켜면 PC 가 사이트 수집에서 켠 사이트만 매출구분으로 골라 조회·전송 */
 function invSitesSwitch(s) {
   const l = document.createElement("label"); l.className = "switch first inv-sites";   // 줄 안이라 위 선 없이
-  const text = Object.assign(document.createElement("span"), { textContent: "수집된 사이트만 전송" });
+  const text = Object.assign(document.createElement("span"), { textContent: "쇼핑몰 프리셋에서 수집 설정된 사이트만 전송" });
   text.append(Object.assign(document.createElement("span"), { className: "why",
-    textContent: "사이트 수집으로 수집된 사이트만 전송합니다. 비활성화 시 모든 사이트를 전송합니다." }));   // 문구 사용자 2026-11-03
+    textContent: "쇼핑몰 프리셋에서 수집 설정된 사이트만 전송합니다. 비활성화 시 모든 사이트를 전송합니다." }));   // 문구 사용자 2026-11-03, 이름 2026-11-09 ('수집된 사이트만' 이 ACTOR 가 실제로 받은 사이트로 읽혔다)
   const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: !!s.inv_sites });
-  box.setAttribute("aria-label", "운송장 전송: 수집된 사이트만");
+  box.setAttribute("aria-label", "운송장 전송: 쇼핑몰 프리셋에서 수집 설정된 사이트만");
   box.onchange = () => { if (box.checked) s.inv_sites = true; else delete s.inv_sites; paintScheduleMeta(); };
   l.append(text, box, Object.assign(document.createElement("span"), { className: "knob" }));
   return l;
