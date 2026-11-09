@@ -567,7 +567,7 @@ const isV7 = () => (live?.schedule?.version ?? 0) >= 7;
 const INV_OPTIONS = [["", "전체 전송"], ["auto", "자동수집 사이트만 전송"], ["excel", "수집 사이트 엑셀출력"]];
 const INV_WHY = { "": "전체 사이트로 조회 후 송장 전송합니다.",
   auto: "사이트 수집을 제외한 사이트만 전송합니다.",
-  excel: "사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 받아 사이트에 올리고, ERPia에서는 미전송 완료처리합니다. 업로드 프리셋이 있는 사이트만 처리합니다." };
+  excel: "사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 받고 ERPia에서는 미전송 완료처리합니다. 업로드 프리셋이 있는 사이트만 사이트에 올라갑니다." };
 const offStep = (t) => !isV6() && /^\d\d:\d\d$/.test(t || "") && +t.slice(3) % 5 !== 0;
 /** 이 줄이 운송장 전송을 골랐는가 - '켠 사이트만' 은 그 줄에만 (PC 의 normalize_slots 와 같은 규칙) */
 const sendsInvoice = (s) => !!s.run?.includes("InvoiceSend");
