@@ -76,7 +76,7 @@ check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
 check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
-      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 6, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 6 (1분 단위 시각)")
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 7, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 7 (운송장 전송 방식)")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
@@ -138,16 +138,20 @@ for bad, why in (([{"at": "10:00"}, {"at": "10:00", "run": ["Hold"]}], "같은 �
         d.normalize_slots(bad); check(False, f"줄 거부 {why}")
     except ValueError as e:
         check(why in str(e), f"줄 거부 {why} ({e})")
-# 운송장 전송 '켠 사이트만' (사용자 2026-11-02): 운송장 전송을 고른 줄에만 남고, 참·거짓만 받는다
-slots = d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], "inv_sites": True}, {"at": "10:00", "inv_sites": True},
-                           {"at": "11:00", "run": ["Hold"], "inv_sites": True}, {"at": "12:00", "run": ["InvoiceSend"], "inv_sites": False}])
-check(slots == [{"at": "09:00", "run": ["Login", "InvoiceSend"], "inv_sites": True}, {"at": "10:00"},
-                {"at": "11:00", "run": ["Login", "Hold"]}, {"at": "12:00", "run": ["Login", "InvoiceSend"]}],
-      f"'켠 사이트만' 은 운송장 전송을 고른 줄에만 ('전체'·다른 모듈 줄은 버림), 끔이면 적지 않는다 ({slots})")
-try:
-    d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], "inv_sites": "Y"}]); check(False, "'켠 사이트만' 값 거부")
-except ValueError as e:
-    check("켠 사이트만" in str(e), f"'켠 사이트만' 은 참·거짓만 ({e})")
+# 운송장 전송 방식 (사용자 2026-11-09, 판 7): 운송장 전송을 고른 줄에만 남는다. 판 5·6 화면의 '켠 사이트만'(inv_sites: true)은
+# 엑셀로 수집한 주문이라 전송이 안 돼(ERPia 도움말) '엑셀 다운로드' 로 바꿔 저장한다
+slots = d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], "inv": "excel"}, {"at": "10:00", "inv": "auto"},
+                           {"at": "11:00", "run": ["Hold"], "inv": "excel"}, {"at": "12:00", "run": ["InvoiceSend"], "inv_sites": False},
+                           {"at": "13:00", "run": ["InvoiceSend"], "inv": "auto"}, {"at": "14:00", "run": ["InvoiceSend"], "inv_sites": True}])
+check(slots == [{"at": "09:00", "run": ["Login", "InvoiceSend"], "inv": "excel"}, {"at": "10:00"},
+                {"at": "11:00", "run": ["Login", "Hold"]}, {"at": "12:00", "run": ["Login", "InvoiceSend"]},
+                {"at": "13:00", "run": ["Login", "InvoiceSend"], "inv": "auto"}, {"at": "14:00", "run": ["Login", "InvoiceSend"], "inv": "excel"}],
+      f"운송장 전송 방식은 운송장 전송을 고른 줄에만, 옛 '켠 사이트만' 은 'excel' 로 ({slots})")
+for bad, why in (({"inv_sites": "Y"}, "켠 사이트만"), ({"inv": "all"}, "운송장 전송 방식")):
+    try:
+        d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], **bad}]); check(False, f"값 거부 {bad}")
+    except ValueError as e:
+        check(why in str(e), f"운송장 전송 값 거부 {bad} ({e})")
 check(d.slot_target({"at": "10:00"}) == ("all", {}), "'전체' 줄 → 전체 실행, 넘길 모듈 없음")
 check(d.slot_target({"at": "11:00", "run": ["Login", "Logistics"]}) == ("routine", {"RPA_RUN_MODULES": "Login,Logistics"}), "사이트 수집 없음 → 루틴만")
 check(d.slot_target({"at": "12:00", "run": ["Prepare"]}) == ("prepare", {}), "사이트 수집만 → 프리페어")
@@ -294,11 +298,11 @@ sched.tick()
 check(d.LAUNCHED == saved + ["routine:auto"] and d.LAUNCHED_ENV[-1] == {"RPA_RUN_MODULES": "Login,Logistics", "RPA_RUN_TRIGGER": "auto"},
       f"next_slot 의 줄대로 루틴만 + 이번 실행 모듈 ({d.LAUNCHED_ENV[-1:]})")
 d.LAUNCHED[:] = saved; d._active["until"] = 0; d._active["proc"] = None
-d.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["InvoiceSend"], "inv_sites": True}]})
+d.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["InvoiceSend"], "inv": "auto"}]})
 c = st.read_settings(); c["schedule"]["next_run_at"] = (dt.datetime.now() - dt.timedelta(seconds=3)).isoformat(timespec="seconds"); st.write_settings(c)
 sched.tick()
-check(d.LAUNCHED_ENV[-1] == {"RPA_RUN_MODULES": "Login,InvoiceSend", "RPA_RUN_TRIGGER": "auto", "RPA_INVOICE_SITES": "1"},
-      f"'켠 사이트만' 줄은 RPA_INVOICE_SITES=1 을 넘긴다 ({d.LAUNCHED_ENV[-1:]})")
+check(d.LAUNCHED_ENV[-1] == {"RPA_RUN_MODULES": "Login,InvoiceSend", "RPA_RUN_TRIGGER": "auto", "RPA_INVOICE_OPTION": "auto"},
+      f"운송장 전송 방식 줄은 RPA_INVOICE_OPTION 을 넘긴다 ({d.LAUNCHED_ENV[-1:]})")
 d.LAUNCHED[:] = saved; d._active["until"] = 0; d._active["proc"] = None
 
 print("\n=== 7. 대시보드를 다시 켰을 때 (resync) ===")

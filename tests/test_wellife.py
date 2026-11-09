@@ -1446,6 +1446,141 @@ check("실행: 조회 -> 전체 체크 -> [전송요청(S)] 누름 -> 팝업 [�
 res = inv_run(True, rows=0)
 check("실행: 0건이면 체크도 전송요청도 하지 않는다 (no_target)",
       res[0] == "no_target" and acts == [("click", "조회(F)")], f"{res} {acts}")
+# '사이트 수집으로 선택된 사이트의 엑셀 출력' 줄 (사용자 2026-11-09): 전체 조회·체크·[전송요청(S)] 없이 사이트별 엑셀 받기로 간다 (invoice_excel 이 사이트마다 조회 → 엑셀 → 미전송 완료처리)
+_saved_xl = wellife.invoice_excel
+wellife.invoice_excel = lambda rr_, ctx_, live: acts.append(("excel", live)) or ("done" if live else "skipped", "엑셀")
+os.environ["RPA_INVOICE_OPTION"] = "excel"
+res = inv_run(True)
+check("엑셀 다운로드 줄: 전체 조회·체크·전송요청 없이 사이트별 엑셀 받기로 간다", acts == [("excel", True)] and res[0] == "done", f"{res} {acts}")
+wellife.invoice_excel = _saved_xl
+# 엑셀 비밀번호 (사용자 2026-11-09): 고정 0000, RPA_UserConfig.json 의 InvoiceExcel.Password 로 바꿈 - 웹에는 없다
+_pw_rr = lambda cfg: types.SimpleNamespace(pl=types.SimpleNamespace(load_settings=lambda: cfg, config_name=lambda: "RPA_UserConfig.json"))
+check("엑셀 비밀번호: 설정이 없으면 0000", wellife.export_password(_pw_rr({})) == "0000")
+check("엑셀 비밀번호: 빈 값도 0000", wellife.export_password(_pw_rr({"InvoiceExcel": {"Password": "  "}})) == "0000")
+check("엑셀 비밀번호: 설정 값을 쓴다 (앞뒤 빈칸 뗌)", wellife.export_password(_pw_rr({"InvoiceExcel": {"Password": " 4321 "}})) == "4321")
+for _bad in ({"InvoiceExcel": "4321"}, {"InvoiceExcel": {"Password": 4321}}):
+    try:
+        wellife.export_password(_pw_rr(_bad)); check(f"엑셀 비밀번호 거부 {_bad}", False)
+    except RuntimeError as e:
+        check(f"엑셀 비밀번호: 모양이 틀리면 설정 오류, 글에 값은 넣지 않는다 ({e})", "4321" not in str(e) and "InvoiceExcel" in str(e))
+_saved_pw = wellife.export_password
+wellife.export_password = lambda rr_: (_ for _ in ()).throw(RuntimeError("설정 모양 틀림"))
+res = inv_run(True)
+check("엑셀 다운로드 줄: 비밀번호 설정이 틀리면 ERPia 를 누르지 않고 '설정 오류' 로 멈춘다",
+      res[0] == "failed" and "설정 오류" in res[1] and acts == [], f"{res} {acts}")
+wellife.export_password = _saved_pw
+os.environ.pop("RPA_INVOICE_OPTION", None)
+
+# 받을 사이트 (사용자 2026-11-09): 옵저버에서 '운송장 전송 마켓' 을 고른 프리셋(invoice_markets) 중 사이트 수집에서 켠 것
+_saved_x = wellife.st, wellife.invoice_markets
+_MK = [{"no": 1, "code": "109", "market": "이지웰"}, {"no": 2, "code": "107", "market": "YES24"}, {"no": 3, "code": "110", "market": "이지웰"},
+       {"no": 4, "code": "", "market": "쿠팡"}, {"no": 5, "code": "109", "market": "이지웰"}]
+_SUM = [{"no": 1, "on": True}, {"no": 2, "on": False}, {"no": 3, "on": True}, {"no": 4, "on": True}, {"no": 5, "on": True}]
+wellife.invoice_markets = lambda: list(_MK)
+wellife.st = types.SimpleNamespace(preset_summary=lambda: _SUM)
+check("엑셀 받을 사이트: 마켓을 고르고 켠 사이트만 (끈 사이트·사이트코드 없는 칸은 빼고, 같은 코드·마켓은 한 번, 같은 마켓은 사이트마다)",
+      wellife.excel_targets() == [{"no": 1, "code": "109", "market": "이지웰"}, {"no": 3, "code": "110", "market": "이지웰"}], str(wellife.excel_targets()))
+wellife.st = types.SimpleNamespace(preset_summary=lambda: None)
+try:
+    wellife.excel_targets(); check("엑셀 받을 사이트: 프리셋을 못 읽으면 멈춘다", False)
+except RuntimeError:
+    check("엑셀 받을 사이트: 프리셋을 못 읽으면 멈춘다 (전체로 받지 않게)", True)
+wellife.st, wellife.invoice_markets = _saved_x
+
+# 사이트마다 그 사이트만 조회 → 0건이면 넘김 → 고른 마켓으로 받아 '(사이트코드)' 이름 → 전체 체크 → [미전송 완료처리](실행만) → 다시 조회. 리허설은 '리허설_' 을 앞에 (업로드가 집지 않게)
+_xl_dir = tempfile.mkdtemp(prefix="inv_xl_")
+_saved_loop = (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
+              wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow)
+_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True}
+_XLLOG = []
+
+
+def _fake_export(rr_, ctx_, market, pw):
+    if market in _XL["fail"]:
+        raise wellife.Stop(*_XL["fail"][market])
+    if market in _XL["preview0"]:      # '엑셀 다운로드 받기' 미리보기 0건 - 받지 않고 None
+        _XLLOG.append(("preview0", market))
+        return None
+    path = os.path.join(_xl_dir, f"{market}송장2026-11-01~2026-11-09.xlsx")
+    open(path, "w").close()
+    _XLLOG.append(("export", market, pw))
+    return path
+
+
+wellife.export_password = lambda rr_: "0000"
+wellife.excel_targets = lambda: list(_XL["targets"])
+wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen, sites=None: _XLLOG.append(("query", sites)) or []
+wellife.export_market = _fake_export
+wellife._close_export_windows = lambda rr_, ctx_: _XLLOG.append(("cleanup",))
+
+
+def _fake_runq(rr_, ctx_):
+    code = next(x for x in reversed(_XLLOG) if x[0] == "query")[1][0][0]
+    again = _XLLOG[-1][0] == "press"          # 완료처리 뒤 다시 조회 - 남은 줄 없음
+    _XLLOG.append(("runq", code))
+    return (0 if again else _XL["rows"].get(code, 0)), "grid"
+
+
+wellife.run_query = _fake_runq
+wellife.controls = lambda rr_, ctx_, form: {"gridCtrl_List": "grid"}
+wellife.check_all_rows = lambda rr_, ctx_, grid, label: _XL["checked"]
+wellife.recheck = lambda rr_, grid, label, live: _XL["checked"]
+wellife.press_arrow = lambda rr_, ctx_, ctl, aid, what, want, count, live: (
+    _XLLOG.append(("press", aid, want, count, live)) or ((" → 누름", True) if live and want else ("", False)))
+_xrr = types.SimpleNamespace(log=lambda m: None, status=Rec(), unique_path=lambda p: p)
+
+
+def xl_run(live, targets, rows, fail=None, preview0=(), checked=True):
+    _XLLOG.clear()
+    for f in os.listdir(_xl_dir):
+        os.remove(os.path.join(_xl_dir, f))
+    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked)
+    return wellife.invoice_excel(_xrr, actx, live)
+
+
+T2 = [{"no": 1, "code": "109", "market": "이지웰"}, {"no": 3, "code": "110", "market": "YES24"}]
+res = xl_run(True, [], {})
+check("엑셀: 마켓을 고른 사이트가 없으면 ERPia 를 누르지 않고 건너뛴다", res[0] == "skipped" and "운송장 전송 마켓" in res[1] and _XLLOG == [], f"{res} {_XLLOG}")
+res = xl_run(True, T2, {"109": 3, "110": 0})
+check("엑셀: 사이트를 돌기 전에 남은 내보내기 창부터 닫는다 (열린 '송장양식' 이 조회 조건 칸을 덮지 않게)", _XLLOG[:1] == [("cleanup",)], str(_XLLOG))
+check("엑셀(실행): 사이트마다 그 사이트코드만 골라 조회하고, 0건 사이트는 받지도 완료처리하지도 않는다",
+      [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False)), ("query", (["110"], False))]
+      and [x for x in _XLLOG if x[0] == "export"] == [("export", "이지웰", "0000")]
+      and [x for x in _XLLOG if x[0] == "press"] == [("press", "btn_NotSendCompletionProcessing", True, 3, True)], f"{_XLLOG}")
+check("엑셀(실행): 받은 뒤 전체 체크 → [미전송 완료처리] → 다시 조회 (받은 사이트만, 순서대로 한 사이트씩)",
+      [x for x in _XLLOG if x[0] in ("runq", "export", "press")] == [("runq", "109"), ("export", "이지웰", "0000"), ("press", "btn_NotSendCompletionProcessing", True, 3, True), ("runq", "109"), ("runq", "110")],
+      f"{_XLLOG}")
+check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로드가 그 코드의 프리셋으로 올린다), 결과 done·사유에 받은 것·완료처리·남은 줄·0건",
+      res[0] == "done" and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"]
+      and "이지웰(109) 3건 (109)이지웰송장" in res[1] and "완료처리 → 누름, 남은 0건" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1],
+      f"{res} {os.listdir(_xl_dir)}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, preview0={"YES24"})
+check("엑셀(실행): 조회는 됐는데 양식 미리보기가 0건이면 받지 않고 완료처리도 하지 않는다 (사유에 조회 건수)",
+      res[0] == "done" and "0건 YES24(110) (조회 2건, 양식 미리보기 0건)" in res[1]
+      and [x[1] for x in _XLLOG if x[0] == "press"] == ["btn_NotSendCompletionProcessing"] and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"], f"{res} {_XLLOG}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, checked=False)
+check("엑셀(실행): 전체 체크가 안 되면 완료처리를 누르지 않고 skipped (확인할 것) - 파일은 받아 둔다",
+      res[0] == "skipped" and "체크가 되지 않아 완료처리하지 않았습니다" in res[1] and all(x[2] is False for x in _XLLOG if x[0] == "press")
+      and len(os.listdir(_xl_dir)) == 2, f"{res} {_XLLOG}")
+res = xl_run(False, T2, {"109": 3, "110": 2})
+check("엑셀(리허설): 받기는 하되 이름 앞에 '리허설_' (업로드가 집지 않게), 완료처리는 누르지 않음, 결과 skipped (토큰 없음)",
+      res[0] == "skipped" and sorted(os.listdir(_xl_dir)) == ["리허설_(109)이지웰송장2026-11-01~2026-11-09.xlsx", "리허설_(110)YES24송장2026-11-01~2026-11-09.xlsx"]
+      and [x[4] for x in _XLLOG if x[0] == "press"] == [False, False] and "미전송 완료처리는 누르지 않음" in res[1],
+      f"{res} {os.listdir(_xl_dir)} {_XLLOG}")
+res = xl_run(True, T2, {"109": 0, "110": 0})
+check("엑셀: 모든 사이트가 0건이면 no_target (파일 없음, 완료처리 없음)", res[0] == "no_target" and os.listdir(_xl_dir) == []
+      and not [x for x in _XLLOG if x[0] in ("export", "press")], f"{res}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, fail={"이지웰": ("failed", "송장양식 목록에서 '이지웰'을(를) 찾지 못했습니다.")})
+check("엑셀: 한 사이트가 실패해도 나머지는 받고, 결과는 failed (받은 것·못 받은 까닭 모두 사유에)",
+      res[0] == "failed" and os.listdir(_xl_dir) == ["(110)YES24송장2026-11-01~2026-11-09.xlsx"] and "못 받음 이지웰(109)" in res[1]
+      and "YES24(110) 2건 (110)YES24송장" in res[1], f"{res}")
+try:
+    xl_run(True, T2, {"109": 3}, fail={"이지웰": ("stopped", "윈도우 화면이 잠겨 있어")})
+    check("엑셀: 화면 잠김 같은 'stopped' 는 바로 멈춘다", False)
+except wellife.Stop as e:
+    check("엑셀: 화면 잠김 같은 'stopped' 는 다음 사이트로 가지 않고 바로 멈춘다", e.result == "stopped" and [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False))], str(_XLLOG))
+(wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
+ wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow) = _saved_loop
 res = inv_run(True, checked=False)
 check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
       ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
@@ -1789,11 +1924,14 @@ qw = {k: w for k, _, _, w in wellife.query_defaults(rr, "Wms")}
 check("설정 QueryDefaults 가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로)",
       qd["DateFrom"] == -30 and qd["SendStatus"] == "전체" and qd["Sales"] == "매출구분 : 전체" and qd["DateTo"] == 0
       and qw["Sales"] == "매출구분 : 전체", str((qd, qw)))
-# ⑥ 매출구분: '켠 사이트만' 예약(RPA_INVOICE_SITES=1)이면 사이트 수집에서 켠 프리셋의 사이트코드만 (사용자 2026-11-02)
+# ⑥ 매출구분: 예약 줄 '사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송'(RPA_INVOICE_OPTION=auto)이면 사이트 수집 프리셋의 사이트코드를 뺀다 (사용자 2026-11-09)
 _saved_st = wellife.st
-PRESETS = [{"no": 1, "code": "012", "on": True}, {"no": 2, "code": "034", "on": False}, {"no": 3, "code": " 056 ", "on": True},
-           {"no": 4, "code": "012", "on": True}, {"no": 5, "code": "", "on": True}, {"no": 6, "code": "078", "on": True}]
-wellife.st = types.SimpleNamespace(preset_summary=lambda: PRESETS, preset_limit=lambda: 5)
+PRESETS = [{"no": 1, "code": "012", "on": True, "steps": 5}, {"no": 2, "code": "034", "on": False, "steps": 3},
+           {"no": 3, "code": " 056 ", "on": True, "steps": 2}, {"no": 4, "code": "012", "on": True, "steps": 1},
+           {"no": 5, "code": "", "on": True, "steps": 4}, {"no": 6, "code": "078", "on": True, "steps": 0},
+           {"no": 7, "code": "090", "on": False, "steps": 0, "imap": True}]
+wellife.st = types.SimpleNamespace(preset_summary=lambda: PRESETS, INVOICE_OPTION_ENV="RPA_INVOICE_OPTION",
+                                   INVOICE_OPTIONS=_saved_st.INVOICE_OPTIONS)
 
 
 def sales_cond():
@@ -1803,18 +1941,23 @@ def sales_cond():
         return (e.result, str(e))
 
 
-os.environ.pop(wellife.INVOICE_SITES_ENV, None)
-check("⑥ 매출구분: '켠 사이트만' 예약이 아니면 지금처럼 '전체'", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
-os.environ[wellife.INVOICE_SITES_ENV] = "1"
-check("⑥ 매출구분: '켠 사이트만' 이면 켠 프리셋의 사이트코드만 (끈 것·업체 프리셋 수를 넘는 번호·빈 코드 빼고, 겹친 코드는 하나)",
-      sales_cond() == ("sites", ["012", "056"]), str(sales_cond()))
-PRESETS[0]["on"] = PRESETS[2]["on"] = PRESETS[3]["on"] = False
+os.environ.pop("RPA_INVOICE_OPTION", None)
+check("⑥ 매출구분: 운송장 전송 방식이 없으면(단추 실행·전체 전송) 지금처럼 '전체'", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+os.environ["RPA_INVOICE_OPTION"] = "excel"
+check("⑥ 매출구분: '사이트 수집으로 선택된 사이트의 엑셀 출력' 의 기본 조회 조건은 '전체' (사이트별 조회는 invoice_excel 이 sites 로 넘긴다)", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+_got = {k: (kind, w) for k, _, kind, w in wellife.query_defaults(rr, "InvoiceSend", sites=(["109"], False))}["Sales"]
+check("⑥ 매출구분: sites 를 넘기면 그 사이트코드만 고른다 (엑셀 다운로드가 사이트마다)", _got == ("sites", (["109"], False)), str(_got))
+os.environ["RPA_INVOICE_OPTION"] = "auto"
+check("⑥ 매출구분: '사이트 수집 사이트 제외' 면 기록한 프리셋(켬/끔·메일 받기 상관없이)의 사이트코드를 뺀다 (빈 코드·기록 없는 칸 빼고, 겹친 코드는 하나)",
+      sales_cond() == ("sites", (["012", "034", "056", "090"], True)), str(sales_cond()))
+PRESETS[:] = [p for p in PRESETS if not (p["steps"] or p.get("imap"))]
+check("⑥ 매출구분: 기록한 프리셋이 없으면 뺄 것이 없어 '전체'", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+wellife.st = types.SimpleNamespace(preset_summary=lambda: None, INVOICE_OPTION_ENV="RPA_INVOICE_OPTION", INVOICE_OPTIONS=_saved_st.INVOICE_OPTIONS)
 got = sales_cond()
-check("⑥ 매출구분: 켠 사이트가 없으면 전체로 보내지 않고 건너뛴다", got[0] == "skipped" and "켠 사이트가 없어" in got[1], str(got))
-wellife.st = types.SimpleNamespace(preset_summary=lambda: None, preset_limit=lambda: 5)
-got = sales_cond()
-check("⑥ 매출구분: 프리셋을 못 읽으면 조회하지 않고 멈춘다", got[0] == "failed", str(got))
-os.environ.pop(wellife.INVOICE_SITES_ENV, None)
+check("⑥ 매출구분: 프리셋을 못 읽으면 사이트 수집 사이트까지 보내지 않게 조회하지 않고 멈춘다", got[0] == "failed", str(got))
+os.environ["RPA_INVOICE_OPTION"] = "nope"
+check("⑥ 매출구분: 모르는 방식 값은 전체 전송으로 본다", wellife.invoice_option() is None and sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+os.environ.pop("RPA_INVOICE_OPTION", None)
 wellife.st = _saved_st
 settings({})
 check("설정이 없으면 ERPia 를 새로 연 화면 값 (⑥ 10일 전~오늘·미전송, ⑤ 내일~내일·납품예정일)",
@@ -1930,15 +2073,15 @@ check("체크 상자를 눌렀는데 그림이 그대로면 (그림을 잘못 �
       err and err[0] == "failed" and LOG14 == [("set", "UnstoringOnly"), ("close",), ("reopen",)], f"{err} {LOG14}")
 STUCK = set()
 _saved_ps, _saved_is = wellife.pick_sites, wellife.invoice_sites
-wellife.invoice_sites = lambda: ["012"]
-wellife.pick_sites = lambda rr_, ctx_, form, key, aid, codes: LOG14.append(("pick", key, tuple(codes))) or "Sales '매출구분 : 전체'→'매출구분 : 옥션'"
+wellife.invoice_sites = lambda: (["012"], True)
+wellife.pick_sites = lambda rr_, ctx_, form, key, aid, codes, exclude=False: LOG14.append(("pick", key, tuple(codes), exclude)) or "Sales '매출구분 : 전체'→'매출구분 : 옥션'"
 got, err = run14(ccc_Sales="매출구분 : 2개 선택됨")
-check("⑥ 켠 사이트만: 매출구분이 '전체' 가 아니어도 화면을 다시 열지 않고 목록에서 고르며, 고친 것을 남긴다",
-      err is None and LOG14 == [("pick", "Sales", ("012",))] and got == ["Sales '매출구분 : 전체'→'매출구분 : 옥션'"],
+check("⑥ 사이트 수집 사이트 제외: 매출구분이 '전체' 가 아니어도 화면을 다시 열지 않고 목록에서 고르며(빼기), 고친 것을 남긴다",
+      err is None and LOG14 == [("pick", "Sales", ("012",), True)] and got == ["Sales '매출구분 : 전체'→'매출구분 : 옥션'"],
       f"{got} {err} {LOG14}")
 wellife.pick_sites = lambda *a: LOG14.append(("pick",)) or None
 got, err = run14(ccc_Sales="매출구분 : 옥션")
-check("⑥ 켠 사이트만: 이미 맞으면 고친 것 없음", err is None and LOG14 == [("pick",)] and got == [], f"{got} {err} {LOG14}")
+check("⑥ 사이트 수집 사이트 제외: 이미 맞으면 고친 것 없음", err is None and LOG14 == [("pick",)] and got == [], f"{got} {err} {LOG14}")
 wellife.pick_sites, wellife.invoice_sites = _saved_ps, _saved_is
 wellife.controls, wellife.cond_value, wellife.set_cond, wellife.close_screen = _saved14
 
@@ -2105,10 +2248,10 @@ SROWS = [("공통엑셀양식", "1234", "공통사이트", "001"), ("옥션", "z
          ("쿠팡", "c1", "쿠팡몰", "004"), ("쿠팡", "c2", "쿠팡몰2", "004")]
 
 
-def run_pick(lst, codes, top=77):
+def run_pick(lst, codes, top=77, exclude=False):
     SL[0], TOP_SL[0] = lst, top
     try:
-        return wellife.pick_sites(srr, actx, wellife.INVOICE_FORM, "Sales", "ccc_Sales", codes), None
+        return wellife.pick_sites(srr, actx, wellife.INVOICE_FORM, "Sales", "ccc_Sales", codes, exclude), None
     except wellife.Stop as e:
         return None, (e.result, str(e))
 
@@ -2170,6 +2313,21 @@ L = SalesList(SROWS, apply=False)
 got, err = run_pick(L, ["001", "002", "003", "004"])
 check("⑥ 매출구분: 목록 전부를 골라도 칸 글 '매출구분 : 전체' 는 받지 않는다 (체크 없음 = 모든 사이트)",
       err and err[0] == "failed" and "전체" in err[1], f"{err} {L.log}")
+# '사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송' (사용자 2026-11-09): 사이트코드가 codes 가 아닌 줄을 모두 체크
+L = SalesList(SROWS, on={("공통엑셀양식", "1234")})
+got, err = run_pick(L, ["001"], exclude=True)
+check("⑥ 매출구분 빼기: 사이트 수집 사이트(001)는 풀고 나머지 줄을 모두 체크, 칸 글 'N개 선택됨' 을 확인",
+      err is None and L.on == {("옥션", "zz"), ("옥션", "yy"), ("쿠팡", "c1"), ("쿠팡", "c2")} and L.text == "매출구분 : 4개 선택됨" and got,
+      f"{got} {err} {L.log}")
+L = SalesList(SROWS)
+got, err = run_pick(L, ["001", "002", "003", "004"], exclude=True)
+check("⑥ 매출구분 빼기: 남는 사이트가 없으면 [닫기] 없이 ESC 로 닫고 건너뛴다 (전체로 보내지 않음)",
+      err and err[0] == "skipped" and L.log[-1] == ("ESC",) and ("닫기",) not in L.log and L.on == set(), f"{err} {L.log}")
+L = SalesList(SROWS, apply=False)
+L.label = lambda: "매출구분 : 전체"
+got, err = run_pick(L, ["999"], exclude=True)
+check("⑥ 매출구분 빼기: 뺄 사이트가 목록에 없어 모두 고르면 칸 글 '매출구분 : 전체' 도 받는다 (모두 = 전체)",
+      err is None and len(L.on) == len(SROWS), f"{got} {err} {L.log}")
 (wellife.controls, wellife.cond_value, wellife.click, wellife._menu_windows, wellife._top_window,
  wellife._close_menu, wellife._shown, wellife.no_popup) = _saved_sl
 
@@ -2664,15 +2822,17 @@ dash.launch = lambda target, by, env=None: sent_env.append(env)
 dash.slot_target = lambda slot, off: ("routine", {"RPA_RUN_MODULES": "InvoiceSend"})
 dash.launch_slot({"at": "09:00", "until": "18:00", "rest_min": 5}, trigger="repeat")
 dash.launch_slot({"at": "09:00"})
-dash.launch_slot({"at": "09:00", "until": "18:00", "rest_min": 5, "inv_sites": True}, trigger="repeat")
+dash.launch_slot({"at": "09:00", "until": "18:00", "rest_min": 5, "inv": "auto"}, trigger="repeat")
 dash.launch_slot({"at": "09:00", "inv_sites": True}, trigger="missed")
+dash.launch_slot({"at": "09:00", "inv": "excel"})
 dash.launch, dash.slot_target = _saved_dash
 check("반복 회차를 띄울 때만 끝 시각·쉬는 시간을 넘긴다 (운송장번호 전송이 마지막 기회인지 안다)",
       sent_env[0].get("RPA_REPEAT_UNTIL") == "18:00" and sent_env[0].get("RPA_REPEAT_REST") == "5"
       and "RPA_REPEAT_UNTIL" not in sent_env[1], str(sent_env))
-check("'켠 사이트만' 줄은 반복 회차·놓친 예약에도 RPA_INVOICE_SITES=1 을 넘기고, 아닌 줄은 넘기지 않는다",
-      "RPA_INVOICE_SITES" not in sent_env[0] and "RPA_INVOICE_SITES" not in sent_env[1]
-      and sent_env[2].get("RPA_INVOICE_SITES") == "1" and sent_env[3].get("RPA_INVOICE_SITES") == "1", str(sent_env))
+check("운송장 전송 방식 줄은 반복 회차·놓친 예약에도 RPA_INVOICE_OPTION 을 넘기고(판 7 전에 저장한 inv_sites 는 excel), 아닌 줄은 넘기지 않는다",
+      "RPA_INVOICE_OPTION" not in sent_env[0] and "RPA_INVOICE_OPTION" not in sent_env[1]
+      and sent_env[2].get("RPA_INVOICE_OPTION") == "auto" and sent_env[3].get("RPA_INVOICE_OPTION") == "excel"
+      and sent_env[4].get("RPA_INVOICE_OPTION") == "excel", str(sent_env))
 
 print("=== '+' 로 연 주문매핑 화면 확인 (BugBuster K8)")
 names_k8 = ("keys", "click", "_focus_in", "_wait_tree_item", "_clear_search", "active_tab", "numbered_tabs", "close_order_copy",

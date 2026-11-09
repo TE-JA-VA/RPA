@@ -4752,14 +4752,15 @@ def unique_path(path):
     return f"{base}_{time.strftime('%Y%m%d%H%M%S')}{ext}"
 
 
-def save_dialog_to_jobs(dlg_hwnd, ext=".xlsx", prefix="WAYBILL", keep_name=True):
-    """저장 대화상자에서 바탕화면 ERPIA_AI_JOBS 폴더로 저장한다.
+def save_dialog_to_jobs(dlg_hwnd, ext=".xlsx", prefix="WAYBILL", keep_name=True, folder=None):
+    """저장 대화상자에서 바탕화면 ERPIA_AI_JOBS 폴더(folder 를 주면 그 폴더 - 운송장 엑셀은 업로드 폴더, wellife.invoice_excel)로
+    저장한다. 저장한 파일 경로를 돌려준다 (못 하면 False).
 
     keep_name=True 면 프로그램이 미리 채워둔 파일명을 그대로 쓰고 폴더만 바꾼다.
     (수동 엑셀 생성은 프로그램이 이름을 정해주므로 우리가 새로 지으면 안 된다)
     이름이 비어 있을 때만 prefix+시각으로 만든다.
     """
-    target_dir = jobs_dir()
+    target_dir = folder or jobs_dir()
     title = win32gui.GetWindowText(dlg_hwnd)
     log(f"  파일 저장 대화상자: hwnd={dlg_hwnd} title={title!r}")
 
@@ -4824,7 +4825,7 @@ def save_dialog_to_jobs(dlg_hwnd, ext=".xlsx", prefix="WAYBILL", keep_name=True)
     for _ in range(10):
         if os.path.exists(full):
             log(f"  파일 생성 확인: {full} ({os.path.getsize(full):,} bytes)")
-            return True
+            return full
         time.sleep(1.0)
     log(f"  경고: 저장했는데 파일이 보이지 않습니다: {full}")
     return False

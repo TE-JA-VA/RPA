@@ -1581,6 +1581,35 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4]}]})
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     check(page.input_value("#sch-times input[type=time]") == "09:03", "PC 가 돌려준 09:03 그대로 보이고 바뀜 없음")
+    print("6-8절 운송장 전송 방식 셋 (판 7 PC, 사용자 2026-11-09)")
+    # 판을 올리기 전에 저장한 '켠 사이트만' 은 엑셀 다운로드로 보인다 (PC 의 st.slot_invoice 와 같다)
+    db_patch(f"{LIVE}/schedule", {"version": 7, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv_sites": True}]})
+    page.wait_for_selector("#sch-times select.inv-opt", timeout=10000)
+    check(page.locator("#sch-times .inv-sites").count() == 0 and page.input_value("#sch-times select.inv-opt") == "excel"
+          and page.is_disabled("#sch-apply"), "판 7 PC: 켬/끔 대신 세 갈래, 옛 '켠 사이트만' 은 '사이트 수집으로 선택된 사이트의 엑셀 출력' 로 (바뀜 없음)")
+    opts = page.eval_on_selector_all("#sch-times select.inv-opt option", "els => els.map(e => e.textContent)")
+    check(opts == ["전체 조회 후 전송", "사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송", "사이트 수집으로 선택된 사이트의 엑셀 출력"], f"세 방식 이름·순서 (사용자 2026-11-09) ({opts})")
+    text = page.text_content("#sch-card") or page.text_content("body")
+    check("비밀번호" not in text and "원본데이터" not in text, "엑셀 비밀번호·다운로드 사유는 화면에 보이지 않는다 (PC 설정 파일 값, 사용자 2026-11-09)")
+    page.select_option("#sch-times select.inv-opt", "auto")
+    check(not page.is_disabled("#sch-apply"), "방식을 바꾸면 적용 가능")
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check(args["slots"][0].get("inv") == "auto" and "inv_sites" not in args["slots"][0] and "inv_excel_pw" not in args,
+          f"inv: auto 를 PC 로 보내고 inv_sites·비밀번호는 안 보낸다 ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv": "auto"}]})
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    check(page.input_value("#sch-times select.inv-opt") == "auto", "PC 가 돌려준 방식 그대로 보이고 바뀜 없음")
+    page.select_option("#sch-times select.inv-opt", "")
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check("inv" not in args["slots"][0], f"'전체 조회 후 전송' 은 줄에 inv 를 두지 않는다 ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"version": 6, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4]}]})
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     db_patch(f"{LIVE}/modules", {"InvoiceSend": None})
     db_patch(f"{LIVE}/schedule", {"version": 2, "days": [0, 1, 2, 3, 4, 5, 6], "slots": [{"at": "09:05"}, {"at": "13:30", "run": ["Login", "Logistics"]}]})
     db_patch("meta/companies/c_demo/apps/rpa", {"limits": None})
