@@ -618,6 +618,7 @@ dash.set_together("off")
 
 print("=== 옵저버 [파일에서 불러오기]·[파일로 내보내기] (설계 2026-10-19 4.2절) ===")
 from types import SimpleNamespace  # noqa: E402
+rr.w.at_once = lambda root, fn: fn()    # 가짜 화면에는 창이 없다 - 한 번에 그리기는 그냥 실행
 
 FREC = {"version": st.RECORD_VERSION, "start_url": "https://store.example.com/login", "record_date": "2026-10-19",
         "viewport": {"width": 900, "height": 640},
@@ -797,7 +798,7 @@ def _side(kind, no):
 def _app():
     asked, said, titles = [], [], []
     f = SimpleNamespace(presets=rr.load_presets(), cur=0, recording=None, previewing=False, shown=0, start_url=None, unsaved_drop=False,
-                        _store_fields=lambda: None, _load_fields=lambda: None, render=lambda: None, select=lambda i: None,
+                        _store_fields=lambda: None, _load_fields=lambda: None, render=lambda: None, select=lambda i: None, root=None, _show_preset=lambda: None,
                         ask=lambda t, x: (asked.append(x), titles.append(t), True)[2], status=SimpleNamespace(config=lambda **kw: said.append(kw.get("text"))))
     f._final = lambda q: rr.App._final(f, q)
     f._kept = lambda q, final: list(range(len(final["steps"])))

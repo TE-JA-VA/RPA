@@ -1095,6 +1095,10 @@ class App:
                 self.source_var.set(p["source"])
                 return
             p["imap"] = p["imap"] or blank_imap(self.id_var.get().strip())
+        w.at_once(self.root, self._show_source)     # 묻는 창은 위에서 - 그동안 화면이 멈춰 있지 않게 (사용자 2026-11-09)
+
+    def _show_source(self):
+        """수집 경로에 맞춰 칸·단계 목록을 바꾼다 - 한 번에 그린다 (_source_changed)."""
         if self.source_var.get() == "mail" and not self.prefix_var.get().strip():
             self._loading = True
             self.prefix_var.set(rec.MAIL_PICK_DEFAULT)
@@ -1111,6 +1115,9 @@ class App:
             return
         self._store_fields()
         self.cur, self.shown = i, 0
+        w.at_once(self.root, self._show_preset)     # 칸·탭·목록이 하나씩 바뀌어 보이지 않게 한 번에 (사용자 2026-11-09)
+
+    def _show_preset(self):
         self._load_fields()
         self.status.config(text="")         # 다른 프리셋의 일을 말하는 글은 지운다
         self.render()
@@ -1131,9 +1138,7 @@ class App:
         self.presets.pop(self.cur)
         self.unsaved_drop = True
         self.cur, self.shown = min(self.cur, len(self.presets) - 1), 0
-        self._load_fields()
-        self.status.config(text="")
-        self.render()
+        w.at_once(self.root, self._show_preset)
 
     # --- 기록 목록 ---
     def _final(self, p):
