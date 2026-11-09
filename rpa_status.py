@@ -800,9 +800,10 @@ ROUTINE_CONFIG_MODULES = (
 # 칸이 없으면 끔인 모듈 (나머지는 칸이 없으면 켬 - 예전 파일 그대로 돌게). 운송장번호 전송은 택배사로 나가 되돌릴 수 없어
 # 업데이트를 받자마자 모든 업체가 보내지 않게 한다 - 업체 웹 환경설정에서 켠 PC 만 (사용자 2026-10-13)
 ROUTINE_OFF_BY_DEFAULT = ("InvoiceSend",)
-# Routine 섹션의 모드 키 (값 '리허설'/'실행'/'1건', 빠지면 리허설 - wellife.load_mode). 운송장번호 전송만 모드가 있다.
-# 모드는 기본 리허설 - 설정을 쓸 때 빠진 모드 키를 '리허설' 로 적어 둔다 (사용자 2026-10-13)
-ROUTINE_MODES = (("InvoiceMode", "운송장번호 전송"),)
+# Routine 섹션에는 모드 키가 없다 - 보통 PROCESS 의 운송장번호 전송은 늘 실행 (사용자 2026-11-09: 업체 PC 가 리허설로 돌면
+# 아무것도 보내지 않아 더 위험하다. 10-13 의 '기본 리허설' InvoiceMode 를 없앰). 파일에 남은 InvoiceMode 는 읽지 않고 무시한다
+# (run_routine.ROUTINE_MODE_KEYS). 웰라이프 PC 의 Wellife 섹션 모드(WELLIFE_MODES, 빠지면 실행)는 그대로다.
+ROUTINE_MODES = ()
 DEFAULT_MODE = "리허설"
 # Wellife 섹션은 빠진 모드가 실행 - 리허설은 필요할 때 파일에 적어서 쓴다 (사용자 2026-11-03, wellife.load_mode 와 같다)
 WELLIFE_DEFAULT_MODE = "실행"
@@ -1065,20 +1066,20 @@ RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지
 PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)
 REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 # 사이트 엑셀 업로드 (사용자 2026-11-06, docs/superpowers/specs/2026-11-06-excel-upload-design.md).
-# 운송장번호 전송 메뉴가 사이트별 엑셀을 폴더에 넣게 고쳐져(PR #32 '쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력') 2026-11-09 켰다.
+# 운송장번호 전송 메뉴가 사이트별 엑셀을 폴더에 넣게 고쳐져(PR #32 '수집 사이트 엑셀출력') 2026-11-09 켰다.
 # 옵저버 스위치·예약(PROCESS 끝나고 1분 뒤)·ACTOR 업로드가 모두 이 값 하나로 켜고 끈다. False 면 모든 프리셋이 다운로드 전용.
 EXCEL_UPLOAD_ON = True
 UPLOAD_DIR_NAME = "ERPIA_AI_UPLOAD"       # 바탕화면\ERPIA_AI 아래. ERPIA_AI_EXCEL 과 나눈다 - 거기 파일은 PROCESS 가 ERPia 로 올린다 (설계 2026-11-06)
-# 예약 줄의 운송장 전송 방식 (사용자 2026-11-09). 줄에 없으면 전체 조회 후 전송 (예전 그대로).
+# 예약 줄의 운송장 전송 방식 (사용자 2026-11-09). 줄에 없으면 전체 전송 (예전 그대로).
 # 예전 '수집된 사이트만 전송'(inv_sites: true)은 엑셀로 수집한 주문이라 [전송요청] 으로 안 가서(ERPia 도움말) 'excel' 로 읽는다.
-# 순서·이름은 사용자 2026-11-09: 1. 전체 조회 후 전송 (줄에 값 없음) 2. auto 3. excel. auto·excel 은 사이트 수집에서 끈 사이트를 전송도 출력도 하지 않는다 -
+# 순서·이름은 사용자 2026-11-09: 1. 전체 전송 (줄에 값 없음) 2. auto 3. excel. auto·excel 은 사이트 수집에서 끈 사이트를 전송도 출력도 하지 않는다 -
 # auto 는 사이트 수집 프리셋을 켬·끔 모두 빼고 (wellife.invoice_sites), excel 은 켠 것만 (wellife.excel_targets).
-INVOICE_OPTIONS = {"auto": "쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송", "excel": "쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력"}
+INVOICE_OPTIONS = {"auto": "자동수집 사이트만 전송", "excel": "수집 사이트 엑셀출력"}
 INVOICE_OPTION_ENV = "RPA_INVOICE_OPTION"   # 띄울 때 줄의 방식을 넘긴다 (rpa_dashboard.launch_slot → wellife.invoice_option)
 
 
 def slot_invoice(slot):
-    """줄의 운송장 전송 방식 - 'excel' / 'auto' / None (전체 조회 후 전송). 판 5·6 이 저장한 inv_sites: true 는 'excel'."""
+    """줄의 운송장 전송 방식 - 'excel' / 'auto' / None (전체 전송). 판 5·6 이 저장한 inv_sites: true 는 'excel'."""
     inv = slot.get("inv")
     return inv if inv in INVOICE_OPTIONS else ("excel" if slot.get("inv_sites") is True else None)
 
