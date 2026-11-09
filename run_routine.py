@@ -228,7 +228,7 @@ ROUTINE_MODULES = (
     ("invoicesend", "InvoiceSend", "운송장번호 전송", ("inv_send_screen", "inv_send"), 512),
 )
 ROUTINE_OFF_BY_DEFAULT = status.ROUTINE_OFF_BY_DEFAULT   # 칸이 없으면 끔 (운송장번호 전송) - 불러올 때 받아 둔다 (시험이 status 를 바꿔 끼운다)
-ROUTINE_MODE_KEYS = tuple(k for k, _ in status.ROUTINE_MODES)   # Routine 섹션의 모드 키 (모듈이 아니다 - '모르는 키' 경고 안 함)
+ROUTINE_MODE_KEYS = ("InvoiceMode",)   # 옛 모드 키 - 2026-11-09 리허설을 없애 값은 읽지 않지만, 파일에 남아 있어도 모르는 키 경고는 내지 않는다   # Routine 섹션의 모드 키 (모듈이 아니다 - '모르는 키' 경고 안 함)
 RUN_MODULES_ENV = "RPA_RUN_MODULES"   # 예약 줄이 고른 이번 실행 모듈 (rpa_dashboard.launch_slot) - 있으면 설정 파일 대신
 
 
@@ -6344,21 +6344,13 @@ MODULE_FUNCS = {
 
 
 def module_invoice_send(ctx):
-    """운송장번호 전송 (모든 업체용 - 화면 코드는 wellife.py, 안전장치 함께). 모드는 Routine 섹션 InvoiceMode
-    ('리허설'/'실행'/'1건', 빠지면 리허설 - 사용자 2026-10-13: 모드는 기본 리허설). 리허설은 [전송요청(S)] 에 마우스만."""
+    """운송장번호 전송 (모든 업체용 - 화면 코드는 wellife.py, 안전장치 함께). 늘 실행이다 - 리허설·1건 모드를 없앴다
+    (사용자 2026-11-09: 업체 PC 가 기본값 리허설로 돌면 운송장이 하나도 나가지 않는다). Routine 섹션에 옛 InvoiceMode 가 남아 있어도 읽지 않는다.
+    웰라이프 PC(wellife.run_main)는 Wellife 섹션 InvoiceMode 를 그대로 쓴다 (빠지면 실행)."""
     rr = sys.modules[__name__]
-    try:
-        live = wellife.load_mode(rr, wellife.INVOICE_MODE_KEY, pl.ROUTINE_SECTION)
-    except Exception as e:
-        return "failed", f"설정 오류: {e}"
-    if live == wellife.ONE and hasattr(ctx, "no_rerun"):   # ERPia 가 꺼져도 다시 돌지 않는다 (1건이 2건이 된다)
-        ctx.no_rerun.add("invoicesend")
-    log(f"운송장번호 전송 모드: {wellife.mode_tag(live)} ('{pl.ROUTINE_SECTION}' 섹션 {wellife.INVOICE_MODE_KEY} - 빠지면 리허설)")
-    ones = wellife.repeat_ones({wellife.INVOICE_MODE_KEY: live})   # '1건' 을 반복하면 회차마다 1건씩 나간다
-    if ones:
-        log(wellife.repeat_one_reason(ones))
-        return "stopped", wellife.repeat_one_reason(ones)
-    return wellife.module_invoice_send(rr, ctx, live)
+    if (pl.load_settings().get(pl.ROUTINE_SECTION) or {}).get(wellife.INVOICE_MODE_KEY) is not None:
+        log(f"운송장번호 전송: '{pl.ROUTINE_SECTION}' 섹션의 {wellife.INVOICE_MODE_KEY} 는 더 쓰지 않습니다 (늘 실행, 2026-11-09)")
+    return wellife.module_invoice_send(rr, ctx, True)
 
 
 def run_modules(selected, modules=None, funcs=None, section=None):
@@ -6550,13 +6542,6 @@ def main():
     together_setup(rr, selected)
 
     result, reason = run_modules(selected)
-    if result == "success" and reason is None and selected.get("InvoiceSend"):   # 운송장번호 전송이 리허설·1건이면 사유에 (R9, 2026-11-03)
-        try:
-            live = wellife.load_mode(rr, wellife.INVOICE_MODE_KEY, pl.ROUTINE_SECTION)
-        except Exception:
-            live = True     # 모드를 못 읽었으면 그 모듈이 이미 실패로 멈췄다
-        if live is not True:
-            reason = f"시험 모드 포함: 운송장번호 전송 {wellife.mode_tag(live)}"
     if os.environ.get("RPA_RUN_TRIGGER") == "repeat" and result == "success" \
             and not [k for k in (status.done_modules() or []) if k != "login"]:
         log("반복 회차 - 처리한 것이 없어 기록에 남기지 않습니다")

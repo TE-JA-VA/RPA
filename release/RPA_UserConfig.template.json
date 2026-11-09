@@ -10,8 +10,7 @@
     "Hold": "N",
     "Logistics": "N",
     "Output": "N",
-    "InvoiceSend": "N",
-    "InvoiceMode": "리허설"
+    "InvoiceSend": "N"
   },
   "Logistic": {
     "cboBS_Auto_YN": "N",
