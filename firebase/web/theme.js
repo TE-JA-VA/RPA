@@ -3,14 +3,14 @@
 // 강조색은 [이름, 밝음용, 어두움용] 쌍이다. 밝은 바탕(sand)과 어두운 카드(dark) 양쪽에서 잘 보이는 색은 드물어서
 // 모드마다 다른 값을 쓴다. 저장은 밝음용 값으로 하고, 어두운 모드면 짝을 찾아 바꿔 단다. 직접 고른 색은 양쪽 같은 값.
 // 상태색(성공 초록·오류 주황·실패 빨강·진행 파랑)과 헷갈리는 색은 후보에 넣지 않는다.
-export const DEFAULT_ACCENT = "#f29f67";   // StarAdmin 팔레트의 주황. 크림 바탕과 짙은 청록 바탕 양쪽에서 같은 값
+export const DEFAULT_ACCENT = "#0f766e";   // 웹 로고의 민트 (2026-11-09 디자인, 주황 대신). 어두운 모드는 밝은 짝
 export const ACCENTS = [
-  ["orange", "#f29f67", "#f29f67"],
-  ["navy", "#21263a", "#fdf6e3"],     // 어두운 모드에선 크림
+  ["mint", "#0f766e", "#2fb5a7"],
+  ["navy", "#21263a", "#ededed"],     // 어두운 모드에선 밝은 회색
   ["violet", "#6c71c4", "#9a9fe0"],
 ];
-// 파랑·청록·노랑은 팔레트에 있지만 진행·성공·오류 색이라 강조 후보에서 뺀다
-const INK_DARK = "#1e1e2c", INK_LIGHT = "#fdf6e3";
+// 파랑·노랑은 진행·오류 색이라 강조 후보에서 뺀다 (성공 색은 민트와 같은 청록 - 시안이 그렇게 정했다)
+const INK_DARK = "#171717", INK_LIGHT = "#ffffff";
 
 function luminance(hex) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)

@@ -322,7 +322,7 @@ with sync_playwright() as pw:
     flat = tiles.replace(" ", "").replace("\n", "")
     check("처리주문30건" in flat and "재고검토보류8/8" in flat, f"숫자 타일 ({flat[:60]})")
     check("≈376" in tiles.replace(" ", ""), "추정치는 ≈")
-    check(page.evaluate("getComputedStyle(document.querySelector('.tile .v')).fontFamily").startswith('"Pretendard Variable"'), "숫자 칸도 같은 서체")
+    check(page.evaluate("getComputedStyle(document.querySelector('.tile .v')).fontFamily").startswith('"JetBrains Mono"'), "숫자 칸의 큰 수는 고정폭 (2026-11-09 디자인)")
     side = page.text_content("#hero .stats")
     check("정상" in page.text_content("#conn") and page.query_selector("#hero .stats #conn") is not None, "연결은 상태 띠 오른쪽에")
     check("9월 22일" in side and "09:05" in side and "다음 자동 실행" not in tiles, "다음 자동 실행도 상태 띠 오른쪽에")
@@ -382,10 +382,10 @@ with sync_playwright() as pw:
     check(page.locator("#recent-strip .day.empty").count() == 15, "실행 없는 날은 빈 도넛")
     check(page.get_attribute("#recent-strip .day.empty svg circle", "stroke") == "url(#hatch)", "빈 도넛은 빗금")
     bg = page.evaluate("getComputedStyle(document.getElementById('hero')).backgroundColor")
-    good = page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--good-fill').trim()")
+    dot = rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#hero .dot')).backgroundColor"))
     hexbg = "#%02x%02x%02x" % tuple(int(x) for x in bg[4:-1].split(",")[:3])
-    check(hexbg == good, f"성공이면 상태 카드가 진한 초록으로 채워진다 ({hexbg} = {good})")
-    check(page.evaluate("getComputedStyle(document.getElementById('h-state')).color") == "rgb(255, 255, 255)", "채운 카드 글자는 흰색")
+    check(hexbg == tok("--card") and dot == tok("--good"), f"성공이면 상태 카드는 채우지 않고 점이 청록 (2026-11-09 디자인) ({hexbg}, 점 {dot})")
+    check(rgb2hex(page.evaluate("getComputedStyle(document.getElementById('h-state')).color")) == tok("--strong"), "제목 글자는 진한 글자색")
     yday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     db_patch(f"{LIVE}/programs/routine", {"started_at": f"{yday}T13:55:49", "finished_at": f"{yday}T13:58:22"})
     page.wait_for_function("document.getElementById('h-state')?.textContent === '대기중'", timeout=10000)
@@ -437,14 +437,17 @@ with sync_playwright() as pw:
     check("주소를 입력하세요" in page.text_content("#list-routine li.stopped .note"), "멈춘 단계가 목록에서 빨갛게")
     hero_hex = lambda: "#%02x%02x%02x" % tuple(int(x) for x in page.evaluate("getComputedStyle(document.getElementById('hero')).backgroundColor")[4:-1].split(",")[:3])
     token = lambda name: page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('{name}').trim()")
-    check(hero_hex() == token("--bad-fill"), "실패는 빨강으로 채움")
+    dot_hex = lambda: rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#hero .dot')).backgroundColor"))
+    check(dot_hex() == token("--bad") and rgb2hex(page.evaluate("getComputedStyle(document.getElementById('h-state')).color")) == token("--bad")
+          and hero_hex() == token("--card"), "실패는 빨간 점·빨간 제목 (채우지 않음)")
     db_patch(f"{LIVE}/programs/routine", {"state": "crashed", "reason": "프로그램이 중간에 사라졌습니다"})
     page.wait_for_function("document.getElementById('hero')?.dataset.state === 'crashed'", timeout=10000)
-    check(hero_hex() == token("--warn-fill"), "비정상 종료(오류)는 노랑으로 채움")
+    check(dot_hex() == token("--warn-mark") and rgb2hex(page.evaluate("getComputedStyle(document.getElementById('h-state')).color")) == token("--warn"),
+          "비정상 종료(오류)는 노란 점·호박색 제목")
     check(page.text_content("#h-state") == "오류", "상태 카드 제목도 '오류' (도넛·기록 표와 같은 말)")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW - 900})
     page.wait_for_function("document.getElementById('h-state')?.textContent === 'PC 연결 끊김'", timeout=10000)
-    check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--soft"), "연결 끊김은 실행 결과가 아니라 중립 바탕 (2026-10-30)")
+    check(page.get_attribute("#hero", "data-state") == "offline" and hero_hex() == token("--card"), "연결 끊김은 실행 결과가 아니라 중립 바탕 (2026-10-30)")
     check("15분 전부터" in page.text_content("#h-line1"), "끊긴 시간")
     db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600})
     db_patch(f"{LIVE}/programs/routine", routine)
@@ -763,7 +766,7 @@ with sync_playwright() as pw:
     check(page.locator("#toasts .toast.info", has_text="PROCESS 오토파일럿 중단 · 대시보드에서 중단했습니다").count() == 1
           and page.locator("#toasts .toast.bad", has_text="PROCESS 오토파일럿 실패").count() == 0, "대시보드에서 중단하면 '실패' 가 아니라 파란 '중단' 토스트")
     page.wait_for_function("document.getElementById('h-state')?.textContent === '중단'", timeout=10000)
-    check(page.get_attribute("#hero", "data-state") == "halted" and hero_hex() == token("--soft") and "중단" in page.text_content("#meta-routine"),
+    check(page.get_attribute("#hero", "data-state") == "halted" and hero_hex() == token("--card") and "중단" in page.text_content("#meta-routine"),
           "상태 띠·단계 요약도 '중단', 바탕은 중립 (실패 빨강 아님, 2026-10-30)")
     page.wait_for_function("document.querySelector('#stop-erpia .t')?.textContent === 'ERPia 종료'", timeout=10000)
     check(True, "멈추면 단추가 다시 [ERPia 종료]")
@@ -823,7 +826,7 @@ with sync_playwright() as pw:
     gaps = page.evaluate("""() => { const r = (s) => document.querySelector(s).getBoundingClientRect();
       return [Math.round(r('.pair').top - r('#token-card').top), Math.round(r('#act-card').top - r('#token-card').bottom),
               Math.round(r('.card.recent').top - r('.pair').bottom)] }""")
-    check(gaps == [0, 14, 14], f"두 열의 첫 카드 위가 같고 카드 사이는 모두 14px (사용자 2026-10-19, 단계 카드가 위 2026-10-30) ({gaps})")
+    check(gaps == [0, 16, 16], f"두 열의 첫 카드 위가 같고 카드 사이는 모두 16px (사용자 2026-10-19, 단계 카드가 위 2026-10-30) ({gaps})")
     ecam = page.evaluate("""() => { const t = document.createElement('i'); t.style.color = 'var(--ecam-green)'; document.body.append(t);
       const want = getComputedStyle(t).color; t.remove();
       return [want, getComputedStyle(document.querySelector('#tok-bar .fill')).backgroundColor] }""")
@@ -965,8 +968,8 @@ with sync_playwright() as pw:
     page.wait_for_function("document.querySelectorAll('#copy-to option').length === 2", timeout=10000)
     gaps = page.evaluate("""() => { const cs = [...document.querySelectorAll('.grp-cards > .card')].filter((x) => x.offsetParent);
       return [cs.map((x) => x.id), cs.slice(1).map((x, i) => Math.round(x.getBoundingClientRect().top - cs[i].getBoundingClientRect().bottom))] }""")
-    check(len(gaps[0]) >= 2 and "copy-card" in gaps[0] and set(gaps[1]) == {14},
-          f"ACTOR 카드 사이 간격은 모두 14px - 숨긴 안내 줄이 사이에 있어도 (사용자 2026-10-20) ({gaps})")
+    check(len(gaps[0]) >= 2 and "copy-card" in gaps[0] and set(gaps[1]) == {16},
+          f"ACTOR 카드 사이 간격은 모두 16px - 숨긴 안내 줄이 사이에 있어도 (사용자 2026-10-20) ({gaps})")
     opts = page.evaluate("Array.from(document.querySelectorAll('#copy-to option')).map(o => [o.value, o.textContent, o.disabled])")
     check(opts == [["pc_x", "창고 PC", False], ["pc_y", "옛 PC (업데이트 필요)", True]], f"받을 PC 는 지금 PC 를 뺀 나머지, 옛 버전 PC 는 선택 못 함 ({opts})")
     check(page.locator("#copy-list .copy-row").count() == 2, "기록이 있는 프리셋만 줄이 있다 (1·2)")
@@ -1257,16 +1260,18 @@ with sync_playwright() as pw:
     check(len({tuple(x) for x in spots}) == 1, f"표시 넷이 같은 자리 ({spots})")
     radius = page.evaluate("""() => [getComputedStyle(document.getElementById('run-routine')).borderRadius,
       getComputedStyle(document.getElementById('act-card')).borderRadius]""")
-    check(radius[0] == "12px", f"버튼 모서리는 카드처럼 둥근 네모 ({radius})")
+    check(radius[0] == "8px", f"버튼 모서리는 둥근 네모 8px (2026-11-09 디자인) ({radius})")
     ic_w = page.evaluate("document.querySelector('#stop-erpia svg').getBoundingClientRect().width")
     check(ic_w > 10, f"전원 아이콘이 실제로 그려진다 (폭 {ic_w:.0f}px)")
     check(not page.is_disabled("#stop-erpia"), "종료 버튼 활성")
     stop_bg = page.evaluate("getComputedStyle(document.getElementById('stop-erpia')).backgroundColor")
-    check(rgb2hex(stop_bg) == token("--bad-fill"), f"종료 버튼은 빨강 ({stop_bg})")
-    check(rgb2hex(page.evaluate("getComputedStyle(document.getElementById('run-routine')).backgroundColor")) == token("--good-fill"),
-          "실행 버튼은 초록으로 채워져 있다")
-    check(rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#run-routine .t')).color")) == token("--on-fill"),
-          "글자는 흰색")
+    check(stop_bg == "rgba(0, 0, 0, 0)" and rgb2hex(page.evaluate("getComputedStyle(document.getElementById('stop-erpia')).color")) == token("--bad"),
+          f"종료 버튼은 빨간 글씨 (채우지 않음, 2026-11-09 디자인) ({stop_bg})")
+    check(rgb2hex(page.evaluate("getComputedStyle(document.getElementById('run-routine')).backgroundColor")) == token("--card")
+          and rgb2hex(page.evaluate("getComputedStyle(document.getElementById('run-all')).backgroundColor")) == token("--accent"),
+          "강조색은 전체 실행 하나, 나머지 실행 버튼은 보통 단추")
+    check(rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#run-routine .t')).color")) == token("--strong"),
+          "보통 단추 글자는 진한 글자색")
     page.hover("#run-routine"); page.wait_for_timeout(900)
     fly = page.evaluate("""() => { const b = document.getElementById('run-routine'), r = b.getBoundingClientRect();
       const f = b.querySelector('.fly').getBoundingClientRect(), t = b.querySelector('.t');
@@ -1634,7 +1639,7 @@ with sync_playwright() as pw:
     check(True, "비밀번호 변경 성공 안내")
     check(sign_in("admin@t.local", "newpass123") and not sign_in("admin@t.local", "pw123456"), "새 비밀번호로만 로그인된다")
     accent = lambda: page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()")
-    check(accent() == "#f29f67" and "기본" in page.text_content("#accent-now"), "강조색 기본은 orange")
+    check(accent() == "#0f766e" and "기본" in page.text_content("#accent-now"), "강조색 기본은 mint (2026-11-09 디자인)")
     page.click("#accent-swatches .swatch[title='violet']")
     check(accent() == "#6c71c4" and page.text_content("#accent-now") == "#6c71c4", "견본을 누르면 강조색이 바뀐다")
     check(page.evaluate("getComputedStyle(document.getElementById('pw-btn')).backgroundColor") == "rgb(108, 113, 196)", "버튼 색도 따라 바뀐다")
@@ -1644,18 +1649,18 @@ with sync_playwright() as pw:
     check(accent() == "#6c71c4", "다시 밝게 하면 밝음용 값")
     ink = lambda: page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--accent-ink').trim()")
     page.click("#accent-swatches .swatch[title='navy']")
-    check(accent() == "#21263a" and ink() == "#fdf6e3", "진한 강조색엔 밝은 글자")
-    page.click("#accent-swatches .swatch[title='orange']")
-    check(accent() == "#f29f67" and ink() == "#1e1e2c", "주황엔 어두운 글자 (흰 글자는 2:1 도 안 됨)")
+    check(accent() == "#21263a" and ink() == "#ffffff", "진한 강조색엔 밝은 글자")
+    page.click("#accent-swatches .swatch[title='mint']")
+    check(accent() == "#0f766e" and ink() == "#ffffff", "민트엔 흰 글자 (대비 큰 쪽)")
     check(page.locator("#accent-swatches .swatch").count() == 3 and page.query_selector("#accent-swatches .swatch[title='yellow']") is None
           and page.query_selector("#accent-swatches .swatch[title='magenta']") is None, "견본에 상태 색(노랑·빨강 계열)은 없다")
     page.fill("#accent-pick", "#b58900"); page.dispatch_event("#accent-pick", "input")
-    check(accent() == "#b58900" and ink() == "#1e1e2c", "직접 고른 색 + 글자색은 대비 큰 쪽 자동")
+    check(accent() == "#b58900" and ink() == "#171717", "직접 고른 색 + 글자색은 대비 큰 쪽 자동")
     page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000)
     check(accent() == "#b58900", "새로고침해도 강조색이 남는다")
     page.click("#admin-nav a[data-key='account']"); page.wait_for_selector("#accent-reset")
     page.click("#accent-reset")
-    check(accent() == "#f29f67" and "기본" in page.text_content("#accent-now"), "기본값으로 되돌린다")
+    check(accent() == "#0f766e" and "기본" in page.text_content("#accent-now"), "기본값으로 되돌린다")
     page.click("#app-nav a[data-key='rpa']")
     page.wait_for_selector("#hero")
     check(page.text_content("#page-title") == "오토파일럿", "오토파일럿으로 돌아온다")

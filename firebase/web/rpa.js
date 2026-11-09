@@ -32,8 +32,7 @@ const runBtn = (id, ic, text, cls = "") =>
 
 const HTML = `
   <div class="subnav" role="tablist">
-    <button id="tab-status" role="tab" aria-selected="true">현황</button>
-    <button id="tab-history" role="tab" aria-selected="false">기록</button>
+    <span class="tabs"><button id="tab-status" role="tab" aria-selected="true">현황</button><button id="tab-history" role="tab" aria-selected="false">기록</button></span>
     <span class="ver-note hide" id="ver"></span>
   </div>
 
