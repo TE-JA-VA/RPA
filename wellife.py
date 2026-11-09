@@ -1202,14 +1202,12 @@ def invoice_excel(rr, ctx, live):
         return "failed", f"{head} - 설정 오류: {e}"
     if not targets:
         return "skipped", f"{head} - 쇼핑몰 프리셋에서 수집 설정된 사이트 중 옵저버에서 '운송장 전송 마켓' 을 고른 사이트가 없어 받지 않았습니다."
-    # 올릴 업로드 프리셋이 없는 사이트는 받지도 완료처리하지도 않는다 (사용자 2026-11-09) - 완료처리하면 ERPia 는 '완료' 인데
-    # 사이트에는 아무것도 안 올라간다. 업로드를 끈 버전(EXCEL_UPLOAD_ON False)이면 모든 사이트가 여기서 빠진다.
+    # 업로드 프리셋이 없는 사이트도 받고 완료처리한다 (사용자 2026-11-09 오후: 쇼핑몰 프리셋에서 켜고 마켓을 고른 사이트는 예약 실행에서
+    # 바로 받아야 한다 - 6113bd6 의 '없으면 건너뜀' 을 바꿈). 대신 사유에 '업로드 프리셋 없음' 을 남겨 파일이 사이트에 저절로 올라가지
+    # 않는다는 것을 알린다 - 받은 파일은 ERPIA_AI_UPLOAD 에 그대로 있다. 업로드를 끈 버전(EXCEL_UPLOAD_ON False)이면 모든 사이트가 그렇다.
     no_up = [f"{t['market']}({t['code']})" for t in targets if t["code"] not in ups]
-    targets = [t for t in targets if t["code"] in ups]
-    no_up_text = f"업로드 프리셋 없음 {', '.join(no_up)}" if no_up else ""
-    if not targets:
-        return "skipped", (f"{head} - {no_up_text}. 옵저버에서 그 사이트의 업로드 프리셋(같은 사이트코드)을 기록하고 켜 주십시오. "
-                           "받지도 미전송 완료처리하지도 않았습니다.")
+    no_up_text = (f"업로드 프리셋 없음 {', '.join(no_up)} (받은 파일은 사이트에 저절로 올라가지 않습니다 - 옵저버에서 같은 사이트코드의 "
+                  "업로드 프리셋을 기록하고 켜면 올라갑니다)") if no_up else ""
     _close_export_windows(rr, ctx)     # 지난 실행·사람이 열어 둔 내보내기 창이 조회 조건 칸을 덮지 않게 (11-09 실측)
     got, empty, bad, pressed_any = [], [], [], False
     for t in targets:
@@ -1273,7 +1271,7 @@ def excel_targets():
 
 def upload_codes():
     """ACTOR 가 사이트에 올릴 수 있는 사이트코드 - 쇼핑몰 프리셋에서 켠 업로드 프리셋 (업체 프리셋 수까지, web_runner.upload_choice 와 같은 기준).
-    업로드를 끈 버전이면 빈 집합 (st.is_upload). 프리셋을 못 읽으면 RuntimeError (완료처리만 하고 못 올리는 일이 없게)."""
+    업로드를 끈 버전이면 빈 집합 (st.is_upload). 프리셋을 못 읽으면 RuntimeError. 없는 사이트도 받되 사유에 알린다 (invoice_excel)."""
     summary = st.preset_summary()
     try:
         presets = st.read_presets()
