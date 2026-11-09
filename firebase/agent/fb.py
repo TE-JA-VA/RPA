@@ -214,11 +214,13 @@ class Client:
             raise HttpError(e.code, e.read().decode("utf-8", "replace")) from None
         return json.loads(raw) if raw else None
 
+    # print=silent: 서버가 쓴 내용을 응답으로 돌려주지 않는다 (204, 빈 응답) - 그 응답이 Realtime DB 다운로드로 잡혔다
+    # (5초 heartbeat·현황마다, 2026-11-09). 쓰기 응답을 쓰는 곳은 없고 실패는 그대로 HTTP 오류로 온다.
     def put(self, path, value):
-        return self._send("PUT", path, value)
+        return self._send("PUT", path, value, {"print": "silent"})
 
     def patch(self, path, value):
-        return self._send("PATCH", path, value)
+        return self._send("PATCH", path, value, {"print": "silent"})
 
     def get(self, path, params=None):
         return self._send("GET", path, None, params)
