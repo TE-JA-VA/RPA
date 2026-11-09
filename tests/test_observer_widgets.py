@@ -41,6 +41,10 @@ root.update()
 sel._pick(1)
 root.update()
 assert sel.current() == 1 and got == ["휴대폰"]
+sel._open()                                       # 짧은 목록: 스크롤바 없이 딱 그 줄 수
+assert int(sel._list["height"]) == 2 and not any(isinstance(c, tk.Scrollbar) for c in sel._list.master.winfo_children())
+sel._close(0)
+assert sel.get() == "(없음)" and got[-1] == "(없음)" and not sel._list.winfo_exists()
 t = tk.StringVar(root, value="")
 fld = w.Field(root, width=4, h=24, textvariable=t, justify="right", validate="key",
             validatecommand=(root.register(lambda x: not x or x.isdecimal()), "%P"))
@@ -56,6 +60,17 @@ tabs._click(0)                                    # 기록·미리보기 중에�
 assert hits[-1] != 0
 tabs._click(1)
 assert hits[-1] == 1
+tabs._open()                                      # '더보기' 목록도 같은 드롭다운, 바쁠 때 다른 탭은 못 고른다
+d = tabs._drop
+assert len(d.tree.get_children()) == 2 and d.ok == [False, True]
+d.close(0)
+assert hits[-1] == 1 and not d.tree.winfo_exists()
+tabs.show([(f"{i}", i % 2 == 0) for i in range(50)], 3, None, False)
+tabs._open()
+d = tabs._drop
+assert int(d.tree["height"]) == 10 and d.hot == 3 and "hot" in d.tree.item("3", "tags")
+d.close(7)
+assert hits[-1] == 7
 root.destroy()
 assert w.self_check()
 print("PASS observer_widgets")

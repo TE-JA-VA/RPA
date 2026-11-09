@@ -130,6 +130,12 @@ check("안 고른 프리셋은 '(선택 안 함)'", app.market_box.get() == obs.
 app.market_box.current(M.index("AK몰") + 1)
 app._market_changed()
 check("고르면 그 프리셋 값이 된다", app.presets[1]["market"] == "AK몰")
+app.market_box._open()
+lb = app.market_box._list
+check("마켓 목록은 10줄 스크롤 목록으로 열린다", int(lb["height"]) == 10 and len(lb.get_children()) == 41, (lb["height"], len(lb.get_children())))
+app.market_box._close(30)
+check("목록에서 고르면 그 프리셋 값이 되고 목록이 닫힌다", app.presets[1]["market"] == M[29] != "AK몰" and not lb.winfo_exists(),
+      app.presets[1]["market"])
 app.select(0)
 check("다른 프리셋으로 가면 그 프리셋 값", app.market_box.get() == "쿠팡")
 app.market_box.current(0)

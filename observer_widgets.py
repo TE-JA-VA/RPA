@@ -7,7 +7,7 @@ import base64
 import ctypes
 import io
 import tkinter as tk
-from tkinter import font as tkfont
+from tkinter import font as tkfont, ttk
 
 from PIL import Image, ImageColor, ImageDraw, PngImagePlugin  # noqa: F401 - PngImagePlugin: Pillow 가 이름으로 불러 Nuitka 가 못 찾는다
 
@@ -230,6 +230,82 @@ class Field(tk.Canvas):
             self.itemconfigure(self._item, width=w - 2 * (r + pad))
 
 
+class DropList:
+    """옵저버 드롭다운 공통 - 줄 사이를 띄운 목록, ROWS 줄을 넘으면 스크롤 (tk.Menu 자리, 사용자 2026-11-09).
+    items = [(글, 글자색, 고를 수 있나)]. 고르면 on_pick(번호), 바깥·Esc·다른 프로그램이면 그냥 닫는다."""
+    ROWS = 10
+
+    def __init__(self, owner, items, cur, on_pick, font, x, y, width, top_y):
+        self.on_pick, self.ok = on_pick, [it[2] for it in items]
+        top = self.top = tk.Toplevel(owner, bg=BORDER)
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        inner = tk.Frame(top, bg=CARD)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
+        style = ttk.Style(owner)        # Listbox 는 줄 간격을 못 준다 - Treeview 는 rowheight
+        style.configure("Drop.Treeview", background=CARD, fieldbackground=CARD, foreground=TEXT, font=font, borderwidth=0,
+                        rowheight=tkfont.Font(font=font).metrics("linespace") + px(6))
+        style.layout("Drop.Treeview", [("Drop.Treeview.treearea", {"sticky": "nswe"})])
+        # 마우스 올린 줄은 선택(윈도우 흰 글자)이 아니라 'hot' 꼬리표 배경으로 - 글자색(초록·흐림)은 그대로 (사용자 2026-11-09)
+        tree = self.tree = ttk.Treeview(inner, style="Drop.Treeview", show="tree", selectmode="none",
+                                        height=max(1, min(self.ROWS, len(items))))
+        tree.column("#0", width=10, stretch=True)
+        if len(items) > self.ROWS:
+            bar = tk.Scrollbar(inner, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=bar.set)
+            bar.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True, padx=(px(6), 0), pady=px(4))
+        for i, (text, color, ok) in enumerate(items):
+            tree.insert("", "end", iid=str(i), text=text, tags=(f"c{i}",))
+            tree.tag_configure(f"c{i}", foreground=color if ok else TEXT4)
+        tree.tag_configure("hot", background=P_BG)
+        self.hot = None
+        if cur is not None and 0 <= cur < len(items):
+            self._light(cur)
+            tree.see(str(cur))
+
+        def row(y):
+            r = tree.identify_row(y)
+            return int(r) if r and self.ok[int(r)] else None
+
+        def hover(e):
+            r = row(e.y)
+            if r is not None and r != self.hot:
+                self._light(r)
+        tree.bind("<Motion>", hover)
+        tree.bind("<ButtonRelease-1>", lambda e: self.close(row(e.y)) if row(e.y) is not None else None)
+        tree.bind("<Return>", lambda e: self.close(self.hot))
+        top.bind("<Escape>", lambda e: self.close())
+        top.bind("<ButtonPress-1>", lambda e: self.close() if e.widget is top else None)   # 잡은 동안 바깥 누름은 top 으로 온다
+        tree.bind("<FocusOut>", lambda e: self.close())                                      # 다른 프로그램으로 가면 닫는다
+        top.update_idletasks()
+        h = top.winfo_reqheight()
+        if y + h > owner.winfo_screenheight():
+            y = top_y - h
+        x = max(0, min(x, owner.winfo_screenwidth() - width))
+        top.geometry(f"{width}x{h}+{x}+{y}")
+        tree.focus_set()
+        try:
+            top.grab_set()
+        except tk.TclError:             # 창이 아직 안 보일 때 (시험)
+            pass
+
+    def _light(self, i):
+        if self.hot is not None:
+            self.tree.item(str(self.hot), tags=(f"c{self.hot}",))
+        self.hot = i
+        self.tree.item(str(i), tags=(f"c{i}", "hot"))
+
+    def close(self, i=None):
+        top, self.top = self.top, None
+        if top is None or not top.winfo_exists():
+            return
+        top.grab_release()
+        top.destroy()
+        if i is not None and self.ok[i]:
+            self.on_pick(i)
+
+
 class Select(tk.Canvas):
     """읽기 전용 선택 상자 (ttk.Combobox state=readonly 자리). 고르면 <<ComboboxSelected>>."""
     def __init__(self, parent, values=(), font=F):
@@ -246,10 +322,13 @@ class Select(tk.Canvas):
         self._paint()
 
     def _open(self):
-        menu = tk.Menu(self, tearoff=0, font=self._font, bd=0, activebackground=P_BG, activeforeground=TEXT)
-        for i, v in enumerate(self._values):
-            menu.add_command(label=v, command=lambda i=i: self._pick(i))
-        menu.tk_popup(self.winfo_rootx(), self.winfo_rooty() + self.h + self.ring * 2)
+        r = self.ring
+        self._drop = DropList(self, [(v, TEXT, True) for v in self._values], self._i, self._pick, self._font,
+                              self.winfo_rootx() + r, self.winfo_rooty() + self.h + r * 2, self.winfo_width() - r * 2, self.winfo_rooty())
+        self._list = self._drop.tree
+
+    def _close(self, i=None):
+        self._drop.close(i)
 
     def _pick(self, i):
         self.current(i)
@@ -469,11 +548,11 @@ class Tabs(tk.Frame):
             self.more.grid_remove()
 
     def _open(self):
-        menu = tk.Menu(self, tearoff=0, font=self.font, bd=0, activebackground=P_BG, activeforeground=TEXT)
-        for i, (text, _, *up) in enumerate(self.items):
-            menu.add_command(label=text, command=lambda i=i: self.on_select(i), columnbreak=i > 0 and i % 25 == 0,
-                             foreground=UP_ON if up and up[0] else TEXT, state="disabled" if self.busy and i != self.cur else "normal")
-        menu.tk_popup(self.more.winfo_rootx(), self.more.winfo_rooty() + self.more.winfo_height())
+        items = [(text, UP_ON if up and up[0] else TEXT, not self.busy or i == self.cur) for i, (text, _, *up) in enumerate(self.items)]
+        f, m = tkfont.Font(font=self.font), self.more
+        width = max([f.measure(t) for t, *_ in items] + [px(160)]) + px(40)
+        self._drop = DropList(self, items, self.cur, self.on_select, self.font,
+                              m.winfo_rootx(), m.winfo_rooty() + m.winfo_height(), width, m.winfo_rooty())
 
     def _new_tab(self, i):
         t = tk.Frame(self.strip, bg=self.cget("bg"))
