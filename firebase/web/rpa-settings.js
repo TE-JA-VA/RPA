@@ -560,6 +560,14 @@ const isV3 = () => (live?.schedule?.version ?? 0) >= 3;
 const isV4 = () => (live?.schedule?.version ?? 0) >= 4;   // 공휴일·업체 휴무일 쉬기 (2026-10-15)
 const isV5 = () => (live?.schedule?.version ?? 0) >= 5;   // 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02)
 const isV6 = () => (live?.schedule?.version ?? 0) >= 6;   // 1분 단위 시각 (2026-11-03) - 그 전 판 PC 는 5분 단위만 받는다
+// 판 7: 줄마다 운송장 전송 방식 (slots[i].inv - 없으면 전체 전송, 사용자 2026-11-09). 판 5·6 은 켬/끔.
+// 엑셀 다운로드의 비밀번호·사유는 PC 설정 파일 값이라 여기에 보이지 않는다 (사용자 2026-11-09)
+const isV7 = () => (live?.schedule?.version ?? 0) >= 7;
+// 순서·이름은 사용자 2026-11-09 그대로 (st.INVOICE_OPTIONS). 2·3 은 사이트 수집에서 끈 사이트를 전송·출력하지 않는다 - 2 는 켬·끔 모두 빼고, 3 은 켠 것만
+const INV_OPTIONS = [["", "전체 조회 후 전송"], ["auto", "사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송"], ["excel", "사이트 수집으로 선택된 사이트의 엑셀 출력"]];
+const INV_WHY = { "": "모든 사이트를 조회해 운송장을 전송합니다.",
+  auto: "사이트 수집에 있는 사이트(켬·끔 모두)를 빼고 조회해 운송장을 전송합니다.",
+  excel: "사이트 수집에서 켠 사이트 중 옵저버에서 운송장 전송 마켓을 고른 사이트마다 조회 조건만 맞춰 그 마켓 양식 엑셀을 받습니다 (운송장이 없으면 받지 않습니다). 전송은 하지 않습니다." };
 const offStep = (t) => !isV6() && /^\d\d:\d\d$/.test(t || "") && +t.slice(3) % 5 !== 0;
 /** 이 줄이 운송장 전송을 골랐는가 - '켠 사이트만' 은 그 줄에만 (PC 의 normalize_slots 와 같은 규칙) */
 const sendsInvoice = (s) => !!s.run?.includes("InvoiceSend");
@@ -597,7 +605,9 @@ function savedSlots() {
     at: x.at, run: Array.isArray(x.run) ? x.run.filter((k) => k !== "Login") : null,
     ...(x.until ? { until: x.until, rest_min: x.rest_min ?? 2 } : {}),
     ...(isV3() ? { days: [...(Array.isArray(x.days) ? x.days : s.days || [])].sort() } : {}),
-    ...(isV5() && x.inv_sites === true ? { inv_sites: true } : {}),
+    // 판 7 PC 도 판을 올리기 전에 저장한 inv_sites 가 남아 있을 수 있다 - PC 는 그것을 'excel' 로 읽는다 (st.slot_invoice)
+    ...(isV7() ? (x.inv === "excel" || x.inv === "auto" ? { inv: x.inv } : x.inv_sites === true ? { inv: "excel" } : {})
+      : isV5() && x.inv_sites === true ? { inv_sites: true } : {}),
   }));
 }
 /** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관·운송장 전송 (사용자 10-08: ②~⑥ 따로, ⑤⑥ 은 반복도) */
@@ -614,7 +624,7 @@ function resetSchedule() {
 }
 const runKey = (run) => (run ? [...run].filter((k) => k !== "Login").sort().join() : "*");
 const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}${s.days ? `@${[...s.days].sort()}` : ""}`
-  + (s.inv_sites && sendsInvoice(s) ? "+inv" : "");
+  + (s.inv_sites && sendsInvoice(s) ? "+inv" : "") + (s.inv && sendsInvoice(s) ? `+inv:${s.inv}` : "");
 const slotsKey = (slots) => slots.map(slotKey).sort().join("|");
 function scheduleDirty() {
   const s = savedSch();
@@ -666,7 +676,7 @@ function runChips(s) {
     b.onclick = () => {
       s.run = s.run.includes(k) ? s.run.filter((x) => x !== k) : [...s.run, k];
       if (!s.run.includes("Logistics")) s.run = s.run.filter((x) => x !== "Output");
-      if (!sendsInvoice(s)) delete s.inv_sites;
+      if (!sendsInvoice(s)) { delete s.inv_sites; delete s.inv; }
       paintTimes(); paintScheduleMeta();
     };
     box.append(b);
@@ -684,6 +694,16 @@ function invSitesSwitch(s) {
   box.onchange = () => { if (box.checked) s.inv_sites = true; else delete s.inv_sites; paintScheduleMeta(); };
   l.append(text, box, Object.assign(document.createElement("span"), { className: "knob" }));
   return l;
+}
+/** 판 7: 운송장 전송을 고른 줄의 방식 셋 중 하나 (사용자 2026-11-09). 고르지 않은 값('')은 전체 전송 - 줄에 inv 를 두지 않는다 */
+function invOption(s) {
+  const box = document.createElement("span");
+  const sel = document.createElement("select"); sel.className = "mode inv-opt"; sel.setAttribute("aria-label", "운송장 전송 방식");
+  for (const [v, text] of INV_OPTIONS) sel.append(new Option(text, v));
+  sel.value = s.inv || "";
+  sel.onchange = () => { if (sel.value) s.inv = sel.value; else delete s.inv; paintTimes(); paintScheduleMeta(); };
+  box.append(sel, Object.assign(document.createElement("span"), { className: "why", textContent: INV_WHY[s.inv || ""] }));
+  return box;
 }
 function paintTimes() {
   const over = new Set(sortedForm().slice(limitOf()));      // 시각 순으로 한도를 넘는 줄 (PC 도 이 줄은 안 돌린다)
@@ -716,10 +736,11 @@ function paintTimes() {
       const mode = document.createElement("select"); mode.className = "mode"; mode.setAttribute("aria-label", "돌릴 모듈");
       mode.append(new Option("전체 모듈 실행", "all"), new Option("선택 모듈만 실행", "pick"));
       mode.value = s.run ? "pick" : "all";
-      mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; delete s.inv_sites; paintTimes(); paintScheduleMeta(); };
+      mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; delete s.inv_sites; delete s.inv; paintTimes(); paintScheduleMeta(); };
       row.append(line("모듈", mode, ...(s.run ? [runChips(s)] : [])));
     }
-    if (isV5() && sendsInvoice(s)) row.append(line("운송장 전송", invSitesSwitch(s)));
+    if (isV7() && sendsInvoice(s)) row.append(line("운송장 전송", invOption(s)));
+    else if (isV5() && sendsInvoice(s)) row.append(line("운송장 전송", invSitesSwitch(s)));
     return row;
   }));
 }
@@ -825,7 +846,7 @@ function payloadOf() {
     ...(isV4() ? { skip_holidays: form.sch.holidays, off_dates: [...form.sch.offDates] } : {}) };   // 옛 판 PC 는 모르는 값 - 안 보낸다
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
   return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}),
-    ...(isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}) })) };
+    ...(isV7() ? (s.inv && sendsInvoice(s) ? { inv: s.inv } : {}) : isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}) })) };
 }
 async function applySchedule() {
   const payload = payloadOf();

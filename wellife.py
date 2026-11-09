@@ -1128,20 +1128,10 @@ def invoice_send(rr, ctx, live):
     # 반복 회차이고 오늘 전송을 누른 기록이 있을 때만 본다 - 하루 한 번·수동 실행·반복 첫 회차는 화면이 느려도 예전대로 (PR #15 검토 2026-10-20)
     if os.environ.get("RPA_REPEAT_UNTIL") and last_send_at(rr, datetime.datetime.now()) and send_busy(rr, ctx):
         return "skipped", f"[{tag}] {send_busy_reason(rr)}"
+    if invoice_option() == "excel":     # 사이트 수집으로 선택된 사이트의 엑셀 출력 - 조회 없이 조건만 맞춰 사이트마다 엑셀만, 체크·[전송요청(S)] 없음 (사용자 2026-11-09)
+        return invoice_excel(rr, ctx, live)
     fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
-    ctl = controls(rr, ctx, INVOICE_FORM)
-    query, grid = ctl.get("btn_Search"), ctl.get("gridCtrl_List")
-    if query is None or grid is None:
-        raise Stop("failed", f"'{INVOICE_TAB}' 조회(F) 단추(btn_Search)나 그리드(gridCtrl_List)를 찾지 못했습니다.")
-    idle = rr.grid_overlay_count(ctx.hwnd, grid)
-    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회 전")
-    click(rr, ctx, query, f"'{INVOICE_TAB}' 조회(F)")
-    time.sleep(2)     # 스피너가 뜨기 전에 '끝' 으로 보지 않게 (물류대기 조회와 같다)
-    if not rr.wait_grid_spinner_gone(ctx.hwnd, grid, idle, label=INVOICE_TAB, max_wait=QUERY_WAIT_SECONDS):
-        raise Stop("failed", f"'{INVOICE_TAB}' 조회가 {QUERY_WAIT_SECONDS}초 안에 끝나지 않았습니다.")
-    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회")
-    count = count_rows(rr, ctx, grid)
-    rr.log(f"  {INVOICE_TAB}: 그리드 {count}줄")
+    count, grid = run_query(rr, ctx)
     rr.status.note(f"운송장 {count}건")
     if not count:
         return "no_target", f"[{tag}] 운송장 0건 (전송할 것 없음)" + query_note(fixed)
@@ -1155,6 +1145,359 @@ def invoice_send(rr, ctx, live):
     if not live:
         head += " (전송요청은 누르지 않음)"
     return ("done" if pressed else "skipped"), head + note + query_note(fixed)
+
+
+def run_query(rr, ctx):
+    """⑥ [조회(F)] → 스피너가 끝나기를 기다려 줄을 센다. (줄 수, 그리드). 팝업이 떠 있으면 멈춘다."""
+    ctl = controls(rr, ctx, INVOICE_FORM)
+    query, grid = ctl.get("btn_Search"), ctl.get("gridCtrl_List")
+    if query is None or grid is None:
+        raise Stop("failed", f"'{INVOICE_TAB}' 조회(F) 단추(btn_Search)나 그리드(gridCtrl_List)를 찾지 못했습니다.")
+    idle = rr.grid_overlay_count(ctx.hwnd, grid)
+    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회 전")
+    click(rr, ctx, query, f"'{INVOICE_TAB}' 조회(F)")
+    time.sleep(2)     # 스피너가 뜨기 전에 '끝' 으로 보지 않게 (물류대기 조회와 같다)
+    if not rr.wait_grid_spinner_gone(ctx.hwnd, grid, idle, label=INVOICE_TAB, max_wait=QUERY_WAIT_SECONDS):
+        raise Stop("failed", f"'{INVOICE_TAB}' 조회가 {QUERY_WAIT_SECONDS}초 안에 끝나지 않았습니다.")
+    no_popup(rr, ctx, f"'{INVOICE_TAB}' 조회")
+    count = count_rows(rr, ctx, grid)
+    rr.log(f"  {INVOICE_TAB}: 그리드 {count}줄")
+    return count, grid
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 사이트 수집으로 선택된 사이트의 엑셀 출력 (예약 줄 운송장 전송 방식 'excel', 사용자 2026-11-09). 실측: docs/wellife-rpa.md 9.7.
+# 받을 사이트는 옵저버에서 '운송장 전송 마켓' 을 고른 사이트 수집 프리셋 중 켠 것 (excel_targets - upstream invoice_markets).
+# 고른 사이트가 없으면 받지 않는다. 사이트마다: 매출구분에서 그 사이트만 고르는 등 조회 조건만 맞추고 [조회(F)] 는 누르지 않는다
+# (마켓 양식은 조회 조건으로 뽑는다, 사용자 2026-11-09) → [마켓업로드용 엑셀출력] → 따로 뜬 '송장양식'(마켓 이름 목록) 에서 고른 마켓 →
+# [엑셀출력] → '엑셀 다운로드 받기' 미리보기에 줄이 없으면 받지 않고 닫는다 (데이터가 있을 때만 받는다) → 비밀번호·사유 →
+# [엑셀 다운로드] → 저장 창 → ERPIA_AI_EXCEL\운송장 (st.upload_dir - ACTOR --upload 가 사이트에 올리는 폴더) → [아니오].
+# 파일 이름 앞에 사이트코드 '(nnn)' 을 붙여 업로드(st.upload_files)가 그 사이트의 업로드 프리셋으로 올리게 한다.
+# 리허설도 받는다 (데이터를 바꾸지 않는다, 사용자) - 이름 앞에 '리허설_' 을 더 붙여 업로드가 집지 않게 한다.
+# 비밀번호·사유는 대시보드(웹)에 보이지 않는다 (사용자 2026-11-09). 비밀번호는 로그·사유에도 남기지 않는다.
+# ---------------------------------------------------------------------------
+EXPORT_FORM_TITLE, EXPORT_DL_TITLE = "송장양식", "엑셀 다운로드 받기"
+EXPORT_SITE_COL = "사이트명"
+EXPORT_REASON = "원본데이터 확인 목적"      # '엑셀 다운로드 사유' (사용자 2026-11-09). ERPia 선택지 다섯 가지 + 직접입력 (11-05 실측)
+EXPORT_PW_SECTION, EXPORT_PW_KEY, EXPORT_PW_DEFAULT = "InvoiceExcel", "Password", "0000"   # 엑셀 비밀번호: 고정 0000, RPA_UserConfig.json 에서 바꿈 (사용자 2026-11-09)
+EXPORT_WAIT_SECONDS = 20
+REHEARSAL_PREFIX = "리허설_"
+
+
+def invoice_excel(rr, ctx, live):
+    """사이트 수집으로 선택된 사이트의 엑셀 출력 (위 설명). [전송요청(S)] 은 누르지 않는다. (결과, 사유):
+    받은 파일이 있으면 실행 done·리허설 skipped (토큰 없음), 모두 0건이면 no_target, 고른 사이트가 없으면 skipped,
+    한 사이트라도 못 받았으면 failed (받은 것도 사유에 남긴다). 사이트 하나가 실패해도 나머지는 받는다 - 화면이 잠기는 등
+    'stopped' 는 바로 멈춘다. [조회(F)] 는 누르지 않는다 - 마켓 양식은 화면의 조회 조건으로 뽑으므로 조건만 맞춘다 (사용자
+    2026-11-09, 새로 연 화면에서 조회 없이 받아지는 것 11-09 실측). 미리보기에 줄이 없으면(0건) 받지 않는다 (머리글만 나온다)."""
+    tag = mode_tag(live)
+    head = f"[{tag}] 사이트 수집 엑셀 출력"
+    try:
+        pw = export_password(rr)
+        targets = excel_targets()
+    except RuntimeError as e:
+        return "failed", f"{head} - 설정 오류: {e}"
+    if not targets:
+        return "skipped", f"{head} - 옵저버에서 '운송장 전송 마켓' 을 고른 사이트 수집 사이트가 없어 받지 않았습니다."
+    _close_export_windows(rr, ctx)     # 지난 실행·사람이 열어 둔 내보내기 창이 조회 조건 칸을 덮지 않게 (11-09 실측)
+    got, empty, bad = [], [], []
+    for t in targets:
+        label = f"{t['market']}({t['code']})"
+        try:
+            ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx), sites=([t["code"]], False))   # 조건만, 조회 없음
+            saved = export_market(rr, ctx, t["market"], pw)
+            if saved is None:
+                empty.append(label)
+                continue
+            saved = upload_name(rr, saved, t["code"], live)
+            rr.log(f"  {INVOICE_TAB}: {label} → {saved}")
+            got.append(f"{label} {os.path.basename(saved)}")
+        except Stop as e:
+            if e.result == "stopped":
+                raise
+            rr.log(f"  {INVOICE_TAB}: {label} 엑셀을 받지 못했습니다. ({e})")
+            bad.append(f"{label}: {e}")
+    rr.status.note(f"운송장 엑셀 {len(got)}개")
+    parts = ([f"받음 {', '.join(got)}"] if got else []) + ([f"0건 {', '.join(empty)}"] if empty else []) \
+        + ([f"못 받음 {'; '.join(bad)}"] if bad else [])
+    text = f"{head} - " + " / ".join(parts) + ". 전송요청은 누르지 않음"
+    if bad:
+        return "failed", text
+    if not got:
+        return "no_target", text
+    return ("done" if live else "skipped"), text
+
+
+def excel_targets():
+    """'사이트 수집으로 선택된 사이트의 엑셀 출력' 로 받을 사이트 [{no, code, market}] - 옵저버에서 '운송장 전송 마켓' 을 고른 프리셋
+    (invoice_markets - 업체 프리셋 수까지) 중 사이트 수집에서 켠 것 (사용자 2026-11-09). 사이트코드가 없는 칸은 업로드할 파일
+    이름을 지을 수 없어 뺀다. 같은 (사이트코드, 마켓)은 한 번. 프리셋을 못 읽으면 RuntimeError (전체로 받지 않게)."""
+    summary = st.preset_summary()
+    if summary is None:
+        raise RuntimeError("사이트 수집 프리셋을 읽지 못했습니다.")
+    on = {p["no"] for p in summary if p["on"]}
+    out, seen = [], set()
+    for m in invoice_markets():
+        key = (str(m.get("code") or "").strip(), m["market"])
+        if m["no"] in on and key[0] and key not in seen:
+            seen.add(key)
+            out.append({"no": m["no"], "code": key[0], "market": key[1]})
+    return out
+
+
+def upload_name(rr, saved, code, live):
+    """받은 파일 이름 앞에 '(사이트코드)' 를 붙인다 - 업로드(st.upload_files)가 그 코드의 업로드 프리셋으로 올린다.
+    리허설은 '리허설_(사이트코드)…' - '(nnn)' 으로 시작하지 않아 업로드가 집지 않는다. 겹치면 run_routine.unique_path 로. 새 경로."""
+    folder, name = os.path.split(saved)
+    dest = rr.unique_path(os.path.join(folder, ("" if live else REHEARSAL_PREFIX) + f"({code}){name}"))
+    os.replace(saved, dest)
+    return dest
+
+
+def export_market(rr, ctx, market, pw):
+    """[마켓업로드용 엑셀출력] → '송장양식' 에서 market → [엑셀출력] → 내려받기 → '송장양식' [닫기(X)]. 저장한 경로,
+    미리보기가 0건이면 받지 않고 None. 목록에 그 마켓이 없거나 '조회에 실패했습니다.' 면 Stop(failed). 멈출 때 남은 창을 닫는다 (다음 클릭을 덮지 않게)."""
+    ctl = controls(rr, ctx, INVOICE_FORM)
+    btn = ctl.get("customCtrlBtnGrp2")
+    if btn is None:
+        raise Stop("failed", f"'{INVOICE_TAB}' [마켓업로드용 엑셀출력] 단추(customCtrlBtnGrp2)를 찾지 못했습니다.")
+    no_popup(rr, ctx, f"'{INVOICE_TAB}' 마켓업로드용 엑셀출력 전")
+    before = _menu_windows(rr, ctx)
+    click(rr, ctx, btn, "마켓업로드용 엑셀출력")
+    form = _wait_window(rr, ctx, before, EXPORT_FORM_TITLE, "마켓업로드용 엑셀출력")
+    try:
+        _click_row(rr, form, EXPORT_SITE_COL, market, "송장양식")
+        before = _menu_windows(rr, ctx)
+        _click_in(rr, form, _child(rr, form, "btn_ExportExcel", "송장양식 [엑셀출력]"), "송장양식 [엑셀출력]")
+        h = _wait_window(rr, ctx, before, (EXPORT_DL_TITLE, "마켓업로드용 양식 조회 실패"), "송장양식 [엑셀출력]")
+        if rr.win32gui.GetWindowText(h) != EXPORT_DL_TITLE:      # '조회에 실패했습니다.' - [확인] 만 있다 (11-05 힙합퍼)
+            raise Stop("failed", f"송장양식 '{market}': {_message_ok(rr, h, '마켓업로드용 양식 조회 실패')}")
+        saved = _download(rr, ctx, h, pw)
+        _click_in(rr, form, _child(rr, form, "customCtrlBtnGrp4", "송장양식 [닫기(X)]"), "송장양식 [닫기(X)]")
+        _wait_gone(rr, form, "송장양식")
+        return saved
+    except Exception:
+        with contextlib.suppress(Exception):
+            _close_export_windows(rr, ctx)
+        raise
+
+
+def export_password(rr):
+    """마켓업로드용 엑셀 비밀번호 - RPA_UserConfig.json 의 InvoiceExcel.Password, 없거나 비면 0000 (사용자 2026-11-09).
+    모양이 틀리면 RuntimeError - 글에 값을 넣지 않는다 (비밀번호)."""
+    where = f"{rr.pl.config_name()}의 '{EXPORT_PW_SECTION}'"
+    sec = rr.pl.load_settings().get(EXPORT_PW_SECTION) or {}
+    if not isinstance(sec, dict):
+        raise RuntimeError(f"{where}은(는) 섹션이어야 합니다.")
+    pw = sec.get(EXPORT_PW_KEY, EXPORT_PW_DEFAULT)
+    if not isinstance(pw, str) or len(pw.strip()) > 100:
+        raise RuntimeError(f"{where} {EXPORT_PW_KEY} 값은 100자 이하의 글자여야 합니다.")
+    return pw.strip() or EXPORT_PW_DEFAULT
+
+
+def _download(rr, ctx, h, pw):
+    """'엑셀 다운로드 받기' (PopupFrmExportExcel): 미리보기(gridCtrl_01)에 줄이 없으면 [닫기(X)]·[예] 로 닫고 None (데이터가 있을
+    때만 받는다, 사용자 2026-11-09 - 0건이면 머리글만 있는 파일이 나온다). 있으면 비밀번호 → 사유 → [엑셀 다운로드] → 저장 창 → [아니오]. 저장한 경로."""
+    grid = _child(rr, h, "gridCtrl_01", "엑셀 미리보기 그리드")
+    for _ in range(6):                  # 줄이 창보다 늦게 그려질 수 있어 3초까지 기다린다
+        rows = rr.grid_rows(grid)
+        if rows:
+            break
+        time.sleep(0.5)
+    if not rows:
+        rr.log(f"  {INVOICE_TAB}: 엑셀 미리보기에 줄이 없어 받지 않습니다.")
+        _close_download(rr, ctx, h)
+        return None
+    edit = _child(rr, h, "txt_password", "엑셀 비밀번호 칸")
+    edit = next(iter(edit.descendants(control_type="Edit")), edit)
+    _click_in(rr, h, edit, "엑셀 비밀번호 칸")
+    if rr.win32gui.GetForegroundWindow() != h or not _focus_in(rr, "txt_password"):
+        raise Stop("failed", "엑셀 비밀번호 칸에 포커스가 오지 않아 입력하지 않았습니다.")
+    edit.type_keys("^a{BACKSPACE}" + rr.ec.literal_keys(pw), with_spaces=True)
+    combo = _child(rr, h, "cbo_reason", "엑셀 다운로드 사유")
+    _pick_in(rr, ctx, h, combo, EXPORT_REASON, "엑셀 다운로드 사유")
+    if rr.legacy_value(combo) != EXPORT_REASON:
+        raise Stop("failed", f"엑셀 다운로드 사유를 '{EXPORT_REASON}'(으)로 고르지 못했습니다. (현재 {rr.legacy_value(combo)!r})")
+    before = _menu_windows(rr, ctx)
+    _click_in(rr, h, _child(rr, h, "btn_ExportExcel", "[엑셀 다운로드]"), "[엑셀 다운로드]")
+    deadline = time.time() + EXPORT_WAIT_SECONDS
+    while time.time() < deadline:
+        dlg = rr.find_save_dialog(ctx.pid)
+        if dlg:
+            break
+        fail = next((x for x in _menu_windows(rr, ctx) - before if rr.win32gui.GetWindowText(x) == "엑셀 저장 실패"), None)
+        if fail:
+            raise Stop("failed", f"엑셀을 받지 못했습니다. ({_message_ok(rr, fail, '엑셀 저장 실패')})")
+        time.sleep(0.5)
+    else:
+        raise Stop("failed", f"[엑셀 다운로드] 뒤 {EXPORT_WAIT_SECONDS}초 안에 저장 창이 뜨지 않았습니다.")
+    folder = st.upload_dir()
+    os.makedirs(folder, exist_ok=True)
+    before = _menu_windows(rr, ctx)
+    saved = rr.save_dialog_to_jobs(dlg, folder=folder)
+    if not saved:     # ERPia 가 '엑셀 저장 실패 - 엑셀파일을 다운로드에 실패했습니다.' 를 띄우면 그 글을 남기고 닫는다 (11-09 실측)
+        fail = next((x for x in _menu_windows(rr, ctx) - before if rr.win32gui.GetWindowText(x) == "엑셀 저장 실패"), None)
+        why = f" ({' '.join(_message_ok(rr, fail, '엑셀 저장 실패').split())})" if fail else ""
+        time.sleep(1.5)                    # 안내를 닫으면 저장 창도 저절로 닫힌다 - 남았을 때만 [취소]
+        if rr.find_save_dialog(ctx.pid):
+            rr.cancel_save_dialog(dlg)
+        raise Stop("failed", f"엑셀을 {folder} 에 저장하지 못했습니다.{why}")
+    ask = _wait_window(rr, ctx, before, "엑셀파일 열기", "엑셀 저장")
+    _message_button(rr, ask, "엑셀파일을 여시겠습니까?", "btn_아니오(&N)", "엑셀파일 열기")
+    _wait_gone(rr, h, EXPORT_DL_TITLE)      # [아니오] 면 다운로드 창이 저절로 닫힌다 (11-05 실측)
+    return saved
+
+
+def _child(rr, h, aid, what):
+    win = rr.Desktop(backend="uia").window(handle=h).wrapper_object()
+    el = next((c for c in win.descendants() if c.element_info.automation_id == aid), None)
+    if el is None:
+        raise Stop("failed", f"{what}({aid})을(를) 찾지 못했습니다.")
+    return el
+
+
+def _wait_window(rr, ctx, before, titles, what):
+    """누른 뒤 새로 뜬 ERPia 최상위 창 중 제목이 titles(하나 또는 여럿) 인 창의 손잡이. 안 뜨면 멈춘다."""
+    titles = (titles,) if isinstance(titles, str) else titles
+    deadline = time.time() + EXPORT_WAIT_SECONDS
+    while time.time() < deadline:
+        h = next((x for x in _menu_windows(rr, ctx) - before if rr.win32gui.GetWindowText(x) in titles), None)
+        if h:
+            time.sleep(1.0)     # 창이 먼저 뜨고 안쪽이 늦게 생긴다 (매출구분 목록과 같다)
+            return h
+        time.sleep(0.3)
+    raise Stop("failed", f"{what} 뒤 '{titles[0]}' 창이 {EXPORT_WAIT_SECONDS}초 안에 뜨지 않았습니다.")
+
+
+def _wait_gone(rr, h, what):
+    deadline = time.time() + EXPORT_WAIT_SECONDS
+    while _shown(rr, h):
+        if time.time() > deadline:
+            raise Stop("failed", f"'{what}' 창이 닫히지 않았습니다.")
+        time.sleep(0.3)
+
+
+def _message_button(rr, h, want, aid, what):
+    """ERPia 메시지 창(Popup_ERPiaMessageBox)의 글이 want 일 때만 그 단추를 누른다. 다르면 누르지 않고 멈춘다."""
+    text = _child(rr, h, "lbl_contents", f"{what} 글").element_info.name
+    if text != want:
+        raise Stop("stopped", f"'{what}' 창의 글이 예상과 달라 누르지 않고 중단하였습니다. ({text[:120]})")
+    _click_in(rr, h, _child(rr, h, aid, f"{what} 단추"), f"{what} 단추")
+    _wait_gone(rr, h, what)
+
+
+def _message_ok(rr, h, what):
+    """[확인] 만 있는 ERPia 안내 창 - 글을 읽고 [확인]. 글을 돌려준다."""
+    text = _child(rr, h, "lbl_contents", f"{what} 글").element_info.name
+    _click_in(rr, h, _child(rr, h, "btn_확인(&O)", f"{what} [확인]"), f"{what} [확인]")
+    _wait_gone(rr, h, what)
+    return text
+
+
+def _pick_in(rr, ctx, h, combo, item, what):
+    """따로 뜬 창 h 안의 콤보를 눌러 목록에서 그 이름을 누른다 (pick_item 은 메인 창 안 콤보용)."""
+    before = _menu_windows(rr, ctx)
+    _click_in(rr, h, combo, what)
+    deadline = time.time() + DROPDOWN_WAIT_SECONDS
+    while time.time() < deadline:
+        time.sleep(0.2)
+        for x in _menu_windows(rr, ctx) - before:
+            try:
+                hit = next((i for i in rr.Desktop(backend="uia").window(handle=x).wrapper_object().descendants(control_type="ListItem")
+                            if i.window_text() == item), None)
+            except Exception:
+                continue
+            if hit is not None:
+                _click_in(rr, x, hit, f"{what} '{item}'")
+                time.sleep(0.4)
+                return
+    _close_menu(rr, ctx, _menu_windows(rr, ctx) - before, what)
+    raise Stop("failed", f"{what}: 목록에 '{item}'이(가) 없어 고르지 않았습니다.")
+
+
+def _list_grid(rr, h, what):
+    win = rr.Desktop(backend="uia").window(handle=h).wrapper_object()
+    grid = next((t for t in win.descendants(control_type="Table") if t.element_info.automation_id == "gridCtrl_List"), None)
+    if grid is None:
+        raise Stop("failed", f"{what} 목록의 그리드(gridCtrl_List)를 찾지 못했습니다.")
+    return grid
+
+
+def _list_rows(rr, h, col, what):
+    """따로 뜬 창의 목록을 맨 위부터 끝까지 넘기며 {줄 번호: col 칸 값}. 넘기는 방식은 _match_sites 와 같다."""
+    grid = _list_grid(rr, h, what)
+    for _ in range(MAX_PAGES):
+        if not _list_scroll(rr, h, grid, "페이지 위로", what):
+            break
+    out, rows = {}, settled_rows(rr, grid)
+    for _ in range(MAX_PAGES):
+        out.update({n: rr.legacy_value(c[col]) for n, c in rows.items() if col in c})
+        first = min(rows, default=None)
+        if not _list_scroll(rr, h, grid, "페이지 아래로", what):
+            return out
+        rows = settled_rows(rr, grid, moved_from=first)
+        if min(rows, default=None) == first:
+            return out
+    raise Stop("failed", f"{what} 목록이 {MAX_PAGES}페이지를 넘어 끝까지 보지 못했습니다.")
+
+
+def _click_row(rr, h, col, value, what):
+    """목록을 맨 위로 올린 뒤 col 칸이 value 인 줄이 그리드 안에 다 보일 때 그 칸을 누른다."""
+    grid = _list_grid(rr, h, what)
+    for _ in range(MAX_PAGES):
+        if not _list_scroll(rr, h, grid, "페이지 위로", what):
+            break
+    rows = settled_rows(rr, grid)
+    for _ in range(MAX_PAGES):
+        g = grid.rectangle()
+        for _, cells in sorted(rows.items()):
+            c = cells.get(col)
+            if c is not None and rr.legacy_value(c) == value and g.top <= c.rectangle().top and c.rectangle().bottom <= g.bottom:
+                _click_in(rr, h, c, f"{what} '{value}'")
+                time.sleep(0.4)
+                return
+        first = min(rows, default=None)
+        if not _list_scroll(rr, h, grid, "페이지 아래로", what):
+            break
+        rows = settled_rows(rr, grid, moved_from=first)
+        if min(rows, default=None) == first:
+            break
+    raise Stop("failed", f"{what} 목록에서 '{value}'을(를) 찾지 못했습니다.")
+
+
+def _close_export_windows(rr, ctx):
+    """남은 내보내기 창을 닫는다: '엑셀 저장 실패' 안내 [확인] → 남은 저장 창 [취소] → '엑셀 다운로드 받기' [닫기]
+    (닫기 확인 글이 맞을 때만 [예]) → '송장양식' [닫기(X)]. 오류로 멈출 때와 엑셀 받기를 시작하기 전에 부른다 - 지난 실행이나
+    사람이 열어 둔 '송장양식' 이 조회 조건 칸을 덮어 멈춘 일이 있다 (11-09 실측)."""
+    titled = lambda t: [x for x in _menu_windows(rr, ctx) if rr.win32gui.GetWindowText(x) == t]
+    for x in titled("엑셀 저장 실패"):
+        _message_ok(rr, x, "엑셀 저장 실패")
+    dlg = rr.find_save_dialog(ctx.pid)
+    if dlg:
+        rr.cancel_save_dialog(dlg)
+    for x in titled(EXPORT_DL_TITLE):
+        _close_download(rr, ctx, x)
+    for x in titled(EXPORT_FORM_TITLE):
+        _click_in(rr, x, _child(rr, x, "customCtrlBtnGrp4", "송장양식 [닫기(X)]"), "송장양식 [닫기(X)]")
+        _wait_gone(rr, x, "송장양식")
+
+
+def _close_download(rr, ctx, h):
+    """'엑셀 다운로드 받기' [닫기(X)] → 닫기 확인('엑셀 다운로드 받기 창을 닫으시겠습니까?')이 뜨면 글이 맞을 때만 [예].
+    아무것도 입력하지 않은 창은 확인 없이 바로 닫힌다 (개발기 실제 업체 11-09 실측) - 창이 사라지면 그대로 끝."""
+    _click_in(rr, h, _child(rr, h, "btn_Close", "엑셀 다운로드 받기 [닫기]"), "엑셀 다운로드 받기 [닫기]")
+    deadline = time.time() + EXPORT_WAIT_SECONDS
+    while time.time() < deadline:
+        if not _shown(rr, h):
+            return
+        ask = next((x for x in _menu_windows(rr, ctx) if rr.win32gui.GetWindowText(x) == "닫기"), None)
+        if ask:
+            time.sleep(0.5)
+            _message_button(rr, ask, "엑셀 다운로드 받기 창을 닫으시겠습니까?", "btn_예(&Y)", "닫기")
+            _wait_gone(rr, h, EXPORT_DL_TITLE)
+            return
+        time.sleep(0.3)
+    raise Stop("failed", f"'{EXPORT_DL_TITLE}' 창이 [닫기] 뒤 {EXPORT_WAIT_SECONDS}초 안에 닫히지 않았습니다.")
 
 
 def send_busy(rr, ctx, wait=None):
@@ -1288,11 +1631,10 @@ def count_rows(rr, ctx, grid):
 # 설정 QueryDefaults.<화면>.<키> 가 있으면 그 값 (웹에는 안 보인다). 'fixed' 는 목록 창이 복잡해(체크 목록·상품) 고치지
 # 않고, 기본값이 아니면 화면을 닫고 다시 연다 (사용자 10-14). 체크 상자 '출고대기만' 은 UIA·MSAA 로 상태가 안 읽혀
 # 컨트롤이 그린 그림(PrintWindow)으로 본다 - 애매하면 화면을 다시 연다.
-# 'sites' (⑥ 매출구분): '켠 사이트만' 예약이면 사이트 수집에서 켠 프리셋의 사이트코드만 목록에서 체크한다 (pick_sites,
-# 사용자 2026-11-02). 아니면 'fixed' 와 같다.
+# 'sites' (⑥ 매출구분): 예약 줄의 운송장 전송 방식이 '사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송' 이면 사이트 수집 프리셋의 사이트코드를
+# 뺀 나머지를 목록에서 체크한다 (pick_sites, 사용자 2026-11-09). 아니면 'fixed' 와 같다.
 # ---------------------------------------------------------------------------
 QUERY_SECTION = "QueryDefaults"
-INVOICE_SITES_ENV = "RPA_INVOICE_SITES"   # 예약 줄 '켠 사이트만' 이면 "1" (rpa_dashboard.launch_slot, 사용자 2026-11-02)
 SITE_CODE_COL = "사이트코드"     # 매출구분 목록에서 사이트를 가리는 칸 (11-03 ERPia 업데이트로 생김, 값은 세 자리 - 개발기 실측)
 QUERY_CONDITIONS = {      # 화면 -> (설정 키, auto_id, 종류, 기본값)
     "InvoiceSend": (
@@ -1320,9 +1662,11 @@ QUERY_CONDITIONS = {      # 화면 -> (설정 키, auto_id, 종류, 기본값)
 CHECKED_AT, UNCHECKED_BELOW = 0.25, 0.05   # 체크 상자 안쪽의 색 있는 점 비율 (10-14 실측: 체크 0.551, 안 체크 0.000 - 포커스와 상관없이)
 
 
-def query_defaults(rr, screen):
+def query_defaults(rr, screen, sites=None):
     """[(키, auto_id, 종류, 기본값)]. 설정에 같은 키가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로).
-    'sites' 는 '켠 사이트만' 예약이면 사이트코드 목록 (invoice_sites), 아니면 'fixed' (전체). 값 모양이 틀리면 RuntimeError (설정 오류)."""
+    'sites' 는 sites (사이트코드 목록, 빼기인가) 를 주면 그 값 ('사이트 수집으로 선택된 사이트의 엑셀 출력' 가 사이트마다 고른다),
+    아니면 '사이트 수집 사이트 제외' 예약일 때 (뺄 사이트코드 목록, True) (invoice_sites), 그 밖에는 'fixed' (전체).
+    값 모양이 틀리면 RuntimeError (설정 오류)."""
     sec = rr.pl.load_settings().get(QUERY_SECTION) or {}
     if not isinstance(sec, dict):    # 섹션 자리에 글자·목록 - 예전엔 .get 에서 'UI 오류: AttributeError' 로 보였다 (2026-11-03)
         raise RuntimeError(f"{rr.pl.config_name()}의 '{QUERY_SECTION}'은(는) 섹션이어야 합니다. ({sec!r})")
@@ -1333,7 +1677,7 @@ def query_defaults(rr, screen):
     for key, aid, kind, default in QUERY_CONDITIONS[screen]:
         want = default if kind == "fixed" else conf.get(key, default)
         if kind == "sites":
-            want = invoice_sites()
+            want = sites if sites is not None else invoice_sites()
             if want is None:
                 kind, want = "fixed", default
         if (kind == "date" and not isinstance(want, int)) or (kind == "check" and want not in ("Y", "N")) \
@@ -1343,20 +1687,26 @@ def query_defaults(rr, screen):
     return out
 
 
+def invoice_option():
+    """예약 줄의 운송장 전송 방식 (st.INVOICE_OPTION_ENV, rpa_dashboard.launch_slot, 사용자 2026-11-09):
+    'excel' (사이트 수집으로 선택된 사이트의 엑셀 출력) / 'auto' (사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송) / None (전체 조회 후 전송 - 단추 실행도)."""
+    v = os.environ.get(st.INVOICE_OPTION_ENV)
+    return v if v in st.INVOICE_OPTIONS else None
+
+
 def invoice_sites():
-    """'켠 사이트만' 예약(INVOICE_SITES_ENV)이면 사이트 수집 프리셋 중 켠 것(이 업체가 쓰는 번호까지)의 사이트코드, 아니면 None
-    (전체). 켠 사이트가 없으면 보내지 않고 건너뛴다 - 전체로 보내지 않게. 프리셋을 못 읽으면 멈춘다."""
-    if os.environ.get(INVOICE_SITES_ENV) != "1":
+    """⑥ 매출구분에서 고를 사이트 - '사이트 수집 사이트 제외' 예약이면 (뺄 사이트코드 목록, True), 아니면 None (전체).
+    뺄 사이트는 사이트 수집에 기록한 프리셋 모두 - 켬/끔 상관없이 (끈 사이트도 전송하지 않는다, 사용자 2026-11-09.
+    엑셀로 수집한 주문은 [전송요청] 으로 안 가기도 한다, ERPia 도움말).
+    기록한 프리셋이 없으면 뺄 것이 없어 None. 프리셋을 못 읽으면 멈춘다 - 사이트 수집 사이트까지 보내지 않게."""
+    if invoice_option() != "auto":
         return None
     presets = st.preset_summary()
     if presets is None:
-        raise Stop("failed", "'켠 사이트만' 예약인데 사이트 수집 프리셋을 읽지 못해 조회하지 않았습니다.")
-    limit = st.preset_limit()
+        raise Stop("failed", "'사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송' 예약인데 사이트 수집 프리셋을 읽지 못해 조회하지 않았습니다.")
     codes = list(dict.fromkeys(str(p["code"]).strip() for p in presets
-                               if p["on"] and p["no"] <= limit and str(p["code"] or "").strip()))
-    if not codes:
-        raise Stop("skipped", "'켠 사이트만' 예약인데 사이트 수집에서 켠 사이트가 없어 전송하지 않았습니다.")
-    return codes
+                               if (p["steps"] or p.get("imap")) and str(p["code"] or "").strip()))
+    return (codes, True) if codes else None
 
 
 def invoice_markets():
@@ -1461,11 +1811,12 @@ def cond_value(rr, ctl, aid, kind):
     return value
 
 
-def ensure_query(rr, ctx, screen, form_id, reopen):
+def ensure_query(rr, ctx, screen, form_id, reopen, sites=None):
     """조회(단계 단추) 직전: 조회 조건이 기본값인가 보고, 아니면 고친다. 고친 것 목록 (로그에도). 맞추지 못하면 멈춘다
-    (조회하지 않음). reopen(): 화면을 다시 여는 함수 - 'fixed' 가 다르거나 체크 상자가 애매할 때 한 번만."""
+    (조회하지 않음). reopen(): 화면을 다시 여는 함수 - 'fixed' 가 다르거나 체크 상자가 애매할 때 한 번만.
+    sites: ⑥ 매출구분에서 고를 (사이트코드 목록, 빼기인가) - query_defaults."""
     try:
-        conds = query_defaults(rr, screen)
+        conds = query_defaults(rr, screen, sites)
     except RuntimeError as e:
         raise Stop("failed", f"설정 오류: {e}") from None
     changed = []
@@ -1486,7 +1837,7 @@ def ensure_query(rr, ctx, screen, form_id, reopen):
         if kind == "fixed":
             continue
         if kind == "sites":     # 화면을 다시 열지 않고 목록에서 고른다 - 지난 회차가 고른 그대로면 건드리지 않는다
-            note = pick_sites(rr, ctx, form_id, key, aid, want)
+            note = pick_sites(rr, ctx, form_id, key, aid, *want)
             if note:
                 changed.append(note)
             ctl = controls(rr, ctx, form_id)
@@ -1572,8 +1923,10 @@ def pick_item(rr, ctx, combo, item, what):
 SALES_PANE = "popup"        # 매출구분 ▼ 로 따로 뜬 목록 창 안 패널 (11-02 실측)
 
 
-def pick_sites(rr, ctx, form_id, key, aid, codes):
+def pick_sites(rr, ctx, form_id, key, aid, codes, exclude=False):
     """⑥ 매출구분(aid) 목록에서 사이트코드가 codes 인 줄만 체크된 채로 [닫기] 하고 칸 글로 확인한다 (사용자 2026-11-02).
+    exclude 면 거꾸로 codes 가 아닌 줄을 모두 체크한다 ('사이트 수집에 있는 사이트를 제외한 사이트만 조회 후 전송', 사용자 2026-11-09) - 남는 줄이 없으면
+    ESC 로 닫고 건너뛴다. 목록의 모든 줄이 남으면 칸 글 '매출구분 : 전체' 도 받는다 (모두 고름 = 전체).
     - 목록은 ▼('오픈') 로 메인 창 밖에 따로 뜬다: 'popup' 안 그리드 gridCtrl (row Check Box·사이트코드·마켓·아이디·명칭),
       [닫기] btn_Close. [닫기] 가 체크를 칸에 반영하고 ESC 는 버린다 (11-02·11-03 실측). 사이트코드 칸이 없는 옛 ERPia 는
       멈춘다. 한 사이트코드에 줄(계정)이 여럿이면 모두 고른다.
@@ -1594,8 +1947,10 @@ def pick_sites(rr, ctx, form_id, key, aid, codes):
     click(rr, ctx, arrow, f"{what} ▼")
     h, win = _sales_list(rr, ctx, old, what)
     try:
-        names, flips = _match_sites(rr, h, win, codes, what)
-        missing = [c for c in codes if c not in names]
+        names, flips, total = _match_sites(rr, h, win, (lambda c: c not in codes) if exclude else (lambda c: c in codes), what)
+        missing = [] if exclude else [c for c in codes if c not in names]
+        if exclude and not names:
+            raise Stop("skipped", f"{what}: 매출구분 목록에 사이트 수집 사이트를 뺀 사이트가 없어 전송하지 않았습니다.")
         if missing:
             raise Stop("failed", f"{what}: 매출구분 목록에 사이트코드 {', '.join(missing)}이(가) 없어 조회하지 않았습니다. "
                                  "사이트 수집에서 켠 사이트를 확인하여 주십시오.")
@@ -1612,14 +1967,16 @@ def pick_sites(rr, ctx, form_id, key, aid, codes):
         with contextlib.suppress(Exception):
             _close_menu(rr, ctx, {h}, what)
         raise
-    picked = [n for c in codes for n in names[c]]
+    picked = [n for ns in names.values() for n in ns] if exclude else [n for c in codes for n in names[c]]
     want = [f"매출구분 : {picked[0]}" if len(picked) == 1 else f"매출구분 : {len(picked)}개 선택됨"]
+    if exclude and len(picked) == total:     # 뺄 사이트가 목록에 없다 - 모두 고른 칸 글은 아직 못 봤다 (docs 9.6)
+        want.append("매출구분 : 전체")
     deadline = time.time() + CHECK_WAIT_SECONDS     # 목록이 닫힌 뒤 칸 글이 늦게 바뀔 수 있다
     while (after := cond_value(rr, controls(rr, ctx, form_id), aid, "fixed")) not in want and time.time() < deadline:
         time.sleep(0.2)
     if after not in want:
         raise Stop("failed", f"{what}: 고른 뒤 칸 글이 {want[0]!r}이(가) 아니어서 조회하지 않았습니다. (현재 {after!r})")
-    rr.log(f"  {what}: 사이트코드 {', '.join(codes)} ({', '.join(map(str, picked))}) - "
+    rr.log(f"  {what}: 사이트코드 {'빼고 ' if exclude else ''}{', '.join(codes)} ({', '.join(map(str, picked))}) - "
            f"{f'체크 {flips}곳을 고침' if flips else '이미 그대로'} → {after!r}")
     return f"{key} {before!r}→{after!r}" if flips or before != after else None
 
@@ -1642,9 +1999,9 @@ def _sales_list(rr, ctx, before, what):
     raise Stop("failed", f"{what}: ▼를 눌렀으나 매출구분 목록이 나타나지 않아 조회하지 않았습니다.")
 
 
-def _match_sites(rr, h, win, codes, what):
-    """목록을 맨 위부터 끝까지 넘기며 체크를 codes 에 맞춘다 (사이트코드가 codes 면 체크, 아니면 풂).
-    ({사이트코드: [명칭]}, 누른 수). 사이트코드 칸이 없으면 멈춘다 (옛 ERPia).
+def _match_sites(rr, h, win, want, what):
+    """목록을 맨 위부터 끝까지 넘기며 체크를 want 에 맞춘다 (want(사이트코드) 가 참이면 체크, 아니면 풂).
+    ({체크한 사이트코드: [명칭]}, 누른 수, 목록 줄 수). 사이트코드 칸이 없으면 멈춘다 (옛 ERPia).
     체크 칸이 그리드 안에 다 보이는 줄만 읽고 누른다 - 반쯤 걸친 줄의 가운데는 그리드 밖(아래 단추)일 수 있다. 그 줄은
     다음 페이지에서 본다. 본 줄 번호를 기억해 겹친 줄은 다시 보지 않고, 끝에서 1번부터 빠진 줄이 있으면 멈춘다.
     넘겼는데 안 움직이면 '페이지 아래로' 가 없을 때만 끝이다 (next_page 와 같다).
@@ -1674,9 +2031,9 @@ def _match_sites(rr, h, win, codes, what):
             seen.add(n)
             code = code_of(cells)
             name = rr.legacy_value(cells["명칭"]) if "명칭" in cells else None
-            if code in codes:
+            if want(code):
                 names.setdefault(code, []).append(name)
-            if (rr.legacy_value(box) == "선택") != (code in codes):
+            if (rr.legacy_value(box) == "선택") != want(code):
                 _click_in(rr, h, box, f"{what} 목록 {name}({code}) 체크")
                 clicked.append(n)
         flips += len(clicked)
@@ -1684,7 +2041,7 @@ def _match_sites(rr, h, win, codes, what):
         while clicked:
             now = rr.grid_rows(grid)
             clicked = [n for n in clicked if n not in now or CHECK_COL not in now[n]
-                       or (rr.legacy_value(now[n][CHECK_COL]) == "선택") != (code_of(now[n]) in codes)]
+                       or (rr.legacy_value(now[n][CHECK_COL]) == "선택") != want(code_of(now[n]))]
             if clicked and time.time() > deadline:
                 raise Stop("failed", f"{what}: 매출구분 목록 체크를 눌렀으나 바뀌지 않아 조회하지 않았습니다. (행 {clicked})")
             if clicked:
@@ -1702,7 +2059,7 @@ def _match_sites(rr, h, win, codes, what):
     if sorted(seen) != list(range(1, len(seen) + 1)):
         raise Stop("failed", f"{what}: 매출구분 목록을 빠짐없이 읽지 못해 조회하지 않았습니다. "
                              f"(읽은 줄 {len(seen)}개, 마지막 줄 {max(seen, default=0)})")
-    return names, flips
+    return names, flips, len(seen)
 
 
 def _list_scroll(rr, h, grid, name, what):

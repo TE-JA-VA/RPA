@@ -547,8 +547,8 @@ def launch_run_all(by):
 
 # ---------------------------------------------------------------------------
 # 자동 실행 예약 (2026-10-07 시각별 모듈, 설계 2026-10-06-settings-schedule 5절)
-#   schedule = {enabled, days(월=0, 요일을 안 적은 줄이 쓴다), slots:[{at, days?, run?, inv_sites?}], next_run_at, next_slot, policy?, last_*}
-#   inv_sites: 운송장 전송은 사이트 수집에서 켠 사이트만 (2026-11-02) - 띄울 때 RPA_INVOICE_SITES=1
+#   schedule = {enabled, days(월=0, 요일을 안 적은 줄이 쓴다), slots:[{at, days?, run?, inv?}], next_run_at, next_slot, policy?, last_*}
+#   inv: 운송장 전송 방식 (st.INVOICE_OPTIONS, 2026-11-09) - 띄울 때 RPA_INVOICE_OPTION. 판 5·6 의 inv_sites: true 는 'excel' 로 읽는다
 #   줄마다 요일 slots[i].days (2026-10-08 사용자) - 없으면 위 days (옛 저장 값·옛 화면)
 #   run 이 없는 줄은 '전체' (사이트 수집 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
 # ---------------------------------------------------------------------------
@@ -663,11 +663,13 @@ def normalize_slots(slots):
             item.update(rest_min=rest, on_fail="stop")
         if run is not None:
             item["run"] = run
-        if s.get("inv_sites") is not None:          # 운송장 전송: 사이트 수집에서 켠 사이트만 (사용자 2026-11-02)
-            if not isinstance(s["inv_sites"], bool):
-                raise ValueError("운송장 전송 '켠 사이트만' 값이 올바르지 않습니다.")
-            if s["inv_sites"] and run is not None and "InvoiceSend" in run:   # 운송장 전송을 고른 줄에만 (웹 줄 단추와 같다)
-                item["inv_sites"] = True
+        if s.get("inv") is not None and s["inv"] not in st.INVOICE_OPTIONS:     # 운송장 전송 방식 (사용자 2026-11-09)
+            raise ValueError("운송장 전송 방식 값이 올바르지 않습니다.")
+        if s.get("inv_sites") is not None and not isinstance(s["inv_sites"], bool):   # 판 5·6 화면
+            raise ValueError("운송장 전송 '켠 사이트만' 값이 올바르지 않습니다.")
+        inv = st.slot_invoice(s)
+        if inv and run is not None and "InvoiceSend" in run:   # 운송장 전송을 고른 줄에만 (웹 줄 단추와 같다)
+            item["inv"] = inv
         out.append(item)
     out.sort(key=lambda x: x["at"])
     for w in (x for x in out if "until" in x):
@@ -944,8 +946,9 @@ def launch_slot(slot, by="auto", trigger="auto"):
     env = dict(env, RPA_RUN_TRIGGER=trigger)
     if trigger == "repeat" and slot.get("until"):   # 반복 회차: 끝 시각·쉬는 시간 - 운송장번호 전송이 마지막 기회인지 안다 (wellife.send_busy_reason)
         env.update(RPA_REPEAT_UNTIL=slot["until"], RPA_REPEAT_REST=str(slot.get("rest_min", REST_MIN_DEFAULT)))
-    if slot.get("inv_sites"):     # 운송장 전송은 사이트 수집에서 켠 사이트만 (wellife.invoice_sites)
-        env["RPA_INVOICE_SITES"] = "1"
+    inv = st.slot_invoice(slot)   # 운송장 전송 방식 (wellife.invoice_option) - 판을 올리기 전에 저장한 inv_sites 도
+    if inv:
+        env[st.INVOICE_OPTION_ENV] = inv
     return launch(target, by, env)
 
 
