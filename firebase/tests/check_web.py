@@ -1535,7 +1535,7 @@ with sync_playwright() as pw:
     box = page.locator("#sch-times .inv-sites input")
     check(page.locator("#sch-times .inv-sites").count() == 1 and not box.is_checked() and page.is_disabled("#sch-apply"),
           "판 5 PC: 운송장 전송 줄에 '켠 사이트만' (꺼짐), 바뀜 없음")
-    check("수집 사이트 엑셀출력사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 다운받습니다. 끄면 전체 전송합니다." in page.text_content("#sch-times .inv-sites"),
+    check("쇼핑몰 프리셋에서 수집 설정된 사이트만 전송쇼핑몰 프리셋에서 수집 설정된 사이트만 전송합니다. 비활성화 시 모든 사이트를 전송합니다." in page.text_content("#sch-times .inv-sites"),
           "이름·설명 글 (사용자 2026-11-03)")
     page.click("#sch-times .inv-sites")
     check(box.is_checked() and not page.is_disabled("#sch-apply"), "켜면 적용 가능")

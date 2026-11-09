@@ -567,7 +567,7 @@ const isV7 = () => (live?.schedule?.version ?? 0) >= 7;
 const INV_OPTIONS = [["", "전체 전송"], ["auto", "자동수집 사이트만 전송"], ["excel", "수집 사이트 엑셀출력"]];
 const INV_WHY = { "": "전체 사이트로 조회 후 송장 전송합니다.",
   auto: "사이트 수집을 제외한 사이트만 전송합니다.",
-  excel: "사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 다운받습니다." };
+  excel: "사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 받아 사이트에 올리고, ERPia에서는 미전송 완료처리합니다. 업로드 프리셋이 있는 사이트만 처리합니다." };
 const offStep = (t) => !isV6() && /^\d\d:\d\d$/.test(t || "") && +t.slice(3) % 5 !== 0;
 /** 이 줄이 운송장 전송을 골랐는가 - '켠 사이트만' 은 그 줄에만 (PC 의 normalize_slots 와 같은 규칙) */
 const sendsInvoice = (s) => !!s.run?.includes("InvoiceSend");
@@ -686,11 +686,11 @@ function runChips(s) {
 /** 운송장 전송을 고른 줄의 '켠 사이트만' 켬/끔 (사용자 2026-11-02) - 켜면 PC 가 사이트 수집에서 켠 사이트만 매출구분으로 골라 조회·전송 */
 function invSitesSwitch(s) {
   const l = document.createElement("label"); l.className = "switch first inv-sites";   // 줄 안이라 위 선 없이
-  const text = Object.assign(document.createElement("span"), { textContent: "수집 사이트 엑셀출력" });
+  const text = Object.assign(document.createElement("span"), { textContent: "쇼핑몰 프리셋에서 수집 설정된 사이트만 전송" });   // 판 7 전 PC 는 엑셀 출력을 모르고 [전송요청(S)] 을 누른다 - 글을 바꾸지 말 것 (PR #33 검토)
   text.append(Object.assign(document.createElement("span"), { className: "why",
-    textContent: "사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 다운받습니다. 끄면 전체 전송합니다." }));   // 문구 사용자 2026-11-03, 이름 2026-11-09 ('수집된 사이트만' 이 ACTOR 가 실제로 받은 사이트로 읽혔다)
+    textContent: "쇼핑몰 프리셋에서 수집 설정된 사이트만 전송합니다. 비활성화 시 모든 사이트를 전송합니다." }));   // 문구 사용자 2026-11-03, 이름 2026-11-09 ('수집된 사이트만' 이 ACTOR 가 실제로 받은 사이트로 읽혔다)
   const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: !!s.inv_sites });
-  box.setAttribute("aria-label", "운송장 전송: 수집 사이트 엑셀출력");
+  box.setAttribute("aria-label", "운송장 전송: 쇼핑몰 프리셋에서 수집 설정된 사이트만");
   box.onchange = () => { if (box.checked) s.inv_sites = true; else delete s.inv_sites; paintScheduleMeta(); };
   l.append(text, box, Object.assign(document.createElement("span"), { className: "knob" }));
   return l;
