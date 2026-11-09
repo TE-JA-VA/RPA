@@ -1446,7 +1446,7 @@ check("실행: 조회 -> 전체 체크 -> [전송요청(S)] 누름 -> 팝업 [�
 res = inv_run(True, rows=0)
 check("실행: 0건이면 체크도 전송요청도 하지 않는다 (no_target)",
       res[0] == "no_target" and acts == [("click", "조회(F)")], f"{res} {acts}")
-# '쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력' 줄 (사용자 2026-11-09): 전체 조회·체크·[전송요청(S)] 없이 사이트별 엑셀 받기로 간다 (invoice_excel 이 사이트마다 조회 → 엑셀 → 미전송 완료처리)
+# '수집 사이트 엑셀출력' 줄 (사용자 2026-11-09): 전체 조회·체크·[전송요청(S)] 없이 사이트별 엑셀 받기로 간다 (invoice_excel 이 사이트마다 조회 → 엑셀 → 미전송 완료처리)
 _saved_xl = wellife.invoice_excel
 wellife.invoice_excel = lambda rr_, ctx_, live: acts.append(("excel", live)) or ("done" if live else "skipped", "엑셀")
 os.environ["RPA_INVOICE_OPTION"] = "excel"
@@ -1924,7 +1924,7 @@ qw = {k: w for k, _, _, w in wellife.query_defaults(rr, "Wms")}
 check("설정 QueryDefaults 가 있으면 그 값 ('fixed' 는 늘 전체 - 고치지 않고 화면을 다시 열므로)",
       qd["DateFrom"] == -30 and qd["SendStatus"] == "전체" and qd["Sales"] == "매출구분 : 전체" and qd["DateTo"] == 0
       and qw["Sales"] == "매출구분 : 전체", str((qd, qw)))
-# ⑥ 매출구분: 예약 줄 '쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송'(RPA_INVOICE_OPTION=auto)이면 사이트 수집 프리셋의 사이트코드를 뺀다 (사용자 2026-11-09)
+# ⑥ 매출구분: 예약 줄 '자동수집 사이트만 전송'(RPA_INVOICE_OPTION=auto)이면 사이트 수집 프리셋의 사이트코드를 뺀다 (사용자 2026-11-09)
 _saved_st = wellife.st
 PRESETS = [{"no": 1, "code": "012", "on": True, "steps": 5}, {"no": 2, "code": "034", "on": False, "steps": 3},
            {"no": 3, "code": " 056 ", "on": True, "steps": 2}, {"no": 4, "code": "012", "on": True, "steps": 1},
@@ -1944,7 +1944,7 @@ def sales_cond():
 os.environ.pop("RPA_INVOICE_OPTION", None)
 check("⑥ 매출구분: 운송장 전송 방식이 없으면(단추 실행·전체 전송) 지금처럼 '전체'", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
 os.environ["RPA_INVOICE_OPTION"] = "excel"
-check("⑥ 매출구분: '쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력' 의 기본 조회 조건은 '전체' (사이트별 조회는 invoice_excel 이 sites 로 넘긴다)", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+check("⑥ 매출구분: '수집 사이트 엑셀출력' 의 기본 조회 조건은 '전체' (사이트별 조회는 invoice_excel 이 sites 로 넘긴다)", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
 _got = {k: (kind, w) for k, _, kind, w in wellife.query_defaults(rr, "InvoiceSend", sites=(["109"], False))}["Sales"]
 check("⑥ 매출구분: sites 를 넘기면 그 사이트코드만 고른다 (엑셀 다운로드가 사이트마다)", _got == ("sites", (["109"], False)), str(_got))
 os.environ["RPA_INVOICE_OPTION"] = "auto"
@@ -2313,7 +2313,7 @@ L = SalesList(SROWS, apply=False)
 got, err = run_pick(L, ["001", "002", "003", "004"])
 check("⑥ 매출구분: 목록 전부를 골라도 칸 글 '매출구분 : 전체' 는 받지 않는다 (체크 없음 = 모든 사이트)",
       err and err[0] == "failed" and "전체" in err[1], f"{err} {L.log}")
-# '쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 제외한 사이트만 조회 후 전송' (사용자 2026-11-09): 사이트코드가 codes 가 아닌 줄을 모두 체크
+# '자동수집 사이트만 전송' (사용자 2026-11-09): 사이트코드가 codes 가 아닌 줄을 모두 체크
 L = SalesList(SROWS, on={("공통엑셀양식", "1234")})
 got, err = run_pick(L, ["001"], exclude=True)
 check("⑥ 매출구분 빼기: 사이트 수집 사이트(001)는 풀고 나머지 줄을 모두 체크, 칸 글 'N개 선택됨' 을 확인",
