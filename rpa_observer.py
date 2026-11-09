@@ -51,6 +51,7 @@ IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부
              "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣어 주십시오).")
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
 MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
+MARKET_NONE = "(선택 안 함)"
 HEAD_DOWN = "각 프리셋마다 로그인부터 엑셀 파일 다운로드까지 보여주시면 다음 번부터 자동으로 엑셀파일을 수집합니다."
 HEAD_UP = "각 프리셋마다 로그인부터 엑셀 파일 업로드까지 보여주시면 다음 번부터 자동으로 사이트에 엑셀파일을 올립니다."
 APP_ID = "AFTERMARKET.RPA.Observer"                     # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
@@ -457,6 +458,7 @@ def new_preset(no, name=None, code=""):
             "wait": {},         # 단계 목록에서 바꾼 'n초 대기' {sid: (켬, 글자)} (apply_waits)
             "mail_id": "", "mail_pw": "", "has_mail_pw": False,   # 메일 2차인증 메일함 계정 (설계 2026-11-02, 비밀번호는 저장하면 비우고 has_mail_pw)
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
+            "market": "",       # 운송장 전송 마켓 (st.INVOICE_MARKETS 하나, 프리셋끼리 안 겹친다 - 사용자 2026-11-09)
             "upload": False,    # 사이트에 엑셀을 올리는 프리셋 (st.EXCEL_UPLOAD_ON 이 꺼져 있으면 무시 - is_up)
             "imap": None,       # 메일 서버(IMAP) 칸 {host, port, security, rules} - source 가 imap 일 때 (2026-10-22)
             "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
@@ -522,7 +524,7 @@ def load_presets():
     out = []
     for p in st.read_presets():
         q = new_preset(p["no"], p["name"], p["code"])
-        q["saved_at"], q["orig"] = p["saved_at"], p["no"]
+        q["saved_at"], q["orig"], q["market"] = p["saved_at"], p["no"], p.get("market") or ""
         r = p["record"]
         if r and r.get("steps"):
             for k, s in enumerate(r["steps"]):
@@ -641,7 +643,7 @@ def keep_dates(files, old, logins_changed, now):
     for f in files:
         o = old.get(f["no"]) or {}
         same = (f["record"] and f["no"] not in logins_changed and o.get("saved_at")
-                and all(o.get(k) == f[k] for k in ("name", "code", "record")))
+                and all(o.get(k) == f[k] for k in ("name", "code", "record")) and (o.get("market") or "") == (f.get("market") or ""))
         f["saved_at"] = o["saved_at"] if same else (now if f["record"] else None)
     return files
 
@@ -716,6 +718,14 @@ def pick_problem(presets):
 def validate_presets(presets):
     """저장 전에 막을 것: (프리셋 번호, 사람에게 보일 문장) 또는 None.
     presets: [{no, name, code, id, pw, has_pw, record}] - 기록이 있는 것만 본다."""
+    markets = {}
+    for p in presets:                    # 운송장 전송 마켓은 프리셋 하나에 하나 (기록이 없는 칸도)
+        m = p.get("market")
+        if m and m in markets:
+            return p["no"], (f"{circled(p['no'])} {p['name']}: 운송장 전송 마켓 '{m}'을(를) {markets[m]}에서도 선택하였습니다. "
+                             "마켓은 프리셋 하나에만 선택할 수 있습니다.")
+        if m:
+            markets[m] = f"{circled(p['no'])} {p['name']}"
     codes = {}
     for p in presets:
         if not p.get("record"):
@@ -886,6 +896,12 @@ class App:
         self.prefix_label = tk.Label(form, text="메일 시작 문구", font=F, bg=CARD, fg=MUTED)
         self.prefix_entry = self._entry(form, self.prefix_var, 12)
         self.prefix_var.trace_add("write", lambda *a: self._field_changed())
+        # 운송장 전송 마켓 (사용자 2026-11-09): 운송장번호 전송이 켜진 PC 에만 보인다 (켤 때 한 번 본다). 꺼져 있어도 고른 값은 그대로 둔다
+        self.market_box = w.Select(form, values=[MARKET_NONE, *st.INVOICE_MARKETS])
+        self.market_box.bind("<<ComboboxSelected>>", lambda e: self._market_changed())
+        if st.invoice_send_on():
+            tk.Label(form, text="운송장 전송 마켓", font=F, bg=CARD, fg=MUTED).grid(row=7, column=0, sticky="w", pady=(3, 0))
+            self.market_box.grid(row=7, column=1, sticky="we", padx=(6, 0), pady=(3, 0))
         form.columnconfigure(0, minsize=self.prefix_label.winfo_reqwidth())    # '메일 시작 문구' 가 나타나도 칸이 옆으로 밀리지 않게 (사용자 2026-10-20)
         for col in (1, 3):              # 왼쪽(이름·아이디·인증 휴대폰)·오른쪽(사이트코드·비밀번호·발신번호) 칸을 같은 너비로 (사용자 2026-10-13)
             form.columnconfigure(col, weight=1, uniform="field")
@@ -1002,8 +1018,13 @@ class App:
         self.up_note.config(text=f"올릴 파일: 바탕화면\\ERPIA_AI\\{st.UPLOAD_DIR_NAME} 폴더의 ({self.code_var.get() or '사이트코드'})로 시작하는 파일")
         (self.up_note if on else self.src_row).tkraise()
 
+    def _market_changed(self):
+        v = self.market_box.get()
+        self.presets[self.cur]["market"] = "" if v == MARKET_NONE else v
+
     def _load_fields(self):
         p = self.presets[self.cur]
+        self.market_box.current(st.INVOICE_MARKETS.index(p["market"]) + 1 if p["market"] in st.INVOICE_MARKETS else 0)
         if st.EXCEL_UPLOAD_ON:
             self.switch.set(p["upload"])
         self._loading = True
@@ -1625,7 +1646,7 @@ class App:
                 if len(pw_sites) > 1:                  # (BugBuster I1)
                     warns.append(f"{circled(no)} 비밀번호 단계가 서로 다른 사이트({', '.join(pw_sites)})에 있습니다. "
                                  "실행할 때마다 모든 사이트에 이 프리셋의 비밀번호를 입력합니다.")
-            out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"], "upload": is_up(p),
+            out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"], "upload": is_up(p), "market": p["market"],
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"],
                         "mail_id": p["mail_id"], "mail_pw": p["mail_pw"], "has_mail_pw": p["has_mail_pw"]})
         problem = validate_presets(out) or pick_problem(out)
@@ -1659,7 +1680,7 @@ class App:
         sites = sites if isinstance(sites, dict) else {}
         logins_changed = {o["no"] for o in out if o["pw"] or o["id"].strip() != (
             (sites.get(st.preset_site_key(origs.get(o["no"]))) or {}).get("ID") or "")}
-        files = keep_dates([{k: o[k] for k in ("no", "name", "code", "record")} for o in out], old, logins_changed, now)
+        files = keep_dates([{k: o[k] for k in ("no", "name", "code", "record", "market")} for o in out], old, logins_changed, now)
         for o in out:
             try:
                 pw = o["pw"] or (stored_password(origs.get(o["no"])) if o["has_pw"] and origs.get(o["no"]) else "")

@@ -1140,8 +1140,29 @@ def presets_path():
     return os.path.join(os.path.dirname(user_config_path()), PRESETS_NAME)
 
 
+# 운송장 전송 마켓 (사용자 2026-11-09): 옵저버가 프리셋마다 하나 고른다 (RPA_Presets.json 의 "market", 프리셋끼리 겹치지 않는다).
+# 운송장번호 전송 모듈이 wellife.invoice_markets() 로 읽는다. 순서·글자는 사용자가 준 그대로.
+INVOICE_MARKETS = (
+    "삼성카드포인트몰", "이지웰", "쿠팡", "이마트", "AK몰", "롯데닷컴", "롯데마트", "KTmall", "옥션(A낙찰-B운송장)", "신세계몰",
+    "YES24", "텐바이텐", "바보사랑", "Hmall", "1300K", "오늘의집", "아가넷", "플레이오토", "체크아웃", "스토어팜",
+    "패션플러스", "맘스투데이", "티몬", "M포인트몰", "2001아울렛", "NS홈쇼핑", "홈앤쇼핑", "동원몰", "오테이스트몰", "원데이맘",
+    "제로투세븐", "미미박스", "이데이몰", "카카오몰", "힙합퍼", "농수산eshop", "다이소몰", "에듀팡", "셀러허브", "LG라이프케어",
+)
+
+
+def invoice_send_on():
+    """운송장번호 전송 모듈이 켜져 있나: 환경설정에서 켰고(웰라이프 업체는 Wellife 섹션) 업체 정책이 막지 않았다.
+    옵저버가 '운송장 전송 마켓' 칸을 보일지 정한다. 못 읽으면 False."""
+    try:
+        selected, _ = read_wellife_modules() if wellife_policy() else read_routine_modules()
+        off = (read_settings()["schedule"].get("policy") or {}).get("off") or []
+    except Exception:
+        return False
+    return selected.get("InvoiceSend") is True and "InvoiceSend" not in off
+
+
 def blank_preset(no):
-    return {"no": no, "name": f"프리셋 {no}", "code": "", "saved_at": None, "record": None}
+    return {"no": no, "name": f"프리셋 {no}", "code": "", "saved_at": None, "record": None, "market": ""}
 
 
 def read_presets():
@@ -1166,7 +1187,8 @@ def read_presets():
         if d.get("saved_at") is not None and not isinstance(d.get("saved_at"), str):
             raise ValueError(f"{PRESETS_NAME}의 프리셋 {i} 저장 시각이 올바르지 않습니다.")
         p = blank_preset(i)
-        p.update(name=str(d.get("name") or p["name"]), code=str(d.get("code") or ""), saved_at=d.get("saved_at"), record=r)
+        p.update(name=str(d.get("name") or p["name"]), code=str(d.get("code") or ""), saved_at=d.get("saved_at"), record=r,
+                 market=str(d.get("market") or ""))
         if r and p["code"] in codes:
             raise ValueError(f"{PRESETS_NAME}의 프리셋 {codes[p['code']]}와(과) {i}이(가) 같은 사이트코드 {p['code']}를 사용합니다.")
         if r:       # 기록 없는 칸의 코드는 겹침으로 안 본다 - 쓰는 쪽(옵저버 validate_presets·옮기기 _code_clash)과 같게 (BugBuster H1)
@@ -1183,7 +1205,7 @@ def write_presets(presets):
     if not PRESET_MIN <= len(presets) <= PRESET_MAX:
         raise ValueError(f"프리셋은 {PRESET_MIN}~{PRESET_MAX}개여야 합니다. ({len(presets)}개)")
     data = [{"no": i, "name": str(p.get("name") or f"프리셋 {i}"), "code": str(p.get("code") or ""),
-             "saved_at": p.get("saved_at"), "record": p.get("record")} for i, p in enumerate(presets, 1)]
+             "saved_at": p.get("saved_at"), "record": p.get("record"), "market": str(p.get("market") or "")} for i, p in enumerate(presets, 1)]
     path = presets_path()
     tmp = f"{path}.{os.getpid()}.tmp"
     try:

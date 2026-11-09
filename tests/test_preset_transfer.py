@@ -74,7 +74,7 @@ def site(no):
 
 print("=== 1. 파일로 내보내기 (export_item) ===")
 item = pt.export_item(1, source={"cid": "c_demo", "pcId": "pc_a", "no": 1})
-check("키는 kind·version·exported_at·from·no·name·code·record 뿐", set(item) == {"kind", "version", "exported_at", "from", "no", "name", "code", "record"}, str(set(item)))
+check("키는 kind·version·exported_at·from·no·name·code·record·market 뿐 (계정 없음)", set(item) == {"kind", "version", "exported_at", "from", "no", "name", "code", "record", "market"}, str(set(item)))
 check("값: kind·version·from·이름·코드·기록", item["kind"] == "autopilot-preset" and item["version"] == 1 and item["from"] == {"cid": "c_demo", "pcId": "pc_a", "no": 1}
       and item["no"] == 1 and item["name"] == "지마켓" and item["code"] == "012" and item["record"] == REC, str(item))
 dumped = json.dumps(item, ensure_ascii=False)
@@ -82,7 +82,7 @@ check("아이디·비밀번호·휴대폰이 없다", "seller01" not in dumped a
 check("source 가 없으면 from 은 {}", pt.export_item(1)["from"] == {})
 item_p = pt.export_item(1, with_phone=True)
 check("with_phone 이면 phone·senders 가 Sites 값", item_p["phone"] == "kim" and item_p["senders"] == ["15881234"]
-      and set(item_p) == {"kind", "version", "exported_at", "from", "no", "name", "code", "record", "phone", "senders"}, str(item_p))
+      and set(item_p) == {"kind", "version", "exported_at", "from", "no", "name", "code", "record", "market", "phone", "senders"}, str(item_p))
 e = raises(ValueError, pt.export_item, 2)
 check("빈 칸은 ValueError", e is not None and str(e) == "프리셋 2에 기록이 없습니다.", str(e))
 

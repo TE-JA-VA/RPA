@@ -1099,6 +1099,8 @@ def module_invoice_send(rr, ctx, live=False):
     """⑥ 운송장번호 전송: 화면 열기 -> 조회 -> 전체 체크 -> [전송요청(S)] (invoice_send). 리허설은 [전송요청(S)] 에 마우스만.
     [미전송 완료처리] 등 나머지 단추는 누르지 않는다. 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (물류대기와 같다)."""
     rr.status.step("inv_send_screen")
+    markets = invoice_markets()
+    rr.log("운송장 전송 마켓: " + (", ".join(f"{m['market']}(프리셋 {m['no']}·{m['code'] or '코드 없음'})" for m in markets) or "고른 마켓 없음"))
     try:
         close_excel_prompt(rr, ctx)
         no_popup(rr, ctx, f"'{INVOICE_TAB}' 화면 이동 전")
@@ -1355,6 +1357,17 @@ def invoice_sites():
     if not codes:
         raise Stop("skipped", "'켠 사이트만' 예약인데 사이트 수집에서 켠 사이트가 없어 전송하지 않았습니다.")
     return codes
+
+
+def invoice_markets():
+    """옵저버에서 프리셋마다 고른 '운송장 전송 마켓' [{no, code, market}] - 업체 프리셋 수까지, 고른 것만 (사용자 2026-11-09).
+    운송장번호 전송 모듈이 이 값으로 마켓별 작업을 한다 - 그 화면 작업은 다음 작업자 몫 (커밋 메시지). 프리셋을 못 읽으면 빈 목록."""
+    try:
+        presets = st.read_presets()
+    except (OSError, ValueError):
+        return []
+    limit = st.preset_limit()
+    return [{"no": p["no"], "code": p["code"], "market": p["market"]} for p in presets if p.get("market") and p["no"] <= limit]
 
 
 def date_days(value, today=None):
