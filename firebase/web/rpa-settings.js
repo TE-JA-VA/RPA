@@ -697,7 +697,7 @@ function invSitesSwitch(s) {
 }
 /** 판 7: 운송장 전송을 고른 줄의 방식 셋 중 하나 (사용자 2026-11-09). 고르지 않은 값('')은 전체 전송 - 줄에 inv 를 두지 않는다 */
 function invOption(s) {
-  const box = document.createElement("span");
+  const box = document.createElement("div"); box.className = "inv-box";   // 고르기 아래 줄에 설명 (옆에 붙이면 글이 고르기 오른쪽에서 끊겨 줄바꿈됐다, 사용자 2026-11-09)
   const sel = document.createElement("select"); sel.className = "mode inv-opt"; sel.setAttribute("aria-label", "운송장 전송 방식");
   for (const [v, text] of INV_OPTIONS) sel.append(new Option(text, v));
   sel.value = s.inv || "";

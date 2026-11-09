@@ -373,6 +373,9 @@
   .xl-pw input { width:140px; padding:4px 8px; font-size:13px; }
   /* 자동 실행 줄: 시각 · 전체/고르기 · 모듈 단추 · 빼기. 좁으면 다음 줄로 넘어간다. 한도를 넘는 줄은 흐리게 */
   .times .t select.mode { width:auto; padding:5px 8px; font-size:13px; }
+  .times .inv-box { display:flex; flex-direction:column; align-items:flex-start; gap:3px; width:100%; min-width:0; }
+  .times .inv-box select.mode { max-width:100%; }
+  .times .inv-box .why { font-size:12px; color:var(--muted); line-height:1.5; }
   .times .t .chips { margin-top:0; }
   .times .t .chips button { padding:4px 8px; font-size:12px; }
   .times .t.over { opacity:.6; }
