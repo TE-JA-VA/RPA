@@ -378,6 +378,7 @@ LATE_CLUE_WAIT = 2.0    # 안쪽 칸까지 합친 글자 단서·'원래 있던 
 STEP_WAIT, STEP_TRIES = 20.0, 6  # 못 찾으면 20초씩 6번(최대 2분) 다시 찾고 포기 - 미리보기·ACTOR 같이 (사용자 2026-10-15)
 RECORD_VERSION = rpa_status.RECORD_VERSION   # 기록 모양 - rpa_status 에 있다 (에이전트도 본다)
 MAIL_RECORD_VERSION, RECORD_VERSIONS = rpa_status.MAIL_RECORD_VERSION, rpa_status.RECORD_VERSIONS
+UPLOAD_RECORD_VERSION = rpa_status.UPLOAD_RECORD_VERSION
 DOWNLOAD_TIMEOUT_MS = 300000  # 파일이 오기 시작할 때까지 기다리는 시간 (안 오면 그 단계 실패). 쇼핑몰이 엑셀을 만드는 데 오래 걸려 60초 → 5분,
                               # 기다리는 동안 로그를 남긴다 (2026-10-15 메모 5). 오기 시작한 뒤에는 다 받을 때까지 기다린다 (느려도)
 # 받기 단추를 누른 뒤 몰이 '자료 없음' 알림창을 띄우면 5분을 다 기다리지 않고 그 단계를 '주문 없음' 으로 끝낸다 (사용자 2026-10-21).
@@ -755,6 +756,9 @@ def mail_time_ok(line, sent_at):
 
 
 def record_version(steps):
+    """파일 넣기 단계가 있으면 3 (메일 인증도 함께 알아야 3 을 읽는다), 메일 인증이면 2, 아니면 1."""
+    if any(s.get("kind") == "file" for s in steps):
+        return UPLOAD_RECORD_VERSION
     return MAIL_RECORD_VERSION if has_mail_auth(steps) else RECORD_VERSION
 
 

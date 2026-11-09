@@ -1058,15 +1058,16 @@ def circled(n):
 
 
 MAIL_RECORD_VERSION = 2                  # 메일 2차인증 단계가 든 기록 (설계 2026-11-02) - 옛 ACTOR 는 1 만 알아 거절한다
-RECORD_VERSIONS = (1, MAIL_RECORD_VERSION)  # 이 PC 가 재생·받을 수 있는 기록 버전
+UPLOAD_RECORD_VERSION = 3                # 엑셀 파일 넣기(file) 단계가 든 기록 (업로드 설계 9절, 2026-11-09) - 옛 ACTOR 는 1·2 만 알아 거절한다
+RECORD_VERSIONS = (1, MAIL_RECORD_VERSION, UPLOAD_RECORD_VERSION)  # 이 PC 가 재생·받을 수 있는 기록 버전
 RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지 않는다 (옛 ACTOR 가 새 기록을 잘못 따라 하지 않게). web_replay·preset_transfer 가
                                           # 여기서 읽는다 - 에이전트(내장 파이썬, playwright 없음)가 web_replay 를 끌어오지 않게 (2026-10-19)
 PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)
 REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 # 사이트 엑셀 업로드 (사용자 2026-11-06, docs/superpowers/specs/2026-11-06-excel-upload-design.md).
-# 운송장번호 전송 메뉴가 사이트별 엑셀을 폴더에 넣게 고쳐진 뒤 True 로 바꾼다. 그 전까지 모든 프리셋은 다운로드 전용 -
-# 옵저버 스위치·예약·ACTOR 업로드가 모두 이 값 하나로 꺼져 있다.
-EXCEL_UPLOAD_ON = False
+# 운송장번호 전송 메뉴가 사이트별 엑셀을 폴더에 넣게 고쳐져(PR #32 '쇼핑몰 프리셋에서 수집 설정된 사이트의 엑셀 출력') 2026-11-09 켰다.
+# 옵저버 스위치·예약(PROCESS 끝나고 1분 뒤)·ACTOR 업로드가 모두 이 값 하나로 켜고 끈다. False 면 모든 프리셋이 다운로드 전용.
+EXCEL_UPLOAD_ON = True
 UPLOAD_DIR_NAME = "ERPIA_AI_UPLOAD"       # 바탕화면\ERPIA_AI 아래. ERPIA_AI_EXCEL 과 나눈다 - 거기 파일은 PROCESS 가 ERPia 로 올린다 (설계 2026-11-06)
 # 예약 줄의 운송장 전송 방식 (사용자 2026-11-09). 줄에 없으면 전체 조회 후 전송 (예전 그대로).
 # 예전 '수집된 사이트만 전송'(inv_sites: true)은 엑셀로 수집한 주문이라 [전송요청] 으로 안 가서(ERPia 도움말) 'excel' 로 읽는다.

@@ -1196,10 +1196,19 @@ def invoice_excel(rr, ctx, live):
     try:
         pw = export_password(rr)
         targets = excel_targets()
+        ups = upload_codes()
     except RuntimeError as e:
         return "failed", f"{head} - 설정 오류: {e}"
     if not targets:
         return "skipped", f"{head} - 쇼핑몰 프리셋에서 수집 설정된 사이트 중 옵저버에서 '운송장 전송 마켓' 을 고른 사이트가 없어 받지 않았습니다."
+    # 올릴 업로드 프리셋이 없는 사이트는 받지도 완료처리하지도 않는다 (사용자 2026-11-09) - 완료처리하면 ERPia 는 '완료' 인데
+    # 사이트에는 아무것도 안 올라간다. 업로드를 끈 버전(EXCEL_UPLOAD_ON False)이면 모든 사이트가 여기서 빠진다.
+    no_up = [f"{t['market']}({t['code']})" for t in targets if t["code"] not in ups]
+    targets = [t for t in targets if t["code"] in ups]
+    no_up_text = f"업로드 프리셋 없음 {', '.join(no_up)}" if no_up else ""
+    if not targets:
+        return "skipped", (f"{head} - {no_up_text}. 옵저버에서 그 사이트의 업로드 프리셋(같은 사이트코드)을 기록하고 켜 주십시오. "
+                           "받지도 미전송 완료처리하지도 않았습니다.")
     _close_export_windows(rr, ctx)     # 지난 실행·사람이 열어 둔 내보내기 창이 조회 조건 칸을 덮지 않게 (11-09 실측)
     got, empty, bad, pressed_any = [], [], [], False
     for t in targets:
@@ -1235,7 +1244,7 @@ def invoice_excel(rr, ctx, live):
             bad.append(f"{label}: {e}")
     rr.status.note(f"운송장 엑셀 {len(got)}개")
     parts = ([f"받음 {', '.join(got)}"] if got else []) + ([f"0건 {', '.join(empty)}"] if empty else []) \
-        + ([f"못 받음 {'; '.join(bad)}"] if bad else [])
+        + ([f"못 받음 {'; '.join(bad)}"] if bad else []) + ([no_up_text] if no_up_text else [])
     text = f"{head} - " + " / ".join(parts) + ". 전송요청은 누르지 않음" + ("" if live else " (리허설 - 미전송 완료처리는 누르지 않음)")
     if bad:
         return "failed", text
@@ -1259,6 +1268,21 @@ def excel_targets():
             seen.add(key)
             out.append({"no": m["no"], "code": key[0], "market": key[1]})
     return out
+
+
+def upload_codes():
+    """ACTOR 가 사이트에 올릴 수 있는 사이트코드 - 쇼핑몰 프리셋에서 켠 업로드 프리셋 (업체 프리셋 수까지, web_runner.upload_choice 와 같은 기준).
+    업로드를 끈 버전이면 빈 집합 (st.is_upload). 프리셋을 못 읽으면 RuntimeError (완료처리만 하고 못 올리는 일이 없게)."""
+    summary = st.preset_summary()
+    try:
+        presets = st.read_presets()
+    except (OSError, ValueError):
+        presets = None
+    if summary is None or presets is None:
+        raise RuntimeError("쇼핑몰 프리셋을 읽지 못했습니다.")
+    on, limit = {p["no"] for p in summary if p["on"]}, st.preset_limit()
+    return {str(p["code"] or "").strip() for p in presets
+            if p["no"] in on and p["no"] <= limit and st.is_upload(p["record"]) and str(p["code"] or "").strip()}
 
 
 def upload_name(rr, saved, code, live):

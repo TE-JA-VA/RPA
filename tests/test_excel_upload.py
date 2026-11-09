@@ -35,7 +35,11 @@ def check(name, ok, detail=""):
 
 
 # --- 스위치가 꺼져 있으면 모두 다운로드 전용 ---
-check("출고 기본값은 꺼짐 (운송장번호 전송 메뉴를 고칠 때까지)", st.EXCEL_UPLOAD_ON is False)
+check("출고 기본값은 켜짐 (운송장번호 전송 메뉴를 고쳤다 - PR #32, 2026-11-09)", st.EXCEL_UPLOAD_ON is True)
+check("파일 넣기 단계가 든 기록은 버전 3 - 옛 ACTOR 는 거절한다 (설계 9절)",
+      rec.record_version([{"kind": "click"}, {"kind": "file"}]) == st.UPLOAD_RECORD_VERSION == 3 and 3 in st.RECORD_VERSIONS
+      and rec.record_version([{"kind": "click"}]) == 1)
+st.EXCEL_UPLOAD_ON = False     # 이하 끈 경우 (스위치 하나로 모두 다운로드 전용으로 돌아가는지)
 check("꺼져 있으면 upload 표시가 있어도 다운로드", st.is_upload({"upload": True}) is False)
 check("꺼져 있으면 옵저버도 다운로드", obs.is_up(dict(obs.new_preset(1), upload=True)) is False)
 sites = [("a", {"Preset": 1, "Action": ["replay"]})]

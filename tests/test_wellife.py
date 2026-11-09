@@ -1487,11 +1487,30 @@ except RuntimeError:
     check("엑셀 받을 사이트: 프리셋을 못 읽으면 멈춘다 (전체로 받지 않게)", True)
 wellife.st, wellife.invoice_markets = _saved_x
 
+# 올릴 업로드 프리셋 (사용자 2026-11-09): 켠 업로드 프리셋의 사이트코드만 - 없으면 받지도 완료처리하지도 않는다
+_UP_REC = {"steps": [{"kind": "file"}], "upload": True}
+_UPP = [{"no": 1, "code": "109", "record": {"steps": []}}, {"no": 2, "code": "109", "record": _UP_REC},
+        {"no": 3, "code": "110", "record": _UP_REC}, {"no": 4, "code": "111", "record": _UP_REC}, {"no": 5, "code": "112", "record": _UP_REC}]
+_UPS = [{"no": n, "on": n != 3} for n in range(1, 6)]
+_UP_ON = [True]
+wellife.st = types.SimpleNamespace(preset_summary=lambda: _UPS, read_presets=lambda: list(_UPP), preset_limit=lambda: 4,
+                                   is_upload=lambda r: _UP_ON[0] and bool((r or {}).get("upload")))
+check("업로드 코드: 켠 업로드 프리셋만 (다운로드 프리셋·끈 프리셋·업체 프리셋 수를 넘는 칸은 빼고)", wellife.upload_codes() == {"109", "111"}, str(wellife.upload_codes()))
+_UP_ON[0] = False
+check("업로드 코드: 업로드를 끈 버전이면 없다 (엑셀 출력이 아무 사이트도 완료처리하지 않는다)", wellife.upload_codes() == set())
+wellife.st = types.SimpleNamespace(preset_summary=lambda: None, read_presets=lambda: [])
+try:
+    wellife.upload_codes(); check("업로드 코드: 프리셋을 못 읽으면 멈춘다", False)
+except RuntimeError:
+    check("업로드 코드: 프리셋을 못 읽으면 멈춘다", True)
+wellife.st = _saved_x[0]
+
 # 사이트마다 그 사이트만 조회 → 0건이면 넘김 → 고른 마켓으로 받아 '(사이트코드)' 이름 → 전체 체크 → [미전송 완료처리](실행만) → 다시 조회. 리허설은 '리허설_' 을 앞에 (업로드가 집지 않게)
 _xl_dir = tempfile.mkdtemp(prefix="inv_xl_")
 _saved_loop = (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
-              wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow)
-_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True}
+              wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow,
+              wellife.upload_codes)
+_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True, "no_up": set()}
 _XLLOG = []
 
 
@@ -1509,6 +1528,7 @@ def _fake_export(rr_, ctx_, market, pw):
 
 wellife.export_password = lambda rr_: "0000"
 wellife.excel_targets = lambda: list(_XL["targets"])
+wellife.upload_codes = lambda: {t["code"] for t in _XL["targets"]} - _XL["no_up"]
 wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen, sites=None: _XLLOG.append(("query", sites)) or []
 wellife.export_market = _fake_export
 wellife._close_export_windows = lambda rr_, ctx_: _XLLOG.append(("cleanup",))
@@ -1530,11 +1550,11 @@ wellife.press_arrow = lambda rr_, ctx_, ctl, aid, what, want, count, live: (
 _xrr = types.SimpleNamespace(log=lambda m: None, status=Rec(), unique_path=lambda p: p)
 
 
-def xl_run(live, targets, rows, fail=None, preview0=(), checked=True):
+def xl_run(live, targets, rows, fail=None, preview0=(), checked=True, no_up=()):
     _XLLOG.clear()
     for f in os.listdir(_xl_dir):
         os.remove(os.path.join(_xl_dir, f))
-    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked)
+    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked, no_up=set(no_up))
     return wellife.invoice_excel(_xrr, actx, live)
 
 
@@ -1554,6 +1574,12 @@ check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로�
       res[0] == "done" and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"]
       and "이지웰(109) 3건 (109)이지웰송장" in res[1] and "완료처리 → 누름, 남은 0건" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1],
       f"{res} {os.listdir(_xl_dir)}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, no_up={"110"})
+check("엑셀(실행): 업로드 프리셋이 없는 사이트는 조회·받기·완료처리를 하지 않고 사유에 남긴다 (사이트엔 안 올라가는데 ERPia 만 완료가 되지 않게)",
+      [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False))] and res[0] == "done" and "업로드 프리셋 없음 YES24(110)" in res[1], f"{res} {_XLLOG}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, no_up={"109", "110"})
+check("엑셀(실행): 모든 사이트에 업로드 프리셋이 없으면 ERPia 를 누르지 않고 건너뛴다 (옵저버에서 기록하라고)",
+      res[0] == "skipped" and _XLLOG == [] and "업로드 프리셋 없음 이지웰(109), YES24(110)" in res[1] and "옵저버" in res[1], f"{res} {_XLLOG}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, preview0={"YES24"})
 check("엑셀(실행): 조회는 됐는데 양식 미리보기가 0건이면 받지 않고 완료처리도 하지 않는다 (사유에 조회 건수)",
       res[0] == "done" and "0건 YES24(110) (조회 2건, 양식 미리보기 0건)" in res[1]
@@ -1580,7 +1606,8 @@ try:
 except wellife.Stop as e:
     check("엑셀: 화면 잠김 같은 'stopped' 는 다음 사이트로 가지 않고 바로 멈춘다", e.result == "stopped" and [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False))], str(_XLLOG))
 (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
- wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow) = _saved_loop
+ wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow,
+ wellife.upload_codes) = _saved_loop
 res = inv_run(True, checked=False)
 check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
       ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
