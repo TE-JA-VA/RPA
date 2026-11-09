@@ -1140,7 +1140,7 @@ def presets_path():
     return os.path.join(os.path.dirname(user_config_path()), PRESETS_NAME)
 
 
-# 운송장 전송 마켓 (사용자 2026-11-09): 옵저버가 프리셋마다 하나 고른다 (RPA_Presets.json 의 "market", 프리셋끼리 겹치지 않는다).
+# 운송장 전송 마켓 (사용자 2026-11-09): 옵저버가 프리셋마다 하나 고른다 (RPA_Presets.json 의 "market"). 여러 프리셋이 같은 마켓을 골라도 된다.
 # 운송장번호 전송 모듈이 wellife.invoice_markets() 로 읽는다. 순서·글자는 사용자가 준 그대로.
 INVOICE_MARKETS = (
     "삼성카드포인트몰", "이지웰", "쿠팡", "이마트", "AK몰", "롯데닷컴", "롯데마트", "KTmall", "옥션(A낙찰-B운송장)", "신세계몰",

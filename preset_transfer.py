@@ -188,10 +188,8 @@ def apply(items):
             forget.append(no)           # 다른 사이트 - 옛 사이트의 메일 기억과 키가 겹쳐 새 메일을 건너뛰지 않게 (BugBuster K13)
         while len(presets) < no:
             presets.append(st.blank_preset(len(presets) + 1))
-        market = str(obj.get("market") or "")
-        if market and any(p["no"] != no and p.get("market") == market for p in presets):
-            market = ""                 # 프리셋 하나에 마켓 하나 - 이미 다른 칸이 쓰는 마켓은 비운다 (옵저버에서 다시 고른다)
-        presets[no - 1] = {"no": no, "name": obj["name"], "code": obj["code"], "saved_at": now, "record": obj["record"], "market": market}
+        presets[no - 1] = {"no": no, "name": obj["name"], "code": obj["code"], "saved_at": now, "record": obj["record"],
+                           "market": str(obj.get("market") or "")}
         url = obj["record"].get("start_url") or ""
         # 같은 사이트라도 짝이 이미 깨진 칸(계정 Code 가 다름)은 계정을 두지 않는다 - 새 Code 로 덮어 세탁하지 않게 (이슈 #13 다시 검토)
         if old.get("record") and old_site and old["code"] == obj["code"] and not st.login_mismatch(old_site, old["code"]):

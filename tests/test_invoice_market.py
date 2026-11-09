@@ -71,14 +71,12 @@ Path(st.presets_path()).write_text('[{"no": 1, "name": "옛", "code": "", "saved
                                    '{"no": 2, "name": "옛2", "code": "", "saved_at": null, "record": null}]', encoding="utf-8")
 check("market 이 없는 옛 파일도 읽는다", [p["market"] for p in st.read_presets()] == ["", ""])
 
-# --- 저장 전 검사: 프리셋 하나에 마켓 하나 ---
+# --- 저장 전 검사 ---
 base = {"id": "a", "pw": "b", "has_pw": True, "record": None}
 a = dict(base, no=1, name="가", code="012", market="쿠팡")
 b = dict(base, no=2, name="나", code="034", market="쿠팡")
 c = dict(base, no=3, name="다", code="056", market="이마트")
-why = (obs.validate_presets([a, b]) or (0, ""))
-check("같은 마켓을 두 프리셋이 고르면 막는다 (기록 없는 칸도)", why[0] == 2 and "쿠팡" in why[1] and "① 가" in why[1], why)
-check("다른 마켓이면 된다", obs.validate_presets([a, c]) is None)
+check("여러 프리셋이 같은 마켓을 골라도 된다 (프리셋 하나에 마켓 하나 - 사용자 2026-11-09)", obs.validate_presets([a, b, c]) is None)
 check("안 고른 칸은 여럿이어도 된다", obs.validate_presets([dict(a, market=""), dict(b, market="")]) is None)
 old = {1: {"name": "가", "code": "012", "record": rec, "saved_at": "2026-11-01T00:00:00", "market": "쿠팡"}}
 f = obs.keep_dates([{"no": 1, "name": "가", "code": "012", "record": rec, "market": "이마트"}], old, set(), "now")

@@ -458,7 +458,7 @@ def new_preset(no, name=None, code=""):
             "wait": {},         # 단계 목록에서 바꾼 'n초 대기' {sid: (켬, 글자)} (apply_waits)
             "mail_id": "", "mail_pw": "", "has_mail_pw": False,   # 메일 2차인증 메일함 계정 (설계 2026-11-02, 비밀번호는 저장하면 비우고 has_mail_pw)
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
-            "market": "",       # 운송장 전송 마켓 (st.INVOICE_MARKETS 하나, 프리셋끼리 안 겹친다 - 사용자 2026-11-09)
+            "market": "",       # 운송장 전송 마켓 (st.INVOICE_MARKETS 하나 - 프리셋 하나에 마켓 하나, 여러 프리셋이 같은 마켓은 된다. 사용자 2026-11-09)
             "upload": False,    # 사이트에 엑셀을 올리는 프리셋 (st.EXCEL_UPLOAD_ON 이 꺼져 있으면 무시 - is_up)
             "imap": None,       # 메일 서버(IMAP) 칸 {host, port, security, rules} - source 가 imap 일 때 (2026-10-22)
             "orig": None,       # 불러올 때의 번호 (새 칸은 None) - 프리셋을 지워 번호가 당겨지면 저장할 때 이 번호의 옛 값을 쓴다 (이슈 #13)
@@ -718,14 +718,6 @@ def pick_problem(presets):
 def validate_presets(presets):
     """저장 전에 막을 것: (프리셋 번호, 사람에게 보일 문장) 또는 None.
     presets: [{no, name, code, id, pw, has_pw, record}] - 기록이 있는 것만 본다."""
-    markets = {}
-    for p in presets:                    # 운송장 전송 마켓은 프리셋 하나에 하나 (기록이 없는 칸도)
-        m = p.get("market")
-        if m and m in markets:
-            return p["no"], (f"{circled(p['no'])} {p['name']}: 운송장 전송 마켓 '{m}'을(를) {markets[m]}에서도 선택하였습니다. "
-                             "마켓은 프리셋 하나에만 선택할 수 있습니다.")
-        if m:
-            markets[m] = f"{circled(p['no'])} {p['name']}"
     codes = {}
     for p in presets:
         if not p.get("record"):
