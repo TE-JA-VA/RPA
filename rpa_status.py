@@ -1205,10 +1205,13 @@ def read_presets():
         p = blank_preset(i)
         p.update(name=str(d.get("name") or p["name"]), code=str(d.get("code") or ""), saved_at=d.get("saved_at"), record=r,
                  market=str(d.get("market") or ""))
-        if r and p["code"] in codes:
-            raise ValueError(f"{PRESETS_NAME}의 프리셋 {codes[p['code']]}와(과) {i}이(가) 같은 사이트코드 {p['code']}를 사용합니다.")
+        # 같은 사이트의 다운로드·업로드 프리셋은 사이트코드가 같다 (업로드 설계 2026-11-06, 옵저버 validate_presets 와 같은 열쇠).
+        # 2026-11-09 업로드를 켠 뒤 pc_b 에서 업로드 프리셋을 저장하자 여기서 파일 전체를 '깨짐' 으로 읽어 프리셋이 모두 사라진 것처럼 보였다
+        key = (p["code"], bool(r.get("upload")) if r else False)
+        if r and key in codes:
+            raise ValueError(f"{PRESETS_NAME}의 프리셋 {codes[key]}와(과) {i}이(가) 같은 사이트코드 {p['code']}를 사용합니다.")
         if r:       # 기록 없는 칸의 코드는 겹침으로 안 본다 - 쓰는 쪽(옵저버 validate_presets·옮기기 _code_clash)과 같게 (BugBuster H1)
-            codes[p["code"]] = i
+            codes[key] = i
         out.append(p)
     while len(out) < PRESET_MIN:
         out.append(blank_preset(len(out) + 1))

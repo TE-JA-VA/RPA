@@ -39,6 +39,20 @@ check("출고 기본값은 켜짐 (운송장번호 전송 메뉴를 고쳤다 - 
 check("파일 넣기 단계가 든 기록은 버전 3 - 옛 ACTOR 는 거절한다 (설계 9절)",
       rec.record_version([{"kind": "click"}, {"kind": "file"}]) == st.UPLOAD_RECORD_VERSION == 3 and 3 in st.RECORD_VERSIONS
       and rec.record_version([{"kind": "click"}]) == 1)
+# 2026-11-09 pc_b: 같은 사이트코드의 다운로드·업로드 프리셋을 저장하면 read_presets 가 파일을 '깨짐' 으로 읽어 프리셋이 모두 사라져 보였다
+_rec = lambda up: dict({"version": 3, "steps": [{"kind": "file"}] if up else [{"kind": "click"}]}, **({"upload": True} if up else {}))
+st.write_presets([{"name": "가", "code": "012", "record": _rec(False)}, {"name": "가 업로드", "code": "012", "record": _rec(True)}])
+check("같은 코드의 다운로드·업로드 프리셋 파일을 읽는다", [p["code"] for p in st.read_presets()] == ["012", "012"])
+st.write_presets([{"name": "가", "code": "012", "record": _rec(True)}, {"name": "나", "code": "012", "record": _rec(True)}])
+try:
+    st.read_presets(); check("같은 코드의 업로드 프리셋 둘은 여전히 깨짐", False)
+except ValueError:
+    check("같은 코드의 업로드 프리셋 둘은 여전히 깨짐 (다운로드 둘과 같게)", True)
+import preset_transfer as _pt  # noqa: E402
+_ps = [{"no": 1, "code": "012", "record": _rec(False)}, {"no": 2, "code": "", "record": None}]
+check("넣어 주기: 다운로드 프리셋과 같은 코드의 업로드 프리셋은 겹침이 아니다",
+      _pt._code_clash(_ps, 2, "012", True) is None and _pt._code_clash(_ps, 2, "012", False) is not None)
+st.write_presets([{"name": "프리셋 1", "code": "", "record": None}, {"name": "프리셋 2", "code": "", "record": None}])
 st.EXCEL_UPLOAD_ON = False     # 이하 끈 경우 (스위치 하나로 모두 다운로드 전용으로 돌아가는지)
 check("꺼져 있으면 upload 표시가 있어도 다운로드", st.is_upload({"upload": True}) is False)
 check("꺼져 있으면 옵저버도 다운로드", obs.is_up(dict(obs.new_preset(1), upload=True)) is False)

@@ -64,9 +64,11 @@ def _sites():
     return sites
 
 
-def _code_clash(presets, no, code):
-    """칸 no 에 code 를 넣으면 read_presets 가 거절하는 상태가 되는지. 겹치면 사유 글, 아니면 None."""
-    k = next((p["no"] for p in presets if p["no"] != no and p.get("record") and p["code"] == code), None)
+def _code_clash(presets, no, code, upload=False):
+    """칸 no 에 code 를 넣으면 read_presets 가 거절하는 상태가 되는지. 겹치면 사유 글, 아니면 None.
+    다운로드·업로드 프리셋은 같은 코드를 쓸 수 있다 (read_presets 와 같은 열쇠 - 코드와 업로드인가)."""
+    k = next((p["no"] for p in presets if p["no"] != no and p.get("record") and p["code"] == code
+              and bool(p["record"].get("upload")) == bool(upload)), None)
     return None if k is None else f"프리셋 {k}와(과) 같은 사이트코드 {code}를 사용합니다."
 
 
@@ -170,7 +172,7 @@ def apply(items):
         except ValueError as e:
             rejected.append((no, str(e)))
             continue
-        clash = _code_clash(presets, no, obj["code"])
+        clash = _code_clash(presets, no, obj["code"], (obj.get("record") or {}).get("upload"))
         if clash:
             rejected.append((no, clash))
             continue
@@ -237,7 +239,7 @@ def restore(slots):
         if not isinstance(bk, dict) or not isinstance(bk.get("preset"), dict):
             rejected.append((no, "보관된 이전 기록이 없습니다."))
             continue
-        clash = _code_clash(presets, no, bk["preset"].get("code")) if bk["preset"].get("record") else None
+        clash = _code_clash(presets, no, bk["preset"].get("code"), bk["preset"]["record"].get("upload")) if bk["preset"].get("record") else None
         if clash:                     # 다른 칸으로 옮긴 뒤 되돌리면 겹친다 - 보관은 남겨 둔다
             rejected.append((no, clash))
             continue
