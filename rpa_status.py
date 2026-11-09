@@ -800,9 +800,10 @@ ROUTINE_CONFIG_MODULES = (
 # 칸이 없으면 끔인 모듈 (나머지는 칸이 없으면 켬 - 예전 파일 그대로 돌게). 운송장번호 전송은 택배사로 나가 되돌릴 수 없어
 # 업데이트를 받자마자 모든 업체가 보내지 않게 한다 - 업체 웹 환경설정에서 켠 PC 만 (사용자 2026-10-13)
 ROUTINE_OFF_BY_DEFAULT = ("InvoiceSend",)
-# Routine 섹션의 모드 키 (값 '리허설'/'실행'/'1건', 빠지면 리허설 - wellife.load_mode). 운송장번호 전송만 모드가 있다.
-# 모드는 기본 리허설 - 설정을 쓸 때 빠진 모드 키를 '리허설' 로 적어 둔다 (사용자 2026-10-13)
-ROUTINE_MODES = (("InvoiceMode", "운송장번호 전송"),)
+# Routine 섹션에는 모드 키가 없다 - 보통 PROCESS 의 운송장번호 전송은 늘 실행 (사용자 2026-11-09: 업체 PC 가 리허설로 돌면
+# 아무것도 보내지 않아 더 위험하다. 10-13 의 '기본 리허설' InvoiceMode 를 없앰). 파일에 남은 InvoiceMode 는 읽지 않고 무시한다
+# (run_routine.ROUTINE_MODE_KEYS). 웰라이프 PC 의 Wellife 섹션 모드(WELLIFE_MODES, 빠지면 실행)는 그대로다.
+ROUTINE_MODES = ()
 DEFAULT_MODE = "리허설"
 # Wellife 섹션은 빠진 모드가 실행 - 리허설은 필요할 때 파일에 적어서 쓴다 (사용자 2026-11-03, wellife.load_mode 와 같다)
 WELLIFE_DEFAULT_MODE = "실행"

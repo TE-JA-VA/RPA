@@ -199,7 +199,7 @@ def load_switches(rr):
 
 def load_mode(rr, key=MODE_KEY, section=SECTION):
     """True 면 실행(데이터를 바꾸는 단추를 실제로 누름), False 면 리허설. 빠지면 Wellife 섹션은 실행 (사용자 2026-11-03 -
-    리허설은 필요할 때 적어서 쓴다), Routine 섹션(보통 PROCESS 운송장번호 전송)은 리허설 (사용자 10-13 그대로).
+    리허설은 필요할 때 적어서 쓴다). Routine 섹션은 2026-11-09 부터 모드를 읽지 않는다 (보통 PROCESS 운송장번호 전송은 늘 실행 - run_routine.module_invoice_send).
     key: MODE_NAMES 의 키 하나 (모듈마다 따로 - 빠져도 Mode 를 따르지 않는다). "1건" 이면 ONE (참 - 실행하되 한 줄만).
     ② SalesMode(엑셀 업로드)는 줄이 없어 "1건" 을 못 쓴다 (NormalSalesMode 는 하단 첫 줄 1건).
     section: 보통 PROCESS 의 운송장번호 전송은 Routine 섹션의 InvoiceMode (run_routine.module_invoice_send, 사용자 10-13).
@@ -1096,8 +1096,9 @@ SEND_BUSY_LAST = "이후에는 전송하지 않습니다"   # 반복 끝 시각�
 SEND_BUSY_LAST_MARGIN = 60      # 초 - '마지막 회차' 판정 여유 (회차 끝까지 남은 시간 + 대시보드 틱 5초, BugBuster L5)
 
 
-def module_invoice_send(rr, ctx, live=False):
-    """⑥ 운송장번호 전송: 화면 열기 -> 조회 -> 전체 체크 -> [전송요청(S)] (invoice_send). 리허설은 [전송요청(S)] 에 마우스만.
+def module_invoice_send(rr, ctx, live=True):
+    """⑥ 운송장번호 전송: 화면 열기 -> 조회 -> 전체 체크 -> [전송요청(S)] (invoice_send). 보통 PROCESS 는 늘 실행 (2026-11-09 리허설 없앰 -
+    run_routine.module_invoice_send). 리허설은 웰라이프 PC 가 Wellife 섹션 InvoiceMode 에 적었을 때만 - [전송요청(S)] 에 마우스만.
     [미전송 완료처리] 는 엑셀 출력 방식(invoice_excel)에서만 누르고 나머지 단추는 누르지 않는다. 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (물류대기와 같다)."""
     rr.status.step("inv_send_screen")
     markets = invoice_markets()
