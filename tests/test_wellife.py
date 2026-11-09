@@ -1446,7 +1446,7 @@ check("실행: 조회 -> 전체 체크 -> [전송요청(S)] 누름 -> 팝업 [�
 res = inv_run(True, rows=0)
 check("실행: 0건이면 체크도 전송요청도 하지 않는다 (no_target)",
       res[0] == "no_target" and acts == [("click", "조회(F)")], f"{res} {acts}")
-# '사이트 수집으로 선택된 사이트의 엑셀 출력' 줄 (사용자 2026-11-09): 전체 조회·체크·[전송요청(S)] 없이 사이트별 엑셀 받기로 간다 (invoice_excel 이 사이트마다 조건만 맞춰 받는다)
+# '사이트 수집으로 선택된 사이트의 엑셀 출력' 줄 (사용자 2026-11-09): 전체 조회·체크·[전송요청(S)] 없이 사이트별 엑셀 받기로 간다 (invoice_excel 이 사이트마다 조회 → 엑셀 → 미전송 완료처리)
 _saved_xl = wellife.invoice_excel
 wellife.invoice_excel = lambda rr_, ctx_, live: acts.append(("excel", live)) or ("done" if live else "skipped", "엑셀")
 os.environ["RPA_INVOICE_OPTION"] = "excel"
@@ -1487,19 +1487,18 @@ except RuntimeError:
     check("엑셀 받을 사이트: 프리셋을 못 읽으면 멈춘다 (전체로 받지 않게)", True)
 wellife.st, wellife.invoice_markets = _saved_x
 
-# 사이트마다 조회 조건만 맞춤([조회(F)] 없음) → 미리보기 0건이면 넘김 → 고른 마켓으로 받아 '(사이트코드)' 이름. 리허설은 '리허설_' 을 앞에 (업로드가 집지 않게)
+# 사이트마다 그 사이트만 조회 → 0건이면 넘김 → 고른 마켓으로 받아 '(사이트코드)' 이름 → 전체 체크 → [미전송 완료처리](실행만) → 다시 조회. 리허설은 '리허설_' 을 앞에 (업로드가 집지 않게)
 _xl_dir = tempfile.mkdtemp(prefix="inv_xl_")
 _saved_loop = (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
-              wellife._close_export_windows)
-_XL = {"targets": [], "rows": {}, "fail": {}}
+              wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow)
+_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True}
 _XLLOG = []
 
 
 def _fake_export(rr_, ctx_, market, pw):
     if market in _XL["fail"]:
         raise wellife.Stop(*_XL["fail"][market])
-    code = next(t["code"] for t in _XL["targets"] if t["market"] == market)
-    if not _XL["rows"].get(code):      # '엑셀 다운로드 받기' 미리보기 0건 - 받지 않고 None
+    if market in _XL["preview0"]:      # '엑셀 다운로드 받기' 미리보기 0건 - 받지 않고 None
         _XLLOG.append(("preview0", market))
         return None
     path = os.path.join(_xl_dir, f"{market}송장2026-11-01~2026-11-09.xlsx")
@@ -1513,14 +1512,29 @@ wellife.excel_targets = lambda: list(_XL["targets"])
 wellife.ensure_query = lambda rr_, ctx_, screen, form, reopen, sites=None: _XLLOG.append(("query", sites)) or []
 wellife.export_market = _fake_export
 wellife._close_export_windows = lambda rr_, ctx_: _XLLOG.append(("cleanup",))
+
+
+def _fake_runq(rr_, ctx_):
+    code = next(x for x in reversed(_XLLOG) if x[0] == "query")[1][0][0]
+    again = _XLLOG[-1][0] == "press"          # 완료처리 뒤 다시 조회 - 남은 줄 없음
+    _XLLOG.append(("runq", code))
+    return (0 if again else _XL["rows"].get(code, 0)), "grid"
+
+
+wellife.run_query = _fake_runq
+wellife.controls = lambda rr_, ctx_, form: {"gridCtrl_List": "grid"}
+wellife.check_all_rows = lambda rr_, ctx_, grid, label: _XL["checked"]
+wellife.recheck = lambda rr_, grid, label, live: _XL["checked"]
+wellife.press_arrow = lambda rr_, ctx_, ctl, aid, what, want, count, live: (
+    _XLLOG.append(("press", aid, want, count, live)) or ((" → 누름", True) if live and want else ("", False)))
 _xrr = types.SimpleNamespace(log=lambda m: None, status=Rec(), unique_path=lambda p: p)
 
 
-def xl_run(live, targets, rows, fail=None):
+def xl_run(live, targets, rows, fail=None, preview0=(), checked=True):
     _XLLOG.clear()
     for f in os.listdir(_xl_dir):
         os.remove(os.path.join(_xl_dir, f))
-    _XL.update(targets=targets, rows=rows, fail=fail or {})
+    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked)
     return wellife.invoice_excel(_xrr, actx, live)
 
 
@@ -1529,29 +1543,44 @@ res = xl_run(True, [], {})
 check("엑셀: 마켓을 고른 사이트가 없으면 ERPia 를 누르지 않고 건너뛴다", res[0] == "skipped" and "운송장 전송 마켓" in res[1] and _XLLOG == [], f"{res} {_XLLOG}")
 res = xl_run(True, T2, {"109": 3, "110": 0})
 check("엑셀: 사이트를 돌기 전에 남은 내보내기 창부터 닫는다 (열린 '송장양식' 이 조회 조건 칸을 덮지 않게)", _XLLOG[:1] == [("cleanup",)], str(_XLLOG))
-check("엑셀(실행): 사이트마다 그 사이트코드만 골라 조건을 맞추고([조회(F)] 없음), 미리보기 0건 사이트는 받지 않는다",
+check("엑셀(실행): 사이트마다 그 사이트코드만 골라 조회하고, 0건 사이트는 받지도 완료처리하지도 않는다",
       [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False)), ("query", (["110"], False))]
-      and [x for x in _XLLOG if x[0] == "export"] == [("export", "이지웰", "0000")] and ("preview0", "YES24") in _XLLOG, f"{_XLLOG}")
-check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로드가 그 코드의 프리셋으로 올린다), 결과 done·사유에 받은 것과 0건",
+      and [x for x in _XLLOG if x[0] == "export"] == [("export", "이지웰", "0000")]
+      and [x for x in _XLLOG if x[0] == "press"] == [("press", "btn_NotSendCompletionProcessing", True, 3, True)], f"{_XLLOG}")
+check("엑셀(실행): 받은 뒤 전체 체크 → [미전송 완료처리] → 다시 조회 (받은 사이트만, 순서대로 한 사이트씩)",
+      [x for x in _XLLOG if x[0] in ("runq", "export", "press")] == [("runq", "109"), ("export", "이지웰", "0000"), ("press", "btn_NotSendCompletionProcessing", True, 3, True), ("runq", "109"), ("runq", "110")],
+      f"{_XLLOG}")
+check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로드가 그 코드의 프리셋으로 올린다), 결과 done·사유에 받은 것·완료처리·남은 줄·0건",
       res[0] == "done" and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"]
-      and "이지웰(109) (109)이지웰송장" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1], f"{res} {os.listdir(_xl_dir)}")
-res = xl_run(False, T2, {"109": 3, "110": 2})
-check("엑셀(리허설): 받기는 하되 이름 앞에 '리허설_' (업로드가 집지 않게), 결과 skipped (토큰 없음)",
-      res[0] == "skipped" and sorted(os.listdir(_xl_dir)) == ["리허설_(109)이지웰송장2026-11-01~2026-11-09.xlsx", "리허설_(110)YES24송장2026-11-01~2026-11-09.xlsx"],
+      and "이지웰(109) 3건 (109)이지웰송장" in res[1] and "완료처리 → 누름, 남은 0건" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1],
       f"{res} {os.listdir(_xl_dir)}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, preview0={"YES24"})
+check("엑셀(실행): 조회는 됐는데 양식 미리보기가 0건이면 받지 않고 완료처리도 하지 않는다 (사유에 조회 건수)",
+      res[0] == "done" and "0건 YES24(110) (조회 2건, 양식 미리보기 0건)" in res[1]
+      and [x[1] for x in _XLLOG if x[0] == "press"] == ["btn_NotSendCompletionProcessing"] and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"], f"{res} {_XLLOG}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, checked=False)
+check("엑셀(실행): 전체 체크가 안 되면 완료처리를 누르지 않고 skipped (확인할 것) - 파일은 받아 둔다",
+      res[0] == "skipped" and "체크가 되지 않아 완료처리하지 않았습니다" in res[1] and all(x[2] is False for x in _XLLOG if x[0] == "press")
+      and len(os.listdir(_xl_dir)) == 2, f"{res} {_XLLOG}")
+res = xl_run(False, T2, {"109": 3, "110": 2})
+check("엑셀(리허설): 받기는 하되 이름 앞에 '리허설_' (업로드가 집지 않게), 완료처리는 누르지 않음, 결과 skipped (토큰 없음)",
+      res[0] == "skipped" and sorted(os.listdir(_xl_dir)) == ["리허설_(109)이지웰송장2026-11-01~2026-11-09.xlsx", "리허설_(110)YES24송장2026-11-01~2026-11-09.xlsx"]
+      and [x[4] for x in _XLLOG if x[0] == "press"] == [False, False] and "미전송 완료처리는 누르지 않음" in res[1],
+      f"{res} {os.listdir(_xl_dir)} {_XLLOG}")
 res = xl_run(True, T2, {"109": 0, "110": 0})
-check("엑셀: 모든 사이트가 0건이면 no_target (파일 없음)", res[0] == "no_target" and os.listdir(_xl_dir) == [], f"{res}")
+check("엑셀: 모든 사이트가 0건이면 no_target (파일 없음, 완료처리 없음)", res[0] == "no_target" and os.listdir(_xl_dir) == []
+      and not [x for x in _XLLOG if x[0] in ("export", "press")], f"{res}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, fail={"이지웰": ("failed", "송장양식 목록에서 '이지웰'을(를) 찾지 못했습니다.")})
 check("엑셀: 한 사이트가 실패해도 나머지는 받고, 결과는 failed (받은 것·못 받은 까닭 모두 사유에)",
       res[0] == "failed" and os.listdir(_xl_dir) == ["(110)YES24송장2026-11-01~2026-11-09.xlsx"] and "못 받음 이지웰(109)" in res[1]
-      and "YES24(110) (110)YES24송장" in res[1], f"{res}")
+      and "YES24(110) 2건 (110)YES24송장" in res[1], f"{res}")
 try:
     xl_run(True, T2, {"109": 3}, fail={"이지웰": ("stopped", "윈도우 화면이 잠겨 있어")})
     check("엑셀: 화면 잠김 같은 'stopped' 는 바로 멈춘다", False)
 except wellife.Stop as e:
     check("엑셀: 화면 잠김 같은 'stopped' 는 다음 사이트로 가지 않고 바로 멈춘다", e.result == "stopped" and [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False))], str(_XLLOG))
 (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
- wellife._close_export_windows) = _saved_loop
+ wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow) = _saved_loop
 res = inv_run(True, checked=False)
 check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
       ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
@@ -1915,7 +1944,7 @@ def sales_cond():
 os.environ.pop("RPA_INVOICE_OPTION", None)
 check("⑥ 매출구분: 운송장 전송 방식이 없으면(단추 실행·전체 전송) 지금처럼 '전체'", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
 os.environ["RPA_INVOICE_OPTION"] = "excel"
-check("⑥ 매출구분: '사이트 수집으로 선택된 사이트의 엑셀 출력' 의 기본 조회 조건은 '전체' (사이트별 조건은 invoice_excel 이 sites 로 넘긴다)", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
+check("⑥ 매출구분: '사이트 수집으로 선택된 사이트의 엑셀 출력' 의 기본 조회 조건은 '전체' (사이트별 조회는 invoice_excel 이 sites 로 넘긴다)", sales_cond() == ("fixed", "매출구분 : 전체"), str(sales_cond()))
 _got = {k: (kind, w) for k, _, kind, w in wellife.query_defaults(rr, "InvoiceSend", sites=(["109"], False))}["Sales"]
 check("⑥ 매출구분: sites 를 넘기면 그 사이트코드만 고른다 (엑셀 다운로드가 사이트마다)", _got == ("sites", (["109"], False)), str(_got))
 os.environ["RPA_INVOICE_OPTION"] = "auto"

@@ -1090,6 +1090,7 @@ INVOICE_TAB = "운송장번호 전송"
 INVOICE_FORM = "Frm_Send_TrackingNumber"
 INVOICE_ICON = "lcg_InvoiceSend"
 INVOICE_SEND = "운송장번호 [전송요청(S)]"
+INVOICE_DONE = "운송장번호 [미전송 완료처리]"     # 엑셀 출력 방식에서 받은 사이트의 줄을 완료 상태로 (invoice_excel)
 SEND_BUSY_WAIT = 60.0      # '전송 중' 인지 이만큼 1초마다 다시 본다 - 잠깐 막힌 것과 가리려고
 SEND_BUSY_LAST = "이후에는 전송하지 않습니다"   # 반복 끝 시각까지 전송 중일 때 사유 끝 (send_busy_reason)
 SEND_BUSY_LAST_MARGIN = 60      # 초 - '마지막 회차' 판정 여유 (회차 끝까지 남은 시간 + 대시보드 틱 5초, BugBuster L5)
@@ -1097,7 +1098,7 @@ SEND_BUSY_LAST_MARGIN = 60      # 초 - '마지막 회차' 판정 여유 (회차
 
 def module_invoice_send(rr, ctx, live=False):
     """⑥ 운송장번호 전송: 화면 열기 -> 조회 -> 전체 체크 -> [전송요청(S)] (invoice_send). 리허설은 [전송요청(S)] 에 마우스만.
-    [미전송 완료처리] 등 나머지 단추는 누르지 않는다. 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (물류대기와 같다)."""
+    [미전송 완료처리] 는 엑셀 출력 방식(invoice_excel)에서만 누르고 나머지 단추는 누르지 않는다. 아이콘이 없어도(absent) 건너뛰지 않고 실패다 (물류대기와 같다)."""
     rr.status.step("inv_send_screen")
     markets = invoice_markets()
     rr.log("운송장 전송 마켓: " + (", ".join(f"{m['market']}(프리셋 {m['no']}·{m['code'] or '코드 없음'})" for m in markets) or "고른 마켓 없음"))
@@ -1128,7 +1129,7 @@ def invoice_send(rr, ctx, live):
     # 반복 회차이고 오늘 전송을 누른 기록이 있을 때만 본다 - 하루 한 번·수동 실행·반복 첫 회차는 화면이 느려도 예전대로 (PR #15 검토 2026-10-20)
     if os.environ.get("RPA_REPEAT_UNTIL") and last_send_at(rr, datetime.datetime.now()) and send_busy(rr, ctx):
         return "skipped", f"[{tag}] {send_busy_reason(rr)}"
-    if invoice_option() == "excel":     # 사이트 수집으로 선택된 사이트의 엑셀 출력 - 조회 없이 조건만 맞춰 사이트마다 엑셀만, 체크·[전송요청(S)] 없음 (사용자 2026-11-09)
+    if invoice_option() == "excel":     # 사이트 수집으로 선택된 사이트의 엑셀 출력 - 사이트마다 조회 → 엑셀 → 전체 체크 → [미전송 완료처리], [전송요청(S)] 없음 (사용자 2026-11-09)
         return invoice_excel(rr, ctx, live)
     fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
     count, grid = run_query(rr, ctx)
@@ -1168,10 +1169,10 @@ def run_query(rr, ctx):
 # ---------------------------------------------------------------------------
 # ⑥ 사이트 수집으로 선택된 사이트의 엑셀 출력 (예약 줄 운송장 전송 방식 'excel', 사용자 2026-11-09). 실측: docs/wellife-rpa.md 9.7.
 # 받을 사이트는 옵저버에서 '운송장 전송 마켓' 을 고른 사이트 수집 프리셋 중 켠 것 (excel_targets - upstream invoice_markets).
-# 고른 사이트가 없으면 받지 않는다. 사이트마다: 매출구분에서 그 사이트만 고르는 등 조회 조건만 맞추고 [조회(F)] 는 누르지 않는다
-# (마켓 양식은 조회 조건으로 뽑는다, 사용자 2026-11-09) → [마켓업로드용 엑셀출력] → 따로 뜬 '송장양식'(마켓 이름 목록) 에서 고른 마켓 →
-# [엑셀출력] → '엑셀 다운로드 받기' 미리보기에 줄이 없으면 받지 않고 닫는다 (데이터가 있을 때만 받는다) → 비밀번호·사유 →
-# [엑셀 다운로드] → 저장 창 → ERPIA_AI_UPLOAD (st.upload_dir - ACTOR --upload 가 사이트에 올리는 폴더) → [아니오].
+# 고른 사이트가 없으면 받지 않는다. 사이트마다 (한 번에 한 사이트, 사용자 2026-11-09): 매출구분에서 그 사이트만 골라 [조회(F)] → 0건이면 넘어감 →
+# [마켓업로드용 엑셀출력] → 따로 뜬 '송장양식'(마켓 이름 목록) 에서 고른 마켓 → [엑셀출력] → '엑셀 다운로드 받기' 미리보기에 줄이 없으면
+# 받지 않고 닫는다 → 비밀번호·사유 → [엑셀 다운로드] → 저장 창 → ERPIA_AI_UPLOAD (st.upload_dir - ACTOR --upload 가 사이트에 올리는 폴더) → [아니오]
+# → 받았으면 전체 체크 → [미전송 완료처리] (엑셀로 올린 운송장은 ERPia 가 전송 여부를 모르므로 상태만 완료로 - 사용자) → 다시 조회해 남은 줄 수.
 # 파일 이름 앞에 사이트코드 '(nnn)' 을 붙여 업로드(st.upload_files)가 그 사이트의 업로드 프리셋으로 올리게 한다.
 # 리허설도 받는다 (데이터를 바꾸지 않는다, 사용자) - 이름 앞에 '리허설_' 을 더 붙여 업로드가 집지 않게 한다.
 # 비밀번호·사유는 대시보드(웹)에 보이지 않는다 (사용자 2026-11-09). 비밀번호는 로그·사유에도 남기지 않는다.
@@ -1188,8 +1189,8 @@ def invoice_excel(rr, ctx, live):
     """사이트 수집으로 선택된 사이트의 엑셀 출력 (위 설명). [전송요청(S)] 은 누르지 않는다. (결과, 사유):
     받은 파일이 있으면 실행 done·리허설 skipped (토큰 없음), 모두 0건이면 no_target, 고른 사이트가 없으면 skipped,
     한 사이트라도 못 받았으면 failed (받은 것도 사유에 남긴다). 사이트 하나가 실패해도 나머지는 받는다 - 화면이 잠기는 등
-    'stopped' 는 바로 멈춘다. [조회(F)] 는 누르지 않는다 - 마켓 양식은 화면의 조회 조건으로 뽑으므로 조건만 맞춘다 (사용자
-    2026-11-09, 새로 연 화면에서 조회 없이 받아지는 것 11-09 실측). 미리보기에 줄이 없으면(0건) 받지 않는다 (머리글만 나온다)."""
+    'stopped' 는 바로 멈춘다. 사이트마다 조회해 0건이면 받지 않고, 양식 미리보기에 줄이 없어도 받지 않는다 (머리글만 나온다).
+    받은 사이트는 전체 체크 → [미전송 완료처리] (실행만 누른다, 리허설은 마우스만) → 다시 조회해 남은 줄 수를 사유에 남긴다."""
     tag = mode_tag(live)
     head = f"[{tag}] 사이트 수집 엑셀 출력"
     try:
@@ -1200,18 +1201,33 @@ def invoice_excel(rr, ctx, live):
     if not targets:
         return "skipped", f"{head} - 옵저버에서 '운송장 전송 마켓' 을 고른 사이트 수집 사이트가 없어 받지 않았습니다."
     _close_export_windows(rr, ctx)     # 지난 실행·사람이 열어 둔 내보내기 창이 조회 조건 칸을 덮지 않게 (11-09 실측)
-    got, empty, bad = [], [], []
+    got, empty, bad, pressed_any = [], [], [], False
     for t in targets:
         label = f"{t['market']}({t['code']})"
         try:
-            ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx), sites=([t["code"]], False))   # 조건만, 조회 없음
-            saved = export_market(rr, ctx, t["market"], pw)
-            if saved is None:
+            ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx), sites=([t["code"]], False))   # 1. 그 사이트만
+            count, grid = run_query(rr, ctx)
+            if not count:
                 empty.append(label)
                 continue
+            saved = export_market(rr, ctx, t["market"], pw)                           # 2. 그 마켓 양식 엑셀
+            if saved is None:
+                empty.append(f"{label} (조회 {count}건, 양식 미리보기 0건)")
+                continue
             saved = upload_name(rr, saved, t["code"], live)
-            rr.log(f"  {INVOICE_TAB}: {label} → {saved}")
-            got.append(f"{label} {os.path.basename(saved)}")
+            rr.log(f"  {INVOICE_TAB}: {label} {count}건 → {saved}")
+            ctl = controls(rr, ctx, INVOICE_FORM)                                     # 3. 전체 체크 → [미전송 완료처리]
+            grid = ctl.get("gridCtrl_List") or grid
+            checked = check_all_rows(rr, ctx, grid, INVOICE_TAB) and recheck(rr, grid, INVOICE_TAB, bool(live))
+            note, pressed = press_arrow(rr, ctx, ctl, "btn_NotSendCompletionProcessing", INVOICE_DONE, checked, count, live)
+            text = f"{label} {count}건 {os.path.basename(saved)}"
+            if not checked:
+                text += " (체크가 되지 않아 완료처리하지 않았습니다. 확인하여 주십시오)"
+            elif pressed:
+                left, _ = run_query(rr, ctx)                                          # 4. 다시 조회 - 남은 줄 수
+                text += f" → 완료처리{note}, 남은 {left}건" + (" (확인하여 주십시오)" if left else "")
+                pressed_any = True
+            got.append(text)
         except Stop as e:
             if e.result == "stopped":
                 raise
@@ -1220,12 +1236,12 @@ def invoice_excel(rr, ctx, live):
     rr.status.note(f"운송장 엑셀 {len(got)}개")
     parts = ([f"받음 {', '.join(got)}"] if got else []) + ([f"0건 {', '.join(empty)}"] if empty else []) \
         + ([f"못 받음 {'; '.join(bad)}"] if bad else [])
-    text = f"{head} - " + " / ".join(parts) + ". 전송요청은 누르지 않음"
+    text = f"{head} - " + " / ".join(parts) + ". 전송요청은 누르지 않음" + ("" if live else " (리허설 - 미전송 완료처리는 누르지 않음)")
     if bad:
         return "failed", text
     if not got:
         return "no_target", text
-    return ("done" if live else "skipped"), text
+    return ("done" if pressed_any else "skipped"), text
 
 
 def excel_targets():
