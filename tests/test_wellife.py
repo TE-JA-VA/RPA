@@ -1487,7 +1487,7 @@ except RuntimeError:
     check("엑셀 받을 사이트: 프리셋을 못 읽으면 멈춘다 (전체로 받지 않게)", True)
 wellife.st, wellife.invoice_markets = _saved_x
 
-# 올릴 업로드 프리셋 (사용자 2026-11-09): 켠 업로드 프리셋의 사이트코드만 - 없으면 받지도 완료처리하지도 않는다
+# 올릴 업로드 프리셋 (사용자 2026-11-09): 켠 업로드 프리셋의 사이트코드 - 없는 사이트도 받되 사유에 '업로드 프리셋 없음' 을 남긴다 (오후 결정)
 _UP_REC = {"steps": [{"kind": "file"}], "upload": True}
 _UPP = [{"no": 1, "code": "109", "record": {"steps": []}}, {"no": 2, "code": "109", "record": _UP_REC},
         {"no": 3, "code": "110", "record": _UP_REC}, {"no": 4, "code": "111", "record": _UP_REC}, {"no": 5, "code": "112", "record": _UP_REC}]
@@ -1497,7 +1497,7 @@ wellife.st = types.SimpleNamespace(preset_summary=lambda: _UPS, read_presets=lam
                                    is_upload=lambda r: _UP_ON[0] and bool((r or {}).get("upload")))
 check("업로드 코드: 켠 업로드 프리셋만 (다운로드 프리셋·끈 프리셋·업체 프리셋 수를 넘는 칸은 빼고)", wellife.upload_codes() == {"109", "111"}, str(wellife.upload_codes()))
 _UP_ON[0] = False
-check("업로드 코드: 업로드를 끈 버전이면 없다 (엑셀 출력이 아무 사이트도 완료처리하지 않는다)", wellife.upload_codes() == set())
+check("업로드 코드: 업로드를 끈 버전이면 없다 (모든 사이트가 '업로드 프리셋 없음' 으로 남는다)", wellife.upload_codes() == set())
 wellife.st = types.SimpleNamespace(preset_summary=lambda: None, read_presets=lambda: [])
 try:
     wellife.upload_codes(); check("업로드 코드: 프리셋을 못 읽으면 멈춘다", False)
@@ -1575,11 +1575,13 @@ check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로�
       and "이지웰(109) 3건 (109)이지웰송장" in res[1] and "완료처리 → 누름, 남은 0건" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1],
       f"{res} {os.listdir(_xl_dir)}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, no_up={"110"})
-check("엑셀(실행): 업로드 프리셋이 없는 사이트는 조회·받기·완료처리를 하지 않고 사유에 남긴다 (사이트엔 안 올라가는데 ERPia 만 완료가 되지 않게)",
-      [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False))] and res[0] == "done" and "업로드 프리셋 없음 YES24(110)" in res[1], f"{res} {_XLLOG}")
+check("엑셀(실행): 업로드 프리셋이 없는 사이트도 조회·받기·완료처리는 하고, 사유에 '업로드 프리셋 없음' 과 저절로 안 올라간다는 안내를 남긴다 (사용자 2026-11-09 오후)",
+      [x for x in _XLLOG if x[0] == "query"] == [("query", (["109"], False)), ("query", (["110"], False))]
+      and [x[1] for x in _XLLOG if x[0] == "press"] == ["btn_NotSendCompletionProcessing"] * 2 and res[0] == "done"
+      and "업로드 프리셋 없음 YES24(110) (받은 파일은 사이트에 저절로 올라가지 않습니다" in res[1] and "이지웰(109) 3건" in res[1], f"{res} {_XLLOG}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, no_up={"109", "110"})
-check("엑셀(실행): 모든 사이트에 업로드 프리셋이 없으면 ERPia 를 누르지 않고 건너뛴다 (옵저버에서 기록하라고)",
-      res[0] == "skipped" and _XLLOG == [] and "업로드 프리셋 없음 이지웰(109), YES24(110)" in res[1] and "옵저버" in res[1], f"{res} {_XLLOG}")
+check("엑셀(실행): 모든 사이트에 업로드 프리셋이 없어도 받고 완료처리한다 - 사유에 두 사이트 모두 안내",
+      res[0] == "done" and len(os.listdir(_xl_dir)) == 2 and "업로드 프리셋 없음 이지웰(109), YES24(110)" in res[1] and "옵저버" in res[1], f"{res} {_XLLOG}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, preview0={"YES24"})
 check("엑셀(실행): 조회는 됐는데 양식 미리보기가 0건이면 받지 않고 완료처리도 하지 않는다 (사유에 조회 건수)",
       res[0] == "done" and "0건 YES24(110) (조회 2건, 양식 미리보기 0건)" in res[1]
