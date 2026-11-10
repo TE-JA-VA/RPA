@@ -1524,7 +1524,7 @@ _xl_dir = tempfile.mkdtemp(prefix="inv_xl_")
 _saved_loop = (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
               wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow,
               wellife.upload_codes, wellife.pick_sites)
-_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True, "no_up": set()}
+_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True, "no_up": set(), "after": {}, "nopress": False}
 _XLLOG = []
 
 
@@ -1536,6 +1536,9 @@ def _fake_export(rr_, ctx_, market, pw):
         return None
     path = os.path.join(_xl_dir, f"{market}송장2026-11-01~2026-11-09.xlsx")
     open(path, "w").close()
+    ctx_.export_saved = path            # _download 처럼 - 저장한 뒤 멈춰도 invoice_excel 이 실패 이름으로 바꾼다
+    if market in _XL["after"]:          # 저장은 됐는데 '엑셀파일 열기' [아니오]·창 닫기에서 멈춤
+        raise wellife.Stop(*_XL["after"][market])
     _XLLOG.append(("export", market, pw))
     return path
 
@@ -1560,15 +1563,16 @@ wellife.controls = lambda rr_, ctx_, form: {"gridCtrl_List": "grid"}
 wellife.check_all_rows = lambda rr_, ctx_, grid, label: _XL["checked"]
 wellife.recheck = lambda rr_, grid, label, live: _XL["checked"]
 wellife.press_arrow = lambda rr_, ctx_, ctl, aid, what, want, count, live: (
-    _XLLOG.append(("press", aid, want, count, live)) or ((" → 누름", True) if live and want else ("", False)))
+    _XLLOG.append(("press", aid, want, count, live)) or ((" (단추가 꺼져 있습니다. 확인하여 주십시오)", False) if _XL["nopress"] and live and want
+                                                          else (" → 누름", True) if live and want else ("", False)))
 _xrr = types.SimpleNamespace(log=lambda m: None, status=Rec(), unique_path=lambda p: p)
 
 
-def xl_run(live, targets, rows, fail=None, preview0=(), checked=True, no_up=()):
+def xl_run(live, targets, rows, fail=None, preview0=(), checked=True, no_up=(), after=None, nopress=False):
     _XLLOG.clear()
     for f in os.listdir(_xl_dir):
         os.remove(os.path.join(_xl_dir, f))
-    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked, no_up=set(no_up))
+    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked, no_up=set(no_up), after=after or {}, nopress=nopress)
     return wellife.invoice_excel(_xrr, actx, live)
 
 
@@ -1604,6 +1608,25 @@ res = xl_run(True, T2, {"109": 3, "110": 2}, checked=False)
 check("엑셀(실행): 전체 체크가 안 되면 완료처리를 누르지 않고 skipped (확인할 것) - 파일은 받아 둔다",
       res[0] == "skipped" and "체크가 되지 않아 완료처리하지 않았습니다" in res[1] and all(x[2] is False for x in _XLLOG if x[0] == "press")
       and len(os.listdir(_xl_dir)) == 2, f"{res} {_XLLOG}")
+import re  # noqa: E402
+_stamp = re.compile(r"^실패_\((\d{3})\)_(.+)_\d\d-\d\d-\d\d-\d\d\.xlsx$")
+_fails = lambda: sorted(_stamp.match(n).groups() for n in os.listdir(_xl_dir) if _stamp.match(n))   # noqa: E731
+check("엑셀(실행): 체크가 안 돼 완료처리하지 못한 파일은 '실패_(사이트코드)_체크안됨_MM-DD-HH-mm' (업로드가 집지 않는다, 사용자 2026-11-10)",
+      _fails() == [("109", "체크안됨"), ("110", "체크안됨")] and not st.upload_files(_xl_dir) and "사이트에 올리지 않습니다" in res[1], f"{os.listdir(_xl_dir)} {res}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, after={"이지웰": ("failed", "'엑셀파일 열기' 창이 뜨지 않았습니다.")})
+check("엑셀(실행): 받은 뒤 마무리에서 멈추면 ERPia 가 준 이름 그대로 두지 않고 '실패_(109)_다운로드_…', 다음 사이트는 그대로",
+      _fails() == [("109", "다운로드")] and os.listdir(_xl_dir).count("(110)YES24송장2026-11-01~2026-11-09.xlsx") == 1 and res[0] == "failed"
+      and "받은 파일 실패_(109)_다운로드_" in res[1], f"{os.listdir(_xl_dir)} {res}")
+res = xl_run(True, T2, {"109": 3, "110": 0}, nopress=True)
+check("엑셀(실행): [미전송 완료처리] 단추가 꺼져 누르지 못했으면 '실패_(109)_완료처리안됨_…' (두 번 올라가지 않게)",
+      _fails() == [("109", "완료처리안됨")] and "단추가 꺼져 있습니다" in res[1], f"{os.listdir(_xl_dir)} {res}")
+try:
+    xl_run(True, T2, {"109": 3}, after={"이지웰": ("stopped", "윈도우 화면이 잠겨 있어")})
+except wellife.Stop:
+    pass
+check("엑셀(실행): 'stopped' 로 바로 멈춰도 받은 파일은 실패 이름으로", _fails() == [("109", "다운로드")], str(os.listdir(_xl_dir)))
+res = xl_run(False, T2, {"109": 3, "110": 2}, checked=False)
+check("엑셀(리허설): 리허설 파일은 '리허설_' 그대로 (실패 이름으로 바꾸지 않는다)", _fails() == [] and len(os.listdir(_xl_dir)) == 2, str(os.listdir(_xl_dir)))
 res = xl_run(False, T2, {"109": 3, "110": 2})
 check("엑셀(리허설): 받기는 하되 이름 앞에 '리허설_' (업로드가 집지 않게), 완료처리는 누르지 않음, 결과 skipped (토큰 없음)",
       res[0] == "skipped" and sorted(os.listdir(_xl_dir)) == ["리허설_(109)이지웰송장2026-11-01~2026-11-09.xlsx", "리허설_(110)YES24송장2026-11-01~2026-11-09.xlsx"]

@@ -121,16 +121,17 @@ check("파일이 있으면 그 프리셋", [c[0] for c in run.upload_choice(chos
 
 # --- 예약: PROCESS 끝 + 1분, 끝날 때마다 한 번 ---
 end = datetime.datetime(2026, 11, 6, 10, 0, 0)
-dash.st.read_json = lambda path: {"state": "success", "finished_at": end.isoformat()}
+dash.st.read_json = lambda path, **kw: ({"state": "success", "finished_at": end.isoformat()} if path == st.status_path("routine")
+                                         else REAL_READ_JSON(path, **kw))
 sch.busy = lambda: None
-sch.tick_upload(end + datetime.timedelta(seconds=30))
-check("1분 전에는 안 띄운다", launched == [], launched)
+sch.tick_upload(end + datetime.timedelta(seconds=5))
+check("10초 전에는 안 띄운다", launched == [], launched)
 sch.busy = lambda: "실행 중"
 sch.tick_upload(end + datetime.timedelta(seconds=90))
 check("다른 것이 돌면 기다린다", launched == [], launched)
 sch.busy = lambda: None
 sch.tick_upload(end + datetime.timedelta(seconds=90))
-check("1분 뒤 띄운다", launched == ["upload"], launched)
+check("10초 뒤 띄운다", launched == ["upload"], launched)
 sch.tick_upload(end + datetime.timedelta(seconds=120))
 check("같은 PROCESS 몫은 다시 안 띄운다 (계정 잠금 방지)", launched == ["upload"], launched)
 end += datetime.timedelta(hours=1)
@@ -159,16 +160,41 @@ fresh.busy = lambda: None
 fresh.upload_for = None
 fresh.tick_upload(end + datetime.timedelta(seconds=dash.UPLOAD_MAX_AGE_SEC + 5))
 check("#38: 끝난 지 10분이 지난 PROCESS 몫은 띄우지 않는다", len(launched) == 3 and fresh.upload_for == end, launched)
+# 옵저버가 떠 있으면 닫아 달라고 하고(30초 메시지 창), 닫히면 다음 틱에 바로 (사용자 2026-11-10)
 end += datetime.timedelta(hours=1)
-real_obs = dash.st.observer_open
-dash.st.observer_open = lambda: True
-sch.tick_upload(end + datetime.timedelta(seconds=90))
-dash.st.observer_open = real_obs
-sch.tick_upload(end + datetime.timedelta(seconds=95))
-check("#38: 옵저버가 떠 있으면 그 몫은 건너뛴다 (닫자마자 띄우지 않는다)", len(launched) == 3, launched)
+sch.busy = lambda: dash.OBSERVER_WAIT
+sch.tick_upload(end + datetime.timedelta(seconds=15))
+req = st.observer_close_request() or {}
+check("옵저버가 떠 있으면 띄우지 않고 닫아 달라고 한다 (사유: ACTOR 실행 시 옵저버 사용 불가)", len(launched) == 3
+      and req.get("key") == end.isoformat() and req.get("why") == st.OBSERVER_CLOSE_WHY and req.get("answer") is None, (launched, req))
+sch.tick_upload(end + datetime.timedelta(seconds=20))
+check("답을 기다리는 동안 다시 부탁하지 않는다 (같은 요청 그대로)", (st.observer_close_request() or {}).get("at") == req.get("at"))
+sch.busy = lambda: None                # 옵저버가 닫혔다
+sch.tick_upload(end + datetime.timedelta(seconds=45))
+check("옵저버가 닫히면 바로 띄우고 요청을 지운다", len(launched) == 4 and st.observer_close_request() is None, launched)
 end += datetime.timedelta(hours=1)
-sch.tick_upload(end + datetime.timedelta(seconds=90))
-check("#38: 다음 PROCESS 뒤에는 다시 띄운다", len(launched) == 4, launched)
+sch.busy = lambda: dash.OBSERVER_WAIT
+sch.tick_upload(end + datetime.timedelta(seconds=15))
+st.answer_observer_close(st.observer_close_request(), "cancel")
+sch.tick_upload(end + datetime.timedelta(seconds=20))
+sch.busy = lambda: None
+sch.tick_upload(end + datetime.timedelta(seconds=25))
+check("[취소] 면 이 몫은 띄우지 않는다 (옵저버를 닫아도)", len(launched) == 4 and sch.upload_for == end and st.observer_close_request() is None, launched)
+end += datetime.timedelta(hours=1)
+sch.busy = lambda: dash.OBSERVER_WAIT
+sch.tick_upload(end + datetime.timedelta(seconds=15))
+sch.tick_upload(end + datetime.timedelta(seconds=15 + dash.OBSERVER_CLOSE_GIVE_UP_SEC + 5))
+check("답이 없으면 (옛 버전 옵저버) 90초 뒤 이 몫은 건너뛴다", len(launched) == 4 and sch.upload_for == end, launched)
+for f in [p for ps in st.upload_files().values() for p in ps]:
+    os.remove(f)
+end += datetime.timedelta(hours=1)
+sch.tick_upload(end + datetime.timedelta(seconds=15))
+check("올릴 것이 없으면 옵저버를 닫아 달라고 하지 않는다", st.observer_close_request() is None and sch.upload_for == end)
+sch.busy = lambda: None
+put("(034)올림.xlsx")
+end += datetime.timedelta(hours=1)
+sch.tick_upload(end + datetime.timedelta(seconds=15))
+check("#38: 다음 PROCESS 뒤에는 다시 띄운다 (10초 뒤)", len(launched) == 5, launched)
 for f in [p for ps in st.upload_files().values() for p in ps]:
     os.remove(f)
 
@@ -187,6 +213,32 @@ REAL_LAUNCH("upload", "auto")
 s = st.read_settings()["schedule"]
 check("#38: 업로드를 띄워도 다음 예약 시각은 그대로", s["next_run_at"] == due and s["last_launch_target"] == "upload", s.get("next_run_at"))
 dash._active.clear()
+put("(034)올림.xlsx")
+before = len(launched)
+due_sch = dash.Scheduler()
+due_sch.busy, due_sch.upload_for = (lambda: None), None
+end = datetime.datetime(2026, 11, 6, 18, 37, 50)
+st.read_json = lambda path, **kw: ({"state": "success", "finished_at": end.isoformat()} if path == st.status_path("routine") else REAL_READ_JSON(path, **kw))
+due_sch.tick_upload(datetime.datetime(2026, 11, 6, 18, 38, 5))
+check("#41: 예약이 띄울 차례(next_run_at 지남)면 업로드를 띄우지 않는다 - 예약이 먼저", len(launched) == before and due_sch.upload_for is None, launched)
+st.read_json = REAL_READ_JSON
+
+# 옵저버: 닫기 요청은 1초마다 보고, 같은 요청은 메시지 창 한 번 - 켜기 전 요청·[취소] 로 답한 요청은 보지 않는다 (사용자 2026-11-10)
+from types import SimpleNamespace  # noqa: E402
+shown = []
+ob = SimpleNamespace(closing=False, started_at="2026-11-06T09:00:00", close_seen=None, close_box=shown.append,
+                     root=SimpleNamespace(after=lambda ms, fn: None), _watch_close=None)
+st.ask_observer_close("2026-11-06T09:59:00", datetime.datetime(2026, 11, 6, 10, 0, 0))
+obs.App._watch_close(ob)
+obs.App._watch_close(ob)
+check("옵저버: 새 닫기 요청이면 메시지 창 한 번 (같은 요청은 다시 안 띄운다)", len(shown) == 1 and shown[0]["why"] == st.OBSERVER_CLOSE_WHY, shown)
+late = SimpleNamespace(ob.__dict__, started_at="2026-11-06T10:00:01", close_seen=None)
+obs.App._watch_close(late)
+check("옵저버: 켜기 전에 남은 요청은 보지 않는다", len(shown) == 1)
+st.answer_observer_close(st.observer_close_request(), "cancel")
+obs.App._watch_close(SimpleNamespace(ob.__dict__, close_seen=None))
+check("옵저버: [취소] 로 답한 요청은 다시 띄우지 않는다", len(shown) == 1)
+st.clear_observer_close()
 (dash.DRY_RUN, dash.target_path, dash.any_rpa_running, dash.launch_state, dash.TOKEN_GATE, dash.st.observer_open, dash.st.install_block_reason) = saved
 
 # --- 토큰: 운송장번호 전송에 포함 ---

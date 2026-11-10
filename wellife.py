@@ -1229,6 +1229,7 @@ def invoice_excel(rr, ctx, live):
     got, empty, bad, pressed_any = [], [], [], False
     for i, t in enumerate(targets):
         label = f"{t['market']}({t['code']})"
+        ctx.export_saved, why = None, "다운로드"      # 받은 파일 (_download 가 적는다)·완료처리까지 못 갔을 때 이름에 넣을 사유
         try:
             if i == 0:      # 1. 그 사이트만 - 다른 조회 조건은 첫 사이트에서 한 번만 본다
                 ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx), sites=([t["code"]], False))
@@ -1243,6 +1244,7 @@ def invoice_excel(rr, ctx, live):
                 empty.append(f"{label} (조회 {count}건, 양식 미리보기 0건)")
                 continue
             saved = upload_name(rr, saved, t["code"], live)
+            ctx.export_saved, why = saved, "완료처리"
             rr.log(f"  {INVOICE_TAB}: {label} {count}건 → {saved}")
             ctl = controls(rr, ctx, INVOICE_FORM)                                     # 3. 전체 체크 → [미전송 완료처리]
             grid = ctl.get("gridCtrl_List") or grid
@@ -1251,15 +1253,26 @@ def invoice_excel(rr, ctx, live):
             text = f"{label} {count}건 {os.path.basename(saved)}"
             if not checked:
                 text += " (체크가 되지 않아 완료처리하지 않았습니다. 확인하여 주십시오)"
+                why = "체크안됨"
             elif pressed:                                                             # 다시 조회하지 않는다 (위 설명) - 다음 사이트로
                 text += f" → 완료처리{note}"
                 pressed_any = True
+                ctx.export_saved = None
+            else:
+                text += note
+                why = "완료처리안됨"
+            failed_as = _fail_saved(rr, ctx, t["code"], why, live)
+            if failed_as:
+                text += f" → {failed_as} (사이트에 올리지 않습니다)"
             got.append(text)
         except Stop as e:
             if e.result == "stopped":
                 raise
             rr.log(f"  {INVOICE_TAB}: {label} 엑셀을 받지 못했습니다. ({e})")
-            bad.append(f"{label}: {e}")
+            failed_as = _fail_saved(rr, ctx, t["code"], why, live)
+            bad.append(f"{label}: {e}" + (f" (받은 파일 {failed_as})" if failed_as else ""))
+        finally:
+            _fail_saved(rr, ctx, t["code"], why, live)    # 'stopped'·뜻밖의 오류로 나갈 때도 (사이트 이름으로 남아 올라가지 않게)
     rr.status.note(f"운송장 엑셀 {len(got)}개")
     parts = ([f"받음 {', '.join(got)}"] if got else []) + ([f"0건 {', '.join(empty)}"] if empty else []) \
         + ([f"못 받음 {'; '.join(bad)}"] if bad else []) + ([no_up_text] if no_up_text else [])
@@ -1310,6 +1323,30 @@ def upload_name(rr, saved, code, live):
     dest = rr.unique_path(os.path.join(folder, ("" if live else REHEARSAL_PREFIX) + f"({code}){name}"))
     os.replace(saved, dest)
     return dest
+
+
+def fail_name(rr, path, code, why):
+    """받은 파일을 '실패_(사이트코드)_사유_MM-DD-HH-mm' 으로 (사용자 2026-11-10). '(nnn)' 으로 시작하지 않아 업로드(st.upload_files)가
+    집지 않는다 - 완료처리가 안 된 송장을 올리면 다음 실행이 같은 송장을 다시 받아 두 번 올라간다. 새 경로."""
+    folder, name = os.path.split(path)
+    stamp = datetime.datetime.now().strftime("%m-%d-%H-%M")
+    dest = rr.unique_path(os.path.join(folder, f"실패_({code})_{why}_{stamp}{os.path.splitext(name)[1]}"))
+    os.replace(path, dest)
+    return dest
+
+
+def _fail_saved(rr, ctx, code, why, live):
+    """이 사이트에서 받았는데 완료처리까지 못 간 파일(ctx.export_saved)을 실패 이름으로. 바꾼 이름, 없으면 None. 리허설은 '리허설_' 그대로."""
+    path, ctx.export_saved = getattr(ctx, "export_saved", None), None
+    if not live or not path or not os.path.isfile(path):
+        return None
+    try:
+        name = os.path.basename(fail_name(rr, path, code, why))
+    except OSError as e:
+        rr.log(f"  {INVOICE_TAB}: 받은 파일 이름을 실패로 바꾸지 못했습니다. ({path}: {e})")
+        return None
+    rr.log(f"  {INVOICE_TAB}: 완료처리까지 가지 못해 받은 파일을 '{name}' 로 바꿨습니다. (사이트에 올리지 않습니다)")
+    return name
 
 
 def export_market(rr, ctx, market, pw):
@@ -1400,6 +1437,7 @@ def _download(rr, ctx, h, pw):
         if rr.find_save_dialog(ctx.pid):
             rr.cancel_save_dialog(dlg)
         raise Stop("failed", f"엑셀을 {folder} 에 저장하지 못했습니다.{why}")
+    ctx.export_saved = saved        # 여기서 멈춰도 invoice_excel 이 '실패_' 이름으로 바꾼다 (ERPia 가 준 이름 그대로 남지 않게, 사용자 2026-11-10)
     ask = _wait_window(rr, ctx, before, "엑셀파일 열기", "엑셀 저장")
     _message_button(rr, ask, "엑셀파일을 여시겠습니까?", "btn_아니오(&N)", "엑셀파일 열기")
     _wait_gone(rr, h, EXPORT_DL_TITLE)      # [아니오] 면 다운로드 창이 저절로 닫힌다 (11-05 실측)

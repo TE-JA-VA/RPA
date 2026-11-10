@@ -394,7 +394,9 @@ TARGETS = {
     "routine": ("PROCESS 오토파일럿", "ERPia_RPA.exe", ()),
 }
 RUNNABLE = {**TARGETS, "upload": ("사이트 엑셀 업로드", "Prepare_RPA.exe", ("--all", "--upload", "--no-keep-open"))}   # upload 는 Scheduler.tick_upload 만 띄운다 - 단추·원격 명령 목록(TARGETS)에 없다
-UPLOAD_WAIT_SEC = 60    # PROCESS 가 끝나고 이만큼 조용하면 업로드를 띄운다 (사용자 2026-11-06)
+UPLOAD_WAIT_SEC = 10    # PROCESS 가 끝나고 이만큼 조용하면 업로드를 띄운다 (사용자 2026-11-06 1분 → 2026-11-10 10초)
+OBSERVER_CLOSE_GIVE_UP_SEC = 90   # 옵저버에 닫아 달라고 한 뒤 이만큼 답이 없으면(옛 버전 옵저버) 그 몫은 건너뛴다 - 옵저버는 30초 뒤 닫는다
+OBSERVER_WAIT = "옵저버가 실행 중이어서 종료를 기다리는 중입니다."
 UPLOAD_MAX_AGE_SEC = 600  # 끝난 지 이보다 오래된 PROCESS 몫은 띄우지 않는다 - 재시작·옵저버를 닫은 뒤 몇 시간 전 몫이 뜨던 것 (#38)
 _active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
 # 토큰 확인 (2026-10-06): 에이전트가 agent.Tokens.gate 를 단다 - 띄우기 직전에 target 으로 부르고, 남은 토큰이 없으면
@@ -1249,7 +1251,7 @@ class Scheduler(threading.Thread):
         if launch_state() is not None:
             return "대시보드가 실행한 작업의 종료를 기다리는 중입니다."
         if st.observer_open():
-            return "옵저버가 실행 중이어서 종료를 기다리는 중입니다."
+            return OBSERVER_WAIT
         return None
 
     @staticmethod
@@ -1257,6 +1259,10 @@ class Scheduler(threading.Thread):
         """마지막 PROCESS 가 끝난 시각 (돌고 있거나 기록이 없으면 None)."""
         v = st.read_json(st.status_path("routine")) or {}
         return st.parse_iso(v.get("finished_at")) if v.get("state") != "running" else None
+
+    def _skip_upload(self, end):
+        self.upload_for = end
+        st.clear_observer_close()
 
     def tick_upload(self, now):
         """PROCESS 가 끝나고 1분 동안 아무것도 안 돌면 업로드 폴더의 엑셀을 사이트에 올린다 - 누가 PROCESS 를 띄웠든 (단추·예약·반복).
@@ -1266,11 +1272,25 @@ class Scheduler(threading.Thread):
         end = self.routine_end()
         if end is None or end == self.upload_for or now < end + datetime.timedelta(seconds=UPLOAD_WAIT_SEC):
             return
-        if now > end + datetime.timedelta(seconds=UPLOAD_MAX_AGE_SEC) or st.observer_open():
-            self.upload_for = end       # 오래됐거나 사람이 옵저버를 쓰는 중 - 이 몫은 건너뛴다 (닫자마자 띄우지 않게, #38). 파일은 다음 PROCESS 뒤에
+        if now > end + datetime.timedelta(seconds=UPLOAD_MAX_AGE_SEC):
+            return self._skip_upload(end)       # 오래된 몫 (#38). 파일은 다음 PROCESS 뒤에
+        sch = st.read_settings()["schedule"]
+        due = st.parse_iso(sch.get("next_run_at"))
+        if sch.get("enabled") and due is not None and due <= now:
+            return                              # 예약이 띄울 차례면 예약이 먼저 - 업로드는 그 PROCESS 가 끝난 뒤에 (#41)
+        why = self.busy()
+        if why == OBSERVER_WAIT:                # 다른 까닭 없이 옵저버만 - 30초 뒤 닫아 달라고 하고, 닫히면 다음 틱에 바로 (사용자 2026-11-10)
+            if not st.upload_pending():
+                return self._skip_upload(end)   # 올릴 것이 없으면 옵저버를 닫지 않는다
+            req = st.observer_close_request()
+            if not req or req.get("key") != end.isoformat():
+                st.ask_observer_close(end.isoformat(), now)
+            elif req.get("answer") == "cancel" or now > (st.parse_iso(req.get("at")) or now) + datetime.timedelta(seconds=OBSERVER_CLOSE_GIVE_UP_SEC):
+                self._skip_upload(end)          # [취소] 또는 옛 옵저버라 답이 없다 - 이 몫은 건너뛴다
             return
-        if self.busy():
+        if why:
             return
+        st.clear_observer_close()
         self.upload_for = end
         if st.upload_pending():     # 올릴 파일 + 같은 코드의 업로드 프리셋이 있을 때만 (없으면 ACTOR 가 바로 끝나 '중단' 기록만 남는다, 11-09 실측)
             launch("upload", "auto")

@@ -1653,6 +1653,37 @@ def observer_open():
     return lock_held(OBSERVER_LOCK)
 
 
+# 에이전트가 옵저버에게 '닫아 달라' (사이트 엑셀 업로드를 띄울 차례인데 옵저버가 떠 있다, 사용자 2026-11-10).
+# 상태 폴더의 파일 하나: 에이전트가 쓰고(ask) 옵저버가 1초마다 읽어 30초 메시지 창 → 닫거나, [취소] 면 answer 'cancel' 을 적는다.
+OBSERVER_CLOSE_NAME = "observer_close.json"
+OBSERVER_CLOSE_WHY = "ACTOR 오토파일럿 실행 시 옵저버는 사용 불가"
+
+
+def observer_close_path():
+    return os.path.join(status_dir(), OBSERVER_CLOSE_NAME)
+
+
+def ask_observer_close(key, at):
+    """key - 무엇 때문인지 (업로드할 PROCESS 의 끝 시각), at - 부탁한 시각 (datetime)."""
+    write_json_atomic(observer_close_path(), {"key": key, "at": at.isoformat(timespec="seconds"), "why": OBSERVER_CLOSE_WHY, "answer": None})
+
+
+def observer_close_request():
+    path = observer_close_path()
+    return read_json(path) if os.path.isfile(path) else None
+
+
+def answer_observer_close(req, answer):
+    write_json_atomic(observer_close_path(), dict(req, answer=answer))
+
+
+def clear_observer_close():
+    try:
+        os.remove(observer_close_path())
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # 공용 도구
 # ---------------------------------------------------------------------------

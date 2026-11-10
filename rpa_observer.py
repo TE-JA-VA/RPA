@@ -808,6 +808,9 @@ class App:
         root.bind("<Configure>", self._on_configure)
         root.protocol("WM_DELETE_WINDOW", self.quit)
         root.after(80, self._poll)
+        self.started_at = st.now_iso()          # 켜기 전에 남은 닫기 요청은 보지 않는다
+        self.close_seen, self.close_box = None, self._close_box     # 에이전트의 닫기 요청 (사용자 2026-11-10) - 시험이 메시지 창을 갈아 끼운다
+        root.after(1000, self._watch_close)
 
     # --- 화면 ---
     def _entry(self, parent, var, width, show=""):
@@ -1830,6 +1833,83 @@ class App:
             self.status.config(text="미리보기를 멈추고 닫는 중…", fg=MUTED)
             self.paint_buttons()
             return
+        self._close_now()
+
+    # --- 에이전트가 닫아 달라고 할 때 (사이트 엑셀 업로드를 띄울 차례, 사용자 2026-11-10) ---
+    CLOSE_SEC = 30
+
+    def _watch_close(self):
+        """1초마다 닫기 요청(st.observer_close_request)을 본다. 새 요청이면 메시지 창 하나 (같은 요청은 한 번만)."""
+        if self.closing:
+            return
+        try:
+            req = st.observer_close_request()
+            if (req and not req.get("answer") and req.get("key") != self.close_seen
+                    and str(req.get("at") or "") >= self.started_at):
+                self.close_seen = req.get("key")
+                self.close_box(req)
+        except Exception:
+            pass                        # 요청을 못 읽어도 옵저버는 그대로 쓴다
+        self.root.after(1000, self._watch_close)
+
+    def _close_box(self, req):
+        """'30초 후 옵저버를 닫습니다' + 사유, [옵저버 닫기]·[취소]. 30초가 지나거나 [옵저버 닫기] 면 force_close, [취소]·X 면 답만 적는다."""
+        top = tk.Toplevel(self.root, bg=CARD)
+        top.title("옵저버")
+        top.transient(self.root)
+        top.resizable(False, False)
+        top.attributes("-topmost", True)
+        pad = w.px(24)
+        body = tk.Frame(top, bg=CARD, padx=pad, pady=pad)
+        body.pack(fill="both", expand=True)
+        head = tk.Label(body, bg=CARD, fg=w.TEXT, font=(w.UI, 11, "bold"), anchor="w", justify="left")
+        head.pack(anchor="w")
+        tk.Label(body, text=f"사유 : {req.get('why') or st.OBSERVER_CLOSE_WHY}", bg=CARD, fg=w.TEXT2, font=w.F,
+                 anchor="w", justify="left").pack(anchor="w", pady=(w.px(8), 0))
+        row = tk.Frame(body, bg=CARD)
+        row.pack(anchor="e", pady=(w.px(20), 0))
+        left = [self.CLOSE_SEC]
+
+        def done(close):
+            if not top.winfo_exists():
+                return
+            top.destroy()
+            if close:
+                return self.force_close()
+            st.answer_observer_close(req, "cancel")
+            self.status.config(text="옵저버 닫기를 취소하였습니다. 이번 사이트 엑셀 업로드는 실행하지 않습니다.", fg=MUTED)
+
+        w.Btn(row, "옵저버 닫기", kind="primary", command=lambda: done(True)).pack(side="right")
+        w.Btn(row, "취소", command=lambda: done(False)).pack(side="right", padx=(0, w.px(8)))
+        top.protocol("WM_DELETE_WINDOW", lambda: done(False))
+
+        def tick():
+            if not top.winfo_exists():
+                return
+            head.config(text=f"{left[0]}초 후 옵저버를 닫습니다")
+            if left[0] <= 0:
+                return done(True)
+            left[0] -= 1
+            top.after(1000, tick)
+        tick()
+        top.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - top.winfo_reqwidth()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - top.winfo_reqheight()) // 3
+        top.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        top.lift()
+        top.focus_force()
+
+    def force_close(self):
+        """묻지 않고 닫는다 (에이전트 요청 - 저장하지 않은 변경은 버린다). 미리보기 중이면 멈추고 정리가 끝나면 닫는다 (quit 과 같은 길)."""
+        if self.closing:
+            return
+        if self.previewing:
+            self.closing = True
+            self.worker.cancel.set()
+            self.status.config(text="미리보기를 멈추고 닫는 중…", fg=MUTED)
+            self.paint_buttons()
+            return
+        self.closing = True
         self._close_now()
 
     def _close_now(self):
