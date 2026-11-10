@@ -78,6 +78,12 @@ b = dict(base, no=2, name="나", code="034", market="쿠팡")
 c = dict(base, no=3, name="다", code="056", market="이마트")
 check("여러 프리셋이 같은 마켓을 골라도 된다 (프리셋 하나에 마켓 하나 - 사용자 2026-11-09)", obs.validate_presets([a, b, c]) is None)
 check("안 고른 칸은 여럿이어도 된다", obs.validate_presets([dict(a, market=""), dict(b, market="")]) is None)
+up = dict(a, market="", upload=True, record={"steps": [{"kind": "file"}]})
+check("마켓 칸이 보이는 PC: 업로드 프리셋은 마켓을 골라야 저장된다 (사용자 2026-11-10)",
+      "운송장 전송 마켓" in (obs.validate_presets([up], need_market=True) or (0, ""))[1])
+check("마켓을 고르면 저장된다", obs.validate_presets([dict(up, market="이지웰")], need_market=True) is None)
+check("다운로드 프리셋은 마켓 없이도 저장된다", obs.validate_presets([dict(up, upload=False)], need_market=True) is None)
+check("마켓 칸이 안 보이는 PC 는 묻지 않는다 (고를 수 없으니)", obs.validate_presets([up]) is None)
 old = {1: {"name": "가", "code": "012", "record": rec, "saved_at": "2026-11-01T00:00:00", "market": "쿠팡"}}
 f = obs.keep_dates([{"no": 1, "name": "가", "code": "012", "record": rec, "market": "이마트"}], old, set(), "now")
 check("마켓을 바꾸면 저장 날짜가 바뀐다", f[0]["saved_at"] == "now", f)

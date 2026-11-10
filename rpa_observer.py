@@ -475,7 +475,8 @@ def edit_view(presets):
     이름·사이트코드·메일 시작 문구는 _store_fields 와 같이 다듬어 견준다 - 고르기만 한 칸(옛 전각 코드 등)을 고친 것으로 보지 않게."""
     return [(p["name"].strip(), unicodedata.normalize("NFKC", p["code"]).strip(), p["id"], bool(p["pw"]), p["phone"], p["senders"],
              p["mail_id"], bool(p["mail_pw"]), p["source"], p["prefix"].strip(), repr(p["imap"]), sorted(p["deleted"]), sorted(p["otp"].items()),
-             sorted(k for k, v in p["enabled"].items() if not v.get()), sorted(p["wait"].items()))
+             sorted(k for k, v in p["enabled"].items() if not v.get()), sorted(p["wait"].items()),
+             p["market"])     # 운송장 전송 마켓만 고르고 닫으면 묻지 않고 버렸다 (2026-11-10)
             for p in presets if p["loaded"] or p["raw"] or p["head"]]
 
 
@@ -715,9 +716,10 @@ def pick_problem(presets):
     return None
 
 
-def validate_presets(presets):
+def validate_presets(presets, need_market=False):
     """저장 전에 막을 것: (프리셋 번호, 사람에게 보일 문장) 또는 None.
-    presets: [{no, name, code, id, pw, has_pw, record}] - 기록이 있는 것만 본다."""
+    presets: [{no, name, code, id, pw, has_pw, record}] - 기록이 있는 것만 본다.
+    need_market: '운송장 전송 마켓' 칸이 보이는 PC - 업로드 프리셋은 마켓을 골라야 저장된다 (사용자 2026-11-10)."""
     codes = {}
     for p in presets:
         if not p.get("record"):
@@ -732,6 +734,8 @@ def validate_presets(presets):
         codes[key] = tag
         if p.get("upload") and not any(s["kind"] == "file" for s in p["record"].get("steps") or []):
             return p["no"], f"{tag}: 파일을 넣는 단계가 기록되지 않았습니다. 사이트의 파일 칸에 엑셀 파일을 넣는 것까지 기록하여 주십시오."
+        if need_market and p.get("upload") and not p.get("market"):
+            return p["no"], f"{tag}: 엑셀 업로드 프리셋은 운송장 전송 마켓을 선택하여 주십시오."
         step = st.imap_step(p["record"])
         if step and imap_problem(step):
             return p["no"], f"{tag}: {imap_problem(step)}"
@@ -1644,7 +1648,7 @@ class App:
             out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"], "upload": is_up(p), "market": p["market"],
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"],
                         "mail_id": p["mail_id"], "mail_pw": p["mail_pw"], "has_mail_pw": p["has_mail_pw"]})
-        problem = validate_presets(out) or pick_problem(out)
+        problem = validate_presets(out, need_market=bool(self.market_box.grid_info())) or pick_problem(out)
         if problem:
             self.select(problem[0] - 1)
             return self.status.config(text=problem[1], fg=RED)

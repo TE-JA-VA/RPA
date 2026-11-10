@@ -191,6 +191,7 @@ class FakeApp(ob.App):
         self.presets, self.cur, self.said, self.told, self.picked = presets, cur, [], [], []
         self.recording, self.previewing = None, False
         self.status = SimpleNamespace(config=lambda **k: self.said.append(k.get("text")))
+        self.market_box = SimpleNamespace(grid_info=lambda: {})     # 운송장 전송 마켓 칸이 안 보이는 PC
 
     def _store_fields(self):
         pass

@@ -799,6 +799,7 @@ def _app():
     asked, said, titles = [], [], []
     f = SimpleNamespace(presets=rr.load_presets(), cur=0, recording=None, previewing=False, shown=0, start_url=None, unsaved_drop=False,
                         _store_fields=lambda: None, _load_fields=lambda: None, render=lambda: None, select=lambda i: None, root=None, _show_preset=lambda: None,
+                        market_box=SimpleNamespace(grid_info=lambda: {}),       # 운송장 전송 마켓 칸이 안 보이는 PC
                         ask=lambda t, x: (asked.append(x), titles.append(t), True)[2], status=SimpleNamespace(config=lambda **kw: said.append(kw.get("text"))))
     f._final = lambda q: rr.App._final(f, q)
     f._kept = lambda q, final: list(range(len(final["steps"])))

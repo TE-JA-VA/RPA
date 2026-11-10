@@ -47,6 +47,9 @@ p["raw"] = [{}]
 before = ob.edit_view([p])
 p["wait"][1] = (True, "5")
 check("값을 바꾸면 '저장하지 않은 변경' 이다", ob.edit_view([p]) != before)
+before = ob.edit_view([p])
+p["market"] = "이지웰"
+check("운송장 전송 마켓만 골라도 '저장하지 않은 변경' 이다", ob.edit_view([p]) != before)
 
 
 class H(http.server.BaseHTTPRequestHandler):
