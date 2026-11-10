@@ -158,12 +158,38 @@ JS = r"""
     }
     return false;
   }
+  // 같은 글자가 여럿일 때 (값이 같은 드롭다운 여럿, 사용자 2026-11-10): 보이는 것 중에서는 몇 번째인지, 그리고 id 가 달린 가장 가까운
+  // 바깥 칸 안에서 몇 번째인지. 화면을 열 때마다 바뀌는 id (숫자 셋 이상·라이브러리가 붙이는 이름) 와 겹치는 id 는 건너뛴다
+  const AUTO_ID = /\d{3,}|^(rc_|ext-|react-|mui-|radix-|headlessui-|:r)|[0-9a-f]{8}-[0-9a-f]{4}/i;
+  function scopeOf(el, tag, t, total) {
+    for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+      if (!a.id || AUTO_ID.test(a.id)) continue;
+      try { if (document.querySelectorAll('#' + CSS.escape(a.id)).length !== 1) continue; } catch (e) { continue; }
+      const inner = [...a.querySelectorAll(tag)].filter(e => textOf(e) === t);
+      return inner.length < total ? {id: a.id, i: inner.indexOf(el), n: inner.length} : null;   // 좁혀지지 않으면 더 바깥도 마찬가지
+    }
+    return null;
+  }
+  // id 끝: 지금 화면에서 하나로 정해지는 가장 짧은 id 끝 (_ 또는 - 에서 자름). WebSquare 의 id 는 창 번호를 품어
+  // (mf_wdc_main_subWindow1_wframe_sbx_dlvStatus) 창을 연 차례가 바뀌면 통째로 달라진다 - 끝 '_dlvStatus' 는 그대로 (현대이지웰, 사용자 2026-11-10)
+  function idTail(id) {
+    if (!id || AUTO_ID.test(id)) return '';
+    for (let i = id.length - 1; i > 0; i--) {
+      if (id[i] !== '_' && id[i] !== '-') continue;
+      const tail = id.slice(i);
+      if (tail.length < 4) continue;
+      try { if (document.querySelectorAll('[id$="' + tail.replace(/["\\]/g, '\\$&') + '"]').length === 1) return tail; } catch (e) { return ''; }
+    }
+    return '';
+  }
   function describe(el) {
     const t = textOf(el), tag = el.tagName.toLowerCase();
     const same = t ? [...document.querySelectorAll(tag)].filter(e => textOf(e) === t) : [];
+    const vis = same.length > 1 ? same.filter(e => visible(e)) : same;
     const [label, labelIndex, labelKind] = labelOf(el);
-    return {tag, id: el.id || '', name: el.getAttribute('name') || '', type: (el.getAttribute('type') || '').toLowerCase(),
-            text: t, textIndex: same.indexOf(el), textCount: same.length,
+    return {tag, id: el.id || '', idTail: idTail(el.id), name: el.getAttribute('name') || '', type: (el.getAttribute('type') || '').toLowerCase(),
+            text: t, textIndex: same.indexOf(el), textCount: same.length, visIndex: vis.indexOf(el), visCount: vis.length,
+            scope: same.length > 1 ? scopeOf(el, tag, t, same.length) : null,
             aria: el.getAttribute('aria-label') || '', title: el.getAttribute('title') || '',
             placeholder: el.getAttribute('placeholder') || '', label, labelIndex, labelKind,
             href: el.getAttribute('href') || '', css: cssPath(el), inOverlay: inOverlay(el)};
@@ -1365,16 +1391,33 @@ def q(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+SURE_CLUES = ("id", "id 끝", "id 안 글자", "보이는 글자")    # 하나로 정해지는 단서 - '새로 생긴 것' 에 없을 때 원래 있던 것에서도 찾는다 (_find)
+# 화면을 열 때마다 바뀌는 id (기록기 AUTO_ID 와 같다) - WebSquare 'wq_uuid_591' 은 앞서 연 창 수에 따라 번호가 밀려 다른 칸을 가리킬 수 있다
+AUTO_ID = re.compile(r"\d{3,}|^(rc_|ext-|react-|mui-|radix-|headlessui-|:r)|[0-9a-f]{8}-[0-9a-f]{4}", re.I)
+
+
 def candidates(t):
     """(설명, 셀렉터, 순번) - 앞의 것부터 써 본다. 순번이 None 이면 하나로 정해질 때만 쓴다."""
     tag, out = t["tag"], []
     if t["id"]:
         out.append(("id", f"[id={q(t['id'])}]", None))
+    tail = t.get("idTail")
+    if tail is None and t["id"].count("_") >= 3 and not AUTO_ID.search(t["id"]):    # idTail 이 없던 옛 기록 - 마지막 두 마디
+        tail = "_" + "_".join(t["id"].split("_")[-2:])
+    if tail:                # 창 번호가 밀려 id 가 통째로 바뀐 날 (WebSquare, 사용자 2026-11-10). 하나로 정해질 때만
+        out.append(("id 끝", f"[id$={q(tail)}]", None))
     if t["text"] and t["textCount"] == 1:
         if tag == "input":
             out.append(("글자", f"input[value={q(t['text'])}]", None))
         else:
             out.append(("글자", f"{tag}:text-is({q(t['text'])})", None))
+    if t["text"] and t["textCount"] > 1:     # 같은 글자가 여럿 - 값이 같은 드롭다운 여럿 (사용자 2026-11-10). 위치·몇 번째보다 먼저
+        sel = f"input[value={q(t['text'])}]" if tag == "input" else f"{tag}:text-is({q(t['text'])})"
+        if t.get("visCount") == 1:          # 펼친 목록의 값 - 다른 드롭다운의 숨은 목록에 같은 값이 있어도 보이는 것은 하나
+            out.append(("보이는 글자", f"{sel} >> visible=true", None))
+        sc = t.get("scope")
+        if sc:                              # 드롭다운 칸 - 글자('전체')가 같아도 바깥 칸의 id 가 다르다
+            out.append(("id 안 글자", f"[id={q(sc['id'])}] {sel}", sc["i"] if sc["n"] > 1 else None))
     if t["name"]:
         out.append(("name", f"{tag}[name={q(t['name'])}]", None))
     for key, attr in (("aria", "aria-label"), ("title", "title"), ("placeholder", "placeholder")):
@@ -1652,6 +1695,9 @@ class Replayer:
         cands = candidates(t)
         # 글자가 숫자뿐이면 보통 쪽 번호라 바뀌면 다른 것이지만, id 가 같거나 파일을 받는 단계면 숫자만 바뀐 같은 것 (현대이지웰 주문 수 링크 '3' → '6', 2026-11-05)
         number = t["text"].isdigit()
+        # 같은 글자가 여럿인데 기록 때 보이던 것은 하나 - 숨은 같은 값(다른 드롭다운의 닫힌 목록)을 집지 않고 보일 때까지 기다린다
+        # (사용자 2026-11-10: 목록이 늦게 펼쳐지면 '보이는 글자' 를 못 찾은 사이 위치·몇 번째 단서가 숨은 것을 스크립트로 눌렀다)
+        shown_only = t["textCount"] > 1 and t.get("visCount") == 1
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
         started = time.time()
         deadline, tries = started + (OPTIONAL_WAIT if optional else self.step_timeout), 1
@@ -1659,9 +1705,15 @@ class Replayer:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
             late = time.time() - started >= LATE_CLUE_WAIT
-            for pv in ((prev, None) if loose and late and prev is not None else (prev,)) if frame is not None else ():
+            # 새로 생긴 것 중에 없으면 원래 있던 것에서도 - loose_new 는 모든 단서로, 그 밖에는 하나로 정해지는 단서(SURE_CLUES)로만.
+            # 기록 땐 앞 단계 뒤에 그려진 드롭다운이 재생 땐 이미 그려져 있었다 (사용자 2026-11-10 미리보기 - 같은 기록이 한 번은
+            # 못 찾고 한 번은 [id] 로 찾았다). 파일 받기는 오늘 새로 생긴 파일만 받게 그대로 둔다
+            relax = late and prev is not None and (loose or not s.get("download"))
+            for pv in ((prev, None) if relax else (prev,)) if frame is not None else ():
                 for how, sel, nth in cands:
                     if not late and how.endswith("(안쪽 포함)"):
+                        continue
+                    if pv is None and prev is not None and not loose and (how not in SURE_CLUES or how == "id" and AUTO_ID.search(t["id"])):
                         continue
                     try:
                         loc = frame.locator(sel)
@@ -1669,6 +1721,13 @@ class Replayer:
                     except Exception:
                         continue            # 화면이 바뀌는 중
                     if loc is not None and self._same(loc, t, how.startswith("숫자 뺀 글자") or number and (how == "id" or how == "위치" and s.get("download"))):
+                        if shown_only:
+                            try:
+                                vis = loc.is_visible()
+                            except Exception:
+                                vis = False     # 화면이 바뀌는 중
+                            if not vis:
+                                continue
                         return frame, loc, how + (", 새로 생긴 것" if pv is not None else "")
             if time.time() > deadline:
                 if optional:
