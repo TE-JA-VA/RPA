@@ -140,6 +140,17 @@ for f in list(st.upload_files().values()):
 end += datetime.timedelta(hours=1)
 sch.tick_upload(end + datetime.timedelta(seconds=90))
 check("올릴 파일이 없으면 안 띄운다", len(launched) == 2, launched)
+put("(077)프리셋없음.xlsx")
+end += datetime.timedelta(hours=1)
+sch.tick_upload(end + datetime.timedelta(seconds=90))
+check("같은 코드의 업로드 프리셋이 없는 파일만 있으면 안 띄운다 (ACTOR 가 바로 끝나 '중단' 기록만 남았다, 11-09 실측)", len(launched) == 2, launched)
+put("(034)올림.xlsx")
+check("올릴 수 있는 파일은 업로드 프리셋이 있는 코드만", sorted(st.upload_pending()) == ["034"], st.upload_pending())
+end += datetime.timedelta(hours=1)
+sch.tick_upload(end + datetime.timedelta(seconds=90))
+check("프리셋 있는 파일이 생기면 띄운다", len(launched) == 3, launched)
+for f in [p for ps in st.upload_files().values() for p in ps]:
+    os.remove(f)
 
 # --- 토큰: 운송장번호 전송에 포함 ---
 steps = [{"key": "PRESET3:replay", "state": "done"}]

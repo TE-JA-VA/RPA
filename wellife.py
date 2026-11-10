@@ -1122,16 +1122,31 @@ def module_invoice_send(rr, ctx, live=True):
 
 
 def invoice_send(rr, ctx, live):
-    """조회(F) -> (줄이 있으면) 머리글로 전체 체크 -> [전송요청(S)]. 조회 조건은 화면 기본값 그대로 (배송일 기간·미전송).
-    실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
+    """예약 줄의 할 일대로 (invoice_flags, 사용자 2026-11-09 저녁 - 셋 중 하나가 아니라 체크 셋): 'excel' 이면 먼저 수집 사이트 엑셀출력
+    (invoice_excel), 'none' 이 아니면 이어서 [전송요청(S)] (invoice_request - 'auto' 면 수집 사이트를 빼고 조회). 둘 다 했으면 사유를
+    ' / ' 로 잇고 결과는 failed > done > skipped > no_target. 둘 다 아니면(예약은 거절하지만 환경 변수로는 올 수 있다) 누르지 않는다. (결과, 사유)."""
+    flags = invoice_flags()
+    results = []
+    if st.INVOICE_EXCEL in flags:
+        results.append(invoice_excel(rr, ctx, live))
+    if "none" not in flags:
+        results.append(invoice_request(rr, ctx, live))
+    if not results:
+        return "skipped", f"[{mode_tag(live)}] 운송장 전송 줄에 할 일이 없어 아무것도 누르지 않았습니다. (전송요청 안 함, 엑셀 출력 없음)"
+    states = [r for r, _ in results]
+    state = next((s for s in ("failed", "done", "skipped", "no_target") if s in states), states[0])
+    return state, " / ".join(text for _, text in results)
+
+
+def invoice_request(rr, ctx, live):
+    """조회(F) -> (줄이 있으면) 머리글로 전체 체크 -> [전송요청(S)]. 조회 조건은 화면 기본값 그대로 (배송일 기간·미전송 - 'auto' 면 매출구분에서
+    사이트 수집 사이트를 뺀다, invoice_sites). 실행은 전체 체크가 됐고 단추가 켜져 있을 때만 누르고 팝업을 [예]/[확인] 으로 넘긴다 (press_arrow).
     체크는 되돌리지 않는다 (다음 조회로 풀린다). (결과, 사유)."""
     tag = mode_tag(live)
     # 앞 회차에 누른 전송이 아직 도는 중 - 누르지 않고 다음 회차에 (사용자 2026-10-19).
     # 반복 회차이고 오늘 전송을 누른 기록이 있을 때만 본다 - 하루 한 번·수동 실행·반복 첫 회차는 화면이 느려도 예전대로 (PR #15 검토 2026-10-20)
     if os.environ.get("RPA_REPEAT_UNTIL") and last_send_at(rr, datetime.datetime.now()) and send_busy(rr, ctx):
         return "skipped", f"[{tag}] {send_busy_reason(rr)}"
-    if invoice_option() == "excel":     # 수집 사이트 엑셀출력 - 사이트마다 조회 → 엑셀 → 전체 체크 → [미전송 완료처리], [전송요청(S)] 없음 (사용자 2026-11-09)
-        return invoice_excel(rr, ctx, live)
     fixed = ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx))   # 조회 조건 기본값 (사용자 10-13)
     count, grid = run_query(rr, ctx)
     rr.status.note(f"운송장 {count}건")
@@ -1168,12 +1183,14 @@ def run_query(rr, ctx):
 
 
 # ---------------------------------------------------------------------------
-# ⑥ 수집 사이트 엑셀출력 (예약 줄 운송장 전송 방식 'excel', 사용자 2026-11-09). 실측: docs/wellife-rpa.md 9.7.
+# ⑥ 수집 사이트 엑셀출력 (예약 줄 slots[i].xl - RPA_INVOICE_OPTION 의 'excel', 사용자 2026-11-09). 실측: docs/wellife-rpa.md 9.7.
 # 받을 사이트는 옵저버에서 '운송장 전송 마켓' 을 고른 사이트 수집 프리셋 중 켠 것 (excel_targets - upstream invoice_markets).
 # 고른 사이트가 없으면 받지 않는다. 사이트마다 (한 번에 한 사이트, 사용자 2026-11-09): 매출구분에서 그 사이트만 골라 [조회(F)] → 0건이면 넘어감 →
 # [마켓업로드용 엑셀출력] → 따로 뜬 '송장양식'(마켓 이름 목록) 에서 고른 마켓 → [엑셀출력] → '엑셀 다운로드 받기' 미리보기에 줄이 없으면
 # 받지 않고 닫는다 → 비밀번호·사유 → [엑셀 다운로드] → 저장 창 → ERPIA_AI_UPLOAD (st.upload_dir - ACTOR --upload 가 사이트에 올리는 폴더) → [아니오]
-# → 받았으면 전체 체크 → [미전송 완료처리] (엑셀로 올린 운송장은 ERPia 가 전송 여부를 모르므로 상태만 완료로 - 사용자) → 다시 조회해 남은 줄 수.
+# → 받았으면 전체 체크 → [미전송 완료처리] (엑셀로 올린 운송장은 ERPia 가 전송 여부를 모르므로 상태만 완료로 - 사용자) → 다음 사이트.
+# 완료처리 뒤 같은 사이트를 다시 조회하지 않는다 (사용자 2026-11-09 저녁 '필요없는 행위' - 조회 한 번 8~13초. 11-09 16:10 실측 두 사이트 모두 완료처리 뒤 0줄).
+# 조회 조건(날짜·전송상태 등)은 첫 사이트에서만 다 보고(ensure_query), 뒤 사이트는 매출구분만 바꾼다(pick_sites) - 그 사이 아무도 안 바꾼다.
 # 파일 이름 앞에 사이트코드 '(nnn)' 을 붙여 업로드(st.upload_files)가 그 사이트의 업로드 프리셋으로 올리게 한다.
 # 리허설도 받는다 (데이터를 바꾸지 않는다, 사용자) - 이름 앞에 '리허설_' 을 더 붙여 업로드가 집지 않게 한다.
 # 비밀번호·사유는 대시보드(웹)에 보이지 않는다 (사용자 2026-11-09). 비밀번호는 로그·사유에도 남기지 않는다.
@@ -1191,7 +1208,7 @@ def invoice_excel(rr, ctx, live):
     받은 파일이 있으면 실행 done·리허설 skipped (토큰 없음), 모두 0건이면 no_target, 고른 사이트가 없으면 skipped,
     한 사이트라도 못 받았으면 failed (받은 것도 사유에 남긴다). 사이트 하나가 실패해도 나머지는 받는다 - 화면이 잠기는 등
     'stopped' 는 바로 멈춘다. 사이트마다 조회해 0건이면 받지 않고, 양식 미리보기에 줄이 없어도 받지 않는다 (머리글만 나온다).
-    받은 사이트는 전체 체크 → [미전송 완료처리] (실행만 누른다, 리허설은 마우스만) → 다시 조회해 남은 줄 수를 사유에 남긴다."""
+    받은 사이트는 전체 체크 → [미전송 완료처리] (실행만 누른다, 리허설은 마우스만). 전송요청을 함께 켠 줄은 이 뒤에 invoice_request 가 한다."""
     tag = mode_tag(live)
     head = f"[{tag}] 수집 사이트 엑셀출력"
     try:
@@ -1210,10 +1227,13 @@ def invoice_excel(rr, ctx, live):
                   "업로드 프리셋을 기록하고 켜면 올라갑니다)") if no_up else ""
     _close_export_windows(rr, ctx)     # 지난 실행·사람이 열어 둔 내보내기 창이 조회 조건 칸을 덮지 않게 (11-09 실측)
     got, empty, bad, pressed_any = [], [], [], False
-    for t in targets:
+    for i, t in enumerate(targets):
         label = f"{t['market']}({t['code']})"
         try:
-            ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx), sites=([t["code"]], False))   # 1. 그 사이트만
+            if i == 0:      # 1. 그 사이트만 - 다른 조회 조건은 첫 사이트에서 한 번만 본다
+                ensure_query(rr, ctx, "InvoiceSend", INVOICE_FORM, lambda: reopen_icon(rr, ctx), sites=([t["code"]], False))
+            else:
+                pick_sites(rr, ctx, INVOICE_FORM, SITES_KEY, SITES_AID, [t["code"]])
             count, grid = run_query(rr, ctx)
             if not count:
                 empty.append(label)
@@ -1231,9 +1251,8 @@ def invoice_excel(rr, ctx, live):
             text = f"{label} {count}건 {os.path.basename(saved)}"
             if not checked:
                 text += " (체크가 되지 않아 완료처리하지 않았습니다. 확인하여 주십시오)"
-            elif pressed:
-                left, _ = run_query(rr, ctx)                                          # 4. 다시 조회 - 남은 줄 수
-                text += f" → 완료처리{note}, 남은 {left}건" + (" (확인하여 주십시오)" if left else "")
+            elif pressed:                                                             # 다시 조회하지 않는다 (위 설명) - 다음 사이트로
+                text += f" → 완료처리{note}"
                 pressed_any = True
             got.append(text)
         except Stop as e:
@@ -1670,7 +1689,7 @@ def count_rows(rr, ctx, grid):
 # 설정 QueryDefaults.<화면>.<키> 가 있으면 그 값 (웹에는 안 보인다). 'fixed' 는 목록 창이 복잡해(체크 목록·상품) 고치지
 # 않고, 기본값이 아니면 화면을 닫고 다시 연다 (사용자 10-14). 체크 상자 '출고대기만' 은 UIA·MSAA 로 상태가 안 읽혀
 # 컨트롤이 그린 그림(PrintWindow)으로 본다 - 애매하면 화면을 다시 연다.
-# 'sites' (⑥ 매출구분): 예약 줄의 운송장 전송 방식이 '자동수집 사이트만 전송' 이면 사이트 수집 프리셋의 사이트코드를
+# 'sites' (⑥ 매출구분): 예약 줄의 전송요청이 '수집 사이트 제외'(auto) 이면 사이트 수집 프리셋의 사이트코드를
 # 뺀 나머지를 목록에서 체크한다 (pick_sites, 사용자 2026-11-09). 아니면 'fixed' 와 같다.
 # ---------------------------------------------------------------------------
 QUERY_SECTION = "QueryDefaults"
@@ -1699,6 +1718,7 @@ QUERY_CONDITIONS = {      # 화면 -> (설정 키, auto_id, 종류, 기본값)
     ),
 }
 CHECKED_AT, UNCHECKED_BELOW = 0.25, 0.05   # 체크 상자 안쪽의 색 있는 점 비율 (10-14 실측: 체크 0.551, 안 체크 0.000 - 포커스와 상관없이)
+SITES_KEY, SITES_AID = next((k, a) for k, a, kind, _ in QUERY_CONDITIONS["InvoiceSend"] if kind == "sites")   # 매출구분 (invoice_excel 이 뒤 사이트에서 바로 고른다)
 
 
 def query_defaults(rr, screen, sites=None):
@@ -1726,11 +1746,10 @@ def query_defaults(rr, screen, sites=None):
     return out
 
 
-def invoice_option():
-    """예약 줄의 운송장 전송 방식 (st.INVOICE_OPTION_ENV, rpa_dashboard.launch_slot, 사용자 2026-11-09):
-    'excel' (수집 사이트 엑셀출력) / 'auto' (자동수집 사이트만 전송) / None (전체 전송 - 단추 실행도)."""
-    v = os.environ.get(st.INVOICE_OPTION_ENV)
-    return v if v in st.INVOICE_OPTIONS else None
+def invoice_flags():
+    """예약 줄의 운송장 전송 할 일 (st.INVOICE_OPTION_ENV, rpa_dashboard.launch_slot, 사용자 2026-11-09): 'auto' (전송요청에서 수집 사이트 제외) /
+    'none' (전송요청 안 함) / 'excel' (수집 사이트 엑셀출력) 의 집합. 비면 전체 전송만 (단추 실행도)."""
+    return st.invoice_flags(os.environ.get(st.INVOICE_OPTION_ENV))
 
 
 def invoice_sites():
@@ -1738,7 +1757,7 @@ def invoice_sites():
     뺄 사이트는 사이트 수집에 기록한 프리셋 모두 - 켬/끔 상관없이 (끈 사이트도 전송하지 않는다, 사용자 2026-11-09.
     엑셀로 수집한 주문은 [전송요청] 으로 안 가기도 한다, ERPia 도움말).
     기록한 프리셋이 없으면 뺄 것이 없어 None. 프리셋을 못 읽으면 멈춘다 - 사이트 수집 사이트까지 보내지 않게."""
-    if invoice_option() != "auto":
+    if "auto" not in invoice_flags():
         return None
     presets = st.preset_summary()
     if presets is None:
@@ -2069,20 +2088,30 @@ def _match_sites(rr, h, win, want, what):
                 continue
             seen.add(n)
             code = code_of(cells)
-            name = rr.legacy_value(cells["명칭"]) if "명칭" in cells else None
-            if want(code):
-                names.setdefault(code, []).append(name)
-            if (rr.legacy_value(box) == "선택") != want(code):
-                _click_in(rr, h, box, f"{what} 목록 {name}({code}) 체크")
+            hit = want(code)
+            if hit:     # 명칭은 고른 줄만 읽는다 (칸 글 확인용) - 줄마다 UIA 읽기 하나를 던다 (개발기 75줄 목록이 사이트마다 23~26초, 11-09 실측)
+                names.setdefault(code, []).append(rr.legacy_value(cells["명칭"]) if "명칭" in cells else None)
+            if (rr.legacy_value(box) == "선택") != hit:
+                _click_in(rr, h, box, f"{what} 목록 사이트코드 {code} 체크")
                 clicked.append(n)
         flips += len(clicked)
-        deadline = time.time() + CHECK_WAIT_SECONDS
+        deadline, retried = time.time() + CHECK_WAIT_SECONDS, False
         while clicked:
             now = rr.grid_rows(grid)
-            clicked = [n for n in clicked if n not in now or CHECK_COL not in now[n]
-                       or (rr.legacy_value(now[n][CHECK_COL]) == "선택") != want(code_of(now[n]))]
-            if clicked and time.time() > deadline:
-                raise Stop("failed", f"{what}: 매출구분 목록 체크를 눌렀으나 바뀌지 않아 조회하지 않았습니다. (행 {clicked})")
+            state = {n: rr.legacy_value(now[n][CHECK_COL]) if n in now and CHECK_COL in now[n] else None for n in clicked}
+            clicked = [n for n in clicked if state[n] not in ("선택", "선택안됨") or (state[n] == "선택") != want(code_of(now[n]))]
+            blank = [n for n in clicked if state[n] not in ("선택", "선택안됨")]    # 체크 값이 안 읽히는 줄 - 눌러도 확인할 길이 없다
+            if [n for n in clicked if n not in blank] and not retried and time.time() > deadline - CHECK_WAIT_SECONDS / 2:
+                # 값은 읽히는데 반쯤 기다려도 안 바뀐 줄은 한 번 더 누른다 - 목록이 뜬 직후 첫 클릭이 묻힌 일이 있다 (개발기 11-09 16:49 실측, 1행).
+                # 읽기만 늦었던 것이면 되돌아가 다시 걸리고, 그래도 끝에 칸 글의 개수 확인(pick_sites)이 막는다
+                for n in [n for n in clicked if n not in blank]:
+                    rr.log(f"  {what}: 목록 {n}행 체크가 바뀌지 않아 한 번 더 누릅니다.")
+                    _click_in(rr, h, now[n][CHECK_COL], f"{what} 목록 {n}행 체크 (다시)")
+                deadline, retried = time.time() + CHECK_WAIT_SECONDS, True
+            elif clicked and time.time() > deadline:
+                # 개발기 11-09 17:18 실측: 76줄 중 52행 이후 25줄(새 사이트코드)은 체크 칸 값이 비어 있어 읽지도 바꾸지도 못했다 - 까닭은 아직 모른다 (docs 9.6)
+                raise Stop("failed", f"{what}: 매출구분 목록 체크를 눌렀으나 바뀌지 않아 조회하지 않았습니다. (행 {[n for n in clicked if n not in blank]}"
+                           + (f", 체크 값이 읽히지 않는 행 {blank}" if blank else "") + ")")
             if clicked:
                 time.sleep(0.2)
         first = min(rows, default=None)
@@ -2333,7 +2362,11 @@ def close_excel_prompt(rr, ctx):
     if sig is not None and getattr(ctx, "calm_children", None) == sig:
         return
     buttons = rr.find_popup_buttons(ctx.window())
-    text = rr.collect_popup_text(buttons[0]) if buttons else ""
+    if not buttons:     # 팝업 없음 - no_popup 처럼 창 구성을 기억해 바로 뒤 no_popup 이 같은 창을 다시 훑지 않게 (11-09 실측: 운송장번호 전송 들어갈 때 7초 두 번)
+        if sig is not None and sig == _calm_sig(rr, ctx):
+            ctx.calm_children = sig
+        return
+    text = rr.collect_popup_text(buttons[0])
     if "여시겠습니까" not in text or not any(k in text for k in rr.EXCEL_OPEN_PROMPT_KEYWORDS):   # '엑셀파일을 여러 …' 같은 다른 질문은 아니다
         return
     no = next((b for b in buttons if b.window_text() in rr.NO_BUTTON_TEXTS), None)
@@ -2789,9 +2822,16 @@ def confirm_popups(rr, ctx, what, grid=None, idle=0, before=frozenset()):
     처리는 멈춘다."""
     texts = []
     deadline = time.time() + CONFIRM_WAIT_SECONDS
-    calm = unknown = None
+    calm = unknown = clean = None
     while time.time() < deadline:
-        found = _next_popup(rr, ctx, before)
+        # 창 전체 훑기(find_popup_buttons)는 ERPia 가 무거우면 7초다 (11-09 실측) - 마지막으로 '팝업 없음' 을 본 창 구성(clean)에서 자식 창·별도 창이
+        # 사라지기만 했으면(스피너가 걷힘) 팝업이 새로 뜬 것이 아니므로 훑지 않는다. 무엇이든 생겼으면 훑는다 (no_popup 의 캐시와 같은 근거)
+        sig = _calm_sig(rr, ctx)
+        if sig is not None and _only_fewer(clean, sig):
+            found = None
+        else:
+            found = _next_popup(rr, ctx, before)
+            clean = sig if found is None and sig is not None and sig == _calm_sig(rr, ctx) else None
         if found is not None:
             text, button = found
             if button is None:
@@ -2828,6 +2868,11 @@ def confirm_popups(rr, ctx, what, grid=None, idle=0, before=frozenset()):
             return texts
         time.sleep(0.3)
     raise Stop("failed", f"{what}: {CONFIRM_WAIT_SECONDS}초 안에 처리가 끝나지 않았습니다. (넘긴 팝업 {len(texts)}개)")
+
+
+def _only_fewer(clean, sig):
+    """창 구성 sig 가 '팝업 없음' 이던 clean 과 같은 창이고 자식 창·별도 창이 그 부분집합인가 (줄기만 함 - 팝업은 창을 더하지 빼지 않는다)."""
+    return clean is not None and sig[0] == clean[0] and sig[1] <= clean[1] and sig[2] <= clean[2]
 
 
 def _next_popup(rr, ctx, before):
@@ -3080,14 +3125,23 @@ def goto_screen(rr, ctx, name, icon, original):
         went, dup = None, []
     if went is not None:
         return "ok" if went[0] else went[1]
-    if not dup:
-        r = original()
-        return r if r in ("ok", "absent") else (f"'{name}' 화면으로 이동하지 못했습니다." if r == "failed" else r)
-    rr.log(f"  같은 화면이 여러 개 열려 있어({', '.join(dup)}) 좌측 아이콘을 자식을 따라 찾습니다.")
+    # 화면이 안 열려 있으면 아이콘을 자식을 따라 찾아 누르고 wait_tab(자식 따라 읽는 active_tab, 0.3초)으로 확인한다. 원래 방식(original -
+    # run_routine.goto_screen_by_icon)은 도착 확인을 창 전체 descendants 로 하는데, ERPia 가 오래 떠서 요소가 3,800개쯤 되면 5초씩 걸리고
+    # 메인 탭바를 못 찾아 None 만 줘 아이콘을 눌러 화면이 떴는데도 2분을 말없이 기다리다 실패했다 (개발기 11-09 17:35 예약 실행 실측 -
+    # 사용자가 '화면까지는 가는데 그 뒤 안 움직인다' 고 본 것). 아이콘을 못 찾았을 때만 원래 방식 (없음 absent 판정·창 다시 잡기는 거기서).
+    if dup:
+        rr.log(f"  같은 화면이 여러 개 열려 있어({', '.join(dup)}) 좌측 아이콘을 자식을 따라 찾습니다.")
     try:
         el = find_icon(ctx, icon)
-        if el is None:
+    except Exception as e:
+        rr.log(f"  '{name}' 아이콘을 자식을 따라 찾지 못해 원래 화면 이동 방식으로 진행합니다. ({type(e).__name__})")
+        el = None
+    if el is None:
+        if dup:
             return "absent"
+        r = original()
+        return r if r in ("ok", "absent") else (f"'{name}' 화면으로 이동하지 못했습니다." if r == "failed" else r)
+    try:
         click(rr, ctx, el, f"'{name}' 아이콘")
         ok, active = wait_tab(rr, ctx, name)
     except Stop:

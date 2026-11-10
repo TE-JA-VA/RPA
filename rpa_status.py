@@ -74,7 +74,7 @@ SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
 # (2026-10-07 시각별 모듈 - 설계 docs/superpowers/specs/2026-10-06-settings-schedule-design.md 5절. 옛 모양 {days, times} 는 read_settings 가 바꾼다)
 SCHEDULE_MINUTE_STEP = 1    # 1분 단위 (사용자 2026-11-03 - 그 전엔 5분: 웹이 통과시킨 09:03 을 PC 가 거절해 예약이 안 바뀌었다)
 SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
-SCHEDULE_VERSION = 7        # 7: 줄마다 운송장 전송 방식 (slots[i].inv - INVOICE_OPTIONS, 2026-11-09). 6: 1분 단위 시각 (2026-11-03, 그 전 판 PC 는 5분 단위만 받는다). 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
+SCHEDULE_VERSION = 8        # 8: 운송장 전송 줄의 할 일을 따로 켠다 (slots[i].inv 전송 방식 + slots[i].xl 엑셀 출력, 2026-11-09 저녁). 7: 줄마다 운송장 전송 방식 (slots[i].inv - 셋 중 하나, 2026-11-09). 6: 1분 단위 시각 (2026-11-03, 그 전 판 PC 는 5분 단위만 받는다). 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
     "prepare": {
         "parallel": 1,              # 업체가 웹에서 고른 동시 실행 창 수 (명령 set_parallel) - 관리 화면이 허용한 최대(policy.parallel)까지만 쓴다
@@ -1070,18 +1070,33 @@ REPLAY_ACTION = "replay"                  # web_runner 의 Action 이름
 # 옵저버 스위치·예약(PROCESS 끝나고 1분 뒤)·ACTOR 업로드가 모두 이 값 하나로 켜고 끈다. False 면 모든 프리셋이 다운로드 전용.
 EXCEL_UPLOAD_ON = True
 UPLOAD_DIR_NAME = "ERPIA_AI_UPLOAD"       # 바탕화면\ERPIA_AI 아래. ERPIA_AI_EXCEL 과 나눈다 - 거기 파일은 PROCESS 가 ERPia 로 올린다 (설계 2026-11-06)
-# 예약 줄의 운송장 전송 방식 (사용자 2026-11-09). 줄에 없으면 전체 전송 (예전 그대로).
-# 예전 '수집된 사이트만 전송'(inv_sites: true)은 엑셀로 수집한 주문이라 [전송요청] 으로 안 가서(ERPia 도움말) 'excel' 로 읽는다.
-# 순서·이름은 사용자 2026-11-09: 1. 전체 전송 (줄에 값 없음) 2. auto 3. excel. auto·excel 은 사이트 수집에서 끈 사이트를 전송도 출력도 하지 않는다 -
-# auto 는 사이트 수집 프리셋을 켬·끔 모두 빼고 (wellife.invoice_sites), excel 은 켠 것만 (wellife.excel_targets).
-INVOICE_OPTIONS = {"auto": "자동수집 사이트만 전송", "excel": "수집 사이트 엑셀출력"}
-INVOICE_OPTION_ENV = "RPA_INVOICE_OPTION"   # 띄울 때 줄의 방식을 넘긴다 (rpa_dashboard.launch_slot → wellife.invoice_option)
+# 예약 줄의 운송장 전송 할 일 (사용자 2026-11-09 저녁 - 셋 중 하나 고르기를 체크 셋으로: 엑셀 출력과 '수집 사이트를 뺀 전송요청' 을 함께 켤 수 있게).
+#   slots[i].inv - [전송요청(S)] 방식: 없음 = 전체 전송 (예전 그대로) / 'auto' = 사이트 수집 프리셋의 사이트(켬·끔 모두)를 빼고 조회 (wellife.invoice_sites)
+#                  / 'none' = 누르지 않음
+#   slots[i].xl  - true 면 사이트 수집에서 켠 사이트의 마켓업로드용 엑셀을 받고 [미전송 완료처리] (wellife.invoice_excel) - 전송요청보다 먼저 한다
+# 판 7 의 inv: 'excel' 과 판 5·6 의 inv_sites: true (엑셀로 수집한 주문이라 [전송요청] 으로 안 간다, ERPia 도움말) 는 ('none', 엑셀) 로 읽는다.
+INVOICE_SEND = {"auto": "수집 사이트 제외", "none": "전송요청 안 함"}
+INVOICE_EXCEL = "excel"
+INVOICE_OPTION_ENV = "RPA_INVOICE_OPTION"   # 띄울 때 넘기는 플래그 글 (invoice_env: rpa_dashboard.launch_slot → wellife.invoice_flags)
 
 
 def slot_invoice(slot):
-    """줄의 운송장 전송 방식 - 'excel' / 'auto' / None (전체 전송). 판 5·6 이 저장한 inv_sites: true 는 'excel'."""
-    inv = slot.get("inv")
-    return inv if inv in INVOICE_OPTIONS else ("excel" if slot.get("inv_sites") is True else None)
+    """줄의 운송장 전송 할 일 (전송 방식 'auto'/'none'/None=전체 전송, 엑셀 출력인가). 옛 판의 inv: 'excel'·inv_sites: true 는 ('none', True)."""
+    inv, xl = slot.get("inv"), slot.get("xl") is True
+    if inv == INVOICE_EXCEL or (inv is None and slot.get("inv_sites") is True):
+        inv, xl = "none", True
+    return (inv if inv in INVOICE_SEND else None), xl
+
+
+def invoice_env(slot):
+    """띄울 때 넘길 플래그 글 ('auto' / 'excel' / 'auto,excel' / 'none,excel'). 예전 그대로(전체 전송만)면 None."""
+    inv, xl = slot_invoice(slot)
+    return ",".join(([inv] if inv else []) + ([INVOICE_EXCEL] if xl else [])) or None
+
+
+def invoice_flags(value):
+    """플래그 글 → 집합 (모르는 값은 뺀다). 비면 전체 전송만."""
+    return {f for f in (value or "").split(",") if f in INVOICE_SEND or f == INVOICE_EXCEL}
 
 
 UPLOAD_TITLE = "사이트 엑셀 업로드"        # 상태 기록 제목 - 토큰은 운송장번호 전송에 포함이라 agent.usage 가 이 실행을 세지 않는다
@@ -1112,6 +1127,21 @@ def upload_files(folder=None):
     for paths in out.values():
         paths.sort(key=os.path.getmtime, reverse=True)
     return out
+
+
+def upload_pending():
+    """올릴 수 있는 파일 {코드: [경로]} - 업로드 폴더의 파일 중 같은 사이트코드의 업로드 프리셋(is_upload)이 있는 것만.
+    예약(rpa_dashboard.tick_upload)은 이것이 있을 때만 ACTOR --upload 를 띄운다. 프리셋 없는 파일만 있으면 ACTOR 가 '실행할 사이트가 없습니다' 로
+    바로 끝나 PROCESS 가 끝날 때마다 1분 뒤 0초짜리 '중단' 기록이 이력에 쌓였다 (개발기 11-09 실측). 프리셋을 못 읽으면 빈 dict."""
+    files = upload_files()
+    if not files or not EXCEL_UPLOAD_ON:
+        return {}
+    try:
+        presets = read_presets()
+    except (OSError, ValueError):
+        return {}
+    codes = {str(p.get("code") or "").strip() for p in presets if is_upload(p.get("record"))}   # 프리셋 수 한도는 ACTOR(web_runner)가 따진다
+    return {c: v for c, v in files.items() if c in codes}
 
 
 _PRESET_KEY = re.compile(r"(?:PRESET)?(\d+)")

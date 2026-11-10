@@ -568,6 +568,12 @@ const INV_OPTIONS = [["", "전체 전송"], ["auto", "자동수집 사이트만 
 const INV_WHY = { "": "전체 사이트로 조회 후 송장 전송합니다.",
   auto: "사이트 수집을 제외한 사이트만 전송합니다.",
   excel: "사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 받고 ERPia에서는 미전송 완료처리합니다. 업로드 프리셋이 있는 사이트만 사이트에 올라갑니다." };
+// 판 8: 운송장 전송 줄의 할 일 체크 셋 (사용자 2026-11-09 저녁 - 셋 중 하나로는 '엑셀출력 + 수집 사이트를 뺀 전송요청' 을 못 골랐다).
+// 줄 값: inv (없음 = 전체 전송 / auto = 수집 사이트 제외 / none = 전송요청 안 함), xl: true (수집 사이트 엑셀출력). PC 는 st.slot_invoice 로 읽는다
+const isV8 = () => (live?.schedule?.version ?? 0) >= 8;
+/** 판 8 PC 가 올린 줄의 할 일 {inv?, xl?} - 판 7 의 inv: excel·판 5·6 의 inv_sites: true 는 '전송요청 안 함 + 엑셀출력' (PC 의 st.slot_invoice 와 같다) */
+const invSaved = (x) => (x.inv === "excel" || (x.inv === undefined && x.inv_sites === true) ? { inv: "none", xl: true }
+  : { ...(x.inv === "auto" || x.inv === "none" ? { inv: x.inv } : {}), ...(x.xl === true ? { xl: true } : {}) });
 const offStep = (t) => !isV6() && /^\d\d:\d\d$/.test(t || "") && +t.slice(3) % 5 !== 0;
 /** 이 줄이 운송장 전송을 골랐는가 - '켠 사이트만' 은 그 줄에만 (PC 의 normalize_slots 와 같은 규칙) */
 const sendsInvoice = (s) => !!s.run?.includes("InvoiceSend");
@@ -606,7 +612,7 @@ function savedSlots() {
     ...(x.until ? { until: x.until, rest_min: x.rest_min ?? 2 } : {}),
     ...(isV3() ? { days: [...(Array.isArray(x.days) ? x.days : s.days || [])].sort() } : {}),
     // 판 7 PC 도 판을 올리기 전에 저장한 inv_sites 가 남아 있을 수 있다 - PC 는 그것을 'excel' 로 읽는다 (st.slot_invoice)
-    ...(isV7() ? (x.inv === "excel" || x.inv === "auto" ? { inv: x.inv } : x.inv_sites === true ? { inv: "excel" } : {})
+    ...(isV8() ? invSaved(x) : isV7() ? (x.inv === "excel" || x.inv === "auto" ? { inv: x.inv } : x.inv_sites === true ? { inv: "excel" } : {})
       : isV5() && x.inv_sites === true ? { inv_sites: true } : {}),
   }));
 }
@@ -624,7 +630,7 @@ function resetSchedule() {
 }
 const runKey = (run) => (run ? [...run].filter((k) => k !== "Login").sort().join() : "*");
 const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}${s.days ? `@${[...s.days].sort()}` : ""}`
-  + (s.inv_sites && sendsInvoice(s) ? "+inv" : "") + (s.inv && sendsInvoice(s) ? `+inv:${s.inv}` : "");
+  + (s.inv_sites && sendsInvoice(s) ? "+inv" : "") + (s.inv && sendsInvoice(s) ? `+inv:${s.inv}` : "") + (s.xl && sendsInvoice(s) ? "+xl" : "");
 const slotsKey = (slots) => slots.map(slotKey).sort().join("|");
 function scheduleDirty() {
   const s = savedSch();
@@ -676,7 +682,7 @@ function runChips(s) {
     b.onclick = () => {
       s.run = s.run.includes(k) ? s.run.filter((x) => x !== k) : [...s.run, k];
       if (!s.run.includes("Logistics")) s.run = s.run.filter((x) => x !== "Output");
-      if (!sendsInvoice(s)) { delete s.inv_sites; delete s.inv; }
+      if (!sendsInvoice(s)) { delete s.inv_sites; delete s.inv; delete s.xl; }
       paintTimes(); paintScheduleMeta();
     };
     box.append(b);
@@ -703,6 +709,26 @@ function invOption(s) {
   sel.value = s.inv || "";
   sel.onchange = () => { if (sel.value) s.inv = sel.value; else delete s.inv; paintTimes(); paintScheduleMeta(); };
   box.append(sel, Object.assign(document.createElement("span"), { className: "why", textContent: INV_WHY[s.inv || ""] }));
+  return box;
+}
+/** 판 8: 운송장 전송을 고른 줄의 할 일 체크 셋 (사용자 2026-11-09 저녁). [전송요청] 끔 = inv 'none' (수집 사이트 제외도 함께 버린다),
+ *  [수집 사이트 제외] = inv 'auto' (전송요청을 켰을 때만 보인다), [수집 사이트 엑셀출력] = xl true. 전송요청·엑셀출력을 둘 다 끄면 적용을 막는다 (scheduleProblems) */
+function invTasks(s) {
+  const box = document.createElement("div"); box.className = "inv-box inv-tasks";
+  const send = s.inv !== "none";
+  const item = (key, name, why, checked, onchange) => {
+    const l = document.createElement("label"); l.className = "inv-task";
+    const b = Object.assign(document.createElement("input"), { type: "checkbox", checked, className: `inv-${key}` });
+    b.setAttribute("aria-label", `운송장 전송: ${name}`);
+    b.onchange = () => { onchange(b.checked); paintTimes(); paintScheduleMeta(); };
+    l.append(b, Object.assign(document.createElement("span"), { textContent: name }), Object.assign(document.createElement("span"), { className: "why", textContent: why }));
+    return l;
+  };
+  box.append(item("send", "전송요청", "조회된 송장을 [전송요청(S)]로 사이트에 보냅니다.", send, (on) => { if (on) delete s.inv; else s.inv = "none"; }));
+  if (send) box.append(item("auto", "수집 사이트 제외", "전송요청에서 사이트 수집으로 등록한 사이트를 뺍니다.", s.inv === "auto",
+    (on) => { if (on) s.inv = "auto"; else delete s.inv; }));
+  box.append(item("excel", "수집 사이트 엑셀출력", "사이트 수집으로 켠 사이트의 마켓업로드용 엑셀을 받아 사이트에 올리고, ERPia에서는 미전송 완료처리합니다.", !!s.xl,
+    (on) => { if (on) s.xl = true; else delete s.xl; }));
   return box;
 }
 function paintTimes() {
@@ -736,10 +762,11 @@ function paintTimes() {
       const mode = document.createElement("select"); mode.className = "mode"; mode.setAttribute("aria-label", "돌릴 모듈");
       mode.append(new Option("전체 모듈 실행", "all"), new Option("선택 모듈만 실행", "pick"));
       mode.value = s.run ? "pick" : "all";
-      mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; delete s.inv_sites; delete s.inv; paintTimes(); paintScheduleMeta(); };
+      mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; delete s.inv_sites; delete s.inv; delete s.xl; paintTimes(); paintScheduleMeta(); };
       row.append(line("모듈", mode, ...(s.run ? [runChips(s)] : [])));
     }
-    if (isV7() && sendsInvoice(s)) row.append(line("운송장 전송", invOption(s)));
+    if (isV8() && sendsInvoice(s)) row.append(line("운송장 전송", invTasks(s)));
+    else if (isV7() && sendsInvoice(s)) row.append(line("운송장 전송", invOption(s)));
     else if (isV5() && sendsInvoice(s)) row.append(line("운송장 전송", invSitesSwitch(s)));
     return row;
   }));
@@ -751,6 +778,7 @@ function scheduleProblems() {
   if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) out.push("시간을 확인하여 주십시오.");
   if (slots.some((s) => offStep(s.at) || offStep(s.until))) out.push("이 PC는 5분 단위로만 예약할 수 있습니다. (예: 09:05)");
   if (isV3() && slots.some((s) => !s.days.length)) out.push("요일을 하나 이상 선택하여 주십시오.");
+  if (isV8() && slots.some((s) => sendsInvoice(s) && s.inv === "none" && !s.xl)) out.push("운송장 전송 줄에서 전송요청이나 수집 사이트 엑셀출력 중 하나는 켜 주십시오.");
   if (isV4() && form.sch.offDates.length > OFF_DATES_MAX) out.push(`휴무일은 최대 ${OFF_DATES_MAX}개까지 등록할 수 있습니다.`);
   if (isV4() && $("sch-off-date")?.value) out.push("선택한 날짜를 [+ 휴무일 추가]로 추가하여 주십시오.");
   slots.forEach((w, wi) => {
@@ -846,7 +874,8 @@ function payloadOf() {
     ...(isV4() ? { skip_holidays: form.sch.holidays, off_dates: [...form.sch.offDates] } : {}) };   // 옛 판 PC 는 모르는 값 - 안 보낸다
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
   return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}),
-    ...(isV7() ? (s.inv && sendsInvoice(s) ? { inv: s.inv } : {}) : isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}) })) };
+    ...(isV8() ? (sendsInvoice(s) ? { ...(s.inv ? { inv: s.inv } : {}), ...(s.xl ? { xl: true } : {}) } : {})
+      : isV7() ? (s.inv && sendsInvoice(s) ? { inv: s.inv } : {}) : isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}) })) };
 }
 async function applySchedule() {
   const payload = payloadOf();

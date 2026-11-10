@@ -1613,6 +1613,34 @@ with sync_playwright() as pw:
     check("inv" not in args["slots"][0], f"'전체 전송' 은 줄에 inv 를 두지 않는다 ({args})")
     key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    print("6-9절 운송장 전송 할 일 체크 셋 (판 8 PC, 사용자 2026-11-09 저녁)")
+    db_patch(f"{LIVE}/schedule", {"version": 8, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv": "excel"}]})
+    page.wait_for_selector("#sch-times .inv-tasks", timeout=10000)
+    check(page.locator("#sch-times select.inv-opt").count() == 0 and not page.is_checked("#sch-times .inv-send")
+          and page.is_checked("#sch-times .inv-excel") and page.locator("#sch-times .inv-auto").count() == 0 and page.is_disabled("#sch-apply"),
+          "판 8 PC: 고르기 대신 체크 셋 - 판 7 의 '엑셀' 은 전송요청 끔 + 엑셀출력 켬 (바뀜 없음), '수집 사이트 제외' 는 전송요청을 켜야 보인다")
+    page.click("#sch-times .inv-excel")
+    check("전송요청이나 수집 사이트 엑셀출력" in (page.text_content("#sch-limit") or "") and page.is_disabled("#sch-apply"), "둘 다 끄면 할 일이 없어 적용을 막는다")
+    page.click("#sch-times .inv-send")
+    page.wait_for_selector("#sch-times .inv-auto", timeout=10000)
+    page.click("#sch-times .inv-auto"); page.click("#sch-times .inv-excel")
+    check(not page.is_disabled("#sch-apply"), "전송요청 + 수집 사이트 제외 + 엑셀출력 - 적용 가능")
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check(args["slots"][0].get("inv") == "auto" and args["slots"][0].get("xl") is True and "inv_sites" not in args["slots"][0],
+          f"inv: auto + xl: true 를 PC 로 보낸다 ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv": "auto", "xl": True}]})
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    check(page.is_checked("#sch-times .inv-send") and page.is_checked("#sch-times .inv-auto") and page.is_checked("#sch-times .inv-excel"),
+          "PC 가 돌려준 할 일 그대로 보이고 바뀜 없음")
+    page.click("#sch-times .inv-send")
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check(args["slots"][0].get("inv") == "none" and args["slots"][0].get("xl") is True, f"전송요청을 끄면 inv: none (수집 사이트 제외는 함께 버린다) ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
     db_patch(f"{LIVE}/schedule", {"version": 6, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"]}]})   # 보낸 줄(운송장 전송만) 그대로 - 전체 줄로 돌려주면 다른 줄이라 바뀜 있음이 맞다
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     db_patch(f"{LIVE}/modules", {"InvoiceSend": None})
