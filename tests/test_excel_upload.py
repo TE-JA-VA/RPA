@@ -61,6 +61,7 @@ check("꺼져 있으면 보통 실행은 그대로", run.upload_choice(sites, Fa
 check("꺼져 있으면 --upload 는 아무것도 안 돈다", run.upload_choice(sites, True) == [])
 sch = dash.Scheduler()
 launched = []
+REAL_LAUNCH, REAL_READ_JSON = dash.launch, st.read_json
 dash.launch = lambda target, by, env=None: launched.append(target)
 sch.tick_upload(datetime.datetime(2026, 11, 6, 12, 0, 0))
 check("꺼져 있으면 예약이 업로드를 안 띄운다", launched == [], launched)
@@ -149,8 +150,44 @@ check("올릴 수 있는 파일은 업로드 프리셋이 있는 코드만", sor
 end += datetime.timedelta(hours=1)
 sch.tick_upload(end + datetime.timedelta(seconds=90))
 check("프리셋 있는 파일이 생기면 띄운다", len(launched) == 3, launched)
+
+# #38: 시키지 않은 업로드 - 재시작·오래된 몫·옵저버를 닫자마자·예약 몫 삼키기
+end += datetime.timedelta(hours=1)
+check("#38: 에이전트를 켤 때 이미 끝난 PROCESS 는 처리한 것으로 본다", dash.Scheduler().upload_for == end)
+fresh = dash.Scheduler()
+fresh.busy = lambda: None
+fresh.upload_for = None
+fresh.tick_upload(end + datetime.timedelta(seconds=dash.UPLOAD_MAX_AGE_SEC + 5))
+check("#38: 끝난 지 10분이 지난 PROCESS 몫은 띄우지 않는다", len(launched) == 3 and fresh.upload_for == end, launched)
+end += datetime.timedelta(hours=1)
+real_obs = dash.st.observer_open
+dash.st.observer_open = lambda: True
+sch.tick_upload(end + datetime.timedelta(seconds=90))
+dash.st.observer_open = real_obs
+sch.tick_upload(end + datetime.timedelta(seconds=95))
+check("#38: 옵저버가 떠 있으면 그 몫은 건너뛴다 (닫자마자 띄우지 않는다)", len(launched) == 3, launched)
+end += datetime.timedelta(hours=1)
+sch.tick_upload(end + datetime.timedelta(seconds=90))
+check("#38: 다음 PROCESS 뒤에는 다시 띄운다", len(launched) == 4, launched)
 for f in [p for ps in st.upload_files().values() for p in ps]:
     os.remove(f)
+
+# #38: 업로드를 띄워도 예약 시각을 넘기지 않는다 (예약 몫을 삼키지 않게)
+due = "2026-11-06T18:38:00"
+st.read_json = REAL_READ_JSON         # 위 예약 시험이 PROCESS 상태로 바꿔 둔 것 - 설정 파일은 진짜로 읽는다
+cfg = st.read_settings()
+cfg["schedule"].update(enabled=True, slots=[{"at": "18:38"}], next_run_at=due)
+st.write_settings(cfg)
+exe = os.path.join(OUT, "fake.exe")
+Path(exe).write_bytes(b"")
+saved = (dash.DRY_RUN, dash.target_path, dash.any_rpa_running, dash.launch_state, dash.TOKEN_GATE, dash.st.observer_open, dash.st.install_block_reason)
+dash.DRY_RUN, dash.target_path, dash.any_rpa_running, dash.launch_state, dash.TOKEN_GATE = True, lambda t: exe, lambda: [], lambda: None, None
+dash.st.observer_open, dash.st.install_block_reason = lambda: False, lambda: None
+REAL_LAUNCH("upload", "auto")
+s = st.read_settings()["schedule"]
+check("#38: 업로드를 띄워도 다음 예약 시각은 그대로", s["next_run_at"] == due and s["last_launch_target"] == "upload", s.get("next_run_at"))
+dash._active.clear()
+(dash.DRY_RUN, dash.target_path, dash.any_rpa_running, dash.launch_state, dash.TOKEN_GATE, dash.st.observer_open, dash.st.install_block_reason) = saved
 
 # --- 토큰: 운송장번호 전송에 포함 ---
 steps = [{"key": "PRESET3:replay", "state": "done"}]

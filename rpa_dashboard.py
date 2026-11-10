@@ -395,6 +395,7 @@ TARGETS = {
 }
 RUNNABLE = {**TARGETS, "upload": ("사이트 엑셀 업로드", "Prepare_RPA.exe", ("--all", "--upload", "--no-keep-open"))}   # upload 는 Scheduler.tick_upload 만 띄운다 - 단추·원격 명령 목록(TARGETS)에 없다
 UPLOAD_WAIT_SEC = 60    # PROCESS 가 끝나고 이만큼 조용하면 업로드를 띄운다 (사용자 2026-11-06)
+UPLOAD_MAX_AGE_SEC = 600  # 끝난 지 이보다 오래된 PROCESS 몫은 띄우지 않는다 - 재시작·옵저버를 닫은 뒤 몇 시간 전 몫이 뜨던 것 (#38)
 _active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
 # 토큰 확인 (2026-10-06): 에이전트가 agent.Tokens.gate 를 단다 - 띄우기 직전에 target 으로 부르고, 남은 토큰이 없으면
 # RuntimeError(사람에게 보일 글). 에이전트 없이 도는 옛 8765 대시보드·시험은 None (막지 않는다)
@@ -527,7 +528,7 @@ def launch(target, by, env=None):
             sch["last_launch_by"] = by
             sch["last_launch_target"] = target
             sch["last_error"] = None
-            if sch.get("enabled") and by == "auto":
+            if sch.get("enabled") and by == "auto" and target != "upload":   # 업로드는 예약이 아니다 - 예약 몫을 삼키지 않게 (#38)
                 # 이번 예약을 썼으니 다음 예약 시각으로 넘긴다.
                 # 수동 실행은 예약을 건드리지 않는다 (정해진 시각에는 정해진 대로 돈다).
                 # 늦게 띄우는 사이(앞 실행을 기다림·절전 등) 지난 다른 예약은 함께 넘어간다 - 기록에 남긴다 (사용자 2026-10-21)
@@ -1157,7 +1158,9 @@ class Scheduler(threading.Thread):
         self.waiting_reason = None
         self.held = (None, 0.0)  # 띄울 차례인데 막힌 까닭과 본 때 (monotonic) - 웹에 올린다 (held_reason, R5)
         self.skipped_at = None   # resync 가 건너뛴 예약 시각 (시작 안내용)
-        self.upload_for = None   # 업로드를 시도한 PROCESS 의 끝 시각. ponytail: 메모리만 - 에이전트를 다시 켜면 그 PROCESS 몫을 한 번 더 시도한다
+        # 업로드를 시도한(또는 건너뛴) PROCESS 의 끝 시각. 켤 때 지난 PROCESS 는 이미 처리한 것으로 본다 - 업데이트·재시작마다 옛 몫이 뜨던 것 (#38).
+        # ponytail: 메모리만 - 끝나고 1분 안에 재시작하면 그 몫은 건너뛴다 (파일은 남아 다음 PROCESS 뒤에 올린다)
+        self.upload_for = self.routine_end()
         self.power = Power()
 
     def resync(self):
@@ -1249,14 +1252,24 @@ class Scheduler(threading.Thread):
             return "옵저버가 실행 중이어서 종료를 기다리는 중입니다."
         return None
 
+    @staticmethod
+    def routine_end():
+        """마지막 PROCESS 가 끝난 시각 (돌고 있거나 기록이 없으면 None)."""
+        v = st.read_json(st.status_path("routine")) or {}
+        return st.parse_iso(v.get("finished_at")) if v.get("state") != "running" else None
+
     def tick_upload(self, now):
         """PROCESS 가 끝나고 1분 동안 아무것도 안 돌면 업로드 폴더의 엑셀을 사이트에 올린다 - 누가 PROCESS 를 띄웠든 (단추·예약·반복).
         PROCESS 가 끝날 때마다 한 번만: 로그인 실패로 파일이 남아도 다음 PROCESS 까지 다시 안 한다 (사이트 계정이 잠기지 않게)."""
         if not st.EXCEL_UPLOAD_ON:
             return
-        v = st.read_json(st.status_path("routine")) or {}
-        end = st.parse_iso(v.get("finished_at")) if v.get("state") != "running" else None
-        if end is None or end == self.upload_for or now < end + datetime.timedelta(seconds=UPLOAD_WAIT_SEC) or self.busy():
+        end = self.routine_end()
+        if end is None or end == self.upload_for or now < end + datetime.timedelta(seconds=UPLOAD_WAIT_SEC):
+            return
+        if now > end + datetime.timedelta(seconds=UPLOAD_MAX_AGE_SEC) or st.observer_open():
+            self.upload_for = end       # 오래됐거나 사람이 옵저버를 쓰는 중 - 이 몫은 건너뛴다 (닫자마자 띄우지 않게, #38). 파일은 다음 PROCESS 뒤에
+            return
+        if self.busy():
             return
         self.upload_for = end
         if st.upload_pending():     # 올릴 파일 + 같은 코드의 업로드 프리셋이 있을 때만 (없으면 ACTOR 가 바로 끝나 '중단' 기록만 남는다, 11-09 실측)
