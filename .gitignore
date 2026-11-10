@@ -51,3 +51,7 @@ firebase/agent/*.zip
 firebase/releases_site/
 firebase/admin/update_signing_key.txt
 firebase/admin/admin_prefs.json
+
+# 개인 파일 (저장소에 안 올림)
+paseo.json
+웰라이프 메모.txt
