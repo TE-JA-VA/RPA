@@ -567,7 +567,7 @@ const isV7 = () => (live?.schedule?.version ?? 0) >= 7;
 const INV_OPTIONS = [["", "전체 전송"], ["auto", "자동수집 사이트만 전송"], ["excel", "수집 사이트 엑셀출력"]];
 const INV_WHY = { "": "전체 사이트로 조회 후 송장 전송합니다.",
   auto: "사이트 수집을 제외한 사이트만 전송합니다.",
-  excel: "사이트 수집으로 설정한 사이트의 마켓업로드용 엑셀을 받고 ERPia에서는 미전송 완료처리합니다. 업로드 프리셋이 있는 사이트만 사이트에 올라갑니다." };
+  excel: "쇼핑몰 프리셋에서 수집 설정된 사이트의 마켓업로드용 엑셀을 받고 ERPia에서는 미전송 완료처리합니다. 업로드 프리셋이 있는 사이트만 사이트에 올라갑니다." };
 // 판 8: 운송장 전송 줄의 할 일 체크 셋 (사용자 2026-11-09 저녁 - 셋 중 하나로는 '엑셀출력 + 수집 사이트를 뺀 전송요청' 을 못 골랐다).
 // 줄 값: inv (없음 = 전체 전송 / auto = 수집 사이트 제외 / none = 전송요청 안 함), xl: true (수집 사이트 엑셀출력). PC 는 st.slot_invoice 로 읽는다
 const isV8 = () => (live?.schedule?.version ?? 0) >= 8;
@@ -725,9 +725,9 @@ function invTasks(s) {
     return l;
   };
   box.append(item("send", "전송요청", "조회된 송장을 [전송요청(S)]로 사이트에 보냅니다.", send, (on) => { if (on) delete s.inv; else s.inv = "none"; }));
-  if (send) box.append(item("auto", "수집 사이트 제외", "전송요청에서 사이트 수집으로 등록한 사이트를 뺍니다.", s.inv === "auto",
+  if (send) box.append(item("auto", "수집 사이트 제외", "전송요청에서 쇼핑몰 프리셋에 등록된 사이트(켬·끔 모두)를 뺍니다.", s.inv === "auto",
     (on) => { if (on) s.inv = "auto"; else delete s.inv; }));
-  box.append(item("excel", "수집 사이트 엑셀출력", "사이트 수집으로 켠 사이트의 마켓업로드용 엑셀을 받아 사이트에 올리고, ERPia에서는 미전송 완료처리합니다.", !!s.xl,
+  box.append(item("excel", "수집 사이트 엑셀출력", "쇼핑몰 프리셋에서 수집 설정된 사이트의 마켓업로드용 엑셀을 받고 ERPia에서는 미전송 완료처리합니다. 업로드 프리셋이 있는 사이트만 사이트에 올라갑니다.", !!s.xl,
     (on) => { if (on) s.xl = true; else delete s.xl; }));
   return box;
 }

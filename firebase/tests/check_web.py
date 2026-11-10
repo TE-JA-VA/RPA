@@ -1613,6 +1613,8 @@ with sync_playwright() as pw:
     check("inv" not in args["slots"][0], f"'전체 전송' 은 줄에 inv 를 두지 않는다 ({args})")
     key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"]}]})   # PC 가 보낸 줄 그대로 돌려준다 - 폼이 편집 중으로 남으면 아래 PC 값으로 다시 그리지 않는다
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     print("6-9절 운송장 전송 할 일 체크 셋 (판 8 PC, 사용자 2026-11-09 저녁)")
     db_patch(f"{LIVE}/schedule", {"version": 8, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv": "excel"}]})
     page.wait_for_selector("#sch-times .inv-tasks", timeout=10000)
@@ -1641,6 +1643,8 @@ with sync_playwright() as pw:
     check(args["slots"][0].get("inv") == "none" and args["slots"][0].get("xl") is True, f"전송요청을 끄면 inv: none (수집 사이트 제외는 함께 버린다) ({args})")
     key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv": "none", "xl": True}]})   # 보낸 줄 그대로 돌려준 뒤 옛 판으로
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     db_patch(f"{LIVE}/schedule", {"version": 6, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"]}]})   # 보낸 줄(운송장 전송만) 그대로 - 전체 줄로 돌려주면 다른 줄이라 바뀜 있음이 맞다
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     db_patch(f"{LIVE}/modules", {"InvoiceSend": None})
