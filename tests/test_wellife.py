@@ -2210,6 +2210,8 @@ class ListBox:
 
     @property
     def v(self):
+        if self.key in self.lst.blank:      # 개발기 실제 업체 52행 이후처럼 값이 안 읽히는 줄
+            return ""
         return "선택" if self.key in self.lst.on else "선택안됨"
 
     def rectangle(self):
@@ -2217,7 +2219,8 @@ class ListBox:
 
     def click_input(self, **kw):
         self.lst.log.append(("체크",) + self.key)
-        self.lst.on ^= {self.key}
+        if self.key not in self.lst.blank:  # 그런 줄은 눌러도 안 바뀌었다 (11-09 실측)
+            self.lst.on ^= {self.key}
 
 
 class ListBtn(El):
@@ -2234,10 +2237,11 @@ class SalesList:
     """rows [(마켓, 아이디, 명칭, 사이트코드)], on = 목록 체크 {(마켓, 아이디)}, page = 한 번에 다 보이는 줄 수 (그 아래 반쯤 걸친
     줄이 하나 더 그려진다), first = 맨 위 줄 (스크롤된 채로 열릴 수 있다). apply=False 면 [닫기] 가 칸 글을 바꾸지 않는다.
     code=False 면 사이트코드 칸이 없다 (11-03 ERPia 업데이트 전). step = '페이지 아래로' 한 번에 내려가는 줄 수 (기본 page),
-    stuck 이면 '페이지 아래로' 를 눌러도 안 움직인다."""
-    def __init__(self, rows, on=(), page=None, first=0, apply=True, code=True, step=None, stuck=False):
+    stuck 이면 '페이지 아래로' 를 눌러도 안 움직인다. blank = 체크 값이 안 읽히고 눌러도 안 바뀌는 줄 {(마켓, 아이디)} ([전체선택] 으로는 체크된다),
+    select_all=False 면 [전체선택] 단추가 없다."""
+    def __init__(self, rows, on=(), page=None, first=0, apply=True, code=True, step=None, stuck=False, blank=(), select_all=True):
         self.rows, self.on, self.page, self.first, self.apply = rows, set(on), page or len(rows), first, apply
-        self.code, self.step, self.stuck = code, step or self.page, stuck
+        self.code, self.step, self.stuck, self.blank = code, step or self.page, stuck, set(blank)
         self.kept = set(self.on)
         self.text = self.label()
         self.shown, self.log = False, []
@@ -2245,6 +2249,8 @@ class SalesList:
                                           rectangle=lambda: Rect(0, 0, 300, 15 * self.page))
         self.buttons = [ListBtn("btn_SelectionClear", lambda: self.log.append(("선택취소",)) or self.on.clear()),
                         ListBtn("btn_Close", self.close)]
+        if select_all:
+            self.buttons.append(ListBtn("btn_SelectAll", lambda: self.log.append(("전체선택",)) or self.on.update((m, i) for m, i, _, _ in self.rows)))
         self.win = types.SimpleNamespace(
             children=lambda: [types.SimpleNamespace(element_info=types.SimpleNamespace(automation_id="popup"))],
             descendants=lambda control_type=None: {"Table": [self.grid], "Button": self.buttons}.get(control_type, []))
@@ -2370,17 +2376,60 @@ check("⑥ 매출구분: 페이지가 겹쳐 넘어가도 겹친 줄은 다시 �
       err is None and L.on == {("마켓0", "id0"), ("마켓6", "id6")} and sum(1 for a in L.log if a[0] == "체크") == 3
       and L.text == "매출구분 : 2개 선택됨", f"{got} {err} {L.log}")
 L = SalesList(ROWS7, page=2, step=4)
-got, err = run_pick(L, ["000"])
+got, err = run_pick(L, ["006"])
 check("⑥ 매출구분: 넘기다 줄을 건너뛰면(못 본 줄) ESC 로 닫고 조회하지 않고 멈춘다",
       err and err[0] == "failed" and "빠짐없이" in err[1] and L.log[-1] == ("ESC",) and L.on == set(), f"{err} {L.log}")
 L = SalesList(ROWS7, page=3, stuck=True)
-got, err = run_pick(L, ["000"])
+got, err = run_pick(L, ["006"])
 check("⑥ 매출구분: '페이지 아래로' 를 눌러도 안 움직이면 끝으로 보지 않고 멈춘다 (next_page 와 같다)",
       err and err[0] == "failed" and "움직이지 않아" in err[1] and L.log[-1] == ("ESC",), f"{err} {L.log}")
 L = SalesList(SROWS, apply=False)
 got, err = run_pick(L, ["001", "002", "003", "004"])
 check("⑥ 매출구분: 목록 전부를 골라도 칸 글 '매출구분 : 전체' 는 받지 않는다 (체크 없음 = 모든 사이트)",
       err and err[0] == "failed" and "전체" in err[1], f"{err} {L.log}")
+# 일찍 멈춤 (사용자 2026-11-10 '고를 사이트를 골랐으면 바로 다음 단계로' - 개발기 76줄 목록을 이미 맞는데도 29초 넘겼다)
+L = SalesList(ROWS7, on={("마켓0", "id0")}, page=3)
+L.text = "매출구분 : 이름0"
+got, err = run_pick(L, ["000"])
+check("⑥ 매출구분 일찍 멈춤: 이미 그 사이트만 체크(칸 글 명칭 하나)면 첫 페이지에서 [닫기] - 나머지 페이지를 안 넘긴다",
+      err is None and got is None and ("아래로",) not in L.log and L.log[-1] == ("닫기",) and L.text == "매출구분 : 이름0", f"{got} {err} {L.log}")
+L = SalesList(ROWS7, page=3)
+got, err = run_pick(L, ["004"])
+check("⑥ 매출구분 일찍 멈춤: 칸 글 '전체'(체크 없음)면 고를 줄을 체크한 페이지에서 멈춘다 (마지막 페이지는 안 봄)",
+      err is None and L.on == {("마켓4", "id4")} and L.log.count(("아래로",)) == 1 and L.text == "매출구분 : 이름4", f"{got} {err} {L.log}")
+L = SalesList(ROWS7, on={("마켓6", "id6")}, page=3)
+got, err = run_pick(L, ["000"])
+check("⑥ 매출구분 일찍 멈춤: 원래 체크된 줄이 뒤에 있으면 그 줄을 풀 때까지 넘긴다 (칸 글 명칭 하나 = 체크 1줄)",
+      err is None and L.on == {("마켓0", "id0")} and L.text == "매출구분 : 이름0", f"{got} {err} {L.log}")
+L = SalesList(ROWS7, on={(m, i) for m, i, _, _ in ROWS7}, page=3)
+L.text = "매출구분 : 전체"      # 모두 체크여도 칸 글이 '전체' 일 수 있다 (docs 9.6 - 아직 못 봄)
+got, err = run_pick(L, ["000"])
+check("⑥ 매출구분 일찍 멈춤: 칸 글이 틀려 [닫기] 뒤 칸 글이 다르면 목록을 다시 열어 끝까지 맞춘다",
+      err is None and L.on == {("마켓0", "id0")} and L.text == "매출구분 : 이름0" and L.log.count(("열기",)) == 2, f"{got} {err} {L.log}")
+L = SalesList(ROWS7, on={("마켓5", "id5")}, page=3)
+got, err = run_pick(L, ["000"], exclude=True)
+check("⑥ 매출구분 빼기는 일찍 멈추지 않는다 (모든 줄을 본다)",
+      err is None and L.on == {(m, i) for m, i, _, c in ROWS7 if c != "000"} and L.text == "매출구분 : 6개 선택됨", f"{got} {err} {L.log}")
+# 빼기는 [전체선택] 을 누르고 뺄 줄만 푼다 (사용자 2026-11-10)
+L = SalesList(ROWS7, page=3)
+got, err = run_pick(L, ["002", "005"], exclude=True)
+check("⑥ 매출구분 빼기: [전체선택] 을 누른 뒤 뺄 사이트 줄만 푼다 (나머지 줄은 누르지 않음)",
+      err is None and ("전체선택",) in L.log and [a for a in L.log if a[0] == "체크"] == [("체크", "마켓2", "id2"), ("체크", "마켓5", "id5")]
+      and L.on == {(m, i) for m, i, _, c in ROWS7 if c not in ("002", "005")} and L.text == "매출구분 : 5개 선택됨", f"{got} {err} {L.log}")
+L = SalesList(ROWS7, page=3, blank={("마켓5", "id5"), ("마켓6", "id6")})
+got, err = run_pick(L, ["001"], exclude=True)
+check("⑥ 매출구분 빼기: 값이 안 읽히는 줄(개발기 52행 이후)도 뺄 줄이 아니면 [전체선택] 에 맡기고 누르지 않는다 - 칸 글 개수로 확인",
+      err is None and [a for a in L.log if a[0] == "체크"] == [("체크", "마켓1", "id1")] and L.text == "매출구분 : 6개 선택됨", f"{got} {err} {L.log}")
+L = SalesList(ROWS7, page=3, blank={("마켓6", "id6")})
+got, err = run_pick(L, ["006"], exclude=True)
+check("⑥ 매출구분 빼기: 뺄 줄의 값이 안 읽혀 풀렸는지 모르면 ESC 로 닫고 전송하지 않는다",
+      err and err[0] == "failed" and "읽히지 않는" in err[1] and L.log[-1] == ("ESC",) and L.text == "매출구분 : 전체", f"{err} {L.log}")
+L = SalesList(ROWS7, page=3, select_all=False)
+got, err = run_pick(L, ["002"], exclude=True)
+check("⑥ 매출구분 빼기: [전체선택] 이 없는 목록이면 예전처럼 줄마다 체크",
+      err is None and ("전체선택",) not in L.log and sum(1 for a in L.log if a[0] == "체크") == 6 and L.text == "매출구분 : 6개 선택됨", f"{got} {err} {L.log}")
+check("⑥ 매출구분 칸 글로 체크된 줄 수", [wellife._checked_count(t) for t in
+      ("매출구분 : 전체", "매출구분 : 3개 선택됨", "매출구분 : 이지웰(test)", "다른 칸", None)] == [0, 3, 1, None, None])
 # '자동수집 사이트만 전송' (사용자 2026-11-09): 사이트코드가 codes 가 아닌 줄을 모두 체크
 L = SalesList(SROWS, on={("공통엑셀양식", "1234")})
 got, err = run_pick(L, ["001"], exclude=True)

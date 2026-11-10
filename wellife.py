@@ -2019,13 +2019,20 @@ def pick_item(rr, ctx, combo, item, what):
 SALES_PANE = "popup"        # 매출구분 ▼ 로 따로 뜬 목록 창 안 패널 (11-02 실측)
 
 
-def pick_sites(rr, ctx, form_id, key, aid, codes, exclude=False):
+def pick_sites(rr, ctx, form_id, key, aid, codes, exclude=False, full=False):
     """⑥ 매출구분(aid) 목록에서 사이트코드가 codes 인 줄만 체크된 채로 [닫기] 하고 칸 글로 확인한다 (사용자 2026-11-02).
+    - 일찍 멈춤 (사용자 2026-11-10 '고를 사이트를 골랐으면 바로 다음 단계로', 사이트코드는 목록에서 하나뿐): 열기 전 칸 글로
+      지금 체크된 줄 수를 알고(_checked_count), 고를 사이트를 다 찾고 원래 체크된 줄을 그만큼 다 만났으면 남은 페이지를 넘기지 않는다.
+      그래도 [닫기] 뒤 칸 글이 다르면(칸 글 '전체' 가 실은 모두 체크였던 때 등) 목록을 다시 열어 끝까지 맞춘다 (full).
+      빼기(exclude)는 모든 줄을 봐야 해서 늘 끝까지 본다.
+    - 빼기는 목록의 [전체선택](btn_SelectAll)을 먼저 누르고 뺄 사이트코드 줄만 푼다 (사용자 2026-11-10 - 줄마다 누르지 않는다).
+      체크 값이 안 읽히는 줄(개발기 실제 업체 52행 이후, docs 9.6)도 뺄 줄이 아니면 [전체선택] 에 맡기고 누르지 않는다 -
+      [닫기] 뒤 칸 글의 개수('N개 선택됨')가 맞는지로 확인한다. [전체선택] 이 없는 목록이면 예전처럼 줄마다 맞춘다.
     exclude 면 거꾸로 codes 가 아닌 줄을 모두 체크한다 ('자동수집 사이트만 전송', 사용자 2026-11-09) - 남는 줄이 없으면
     ESC 로 닫고 건너뛴다. 목록의 모든 줄이 남으면 칸 글 '매출구분 : 전체' 도 받는다 (모두 고름 = 전체).
     - 목록은 ▼('오픈') 로 메인 창 밖에 따로 뜬다: 'popup' 안 그리드 gridCtrl (row Check Box·사이트코드·마켓·아이디·명칭),
       [닫기] btn_Close. [닫기] 가 체크를 칸에 반영하고 ESC 는 버린다 (11-02·11-03 실측). 사이트코드 칸이 없는 옛 ERPia 는
-      멈춘다. 한 사이트코드에 줄(계정)이 여럿이면 모두 고른다.
+      멈춘다. 끝까지 볼 때는 한 사이트코드에 줄(계정)이 여럿이면 모두 고른다 (일찍 멈추면 같은 페이지에 있는 줄까지만).
     - 이미 맞게 체크된 줄은 건드리지 않는다 - [선택취소] 를 먼저 누르지 않는다 (사용자 2026-11-02).
     - 목록에 없는 사이트코드가 있거나 무엇이든 틀리면 ESC 로 닫고(바꾼 체크는 버려진다) 멈춘다 - 조회하지 않는다.
     - [닫기] 뒤 칸 글이 '매출구분 : <명칭>'(한 줄)·'매출구분 : N개 선택됨'(여러 줄) 이 아니면 멈춘다 - 목록에서 못 본 줄에
@@ -2043,7 +2050,10 @@ def pick_sites(rr, ctx, form_id, key, aid, codes, exclude=False):
     click(rr, ctx, arrow, f"{what} ▼")
     h, win = _sales_list(rr, ctx, old, what)
     try:
-        names, flips, total = _match_sites(rr, h, win, (lambda c: c not in codes) if exclude else (lambda c: c in codes), what)
+        known = None if exclude or full else _checked_count(before)
+        all_on = exclude and _select_all(rr, h, win, what)
+        names, flips, total, early = _match_sites(rr, h, win, (lambda c: c not in codes) if exclude else (lambda c: c in codes), what,
+                                                  need=None if exclude else set(codes), checked=known, all_on=all_on)
         missing = [] if exclude else [c for c in codes if c not in names]
         if exclude and not names:
             raise Stop("skipped", f"{what}: 매출구분 목록에 쇼핑몰 프리셋에 등록된 사이트를 뺀 사이트가 없어 전송하지 않았습니다.")
@@ -2070,11 +2080,32 @@ def pick_sites(rr, ctx, form_id, key, aid, codes, exclude=False):
     deadline = time.time() + CHECK_WAIT_SECONDS     # 목록이 닫힌 뒤 칸 글이 늦게 바뀔 수 있다
     while (after := cond_value(rr, controls(rr, ctx, form_id), aid, "fixed")) not in want and time.time() < deadline:
         time.sleep(0.2)
+    if after not in want and early:     # 목록 뒤쪽에 칸 글이 말하지 않은 체크가 남았다 - 다시 열어 끝까지 맞춘다
+        rr.log(f"  {what}: 고른 뒤 칸 글이 {after!r}(기대 {want[0]!r})라 목록을 다시 열어 끝까지 맞춥니다.")
+        return pick_sites(rr, ctx, form_id, key, aid, codes, exclude, full=True)
     if after not in want:
         raise Stop("failed", f"{what}: 고른 뒤 칸 글이 {want[0]!r}이(가) 아니어서 조회하지 않았습니다. (현재 {after!r})")
     rr.log(f"  {what}: 사이트코드 {'빼고 ' if exclude else ''}{', '.join(codes)} ({', '.join(map(str, picked))}) - "
-           f"{f'체크 {flips}곳을 고침' if flips else '이미 그대로'} → {after!r}")
+           f"{f'체크 {flips}곳을 고침' if flips else '이미 그대로'}{' (목록 끝까지 안 넘김)' if early else ''} → {after!r}")
     return f"{key} {before!r}→{after!r}" if flips or before != after else None
+
+
+def _select_all(rr, h, win, what):
+    """매출구분 목록의 [전체선택] 을 누른다 (빼기 - 뒤에 뺄 줄만 푼다). 단추가 없으면 False (줄마다 맞춘다)."""
+    btn = next((b for b in win.descendants(control_type="Button") if b.element_info.automation_id == "btn_SelectAll"), None)
+    if btn is None:
+        rr.log(f"  {what}: 매출구분 목록에 [전체선택] 이 없어 줄마다 체크합니다.")
+        return False
+    _click_in(rr, h, btn, f"{what} 목록 [전체선택]")
+    time.sleep(0.3)         # 체크 표시가 다시 그려질 틈
+    return True
+
+
+def _checked_count(text):
+    """매출구분 칸 글로 본 지금 체크된 줄 수 - '매출구분 : 전체' 0 (모두 체크여도 '전체' 일 수 있다 - pick_sites 가 칸 글로 다시 본다),
+    'N개 선택됨' N, 명칭 하나면 1. 모르는 모양이면 None (목록을 끝까지 본다)."""
+    m = re.fullmatch(r"매출구분 : (?:(전체)|(\d+)개 선택됨|(.+))", text or "")
+    return None if m is None else 0 if m[1] else int(m[2]) if m[2] else 1
 
 
 def _sales_list(rr, ctx, before, what):
@@ -2095,9 +2126,13 @@ def _sales_list(rr, ctx, before, what):
     raise Stop("failed", f"{what}: ▼를 눌렀으나 매출구분 목록이 나타나지 않아 조회하지 않았습니다.")
 
 
-def _match_sites(rr, h, win, want, what):
+def _match_sites(rr, h, win, want, what, need=None, checked=None, all_on=False):
     """목록을 맨 위부터 끝까지 넘기며 체크를 want 에 맞춘다 (want(사이트코드) 가 참이면 체크, 아니면 풂).
-    ({체크한 사이트코드: [명칭]}, 누른 수, 목록 줄 수). 사이트코드 칸이 없으면 멈춘다 (옛 ERPia).
+    ({체크한 사이트코드: [명칭]}, 누른 수, 본 줄 수, 일찍 멈췄나). 사이트코드 칸이 없으면 멈춘다 (옛 ERPia).
+    need(찾을 사이트코드)와 checked(열기 전 체크된 줄 수)가 있으면 need 를 다 찾고 원래 체크된 줄을 checked 개 만난 페이지에서
+    멈춘다 - 남은 줄은 모두 체크가 없다 (사용자 2026-11-10). 칸 글이 틀렸으면 pick_sites 가 [닫기] 뒤 칸 글로 알아채 끝까지 다시 본다.
+    all_on: [전체선택] 을 누른 뒤 - '선택안됨' 으로 읽히지 않는 줄은 체크된 것으로 본다. 그래서 체크할 줄은 값이 안 읽혀도 누르지 않고
+    (누르면 풀린다 - 칸 글 개수로 확인), 뺄 줄은 눌러 풀고 풀렸는지 못 읽으면 멈춘다.
     체크 칸이 그리드 안에 다 보이는 줄만 읽고 누른다 - 반쯤 걸친 줄의 가운데는 그리드 밖(아래 단추)일 수 있다. 그 줄은
     다음 페이지에서 본다. 본 줄 번호를 기억해 겹친 줄은 다시 보지 않고, 끝에서 1번부터 빠진 줄이 있으면 멈춘다.
     넘겼는데 안 움직이면 '페이지 아래로' 가 없을 때만 끝이다 (next_page 와 같다).
@@ -2115,7 +2150,7 @@ def _match_sites(rr, h, win, want, what):
     for _ in range(MAX_PAGES):
         if not _list_scroll(rr, h, grid, "페이지 위로", what):
             break
-    names, seen, flips = {}, set(), 0
+    names, seen, flips, had, early = {}, set(), 0, 0, False
     rows = settled_rows(rr, grid)
     for _ in range(MAX_PAGES):
         g, clicked = grid.rectangle(), []
@@ -2129,7 +2164,10 @@ def _match_sites(rr, h, win, want, what):
             hit = want(code)
             if hit:     # 명칭은 고른 줄만 읽는다 (칸 글 확인용) - 줄마다 UIA 읽기 하나를 던다 (개발기 75줄 목록이 사이트마다 23~26초, 11-09 실측)
                 names.setdefault(code, []).append(rr.legacy_value(cells["명칭"]) if "명칭" in cells else None)
-            if (rr.legacy_value(box) == "선택") != hit:
+            value = rr.legacy_value(box)
+            on = value != "선택안됨" if all_on else value == "선택"     # [전체선택] 뒤에는 안 읽히는 줄도 체크된 것으로 본다 (뺄 줄이면 눌러 보고 확인)
+            had += on
+            if on != hit:
                 _click_in(rr, h, box, f"{what} 목록 사이트코드 {code} 체크")
                 clicked.append(n)
         flips += len(clicked)
@@ -2152,6 +2190,9 @@ def _match_sites(rr, h, win, want, what):
                            + (f", 체크 값이 읽히지 않는 행 {blank}" if blank else "") + ")")
             if clicked:
                 time.sleep(0.2)
+        if need is not None and checked is not None and need <= names.keys() and had >= checked:
+            early = _list_button(rr, grid, "페이지 아래로") is not None     # 끝 페이지였으면 일찍 멈춘 것이 아니다
+            break
         first = min(rows, default=None)
         if not _list_scroll(rr, h, grid, "페이지 아래로", what):
             break
@@ -2165,7 +2206,7 @@ def _match_sites(rr, h, win, want, what):
     if sorted(seen) != list(range(1, len(seen) + 1)):
         raise Stop("failed", f"{what}: 매출구분 목록을 빠짐없이 읽지 못해 조회하지 않았습니다. "
                              f"(읽은 줄 {len(seen)}개, 마지막 줄 {max(seen, default=0)})")
-    return names, flips, len(seen)
+    return names, flips, len(seen), early
 
 
 def _list_scroll(rr, h, grid, name, what):
