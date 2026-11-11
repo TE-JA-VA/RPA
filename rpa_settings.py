@@ -614,7 +614,10 @@ def unpack_lib(program_dir):
         os.replace(new, lib)
         try:                                    # 프로그램 폴더는 사용자가 못 써서 .pyc 를 여기서 만들어 둔다 (없어도 돈다)
             import compileall
-            compileall.compile_dir(lib, quiet=2)
+            import warnings
+            with warnings.catch_warnings():     # 라이브러리 소스의 SyntaxWarning 을 기록·화면에 흘리지 않는다
+                warnings.simplefilter("ignore")
+                compileall.compile_dir(lib, quiet=2)
         except Exception:
             pass
         with open(os.path.join(lib, LIB_MARK), "w", encoding="utf-8") as f:
