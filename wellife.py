@@ -1188,7 +1188,7 @@ def run_query(rr, ctx):
 # 고른 사이트가 없으면 받지 않는다. 사이트마다 (한 번에 한 사이트, 사용자 2026-11-09): 매출구분에서 그 사이트만 골라 [조회(F)] → 0건이면 넘어감 →
 # [마켓업로드용 엑셀출력] → 따로 뜬 '송장양식'(마켓 이름 목록) 에서 고른 마켓 → [엑셀출력] → '엑셀 다운로드 받기' 미리보기에 줄이 없으면
 # 받지 않고 닫는다 → 비밀번호·사유 → [엑셀 다운로드] → 저장 창 → ERPIA_AI_UPLOAD (st.upload_dir - ACTOR --upload 가 사이트에 올리는 폴더) → [아니오]
-# → 받았으면 전체 체크 → [미전송 완료처리] (엑셀로 올린 운송장은 ERPia 가 전송 여부를 모르므로 상태만 완료로 - 사용자) → 다음 사이트.
+# → 받은 파일의 비밀번호를 풀어 비밀번호 없는 엑셀로 (unlock_excel - ERPia 는 비밀번호 없이 받을 수 없다) → 받았으면 전체 체크 → [미전송 완료처리] (엑셀로 올린 운송장은 ERPia 가 전송 여부를 모르므로 상태만 완료로 - 사용자) → 다음 사이트.
 # 완료처리 뒤 같은 사이트를 다시 조회하지 않는다 (사용자 2026-11-09 저녁 '필요없는 행위' - 조회 한 번 8~13초. 11-09 16:10 실측 두 사이트 모두 완료처리 뒤 0줄).
 # 조회 조건(날짜·전송상태 등)은 첫 사이트에서만 다 보고(ensure_query), 뒤 사이트는 매출구분만 바꾼다(pick_sites) - 그 사이 아무도 안 바꾼다.
 # 파일 이름 앞에 사이트코드 '(nnn)' 을 붙여 업로드(st.upload_files)가 그 사이트의 업로드 프리셋으로 올리게 한다.
@@ -1243,6 +1243,8 @@ def invoice_excel(rr, ctx, live):
             if saved is None:
                 empty.append(f"{label} (조회 {count}건, 양식 미리보기 0건)")
                 continue
+            why = "암호해제"
+            unlock_excel(saved, pw)                                                   # 사이트에 올릴 수 있게 비밀번호 없는 엑셀로
             saved = upload_name(rr, saved, t["code"], live)
             ctx.export_saved, why = saved, "완료처리"
             rr.log(f"  {INVOICE_TAB}: {label} {count}건 → {saved}")
@@ -1314,6 +1316,28 @@ def upload_codes():
     on, limit = {p["no"] for p in summary if p["on"]}, st.preset_limit()
     return {str(p["code"] or "").strip() for p in presets
             if p["no"] in on and p["no"] <= limit and st.is_upload(p["record"]) and str(p["code"] or "").strip()}
+
+
+def unlock_excel(path, pw):
+    """ERPia 가 비밀번호(pw)로 잠가 준 엑셀을 비밀번호 없는 엑셀로 바꾼다 - 사이트가 잠긴 엑셀을 받지 않는다 (사용자 2026-11-10).
+    Excel 없이 msoffcrypto 로 같은 폴더의 임시 파일에 풀고 원래 이름을 덮는다 - 도중에 실패해도 받은 파일은 그대로 남는다.
+    11-10 실측 (ERPia 파일은 agile 암호): 한 파일 0.1초. Excel 로 열어 비밀번호 없이 저장하면 Excel 을 띄우고 끄는 데만 약 3초에 Excel 이 깔려 있어야 한다.
+    잠기지 않은 파일은 그대로 둔다. 풀지 못하면 Stop(failed) - 비밀번호는 글에 넣지 않는다."""
+    tmp = os.path.join(os.path.dirname(path), "~풀기_" + os.path.basename(path))     # '(nnn)' 으로 시작하지 않아 업로드가 집지 않는다
+    try:
+        import msoffcrypto
+        with open(path, "rb") as src:
+            office = msoffcrypto.OfficeFile(src)
+            if not office.is_encrypted():
+                return
+            office.load_key(password=pw, verify_password=True)
+            with open(tmp, "wb") as out:
+                office.decrypt(out)          # 풀린 내용이 엑셀(zip)인지도 본다
+        os.replace(tmp, path)
+    except Exception as e:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise Stop("failed", f"받은 엑셀의 비밀번호를 풀지 못했습니다. ({type(e).__name__})") from e
 
 
 def upload_name(rr, saved, code, live):
