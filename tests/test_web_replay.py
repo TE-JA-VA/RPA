@@ -304,6 +304,13 @@ def main():
         ok, r, m = replay_check(srv, url, e, day, False, None, "E1_다음날")
         check("E1: 끝까지, 그날 송장 파일", ok and m.ship_downloads == [day.isoformat()]
               and [os.path.basename(x) for x in r.saved] == [f"(012)송장목록_{day.isoformat()}.xlsx"], str(r.results[-1]))
+        # 기록 때는 새 창이 떴는데 재생 날은 누른 창에서 바로 받는 사이트 (현대이지웰 2026-11-11 46단계: '새 창' 을 15초 기다리다 멈췄다)
+        e_pop = json.loads(json.dumps(e))
+        check("E1b 전제: 마지막 단계가 파일 받기", bool(e_pop["steps"][-1].get("download")), str(e_pop["steps"][-1])[:200])
+        e_pop["steps"][-1]["opens"] = 1
+        ok, r, m = replay_check(srv, url, e_pop, day, False, None, "E1b_새창없이받기")
+        check("E1b: 파일 받는 단계는 기록 때 뜬 새 창이 안 떠도 받는다", ok and m.ship_downloads == [day.isoformat()]
+              and r.results[-1][1] == "ok", str(r.results[-1]))
         no_hover = rec.keep_steps(e, [i for i, s in enumerate(e["steps"]) if s["kind"] != "hover"])
         ok, r, m = replay_check(srv, url, no_hover, day, False, None, "E2_마우스올리기뺌", step_timeout=5)
         check("E2: 마우스 올리기를 빼면 '송장전송' 을 못 찾고 멈춘다 (이 단계가 왜 있어야 하는지)",

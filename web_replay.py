@@ -2204,6 +2204,15 @@ class Replayer:
         def act():
             if not s.get("opens"):
                 return self._act(page, loc, s)
+            if s.get("download"):
+                # 파일을 받는 단계의 새 창은 뜨면 쓰고 안 떠도 기다리지 않는다 - 파일은 _until_download 가 어느 창에서 오든 기다린다
+                # (현대이지웰 2026-11-11: 기록 때는 새 창이 떴는데 재생 때는 누른 창에서 바로 받아 '새 창' 을 15초 기다리다 멈췄다)
+                def on_popup(popup):
+                    self.pages[s["opens"]] = popup
+                    self._watch(popup)
+                self.pages[s["opens"]] = None
+                page.once("popup", on_popup)
+                return self._act(page, loc, s)
             # 공지 창이면 짧게 기다리고, 안 뜨면 그 창 번호를 비워 두고 넘어간다 - 비워 둔 번호는 [수정] adopt 가 새 탭에 다시 주지 않는다
             notice = not s.get("download") and notice_popup(self.rec["steps"], s["opens"])
             acted = False
