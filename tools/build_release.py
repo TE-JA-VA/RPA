@@ -18,6 +18,7 @@ import datetime
 import fnmatch
 import glob
 import hashlib
+import importlib.machinery
 import importlib.metadata
 import importlib.util
 import json
@@ -129,6 +130,8 @@ NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-ic
                                          *PLAYWRIGHT, TK_PLUGIN, *AGENT_MODULES]}
 # --- 조각 방식 (--modules, 설계 2026-11-11): exe 셋은 내장 Python 을 켜는 작은 시작 파일, 우리 코드는 app\\*.pyd ---
 START_MODULES = {exe: os.path.splitext(src)[0] for exe, src in EXES.items()}      # exe → run_main() 을 가진 모듈
+MODULE_CACHE = os.path.join(REPO, "build", "pyd_cache")     # 지난번에 만든 조각과 재료 지문 - 지우면 모든 조각을 새로 만들고 PC 가 다 다시 받는다
+MODULE_OPTIONS = ["--module", "--assume-yes-for-downloads", "--remove-output", "--no-pyi-file"]
 LAUNCHER_SRC = os.path.join(REPO, "tools", "launcher.c")
 LAUNCHER_CACHE = os.path.join(REPO, "build", "launcher_cache")   # 시작 파일은 버전이 바뀌어도 같은 파일이어야 한다 - 지우지 말 것
 LAUNCHERS = {"ERPia_RPA.exe": (ICON_PROCESS, "PROCESS 오토파일럿", False),        # (아이콘, 작업 관리자 설명, 창 프로그램인가)
@@ -559,6 +562,61 @@ def build_exes(work_dir, only=None, cache=EXE_CACHE, force=False):
             f.write(f"{fp}\n{_sha(keep)}\n")
         made.append(exe)
     return f"{tool} (새로 {len(made)}{': ' + ', '.join(made) if made else ''}, 그대로 {len(kept)})"
+
+
+def module_sources():
+    """조각으로 만들 우리 파이썬 파일 - exe 셋에 들어가던 것 모두 (정렬, 겹치지 않게)."""
+    return sorted({p for exe in EXES for p in exe_sources(exe)})
+
+
+def module_fingerprint(src, tool):
+    """조각 하나의 재료 지문: 그 파일 내용 + 도구 버전 + 옵션. 다른 우리 파일이 바뀌어도 그대로다 (조각은 서로를 실행 때 import 한다)."""
+    h = hashlib.sha256()
+    for part in (open(src, "rb").read(), tool.encode("utf-8"), json.dumps([MODULE_OPTIONS, NUITKA_ENV], sort_keys=True).encode("utf-8")):
+        h.update(part + b"\0")
+    return h.hexdigest()
+
+
+def compile_module(src, out_dir):
+    """src 를 Nuitka 로 조각(.pyd) 하나로 만들어 out_dir 에 두고 그 경로를 돌려준다."""
+    env = dict(os.environ, **NUITKA_ENV, PYTHONPATH=os.pathsep.join(filter(None, [AGENT_DIR, os.environ.get("PYTHONPATH")])))
+    subprocess.run([sys.executable, "-m", "nuitka", *MODULE_OPTIONS, f"--output-dir={out_dir}", src], cwd=REPO, check=True, env=env)
+    return os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + importlib.machinery.EXTENSION_SUFFIXES[0])
+
+
+def build_modules(work_dir, cache=MODULE_CACHE, force=False, compile=compile_module):
+    """우리 파일을 하나씩 조각으로 만들어 work_dir\\app 에 둔다. 재료 지문이 cache 에 보관한 것과 같으면 다시 만들지 않는다
+    (force 면 늘 새로). 조각은 차례로 만든다 - 동시에 만들지 않는다 (exe 동시 빌드의 원인 모를 고장, 2026-10-21).
+    판 목록의 builder 칸 글자를 돌려준다 ("nuitka 4.2.2 · python 3.14.7 (조각 새로 1: web_replay, 그대로 16)")."""
+    app = os.path.join(work_dir, "app")
+    os.makedirs(app, exist_ok=True)
+    os.makedirs(cache, exist_ok=True)
+    ver = subprocess.run([sys.executable, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
+    tool = f"nuitka {ver} · python {platform.python_version()}"
+    suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
+    made, kept, wanted = [], [], set()
+    for src in module_sources():
+        name = os.path.splitext(os.path.basename(src))[0]
+        fp, keep = module_fingerprint(src, tool), os.path.join(cache, name + suffix)
+        try:
+            same = not force and os.path.isfile(keep) and open(keep + ".inputs", encoding="utf-8").read().split() == [fp, _sha(keep)]
+        except OSError:
+            same = False
+        if same:
+            kept.append(name)
+        else:
+            with tempfile.TemporaryDirectory(prefix="rpa_pyd_", ignore_cleanup_errors=True) as tmp:
+                shutil.copy2(compile(src, tmp), keep)
+            with open(keep + ".inputs", "w", encoding="utf-8") as f:          # 조각을 다 보관한 뒤에 지문 - 중간에 죽으면 다음에 다시 만든다
+                f.write(f"{fp}\n{_sha(keep)}\n")
+            made.append(name)
+            print(f"  {name}: 조각을 새로 만들었습니다", flush=True)
+        shutil.copy2(keep, os.path.join(app, name + suffix))
+        wanted.add(name + suffix)
+    for old in os.listdir(app):
+        if old.endswith(suffix) and old not in wanted:
+            os.remove(os.path.join(app, old))
+    return f"{tool} (조각 새로 {len(made)}{': ' + ', '.join(made) if made else ''}, 그대로 {len(kept)})"
 
 
 def reuse_exes(src_dir, work_dir):

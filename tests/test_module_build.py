@@ -105,5 +105,55 @@ check("_start.py 가 없으면 코드 2", r.returncode == 2, f"{r.returncode} {r
 r = run(os.path.join(top, "Prepare_Observer.exe"), "--check", cwd=top)
 check("창 프로그램도 --check 면 창 없이 코드 2", r.returncode == 2, str(r.returncode))
 
+# ---------------------------------------------------------------------------
+print("=== 2. 조각 컴파일과 보관 (가짜 컴파일) ===")
+import importlib.machinery  # noqa: E402
+
+SUFFIX = importlib.machinery.EXTENSION_SUFFIXES[0]
+calls = []
+
+
+def fake(src, out_dir):
+    """compile_module 흉내: 부른 소스를 적고 내용이 소스 이름인 조각을 쓴다."""
+    calls.append(os.path.basename(src))
+    path = os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + SUFFIX)
+    with open(path, "wb") as f:
+        f.write(os.path.basename(src).encode("utf-8"))
+    return path
+
+
+work, cache = os.path.join(tmp, "work"), os.path.join(tmp, "pc")
+sources = br.module_sources()
+names = {os.path.splitext(os.path.basename(s))[0] for s in sources}
+check("exe 셋의 우리 파일을 모두 모은다",
+      names >= {"run_routine", "web_runner", "rpa_observer", "rpa_status", "web_replay", "fb", "secret", "wellife"}, str(sorted(names)))
+check("같은 파일은 한 번만", len(names) == len(sources))
+out1 = br.build_modules(work, cache=cache, compile=fake)
+check("처음에는 모두 컴파일한다", sorted(calls) == sorted(os.path.basename(s) for s in sources), str(calls))
+check("조각은 work\\app 에", sorted(os.listdir(os.path.join(work, "app"))) == sorted(n + SUFFIX for n in names))
+check("builder 글자에 도구와 새로 만든 수", "nuitka" in out1 and f"조각 새로 {len(sources)}" in out1, out1)
+calls.clear()
+out2 = br.build_modules(work, cache=cache, compile=fake)
+check("재료가 같으면 하나도 다시 만들지 않는다", calls == [] and f"그대로 {len(sources)}" in out2, f"{calls} {out2}")
+calls.clear()
+br.build_modules(work, cache=cache, compile=fake, force=True)
+check("force 면 모두 새로", len(calls) == len(sources))
+with open(os.path.join(cache, "rpa_status" + SUFFIX), "wb") as f:
+    f.write(b"broken")
+calls.clear()
+out3 = br.build_modules(work, cache=cache, compile=fake)
+check("보관한 조각이 깨졌으면 그것만 다시 만든다", calls == ["rpa_status.py"] and "조각 새로 1: rpa_status" in out3, f"{calls} {out3}")
+a, b = os.path.join(tmp, "a.py"), os.path.join(tmp, "b.py")
+for path, text in ((a, "x = 1\n"), (b, "x = 2\n")):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+check("지문은 그 파일 내용과 도구 버전만 본다",
+      br.module_fingerprint(a, "t") != br.module_fingerprint(b, "t") and br.module_fingerprint(a, "t") == br.module_fingerprint(a, "t")
+      and br.module_fingerprint(a, "t") != br.module_fingerprint(a, "t2"))
+with open(os.path.join(work, "app", "gone" + SUFFIX), "wb") as f:
+    f.write(b"x")
+br.build_modules(work, cache=cache, compile=fake)
+check("소스에 없는 옛 조각은 남기지 않는다", not os.path.exists(os.path.join(work, "app", "gone" + SUFFIX)))
+
 shutil.rmtree(tmp, ignore_errors=True)
 finish()
