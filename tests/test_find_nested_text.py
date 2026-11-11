@@ -89,7 +89,8 @@ with sync_playwright() as p:
     check("loose 면 원래 있던 것에서도 찾는다", got[0] == "card" and got[1].startswith("숫자 뺀 글자"), str(got))
 
     print("=== 5. 숫자뿐인 글자가 바뀐 받기 링크")
-    page.set_content('<div><a href="#a" id="cnt">6</a></div><div><a href="#a" class="n">6</a></div><div><a href="#a" id="st">처리중</a></div>')
+    page.set_content('<div><a href="#a" id="cnt">6</a></div><div><a href="#a" class="n">6</a></div><div><a href="#a" id="st">처리중</a></div>'
+                     '<div><a href="#a" id="mf_wdc_main_subWindow2_wframe_ExcelDownload_wframe_anc_count">13</a></div>')
 
     def num(text, id_="", css="body > div:nth-of-type(9) > a", download=None):
         s = step(dict(target(text, css=css), id=id_, href=""))
@@ -109,6 +110,9 @@ with sync_playwright() as p:
     check("받기가 아니면 위치만으로는 안 된다 (쪽 번호 '3' 자리의 '6' 을 누르면 안 된다)", got == (None, None), str(got))
     got = num("3", "st")
     check("숫자가 글자로 바뀐 것은 id 가 같아도 다른 것", got == (None, None), str(got))
+    got = num("6", "mf_wdc_main_subWindow1_wframe_ExcelDownload_wframe_anc_count", download="배송목록.xlsx")
+    check("창 번호가 밀려 id 끝으로 찾아도 주문 수 '6' → '13' 이면 그것 (현대이지웰 배송목록 받기, 2026-11-11)",
+          got == ("mf_wdc_main_subWindow2_wframe_ExcelDownload_wframe_anc_count", "id 끝"), str(got))
     b.close()
 
 t2 = target("메일 1", 1, 2)

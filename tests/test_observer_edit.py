@@ -190,8 +190,7 @@ def main():
               o["first"][0] == "paused" and [x for x in o["flow"] if x != "steps"] == ["paused", "editing", "human_done", "recording_stopped"]
               and "steps" in o["flow"] and o["flow"].index("editing") < o["flow"].index("steps"), str(o["flow"]))
         check("1: editing 알림은 (칸 번호, 아직 안 한 4단계의 id = 3)", o.get("editing", ())[:2] == ("editing", 0) and o.get("cut_ok"), str(o.get("editing")))
-        check("1: 미리보기 기록은 '중단' 으로 끝나고 사유는 '4단계부터 수정합니다.'", o.get("history_preview", {}).get("state") == "stopped"
-              and "4단계부터 수정합니다." in json.dumps(o.get("history_preview", {}), ensure_ascii=False), str(o.get("history_preview"))[:300])
+        check("1: [수정] 으로 넘어간 미리보기는 대시보드 실행 기록에 남지 않는다 (사용자 2026-11-11)", o.get("history_preview") == {}, str(o.get("history_preview"))[:300])
         check("1: 프로필 폴더는 미리보기 것 하나만 (새로 띄우지 않았다), 기록을 끝내면 지워진다",
               len(o.get("profiles_editing", [])) == 1 and o.get("profiles_after") == [], str((o.get("profiles_editing"), o.get("profiles_after"))))
         fs = o.get("final", {}).get("steps", [])
@@ -214,8 +213,7 @@ def main():
         check("2: 화면 흐름 failed_at → editing → steps → recording_stopped, cut 은 3단계의 id = 2",
               [x for x in o["flow"] if x != "steps"] == ["failed_at", "editing", "human_done", "recording_stopped"] and o.get("cut_ok"),
               str((o["flow"], o.get("editing"))))
-        check("2: 미리보기 기록 사유 '3단계부터 수정합니다.'", "3단계부터 수정합니다." in json.dumps(o.get("history_preview", {}), ensure_ascii=False),
-              str(o.get("history_preview"))[:300])
+        check("2: [수정] 으로 넘어간 미리보기는 대시보드 실행 기록에 남지 않는다", o.get("history_preview") == {}, str(o.get("history_preview"))[:300])
         fs = o.get("final", {}).get("steps", [])
         check("2: 최종 기록 = 남긴 2단계 + 새 1단계 (로그인)", len(fs) == 3 and fs[:2] == a["steps"][:2] and fs[2]["kind"] == "click"
               and fs[2]["target"]["text"] == "로그인", str([rec.describe(s) for s in fs]))

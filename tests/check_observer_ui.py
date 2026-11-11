@@ -258,6 +258,8 @@ def main():
     check("대시보드 기록에 '옵저버' 미리보기 한 줄 (성공)", row.get("program_label") == "옵저버", str(rows[:1])[:300])
     check("그 로그에는 칸에 친 값·아이디·비밀번호가 없다", "주문 처리" not in logs and fake_mall.USER not in logs
           and fake_mall.PASSWORD not in logs, logs[-500:])
+    check("사람이 누른 [■ 중단] 은 대시보드 기록에 남지 않는다 (사용자 2026-11-11)", not any(r.get("state") == "stopped" for r in rows),
+          str([r.get("state") for r in rows]))
     pv = os.path.join(st.data_dir(), "옵저버", "미리보기")
     check("미리보기로 받은 파일은 기록 폴더 (ERPIA_AI_EXCEL 아님)", os.path.isdir(pv) and any(n.startswith("(012)") for n in os.listdir(pv)))
     check("업체 프리셋 수(10)까지 - 10개면 [+] 가 없다", result.get("ten") == (10, 10, False, 10), str(result.get("ten")))
@@ -266,12 +268,12 @@ def main():
     check("미리보기 브라우저를 못 띄우면 까닭을 보이고 단추가 돌아온다 (미리보기 상태로 멈추지 않는다)",
           fail[0] is False and "띄우지 못했습니다" in fail[1] and fail[2] is False and fail[3] == "▶  미리보기", str(fail))
     stop = result.get("stop") or (None, "", 99, ["?"], None)
-    check("[■ 중단] 은 곧 멈추고 브라우저 프로필을 지운다, 기록은 '멈춤'", stop[0] is False and "중단" in stop[1] and stop[2] < 6
-          and stop[3] == [] and stop[4] == "stopped", str(stop))
+    check("[■ 중단] 은 곧 멈추고 브라우저 프로필을 지운다, 기록에 안 남김", stop[0] is False and "중단" in stop[1] and stop[2] < 6
+          and stop[3] == [] and stop[4] != "stopped", str(stop))
     check("일시정지 중 단추는 [▶ 계속]·[■ 중단]", result.get("paused_btns") == ("▶  계속", "■  중단"), str(result.get("paused_btns")))
     left = sorted(set(glob.glob(PROFILES)) - result.get("before_pause", set()))
-    check("일시정지 중에 창을 닫으면 정리하고 곧 닫힌다 (프로필 안 남음, 기록은 '멈춤')", "t_close" in result and closed_in < 10
-          and left == [] and not app.worker.is_alive() and (st.read_history(program="observer") or [{}])[0].get("state") == "stopped",
+    check("일시정지 중에 창을 닫으면 정리하고 곧 닫힌다 (프로필 안 남음, 기록에 안 남김)", "t_close" in result and closed_in < 10
+          and left == [] and not app.worker.is_alive() and (st.read_history(program="observer") or [{}])[0].get("state") != "stopped",
           f"{closed_in:.1f}초 {left}")
     print(f"사진: {SHOTS}")
     print("실패:", fails or "없음")

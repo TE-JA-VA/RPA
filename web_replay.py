@@ -1733,7 +1733,8 @@ class Replayer:
                         loc = self._pick(loc, loc.count(), nth, pv)
                     except Exception:
                         continue            # 화면이 바뀌는 중
-                    if loc is not None and self._same(loc, t, how.startswith("숫자 뺀 글자") or number and (how == "id" or how == "위치" and s.get("download"))):
+                    if loc is not None and self._same(loc, t, how.startswith("숫자 뺀 글자")
+                                                      or number and (how in ("id", "id 끝") or how == "위치" and s.get("download"))):
                         if shown_only:
                             try:
                                 vis = loc.is_visible()

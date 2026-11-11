@@ -368,7 +368,7 @@ class Worker(threading.Thread):
         st.log_line(f"{stamp()} === 미리보기: {label} ({len(steps)}단계) ===")
         ok, why, note, saved, sec = False, "미리보기를 끝까지 진행하지 못했습니다.", None, [], 0.0
         ctx = prof = None
-        editing = False
+        editing = by_user = False       # [수정]·사람이 누른 [■ 중단] - 대시보드 실행 기록에 남기지 않는다 (사용자 2026-11-11)
         try:
             try:
                 ctx, prof = launch(self.p, slow_mo=120)     # 새 프로필 = RPA 가 혼자 돌 때처럼 로그아웃 상태
@@ -425,10 +425,13 @@ class Worker(threading.Thread):
                 recorder.adopt(rp.pages)                        # 미리보기가 쓰던 탭 번호 그대로 (설계 4.2절 - 새 창을 여는 사이트)
                 return
             if not ok and self.cancel.is_set():
-                why = note = "미리보기를 중단하였습니다."
-            elif not ok and rp.results:
+                note = "미리보기를 중단하였습니다."
+                by_user = not failed            # 못 찾아 멈춘 자리에서 누른 [■ 중단] 은 그 실패로 남긴다
+            if not ok and rp.results and not by_user:
                 i, _, how = rp.results[-1]
                 why = f"{i}단계에서 멈췄습니다: {how}"
+            elif by_user:
+                why = note
             st.log_line(f"{stamp()} {'미리보기 성공' if ok else '미리보기 멈춤'} ({sec:.0f}초) - 받은 파일: "
                         f"{', '.join(saved) or '없음'}")
             if ctx.pages and not self.cancel.is_set():
@@ -438,7 +441,9 @@ class Worker(threading.Thread):
             note = f"미리보기 오류: {why}"
             st.log_line(f"{stamp()} {note}")
         finally:
-            st.finish("success" if ok else "stopped", None if ok else why)
+            # 사람이 누른 [■ 중단]·[수정] 은 대시보드 실행 기록에 남기지 않는다 (사용자 2026-11-11 - 빨간 '실패' 로 쌓여 실제 기록을 가렸다).
+            # 성공과 사이트에서 못 찾은 멈춤은 남긴다 - 원격 지원 때 어느 단계가 막혔는지 본다. 남기지 않는 것도 PC 로그(st.log_line)에는 있다
+            st.finish("success" if ok else "stopped", None if ok else why, record=not (editing or by_user))
             if ctx is not None:
                 try:
                     ctx.close()
