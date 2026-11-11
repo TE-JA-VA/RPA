@@ -302,7 +302,8 @@ if (Test-Path "$T\site") {
 # 6. 조용한 제거: 작업·프로그램·시작 메뉴는 없어지고 설정·기록은 남는다 (조용한 제거의 기본)
 Start-Process "$App\unins000.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
 for ($i = 0; ($i -lt 60) -and (Test-Path $App); $i++) { Start-Sleep 1 }
-Check "제거: 프로그램 폴더가 없다" (-not (Test-Path $App))
+$left = if (Test-Path $App) { $f = @(Get-ChildItem $App -Recurse -Force -File -ErrorAction SilentlyContinue); "남은 파일 $($f.Count)개: " + (($f | Select-Object -First 12 | ForEach-Object { $_.FullName.Substring($App.Length) }) -join "; ") } else { "" }
+Check "제거: 프로그램 폴더가 없다" (-not (Test-Path $App)) $left
 schtasks /Query /TN $Task *> $null
 Check "제거: 작업이 없다" ($LASTEXITCODE -ne 0)
 Check "제거: 시작 메뉴가 없다" (-not (Test-Path $SM))
