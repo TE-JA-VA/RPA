@@ -683,6 +683,64 @@ rs.delete_helper_task(run=lambda a: (ran.append(a), (0, ""))[1])
 check([a[:3] for a in ran] == [["schtasks", "/Create", "/TN"], ["schtasks", "/Run", "/TN"], ["schtasks", "/Delete", "/TN"]]
       and all(rs.HELPER_TASK_NAME in a for a in ran), f"등록·실행·지우기 ({[a[:4] for a in ran]})")
 
+# ---------------------------------------------------------------------------
+print("=== 라이브러리 묶음 풀기 (조각 빌드 2026-11-11) ===")
+import hashlib  # noqa: E402
+import zipfile  # noqa: E402
+
+lib_root = os.path.join(TMP, "libtest", "RPA")
+os.makedirs(lib_root)
+
+
+def make_lib_zip(files):
+    with zipfile.ZipFile(os.path.join(lib_root, rs.LIB_ZIP), "w") as z:
+        for name, text in files.items():
+            z.writestr(name, text)
+
+
+def lib_sha():
+    return hashlib.sha256(open(os.path.join(lib_root, rs.LIB_ZIP), "rb").read()).hexdigest()
+
+
+def unpack_fails():
+    try:
+        rs.unpack_lib(lib_root)
+    except RuntimeError as e:
+        return str(e)
+    return None
+
+
+check("lib.zip 이 없으면 (옛 방식 버전) 아무것도 안 한다", rs.unpack_lib(lib_root) is False and not os.path.exists(os.path.join(lib_root, "lib")))
+make_lib_zip({"pkg/__init__.py": "X = 1\n", "one.py": "Y = 2\n"})
+check("처음에는 푼다", rs.unpack_lib(lib_root) is True
+      and open(os.path.join(lib_root, "lib", "pkg", "__init__.py"), encoding="utf-8").read() == "X = 1\n")
+check("표시 = 묶음의 지문", open(os.path.join(lib_root, "lib", rs.LIB_MARK), encoding="utf-8").read().strip() == lib_sha())
+check("묶음이 그대로면 다시 풀지 않는다", rs.unpack_lib(lib_root) is False)
+make_lib_zip({"pkg/__init__.py": "X = 2\n"})
+check("묶음이 바뀌면 옛 것을 지우고 새로 푼다", rs.unpack_lib(lib_root) is True
+      and not os.path.exists(os.path.join(lib_root, "lib", "one.py"))
+      and open(os.path.join(lib_root, "lib", "pkg", "__init__.py"), encoding="utf-8").read() == "X = 2\n")
+check("임시 폴더가 남지 않는다", not os.path.exists(os.path.join(lib_root, "lib.new")))
+os.remove(os.path.join(lib_root, "lib", rs.LIB_MARK))          # 풀다 끊긴 자리 (Review Focus 2)
+os.remove(os.path.join(lib_root, "lib", "pkg", "__init__.py"))
+check("표시가 없으면 처음부터 다시 푼다", rs.unpack_lib(lib_root) is True and os.path.isfile(os.path.join(lib_root, "lib", "pkg", "__init__.py")))
+os.makedirs(os.path.join(lib_root, "lib.new", "junk"))         # 지난번에 끊겨 남은 임시 폴더
+os.remove(os.path.join(lib_root, "lib", rs.LIB_MARK))
+check("끊겨 남은 임시 폴더가 있어도 푼다", rs.unpack_lib(lib_root) is True and not os.path.exists(os.path.join(lib_root, "lib", "junk")))
+for bad in ("../evil.py", "..\\evil.py", "C:/evil.py", "/evil.py", "a/../../evil.py"):      # Review Focus 1
+    make_lib_zip({bad: "x", "ok.py": "x"})
+    why = unpack_fails()
+    check(f"밖을 가리키는 이름은 풀지 않는다 ({bad})", why is not None and "프로그램 구성 요소를 준비하지 못했습니다" in why
+          and not os.path.exists(os.path.join(os.path.dirname(lib_root), "evil.py")) and not os.path.exists(r"C:\evil.py"), str(why))
+check("거절한 묶음은 옛 lib 를 건드리지 않는다", os.path.isfile(os.path.join(lib_root, "lib", "pkg", "__init__.py")))
+with open(os.path.join(lib_root, rs.LIB_ZIP), "wb") as f:
+    f.write(b"not a zip")
+why = unpack_fails()
+check("깨진 묶음은 까닭과 함께 실패", why is not None and "프로그램 구성 요소를 준비하지 못했습니다" in why, str(why))
+main_src = open(ROOT / "rpa_settings.py", encoding="utf-8").read()
+check("--after-install 이 설정 여부와 상관없이 묶음을 먼저 푼다",
+      0 < main_src.find("unpack_lib(paths[") < main_src.find("if after and configured(paths"))
+
 shutil.rmtree(TMP, ignore_errors=True)
 print()
 print(f"실패: {'없음' if not fails else fails}")

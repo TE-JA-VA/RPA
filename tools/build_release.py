@@ -132,6 +132,14 @@ NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-ic
 START_MODULES = {exe: os.path.splitext(src)[0] for exe, src in EXES.items()}      # exe → run_main() 을 가진 모듈
 MODULE_CACHE = os.path.join(REPO, "build", "pyd_cache")     # 지난번에 만든 조각과 재료 지문 - 지우면 모든 조각을 새로 만들고 PC 가 다 다시 받는다
 MODULE_OPTIONS = ["--module", "--assume-yes-for-downloads", "--remove-output", "--no-pyi-file"]
+SITE_PACKAGES = os.path.join(REPO, ".venv", "Lib", "site-packages")
+# 라이브러리 묶음(lib.zip)에 실을 것 - 옛 onefile exe 가 싣던 것과 같아야 한다. 빠지면 --check 가 ModuleNotFoundError 로 알려 준다
+LIB_NAMES = ["playwright", "pywinauto", "comtypes", "win32", "win32com", "win32comext", "pythonwin", "pywin32_system32",
+             "pywin32.pth", "pywin32.version.txt", "pythoncom.py", "greenlet", "pyee", "typing_extensions.py", "PIL", "six.py"]
+LIB_SKIP = ("playwright/driver/node.exe",)       # 프로그램 폴더 playwright\\node.exe 한 벌을 쓴다 (NODE_REL)
+LIB_SKIP_DIRS = ("comtypes/test",)
+LIB_TIME = (2026, 1, 1, 0, 0, 0)                 # 묶음 안 파일 시각 - 고정해야 같은 재료에서 같은 묶음이 나온다 (PC 가 다시 안 받는다)
+COMTYPES_CHECK = ("comtypes/_tlib_version_checker.py", b'if not hasattr(sys, "frozen"):', b"if False:")   # nuitka-package.config.yml 과 같은 바꿈
 LAUNCHER_SRC = os.path.join(REPO, "tools", "launcher.c")
 LAUNCHER_CACHE = os.path.join(REPO, "build", "launcher_cache")   # 시작 파일은 버전이 바뀌어도 같은 파일이어야 한다 - 지우지 말 것
 LAUNCHERS = {"ERPia_RPA.exe": (ICON_PROCESS, "PROCESS 오토파일럿", False),        # (아이콘, 작업 관리자 설명, 창 프로그램인가)
@@ -617,6 +625,40 @@ def build_modules(work_dir, cache=MODULE_CACHE, force=False, compile=compile_mod
         if old.endswith(suffix) and old not in wanted:
             os.remove(os.path.join(app, old))
     return f"{tool} (조각 새로 {len(made)}{': ' + ', '.join(made) if made else ''}, 그대로 {len(kept)})"
+
+
+def build_lib_zip(zip_path, site_packages=SITE_PACKAGES):
+    """라이브러리 묶음을 만든다 (컴파일하지 않고 그대로). 같은 재료면 늘 같은 바이트다.
+    comtypes 의 형식 라이브러리 시각 검사는 끄고 (빌드 PC 와 윈도우 버전이 다른 PC 에서 죽는다, 2026-09-29),
+    win32ui 가 쓰는 MFC DLL 을 pythonwin 에 넣는다."""
+    files = {}
+    for name in LIB_NAMES:
+        full = os.path.join(site_packages, name)
+        if os.path.isfile(full):
+            files[name] = full
+        elif os.path.isdir(full):
+            for base, dirs, names in os.walk(full):
+                rel_dir = os.path.relpath(base, site_packages).replace(os.sep, "/")
+                dirs[:] = [d for d in dirs if d != "__pycache__" and f"{rel_dir}/{d}" not in LIB_SKIP_DIRS]
+                for n in names:
+                    if f"{rel_dir}/{n}" not in LIB_SKIP:
+                        files[f"{rel_dir}/{n}"] = os.path.join(base, n)
+        else:
+            raise RuntimeError(f"라이브러리가 없습니다: {full}")
+    files["pythonwin/mfc140u.dll"] = MFC_DLL
+    tmp = zip_path + ".tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel in sorted(files):
+            with open(files[rel], "rb") as f:
+                data = f.read()
+            if rel == COMTYPES_CHECK[0]:
+                if COMTYPES_CHECK[1] not in data:
+                    raise RuntimeError(f"comtypes 에 바꿀 줄이 없습니다 ({rel}) - comtypes 를 올렸으면 시각 검사 끄는 자리를 다시 찾으세요")
+                data = data.replace(COMTYPES_CHECK[1], COMTYPES_CHECK[2])
+            info = zipfile.ZipInfo(rel, LIB_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, data)
+    os.replace(tmp, zip_path)
 
 
 def reuse_exes(src_dir, work_dir):

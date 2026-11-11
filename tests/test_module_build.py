@@ -155,5 +155,25 @@ with open(os.path.join(work, "app", "gone" + SUFFIX), "wb") as f:
 br.build_modules(work, cache=cache, compile=fake)
 check("소스에 없는 옛 조각은 남기지 않는다", not os.path.exists(os.path.join(work, "app", "gone" + SUFFIX)))
 
+# ---------------------------------------------------------------------------
+print("=== 3. 라이브러리 묶음 ===")
+import zipfile  # noqa: E402
+
+z1, z2 = os.path.join(tmp, "lib1.zip"), os.path.join(tmp, "lib2.zip")
+br.build_lib_zip(z1)
+br.build_lib_zip(z2)
+with zipfile.ZipFile(z1) as z:
+    lib_names = z.namelist()
+    checker = z.read("comtypes/_tlib_version_checker.py")
+check("같은 재료면 묶음이 한 바이트도 안 다르다", open(z1, "rb").read() == open(z2, "rb").read())
+check("실을 것이 들어 있다", {"playwright/__init__.py", "pywinauto/__init__.py", "pythonwin/mfc140u.dll", "pywin32.pth",
+                              "pythoncom.py", "greenlet/__init__.py", "PIL/__init__.py"} <= set(lib_names))
+check("뺄 것은 빠졌다", not any("__pycache__" in n or n.endswith("driver/node.exe") or n.startswith("comtypes/test/")
+                                or ".dist-info/" in n for n in lib_names))
+check("comtypes 시각 검사를 껐다", b'if not hasattr(sys, "frozen"):' not in checker and b"if False:" in checker)
+check("빌드 PC 의 comtypes gen 을 같이 싣는다", any(n.startswith("comtypes/gen/") and n.endswith(".py") for n in lib_names))
+check("우리 코드·개발 도구는 싣지 않는다", not any(n.split("/")[0] in ("nuitka", "pip", "numpy", "setuptools") for n in lib_names))
+check("묶음 크기 60MB 안쪽", os.path.getsize(z1) < 60 * 2 ** 20, f"{os.path.getsize(z1) // 2 ** 20}MB")
+
 shutil.rmtree(tmp, ignore_errors=True)
 finish()
