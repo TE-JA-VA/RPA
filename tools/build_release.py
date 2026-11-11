@@ -127,6 +127,13 @@ NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-ic
                                     *AGENT_MODULES],
                 "Prepare_Observer.exe": ["--windows-console-mode=attach", f"--windows-icon-from-ico={ICON_PREPARE}",
                                          *PLAYWRIGHT, TK_PLUGIN, *AGENT_MODULES]}
+# --- 조각 방식 (--modules, 설계 2026-11-11): exe 셋은 내장 Python 을 켜는 작은 시작 파일, 우리 코드는 app\\*.pyd ---
+START_MODULES = {exe: os.path.splitext(src)[0] for exe, src in EXES.items()}      # exe → run_main() 을 가진 모듈
+LAUNCHER_SRC = os.path.join(REPO, "tools", "launcher.c")
+LAUNCHER_CACHE = os.path.join(REPO, "build", "launcher_cache")   # 시작 파일은 버전이 바뀌어도 같은 파일이어야 한다 - 지우지 말 것
+LAUNCHERS = {"ERPia_RPA.exe": (ICON_PROCESS, "PROCESS 오토파일럿", False),        # (아이콘, 작업 관리자 설명, 창 프로그램인가)
+             "Prepare_RPA.exe": (ICON_ACTOR, "ACTOR 오토파일럿", False),
+             "Prepare_Observer.exe": (ICON_PREPARE, "옵저버", True)}
 ISS_PATH = os.path.join(REPO, "release", "installer.iss")
 # Inno Setup 6 의 ISCC.exe 를 찾는 자리 (이 PC 는 winget 사용자 설치 → LOCALAPPDATA)
 ISCC_DIRS = (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6"),
@@ -214,6 +221,72 @@ def brand_exe(src, dst, description, version, icon=None):
             win32api.UpdateResource(u, win32con.RT_ICON, i, img, langs[0])
         win32api.UpdateResource(u, win32con.RT_GROUP_ICON, 1, group, langs[0])
     win32api.EndUpdateResource(u, 0)
+
+
+def zig_exe():
+    """Nuitka 가 받아 둔 zig (C 컴파일러). 없으면 RuntimeError - Nuitka 로 exe 를 한 번 만들면 받아진다."""
+    found = sorted(glob.glob(os.path.join(os.environ.get("LOCALAPPDATA", ""), "Nuitka", "Nuitka", "Cache", "downloads", "pip",
+                                          "*", "Lib", "site-packages", "ziglang", "zig.exe")))
+    if not found:
+        raise RuntimeError("zig 를 찾지 못했습니다 (Nuitka 가 받아 두는 C 컴파일러). 옛 방식으로 exe 를 한 번 만들면 받아집니다")
+    return found[-1]
+
+
+def _stamp_launcher(path, icon, description):
+    """zig 가 만든 exe 에 아이콘 한 벌과 버전 정보(작업 관리자 설명)를 넣는다. 원래 자원이 없는 exe 라 새로 넣는다."""
+    name = os.path.basename(path)
+    text = {"CompanyName": "오토파일럿", "FileDescription": description, "ProductName": "오토파일럿",
+            "FileVersion": BRAND_VERSION, "ProductVersion": BRAND_VERSION, "InternalName": name, "OriginalFilename": name}
+    vs = win32verstamp.VS_VERSION_INFO(*[int(x) for x in BRAND_VERSION.split(".")], text,
+                                       {"Translation": struct.pack("hh", 0x409, 1252)}, 0, 0)
+    group, images = icon_resources(icon)
+    u = win32api.BeginUpdateResource(path, 0)
+    win32api.UpdateResource(u, 16, 1, vs, 0x409)
+    for i, img in enumerate(images, 1):
+        win32api.UpdateResource(u, win32con.RT_ICON, i, img, 0x409)
+    win32api.UpdateResource(u, win32con.RT_GROUP_ICON, 1, group, 0x409)
+    win32api.EndUpdateResource(u, 0)
+
+
+def build_launchers(work_dir, cache=LAUNCHER_CACHE):
+    """시작 파일 셋(EXES 의 이름)을 work_dir 에 둔다. 재료(launcher.c·아이콘·설명·zig·Python 버전)가 같으면 cache 의 것을
+    그대로 쓴다 - 시작 파일은 버전마다 같은 바이트여야 PC 가 다시 받지 않는다."""
+    os.makedirs(work_dir, exist_ok=True)
+    os.makedirs(cache, exist_ok=True)
+    zig = pyver = None
+    bases = {}
+    for exe, (icon, description, windowed) in LAUNCHERS.items():
+        if zig is None:
+            zig = zig_exe()
+            pyver = f"{sys.version_info.major}{sys.version_info.minor}"
+            tool = subprocess.run([zig, "version"], capture_output=True, text=True, check=True).stdout.strip()
+        h = hashlib.sha256()
+        for part in (open(LAUNCHER_SRC, "rb").read(), open(icon, "rb").read(),
+                     f"{description}|{windowed}|{BRAND_VERSION}|{tool}|{pyver}".encode("utf-8")):
+            h.update(part + b"\0")
+        fp, keep = h.hexdigest(), os.path.join(cache, exe)
+        try:
+            same = os.path.isfile(keep) and open(keep + ".inputs", encoding="utf-8").read().split() == [fp, _sha(keep)]
+        except OSError:
+            same = False
+        if not same:
+            if windowed not in bases:
+                tmp = tempfile.mkdtemp(prefix="rpa_launcher_")
+                base = os.path.join(tmp, "launcher.exe")
+                cmd = [zig, "cc", LAUNCHER_SRC, "-o", base, "-target", "x86_64-windows-gnu", "-mcpu=x86_64", "-O2", "-municode",
+                       f"-DPYVER={pyver}"] + (["-DWINDOWED", "-Wl,--subsystem,windows"] if windowed else [])
+                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                if r.returncode != 0 or not os.path.isfile(base):
+                    raise RuntimeError(f"시작 파일을 만들지 못했습니다: {(r.stderr or r.stdout)[-800:]}")
+                bases[windowed] = base
+            shutil.copy2(bases[windowed], keep)
+            _stamp_launcher(keep, icon, description)
+            with open(keep + ".inputs", "w", encoding="utf-8") as f:
+                f.write(f"{fp}\n{_sha(keep)}\n")
+            print(f"  {exe}: 시작 파일을 새로 만들었습니다")
+        shutil.copy2(keep, os.path.join(work_dir, exe))
+    for base in bases.values():
+        shutil.rmtree(os.path.dirname(base), ignore_errors=True)
 
 
 def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0.0.0"):
