@@ -724,6 +724,44 @@ check("임시 폴더가 남지 않는다", not os.path.exists(os.path.join(lib_r
 os.remove(os.path.join(lib_root, "lib", rs.LIB_MARK))          # 풀다 끊긴 자리 (Review Focus 2)
 os.remove(os.path.join(lib_root, "lib", "pkg", "__init__.py"))
 check("표시가 없으면 처음부터 다시 푼다", rs.unpack_lib(lib_root) is True and os.path.isfile(os.path.join(lib_root, "lib", "pkg", "__init__.py")))
+os.remove(os.path.join(lib_root, "lib", "pkg", "__init__.py"))     # 표시는 맞는데 파일이 빠졌다 (백신 격리) - 검토 2026-11-11
+check("표시가 맞아도 빠진 파일이 있으면 다시 푼다 (같은 버전 다시 설치로 고쳐진다)",
+      rs.unpack_lib(lib_root) is True and os.path.isfile(os.path.join(lib_root, "lib", "pkg", "__init__.py")))
+check("빠진 것이 없으면 다시 풀지 않는다", rs.unpack_lib(lib_root) is False)
+# 새 lib 를 제자리에 놓지 못하면 옛 lib 가 그대로 남아야 한다 (검토 2026-11-11: 옛 것부터 지우면 프로그램이 통째로 죽는다)
+_replace, _retry = rs.os.replace, rs.LIB_RETRY
+rs.LIB_RETRY = (3, 0)
+make_lib_zip({"pkg/__init__.py": "X = 3\n"})
+tries = []
+
+
+def locked(src, dst):
+    if os.path.basename(src) == "lib.new":
+        tries.append(1)
+        raise PermissionError(5, "잠김")
+    return _replace(src, dst)
+
+
+rs.os.replace = locked
+why = unpack_fails()
+check("새 lib 를 못 놓으면 실패하고, 옛 lib 는 그대로 쓸 수 있다", why is not None and len(tries) == 3
+      and open(os.path.join(lib_root, "lib", "pkg", "__init__.py"), encoding="utf-8").read() == "X = 2\n"
+      and not os.path.exists(os.path.join(lib_root, "lib.old")), f"{why} {tries}")
+
+
+def locked_once(src, dst):
+    if os.path.basename(src) == "lib.new" and not tries:
+        tries.append(1)
+        raise PermissionError(5, "잠김")
+    return _replace(src, dst)
+
+
+tries.clear()
+rs.os.replace = locked_once
+check("잠깐 잠긴 것은 다시 해서 푼다", rs.unpack_lib(lib_root) is True and tries == [1]
+      and open(os.path.join(lib_root, "lib", "pkg", "__init__.py"), encoding="utf-8").read() == "X = 3\n"
+      and not os.path.exists(os.path.join(lib_root, "lib.old")))
+rs.os.replace, rs.LIB_RETRY = _replace, _retry
 os.makedirs(os.path.join(lib_root, "lib.new", "junk"))         # 지난번에 끊겨 남은 임시 폴더
 os.remove(os.path.join(lib_root, "lib", rs.LIB_MARK))
 check("끊겨 남은 임시 폴더가 있어도 푼다", rs.unpack_lib(lib_root) is True and not os.path.exists(os.path.join(lib_root, "lib", "junk")))

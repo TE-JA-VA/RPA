@@ -31,16 +31,25 @@ def main():
     root = os.path.dirname(exe)
     lib = os.path.join(root, "lib")
     name = START.get(os.path.basename(exe).lower())
-    if name is None or not os.path.isdir(lib):
-        tell(MISSING.format(exe if name is None else lib))
+    mark = os.path.join(lib, ".unpacked")       # 설치 마무리(rpa_settings.unpack_lib)가 다 풀고 맨 끝에 쓴다 - 없으면 덜 풀린 lib
+    if name is None or not os.path.isfile(mark):
+        tell(MISSING.format(exe if name is None else mark))
         return 2
+    # 윈도우의 Python 은 exe 가 놓인 폴더도 찾는 길에 넣는다. 프로그램 폴더에는 에이전트용 rpa_status.py 등이 있어, 조각이
+    # 빠졌을 때(백신 격리) 그 .py 로 말없이 돌면 안 된다 (packaged() 가 거짓이 되어 자리를 잘못 찾는다)
+    sys.path[:] = [p for p in sys.path if not (os.path.isdir(p) and os.path.samefile(p, root))]   # 짧은 이름(8.3)으로 적혀 있어도
     import importlib
     import site
     # python.exe 로 켤 때는 내장 Python 폴더가 exe 폴더라 그 안의 DLL(vcruntime140_1.dll 등)을 저절로 찾는다. 시작 파일은
     # 프로그램 폴더에 있어 따로 알려 준다 - 깨끗한 윈도우에서 win32clipboard 가 'DLL load failed' (샌드박스 2026-11-11)
     os.add_dll_directory(os.path.join(root, "python"))
     site.addsitedir(lib)                        # pywin32 의 .pth 까지
-    return importlib.import_module(name).run_main()
+    try:
+        module = importlib.import_module(name)
+    except ImportError as e:                    # 조각·라이브러리가 빠졌다 - 오류 추적 대신 한 줄 (창 프로그램은 알림 창)
+        tell(MISSING.format(e.name or name))
+        return 2
+    return module.run_main()
 
 
 if __name__ == "__main__":

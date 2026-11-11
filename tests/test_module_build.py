@@ -48,8 +48,9 @@ def icon_count(path):
         win32api.FreeLibrary(h)
 
 
-def run(exe, *args, cwd):
+def run(exe, *args, cwd, **more):
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PYTHON")}
+    env.update(more)
     return subprocess.run([exe, *args], capture_output=True, cwd=cwd, timeout=120, env=env)
 
 
@@ -58,19 +59,29 @@ tmp = tempfile.mkdtemp(prefix="rpa_modbuild_")
 # ---------------------------------------------------------------------------
 print("=== 1. 시작 파일 ===")
 FAKE = ('import sys, os, json, ctypes\n'
+        'import probe_lib\n'
         'def run_main():\n'
         '    try:\n'
         '        ctypes.WinDLL("rpa_probe_dep.dll")\n'
         '        dep = True\n'
         '    except OSError:\n'
         '        dep = False\n'
-        '    print(json.dumps({"argv": sys.argv, "exe": sys.executable, "home": os.environ.get("PYTHONHOME"), "path0": sys.path[0], "dep": dep}))\n'
+        '    print(json.dumps({"argv": sys.argv, "exe": sys.executable, "home": os.environ.get("PYTHONHOME"), "path0": sys.path[0], "dep": dep,\n'
+        '                      "lib": probe_lib.WHERE}))\n'
         '    return 7\n')
 top = os.path.join(tmp, "공백 한글 폴더", "RPA")
 shutil.copytree(os.path.join(br.RUNTIME_ROOT, "python"), os.path.join(top, "python"))
 shutil.copy2(os.path.join(top, "python", "vcruntime140_1.dll"), os.path.join(top, "python", "rpa_probe_dep.dll"))   # 내장 Python 폴더에만 있는 DLL
 os.makedirs(os.path.join(top, "app"))
 os.makedirs(os.path.join(top, "lib"))
+with open(os.path.join(top, "lib", ".unpacked"), "w", encoding="utf-8") as f:    # 설치 마무리가 다 풀었다는 표시
+    f.write("x")
+with open(os.path.join(top, "lib", "probe_lib.py"), "w", encoding="utf-8") as f:
+    f.write('WHERE = "lib"\n')
+trap = os.path.join(tmp, "trap")
+os.makedirs(trap)
+with open(os.path.join(trap, "probe_lib.py"), "w", encoding="utf-8") as f:       # PC 에 PYTHONPATH 가 잡혀 있을 때
+    f.write('WHERE = "trap"\n')
 shutil.copy2(ROOT / "app_start.py", os.path.join(top, "app", "_start.py"))
 for mod in ("web_runner", "rpa_observer", "run_routine"):
     with open(os.path.join(top, "app", mod + ".py"), "w", encoding="utf-8") as f:
@@ -84,13 +95,19 @@ r = run(exe, "--preset", "① 지마켓", 'a "b" c', cwd=top)
 try:
     got = json.loads(r.stdout.decode("utf-8"))
 except ValueError:
-    got = {"argv": None, "exe": None, "home": "?", "path0": "", "dep": None}
+    got = {"argv": None, "exe": None, "home": "?", "path0": "", "dep": None, "lib": None}
 check("종료 코드가 그대로 나온다", r.returncode == 7, f"{r.returncode} {r.stderr[-300:]!r}")
 check("인자가 그대로, argv[0] 은 exe", got["argv"] == [exe, "--preset", "① 지마켓", 'a "b" c'], str(got["argv"]))
 check("sys.executable 은 exe, PYTHONHOME 은 물려주지 않는다", got["exe"] == exe and got["home"] is None, str(got))
 check("프로그램 폴더의 함정 .py 가 아니라 app 의 것을 쓴다",
       os.path.normcase(got["path0"]) == os.path.normcase(os.path.join(top, "app")), got["path0"])
 check("내장 Python 폴더의 DLL 을 찾는다 (깨끗한 윈도우에는 vcruntime140_1.dll 이 시스템에 없다 - 샌드박스 2026-11-11)", got["dep"] is True, str(got["dep"]))
+r = run(exe, cwd=top, PYTHONPATH=trap, PYTHONSTARTUP=os.path.join(trap, "none.py"), PYTHONINSPECT="1")
+try:
+    where = json.loads(r.stdout.decode("utf-8"))["lib"]
+except (ValueError, KeyError):
+    where = r.stderr[-200:]
+check("PC 의 PYTHONPATH 등이 우리 라이브러리를 가리지 않는다 (검토 2026-11-11)", r.returncode == 7 and where == "lib", f"{r.returncode} {where}")
 check("PROCESS 시작 파일", run(os.path.join(top, "ERPia_RPA.exe"), cwd=top).returncode == 7)
 r = run(os.path.join(top, "Prepare_Observer.exe"), "--check", cwd=top)
 check("옵저버 시작 파일 (창 프로그램, 출력은 부른 쪽이 받는다)", r.returncode == 7 and b'"argv"' in r.stdout, f"{r.returncode} {r.stdout[-200:]!r}")
@@ -100,7 +117,19 @@ before = {e: open(os.path.join(top, e), "rb").read() for e in br.EXES}
 br.build_launchers(top, cache=lc)
 check("재료가 같으면 시작 파일이 한 바이트도 안 바뀐다", all(open(os.path.join(top, e), "rb").read() == before[e] for e in br.EXES))
 check("프로그램마다 다른 파일 (아이콘·설명)", len(set(before.values())) == 3)
-# lib 가 없다 / _start.py 가 없다 - 한 줄 안내와 코드 2 (Review Focus 3)
+# 조각·라이브러리가 빠졌다 / lib 를 덜 풀었다 / lib 가 없다 / _start.py 가 없다 - 한 줄 안내와 코드 2 (Review Focus 3)
+os.rename(os.path.join(top, "app", "web_runner.py"), os.path.join(top, "app", "web_runner.gone"))
+r = run(exe, "--check", cwd=top)
+check("조각이 빠지면 (백신 격리) 오류 추적 대신 한 줄 안내와 코드 2",
+      r.returncode == 2 and "다시 설치하여 주십시오".encode("utf-8") in r.stderr and b"Traceback" not in r.stderr and b"web_runner" in r.stderr,
+      f"{r.returncode} {r.stderr[-300:]!r}")
+os.rename(os.path.join(top, "app", "web_runner.gone"), os.path.join(top, "app", "web_runner.py"))
+os.remove(os.path.join(top, "lib", "probe_lib.py"))
+r = run(exe, "--check", cwd=top)
+check("라이브러리가 빠져도 한 줄 안내와 코드 2", r.returncode == 2 and b"Traceback" not in r.stderr and b"probe_lib" in r.stderr, f"{r.returncode} {r.stderr[-300:]!r}")
+os.remove(os.path.join(top, "lib", ".unpacked"))
+r = run(exe, "--check", cwd=top)
+check("lib 를 덜 풀었으면 (표시 없음) 한 줄 안내와 코드 2", r.returncode == 2 and b"Traceback" not in r.stderr and b".unpacked" in r.stderr, f"{r.returncode} {r.stderr[-300:]!r}")
 shutil.rmtree(os.path.join(top, "lib"))
 r = run(exe, "--check", cwd=top)
 check("lib 가 없으면 한 줄 안내와 코드 2",

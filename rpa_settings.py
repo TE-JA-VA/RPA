@@ -58,6 +58,7 @@ PRINT_MODES = {PRINT_MANUAL: "N", PRINT_AUTO: "Y"}    # 수동이 먼저·기본
 PASSWORD_KEYS = ("agent_pw", "erp_pw")
 LIB_ZIP = "lib.zip"                              # 조각 방식 버전의 라이브러리 묶음 (프로그램 폴더, 버전 목록에 있다)
 LIB_DIR = "lib"                                  # 묶음을 푼 자리 - 시작 파일(app\\_start.py)이 여기서 라이브러리를 찾는다
+LIB_RETRY = (20, 0.5)                            # lib 폴더 이름 바꾸기가 잠겨 있으면 (백신 검사) 몇 번, 몇 초마다 다시
 LIB_MARK = ".unpacked"                           # lib 안, 푼 묶음의 지문. 맨 끝에 쓴다 - 없으면 풀다 끊긴 것
 CRASH_LOG_NAME = "설정창_오류.txt"               # 뜻밖의 오류 추적 (기록 폴더)
 ICON_NAME = "AFTER_MARKET.ico"                  # 프로그램 폴더 (tools/make_icon.py 가 만든다)
@@ -584,34 +585,58 @@ def inherit_acl(program_dir, run=run_quiet):
     return run(["icacls", os.path.join(program_dir, "*"), "/reset", "/T", "/C", "/Q"], timeout=300)
 
 
+def _replace_retry(src, dst):
+    """os.replace - 잠겨 있으면 (PermissionError) LIB_RETRY 만큼 다시 해 본다."""
+    tries, wait = LIB_RETRY
+    for i in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(wait)
+
+
 def unpack_lib(program_dir):
-    """라이브러리 묶음(lib.zip)을 lib\\ 에 푼다 (조각 빌드 설계 11절). 풀었으면 True, 이미 그 묶음을 풀어 뒀거나
+    """라이브러리 묶음(lib.zip)을 lib\\ 에 푼다 (조각 빌드 설계 11절). 풀었으면 True, 이미 그 묶음을 다 풀어 뒀거나
     묶음이 없으면(옛 방식 버전) False. 못 풀면 RuntimeError - 설치 마무리가 실패로 끝나 업데이트 도우미가 되돌린다.
-    표시 파일은 맨 끝에 쓴다: 풀다 끊기면 다음에 처음부터 다시 푼다."""
+    lib.new 에 다 푼 뒤 폴더 이름만 바꾼다: 새 것을 제자리에 못 놓으면 옛 lib 를 되돌려 놓아 프로그램은 계속 돈다.
+    표시 파일은 맨 끝에 쓴다: 풀다 끊기면 다음에 처음부터 다시 푼다. 표시가 맞아도 빠진 파일이 있으면 (백신 격리) 다시 푼다."""
     import hashlib
     import zipfile
-    src, lib, new = (os.path.join(program_dir, n) for n in (LIB_ZIP, LIB_DIR, LIB_DIR + ".new"))
+    src, lib, new, old = (os.path.join(program_dir, n) for n in (LIB_ZIP, LIB_DIR, LIB_DIR + ".new", LIB_DIR + ".old"))
     if not os.path.isfile(src):
         return False
     try:
         with open(src, "rb") as f:
             digest = hashlib.sha256(f.read()).hexdigest()
-        try:
-            with open(os.path.join(lib, LIB_MARK), encoding="utf-8") as f:
-                if f.read().strip() == digest:
-                    return False
-        except OSError:
-            pass
         with zipfile.ZipFile(src) as z:
-            for name in z.namelist():           # 밖을 가리키는 이름이 하나라도 있으면 아무것도 풀지 않는다
+            names = z.namelist()
+            for name in names:                  # 밖을 가리키는 이름이 하나라도 있으면 아무것도 풀지 않는다
                 parts = name.replace("\\", "/").split("/")
                 if name.startswith(("/", "\\")) or ":" in name or ".." in parts:
                     raise ValueError(f"묶음 안의 경로가 잘못되었습니다: {name!r}")
+            try:
+                with open(os.path.join(lib, LIB_MARK), encoding="utf-8") as f:
+                    done = f.read().strip() == digest
+            except OSError:
+                done = False
+            if done and all(os.path.isfile(os.path.join(lib, *n.split("/"))) for n in names if not n.endswith("/")):
+                return False
             shutil.rmtree(new, ignore_errors=True)
+            shutil.rmtree(old, ignore_errors=True)
             z.extractall(new)
-        if os.path.isdir(lib):
-            shutil.rmtree(lib)
-        os.replace(new, lib)
+        had = os.path.isdir(lib)
+        if had:
+            _replace_retry(lib, old)
+        try:
+            _replace_retry(new, lib)
+        except OSError:
+            if had:
+                os.replace(old, lib)            # 옛 lib 를 되돌려 놓는다
+            raise
+        shutil.rmtree(old, ignore_errors=True)
         try:                                    # 프로그램 폴더는 사용자가 못 써서 .pyc 를 여기서 만들어 둔다 (없어도 돈다)
             import compileall
             import warnings
