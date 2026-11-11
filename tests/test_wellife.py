@@ -1524,8 +1524,18 @@ _xl_dir = tempfile.mkdtemp(prefix="inv_xl_")
 _saved_loop = (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
               wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow,
               wellife.upload_codes, wellife.pick_sites)
-_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True, "no_up": set(), "after": {}, "nopress": False}
+_XL = {"targets": [], "rows": {}, "fail": {}, "preview0": set(), "checked": True, "no_up": set(), "after": {}, "nopress": False, "broken": set()}
 _XLLOG = []
+import io  # noqa: E402
+import zipfile  # noqa: E402
+from msoffcrypto.format.ooxml import OOXMLFile  # noqa: E402
+_plain = io.BytesIO()
+with zipfile.ZipFile(_plain, "w") as _z:
+    _z.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+    _z.writestr("xl/pad.xml", "a" * 5000)   # msoffcrypto 는 4KB 보다 작은 파일을 잠갔다 풀면 실패한다 (ERPia 파일은 머리글만 있어도 풀면 11KB)
+_PLAIN, _locked = _plain.getvalue(), io.BytesIO()
+OOXMLFile(io.BytesIO(_PLAIN)).encrypt("0000", _locked)     # ERPia 처럼 비밀번호로 잠긴 엑셀
+_LOCKED = _locked.getvalue()
 
 
 def _fake_export(rr_, ctx_, market, pw):
@@ -1535,7 +1545,8 @@ def _fake_export(rr_, ctx_, market, pw):
         _XLLOG.append(("preview0", market))
         return None
     path = os.path.join(_xl_dir, f"{market}송장2026-11-01~2026-11-09.xlsx")
-    open(path, "w").close()
+    with open(path, "wb") as f:
+        f.write(b"" if market in _XL["broken"] else _LOCKED)     # broken: 엑셀이 아닌 파일 - 비밀번호를 풀지 못한다
     ctx_.export_saved = path            # _download 처럼 - 저장한 뒤 멈춰도 invoice_excel 이 실패 이름으로 바꾼다
     if market in _XL["after"]:          # 저장은 됐는데 '엑셀파일 열기' [아니오]·창 닫기에서 멈춤
         raise wellife.Stop(*_XL["after"][market])
@@ -1568,11 +1579,12 @@ wellife.press_arrow = lambda rr_, ctx_, ctl, aid, what, want, count, live: (
 _xrr = types.SimpleNamespace(log=lambda m: None, status=Rec(), unique_path=lambda p: p)
 
 
-def xl_run(live, targets, rows, fail=None, preview0=(), checked=True, no_up=(), after=None, nopress=False):
+def xl_run(live, targets, rows, fail=None, preview0=(), checked=True, no_up=(), after=None, nopress=False, broken=()):
     _XLLOG.clear()
     for f in os.listdir(_xl_dir):
         os.remove(os.path.join(_xl_dir, f))
-    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked, no_up=set(no_up), after=after or {}, nopress=nopress)
+    _XL.update(targets=targets, rows=rows, fail=fail or {}, preview0=set(preview0), checked=checked, no_up=set(no_up), after=after or {}, nopress=nopress,
+               broken=set(broken))
     return wellife.invoice_excel(_xrr, actx, live)
 
 
@@ -1592,6 +1604,8 @@ check("엑셀(실행): 받은 파일 이름 앞에 '(사이트코드)' (업로�
       res[0] == "done" and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"]
       and "이지웰(109) 3건 (109)이지웰송장" in res[1] and "완료처리 → 누름" in res[1] and "0건 YES24(110)" in res[1] and "0000" not in res[1],
       f"{res} {os.listdir(_xl_dir)}")
+check("엑셀(실행): 받은 파일은 비밀번호를 풀어 비밀번호 없는 엑셀로 바뀐다 (사이트가 잠긴 엑셀을 받지 않는다, 사용자 2026-11-10)",
+      Path(_xl_dir, "(109)이지웰송장2026-11-01~2026-11-09.xlsx").read_bytes() == _PLAIN)
 res = xl_run(True, T2, {"109": 3, "110": 2}, no_up={"110"})
 check("엑셀(실행): 업로드 프리셋이 없는 사이트도 조회·받기·완료처리는 하고, 사유에 '업로드 프리셋 없음' 과 저절로 안 올라간다는 안내를 남긴다 (사용자 2026-11-09 오후)",
       [x[:2] for x in _XLLOG if x[0] in ("query", "pick")] == [("query", (["109"], False)), ("pick", (["110"], False))]
@@ -1617,6 +1631,25 @@ res = xl_run(True, T2, {"109": 3, "110": 2}, after={"이지웰": ("failed", "'�
 check("엑셀(실행): 받은 뒤 마무리에서 멈추면 ERPia 가 준 이름 그대로 두지 않고 '실패_(109)_다운로드_…', 다음 사이트는 그대로",
       _fails() == [("109", "다운로드")] and os.listdir(_xl_dir).count("(110)YES24송장2026-11-01~2026-11-09.xlsx") == 1 and res[0] == "failed"
       and "받은 파일 실패_(109)_다운로드_" in res[1], f"{os.listdir(_xl_dir)} {res}")
+res = xl_run(True, T2, {"109": 3, "110": 2}, broken={"이지웰"})
+check("엑셀(실행): 받은 파일의 비밀번호를 풀지 못하면 완료처리하지 않고 '실패_(109)_암호해제_…' (업로드가 집지 않고 다음 실행이 다시 받는다), 다음 사이트는 그대로",
+      _fails() == [("109", "암호해제")] and res[0] == "failed" and "비밀번호를 풀지 못했습니다" in res[1]
+      and [x[3] for x in _XLLOG if x[0] == "press"] == [2] and os.listdir(_xl_dir).count("(110)YES24송장2026-11-01~2026-11-09.xlsx") == 1,
+      f"{os.listdir(_xl_dir)} {res} {_XLLOG}")
+_udir = tempfile.mkdtemp(prefix="unlock_")
+_u = Path(_udir, "u.xlsx")
+_u.write_bytes(_LOCKED)
+try:
+    wellife.unlock_excel(str(_u), "9999")
+    _ue = None
+except wellife.Stop as e:
+    _ue = e
+check("엑셀 비밀번호 풀기: 비밀번호가 틀리면 Stop(failed) - 받은 파일은 잠긴 그대로, 임시 파일은 남지 않고, 글에 비밀번호가 없다",
+      _ue is not None and _ue.result == "failed" and "9999" not in str(_ue) and _u.read_bytes() == _LOCKED and os.listdir(_udir) == ["u.xlsx"],
+      f"{_ue} {os.listdir(_udir)}")
+_u.write_bytes(_PLAIN)
+wellife.unlock_excel(str(_u), "0000")
+check("엑셀 비밀번호 풀기: 잠기지 않은 엑셀은 그대로 둔다", _u.read_bytes() == _PLAIN and os.listdir(_udir) == ["u.xlsx"])
 res = xl_run(True, T2, {"109": 3, "110": 0}, nopress=True)
 check("엑셀(실행): [미전송 완료처리] 단추가 꺼져 누르지 못했으면 '실패_(109)_완료처리안됨_…' (두 번 올라가지 않게)",
       _fails() == [("109", "완료처리안됨")] and "단추가 꺼져 있습니다" in res[1], f"{os.listdir(_xl_dir)} {res}")
