@@ -286,6 +286,11 @@ with sync_playwright() as p:
         rp.first_page.goto(url)
         ok = rp.run()
         result = (ok, rp.upload_tried, rp.first_page.title(), rp.first_page.locator("#r").inner_text(), rp.results[-1])
+        if file is None:        # 옵저버 [수정] - 멈춘 미리보기 브라우저에서 이어 기록 (업체 문의 2026-11-11: 업로드 단추를 눌러도 파일 창이 안 떴다)
+            held = bool(rp.first_page._impl_obj.listeners("filechooser"))
+            rp.allow_file_dialog()
+            check("이어 기록으로 넘기면 파일 창을 막던 것을 푼다 (사람이 파일 창으로 고를 수 있게)",
+                  held and not rp.first_page._impl_obj.listeners("filechooser"), (held, rp.first_page._impl_obj.listeners("filechooser")))
         ctx.close()
         return result
 

@@ -421,6 +421,7 @@ class Worker(threading.Thread):
                 self.ui.put(("editing", no, ids[e.i - 1]))      # 기록기가 steps 를 보내기 전에 - 화면이 남길 앞부분을 먼저 자른다
                 self.ctx, self.prof, self.page, self.recorder, self.rec_no = ctx, prof, rp.pages[0], recorder, no
                 ctx = prof = None                               # finally 가 닫지 않게
+                rp.allow_file_dialog()                          # 이어 기록에서는 사람이 파일 창으로 고른다 (업체 문의 2026-11-11)
                 recorder.adopt(rp.pages)                        # 미리보기가 쓰던 탭 번호 그대로 (설계 4.2절 - 새 창을 여는 사이트)
                 return
             if not ok and self.cancel.is_set():

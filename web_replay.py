@@ -1534,7 +1534,20 @@ class Replayer:
         page.on("dialog", on_dialog)
         page.on("download", lambda dl: self.downloads.append(dl))
         if self.upload_steps:
-            page.on("filechooser", lambda chooser: None)    # 받는 쪽이 있으면 윈도우 파일 창이 안 뜬다 - 파일은 'file' 단계가 넣는다
+            page.on("filechooser", self._no_file_dialog)    # 받는 쪽이 있으면 윈도우 파일 창이 안 뜬다 - 파일은 'file' 단계가 넣는다
+
+    @staticmethod
+    def _no_file_dialog(chooser):
+        pass
+
+    def allow_file_dialog(self):
+        """윈도우 파일 창을 다시 띄우게 한다 - 미리보기 브라우저에서 이어 기록할 때 (옵저버 [수정]). 그대로 두면 사람이 업로드 단추를
+        눌러도 파일 창이 안 떠 파일을 고를 수 없었다 (업체 문의 2026-11-11: 업로드 모드 마지막 단계)."""
+        for page in self.watched:
+            try:
+                page.remove_listener("filechooser", self._no_file_dialog)
+            except Exception:
+                pass                # 닫힌 탭
 
     # --- 중단·일시정지 ---
     def _gate_release(self):
