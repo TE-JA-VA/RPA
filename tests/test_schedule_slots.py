@@ -76,7 +76,7 @@ check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
 check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
-      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 8, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 8 (운송장 전송 할 일)")
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 9, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 9 (줄마다 수집 사이트)")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})
@@ -154,6 +154,19 @@ for bad, why in (({"inv_sites": "Y"}, "켠 사이트만"), ({"inv": "all"}, "운
         d.normalize_slots([{"at": "09:00", "run": ["InvoiceSend"], **bad}]); check(False, f"값 거부 {bad}")
     except ValueError as e:
         check(why in str(e), f"운송장 전송 값 거부 {bad} ({e})")
+# 줄마다 수집 사이트 (판 9, 업체 미팅 2026-11-11): 사이트 수집을 돌리는 줄('전체' 포함)에만 남고, 번호는 정렬
+slots = d.normalize_slots([{"at": "09:00", "sites": [3, 1]}, {"at": "10:00", "run": ["Prepare", "Sales"], "sites": [2]},
+                           {"at": "11:00", "run": ["Hold"], "sites": [1]}])
+check(slots == [{"at": "09:00", "sites": [1, 3]}, {"at": "10:00", "run": ["Prepare", "Login", "Sales"], "sites": [2]}, {"at": "11:00", "run": ["Login", "Hold"]}],
+      f"수집 사이트는 사이트 수집 줄에만 ({slots})")
+for bad in ([], [0], [1, 1], ["1"], [True], 3, [st.PRESET_MAX + 1]):
+    try:
+        d.normalize_slots([{"at": "09:00", "sites": bad}]); check(False, f"수집 사이트 거부 {bad!r}")
+    except ValueError as e:
+        check("사이트 수집 사이트" in str(e), f"수집 사이트 거부 {bad!r} ({e})")
+check(d.slot_text({"at": "09:00", "sites": [1, 3]}) == "09:00 사이트 ①③"
+      and d.slot_text({"at": "10:00", "run": ["Prepare", "Login", "Sales"], "sites": [2]}) == "10:00 사이트 수집(②)·매출처리", "줄 글에 고른 사이트")
+check(st.run_sites("1,3") == {1, 3} and st.run_sites("") is None and st.run_sites("x") is None, "넘긴 사이트 글 읽기")
 check(d.slot_target({"at": "10:00"}) == ("all", {}), "'전체' 줄 → 전체 실행, 넘길 모듈 없음")
 check(d.slot_target({"at": "11:00", "run": ["Login", "Logistics"]}) == ("routine", {"RPA_RUN_MODULES": "Login,Logistics"}), "사이트 수집 없음 → 루틴만")
 check(d.slot_target({"at": "12:00", "run": ["Prepare"]}) == ("prepare", {}), "사이트 수집만 → 프리페어")
@@ -305,6 +318,11 @@ c = st.read_settings(); c["schedule"]["next_run_at"] = (dt.datetime.now() - dt.t
 sched.tick()
 check(d.LAUNCHED_ENV[-1] == {"RPA_RUN_MODULES": "Login,InvoiceSend", "RPA_RUN_TRIGGER": "auto", "RPA_INVOICE_OPTION": "auto"},
       f"운송장 전송 방식 줄은 RPA_INVOICE_OPTION 을 넘긴다 ({d.LAUNCHED_ENV[-1:]})")
+d.LAUNCHED[:] = saved; d._active["until"] = 0; d._active["proc"] = None
+d.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Prepare"], "sites": [3, 1]}]})
+c = st.read_settings(); c["schedule"]["next_run_at"] = (dt.datetime.now() - dt.timedelta(seconds=3)).isoformat(timespec="seconds"); st.write_settings(c)
+sched.tick()
+check(d.LAUNCHED_ENV[-1] == {"RPA_RUN_TRIGGER": "auto", "RPA_RUN_SITES": "1,3"}, f"수집 사이트를 고른 줄은 RPA_RUN_SITES 를 넘긴다 ({d.LAUNCHED_ENV[-1:]})")
 d.LAUNCHED[:] = saved; d._active["until"] = 0; d._active["proc"] = None
 
 print("\n=== 7. 대시보드를 다시 켰을 때 (resync) ===")

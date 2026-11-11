@@ -218,7 +218,7 @@ def next_plan():
     if "Logistics" not in run:                    # 물류관리가 없으면 운송장도 안 돈다 (run_routine.run_modules_from_env)
         run = [k for k in run if k != "Output"]
     wl = (sch.get("policy") or {}).get("wellife") is True
-    return [history_key(k, wl) for k in run if k != "Prepare"], "Prepare" in run
+    return [history_key(k, wl) for k in run if k != "Prepare"], "Prepare" in run, slot.get("sites")
 
 
 class Tokens:
@@ -260,7 +260,9 @@ class Tokens:
         out = {"routine": routine, "prepare": prepare, "all": routine + prepare}
         nxt = self._next_plan() if self._next_plan else None
         if nxt is not None:
-            out["next"] = run_cost({m: 1 for m in nxt[0]}, table) + (prepare if nxt[1] else 0)
+            picked = nxt[2] if len(nxt) > 2 else None         # 줄이 고른 사이트 (판 9) - 켠 사이트 수보다 많을 수 없다
+            part = run_cost({"sites": min(sites, len(picked))}, table) if picked and sites else prepare
+            out["next"] = run_cost({m: 1 for m in nxt[0]}, table) + (part if nxt[1] else 0)
         return out
 
     def gate(self, target):

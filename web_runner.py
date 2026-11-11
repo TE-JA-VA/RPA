@@ -1878,12 +1878,19 @@ def cmd_run(targets, headless, session_override=None, keep_open=False,
         for name, site in over:
             log(f"  {name}: 프리셋 {site['Preset']}은(는) 이 업체의 프리셋 수({limit}개)를 넘어 건너뜁니다.")
         chosen = upload_choice([c for c in chosen if c not in over], upload)
+        picked = None if upload else status.run_sites()      # 예약 줄이 고른 사이트만 (판 9, 업체 미팅 2026-11-11)
+        if picked is not None:
+            for name, site in chosen:
+                if site.get("Preset") not in picked:
+                    log(f"  {name}: 이번 예약에서 고르지 않은 사이트라 건너뜁니다.")
+            chosen = [c for c in chosen if c[1].get("Preset") in picked]
         if not chosen:
             if upload:      # 올릴 파일이 있는 업로드 프리셋이 없다 - 할 일이 없는 것이지 중단이 아니다: 이력에 안 남긴다 (11-09 실측, atexit 가 '중단' 으로 닫지 않게 여기서 닫는다)
                 log("올릴 파일이 있는 업로드 프리셋이 없어 올리지 않았습니다.")
                 status.finish("success", "올릴 파일이 있는 업로드 프리셋이 없어 올리지 않았습니다.", record=False)
                 return 0
-            log("실행할 사이트가 없습니다." + ("" if over else f" (Stts={STTS_RUN}인 사이트가 없습니다)"))
+            log("실행할 사이트가 없습니다." + (" (이번 예약에서 고른 사이트가 쇼핑몰 프리셋에서 꺼져 있습니다)" if picked is not None
+                                          else "" if over else f" (Stts={STTS_RUN}인 사이트가 없습니다)"))
             return 1
 
     chosen, skipped = split_mismatched(chosen)

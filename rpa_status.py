@@ -74,7 +74,7 @@ SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
 # (2026-10-07 시각별 모듈 - 설계 docs/superpowers/specs/2026-10-06-settings-schedule-design.md 5절. 옛 모양 {days, times} 는 read_settings 가 바꾼다)
 SCHEDULE_MINUTE_STEP = 1    # 1분 단위 (사용자 2026-11-03 - 그 전엔 5분: 웹이 통과시킨 09:03 을 PC 가 거절해 예약이 안 바뀌었다)
 SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
-SCHEDULE_VERSION = 8        # 8: 운송장 전송 줄의 할 일을 따로 켠다 (slots[i].inv 전송 방식 + slots[i].xl 엑셀 출력, 2026-11-09 저녁). 7: 줄마다 운송장 전송 방식 (slots[i].inv - 셋 중 하나, 2026-11-09). 6: 1분 단위 시각 (2026-11-03, 그 전 판 PC 는 5분 단위만 받는다). 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
+SCHEDULE_VERSION = 9        # 9: 줄마다 사이트 수집할 사이트 (slots[i].sites, 업체 미팅 2026-11-11). 8: 운송장 전송 줄의 할 일을 따로 켠다 (slots[i].inv 전송 방식 + slots[i].xl 엑셀 출력, 2026-11-09 저녁). 7: 줄마다 운송장 전송 방식 (slots[i].inv - 셋 중 하나, 2026-11-09). 6: 1분 단위 시각 (2026-11-03, 그 전 판 PC 는 5분 단위만 받는다). 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
     "prepare": {
         "parallel": 1,              # 업체가 웹에서 고른 동시 실행 창 수 (명령 set_parallel) - 관리 화면이 허용한 최대(policy.parallel)까지만 쓴다
@@ -1099,6 +1099,18 @@ def invoice_flags(value):
     return {f for f in (value or "").split(",") if f in INVOICE_SEND or f == INVOICE_EXCEL}
 
 
+# 줄마다 사이트 (판 9, 업체 미팅 2026-11-11): slots[i].sites = [프리셋 번호] - 그 줄의 사이트 수집은 이 프리셋만 (켠 것 중에서).
+# 없으면 지금처럼 켠 사이트 전체. 띄울 때 RUN_SITES_ENV 로 넘긴다 (rpa_dashboard.launch_slot → web_runner.cmd_run)
+RUN_SITES_ENV = "RPA_RUN_SITES"
+
+
+def run_sites(value=None):
+    """이번 실행에서 고른 프리셋 번호 집합 (환경 변수 글 "1,3"). 없거나 못 읽으면 None = 켠 사이트 전체."""
+    raw = os.environ.get(RUN_SITES_ENV, "") if value is None else value
+    picked = {int(x) for x in raw.split(",") if x.strip().isdigit()}
+    return picked or None
+
+
 UPLOAD_TITLE = "사이트 엑셀 업로드"        # 상태 기록 제목 - 토큰은 운송장번호 전송에 포함이라 agent.usage 가 이 실행을 세지 않는다
 
 
@@ -1422,6 +1434,7 @@ def preset_summary():
         out.append({"no": p["no"], "name": p["name"], "code": p["code"],
                     "steps": len((p["record"] or {}).get("steps") or []), "saved_at": p["saved_at"],
                     "imap": bool(imap_step(p["record"])),      # 메일 받기 - 화면이 'N단계' 대신 '메일 받기' (2026-10-22)
+                    "upload": is_upload(p["record"]),          # 업로드 프리셋 - 예약 줄의 수집 사이트 고르기에서 뺀다 (판 9)
                     "has_login": bool(site.get("ID")) and bool(site.get("PW")) and not login_mismatch(site, p["code"]),
                     "on": str(site.get("Stts", "")).strip() == "0", "excel_pw": str(site.get(EXCEL_PW_KEY) or ""),
                     "backup": os.path.isfile(preset_backup_path(p["no"]))})

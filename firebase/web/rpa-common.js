@@ -135,9 +135,14 @@ export const WELLIFE_RUN_CHIPS = [["Prepare", "사이트 수집"], ["Excel", "�
   ["InvoiceSend", "운송장 전송"]];
 export const RUN_NAMES = dict([...RUN_CHIPS, ...WELLIFE_RUN_CHIPS]);
 /** '고르기' 줄의 모듈 이름 (로그인은 늘 붙으니 안 적는다). '전체' 거나 줄이 없으면 "" */
-export const slotNames = (slot) => (slot?.run ? slot.run.filter((k) => k !== "Login").map((k) => RUN_NAMES[k] || k).join("·") : "");
-/** 줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' (PC 의 slot_text 와 같다) */
-export const slotText = (s) => (s.until ? `${s.at}~${s.until} 반복` : s.at) + (s.run ? ` ${slotNames(s)}` : "");
+const circ = (n) => String.fromCharCode(n <= 20 ? 0x2460 + n - 1 : n <= 35 ? 0x3251 + n - 21 : 0x32B1 + n - 36);   // rpa_status.circled
+/** 줄이 고른 수집 사이트 '①③' (판 9). 없으면 "" */
+const slotSites = (slot) => (Array.isArray(slot?.sites) ? slot.sites.map(circ).join("") : "");
+export const slotNames = (slot) => (slot?.run ? slot.run.filter((k) => k !== "Login")
+  .map((k) => (RUN_NAMES[k] || k) + (k === "Prepare" && slotSites(slot) ? `(${slotSites(slot)})` : "")).join("·") : "");
+/** 줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' / '09:00 사이트 수집(①③)' (PC 의 slot_text 와 같다) */
+export const slotText = (s) => (s.until ? `${s.at}~${s.until} 반복` : s.at)
+  + (s.run ? ` ${slotNames(s)}` : slotSites(s) ? ` 사이트 ${slotSites(s)}` : "");
 
 /** 예약 안내 한 줄 [글, 색] - PC 설정 파일을 못 읽음(R4) / 띄울 차례인데 막혀 기다림(R5) / PC 시간대가 한국이 아님(R13). 없으면 null */
 export function schedNote(sch) {

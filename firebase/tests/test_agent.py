@@ -1019,6 +1019,8 @@ with tempfile.TemporaryDirectory() as d:
         tk = ag.Tokens(tc, "c_demo", ag.Prices(tc), plan, next_plan=ag.next_plan)
         tk.refresh(force=True)
         check(tk.view()["cost"]["next"] == 3, f"다음 예약 줄의 토큰 = 그 줄의 모듈 (물류관리 1·로그인 0) + 사이트 수집 (사이트 2) ({tk.view()['cost']})")
+        dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Prepare", "Logistics"], "sites": [1]}]})
+        check(tk.view()["cost"]["next"] == 2, f"줄이 고른 수집 사이트만 센다 - 물류관리 1 + 사이트 1 (판 9) ({tk.view()['cost']})")
         dash.set_policy(3, ["Logistics"])
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Sales", "Logistics", "Output"]}]})
         check(tk.view()["cost"]["next"] == 1, f"업체가 물류관리를 안 쓰면 운송장도 안 돈다 - 주문매핑 1 만 ({tk.view()['cost']})")
@@ -1040,7 +1042,7 @@ with tempfile.TemporaryDirectory() as d:
             st.write_user_config(c)
             check(ag.local_plan()[1] == 1, f"사이트 수집 토큰은 켜진 PRESETn 만 센다 (옛 SITEn 은 안 돈다 - 2026-10-12) ({ag.local_plan()})")
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "until": "12:00", "rest_min": 5, "run": ["Wms"]}]})
-            check(ag.next_plan() == (["login", "wellife_wms"], False), f"웰라이프 줄도 이력 키로 ({ag.next_plan()})")
+            check(ag.next_plan() == (["login", "wellife_wms"], False, None),f"웰라이프 줄도 이력 키로 ({ag.next_plan()})")
             dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Wms", "InvoiceSend"]}]})
             check(sorted(ag.next_plan()[0]) == ["invoicesend", "login", "wellife_wms"] and ag.next_plan()[1] is False,
                   f"모든 업체용 운송장 전송은 wellife_ 없는 키 (wellife.MODULES 와 같다) ({ag.next_plan()})")

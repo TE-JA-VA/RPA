@@ -554,6 +554,7 @@ def launch_run_all(by):
 #   inv·xl: 운송장 전송 할 일 (st.INVOICE_SEND·INVOICE_EXCEL, 2026-11-09) - 띄울 때 RPA_INVOICE_OPTION (st.invoice_env). 판 7 의 inv: excel·판 5·6 의 inv_sites: true 는 전송요청 없이 엑셀만
 #   줄마다 요일 slots[i].days (2026-10-08 사용자) - 없으면 위 days (옛 저장 값·옛 화면)
 #   run 이 없는 줄은 '전체' (사이트 수집 + 실행 모듈 카드), 있으면 그 모듈만 - 띄울 때 RPA_RUN_MODULES 로 넘긴다
+#   sites: 사이트 수집할 프리셋 번호 (판 9) - 없으면 켠 사이트 전체, 띄울 때 RPA_RUN_SITES (st.run_sites)
 # ---------------------------------------------------------------------------
 ROUTINE_KEYS = tuple(k for k, _ in st.ROUTINE_CONFIG_MODULES)      # Login, Import, Excel, Sales, Hold, Logistics, Output, InvoiceSend
 # 웰라이프 업체만 (Wellife 섹션 키 - 나머지는 PROCESS 와 같은 키). InvoiceSend 는 2026-10-13, Import·Excel 은 2026-10-30 모든 업체로 열어
@@ -672,6 +673,13 @@ def normalize_slots(slots):
             raise ValueError("운송장 엑셀 출력 값이 올바르지 않습니다.")
         if s.get("inv_sites") is not None and not isinstance(s["inv_sites"], bool):   # 판 5·6 화면
             raise ValueError("운송장 전송 '켠 사이트만' 값이 올바르지 않습니다.")
+        sites = s.get("sites")          # 줄마다 사이트 (판 9) - 사이트 수집을 돌리는 줄에만 남긴다
+        if sites is not None:
+            if (not isinstance(sites, list) or not sites or len(set(sites)) != len(sites)
+                    or not all(isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= st.PRESET_MAX for n in sites)):
+                raise ValueError("사이트 수집 사이트 값이 올바르지 않습니다.")
+            if run is None or "Prepare" in run:
+                item["sites"] = sorted(sites)
         inv, xl = st.slot_invoice(s)
         if run is not None and "InvoiceSend" in run:   # 운송장 전송을 고른 줄에만 (웹 줄 단추와 같다)
             if inv == "none" and not xl:
@@ -959,6 +967,8 @@ def launch_slot(slot, by="auto", trigger="auto"):
     inv = st.invoice_env(slot)   # 운송장 전송 할 일 (wellife.invoice_flags) - 판을 올리기 전에 저장한 inv: excel·inv_sites 도
     if inv:
         env[st.INVOICE_OPTION_ENV] = inv
+    if slot.get("sites") and target in ("all", "prepare"):     # 이 줄이 고른 사이트만 수집 (판 9)
+        env[st.RUN_SITES_ENV] = ",".join(str(n) for n in slot["sites"])
     return launch(target, by, env)
 
 
@@ -1060,9 +1070,10 @@ def days_label(days):
 def slot_text(s):
     """줄 한 칸 글: '10:00' / '11:00 물류관리' / '11:00~12:00 반복 물류관리' (로그인은 안 적는다)."""
     head = f"{s['at']}~{s['until']} 반복" if s.get("until") else s["at"]
+    sites = "".join(st.circled(n) for n in s.get("sites") or [])      # 고른 수집 사이트 (판 9) '사이트 수집(①③)'
     if s.get("run") is None:
-        return head
-    return f"{head} {'·'.join(SLOT_NAMES[k] for k in s['run'] if k != 'Login')}".strip()
+        return f"{head} 사이트 {sites}" if sites else head
+    return f"{head} {'·'.join(SLOT_NAMES[k] + (f'({sites})' if k == 'Prepare' and sites else '') for k in s['run'] if k != 'Login')}".strip()
 
 
 def schedule_label(sch):

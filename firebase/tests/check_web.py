@@ -1645,6 +1645,40 @@ with sync_playwright() as pw:
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
     db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv": "none", "xl": True}]})   # 보낸 줄 그대로 돌려준 뒤 옛 판으로
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    print("6-10절 줄마다 수집 사이트 (판 9 PC, 업체 미팅 2026-11-11)")
+    old_presets = db_get(f"{LIVE}/presets")
+    shop = {"steps": 5, "has_login": True, "on": True, "upload": False, "saved_at": None, "backup": False}
+    db_patch(LIVE, {"presets": [dict(shop, no=1, name="가몰", code="101"), dict(shop, no=2, name="나몰", code="102"),
+                                dict(shop, no=3, name="가몰 업로드", code="101", upload=True), dict(shop, no=4, name="다몰", code="103", on=False)]})
+    wk = [0, 1, 2, 3, 4]
+    db_patch(f"{LIVE}/schedule", {"version": 9, "slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"]}]})
+    page.wait_for_selector("#sch-times .site-chips", timeout=10000)
+    chips = page.locator("#sch-times .site-chips button")
+    check(chips.count() == 2 and all(chips.nth(i).get_attribute("aria-pressed") == "true" for i in range(2)) and page.is_disabled("#sch-apply"),
+          "사이트 수집 줄: 켠 다운로드 프리셋마다 단추 (업로드·꺼진 프리셋 없음), 처음엔 모두 눌림")
+    page.click("#sch-times .site-chips button[data-no='2']")
+    check(not page.is_disabled("#sch-apply"), "하나를 끄면 적용할 수 있다")
+    page.click("#sch-times .site-chips button[data-no='1']")
+    check("수집 사이트를 하나 이상" in (page.text_content("#sch-limit") or "") and page.is_disabled("#sch-apply"), "모두 끄면 적용을 막는다")
+    page.click("#sch-times .site-chips button[data-no='1']")
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check(args["slots"][0].get("sites") == [1], f"고른 사이트 번호를 PC 로 보낸다 ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"], "sites": [1]}]})
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    check(chips.nth(0).get_attribute("aria-pressed") == "true" and chips.nth(1).get_attribute("aria-pressed") == "false"
+          and "사이트 수집(①)" in (page.text_content("#sch-meta") or ""), "PC 가 돌려준 사이트 그대로 보이고, 카드 머리에 '사이트 수집(①)'")
+    page.click("#sch-times .site-chips button[data-no='2']")
+    page.click("#sch-apply"); time.sleep(1.5)
+    args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
+    check("sites" not in args["slots"][0], f"모두 고르면 sites 없이 보낸다 - 나중에 켠 사이트도 함께 ({args})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"]}]})
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    db_patch(LIVE, {"presets": old_presets})
     db_patch(f"{LIVE}/schedule", {"version": 6, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"]}]})   # 보낸 줄(운송장 전송만) 그대로 - 전체 줄로 돌려주면 다른 줄이라 바뀜 있음이 맞다
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     db_patch(f"{LIVE}/modules", {"InvoiceSend": None})

@@ -1283,8 +1283,10 @@ class App:
         self._title()
         self.canvas.update_idletasks()
         self._align_columns()
-        if n > self.shown:
-            self.canvas.yview_moveto(1.0)       # 새 단계가 생기면 맨 아래로
+        if self.recording is not None and n > self.shown:
+            self.canvas.yview_moveto(1.0)       # 기록 중 새 단계가 생기면 맨 아래로
+        elif not self.shown:                    # 처음 켤 때·프리셋을 바꿀 때·파일을 불러올 때는 맨 위부터 (업체 미팅 2026-11-11 -
+            self.canvas.yview_moveto(0.0)       # 전에는 shown 이 0 이라 '새 단계' 로 보고 맨 아래로 내려갔다)
         self.shown = n
         self.paint_buttons()
 

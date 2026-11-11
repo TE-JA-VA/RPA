@@ -162,8 +162,22 @@ try:
     try:
         code_all, log_all = wr.cmd_run([], headless=True), list(lines)
         code_one = wr.cmd_run(["PRESET3"], headless=True)
+        st.preset_limit = lambda: 3                     # 예약 줄이 고른 사이트만 (판 9, 업체 미팅 2026-11-11)
+        os.environ[st.RUN_SITES_ENV] = "1"
+        lines.clear()
+        time.sleep(1.1)
+        code_pick, log_pick = wr.cmd_run([], headless=True), list(lines)
+        os.environ[st.RUN_SITES_ENV] = "9"
+        lines.clear()
+        code_none, log_none = wr.cmd_run([], headless=True), list(lines)
     finally:
         wr.load_config, st.preset_limit = real_cfg, real_limit
+        os.environ.pop(st.RUN_SITES_ENV, None)
+    check("예약 줄이 고른 사이트만 돌고 나머지는 로그만 남기고 건너뛴다",
+          code_pick == 0 and any("PRESET3" in x and "고르지 않은 사이트" in x for x in log_pick)
+          and not any("PRESET1" in x and "고르지 않은" in x for x in log_pick), "\n".join(log_pick))
+    check("고른 사이트가 모두 꺼져 있으면 실행할 사이트가 없다고 까닭을 남긴다",
+          code_none == 1 and any("고른 사이트가 쇼핑몰 프리셋에서 꺼져" in x for x in log_none), "\n".join(log_none))
     check("프리셋 수 한도 밖 칸은 로그만 남기고 건너뛰고 나머지는 실행 (BugBuster M10)",
           code_all == 0 and any("PRESET3" in x and "넘어 건너뜁니다" in x for x in log_all), "\n".join(log_all))
     check("한도 밖 칸을 --site 로 콕 집으면 지금처럼 거부", code_one == 1)

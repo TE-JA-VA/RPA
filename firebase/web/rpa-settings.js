@@ -571,6 +571,11 @@ const INV_WHY = { "": "전체 사이트로 조회 후 송장 전송합니다.",
 // 판 8: 운송장 전송 줄의 할 일 체크 셋 (사용자 2026-11-09 저녁 - 셋 중 하나로는 '엑셀출력 + 수집 사이트를 뺀 전송요청' 을 못 골랐다).
 // 줄 값: inv (없음 = 전체 전송 / auto = 수집 사이트 제외 / none = 전송요청 안 함), xl: true (수집 사이트 엑셀출력). PC 는 st.slot_invoice 로 읽는다
 const isV8 = () => (live?.schedule?.version ?? 0) >= 8;
+// 판 9: 줄마다 수집 사이트 (slots[i].sites = 프리셋 번호, 업체 미팅 2026-11-11). 없으면 켠 사이트 전체 - 나중에 켠 사이트도 함께 돈다
+const isV9 = () => (live?.schedule?.version ?? 0) >= 9;
+const collects = (s) => !s.run || s.run.includes("Prepare");      // 사이트 수집을 돌리는 줄 (전체 모듈 줄 포함)
+/** 줄에서 고를 수 있는 사이트 - 쇼핑몰 프리셋에서 켠 다운로드 프리셋 (업로드 프리셋은 사이트 수집에서 돌지 않는다) */
+const pickableShops = () => savedShops().filter((p) => p.on && !p.upload && shopReady(p));
 /** 판 8 PC 가 올린 줄의 할 일 {inv?, xl?} - 판 7 의 inv: excel·판 5·6 의 inv_sites: true 는 '전송요청 안 함 + 엑셀출력' (PC 의 st.slot_invoice 와 같다) */
 const invSaved = (x) => (x.inv === "excel" || (x.inv === undefined && x.inv_sites === true) ? { inv: "none", xl: true }
   : { ...(x.inv === "auto" || x.inv === "none" ? { inv: x.inv } : {}), ...(x.xl === true ? { xl: true } : {}) });
@@ -614,6 +619,7 @@ function savedSlots() {
     // 판 7 PC 도 판을 올리기 전에 저장한 inv_sites 가 남아 있을 수 있다 - PC 는 그것을 'excel' 로 읽는다 (st.slot_invoice)
     ...(isV8() ? invSaved(x) : isV7() ? (x.inv === "excel" || x.inv === "auto" ? { inv: x.inv } : x.inv_sites === true ? { inv: "excel" } : {})
       : isV5() && x.inv_sites === true ? { inv_sites: true } : {}),
+    ...(isV9() && Array.isArray(x.sites) ? { sites: [...x.sites].sort((a, b) => a - b) } : {}),
   }));
 }
 /** 줄 단추 - 웰라이프 업체는 물류관리·운송장 대신 SAP 연동·WMS 이관·운송장 전송 (사용자 10-08: ②~⑥ 따로, ⑤⑥ 은 반복도) */
@@ -630,7 +636,8 @@ function resetSchedule() {
 }
 const runKey = (run) => (run ? [...run].filter((k) => k !== "Login").sort().join() : "*");
 const slotKey = (s) => `${s.at}${s.until ? `~${s.until}/${s.rest_min}` : ""}=${runKey(s.run)}${s.days ? `@${[...s.days].sort()}` : ""}`
-  + (s.inv_sites && sendsInvoice(s) ? "+inv" : "") + (s.inv && sendsInvoice(s) ? `+inv:${s.inv}` : "") + (s.xl && sendsInvoice(s) ? "+xl" : "");
+  + (s.inv_sites && sendsInvoice(s) ? "+inv" : "") + (s.inv && sendsInvoice(s) ? `+inv:${s.inv}` : "") + (s.xl && sendsInvoice(s) ? "+xl" : "")
+  + (s.sites && collects(s) ? `+sites:${s.sites}` : "");
 const slotsKey = (slots) => slots.map(slotKey).sort().join("|");
 function scheduleDirty() {
   const s = savedSch();
@@ -731,6 +738,27 @@ function invTasks(s) {
     (on) => { if (on) s.xl = true; else delete s.xl; }));
   return box;
 }
+/** 판 9: 사이트 수집 줄의 사이트 단추 (업체 미팅 2026-11-11). 모두 눌린 상태 = sites 없음 (켠 사이트 전체 - 나중에 켠 사이트도).
+ *  하나라도 끄면 고른 번호만 sites 로. 모두 끄면 적용을 막는다 (scheduleProblems) */
+function siteChips(s) {
+  const shops = pickableShops(), all = shops.map((p) => p.no);
+  const box = document.createElement("span"); box.className = "seg chips site-chips";
+  for (const p of shops) {
+    const on = !s.sites || s.sites.includes(p.no);
+    const b = document.createElement("button"); b.type = "button"; b.dataset.no = p.no;
+    b.textContent = `${circled(p.no)} ${p.name}`; b.title = `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""}`;
+    b.setAttribute("aria-pressed", on);
+    b.disabled = !c.isAdmin || busy;
+    b.onclick = () => {
+      const now = (s.sites || all).filter((n) => all.includes(n));
+      const next = on ? now.filter((n) => n !== p.no) : [...now, p.no].sort((a, x) => a - x);
+      if (next.length === all.length) delete s.sites; else s.sites = next;
+      paintTimes(); paintScheduleMeta();
+    };
+    box.append(b);
+  }
+  return box;
+}
 function paintTimes() {
   const over = new Set(sortedForm().slice(limitOf()));      // 시각 순으로 한도를 넘는 줄 (PC 도 이 줄은 안 돌린다)
   $("sch-times").replaceChildren(...form.sch.slots.map((s, i) => {
@@ -765,6 +793,7 @@ function paintTimes() {
       mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; delete s.inv_sites; delete s.inv; delete s.xl; paintTimes(); paintScheduleMeta(); };
       row.append(line("모듈", mode, ...(s.run ? [runChips(s)] : [])));
     }
+    if (isV9() && collects(s) && pickableShops().length > 1) row.append(line("수집 사이트", siteChips(s)));   // 사이트가 하나면 고를 게 없다
     if (isV8() && sendsInvoice(s)) row.append(line("운송장 전송", invTasks(s)));
     else if (isV7() && sendsInvoice(s)) row.append(line("운송장 전송", invOption(s)));
     else if (isV5() && sendsInvoice(s)) row.append(line("운송장 전송", invSitesSwitch(s)));
@@ -778,6 +807,8 @@ function scheduleProblems() {
   if (slots.some((s) => !/^\d\d:\d\d$/.test(s.at))) out.push("시간을 확인하여 주십시오.");
   if (slots.some((s) => offStep(s.at) || offStep(s.until))) out.push("이 PC는 5분 단위로만 예약할 수 있습니다. (예: 09:05)");
   if (isV3() && slots.some((s) => !s.days.length)) out.push("요일을 하나 이상 선택하여 주십시오.");
+  if (isV9() && slots.some((s) => collects(s) && s.sites && !s.sites.some((n) => pickableShops().some((p) => p.no === n))))
+    out.push("사이트 수집 줄에서 수집 사이트를 하나 이상 선택하여 주십시오.");
   if (isV8() && slots.some((s) => sendsInvoice(s) && s.inv === "none" && !s.xl)) out.push("운송장 전송 줄에서 전송요청이나 수집 사이트 엑셀출력 중 하나는 켜 주십시오.");
   if (isV4() && form.sch.offDates.length > OFF_DATES_MAX) out.push(`휴무일은 최대 ${OFF_DATES_MAX}개까지 등록할 수 있습니다.`);
   if (isV4() && $("sch-off-date")?.value) out.push("선택한 날짜를 [+ 휴무일 추가]로 추가하여 주십시오.");
@@ -875,7 +906,8 @@ function payloadOf() {
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
   return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}),
     ...(isV8() ? (sendsInvoice(s) ? { ...(s.inv ? { inv: s.inv } : {}), ...(s.xl ? { xl: true } : {}) } : {})
-      : isV7() ? (s.inv && sendsInvoice(s) ? { inv: s.inv } : {}) : isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}) })) };
+      : isV7() ? (s.inv && sendsInvoice(s) ? { inv: s.inv } : {}) : isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}),
+    ...(isV9() && s.sites?.length && collects(s) ? { sites: [...s.sites] } : {}) })) };
 }
 async function applySchedule() {
   const payload = payloadOf();
