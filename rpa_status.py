@@ -242,6 +242,16 @@ def _nuitka():
     return globals().get("__compiled__")
 
 
+def compiled_dir(compiled=None):
+    """컴파일된 모듈이 놓인 프로그램 폴더. 컴파일된 것이 아니면 None.
+    onefile 은 exe 가 놓인 폴더 그대로, 조각 방식은 조각이 app\\ 에 있어 그 한 단계 위 (2026-11-11 조각 빌드)."""
+    compiled = compiled if compiled is not None else _nuitka()
+    if compiled is None:
+        return None
+    path = getattr(compiled, "containing_dir", None) or os.path.dirname(os.path.abspath(sys.argv[0]))
+    return os.path.dirname(path) if os.path.basename(path).lower() == "app" else path
+
+
 def packaged():
     """exe 로 묶여 도는가 (Nuitka 또는 PyInstaller)."""
     return _nuitka() is not None or bool(getattr(sys, "frozen", False))
@@ -259,9 +269,8 @@ def program_dir():
     Nuitka onefile 은 풀린 임시 폴더가 아니라 exe 가 놓인 폴더, PyInstaller 는 exe 옆, 소스면 이 파일 옆.
     개발 PC 처럼 옆 dist 에 Run_All.bat 이 있으면 dist - 대시보드가 띄우는 exe 와 같은 설정을 본다
     (rpa_dashboard.run_command_path 와 같은 규칙)."""
-    compiled = _nuitka()
-    if compiled is not None:
-        return getattr(compiled, "containing_dir", None) or os.path.dirname(os.path.abspath(sys.argv[0]))
+    if _nuitka() is not None:
+        return compiled_dir()
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     here = os.path.dirname(os.path.abspath(__file__))

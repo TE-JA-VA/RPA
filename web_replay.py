@@ -51,7 +51,7 @@ def use_shared_node(program_dir):
 
 _compiled = globals().get("__compiled__")            # exe 일 때만 - 소스로 돌 때는 패키지 안 node 그대로
 if _compiled is not None and not os.environ.get("PLAYWRIGHT_NODEJS_PATH"):
-    use_shared_node(getattr(_compiled, "containing_dir", None) or os.path.dirname(os.path.abspath(sys.argv[0])))
+    use_shared_node(rpa_status.compiled_dir(_compiled))
 
 EDGE_MISSING = "Microsoft Edge가 설치되어 있지 않습니다. Edge를 설치한 뒤 다시 실행하여 주십시오."
 

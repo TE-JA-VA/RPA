@@ -2009,13 +2009,17 @@ def main():
     return 0
 
 
-if __name__ == "__main__":
+def run_main():
+    """직접 실행·조각 방식의 시작 파일(app_start)이 부른다."""
     try:
-        exit_code = main()
+        return main()
     except BaseException as e:
         status.fail_exception(e)
         if _together is None:
             raise
         log(f"수집이 오류로 끝났습니다 ({type(e).__name__}: {e}) - 함께 띄운 ERPia 쪽은 끝까지 기다립니다.")
-        exit_code = finish_together(1)
-    sys.exit(exit_code)
+        return finish_together(1)
+
+
+if __name__ == "__main__":
+    sys.exit(run_main())

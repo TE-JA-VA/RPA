@@ -2068,5 +2068,10 @@ def main(argv=None):
     return 0
 
 
+def run_main():
+    """직접 실행·조각 방식의 시작 파일(app_start)이 부른다."""
+    return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_main())

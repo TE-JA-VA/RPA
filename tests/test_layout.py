@@ -269,4 +269,23 @@ for name in ("run_routine.py", "web_runner.py", "sms_watch.py", "perform_login.p
     src = open(ROOT / name, encoding="utf-8").read()
     check(f"{name} 에 각자 exe 옆을 계산하던 app_base_dir 이 없다", "def app_base_dir" not in src)
 
+# ---------------------------------------------------------------------------
+print("=== 8. 조각 방식: 프로그램 폴더는 app 의 한 단계 위, 시작 함수 run_main (2026-11-11) ===")
+
+
+class _C:                       # __compiled__ 흉내
+    def __init__(self, d):
+        self.containing_dir = d
+
+
+check("onefile: 조각 폴더가 곧 프로그램 폴더", st.compiled_dir(_C(r"C:\P\RPA")) == r"C:\P\RPA")
+check("조각 방식: app 의 한 단계 위", st.compiled_dir(_C(r"C:\P\RPApp")) == r"C:\P\RPA")
+check("폴더 이름 대소문자를 가리지 않는다", st.compiled_dir(_C(r"C:\P\RPA\APP")) == r"C:\P\RPA")
+check("끝 폴더가 app 일 때만", st.compiled_dir(_C(r"C:\Ppp\RPA")) == r"C:\Ppp\RPA")
+check("컴파일된 것이 아니면 None", st.compiled_dir() is None)
+for mod in ("run_routine", "web_runner", "rpa_observer"):
+    src = open(ROOT / (mod + ".py"), encoding="utf-8").read()
+    check(f"{mod}: run_main() 이 있고 직접 실행도 그것을 부른다",
+          "def run_main(" in src and src.rstrip().endswith("sys.exit(run_main())"))
+
 finish()

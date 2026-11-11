@@ -6562,9 +6562,10 @@ def main():
     log(f"=== PROCESS 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ({'성공' if result == 'success' else '중단'}) ===")
 
 
-if __name__ == "__main__":
+def run_main():
+    """직접 실행·조각 방식의 시작 파일(app_start)이 부른다."""
     try:
-        main()
+        return main()
     except BaseException as e:
         # 대시보드에 '비정상 종료'로 남긴다. 정상 흐름의 결과는 main() 이 이미 기록했다.
         status.fail_exception(e)
@@ -6577,3 +6578,7 @@ if __name__ == "__main__":
                     f.write("\n".join(logs))
         except Exception:
             pass
+
+
+if __name__ == "__main__":
+    sys.exit(run_main())
