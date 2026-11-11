@@ -2,6 +2,7 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 2026-09-29-installer-design.md).
 
     .venv\Scripts\python.exe tools\build_release.py [--exes-from <판 폴더>] [--rebuild-all] [--no-setup] [--to-dist]
+    .venv\Scripts\python.exe tools\build_release.py --modules [--rebuild-all] [--no-setup]      조각 방식 (아래)
 
 1. exe 셋을 만든다 (build\release 에). 재료(소스·옵션·패키지)가 지난번과 같은 exe 는 build\exe_cache 의 것을 그대로 쓴다 -
    같은 파일이라 PC 가 업데이트 때 다시 받지 않는다. --rebuild-all 이면 모두 새로. --exes-from 이면 그 판 폴더의 exe 를 가져온다
@@ -10,6 +11,11 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 4. D:\AX\배포_<판 번호>.zip 으로 압축한다 (맨 위 폴더도 같은 이름 - 손으로 넘기는 대비책)
 5. 스스로 확인한다: 압축 목록·지문·들어가면 안 되는 파일·빈 배포 틀, 풀어서 exe 셋 --check, 내장 파이썬 tkinter
 6. 설치 파일 D:\AX\AFTER_MARKET_RPA_Setup_<판 번호>.exe 를 만든다 (Inno Setup, release/installer.iss). --no-setup 이면 건너뛴다
+조각 방식 (--modules, docs/superpowers/specs/2026-11-11-module-build-design.md): 1번 대신 우리 파일을 하나씩 조각(app\*.pyd)으로
+만들고 (고친 파일만 다시 - 파일 하나에 30초 안쪽), 라이브러리는 컴파일 없이 lib.zip 하나로 싣고 (설치 마무리 rpa_settings.unpack_lib 가
+lib\ 에 푼다), exe 셋은 내장 Python 을 켜는 작은 시작 파일(tools/launcher.c)이다. 기본은 옛 방식(--onefile 과 같다)이다.
+보관 폴더 셋은 지우지 말 것 - 지우면 전부 새로 만들어 PC 가 다 다시 받는다: build\exe_cache (옛 방식 exe), build\pyd_cache (조각),
+build\launcher_cache (시작 파일).
 비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다. 설치 파일은 5번을 통과한 판 폴더로만 만든다).
 """
 import argparse
