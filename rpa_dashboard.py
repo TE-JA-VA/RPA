@@ -397,6 +397,15 @@ RUNNABLE = {**TARGETS, "upload": ("사이트 엑셀 업로드", "Prepare_RPA.exe
 UPLOAD_WAIT_SEC = 10    # PROCESS 가 끝나고 이만큼 조용하면 업로드를 띄운다 (사용자 2026-11-06 1분 → 2026-11-10 10초)
 OBSERVER_CLOSE_GIVE_UP_SEC = 90   # 옵저버에 닫아 달라고 한 뒤 이만큼 답이 없으면(옛 버전 옵저버) 그 몫은 건너뛴다 - 옵저버는 30초 뒤 닫는다
 OBSERVER_WAIT = "옵저버가 실행 중이어서 종료를 기다리는 중입니다."
+
+
+def other_close_pending(req, key):
+    """다른 일(업로드·예약)이 옵저버에 닫아 달라고 해 놓고 아직 답이 없나 - 그 요청을 덮어쓰지 않는다 (덮어쓰면 옵저버에 창이 번갈아 뜬다).
+    옵저버가 닫히면 둘 다 이어서 돈다. 답(취소)이 있거나 옵저버를 새로 켜 그 요청을 안 볼 만큼 오래됐으면 덮어써도 된다."""
+    if not req or req.get("key") == key or req.get("answer"):
+        return False
+    at = st.parse_iso(req.get("at"))
+    return at is not None and NOW() - at < datetime.timedelta(seconds=OBSERVER_CLOSE_GIVE_UP_SEC)
 UPLOAD_MAX_AGE_SEC = 600  # 끝난 지 이보다 오래된 PROCESS 몫은 띄우지 않는다 - 재시작·옵저버를 닫은 뒤 몇 시간 전 몫이 뜨던 것 (#38)
 _active = {"target": None, "by": None, "at": 0.0, "proc": None, "until": 0.0, "checked": False}
 # 토큰 확인 (2026-10-06): 에이전트가 agent.Tokens.gate 를 단다 - 띄우기 직전에 target 으로 부르고, 남은 토큰이 없으면
@@ -1271,6 +1280,21 @@ class Scheduler(threading.Thread):
         v = st.read_json(st.status_path("routine")) or {}
         return st.parse_iso(v.get("finished_at")) if v.get("state") != "running" else None
 
+    @staticmethod
+    def ask_close_observer(key, now):
+        """예약·반복 회차를 띄울 차례인데 옵저버만 막고 있으면 30초 뒤 닫아 달라고 한다 (사용자 2026-11-11 - 사이트 엑셀 업로드와 같다).
+        같은 차례는 한 번만. [취소] 면 예전처럼 옵저버를 닫을 때까지 기다렸다가 띄운다 (예약을 건너뛰지 않는다)."""
+        req = st.observer_close_request()
+        if not (req and req.get("key") == key) and not other_close_pending(req, key):
+            st.ask_observer_close(key, now, st.OBSERVER_CLOSE_SCHEDULE_WHY, "schedule")
+
+    @staticmethod
+    def clear_schedule_close():
+        """예약이 띄웠으면 닫기 요청을 지운다 - 업로드 요청은 그대로 (업로드가 스스로 정리한다)."""
+        req = st.observer_close_request()
+        if req and str(req.get("key") or "").startswith(("sch:", "rep:")):
+            st.clear_observer_close()
+
     def _skip_upload(self, end):
         self.upload_for = end
         st.clear_observer_close()
@@ -1294,6 +1318,8 @@ class Scheduler(threading.Thread):
             if not st.upload_pending():
                 return self._skip_upload(end)   # 올릴 것이 없으면 옵저버를 닫지 않는다
             req = st.observer_close_request()
+            if other_close_pending(req, end.isoformat()):
+                return                          # 예약이 먼저 닫아 달라고 했다 - 닫히면 이 업로드도 이어서
             if not req or req.get("key") != end.isoformat():
                 st.ask_observer_close(end.isoformat(), now)
             elif req.get("answer") == "cancel" or now > (st.parse_iso(req.get("at")) or now) + datetime.timedelta(seconds=OBSERVER_CLOSE_GIVE_UP_SEC):
@@ -1330,7 +1356,10 @@ class Scheduler(threading.Thread):
             if slot is not None and not slot.get("until"):
                 self.waiting_reason = self.blocked()
                 if self.waiting_reason is None:
+                    self.clear_schedule_close()
                     self.launch(slot)
+                elif self.waiting_reason == OBSERVER_WAIT:
+                    self.ask_close_observer(f"sch:{next_run.isoformat()}", now)
                 return
             missed = due_between(sch, next_run, now)     # 열려 있는 반복 시간대는 빠진다 - 깨우기가 안 먹어 자다 깬 PC 의 밀린 예약만 (검토 10-22)
             self._advance_now(now)               # 가리키던 줄이 없어졌거나 반복 시간대 - 다음 줄로 (시간대는 아래 반복이 맡는다)
@@ -1360,8 +1389,11 @@ class Scheduler(threading.Thread):
             self.waiting_reason = None
             return
         self.waiting_reason = self.blocked()
+        if self.waiting_reason == OBSERVER_WAIT:      # 회차마다 한 번 (앞 회차가 끝난 시각으로 가른다)
+            self.ask_close_observer(f"rep:{win['at']}:{end.isoformat() if end else now.date().isoformat()}", now)
         if self.waiting_reason is not None:
             return
+        self.clear_schedule_close()
         stamp = now.isoformat(timespec="seconds")
         try:
             launch_slot(win, trigger="repeat")

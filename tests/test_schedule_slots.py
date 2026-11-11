@@ -228,6 +228,21 @@ check(st.hold_lock(st.OBSERVER_LOCK) is False, "옵저버는 둘이 못 뜬다")
 set_next(-3)
 sched.tick()
 check(d.LAUNCHED == saved and "옵저버" in (sched.waiting_reason or ""), f"예약 시각이 와도 기다림: {sched.waiting_reason}")
+# 사이트 엑셀 업로드처럼 옵저버에 30초 뒤 닫아 달라고 한다 (사용자 2026-11-11)
+req = st.observer_close_request() or {}
+check(str(req.get("key") or "").startswith("sch:") and req.get("kind") == "schedule" and req.get("why") == st.OBSERVER_CLOSE_SCHEDULE_WHY
+      and req.get("answer") is None, f"예약 차례면 옵저버에 닫아 달라고 한다 ({req})")
+sched.tick()
+check((st.observer_close_request() or {}).get("at") == req.get("at"), "같은 차례에는 다시 부탁하지 않는다")
+st.answer_observer_close(st.observer_close_request(), "cancel")
+sched.tick()
+check(d.LAUNCHED == saved and (st.observer_close_request() or {}).get("answer") == "cancel",
+      "[취소] 면 다시 부탁하지 않고 옵저버가 닫힐 때까지 기다린다 (예약은 건너뛰지 않는다)")
+sch_req = st.observer_close_request()
+st.ask_observer_close("2026-11-11T09:00:00", dt.datetime.now())        # 업로드가 먼저 부탁해 두었으면
+check(d.other_close_pending(st.observer_close_request(), "sch:x") and not d.other_close_pending(st.observer_close_request(), "2026-11-11T09:00:00"),
+      "다른 일의 답 없는 요청은 덮어쓰지 않는다 (창이 번갈아 뜨지 않게)")
+st.answer_observer_close(sch_req, "cancel")       # 예약 요청으로 되돌려 둔다 - 띄우면 지워지는지 아래에서 본다
 # R5 (2026-11-03): 띄울 차례인데 막힌 까닭을 웹에 올린다 (held_reason) - 몇 틱 동안 다시 안 적으면 지운다
 check("옵저버" in (sched.held_reason() or ""), f"막힌 까닭을 웹에 올릴 값으로: {sched.held_reason()}")
 _held = sched.held
@@ -246,6 +261,7 @@ holder.wait()
 check(st.observer_open() is False, "옵저버가 끝나면 (죽어도) 잠금이 풀린다")
 sched.tick()
 check(d.LAUNCHED == saved + ["all:auto"], "옵저버가 닫히면 미룬 예약이 돈다")
+check(st.observer_close_request() is None, "예약을 띄우면 닫기 요청을 지운다")
 d.LAUNCHED[:] = saved
 d._active["until"] = 0
 d._active["proc"] = None

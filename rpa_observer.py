@@ -1889,7 +1889,8 @@ class App:
             if close:
                 return self.force_close()
             st.answer_observer_close(req, "cancel")
-            self.status.config(text="옵저버 닫기를 취소하였습니다. 이번 사이트 엑셀 업로드는 실행하지 않습니다.", fg=MUTED)
+            self.status.config(text="옵저버 닫기를 취소하였습니다. " + ("옵저버를 닫으면 자동 실행을 시작합니다." if req.get("kind") == "schedule"
+                                                                    else "이번 사이트 엑셀 업로드는 실행하지 않습니다."), fg=MUTED)
 
         w.Btn(row, "옵저버 닫기", kind="primary", command=lambda: done(True)).pack(side="right")
         w.Btn(row, "취소", command=lambda: done(False)).pack(side="right", padx=(0, w.px(8)))

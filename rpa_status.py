@@ -1679,15 +1679,18 @@ def observer_open():
 # 상태 폴더의 파일 하나: 에이전트가 쓰고(ask) 옵저버가 1초마다 읽어 30초 메시지 창 → 닫거나, [취소] 면 answer 'cancel' 을 적는다.
 OBSERVER_CLOSE_NAME = "observer_close.json"
 OBSERVER_CLOSE_WHY = "ACTOR 오토파일럿 실행 시 옵저버는 사용 불가"
+# 예약·반복 회차를 띄울 차례에도 (사용자 2026-11-11 - 옵저버를 켠 채 두면 그날 예약이 계속 밀렸다). kind 'schedule' 은 [취소] 해도 건너뛰지 않고 닫을 때까지 기다린다
+OBSERVER_CLOSE_SCHEDULE_WHY = "자동 실행 시 옵저버는 사용 불가"
 
 
 def observer_close_path():
     return os.path.join(status_dir(), OBSERVER_CLOSE_NAME)
 
 
-def ask_observer_close(key, at):
-    """key - 무엇 때문인지 (업로드할 PROCESS 의 끝 시각), at - 부탁한 시각 (datetime)."""
-    write_json_atomic(observer_close_path(), {"key": key, "at": at.isoformat(timespec="seconds"), "why": OBSERVER_CLOSE_WHY, "answer": None})
+def ask_observer_close(key, at, why=OBSERVER_CLOSE_WHY, kind="upload"):
+    """key - 무엇 때문인지 (업로드할 PROCESS 의 끝 시각 / 'sch:'·'rep:' 예약 차례), at - 부탁한 시각 (datetime).
+    kind - 'upload' (취소하면 이번 업로드를 건너뛴다) / 'schedule' (취소하면 옵저버를 닫을 때까지 기다린다)."""
+    write_json_atomic(observer_close_path(), {"key": key, "at": at.isoformat(timespec="seconds"), "why": why, "kind": kind, "answer": None})
 
 
 def observer_close_request():
