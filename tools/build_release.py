@@ -300,7 +300,7 @@ def build_launchers(work_dir, cache=LAUNCHER_CACHE):
         shutil.rmtree(os.path.dirname(base), ignore_errors=True)
 
 
-def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0.0.0"):
+def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0.0.0", modules=False):
     """배포판 폴더를 모은다. 판 목록에 들어갈 상대 경로('/')를 돌려준다. 이미 있으면 멈춘다 (덮어쓰지 않는다).
     version 은 AFTER MARKET 파이썬 사본의 파일 버전 (num_version 모양)."""
     if os.path.exists(out_dir):
@@ -310,6 +310,14 @@ def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0
     for name in EXES:
         _copy(os.path.join(exe_dir, name), out_dir, name)
         program.append(name)
+    if modules:                                         # 조각 방식: 위 exe 는 시작 파일, 우리 코드는 app\\ 의 조각, 라이브러리는 묶음 하나
+        suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
+        for name in sorted(n for n in os.listdir(os.path.join(exe_dir, "app")) if n.endswith(suffix)):
+            _copy(os.path.join(exe_dir, "app", name), out_dir, f"app/{name}")
+            program.append(f"app/{name}")
+        _copy(os.path.join(repo, "app_start.py"), out_dir, "app/_start.py")
+        _copy(os.path.join(exe_dir, "lib.zip"), out_dir, "lib.zip")
+        program += ["app/_start.py", "lib.zip"]
     for rel, src in PROGRAM_FILES:
         _copy(os.path.join(repo, *src.split("/")), out_dir, rel)
         program.append(rel)
@@ -417,6 +425,12 @@ def smoke_check(zip_path, timeout=180):
         with zipfile.ZipFile(zip_path) as z:
             z.extractall(tmp)
         top = os.path.join(tmp, os.listdir(tmp)[0])
+        if os.path.isfile(os.path.join(top, "lib.zip")):   # 조각 방식: 설치 마무리가 하는 일 (라이브러리 묶음 풀기)
+            import rpa_settings
+            try:
+                rpa_settings.unpack_lib(top)
+            except RuntimeError as e:
+                return [str(e)]
         cfg = os.path.join(tmp, "cfg", "RPA_UserConfig.json")
         os.makedirs(os.path.dirname(cfg))
         shutil.copy2(os.path.join(top, "RPA_UserConfig.json"), cfg)
@@ -740,22 +754,34 @@ def main(argv=None):
                     help="exe 셋을 이 PC 의 dist 에도 복사한다 (설정 파일은 건드리지 않는다)")
     ap.add_argument("--exes-from", metavar="판폴더", help="exe 셋을 만들지 않고 이 판 폴더에서 가져온다 (exe 소스가 안 바뀐 판)")
     ap.add_argument("--no-setup", action="store_true", help="설치 파일(setup.exe)을 만들지 않는다")
-    ap.add_argument("--rebuild-all", action="store_true", help="재료가 지난번과 같아도 exe 셋을 모두 새로 만든다")
+    ap.add_argument("--rebuild-all", action="store_true", help="재료가 지난번과 같아도 exe 셋(조각 방식이면 조각)을 모두 새로 만든다")
+    ap.add_argument("--modules", action="store_true",
+                    help="조각 방식: 우리 파일을 하나씩 .pyd 로, 라이브러리는 lib.zip 으로, exe 셋은 시작 파일 (설계 2026-11-11)")
+    ap.add_argument("--onefile", action="store_true", help="옛 방식: exe 셋을 Nuitka onefile 로 (지금 기본과 같다)")
     args = ap.parse_args(argv)
+    if args.modules and (args.exes_from or args.to_dist or args.onefile):
+        print("  문제: --modules 는 --exes-from·--to-dist·--onefile 과 함께 쓸 수 없습니다")
+        return 1
     problem = signing_key_problem()
     if problem:
         print("  문제:", problem)
         return 1
     version = next_version(OUT_ROOT, datetime.date.today())
     work = os.path.join(REPO, "build", "release")
-    print(f"판 {version} 을 만듭니다 ({f'exe 는 {args.exes_from} 에서' if args.exes_from else 'Nuitka'})")
+    print(f"판 {version} 을 만듭니다 ({'조각 방식' if args.modules else f'exe 는 {args.exes_from} 에서' if args.exes_from else 'Nuitka'})")
     try:
-        builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(work, force=args.rebuild_all)
-    except (FileNotFoundError, RuntimeError) as e:
+        if args.modules:
+            work = os.path.join(REPO, "build", "release_modules")
+            build_launchers(work)
+            builder = build_modules(work, force=args.rebuild_all)
+            build_lib_zip(os.path.join(work, "lib.zip"))
+        else:
+            builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(work, force=args.rebuild_all)
+    except (FileNotFoundError, RuntimeError, subprocess.CalledProcessError) as e:
         print("  문제:", e)
         return 1
     out_dir = os.path.join(OUT_ROOT, f"배포_{version}")
-    program = collect(out_dir, work, version=BRAND_VERSION)
+    program = collect(out_dir, work, version=BRAND_VERSION, modules=args.modules)
     man = write_manifest(out_dir, version, builder, program)
     zip_path = out_dir + ".zip"
     make_zip(out_dir, zip_path)

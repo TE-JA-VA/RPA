@@ -411,7 +411,7 @@ check("web_replay 를 불러오면 (exe 일 때만) PLAYWRIGHT_NODEJS_PATH 를 �
       'os.environ["PLAYWRIGHT_NODEJS_PATH"]' in src_wr and 'globals().get("__compiled__")' in src_wr)
 import update_helper  # noqa: E402
 check("감독·에이전트 사본은 판 번호가 아니라 고정 버전으로 찍는다 (판마다 같은 파일 - 업데이트에 안 들어간다)",
-      br.BRAND_VERSION == "1.0.0.0" and "collect(out_dir, work, version=BRAND_VERSION)" in Path(br.__file__).read_text(encoding="utf-8"))
+      br.BRAND_VERSION == "1.0.0.0" and "collect(out_dir, work, version=BRAND_VERSION, " in Path(br.__file__).read_text(encoding="utf-8"))
 check("도우미가 끄는 사본 이름 = 빌드가 만드는 사본 이름",
       set(update_helper.BRANDED_EXES) == set(br.BRANDED), str(update_helper.BRANDED_EXES))
 fp = br.exe_fingerprint("ERPia_RPA.exe", "nuitka 4.2.2 · python 3.14.7")
@@ -492,5 +492,32 @@ with tempfile.TemporaryDirectory() as d:
                        env={**os.environ, "PYTHONIOENCODING": "utf-8", "RPA_PROGRAMDATA": d, "RPA_STATUS_DIR": d, "RPA_USER_CONFIG": os.path.join(d, "u.json")})
     check("내장 파이썬 + 배포 .py 만으로 agent.real_actions() 가 명령표를 돌려준다 (web_replay·playwright 를 끌어오면 에이전트가 통째로 죽는다)",
           r.returncode == 0 and "export_preset" in r.stdout, (r.stderr or r.stdout)[-600:])
+
+# ---------------------------------------------------------------------------
+print("=== 조각 방식 모으기 (--modules, 2026-11-11) ===")
+import importlib.machinery  # noqa: E402
+
+SUFFIX = importlib.machinery.EXTENSION_SUFFIXES[0]
+work_m = os.path.join(tmp, "work_m")
+for exe in br.EXES:
+    write(os.path.join(work_m, exe), b"MZ launcher " + exe.encode())
+for mod in ("web_runner", "rpa_status"):
+    write(os.path.join(work_m, "app", mod + SUFFIX), b"pyd " + mod.encode())
+write(os.path.join(work_m, "lib.zip"), b"PK fake")
+write(os.path.join(repo, "app_start.py"), "print('start')\n")
+out_m = os.path.join(out_root, "배포_2026.11.11-9")
+program_m = br.collect(out_m, work_m, repo=repo, runtime_root=runtime, modules=True)
+check("조각 방식: 시작 파일·조각·묶음·시작 스크립트가 버전 목록에 들어간다",
+      {"app/_start.py", "lib.zip", f"app/web_runner{SUFFIX}", f"app/rpa_status{SUFFIX}", *br.EXES} <= set(program_m), str(program_m))
+check("프로그램 파일·오토파일럿 이름의 파이썬은 그대로", {rel for rel, _ in br.PROGRAM_FILES} | {f"python/{n}" for n in br.BRANDED} <= set(program_m))
+check("lib 폴더는 싣지 않는다 (PC 에서 푼다)", not os.path.exists(os.path.join(out_m, "lib")))
+check("app 에는 조각과 _start.py 뿐", sorted(os.listdir(os.path.join(out_m, "app"))) == sorted(["_start.py", "web_runner" + SUFFIX, "rpa_status" + SUFFIX]))
+man_m = br.write_manifest(out_m, "2026.11.11-9", "시험", program_m)
+br.make_zip(out_m, out_m + ".zip")
+check("조각 방식 압축도 검사를 통과한다", br.verify_zip(out_m + ".zip", man_m, program_m, others) == [],
+      str(br.verify_zip(out_m + ".zip", man_m, program_m, others)))
+check("옛 방식 모으기에는 app·lib.zip 이 없다", not any(p.startswith("app/") or p == "lib.zip" for p in program))
+check("함께 못 쓰는 옵션은 문제로 끝난다", br.main(["--modules", "--exes-from", "x"]) == 1 and br.main(["--modules", "--to-dist"]) == 1
+      and br.main(["--modules", "--onefile"]) == 1)
 
 finish()
