@@ -57,12 +57,18 @@ tmp = tempfile.mkdtemp(prefix="rpa_modbuild_")
 
 # ---------------------------------------------------------------------------
 print("=== 1. 시작 파일 ===")
-FAKE = ('import sys, os, json\n'
+FAKE = ('import sys, os, json, ctypes\n'
         'def run_main():\n'
-        '    print(json.dumps({"argv": sys.argv, "exe": sys.executable, "home": os.environ.get("PYTHONHOME"), "path0": sys.path[0]}))\n'
+        '    try:\n'
+        '        ctypes.WinDLL("rpa_probe_dep.dll")\n'
+        '        dep = True\n'
+        '    except OSError:\n'
+        '        dep = False\n'
+        '    print(json.dumps({"argv": sys.argv, "exe": sys.executable, "home": os.environ.get("PYTHONHOME"), "path0": sys.path[0], "dep": dep}))\n'
         '    return 7\n')
 top = os.path.join(tmp, "공백 한글 폴더", "RPA")
 shutil.copytree(os.path.join(br.RUNTIME_ROOT, "python"), os.path.join(top, "python"))
+shutil.copy2(os.path.join(top, "python", "vcruntime140_1.dll"), os.path.join(top, "python", "rpa_probe_dep.dll"))   # 내장 Python 폴더에만 있는 DLL
 os.makedirs(os.path.join(top, "app"))
 os.makedirs(os.path.join(top, "lib"))
 shutil.copy2(ROOT / "app_start.py", os.path.join(top, "app", "_start.py"))
@@ -78,12 +84,13 @@ r = run(exe, "--preset", "① 지마켓", 'a "b" c', cwd=top)
 try:
     got = json.loads(r.stdout.decode("utf-8"))
 except ValueError:
-    got = {"argv": None, "exe": None, "home": "?", "path0": ""}
+    got = {"argv": None, "exe": None, "home": "?", "path0": "", "dep": None}
 check("종료 코드가 그대로 나온다", r.returncode == 7, f"{r.returncode} {r.stderr[-300:]!r}")
 check("인자가 그대로, argv[0] 은 exe", got["argv"] == [exe, "--preset", "① 지마켓", 'a "b" c'], str(got["argv"]))
 check("sys.executable 은 exe, PYTHONHOME 은 물려주지 않는다", got["exe"] == exe and got["home"] is None, str(got))
 check("프로그램 폴더의 함정 .py 가 아니라 app 의 것을 쓴다",
       os.path.normcase(got["path0"]) == os.path.normcase(os.path.join(top, "app")), got["path0"])
+check("내장 Python 폴더의 DLL 을 찾는다 (깨끗한 윈도우에는 vcruntime140_1.dll 이 시스템에 없다 - 샌드박스 2026-11-11)", got["dep"] is True, str(got["dep"]))
 check("PROCESS 시작 파일", run(os.path.join(top, "ERPia_RPA.exe"), cwd=top).returncode == 7)
 r = run(os.path.join(top, "Prepare_Observer.exe"), "--check", cwd=top)
 check("옵저버 시작 파일 (창 프로그램, 출력은 부른 쪽이 받는다)", r.returncode == 7 and b'"argv"' in r.stdout, f"{r.returncode} {r.stdout[-200:]!r}")

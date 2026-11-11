@@ -36,6 +36,9 @@ def main():
         return 2
     import importlib
     import site
+    # python.exe 로 켤 때는 내장 Python 폴더가 exe 폴더라 그 안의 DLL(vcruntime140_1.dll 등)을 저절로 찾는다. 시작 파일은
+    # 프로그램 폴더에 있어 따로 알려 준다 - 깨끗한 윈도우에서 win32clipboard 가 'DLL load failed' (샌드박스 2026-11-11)
+    os.add_dll_directory(os.path.join(root, "python"))
     site.addsitedir(lib)                        # pywin32 의 .pth 까지
     return importlib.import_module(name).run_main()
 
