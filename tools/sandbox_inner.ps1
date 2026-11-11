@@ -78,6 +78,16 @@ foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝"), @("Prepare_RPA
 # 브라우저는 깔린 Edge (2026-10-06 - 같이 싣던 Chromium 713MB 를 뺐다). 프리페어 --selftest 는 위에서 Edge 로 내장 로그인 폼을 채웠다
 Check "ACTOR 오토파일럿·ACTOR exe 가 인증번호 중계 모듈을 불러온다 (fb·secret 을 exe 에 실음 - 설계 13절)" (($outs["Prepare_RPA.exe --check"] -match "인증번호 중계: 준비됨") -and ($outs["Prepare_Observer.exe --check"] -match "인증번호 중계: 준비됨")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
 Check "옵저버 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: Microsoft Edge …')" ($outs["Prepare_Observer.exe --check"] -match "브라우저: Microsoft Edge \d") (($outs["Prepare_Observer.exe --check"] -split "`n" | Where-Object { $_ -match "브라우저" }) -join " / ")
+# 조각 방식 버전 (lib.zip 이 있다, 설계 2026-11-11): 라이브러리 묶음이 풀렸고, 우리 소스(.py)는 실리지 않았다
+if (Test-Path "$App\lib.zip") {
+    $zipSha = (Get-FileHash "$App\lib.zip" -Algorithm SHA256).Hash.ToLower()
+    $mark = if (Test-Path "$App\lib\.unpacked") { (Get-Content "$App\lib\.unpacked" -Raw).Trim() } else { "" }
+    Check "조각 버전: 설치 마무리가 라이브러리 묶음을 풀었다 (lib\.unpacked = lib.zip 지문)" ($mark -eq $zipSha) "mark=$mark"
+    $appPy = @(Get-ChildItem "$App\app" -Filter *.py -File | ForEach-Object { $_.Name })
+    Check "조각 버전: app 의 .py 는 _start.py 하나뿐" (($appPy.Count -eq 1) -and ($appPy[0] -eq "_start.py")) ($appPy -join ", ")
+    $src = @("run_routine.py", "web_runner.py", "web_replay.py", "rpa_observer.py", "wellife.py") | Where-Object { Get-ChildItem $App -Recurse -Filter $_ -File -ErrorAction SilentlyContinue }
+    Check "조각 버전: 우리 소스가 실리지 않았다" (@($src).Count -eq 0) ($src -join ", ")
+}
 # 옵저버를 시작 메뉴처럼 붙을 콘솔 없이 켠다 (2026-10-02 첫 실행: 표준 핸들이 못 쓰는 값이라 Playwright 가 WinError 6 -
 # --check 는 콘솔에서 불러 못 잡았다). 콘솔 없는 pythonw 가 띄우고 관리자 권한은 이 스크립트에서 물려받는다 (UAC 창 없음).
 # 일꾼이 Playwright 드라이버(node.exe run-driver)를 띄우고 드라이버가 깔린 Edge 를 창으로 띄우면 통과 (2026-10-06 - 드라이버만 보고
