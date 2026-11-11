@@ -83,7 +83,8 @@ FORBIDDEN = ["__pycache__", "*.pyc", "*_result.txt", "sms_watch_log.txt", "web_*
              "serviceAccountKey.json"]
 MARKERS = {"ERPia_RPA.exe": "=== 점검 끝", "Prepare_RPA.exe": "쓸 수 있는 Action",
            "Prepare_Observer.exe": "옵저버 점검 끝"}   # --check 의 끝 줄
-EXCLUDE = ["numpy", "yaml", "scipy", "pandas", "torch", "cv2", "matplotlib", "networkx", "graphify"]
+EXCLUDE = ["numpy", "yaml", "scipy", "pandas", "torch", "cv2", "matplotlib", "networkx", "graphify",
+           "comtypes.test"]     # --include-package=comtypes 가 시험 코드까지 컴파일했다 (exe 2MB 작아짐, 2026-11-11)
 # pywinauto 가 부르는 win32ui 는 MFC DLL 을 쓰는데, 이 PC 에는 System32 에만 있고 Nuitka 는 System32 를 안 뒤져
 # 말없이 뺀다 → VC++ 재배포 패키지가 없는 PC 에서 exe 가 켜지자마자 ImportError (2026-09-29 노트북). 직접 넣는다
 MFC_DLL = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "mfc140u.dll")
