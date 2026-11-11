@@ -141,7 +141,9 @@ MODULE_OPTIONS = ["--module", "--assume-yes-for-downloads", "--remove-output", "
 SITE_PACKAGES = os.path.join(REPO, ".venv", "Lib", "site-packages")
 # 라이브러리 묶음(lib.zip)에 실을 것 - 옛 onefile exe 가 싣던 것과 같아야 한다. 빠지면 --check 가 ModuleNotFoundError 로 알려 준다
 LIB_NAMES = ["playwright", "pywinauto", "comtypes", "win32", "win32com", "win32comext", "pythonwin", "pywin32_system32",
-             "pywin32.pth", "pywin32.version.txt", "pythoncom.py", "greenlet", "pyee", "typing_extensions.py", "PIL", "six.py"]
+             "pywin32.pth", "pywin32.version.txt", "pythoncom.py", "greenlet", "pyee", "typing_extensions.py", "PIL", "six.py",
+             # 운송장 엑셀 비밀번호 풀기 (PR #43, wellife.unlock_excel) - msoffcrypto 와 그 의존성
+             "msoffcrypto", "cryptography", "cffi", "_cffi_backend.cp314-win_amd64.pyd", "olefile", "pycparser"]
 LIB_SKIP = ("playwright/driver/node.exe",)       # 프로그램 폴더 playwright\\node.exe 한 벌을 쓴다 (NODE_REL)
 LIB_SKIP_DIRS = ("comtypes/test",)
 LIB_TIME = (2026, 1, 1, 0, 0, 0)                 # 묶음 안 파일 시각 - 고정해야 같은 재료에서 같은 묶음이 나온다 (PC 가 다시 안 받는다)

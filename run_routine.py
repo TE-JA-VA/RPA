@@ -5822,6 +5822,12 @@ def run_self_check():
     except Exception:
         log("실행 상태   : ERPiaMain.exe 실행되어 있지 않음")
 
+    try:        # 운송장 엑셀출력이 받은 엑셀의 비밀번호를 푼다 (wellife.unlock_excel, PR #43) - 배포 exe 에 라이브러리가 들어갔는지
+        from msoffcrypto.format.ooxml import OOXMLFile  # noqa: F401 - cryptography 의 암호 모듈까지 불러온다
+        log("엑셀 풀기   : 준비됨 (msoffcrypto)")
+    except Exception as e:
+        log(f"엑셀 풀기   : 없음! ({type(e).__name__}: {e}) - 운송장 엑셀출력이 받은 엑셀의 비밀번호를 풀지 못합니다")
+
     log("=== 점검 끝 (PROCESS 는 실행하지 않았습니다) ===")
 
 
