@@ -47,6 +47,8 @@ def auth_message(code):
         return "이 에이전트 계정은 사용중지되어 있습니다. 관리자에게 문의하여 주십시오."
     if code in TEMP_BLOCK_CODES:
         return "시도가 너무 많아 잠시 차단되었습니다. 약 10분 후 다시 실행하여 주십시오."
+    if code == "NOT_AGENT":
+        return "에이전트 계정(agent-…)이 아닙니다. 관리자에게 문의하여 주십시오."
     return f"로그인 거부: {code}"
 
 
@@ -433,6 +435,7 @@ class Uploader:
         self._client = client
         self._cid = cid
         self._base = app_path("live", cid, pc_id)
+        self._cmd_prefix = app_path("commands", cid, pc_id) + "/"
         self._queue_path = queue_path
         self._lock = threading.RLock()    # 명령 결과 표시(push_patch)는 느린 명령 스레드에서도 온다 (BugBuster L19)
         self._queue = self._read_queue()
@@ -449,13 +452,27 @@ class Uploader:
                         except ValueError:
                             continue
                         # 옛 버전이 쌓은 현황·heartbeat 는 버린다 - 되보내면 화면이 옛 상태로 돌아간다 (BugBuster H3)
-                        if isinstance(row, dict) and "/live/" not in f"/{row.get('path', '')}":
+                        if self._queue_row_ok(row):
                             rows.append(row)
         except FileNotFoundError:
             pass
         except Exception:
             pass
         return rows
+
+    def _queue_row_ok(self, row):
+        """큐 파일의 한 줄을 다시 보내도 되나 (보안 감사 2026-11-12). 이 에이전트가 쌓는 두 꼴만 받는다 - 명령 결과 patch(자기 PC
+        명령함의 명령 하나), 실행 이력 fs(자기 업체 runs). 다른 사용자가 심은 줄·다른 업체 줄·현황(live)·깨진 줄은 버린다 - 깨진 줄은
+        flush 에서 KeyError 로 큐를 영영 막았다."""
+        if not isinstance(row, dict) or not isinstance(row.get("value"), dict):
+            return False
+        path, method = row.get("path"), row.get("method", "put")
+        if method == "patch" and isinstance(path, str) and path.startswith(self._cmd_prefix):
+            key = path[len(self._cmd_prefix):]
+            return bool(key) and "/" not in key and "." not in key
+        if method == "fs":
+            return path == f"runs/{self._cid}/items" and isinstance(row["value"].get("run_id"), str)
+        return False
 
     def _write_queue(self):
         try:
@@ -553,6 +570,8 @@ META_TYPES = ("export_preset", "import_preset", "restore_preset")   # handler �
 SLOW_TYPES = ("import_preset", "restore_preset")   # 옵저버·ACTOR 가 끝나길 기다린다 - running 표시 뒤 스레드에서 (명령 흐름을 막지 않게)
 TRANSFER_TTL_SEC = 6 * 3600
 TRANSFER_CLEAN_SEC = 600
+COMMAND_KEEP_SEC = 7 * 86400   # 끝난 명령은 만든 지 7일 지나면 지운다 (보안 감사 2026-11-12: 끝없이 쌓여 공용 한도를 먹고, 옛 엑셀 비밀번호가 남았다)
+COMMAND_CLEAN_MAX = 200        # 한 번에 읽는 수 - 처음 켤 때 쌓인 것을 한꺼번에 내려받지 않게
 INSTALL_CHECK_SEC = 900        # 설치 파일을 버전 목록과 다시 맞춰 보는 간격 (파일 변조 감지, 2026-10-23). 실행 직전에도 따로 잰다
 
 
@@ -610,6 +629,24 @@ def cleanup_transfers(client, cid, now_ms, app=APP):
         raise
     except Exception as e:
         log(f"전송 자리 정리 실패: {type(e).__name__}")
+    return n
+
+
+def cleanup_commands(client, cid, pc_id, now, app=APP):
+    """자기 PC 명령함에서 만든 지 COMMAND_KEEP_SEC 넘은 끝난 명령(done·failed·expired)을 지운다 → 지운 수.
+    규칙이 그 PC 의 에이전트에게 끝난 명령 지우기만 허용한다. 못 읽으면 0, 인증이 죽었으면 AuthError 그대로."""
+    base = app_path("commands", cid, pc_id, app)
+    n = 0
+    try:
+        got = client.get(base, {"orderBy": '"created_at"', "endAt": str(int(now - COMMAND_KEEP_SEC)), "limitToFirst": str(COMMAND_CLEAN_MAX)}) or {}
+        for key, cmd in got.items():
+            if isinstance(cmd, dict) and cmd.get("state") in ("done", "failed", "expired"):
+                client.delete(f"{base}/{key}")
+                n += 1
+    except fb.AuthError:
+        raise
+    except Exception as e:
+        log(f"지난 명령 정리 실패: {type(e).__name__}")
     return n
 
 
@@ -717,13 +754,18 @@ class Commands:
 # ---------------------------------------------------------------------------
 # 실제 동작 (기존 코드를 그대로 쓴다)
 # ---------------------------------------------------------------------------
+_LAST_MODULES = {}
+
+
 def company_modules(client, cid, app=APP):
     """업체가 안 쓰는 모듈 정책 {키: False}. 총괄만 쓸 수 있는 자리라 화면을 우회한 명령도 여기서 막힌다.
-    못 읽으면 빈 값 - 정책 조회 실패가 실행을 막지는 않는다."""
+    못 읽으면 지난번에 읽은 값 (보안 감사 다듬기 2026-11-12: 빈 값이면 그 순간 총괄이 끈 모듈 검사가 빠졌다) - 한 번도 못 읽었으면 빈 값."""
     try:
-        return {k: v for k, v in (client.get(f"meta/companies/{cid}/apps/{app}/modules") or {}).items() if v is False}
+        got = {k: v for k, v in (client.get(f"meta/companies/{cid}/apps/{app}/modules") or {}).items() if v is False}
     except Exception:
-        return {}
+        return dict(_LAST_MODULES.get(cid, {}))
+    _LAST_MODULES[cid] = got
+    return got
 
 
 WELLIFE_BLOCKED = ("Logistics", "Output")    # 웰라이프 업체가 안 쓰는 보통 루틴 모듈 (설계 2026-10-07-wellife-gate)
@@ -997,6 +1039,9 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         tid = tid_of(args)
         now_ms = int(client.server_now() * 1000)        # 서버 시각 - 규칙이 서버 시각 ±10분만 받는다 (2026-10-21)
         slot = {"by": meta.get("by"), "from_pc": pc_id, "created_at": now_ms, "expires_at": now_ms + TRANSFER_TTL_SEC * 1000}
+        to_pc = args.get("to_pc") if isinstance(args, dict) else None
+        if isinstance(to_pc, str) and 0 < len(to_pc) <= 64:
+            slot["to_pc"] = to_pc                        # 받는 PC 가 다 읽고 지울 수 있게 (규칙: 보낸·받는 PC·만료 뒤만 지운다, 보안 감사 2026-11-12)
         try:
             nos = nos_of(args, "nos")
             presets = [pt.export_item(n, bool(args.get("with_phone")), {"cid": cid, "pcId": pc_id, "no": n}) for n in nos]
@@ -1026,6 +1071,7 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         tid = tid_of(args)
         path = transfer_path(cid, tid)
         got = [None]
+        want = args.get("from_pc") if isinstance(args, dict) else None     # 관리자가 고른 보낼 PC (옛 웹·관리 화면은 안 실음)
 
         def ready():
             if got[0] is None:
@@ -1036,6 +1082,9 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
                 except Exception as e:           # 망 오류는 마감까지 다시 시도
                     log(f"전송 자리 읽기 실패: {type(e).__name__}")
                     return False
+                # 같은 업체의 다른 PC 가 같은 전송 번호로 먼저 만든 자리는 받지 않는다 (보안 감사 2026-11-12 - 바꿔치기)
+                if isinstance(want, str) and want and isinstance(t, dict) and t.get("from_pc") != want:
+                    raise RuntimeError("고른 PC가 아닌 곳에서 온 프리셋이라 받지 않았습니다. 다시 복사하여 주십시오.")
                 if isinstance(t, dict) and isinstance(t.get("failed"), str):   # 보낸 PC 가 실패를 남겼다 - 기다리지 않는다
                     try:
                         client.delete(path)
@@ -1185,7 +1234,9 @@ def watch_commands(client, path, on_command, stop=None):
                 items = payload                       # 처음 붙을 때: 대기 중인 명령 전부
             elif sub.count("/") == 1 and isinstance(payload, dict):
                 items = {sub.strip("/"): payload}     # 새 명령 하나 (null 은 queued 에서 빠진 것 - 지워짐 아님, 건너뛴다)
-            for cmd_id, cmd in items.items():
+            # 밀린 명령은 만든 순서대로 (보안 감사 다듬기 2026-11-12) - REST 는 결과의 키 순서를 보장하지 않는다
+            order = sorted(items.items(), key=lambda kv: (kv[1].get("created_at") if isinstance(kv[1], dict) and isinstance(kv[1].get("created_at"), (int, float)) else 0, kv[0]))
+            for cmd_id, cmd in order:
                 on_command(cmd_id, cmd)
     finally:
         gen.close()
@@ -1307,7 +1358,7 @@ def main():
         if dead.code in TEMP_BLOCK_CODES:
             return RETRY_LATER_CODE
         # 막힌 계정은 비밀번호를 다시 넣어도 소용없다 - 안내대로 나중에 다시 띄운다
-        if not sys.stdin.isatty() or dead.code == "USER_DISABLED":
+        if not sys.stdin.isatty() or dead.code in ("USER_DISABLED", "NOT_AGENT"):
             return 3
         print(f"비밀번호가 바뀌었거나 계정이 사용중지되었습니다: {auth_message(dead.code)}. "
               f"새 비밀번호를 넣으세요 (회사 {cfg['cid']} / PC {cfg['pc_id']}). "
@@ -1335,6 +1386,8 @@ def run(cfg):
     client = fb.Client(cfg)
     try:
         c = fb.claims(client.token())
+        if c.get("role") != "agent":             # first_run 과 같다 (보안 감사 다듬기 2026-11-12) - 역할이 바뀐 계정으로 계속 돌지 않게
+            return fb.AuthError(403, "NOT_AGENT")
         if c.get("cid") and c.get("pcId") and (c["cid"], c["pcId"]) != (cfg["cid"], cfg["pc_id"]):
             log(f"토큰의 회사·PC({c['cid']}/{c['pcId']})가 설정({cfg['cid']}/{cfg['pc_id']})과 다릅니다. 토큰 값을 씁니다")
             cfg.update(cid=c["cid"], pc_id=c["pcId"])
@@ -1439,6 +1492,7 @@ def run(cfg):
                 if time.monotonic() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
                     last_clean = time.monotonic()
                     cleanup_transfers(client, cfg["cid"], int(client.server_now() * 1000))   # 서버 시각 - PC 시계가 앞서도 남의 전송을 일찍 안 지운다
+                    cleanup_commands(client, cfg["cid"], cfg["pc_id"], client.server_now())
                 settings = st.read_settings()
                 last_sched, snap["schedule"] = live_schedule(settings, last_sched, dash.SCHEDULER.held_reason())
                 # 최근 10일 요약은 이력 파일이 바뀌었을 때만 다시 센다

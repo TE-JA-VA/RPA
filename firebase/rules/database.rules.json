@@ -17,8 +17,8 @@
         "live": {
           "$cid": {
             "$pcId": {
-              ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
-              ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId",
+              ".read": "auth != null && ((auth.token.cid === $cid && (auth.token.role === 'viewer' || auth.token.role === 'admin' || auth.token.role === 'agent') && root.child('meta/companies/' + $cid + '/stts').val() !== 9) || auth.token.role === 'super')",
+              ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId && root.child('meta/companies/' + $cid + '/stts').val() !== 9",
               "server_time": { ".validate": "newData.isString() && newData.val().length <= 40" },
               "host": { ".validate": "newData.isString() && newData.val().length <= 100" },
               "launching": { ".validate": "newData.isBoolean()" },
@@ -29,11 +29,11 @@
               "programs": { ".validate": "newData.hasChildren()" },
               "modules": { ".validate": "newData.hasChildren()" },
               "modes": { ".validate": "newData.hasChildren()" },
-              "presets": { ".validate": "newData.hasChildren()" },
+              "presets": { ".validate": "newData.hasChildren()", "$i": { ".validate": "$i.matches(/^[0-9]{1,2}$/)" } },
               "parallel": { ".validate": "newData.hasChildren()" },
               "together": { ".validate": "newData.hasChildren()" },
               "schedule": { ".validate": "newData.hasChildren()" },
-              "recent": { ".validate": "newData.hasChildren()" },
+              "recent": { ".validate": "newData.hasChildren()", "$i": { ".validate": "$i.matches(/^[0-9]{1,2}$/)" } },
               "version": { ".validate": "newData.hasChildren()" },
               "update": { ".validate": "newData.hasChildren()" },
               "tokens": { ".validate": "newData.hasChildren()" },
@@ -54,8 +54,14 @@
         "settings": {
           "$cid": {
             "$pcId": {
-              ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
-              ".write": "auth != null && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')"
+              ".read": "auth != null && ((auth.token.cid === $cid && (auth.token.role === 'viewer' || auth.token.role === 'admin' || auth.token.role === 'agent') && root.child('meta/companies/' + $cid + '/stts').val() !== 9) || auth.token.role === 'super')",
+              ".write": "auth != null && ((auth.token.role === 'admin' && auth.token.cid === $cid && root.child('meta/companies/' + $cid + '/stts').val() !== 9) || auth.token.role === 'super')",
+              "modules": { ".validate": "newData.hasChildren()" },
+              "presets": { ".validate": "newData.hasChildren()", "$k": { ".validate": "$k.matches(/^PRESET[0-9]{1,2}$/) && newData.isBoolean()" } },
+              "parallel": { ".validate": "newData.isNumber()" },
+              "together": { ".validate": "newData.isString() && newData.val().length <= 20" },
+              "schedule": { ".validate": "newData.hasChildren()" },
+              "$other": { ".validate": false }
             }
           }
         },
@@ -63,11 +69,11 @@
         "commands": {
           "$cid": {
             "$pcId": {
-              ".read": "auth != null && ((auth.token.cid === $cid && auth.token.role !== 'phone') || auth.token.role === 'super')",
-              ".indexOn": ["state"],
+              ".read": "auth != null && ((auth.token.cid === $cid && (auth.token.role === 'viewer' || auth.token.role === 'admin' || auth.token.role === 'agent') && root.child('meta/companies/' + $cid + '/stts').val() !== 9) || auth.token.role === 'super')",
+              ".indexOn": ["state", "created_at"],
 
               "$cmdId": {
-                ".write": "auth != null && ((!data.exists() && newData.exists() && ((auth.token.role === 'admin' && auth.token.cid === $cid) || auth.token.role === 'super')) || (data.exists() && newData.exists() && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId))",
+                ".write": "auth != null && ((!data.exists() && newData.exists() && ((auth.token.role === 'admin' && auth.token.cid === $cid && root.child('meta/companies/' + $cid + '/stts').val() !== 9) || auth.token.role === 'super')) || (data.exists() && newData.exists() && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId) || (data.exists() && !newData.exists() && auth.token.role === 'agent' && auth.token.cid === $cid && auth.token.pcId === $pcId && (data.child('state').val() === 'done' || data.child('state').val() === 'failed' || data.child('state').val() === 'expired')))",
                 ".validate": "newData.hasChildren(['type', 'by', 'created_at', 'expires_at', 'state'])",
 
                 "type": {
@@ -97,16 +103,17 @@
 
         "transfers": {
           "$cid": {
-            ".read": "auth != null && ((auth.token.role === 'agent' && auth.token.cid === $cid) || auth.token.role === 'super')",
+            ".read": "auth != null && ((auth.token.role === 'agent' && auth.token.cid === $cid && root.child('meta/companies/' + $cid + '/stts').val() !== 9) || auth.token.role === 'super')",
 
             "$tid": {
-              ".write": "auth != null && (auth.token.role === 'super' || (auth.token.role === 'agent' && auth.token.cid === $cid && (!newData.exists() || (!data.exists() && newData.child('from_pc').val() === auth.token.pcId))))",
+              ".write": "auth != null && (auth.token.role === 'super' || (auth.token.role === 'agent' && auth.token.cid === $cid && root.child('meta/companies/' + $cid + '/stts').val() !== 9 && ((!newData.exists() && (data.child('from_pc').val() === auth.token.pcId || data.child('to_pc').val() === auth.token.pcId || data.child('expires_at').val() < now)) || (!data.exists() && newData.child('from_pc').val() === auth.token.pcId))))",
               ".validate": "$tid.matches(/^[A-Za-z0-9_-]{16,40}$/) && newData.hasChildren(['from_pc', 'by', 'created_at', 'expires_at']) && (newData.hasChild('presets') || newData.hasChild('failed'))",
               "from_pc": { ".validate": "newData.isString()" },
               "by": { ".validate": "newData.isString()" },
               "created_at": { ".validate": "newData.isNumber() && newData.val() >= now - 600000 && newData.val() <= now + 600000" },
               "expires_at": { ".validate": "newData.isNumber() && newData.val() <= newData.parent().child('created_at').val() + 21600000" },
-              "presets": { ".validate": "newData.hasChildren()" },
+              "to_pc": { ".validate": "newData.isString() && newData.val().length <= 64" },
+              "presets": { ".validate": "newData.hasChildren()", "$i": { ".validate": "$i.matches(/^[0-9]{1,2}$/)" } },
               "failed": { ".validate": "newData.isString() && newData.val().length <= 200" },
               "$other": { ".validate": false }
             }
@@ -120,13 +127,13 @@
             "$phoneId": {
               "current": {
                 ".read": "auth != null && ((auth.token.cid === $cid && (auth.token.role !== 'phone' || auth.token.phoneId === $phoneId)) || auth.token.role === 'super')",
-                ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && (!data.exists() || data.child('pcId').val() === auth.token.pcId || data.child('created_at').val() + 120000 < now)",
+                ".write": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && root.child('meta/companies/' + $cid + '/stts').val() !== 9 && (!data.exists() || data.child('pcId').val() === auth.token.pcId || data.child('created_at').val() + 120000 < now)",
                 ".validate": "newData.hasChildren(['req_id', 'site', 'senders', 'pcId', 'created_at'])",
                 "req_id": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{8,64}$/)" },
                 "site": { ".validate": "newData.isString() && newData.val().length <= 100" },
                 "senders": {
                   ".validate": "newData.hasChildren()",
-                  "$num": { ".validate": "$num.matches(/^[0-9]{3,15}$/) && newData.val() === true" }
+                  "$num": { ".validate": "$num.matches(/^[0-9]{3,15}$/) && newData.val() === true && (!root.child('meta/companies/' + $cid + '/phones/' + $phoneId + '/senders').exists() || root.child('meta/companies/' + $cid + '/phones/' + $phoneId + '/senders').child($num).val() === true)" }
                 },
                 "pcId": { ".validate": "newData.val() === auth.token.pcId" },
                 "created_at": { ".validate": "newData.val() === now" },
@@ -140,7 +147,7 @@
           "$cid": {
             "$phoneId": {
               "current": {
-                ".read": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/pcId').val() === auth.token.pcId",
+                ".read": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/pcId').val() === auth.token.pcId && (!data.exists() || data.child('req_id').val() === root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/req_id').val())",
                 ".write": "auth != null && ((auth.token.role === 'agent' && auth.token.cid === $cid && !newData.exists() && (!root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current').exists() || root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/pcId').val() === auth.token.pcId || root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/created_at').val() + 120000 < now)) || (auth.token.role === 'phone' && auth.token.cid === $cid && auth.token.phoneId === $phoneId && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/created_at').val() + 120000 > now))",
                 ".validate": "newData.hasChildren(['req_id', 'code', 'sender', 'sms_at', 'written_at']) && newData.child('req_id').val() === root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/req_id').val() && root.child('apps/otp/requests/' + $cid + '/' + $phoneId + '/current/senders/' + newData.child('sender').val()).val() === true",
                 "req_id": { ".validate": "newData.isString()" },

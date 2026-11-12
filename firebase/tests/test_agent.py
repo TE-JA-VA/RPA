@@ -630,6 +630,25 @@ with tempfile.TemporaryDirectory() as d:
     up6 = ag.Uploader(cl3, "c_demo", "pc_office", q)
     check(up6.pending() == 1 and up6.flush() and cl3.puts == [("runs/c_demo/items", "r11")], f"옛 현황은 버리고 기록만 보낸다 ({cl3.puts})")
 
+    # 큐 줄 검사 (보안 감사 2026-11-12) - 자기 PC 명령 결과·자기 업체 기록만. 다른 사용자가 심은 줄·다른 업체·깨진 줄은 버린다
+    with open(q, "w", encoding="utf-8") as f:
+        for row in ({"path": "apps/rpa/commands/c_demo/pc_office/k1", "value": {"state": "done"}, "method": "patch"},     # 받는다
+                    {"path": "runs/c_demo/items", "value": dict(doc, run_id="r12"), "method": "fs"},                 # 받는다
+                    {"path": "apps/rpa/commands/c_demo/pc_other/k1", "value": {"state": "done"}, "method": "patch"},  # 남의 PC
+                    {"path": "apps/rpa/commands/c_demo/pc_office", "value": {"k1": {"state": "done"}}, "method": "patch"},   # 명령함 통째
+                    {"path": "apps/rpa/commands/c_demo/pc_office/k1/state", "value": {"a": 1}, "method": "patch"},  # 더 깊은 곳
+                    {"path": "apps/otp/requests/c_demo/ph1/current", "value": {"senders": {"1599": True}}, "method": "put"},   # 다른 자리·put
+                    {"path": "runs/c_other/items", "value": dict(doc, run_id="r13"), "method": "fs"},                # 다른 업체
+                    {"path": "runs/c_demo/items", "value": dict(doc, run_id=None), "method": "fs"},                  # run_id 없음 (KeyError 로 큐가 막히던 것)
+                    {"value": {"state": "done"}, "method": "patch"},                                                  # path 없음
+                    {"path": "runs/c_demo/items", "value": "x", "method": "fs"},
+                    ["not", "a", "row"]):
+            f.write(json.dumps(row) + "\n")
+    cl4 = FlakyClient()
+    up7 = ag.Uploader(cl4, "c_demo", "pc_office", q)
+    check(up7.pending() == 2 and up7.flush() and [p for p, _ in cl4.puts] == ["apps/rpa/commands/c_demo/pc_office/k1", "runs/c_demo/items"],
+          f"큐 파일은 자기 PC 명령 결과·자기 업체 기록 줄만 다시 보낸다 ({cl4.puts})")
+
 
 class DenyClient:
     """옛 경로(live/…)는 규칙이 403 으로 거부한다. 2026-09-21 실기에서 49건이 큐 머리를 영원히 막았다."""
@@ -925,7 +944,10 @@ pc = PolicyClient({"Hold": False, "Output": True})
 check(ag.company_modules(pc, "c_x") == {"Hold": False}, "false 인 것만 정책으로 본다")
 check(pc.asked == ["meta/companies/c_x/apps/rpa/modules"], f"회사 메타에서 읽는다 ({pc.asked})")
 check(ag.company_modules(PolicyClient(None), "c_x") == {}, "정책이 없으면 빈 값")
-check(ag.company_modules(PolicyClient(fb.HttpError(401, "denied")), "c_x") == {}, "못 읽어도 실행을 막지 않는다")
+check(ag.company_modules(PolicyClient(fb.HttpError(401, "denied")), "c_never") == {}, "한 번도 못 읽었으면 빈 값 - 실행을 막지는 않는다")
+ag.company_modules(PolicyClient({"Hold": False}), "c_y")
+check(ag.company_modules(PolicyClient(fb.HttpError(503, "busy")), "c_y") == {"Hold": False},
+      "못 읽으면 지난번에 읽은 값 - 그 순간 총괄이 끈 모듈 검사가 빠지지 않게 (보안 감사 다듬기 2026-11-12)")
 
 print("\n5-3절 업체 정책: 자동 실행 개수 (2026-10-07)")
 
@@ -1256,6 +1278,10 @@ check(got == ["c1", "c2", "c3"], "처음 덩어리와 낱개 명령을 건네주
 check(why == "auth_revoked" and sc.renewed == 1 and sc.closed, "토큰 만료 알림이 오면 토큰을 버리고 돌아온다 (다시 붙게)")
 check(sc.params == {"orderBy": '"state"', "equalTo": '"queued"'}, f"대기 중(queued) 명령만 구독한다 (BugBuster I11) ({sc.params})")
 check(ag.watch_commands(StreamClient([("keep-alive", None)]), "p", lambda i, c: None) == "ended", "서버가 닫으면 ended")
+got_o = []
+ag.watch_commands(StreamClient([("put", {"path": "/", "data": {"zz": {"type": "launch", "created_at": 100}, "aa": {"type": "stop_rpa", "created_at": 300},
+                                                              "mm": {"type": "set_schedule", "created_at": 200}, "bad": "x"}})]), "p", lambda i, c: got_o.append(i))
+check(got_o == ["bad", "zz", "mm", "aa"], f"밀린 명령은 만든 순서대로 건넨다 - 키 순서가 아니라 (보안 감사 다듬기 2026-11-12) ({got_o})")
 
 import threading
 ev, got2 = threading.Event(), []
@@ -1533,6 +1559,21 @@ with tempfile.TemporaryDirectory() as d:
               f"복사 결과 글 + 거절된 칸 ({msg})")
         s2 = st.read_user_config()["Sites"]["PRESET2"]
         check(st.read_presets()[1]["name"] == "쿠팡" and s2["ID"] == "" and s2["PW"] == "" and s2["Stts"] == 9, "다른 사이트코드 새 칸: 아이디·비밀번호 없이 꺼짐")
+        # 보낸 PC 확인 (보안 감사 2026-11-12) - 같은 업체 다른 PC 가 같은 전송 번호로 먼저 만든 자리는 받지 않는다
+        tc = TransferClient(gets=[dict(copy_t, from_pc="pc_evil")])
+        try:
+            acts_with(tc)["import_preset"]({"tid": TID, "slots": [2, 3], "from_pc": "pc_b"}, {"key": "k4c", "by": "u1", "expires_at": 3600})
+            check(False, "보낸 PC 가 다르면 받지 않는다 (안 됨)")
+        except RuntimeError as e:
+            check("고른 PC가 아닌 곳" in str(e) and tc.deletes == [] and st.read_presets()[1]["name"] == "쿠팡",
+                  f"보낸 PC 가 명령의 from_pc 와 다르면 받지 않고, 자리도 안 지우고, 프리셋도 그대로 ({e}, {tc.deletes})")
+        tc = TransferClient(gets=[dict(copy_t, presets=[dict(fixed, no=4, code="056", name="옥션")])])     # 빈 칸 4 - 뒤의 되돌리기 시험(칸 1·2)을 건드리지 않게
+        msg = acts_with(tc)["import_preset"]({"tid": TID, "slots": [4], "from_pc": "pc_b", "from_label": "창고 PC"}, {"key": "k4d", "by": "u1", "expires_at": 3600})
+        check("복사하였습니다" in msg and st.read_presets()[3]["name"] == "옥션", f"보낸 PC 가 맞으면 받는다 ({msg})")
+        tc = TransferClient()
+        acts_with(tc)["export_preset"]({"tid": TID, "nos": [1], "with_phone": False, "to_pc": "pc_b"}, {"key": "k1b", "by": "u1", "expires_at": 3600})
+        check(tc.puts[0][1].get("to_pc") == "pc_b", f"보낼 때 받는 PC 를 적는다 - 받는 PC 가 다 읽고 지울 수 있게 ({ {k: v for k, v in tc.puts[0][1].items() if k != 'presets'} })")
+        check("to_pc" not in sent, "옛 웹·관리 화면(받는 PC 없음)이면 to_pc 를 안 적는다")
         # A1: 칸 수가 프리셋 수와 다르면 (zip 이 남는 프리셋을 말없이 버리지 않게), 목록이 아니면
         for bad_slots in ([2], {"a": 1}):
             tc = TransferClient(gets=[copy_t])
@@ -1643,6 +1684,21 @@ with tempfile.TemporaryDirectory() as d:
               f"명령함은 state=running 만 질의한다 (규칙 .indexOn state) ({cc.get_calls})")
         check(ag.fail_stale_slow(CmdClient(None), "c_demo", "pc_office", 4000) == 0 and ag.fail_stale_slow(CmdClient(OSError("망")), "c_demo", "pc_office", 4000) == 0,
               "없거나 못 읽으면 0")
+        # 끝난 지 7일 넘은 명령 지우기 (보안 감사 2026-11-12) - 끝난 것만, 질의는 created_at 기준
+        class CleanClient(CmdClient):
+            def __init__(self, got):
+                super().__init__(got)
+                self.deletes = []
+
+            def delete(self, path):
+                self.deletes.append(path)
+        ccl = CleanClient({"o1": {"state": "done"}, "o2": {"state": "failed"}, "o3": {"state": "expired"}, "o4": {"state": "queued"}, "o5": {"state": "running"}, "o6": "x"})
+        n = ag.cleanup_commands(ccl, "c_demo", "pc_office", 10 * 86400)
+        check(n == 3 and ccl.deletes == [f"apps/rpa/commands/c_demo/pc_office/{k}" for k in ("o1", "o2", "o3")],
+              f"끝난 명령만 지운다 - 대기·진행 중은 남긴다 ({n}, {ccl.deletes})")
+        check(ccl.get_calls == [("apps/rpa/commands/c_demo/pc_office", {"orderBy": '"created_at"', "endAt": str(3 * 86400), "limitToFirst": "200"})],
+              f"만든 지 7일 넘은 것만 200개씩 질의한다 ({ccl.get_calls})")
+        check(ag.cleanup_commands(CleanClient(OSError("망")), "c_demo", "pc_office", 10 * 86400) == 0, "못 읽으면 0")
         try:
             ag.fail_stale_slow(CmdClient(fb.AuthError(401, "USER_DISABLED")), "c_demo", "pc_office", 4000)
             check(False, "AuthError 올림")

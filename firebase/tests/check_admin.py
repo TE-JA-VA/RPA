@@ -340,8 +340,22 @@ code, r = api("POST", "/api/companies/nobody/phones", {"phoneId": "kim", "label"
 check(code == 400 and not account(email("nobody", "phone-kim")), "없는 업체에는 휴대폰을 못 넣는다", r)
 code, d = api("GET", "/api/companies/t_phone")
 ph = d.get("phones") if code == 200 else None
-check(ph and [{k: v for k, v in x.items() if k != "lastSignIn"} for x in ph] == [{"phoneId": "kim", "label": "김OO 휴대폰", "owner": "김OO", "email": kim, "disabled": False}] and "lastSignIn" in ph[0],
-      "상세에 휴대폰 목록 (계정 상태 함께)", ph)
+check(ph and [{k: v for k, v in x.items() if k != "lastSignIn"} for x in ph] == [{"phoneId": "kim", "label": "김OO 휴대폰", "owner": "김OO", "email": kim, "disabled": False, "senders": []}] and "lastSignIn" in ph[0],
+      "상세에 휴대폰 목록 (계정 상태 함께, 발신번호 제한 없음)", ph)
+# 허용 발신번호 (보안 감사 2026-11-12) - 규칙이 PC 의 요청 발신번호를 이 목록 안에서만 받는다
+code, r = api("POST", "/api/companies/t_phone/phones/kim/senders", {"senders": "1588-1234, 0212345678\n1588-1234"})
+check(code == 200 and r.get("senders") == ["15881234", "0212345678"] and db_get("meta/companies/t_phone/phones/kim/senders") == {"15881234": True, "0212345678": True},
+      "휴대폰 발신번호 목록 저장 (하이픈·중복 정리)", r)
+for bad in ("12", "abc", ", ".join(str(1000 + i) for i in range(21))):
+    code, r = api("POST", "/api/companies/t_phone/phones/kim/senders", {"senders": bad})
+    check(code == 400 and db_get("meta/companies/t_phone/phones/kim/senders") == {"15881234": True, "0212345678": True}, f"잘못된 발신번호는 거절 ({bad[:20]})", r)
+code, r = api("POST", "/api/companies/t_phone/phones/nobody/senders", {"senders": "15881234"})
+check(code == 400, "없는 휴대폰은 거절", r)
+code, d2 = api("GET", "/api/companies/t_phone")
+check(code == 200 and d2["phones"][0]["senders"] == ["15881234", "0212345678"], "상세에 발신번호 목록", d2.get("phones"))
+code, r = api("POST", "/api/companies/t_phone/phones/kim/senders", {"senders": " "})
+check(code == 200 and r.get("senders") == [] and db_get("meta/companies/t_phone/phones/kim/senders") is None, "비우면 목록을 지운다 = 제한 없음", r)
+check(db_get("meta/companies/t_phone/phones/kim") == {"label": "김OO 휴대폰", "owner": "김OO"}, "발신번호를 지워도 이름·주인은 그대로")
 check(all(u["role"] != "phone" for u in d.get("users", [])), "휴대폰 계정은 '계정' 표에 섞이지 않는다 (휴대폰 칸에)", d.get("users"))
 pw_kim = SECRETS[-1]
 tok = call("POST", f"{AUTH}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake",
@@ -621,7 +635,8 @@ with sync_playwright() as pw:
     check(dialogs == ["프리셋 3을(를) 이 파일로 변경합니다. 기록이 있으면 덮어쓰며 이전 기록은 PC에 보관됩니다. 진행하시겠습니까?"], f"넣어 주기 확인 창 ({dialogs})")
     imp = [(k, v) for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "import_preset"]
     tid2 = imp[0][1]["args"].get("tid", "") if imp else ""
-    check(len(imp) == 1 and imp[0][1]["args"] == {"tid": tid2, "slots": [3]} and re.fullmatch(r"[a-z0-9]{20}", tid2), f"import_preset 명령 (slots [3]) ({imp and imp[0][1]['args'].get('slots')})")
+    check(len(imp) == 1 and imp[0][1]["args"] == {"tid": tid2, "slots": [3], "from_pc": "admin"} and re.fullmatch(r"[a-z0-9]{20}", tid2),
+          f"import_preset 명령 (slots [3], 보낸 쪽 admin - 보안 감사 2026-11-12) ({imp and imp[0][1]['args']})")
     tr = db_get(f"apps/rpa/transfers/{CID}/{tid2}") or {}
     check(tr.get("presets", [None])[0] == BIG and tr.get("by") == "admin-tool" and tr.get("from_pc") == "admin"
           and tr.get("expires_at", 0) - tr.get("created_at", 0) == 6 * 3600 * 1000, "전송 자리에 그 파일 (by admin-tool, 6시간)", {k: v for k, v in tr.items() if k != "presets"})
@@ -903,7 +918,8 @@ with sync_playwright() as pw:
     page.click("#companies tr[data-cid='t_phone']")
     page.wait_for_selector("#detail #phone-kim", timeout=15000)
     cells = [c.strip() for c in page.locator("#phone-kim td").all_text_contents()]
-    check(cells[:4] == ["김OO 휴대폰", "kim", "김OO", "사용중"], f"휴대폰 표: 이름·휴대폰코드·사용자 이름·상태 ({cells})")
+    check(cells[:5] == ["김OO 휴대폰", "kim", "김OO", "제한 없음", "사용중"] and "발신번호" in cells[-1],
+          f"휴대폰 표: 이름·휴대폰코드·사용자 이름·허용 발신번호·상태, [발신번호] 단추 ({cells})")
     page.fill("#detail input[placeholder^='휴대폰코드']", "park")
     page.fill("#detail input[placeholder^='휴대폰 이름']", "박OO 휴대폰")
     page.fill("#detail input[placeholder^='사용자 이름']", "박OO")

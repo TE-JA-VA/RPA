@@ -471,8 +471,9 @@ async function copyPresets() {
   if (!confirm(`${pcLabel(to)}의 프리셋 ${slots.join(", ")}을(를) 이 PC의 프리셋으로 변경합니다. 기록이 있으면 덮어쓰며 아이디·비밀번호는 복사되지 않습니다. 진행하시겠습니까?`)) return;
   // 전송 id: 영문 소문자·숫자 20자 (ops.newTid·agent.TRANSFER_RE 와 같은 꼴)
   const tid = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, "0")).join("");
-  await locked(() => sendPair(c, [[c.pcId, "export_preset", { tid, nos: picked.map(([n]) => n), with_phone: true }],
-                                  [to, "import_preset", { tid, slots, from_label: pcLabel(c.pcId) }]], "프리셋 복사", here()));   // 결과 글에 PC 이름 (사용자 2026-10-20)
+  // to_pc·from_pc: 받는 PC 가 보낸 PC 를 확인하고, 다 읽은 자리를 지울 수 있게 (보안 감사 2026-11-12 - 같은 업체 다른 PC 의 바꿔치기)
+  await locked(() => sendPair(c, [[c.pcId, "export_preset", { tid, nos: picked.map(([n]) => n), with_phone: true, to_pc: to }],
+                                  [to, "import_preset", { tid, slots, from_label: pcLabel(c.pcId), from_pc: c.pcId }]], "프리셋 복사", here()));   // 결과 글에 PC 이름 (사용자 2026-10-20)
 }
 
 // --- 동시 실행 (사용자 2026-10-16) ---------------------------------

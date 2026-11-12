@@ -192,12 +192,25 @@ test("commands: 만든 시각이 서버 시각과 1분 넘게 다르거나 만�
   await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c4"), { state: "running", started_at: 1100 }));   // 고칠 때는 시각을 다시 보지 않는다
 });
 
-test("commands: 에이전트는 명령을 고치기만 하고 지울 수 없다 (BugBuster L16)", async () => {
+test("commands: 에이전트는 끝나지 않은 명령을 지울 수 없다 (BugBuster L16)", async () => {
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd()));
   await assertFails(remove(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1")));
   await assertFails(set(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), null));
   await assertFails(remove(ref(asAgentA1(), "apps/rpa/commands/ca/pc1")));
-  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { state: "expired" }));
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1"), { state: "running" }));
+  await assertFails(remove(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c1")));          // 돌고 있는 것
+});
+
+test("commands: 끝난 명령(done·failed·expired)은 그 PC 에이전트만 지운다 - 오래된 명령 정리 (보안 감사 2026-11-12)", async () => {
+  for (const [key, end] of [["c1", "done"], ["c2", "failed"]]) {
+    await assertSucceeds(set(ref(asAdminA(), `apps/rpa/commands/ca/pc1/${key}`), cmd()));
+    await assertSucceeds(update(ref(asAgentA1(), `apps/rpa/commands/ca/pc1/${key}`), { state: "running" }));
+    await assertSucceeds(update(ref(asAgentA1(), `apps/rpa/commands/ca/pc1/${key}`), { state: end }));
+  }
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c3"), cmd()));
+  await assertSucceeds(update(ref(asAgentA1(), "apps/rpa/commands/ca/pc1/c3"), { state: "expired" }));
+  for (const who of [asAgentA2, asAdminA, asViewerA, asAgentB1]) await assertFails(remove(ref(who(), "apps/rpa/commands/ca/pc1/c1")));
+  for (const key of ["c1", "c2", "c3"]) await assertSucceeds(remove(ref(asAgentA1(), `apps/rpa/commands/ca/pc1/${key}`)));
 });
 
 test("commands: 에이전트가 type 을 바꾸면 거부", async () => {
@@ -208,11 +221,47 @@ test("commands: 에이전트가 type 을 바꾸면 거부", async () => {
 test("settings: 관리자는 쓰고, 열람자는 못 쓰고, 그 PC 의 에이전트는 읽는다", async () => {
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1"), {
     modules: { Login: true, Sales: false, Hold: true, Logistics: true, Output: true },
-    updated_by: "u_admin_a", updated_at: 1000,
+    presets: { PRESET1: true, PRESET12: false }, parallel: 2, together: "each", schedule: { slots: [{ at: "09:00" }] },
   }));
   await assertFails(set(ref(asViewerA(), "apps/rpa/settings/ca/pc1"), { modules: { Login: false } }));
   await assertSucceeds(get(ref(asAgentA1(), "apps/rpa/settings/ca/pc1")));
   await assertFails(get(ref(asAdminB(), "apps/rpa/settings/ca/pc1")));
+});
+
+test("settings: 웹이 쓰는 다섯 칸만 받는다 - 모르는 칸·틀린 꼴·큰 글자 거부 (보안 감사 2026-11-12: 크기 상한)", async () => {
+  await assertFails(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1/junk"), { a: 1 }));
+  await assertFails(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1/parallel"), "2"));
+  await assertFails(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1/together"), "x".repeat(21)));
+  await assertFails(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1/presets"), { abc: true }));
+  await assertFails(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1/presets"), { PRESET1: "x".repeat(100) }));
+  await assertSucceeds(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1/together"), "all"));
+});
+
+test("업체 정지(stts=9): 업체 계정은 이미 받은 토큰으로도 읽기·쓰기·명령이 막히고 super 만 된다 (보안 감사 다듬기 2026-11-12)", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await set(ref(c.database(), "meta/companies/ca"), { name: "가나", stts: 9 });
+    await set(ref(c.database(), "apps/rpa/live/ca/pc1"), { host: "PC1" });
+  });
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/host"), "PC1"));
+  for (const who of [asViewerA, asAdminA, asAgentA1]) await assertFails(get(ref(who(), "apps/rpa/live/ca/pc1")));
+  await assertFails(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c1"), cmd()));
+  await assertFails(set(ref(asAdminA(), "apps/rpa/settings/ca/pc1/parallel"), 2));
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq()));
+  await assertSucceeds(get(ref(asSuper(), "apps/rpa/live/ca/pc1")));
+  await assertSucceeds(get(ref(asViewerA(), "meta/companies/ca")));          // 웹이 정지 안내를 띄우려고 읽는다
+  await env.withSecurityRulesDisabled(async (c) => { await set(ref(c.database(), "meta/companies/ca/stts"), 0); });
+  await assertSucceeds(get(ref(asViewerA(), "apps/rpa/live/ca/pc1")));
+});
+
+test("업체 자료는 정해진 역할(viewer·admin·agent)만 읽는다 - 모르는 역할은 cid 가 있어도 거부 (보안 감사 다듬기 2026-11-12)", async () => {
+  const asOdd = () => env.authenticatedContext("u_odd", { cid: "ca", role: "auditor" }).database();
+  for (const p of ["apps/rpa/live/ca/pc1", "apps/rpa/commands/ca/pc1", "apps/rpa/settings/ca/pc1"]) await assertFails(get(ref(asOdd(), p)));
+});
+
+test("live·transfers 의 목록 칸은 번호 키 두 자리까지 (보안 감사 2026-11-12: 크기 상한)", async () => {
+  await assertSucceeds(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/presets"), { 0: { no: 1 }, 49: { no: 50 } }));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/presets"), { 100: { no: 1 } }));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1/recent"), { big: { a: 1 } }));
 });
 
 // ---------------------------------------------------------------------------
@@ -292,6 +341,27 @@ test("otp 번호: 열린 요청·같은 req_id·발신번호 일치·숫자 4~8�
   await assertFails(set(ref(asPhoneB1(), "apps/otp/codes/ca/ph1/current"), otpCode()));   // 다른 업체
   await assertFails(set(ref(asAgentA1(), CODE), otpCode()));                        // 에이전트는 지우기만
   await assertSucceeds(set(ref(asPhoneA1(), CODE), otpCode()));
+});
+
+test("otp 요청: 휴대폰에 허용 발신번호를 정했으면 그 안의 번호로만 연다, 안 정했으면 지금처럼 (보안 감사 2026-11-12)", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await set(ref(c.database(), "meta/companies/ca/phones/ph1"), { label: "김 휴대폰", senders: { "15881234": true } });
+  });
+  await assertSucceeds(set(ref(asAgentA1(), REQ), otpReq()));
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq({ senders: { "15990000": true } })));            // 은행 번호
+  await assertFails(set(ref(asAgentA1(), REQ), otpReq({ senders: { "15881234": true, "15990000": true } })));
+  await assertSucceeds(set(ref(asAgentA1(), "apps/otp/requests/ca/ph2/current"), otpReq({ senders: { "15990000": true } })));   // 목록 없는 휴대폰
+  await assertFails(set(ref(asAdminA(), "meta/companies/ca/phones/ph1/senders/15990000"), true));       // 목록은 총괄(관리 화면)만 바꾼다
+});
+
+test("otp 번호: 남은 번호는 지금 요청의 req_id 일 때만 읽는다 - 앞 PC 가 못 지운 번호를 다음 PC 가 못 읽는다 (보안 감사 다듬기 2026-11-12)", async () => {
+  await putReqRaw({ req_id: "req_new12345", pcId: "pc2" });
+  await env.withSecurityRulesDisabled(async (c) => { await set(ref(c.database(), CODE), { ...otpCode(), written_at: Date.now() }); });   // 옛 요청 req_abcdef12 의 번호
+  await assertFails(get(ref(asAgentA2(), CODE)));
+  await env.withSecurityRulesDisabled(async (c) => { await set(ref(c.database(), CODE), { ...otpCode({ req_id: "req_new12345" }), written_at: Date.now() }); });
+  await assertSucceeds(get(ref(asAgentA2(), CODE)));
+  await env.withSecurityRulesDisabled(async (c) => { await remove(ref(c.database(), CODE)); });
+  await assertSucceeds(get(ref(asAgentA2(), CODE)));                   // 아직 번호가 없을 때 기다리며 읽기
 });
 
 test("otp 번호: 2분 지난 요청엔 못 쓴다", async () => {
@@ -455,7 +525,8 @@ const transfer = (over = {}) => ({
   presets: [{ kind: "autopilot-preset", version: 1, no: 1, name: "가나몰", code: "001", record: { steps: [] } }],
   ...over,
 });
-const putTransferRaw = () => env.withSecurityRulesDisabled(async (c) => { await set(ref(c.database(), TR), transfer()); });
+const putTransferRaw = (over = {}) => env.withSecurityRulesDisabled(async (c) => { await set(ref(c.database(), TR), transfer(over)); });
+const asAgentA3 = () => env.authenticatedContext("u_agent_a3", { cid: "ca", pcId: "pc3", role: "agent" }).database();
 
 test("transfers: 그 업체 에이전트가 자기 PC 이름으로 만든다, 남의 PC 이름·관리자는 거부", async () => {
   await assertSucceeds(set(ref(asAgentA1(), TR), transfer()));
@@ -495,7 +566,7 @@ test("transfers: 업체 목록(shallow)은 그 업체 에이전트·super 가 �
 });
 
 test("transfers: 받는 PC 에이전트가 한 건을 읽고 지운다, 관리자·다른 업체는 읽기·쓰기 거부, super 는 읽는다", async () => {
-  await putTransferRaw();
+  await putTransferRaw({ to_pc: "pc2" });
   await assertSucceeds(get(ref(asAgentA2(), TR)));
   await assertSucceeds(get(ref(asSuper(), TR)));
   for (const who of [asAdminA, asViewerA, asAgentB1]) await assertFails(get(ref(who(), TR)));
@@ -504,6 +575,18 @@ test("transfers: 받는 PC 에이전트가 한 건을 읽고 지운다, 관리�
   await assertFails(remove(ref(asAgentB1(), TR)));
   await assertFails(set(ref(asAgentA2(), TR), transfer({ from_pc: "pc2" })));   // 있는 것 덮어쓰기는 안 된다
   await assertSucceeds(remove(ref(asAgentA2(), TR)));
+});
+
+test("transfers: 진행 중인 자리는 보낸 PC·받는 PC 만 지운다, 같은 업체 다른 PC 는 만료 뒤에만 - 지우고 바꿔치기 막기 (보안 감사 2026-11-12)", async () => {
+  await putTransferRaw({ to_pc: "pc2" });
+  await assertFails(remove(ref(asAgentA3(), TR)));
+  await assertFails(set(ref(asAgentA3(), TR), transfer({ from_pc: "pc3" })));
+  await assertSucceeds(remove(ref(asAgentA1(), TR)));                  // 보낸 PC
+  await putTransferRaw({ to_pc: "pc2", created_at: T0 - 7 * 3600 * 1000, expires_at: T0 - 3600 * 1000 });
+  await assertSucceeds(remove(ref(asAgentA3(), TR)));                  // 만료 뒤 주기 점검
+  await putTransferRaw();                                              // 옛 에이전트가 만든 자리 (to_pc 없음)
+  await assertFails(remove(ref(asAgentA2(), TR)));
+  await assertFails(set(ref(asAgentA1(), `apps/rpa/transfers/ca/${TID.replace("a", "h")}`), transfer({ presets: { x: { no: 1 } } })));   // 번호 키만
 });
 
 test("commands: export_preset·import_preset·restore_preset 은 관리자가 만들 수 있다", async () => {

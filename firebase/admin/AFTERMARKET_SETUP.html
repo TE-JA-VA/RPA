@@ -590,9 +590,18 @@ function phoneSection(d) {     // 인증번호를 받아 PC 로 보내는 직원
       flash(p.disabled ? "휴대폰을 다시 사용할 수 있습니다." : "휴대폰을 사용중지하였습니다.");
       openDetail(d.cid);
     }) }, p.disabled ? "사용" : "사용중지");
+    // 중계할 발신번호 (보안 감사 2026-11-12) - 비우면 제한 없음. 정하면 PC 가 이 목록 밖의 번호로는 인증번호를 요청하지 못한다
+    const snd = el("button", { class: "ghost", onclick: () => act(snd, async () => {
+      const text = prompt(`${p.label}이(가) 인증번호를 전달할 발신번호를 쉼표로 구분하여 입력하여 주십시오. 비우면 제한하지 않습니다.`, (p.senders ?? []).join(", "));
+      if (text === null) return;
+      const r = await api("POST", `/api/companies/${d.cid}/phones/${p.phoneId}/senders`, { senders: text });
+      flash(r.senders.length ? `발신번호 ${r.senders.length}개를 저장하였습니다.` : "발신번호 제한을 해제하였습니다.");
+      openDetail(d.cid);
+    }) }, "발신번호");
     return el("tr", { id: `phone-${p.phoneId}` }, el("td", {}, p.label), el("td", {}, p.phoneId), el("td", {}, p.owner || "-"),
+      el("td", { class: p.senders?.length ? "" : "muted" }, p.senders?.length ? p.senders.join(", ") : "제한 없음"),
       el("td", { class: p.disabled !== false ? "muted" : "" }, p.disabled === null ? "계정 없음" : p.disabled ? "사용중지" : "사용중"),   // 사용중지는 업체 '비활성' 과 같이 회색 (오류가 아니다)
-      el("td", {}, when(p.lastSignIn)), el("td", {}, p.disabled === null ? "" : el("div", { class: "row" }, pw, lock)));
+      el("td", {}, when(p.lastSignIn)), el("td", {}, p.disabled === null ? "" : el("div", { class: "row" }, snd, pw, lock)));
   });
   const id = el("input", { placeholder: "휴대폰코드 (예: kim)", size: 16 }), label = el("input", { placeholder: "휴대폰 이름", size: 16 });
   const owner = el("input", { placeholder: "사용자 이름", size: 12 });
@@ -602,7 +611,7 @@ function phoneSection(d) {     // 인증번호를 받아 PC 로 보내는 직원
     refresh(d.cid, phoneSecret(`새 휴대폰 - ${r.label}`, r));
   }) }, "휴대폰 추가");
   return el("div", { class: "sec" }, el("h3", {}, "휴대폰 (인증번호 받기)"),
-    d.phones.length ? el("div", { class: "tbl" }, el("table", {}, el("thead", {}, el("tr", {}, ...["휴대폰 이름", "휴대폰코드", "사용자 이름", "상태", "마지막 로그인", ""].map((h) => el("th", {}, h)))),
+    d.phones.length ? el("div", { class: "tbl" }, el("table", {}, el("thead", {}, el("tr", {}, ...["휴대폰 이름", "휴대폰코드", "사용자 이름", "허용 발신번호", "상태", "마지막 로그인", ""].map((h) => el("th", {}, h)))),
       el("tbody", {}, rows))) : el("p", { class: "muted" }, "휴대폰이 없습니다."),
     el("div", { class: "row" }, id, label, owner, add));
 }

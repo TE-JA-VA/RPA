@@ -185,6 +185,25 @@ export async function addPhone(cid, phoneId, label, owner) {
   } catch (e) { await auth.deleteUser(user.uid); throw e; }   // 목록에 없는 반쪽 계정을 남기지 않는다
   return { email, uid: user.uid, cid, phoneId, label: clean, password };
 }
+// 휴대폰이 중계할 발신번호 (보안 감사 2026-11-12). 규칙이 PC 의 요청 발신번호를 이 목록 안에서만 받는다 - PC 가 은행 번호를 넣어
+// 직원 휴대폰의 다른 인증번호를 받아 가지 못하게. 비우면 목록을 지운다 = 제한 없음 (지금처럼, 사용자 2026-11-12)
+export const PHONE_SENDERS_MAX = 20;
+export function parseSenders(text) {
+  const nums = [...new Set(String(text ?? "").split(/[\s,;]+/).map((s) => s.replace(/[-()]/g, "")).filter(Boolean))];
+  const bad = nums.filter((n) => !/^[0-9]{3,15}$/.test(n));
+  if (bad.length) throw new Refused(`발신번호는 숫자 3~15자리여야 합니다: ${bad.join(", ")}`);
+  if (nums.length > PHONE_SENDERS_MAX) throw new Refused(`발신번호는 ${PHONE_SENDERS_MAX}개까지 입력할 수 있습니다.`);
+  return nums;
+}
+export async function setPhoneSenders(cid, phoneId, text) {
+  checkKey("cid", cid); checkKey("휴대폰코드", phoneId);
+  if (!(await companyOf(cid)).phones?.[phoneId]) throw new Refused(`휴대폰코드 ${phoneId}이(가) 없습니다.`);
+  const nums = parseSenders(text);
+  const ref = rtdb.ref(`meta/companies/${cid}/phones/${phoneId}/senders`);
+  if (nums.length) await ref.set(Object.fromEntries(nums.map((n) => [n, true])));
+  else await ref.remove();
+  return { phoneId, senders: nums };
+}
 export async function resetPassword(cidArg, id) {
   const user = await userOf(cidArg, id);
   const password = randomPassword();
@@ -407,9 +426,10 @@ export async function importPreset(cid, pcId, file, slot) {
   await checkPc(cid, pcId);                       // 전송 자리를 쓰기 전에 - 거절되면 6시간 남는 찌꺼기가 없게
   const tid = newTid(), now = Date.now();
   const ref = rtdb.ref(`apps/rpa/transfers/${cid}/${tid}`);
-  await ref.set({ by: "admin-tool", from_pc: "admin", created_at: now, expires_at: now + TRANSFER_TTL_SEC * 1000, presets: [file] });
+  // to_pc·from_pc: 받는 PC 가 다 읽고 지우며, 같은 업체 다른 PC 가 먼저 만든 자리는 받지 않는다 (보안 감사 2026-11-12)
+  await ref.set({ by: "admin-tool", from_pc: "admin", to_pc: pcId, created_at: now, expires_at: now + TRANSFER_TTL_SEC * 1000, presets: [file] });
   try {
-    const { key } = await sendAdminCommand(cid, pcId, "import_preset", { tid, slots: [slot] });
+    const { key } = await sendAdminCommand(cid, pcId, "import_preset", { tid, slots: [slot], from_pc: "admin" });
     return { key, tid, slot };
   } catch (e) {
     await ref.remove().catch(() => {});           // 명령을 못 넣었으면 올린 파일도 거둔다
@@ -563,7 +583,8 @@ export async function companyDetail(cid) {
     pcId: u.customClaims?.pcId ?? null, disabled: u.disabled, lastSignIn: signedIn(u) }));
   const phones = Object.entries(v.phones ?? {}).map(([phoneId, p]) => {      // 휴대폰은 계정 표가 아니라 휴대폰 칸에 (계정 상태 함께)
     const email = emailFor(cid, `phone-${phoneId}`), u = all.find((x) => x.email === email);
-    return { phoneId, label: p.label ?? "", owner: p.owner ?? "", email, disabled: u ? u.disabled : null, lastSignIn: u ? signedIn(u) : null };
+    return { phoneId, label: p.label ?? "", owner: p.owner ?? "", email, disabled: u ? u.disabled : null, lastSignIn: u ? signedIn(u) : null,
+      senders: Object.keys(p.senders ?? {}) };
   });
   return { cid, name: v.name, stts: v.stts ?? 0, pcs: await Promise.all(Object.entries(v.pcs ?? {}).map(async ([pcId, p]) =>
       ({ pcId, label: p.label ?? "", ...(await pcUpdateStatus(cid, pcId)) }))),

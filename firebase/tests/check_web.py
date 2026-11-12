@@ -998,9 +998,10 @@ with sync_playwright() as pw:
     exp = cmds_of("export_preset")
     imp = [v for v in (db_get("apps/rpa/commands/c_demo/pc_x") or {}).values() if v.get("type") == "import_preset"]
     tid = (exp[0].get("args") or {}).get("tid", "") if exp else ""
-    check(len(exp) == 1 and exp[0]["args"] == {"tid": tid, "nos": [1, 2], "with_phone": True} and re.fullmatch(r"[a-z0-9]{20}", tid or "") is not None,
-          f"지금 PC 에 export_preset (tid 20자, 휴대폰 포함) ({exp})")
-    check(len(imp) == 1 and imp[0]["args"] == {"tid": tid, "slots": [1, 5], "from_label": "사무실 PC"} and imp[0]["by"] == admin_uid, f"받을 PC 에 같은 tid 의 import_preset ({imp})")
+    check(len(exp) == 1 and exp[0]["args"] == {"tid": tid, "nos": [1, 2], "with_phone": True, "to_pc": "pc_x"} and re.fullmatch(r"[a-z0-9]{20}", tid or "") is not None,
+          f"지금 PC 에 export_preset (tid 20자, 휴대폰 포함, 받는 PC) ({exp})")
+    check(len(imp) == 1 and imp[0]["args"] == {"tid": tid, "slots": [1, 5], "from_label": "사무실 PC", "from_pc": "pc_office"} and imp[0]["by"] == admin_uid,
+          f"받을 PC 에 같은 tid 의 import_preset - 보낸 PC 확인용 from_pc (보안 감사 2026-11-12) ({imp})")
     key = next(k for k, v in (db_get("apps/rpa/commands/c_demo/pc_x") or {}).items() if v.get("type") == "import_preset")
     db_patch(f"apps/rpa/commands/c_demo/pc_x/{key}", {"state": "done", "started_at": 1, "ended_at": 2,   # agent.do_import 의 결과 글
                                                         "result": "사무실 PC의 프리셋 2개를 복사하였습니다. 아이디·비밀번호가 없는 프리셋은 옵저버에서 입력하여 주십시오."})

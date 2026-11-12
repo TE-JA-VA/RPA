@@ -3,6 +3,8 @@ WebManageConfig.json
 login_manager_config.json
 ERPIA_AI.txt
 RPA_UserConfig.json
+RPA_Presets.json
+Keys/
 *.old
 *.bak
 
@@ -47,6 +49,8 @@ firebase/admin_web/
 firebase/**/*-debug.log
 firebase/agent/*_기록.txt*
 firebase/agent/history_pos.txt
+firebase/agent/에이전트_오류.txt
+firebase/agent/에이전트_멈춤.json
 firebase/agent/*.zip
 firebase/releases_site/
 firebase/admin/update_signing_key.txt
