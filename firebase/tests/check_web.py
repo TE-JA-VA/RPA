@@ -935,8 +935,18 @@ with sync_playwright() as pw:
     print("5-2-0절 엑셀 비밀번호 (사용자 2026-11-05)")
     check(page.locator(".xl-pw").count() == 0, "옛 PC (excel_pw 를 안 올림) 는 칸이 없다")
     db_patch(f"{LIVE}/presets/0", {"excel_pw": ""})
-    page.wait_for_selector(".xl-pw input", timeout=10000)
-    check(page.locator(".xl-pw").count() == 1 and page.is_disabled("#shop-apply"), "새 PC 는 기록이 있는 줄에만 칸, 고치기 전엔 적용 비활성")
+    page.wait_for_selector("#shop-list .xl-open", timeout=10000)
+    if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "xl_open.png"))
+    check(page.locator(".xl-pw").count() == 0 and page.locator("#shop-list .xl-open").count() == 1 and page.is_disabled("#shop-apply")
+          and page.text_content("#shop-list .xl-open").strip() == "엑셀 비밀번호 설정",
+          "새 PC: 값이 없으면 칸 대신 [엑셀 비밀번호 설정] (기록이 있는 줄에만), 적용 비활성 (2026-11-13)")
+    on_before = page.is_checked("#shop-list .switch[data-no='1'] input")
+    page.click("#shop-list .xl-open")
+    check(page.locator(".xl-pw input").count() == 1 and page.evaluate("document.activeElement?.closest('.xl-pw') !== null")
+          and page.is_checked("#shop-list .switch[data-no='1'] input") == on_before, "누르면 칸이 펼쳐지고 초점, 스위치는 그대로")
+    page.click(".xl-pw .xl-cancel")
+    check(page.locator(".xl-pw").count() == 0 and page.locator("#shop-list .xl-open").count() == 1, "[취소] 하면 다시 접힌다")
+    page.click("#shop-list .xl-open")
     page.fill(".xl-pw input", " 1234 ")
     check(not page.is_disabled("#shop-apply"), "값을 넣으면 적용 활성")
     page.click("#shop-apply")
@@ -951,7 +961,48 @@ with sync_playwright() as pw:
     check(page.input_value(".xl-pw input").strip() == "1234", "PC 값이 돌아오면 그 값이 칸에 보인다")
     page.evaluate("document.activeElement?.blur?.()")
     db_patch(f"{LIVE}/presets/0", {"excel_pw": None})
-    page.wait_for_function("!document.querySelector('.xl-pw')", timeout=10000)
+    page.wait_for_function("!document.querySelector('.xl-pw') && !document.querySelector('.xl-open')", timeout=10000)
+
+    print("5-2-0b절 프리셋 찾기·거르기·10개 스크롤 (2026-11-13)")
+    saved_shops = db_get(f"{LIVE}/presets")
+    many = [{"no": n, "name": f"몰{n}", "code": f"C{n:02d}", "steps": 3, "saved_at": "2026-11-01T09:00:00", "has_login": n != 12, "on": n % 2 == 1}
+            for n in range(1, 13)]
+    db_patch(LIVE, {"presets": many})
+    page.wait_for_function("document.querySelectorAll('#shop-list .switch').length === 12", timeout=10000)
+    if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "shops12.png"))
+    page.wait_for_timeout(300)
+    sh = page.evaluate("(() => { const l = document.getElementById('shop-list'); return [l.scrollHeight, l.clientHeight]; })()")
+    check(sh[0] > sh[1] + 20 and page.text_content("#shop-count").strip() == "프리셋 12개", f"10개 넘으면 목록 안에서 스크롤 ({sh}, {page.text_content('#shop-count')})")
+    page.evaluate("document.getElementById('shop-list').scrollTop = 80")
+    db_patch(LIVE, {"last_seen_probe": 1})
+    time.sleep(1.0)
+    st_top = page.evaluate("document.getElementById('shop-list').scrollTop")
+    check(st_top >= 70, f"live 가 와도 프리셋 목록 스크롤 자리가 남는다 (최종 검토 2) ({st_top})")
+    db_patch(LIVE, {"last_seen_probe": None})
+    page.fill("#shop-q", "몰1")
+    check(page.locator("#shop-list .switch").count() == 4 and "12개 중 4개 표시" in page.text_content("#shop-count"), "이름 찾기 (몰1·몰10·몰11·몰12)")
+    page.fill("#shop-q", "c03")
+    check(page.locator("#shop-list .switch").count() == 1, "코드 앞부분 찾기 (대소문자 무시)")
+    page.fill("#shop-q", "7")
+    check(page.locator("#shop-list .switch").count() == 1 and "몰7" in page.text_content("#shop-list"), "번호 찾기")
+    page.press("#shop-q", "Escape")
+    check(page.input_value("#shop-q") == "" and page.locator("#shop-list .switch").count() == 12, "Esc 로 찾기를 지운다")
+    need = page.locator("#shop-filter button", has_text="입력 필요")
+    check(need.count() == 1 and "1" in (need.text_content() or ""), "'입력 필요' 거르기에 아이디·비밀번호가 없는 ⑫ 하나")
+    page.click("#shop-list .switch[data-no='2'] .knob")      # ② 끔 → 켬
+    page.click("#shop-filter button:has-text('끔')")
+    check(page.locator("#shop-list .switch[data-no='2']").count() == 0 and page.locator("#shop-list .switch").count() == 5, "끔 거르기: 방금 켠 ② 는 숨는다")
+    page.click("#shop-apply"); time.sleep(1.5)
+    sent = [x for x in cmds_of("set_presets") if len(x.get("args") or {}) >= 12]
+    check(sent and sent[-1]["args"].get("PRESET2") is True and sent[-1]["args"].get("PRESET1") is True,
+          f"걸러져 숨은 줄도 적용 값에 (Review Focus 5) ({sent[-1]['args'] if sent else None})")
+    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_presets"][-1]
+    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "프리셋을 변경하였습니다.", "started_at": 1, "ended_at": 2})
+    page.click("#shop-filter button:has-text('전체')")
+    db_patch(f"{LIVE}/presets/1", {"on": True})          # PC 가 적용한 값을 돌려준 뒤 (편집 중이면 목록을 PC 값으로 다시 그리지 않는다)
+    page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
+    db_put(f"{LIVE}/presets", saved_shops)
+    page.wait_for_function("document.querySelectorAll('#shop-list .switch').length === 2", timeout=10000)
 
     print("5-2-1절 프리셋 복사·되돌리기 (설계 2026-10-19 4.3절)")
     check(page.is_hidden("#copy-card"), "PC 하나뿐인 업체는 복사 카드가 없다")
@@ -1327,7 +1378,7 @@ with sync_playwright() as pw:
 
     def set_win(a, b):
         for i, v in ((0, a), (1, b)):
-            el = page.query_selector_all(f"{win} input[type=time]")[i]
+            el = page.query_selector_all(f"{win} input.tm")[i]
             el.fill(v); el.dispatch_event("change")
 
     set_win("10:00", "")   # 끝 시각을 지워도 (백스페이스) 반복 줄은 반복 줄 그대로 - 보통 줄로 바뀌어 '사이트 수집' 이 생기면 안 된다
@@ -1442,12 +1493,12 @@ with sync_playwright() as pw:
     check("같은 시각이 중복되어 있습니다." in lines and "반복 줄에 모듈을 하나 이상 선택하여 주십시오." in lines and page.is_disabled("#sch-apply"),
           f"막는 까닭은 하나씩이 아니라 모두, 한 줄에 하나씩 (사용자 2026-10-08) ({lines})")
     check(len(lines) == 2, f"반복 줄의 모듈 미선택은 한 번만 ('선택 모듈만 실행' 줄 글과 겹치지 않는다) ({lines})")
-    el = page.query_selector(f"{row2} input[type=time]"); el.fill("10:00"); el.dispatch_event("change")
+    el = page.query_selector(f"{row2} input.tm"); el.fill("10:00"); el.dispatch_event("change")
     lines = [x.strip() for x in page.locator("#sch-limit > div").all_text_contents()]
     check(any("10:00 은 반복 시간대(10:00~11:00) 와 겹칩니다" in x for x in lines) and "같은 시각이 중복되어 있습니다." not in lines,
           f"반복 시간대와 같은 시각에 시작하면 '겹칩니다' 하나만 ('같은 시각' 은 시각 줄끼리) ({lines})")
     page.click(f"{row3} button.del")
-    el = page.query_selector(f"{row2} input[type=time]"); el.fill("09:00"); el.dispatch_event("change")
+    el = page.query_selector(f"{row2} input.tm"); el.fill("09:00"); el.dispatch_event("change")
     check("같은 시각" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "요일이 겹치는 같은 시각은 막는다")
     for i in range(1, 6):
         page.click(f"{row2} .days-mini button:nth-child({i})")  # 월~금 끄기
@@ -1569,16 +1620,15 @@ with sync_playwright() as pw:
     db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:00", "days": [0, 1, 2, 3, 4]}]})
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     print("6-7절 1분 단위 시각 (판 6 PC, 사용자 2026-11-03)")
-    el = page.query_selector("#sch-times input[type=time]"); el.fill("09:03"); el.dispatch_event("change")
+    el = page.query_selector("#sch-times input.tm"); el.fill("09:03"); el.dispatch_event("change")
     check("5분 단위" in page.text_content("#sch-limit") and page.is_disabled("#sch-apply"), "판 5 PC 는 09:03 을 막는다 (PC 가 거절한다)")
     db_patch(f"{LIVE}/schedule", {"version": 6})
-    for _ in range(30):                  # 현황이 닿은 뒤 바꾸면 줄을 다시 그려 step 이 1분이 된다
-        el = page.query_selector("#sch-times input[type=time]"); el.fill("09:03"); el.dispatch_event("change")
-        if page.get_attribute("#sch-times input[type=time]", "step") == "60":
+    for _ in range(30):                  # 현황이 닿은 뒤 바꾸면 '5분 단위' 막기가 풀린다
+        el = page.query_selector("#sch-times input.tm"); el.fill("09:03"); el.dispatch_event("change")
+        if "5분 단위" not in page.text_content("#sch-limit"):
             break
         time.sleep(0.3)
-    check("5분 단위" not in page.text_content("#sch-limit") and not page.is_disabled("#sch-apply")
-          and page.get_attribute("#sch-times input[type=time]", "step") == "60", "판 6 PC 는 09:03 을 받는다 (1분 단위)")
+    check("5분 단위" not in page.text_content("#sch-limit") and not page.is_disabled("#sch-apply"), "판 6 PC 는 09:03 을 받는다 (1분 단위)")
     page.click("#sch-apply"); time.sleep(1.5)
     args = ((cmds_of("set_schedule") or [{}])[-1].get("args") or {}).get("slots") or [{}]
     check(args[0].get("at") == "09:03", f"09:03 을 PC 로 보냄 ({args})")
@@ -1586,7 +1636,41 @@ with sync_playwright() as pw:
     db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
     db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4]}]})
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
-    check(page.input_value("#sch-times input[type=time]") == "09:03", "PC 가 돌려준 09:03 그대로 보이고 바뀜 없음")
+    check(page.input_value("#sch-times input.tm") == "09:03", "PC 가 돌려준 09:03 그대로 보이고 바뀜 없음")
+    print("6-7-1절 시각 칸 글자 입력·시계 (2026-11-13)")
+    tm = "#sch-times input.tm"
+    el = page.query_selector(tm); el.fill("930"); el.dispatch_event("change")
+    check(page.input_value(tm) == "09:30" and not page.is_disabled("#sch-apply"), f"'930' 을 치면 09:30 ({page.input_value(tm)})")
+    el = page.query_selector(tm); el.fill("932"); el.dispatch_event("change")
+    page.focus(tm); page.keyboard.press("ArrowUp")
+    check(page.input_value(tm) == "09:35", f"↑ 는 5분 칸에 맞춰 (09:32 → 09:35) ({page.input_value(tm)})")
+    page.keyboard.press("ArrowDown"); page.keyboard.press("ArrowDown")
+    check(page.input_value(tm) == "09:25", f"↓ 두 번 → 09:25 ({page.input_value(tm)})")
+    page.click("#sch-times .clk")
+    page.wait_for_selector("#sch-times .clock", timeout=5000)
+    if os.environ.get("SHOT_DIR"): page.locator("#sch-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "clock.png"))
+    check(page.locator("#sch-times .clock .col:nth-child(1) button").count() == 24
+          and page.locator("#sch-times .clock .col:nth-child(2) button").count() == 12, "시계: 시 24개·분 12개 (5분 단위)")
+    page.click(tm)
+    check(page.locator("#sch-times .clock").count() == 0, "시계를 연 채 시각 칸을 누르면 시계가 닫힌다 (남는 팝업 없음 - 최종 검토 3)")
+    page.click("#sch-times .clk")
+    page.wait_for_selector("#sch-times .clock", timeout=5000)
+    page.click("#sch-times .clock .col:nth-child(1) button:has-text('14')")
+    check(page.locator("#sch-times .clock").count() == 1, "시를 눌러도 목록은 열린 채")
+    page.click("#sch-times .clock .col:nth-child(2) button:has-text('45')")
+    check(page.input_value(tm) == "14:45" and page.locator("#sch-times .clock").count() == 0, f"분을 누르면 넣고 닫는다 ({page.input_value(tm)})")
+    el = page.query_selector(tm); el.fill("ab"); el.dispatch_event("change")
+    check("bad" in (page.get_attribute(tm, "class") or "") and page.is_disabled("#sch-apply") and "시간을 확인" in page.text_content("#sch-limit"),
+          "못 읽는 글이면 빨간 칸·적용 막음")
+    el = page.query_selector(tm); el.fill("09:03"); el.dispatch_event("change")
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=5000)
+    page.fill(tm, "0903")                # 저장 값과 같아 '바뀜 없음' - live 가 와도 치는 중인 칸을 다시 그리지 않는다 (Review Focus 1)
+    db_patch(f"{LIVE}/schedule", {"last_launch_at": "2026-11-13T09:00:00"})
+    time.sleep(1.0)
+    check(page.input_value(tm) == "0903" and page.evaluate("document.activeElement?.classList.contains('tm')"),
+          f"live 갱신에도 치는 중인 글·초점이 남는다 ({page.input_value(tm)})")
+    page.evaluate("document.activeElement?.blur?.()")
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=5000)
     print("6-8절 운송장 전송 방식 셋 (판 7 PC, 사용자 2026-11-09)")
     # 판을 올리기 전에 저장한 '켠 사이트만' 은 엑셀 다운로드로 보인다 (PC 의 st.slot_invoice 와 같다)
     db_patch(f"{LIVE}/schedule", {"version": 7, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"], "inv_sites": True}]})
@@ -1653,31 +1737,87 @@ with sync_playwright() as pw:
                                 dict(shop, no=3, name="가몰 업로드", code="101", upload=True), dict(shop, no=4, name="다몰", code="103", on=False)]})
     wk = [0, 1, 2, 3, 4]
     db_patch(f"{LIVE}/schedule", {"version": 9, "slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"]}]})
-    page.wait_for_selector("#sch-times .site-chips", timeout=10000)
-    chips = page.locator("#sch-times .site-chips button")
-    check(chips.count() == 2 and all(chips.nth(i).get_attribute("aria-pressed") == "true" for i in range(2)) and page.is_disabled("#sch-apply"),
-          "사이트 수집 줄: 켠 다운로드 프리셋마다 단추 (업로드·꺼진 프리셋 없음), 처음엔 모두 눌림")
-    page.click("#sch-times .site-chips button[data-no='2']")
-    check(not page.is_disabled("#sch-apply"), "하나를 끄면 적용할 수 있다")
-    page.click("#sch-times .site-chips button[data-no='1']")
-    check("수집 사이트를 하나 이상" in (page.text_content("#sch-limit") or "") and page.is_disabled("#sch-apply"), "모두 끄면 적용을 막는다")
-    page.click("#sch-times .site-chips button[data-no='1']")
+    page.wait_for_selector("#sch-times .add-site", timeout=10000)
+    ack = lambda kind: db_patch(f"{CMDS}/{[k for k, v in (db_get(CMDS) or {}).items() if v.get('type') == kind][-1]}",
+                                {"state": "done", "result": "ok", "started_at": 1, "ended_at": 2})
+    check(page.locator("#sch-times .tag").count() == 0 and "켠 사이트 전체 (2개)" in (page.text_content("#sch-times .all-sites") or "")
+          and page.is_disabled("#sch-apply"), "사이트 수집 줄: 처음엔 꼬리표 없이 '켠 사이트 전체 (2개)'")
+    page.click("#sch-times .add-site")
+    page.wait_for_selector("#sch-times .picker", timeout=5000)
+    check(page.locator("#sch-times .picker li[data-no]").count() == 3 and page.is_disabled("#sch-times .picker li[data-no='4'] input")
+          and not page.is_disabled("#sch-times .picker li[data-no='1'] input"),
+          "목록: 다운로드 프리셋만 (업로드 ③ 없음), 꺼진 ④ 는 흐리게·고를 수 없음 (Review Focus 2)")
+    page.click("#sch-times .picker li[data-no='1'] input"); page.click("#sch-times .picker .ok")
+    check(page.locator("#sch-times .tag").count() == 1 and "①" in page.text_content("#sch-times .tag") and not page.is_disabled("#sch-apply"),
+          "고르고 [적용] 하면 꼬리표")
     page.click("#sch-apply"); time.sleep(1.5)
     args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
     check(args["slots"][0].get("sites") == [1], f"고른 사이트 번호를 PC 로 보낸다 ({args})")
-    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
-    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
+    ack("set_schedule")
     db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"], "sites": [1]}]})
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
-    check(chips.nth(0).get_attribute("aria-pressed") == "true" and chips.nth(1).get_attribute("aria-pressed") == "false"
-          and "사이트 수집(①)" in (page.text_content("#sch-meta") or ""), "PC 가 돌려준 사이트 그대로 보이고, 카드 머리에 '사이트 수집(①)'")
-    page.click("#sch-times .site-chips button[data-no='2']")
+    check(page.locator("#sch-times .tag").count() == 1 and "사이트 수집(①)" in (page.text_content("#sch-meta") or ""),
+          "PC 가 돌려준 사이트 그대로 꼬리표, 카드 머리에 '사이트 수집(①)'")
+    page.click("#sch-times .add-site")
+    page.evaluate("document.querySelector('#sch-times .picker').dataset.mark = '1'")
+    page.click("#sch-times .picker .foot .cnt")         # 초점을 찾기 칸 밖으로 (지킴 없이도 남아야 한다)
+    db_patch(f"{LIVE}/schedule", {"last_launch_at": "2026-11-13T09:00:30"})
+    time.sleep(1.0)
+    check(page.evaluate("document.querySelector('#sch-times .picker')?.dataset.mark") == "1",
+          "목록이 열린 동안 live 가 와도 목록을 새로 만들지 않는다 - 스크롤이 맨 위로 튀지 않게 (최종 검토 1)")
+    page.fill("#sch-times .pick-q", "나")
+    if os.environ.get("SHOT_DIR"): page.locator("#sch-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "picker.png"))
+    check(page.locator("#sch-times .picker li[data-no]").count() == 1, "목록 찾기 (이름)")
+    db_patch(f"{LIVE}/schedule", {"last_launch_at": "2026-11-13T09:01:00"})
+    time.sleep(1.0)
+    check(page.input_value("#sch-times .pick-q") == "나", "live 갱신에도 찾기 칸 글이 남는다 (Review Focus 1)")
+    page.keyboard.press("Escape")
+    check(page.locator("#sch-times .picker").count() == 0 and page.locator("#sch-times .tag").count() == 1 and page.is_disabled("#sch-apply"),
+          "Esc 는 바뀐 것 없이 닫는다")
+    page.click("#sch-times .add-site")
+    page.wait_for_function("document.activeElement?.classList.contains('pick-q')", timeout=5000)
+    db_patch(f"{LIVE}/schedule", {"last_launch_at": "2026-11-13T09:02:00"})   # 목록이 열린 동안 live 가 폼을 새로 만든다 - 고른 값이 옛 줄에 쓰여 사라지면 안 된다
+    time.sleep(1.0)
+    page.click("#sch-times .picker li[data-no='2'] input"); page.keyboard.press("Enter")
+    check(page.locator("#sch-times .tag").count() == 2 and page.locator("#sch-times .picker").count() == 0, "Enter 는 [적용]")
+    page.click("#sch-times .tag[data-no='1'] button"); page.click("#sch-times .tag[data-no='2'] button")
+    check(page.locator("#sch-times .tag").count() == 0 and "켠 사이트 전체" in page.text_content("#sch-times .all-sites")
+          and not page.is_disabled("#sch-apply"), "× 로 모두 빼면 다시 '켠 사이트 전체'")
     page.click("#sch-apply"); time.sleep(1.5)
     args = (cmds_of("set_schedule") or [{}])[-1].get("args") or {}
-    check("sites" not in args["slots"][0], f"모두 고르면 sites 없이 보낸다 - 나중에 켠 사이트도 함께 ({args})")
-    key = [k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_schedule"][-1]
-    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "자동 실행", "started_at": 1, "ended_at": 2})
-    db_patch(f"{LIVE}/schedule", {"slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"]}]})
+    check("sites" not in args["slots"][0], f"모두 빼면 sites 없이 보낸다 - 나중에 켠 사이트도 함께 ({args})")
+    ack("set_schedule")
+    db_put(f"{LIVE}/schedule/slots", [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"]}])   # 보낸 줄 그대로 돌려준 뒤
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    db_put(f"{LIVE}/schedule/slots", [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"], "sites": [4]}])
+    page.wait_for_selector("#sch-times .tag[data-no='4']", timeout=10000)
+    check("수집 사이트를 하나 이상" in (page.text_content("#sch-limit") or ""), "꺼진 사이트만 남은 줄: 꼬리표로 보이고 적용을 막는다 (Review Focus 3)")
+    page.click("#sch-times .tag[data-no='4'] button")
+    check(page.locator("#sch-times .tag").count() == 0 and "수집 사이트를 하나 이상" not in (page.text_content("#sch-limit") or ""), "× 로 뺄 수 있다")
+    print("6-11절 [지금 실행] (판 10 PC, 2026-11-13)")
+    check(page.locator("#sch-times .now").count() == 0, "판 9 PC 에는 [지금 실행] 이 없다")
+    db_put(f"{LIVE}/schedule/slots", [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"]}])   # × 로 뺀 폼과 같게 - 편집 중이면 live 가 폼을 다시 그리지 않는다
+    page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
+    db_patch(f"{LIVE}/schedule", {"version": 10, "slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"], "sites": [2]},
+                                                          {"at": "10:00", "until": "11:00", "rest_min": 2, "days": wk, "run": ["Login", "Sales"]}]})
+    page.wait_for_selector("#sch-times .now", timeout=10000)
+    if os.environ.get("SHOT_DIR"): page.locator("#sch-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "now.png"))
+    check(page.locator("#sch-times .now").count() == 1 and page.locator("#sch-times .t:nth-child(2) .now").count() == 0,
+          "시각 줄에만 있고 반복 시간대 줄에는 없다")
+    before = len(cmds_of("launch"))
+    page.once("dialog", lambda d: d.dismiss())
+    page.click("#sch-times .now"); time.sleep(0.8)
+    check(len(cmds_of("launch")) == before, "확인 창에서 취소하면 보내지 않는다")
+    seen = []
+    page.once("dialog", lambda d: (seen.append(d.message), d.accept()))
+    page.click("#sch-times .now"); time.sleep(1.5)
+    got = cmds_of("launch")[before:]
+    slot = (got[-1].get("args") or {}).get("slot") if got else None
+    check(len(got) == 1 and got[0]["args"].get("target") == "slot" and slot == {"at": "09:03", "run": ["Prepare", "Sales"], "sites": [2]},
+          f"launch {{target: slot}} 에 화면의 줄 그대로 (요일은 빼고) ({got})")
+    check(seen and "09:03" in seen[0] and "②" in seen[0], f"확인 창에 무엇을 돌릴지 ({seen})")
+    ack("launch")
+    db_patch(f"{LIVE}/schedule", {"version": 9, "slots": [{"at": "09:03", "days": wk, "run": ["Prepare", "Login", "Sales"]}]})
     page.wait_for_function("document.getElementById('sch-apply')?.disabled === true", timeout=10000)
     db_patch(LIVE, {"presets": old_presets})
     db_patch(f"{LIVE}/schedule", {"version": 6, "slots": [{"at": "09:03", "days": [0, 1, 2, 3, 4], "run": ["Login", "InvoiceSend"]}]})   # 보낸 줄(운송장 전송만) 그대로 - 전체 줄로 돌려주면 다른 줄이라 바뀜 있음이 맞다

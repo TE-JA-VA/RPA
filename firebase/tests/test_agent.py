@@ -1767,6 +1767,40 @@ with tempfile.TemporaryDirectory() as icon_dir:
     check(ag.refresh_icons(lambda: "v3", icon_mark, lambda: icon_calls.append(1)) is True, "실패한 버전은 다음 시작에 다시 한다")
     check(ag.refresh_icons(icon_fail, icon_mark, lambda: icon_calls.append(1)) is False, "버전을 못 읽어도 예외를 내지 않는다")
 
+print("[지금 실행] - launch {target: slot} (2026-11-13: 자동 실행 줄 하나를 그 설정 그대로 한 번)")
+import rpa_dashboard as _dash
+_slot_calls = []
+_saved_launch_slot = _dash.launch_slot
+_dash.launch_slot = lambda slot, by="auto", trigger="auto": _slot_calls.append((slot, by, trigger))
+try:
+    _acts = ag.real_actions()
+    _msg = _acts["launch"]({"target": "slot", "slot": {"at": "09:00", "run": ["Prepare", "Excel"], "days": [0, 1, 2, 3, 4], "sites": [2, 1]}})
+    check(len(_slot_calls) == 1 and _slot_calls[0][1:] == ("cloud", "manual") and _slot_calls[0][0]["sites"] == [1, 2]
+          and _slot_calls[0][0]["run"] == ["Prepare", "Login", "Excel"], f"줄을 검사(normalize_slots - 예약처럼 로그인을 붙인다)해 launch_slot 으로 띄운다 ({_slot_calls})")
+    check("09:00" in _msg and "지금 실행합니다" in _msg, f"결과 글에 줄 ({_msg})")
+    for _args, _why in (({"target": "slot", "slot": {"at": "10:00", "until": "11:00", "rest_min": 2, "run": ["Sales"]}}, "반복 시간대"),
+                        ({"target": "slot", "slot": "x"}, "읽지 못했습니다"), ({"target": "slot"}, "읽지 못했습니다"),
+                        ({"target": "slot", "slot": {"at": "25:00"}}, "")):
+        _slot_calls.clear()
+        try:
+            _acts["launch"](_args)
+            _err = None
+        except RuntimeError as e:
+            _err = str(e)
+        check(_err is not None and _why in _err and not _slot_calls, f"거절하고 띄우지 않는다: {_args} ({_err})")
+
+    def _unused(slot, by="auto", trigger="auto"):
+        raise RuntimeError(_dash.UNUSED_ONLY)
+    _dash.launch_slot = _unused
+    try:
+        _acts["launch"]({"target": "slot", "slot": {"at": "09:00", "run": ["Sales"]}})
+        _err = None
+    except RuntimeError as e:
+        _err = str(e)
+    check(_err == _dash.UNUSED_ONLY, f"업체가 안 쓰는 모듈만 남으면 그 까닭 그대로 ({_err})")
+finally:
+    _dash.launch_slot = _saved_launch_slot
+
 print(f"\n{COUNT - len(FAIL)}/{COUNT} 통과")
 if FAIL:
     print("실패:", ", ".join(FAIL))

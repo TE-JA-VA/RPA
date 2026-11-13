@@ -74,7 +74,7 @@ SEALED_PREFIX = "dpapi:"             # 잠근 비밀번호 앞에 붙는다
 # (2026-10-07 시각별 모듈 - 설계 docs/superpowers/specs/2026-10-06-settings-schedule-design.md 5절. 옛 모양 {days, times} 는 read_settings 가 바꾼다)
 SCHEDULE_MINUTE_STEP = 1    # 1분 단위 (사용자 2026-11-03 - 그 전엔 5분: 웹이 통과시킨 09:03 을 PC 가 거절해 예약이 안 바뀌었다)
 SCHEDULE_MAX_SLOTS = 12     # PC 쪽 절대 상한. 업체 한도(자동 실행 개수, 기본 2)는 에이전트가 schedule.policy 에 적는다
-SCHEDULE_VERSION = 9        # 9: 줄마다 사이트 수집할 사이트 (slots[i].sites, 업체 미팅 2026-11-11). 8: 운송장 전송 줄의 할 일을 따로 켠다 (slots[i].inv 전송 방식 + slots[i].xl 엑셀 출력, 2026-11-09 저녁). 7: 줄마다 운송장 전송 방식 (slots[i].inv - 셋 중 하나, 2026-11-09). 6: 1분 단위 시각 (2026-11-03, 그 전 판 PC 는 5분 단위만 받는다). 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
+SCHEDULE_VERSION = 10       # 10: [지금 실행] - launch {target: slot} (2026-11-13). 9: 줄마다 사이트 수집할 사이트 (slots[i].sites, 업체 미팅 2026-11-11). 8: 운송장 전송 줄의 할 일을 따로 켠다 (slots[i].inv 전송 방식 + slots[i].xl 엑셀 출력, 2026-11-09 저녁). 7: 줄마다 운송장 전송 방식 (slots[i].inv - 셋 중 하나, 2026-11-09). 6: 1분 단위 시각 (2026-11-03, 그 전 판 PC 는 5분 단위만 받는다). 5: 줄마다 운송장 전송 '켠 사이트만' (slots[i].inv_sites, 2026-11-02). 4: 공휴일·업체 휴무일 쉬기 (skip_holidays·off_dates, 2026-10-15). 3: 줄마다 요일 (slots[i].days, 2026-10-08). live.schedule.version - 화면이 새 판 PC 를 알아본다 (없으면 옛 판: 시각만). 빈 줄 목록은 Realtime DB 에서 사라져 표시로 못 쓴다
 DEFAULT_SETTINGS = {
     "prepare": {
         "parallel": 1,              # 업체가 웹에서 고른 동시 실행 창 수 (명령 set_parallel) - 관리 화면이 허용한 최대(policy.parallel)까지만 쓴다

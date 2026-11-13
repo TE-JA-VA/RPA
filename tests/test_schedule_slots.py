@@ -76,7 +76,7 @@ check(d.schedule_label({"days": WK, "slots": [{"at": "10:00"}, {"at": "11:00", "
 print("\n=== 4. 기본값과 예전 설정 ===")
 cfg = st.read_settings()
 check(cfg["schedule"]["enabled"] is False and cfg["schedule"]["days"] == WK and cfg["schedule"]["slots"] == [{"at": "09:00"}]
-      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 9, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 9 (줄마다 수집 사이트)")
+      and "times" not in cfg["schedule"] and cfg["schedule"]["version"] == st.SCHEDULE_VERSION == 10, "기본: 꺼짐, 평일 09:00 '전체' 한 줄, 판 10 ([지금 실행])")
 old = st.read_settings(); old["schedule"]["interval_min"] = 15; st.write_settings(old)
 check(d.schedule_view()["days"] == WK and "interval_min" not in d.schedule_view(), "예전 interval_min 이 있어도 새 모양으로 보임")
 st.write_settings({"schedule": {"enabled": False, "days": WK, "times": ["13:30", "09:05"]}})

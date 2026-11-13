@@ -414,6 +414,61 @@
   /* 프리셋 줄 아래 엑셀 비밀번호 (사용자 2026-11-05) */
   .xl-pw { display:flex; align-items:center; gap:8px; margin:0 0 8px 22px; font-size:12px; color:var(--muted); }
   .xl-pw input { width:140px; padding:4px 8px; font-size:13px; }
+  /* 2026-11-13 시안 (사용자 승인): 엑셀 비밀번호 접기·프리셋 찾기·거르기·10개 스크롤 */
+  .xl-pw .xl-cancel { padding:4px 10px; font-size:12px; }
+  .switch .xl-open { padding:1px 8px; font-size:12px; border-radius:6px; margin-left:4px; border:1px dashed var(--line2); background:transparent; color:var(--muted); font-weight:400; }
+  .switch .xl-open:hover:not(:disabled) { color:var(--strong); border-color:var(--text2); background:transparent; }
+  .shop-tools { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+  .shop-tools .q { flex:1 1 180px; min-width:0; position:relative; }
+  .shop-tools .q input { padding:7px 30px 7px 32px; }
+  .shop-tools .q svg { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--muted); pointer-events:none; }
+  .shop-tools .q .clear { position:absolute; right:4px; top:50%; transform:translateY(-50%); border:0; background:transparent; color:var(--muted); padding:2px 6px; font-size:15px; }
+  .shop-tools .seg { margin-top:0; }
+  .shop-tools .seg button .n { font:400 12px var(--mono); color:var(--muted); margin-left:4px; }
+  .shop-tools .seg button[aria-pressed="true"] .n { color:inherit; }
+  #shop-list { overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+  #shop-list.scroll { border-bottom:1px solid var(--line); padding-right:6px; box-shadow:inset 0 -10px 8px -10px rgba(0,0,0,.18); }
+  .shop-count { font-size:12px; color:var(--muted); margin-top:8px; }
+  .shop-count:empty { display:none; }
+  .shop-empty { font-size:13px; color:var(--muted); padding:20px 0; text-align:center; }
+  /* 자동 실행 줄: 글자 시각 칸 + 시계, 수집 사이트 꼬리표 + [+ 추가] 목록, [지금 실행] */
+  .times .tm-box { position:relative; display:inline-flex; align-items:center; }
+  .times .t input.tm { width:108px; font:500 18px/24px var(--mono); font-variant-numeric:tabular-nums; border-color:transparent; background:transparent; padding:4px 30px 4px 6px; margin-left:-6px; }
+  .times .t input.tm:hover, .times .t input.tm:focus, .times .tm-box.open input.tm { border-color:var(--line2); }
+  .times .t input.tm.bad { border-color:var(--bad); color:var(--bad); }
+  .times .tm-err { font-size:12px; color:var(--bad); }
+  .times .t .clk { position:absolute; right:4px; top:50%; transform:translateY(-50%); width:24px; height:24px; padding:0; border:0; background:transparent; color:var(--text2); display:grid; place-items:center; border-radius:6px; }
+  .times .t .clk:hover:not(:disabled), .times .tm-box.open .clk { background:var(--soft); color:var(--strong); }
+  .times .clock { position:absolute; z-index:20; top:calc(100% + 6px); left:-6px; display:flex; gap:4px; background:var(--card); border:1px solid var(--line2); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.14); padding:8px; }
+  .times .clock .col { display:flex; flex-direction:column; gap:2px; max-height:216px; overflow:auto; scrollbar-width:thin; padding-right:2px; position:relative; }
+  .times .clock .col + .col { border-left:1px solid var(--line); padding-left:4px; }
+  .times .t .clock button { width:48px; padding:5px 0; font:500 14px/20px var(--mono); border:0; background:transparent; color:var(--ink); border-radius:6px; }
+  .times .t .clock button:hover:not(:disabled) { background:var(--soft); }
+  .times .t .clock button[aria-pressed="true"] { background:var(--accent); color:var(--accent-ink); }
+  .times .t-head .now { margin-left:auto; }
+  .times .t-head .now + .del { margin-left:0; }
+  .times .tags { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .times .tag { display:inline-flex; align-items:center; gap:2px; padding:3px 4px 3px 9px; border-radius:8px; font-size:12px; background:var(--strong); color:var(--card); max-width:220px; }
+  .times .tag.off { background:var(--soft); color:var(--muted); text-decoration:line-through; }
+  .times .tag span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .times .t .tag button { border:0; background:transparent; color:inherit; padding:0 4px; font-size:14px; line-height:1; opacity:.7; }
+  .times .t .tag button:hover:not(:disabled) { opacity:1; background:transparent; }
+  .times .all-sites { font-size:12px; color:var(--text2); }
+  .times .t .add-site { border-style:dashed; }
+  .times .pick-anchor { position:relative; display:inline-block; }
+  .times .picker { position:absolute; z-index:20; top:calc(100% + 6px); left:0; width:300px; max-width:calc(100vw - 48px); background:var(--card); border:1px solid var(--line2); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.14); padding:10px; }
+  @media (max-width:640px) { .times .picker { left:auto; right:0; } }
+  .times .picker .bulk { display:flex; gap:12px; margin:8px 2px 4px; }
+  .times .t .picker .bulk .link { border:0; background:transparent; padding:0; font-size:12px; font-weight:400; color:var(--accent-text); }
+  .times .picker ul { list-style:none; margin:0; padding:0; max-height:248px; overflow:auto; border-top:1px solid var(--line); }
+  .times .picker li label { display:flex; align-items:center; gap:8px; padding:7px 6px; font-size:13px; border-radius:6px; cursor:pointer; }
+  .times .picker li label:hover { background:var(--soft); }
+  .times .picker li .code { color:var(--muted); font-size:12px; margin-left:auto; }
+  .times .picker li.off label { color:var(--muted); cursor:default; }
+  .times .picker .empty { font-size:12px; color:var(--muted); padding:10px 6px; }
+  .times .picker .foot { display:flex; align-items:center; gap:6px; border-top:1px solid var(--line); padding-top:10px; margin-top:4px; }
+  .times .picker .foot .cnt { font-size:12px; color:var(--text2); margin-right:auto; }
+  .times .t .picker .foot .ok:not(:disabled) { background:var(--accent); color:var(--accent-ink); border-color:transparent; }
   /* 자동 실행 줄: 시각 · 전체/고르기 · 모듈 단추 · 빼기. 좁으면 다음 줄로 넘어간다. 한도를 넘는 줄은 흐리게 */
   .times .t select.mode { width:auto; padding:5px 8px; font-size:13px; }
   .times .inv-box { display:flex; flex-direction:column; align-items:flex-start; gap:3px; width:100%; min-width:0; }

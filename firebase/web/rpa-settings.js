@@ -16,7 +16,16 @@ const HTML = `
       <div class="grp-cards">
       <div class="card hide" id="shop-card">
         <h2>쇼핑몰 프리셋 <span class="muted" id="shop-meta"></span></h2>
+        <div class="shop-tools">
+          <label class="q">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.8"/><path d="M10.6 10.6 14 14" stroke-linecap="round"/></svg>
+            <input id="shop-q" type="text" placeholder="이름·코드·번호로 찾기" autocomplete="off" aria-label="프리셋 찾기">
+            <button class="clear" id="shop-q-clear" type="button" aria-label="찾기 지우기" hidden>×</button>
+          </label>
+          <div class="seg" id="shop-filter"></div>
+        </div>
         <div id="shop-list"></div>
+        <div class="shop-count" id="shop-count"></div>
         <div class="msg" id="shop-info"></div>
         <button class="apply" id="shop-apply" disabled>적용</button>
       </div>
@@ -90,7 +99,9 @@ const HTML = `
 
 let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, stopPar = null, busy = false, live = null, liveLimit;
 let stopPeers = [], transferOk = {};   // 다른 PC 의 live.preset_transfer (새 명령을 아는 PC 만 복사 상대로 고른다 - Review Focus 5)
-let copyKey = "";   // 복사 카드의 줄·받을 PC 목록을 마지막으로 만든 기준 - 같으면 다시 안 만든다 (heartbeat 가 5초마다 live 를 바꾼다, Task 7 검토)
+let copyKey = "";
+// 2026-11-13: 프리셋 찾기·거르기, 펼친 엑셀 비밀번호 칸, 자동 실행 줄의 열린 시계·사이트 목록 - live 가 다시 그려도 남게 모듈 상태로
+let shopQ = "", shopFilter = "all", xlOpen = new Set(), openClock = null, openPicker = null;   // 복사 카드의 줄·받을 PC 목록을 마지막으로 만든 기준 - 같으면 다시 안 만든다 (heartbeat 가 5초마다 live 를 바꾼다, Task 7 검토)
 let parLimit;    // 관리 화면이 허용한 동시 실행 최대 (limits/parallel) - 2 미만이면 '동시 실행' 카드가 없다 (업체는 이 기능을 모른다)
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
 let form = { modules: {}, shops: {}, parallel: 1, together: "off", sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] }, copy: { to: "", pick: {} } };
@@ -100,12 +111,19 @@ const show = (el, on) => el.classList.toggle("hide", !on);
 export function mount(el, context) {
   root = el; c = context; busy = false; live = null; liveLimit = undefined; parLimit = undefined; sent = {};
   form.copy = { to: "", pick: {} }; transferOk = {}; copyKey = "";
+  shopQ = ""; shopFilter = "all"; xlOpen = new Set(); openClock = null; openPicker = null;
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
   // [적용] 은 저장(set)부터 명령 끝까지 잠근다 - 저장 왕복 사이에 두 번 눌러도 한 번만 (BugBuster K11)
   $("mod-apply").onclick = () => locked(applyModules);
   $("shop-apply").onclick = () => locked(applyShops);
   $("reload-form").onclick = reloadForm;   // (I14)
+  $("shop-q").oninput = () => { shopQ = $("shop-q").value.trim(); $("shop-q-clear").hidden = !shopQ; paintShopList(); };
+  $("shop-q").onkeydown = (e) => { if (e.key === "Escape" && $("shop-q").value) { $("shop-q").value = ""; $("shop-q").oninput(); } };
+  $("shop-q-clear").onclick = (e) => { e.preventDefault(); $("shop-q").value = ""; $("shop-q").oninput(); $("shop-q").focus(); };
+  // 자동 실행 줄의 시계·사이트 목록: 바깥을 누르거나 Esc 면 닫는다 (목록 안은 stopPropagation)
+  root.addEventListener("click", () => { if (openClock || openPicker) { openClock = null; openPicker = null; closePops(); paintTimes(); } });
+  root.addEventListener("keydown", (e) => { if (e.key === "Escape" && openClock) { openClock = null; closePops(); paintTimes(); } });
   $("copy-send").onclick = copyPresets;
   $("copy-all").onclick = () => { for (const p of copyable()) form.copy.pick[p.no] = { ...form.copy.pick[p.no], on: true }; copyKey = ""; paintCopy(); };
   $("copy-to").onchange = (e) => { form.copy.to = e.target.value; paintCopyMeta(); };
@@ -177,7 +195,7 @@ export function mount(el, context) {
     if (first || !was[1]) resetShops();
     if (first || !was[3]) resetParallel();
     if (first || !was[4]) resetTogether();
-    if (first || !was[2]) resetSchedule();
+    if (first || (!was[2] && !openClock && !openPicker)) resetSchedule();   // 시계·사이트 목록이 열려 있으면 그대로 (최종 검토 1 - 스크롤이 튀지 않게)
     // 편집 중인 카드의 PC 값이 바뀌었는데 폼과 다르면 (다른 관리자가 [적용]) 띠로 알린다 - 그대로 [적용] 하면 그 변경을 덮는다 (BugBuster I14)
     if (!first) {
       const now = dirtyList(), after = savedKeys();
@@ -340,14 +358,32 @@ function resetShops() {
 function shopsDirty() {
   return savedShops().some((p) => !!form.shops?.[p.no] !== !!p.on || (hasXlPw(p) && (form.xlPw?.[p.no] ?? "").trim() !== p.excel_pw));
 }
+/** 엑셀 비밀번호 칸 (2026-11-13): 값이 있거나 [엑셀 비밀번호 설정] 으로 연 줄만 펼친다. [취소]·Esc 는 PC 값으로 되돌리고, 값이 없으면 다시 접는다 */
+const xlShown = (p) => !!(form.xlPw?.[p.no] ?? "") || xlOpen.has(p.no);
 function xlPwRow(p) {
   const row = Object.assign(document.createElement("label"), { className: "xl-pw" });
+  row.dataset.no = p.no;
   const inp = Object.assign(document.createElement("input"), { type: "text", maxLength: 100, autocomplete: "off", value: form.xlPw?.[p.no] ?? "", disabled: !c.isAdmin || busy });
   inp.setAttribute("aria-label", `${circled(p.no)} 엑셀 비밀번호`);
-  inp.oninput = () => { form.xlPw[p.no] = inp.value; paintShopMeta(); };
-  row.append("엑셀 비밀번호", inp);
+  const cancel = Object.assign(document.createElement("button"), { type: "button", className: "xl-cancel", textContent: "취소", disabled: !c.isAdmin || busy });
+  const showCancel = () => { cancel.hidden = !xlOpen.has(p.no) && (form.xlPw[p.no] ?? "").trim() === (p.excel_pw ?? ""); };
+  cancel.onclick = (e) => { e.preventDefault(); form.xlPw[p.no] = p.excel_pw || ""; xlOpen.delete(p.no); paintShopList(); paintShopMeta(); };
+  inp.oninput = () => { form.xlPw[p.no] = inp.value; showCancel(); paintShopMeta(); };
+  inp.onkeydown = (e) => { if (e.key === "Escape") cancel.click(); };
+  showCancel();
+  row.append("엑셀 비밀번호", inp, cancel);
   return row;
 }
+/** 거르기 (2026-11-13). 입력 필요 = 아이디·비밀번호를 넣어야 하거나 아직 기록하지 않은 프리셋 */
+const SHOP_FILTERS = [["all", "전체", () => true], ["on", "켬", (p) => !!form.shops?.[p.no]], ["off", "끔", (p) => !form.shops?.[p.no]],
+  ["need", "입력 필요", (p) => !shopReady(p)]];
+/** 찾기: 이름은 일부, 코드는 앞부분, 번호는 그대로 (①~⑳ 도 번호로) */
+function shopMatches(p) {
+  if (!shopQ) return true;
+  const q = shopQ.toLowerCase().replace(/^[\u2460-\u2473]$/, (ch) => String(ch.charCodeAt(0) - 0x2460 + 1));
+  return p.name.toLowerCase().includes(q) || (!!p.code && p.code.toLowerCase().startsWith(q)) || String(p.no) === q;
+}
+const SHOP_ROWS_MAX = 10;   // 프리셋 10개 높이까지 보이고 그 밑은 목록 안에서 스크롤 (엑셀 비밀번호 줄은 세지 않는다)
 function shopLine(p) {
   const saved = p.saved_at ? ` · ${Number(p.saved_at.slice(5, 7))}/${Number(p.saved_at.slice(8, 10))} 저장` : "";
   return `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""} · ${p.imap ? "메일 받기" : `${p.steps}단계`}${saved}`;   // imap: 메일 서버에서 받는 프리셋 (2026-10-22)
@@ -355,18 +391,29 @@ function shopLine(p) {
 function paintShops() {
   show($("shop-card"), Array.isArray(live?.presets));   // 옛 에이전트·설정이 깨진 PC 는 카드를 숨긴다
   show($("shop-none"), !!live && !Array.isArray(live.presets));
-  const list = savedShops();
-  // 치는 중인 칸을 live 가 다시 그려 지우지 않게
+  // 치는 중인 칸을 live 가 다시 그려 지우지 않게 (찾기 칸은 목록 밖이라 다시 그려도 남지만 목록이 깜빡이지 않게)
   if (document.activeElement?.closest?.(".xl-pw") && $("shop-list").contains(document.activeElement)) { paintShopMeta(); paintCopy(); return; }
-  $("shop-list").replaceChildren(...list.flatMap((p, i) => {
+  paintShopList();
+  paintShopMeta();
+  paintCopy();
+}
+function paintShopList() {
+  const all = savedShops(), f = SHOP_FILTERS.find(([k]) => k === shopFilter)[2];
+  const list = all.filter((p) => f(p) && shopMatches(p));
+  const box = $("shop-list"), top = box.scrollTop;   // live 가 다시 그려도 스크롤 자리를 지킨다 (최종 검토 2)
+  box.style.maxHeight = "";
+  box.replaceChildren(...(list.length || !all.length ? list : [Object.assign(document.createElement("div"), { className: "shop-empty",
+    textContent: shopQ ? `'${shopQ}'에 맞는 프리셋이 없습니다.` : "이 조건에 맞는 프리셋이 없습니다." })]).flatMap((p, i) => {
+    if (!(p && p.no)) return [p];
     const row = document.createElement("label"); row.className = "switch" + (i === 0 ? " first" : "");
+    row.dataset.no = p.no;
     const cb = document.createElement("input");
     const ready = shopReady(p);
     cb.type = "checkbox"; cb.checked = !!form.shops[p.no];
     cb.disabled = !c.isAdmin || busy || (!ready && !cb.checked);   // 켜진 것은 준비가 안 됐어도 끌 수는 있다
     cb.setAttribute("aria-label", `${circled(p.no)} ${p.name}`);
     const why = ready ? "" : p.steps ? "옵저버에서 아이디·비밀번호를 입력한 뒤 저장하여 주십시오." : "옵저버에서 기록한 뒤 저장하여 주십시오.";
-    cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); };
+    cb.onchange = () => { form.shops[p.no] = cb.checked; paintShopMeta(); paintShopFilterCounts(); };
     const text = switchText(shopLine(p), why), extras = [];
     // 복사·넣어 주기로 받은 칸은 아이디·비밀번호가 비어 있다 (설계 2026-10-19 4.3절). 보관이 있으면 [되돌리기] (restore_preset)
     if (p.steps > 0 && !p.has_login) extras.push(Object.assign(document.createElement("span"), { className: "pill bad", textContent: "아이디·비밀번호 입력 필요" }));
@@ -375,13 +422,37 @@ function paintShops() {
       b.onclick = (e) => { e.preventDefault(); restorePreset(p.no); };   // 스위치(label)는 안 건드린다
       extras.push(b);
     }
+    const xl = hasXlPw(p) && p.steps > 0;
+    if (xl && !xlShown(p)) {                     // 값이 없는 줄은 작은 단추만 (2026-11-13)
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "xl-open", textContent: "엑셀 비밀번호 설정", disabled: !c.isAdmin || busy });
+      b.onclick = (e) => { e.preventDefault(); xlOpen.add(p.no); paintShopList(); $("shop-list").querySelector(`.xl-pw[data-no="${p.no}"] input`)?.focus(); };
+      extras.unshift(b);
+    }
     if (extras.length) text.firstChild.after(" ", ...extras);
     row.append(text, cb, Object.assign(document.createElement("span"), { className: "knob" }));
-    return hasXlPw(p) && p.steps > 0 ? [row, xlPwRow(p)] : [row];
+    return xl && xlShown(p) ? [row, xlPwRow(p)] : [row];
   }));
-  $("shop-info").textContent = list.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC의 '옵저버'에서 기록하여 주십시오.";
-  paintShopMeta();
-  paintCopy();
+  const rows = box.querySelectorAll(".switch"), scroll = rows.length > SHOP_ROWS_MAX;
+  if (scroll) {
+    const last = rows[SHOP_ROWS_MAX - 1], end = last.nextElementSibling?.classList.contains("xl-pw") ? last.nextElementSibling : last;
+    box.style.maxHeight = `${Math.ceil(end.getBoundingClientRect().bottom - box.getBoundingClientRect().top) + 1}px`;   // 높이를 비운 직후라 scrollTop 은 0
+  }
+  box.classList.toggle("scroll", scroll);
+  box.scrollTop = top;
+  $("shop-count").textContent = !all.length ? "" : list.length === all.length ? `프리셋 ${all.length}개` : `${all.length}개 중 ${list.length}개 표시`;
+  $("shop-filter").replaceChildren(...SHOP_FILTERS.map(([k, name, ff]) => {
+    const n = all.filter(ff).length;
+    const b = Object.assign(document.createElement("button"), { type: "button", hidden: k === "need" && !n });   // 입력이 필요한 프리셋이 없으면 단추도 없다
+    b.append(name, Object.assign(document.createElement("span"), { className: "n", textContent: n }));
+    b.setAttribute("aria-pressed", shopFilter === k);
+    b.onclick = () => { shopFilter = shopFilter === k || k === "all" ? "all" : k; paintShopList(); };
+    return b;
+  }));
+  $("shop-info").textContent = all.some((p) => p.steps > 0) ? "" : "기록한 프리셋이 없습니다. 이 PC의 '옵저버'에서 기록하여 주십시오.";
+}
+/** 스위치를 바꿀 때는 목록을 다시 그리지 않고 (끔 거르기에서 바로 사라지지 않게) 거르기 개수만 */
+function paintShopFilterCounts() {
+  $("shop-filter").querySelectorAll("button").forEach((b, i) => { b.querySelector(".n").textContent = savedShops().filter(SHOP_FILTERS[i][2]).length; });
 }
 async function restorePreset(no) {
   if (!confirm(`프리셋 ${no}을(를) 이전 기록으로 되돌리시겠습니까?`)) return;
@@ -392,7 +463,7 @@ function paintShopMeta() {
   const on = list.filter((p) => form.shops?.[p.no]).length;
   $("shop-meta").textContent = list.length ? `${on}/${list.length} 켬` : "";
   $("shop-apply").disabled = !c.isAdmin || busy || !shopsDirty();
-  for (const b of $("shop-list").querySelectorAll(".restore")) b.disabled = busy;   // 줄은 live 가 올 때만 다시 만든다 - 잠금은 여기서
+  for (const b of $("shop-list").querySelectorAll(".restore, .xl-open, .xl-cancel")) b.disabled = !c.isAdmin || busy;   // 줄은 live 가 올 때만 다시 만든다 - 잠금은 여기서
 }
 async function applyShops() {
   const wanted = Object.fromEntries(savedShops().map((p) => [`PRESET${p.no}`, !!form.shops[p.no]]));
@@ -401,6 +472,7 @@ async function applyShops() {
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.shops = keyOf.shops();
   const xl = savedShops().filter(hasXlPw);      // 옛 에이전트는 모르는 키를 프리셋 번호로 읽어 거절한다
+  xlOpen.clear(); paintShopList();               // 비운 채 적용한 칸은 다시 접힌다 (2026-11-13)
   await send("set_presets", xl.length ? { ...wanted, excel_pw: Object.fromEntries(xl.map((p) => [`PRESET${p.no}`, (form.xlPw[p.no] ?? "").trim()])) } : wanted, "쇼핑몰 프리셋", "shops");
 }
 
@@ -574,6 +646,8 @@ const INV_WHY = { "": "전체 사이트로 조회 후 송장 전송합니다.",
 const isV8 = () => (live?.schedule?.version ?? 0) >= 8;
 // 판 9: 줄마다 수집 사이트 (slots[i].sites = 프리셋 번호, 업체 미팅 2026-11-11). 없으면 켠 사이트 전체 - 나중에 켠 사이트도 함께 돈다
 const isV9 = () => (live?.schedule?.version ?? 0) >= 9;
+// 판 10: 줄마다 [지금 실행] - launch {target: slot} (2026-11-13). 그 전 PC 는 '메뉴를 찾을 수 없습니다' 로 거절하니 단추를 안 보인다
+const isV10 = () => (live?.schedule?.version ?? 0) >= 10;
 const collects = (s) => !s.run || s.run.includes("Prepare");      // 사이트 수집을 돌리는 줄 (전체 모듈 줄 포함)
 /** 줄에서 고를 수 있는 사이트 - 쇼핑몰 프리셋에서 켠 다운로드 프리셋 (업로드 프리셋은 사이트 수집에서 돌지 않는다) */
 const pickableShops = () => savedShops().filter((p) => p.on && !p.upload && shopReady(p));
@@ -659,11 +733,89 @@ function paintDays() {
   }));
 }
 const sortedForm = () => [...form.sch.slots].sort((a, b) => a.at.localeCompare(b.at));
-function timeInput(value, label, apply) {
-  const inp = document.createElement("input"); inp.type = "time"; inp.step = isV6() ? 60 : 300; inp.value = value; inp.className = "num";
+// 시각 칸 (2026-11-13): 글자로 친다 - '930'·'9:30'·'0930'·'9'·'1405' → HH:MM (1분 단위. 판 6 전 PC 는 scheduleProblems 의 '5분 단위로만' 이 막는다).
+// ↑ ↓ 는 5분 칸에 맞춰, 시계 단추는 시·분(5분 단위) 목록
+const pad2 = (n) => String(n).padStart(2, "0");
+function parseTime(raw) {
+  const t = String(raw ?? "").trim().replace(/[.\s]/g, ":");
+  let h, m;
+  if (/^\d{1,2}:\d{1,2}$/.test(t)) [h, m] = t.split(":").map(Number);
+  else if (/^\d{1,2}$/.test(t)) [h, m] = [Number(t), 0];
+  else if (/^\d{3,4}$/.test(t)) [h, m] = [Number(t.slice(0, -2)), Number(t.slice(-2))];
+  else return null;
+  return h > 23 || m > 59 ? null : `${pad2(h)}:${pad2(m)}`;
+}
+const CLOCK_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><path d="M8 4.6V8l2.3 1.5" stroke-linecap="round"/></svg>';
+/** 줄 i 의 시각 칸 (key: at / until). 치는 동안은 줄을 다시 그리지 않고, 칸을 떠날 때(change) 맞춘다 */
+function timeInput(s, key, label, i) {
+  const cur = () => form.sch.slots[i] || s;   // live 가 폼을 새로 만들었으면 그 줄 (같은 차례)
+  const wrap = document.createElement("span"); wrap.className = "tm-wrap";
+  const open = openClock?.i === i && openClock.key === key;
+  const box = document.createElement("span"); box.className = "tm-box" + (open ? " open" : "");
+  const inp = Object.assign(document.createElement("input"), { type: "text", className: "tm", value: s[key] ?? "", inputMode: "numeric", maxLength: 5, autocomplete: "off" });
   inp.setAttribute("aria-label", label);
-  inp.onchange = () => { apply(inp.value); paintTimes(); paintScheduleMeta(); };
-  return inp;
+  const err = Object.assign(document.createElement("span"), { className: "tm-err" });
+  const mark = () => { const bad = !parseTime(inp.value); inp.classList.toggle("bad", bad); err.textContent = bad ? " 시각을 확인하여 주십시오. (예: 09:30)" : ""; };
+  inp.onfocus = () => inp.select();
+  inp.oninput = () => { cur()[key] = parseTime(inp.value) || inp.value.trim(); paintScheduleMeta(); };
+  // 칸을 떠날 때 줄을 다시 그리지 않는다 - 시각을 치고 바로 다른 단추를 누르면 그 단추가 바뀌어 첫 클릭이 사라진다 (check_web 6-3절).
+  // 시각 순서로 정하는 '미실행 (한도초과)' 표시가 바뀔 때만 다시 그린다
+  inp.onchange = () => {
+    const v = parseTime(inp.value); if (v) inp.value = v; cur()[key] = v || inp.value.trim(); mark();
+    const over = new Set(sortedForm().slice(limitOf()));
+    if ([...$("sch-times").children].some((row, k) => row.classList.contains("over") !== over.has(form.sch.slots[k]))) paintTimes();
+    paintScheduleMeta();
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter") { inp.blur(); return; }
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const v = parseTime(inp.value) || parseTime(cur()[key]) || "09:00";
+    const now = Number(v.slice(0, 2)) * 60 + Number(v.slice(3));      // 5분씩 - 09:32 에서 ↑ 는 09:35, ↓ 는 09:30
+    const m = ((e.key === "ArrowUp" ? Math.floor(now / 5) * 5 + 5 : Math.ceil(now / 5) * 5 - 5) + 1440) % 1440;
+    inp.value = cur()[key] = `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+    mark(); paintScheduleMeta();
+  };
+  const clk = Object.assign(document.createElement("button"), { type: "button", className: "clk", title: "시각 고르기 (5분 단위)", innerHTML: CLOCK_SVG });
+  clk.setAttribute("aria-label", `${label} 고르기`);
+  clk.onclick = (e) => {                          // 누를 때의 상태로 (그린 뒤 바깥 클릭으로 닫혔을 수 있다)
+    e.stopPropagation();
+    const now = openClock?.i === i && openClock.key === key;
+    openPicker = null; openClock = now ? null : { i, key }; closePops(); paintTimes();
+  };
+  box.append(inp, clk);
+  if (open) box.append(clockPop(s, key));
+  if (s[key] !== "" || key === "at") mark();     // 끝 시각을 지운 반복 줄은 아래 '반복 끝 시각은' 글이 말한다
+  wrap.append(box, err);
+  return wrap;
+}
+/** 열린 시계·사이트 목록을 바로 지운다 - 초점이 시각 칸에 있으면 paintTimes 가 다시 그리기를 건너뛰어 팝업이 남는다 (최종 검토 3) */
+function closePops() {
+  $("sch-times").querySelectorAll(".clock, .picker").forEach((n) => n.remove());
+  $("sch-times").querySelectorAll(".tm-box.open").forEach((b) => b.classList.remove("open"));
+}
+/** 시계 목록: 시 00~23 · 분 00~55 (5분 단위). 시를 누르면 열린 채, 분을 누르면 넣고 닫는다 */
+function clockPop(s, key) {
+  const [h, m] = (parseTime(s[key]) || "09:00").split(":").map(Number);
+  const pop = document.createElement("div"); pop.className = "clock";
+  pop.onclick = (e) => e.stopPropagation();
+  const col = (vals, cur, pick) => {
+    const box = document.createElement("div"); box.className = "col";
+    for (const v of vals) {
+      const b = Object.assign(document.createElement("button"), { type: "button", textContent: pad2(v) });
+      b.setAttribute("aria-pressed", v === cur);
+      b.onclick = () => pick(v);
+      box.append(b);
+    }
+    return box;
+  };
+  pop.append(col([...Array(24).keys()], h, (v) => { s[key] = `${pad2(v)}:${pad2(m)}`; paintTimes(); paintScheduleMeta(); }),
+    col([...Array(12).keys()].map((x) => x * 5), m, (v) => { s[key] = `${pad2(h)}:${pad2(v)}`; openClock = null; paintTimes(); paintScheduleMeta(); }));
+  requestAnimationFrame(() => pop.querySelectorAll(".col").forEach((cl) => {   // 고른 값을 목록 가운데로 (페이지는 안 움직인다)
+    const b = cl.querySelector('[aria-pressed="true"]');
+    if (b) cl.scrollTop = b.offsetTop - cl.clientHeight / 2 + b.offsetHeight / 2;   // .col 이 position:relative 라 offsetTop 은 목록 안 기준
+  }));
+  return pop;
 }
 /** 줄의 요일 단추 일곱 개 (판 3 PC) */
 function dayChips(s) {
@@ -739,28 +891,102 @@ function invTasks(s) {
     (on) => { if (on) s.xl = true; else delete s.xl; }));
   return box;
 }
-/** 판 9: 사이트 수집 줄의 사이트 단추 (업체 미팅 2026-11-11). 모두 눌린 상태 = sites 없음 (켠 사이트 전체 - 나중에 켠 사이트도).
- *  하나라도 끄면 고른 번호만 sites 로. 모두 끄면 적용을 막는다 (scheduleProblems) */
-function siteChips(s) {
-  const shops = pickableShops(), all = shops.map((p) => p.no);
-  const box = document.createElement("span"); box.className = "seg chips site-chips";
-  for (const p of shops) {
-    const on = !s.sites || s.sites.includes(p.no);
-    const b = document.createElement("button"); b.type = "button"; b.dataset.no = p.no;
-    b.textContent = `${circled(p.no)} ${p.name}`; b.title = `${circled(p.no)} ${p.name}${p.code ? ` (${p.code})` : ""}`;
-    b.setAttribute("aria-pressed", on);
-    b.disabled = !c.isAdmin || busy;
-    b.onclick = () => {
-      const now = (s.sites || all).filter((n) => all.includes(n));
-      const next = on ? now.filter((n) => n !== p.no) : [...now, p.no].sort((a, x) => a - x);
-      if (next.length === all.length) delete s.sites; else s.sites = next;
-      paintTimes(); paintScheduleMeta();
-    };
-    box.append(b);
+/** 줄에서 고르는 수집 사이트 (2026-11-13): 고른 사이트만 꼬리표 (× 로 빼기) + [+ 추가] 목록. 고른 게 없으면 sites 없음 = 켠 사이트 전체 (판 9 그대로).
+ *  목록에는 다운로드 프리셋만 - 켠 것은 고를 수 있고, 꺼졌거나 입력이 필요한 것은 흐리게 (이미 고른 것은 뺄 수는 있다) */
+const siteCandidates = () => savedShops().filter((p) => !p.upload && p.steps > 0);
+function siteChips(s, i) {
+  const box = document.createElement("span"); box.className = "tags";
+  const ok = pickableShops();
+  if (!s.sites?.length) box.append(Object.assign(document.createElement("span"), { className: "all-sites", textContent: `켠 사이트 전체 (${ok.length}개)` }));
+  for (const no of s.sites || []) {
+    const p = savedShops().find((x) => x.no === no), on = ok.some((x) => x.no === no);
+    const name = `${circled(no)} ${p ? p.name : "(없는 프리셋)"}`;
+    const tag = Object.assign(document.createElement("span"), { className: "tag" + (on ? "" : " off"),
+      title: `${name}${p?.code ? ` (${p.code})` : ""}${on ? "" : " - 쇼핑몰 프리셋에서 꺼져 있어 수집하지 않습니다."}` });
+    tag.dataset.no = no;
+    const x = Object.assign(document.createElement("button"), { type: "button", textContent: "×", disabled: !c.isAdmin || busy });
+    x.setAttribute("aria-label", `${name} 빼기`);
+    x.onclick = () => { s.sites = s.sites.filter((n) => n !== no); if (!s.sites.length) delete s.sites; paintTimes(); paintScheduleMeta(); };
+    tag.append(Object.assign(document.createElement("span"), { textContent: name }), x);
+    box.append(tag);
   }
+  const anchor = document.createElement("span"); anchor.className = "pick-anchor";
+  const add = Object.assign(document.createElement("button"), { type: "button", className: "add-site", textContent: "+ 추가", disabled: !c.isAdmin || busy });
+  add.onclick = (e) => { e.stopPropagation(); openClock = null; openPicker = openPicker?.i === i ? null : { i, chosen: new Set(s.sites || []), q: "", focused: false }; paintTimes(); };
+  anchor.append(add);
+  if (openPicker?.i === i) anchor.append(sitePicker(s));
+  box.append(anchor);
   return box;
 }
+function sitePicker(s) {
+  const st = openPicker, dis = !c.isAdmin || busy;
+  const ok = new Set(pickableShops().map((p) => p.no));
+  const pop = document.createElement("div"); pop.className = "picker";
+  pop.onclick = (e) => e.stopPropagation();
+  const q = Object.assign(document.createElement("input"), { type: "text", className: "pick-q", placeholder: "사이트 이름·코드로 찾기", value: st.q, autocomplete: "off" });
+  q.setAttribute("aria-label", "사이트 찾기");
+  const list = document.createElement("ul"), cnt = Object.assign(document.createElement("span"), { className: "cnt" });
+  const shown = () => siteCandidates().filter((p) => !st.q || p.name.toLowerCase().includes(st.q.toLowerCase()) || (p.code || "").toLowerCase().startsWith(st.q.toLowerCase()));
+  const paintCnt = () => { cnt.textContent = st.chosen.size ? `${st.chosen.size}개 선택` : "선택 안 함 = 켠 사이트 전체"; };
+  const paintList = () => {
+    const rows = shown();
+    list.replaceChildren(...(rows.length ? rows.map((p) => {
+      const cb = Object.assign(document.createElement("input"), { type: "checkbox", checked: st.chosen.has(p.no) });
+      cb.disabled = dis || (!ok.has(p.no) && !cb.checked);
+      cb.onchange = () => { if (cb.checked) st.chosen.add(p.no); else st.chosen.delete(p.no); paintCnt(); };
+      const li = document.createElement("li"); li.dataset.no = p.no; if (!ok.has(p.no)) li.className = "off";
+      const lab = document.createElement("label");
+      if (!ok.has(p.no)) lab.title = p.on ? "아이디·비밀번호를 입력하여야 수집할 수 있습니다." : "쇼핑몰 프리셋에서 꺼져 있습니다.";
+      lab.append(cb, Object.assign(document.createElement("span"), { textContent: `${circled(p.no)} ${p.name}` }),
+        Object.assign(document.createElement("span"), { className: "code", textContent: ok.has(p.no) ? p.code || "" : p.on ? "입력 필요" : "꺼짐" }));
+      li.append(lab);
+      return li;
+    }) : [Object.assign(document.createElement("li"), { className: "empty", textContent: "찾는 사이트가 없습니다." })]));
+  };
+  q.oninput = () => { st.q = q.value.trim(); paintList(); };
+  const close = () => { openPicker = null; if (pop.contains(document.activeElement)) document.activeElement.blur(); };
+  const apply = () => {
+    const row = form.sch.slots[st.i] || s, v = [...st.chosen].sort((x, y) => x - y);   // live 가 폼을 새로 만들었으면 그 줄 (같은 차례)
+    if (v.length) row.sites = v; else delete row.sites;
+    close(); paintTimes(); paintScheduleMeta();
+  };
+  const cancel = () => { close(); paintTimes(); };
+  pop.onkeydown = (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); cancel(); }
+    else if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); apply(); }
+  };
+  const link = (text, run) => { const b = Object.assign(document.createElement("button"), { type: "button", className: "link", textContent: text, disabled: dis }); b.onclick = run; return b; };
+  const bulk = document.createElement("div"); bulk.className = "bulk";
+  bulk.append(link("보이는 사이트 모두 선택", () => { shown().filter((p) => ok.has(p.no)).forEach((p) => st.chosen.add(p.no)); paintList(); paintCnt(); }),
+    link("모두 해제", () => { st.chosen.clear(); paintList(); paintCnt(); }));
+  const no = Object.assign(document.createElement("button"), { type: "button", textContent: "취소" }); no.onclick = cancel;
+  const yes = Object.assign(document.createElement("button"), { type: "button", className: "ok", textContent: "적용", disabled: dis }); yes.onclick = apply;
+  const foot = document.createElement("div"); foot.className = "foot"; foot.append(cnt, no, yes);
+  pop.append(q, bulk, list, foot);
+  paintList(); paintCnt();
+  if (!st.focused) { st.focused = true; setTimeout(() => q.focus(), 0); }   // 처음 열 때만 - live 가 다시 그릴 때 초점을 빼앗지 않게
+  return pop;
+}
+/** [지금 실행] 전에 그 줄만 본다 (요일·한도·겹침은 수동 실행과 상관없다) */
+function rowProblem(s) {
+  if (!parseTime(s.at) || parseTime(s.at) !== s.at) return "시간을 확인하여 주십시오.";
+  if (s.run && !s.run.length) return "'선택 모듈만 실행' 줄에 모듈을 하나 이상 선택하여 주십시오.";
+  if (collects(s) && s.sites && !s.sites.some((n) => pickableShops().some((p) => p.no === n))) return "수집 사이트를 하나 이상 선택하여 주십시오.";
+  if (sendsInvoice(s) && s.inv === "none" && !s.xl) return "운송장 전송 줄에서 전송요청이나 수집 사이트 엑셀출력 중 하나는 켜 주십시오.";
+  return "";
+}
+async function runSlotNow(s) {
+  const why = rowProblem(s);
+  if (why) { notify("warn", why); return; }
+  const slot = slotPayload(s);
+  delete slot.days;
+  const what = slotText(slot) + (slot.run ? "" : slot.sites ? " (전체 모듈)" : " 전체 모듈");
+  if (!confirm(`${s.at} 줄을 지금 한 번 실행하시겠습니까?\n\n${what}`)) return;
+  await locked(() => send("launch", { target: "slot", slot }, "지금 실행"));
+}
 function paintTimes() {
+  // 시각 칸·사이트 찾기 칸에 치는 중이면 다시 그리지 않는다 - live 가 5초마다 와도 친 글·초점이 남게 (2026-11-13)
+  if (document.activeElement?.matches?.(".tm, .pick-q") && $("sch-times").contains(document.activeElement)) return;
   const over = new Set(sortedForm().slice(limitOf()));      // 시각 순으로 한도를 넘는 줄 (PC 도 이 줄은 안 돌린다)
   $("sch-times").replaceChildren(...form.sch.slots.map((s, i) => {
     // 슬롯마다 같은 틀 (사용자 2026-10-08): ① 시각 · [빼기] ② 요일 ③ 모듈 ④ 쉬는 시간(반복만). 슬롯 사이는 가로선
@@ -772,10 +998,15 @@ function paintTimes() {
       l.append(span("t-lbl", label), v); return l;
     };
     const head = document.createElement("div"); head.className = "t-head";
-    head.append(timeInput(s.at, "시각", (v) => { s.at = v; }));
+    head.append(timeInput(s, "at", "시각", i));
     const win = s.until !== undefined;              // 반복 시간대 줄. 끝 시각을 지워도("") 반복 줄 그대로
-    if (win) head.append(span("", "~"), timeInput(s.until, "끝 시각", (v) => { s.until = v; }), span("t-kind", "반복"));
+    if (win) head.append(span("", "~"), timeInput(s, "until", "끝 시각", i), span("t-kind", "반복"));
     if (over.has(s)) head.append(span("rest", "미실행 (한도초과)"));
+    if (!win && isV10() && c.isAdmin) {            // 시각 줄만 - 반복 시간대는 PC 가 회차를 돈다 (2026-11-13)
+      const now = Object.assign(document.createElement("button"), { type: "button", className: "now", textContent: "지금 실행" });
+      now.onclick = () => runSlotNow(s);
+      head.append(now);
+    }
     const del = document.createElement("button"); del.className = "del"; del.textContent = "빼기";
     del.onclick = () => { form.sch.slots.splice(i, 1); paintTimes(); paintScheduleMeta(); };
     head.append(del);
@@ -794,7 +1025,7 @@ function paintTimes() {
       mode.onchange = () => { s.run = mode.value === "pick" ? [] : null; delete s.inv_sites; delete s.inv; delete s.xl; paintTimes(); paintScheduleMeta(); };
       row.append(line("모듈", mode, ...(s.run ? [runChips(s)] : [])));
     }
-    if (isV9() && collects(s) && pickableShops().length > 1) row.append(line("수집 사이트", siteChips(s)));   // 사이트가 하나면 고를 게 없다
+    if (isV9() && collects(s) && (pickableShops().length > 1 || s.sites?.length)) row.append(line("수집 사이트", siteChips(s, i)));   // 사이트가 하나면 고를 게 없다 (고른 게 남았으면 보여 뺄 수 있게)   // 사이트가 하나면 고를 게 없다
     if (isV8() && sendsInvoice(s)) row.append(line("운송장 전송", invTasks(s)));
     else if (isV7() && sendsInvoice(s)) row.append(line("운송장 전송", invOption(s)));
     else if (isV5() && sendsInvoice(s)) row.append(line("운송장 전송", invSitesSwitch(s)));
@@ -835,7 +1066,7 @@ function paintScheduleMeta() {
   const s = savedSch(), lim = limitOf(), n = form.sch.slots.length;
   const dis = !c.isAdmin || busy;
   $("sch-enabled").disabled = dis;
-  for (const el of $("sch-form").querySelectorAll("button, input, select")) if (!el.closest(".chips")) el.disabled = dis;
+  for (const el of $("sch-form").querySelectorAll("button, input, select")) if (!el.closest(".chips, .picker")) el.disabled = dis;
   $("sch-add").disabled = dis || n >= lim;
   show($("sch-add-win"), isV2()); $("sch-add-win").disabled = dis || n >= lim;
   $("sch-count").textContent = `${n}/${lim} 사용`;
@@ -905,10 +1136,15 @@ function payloadOf() {
   const base = { enabled: form.sch.enabled, days: [...new Set(isV3() ? form.sch.slots.flatMap((s) => s.days) : form.sch.days)].sort(),
     ...(isV4() ? { skip_holidays: form.sch.holidays, off_dates: [...form.sch.offDates] } : {}) };   // 옛 판 PC 는 모르는 값 - 안 보낸다
   if (!isV2()) return { ...base, times: [...new Set(form.sch.slots.map((s) => s.at))].sort() };
-  return { ...base, slots: sortedForm().map(fitSlot).map((s) => ({ at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}),
+  return { ...base, slots: sortedForm().map(slotPayload) };
+}
+/** 줄 하나의 보낼 값 - [적용] (set_schedule) 과 [지금 실행] (launch target: slot) 이 같다 */
+function slotPayload(x) {
+  const s = fitSlot(x);
+  return { at: s.at, ...(s.until ? { until: s.until, rest_min: s.rest_min } : {}), ...(s.run ? { run: [...s.run] } : {}), ...(s.days ? { days: [...s.days].sort() } : {}),
     ...(isV8() ? (sendsInvoice(s) ? { ...(s.inv ? { inv: s.inv } : {}), ...(s.xl ? { xl: true } : {}) } : {})
       : isV7() ? (s.inv && sendsInvoice(s) ? { inv: s.inv } : {}) : isV5() && s.inv_sites && sendsInvoice(s) ? { inv_sites: true } : {}),
-    ...(isV9() && s.sites?.length && collects(s) ? { sites: [...s.sites] } : {}) })) };
+    ...(isV9() && s.sites?.length && collects(s) ? { sites: [...s.sites] } : {}) };
 }
 async function applySchedule() {
   const payload = payloadOf();

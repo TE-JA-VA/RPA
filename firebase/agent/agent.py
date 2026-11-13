@@ -856,6 +856,18 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
     def do_launch(args):
         target = (args or {}).get("target") if isinstance(args, dict) else None
         target = target or "routine"
+        if target == "slot":                 # [지금 실행] - 자동 실행 줄 하나를 그 설정 그대로 한 번 (2026-11-13). 옛 PC 는 '메뉴를 찾을 수 없습니다' 로 거절한다
+            slot = args.get("slot")
+            if not isinstance(slot, dict):
+                raise RuntimeError("실행할 줄을 읽지 못했습니다.")
+            if "until" in slot:
+                raise RuntimeError("반복 시간대 줄은 지금 실행할 수 없습니다.")
+            try:
+                slot = dash.normalize_slots([slot])[0]
+            except ValueError as e:
+                raise RuntimeError(str(e)) from None
+            dash.launch_slot(slot, by="cloud", trigger="manual")   # 업체가 안 쓰는 모듈 빼기·사이트·운송장 할 일은 예약 실행과 같은 길
+            return f"{dash.st.josa(dash.slot_text(slot))} 지금 실행합니다."
         if target not in dash.TARGETS:
             raise RuntimeError(f"메뉴를 찾을 수 없습니다. ({target})")
         dash.launch(target, "cloud")         # 1PC 1프로그램 잠금·중복 방지는 launch 안에 있다
