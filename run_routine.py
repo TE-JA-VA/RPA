@@ -371,7 +371,7 @@ def ensure_erpia_running():
     raise RuntimeError("ERPiaMain.exe 프로세스가 뜨는 것을 확인하지 못했습니다.")
 
 
-def is_main_app_window(hwnd):
+def is_main_app_window(hwnd, errors=None):
     """해당 창이 '로그인 완료된 메인 화면'인지 확인한다.
 
     앱을 막 실행한 직후에는 로그인 창이 뜨기 전에 스플래시/초기 창이
@@ -396,20 +396,47 @@ def is_main_app_window(hwnd):
             t = c.window_text()
             if t == "Accordion Menu" or t.startswith("lcg_"):
                 return True
-    except Exception:
-        pass
+    except Exception as e:
+        if errors is not None:
+            errors.append(e)
     return False
 
 
+def _window_note(hwnd):
+    """진단 기록용 창 한 줄 (제목·클래스·크기·보임)."""
+    try:
+        l, t, r, b = win32gui.GetWindowRect(hwnd)
+        return (f"hwnd={hwnd} '{win32gui.GetWindowText(hwnd)[:40]}' {win32gui.GetClassName(hwnd)[:40]} "
+                f"{r - l}x{b - t} 보임={bool(win32gui.IsWindowVisible(hwnd))}")
+    except Exception as e:
+        return f"hwnd={hwnd} ({type(e).__name__})"
+
+
 def acquire_main_window(pid, tries=12):
-    """로그인 완료된 메인 창을 잡아 (hwnd, app, win) 을 돌려준다.
+    """로그인 완료된 메인 창을 잡아 (hwnd, app, win, pid) 를 돌려준다.
 
     로그인 직후(특히 2차 인증 안내 팝업을 거친 경우) ERPia 가 메인 창을 다시 만들어,
     방금 잡은 핸들로 UIA 를 호출하면 COMError(-2146233083, ElementFromHandle) 가 난다.
     그럴 때 창을 다시 찾아 재시도한다. 실제로 UIA 호출이 되는 창만 돌려준다.
-    못 잡으면 (None, None, None).
+    ERPia 가 로그인 직후 스스로 업데이트해 다시 켜지면 PID 가 바뀐다 (triif 2026-11-13 09:01 - 꺼진 PID 의 창만 72초 찾다 실패).
+    그래서 PID 가 끝났으면 떠 있는 ERPia 의 PID 를 다시 찾고, 바뀌면 시도 횟수를 처음부터 다시 센다.
+    못 잡으면 (None, None, None, pid) - 마지막으로 본 창과 오류를 기록에 남긴다.
     """
-    for attempt in range(tries):
+    attempt = 0
+    last_candidate, errors = None, []
+    while attempt < tries:
+        attempt += 1
+        if pid is not None and not ec.pid_alive(pid):
+            try:
+                new_pid = ec.find_erpia_pid()
+            except RuntimeError:
+                new_pid = None      # 다시 켜지는 중일 수 있다 - 다음 시도에 다시 본다
+            if new_pid is not None and new_pid != pid:
+                log(f"  ERPia 가 다시 켜졌습니다 (PID {pid} -> {new_pid}, ERPia 자체 업데이트 등) - 새 ERPia 의 메인 창을 찾습니다.")
+                pid, attempt = new_pid, 0
+            elif new_pid is None:
+                time.sleep(1.0)
+                continue
         try:
             candidate = ec.wait_for_main_hwnd(pid, timeout=5)
         except RuntimeError:
@@ -417,9 +444,10 @@ def acquire_main_window(pid, tries=12):
         if candidate is None:
             time.sleep(1.0)
             continue
+        last_candidate = candidate
         try:
             # is_main_app_window 이 좌측 메뉴가 보일 때까지(=메인 화면 준비됨) 확인한다.
-            if not is_main_app_window(candidate):
+            if not is_main_app_window(candidate, errors):
                 time.sleep(1.0)
                 continue
             ec.ensure_foreground(candidate)
@@ -427,12 +455,15 @@ def acquire_main_window(pid, tries=12):
             win = app.window(handle=candidate)
             # 핸들이 곧 무효가 될 상태면 여기서 COMError 가 난다. 되면 이 창은 쓸 수 있다.
             win.rectangle()
-            return candidate, app, win
+            return candidate, app, win, pid
         except Exception as e:
             log(f"  메인 창(hwnd={candidate}) 접근 실패 -> 다시 잡습니다 "
-                f"({attempt + 1}/{tries}): {type(e).__name__}")
+                f"({attempt}/{tries}): {type(e).__name__}")
             time.sleep(1.5)
-    return None, None, None
+    log(f"  메인 창 진단: PID={pid} 살아있음={pid is not None and ec.pid_alive(pid)} "
+        f"마지막 후보={_window_note(last_candidate) if last_candidate else '없음'}"
+        + (f" 메뉴 확인 오류 {len(errors)}번 (마지막: {type(errors[-1]).__name__}: {str(errors[-1])[:120]})" if errors else " 메뉴 확인 오류 없음"))
+    return None, None, None, pid
 
 
 class RoutineContext:
@@ -455,7 +486,7 @@ class RoutineContext:
 
     def refresh(self):
         """메인 창을 다시 잡는다. 못 잡으면 False."""
-        self.hwnd, self.app, self.win = acquire_main_window(self.pid)
+        self.hwnd, self.app, self.win, self.pid = acquire_main_window(self.pid)
         return self.hwnd is not None
 
     def attach(self):
@@ -522,14 +553,14 @@ def wait_for_active_main_tab(app, hwnd, keyword, timeout=20, interval=1.0, ctx=N
             # 창 핸들 자체가 죽었다 = 창이 다시 만들어졌다. 새 메인 창을 잡아 이어서 기다린다.
             log("  메인 창 핸들이 무효화되어 메인 창을 다시 찾습니다.")
             try:
-                new_hwnd, new_app, _win = acquire_main_window(ec.find_erpia_pid())
+                new_hwnd, new_app, _win, new_pid = acquire_main_window(ec.find_erpia_pid())
             except Exception as e:
                 new_hwnd, new_app = None, None
                 log(f"  메인 창 재확보 실패(계속 기다림): {type(e).__name__}")
             if new_hwnd is not None:
                 hwnd, app = new_hwnd, new_app
                 if ctx is not None:
-                    ctx.hwnd, ctx.app = new_hwnd, new_app   # 호출자도 새 창을 쓰게 한다
+                    ctx.hwnd, ctx.app, ctx.pid = new_hwnd, new_app, new_pid   # 호출자도 새 창을 쓰게 한다
                 log(f"  메인 창 다시 확보: hwnd={hwnd}")
         time.sleep(interval)
         waited += interval
@@ -5939,7 +5970,20 @@ def module_login(ctx):
     # UIA 호출이 실제로 되는 창을 잡을 때까지 재시도한다.
     log("메인 화면 대기 중...")
     if not ctx.refresh():
-        return "failed", "메인 화면을 안정적으로 잡지 못했습니다."
+        # 로그인 직후 ERPia 가 스스로 업데이트해 다시 켜지면서 로그인 창을 다시 띄웠을 수 있다 - 한 번만 다시 로그인한다
+        login_win = pl.find_login_window()
+        if login_win is None or not win32gui.IsWindowVisible(login_win.handle):
+            return "failed", "메인 화면을 안정적으로 잡지 못했습니다."
+        log("ERPia 가 다시 켜져 로그인 창이 다시 떴습니다 (ERPia 자체 업데이트 등) - 한 번 더 로그인합니다.")
+        try:
+            ctx.pid = ec.find_erpia_pid()
+        except RuntimeError:
+            pass
+        result = pl.login_flow(admin_code, user_id, password, log=log)
+        if result["status"] not in ("success", "already_logged_in"):
+            return "failed", f"로그인 실패: {result.get('status')} - {result.get('message')}"
+        if not ctx.refresh():
+            return "failed", "메인 화면을 안정적으로 잡지 못했습니다."
     log(f"메인 창 확보: hwnd={ctx.hwnd}")
     return "done", None
 

@@ -313,8 +313,57 @@ def raising(win, key, control_types=()):
     raise RuntimeError("COMError 흉내")
 
 
+# ERPia 가 로그인 직후 스스로 업데이트해 다시 켜지면 PID 가 바뀐다 (triif 2026-11-13 09:01) - 새 PID 의 창을 잡아야 한다
+_real_acquire = rr.acquire_main_window
+_EC_NAMES = ("pid_alive", "find_erpia_pid", "wait_for_main_hwnd", "ensure_foreground")
+_saved_ec = {n: getattr(rr.ec, n, None) for n in _EC_NAMES}
+_saved_acq = (rr.is_main_app_window, rr.Application, rr.time.sleep)
+seen_pids = []
+
+
+def _wait_hwnd(pid, timeout=5):
+    seen_pids.append(pid)
+    if pid == 7828:
+        raise RuntimeError("텍스트가 있는 최상위 창을 찾지 못했습니다.")
+    return 555
+
+
+rr.ec.pid_alive = lambda pid: pid != 7828
+rr.ec.find_erpia_pid = lambda: 15260
+rr.ec.wait_for_main_hwnd = _wait_hwnd
+rr.is_main_app_window = lambda h, errors=None: h == 555
+rr.ec.ensure_foreground = lambda h: True
+rr.Application = lambda backend=None: types.SimpleNamespace(connect=lambda handle: types.SimpleNamespace(window=lambda handle: FakeWin()))
+rr.time.sleep = lambda s: None
+r = _real_acquire(7828)
+check("PID 가 끝났으면 새 ERPia PID 로 메인 창을 잡는다 (PID 7828 -> 15260)", r[0] == 555 and r[3] == 15260 and 7828 not in seen_pids, str((r, seen_pids)))
+ctx = make_ctx()
+ctx.pid = 7828
+check("refresh 가 바뀐 PID 를 ctx 에 남긴다", ctx.refresh() and ctx.pid == 15260 and ctx.hwnd == 555, str((ctx.pid, ctx.hwnd)))
+rr.ec.find_erpia_pid = lambda: (_ for _ in ()).throw(RuntimeError("없음"))
+logs = []
+_saved_log = rr.log
+rr.log = logs.append
+r = _real_acquire(7828, tries=3)
+rr.log = _saved_log
+check("ERPia 가 아예 없으면 시도 횟수 안에서 끝나고 진단 줄을 남긴다", r[:3] == (None, None, None) and any("메인 창 진단" in x for x in logs), str(logs[-1:]))
+rr.ec.pid_alive = lambda pid: True
+rr.is_main_app_window = lambda h, errors=None: (errors.append(RuntimeError("이벤트에서 가입자를 불러낼 수 없습니다")) if errors is not None else None) and False
+logs = []
+rr.log = logs.append
+r = _real_acquire(4242, tries=2)
+rr.log = _saved_log
+check("메뉴 확인 중 난 오류를 진단 줄에 남긴다 (예전엔 삼켜서 72초 동안 흔적이 없었다)",
+      r[0] is None and any("메뉴 확인 오류 2번" in x and "가입자" in x for x in logs), str(logs[-1:]))
+rr.is_main_app_window, rr.Application, rr.time.sleep = _saved_acq
+for _n, _v in _saved_ec.items():
+    if _v is None:
+        delattr(rr.ec, _n)
+    else:
+        setattr(rr.ec, _n, _v)
+
 rr.find_by_text = raising
-rr.acquire_main_window = lambda pid, tries=12: (778, types.SimpleNamespace(window=lambda handle: FakeWin()), FakeWin())
+rr.acquire_main_window = lambda pid, tries=12: (778, types.SimpleNamespace(window=lambda handle: FakeWin()), FakeWin(), pid)
 check("예외만 나다 끝나면 absent 가 아니라 failed", rr.goto_screen_by_icon(make_ctx(), "lcg_X", "엑스", "엑스", wait_seconds=4) == "failed")
 
 
@@ -346,7 +395,7 @@ class LiveWin:
 el = NamedEl()
 rr.find_by_text = _real_find_by_text
 rr.win32gui.IsWindow = lambda h: h != 777
-rr.acquire_main_window = lambda pid, tries=12: (778, types.SimpleNamespace(window=lambda handle: LiveWin(el)), LiveWin(el))
+rr.acquire_main_window = lambda pid, tries=12: (778, types.SimpleNamespace(window=lambda handle: LiveWin(el)), LiveWin(el), pid)
 rr.wait_for_active_main_tab = lambda app, hwnd, kw, timeout=20, interval=1.0, ctx=None: (True, "엑스 관리")
 ctx = make_ctx()
 ctx.app = types.SimpleNamespace(window=lambda handle: DeadWin())
@@ -372,10 +421,10 @@ rr.pl = types.SimpleNamespace(find_login_window=lambda: None, load_logistic_opti
                               load_credentials=pl.load_credentials, ROUTINE_SECTION="Routine",
                               load_hold_save_only=lambda: pl.load_hold_save_only(), HOLD_SAVE_ONLY_KEY=pl.HOLD_SAVE_ONLY_KEY)
 ctx = make_ctx()
-rr.acquire_main_window = lambda pid, tries=12: (None, None, None)
+rr.acquire_main_window = lambda pid, tries=12: (None, None, None, pid)
 ok, reason = ctx.attach()
 check("attach: 메인 창 못 잡으면 (False, 사유)", ok is False and "메인 화면" in reason, str(reason))
-rr.acquire_main_window = lambda pid, tries=12: (999, "app", "win")
+rr.acquire_main_window = lambda pid, tries=12: (999, "app", "win", pid)
 ok, reason = ctx.attach()
 check("attach: 성공하면 hwnd 갱신", ok is True and ctx.hwnd == 999 and ctx.pid == 4242)
 rr.pl.find_login_window = lambda: types.SimpleNamespace(handle=1)     # 로그인 뒤 숨은 채 남는 잔재 창
@@ -1330,6 +1379,36 @@ rr.pl.load_credentials = _saved_cred
 LOGGED[0] = True
 for n, f in _saved_e.items():
     setattr(rr, n, f)
+
+# ERPia 가 로그인 직후 스스로 업데이트해 다시 켜지며 로그인 창을 다시 띄우면 한 번 더 로그인한다 (triif 2026-11-13)
+_saved_rl = {n: getattr(rr.pl, n, None) for n in ("load_credentials", "login_flow", "find_login_window")}
+_saved_rl2 = (rr.ensure_erpia_running, rr.wait_login_or_main, rr.RoutineContext.refresh, rr.win32gui.IsWindowVisible,
+              getattr(rr.ec, "find_erpia_pid", None))
+FLOWS, REFRESH = [], [False, True]
+rr.pl.load_credentials = lambda: ("업체", "아이디", "비번")
+rr.pl.login_flow = lambda a, u, p, log=None: FLOWS.append(1) or {"status": "success"}
+rr.pl.find_login_window = lambda: types.SimpleNamespace(handle=31)
+rr.win32gui.IsWindowVisible = lambda h: True
+rr.ensure_erpia_running = lambda: 7828
+rr.wait_login_or_main = lambda pid: ("login_window", types.SimpleNamespace(handle=30))
+rr.ec.find_erpia_pid = lambda: 15260
+rr.RoutineContext.refresh = lambda self: REFRESH.pop(0)
+lctx = rr.RoutineContext()
+res = rr.module_login(lctx)
+check("ERPia 가 다시 켜져 로그인 창이 다시 뜨면 한 번 더 로그인하고 이어간다", res == ("done", None) and FLOWS == [1, 1] and lctx.pid == 15260,
+      str((res, FLOWS, lctx.pid)))
+FLOWS, REFRESH = [], [False]
+rr.pl.find_login_window = lambda: None
+res = rr.module_login(rr.RoutineContext())
+check("로그인 창이 없으면 다시 로그인하지 않고 예전처럼 실패", res[0] == "failed" and "메인 화면" in res[1] and FLOWS == [1], str((res, FLOWS)))
+for n, f in _saved_rl.items():
+    if f is None:
+        delattr(rr.pl, n)
+    else:
+        setattr(rr.pl, n, f)
+(rr.ensure_erpia_running, rr.wait_login_or_main, rr.RoutineContext.refresh, rr.win32gui.IsWindowVisible, _fe) = _saved_rl2
+if _fe is not None:
+    rr.ec.find_erpia_pid = _fe
 
 LOGINS = []
 _saved_ml = rr.module_login
