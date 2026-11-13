@@ -632,8 +632,8 @@ note = wellife.hover_menu_item(drop_rr(), actx, Split([El("지정")]), wellife.S
 check("▼ 자리를 못 고르면 누르지 않고 본체 위에 마우스만 ('확인할 것')", acts == [] and "확인하여 주십시오" in note, f"{note} {acts}")
 TOP[0] = 99
 note, err = run_drop(Arrow())
-check("누를 자리를 다른 창(열린 메뉴·다른 프로그램)이 덮고 있으면 누르지 않고 멈춘다",
-      err is not None and err.result == "failed" and acts == [], f"{err} {acts}")
+check("누를 자리를 다른 창(열린 메뉴·다른 프로그램)이 덮고 있으면 누르지 않고 멈춘다 (ERPia 의 제목 없는 창이면 ESC 한 번만 - 2026-11-13)",
+      err is not None and err.result == "failed" and acts in ([], [("keys", "{ESC}")]), f"{err} {acts}")
 TOP[0] = 1
 acts.clear()
 for name, el in (("빈 사각형", El("빈", Rect(0, 0, 0, 0))), ("창 밖", El("밖", Rect(300, 500, 340, 520)))):
@@ -3055,5 +3055,77 @@ check("못 알아보면 멈추고, 그새 열린 번호 탭은 닫는다 (다음
       stopped and closed_k8 == [wellife.ORDER_TAB + " (2)"], str(closed_k8))
 for n, f in _saved_k8.items():
     setattr(wellife, n, f)
+
+
+# 누를 자리를 덮은 창 (triif 2026-11-13 10:40 'Sales ▼' 를 창 8915662 가 덮음) - 무엇인지 남기고, ERPia 의 제목 없는 작은 창만 ESC 한 번
+class _Rect:
+    def __init__(self, l, t, r, b):
+        self.left, self.top, self.right, self.bottom = l, t, r, b
+
+    def width(self):
+        return self.right - self.left
+
+    def height(self):
+        return self.bottom - self.top
+
+
+class _CovEl:
+    def rectangle(self):
+        return _Rect(100, 100, 120, 120)
+
+
+COV = {"top": 800, "fg": 801, "pid": {800: 4242, 801: 9999}, "title": {800: ""}, "keys": [], "logs": []}
+
+
+def _cov_keys(k):
+    COV["keys"].append(k)
+    COV["top"] = 1                                   # ESC 로 목록이 닫혔다
+
+
+cov_rr = types.SimpleNamespace(
+    win32gui=types.SimpleNamespace(GetAncestor=lambda h, f: h, WindowFromPoint=lambda pt: COV["top"], GetForegroundWindow=lambda: COV["fg"],
+                                   GetWindowText=lambda h: COV["title"].get(h, "메인"), GetClassName=lambda h: "WindowsForms10.Window",
+                                   GetWindowRect=lambda h: (0, 0, 300, 200)),
+    win32process=types.SimpleNamespace(GetWindowThreadProcessId=lambda h: (0, COV["pid"].get(h, 4242))),
+    send_keys=_cov_keys, log=COV["logs"].append)
+cov_ctx = types.SimpleNamespace(hwnd=1, pid=4242, window=lambda: types.SimpleNamespace(rectangle=lambda: _Rect(0, 0, 1000, 800)))
+_saved_cov = (wellife.mouse.move, wellife.COVER_WAIT_SECONDS, wellife._top_window)
+wellife._top_window = lambda rr_, pt: COV["top"]          # 앞 시험이 바꿔 둔 것을 쓰지 않게
+wellife.mouse.move = lambda coords=None: None
+wellife.COVER_WAIT_SECONDS = 0.5
+try:
+    wellife.clear_point(cov_rr, cov_ctx, _CovEl(), "조회 조건 Sales ▼")
+    res = None
+except wellife.Stop as e:
+    res = str(e)
+check("맨 앞 창이 ERPia 가 아니면 ESC 를 보내지 않는다 (다른 프로그램에 ESC 가 가지 않게)", res and COV["keys"] == [], str((res, COV["keys"])))
+COV.update(top=500, fg=1)
+COV["pid"][500] = 4242
+COV["title"][500] = ""
+pt = wellife.clear_point(cov_rr, cov_ctx, _CovEl(), "조회 조건 Sales ▼")
+check("ERPia 의 제목 없는 작은 창(남은 목록)이 덮으면 ESC 한 번으로 닫고 누른다", pt == (110, 110) and COV["keys"] == ["{ESC}"]
+      and any("ESC 로 닫습니다" in x for x in COV["logs"]), str((pt, COV)))
+COV.update(top=600, keys=[], logs=[])
+COV["pid"][600] = 9999
+COV["title"][600] = "알림"
+try:
+    wellife.clear_point(cov_rr, cov_ctx, _CovEl(), "조회 조건 Sales ▼")
+    res = None
+except wellife.Stop as e:
+    res = str(e)
+check("다른 프로그램 창이면 ESC 없이 멈추고, 사유에 창 제목·프로그램을 남긴다", res and COV["keys"] == [] and "'알림'" in res
+      and "PID 9999" in res and "덮고 있어" in res, str((res, COV["keys"])))
+COV.update(top=700, keys=[])
+COV["pid"][700] = 4242
+COV["title"][700] = "확인"
+try:
+    wellife.clear_point(cov_rr, cov_ctx, _CovEl(), "조회 조건 Sales ▼")
+    res = None
+except wellife.Stop as e:
+    res = str(e)
+check("제목 있는 ERPia 창(안내·확인)은 ESC 로 닫지 않고 멈춘다", res and COV["keys"] == [], str((res, COV["keys"])))
+check("덮은 창은 5초까지 기다린다 (잠깐 뜨는 알림·도움말)", _saved_cov[1] == 5)
+check("exe 이름 읽기: 이 시험 프로세스는 python", (wellife._exe_name(os.getpid()) or "").lower().startswith("python"))
+wellife.mouse.move, wellife.COVER_WAIT_SECONDS, wellife._top_window = _saved_cov
 
 finish()

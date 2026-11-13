@@ -2860,14 +2860,84 @@ def clear_point(rr, ctx, el, what):
     if r.width() <= 0 or r.height() <= 0 or not (wr.left <= pt[0] < wr.right and wr.top <= pt[1] < wr.bottom):
         raise Stop("failed", f"{what}: 누를 자리가 창 안에 보이지 않아 누르지 않고 중단하였습니다. ({r})")
     mouse.move(coords=pt)
-    deadline = time.time() + 1.0
+    deadline = time.time() + COVER_WAIT_SECONDS
     top = _top_window(rr, pt)
+    escaped = False
     while top != ctx.hwnd:
+        # ERPia 자신의 제목 없는 작은 창(남은 내림 목록·풍선 도움말)이면 ESC 로 한 번만 닫아 본다. 제목 있는 ERPia 창(안내·확인)과
+        # 다른 프로그램 창은 건드리지 않는다 - 함부로 닫으면 안 된다 (triif 2026-11-13 10:40 처음, 사용자 승인)
+        if (not escaped and top and _window_pid(rr, top) == ctx.pid and not _title(rr, top)
+                and _window_pid(rr, _foreground(rr)) == ctx.pid):    # ESC 는 맨 앞 창으로 간다 - ERPia 가 맨 앞일 때만
+            escaped = True
+            rr.log(f"  {what}: 누를 자리를 ERPia 의 작은 창이 덮고 있어 ESC 로 닫습니다. ({_window_who(rr, top)})")
+            rr.send_keys("{ESC}")
         if time.time() > deadline:
-            raise Stop("failed", f"{what}: 누를 자리를 다른 창({top})이 덮고 있어 누르지 않고 중단하였습니다.")
+            raise Stop("failed", f"{what}: 누를 자리를 다른 창이 덮고 있어 누르지 않고 중단하였습니다. ({_window_who(rr, top)})")
         time.sleep(0.1)
         top = _top_window(rr, pt)
     return pt
+
+
+COVER_WAIT_SECONDS = 5   # 누를 자리를 덮은 창이 비켜나기를 기다리는 시간 (잠깐 뜨는 알림·도움말) - 2026-11-13 1초 → 5초
+
+
+def _window_pid(rr, h):
+    try:
+        return rr.win32process.GetWindowThreadProcessId(h)[1]
+    except Exception:
+        return None
+
+
+def _foreground(rr):
+    try:
+        return rr.win32gui.GetForegroundWindow()
+    except Exception:
+        return None
+
+
+def _title(rr, h):
+    try:
+        return rr.win32gui.GetWindowText(h)
+    except Exception:
+        return ""
+
+
+def _window_who(rr, h):
+    """덮은 창 한 줄 - 제목·종류·프로그램·크기 (업체 담당자가 무엇을 닫을지 알게)."""
+    if not h:
+        return "창을 읽지 못함"
+    parts = [f"창 {h}"]
+    try:
+        parts.append(f"'{_title(rr, h)[:40]}'")
+        parts.append(rr.win32gui.GetClassName(h)[:40])
+        l, t, r, b = rr.win32gui.GetWindowRect(h)
+        parts.append(f"{r - l}x{b - t} ({l},{t})")
+    except Exception:
+        pass
+    pid = _window_pid(rr, h)
+    parts.append(f"프로그램 {_exe_name(pid) or '?'} (PID {pid})")
+    return " · ".join(parts)
+
+
+def _exe_name(pid):
+    """프로세스 번호의 exe 이름. 못 읽으면 None (관리자 프로세스도 PROCESS_QUERY_LIMITED_INFORMATION 이면 대개 읽힌다)."""
+    import ctypes
+    from ctypes import wintypes
+    if not pid:
+        return None
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = wintypes.HANDLE
+    h = k.OpenProcess(0x1000, False, int(pid))
+    if not h:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(520)
+        n = wintypes.DWORD(len(buf))
+        if not k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+            return None
+        return os.path.basename(buf.value)
+    finally:
+        k.CloseHandle(h)
 
 
 def _top_window(rr, pt):
