@@ -340,6 +340,16 @@ check("PID 가 끝났으면 새 ERPia PID 로 메인 창을 잡는다 (PID 7828 
 ctx = make_ctx()
 ctx.pid = 7828
 check("refresh 가 바뀐 PID 를 ctx 에 남긴다", ctx.refresh() and ctx.pid == 15260 and ctx.hwnd == 555, str((ctx.pid, ctx.hwnd)))
+_next_pid = iter(range(20000, 30000))
+_calls = []
+rr.ec.pid_alive = lambda pid: False                       # 계속 꺼졌다 켜지는 ERPia - 볼 때마다 새 PID
+rr.ec.find_erpia_pid = lambda: _calls.append(1) or next(_next_pid)
+rr.ec.wait_for_main_hwnd = lambda pid, timeout=5: (_ for _ in ()).throw(RuntimeError("창 없음"))
+r = _real_acquire(7828, tries=12)
+rr.ec.wait_for_main_hwnd = _wait_hwnd
+check("ERPia 가 끝없이 다시 켜져도 PID 바꿔 다시 세기는 3번까지라 끝난다 (12 x 4 = 48번 안)",
+      r[0] is None and len(_calls) <= 12 * (rr.PID_SWITCH_MAX + 1), str(len(_calls)))
+rr.ec.pid_alive = lambda pid: pid != 7828
 rr.ec.find_erpia_pid = lambda: (_ for _ in ()).throw(RuntimeError("없음"))
 logs = []
 _saved_log = rr.log

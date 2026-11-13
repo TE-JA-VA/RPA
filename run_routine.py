@@ -412,6 +412,9 @@ def _window_note(hwnd):
         return f"hwnd={hwnd} ({type(e).__name__})"
 
 
+PID_SWITCH_MAX = 3   # 메인 창을 찾는 동안 ERPia PID 가 바뀌어 시도 횟수를 다시 세는 최대 횟수
+
+
 def acquire_main_window(pid, tries=12):
     """로그인 완료된 메인 창을 잡아 (hwnd, app, win, pid) 를 돌려준다.
 
@@ -420,9 +423,10 @@ def acquire_main_window(pid, tries=12):
     그럴 때 창을 다시 찾아 재시도한다. 실제로 UIA 호출이 되는 창만 돌려준다.
     ERPia 가 로그인 직후 스스로 업데이트해 다시 켜지면 PID 가 바뀐다 (triif 2026-11-13 09:01 - 꺼진 PID 의 창만 72초 찾다 실패).
     그래서 PID 가 끝났으면 떠 있는 ERPia 의 PID 를 다시 찾고, 바뀌면 시도 횟수를 처음부터 다시 센다.
+    다시 세기는 PID_SWITCH_MAX 번까지 - ERPia 가 계속 꺼졌다 켜지면 끝없이 돌지 않게 남은 횟수 안에서 끝낸다.
     못 잡으면 (None, None, None, pid) - 마지막으로 본 창과 오류를 기록에 남긴다.
     """
-    attempt = 0
+    attempt, switches = 0, 0
     last_candidate, errors = None, []
     while attempt < tries:
         attempt += 1
@@ -432,8 +436,11 @@ def acquire_main_window(pid, tries=12):
             except RuntimeError:
                 new_pid = None      # 다시 켜지는 중일 수 있다 - 다음 시도에 다시 본다
             if new_pid is not None and new_pid != pid:
+                switches += 1
                 log(f"  ERPia 가 다시 켜졌습니다 (PID {pid} -> {new_pid}, ERPia 자체 업데이트 등) - 새 ERPia 의 메인 창을 찾습니다.")
-                pid, attempt = new_pid, 0
+                pid = new_pid
+                if switches <= PID_SWITCH_MAX:
+                    attempt = 0
             elif new_pid is None:
                 time.sleep(1.0)
                 continue
