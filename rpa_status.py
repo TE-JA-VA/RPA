@@ -1070,6 +1070,10 @@ def circled(n):
 MAIL_RECORD_VERSION = 2                  # 메일 2차인증 단계가 든 기록 (설계 2026-11-02) - 옛 ACTOR 는 1 만 알아 거절한다
 UPLOAD_RECORD_VERSION = 3                # 엑셀 파일 넣기(file) 단계가 든 기록 (업로드 설계 9절, 2026-11-09) - 옛 ACTOR 는 1·2 만 알아 거절한다
 RECORD_VERSIONS = (1, MAIL_RECORD_VERSION, UPLOAD_RECORD_VERSION)  # 이 PC 가 재생·받을 수 있는 기록 버전
+# 업체가 원하지 않을 수 있는 일을 하는 단추·화면의 낱말 - 재생기가 원래 대상 대신 같은 글자 단추를 누를지 볼 때 (web_replay._risky_layer,
+# 사용자 2026-11-16), ACTOR AI 도움이 AI 의 고름을 거를 때 같이 쓴다. 기록 대상 글에 같은 낱말이 있으면 그 낱말은 괜찮다
+RISK_WORDS = ("동의", "결제", "구매", "주문하기", "삭제", "변경", "신청", "전송", "발송", "등록", "저장", "승인", "해지",
+              "탈퇴", "취소", "출고", "확정")
 RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지 않는다 (옛 ACTOR 가 새 기록을 잘못 따라 하지 않게). web_replay·preset_transfer 가
                                           # 여기서 읽는다 - 에이전트(내장 파이썬, playwright 없음)가 web_replay 를 끌어오지 않게 (2026-10-19)
 PRESET_DEFAULT = 2                        # 업체 프리셋 수를 모를 때 (관리 화면에서 정하지 않은 업체·에이전트가 아직 못 읽은 PC)

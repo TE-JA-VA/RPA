@@ -1403,6 +1403,14 @@ def q(s):
 
 SURE_CLUES = ("id", "id 끝", "id 안 글자", "보이는 글자")    # 하나로 정해지는 단서 - '새로 생긴 것' 에 없을 때 원래 있던 것에서도 찾는다 (_find)
 # 화면을 열 때마다 바뀌는 id (기록기 AUTO_ID 와 같다) - WebSquare 'wq_uuid_591' 은 앞서 연 창 수에 따라 번호가 밀려 다른 칸을 가리킬 수 있다
+# 요소가 든 레이어(가장 가까운 대화상자 또는 화면 넓이 30% 넘는 fixed 상자·z-index 있는 absolute 상자)의 글. 레이어가 아니면 빈 글
+LAYER_TEXT_JS = """e => { const W = innerWidth;
+  for (let a = e; a && a !== document.body; a = a.parentElement) {
+    const cs = getComputedStyle(a), z = parseInt(cs.zIndex, 10);
+    if (a.matches('[role=dialog],[role=alertdialog],[aria-modal=true],dialog')
+        || (cs.position === 'fixed' || cs.position === 'absolute' && z > 0) && a.getBoundingClientRect().width > W * 0.3)
+      return (a.innerText || '').replace(/\\s+/g, ' ').slice(0, 3000); }
+  return ''; }"""
 AUTO_ID = re.compile(r"\d{3,}|^(rc_|ext-|react-|mui-|radix-|headlessui-|:r)|[0-9a-f]{8}-[0-9a-f]{4}", re.I)
 
 
@@ -1728,6 +1736,10 @@ class Replayer:
         # (사용자 2026-11-10: 목록이 늦게 펼쳐지면 '보이는 글자' 를 못 찾은 사이 위치·몇 번째 단서가 숨은 것을 스크립트로 눌렀다)
         shown_only = t["textCount"] > 1 and t.get("visCount") == 1
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
+        # 기록 때 id 가 있던 대상을 id 로 못 찾고 다른 단서(글자 등)로 찾았으면 원래 것이 아닐 수 있다 - 위험한 레이어 안이면 누르지 않는다
+        # (사용자 2026-11-16: 신청 레이어의 [확인] 을 원래 [확인] 대신 눌렀다). 날마다 바뀌는 자동 id 는 id 없음으로 본다
+        guard = bool(t.get("id")) and not AUTO_ID.search(t["id"])
+        risky = None
         started = time.time()
         deadline, tries = started + (0 if quick else OPTIONAL_WAIT if optional else self.step_timeout), 1
         while True:
@@ -1758,6 +1770,11 @@ class Replayer:
                                 vis = False     # 화면이 바뀌는 중
                             if not vis:
                                 continue
+                        if guard and not how.startswith("id"):
+                            w = self._risky_layer(loc, t)
+                            if w:
+                                risky = w
+                                continue
                         return frame, loc, how + (", 새로 생긴 것" if pv is not None else "")
             if quick:
                 raise NoTarget("")
@@ -1768,11 +1785,21 @@ class Replayer:
                 if got:
                     raise Moved(*got)
                 if tries >= self.step_tries:
-                    raise NoTarget(f"{self.step_timeout:.0f}초씩 {tries}번 찾았으나 대상을 찾지 못했습니다. (단서: {', '.join(c[0] for c in cands)})")
+                    why = f" '{risky}'이(가) 있는 화면의 같은 글자 단추는 누르지 않았습니다." if risky else ""
+                    raise NoTarget(f"{self.step_timeout:.0f}초씩 {tries}번 찾았으나 대상을 찾지 못했습니다. (단서: {', '.join(c[0] for c in cands)})"
+                                   + why)
                 tries += 1
                 self.log(f"      {self.step_timeout:.0f}초 동안 대상을 찾지 못했습니다. 다시 찾습니다. ({tries}/{self.step_tries})")
                 deadline = time.time() + self.step_timeout
             page.wait_for_timeout(250)
+
+    def _risky_layer(self, loc, t):
+        """loc 이 든 레이어 글에 기록 대상 글에 없는 위험 낱말이 있으면 그 낱말 (없거나 못 읽으면 None)."""
+        try:
+            text = loc.evaluate(LAYER_TEXT_JS)
+        except Exception:
+            return None
+        return next((w for w in rpa_status.RISK_WORDS if w in text and w not in (t.get("text") or "")), None)
 
     # --- 기록과 다른 창에 뜬 대상 (설계 2026-11-16) ---
     def _movable(self, s):
