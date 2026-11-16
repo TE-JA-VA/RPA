@@ -391,6 +391,10 @@ MAIL_EMPTY_HOLD = 5.0        # 그 글이 이만큼 계속 보여야 빈 목록 
                              # 그 실행만 '대상 없음' 이고 기억하지 않아 다음 실행에서 받는다
 CLOSE_TEXTS = ("닫기", "오늘 하루 보지 않기", "오늘하루 보지않기", "오늘 하루 열지 않기", "x", "×", "close")
 OPTIONAL_WAIT = 3.0
+# 기록과 다른 창에 뜬 대상 찾기 (설계 2026-11-16): 팝업이 기록과 다르게 뜬 날 - 끼어든 창·순서 바뀜·같은 창으로 열림·한 클릭에 창 둘
+URL_WAIT = 3.0          # 새로 뜬 창의 주소가 기록과 다를 때 주소가 맞는 창이 뜨기를, 번호가 없는 창이 뜨기를 기다리는 시간
+FRAME_PROBE_MAX = 8     # 창 하나에서 훑는 안쪽 틀 수 (광고 틀이 많은 화면에서 오래 걸리지 않게)
+MOVE_KINDS = ("click", "fill", "secret", "select", "check", "enter")   # 창을 고쳐 잡는 단계 - 마우스 올리기·'있을 때만' 은 지금처럼 없으면 건너뛴다
 NOTICE_WAIT = 8.0       # 기록 때 로그인 뒤 저절로 뜬 공지 창을 기다리는 시간 - 로그인 화면이 다 뜬 뒤 여는 느린 사이트도 잡게 (O2, 검토 2026-11-03)
 
 
@@ -563,8 +567,10 @@ class Recorder:
         4.2절). 빈 번호(닫힌 팝업)는 None 으로 비워 두어 새 탭이 max+1 부터 받고, 남긴 단계가 가리키는 탭 번호가 그대로 맞는다.
         지금 문서에도 기록 JS 를 심는다 (add_init_script 는 다음 문서부터. 문서마다 표시가 있어 두 번 붙지 않는다)."""
         self.pages = [pages.get(i) for i in range(max(pages, default=-1) + 1)]
+        seen = set()                # 재생기가 '새 창 대신 같은 창' 으로 잡았으면 같은 창이 두 번호에 있다 (설계 2026-11-16) - 한 번만 받는다
         for pg in self.pages:
-            if pg is not None and not pg.is_closed():
+            if pg is not None and not pg.is_closed() and id(pg) not in seen:
+                seen.add(id(pg))
                 self._page(pg)
                 for f in pg.frames:
                     self._inject(f)
@@ -1372,6 +1378,10 @@ class Skip(Exception):
     pass
 
 
+class Moved(Exception):
+    """대상이 지정한 창·틀이 아닌 다른 곳에 있다 (_find 의 elsewhere) - args = (창, 단계 모양, 붙일 말). _step 이 고쳐 잡는다 (설계 2026-11-16)."""
+
+
 class Cancelled(Exception):
     """[■ 중단] (옵저버 미리보기) - 찾거나 기다리던 것을 그만둔다."""
 
@@ -1490,6 +1500,9 @@ class Replayer:
         self.hide_values = hide_values       # 로그에 칸에 친 값·주소 ? 뒤를 안 싣는다 (대시보드로 간다)
         self.shot_dir = shot_dir or out_dir  # 실패 사진 자리 (프리페어는 받은 파일 폴더에 사진을 두지 않는다)
         self.pages, self.watched, self.saved, self.results, self.baseline = {}, set(), [], [], {}
+        self.needs, self.loose = {}, set()   # run() 이 채운다 (단계만 따로 돌리는 시험은 빈 채로)
+        # 기록과 다른 창에 뜬 대상 (설계 2026-11-16): 단계가 연 창 번호 · 그중 아직 손대지 않은 것 · 새 창 대신 같은 창으로 잡은 번호
+        self.opened, self.fresh, self.folded = set(), set(), set()
         self.progress = None        # (번호, run/ok/skip/fail, 설명) - 화면이 단계마다 표시
         self.upload_file, self.upload_tried, self.upload_steps = None, False, False   # 사이트 엑셀 업로드: 올릴 파일, 파일을 넣었나, 'file' 단계가 있나
         self.page_hook = None       # 첫 창이 뜨면 (창 자리 맞추기)
@@ -1700,8 +1713,11 @@ class Replayer:
         except Exception:
             return set()
 
-    def _find(self, page, s, prev, loose=False):
-        """loose: 새로 생긴 것 중에 없으면 원래 있던 것에서도 (loose_new)."""
+    def _find(self, page, s, prev, loose=False, quick=False, elsewhere=None):
+        """loose: 새로 생긴 것 중에 없으면 원래 있던 것에서도 (loose_new).
+        quick: 기다리지 않고 한 번만 훑는다 (다른 창·틀 훑기 - 이미 떠 있는 화면이라 늦은 단서도 처음부터), 없으면 NoTarget.
+               틀마다 기다리면 안쪽 틀이 많은 화면에서 못 찾는 날의 실패가 수십 초 늦어진다 (최종 검토 2026-11-16).
+        elsewhere: 못 찾은 회차 끝마다 부른다 - (창, 단계 모양, 붙일 말) 을 돌려주면 Moved (설계 2026-11-16)."""
         t = s["target"]
         if s.get("loose"):          # 메일 고르기 묶음 - 메일마다 글자(첨부 이름 등)가 달라 글자 말고 자리·속성으로
             t = dict(t, text="", textCount=0)
@@ -1713,11 +1729,11 @@ class Replayer:
         shown_only = t["textCount"] > 1 and t.get("visCount") == 1
         optional = s.get("optional") or s["kind"] == "hover"     # 마우스 올리기는 거들 뿐 - 없으면 건너뛰고 다음 누르기가 연다
         started = time.time()
-        deadline, tries = started + (OPTIONAL_WAIT if optional else self.step_timeout), 1
+        deadline, tries = started + (0 if quick else OPTIONAL_WAIT if optional else self.step_timeout), 1
         while True:
             self._check_cancel()
             frame = self._frame(page, s["frame"])
-            late = time.time() - started >= LATE_CLUE_WAIT
+            late = quick or time.time() - started >= LATE_CLUE_WAIT
             # 새로 생긴 것 중에 없으면 원래 있던 것에서도 - loose_new 는 모든 단서로, 그 밖에는 하나로 정해지는 단서(SURE_CLUES)로만.
             # 기록 땐 앞 단계 뒤에 그려진 드롭다운이 재생 땐 이미 그려져 있었다 (사용자 2026-11-10 미리보기 - 같은 기록이 한 번은
             # 못 찾고 한 번은 [id] 로 찾았다). 파일 받기는 오늘 새로 생긴 파일만 받게 그대로 둔다
@@ -1743,15 +1759,178 @@ class Replayer:
                             if not vis:
                                 continue
                         return frame, loc, how + (", 새로 생긴 것" if pv is not None else "")
+            if quick:
+                raise NoTarget("")
             if time.time() > deadline:
                 if optional:
                     raise Skip("화면에 없음")
+                got = elsewhere() if elsewhere is not None else None
+                if got:
+                    raise Moved(*got)
                 if tries >= self.step_tries:
                     raise NoTarget(f"{self.step_timeout:.0f}초씩 {tries}번 찾았으나 대상을 찾지 못했습니다. (단서: {', '.join(c[0] for c in cands)})")
                 tries += 1
                 self.log(f"      {self.step_timeout:.0f}초 동안 대상을 찾지 못했습니다. 다시 찾습니다. ({tries}/{self.step_tries})")
                 deadline = time.time() + self.step_timeout
             page.wait_for_timeout(250)
+
+    # --- 기록과 다른 창에 뜬 대상 (설계 2026-11-16) ---
+    def _movable(self, s):
+        """창·틀을 고쳐 잡아도 되는 단계인가 - 메일함 창·인증번호·메일 고르기·'있을 때만'·마우스 올리기는 뺀다."""
+        return (s["kind"] in MOVE_KINDS and bool(s.get("target")) and not s.get("optional") and s.get("page") != self.mail_page
+                and not any(s.get(k) for k in ("pick", "loose", "mailOpen", "mailLink", "mailSend", "otpSend")))
+
+    def _other_pages(self, here):
+        """같은 사이트(컨텍스트)의 열린 다른 창 - 메일함 창·브라우저 자체 페이지(Edge 다운로드 창)는 뺀다."""
+        mail = self.pages.get(self.mail_page) if self.mail_page is not None else None
+        out = []
+        for pg in self.context.pages:
+            try:
+                if pg is here or pg is mail or pg.is_closed() or pg.url.startswith(BROWSER_PAGES):
+                    continue
+            except Exception:
+                continue            # 그 사이 닫힌 창
+            out.append(pg)
+        return out
+
+    def _rec_path(self, pg, s):
+        """s 가 기록된 틀이 pg 에서 지금 보고 있는 주소 경로 (기록의 s['url'] 과 견준다). 그 틀이 없으면 None."""
+        try:
+            f = self._frame(pg, s["frame"])
+            return url_path(f.url) if f is not None else None
+        except Exception:
+            return None
+
+    def _probe(self, pg, s, prev, loose, frames=True, main=True):
+        """pg 에 s 의 대상이 지금 있나 (기다리지 않고 한 번 훑는다) → 찾은 모양의 단계 (틀이 다르면 frame 을 고친 사본) | None.
+        main=False 면 기록된 틀은 빼고 다른 틀만."""
+        tries = [s] if main else []
+        if frames:
+            try:
+                at = self._frame(pg, s["frame"])
+                tries += [dict(s, frame=frame_info(f)) for f in pg.frames[:FRAME_PROBE_MAX + 1] if f is not at]
+            except Exception:
+                pass                # 그 사이 닫힌 창
+        for v in tries:
+            try:
+                self._find(pg, v, prev, loose, quick=True)
+                return v
+            except Cancelled:
+                raise
+            except Exception:
+                continue
+        return None
+
+    def _elsewhere(self, i, s, here):
+        """s 의 대상이 지정한 창(here)의 다른 틀이나 열린 다른 창에 있나 → (창, 단계 모양, 붙일 말) | None.
+        여러 창에 있으면 주소가 기록과 같은 창이 하나일 때만. 단계가 연 창이 아닌 창(처음 창·새 탭)의 단계·공지 창의 단계·글자 없는
+        대상은 주소가 같은 곳으로만 옮긴다 - 처음 창의 [확인] 을 못 찾았다고 열려 있는 공지 창의 [확인] 을 누르지 않게."""
+        prev = self.baseline.get(i)
+        if s.get("download") and prev:
+            return None             # '새로 생긴 것' 의 기준이 이미 다른 창에서 잡혔다 - 옮기면 옛 파일을 받을 수 있다
+        loose = i in self.loose
+        # 주소(경로)가 기록과 같은 곳으로만 옮기는 단계 - 주소가 달라도 옮기면 예전에 분명히 실패하던 날 엉뚱한 것을 누른다 (최종 검토 2026-11-16):
+        # 단계가 열지 않은 창(처음 창·새 탭)의 단계, 공지 창의 단계 (닫기류 글자는 어느 창에나 있다), 글자 없는 대상 (자리만 같으면 '찾은 것' 이 된다)
+        strict = ((s["page"] in self.pages and s["page"] not in self.opened) or notice_popup(self.rec["steps"], s["page"])
+                  or not (s["target"].get("text") or "").strip())
+        if here is not None and not here.is_closed():
+            v = self._probe(here, s, prev, loose, main=False)
+            if v is not None and (not strict or self._rec_path(here, v) == s["url"]):
+                return here, v, "본문에서 찾음" if v["frame"].get("main") else "안쪽 틀에서 찾음"
+        found = [(pg, v) for pg in self._other_pages(here) for v in [self._probe(pg, s, prev, loose)] if v is not None]
+        if len(found) > 1 or strict:
+            n = len(found)
+            found = [x for x in found if self._rec_path(*x) == s["url"]]
+            if n and len(found) != 1:
+                self.log(f"      (대상이 다른 창 {n}개에 있으나 기록과 주소가 같은 창 하나로 정할 수 없어 옮기지 않습니다)")
+        return (found[0][0], found[0][1], "다른 창에서 찾음") if len(found) == 1 else None
+
+    def _move(self, n, pg, why):
+        """창 번호 n 을 pg 로 고쳐 잡는다."""
+        self.pages[n] = pg
+        self._watch(pg)
+        try:
+            title = pg.title()[:30]
+        except Exception:
+            title = ""
+        self.log(f"      (창 {n}: {why} 고쳐 잡습니다 - '{title}' {url_path(pg.url)})")
+
+    def _take(self, i, s, got, notes):
+        """_elsewhere 가 찾은 곳으로 고쳐 잡는다 → (창, 단계 모양). 창이 바뀌면 이 단계 뒤에 나타날 것들의 기준을 새 창에서 다시 잡는다
+        - 옛 창에서 잡은 기준이면 옛 파일을 '새로 생긴 것' 으로 받는다."""
+        pg, v, note = got
+        n = s["page"]
+        if self.pages.get(n) is not pg:
+            self._move(n, pg, "대상을 다른 창에서 찾아")
+            for j in self.needs.get(i, ()):
+                if self.rec["steps"][j].get("page") == n:
+                    self.baseline[j] = self._snapshot(self.rec["steps"][j])
+        else:
+            self.log(f"      (창 {n}: 대상을 기록과 다른 틀에서 찾았습니다)")
+        notes.append(note)
+        return pg, v
+
+    def _url_window(self, i, s):
+        """새로 뜬 창에 처음 손대는 단계: 그 창의 주소가 기록과 다르고, 주소가 기록과 같은 다른 창이 하나 있고 거기 대상이 있으면
+        그 창을 그 번호로 고쳐 잡는다 (URL_WAIT 초까지 그런 창을 기다린다) → 붙일 말 | None. 기준을 잡기 전에 부른다.
+        없으면 지금처럼 지정한 창에서 한다 - 주소가 다르다고 막지 않는다 (팝업 주소가 날마다 바뀌는 멀쩡한 사이트, 사용자 2026-11-16)."""
+        n = s.get("page")
+        if n not in self.fresh:
+            return None
+        self.fresh.discard(n)
+        here = self.pages.get(n)
+        if (here is None or here.is_closed() or not self._movable(s) or self._rec_path(here, s) == s["url"]
+                or (s.get("download") and self.baseline.get(i))):
+            return None
+        end = time.time() + URL_WAIT
+        while True:
+            self._check_cancel()
+            # 지금 창이 그 사이 기록의 주소가 됐으면 (잠깐 다른 주소를 거쳐 뜨는 팝업) 그대로 둔다. 번호가 이미 있는 창(처음 창 등)으로는
+            # 옮기지 않는다 - 경로 하나로 다 처리하는 사이트는 처음 창과 팝업의 경로가 같다 (최종 검토 2026-11-16)
+            if here.is_closed() or self._rec_path(here, s) == s["url"]:
+                return None
+            taken = {id(pg) for pg in self.pages.values() if pg is not None}
+            match = [pg for pg in self._other_pages(here) if id(pg) not in taken and self._rec_path(pg, s) == s["url"]]
+            if len(match) == 1 and self._probe(match[0], s, self.baseline.get(i), i in self.loose, frames=False) is not None:
+                self._move(n, match[0], "새로 뜬 창의 주소가 기록과 달라, 주소가 같은 창으로")
+                return "다른 창에서 찾음"
+            if time.time() > end:
+                return None
+            self._idle(200, here)
+
+    def _wait_elsewhere(self, i, s):
+        """번호가 없는 창의 단계 (한 번의 클릭이 연 두 번째 창 - 기록기는 첫 창만 '여는 창' 으로 적는다): 열린 창들에서 대상을 찾는다.
+        막 뜨는 중일 수 있어 URL_WAIT 초까지 → _elsewhere 와 같은 것 | None"""
+        end = time.time() + URL_WAIT
+        while True:
+            self._check_cancel()
+            got = self._elsewhere(i, s, None)
+            if got or time.time() > end:
+                return got
+            self._idle(200)
+
+    def _next_here(self, i, s, page):
+        """새 창을 여는 단계 s: 그 창에서 할 다음 단계의 대상이 지금 창(안쪽 틀 포함)에 있나."""
+        n, steps = s["opens"], self.rec["steps"]
+        j = next((k for k in range(i + 1, len(steps)) if steps[k].get("page") == n and self._movable(steps[k])), None)
+        try:
+            return j is not None and not page.is_closed() and self._probe(page, steps[j], None, j in self.loose) is not None
+        except Cancelled:
+            raise
+        except Exception:
+            return False
+
+    def _same_window(self, i, s, page):
+        """새 창을 여는 단계인데 누른 뒤 새 창이 뜨지 않았다: 그 창에서 할 다음 단계의 대상이 지금 창(안쪽 틀 포함)에 새로 생겼으면
+        지금 창을 그 번호로 잡는다 (팝업 대신 같은 창의 레이어·틀로 열린 날). 누르기 전부터 있던 것이면 부르지 않는다 (_step)."""
+        n = s["opens"]
+        if not self._next_here(i, s, page):
+            return False
+        self.pages[n] = page
+        self.opened.add(n)
+        self.folded.add(n)
+        self.log(f"      (새 창이 뜨지 않았으나 다음 단계의 대상이 지금 창에 있어, 지금 창을 창 {n}(으)로 잡습니다)")
+        return True
 
     # --- 하기 ---
     def _dismiss(self, page):
@@ -2165,6 +2344,10 @@ class Replayer:
         return path
 
     def _step(self, i, s):
+        notes = []                        # 결과 글 끝에 붙일 말 (다른 창에서 찾음 등 - 설계 2026-11-16)
+        note = self._url_window(i, s) if s.get("target") else None      # 새로 뜬 창의 번호가 어긋났으면 기준을 잡기 전에 고친다
+        if note:
+            notes.append(note)
         for j in self.needs.get(i, ()):   # 뒤 단계가 '이 단계 뒤에 나타난 것' 을 누른다 - 지금 있는 것들을 적어 둔다
             self.baseline[j] = self._snapshot(self.rec["steps"][j])
         if s["kind"] == "newtab":
@@ -2176,7 +2359,14 @@ class Replayer:
         if page is None and s["page"] in self.pages:   # 오늘은 뜨지 않은 공지 창 (act - notice_popup)
             raise Skip("공지 창이 뜨지 않았습니다")
         if page is None or page.is_closed():
-            raise NotFound(f"창 {s['page']}이(가) 없습니다.")
+            # 번호가 없는 창 (한 클릭이 연 두 번째 창 등) 만 찾아 잡는다. 떴다가 닫힌 창은 예전처럼 실패 - 창이 스스로 닫힌 날
+            # 다른 창의 같은 이름 단추를 누르지 않게 (최종 검토 2026-11-16)
+            got = self._wait_elsewhere(i, s) if page is None and self._movable(s) else None
+            if got is None:
+                if s.get("target") and notice_popup(self.rec["steps"], s["page"]):
+                    raise Skip("공지 창이 뜨지 않았습니다")
+                raise NotFound(f"창 {s['page']}이(가) 없습니다.")
+            page, s = self._take(i, s, got, notes)
         # 사람이 기다린 시간의 절반 (0.3~3초): 화면이 따라올 틈
         self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
         if s["kind"] == "goto":
@@ -2189,9 +2379,26 @@ class Replayer:
             return self._put_file(page, s)
         if s["kind"] == "fill" and (s.get("target") or {}).get("type") == "file":
             return "파일 칸 - 건너뜀"     # #39 전 기록기가 파일 칸에 함께 적은 글자 넣기 (fakepath) - 파일은 'file' 단계가 넣는다
-        frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose)
+        movable = self._movable(s)
+        if movable and s["page"] in self.folded:        # 새 창 대신 같은 창으로 잡은 번호 - 안쪽 틀로 열렸으면 틀부터 맞춘다 (20초를 기다리지 않게)
+            v = self._probe(page, s, self.baseline.get(i), i in self.loose)
+            if v is not None and v is not s:
+                s = v
+                notes.append("본문에서 찾음" if v["frame"].get("main") else "안쪽 틀에서 찾음")
+        try:
+            frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose,
+                                         elsewhere=(lambda: self._elsewhere(i, s, page)) if movable else None)
+        except Moved as m:                  # 지정한 창에 없고 다른 창·틀에 있다 - 고쳐 잡고 거기서 찾는다
+            page, s = self._take(i, s, m.args, notes)
+            frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose)
+        except NoTarget:
+            if notice_popup(self.rec["steps"], s["page"]):      # 공지 창의 단계가 어느 창에도 없다 - 공지가 뜨지 않은 날 (다른 창이 그 번호를 받았다)
+                raise Skip("공지 창이 뜨지 않았습니다") from None
+            raise
         if url_path(frame.url) != s["url"]:
             self.log(f"      (주소가 다름: 기록 {s['url']} / 지금 {url_path(frame.url)})")
+            if s["page"] in self.opened:        # 새로 뜬 창의 주소가 기록과 다른데 그대로 했다 - 눈에 띄게 (처음 창은 로그만)
+                notes.append("주소 다름")
         if self.review:             # 누를 곳에 잠깐 빨간 테두리 (Playwright highlight 는 글자 표가 화면에 쌓인다)
             try:
                 loc.evaluate("e => { const o = e.style.outline, f = e.style.outlineOffset;"
@@ -2209,24 +2416,34 @@ class Replayer:
                 # (현대이지웰 2026-11-11: 기록 때는 새 창이 떴는데 재생 때는 누른 창에서 바로 받아 '새 창' 을 15초 기다리다 멈췄다)
                 def on_popup(popup):
                     self.pages[s["opens"]] = popup
+                    self.opened.add(s["opens"])
+                    self.fresh.add(s["opens"])
                     self._watch(popup)
                 self.pages[s["opens"]] = None
                 page.once("popup", on_popup)
                 return self._act(page, loc, s)
             # 공지 창이면 짧게 기다리고, 안 뜨면 그 창 번호를 비워 두고 넘어간다 - 비워 둔 번호는 [수정] adopt 가 새 탭에 다시 주지 않는다
             notice = not s.get("download") and notice_popup(self.rec["steps"], s["opens"])
+            # 다음 단계의 대상이 누르기 전부터 지금 창에 있었나 - 있었으면 '새 창 대신 같은 창' 으로 보지 않는다
+            # (팝업 대신 알림창만 뜬 날, 처음 창에 원래 있던 같은 이름 단추로 넘어가 성공으로 보고하지 않게 - 최종 검토 2026-11-16)
+            was_here = notice or self._next_here(i, s, page)
             acted = False
             try:
                 with page.expect_popup(timeout=NOTICE_WAIT * 1000 if notice else 15000) as pi:
                     self._act(page, loc, s)
                     acted = True
             except PWTimeout:
+                if acted and not notice and not was_here and self._same_window(i, s, page):   # 팝업 대신 같은 창의 레이어·틀로 열린 날
+                    notes.append("새 창 대신 같은 창")
+                    return
                 if not (notice and acted):       # 누르기 자체가 안 됐거나 일하는 창이면 예전처럼 실패
                     raise
                 self.pages[s["opens"]] = None
                 self.log("      (공지 창이 뜨지 않아 넘어갑니다)")
                 return
             self.pages[s["opens"]] = pi.value
+            self.opened.add(s["opens"])
+            self.fresh.add(s["opens"])
             self._watch(pi.value)
             if not s.get("download"):       # 파일만 내려 주는 팝업은 곧 스스로 닫힌다
                 pi.value.wait_for_load_state("domcontentloaded")
@@ -2234,7 +2451,7 @@ class Replayer:
             how += f", 받음 {os.path.basename(self._save(self._until_download(page, act)))}"
         else:
             act()
-        return how
+        return ", ".join([how] + notes)
 
     def run(self):
         if self.rec.get("version") not in RECORD_VERSIONS:

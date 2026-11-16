@@ -43,7 +43,7 @@ class Page:
 
 
 rec.candidates = lambda t: [("아이디", "#x", None)]
-STEP = {"kind": "click", "target": {}, "frame": {"main": True}}
+STEP = {"kind": "click", "target": {"text": "", "textCount": 0}, "frame": {"main": True}}   # _find 가 읽는 칸 (2026-11-05 부터 text, 11-10 부터 textCount - 그동안 이 시험이 KeyError 로 멈춰 있었다)
 
 
 def run(show_after, tries):
