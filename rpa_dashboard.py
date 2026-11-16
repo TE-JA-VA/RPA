@@ -477,7 +477,7 @@ def launching_sec():
 
 
 def launch(target, by, env=None):
-    """RPA 를 새 콘솔 창으로 띄우고 설정에 기록한다.
+    """RPA 를 창 없는 콘솔로 띄우고 설정에 기록한다.
 
     target: all / prepare / routine,  by: 'auto' 또는 'manual:<아이디>'
     env: 자식에게 더할 환경 변수 - 예약 줄의 이번 실행 모듈(RPA_RUN_MODULES)·띄운 까닭(RPA_RUN_TRIGGER)
@@ -512,7 +512,8 @@ def launch(target, by, env=None):
             LAUNCHED_ENV.append(dict(env or {}))
         else:
             cmd = ["cmd.exe", "/c", path] if path.lower().endswith(".bat") else [path, *args]
-            # 새 콘솔 창은 프로그램이 끝나면 바로 닫혀 오류 출력이 사라진다. stderr 만 파일로 남긴다.
+            # 콘솔은 만들되 창은 띄우지 않는다 (CREATE_NO_WINDOW) - 검은 창이 ERPia 의 누를 자리를 덮어 루틴이 멈췄다
+            # (triif 2026-11-16 17:10, 사용자 '창 없이 띄움'). 진행은 대시보드·로그 파일로 본다. 오류 출력(stderr)만 파일로 남긴다.
             err_path = os.path.join(st.status_dir(), f"stderr_{target}.txt")
             try:
                 err_fh = open(err_path, "w", encoding="utf-8")
@@ -523,7 +524,7 @@ def launch(target, by, env=None):
                 # 띄우고 기다리면 아무도 없는 PC 에서 멈추므로, 표시를 넘겨 바로 멈추고 사유를 남기게 한다.
                 proc = subprocess.Popen(cmd, cwd=os.path.dirname(path), stderr=err_fh,
                                         env={**os.environ, "RPA_UNATTENDED": "1", **(env or {})},
-                                        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             finally:
                 if err_fh is not None:
                     err_fh.close()   # 자식이 손잡이를 물려받았으므로 여기서는 닫아도 된다

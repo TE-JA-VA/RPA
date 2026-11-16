@@ -2940,10 +2940,30 @@ def _exe_name(pid):
         k.CloseHandle(h)
 
 
-def _top_window(rr, pt):
-    """그 화면 좌표의 맨 위 최상위 창. 못 읽으면 None."""
+def _own_console():
+    """이 프로그램의 실행 창(콘솔) 번호. 콘솔 없이 켰으면 None."""
+    import ctypes
     try:
-        return rr.win32gui.GetAncestor(rr.win32gui.WindowFromPoint(pt), 2)    # GA_ROOT
+        k = ctypes.WinDLL("kernel32")
+        k.GetConsoleWindow.restype = ctypes.c_void_p
+        return k.GetConsoleWindow() or None
+    except Exception:
+        return None
+
+
+def _top_window(rr, pt):
+    """그 화면 좌표의 맨 위 최상위 창. 못 읽으면 None.
+    오토파일럿 자신의 실행 창(콘솔)이 덮고 있으면 최소화하고 다시 본다 - 우리 창이라 내려도 되고, 덮개 검사마다 따로 고치지 않게 여기서
+    (triif 2026-11-16 17:10: 운송장번호 전송 '조회 조건 Sales ▼' 를 ERPia_RPA.exe 콘솔이 덮어 중단). 다른 프로그램 창은 그대로 둔다."""
+    try:
+        top = rr.win32gui.GetAncestor(rr.win32gui.WindowFromPoint(pt), 2)    # GA_ROOT
+        con = _own_console()
+        if con and top == con:
+            rr.log("  누를 자리를 오토파일럿 실행 창(검은 창)이 덮고 있어 최소화합니다.")
+            rr.win32gui.ShowWindow(con, 6)     # SW_MINIMIZE
+            time.sleep(0.2)
+            top = rr.win32gui.GetAncestor(rr.win32gui.WindowFromPoint(pt), 2)
+        return top
     except Exception:
         return None
 
