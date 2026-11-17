@@ -1,24 +1,45 @@
-# 실행에 필요한 것 (playwright, pywinauto, pywin32, msoffcrypto-tool 과 그 의존성)
+# 새 PC 에서: Python 3.14.7 로 .venv 를 만든 뒤
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+# 브라우저는 PC 에 깔린 Edge 를 쓴다 (playwright install 은 하지 않는다).
+# pip 밖에서 따로: Inno Setup 6 (설치 파일), Node.js·firebase CLI (버전 내보내기). zig 는 Nuitka 가 첫 빌드 때 받는다.
+# 빌드 PC 를 옮길 때는 build\exe_cache·pyd_cache·launcher_cache 도 같이 옮긴다 (없으면 모든 PC 가 전부 다시 받는다).
+
+# 실행에 필요한 것 (playwright, pywinauto, pywin32, msoffcrypto-tool, pillow 와 그 의존성)
 cffi==2.1.1
 comtypes==1.4.16
 cryptography==50.0.2
+greenlet==3.5.5
 msoffcrypto-tool==6.1.0
 olefile==0.47
-pycparser==3.12
-greenlet==3.5.5
+pillow==12.3.0
 playwright==1.62.0
+pycparser==3.12
 pyee==13.0.1
 pywin32==312
 pywinauto==0.6.9
-pillow==12.3.0
 six==1.17.0
 typing_extensions==4.16.0
 
-# exe 빌드에 필요한 것 (pyinstaller 와 그 의존성)
-altgraph==0.17.5
-packaging==26.3
-pefile==2024.8.26
-pyinstaller==6.22.2
-pyinstaller-hooks-contrib==2026.7
-pywin32-ctypes==0.2.3
-setuptools==84.0.0
+# ACTOR AI 어시스트 (anthropic 과 그 의존성, 2026-11-17)
+annotated-types==0.8.0
+anthropic==2.8.0
+anyio==4.16.0
+docstring_parser==0.18.0
+h11==0.16.0
+httpcore2==2.16.0
+httpx2==2.16.0
+idna==3.19
+jiter==0.19.0
+opentelemetry-api==1.45.2
+pydantic==2.14.3
+pydantic_core==2.50.4
+sniffio==1.3.1
+truststore==0.10.5
+typing-inspection==0.4.5
+
+# exe 빌드에 필요한 것 (tools/build_release.py - Nuitka 와 onefile 압축 zstandard. 예전 PyInstaller 는 2026-10-02 부터 안 쓴다)
+Nuitka==4.2.2
+zstandard==0.25.0
+
+# 가끔 쓰는 도구 (tools/make_icon.py 아이콘 만들기)
+numpy==2.5.4
