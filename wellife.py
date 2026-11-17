@@ -2443,52 +2443,78 @@ def popup_buttons(rr, ctx):
     창 전체를 훑으면 열린 화면 수만큼 느려진다 (11-11 개발기 실측: 화면 4개가 열린 ERPia 에서 한 번 6.4~7.4초 → 1.9~2.2초.
     회차마다 새 실행이라 ERPia 가 켜져 있으면 화면 이동부터 늦었다). 숨은 화면 안 단추는 창 밖 좌표라 원래도 걸렀다 -
     창 안 구석에 걸친 숨은 화면의 단추만 더 빠진다 (화면 칸 밖이라 보이지 않는 단추 - 실측에서는 탭 스크롤 '열 오른쪽').
-    숨은 화면을 못 찾거나(화면 하나뿐 등), 훑다가 오류가 나거나, 훑는 사이에 숨은 화면이 바뀌면(탭 전환 - 막 뜬 화면을
-    건너뛰었을 수 있다) 예전처럼 창 전체."""
+    숨은 화면을 못 찾거나(화면 하나뿐 등), 훑는 사이에 숨은 화면이 바뀌면(탭 전환 - 막 뜬 화면을 건너뛰었을 수 있다) 예전처럼 창 전체.
+    훑다가 오류가 나면(닫히는 팝업의 단추가 사라짐 등) 한 번 더 훑고, 또 오류면 창 전체 - 오류까지의 부분 결과를 쓰면 confirm_popups 가
+    그 창 구성을 '팝업 없음' 으로 기억해 이미 뜬 다음 팝업을 다시 훑지 않는다 (검토 2026-11-17)."""
     win = ctx.window()
-    try:
-        pages, chain = hidden_pages(rr, ctx.hwnd)
-        if not pages:
-            return rr.find_popup_buttons(win)
-        wr = win.rectangle()
-        wanted = set(rr.OK_BUTTON_TEXTS) | set(rr.YES_BUTTON_TEXTS) | set(rr.NO_BUTTON_TEXTS)
-        found = []
+    for again in (False, True):
+        try:
+            return _popup_buttons_skipping(rr, ctx, win)
+        except Exception as e:
+            if again:
+                _scan_note(rr, ctx, f"훑다가 오류가 두 번 나 창 전체를 훑습니다 ({type(e).__name__})")
+    return rr.find_popup_buttons(win)
 
-        def walk(el):       # 창 전체 훑기와 같은 차례 (첫 단추로 팝업 글을 읽는다)
-            for c in el.children():
-                h = c.element_info.handle
-                if h in pages:
-                    continue                        # 숨은 화면 갈래
-                found.append(c)
-                if h in chain:
-                    walk(c)                         # 숨은 화면이 든 칸 - 한 단계씩 내려간다
-                else:
-                    found.extend(c.descendants(control_type="Button"))
-        walk(win)
-        if hidden_pages(rr, ctx.hwnd)[0] != pages:
-            return rr.find_popup_buttons(win)
-        out = []
-        for b in found:
-            if b.element_info.control_type != "Button" or b.window_text() not in wanted:
-                continue
-            r = b.rectangle()
-            if r.width() > 0 and r.height() > 0 and not (r.left < wr.left or r.top < wr.top):
-                out.append(b)
-        return out
-    except Exception:
+
+def _popup_buttons_skipping(rr, ctx, win):
+    """popup_buttons 한 번 - 숨은 화면 갈래만 빼고 훑는다. 숨은 화면이 없거나 훑는 사이 바뀌면 창 전체. 오류는 그대로 던진다."""
+    pages, chain, lost = hidden_pages(rr, ctx.hwnd)
+    if lost:
+        _scan_note(rr, ctx, "창 밖의 큰 칸을 숨은 화면으로 알아보지 못해 그 칸도 훑습니다 (떠 있는 화면과 크기가 다름)")
+    if not pages:
         return rr.find_popup_buttons(win)
+    wr = win.rectangle()
+    wanted = set(rr.OK_BUTTON_TEXTS) | set(rr.YES_BUTTON_TEXTS) | set(rr.NO_BUTTON_TEXTS)
+    found = []
+
+    def walk(el):       # 창 전체 훑기와 같은 차례 (첫 단추로 팝업 글을 읽는다)
+        for c in el.children():
+            h = c.element_info.handle
+            if h in pages:
+                continue                        # 숨은 화면 갈래
+            if c.element_info.control_type == "Button":
+                found.append(c)
+            if h in chain:
+                walk(c)                         # 숨은 화면이 든 칸 - 한 단계씩 내려간다
+            else:
+                found.extend(c.descendants(control_type="Button"))     # 이미 단추만 - 종류를 다시 읽지 않는다 (UIA 호출)
+    walk(win)
+    if hidden_pages(rr, ctx.hwnd)[0] != pages:
+        _scan_note(rr, ctx, "훑는 사이 숨은 화면이 바뀌어(탭 전환) 창 전체를 다시 훑습니다")
+        return rr.find_popup_buttons(win)
+    out = []
+    for b in found:
+        if b.window_text() not in wanted:
+            continue
+        r = b.rectangle()
+        if r.width() > 0 and r.height() > 0 and not (r.left < wr.left or r.top < wr.top):
+            out.append(b)
+    return out
+
+
+def _scan_note(rr, ctx, why):
+    """팝업 확인이 숨은 화면을 빼지 못한 까닭을 실행마다 까닭별로 한 번 기록에 남긴다 - 고객 PC 의 ERPia 에서 늘 그래서
+    느려져도 기록으로 알 수 있게 (검토 2026-11-17). 숨은 화면이 아예 없는 것(화면 하나뿐)은 정상이라 남기지 않는다."""
+    seen = getattr(ctx, "scan_notes", None)
+    if seen is None:
+        seen = ctx.scan_notes = set()
+    if why not in seen:
+        seen.add(why)
+        rr.log(f"  팝업 확인: {why} - 느릴 뿐 판정은 같습니다 (이번 실행에서 한 번만 적습니다).")
 
 
 def hidden_pages(rr, main):
-    """(숨은 화면 창들, 그 조상 창들) - win32 라 거의 0초. 숨은 화면 = 창 밖(왼쪽·위)에 놓인, 창 절반 이상 크기의 자식 창 중
+    """(숨은 화면 창들, 그 조상 창들, 못 알아본 칸이 있는가) - win32 라 거의 0초. 숨은 화면 = 창 밖(왼쪽·위)에 놓인, 창 절반 이상 크기의 자식 창 중
     창 안에 같은 크기의 형제(떠 있는 화면)가 있는 것 (11-11 실측: 1920x1032 창의 화면 칸 아래 떠 있는 화면 (251,79) 과
     숨은 화면들 (-1418,-904) 이 모두 1668x952). 크기 조건은 창 밖으로 걸친 팝업을 숨은 화면으로 잘못 보지 않게 - 팝업은 화면보다
     작다 (11-11 시험 창: 같은 크기 칸이 창 안에 있으면 창 왼쪽으로 걸친 팝업을 숨은 화면으로 보고 그 단추를 놓쳤다).
     짝이 되는 '떠 있는 화면' 은 보이는 창만 센다 - 창 안에 숨겨 둔 같은 크기 칸이 큰 팝업의 짝이 되지 않게. 메인 창이 최소화돼
-    있으면 창 사각형이 작은 아이콘 자리라 크기 조건이 모두 참이 되므로 찾지 않는다 (예전처럼 창 전체, 검토 2026-11-17)."""
+    있으면 창 사각형이 작은 아이콘 자리라 크기 조건이 모두 참이 되므로 찾지 않는다 (예전처럼 창 전체, 검토 2026-11-17).
+    못 알아본 칸 = 창 밖의 창 절반 이상 칸인데 짝이 없어 숨은 화면으로 보지 않은 것, 숨은 화면 안의 창은 빼고 (해상도·메뉴 접힘으로
+    크기가 달라짐 등 - 기록용)."""
     g = rr.win32gui
     if g.IsIconic(main):
-        return set(), set()
+        return set(), set(), False
     wl, wt, wr, wb = g.GetWindowRect(main)
     rects = {}
 
@@ -2510,7 +2536,16 @@ def hidden_pages(rr, main):
         while p in rects and p not in chain:        # 메인 창 바로 아래까지
             chain.add(p)
             p = rects[p][0]
-    return pages, chain
+
+    def inside(h):      # 숨은 화면 안의 창 - 같이 건너뛴다 (11-17 실측: 숨은 화면의 자식들도 창 밖·같은 크기)
+        p = rects[h][0]
+        while p in rects:
+            if p in pages:
+                return True
+            p = rects[p][0]
+        return False
+    lost = any(off(r) and big(r) and h not in pages and not inside(h) for h, (p, r, _vis) in rects.items())
+    return pages, chain, lost
 
 
 def no_popup(rr, ctx, after):

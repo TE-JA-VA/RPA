@@ -2616,7 +2616,7 @@ wellife.click, wellife.TAB_WAIT_SECONDS = _saved15
 print("=== 16. 창 전체를 훑지 않기 (10-14 리허설 9분 10초 - 화면 7~8개가 열려 요소 약 3,400개, 한 번에 10~14초) ===")
 # 팝업 보기: 보이는 자식 창 목록이 마지막 '팝업 없음' 때와 같으면 다시 훑지 않는다 (ERPia 팝업은 자식 창으로 뜬다)
 scans, kids15, tops15 = [], [{1: ("a", (0, 0, 9, 9)), 2: ("b", (0, 0, 9, 9))}], [[]]
-prr = types.SimpleNamespace(visible_child_windows=lambda h: kids15[0], find_popup_windows=lambda pid, h: tops15[0],
+prr = types.SimpleNamespace(visible_child_windows=lambda h: kids15[0], find_popup_windows=lambda pid, h: tops15[0], log=lambda m: None,
                             find_popup_buttons=lambda win: scans.append(1) or POP15[0], collect_popup_text=lambda b: "팝업 글")
 POP15 = [[]]
 pctx = types.SimpleNamespace(hwnd=1, pid=5, window=lambda: None)
@@ -3131,14 +3131,25 @@ wellife.mouse.move, wellife.COVER_WAIT_SECONDS, wellife._top_window = _saved_cov
 # --- 팝업 단추 찾기: 숨은 화면 갈래는 훑지 않는다 (사용자 2026-11-11, ERPia 가 켜져 있으면 화면 수만큼 느렸다) ---
 # 메인(1) → 판(10) → 화면 칸(20) → 떠 있는 화면(30), 숨은 화면(31·32, 창 밖 같은 크기). 판 아래 창 밖으로 걸친 팝업(40)·상단(11).
 W_RECT = {1: (0, 0, 1920, 1032), 10: (0, 0, 1920, 1032), 11: (0, 0, 1920, 48), 20: (250, 48, 1920, 1032),
-          30: (251, 79, 1919, 1031), 31: (-1418, -904, 250, 48), 32: (-1418, -904, 250, 48), 40: (-50, 300, 600, 500)}
-W_PARENT = {10: 1, 11: 10, 20: 10, 30: 20, 31: 20, 32: 20, 40: 10}
-visited = []
+          30: (251, 79, 1919, 1031), 31: (-1418, -904, 250, 48), 32: (-1418, -904, 250, 48), 40: (-50, 300, 600, 500),
+          33: (-1418, -904, 250, 48)}     # 숨은 화면 31 안의 win32 창 - 창 밖·같은 크기 (11-17 실측: 못 알아본 칸으로 세면 안 된다)
+W_PARENT = {10: 1, 11: 10, 20: 10, 30: 20, 31: 20, 32: 20, 40: 10, 33: 31}
+visited, kind_reads = [], []
+
+
+class Info:
+    def __init__(self, handle, kind):
+        self.handle, self.kind = handle, kind
+
+    @property
+    def control_type(self):     # 종류 읽기는 UIA 호출이라 센다 (검토 2026-11-17)
+        kind_reads.append(self.kind)
+        return self.kind
 
 
 class U:
     def __init__(self, handle, kind, name="", rect=None, kids=()):
-        self.element_info = types.SimpleNamespace(handle=handle, control_type=kind)
+        self.element_info = Info(handle, kind)
         self.name, self.kids = name, list(kids)
         self.rect = Rect(*(rect or W_RECT.get(handle, (0, 0, 0, 0))))
 
@@ -3156,7 +3167,7 @@ class U:
         visited.append(self.element_info.handle)
         out = []
         for k in self.kids:
-            out += ([k] if k.element_info.control_type == control_type else []) + k.descendants(control_type)
+            out += ([k] if k.element_info.kind == control_type else []) + k.descendants(control_type)    # UIA 가 걸러 준다
         return out
 
 
@@ -3179,26 +3190,37 @@ def w_enum(main, cb, extra):
         cb(h, extra)
 
 
-w_full = []
+w_full, w_log = [], []
 W_HIDDEN, W_ICONIC = set(), [False]       # 보이지 않는 자식 창 / 메인 창 최소화
 wrr = types.SimpleNamespace(win32gui=types.SimpleNamespace(GetWindowRect=lambda h: W_RECT[h], GetParent=lambda h: W_PARENT.get(h, 0),
                                                            EnumChildWindows=w_enum, IsWindowVisible=lambda h: h not in W_HIDDEN,
                                                            IsIconic=lambda h: W_ICONIC[0]),
                             OK_BUTTON_TEXTS=rr.OK_BUTTON_TEXTS, YES_BUTTON_TEXTS=rr.YES_BUTTON_TEXTS, NO_BUTTON_TEXTS=rr.NO_BUTTON_TEXTS,
-                            find_popup_buttons=lambda win: w_full.append(1) or ["전체 훑기"])
+                            find_popup_buttons=lambda win: w_full.append(1) or ["전체 훑기"], log=w_log.append)
 wctx = types.SimpleNamespace(hwnd=1, window=lambda: w_tree)
 check("숨은 화면은 창 밖 같은 크기 형제만 - 창 밖으로 걸친 팝업 창은 아니다",
-      wellife.hidden_pages(wrr, 1) == ({31, 32}, {20, 10}), str(wellife.hidden_pages(wrr, 1)))
+      wellife.hidden_pages(wrr, 1) == ({31, 32}, {20, 10}, False), str(wellife.hidden_pages(wrr, 1)))
 got = wellife.popup_buttons(wrr, wctx)
 check("떠 있는 화면·팝업 창의 단추는 찾고 숨은 화면은 들어가지 않는다",
       got == [yes_shown, ok_popup] and not {31, 32} & set(visited) and not w_full,
       f"{[(b.name, b.rect.left) for b in got]} 들어간 곳 {visited}")
+check("이미 단추로 걸러 받은 것은 종류를 다시 읽지 않는다 (UIA 호출, 검토 2026-11-17)", "Button" not in kind_reads, str(kind_reads))
+check("숨은 화면을 다 알아보면 기록을 남기지 않는다", w_log == [], str(w_log))
 W_RECT[31] = W_RECT[32] = (-1418, -904, 200, 48)     # 숨은 화면 크기가 떠 있는 화면과 다르면 숨은 화면으로 보지 않는다
 check("숨은 화면을 못 찾으면 예전처럼 창 전체를 훑는다", wellife.popup_buttons(wrr, wctx) == ["전체 훑기"] and w_full, str(w_full))
+check("창 밖 큰 칸을 숨은 화면으로 못 알아보면 까닭을 한 번 남긴다 (검토 2026-11-17)",
+      len(w_log) == 1 and "알아보지 못해" in w_log[0], str(w_log))
+wellife.popup_buttons(wrr, wctx)
+check("같은 까닭은 실행마다 한 번만 남긴다", len(w_log) == 1, str(w_log))
 w_full.clear()
+w_log.clear()
 check("창 목록을 못 읽으면 창 전체를 훑는다",
-      wellife.popup_buttons(types.SimpleNamespace(**{**vars(wrr), "win32gui": types.SimpleNamespace()}), wctx) == ["전체 훑기"] and w_full)
+      wellife.popup_buttons(types.SimpleNamespace(**{**vars(wrr), "win32gui": types.SimpleNamespace()}), wctx) == ["전체 훑기"]
+      and len(w_full) == 1)
+check("두 번 다 오류면 까닭(오류 종류)을 남긴다", len(w_log) == 1 and "오류가 두 번" in w_log[0] and "AttributeError" in w_log[0], str(w_log))
 W_RECT[31] = W_RECT[32] = (-1418, -904, 250, 48)
+w_log.clear()
+wctx.scan_notes = set()     # 새 실행
 # 창 왼쪽으로 걸친 큰 팝업(42, 1000x600 - 창 절반 이상)과 창 안의 보이지 않는 같은 크기 칸(43) - 짝으로 세면 팝업을 숨은 화면으로 본다 (검토 2026-11-17)
 W_RECT[42], W_PARENT[42], W_RECT[43], W_PARENT[43] = (-50, 300, 950, 900), 10, (300, 300, 1300, 900), 10
 W_HIDDEN.add(43)
@@ -3206,14 +3228,14 @@ check("보이지 않는 같은 크기 칸은 '떠 있는 화면' 짝으로 세�
       42 not in wellife.hidden_pages(wrr, 1)[0], str(wellife.hidden_pages(wrr, 1)))
 W_ICONIC[0] = True
 check("메인 창이 최소화돼 있으면 숨은 화면을 찾지 않는다 - 예전처럼 창 전체 (검토 2026-11-17)",
-      wellife.hidden_pages(wrr, 1) == (set(), set()), str(wellife.hidden_pages(wrr, 1)))
+      wellife.hidden_pages(wrr, 1) == (set(), set(), False), str(wellife.hidden_pages(wrr, 1)))
 W_ICONIC[0] = False
 for _h in (42, 43):
     W_RECT.pop(_h), W_PARENT.pop(_h)
 W_HIDDEN.clear()
 W_RECT[41], W_PARENT[41] = (700, 300, 1350, 500), 10     # 창 안에 걸친 팝업(40)과 같은 크기 칸 (숨겨 둔 팝업 칸 등)
 check("창 밖으로 걸친 팝업은 창 안에 같은 크기 형제가 있어도 숨은 화면이 아니다 (화면은 창 절반 이상)",
-      wellife.hidden_pages(wrr, 1) == ({31, 32}, {20, 10}), str(wellife.hidden_pages(wrr, 1)))
+      wellife.hidden_pages(wrr, 1) == ({31, 32}, {20, 10}, False), str(wellife.hidden_pages(wrr, 1)))
 w_full.clear()
 got = wellife.popup_buttons(wrr, wctx)
 check("그 팝업의 창 안 단추를 찾는다", got == [yes_shown, ok_popup] and not w_full, str([(b.name, b.rect.left) for b in got]))
@@ -3225,6 +3247,8 @@ visited.clear()
 got = wellife.popup_buttons(wrr, wctx)
 check("숨은 화면 하나만 크기가 다르면 그 화면만 훑는다 (결과는 같다)",
       got == [yes_shown, ok_popup] and 31 not in visited and 32 in visited and not w_full, f"들어간 곳 {visited}")
+check("그때도 못 알아본 칸이 있다고 남긴다", len(w_log) == 1 and "알아보지 못해" in w_log[0], str(w_log))
+w_log.clear()
 W_RECT[32] = W_RECT[31]
 page30 = w_tree.kids[0].kids[1].kids[0]
 
@@ -3236,10 +3260,28 @@ def w_switch(control_type=None):     # 떠 있는 화면을 훑는 사이에 탭
 
 page30.descendants = w_switch
 check("훑는 사이에 숨은 화면이 바뀌면 창 전체를 다시 훑는다", wellife.popup_buttons(wrr, wctx) == ["전체 훑기"] and w_full)
+check("그 까닭을 남긴다", len(w_log) == 1 and "바뀌어" in w_log[0], str(w_log))
 W_RECT[30], W_RECT[31] = W_RECT[31], W_RECT[30]
+w_log.clear()
+w_once = []
+
+
+def w_vanish(control_type=None):     # 처음 한 번만 단추가 사라지는 중 (닫히는 팝업) - 다시 훑으면 읽힌다
+    if not w_once:
+        w_once.append(1)
+        raise RuntimeError("UIA_E_ELEMENTNOTAVAILABLE")
+    return U.descendants(page30, control_type)
+
+
+page30.descendants = w_vanish
+w_full.clear()
+got = wellife.popup_buttons(wrr, wctx)
+check("훑다가 오류가 한 번 나면 빠른 훑기를 다시 해 오류 난 갈래의 단추도 찾는다 - 부분 결과를 쓰지 않고, 창 전체도 안 훑는다 (검토 2026-11-17)",
+      got == [yes_shown, ok_popup] and not w_full and w_log == [], f"{[getattr(b, 'name', b) for b in got]} {w_full} {w_log}")
 page30.descendants = lambda control_type=None: 1 / 0
 w_full.clear()
-check("훑다가 오류가 나면 창 전체를 훑는다", wellife.popup_buttons(wrr, wctx) == ["전체 훑기"] and w_full)
+check("훑다가 오류가 두 번 나면 창 전체를 훑는다", wellife.popup_buttons(wrr, wctx) == ["전체 훑기"] and len(w_full) == 1)
+check("그 까닭(오류 종류)을 남긴다", len(w_log) == 1 and "ZeroDivisionError" in w_log[0], str(w_log))
 del page30.descendants
 w_full.clear()
 wrr.collect_popup_text = lambda b: f"{b.name} 팝업 글"
