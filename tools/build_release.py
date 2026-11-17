@@ -143,7 +143,12 @@ SITE_PACKAGES = os.path.join(REPO, ".venv", "Lib", "site-packages")
 LIB_NAMES = ["playwright", "pywinauto", "comtypes", "win32", "win32com", "win32comext", "pythonwin", "pywin32_system32",
              "pywin32.pth", "pywin32.version.txt", "pythoncom.py", "greenlet", "pyee", "typing_extensions.py", "PIL", "six.py",
              # 운송장 엑셀 비밀번호 풀기 (PR #43, wellife.unlock_excel) - msoffcrypto 와 그 의존성
-             "msoffcrypto", "cryptography", "cffi", "_cffi_backend.cp314-win_amd64.pyd", "olefile", "pycparser"]
+             "msoffcrypto", "cryptography", "cffi", "_cffi_backend.cp314-win_amd64.pyd", "olefile", "pycparser",
+             # ACTOR AI 도움 (ai_rescue, 2026-11-16) - Anthropic SDK 와 그 의존성. httpx2·httpcore2 는 불러올 때 자기 dist-info 로 버전을 읽고
+             # opentelemetry 는 entry_points 로 context 를 찾는다 (dist-info 이름에 버전 번호 - SDK 를 올리면 같이 고칠 것, 없으면 빌드가 멈춘다)
+             "anthropic", "anyio", "docstring_parser", "h11", "httpcore2", "httpx2", "httpx2-2.16.0.dist-info", "httpcore2-2.16.0.dist-info",
+             "opentelemetry_api-1.45.2.dist-info", "idna", "jiter",
+             "opentelemetry", "pydantic", "pydantic_core", "sniffio", "truststore", "typing_inspection", "annotated_types"]
 LIB_SKIP = ("playwright/driver/node.exe",)       # 프로그램 폴더 playwright\\node.exe 한 벌을 쓴다 (NODE_REL)
 LIB_SKIP_DIRS = ("comtypes/test",)
 LIB_TIME = (2026, 1, 1, 0, 0, 0)                 # 묶음 안 파일 시각 - 고정해야 같은 재료에서 같은 묶음이 나온다 (PC 가 다시 안 받는다)

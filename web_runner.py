@@ -32,6 +32,7 @@ import time
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
+import ai_rescue
 import rpa_status as status
 import web_replay              # 브라우저 띄우기(web_replay.edge - 깔린 Edge)와 프리셋 재생
 
@@ -367,6 +368,18 @@ def site_stts(site):
 def site_will_run(site):
     """이 사이트의 작업을 실행해도 되는가."""
     return site_stts(site) == STTS_RUN
+
+
+def attach_ai(rp, name):
+    """PC 에 AI 도움이 켜져 있으면 재생기에 붙인다 (ACTOR 만 - 옵저버 미리보기는 붙이지 않는다). 키는 로그에 쓰지 않는다."""
+    try:
+        rp.ai = ai_rescue.from_settings(status.ai_settings(), log=lambda m: log(f"  [{name}]       {m}"))
+    except Exception as e:      # SDK 가 빠진 빌드 등 - AI 때문에 지금보다 나빠지면 안 된다 (최종 검토 I-6)
+        rp.ai = None
+        log(f"  [{name}] AI 도움을 쓰지 못함: 준비 실패 ({type(e).__name__})")
+        return
+    if rp.ai is not None:
+        log(f"  [{name}] AI 도움 사용")
 
 
 def _replay_problems(name, site):
@@ -1439,6 +1452,7 @@ def action_replay(page, name, site):
         rp.gate = (_here.gates.lock(key), web_replay.auth_start(p["record"]["steps"]), end)
     rp.first_page = page
     rp.fit_viewport = True
+    attach_ai(rp, name)
     if upload:
         rp.upload_file = file
     if _together:       # 루틴이 ERPia 에 키보드를 쓰는 동안은 다음 단계로 가지 않는다 (단계가 새 창을 띄우면 포커스를 가져간다)
@@ -1459,6 +1473,8 @@ def action_replay(page, name, site):
         page.on("dialog", on_dialog)
         if upload:
             settle_upload(file, rp.upload_tried, ok)
+        if rp.ai_calls:             # AI 를 부른 수와 그중 살린 단계 수 (과금·대조 - 설계 2026-11-16)
+            status.metric(f"{name}:ai", "AI 도움", rp.ai_saved, total=rp.ai_calls, unit="번")
     if not upload:
         status.metric(f"{name}:files", "받은 엑셀", len(rp.saved), unit="개")
     if not ok:
@@ -1718,6 +1734,11 @@ def cmd_check():
             log(f"          ! {p}")
 
     log(f"  사이트 {len(cfg)}건, 문제 {len(all_problems)}건")
+    try:                        # AI 도움 SDK 를 실제로 불러 본다 (요청은 보내지 않는다) - 빌드가 모듈·dist-info 를 빠뜨리면 끝 줄이 안 찍힌다
+        ai_rescue.Claude("check")
+    except Exception as e:
+        log(f"  ! AI 도움 SDK 를 불러오지 못했습니다: {type(e).__name__}: {e}")
+        return 1
     log(f"  쓸 수 있는 Action: {', '.join(sorted(ACTIONS))}")
     return 1 if all_problems else 0
 

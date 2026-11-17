@@ -17,6 +17,7 @@ import unicodedata
 import urllib.parse
 import zipfile
 
+import ai_rescue as ai
 import rpa_status
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
@@ -425,6 +426,44 @@ SETTLE_MAX_MS = 3000        # 단계 사이 기다림 상한 (사람이 기다�
 TEXT_OF = """e => { const n = s => (s || '').replace(/\\s+/g, ' ').trim(); const t = e.tagName;
   if (t === 'INPUT') return ['button','submit','reset'].includes((e.type||'').toLowerCase()) ? n(e.value) : '';
   if (t === 'TEXTAREA' || t === 'SELECT') return ''; return n(e.textContent).slice(0, 80); }"""
+
+# AI 도움 (설계 2026-11-16): 틀 하나의 누를 수 있는 것을 모아 data-ap-ai 표시를 붙인다. 입력 칸은 값을 읽지 않고 이름(placeholder·label)만.
+# 레이어 = 가장 가까운 대화상자([role=dialog]·aria-modal·<dialog>) 또는 화면 넓이 30% 넘는 fixed 상자, z-index 가 있는 absolute 상자
+# (z-index 없는 absolute 는 화면 전체를 감싸는 틀인 사이트가 있어 뺀다 - 모든 요소가 '레이어' 가 되면 메뉴 글의 '저장' 으로 다 막힌다)
+AI_SELECTOR = ("a[href], a[onclick], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], "
+               "[role=menuitem], [role=tab], [onclick]")
+AI_CANDS_JS = """([start, max, sel]) => {
+  const n = s => (s || '').replace(/\\s+/g, ' ').trim(), textOf = __TEXT_OF__, sig = __SIG__, W = innerWidth;
+  const layerOf = e => { for (let a = e; a && a !== document.body; a = a.parentElement) {
+      if (a.matches('[role=dialog],[role=alertdialog],[aria-modal=true],dialog')) return a;
+      const cs = getComputedStyle(a), z = parseInt(cs.zIndex, 10);
+      if ((cs.position === 'fixed' || cs.position === 'absolute' && z > 0) && a.getBoundingClientRect().width > W * 0.3) return a; }
+    return null; };
+  const out = [], layers = new Set(); let k = start;
+  for (const e of document.querySelectorAll(sel)) {
+    if (out.length >= max) break;
+    const t0 = e.tagName; if (t0 === 'TR' || t0 === 'TD' || t0 === 'TH') continue;     // 표 줄 전체 글 (고객 이름·주소)
+    const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    if (r.width <= 0 || r.height <= 0 || cs.visibility === 'hidden' || cs.display === 'none') continue;
+    const t = e.tagName.toLowerCase(), typ = (e.getAttribute('type') || '').toLowerCase();
+    let label = n(e.getAttribute('aria-label') || e.getAttribute('title'));
+    if (t === 'input' || t === 'textarea' || t === 'select')
+      label = label || n(e.getAttribute('placeholder')) || n(e.labels && e.labels[0] ? e.labels[0].textContent : '');
+    if (!label && t === 'a') { const img = e.querySelector('img[alt]'); if (img) label = n(img.alt); }
+    const lay = layerOf(e); if (lay) layers.add(lay);
+    e.setAttribute('data-ap-ai', String(k));
+    out.push({mark: k++, tag: t, role: e.getAttribute('role') || '', type: typ, text: textOf(e), label: label.slice(0, 80),
+              full: n(e.innerText || '').slice(0, 1000), container: lay ? n(lay.innerText).slice(0, 3000) : '', sig: sig(e),
+              inTable: !!e.closest('tbody')});
+  }
+  const heads = [...document.querySelectorAll('h1,h2,h3')].filter(h => h.getClientRects().length).map(h => n(h.innerText)).filter(Boolean);
+  return JSON.stringify({cands: out, heads, layers: [...layers].map(l => n(l.innerText).slice(0, 3000)),
+                         body: document.body ? n(document.body.innerText).slice(0, 3000) : ''});
+}""".replace("__TEXT_OF__", TEXT_OF).replace("__SIG__", SIG)
+AI_CLEAR_JS = "() => document.querySelectorAll('[data-ap-ai]').forEach(e => e.removeAttribute('data-ap-ai'))"
+AI_PUBLIC = ("n", "tag", "role", "type", "text", "label", "where", "overlay")     # AI 에게 가는 칸 - 나머지(창·틀·loc·container·risk·sig)는 우리만
+AI_FRAME_MAX = 2000     # 틀 하나에서 모으는 안전 상한 - 다 모은 뒤 레이어 것을 앞에 두고 CANDIDATES_MAX 로 자른다 (메뉴 링크가 많은 관리 화면에서
+                        # 본문 끝에 붙는 공지 레이어가 잘려 나가지 않게, 최종 검토 I-1)
 
 
 EDGE_NEW_TAB = "https://ntp.msn.com/edge/ntp"  # 사람이 Ctrl+T·+ 로 연 Edge 새 탭은 edge:// 가 아니라 이 주소로 바로 생긴다 (2026-10-06 실측)
@@ -1382,6 +1421,10 @@ class Moved(Exception):
     """대상이 지정한 창·틀이 아닌 다른 곳에 있다 (_find 의 elsewhere) - args = (창, 단계 모양, 붙일 말). _step 이 고쳐 잡는다 (설계 2026-11-16)."""
 
 
+class Rescued(Exception):
+    """AI 도움이 막힌 단계를 풀었다 (_find 의 rescue) - args = (창, 틀, 요소, 붙일 말, 대신 누르기인가, 고른 후보 | None) (설계 2026-11-16)."""
+
+
 class Cancelled(Exception):
     """[■ 중단] (옵저버 미리보기) - 찾거나 기다리던 것을 그만둔다."""
 
@@ -1537,6 +1580,9 @@ class Replayer:
         self.no_target_why = "대상 없음"     # no_target 일 때 단계 글 (몰의 '자료 없음' 알림창이면 그 글)
         # 인증 차례 (병렬 수집): (threading.Lock, 첫 단계, 끝 단계) - 첫 단계 앞에서 잡고 끝 단계를 지나면 놓는다 (auth_start·auth_end). 없으면 안 기다린다
         self.gate, self.gate_held = None, False
+        # AI 도움 (설계 2026-11-16): ai = choose(system, user) -> Answer 를 가진 것 (ACTOR 만 붙인다, 없으면 지금과 같다).
+        # ai_calls = 이 재생에서 부른 수, ai_saved = AI가 풀어 이어 간 단계 수, ai_down = 못 쓰게 된 까닭, ai_note = 실패 글에 붙일 AI 의 말
+        self.ai, self.ai_calls, self.ai_saved, self.ai_down, self.ai_note = None, 0, 0, None, None
 
     def _watch(self, page):
         if page in self.watched:
@@ -1721,11 +1767,12 @@ class Replayer:
         except Exception:
             return set()
 
-    def _find(self, page, s, prev, loose=False, quick=False, elsewhere=None):
+    def _find(self, page, s, prev, loose=False, quick=False, elsewhere=None, rescue=None):
         """loose: 새로 생긴 것 중에 없으면 원래 있던 것에서도 (loose_new).
         quick: 기다리지 않고 한 번만 훑는다 (다른 창·틀 훑기 - 이미 떠 있는 화면이라 늦은 단서도 처음부터), 없으면 NoTarget.
                틀마다 기다리면 안쪽 틀이 많은 화면에서 못 찾는 날의 실패가 수십 초 늦어진다 (최종 검토 2026-11-16).
-        elsewhere: 못 찾은 회차 끝마다 부른다 - (창, 단계 모양, 붙일 말) 을 돌려주면 Moved (설계 2026-11-16)."""
+        elsewhere: 못 찾은 회차 끝마다 부른다 - (창, 단계 모양, 붙일 말) 을 돌려주면 Moved (설계 2026-11-16).
+        rescue: 첫 회차 끝에 elsewhere 가 못 찾으면 한 번 부른다 - (창, 틀, 요소, 붙일 말, 대신 누르기인가, 후보) 를 돌려주면 Rescued (AI 도움)."""
         t = s["target"]
         if s.get("loose"):          # 메일 고르기 묶음 - 메일마다 글자(첨부 이름 등)가 달라 글자 말고 자리·속성으로
             t = dict(t, text="", textCount=0)
@@ -1784,6 +1831,10 @@ class Replayer:
                 got = elsewhere() if elsewhere is not None else None
                 if got:
                     raise Moved(*got)
+                if tries == 1 and rescue is not None:
+                    got = rescue()
+                    if got:
+                        raise Rescued(*got)
                 if tries >= self.step_tries:
                     why = f" '{risky}'이(가) 있는 화면의 같은 글자 단추는 누르지 않았습니다." if risky else ""
                     raise NoTarget(f"{self.step_timeout:.0f}초씩 {tries}번 찾았으나 대상을 찾지 못했습니다. (단서: {', '.join(c[0] for c in cands)})"
@@ -1800,6 +1851,191 @@ class Replayer:
         except Exception:
             return None
         return next((w for w in rpa_status.RISK_WORDS if w in text and w not in (t.get("text") or "")), None)
+
+    # --- AI 도움 (설계 2026-11-16) ---
+    def _ai_candidates(self, i, s, here):
+        """here 와 열린 다른 창에서 누를 수 있는 것을 모은다 → (cands, windows). 레이어 안·here 의 요소가 앞.
+        공개 칸(AI_PUBLIC)의 글과 windows 는 가린 글이다. 파일 받기 단계는 '오늘 새로 생긴 것' 기준에 있던 줄을 뺀다."""
+        self._ai_clear()
+        secrets = [v for v in self.creds.values() if isinstance(v, str)]
+        known = {id(pg) for pg in self.pages.values() if pg is not None}
+        old = self.baseline.get(i) if s.get("download") else None
+        pages = ([here] if here is not None and not here.is_closed() else []) + self._other_pages(here)
+        allc, windows, k = [], [], 0
+        for no, pg in enumerate(pages, 1):
+            new_win, heads, layers, body = id(pg) not in known, [], [], ""
+            try:
+                frames, title, path = pg.frames[:FRAME_PROBE_MAX + 1], pg.title(), url_path(pg.url)
+            except Exception:
+                continue            # 그 사이 닫힌 창
+            for f in frames:
+                try:
+                    got = json.loads(f.evaluate(AI_CANDS_JS, [k, AI_FRAME_MAX, AI_SELECTOR]))
+                except Exception:
+                    continue        # 화면이 바뀌는 중·다른 사이트 틀
+                heads += got["heads"]
+                layers += got["layers"]
+                inner = f.parent_frame is not None
+                body = body or ("" if inner else got["body"])
+                where = f"창 {no}" + ((f"·틀 {f.name}" if f.name else "·안쪽 틀") if inner else "")
+                for c in got["cands"]:
+                    k = max(k, c["mark"] + 1)
+                    if old and c["sig"] in old:
+                        continue
+                    # 가린 뒤에 자른다 - 잘린 이메일·전화·아이디는 가리기 꼴에 안 맞는다 (최종 검토 I-4)
+                    text, label = ai.mask(c["text"], secrets)[:ai.CAND_TEXT_MAX], ai.mask(c["label"], secrets)[:ai.CAND_TEXT_MAX]
+                    if c["inTable"] and not ai.TABLE_ACTION.search(text) and ai.classify(text) == "substitute":
+                        text = label = ""       # 표 본문 안 이름 링크 등 - 글은 보내지 않는다
+                    allc.append(dict(c, page=pg, frame=f, loc=f.locator(f'[data-ap-ai="{c["mark"]}"]'), where=where,
+                                     overlay=bool(c["container"]) or new_win, here=pg is here, text=text, label=label))
+            if new_win:             # 기록에 없던 창 - 그 창의 글로 위험 낱말을 본다
+                for c in allc:
+                    if c["page"] is pg and not c["container"]:
+                        c["container"] = body
+            screen = " / ".join(dict.fromkeys([ai.mask(h, secrets) for h in heads] + [ai.mask(x, secrets)[:300] for x in layers]))
+            screen = screen[:ai.SCREEN_TEXT_MAX]
+            windows.append({"no": no, "title": ai.mask(title, secrets), "path": ai.mask(path, secrets), "screen": screen})
+        for c in allc:              # 위험 낱말은 잘리기 전 글 전체에서 본다 (요소 글·레이어 글, 최종 검토 I-3)
+            c["risk"] = f'{c["container"]} {c["full"]}'
+        allc.sort(key=lambda c: 0 if c["overlay"] else 1 if c["here"] else 2)
+        cands = allc[:ai.CANDIDATES_MAX]
+        for n, c in enumerate(cands):
+            c["n"] = n
+        return cands, windows
+
+    def _ai_ok(self, i, s):
+        """이 단계에 AI 를 불러도 되나 - 켜져 있고·못 쓰게 되지 않았고·횟수가 남았고, 맡기는 단계 (누르기·넣기·고르기·켜기·엔터)이고,
+        인증 구간(아이디~인증번호 [확인]) 밖이다 (AI 를 기다리는 동안 병렬 수집의 인증 차례를 쥐지 않게)."""
+        if self.ai is None or self.ai_down or self.ai_calls >= ai.RUN_CALLS_MAX:
+            return False
+        if s["kind"] not in ("click", "fill", "select", "check", "enter") or not s.get("target") or s.get("optional"):
+            return False
+        if any(s.get(k) for k in ("credential", "pick", "loose", "mailOpen", "mailLink", "mailSend", "otpSend")):
+            return False
+        if self.mail_page is not None and s.get("page") == self.mail_page:
+            return False
+        steps = self.rec["steps"]
+        if notice_popup(steps, s.get("page")):     # 공지 창의 [닫기] - 공지가 안 뜬 날은 건너뛰는 단계다 (AI 가 다른 것을 닫지 않게)
+            return False
+        end = auth_end(steps)
+        return not (end is not None and auth_start(steps) <= i + 1 <= end)
+
+    def _ai_tail(self, msg):
+        """실패 글 끝에 AI 의 말을 붙인다 (그리고 비운다)."""
+        if self.ai_note:
+            msg += f" (AI: {self.ai_note})"
+        elif self.ai_down:
+            msg += f" (AI 도움을 쓰지 못함: {self.ai_down})"
+        self.ai_note = None
+        return msg
+
+    def _ai_rescue(self, i, s, here):
+        """막힌 단계 s 를 AI 에게 묻는다 → (창, 틀, 요소, 붙일 말, 대신 누르기인가, 고른 후보 | None) | None.
+        미루기·[확인] 은 여기서 누르고 기록대로 다시 찾는다. 대신 누르기는 고른 요소를 돌려주고 _step 이 행동한다 (표시는 그 뒤에 지운다).
+        AI 가 무엇이라 답하든 미루기·[확인]·대신 누르기는 우리가 글로 정하고 위험 낱말로 거른다 (ai_rescue.allowed)."""
+        secrets = [v for v in self.creds.values() if isinstance(v, str)]
+        steps = self.rec["steps"]
+        say = lambda x: ai.mask(describe(x, hide_values=True), secrets)     # noqa: E731 - 칸에 친 값은 싣지 않는다
+        info = {"kind": s["kind"], "what": say(s)}
+        before, after = [say(x) for x in steps[max(0, i - 2):i]], [say(x) for x in steps[i + 1:i + 3]]
+        prev, loose, target = self.baseline.get(i), i in self.loose, s["target"].get("text") or ""
+        picked, closed = set(), []
+        try:
+            for _ in range(ai.STEP_ACTS_MAX):
+                if not self._ai_ok(i, s):
+                    break
+                cands, windows = self._ai_candidates(i, s, here)
+                try:
+                    ans = self.ai.choose(ai.SYSTEM_PROMPT, ai.build_prompt(info, before, after, windows,
+                                                                         [{k: c[k] for k in AI_PUBLIC} for c in cands]))
+                except ai.AiUnavailable as e:
+                    self.ai_down = str(e)
+                    self.log(f"      AI 도움을 쓰지 못함: {e}")
+                    break
+                finally:
+                    self.ai_calls += 1
+                self.log(f"      AI: {ans.reason}")
+                if ans.choice is None or not 0 <= ans.choice < len(cands):
+                    self.ai_note = ans.screen
+                    break
+                c = cands[ans.choice]
+                text = c["text"] or c["label"]
+                key = (id(c["page"]), c["sig"], c["container"])
+                if key in picked:
+                    self.ai_note = "같은 것을 다시 고름"
+                    break
+                picked.add(key)
+                kind = ai.classify(text)
+                ok, why = ai.allowed(kind, text, c["risk"], target, ans.info_only, s["kind"], c)
+                if not ok:
+                    self.ai_note = f"'{text}' 은(는) 누르지 않음 - {why}"
+                    self.log(f"      AI 가 고른 '{text}' 은(는) 누르지 않습니다 ({why})")
+                    break
+                if kind == "substitute":
+                    return c["page"], c["frame"], c["loc"], f"AI가 고름: '{text}' (기록: '{target}')", True, c
+                c["loc"].click(timeout=4000)
+                closed.append(text)
+                self.log(f"      AI 가 고른 '{text}' 을(를) 눌렀습니다")
+                self._ai_clear()
+                (here or c["page"]).wait_for_timeout(500)
+                v = self._probe(here, s, prev, loose) if here is not None and not here.is_closed() else None
+                got = (here, v) if v is not None else (self._elsewhere(i, s, here) or (None, None))[:2]
+                if got[0] is not None:
+                    frame, loc, how = self._find(got[0], got[1], prev, loose, quick=True)
+                    return got[0], frame, loc, how + ", " + ", ".join(f"AI가 닫음: '{t}'" for t in closed), False, None
+            else:
+                self.ai_note = f"AI가 {len(closed)}번 눌렀지만 기록으로 돌아오지 못함"
+        except (Cancelled, EditHere):
+            self._ai_clear()
+            raise
+        except Exception as e:      # 누르기 실패·화면이 바뀌는 중 - 살리지 못한 것으로 (지금과 같은 실패)
+            self.log(f"      AI 도움 중 오류: {type(e).__name__}")
+        self._ai_clear()
+        return None
+
+    def _ai_next_seen(self, i, page):
+        """다음 단계(대상이 있는 것)의 대상이 지금 어느 창에 보이나."""
+        steps = self.rec["steps"]
+        nxt = next((steps[k] for k in range(i + 1, len(steps)) if steps[k].get("target") and steps[k]["kind"] in MOVE_KINDS), None)
+        try:
+            return nxt is not None and any(self._probe(pg, nxt, None, False) is not None for pg in [page] + self._other_pages(page))
+        except Cancelled:
+            raise
+        except Exception:
+            return False
+
+    def _ai_followed(self, i, s, page, before):
+        """대신 누른 뒤 FOLLOW_WAIT 초 안에 무언가 이어졌나 - 주소 경로가 바뀜·창이 늘어남·고른 레이어 단추가 사라짐·다음 단계 대상이
+        (누르기 전엔 안 보이다가) 보임. before = (경로, 창 수, 고른 요소 핸들 | None - 레이어 안일 때만, 누르기 전 다음 대상이 보였나).
+        누르기 전부터 보이던 다음 대상은 치지 않는다 - 엉뚱한 것을 눌러도 '이어짐' 이 된다 (최종 검토 I-5, _next_here 와 같은 까닭)"""
+        end = time.time() + ai.FOLLOW_WAIT
+        while True:
+            self._check_cancel()
+            try:
+                if page.is_closed() or url_path(page.url) != before[0] or len(self.context.pages) > before[1]:
+                    return True
+                if before[2] is not None and not before[2].is_visible():
+                    return True
+            except Exception:
+                return True         # 창·요소가 사라졌다 - 무언가 일어났다
+            if not before[3] and self._ai_next_seen(i, page):
+                return True
+            if time.time() > end:
+                return False
+            page.wait_for_timeout(250)
+
+    def _ai_clear(self):
+        """모든 창·틀에서 후보 표시(data-ap-ai)를 지운다 - 사이트 화면에 남기지 않는다."""
+        for pg in list(self.context.pages) if self.context is not None else []:
+            try:
+                frames = pg.frames
+            except Exception:
+                continue
+            for f in frames:
+                try:
+                    f.evaluate(AI_CLEAR_JS)
+                except Exception:
+                    pass
 
     # --- 기록과 다른 창에 뜬 대상 (설계 2026-11-16) ---
     def _movable(self, s):
@@ -2372,6 +2608,7 @@ class Replayer:
 
     def _step(self, i, s):
         notes = []                        # 결과 글 끝에 붙일 말 (다른 창에서 찾음 등 - 설계 2026-11-16)
+        rescued = None                    # AI 도움이 푼 것 (창, 틀, 요소, 붙일 말, 대신 누르기인가, 후보)
         note = self._url_window(i, s) if s.get("target") else None      # 새로 뜬 창의 번호가 어긋났으면 기준을 잡기 전에 고친다
         if note:
             notes.append(note)
@@ -2392,8 +2629,13 @@ class Replayer:
             if got is None:
                 if s.get("target") and notice_popup(self.rec["steps"], s["page"]):
                     raise Skip("공지 창이 뜨지 않았습니다")
-                raise NotFound(f"창 {s['page']}이(가) 없습니다.")
-            page, s = self._take(i, s, got, notes)
+                # 번호가 없는 창만 AI 에게 묻는다 - 떴다가 닫힌 창은 예전처럼 실패 (다른 창의 같은 이름 단추를 누르지 않게)
+                rescued = self._ai_rescue(i, s, None) if page is None and self._ai_ok(i, s) else None
+                if rescued is None:
+                    raise NotFound(self._ai_tail(f"창 {s['page']}이(가) 없습니다."))
+                page = rescued[0]
+            else:
+                page, s = self._take(i, s, got, notes)
         # 사람이 기다린 시간의 절반 (0.3~3초): 화면이 따라올 틈
         self._wait(page, min(max(s.get("gap", 0) * 0.5, 300), SETTLE_MAX_MS))
         if s["kind"] == "goto":
@@ -2413,14 +2655,24 @@ class Replayer:
                 s = v
                 notes.append("본문에서 찾음" if v["frame"].get("main") else "안쪽 틀에서 찾음")
         try:
+            if rescued is not None:
+                raise Rescued(*rescued)
             frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose,
-                                         elsewhere=(lambda: self._elsewhere(i, s, page)) if movable else None)
+                                         elsewhere=(lambda: self._elsewhere(i, s, page)) if movable else None,
+                                         rescue=(lambda: self._ai_rescue(i, s, page)) if self._ai_ok(i, s) else None)
         except Moved as m:                  # 지정한 창에 없고 다른 창·틀에 있다 - 고쳐 잡고 거기서 찾는다
             page, s = self._take(i, s, m.args, notes)
             frame, loc, how = self._find(page, s, self.baseline.get(i), i in self.loose)
-        except NoTarget:
+        except Rescued as r:                # AI 가 풀었다 - 다른 창이면 그 번호를 고쳐 잡는다 (_take 처럼 기준도 다시)
+            rescued = r.args
+            page, frame, loc, how = rescued[:4]
+            if self.pages.get(s["page"]) is not page:
+                self._take(i, s, (page, s, ""), [])
+        except NoTarget as e:
             if notice_popup(self.rec["steps"], s["page"]):      # 공지 창의 단계가 어느 창에도 없다 - 공지가 뜨지 않은 날 (다른 창이 그 번호를 받았다)
                 raise Skip("공지 창이 뜨지 않았습니다") from None
+            if self.ai_note or self.ai_down:
+                raise NoTarget(self._ai_tail(str(e))) from None
             raise
         if url_path(frame.url) != s["url"]:
             self.log(f"      (주소가 다름: 기록 {s['url']} / 지금 {url_path(frame.url)})")
@@ -2474,10 +2726,26 @@ class Replayer:
             self._watch(pi.value)
             if not s.get("download"):       # 파일만 내려 주는 팝업은 곧 스스로 닫힌다
                 pi.value.wait_for_load_state("domcontentloaded")
-        if s.get("download"):
-            how += f", 받음 {os.path.basename(self._save(self._until_download(page, act)))}"
-        else:
-            act()
+        sub = rescued is not None and rescued[4]
+        if sub:                             # 대신 누르기 - 누르기 전 모습 (이어졌나 견준다)
+            c = rescued[5]
+            try:
+                handle = c["loc"].element_handle(timeout=2000) if c["overlay"] else None
+            except Exception:
+                handle = None
+            before = (url_path(page.url), len(self.context.pages), handle, self._ai_next_seen(i, page))
+        try:
+            if s.get("download"):
+                how += f", 받음 {os.path.basename(self._save(self._until_download(page, act)))}"
+            else:
+                act()
+        finally:
+            if rescued is not None:
+                self._ai_clear()
+        if sub and not s.get("opens") and not s.get("download") and not self._ai_followed(i, s, page, before):
+            raise NotFound("AI가 고른 것을 눌렀지만 이어지지 않음")
+        if rescued is not None:
+            self.ai_saved += 1
         return ", ".join([how] + notes)
 
     def run(self):

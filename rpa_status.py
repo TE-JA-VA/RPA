@@ -1297,6 +1297,32 @@ def mail_memory_path(no):
     return os.path.join(data_dir(), "메일기억", f"{preset_site_key(no)}.json")
 
 
+AI_NAME = "ai.json"     # ACTOR AI 도움 설정 {"on", "key"} - 에이전트가 웹에서 받아 적는다 (계획 ②). 키는 DPAPI 로 잠가 적는다
+
+
+def ai_settings():
+    """{"on": bool, "key": 평문 키} (키가 없으면 key 칸 없음). 파일이 없거나 깨졌거나 풀 수 없으면 None - 예외를 내지 않는다
+    (AI 를 못 쓰면 지금과 똑같이 돈다)."""
+    try:
+        with open(os.path.join(data_dir(), AI_NAME), encoding="utf-8") as f:
+            d = json.load(f)
+        out = {"on": d.get("on") is True}
+        if d.get("key"):
+            out["key"] = unseal(d["key"])
+        return out
+    except Exception:
+        return None
+
+
+def set_ai(on, key):
+    """AI 도움 설정을 적는다. 키는 잠가 적고, 꺼졌거나 키가 비면 키를 지운다. 같은 값이면 다시 쓰지 않는다."""
+    key = key if on and key else None
+    want = {"on": bool(on), **({"key": key} if key else {})}
+    if ai_settings() == want:
+        return
+    write_json_atomic(os.path.join(data_dir(), AI_NAME), dict(want, **({"key": seal(key)} if key else {})))
+
+
 def imap_memory_path(no):
     """메일 받기(IMAP) 프리셋 no 가 처리한 메일 기억 (mail_imap) - 웹메일 기억과 모양이 달라 파일을 따로 둔다."""
     return os.path.join(data_dir(), "메일기억", f"{preset_site_key(no)}.imap.json")
