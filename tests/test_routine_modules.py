@@ -364,6 +364,12 @@ rr.ec.erpia_pids = lambda: [9999, 16000]                  # 시작할 때 있던
 seen_pids.clear()
 r = _real_acquire(7828, tries=3, others={9999})
 check("시작할 때 없던 새 ERPia 는 우리 것으로 따라간다 (로그인 전 자체 업데이트로 다시 켜짐)", 16000 in seen_pids and 9999 not in seen_pids, str(seen_pids))
+_saved_li = rr.erpia_logged_in
+rr.erpia_logged_in = lambda pid: pid == 16000             # 새로 떴지만 다른 계정으로 로그인돼 있다 - 실행 중에 사람이 띄운 것
+seen_pids.clear()
+r = _real_acquire(7828, tries=3, others={9999})
+rr.erpia_logged_in = _saved_li
+check("새로 떴어도 다른 계정으로 로그인된 ERPia 로는 갈아타지 않는다 (검토 2026-11-17)", r[0] is None and 16000 not in seen_pids, str(seen_pids))
 rr.ec.erpia_pids = lambda: []
 logs = []
 _saved_log = rr.log
@@ -1393,6 +1399,16 @@ ectx = rr.RoutineContext()
 pid = rr.ensure_erpia_running(ectx)
 check("다른 계정으로 로그인된 ERPia 는 두고 새로 띄운다 - 남의 것은 ctx.others 에 (사용자 2026-11-16)",
       pid == 5555 and len(POPEN) == 1 and ectx.others == {4343} and 4343 in PIDS, f"{pid} {POPEN} {ectx.others}")
+POPEN.clear()
+PIDS[:] = [4343, 4444]               # 로그인 창만 뜬 ERPia 가 둘 - 사람이 로그인하는 중일 수 있다
+LOGGED[0] = False
+pid = rr.ensure_erpia_running()
+check("로그인 전 ERPia 라도 ERPia 가 여럿이면 거기에 로그인하지 않고 새로 띄운다 (검토 2026-11-17)",
+      pid == 5555 and len(POPEN) == 1, f"{pid} {POPEN}")
+PIDS[:] = [4343]
+POPEN.clear()
+check("로그인 전 ERPia 가 하나뿐이면 예전처럼 거기에 로그인한다", rr.ensure_erpia_running() == 4343 and POPEN == [], str(POPEN))
+LOGGED[0] = True
 POPEN.clear()
 ELEV[0] = True
 PIDS[:] = [4242]

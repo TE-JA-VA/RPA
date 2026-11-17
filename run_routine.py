@@ -321,7 +321,8 @@ def my_erpia_pids(others=None):
         mine = []
     if others is None:
         return mine
-    return mine + [p for p in ec.erpia_pids() if p not in others and p not in mine]
+    # 새로 뜬 것이라도 다른 계정으로 로그인돼 있으면 남의 것 - 실행 중에 사람이 띄운 ERPia 일 수 있다 (검토 2026-11-17)
+    return mine + [p for p in ec.erpia_pids() if p not in others and p not in mine and not erpia_logged_in(p)]
 
 
 def _login_visible(pid):
@@ -360,7 +361,9 @@ def ensure_erpia_running(ctx=None):
     pids = ec.erpia_pids()
     mine = my_erpia_pids()
     others = [p for p in pids if p not in mine]
-    fresh = [p for p in others if not erpia_logged_in(p)]        # 로그인 전 - 아직 어느 계정도 아니다 (예전처럼 거기에 로그인한다)
+    # 로그인 전 - 아직 어느 계정도 아니다 (예전처럼 거기에 로그인한다). 다만 ERPia 가 그것 하나뿐일 때만 - 여럿이면 사람이 로그인
+    # 창에 입력하거나 2차 인증 중인 ERPia 일 수 있어 새로 띄운다 (검토 2026-11-17)
+    fresh = [p for p in others if not erpia_logged_in(p)] if len(pids) == 1 else []
     pid = mine[0] if mine else (fresh[0] if fresh else None)
     if pid is not None and erpia_unreachable(pid):
         if pid not in mine:
@@ -6032,6 +6035,9 @@ def module_login(ctx):
         if not ctx.refresh():
             return "failed", "메인 화면을 안정적으로 잡지 못했습니다."
     log(f"메인 창 확보: hwnd={ctx.hwnd}")
+    if ctx.pid not in my_erpia_pids():   # 우리가 로그인했는데 제목이 설정과 다르다 - 다음 실행이 이 ERPia 를 못 알아보고 새로 띄운다 (검토 2026-11-17)
+        log(f"경고: ERPia 창 제목('{win32gui.GetWindowText(ctx.hwnd)}')이 설정 계정 '{admin_code} - {user_id}' 와 달라 "
+            "다음 실행에서 이 ERPia 를 알아보지 못할 수 있습니다.")
     return "done", None
 
 

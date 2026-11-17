@@ -300,16 +300,16 @@ def click_login_button(login_win, log):
 def wait_for_popup(login_win, seconds=POPUP_POLL_SECONDS):
     """(팝업이 뜬 창, 그 팝업의 버튼 목록) 을 반환한다. 없으면 (None, None).
     로그인 창 내부 오버레이형 팝업과, 별도의 최상위 팝업 창 두 가지 모두 확인한다."""
+    try:        # 처음에 한 번 - 로그인 창이 닫힌 뒤 다시 읽으면 0 이 되어 별도 팝업을 놓친다 (검토 2026-11-17)
+        owner = win32process.GetWindowThreadProcessId(login_win.handle)[1] or None
+    except Exception:
+        owner = None
     elapsed = 0.0
     while elapsed < seconds:
         embedded = find_embedded_popup_buttons(login_win)
         if embedded:
             return login_win, embedded
 
-        try:
-            owner = win32process.GetWindowThreadProcessId(login_win.handle)[1]
-        except Exception:
-            owner = None
         others = find_other_erpia_popups({login_win.handle}, owner)
         if others:
             return others[0], others[0].descendants(control_type="Button")
