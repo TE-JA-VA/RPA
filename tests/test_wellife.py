@@ -168,8 +168,8 @@ settings(ALL_Y)
 rr.ec.erpia_pids = lambda: [13388, 30140]
 wellife.run_main(rr)
 fin = rec.of("finish")
-check("ERPia 가 둘 이상이면 아무것도 누르지 않고 finish(stopped) - 다른 세션을 조작하지 않게",
-      not got and fin and fin[-1][0] == "stopped" and "2개" in fin[-1][1], str(fin))
+check("ERPia 가 둘 이상이어도 멈추지 않는다 - 로그인·붙기가 설정 계정 ERPia 만 고른다 (사용자 2026-11-16, 예전엔 멈춤)",
+      got and not any(f[0] == "stopped" and "개 열려" in (f[1] or "") for f in fin), str(fin))
 rr.ec.erpia_pids = lambda: []
 
 # 모듈별 실행: 예약 줄이 고른 모듈(RPA_RUN_MODULES) - 섹션의 켬·끔 대신 그 모듈만 (지금 루틴과 같은 규칙)
@@ -819,7 +819,7 @@ check("로그인 실패 팝업은 메인 화면이 아니다", not rr.pl.is_main
 
 # 이미 로그인된 ERPia: 숨은 로그인 잔재 창을 로그인 창으로 보면 그 창 Edit 좌표(= 메인 화면 위)를 누른다
 _saved = rr.pl.find_login_window, rr.ec.find_main_hwnd, rr.is_main_app_window, rr.win32gui
-rr.pl.find_login_window = lambda: types.SimpleNamespace(handle=77)
+rr.pl.find_login_window = lambda pid=None: types.SimpleNamespace(handle=77)
 rr.ec.find_main_hwnd = lambda pid: 55
 rr.is_main_app_window = lambda h: True
 rr.win32gui = types.SimpleNamespace(IsWindowVisible=lambda h: False)

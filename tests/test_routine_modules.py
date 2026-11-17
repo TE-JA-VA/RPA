@@ -231,7 +231,8 @@ print()
 print("=== 3. 모듈 표 / 컨텍스트 / 화면 진입 ===")
 rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime=_time.strftime)
 rr.ec = types.SimpleNamespace(ensure_foreground=lambda *a, **k: True, find_erpia_pid=lambda: 4242,
-                              process_elevated=lambda pid: False, pid_alive=lambda pid: True, erpia_pids=lambda: [])
+                              process_elevated=lambda pid: False, pid_alive=lambda pid: True, erpia_pids=lambda: [],
+                              erpia_pids_titled=lambda title: [4242])     # 설정 계정 제목의 ERPia (사용자 2026-11-16)
 rr.log = lambda msg="": None
 rr.win32gui = types.SimpleNamespace(IsWindow=lambda h: True, IsWindowVisible=lambda h: True,
                                     PostMessage=lambda h, m, w, l: None)
@@ -315,8 +316,10 @@ def raising(win, key, control_types=()):
 
 # ERPia 가 로그인 직후 스스로 업데이트해 다시 켜지면 PID 가 바뀐다 (triif 2026-11-13 09:01) - 새 PID 의 창을 잡아야 한다
 _real_acquire = rr.acquire_main_window
-_EC_NAMES = ("pid_alive", "find_erpia_pid", "wait_for_main_hwnd", "ensure_foreground")
+_EC_NAMES = ("pid_alive", "find_erpia_pid", "wait_for_main_hwnd", "ensure_foreground", "erpia_pids_titled", "erpia_pids")
 _saved_ec = {n: getattr(rr.ec, n, None) for n in _EC_NAMES}
+_saved_cred3 = rr.pl.load_credentials
+rr.pl.load_credentials = lambda: ("업체", "아이디", "비번")
 _saved_acq = (rr.is_main_app_window, rr.Application, rr.time.sleep)
 seen_pids = []
 
@@ -329,7 +332,8 @@ def _wait_hwnd(pid, timeout=5):
 
 
 rr.ec.pid_alive = lambda pid: pid != 7828
-rr.ec.find_erpia_pid = lambda: 15260
+rr.ec.erpia_pids_titled = lambda title: [15260] if title == "업체 - 아이디" else []     # 다시 켜진 우리 ERPia (설정 계정 제목)
+rr.ec.erpia_pids = lambda: [15260]
 rr.ec.wait_for_main_hwnd = _wait_hwnd
 rr.is_main_app_window = lambda h, errors=None: h == 555
 rr.ec.ensure_foreground = lambda h: True
@@ -343,14 +347,24 @@ check("refresh 가 바뀐 PID 를 ctx 에 남긴다", ctx.refresh() and ctx.pid 
 _next_pid = iter(range(20000, 30000))
 _calls = []
 rr.ec.pid_alive = lambda pid: False                       # 계속 꺼졌다 켜지는 ERPia - 볼 때마다 새 PID
-rr.ec.find_erpia_pid = lambda: _calls.append(1) or next(_next_pid)
+rr.ec.erpia_pids_titled = lambda title: _calls.append(1) or [next(_next_pid)]
 rr.ec.wait_for_main_hwnd = lambda pid, timeout=5: (_ for _ in ()).throw(RuntimeError("창 없음"))
 r = _real_acquire(7828, tries=12)
 rr.ec.wait_for_main_hwnd = _wait_hwnd
 check("ERPia 가 끝없이 다시 켜져도 PID 바꿔 다시 세기는 3번까지라 끝난다 (12 x 4 = 48번 안)",
       r[0] is None and len(_calls) <= 12 * (rr.PID_SWITCH_MAX + 1), str(len(_calls)))
 rr.ec.pid_alive = lambda pid: pid != 7828
-rr.ec.find_erpia_pid = lambda: (_ for _ in ()).throw(RuntimeError("없음"))
+rr.ec.erpia_pids_titled = lambda title: []                # 다른 계정 ERPia(9999)만 떠 있다 - 그리로 갈아타지 않는다 (검토 2026-11-16)
+rr.ec.erpia_pids = lambda: [9999]
+seen_pids.clear()
+r = _real_acquire(7828, tries=3)
+check("PID 가 끝나도 다른 계정 ERPia 로는 갈아타지 않는다 (사람이 쓰는 ERPia 를 조작하지 않게, 검토 2026-11-16)",
+      r[0] is None and 9999 not in seen_pids, str((r, seen_pids)))
+rr.ec.erpia_pids = lambda: [9999, 16000]                  # 시작할 때 있던 남의 9999 는 빼고, 그 뒤 새로 뜬 16000 은 우리 것 (자체 업데이트)
+seen_pids.clear()
+r = _real_acquire(7828, tries=3, others={9999})
+check("시작할 때 없던 새 ERPia 는 우리 것으로 따라간다 (로그인 전 자체 업데이트로 다시 켜짐)", 16000 in seen_pids and 9999 not in seen_pids, str(seen_pids))
+rr.ec.erpia_pids = lambda: []
 logs = []
 _saved_log = rr.log
 rr.log = logs.append
@@ -366,6 +380,7 @@ rr.log = _saved_log
 check("메뉴 확인 중 난 오류를 진단 줄에 남긴다 (예전엔 삼켜서 72초 동안 흔적이 없었다)",
       r[0] is None and any("메뉴 확인 오류 2번" in x and "가입자" in x for x in logs), str(logs[-1:]))
 rr.is_main_app_window, rr.Application, rr.time.sleep = _saved_acq
+rr.pl.load_credentials = _saved_cred3
 for _n, _v in _saved_ec.items():
     if _v is None:
         delattr(rr.ec, _n)
@@ -373,7 +388,7 @@ for _n, _v in _saved_ec.items():
         setattr(rr.ec, _n, _v)
 
 rr.find_by_text = raising
-rr.acquire_main_window = lambda pid, tries=12: (778, types.SimpleNamespace(window=lambda handle: FakeWin()), FakeWin(), pid)
+rr.acquire_main_window = lambda pid, tries=12, others=None: (778, types.SimpleNamespace(window=lambda handle: FakeWin()), FakeWin(), pid)
 check("예외만 나다 끝나면 absent 가 아니라 failed", rr.goto_screen_by_icon(make_ctx(), "lcg_X", "엑스", "엑스", wait_seconds=4) == "failed")
 
 
@@ -405,7 +420,7 @@ class LiveWin:
 el = NamedEl()
 rr.find_by_text = _real_find_by_text
 rr.win32gui.IsWindow = lambda h: h != 777
-rr.acquire_main_window = lambda pid, tries=12: (778, types.SimpleNamespace(window=lambda handle: LiveWin(el)), LiveWin(el), pid)
+rr.acquire_main_window = lambda pid, tries=12, others=None: (778, types.SimpleNamespace(window=lambda handle: LiveWin(el)), LiveWin(el), pid)
 rr.wait_for_active_main_tab = lambda app, hwnd, kw, timeout=20, interval=1.0, ctx=None: (True, "엑스 관리")
 ctx = make_ctx()
 ctx.app = types.SimpleNamespace(window=lambda handle: DeadWin())
@@ -427,28 +442,31 @@ check("goto_logistics_screen 은 lcg_Logistics", "lcg_Logistics" in rr.goto_logi
 check("goto_logistics(폴백형) 는 없어졌다", not hasattr(rr, "goto_logistics"))
 check("run_hold_save_and_goto_logistics 도 없어졌다", not hasattr(rr, "run_hold_save_and_goto_logistics"))
 
-rr.pl = types.SimpleNamespace(find_login_window=lambda: None, load_logistic_options=lambda: {},
-                              load_credentials=pl.load_credentials, ROUTINE_SECTION="Routine",
+rr.pl = types.SimpleNamespace(find_login_window=lambda pid=None: None, load_logistic_options=lambda: {},
+                              load_credentials=lambda: ("업체", "아이디", "비번"), ROUTINE_SECTION="Routine",
                               load_hold_save_only=lambda: pl.load_hold_save_only(), HOLD_SAVE_ONLY_KEY=pl.HOLD_SAVE_ONLY_KEY)
 ctx = make_ctx()
-rr.acquire_main_window = lambda pid, tries=12: (None, None, None, pid)
+rr.acquire_main_window = lambda pid, tries=12, others=None: (None, None, None, pid)
 ok, reason = ctx.attach()
 check("attach: 메인 창 못 잡으면 (False, 사유)", ok is False and "메인 화면" in reason, str(reason))
-rr.acquire_main_window = lambda pid, tries=12: (999, "app", "win", pid)
+rr.acquire_main_window = lambda pid, tries=12, others=None: (999, "app", "win", pid)
 ok, reason = ctx.attach()
 check("attach: 성공하면 hwnd 갱신", ok is True and ctx.hwnd == 999 and ctx.pid == 4242)
-rr.pl.find_login_window = lambda: types.SimpleNamespace(handle=1)     # 로그인 뒤 숨은 채 남는 잔재 창
+rr.pl.find_login_window = lambda pid=None: types.SimpleNamespace(handle=1)     # 로그인 뒤 숨은 채 남는 잔재 창
 rr.win32gui.IsWindowVisible = lambda h: False
 ok, reason = ctx.attach()
 check("attach: 숨은 로그인 잔재 창은 무시하고 붙는다", ok is True, str(reason))
 rr.win32gui.IsWindowVisible = lambda h: True
 ok, reason = ctx.attach()
 check("attach: 보이는 로그인 창이면 즉시 안내", ok is False and "로그인 창" in reason, str(reason))
-rr.pl.find_login_window = lambda: None
-rr.ec.find_erpia_pid = lambda: (_ for _ in ()).throw(RuntimeError("없음"))
+rr.pl.find_login_window = lambda pid=None: None
+rr.ec.erpia_pids_titled = lambda title: []
 ok, reason = ctx.attach()
-check("attach: ERPia 미실행이면 로그인 모듈 안내", ok is False and "로그인 모듈" in reason, str(reason))
-rr.ec.find_erpia_pid = lambda: 4242
+check("attach: 설정 계정 ERPia 가 없으면 로그인 모듈 안내", ok is False and "로그인 모듈" in reason, str(reason))
+rr.ec.erpia_pids = lambda: [9999]
+ok, reason = ctx.attach()
+check("attach: 다른 계정 ERPia 만 떠 있으면 거기에 붙지 않는다 (검토 2026-11-16)", ok is False and "건드리지 않습니다" in reason, str(reason))
+rr.ec.erpia_pids, rr.ec.erpia_pids_titled = (lambda: []), (lambda title: [4242])
 
 # ---------------------------------------------------------------------------
 print()
@@ -486,9 +504,11 @@ class StatusRec:
         return [c[1:] for c in self.calls if c[0] == name]
 
 
-def run(selected, results, attach=(True, None)):
-    """모듈 함수를 가짜로 바꿔 디스패처만 돌린다. results: {모듈키: (result, reason)}"""
+def run(selected, results, attach=(True, None), admin_off=()):
+    """모듈 함수를 가짜로 바꿔 디스패처만 돌린다. results: {모듈키: (result, reason)}. admin_off: 관리자가 끈 모듈 (settings.json policy.off)"""
     rec = StatusRec()
+    if admin_off:
+        rec.read_settings = lambda: {"schedule": {"policy": {"off": list(admin_off)}}}
     rr.status = rec
     called = []
     attach_calls = []
@@ -531,6 +551,9 @@ check("끈 모듈은 부르지 않는다 (주문매핑만 끄면 수집은 돈�
 check("끈 모듈은 module_off (칸이 없는 운송장번호 전송도 끔)", [r[0] for r in rec.of("module_off")] == ["sales", "hold", "invoicesend"])
 skipped = rec.of("skip")
 check("끈 모듈의 단계는 '설정에서 끔' 으로 skip", len(skipped) == 8 and all(s[1] == "설정에서 끔" for s in skipped), str(skipped))
+out, called, rec, ac = run(ALL_ON, {}, admin_off=("Hold",))
+check("관리자가 끈 모듈은 PC 설정에서 켜 있어도 [실행] 단추·'전체' 줄(모듈을 고르지 않은 실행)에서 돌지 않는다 (검토 2026-11-16)",
+      "hold" not in called and "logistics" in called and "hold" in [r[0] for r in rec.of("module_off")], str(called))
 logged = []
 rr.log = lambda msg="": logged.append(msg)
 os.environ["RPA_RUN_MODULES"] = "Logistics,Output"
@@ -605,6 +628,19 @@ ctx.results = {"logistics": "no_target"}
 seen.clear()
 res = rr.module_output(ctx)
 check("물류관리가 돌았는데 done 이 아니면 출력하지 않고 no_target", res[0] == "no_target" and not seen, str((res, seen)))
+
+real_query = rr.query_print_targets      # ERPia 가 꺼져 물류관리를 다시 돌았으면 출력 전에 상단을 조회한다 (사용자 2026-11-16)
+ctx.rerun = {"logistics"}
+for n, want in ((0, "no_target"), (None, "failed"), (2, "done")):
+    rr.query_print_targets = lambda c, n=n: seen.update(query=True) or n
+    seen.clear()
+    res = rr.module_output(ctx)
+    printed = "policy" in seen
+    check(f"물류관리를 다시 돌아 대상 없음이면 출력 전에 조회 - 조회 {n} → {want}"
+          + (" ([아니오] 정책, 화면 이동 없음)" if n else " (출력 안 함)"),
+          res[0] == want and seen.get("query") and printed == bool(n) and seen.get("policy", "stop") == "stop" and "goto" not in seen,
+          str((res, seen)))
+rr.query_print_targets, ctx.rerun = real_query, set()
 
 rr.run_print_step = lambda app, pid, hwnd, options=None, already_printed="continue": "already_printed"
 ctx.results = {}
@@ -1043,8 +1079,8 @@ OTHERS = [[]]
 rr.ec.erpia_pids = lambda: OTHERS[0]
 OTHERS[0] = [9999]
 out, called, rec = run_crash(crash_once)
-check("꺼진 뒤 다른 ERPia 가 떠 있으면 다시 띄우지 않고 멈춘다 (사람이 띄운 것일 수 있다, 리뷰 10-14)",
-      out[0] == "stopped" and "9999" in out[1] and called == ["login", "sales"], f"{out} {called}")
+check("꺼진 뒤 다른 계정 ERPia 가 떠 있어도 그것은 두고 우리 것을 다시 띄워 잇는다 (사용자 2026-11-16, 예전엔 멈춤)",
+      out[0] == "success" and called == ["login", "sales", "login", "sales"], f"{out} {called}")
 OTHERS[0] = []
 
 
@@ -1330,9 +1366,12 @@ LOGGED = [True]
 _saved_e = {n: getattr(rr, n) for n in ("load_exe_path", "subprocess", "erpia_logged_in")}
 rr.erpia_logged_in = lambda pid: LOGGED[0]
 rr.load_exe_path = lambda: r"C:\ERPia\ERPiaMain.exe"
-PIDS = [4242]
-rr.ec.find_erpia_pid = lambda: PIDS[0] if PIDS else (_ for _ in ()).throw(RuntimeError("없음"))
-rr.ec.terminate_pid = lambda pid: (PIDS.clear(), ALIVE.__setitem__(0, False))[0]
+PIDS, MINE = [4242], {4242}          # 떠 있는 ERPia / 그중 설정 계정 제목('업체 - 아이디')인 것 (사용자 2026-11-16)
+_saved_ec13 = (rr.ec.erpia_pids, rr.ec.erpia_pids_titled, rr.pl.load_credentials)
+rr.ec.erpia_pids = lambda: list(PIDS)
+rr.ec.erpia_pids_titled = lambda title: [p for p in PIDS if p in MINE]
+rr.pl.load_credentials = lambda: ("업체", "아이디", "비번")
+rr.ec.terminate_pid = lambda pid: (PIDS.remove(pid), ALIVE.__setitem__(0, False))[0]
 
 
 def fake_popen(args, cwd=None):
@@ -1345,9 +1384,19 @@ pid = rr.ensure_erpia_running()
 check("ensure_erpia_running: 이미 로그인된 관리자 ERPia 는 끄고 새로 띄운 ERPia 의 PID", pid == 5555 and len(POPEN) == 1, f"{pid} {POPEN}")
 ELEV[0] = False
 POPEN.clear()
+MINE.add(5555)                       # 새로 띄운 ERPia 에 로그인했다 - 제목이 설정 계정
 check("같은 권한이면 떠 있는 ERPia 를 그대로", rr.ensure_erpia_running() == 5555 and POPEN == [])
+PIDS[:] = [4343]                     # 다른 계정으로 로그인된 ERPia 만 떠 있다 (사람이 쓰는 것일 수 있다)
+MINE.clear()
+ALIVE[0] = True
+ectx = rr.RoutineContext()
+pid = rr.ensure_erpia_running(ectx)
+check("다른 계정으로 로그인된 ERPia 는 두고 새로 띄운다 - 남의 것은 ctx.others 에 (사용자 2026-11-16)",
+      pid == 5555 and len(POPEN) == 1 and ectx.others == {4343} and 4343 in PIDS, f"{pid} {POPEN} {ectx.others}")
+POPEN.clear()
 ELEV[0] = True
 PIDS[:] = [4242]
+MINE.add(4242)
 ALIVE[0] = True
 rr.ec.terminate_pid = lambda pid: "접근 거부"
 os.environ["RPA_UNATTENDED"] = "1"
@@ -1358,17 +1407,16 @@ except RuntimeError as e:
     res = str(e)
 os.environ.pop("RPA_UNATTENDED")
 check("못 끄면 새로 띄우지 않고 사유와 함께 멈춘다", res is not None and "종료하지 못했습니다" in res and POPEN == [], str(res))
-OTHERS[0] = [4242, 4343]
+PIDS[:] = [4242, 4343]               # 우리 관리자 ERPia(제목으로 앎) + 다른 계정 ERPia
 KILLED = []
-rr.ec.terminate_pid = lambda pid: KILLED.append(pid)
-try:
-    rr.ensure_erpia_running()
-    res = None
-except RuntimeError as e:
-    res = str(e)
-check("ERPia 가 여러 개면 로그인된 관리자 ERPia 라도 끄지 않는다 (리뷰 10-14)",
-      res is not None and "여러 개" in res and KILLED == [] and POPEN == [], str(res))
-OTHERS[0] = []
+rr.ec.terminate_pid = lambda pid: (KILLED.append(pid), PIDS.remove(pid), ALIVE.__setitem__(0, False))[0]
+pid = rr.ensure_erpia_running()
+check("ERPia 가 여럿이어도 우리 관리자 ERPia 만 끄고 새로 띄운다 - 다른 계정 ERPia 는 그대로 (예전엔 멈춤, 사용자 2026-11-16)",
+      pid == 5555 and KILLED == [4242] and 4343 in PIDS, f"{pid} {KILLED} {PIDS}")
+POPEN.clear()
+PIDS[:] = [4242]
+MINE.clear()                         # 로그인 전 ERPia - 아직 어느 계정도 아니다
+ALIVE[0] = True
 LOGGED[0] = False
 KILLED = []
 rr.ec.terminate_pid = lambda pid: KILLED.append(pid)
@@ -1389,26 +1437,27 @@ rr.pl.load_credentials = _saved_cred
 LOGGED[0] = True
 for n, f in _saved_e.items():
     setattr(rr, n, f)
+rr.ec.erpia_pids, rr.ec.erpia_pids_titled, rr.pl.load_credentials = _saved_ec13
 
 # ERPia 가 로그인 직후 스스로 업데이트해 다시 켜지며 로그인 창을 다시 띄우면 한 번 더 로그인한다 (triif 2026-11-13)
 _saved_rl = {n: getattr(rr.pl, n, None) for n in ("load_credentials", "login_flow", "find_login_window")}
 _saved_rl2 = (rr.ensure_erpia_running, rr.wait_login_or_main, rr.RoutineContext.refresh, rr.win32gui.IsWindowVisible,
-              getattr(rr.ec, "find_erpia_pid", None))
+              getattr(rr.ec, "erpia_pids_titled", None))
 FLOWS, REFRESH = [], [False, True]
 rr.pl.load_credentials = lambda: ("업체", "아이디", "비번")
-rr.pl.login_flow = lambda a, u, p, log=None: FLOWS.append(1) or {"status": "success"}
-rr.pl.find_login_window = lambda: types.SimpleNamespace(handle=31)
+rr.pl.login_flow = lambda a, u, p, log=None, pid=None: FLOWS.append(1) or {"status": "success"}
+rr.pl.find_login_window = lambda pid=None: types.SimpleNamespace(handle=31)
 rr.win32gui.IsWindowVisible = lambda h: True
-rr.ensure_erpia_running = lambda: 7828
+rr.ensure_erpia_running = lambda ctx=None: 7828
 rr.wait_login_or_main = lambda pid: ("login_window", types.SimpleNamespace(handle=30))
-rr.ec.find_erpia_pid = lambda: 15260
+rr.ec.erpia_pids_titled = lambda title: [15260]      # 다시 켜진 ERPia - 아직 로그인 전이라도 시험에서는 제목으로 찾는다
 rr.RoutineContext.refresh = lambda self: REFRESH.pop(0)
 lctx = rr.RoutineContext()
 res = rr.module_login(lctx)
 check("ERPia 가 다시 켜져 로그인 창이 다시 뜨면 한 번 더 로그인하고 이어간다", res == ("done", None) and FLOWS == [1, 1] and lctx.pid == 15260,
       str((res, FLOWS, lctx.pid)))
 FLOWS, REFRESH = [], [False]
-rr.pl.find_login_window = lambda: None
+rr.pl.find_login_window = lambda pid=None: None
 res = rr.module_login(rr.RoutineContext())
 check("로그인 창이 없으면 다시 로그인하지 않고 예전처럼 실패", res[0] == "failed" and "메인 화면" in res[1] and FLOWS == [1], str((res, FLOWS)))
 for n, f in _saved_rl.items():
@@ -1418,14 +1467,14 @@ for n, f in _saved_rl.items():
         setattr(rr.pl, n, f)
 (rr.ensure_erpia_running, rr.wait_login_or_main, rr.RoutineContext.refresh, rr.win32gui.IsWindowVisible, _fe) = _saved_rl2
 if _fe is not None:
-    rr.ec.find_erpia_pid = _fe
+    rr.ec.erpia_pids_titled = _fe
 
 LOGINS = []
 _saved_ml = rr.module_login
 rr.module_login = lambda ctx: LOGINS.append(1) or ("done", None)
 rr.RoutineContext.attach = _real_attach
 ctx = rr.RoutineContext()
-rr.ec.find_erpia_pid = lambda: 4242
+rr.ec.erpia_pids_titled = lambda title: [4242]
 ok, reason = ctx.attach()
 check("로그인 모듈을 끈 채 관리자 ERPia 에 붙으려 하면 끄지 않고 사유를 남긴다 (끄는 것은 로그인할 때만)",
       ok is False and LOGINS == [] and "로그인 모듈" in reason, f"{ok} {reason}")

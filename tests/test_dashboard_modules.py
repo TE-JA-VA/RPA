@@ -479,13 +479,14 @@ try:
         pass
     check("사람이 띄운 실행이면 고르는 창을 띄운다", calls == ["창"], str(calls))
 
-    real_find_pid, real_load = rr.ec.find_erpia_pid, rr.load_exe_path
-    rr.ec.find_erpia_pid = lambda: 4321
+    real_find_pid, real_load = (rr.ec.erpia_pids, rr.ec.erpia_pids_titled, rr.my_erpia_pids), rr.load_exe_path
+    rr.ec.erpia_pids, rr.ec.erpia_pids_titled = (lambda: [4321]), (lambda title: [4321])
+    rr.my_erpia_pids = lambda others=None: [4321]           # 설정 계정 ERPia 가 떠 있다 (사용자 2026-11-16)
     rr.load_exe_path = lambda: calls.append("위치") or "없음"
     try:
         check("ERPia 가 이미 떠 있으면 위치를 찾지도 묻지도 않는다", rr.ensure_erpia_running() == 4321 and calls == ["창"], str(calls))
     finally:
-        rr.ec.find_erpia_pid, rr.load_exe_path = real_find_pid, real_load
+        (rr.ec.erpia_pids, rr.ec.erpia_pids_titled, rr.my_erpia_pids), rr.load_exe_path = real_find_pid, real_load
 finally:
     os.environ.pop("RPA_UNATTENDED", None)
     st._erpia_install_dirs, st.pick_erpia_exe = real_dirs, real_pick

@@ -123,8 +123,13 @@ def finish_cleanup(state):
     """성공(done) 뒤 정리 - 몇 번을 다시 해도 같다. done 을 먼저 적은 뒤 하므로 끊겨도 다음 실행이 마저 한다."""
     bnew = up.path("backup_new")
     if os.path.isdir(bnew):
-        shutil.rmtree(up.path("backup"), ignore_errors=True)
-        os.replace(bnew, up.path("backup"))
+        if state.get("from") and state.get("from") == state.get("target"):
+            # 같은 판 다시 받기(바뀐 파일 되돌리기) - 직전 판 보관본을 그 판으로 덮지 않는다. 덮으면 [되돌리기]가 같은 판으로
+            # 아무것도 안 바꾸고 '성공' 한다 (검토 2026-11-16)
+            shutil.rmtree(bnew, ignore_errors=True)
+        else:
+            shutil.rmtree(up.path("backup"), ignore_errors=True)
+            os.replace(bnew, up.path("backup"))
     shutil.rmtree(state.get("staging") or up.path("staging"), ignore_errors=True)
     try:
         os.remove(up.path("alive.json"))

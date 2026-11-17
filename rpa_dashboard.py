@@ -1029,7 +1029,8 @@ def stop_reason(status):
         return f"{(status.get('finished_at') or '')[11:16]} {STOPPED_TEXT}. 반복 실행을 중단하였습니다.".strip()
     word = "오류" if status.get("state") == "crashed" else "실패"
     why = status.get("reason") or bad.get("reason") or "까닭 없음"
-    return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or 'PROCESS'} {word}로 반복 실행을 중단하였습니다: {why}".strip()
+    who = bad.get("label") or ("ACTOR" if status.get("program") == "prepare" else "PROCESS")    # 사이트 수집만 고른 반복 회차는 프리페어 - 모듈 목록이 없다 (검토 2026-11-16)
+    return f"{(status.get('finished_at') or '')[11:16]} {who} {word}로 반복 실행을 중단하였습니다: {why}".strip()
 
 
 def repeat_state(sch, win, now):
@@ -1431,10 +1432,11 @@ class Scheduler(threading.Thread):
                 return
             rep["pending"] = None
             stamp = now.isoformat(timespec="seconds")
-            if not fresh:                        # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
-                rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차를 시작하지 못했습니다."}
-            elif not launched_in(rep, since):
+            if not launched_in(rep, since):     # 먼저 본다 - program 을 지금 시간대로 골랐으니 앞 시간대 회차는 다른 상태 파일을 읽어 fresh 가 틀린다
                 pass                             # 앞 시간대에 띄운 회차가 붙은 시간대가 열린 뒤 끝났다 - 이 시간대 회차가 아니니 세지도 멈추지도 않는다
+                #                                  (사이트 수집만 ↔ PROCESS 처럼 종류가 다른 붙은 시간대에서 뒤 시간대가 '시작하지 못함' 으로 멈췄다, 검토 2026-11-16)
+            elif not fresh:                      # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
+                rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차를 시작하지 못했습니다."}
             elif v.get("trigger") != "repeat":
                 pass                             # 다른 실행(사람이 누른 단추 등)이 상태를 덮었다 - 회차 결과를 모르니 세지도 멈추지도 않는다
             elif v.get("state") == "success" or locked_round(v):

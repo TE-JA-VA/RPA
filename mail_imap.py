@@ -436,9 +436,13 @@ def fetch(server, rules, dest_dir, code, memory_path, log=print, now=None):
                         M.uid("STORE", str(m["uid"]), "+FLAGS", "(\\Seen)")
             complete = len(pending) <= rules["max"] and len(done) == len(mails)
     finally:        # 중간에 끊겨도 다 받은 메일은 기억한다 (다음에 또 받지 않게)
+        anchored = False
         if complete:
             memory[LAST_RUN] = now.date().isoformat()
-        if done or complete:
+        elif not memory.get(LAST_RUN):      # 첫 실행이 끝까지 못 갔다 - 이번 기간의 첫날을 적어, 다음 실행이 남은 메일을
+            memory[LAST_RUN] = (now.date() - dt.timedelta(days=rules["days"])).isoformat()   # 기간 밖으로 거르지 않게 (검토 2026-11-16)
+            anchored = True
+        if done or complete or anchored:
             memory.update({k: now.date().isoformat() for k in done})
             _write(memory_path, memory, now)
     log(f"메일 {result['mails']}통, 첨부 {len(result['saved'])}개를 받았습니다."

@@ -179,7 +179,8 @@ try:
     check("실패한 첨부는 까닭과 함께", r1["mails"] == 4 and any(n == "bad.xlsx" for n, _ in r1["skipped"]), r1)
     m1 = json.load(open(mem, encoding="utf-8"))
     keys6 = re.search(rb"Message-ID: (<[^>]+>)", fake.boxes["INBOX"][u6 - 1]["raw"])[1].decode()
-    check("첨부 하나라도 실패한 메일은 기억 안 함", len(m1) == 4 and keys6 not in m1, m1)
+    check("첨부 하나라도 실패한 메일은 기억 안 함 - 끝까지 못 간 첫 실행은 이번 기간 첫날을 적어 둔다 (검토 2026-11-16)",
+          len(m1) == 5 and keys6 not in m1 and m1.get(mi.LAST_RUN) == "2026-10-22", m1)
     check("90일 지난 기억은 지움", "old@x" not in m1 and "recent@x" in m1, m1)
     check("읽음 표시 끔: 서버 플래그 그대로", fake.flags() == flags0, fake.flags())
     cmds = fake.commands[n_cmd:]
@@ -253,6 +254,12 @@ try:
     check("다음 실행은 마지막 실행 날(어제)부터 - 어제 저녁 메일도, 오래된 것부터 저장 (I8·I7)", names3 == ["(P9)가.xlsx", "(P9)다.xlsx"], names3)
     check("파일 시각 = 메일 시각 (I7)", abs(os.path.getmtime(f3["saved"][0]) - Y22.timestamp()) < 2
           and os.path.getmtime(f3["saved"][0]) < os.path.getmtime(f3["saved"][1]))
+    mb4 = os.path.join(work, "b2c.json")        # 기억이 없는 첫 실행이 한 번에 최대를 넘겨 끝까지 못 갔다
+    g1 = mi.fetch(S, dict(rb, max=1), os.path.join(work, "b2c"), "P9", mb4, log=lines.append, now=NOW)
+    g2 = mi.fetch(S, rb, os.path.join(work, "b2c"), "P9", mb4, log=lines.append, now=NOW + dt.timedelta(days=1))
+    check("첫 실행이 끝까지 못 가도 다음 날 실행이 남은 메일을 받는다 - 기간 밖으로 거르지 않는다 (검토 2026-11-16)",
+          len(g1["saved"]) == 1 and sorted(os.path.basename(p) for p in g1["saved"] + g2["saved"]) == ["(P9)나.xlsx", "(P9)다.xlsx"],
+          (g1["saved"], g2["saved"]))
 
     fake.add(mail("a <a@b.kr>", ">>> 큰 메일", [("큰.xlsx", b"z" * 2000)]), TODAY + dt.timedelta(hours=1), box="B3")
     fake.add(mail("a <a@b.kr>", ">>> 첨부 없음", []), TODAY + dt.timedelta(hours=2), box="B3")

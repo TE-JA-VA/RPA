@@ -1015,7 +1015,9 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         back = upd.backup_version()
         if not back:
             raise RuntimeError("되돌릴 이전 버전이 없습니다.")
-        check_can_update()
+        install = check_can_update()
+        if install.get("state") != "ok":    # 되돌리기는 보관본에 있는 파일만 바꾼다 - 바뀐·빠진 파일은 그대로 남아 3분 점검을 못 넘긴다 (검토 2026-11-16)
+            raise RuntimeError("바뀌었거나 빠진 파일이 있어 되돌리지 않습니다. 먼저 같은 버전으로 [업데이트]해 고친 뒤 되돌려 주십시오.")
         start(back, "rollback")
         return f"이전 버전으로 되돌리기를 예약하였습니다. ({back}) 오토파일럿 실행이 끝나면 바로 적용됩니다."
 

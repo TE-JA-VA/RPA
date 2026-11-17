@@ -86,8 +86,8 @@ def run(bad, when="now", unknown=False, hide="", dlg_hide=""):
     rr.move_file_to = lambda path, dest, reason="": moved.__setitem__(path, reason) or True
     try:
         rr.run_excel_upload_step(None, 0, 0, None)
-    except rr.UploadStop:
-        return moved, blocked.count(True), True
+    except rr.UploadStop as e:
+        return moved, blocked.count(True), ("stop", e.uploaded, e.errors)
     except rr.UploadGridHidden as h:
         return moved, blocked.count(True), ("hidden", h.uploaded, h.errors)
     finally:
@@ -119,6 +119,9 @@ check("마지막 파일은 결과 팝업을 기다려 본다", moved == {**done,
 
 moved, blocked, stopped = run("A", unknown=True)
 check("누를 단추를 모르는 창이면 멈추고, 결과를 못 본 앞 파일은 옮기지 않는다", stopped and moved == {}, f"멈춤 {stopped} {moved}")
+moved, blocked, stopped = run("B", unknown=True)
+check("모르는 창으로 멈춰도 그때까지 올린 수를 함께 알린다 - 올린 파일이 있는데 '건너뜀' 이 되지 않게 (검토 2026-11-16)",
+      stopped == ("stop", 1, 0) and moved == {"A.xlsx": "업로드 완료"}, f"{stopped} {moved}")
 
 moved, blocked, stopped = run("", hide="B")
 check("찾는 동안 그리드가 화면에서 사라지면(다른 탭이 앞으로 옴, 10-20 실측) 오류로 보내지 않고 남은 파일은 그대로 두고 알린다 - 앞 파일은 마무리",
