@@ -232,7 +232,7 @@
         <label class="inline"><input type="radio" name="ai" value="no">아니오</label>
         <input id="s-ai-key" type="password" placeholder="Anthropic API 키 (sk-ant-…)" size="30" autocomplete="off" disabled>
       </div>
-      <p class="muted">막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다. 사용하려면 업체 전용 API 키를 입력하여 주십시오.</p>
+      <p class="muted">막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다. 사용하려면 업체 전용 API 키를 입력하여 주십시오.</p>
       <div class="lbl">6. 최초 토큰량 설정</div>
       <div class="row">
         <label class="inline"><input type="radio" name="tok" value="now">지금 넣기</label>
@@ -767,7 +767,7 @@ function aiSection(d) {
     await openDetail(d.cid);
   }) }, "적용");
   return el("div", { class: "sec ai" }, head,
-    el("p", { class: "muted" }, "막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다. 업체의 모든 PC가 업데이트된 뒤에 켤 수 있습니다. 업체는 웹에서 끌 수 없습니다."),
+    el("p", { class: "muted" }, "막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다. 업체의 모든 PC가 업데이트된 뒤에 켤 수 있습니다. 업체는 웹에서 끌 수 없습니다."),
     el("div", { class: "row" }, el("label", { class: "inline" }, on, "사용"), key, el("span", { class: "muted ai-hint" }, a.hint ? `키 있음 (…${a.hint})` : "키 없음"), apply),
     el("p", { class: "ai-month" }, `이번 달 AI가 살린 단계 ${nf(a.saved)}번 / AI를 부른 횟수 ${nf(a.called)}번 / 포함 ${plan ? `${nf(plan.included)}번` : "-"}`),
     ...charge,

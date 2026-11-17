@@ -8,7 +8,7 @@ import {
 import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
 import { toast } from "./toast.js";
 import { icon as lucide } from "./icons.js";
-import { P, esc, MODULES, WELLIFE_MODULES, wellifeOn, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf, pcWho, schedNote } from "./rpa-common.js";
+import { hideAi, hideAiRun, P, esc, MODULES, WELLIFE_MODULES, wellifeOn, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf, pcWho, schedNote } from "./rpa-common.js";
 export * as settings from "./rpa-settings.js";   // 관리 > 환경설정 이 이 앱의 설정 화면을 붙인다 (settings.js)
 
 export const key = "rpa";
@@ -180,7 +180,7 @@ export function mount(el, context) {
   stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
     const v = snap.val();
     const first = live == null;
-    live = v || {};
+    live = c.me?.role === "super" ? v || {} : hideAi(v || {});   // AI 어시스트 흔적은 총괄만 (사용자 2026-11-17)
     seeBoot(live.heartbeat?.boot);   // (I13)
     runToasts(first);
     paintHero(); paintTiles(); paintRecent(); paintSteps();
@@ -562,7 +562,7 @@ async function loadHistory(date) {
       : query(col, where("pcId", "==", c.pcId), orderBy("started_at", "desc"), limit(HISTORY_LIMIT));
     const snap = await getDocs(q);
     if (seq !== histSeq || !root) return;
-    histItems = snap.docs.map((d) => d.data());
+    histItems = snap.docs.map((d) => (c.me?.role === "super" ? d.data() : hideAiRun(d.data())));   // AI 어시스트 흔적은 총괄만
     paintHist();
   } catch (e) {
     if (seq !== histSeq || !root) return;

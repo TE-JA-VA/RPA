@@ -1103,7 +1103,7 @@ with sync_playwright() as pw:
     keybox = page.locator("#detail .sec.ai input.ai-key")
     check(page.text_content("#detail .sec.ai h3").startswith("AI 어시스트") and not page.is_checked("#detail .sec.ai input[data-ai]")
           and keybox.get_attribute("type") == "password" and keybox.get_attribute("placeholder") == "sk-ant-… (바꿀 때만 입력)"
-          and "키 없음" in ai_text and "막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다." in ai_text,
+          and "키 없음" in ai_text and "막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다." in ai_text,
           "S1 업체 상세에 'AI 어시스트' 상자 - [사용] 체크·키 칸(가림)·키 상태·안내 글", ai_text[:300])
     check("AI가 살린 단계 650번" in ai_text and "AI를 부른 횟수 760번" in ai_text and "포함 100번" in ai_text
           and page.locator("#detail .sec.ai table.ai-charge tbody tr").count() == 3 and "추가 금액 90,000원 · 합계 120,000원" in ai_text,

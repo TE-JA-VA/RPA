@@ -5,6 +5,26 @@ import { toast } from "./toast.js";
 
 export const P = (kind, cid, pcId) => `apps/rpa/${kind}/${cid}/${pcId}`;
 // 에이전트·Firestore 에서 온 값은 innerHTML 에 넣기 전에 반드시 씌운다 (app.js 와 같은 구현)
+// ACTOR AI 어시스트 흔적은 업체 계정에게 보이지 않는다 - 총괄(super)만 본다 (사용자 2026-11-17 '기록은 우리만 알아볼 수 있게').
+// 지표 "{사이트}:ai", 로그 줄 (AI: …·AI 가 고른 …·AI가 닫음/고름·AI 어시스트 …), 사유 끝의 " (AI: …)"·" (AI 어시스트를 쓰지 못함: …)"
+const AI_LINE = /(^|[^A-Za-z])AI( 어시스트|:| 가 고른|가 고름|가 닫음|가 \d+번)/;
+const AI_TAIL = / \(AI( 어시스트를 쓰지 못함)?: [^)]*\)/g;
+const AI_TEXT_KEYS = new Set(["reason", "note", "how", "detail"]);
+export function hideAi(v, key = "") {
+  if (Array.isArray(v)) {
+    if (key === "metrics") v = v.filter((m) => !String(m?.key ?? "").endsWith(":ai"));
+    else if (key === "log" || key === "log_tail") v = v.filter((line) => typeof line !== "string" || !AI_LINE.test(line));
+    return v.map((x) => hideAi(x));
+  }
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hideAi(x, k)]));
+  return typeof v === "string" && AI_TEXT_KEYS.has(key) ? v.replace(AI_TAIL, "") : v;
+}
+/** 실행 기록 문서 하나 (Firestore runs) - 사유와 payload(JSON 글) 안까지 */
+export function hideAiRun(r) {
+  const out = hideAi(r);
+  try { out.payload = JSON.stringify(hideAi(JSON.parse(r.payload || "{}"))); } catch {}
+  return out;
+}
 export const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 export const MODULES = [   // 주문매핑은 자동 수집·엑셀 수집·매출처리 셋 (모든 업체 2026-10-30, PC 의 rpa_status.ROUTINE_CONFIG_MODULES 와 같은 순서)
   ["Login", "로그인"], ["Import", "자동 수집"], ["Excel", "엑셀 수집"], ["Sales", "주문매핑 매출처리"], ["Hold", "물류대기 관리"],

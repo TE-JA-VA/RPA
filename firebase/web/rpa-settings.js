@@ -1,8 +1,6 @@
 // RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 프리페어 RPA(사이트 수집: 쇼핑몰 프리셋) · 루틴 RPA(실행 모듈) · 자동 실행 (PC 마다).
 // 값의 기준은 PC 가 올린 live. 적용 = settings 에 쓰고 명령을 넣는다 - PC 가 반영해 live 로 돌려준다
 import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import { getFirestore, connectFirestoreEmulator, collection, query, where, getAggregateFromServer, sum, doc, getDoc }
-  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, switchText, notify, sendCommand, sendPair, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay, schedNote } from "./rpa-common.js";
 
 export const title = "오토파일럿";
@@ -116,7 +114,6 @@ const show = (el, on) => el.classList.toggle("hide", !on);
 
 export function mount(el, context) {
   root = el; c = context; busy = false; live = null; liveLimit = undefined; parLimit = undefined; sent = {};
-  aiLoaded = false; aiStat = null;
   form.copy = { to: "", pick: {} }; transferOk = {}; copyKey = "";
   shopQ = ""; shopFilter = "all"; xlOpen = new Set(); openClock = null; openPicker = null;
   root.innerHTML = HTML;
@@ -252,53 +249,14 @@ function reloadForm() {
 }
 
 // --- AI 어시스트 (계획 ② 2026-11-17) - 업체는 켜고 끄지 못한다, 금액도 보이지 않는다 ---------------------------------------
-// 이번 달 살린 횟수는 환경설정을 열 때(또는 켜진 때) 한 번만 읽는다 - 현황(heartbeat)마다 다시 읽으면 Firestore 읽기가 는다 (Review Focus 4)
-let aiLoaded = false, aiStat = null;     // aiStat = { saved, included } | { error: true } | null (읽는 중)
-const AI_GUIDE = "막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다.";
+// 횟수도 보이지 않는다 - 0번인 달에 돈만 낸다고 느끼지 않게 (사용자 2026-11-17). 그래서 Firestore 기록을 읽지 않는다
+const AI_GUIDE = "막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다.";
 const AI_OFF = "AI 어시스트를 사용하지 않습니다. 사이트 화면이 바뀌어 수집이 멈추는 날, AI가 대신 찾아 이어 가게 할 수 있습니다. 사용하려면 담당자에게 문의하여 주십시오.";
-function aiFirestore() {
-  const fs = getFirestore(c.db.app);
-  if (location.hostname === "127.0.0.1" && new URLSearchParams(location.search).get("emu") === "1") {
-    try { connectFirestoreEmulator(fs, "127.0.0.1", 8080); } catch {}   // RPA 화면이 먼저 붙였으면 이미 붙어 있다
-  }
-  return fs;
-}
-async function loadAi() {
-  aiLoaded = true;
-  const me = c;
-  try {
-    const fs = aiFirestore();
-    const m = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).slice(0, 7);   // PC 기록의 started_at 과 같은 한국 시각
-    const [y, mo] = m.split("-").map(Number), next = mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, "0")}`;
-    // 이번 달 [1일, 다음 달 1일) - 시계가 틀린 PC 의 미래 시각 기록은 빠진다. 색인 started_at + ai.saved
-    const q = query(collection(fs, "runs", c.me.cid, "items"), where("started_at", ">=", `${m}-01T00:00:00`), where("started_at", "<", `${next}-01T00:00:00`));
-    const plan = (id) => getDoc(doc(fs, "aiPlans", id)).then((d) => d.data() || {}).catch(() => ({}));
-    const [saved, base, own] = await Promise.all([getAggregateFromServer(q, { s: sum("ai.saved") }).then((r) => r.data().s ?? 0), plan("default"), plan(c.me.cid)]);
-    if (c !== me) return;
-    const inc = own.included ?? base.included;
-    aiStat = { saved, included: typeof inc === "number" ? inc : null };
-  } catch {
-    if (c !== me) return;
-    aiStat = { error: true };
-  }
-  paintAi();
-}
 function paintAi() {
   if (!root || !c) return;
   const on = c.policy?.rpa?.features?.ai === true;
   $("ai-meta").textContent = on ? "사용 중" : "";
-  const lines = [];
-  if (!on) lines.push(AI_OFF);
-  else {
-    if (!aiLoaded) loadAi();
-    lines.push("AI 어시스트 사용 중", AI_GUIDE);
-    if (aiStat?.error) lines.push("이번 달 횟수를 읽지 못했습니다.");
-    else if (!aiStat) lines.push("이번 달 횟수를 불러오는 중입니다.");
-    else {
-      lines.push(`이번 달 AI가 살린 단계: ${aiStat.saved}번${aiStat.included === null ? "" : ` (월 포함 ${aiStat.included}번)`}`);
-      if (aiStat.included !== null && aiStat.saved > aiStat.included) lines.push("포함 횟수를 넘은 만큼은 별도로 청구됩니다.");
-    }
-  }
+  const lines = on ? ["AI 어시스트 사용 중", AI_GUIDE] : [AI_OFF];
   $("ai-text").replaceChildren(...lines.map((t) => Object.assign(document.createElement("div"), { className: "msg", textContent: t })));
 }
 

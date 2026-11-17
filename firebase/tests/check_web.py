@@ -156,6 +156,31 @@ print("시드 완료")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
+AI_RUN_LOG = ["[10:00:01] 1. 클릭 '엑셀받기'", "      AI: 공지 레이어가 앞을 가려 닫기를 고름", "      AI 가 고른 '닫기' 을(를) 눌렀습니다",
+              "[10:00:05] 찾음 (id, AI가 닫음: '닫기')", "[10:00:09] 끝"]
+
+
+def seed_ai_run(rid):
+    """AI 어시스트 흔적이 든 실행 기록 - 업체 계정에는 숨기고 총괄은 본다 (사용자 2026-11-17)"""
+    payload = {"run_id": rid, "program": "prepare", "state": "stopped", "started_at": f"{TODAY}T23:58:00", "duration_sec": 9,
+               "reason": "엑셀받기 단계에서 대상을 찾지 못했습니다. (AI: 약관 동의 화면이 새로 생김)",
+               "steps": [], "log": AI_RUN_LOG,
+               "metrics": [{"key": "PRESET1:ai", "label": "AI 어시스트", "value": 1, "total": 2, "unit": "번"},
+                           {"key": "PRESET1", "label": "수집", "value": 5, "unit": "건"}]}
+    doc = {"cid": "c_demo", "pcId": "pc_office", "run_id": rid, "program": "prepare", "program_label": "ACTOR 오토파일럿",
+           "state": "stopped", "reason": payload["reason"], "started_at": payload["started_at"], "finished_at": None,
+           "duration_sec": 9, "date": TODAY, "payload": json.dumps(payload, ensure_ascii=False)}
+    call("POST", f"{FS}/runs/c_demo/items?documentId={rid}", {"fields": fs_fields(doc)}, OWNER)
+
+
+def ai_seen_in_history(page):
+    """기록 탭 맨 위 줄(가장 늦은 기록)과 펼친 상세의 글"""
+    page.click("#tab-history")
+    page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
+    page.locator("#hist-rows tr.hist").first.click()
+    return page.text_content("#hist-rows tr.hist") + " || " + page.text_content("#hist-rows tr.hist-detail")
+
+
 def login(page, login_id, pw="pw123456", cid=""):
     """세 칸 로그인. 아이디 칸에 이메일을 넣으면 그대로 쓰이고, 회사 코드 + 아이디면 화면이 이메일을 조립한다"""
     page.goto(WEB)
@@ -536,25 +561,30 @@ with sync_playwright() as pw:
     call("PATCH", f"{FS}/aiPlans/default", {"fields": {"monthly": {"integerValue": "30000"}, "included": {"integerValue": "100"}}}, OWNER)
     agg.clear()
     db_put("meta/companies/c_demo/apps/rpa/features/ai", True)
-    page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('3번')", timeout=15000)
+    page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('사용 중')", timeout=15000)
+    page.wait_for_timeout(1500)
     ai_on = page.text_content("#ai-card")
-    check("AI 어시스트 사용 중" in ai_on and "이번 달 AI가 살린 단계: 3번 (월 포함 100번)" in ai_on
-          and "막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다." in ai_on and "청구" not in ai_on and "원" not in ai_on,
-          f"W1 켜져 있으면 사용 중·이번 달 살린 단계·포함 횟수·안내 글, 금액은 없음 ({ai_on})")
+    check("AI 어시스트 사용 중" in ai_on and "막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다." in ai_on
+          and not re.search(r"\d+번", ai_on) and "횟수" not in ai_on and "포함" not in ai_on and "청구" not in ai_on and "원" not in ai_on,
+          f"W1 켜져 있으면 사용 중·안내 글만 - 횟수·포함 횟수·금액·청구 안내는 없음 (사용자 2026-11-17) ({ai_on})")
     reads = len(agg)
     for i in range(3):
         db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600 + i + 1})
         page.wait_for_timeout(1200)
-    check(reads == 1 and len(agg) == 1, f"W4 현황(heartbeat)이 와도 합계를 다시 읽지 않는다 - 연 뒤 한 번 ({reads} → {len(agg)})")
-    call("PATCH", f"{FS}/aiPlans/default", {"fields": {"monthly": {"integerValue": "30000"}, "included": {"integerValue": "2"}}}, OWNER)
-    goto(page, "rpa"); goto(page, "settings")
-    page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('포함 2번')", timeout=15000)
-    check("포함 횟수를 넘은 만큼은 별도로 청구됩니다." in page.text_content("#ai-card"), "포함 횟수를 넘으면 별도 청구 안내")
+    check(reads == 0 and len(agg) == 0, f"W4 업체 웹은 AI 횟수 합계를 읽지 않는다 - 현황(heartbeat)이 와도 ({reads} → {len(agg)})")
     call("DELETE", f"{DB}/meta/companies/c_demo/apps/rpa/features/ai.json?ns={NS}", None, OWNER)
     for rid in ("ai_r1", "ai_r2"):
         call("DELETE", f"{FS}/runs/c_demo/items/{rid}", None, OWNER)
     call("DELETE", f"{FS}/aiPlans/default", None, OWNER)
     page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('사용하지 않습니다')", timeout=15000)
+    seed_ai_run("ai_hist")
+    goto(page, "rpa")
+    seen = ai_seen_in_history(page)
+    check("엑셀받기 단계에서 대상을 찾지 못했습니다." in seen and "[10:00:01] 1. 클릭 '엑셀받기'" in seen and "[10:00:09] 끝" in seen
+          and not re.search(r"(^|[^A-Za-z])AI([^A-Za-z]|$)", seen),
+          f"업체 계정의 기록 탭에는 AI 어시스트 지표·로그 줄·실패 사유의 AI 부분이 보이지 않는다 (사용자 2026-11-17) ({seen[:300]})")
+    call("DELETE", f"{FS}/runs/c_demo/items/ai_hist", None, OWNER)
+    goto(page, "settings")
 
     print("5절 실행 모듈 (관리 > 환경설정)")
     check(page.text_content("#page-title") == "환경설정" and page.query_selector(".app-settings .app-title") is None,
@@ -2144,6 +2174,12 @@ with sync_playwright() as pw:
           f"?cid=c_demo 로 열면 그 업체 화면 + 총괄로 보는 중이라는 띠 ({bar})")
     goto(page, "settings")
     check(page.is_visible("#mod-card"), "총괄은 그 업체 환경설정도 연다")
+    seed_ai_run("ai_hist_super")
+    goto(page, "rpa")
+    seen = ai_seen_in_history(page)
+    check("AI: 공지 레이어가" in seen and "AI 가 고른 '닫기'" in seen and "(AI: 약관 동의 화면이 새로 생김)" in seen,
+          f"총괄 계정은 AI 어시스트 기록을 그대로 본다 ({seen[:300]})")
+    call("DELETE", f"{FS}/runs/c_demo/items/ai_hist_super", None, OWNER)
     page.goto(WEB + "&cid=c_gone"); page.wait_for_selector("#main:not(.hide)", timeout=15000)
     check("지운 회사" in page.text_content("#company"), "다른 업체 주소로 바꾸면 그 업체")
     page.goto(WEB + "&cid=../c_demo"); page.wait_for_selector("#super-bar:not(.hide)", timeout=15000)
