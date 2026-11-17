@@ -3128,4 +3128,126 @@ check("덮은 창은 5초까지 기다린다 (잠깐 뜨는 알림·도움말)",
 check("exe 이름 읽기: 이 시험 프로세스는 python", (wellife._exe_name(os.getpid()) or "").lower().startswith("python"))
 wellife.mouse.move, wellife.COVER_WAIT_SECONDS, wellife._top_window = _saved_cov
 
+# --- 팝업 단추 찾기: 숨은 화면 갈래는 훑지 않는다 (사용자 2026-11-11, ERPia 가 켜져 있으면 화면 수만큼 느렸다) ---
+# 메인(1) → 판(10) → 화면 칸(20) → 떠 있는 화면(30), 숨은 화면(31·32, 창 밖 같은 크기). 판 아래 창 밖으로 걸친 팝업(40)·상단(11).
+W_RECT = {1: (0, 0, 1920, 1032), 10: (0, 0, 1920, 1032), 11: (0, 0, 1920, 48), 20: (250, 48, 1920, 1032),
+          30: (251, 79, 1919, 1031), 31: (-1418, -904, 250, 48), 32: (-1418, -904, 250, 48), 40: (-50, 300, 600, 500)}
+W_PARENT = {10: 1, 11: 10, 20: 10, 30: 20, 31: 20, 32: 20, 40: 10}
+visited = []
+
+
+class U:
+    def __init__(self, handle, kind, name="", rect=None, kids=()):
+        self.element_info = types.SimpleNamespace(handle=handle, control_type=kind)
+        self.name, self.kids = name, list(kids)
+        self.rect = Rect(*(rect or W_RECT.get(handle, (0, 0, 0, 0))))
+
+    def window_text(self):
+        return self.name
+
+    def rectangle(self):
+        return self.rect
+
+    def children(self):
+        visited.append(self.element_info.handle)
+        return self.kids
+
+    def descendants(self, control_type=None):
+        visited.append(self.element_info.handle)
+        out = []
+        for k in self.kids:
+            out += ([k] if k.element_info.control_type == control_type else []) + k.descendants(control_type)
+        return out
+
+
+def btn(name, x, y):
+    return U(None, "Button", name, (x, y, x + 60, y + 20))
+
+
+yes_shown, ok_popup = btn("예", 900, 600), btn("확인", 100, 350)
+hidden_corner_yes = btn("예", 200, 10)          # 숨은 화면 안이지만 좌표는 창 안 구석 - 보이지 않는 단추
+w_tree = U(1, "Window", kids=[U(10, "Pane", kids=[
+    U(11, "Pane", kids=[btn("모두닫기", 700, 11)]),
+    U(20, "Pane", kids=[U(30, "Pane", kids=[yes_shown, btn("조회(F)", 400, 100)]),
+                        U(31, "Pane", kids=[hidden_corner_yes]), U(32, "Pane", kids=[btn("확인", -500, -300)]),
+                        U(None, "Tab", rect=(250, 48, 1920, 79))]),
+    U(40, "Pane", kids=[ok_popup])])])
+
+
+def w_enum(main, cb, extra):
+    for h in W_PARENT:
+        cb(h, extra)
+
+
+w_full = []
+W_HIDDEN, W_ICONIC = set(), [False]       # 보이지 않는 자식 창 / 메인 창 최소화
+wrr = types.SimpleNamespace(win32gui=types.SimpleNamespace(GetWindowRect=lambda h: W_RECT[h], GetParent=lambda h: W_PARENT.get(h, 0),
+                                                           EnumChildWindows=w_enum, IsWindowVisible=lambda h: h not in W_HIDDEN,
+                                                           IsIconic=lambda h: W_ICONIC[0]),
+                            OK_BUTTON_TEXTS=rr.OK_BUTTON_TEXTS, YES_BUTTON_TEXTS=rr.YES_BUTTON_TEXTS, NO_BUTTON_TEXTS=rr.NO_BUTTON_TEXTS,
+                            find_popup_buttons=lambda win: w_full.append(1) or ["전체 훑기"])
+wctx = types.SimpleNamespace(hwnd=1, window=lambda: w_tree)
+check("숨은 화면은 창 밖 같은 크기 형제만 - 창 밖으로 걸친 팝업 창은 아니다",
+      wellife.hidden_pages(wrr, 1) == ({31, 32}, {20, 10}), str(wellife.hidden_pages(wrr, 1)))
+got = wellife.popup_buttons(wrr, wctx)
+check("떠 있는 화면·팝업 창의 단추는 찾고 숨은 화면은 들어가지 않는다",
+      got == [yes_shown, ok_popup] and not {31, 32} & set(visited) and not w_full,
+      f"{[(b.name, b.rect.left) for b in got]} 들어간 곳 {visited}")
+W_RECT[31] = W_RECT[32] = (-1418, -904, 200, 48)     # 숨은 화면 크기가 떠 있는 화면과 다르면 숨은 화면으로 보지 않는다
+check("숨은 화면을 못 찾으면 예전처럼 창 전체를 훑는다", wellife.popup_buttons(wrr, wctx) == ["전체 훑기"] and w_full, str(w_full))
+w_full.clear()
+check("창 목록을 못 읽으면 창 전체를 훑는다",
+      wellife.popup_buttons(types.SimpleNamespace(**{**vars(wrr), "win32gui": types.SimpleNamespace()}), wctx) == ["전체 훑기"] and w_full)
+W_RECT[31] = W_RECT[32] = (-1418, -904, 250, 48)
+# 창 왼쪽으로 걸친 큰 팝업(42, 1000x600 - 창 절반 이상)과 창 안의 보이지 않는 같은 크기 칸(43) - 짝으로 세면 팝업을 숨은 화면으로 본다 (검토 2026-11-17)
+W_RECT[42], W_PARENT[42], W_RECT[43], W_PARENT[43] = (-50, 300, 950, 900), 10, (300, 300, 1300, 900), 10
+W_HIDDEN.add(43)
+check("보이지 않는 같은 크기 칸은 '떠 있는 화면' 짝으로 세지 않는다 - 창 밖으로 걸친 큰 팝업은 숨은 화면이 아니다 (검토 2026-11-17)",
+      42 not in wellife.hidden_pages(wrr, 1)[0], str(wellife.hidden_pages(wrr, 1)))
+W_ICONIC[0] = True
+check("메인 창이 최소화돼 있으면 숨은 화면을 찾지 않는다 - 예전처럼 창 전체 (검토 2026-11-17)",
+      wellife.hidden_pages(wrr, 1) == (set(), set()), str(wellife.hidden_pages(wrr, 1)))
+W_ICONIC[0] = False
+for _h in (42, 43):
+    W_RECT.pop(_h), W_PARENT.pop(_h)
+W_HIDDEN.clear()
+W_RECT[41], W_PARENT[41] = (700, 300, 1350, 500), 10     # 창 안에 걸친 팝업(40)과 같은 크기 칸 (숨겨 둔 팝업 칸 등)
+check("창 밖으로 걸친 팝업은 창 안에 같은 크기 형제가 있어도 숨은 화면이 아니다 (화면은 창 절반 이상)",
+      wellife.hidden_pages(wrr, 1) == ({31, 32}, {20, 10}), str(wellife.hidden_pages(wrr, 1)))
+w_full.clear()
+got = wellife.popup_buttons(wrr, wctx)
+check("그 팝업의 창 안 단추를 찾는다", got == [yes_shown, ok_popup] and not w_full, str([(b.name, b.rect.left) for b in got]))
+orig = rr.find_popup_buttons(w_tree)
+check("원래 find_popup_buttons 와 같은 판정·차례 - 숨은 화면 구석의 보이지 않는 단추만 빠진다",
+      hidden_corner_yes in orig and got == [b for b in orig if b is not hidden_corner_yes], str([(b.name, b.rect.left) for b in orig]))
+W_RECT[32] = (-1418, -904, 200, 48)
+visited.clear()
+got = wellife.popup_buttons(wrr, wctx)
+check("숨은 화면 하나만 크기가 다르면 그 화면만 훑는다 (결과는 같다)",
+      got == [yes_shown, ok_popup] and 31 not in visited and 32 in visited and not w_full, f"들어간 곳 {visited}")
+W_RECT[32] = W_RECT[31]
+page30 = w_tree.kids[0].kids[1].kids[0]
+
+
+def w_switch(control_type=None):     # 떠 있는 화면을 훑는 사이에 탭이 바뀐다 - 31 이 떠오르고 30 이 숨는다
+    W_RECT[30], W_RECT[31] = W_RECT[31], W_RECT[30]
+    return U.descendants(page30, control_type)
+
+
+page30.descendants = w_switch
+check("훑는 사이에 숨은 화면이 바뀌면 창 전체를 다시 훑는다", wellife.popup_buttons(wrr, wctx) == ["전체 훑기"] and w_full)
+W_RECT[30], W_RECT[31] = W_RECT[31], W_RECT[30]
+page30.descendants = lambda control_type=None: 1 / 0
+w_full.clear()
+check("훑다가 오류가 나면 창 전체를 훑는다", wellife.popup_buttons(wrr, wctx) == ["전체 훑기"] and w_full)
+del page30.descendants
+w_full.clear()
+wrr.collect_popup_text = lambda b: f"{b.name} 팝업 글"
+try:
+    wellife.no_popup(wrr, wctx, "화면 이동")
+    w_stop = None
+except wellife.Stop as e:
+    w_stop = str(e)
+check("no_popup 도 새 길로 팝업을 보고 누르지 않고 멈춘다", bool(w_stop) and "예 팝업 글" in w_stop and not w_full, str(w_stop))
+
 finish()

@@ -2438,9 +2438,84 @@ def front_note(rr, ctx):
         return ""
 
 
+def popup_buttons(rr, ctx):
+    """메인 창 안 팝업의 단추(예/아니오/확인) - rr.find_popup_buttons 와 같은 판정이되 숨은 화면 갈래는 훑지 않는다.
+    창 전체를 훑으면 열린 화면 수만큼 느려진다 (11-11 개발기 실측: 화면 4개가 열린 ERPia 에서 한 번 6.4~7.4초 → 1.9~2.2초.
+    회차마다 새 실행이라 ERPia 가 켜져 있으면 화면 이동부터 늦었다). 숨은 화면 안 단추는 창 밖 좌표라 원래도 걸렀다 -
+    창 안 구석에 걸친 숨은 화면의 단추만 더 빠진다 (화면 칸 밖이라 보이지 않는 단추 - 실측에서는 탭 스크롤 '열 오른쪽').
+    숨은 화면을 못 찾거나(화면 하나뿐 등), 훑다가 오류가 나거나, 훑는 사이에 숨은 화면이 바뀌면(탭 전환 - 막 뜬 화면을
+    건너뛰었을 수 있다) 예전처럼 창 전체."""
+    win = ctx.window()
+    try:
+        pages, chain = hidden_pages(rr, ctx.hwnd)
+        if not pages:
+            return rr.find_popup_buttons(win)
+        wr = win.rectangle()
+        wanted = set(rr.OK_BUTTON_TEXTS) | set(rr.YES_BUTTON_TEXTS) | set(rr.NO_BUTTON_TEXTS)
+        found = []
+
+        def walk(el):       # 창 전체 훑기와 같은 차례 (첫 단추로 팝업 글을 읽는다)
+            for c in el.children():
+                h = c.element_info.handle
+                if h in pages:
+                    continue                        # 숨은 화면 갈래
+                found.append(c)
+                if h in chain:
+                    walk(c)                         # 숨은 화면이 든 칸 - 한 단계씩 내려간다
+                else:
+                    found.extend(c.descendants(control_type="Button"))
+        walk(win)
+        if hidden_pages(rr, ctx.hwnd)[0] != pages:
+            return rr.find_popup_buttons(win)
+        out = []
+        for b in found:
+            if b.element_info.control_type != "Button" or b.window_text() not in wanted:
+                continue
+            r = b.rectangle()
+            if r.width() > 0 and r.height() > 0 and not (r.left < wr.left or r.top < wr.top):
+                out.append(b)
+        return out
+    except Exception:
+        return rr.find_popup_buttons(win)
+
+
+def hidden_pages(rr, main):
+    """(숨은 화면 창들, 그 조상 창들) - win32 라 거의 0초. 숨은 화면 = 창 밖(왼쪽·위)에 놓인, 창 절반 이상 크기의 자식 창 중
+    창 안에 같은 크기의 형제(떠 있는 화면)가 있는 것 (11-11 실측: 1920x1032 창의 화면 칸 아래 떠 있는 화면 (251,79) 과
+    숨은 화면들 (-1418,-904) 이 모두 1668x952). 크기 조건은 창 밖으로 걸친 팝업을 숨은 화면으로 잘못 보지 않게 - 팝업은 화면보다
+    작다 (11-11 시험 창: 같은 크기 칸이 창 안에 있으면 창 왼쪽으로 걸친 팝업을 숨은 화면으로 보고 그 단추를 놓쳤다).
+    짝이 되는 '떠 있는 화면' 은 보이는 창만 센다 - 창 안에 숨겨 둔 같은 크기 칸이 큰 팝업의 짝이 되지 않게. 메인 창이 최소화돼
+    있으면 창 사각형이 작은 아이콘 자리라 크기 조건이 모두 참이 되므로 찾지 않는다 (예전처럼 창 전체, 검토 2026-11-17)."""
+    g = rr.win32gui
+    if g.IsIconic(main):
+        return set(), set()
+    wl, wt, wr, wb = g.GetWindowRect(main)
+    rects = {}
+
+    def cb(h, _):
+        try:
+            rects[h] = (g.GetParent(h), g.GetWindowRect(h), g.IsWindowVisible(h))
+        except Exception:
+            pass        # 그새 닫힌 창
+        return True
+    g.EnumChildWindows(main, cb, None)
+    off = lambda r: r[0] < wl or r[1] < wt          # noqa: E731
+    size = lambda r: (r[2] - r[0], r[3] - r[1])     # noqa: E731
+    big = lambda r: 2 * (r[2] - r[0]) >= wr - wl and 2 * (r[3] - r[1]) >= wb - wt   # noqa: E731
+    shown = {(p, size(r)) for p, r, vis in rects.values() if vis and not off(r)}
+    pages = {h for h, (p, r, _vis) in rects.items() if off(r) and big(r) and (p, size(r)) in shown}
+    chain = set()
+    for h in pages:
+        p = rects[h][0]
+        while p in rects and p not in chain:        # 메인 창 바로 아래까지
+            chain.add(p)
+            p = rects[p][0]
+    return pages, chain
+
+
 def no_popup(rr, ctx, after):
     """팝업(예/아니오/확인 단추)이 떠 있으면 누르지 않고 멈춘다.
-    단추 찾기는 창 전체를 훑어 수 초 걸린다 (10-14 실측: 단계마다 4~5번). ERPia 팝업은 메인 창의 자식 창으로 뜨므로
+    단추 찾기(popup_buttons)는 수 초 걸린다 (10-14 실측: 단계마다 4~5번). ERPia 팝업은 메인 창의 자식 창으로 뜨므로
     (원래 PROCESS 의 PopupGate 와 같은 근거) 보이는 자식 창 목록(win32 - 거의 0초)이 마지막으로 '팝업 없음' 을
     확인했을 때와 같으면 다시 훑지 않는다. 목록을 못 읽으면 늘 훑는다."""
     if getattr(ctx, "pass_popups", False):
@@ -2448,7 +2523,7 @@ def no_popup(rr, ctx, after):
     sig = _calm_sig(rr, ctx)
     if sig is not None and getattr(ctx, "calm_children", None) == sig:
         return
-    buttons = rr.find_popup_buttons(ctx.window())
+    buttons = popup_buttons(rr, ctx)
     if buttons:
         ctx.calm_children = None
         text = rr.collect_popup_text(buttons[0])
@@ -2464,7 +2539,7 @@ def close_excel_prompt(rr, ctx):
     sig = _calm_sig(rr, ctx)
     if sig is not None and getattr(ctx, "calm_children", None) == sig:
         return
-    buttons = rr.find_popup_buttons(ctx.window())
+    buttons = popup_buttons(rr, ctx)
     if not buttons:     # 팝업 없음 - no_popup 처럼 창 구성을 기억해 바로 뒤 no_popup 이 같은 창을 다시 훑지 않게 (11-09 실측: 운송장번호 전송 들어갈 때 7초 두 번)
         if sig is not None and sig == _calm_sig(rr, ctx):
             ctx.calm_children = sig
@@ -3050,7 +3125,7 @@ def _only_fewer(clean, sig):
 
 def _next_popup(rr, ctx, before):
     """떠 있는 팝업 하나 (문구, 누를 단추) - 누를 단추가 없으면 (문구, None). 팝업이 없으면 None."""
-    buttons = rr.find_popup_buttons(ctx.window())
+    buttons = popup_buttons(rr, ctx)
     if buttons:
         return rr.collect_popup_text(buttons[0]), _yes_button(buttons)
     for h in sorted(popup_windows(rr, ctx) - set(before)):
