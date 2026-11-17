@@ -128,6 +128,12 @@
   #detail .sec > .row:last-child { margin:12px 0 0; padding-top:12px; border-top:1px solid var(--line); }
   #detail .sec:not(.danger) > .row:last-child > button:last-child { margin-left:auto; }
   #detail .sec.danger > .row:last-child { border-top:0; padding-top:0; }
+  /* 비활성화된 PC (사용자 2026-11-17) - 위 PC 표와 굵은 빨간 줄로 나누고 이름은 빨강 */
+  #detail .pcs-off { margin-top:16px; padding-top:12px; border-top:2px solid color-mix(in srgb, var(--bad) 55%, transparent); }
+  #detail .pcs-off > h4 { margin:0 0 4px; font-size:14px; font-weight:600; color:var(--bad); }
+  #detail .pcs-off td.pc-name { color:var(--bad); font-weight:600; }
+  #detail .pcs-off .off-tag { margin-left:6px; font-size:12px; font-weight:500; padding:1px 6px; border-radius:6px; background:var(--bad-soft); color:var(--bad); }
+  #detail .sec.danger > h3.sub { margin-top:20px; }
   .mod-ok { margin-left:10px; color:var(--accent-text); font-weight:500; font-size:13px; }
   td .row { margin:0; flex-wrap:nowrap; }
   /* 표 끝 칸의 단추 묶음(재발급·사용중지·업데이트)은 오른쪽 끝에 (시안) */
@@ -232,7 +238,7 @@
         <label class="inline"><input type="radio" name="ai" value="no">아니오</label>
         <input id="s-ai-key" type="password" placeholder="Anthropic API 키 (sk-ant-…)" size="30" autocomplete="off" disabled>
       </div>
-      <p class="muted">막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다. 사용하려면 업체 전용 API 키를 입력하여 주십시오.</p>
+      <p class="muted">ACTOR 오토파일럿 실행 중 막힌 단계에서 개인정보를 가린 뒤 Claude가 안전하게 처리합니다. 사용하려면 업체 전용 API 키를 입력하여 주십시오.</p>
       <div class="lbl">6. 최초 토큰량 설정</div>
       <div class="row">
         <label class="inline"><input type="radio" name="tok" value="now">지금 넣기</label>
@@ -587,9 +593,21 @@ function pcSection(d) {
     flash(`PC ${r.pc.pcId}을(를) 추가하였습니다.`);
     refresh(d.cid, r.agent ? secretBox("에이전트 계정 - PC 설정 창에 넣을 값", `업체코드: ${d.cid}   PC코드: ${r.pc.pcId}   비밀번호: ${r.agent.password}`) : null);
   }) }, "PC 추가");
+  const offRows = (d.pcsOff ?? []).map((p) => {
+    const on = el("button", { class: "pc-on", onclick: () => act(on, async () => {
+      await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/restore`, {});
+      flash(`PC ${p.pcId}을(를) 다시 활성화하였습니다. 에이전트 계정을 다시 사용할 수 있습니다.`);
+      refresh(d.cid);
+    }) }, "다시 활성화");
+    return el("tr", { "data-pc": p.pcId }, el("td", { class: "pc-name" }, p.label || "(이름 없음)", el("span", { class: "off-tag" }, "비활성화")),
+      el("td", {}, p.pcId), el("td", { class: "muted" }, local(p.at)), el("td", {}, on));
+  });
   return el("div", { class: "sec" }, el("h3", {}, "PC"),
     d.pcs.length ? el("div", { style: "overflow-x:auto" }, el("table", { class: "pcs" }, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "버전", "업데이트 상태", "프리셋", "업데이트"].map((h) => el("th", {}, h)))),
       el("tbody", {}, d.pcs.map((p) => pcRowEl(d, p, d.releases))))) : el("p", { class: "muted" }, "PC가 없습니다."),
+    offRows.length ? el("div", { class: "tbl pcs-off" }, el("h4", {}, `비활성화된 PC (${offRows.length})`),
+      el("p", { class: "muted" }, "업체 PC 목록과 업체 웹에서 빠졌고 에이전트 계정은 사용중지되어 있습니다. 실행 기록은 남아 있습니다."),
+      el("table", {}, el("thead", {}, el("tr", {}, ...["PC 이름", "PC코드", "비활성화 날짜", ""].map((h) => el("th", {}, h)))), el("tbody", {}, offRows))) : "",
     el("div", { class: "row" }, id, label, el("label", { class: "inline" }, agent, "에이전트 계정도 만들기"), add));
 }
 const phoneSecret = (title, r) => secretBox(title, `휴대폰 앱 '오토파일럿 컨트롤타워' 에 넣을 값\n이메일: ${r.email}\n비밀번호: ${r.password}`);
@@ -767,7 +785,7 @@ function aiSection(d) {
     await openDetail(d.cid);
   }) }, "적용");
   return el("div", { class: "sec ai" }, head,
-    el("p", { class: "muted" }, "막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다. 업체의 모든 PC가 업데이트된 뒤에 켤 수 있습니다. 업체는 웹에서 끌 수 없습니다."),
+    el("p", { class: "muted" }, "ACTOR 오토파일럿 실행 중 막힌 단계에서 개인정보를 가린 뒤 Claude가 안전하게 처리합니다. 업체의 모든 PC가 업데이트된 뒤에 켤 수 있습니다. 업체는 웹에서 끌 수 없습니다."),
     el("div", { class: "row" }, el("label", { class: "inline" }, on, "사용"), key, el("span", { class: "muted ai-hint" }, a.hint ? `키 있음 (…${a.hint})` : "키 없음"), apply),
     el("p", { class: "ai-month" }, `이번 달 AI가 살린 단계 ${nf(a.saved)}번 / AI를 부른 횟수 ${nf(a.called)}번 / 포함 ${plan ? `${nf(plan.included)}번` : "-"}`),
     ...charge,
@@ -783,13 +801,25 @@ function dangerSection(d) {
     }) }, "다시 활성화");
     return el("div", { class: "sec" }, el("h3", {}, "업체 다시 활성화"), el("p", { class: "muted" }, "이 업체를 다시 활성화합니다. 계정도 모두 다시 사용할 수 있습니다."), back);
   }
+  // PC 비활성화 (사용자 2026-11-17) - 되돌리기 어려운 일은 이 빨간 상자에 모은다. 기록은 남고 PC 칸의 [다시 활성화] 로 되돌린다
+  const pick = el("select", { class: "pc-off-pick", "aria-label": "비활성화할 PC" }, d.pcs.map((p) => el("option", { value: p.pcId }, `${p.label || p.pcId} (${p.pcId})`)));
+  const off = el("button", { class: "danger pc-off", onclick: () => act(off, async () => {
+    const p = d.pcs.find((x) => x.pcId === pick.value);
+    if (!p || !confirm(`${p.label || p.pcId}(${p.pcId})을(를) 비활성화하시겠습니까? 업체 PC 목록에서 빠지고 에이전트 계정이 사용중지됩니다. 실행 기록은 남고, 언제든지 다시 활성화할 수 있습니다.`)) return;
+    await api("POST", `/api/companies/${d.cid}/pcs/${p.pcId}/deactivate`, {});
+    flash(`PC ${p.pcId}을(를) 비활성화하였습니다.`);
+    refresh(d.cid);
+  }) }, "PC 비활성화");
+  const pcPart = d.pcs.length ? [el("h3", {}, "PC 비활성화"),
+    el("p", { class: "muted" }, "쓰지 않는 PC를 업체 PC 목록과 업체 웹에서 뺍니다. 에이전트 계정은 사용중지되고, 실행 기록은 남습니다. PC 칸에서 언제든지 다시 활성화할 수 있습니다."),
+    el("div", { class: "row" }, pick, off)] : [];
   const code = el("input", { placeholder: d.cid, size: 22 });
   const del = el("button", { class: "danger", onclick: () => act(del, async () => {
     const r = await api("POST", `/api/companies/${d.cid}/remove`, { confirm: code.value.trim() });
     flash(`업체를 비활성화하였습니다. 계정 ${r.users.length}개를 사용중지하였습니다. (데이터는 유지됩니다)`);
     refresh(d.cid);
   }) }, "업체 비활성화");
-  return el("div", { class: "sec danger" }, el("h3", {}, "업체 비활성화"), el("p", { class: "muted" }, "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다."),
+  return el("div", { class: "sec danger" }, ...pcPart, el("h3", { class: pcPart.length ? "sub" : null }, "업체 비활성화"), el("p", { class: "muted" }, "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다."),
     el("div", { class: "row" }, code, del));
 }
 

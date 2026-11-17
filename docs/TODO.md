@@ -32,6 +32,7 @@
 
 ## 2. 말하면 시작
 
+- [ ] **다음 PC 버전 때: 명령 '실행 중' 표시 실패하면 다시 시도** (사용자 2026-11-17) - agent.Commands.handle 이 _mark(running) 실패를 'deferred' 로 돌려주고 끝이라, 인터넷이 잠깐 끊긴 PC 는 명령이 queued 로 남아 10분 뒤 만료된다 (pc_kyungho 14:40 [업데이트] 21초 실패 → 만료). 고칠 것: 몇 번 다시 시도 → 안 되면 만료 전까지 30초마다 다시 확인, _mark 가 실패 까닭(연결 오류·시간 초과·거부)을 기록에 한 줄
 - [ ] **exe 셋 동시 빌드 (보류)** - 2026-10-21 실측: 동시 337초 vs 차례 496초 (약 2분 40초 빠름) 이지만 동시로 만든 Prepare_RPA.exe 가 늘 'No module named base64' 로 켜지지 않는다. Nuitka 분석 캐시(module-cache·library_dependencies·adapted_headers·scons-msvc-config)를 exe 마다 따로 줘도 같았고, 같은 코드를 차례로 만들면 멀쩡 (115초). 원인 모름 - 남은 공유: downloads·zig 캐시, 작업 폴더 build\release. 하려면 exe 마다 작업 폴더도 따로 + 원인부터 (코드는 6d8a6c3)
 - [ ] **운송장번호 전송 메뉴 고치기 + 사이트 엑셀 업로드 켜기** - 옵저버 다운로드/업로드 기능은 2026-11-06 에 코드가 들어갔고 `rpa_status.EXCEL_UPLOAD_ON = False` 로 숨겨 뒀다. 메뉴를 고칠 때 [설계](superpowers/specs/2026-11-06-excel-upload-design.md) 3절 약속·9절 켜는 순서대로
 - [ ] **회사 서버로 옮기기** - 1단계 업데이트·웹 정적 파일은 준비 끝, 서버가 오면 docs/server-move-stage1.md 순서로 (2026-10-21). 2단계 전부(큰 일)는 회사 답 뒤. 2단계 때 토큰 판정을 서버로 옮긴다 - 지금은 PC 의 .py 를 고치면 우회되고, 2026-10-23 파일 변조 감지는 '들키게' 할 뿐 막지 못한다 (rpa-1d REA 모의 분석)

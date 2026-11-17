@@ -461,6 +461,36 @@ check(code == 200 and any(s["label"] == "AI 어시스트 사용" and s["ok"] for
       and db_get("meta/companies/t_ai/apps/rpa/features/ai") is True and db_get("apps/rpa/aikey/t_ai/hint") == "9876"
       and "sk-ant" not in json.dumps(r), "AD10 신규 업체에서 AI 어시스트 사용 + 키 (PC 가 아직 없어 준비 검사는 안 한다)", (code, r.get("steps")))
 
+print("=== 3-4. PC 비활성화 (사용자 2026-11-17) ===")
+db_put("apps/rpa/live/t_new/pc_b/host", "STORE-PC")
+code, r = api("POST", "/api/companies/t_new/pcs/pc_b/deactivate", {})
+off = db_get("meta/companies/t_new/pcs_off/pc_b") or {}
+check(code == 200 and "pc_b" not in (db_get("meta/companies/t_new/pcs") or {}) and off.get("label") == "창고 PC" and off.get("at")
+      and account(email("t_new", "agent-pc_b")).get("disabled") is True and db_get("apps/rpa/live/t_new/pc_b") is None,
+      "PO1 PC 비활성화: PC 목록에서 빠져 비활성화된 PC 로, 에이전트 계정 사용중지, 현황 자리는 지운다", (code, r, off))
+check(account(email("t_new", "agent-pc_b")).get("email"), "PO1 에이전트 계정은 지우지 않는다 (사용중지만)")
+code, d = api("GET", "/api/companies/t_new")
+check(code == 200 and [x["pcId"] for x in d.get("pcs", [])] == ["pc_a"] and [x["pcId"] for x in d.get("pcsOff", [])] == ["pc_b"],
+      "PO2 업체 상세: PC 표에는 없고 비활성화된 PC 목록에 있다", (d.get("pcs"), d.get("pcsOff")))
+db_put("apps/rpa/live/t_new/pc_a/ai_ready", True)
+code, r = api("POST", "/api/companies/t_new/ai", {"on": True, "key": KEY1})
+check(code == 200 and r.get("on") is True, "PO3 비활성화한 옛 PC 는 AI 어시스트 켜기를 막지 않는다", (code, r))
+api("POST", "/api/companies/t_new/ai", {"on": False})
+code, r = api("POST", "/api/companies/t_new/pcs", {"pcId": "pc_b", "label": "새 창고", "agent": False})
+check(code == 400 and "비활성화된 PC" in r.get("error", "") and "pc_b" not in (db_get("meta/companies/t_new/pcs") or {}),
+      "PO4 비활성화된 PC코드로 PC 추가는 거절 - [다시 활성화] 로 안내", (code, r))
+code, r = api("POST", "/api/companies/t_new/pcs/nobody/deactivate", {})
+check(code == 400 and "nobody" in r.get("error", ""), "PO4 없는 PC 는 거절", (code, r))
+code, r = api("POST", "/api/companies/t_new/pcs/pc_b/restore", {})
+check(code == 200 and (db_get("meta/companies/t_new/pcs/pc_b") or {}).get("label") == "창고 PC" and db_get("meta/companies/t_new/pcs_off") is None
+      and account(email("t_new", "agent-pc_b")).get("disabled") is not True, "PO5 다시 활성화: PC 목록으로 돌아오고 에이전트 계정도 다시 사용", (code, r))
+db_put("apps/rpa/live/t_new/pc_b/ai_ready", True)
+for _ in range(20):
+    if "PC 비활성화 t_new/pc_b" in log_text() and "PC 다시 활성화 t_new/pc_b" in log_text():
+        break
+    time.sleep(0.2)
+check("PC 비활성화 t_new/pc_b (에이전트 계정 사용중지)" in log_text() and "PC 다시 활성화 t_new/pc_b" in log_text(), "PO6 관리 기록에 한 줄씩", log_text()[-300:])
+
 code, rows = api("GET", "/api/usage")
 check(code == 200 and any(x["cid"] == "t_new" and x["left"] == 600 for x in rows), "통계: 업체마다 남은 토큰", str(rows)[:200])
 code, r = api("GET", "/api/companies/Bad")
@@ -1103,7 +1133,7 @@ with sync_playwright() as pw:
     keybox = page.locator("#detail .sec.ai input.ai-key")
     check(page.text_content("#detail .sec.ai h3").startswith("AI 어시스트") and not page.is_checked("#detail .sec.ai input[data-ai]")
           and keybox.get_attribute("type") == "password" and keybox.get_attribute("placeholder") == "sk-ant-… (바꿀 때만 입력)"
-          and "키 없음" in ai_text and "막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다." in ai_text,
+          and "키 없음" in ai_text and "ACTOR 오토파일럿 실행 중 막힌 단계에서 개인정보를 가린 뒤 Claude가 안전하게 처리합니다." in ai_text,
           "S1 업체 상세에 'AI 어시스트' 상자 - [사용] 체크·키 칸(가림)·키 상태·안내 글", ai_text[:300])
     check("AI가 살린 단계 650번" in ai_text and "AI를 부른 횟수 760번" in ai_text and "포함 100번" in ai_text
           and page.locator("#detail .sec.ai table.ai-charge tbody tr").count() == 3 and "추가 금액 90,000원 · 합계 120,000원" in ai_text,
@@ -1144,6 +1174,27 @@ with sync_playwright() as pw:
     page.click("#detail .sec.ai button.ai-apply")
     page.wait_for_function("(document.querySelector('#detail .sec.ai')?.textContent || '').includes('키 없음')", timeout=15000)
     check(db_get("meta/companies/t_new/apps/rpa/features/ai") is None and db_get("apps/rpa/aikey/t_new") is None, "체크를 풀고 [적용] 하면 끄고 키도 지운다")
+
+    print("PC 비활성화 화면 (사용자 2026-11-17)")
+    dialogs.clear()
+    page.select_option("#detail select.pc-off-pick", "pc_b")
+    page.click("#detail button.pc-off")
+    page.wait_for_selector("#detail .pcs-off tr[data-pc='pc_b']", timeout=15000)
+    check(any("창고 PC(pc_b)" in m and "비활성화" in m for m in dialogs) and "pc_b" not in (db_get("meta/companies/t_new/pcs") or {})
+          and page.locator("#detail table.pcs tr#pc-pc_b").count() == 0,
+          f"PS1 [PC 비활성화] - 확인 창 뒤 PC 표에서 빠지고 '비활성화된 PC' 에 보인다 ({dialogs})")
+    check("삭제" not in page.text_content("#detail"), "PS1 관리 화면에 '삭제' 라는 말은 없다")
+    check(page.locator("#detail .sec.danger select.pc-off-pick").count() == 1 and page.locator("#detail .sec.danger button.pc-off").count() == 1
+          and page.locator("#detail .sec:not(.danger) button.pc-off").count() == 0, "PS3 [PC 비활성화] 는 아래 빨간 상자(업체 비활성화와 같은 곳)에 있다")
+    off_name, on_name, bad = page.evaluate("""[getComputedStyle(document.querySelector('#detail .pcs-off td.pc-name')).color,
+        getComputedStyle(document.querySelector('#detail table.pcs td')).color,
+        getComputedStyle(document.querySelector('#detail .pcs-off')).borderTopWidth]""")
+    check(off_name != on_name and float(bad.replace("px", "")) >= 2 and "비활성화된 PC (1)" in page.text_content("#detail .pcs-off"),
+          f"PS4 비활성화된 PC 는 빨간 이름·굵은 구분선·개수 제목으로 활성 PC 와 구분된다 ({off_name} / {on_name}, 선 {bad})")
+    page.click("#detail .pcs-off tr[data-pc='pc_b'] button.pc-on")
+    page.wait_for_selector("#detail table.pcs tr#pc-pc_b", timeout=15000)
+    check(page.locator("#detail .pcs-off").count() == 0 and account(email("t_new", "agent-pc_b")).get("disabled") is not True,
+          "PS2 [다시 활성화] - PC 표로 돌아오고 비활성화된 PC 목록은 사라진다")
 
     print("휴대폰 (5단계)")
     page.click("nav button[data-view='companies']")

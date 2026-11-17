@@ -140,10 +140,38 @@ export async function addCompany(cid, name) {
 export async function addPc(cid, pcId, label) {
   checkKey("cid", cid); checkKey("pcId", pcId);
   await companyOf(cid);
+  if ((await companyOf(cid)).pcs_off?.[pcId]) throw new Refused(`PC코드 ${pcId}은(는) 비활성화된 PC입니다. 업체 화면의 '비활성화된 PC'에서 [다시 활성화]를 사용하여 주십시오.`);
   if ((await companyOf(cid)).pcs?.[pcId]) throw new Refused(`PC코드 ${pcId}은(는) 이미 등록되어 있습니다. 에이전트 계정이 없으면 node setup.js agent ${cid} ${pcId}를 사용하여 주십시오.`);   // 이름을 말없이 덮어쓰지 않는다 (BugBuster L14)
   const clean = String(label ?? "").trim();
   await rtdb.ref(`meta/companies/${cid}/pcs/${pcId}`).update({ label: clean });
   return { cid, pcId, label: clean };
+}
+// PC 비활성화 (사용자 2026-11-17): 쓰지 않는 PC 를 업체 PC 목록에서 빼 pcs_off 로 옮긴다 - 업체 웹 PC 고르기·AI 어시스트 켜기 검사에서 빠진다.
+// 에이전트 계정은 사용중지(지우지 않음), 현황·명령 자리는 지운다. 실행 기록·토큰 내역·PC 설정은 남는다. [다시 활성화] 로 되돌린다
+async function agentOf(cid, pcId) {
+  try {
+    return await auth.getUserByEmail(emailFor(cid, `agent-${pcId}`));
+  } catch (e) {
+    if (e.code === "auth/user-not-found") return null;
+    throw e;
+  }
+}
+export async function setPcRemoved(cid, pcId, removing) {
+  checkKey("cid", cid); checkKey("pcId", pcId);
+  const v = await companyOf(cid, { removed: true });
+  const from = removing ? v.pcs?.[pcId] : v.pcs_off?.[pcId];
+  if (!from) throw new Refused(removing ? `PC코드 ${pcId}이(가) 없습니다.` : `비활성화된 PC ${pcId}이(가) 없습니다.`);
+  const label = from.label ?? "";
+  await rtdb.ref(`meta/companies/${cid}`).update(removing
+    ? { [`pcs/${pcId}`]: null, [`pcs_off/${pcId}`]: { label, at: nowKst() } }
+    : { [`pcs/${pcId}`]: { label }, [`pcs_off/${pcId}`]: null });
+  if (removing) await Promise.all(["live", "commands"].map((k) => rtdb.ref(`apps/rpa/${k}/${cid}/${pcId}`).set(null)));
+  const agent = await agentOf(cid, pcId);
+  if (agent) {
+    await auth.updateUser(agent.uid, { disabled: removing });
+    if (removing) await auth.revokeRefreshTokens(agent.uid);
+  }
+  return { cid, pcId, label, agent: !!agent };
 }
 export async function addUser(cidArg, id, role, name) {
   if (!["super", "admin", "viewer"].includes(role)) throw new Refused("역할(role)은 super, admin, viewer 중 하나여야 합니다.");
@@ -712,6 +740,7 @@ export async function companyDetail(cid) {
   });
   return { cid, name: v.name, stts: v.stts ?? 0, pcs: await Promise.all(Object.entries(v.pcs ?? {}).map(async ([pcId, p]) =>
       ({ pcId, label: p.label ?? "", ...(await pcUpdateStatus(cid, pcId)) }))),
+    pcsOff: Object.entries(v.pcs_off ?? {}).map(([pcId, p]) => ({ pcId, label: p.label ?? "", at: p.at ?? null })),
     users, phones, modules: v.apps?.rpa?.modules ?? {}, features: v.apps?.rpa?.features ?? {}, wellife: wellifeOn(cid, v.apps?.rpa?.features),
     wellifeAuto: wellifeAuto(cid), scheduleLimit: v.apps?.rpa?.limits?.schedule ?? null,
     presetLimit: v.apps?.rpa?.limits?.presets ?? null, parallelLimit: v.apps?.rpa?.limits?.parallel ?? null,

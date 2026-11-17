@@ -564,7 +564,7 @@ with sync_playwright() as pw:
     page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('사용 중')", timeout=15000)
     page.wait_for_timeout(1500)
     ai_on = page.text_content("#ai-card")
-    check("AI 어시스트 사용 중" in ai_on and "막힌 단계의 화면 글을 개인정보를 가린 뒤 Claude가 안전하게 처리합니다." in ai_on
+    check("AI 어시스트 사용 중" in ai_on and "ACTOR 오토파일럿 실행 중 막힌 단계에서 개인정보를 가린 뒤 Claude가 안전하게 처리합니다." in ai_on
           and not re.search(r"\d+번", ai_on) and "횟수" not in ai_on and "포함" not in ai_on and "청구" not in ai_on and "원" not in ai_on,
           f"W1 켜져 있으면 사용 중·안내 글만 - 횟수·포함 횟수·금액·청구 안내는 없음 (사용자 2026-11-17) ({ai_on})")
     reads = len(agg)

@@ -42,6 +42,9 @@ export const ROUTES = compile([
     const pc = await ops.addPc(p.cid, b.pcId, b.label);
     return { pc, agent: b.agent ? await ops.addAgent(p.cid, b.pcId) : null };
   }, (b, r, p) => `PC 추가 ${p.cid}/${r.pc.pcId}${r.agent ? " + 에이전트 계정" : ""}`],
+  ["POST", "/api/companies/:cid/pcs/:pcId/deactivate", (b, p) => ops.setPcRemoved(p.cid, p.pcId, true),
+    (b, r, p) => `PC 비활성화 ${p.cid}/${p.pcId}${r.agent ? " (에이전트 계정 사용중지)" : ""}`],
+  ["POST", "/api/companies/:cid/pcs/:pcId/restore", (b, p) => ops.setPcRemoved(p.cid, p.pcId, false), (b, r, p) => `PC 다시 활성화 ${p.cid}/${p.pcId}`],
   ["POST", "/api/companies/:cid/phones", (b, p) => ops.addPhone(p.cid, String(b.phoneId ?? "").trim(), b.label, b.owner),
     (b, r, p) => `휴대폰 추가 ${p.cid}/${r.phoneId} (${r.label})`],
   ["POST", "/api/companies/:cid/phones/:phoneId/senders", (b, p) => ops.setPhoneSenders(p.cid, p.phoneId, b.senders),
