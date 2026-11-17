@@ -126,7 +126,7 @@ res, status, msg = fn(super_tok, "GET", "/api/info")
 check(status is None and res and res.get("emulator") is True and res.get("project") == PROJECT, "총괄은 된다 (/api/info, 에뮬레이터 표시)", (res, status, msg))
 
 print("=== 3. 로컬과 같은 작업 ===")
-PLAN = {"cid": "w_new", "name": "웹 업체", "hold": False, "pcs": [{"pcId": "pc_a", "label": "사무실 PC"}],
+PLAN = {"cid": "w_new", "name": "웹 업체", "hold": False, "ai": False, "pcs": [{"pcId": "pc_a", "label": "사무실 PC"}],
         "users": [{"id": "boss", "name": "대표", "role": "admin"}], "tokens": {"amount": "+300", "memo": "첫 결제"}}
 res, status, msg = fn(super_tok, "POST", "/api/setup", PLAN)
 check(status is None and res and all(s["ok"] for s in res["steps"]), "신규 업체 만들기 (로컬 /api/setup 과 같은 요청)", (status, msg, res and res.get("steps")))

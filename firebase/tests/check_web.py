@@ -518,8 +518,45 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('run-routine')?.disabled === false", timeout=5000)
     check(True, "끝나면 버튼이 풀린다")
 
-    print("5절 실행 모듈 (관리 > 환경설정)")
+    print("AI 어시스트 카드 (계획 ② 2026-11-17)")
+    agg = []                                   # 환경설정이 Firestore 에 보낸 'AI 가 살린 단계' 합계 질의 (Review Focus 4)
+    page.on("request", lambda r: agg.append(r.url) if "runAggregationQuery" in r.url and "ai.saved" in (r.post_data or "") else None)
     goto(page, "settings")
+    page.wait_for_selector("#ai-card", timeout=10000)
+    ai_off = page.text_content("#ai-card")
+    check("AI 어시스트를 사용하지 않습니다. 사이트 화면이 바뀌어 수집이 멈추는 날, AI가 대신 찾아 이어 가게 할 수 있습니다. 사용하려면 담당자에게 문의하여 주십시오."
+          in ai_off and not re.search(r"\d+번", ai_off), f"W2 꺼져 있으면 안내 글만, 숫자 없음 ({ai_off})")
+    check(page.locator("#ai-card input, #ai-card button, #ai-card select").count() == 0, "W3 업체는 웹에서 켜거나 끄지 못한다 (조작 요소 없음)")
+    kst_m = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).strftime("%Y-%m")
+    for rid, saved in (("ai_r1", 1), ("ai_r2", 2)):
+        call("POST", f"{FS}/runs/c_demo/items?documentId={rid}", {"fields": {
+            "cid": {"stringValue": "c_demo"}, "pcId": {"stringValue": "pc_office"}, "run_id": {"stringValue": rid}, "program": {"stringValue": "prepare"},
+            "started_at": {"stringValue": f"{kst_m}-01T00:00:0{saved}"}, "date": {"stringValue": f"{kst_m}-01"},
+            "ai": {"mapValue": {"fields": {"saved": {"integerValue": str(saved)}, "called": {"integerValue": str(saved + 1)}}}}}}, OWNER)
+    call("PATCH", f"{FS}/aiPlans/default", {"fields": {"monthly": {"integerValue": "30000"}, "included": {"integerValue": "100"}}}, OWNER)
+    agg.clear()
+    db_put("meta/companies/c_demo/apps/rpa/features/ai", True)
+    page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('3번')", timeout=15000)
+    ai_on = page.text_content("#ai-card")
+    check("AI 어시스트 사용 중" in ai_on and "이번 달 AI가 살린 단계: 3번 (월 포함 100번)" in ai_on
+          and "막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다." in ai_on and "청구" not in ai_on and "원" not in ai_on,
+          f"W1 켜져 있으면 사용 중·이번 달 살린 단계·포함 횟수·안내 글, 금액은 없음 ({ai_on})")
+    reads = len(agg)
+    for i in range(3):
+        db_patch(f"{LIVE}/heartbeat", {"at": NOW + 3600 + i + 1})
+        page.wait_for_timeout(1200)
+    check(reads == 1 and len(agg) == 1, f"W4 현황(heartbeat)이 와도 합계를 다시 읽지 않는다 - 연 뒤 한 번 ({reads} → {len(agg)})")
+    call("PATCH", f"{FS}/aiPlans/default", {"fields": {"monthly": {"integerValue": "30000"}, "included": {"integerValue": "2"}}}, OWNER)
+    goto(page, "rpa"); goto(page, "settings")
+    page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('포함 2번')", timeout=15000)
+    check("포함 횟수를 넘은 만큼은 별도로 청구됩니다." in page.text_content("#ai-card"), "포함 횟수를 넘으면 별도 청구 안내")
+    call("DELETE", f"{DB}/meta/companies/c_demo/apps/rpa/features/ai.json?ns={NS}", None, OWNER)
+    for rid in ("ai_r1", "ai_r2"):
+        call("DELETE", f"{FS}/runs/c_demo/items/{rid}", None, OWNER)
+    call("DELETE", f"{FS}/aiPlans/default", None, OWNER)
+    page.wait_for_function("(document.getElementById('ai-card')?.textContent || '').includes('사용하지 않습니다')", timeout=15000)
+
+    print("5절 실행 모듈 (관리 > 환경설정)")
     check(page.text_content("#page-title") == "환경설정" and page.query_selector(".app-settings .app-title") is None,
           "환경설정 페이지: 제목, 앱이 하나면 앱 이름 머리는 없다 (2026-10-30)")
     page.wait_for_function("document.getElementById('mod-meta')?.textContent === '4/5 켬'", timeout=10000)

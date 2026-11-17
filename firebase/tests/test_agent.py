@@ -272,6 +272,13 @@ doc = ag.run_doc(rec, "c_demo", "pc_office")
 check(doc["cid"] == "c_demo" and doc["pcId"] == "pc_office" and doc["date"] == "2026-09-14" and doc["duration_sec"] == 2, "문서 조회 필드")
 pl = json.loads(doc["payload"])
 check(pl["steps"] == [{"key": "a"}] and len(pl["log"]) == 80 and "log_tail" not in pl, "payload 에 단계·로그 80줄")
+check("ai" not in doc, "AG4 AI 지표가 없으면 ai 칸 없음")
+doc = ag.run_doc(dict(rec, metrics=[{"key": "PRESET1:ai", "label": "AI 어시스트", "value": 1, "total": 2},
+                                    {"key": "PRESET2:ai", "label": "AI 어시스트", "value": 0, "total": 1},
+                                    {"key": "PRESET1", "label": "수집", "value": 5, "total": 5}]), "c_demo", "pc_office")
+check(doc.get("ai") == {"saved": 1, "called": 3}, f"AG4 사이트마다의 AI 지표를 더한다 ({doc.get('ai')})")
+doc = ag.run_doc(dict(rec, metrics=[{"key": "PRESET1:ai", "value": 0, "total": 0}]), "c_demo", "pc_office")
+check("ai" not in doc, "AG4 부른 수가 0 이면 ai 칸 없음")
 
 
 class FsClient:
@@ -978,6 +985,7 @@ check(ag.company_policy(AppClient({"modules": {"Sales": False}}), "c_x")[1] == [
       "주문매핑을 막은 업체는 나눈 수집(엑셀·자동)도 막는다 (2026-10-30 전 주문매핑은 수집까지)")
 got = [ag.company_policy(AppClient({"limits": {"presets": v}}), "c_x")[3] for v in (5, 10, 50, 1, 51, "5", True)]
 check(got == [5, 10, 50, None, None, None, None], f"업체 프리셋 수: 2~50 정수만, 아니면 None (PC 가 기본 2) {got}")
+check(ag.live_extras({}).get("ai_ready") is True, "AG5 현황에 AI 어시스트를 아는 PC 표시 (관리 화면이 켜기 전에 본다)")
 check(ag.live_extras({})["preset_max"] == 50, "현황에 PC 가 받는 프리셋 최대 (관리 화면이 41개 이상을 열기 전에 본다)")
 check([ag.company_policy(AppClient(v), "Test_Wellife_test")[3] for v in ({}, {"limits": {"presets": 5}})] == [50, 50],
       "업체코드에 wellife 가 든 업체는 프리셋 50 (관리 화면 값 대신)")
@@ -1035,6 +1043,56 @@ with tempfile.TemporaryDirectory() as d:
         check(ag.Policy(AppClient({"features": {"wellife": False}}), "c_demo").refresh(force=True) is not None and st.has_wellife_section() is True,
               "한 번도 안 열린 업체의 섹션은 지우지 않는다 (그대로 멈춤)")
         os.environ.pop("RPA_USER_CONFIG", None)
+
+        # ACTOR AI 어시스트 (계획 ② 2026-11-17): 업체 정책 읽기에서 켬·키를 읽어 PC 에 봉인해 둔다
+        class PathClient:
+            def __init__(self, values):
+                self.values, self.asked = values, []
+
+            def get(self, path):
+                self.asked.append(path)
+                v = self.values.get(path)
+                if isinstance(v, Exception):
+                    raise v
+                return v
+        on_c = PathClient({"meta/companies/c_x/apps/rpa/features/ai": True, "apps/rpa/aikey/c_x/key": "sk-ant-x"})
+        check(ag.ai_policy(on_c, "c_x") == (True, "sk-ant-x"), f"AG1 켜졌으면 그 업체 키를 읽는다 ({on_c.asked})")
+        off_c = PathClient({})
+        check(ag.ai_policy(off_c, "c_x") == (False, None) and off_c.asked == ["meta/companies/c_x/apps/rpa/features/ai"],
+              f"AG1 꺼졌으면 키 자리는 읽지 않는다 ({off_c.asked})")
+        try:
+            ag.ai_policy(PathClient({"meta/companies/c_x/apps/rpa/features/ai": fb.HttpError(503, "끊김")}), "c_x")
+            check(False, "AG1 못 읽으면 예외 - 부르는 쪽이 지난 값을 둔다")
+        except fb.HttpError:
+            check(True, "AG1 못 읽으면 예외 - 부르는 쪽이 지난 값을 둔다")
+        _saved_set_ai, _ai_calls = st.set_ai, []
+        st.set_ai = lambda on, key: _ai_calls.append((on, key))
+        try:
+            pol_ai = PathClient({"meta/companies/c_x/apps/rpa": {"limits": {"schedule": 3}},
+                                 "meta/companies/c_x/apps/rpa/features/ai": True, "apps/rpa/aikey/c_x/key": "sk-ant-x"})
+            ag.Policy(pol_ai, "c_x").refresh(force=True)
+            check(_ai_calls == [(True, "sk-ant-x")], f"AG2 정책 읽기가 켬·키를 PC 에 둔다 ({_ai_calls})")
+            _ai_calls.clear()
+            ag.Policy(PathClient({"meta/companies/c_x/apps/rpa": {"limits": {"schedule": 3}}}), "c_x").refresh(force=True)
+            check(_ai_calls == [(False, None)], f"AG3 꺼짐을 읽으면 PC 의 키를 지운다 ({_ai_calls})")
+            _ai_calls.clear()
+            _lines = []
+            _saved_log, ag.log = ag.log, _lines.append
+            try:
+                got_pol = ag.Policy(PathClient({"meta/companies/c_x/apps/rpa": {"limits": {"schedule": 3}},
+                                                "meta/companies/c_x/apps/rpa/features/ai": True,
+                                                "apps/rpa/aikey/c_x/key": fb.HttpError(403, "거부")}), "c_x").refresh(force=True)
+            finally:
+                ag.log = _saved_log
+            check(got_pol is not None and _ai_calls == [] and len(_lines) == 1 and "sk-ant" not in _lines[0],
+                  f"AG2 키를 못 읽으면 지난 값을 두고 로그 한 줄 - 정책 읽기 자체는 그대로 ({_lines})")
+            _ai_calls.clear()
+            ag.Policy(PathClient({"meta/companies/c_x/apps/rpa": {"limits": {"schedule": 3}},
+                                  "meta/companies/c_x/apps/rpa/features/ai": True,
+                                  "apps/rpa/aikey/c_x/key": fb.HttpError(401, '{"error" : "Permission denied"}')}), "c_x").refresh(force=True)
+            check(_ai_calls == [(False, None)], f"AG6 키 자리를 읽을 권한이 없으면 (비활성화 업체 등) PC 의 키도 지운다 ({_ai_calls})")
+        finally:
+            st.set_ai = _saved_set_ai
         dash.set_policy(3, [])
         dash.apply_schedule({"enabled": True, "days": list(range(7)), "slots": [{"at": "11:00", "run": ["Prepare", "Logistics"]}]})
         tc = TokenClient(9, 0)

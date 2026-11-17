@@ -144,7 +144,7 @@ LIB_NAMES = ["playwright", "pywinauto", "comtypes", "win32", "win32com", "win32c
              "pywin32.pth", "pywin32.version.txt", "pythoncom.py", "greenlet", "pyee", "typing_extensions.py", "PIL", "six.py",
              # 운송장 엑셀 비밀번호 풀기 (PR #43, wellife.unlock_excel) - msoffcrypto 와 그 의존성
              "msoffcrypto", "cryptography", "cffi", "_cffi_backend.cp314-win_amd64.pyd", "olefile", "pycparser",
-             # ACTOR AI 도움 (ai_rescue, 2026-11-16) - Anthropic SDK 와 그 의존성. httpx2·httpcore2 는 불러올 때 자기 dist-info 로 버전을 읽고
+             # ACTOR AI 어시스트 (ai_rescue, 2026-11-16) - Anthropic SDK 와 그 의존성. httpx2·httpcore2 는 불러올 때 자기 dist-info 로 버전을 읽고
              # opentelemetry 는 entry_points 로 context 를 찾는다 (dist-info 이름에 버전 번호 - SDK 를 올리면 같이 고칠 것, 없으면 빌드가 멈춘다)
              "anthropic", "anyio", "docstring_parser", "h11", "httpcore2", "httpx2", "httpx2-2.16.0.dist-info", "httpcore2-2.16.0.dist-info",
              "opentelemetry_api-1.45.2.dist-info", "idna", "jiter",

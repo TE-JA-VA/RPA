@@ -226,7 +226,14 @@
         <label class="inline"><input type="radio" name="hold" value="yes">예</label>
         <label class="inline"><input type="radio" name="hold" value="no">아니오</label>
       </div>
-      <div class="lbl">5. 최초 토큰량 설정</div>
+      <div class="lbl">5. AI 어시스트 사용 여부</div>
+      <div class="row">
+        <label class="inline"><input type="radio" name="ai" value="yes">예</label>
+        <label class="inline"><input type="radio" name="ai" value="no">아니오</label>
+        <input id="s-ai-key" type="password" placeholder="Anthropic API 키 (sk-ant-…)" size="30" autocomplete="off" disabled>
+      </div>
+      <p class="muted">막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다. 사용하려면 업체 전용 API 키를 입력하여 주십시오.</p>
+      <div class="lbl">6. 최초 토큰량 설정</div>
       <div class="row">
         <label class="inline"><input type="radio" name="tok" value="now">지금 넣기</label>
         <input id="s-tok-amount" placeholder="토큰 수 (예: 1000)" size="14" inputmode="numeric"><input id="s-tok-memo" placeholder="비고 (예: 10월 결제)" size="22">
@@ -248,6 +255,13 @@
     <div class="card">
       <h2>통계</h2>
       <div class="tbl"><table><thead><tr><th>업체코드</th><th>이름</th><th>현재 토큰</th><th>이번 달 사용한 토큰</th><th>토큰 정보 생성</th></tr></thead><tbody id="usage"></tbody></table></div>
+    </div>
+    <div class="card" id="ai-plan">
+      <h2>AI 어시스트 기본 요금표</h2>
+      <p class="muted">ACTOR 오토파일럿 'AI 어시스트'의 월 요금입니다. 월정액에 포함 횟수까지 들어 있고, 넘은 만큼은 구간별 단가로 더합니다. 세는 단위는 AI가 살린 단계입니다. 업체별 요금은 업체 상세의 'AI 어시스트'에서 정합니다.</p>
+      <div class="row"><span class="muted">월정액(원)</span><input id="aip-monthly" size="10" inputmode="numeric" class="num"><span class="muted">포함 횟수(번)</span><input id="aip-included" size="6" inputmode="numeric" class="num"></div>
+      <table><thead><tr><th>구간 (살린 단계)</th><th>단가 (원/번)</th><th></th></tr></thead><tbody id="aip-tiers"></tbody></table>
+      <div class="row" style="margin-top:12px"><button id="aip-add">+ 구간</button><button id="aip-save" class="primary" style="margin-left:auto">적용</button></div>
     </div>
   </section>
 </main>
@@ -376,12 +390,13 @@ async function openDetail(cid, keep) {
   const d = await act(null, () => api("GET", `/api/companies/${cid}`));
   if (!d) return false;
   d.releases = (await act(null, () => api("GET", "/api/releases"))) ?? { list: [], stable: null, newest: null };
+  d.ai = await api("GET", `/api/companies/${cid}/ai`).catch((e) => ({ error: e.message }));
   current = cid;
   for (const tr of $("companies").children) tr.classList.toggle("on", tr.dataset.cid === cid);
   const box = $("detail");
   box.replaceChildren(el("h2", {}, `${d.name} (${d.cid})`, d.stts === 9 ? el("span", { class: "muted" }, " · 비활성화된 업체") : "",
       el("button", { id: "open-dash", class: "h2-btn", onclick: (ev) => openDash(ev.currentTarget, d.cid) }, "대시보드 보기")),
-    keep ?? "", pcSection(d), phoneSection(d), userSection(d), tokenSection(d), policySection(d), dangerSection(d));
+    keep ?? "", pcSection(d), phoneSection(d), userSection(d), tokenSection(d), policySection(d), aiSection(d), dangerSection(d));
   box.classList.remove("hide");
   return true;
 }
@@ -719,6 +734,46 @@ function policySection(d) {
     el("p", { class: "muted" }, "숫자 정책은 PC에 10분 이내에 적용됩니다."),
     el("div", { class: "row" }, apply));
 }
+// ACTOR AI 어시스트 (계획 ② 2026-11-17): 켬·키 + 이번 달 살린 횟수·금액 + 이 업체 요금표. 키는 다시 보이지 않는다 (끝 4글자만)
+function aiSection(d) {
+  const a = d.ai, head = el("h3", {}, "AI 어시스트");
+  if (!a || a.error) return el("div", { class: "sec ai" }, head, el("p", { class: "muted" }, `AI 어시스트 정보를 읽지 못했습니다. ${a?.error ?? ""}`));
+  const on = el("input", { type: "checkbox", "data-ai": "on", checked: a.on });
+  const key = el("input", { type: "password", class: "ai-key", placeholder: "sk-ant-… (바꿀 때만 입력)", size: 30, autocomplete: "off" });
+  const apply = el("button", { class: "ai-apply", onclick: () => act(apply, async () => {
+    const k = key.value.trim();
+    if (on.checked === a.on && !k) return;
+    await api("POST", `/api/companies/${d.cid}/ai`, { on: on.checked, ...(k ? { key: k } : {}) });
+    key.value = "";
+    flash(on.checked ? "AI 어시스트를 사용합니다. PC에는 10분 이내에 적용됩니다." : "AI 어시스트를 사용하지 않습니다. PC에는 10분 이내에 적용됩니다.");
+    await openDetail(d.cid);
+  }) }, "적용");
+  const plan = a.plan, base = a.base ?? {};
+  const tierName = (r) => (r.to === null ? `${nf(r.from + 1)}번 이상` : `${nf(r.from + 1)}~${nf(r.to)}번`);
+  const charge = a.charge
+    ? [el("div", { class: "tbl" }, el("table", { class: "ai-charge" },
+        el("thead", {}, el("tr", {}, ["구간", "횟수", "단가", "금액"].map((h) => el("th", {}, h)))),
+        el("tbody", {}, a.charge.rows.map((r) => el("tr", {}, el("td", {}, tierName(r)), el("td", { class: "num" }, `${nf(r.count)}번`),
+          el("td", { class: "num" }, `${nf(r.price)}원`), el("td", { class: "num" }, `${nf(r.amount)}원`)))))),
+       el("p", {}, el("b", {}, `추가 금액 ${nf(a.charge.extra)}원 · 합계 ${nf(a.charge.total)}원`), el("span", { class: "muted" }, ` (월정액 ${nf(a.charge.monthly)}원 포함)`))]
+    : [el("p", { class: a.planError ? "bad" : "muted" }, a.planError ? `요금표가 올바르지 않아 금액을 계산하지 않았습니다. ${a.planError}`
+        : "요금표가 없습니다. 토큰 배율·통계 화면의 'AI 어시스트 기본 요금표'를 입력하여 주십시오.")];
+  const own = a.own ?? {};
+  const m = el("input", { class: "aip-monthly num", value: own.monthly ?? "", placeholder: base.monthly ?? "", size: 10, inputmode: "numeric", "aria-label": "이 업체 월정액" });
+  const inc = el("input", { class: "aip-included num", value: own.included ?? "", placeholder: base.included ?? "", size: 6, inputmode: "numeric", "aria-label": "이 업체 포함 횟수" });
+  const planApply = el("button", { class: "ai-plan-apply", onclick: () => act(planApply, async () => {
+    await api("POST", `/api/companies/${d.cid}/ai-plan`, { values: { monthly: m.value.trim(), included: inc.value.trim() } });
+    flash("이 업체 요금표를 저장하였습니다.");
+    await openDetail(d.cid);
+  }) }, "적용");
+  return el("div", { class: "sec ai" }, head,
+    el("p", { class: "muted" }, "막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다. 업체의 모든 PC가 업데이트된 뒤에 켤 수 있습니다. 업체는 웹에서 끌 수 없습니다."),
+    el("div", { class: "row" }, el("label", { class: "inline" }, on, "사용"), key, el("span", { class: "muted ai-hint" }, a.hint ? `키 있음 (…${a.hint})` : "키 없음"), apply),
+    el("p", { class: "ai-month" }, `이번 달 AI가 살린 단계 ${nf(a.saved)}번 / AI를 부른 횟수 ${nf(a.called)}번 / 포함 ${plan ? `${nf(plan.included)}번` : "-"}`),
+    ...charge,
+    el("div", { class: "row" }, el("span", { class: "muted" }, "이 업체 요금표 (비우면 기본값)"), el("span", { class: "muted" }, "월정액(원)"), m,
+      el("span", { class: "muted" }, "포함 횟수(번)"), inc, planApply));
+}
 function dangerSection(d) {
   if (d.stts === 9) {
     const back = el("button", { onclick: () => act(back, async () => {
@@ -750,6 +805,7 @@ $("s-users").append(userRow("admin"));
 $("s-add-user").onclick = () => $("s-users").append(userRow("viewer"));
 $("s-make").onclick = () => act($("s-make"), async () => {
   const hold = document.querySelector("input[name=hold]:checked"), tok = document.querySelector("input[name=tok]:checked");
+  const aiPick = document.querySelector("input[name=ai]:checked");
   const plan = {
     cid: $("s-cid").value.trim(), name: $("s-name").value.trim(),
     pcs: [...document.querySelectorAll("#s-pcs .pc")].map((r) => ({ pcId: r.querySelector(".pc-id").value.trim(), label: r.querySelector(".pc-label").value.trim() }))
@@ -757,10 +813,15 @@ $("s-make").onclick = () => act($("s-make"), async () => {
     users: [...document.querySelectorAll("#s-users .acct")].map((r) => ({ id: r.querySelector(".u-id").value.trim(), name: r.querySelector(".u-name").value.trim(),
       role: r.querySelector(".u-role").value })).filter((u) => u.id),    // 관리자가 없으면 서버가 '관리자 계정을 한 명 이상' 으로 거절한다
     hold: hold ? hold.value === "yes" : null,         // 안 고르면 서버가 '물류대기 관리 메뉴 사용 여부를 골라 주세요' 로 거절한다
+    ai: aiPick ? aiPick.value === "yes" : null,       // 안 고르면 서버가 'AI 어시스트 사용 여부를 선택하여 주십시오' 로 거절한다
+    aiKey: aiPick?.value === "yes" ? $("s-ai-key").value.trim() : undefined,
     tokens: tok?.value === "now" ? { amount: $("s-tok-amount").value.replace(/,/g, "").trim(), memo: $("s-tok-memo").value.trim() } : null,
   };
-  showSetupResult(plan, await api("POST", "/api/setup", plan));
+  const r = await api("POST", "/api/setup", plan);
+  $("s-ai-key").value = "";                           // 키는 화면에 남기지 않는다
+  showSetupResult(plan, r);
 });
+for (const r of document.querySelectorAll("input[name=ai]")) r.onchange = () => { $("s-ai-key").disabled = r.value !== "yes" || !r.checked; };
 function showSetupResult(plan, r) {
   const pw = (made) => (made ? made.password : "(이미 있던 계정 - 모르면 업체 화면에서 재발급)");
   const lines = [`[대시보드]  ${info.dashboard}`];
@@ -803,7 +864,42 @@ $("rates-save").onclick = async () => {
     flash(`${cid ? `${cid} 의 ` : ""}토큰 배율 ${changed.length}개를 저장했습니다 (${what})`);
   } finally { rateBusy = false; paintRateSave(); }
 };
+// --- AI 어시스트 요금표 (계획 ② 2026-11-17) ---------------------------------------------
+// 구간 줄: 마지막 줄은 끝이 없다 ('그 이상'). 줄을 더하면 마지막 줄 앞에 넣는다
+function readTiers(body) {
+  const rows = [...body.querySelectorAll("tr.tier")];
+  return rows.map((tr, i) => ({ to: i === rows.length - 1 ? "" : tr.querySelector(".aip-to").value.trim(), price: tr.querySelector(".aip-price").value.trim() }));
+}
+function drawTiers(body, tiers) {
+  const list = tiers.length ? tiers : [{ to: "", price: "" }];
+  body.replaceChildren(...list.map((t, i) => {
+    const last = i === list.length - 1;
+    const del = el("button", { class: "aip-del", disabled: list.length === 1, onclick: () => {
+      const now = readTiers(body); now.splice(i, 1); drawTiers(body, now);
+    } }, "빼기");
+    return el("tr", { class: "tier" },
+      el("td", {}, last ? `${i ? "앞 구간 끝" : "포함 횟수"} 다음부터 그 이상`
+        : el("span", {}, "~ ", el("input", { class: "aip-to num", value: t.to ?? "", size: 6, inputmode: "numeric", "aria-label": `${i + 1}번째 구간 끝` }), " 번까지")),
+      el("td", {}, el("input", { class: "aip-price num", value: t.price ?? "", size: 6, inputmode: "numeric", "aria-label": `${i + 1}번째 구간 단가` })),
+      el("td", {}, del));
+  }));
+}
+async function loadAiPlan() {
+  const p = await act(null, () => api("GET", "/api/ai-plan"));
+  if (!p) return;
+  $("aip-monthly").value = p.monthly ?? "";
+  $("aip-included").value = p.included ?? "";
+  drawTiers($("aip-tiers"), (p.tiers ?? []).map((t) => ({ to: t.to ?? "", price: t.price })));
+}
+$("aip-add").onclick = () => { const now = readTiers($("aip-tiers")); now.splice(Math.max(0, now.length - 1), 0, { to: "", price: "" }); drawTiers($("aip-tiers"), now); };
+$("aip-save").onclick = () => act($("aip-save"), async () => {
+  await api("POST", "/api/ai-plan", { values: { monthly: $("aip-monthly").value.trim(), included: $("aip-included").value.trim(), tiers: readTiers($("aip-tiers")) } });
+  flash("AI 어시스트 기본 요금표를 저장하였습니다. 이번 달 금액부터 새 요금표로 계산합니다.");
+  await loadAiPlan();
+});
+
 async function loadRates() {
+  loadAiPlan();
   const cid = $("rate-cid").value;
   const got = await act(null, () => Promise.all([api("GET", "/api/prices"), api("GET", "/api/usage"),
     cid ? api("GET", `/api/companies/${cid}/prices`) : null]));

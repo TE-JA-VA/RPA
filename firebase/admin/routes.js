@@ -4,6 +4,12 @@
 import * as ops from "./ops.js";
 
 // 관리 기록 한 줄: 'sales = 2, hold = (기본값)'
+// AI 어시스트 요금표 한 줄: '월정액 30000, 포함 100, 구간 3개' (업체 요금표는 비운 칸 = (기본값))
+const aiPlanNote = (values) => ["monthly", "included", "tiers"].filter((k) => k in (values ?? {})).map((k) => {
+  const v = values[k];
+  if (k === "tiers") return Array.isArray(v) && v.length ? `구간 ${v.length}개` : "구간 (기본값)";
+  return `${k === "monthly" ? "월정액" : "포함"} ${String(v ?? "").trim() || "(기본값)"}`;
+}).join(", ");
 const priceNote = (values) => Object.entries(values ?? {}).map(([k, v]) => `${k} = ${String(v ?? "").trim() || "(기본값)"}`).join(", ");
 
 export function compile(list) {
@@ -71,6 +77,14 @@ export const ROUTES = compile([
   ["POST", "/api/prices", (b) => ops.setPrices(b.values), (b) => `토큰 배율 ${priceNote(b.values)}`],
   ["GET", "/api/usage", () => ops.usageRows()],
   ["GET", "/api/companies/:cid/prices", (b, p) => ops.companyPrices(p.cid)],
+  // ACTOR AI 어시스트 (계획 ② 2026-11-17) - 기록 글에 키를 넣지 않는다
+  ["POST", "/api/companies/:cid/ai", (b, p) => ops.setAi(p.cid, b.on === true, b.key),
+    (b, r, p) => `AI 어시스트 ${p.cid} = ${r.on ? "켬" : "끔"}${r.on && String(b.key ?? "").trim() ? " (키 바꿈)" : ""}`],
+  ["GET", "/api/companies/:cid/ai", (b, p) => ops.aiInfo(p.cid, b.month)],
+  ["GET", "/api/ai-plan", () => ops.getAiPlan()],
+  ["POST", "/api/ai-plan", (b) => ops.setAiPlan(b.values), (b) => `AI 어시스트 기본 요금표 ${aiPlanNote(b.values)}`],
+  ["POST", "/api/companies/:cid/ai-plan", (b, p) => ops.setCompanyAiPlan(p.cid, b.values),
+    (b, r, p) => `AI 어시스트 업체 요금표 ${p.cid} ${aiPlanNote(b.values)}`],
   ["POST", "/api/companies/:cid/prices", (b, p) => ops.setCompanyPrices(p.cid, b.values),
     (b, r, p) => `업체 토큰 배율 ${p.cid} ${priceNote(b.values)}`],
 ]);

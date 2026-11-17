@@ -25,6 +25,7 @@
               "hold_review": { ".validate": "newData.isBoolean()" },
               "preset_transfer": { ".validate": "newData.isNumber()" },
               "preset_max": { ".validate": "newData.isNumber()" },
+              "ai_ready": { ".validate": "newData.isBoolean()" },
               "labels": { ".validate": "newData.hasChildren()" },
               "programs": { ".validate": "newData.hasChildren()" },
               "modules": { ".validate": "newData.hasChildren()" },
@@ -98,6 +99,13 @@
                 "$other": { ".validate": false }
               }
             }
+          }
+        },
+
+        "aikey": {
+          "$cid": {
+            ".read": "auth != null && auth.token.role === 'agent' && auth.token.cid === $cid && root.child('meta/companies/' + $cid + '/stts').val() !== 9",
+            ".write": false
           }
         },
 

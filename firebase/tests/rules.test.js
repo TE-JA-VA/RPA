@@ -595,3 +595,56 @@ test("commands: export_preset·import_preset·restore_preset 은 관리자가 �
   await assertSucceeds(set(ref(asAdminA(), "apps/rpa/commands/ca/pc1/c3"), cmd({ type: "restore_preset", args: { nos: [1] } })));
   await assertFails(set(ref(asViewerA(), "apps/rpa/commands/ca/pc2/c4"), cmd({ type: "import_preset", by: "u_view_a", args: { tid: TID, slots: [1] } })));
 });
+
+// ACTOR AI 어시스트 (계획 ② 2026-11-17): 업체별 키는 그 업체 에이전트만 읽고 아무도 못 쓴다 (관리 화면 Admin SDK 만)
+test("aikey RU1: 같은 업체 에이전트는 키를 읽고, live 에 ai_ready 를 올린다", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await set(ref(c.database(), "apps/rpa/aikey/ca"), { key: "sk-ant-x", hint: "…x", at: 1 });
+  });
+  await assertSucceeds(get(ref(asAgentA1(), "apps/rpa/aikey/ca")));
+  await assertSucceeds(get(ref(asAgentA2(), "apps/rpa/aikey/ca/key")));
+  await assertSucceeds(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), { host: "PC1", ai_ready: true }));
+  await assertFails(set(ref(asAgentA1(), "apps/rpa/live/ca/pc1"), { host: "PC1", ai_ready: "yes" }));
+});
+
+test("aikey RU2: 관리자·열람자·다른 업체 에이전트는 못 읽고, 아무도 못 쓴다", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await set(ref(c.database(), "apps/rpa/aikey/ca"), { key: "sk-ant-x", hint: "…x", at: 1 });
+  });
+  const asAgentB1 = () => env.authenticatedContext("u_agent_b1", { cid: "cb", pcId: "pc1", role: "agent" }).database();
+  for (const who of [asAdminA(), asViewerA(), asAgentB1(), asAnon()]) await assertFails(get(ref(who, "apps/rpa/aikey/ca")));
+  for (const who of [asAgentA1(), asAdminA(), asSuper()]) await assertFails(set(ref(who, "apps/rpa/aikey/ca"), { key: "sk-ant-y" }));
+});
+
+test("aikey RU3: 정지한 업체(stts=9)의 에이전트는 키를 못 읽는다", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await set(ref(c.database(), "apps/rpa/aikey/ca"), { key: "sk-ant-x", hint: "…x", at: 1 });
+    await set(ref(c.database(), "meta/companies/ca/stts"), 9);
+  });
+  await assertFails(get(ref(asAgentA1(), "apps/rpa/aikey/ca")));
+});
+
+test("runs RU4: AI 어시스트 횟수 ai {saved, called} 는 0 이상 정수이고 살린 수가 부른 수를 넘지 않는다", async () => {
+  await assertSucceeds(setDoc(doc(fsAgentA1(), "runs/ca/items/r1"), run({ ai: { saved: 1, called: 2 } })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r2"), run({ run_id: "r2", ai: { saved: 3, called: 2 } })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r3"), run({ run_id: "r3", ai: { saved: "1", called: 2 } })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r4"), run({ run_id: "r4", ai: { saved: -1, called: 0 } })));
+  await assertFails(setDoc(doc(fsAgentA1(), "runs/ca/items/r5"), run({ run_id: "r5", ai: 3 })));
+});
+
+test("aiPlans RU5: 기본 요금표는 업체 계정이 읽고, 업체 요금표는 그 업체·super 만 읽는다. 아무도 못 쓴다", async () => {
+  await env.withSecurityRulesDisabled(async (c) => {
+    await setDoc(doc(c.firestore(), "aiPlans/default"), { monthly: 30000, included: 100, tiers: [{ to: null, price: 100 }] });
+    await setDoc(doc(c.firestore(), "aiPlans/ca"), { included: 200 });
+    await setDoc(doc(c.firestore(), "aiPlans/cb"), { included: 300 });
+  });
+  for (const who of [fsAgentA1(), fsAdminA(), fsAdminB(), fsSuper()]) await assertSucceeds(getDoc(doc(who, "aiPlans/default")));
+  await assertSucceeds(getDoc(doc(fsAdminA(), "aiPlans/ca")));
+  await assertSucceeds(getDoc(doc(fsSuper(), "aiPlans/cb")));
+  await assertFails(getDoc(doc(fsAdminA(), "aiPlans/cb")));
+  const fsPhoneA = env.authenticatedContext("u_phone_a", { cid: "ca", role: "phone", phoneId: "ph1" }).firestore();
+  await assertFails(getDoc(doc(fsPhoneA, "aiPlans/default")));
+  await assertFails(getDoc(doc(fsPhoneA, "aiPlans/ca")));
+  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), "aiPlans/default")));
+  for (const who of [fsAdminA(), fsSuper(), fsAgentA1()]) await assertFails(setDoc(doc(who, "aiPlans/default"), { monthly: 0 }));
+});

@@ -427,7 +427,7 @@ TEXT_OF = """e => { const n = s => (s || '').replace(/\\s+/g, ' ').trim(); const
   if (t === 'INPUT') return ['button','submit','reset'].includes((e.type||'').toLowerCase()) ? n(e.value) : '';
   if (t === 'TEXTAREA' || t === 'SELECT') return ''; return n(e.textContent).slice(0, 80); }"""
 
-# AI 도움 (설계 2026-11-16): 틀 하나의 누를 수 있는 것을 모아 data-ap-ai 표시를 붙인다. 입력 칸은 값을 읽지 않고 이름(placeholder·label)만.
+# AI 어시스트 (설계 2026-11-16): 틀 하나의 누를 수 있는 것을 모아 data-ap-ai 표시를 붙인다. 입력 칸은 값을 읽지 않고 이름(placeholder·label)만.
 # 레이어 = 가장 가까운 대화상자([role=dialog]·aria-modal·<dialog>) 또는 화면 넓이 30% 넘는 fixed 상자, z-index 가 있는 absolute 상자
 # (z-index 없는 absolute 는 화면 전체를 감싸는 틀인 사이트가 있어 뺀다 - 모든 요소가 '레이어' 가 되면 메뉴 글의 '저장' 으로 다 막힌다)
 AI_SELECTOR = ("a[href], a[onclick], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], "
@@ -1422,7 +1422,7 @@ class Moved(Exception):
 
 
 class Rescued(Exception):
-    """AI 도움이 막힌 단계를 풀었다 (_find 의 rescue) - args = (창, 틀, 요소, 붙일 말, 대신 누르기인가, 고른 후보 | None) (설계 2026-11-16)."""
+    """AI 어시스트가 막힌 단계를 풀었다 (_find 의 rescue) - args = (창, 틀, 요소, 붙일 말, 대신 누르기인가, 고른 후보 | None) (설계 2026-11-16)."""
 
 
 class Cancelled(Exception):
@@ -1580,7 +1580,7 @@ class Replayer:
         self.no_target_why = "대상 없음"     # no_target 일 때 단계 글 (몰의 '자료 없음' 알림창이면 그 글)
         # 인증 차례 (병렬 수집): (threading.Lock, 첫 단계, 끝 단계) - 첫 단계 앞에서 잡고 끝 단계를 지나면 놓는다 (auth_start·auth_end). 없으면 안 기다린다
         self.gate, self.gate_held = None, False
-        # AI 도움 (설계 2026-11-16): ai = choose(system, user) -> Answer 를 가진 것 (ACTOR 만 붙인다, 없으면 지금과 같다).
+        # AI 어시스트 (설계 2026-11-16): ai = choose(system, user) -> Answer 를 가진 것 (ACTOR 만 붙인다, 없으면 지금과 같다).
         # ai_calls = 이 재생에서 부른 수, ai_saved = AI가 풀어 이어 간 단계 수, ai_down = 못 쓰게 된 까닭, ai_note = 실패 글에 붙일 AI 의 말
         self.ai, self.ai_calls, self.ai_saved, self.ai_down, self.ai_note = None, 0, 0, None, None
 
@@ -1772,7 +1772,7 @@ class Replayer:
         quick: 기다리지 않고 한 번만 훑는다 (다른 창·틀 훑기 - 이미 떠 있는 화면이라 늦은 단서도 처음부터), 없으면 NoTarget.
                틀마다 기다리면 안쪽 틀이 많은 화면에서 못 찾는 날의 실패가 수십 초 늦어진다 (최종 검토 2026-11-16).
         elsewhere: 못 찾은 회차 끝마다 부른다 - (창, 단계 모양, 붙일 말) 을 돌려주면 Moved (설계 2026-11-16).
-        rescue: 첫 회차 끝에 elsewhere 가 못 찾으면 한 번 부른다 - (창, 틀, 요소, 붙일 말, 대신 누르기인가, 후보) 를 돌려주면 Rescued (AI 도움)."""
+        rescue: 첫 회차 끝에 elsewhere 가 못 찾으면 한 번 부른다 - (창, 틀, 요소, 붙일 말, 대신 누르기인가, 후보) 를 돌려주면 Rescued (AI 어시스트)."""
         t = s["target"]
         if s.get("loose"):          # 메일 고르기 묶음 - 메일마다 글자(첨부 이름 등)가 달라 글자 말고 자리·속성으로
             t = dict(t, text="", textCount=0)
@@ -1852,7 +1852,7 @@ class Replayer:
             return None
         return next((w for w in rpa_status.RISK_WORDS if w in text and w not in (t.get("text") or "")), None)
 
-    # --- AI 도움 (설계 2026-11-16) ---
+    # --- AI 어시스트 (설계 2026-11-16) ---
     def _ai_candidates(self, i, s, here):
         """here 와 열린 다른 창에서 누를 수 있는 것을 모은다 → (cands, windows). 레이어 안·here 의 요소가 앞.
         공개 칸(AI_PUBLIC)의 글과 windows 는 가린 글이다. 파일 받기 단계는 '오늘 새로 생긴 것' 기준에 있던 줄을 뺀다."""
@@ -1925,7 +1925,7 @@ class Replayer:
         if self.ai_note:
             msg += f" (AI: {self.ai_note})"
         elif self.ai_down:
-            msg += f" (AI 도움을 쓰지 못함: {self.ai_down})"
+            msg += f" (AI 어시스트를 쓰지 못함: {self.ai_down})"
         self.ai_note = None
         return msg
 
@@ -1950,7 +1950,7 @@ class Replayer:
                                                                          [{k: c[k] for k in AI_PUBLIC} for c in cands]))
                 except ai.AiUnavailable as e:
                     self.ai_down = str(e)
-                    self.log(f"      AI 도움을 쓰지 못함: {e}")
+                    self.log(f"      AI 어시스트를 쓰지 못함: {e}")
                     break
                 finally:
                     self.ai_calls += 1
@@ -1989,7 +1989,7 @@ class Replayer:
             self._ai_clear()
             raise
         except Exception as e:      # 누르기 실패·화면이 바뀌는 중 - 살리지 못한 것으로 (지금과 같은 실패)
-            self.log(f"      AI 도움 중 오류: {type(e).__name__}")
+            self.log(f"      AI 어시스트 중 오류: {type(e).__name__}")
         self._ai_clear()
         return None
 
@@ -2608,7 +2608,7 @@ class Replayer:
 
     def _step(self, i, s):
         notes = []                        # 결과 글 끝에 붙일 말 (다른 창에서 찾음 등 - 설계 2026-11-16)
-        rescued = None                    # AI 도움이 푼 것 (창, 틀, 요소, 붙일 말, 대신 누르기인가, 후보)
+        rescued = None                    # AI 어시스트가 푼 것 (창, 틀, 요소, 붙일 말, 대신 누르기인가, 후보)
         note = self._url_window(i, s) if s.get("target") else None      # 새로 뜬 창의 번호가 어긋났으면 기준을 잡기 전에 고친다
         if note:
             notes.append(note)

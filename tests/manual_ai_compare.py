@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ACTOR AI 도움 손 시험 - 실제 AI(Haiku 5.5·Sonnet 5.5)로 가짜 쇼핑몰 화면 R1~R10 을 돌려 고름이 맞는지·시간·토큰을 견준다.
+"""ACTOR AI 어시스트 손 시험 - 실제 AI(Haiku 5.5·Sonnet 5.5)로 가짜 쇼핑몰 화면 R1~R10 을 돌려 고름이 맞는지·시간·토큰을 견준다.
 돈이 든다 (수십 번 호출, 1달러 안쪽). 일괄 시험에 넣지 말 것. 화면은 가짜 쇼핑몰뿐이라 고객 정보는 나가지 않는다 (창은 뜨지 않는다).
 
 키는 이 창의 환경 변수로만 넘긴다 - 파일·로그·화면 어디에도 찍지 않는다:
@@ -76,7 +76,7 @@ def main():
         srv.shutdown()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
-        f.write(f"# AI 도움 손 시험 ({time.strftime('%Y-%m-%d %H:%M')})\n\n")
+        f.write(f"# AI 어시스트 손 시험 ({time.strftime('%Y-%m-%d %H:%M')})\n\n")
         f.write("| 모델 | 화면 | 결과 | 호출 | 초 | 입력 토큰 | 출력 토큰 | 눌린 것 | AI 가 본 화면 |\n|---|---|---|---|---|---|---|---|---|\n")
         for row in rows:
             f.write("| " + " | ".join(str(x) for x in row) + " |\n")

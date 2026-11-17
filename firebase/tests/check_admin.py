@@ -149,11 +149,13 @@ code, r = api("GET", "/api/info")
 check(code == 200 and r == {"emulator": True, "project": PROJECT, "dashboard": f"https://{PROJECT}.web.app"}, "에뮬레이터에 붙었다고 알린다", r)
 
 print("=== 2. 신규 업체 (한 흐름) ===")
-PLAN = {"cid": "t_new", "name": "<img src=x onerror=alert(1)> 새 업체", "hold": False,
+PLAN = {"cid": "t_new", "name": "<img src=x onerror=alert(1)> 새 업체", "hold": False, "ai": False,
         "pcs": [{"pcId": "pc_a", "label": "사무실 PC"}, {"pcId": "pc_b", "label": "창고 PC"}],
         "users": [{"id": "boss", "name": "대표", "role": "admin"}, {"id": "staff", "name": "직원", "role": "viewer"}],
         "tokens": {"amount": "+500", "memo": "첫 결제"}}
 for bad, why in ((dict(PLAN, cid="Net-1"), "업체코드"), ({k: v for k, v in PLAN.items() if k != "hold"}, "물류대기"),
+                 ({k: v for k, v in PLAN.items() if k != "ai"}, "AI 어시스트 사용 여부"), (dict(PLAN, ai=True), "API 키를 입력"),
+                 (dict(PLAN, ai=True, aiKey="abc"), "sk-ant-로 시작합니다"),
                  (dict(PLAN, pcs=[]), "PC"), (dict(PLAN, users=[{"id": "v", "role": "viewer"}]), "관리자"),
                  (dict(PLAN, tokens={"amount": "1,000"}), "최초 토큰량")):
     code, r = api("POST", "/api/setup", bad)
@@ -162,10 +164,11 @@ check(db_get("meta/companies/t_new") is None, "거절된 내용으로는 아무�
 code, r = api("POST", "/api/setup", PLAN)
 made = r.get("made", {}) if code == 200 else {}
 SECRETS += [u.get("password", "") for u in made.get("users", [])] + [a.get("password", "") for a in made.get("agents", [])]
-check(code == 200 and r["ok"] and len(r["steps"]) == 9 and all(s["ok"] for s in r["steps"]),
-      "다 만들었다 (업체·PC 2·계정 2·에이전트 계정 2·물류대기·첫 토큰 = 9 줄)", (code, r.get("steps")))
+check(code == 200 and r["ok"] and len(r["steps"]) == 10 and all(s["ok"] for s in r["steps"]),
+      "다 만들었다 (업체·PC 2·계정 2·에이전트 계정 2·물류대기·AI 어시스트·첫 토큰 = 10 줄)", (code, r.get("steps")))
 labels = [x["label"] for x in r.get("steps", [])] if code == 200 else []
 check("유저 계정 staff" in labels and "에이전트 계정 pc_a" in labels and "물류대기 관리 메뉴 사용 안 함" in labels and "최초 토큰 500개" in labels
+      and "AI 어시스트 사용 안 함" in labels and db_get("meta/companies/t_new/apps/rpa/features/ai") is None
       and not any(w in " ".join(labels) for w in ("열람자", "기계", "첫 토큰", "씀")),
       "단계 이름: 유저 계정·에이전트 계정 (사용자가 고른 이름 2026-10-06)", labels)
 check({u["id"] for u in made.get("users", [])} == {"boss", "staff"} and {a["pcId"] for a in made.get("agents", [])} == {"pc_a", "pc_b"}
@@ -315,6 +318,149 @@ check(code == 400 and "토큰 배율" in r.get("error", "") and "sales" not in (
       "업체 배율도 하나라도 틀리면 아무것도 안 쓴다", r)
 code, r = api("POST", "/api/companies/nobody/prices", {"values": {"sales": "1"}})
 check(code == 400 and fs_doc("prices/nobody") is None, "없는 업체에는 쓰지 않는다", r)
+print("=== 3-3. AI 어시스트 (계획 ② 2026-11-17) ===")
+KEY1 = "sk-ant-abcd1234"
+SECRETS.append(KEY1)
+
+
+def fs_value(v):
+    if isinstance(v, bool):
+        return {"booleanValue": v}
+    if isinstance(v, int):
+        return {"integerValue": str(v)}
+    if isinstance(v, dict):
+        return {"mapValue": {"fields": {k: fs_value(x) for k, x in v.items()}}}
+    return {"stringValue": str(v)}
+
+
+def fs_put(path, data):
+    return call("PATCH", f"{FS}/{path}", {"fields": {k: fs_value(v) for k, v in data.items()}}, OWNER)
+
+
+def log_text():
+    return open(LOG, "rb").read()[log_start:].decode("utf-8") if os.path.exists(LOG) else ""
+
+
+code, r = api("POST", "/api/companies/t_new/ai", {"on": True})
+check(code == 400 and "AI 어시스트를 켜려면 API 키를 입력하여 주십시오." in r.get("error", "")
+      and db_get("meta/companies/t_new/apps/rpa/features/ai") is None, "AD1 키 없이 켜기는 거절", (code, r))
+code, r = api("POST", "/api/companies/t_new/ai", {"on": True, "key": "abc"})
+check(code == 400 and "Anthropic API 키는 sk-ant-로 시작합니다." in r.get("error", "") and db_get("apps/rpa/aikey/t_new") is None,
+      "AD3 키 모양이 틀리면 거절", (code, r))
+code, r = api("POST", "/api/companies/t_new/ai", {"on": True, "key": "sk-ant- abc"})
+check(code == 400 and "sk-ant-로 시작합니다" in r.get("error", ""), "AD3 공백이 든 키도 거절", (code, r))
+db_put("apps/rpa/live/t_new/pc_a/ai_ready", True)
+code, r = api("POST", "/api/companies/t_new/ai", {"on": True, "key": KEY1})
+check(code == 400 and "업데이트되지 않은 PC가 있어 AI 어시스트를 켤 수 없습니다." in r.get("error", "") and "pc_b" in r.get("error", "")
+      and "pc_a" not in r.get("error", "") and db_get("meta/companies/t_new/apps/rpa/features/ai") is None
+      and db_get("apps/rpa/aikey/t_new") is None, "AD5 ai_ready 를 안 올린 PC 가 있으면 거절하고 그 PC코드를 알린다", (code, r))
+db_put("apps/rpa/live/t_new/pc_b/ai_ready", True)
+code, r = api("POST", "/api/companies/t_new/ai", {"on": True, "key": KEY1})
+check(code == 200 and r == {"on": True, "hint": "1234"} and db_get("meta/companies/t_new/apps/rpa/features/ai") is True
+      and db_get("apps/rpa/aikey/t_new/key") == KEY1 and db_get("apps/rpa/aikey/t_new/hint") == "1234",
+      "AD2 모든 PC 가 준비되면 켜고 키를 둔다 - 응답에는 끝 4글자만", (code, r))
+for _ in range(20):
+    if "AI 어시스트 t_new = 켬 (키 바꿈)" in log_text():
+        break
+    time.sleep(0.2)
+check("AI 어시스트 t_new = 켬 (키 바꿈)" in log_text() and "sk-ant" not in log_text(), "AD2 관리 기록에 한 줄, 키는 없음", log_text()[-200:])
+code, r = api("POST", "/api/companies/t_new/ai", {"on": True})
+check(code == 200 and r == {"on": True, "hint": "1234"} and db_get("apps/rpa/aikey/t_new/key") == KEY1, "이미 둔 키가 있으면 키 없이 켜도 된다", (code, r))
+
+GOOD_PLAN = {"monthly": "30000", "included": "100", "tiers": [{"to": "300", "price": "200"}, {"to": "600", "price": "150"}, {"to": "", "price": "100"}]}
+for bad, why in (({**GOOD_PLAN, "tiers": [{"to": "300", "price": "200"}, {"to": "200", "price": "150"}, {"to": "", "price": "100"}]}, "줄어듦"),
+                 ({**GOOD_PLAN, "tiers": [{"to": "300", "price": "-1"}, {"to": "", "price": "100"}]}, "음수"),
+                 ({**GOOD_PLAN, "tiers": [{"to": "300", "price": "200"}, {"to": "600", "price": "100"}]}, "마지막이 숫자"),
+                 ({**GOOD_PLAN, "tiers": [{"to": "100", "price": "200"}, {"to": "", "price": "100"}]}, "첫 구간 끝이 포함 횟수 이하"),
+                 ({**GOOD_PLAN, "monthly": "3만"}, "월정액 글자"), ({**GOOD_PLAN, "tiers": []}, "구간 없음")):
+    code, r = api("POST", "/api/ai-plan", {"values": bad})
+    check(code == 400 and r.get("error") and fs_doc("aiPlans/default") is None, f"AD7 요금표 거절: {why}", (code, r))
+code, r = api("POST", "/api/ai-plan", {"values": GOOD_PLAN})
+check(code == 200 and r == {"monthly": 30000, "included": 100, "tiers": [{"to": 300, "price": 200}, {"to": 600, "price": 150}, {"to": None, "price": 100}]},
+      "AI 어시스트 기본 요금표 저장 (숫자로)", (code, r))
+code, r = api("GET", "/api/ai-plan")
+check(code == 200 and r.get("monthly") == 30000 and r.get("tiers", [{}])[-1].get("to") is None, "기본 요금표 읽기", (code, r))
+
+kst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+month = kst.strftime("%Y-%m")
+last = (kst.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
+fs_put("runs/t_new/items/ai1", {"cid": "t_new", "pcId": "pc_a", "started_at": f"{month}-01T00:00:05", "ai": {"saved": 600, "called": 700}})
+fs_put("runs/t_new/items/ai2", {"cid": "t_new", "pcId": "pc_b", "started_at": f"{month}-01T09:00:00", "ai": {"saved": 50, "called": 60}})
+fs_put("runs/t_new/items/ai0", {"cid": "t_new", "pcId": "pc_a", "started_at": f"{last}-20T09:00:00", "ai": {"saved": 999, "called": 999}})
+fs_put("runs/t_new/items/ai9", {"cid": "t_new", "pcId": "pc_a", "started_at": "2099-01-01T00:00:00", "ai": {"saved": 7, "called": 7}})
+code, r = api("GET", "/api/companies/t_new/ai")
+check(code == 200 and r.get("saved") == 650 and r.get("called") == 760, "AD9 이번 달 문서만 더한다 (지난달·미래 시각 기록은 빠짐)", (code, r))
+ch = r.get("charge") or {}
+check(ch.get("extra") == 90000 and ch.get("total") == 120000 and ch.get("monthly") == 30000
+      and [x.get("count") for x in ch.get("rows", [])] == [200, 300, 50] and [x.get("amount") for x in ch.get("rows", [])] == [40000, 45000, 5000],
+      "AD6 금액: 200×200 + 300×150 + 50×100 = 90,000원, 합계 120,000원", ch)
+check(r.get("on") is True and r.get("hint") == "1234" and "sk-ant" not in json.dumps(r), "AD2 정보에도 키는 없고 끝 4글자만", r)
+calc = subprocess.run(["node", "--input-type=module", "-e",
+                       "import { aiCharge } from './ops.js'; const P = { monthly: 30000, included: 100, tiers: [{ to: 300, price: 200 }, "
+                       "{ to: 600, price: 150 }, { to: null, price: 100 }] }; console.log(JSON.stringify([aiCharge(P, 650), aiCharge(P, 80)])); process.exit(0);"],
+                      cwd=ADMIN, capture_output=True, text=True, encoding="utf-8", timeout=60)
+try:
+    c650, c80 = json.loads(calc.stdout.strip().splitlines()[-1])
+except Exception:
+    c650 = c80 = {}
+check(c650.get("extra") == 90000 and c650.get("total") == 120000 and c80.get("extra") == 0 and c80.get("total") == 30000,
+      "AD6 aiCharge 순수 계산 (포함 횟수 안이면 추가 0)", (calc.stdout[-300:], calc.stderr[-300:]))
+
+code, r = api("POST", "/api/companies/t_new/ai-plan", {"values": {"included": "200"}})
+code2, r2 = api("GET", "/api/companies/t_new/ai")
+check(code == 200 and code2 == 200 and r2.get("plan", {}).get("included") == 200 and r2.get("plan", {}).get("monthly") == 30000
+      and r2.get("own") == {"included": 200} and (r2.get("charge") or {}).get("extra") == 70000,
+      "AD8 업체 요금표는 칸마다 기본값을 덮는다 (포함 200 → 추가 70,000원)", (code, r, r2))
+code, r = api("POST", "/api/companies/t_new/ai-plan", {"values": {"included": "500"}})
+check(code == 400 and (fs_doc("aiPlans/t_new") or {}).get("included") == 200, "AD7 업체 요금표도 합친 결과가 틀리면 거절 (포함 500 > 첫 구간 끝 300)", (code, r))
+code, r = api("POST", "/api/companies/t_new/ai-plan", {"values": {"included": ""}})
+code2, r2 = api("GET", "/api/companies/t_new/ai")
+check(code == 200 and r2.get("own") == {} and r2.get("plan", {}).get("included") == 100, "업체 요금표 칸을 비우면 기본값", (code, r, r2))
+
+# 최종 검토 1: 기본 요금표를 바꿔 업체 요금표와 합친 결과가 틀어지면 금액을 보이지 않고 알린다 (틀린 금액 37,500원 대신)
+api("POST", "/api/companies/t_new/ai-plan", {"values": {"included": "250"}})
+code, r = api("POST", "/api/ai-plan", {"values": {**GOOD_PLAN, "tiers": [{"to": "200", "price": "200"}, {"to": "600", "price": "150"}, {"to": "", "price": "100"}]}})
+code2, r2 = api("GET", "/api/companies/t_new/ai")
+check(code == 200 and code2 == 200 and r2.get("charge") is None and r2.get("plan") is None and "보다 커야" in (r2.get("planError") or ""),
+      "최종 검토 1: 합친 요금표가 틀어지면 금액 없이 까닭을 돌려준다", (code, r, r2))
+api("POST", "/api/ai-plan", {"values": GOOD_PLAN})
+api("POST", "/api/companies/t_new/ai-plan", {"values": {"included": ""}})
+calc2 = subprocess.run(["node", "--input-type=module", "-e",
+                        "import { aiCharge } from './ops.js'; console.log(JSON.stringify(aiCharge({ monthly: 0, included: 500, tiers: [{ to: 300, price: 200 }, "
+                        "{ to: 600, price: 150 }, { to: null, price: 100 }] }, 550))); process.exit(0);"],
+                       cwd=ADMIN, capture_output=True, text=True, encoding="utf-8", timeout=60)
+try:
+    c550 = json.loads(calc2.stdout.strip().splitlines()[-1])
+except Exception:
+    c550 = {}
+check([x.get("count") for x in c550.get("rows", [])] == [0, 50, 0] and c550.get("extra") == 7500,
+      "최종 검토 1: 구간 끝이 포함 횟수보다 작아도 앞으로 되돌아가 세지 않는다 (50번×150 = 7,500원)", (calc2.stdout[-300:], calc2.stderr[-300:]))
+
+code, r = api("POST", "/api/companies/t_new/ai", {"on": False})
+check(code == 200 and r.get("on") is False and db_get("meta/companies/t_new/apps/rpa/features/ai") is None
+      and db_get("apps/rpa/aikey/t_new") is None, "AD4 끄면 켬·키 둘 다 지운다", (code, r))
+code, r = api("GET", "/api/companies/t_new/ai")
+check(code == 200 and r.get("on") is False and r.get("hint") is None, "끈 뒤 정보: 꺼짐·키 없음", r)
+
+# 최종 검토 2: 이미 있는 업체에 마법사를 다시 돌려도 옛 버전 PC 검사를 건너뛰지 않는다 (Review Focus 1)
+call("DELETE", f"{DB}/apps/rpa/live/t_new/pc_b/ai_ready.json?ns={NS}", None, OWNER)
+SECRETS.append("sk-ant-again0000")
+code, r = api("POST", "/api/setup", dict(PLAN, ai=True, aiKey="sk-ant-again0000", tokens=None))
+step_ai = next((x for x in r.get("steps", []) if x["label"].startswith("AI 어시스트")), {}) if code == 200 else {}
+check(code == 200 and step_ai.get("ok") is False and "업데이트되지 않은 PC" in step_ai.get("note", "") and "pc_b" in step_ai.get("note", "")
+      and db_get("meta/companies/t_new/apps/rpa/features/ai") is None and db_get("apps/rpa/aikey/t_new") is None and "sk-ant" not in json.dumps(r),
+      "최종 검토 2: 이미 있는 업체는 마법사로도 모든 PC 가 준비돼야 켠다", (code, r.get("steps")))
+db_put("apps/rpa/live/t_new/pc_b/ai_ready", True)
+
+AIPLAN = dict(PLAN, cid="t_ai", name="AI 업체", pcs=[{"pcId": "pc_1", "label": "PC"}], users=[{"id": "boss", "role": "admin"}],
+              tokens=None, ai=True, aiKey="sk-ant-zzzz9876")
+SECRETS.append("sk-ant-zzzz9876")
+code, r = api("POST", "/api/setup", AIPLAN)
+SECRETS += [u["password"] for u in r.get("made", {}).get("users", [])] + [a["password"] for a in r.get("made", {}).get("agents", [])]
+check(code == 200 and any(s["label"] == "AI 어시스트 사용" and s["ok"] for s in r.get("steps", []))
+      and db_get("meta/companies/t_ai/apps/rpa/features/ai") is True and db_get("apps/rpa/aikey/t_ai/hint") == "9876"
+      and "sk-ant" not in json.dumps(r), "AD10 신규 업체에서 AI 어시스트 사용 + 키 (PC 가 아직 없어 준비 검사는 안 한다)", (code, r.get("steps")))
+
 code, rows = api("GET", "/api/usage")
 check(code == 200 and any(x["cid"] == "t_new" and x["left"] == 600 for x in rows), "통계: 업체마다 남은 토큰", str(rows)[:200])
 code, r = api("GET", "/api/companies/Bad")
@@ -424,7 +570,7 @@ with sync_playwright() as pw:
            "한 대 더", "쓰나요", "예, 씁니다", "첫 토큰", "세기만", "관리자 계정 (대시보드에 로그인할 사람)", "유저 추가")
     NEW = ("에이전트 계정도 만들기", "PC 추가", '"추가"', "사용중지", "사용중", "유저", "토큰 정보", "업체 비활성화", "다시 활성화",
            '<button id="s-add-pc">+ 추가</button>', "4. 물류대기 관리 메뉴 사용 여부", 'value="yes">예</label>', 'value="no">아니오</label>',
-           "5. 최초 토큰량 설정", 'value="later" checked>나중에 설정</label>', "3. 대시보드 계정", '<button id="s-add-user">+ 추가</button>',
+           "5. AI 어시스트 사용 여부", "6. 최초 토큰량 설정", 'value="later" checked>나중에 설정</label>', "3. 대시보드 계정", '<button id="s-add-user">+ 추가</button>',
            "업체가 보유한 토큰 정보가 없습니다. 최초 토큰 생성시 토큰 정보가 함께 생성됩니다. 토큰이 0이하라면 모듈 실행을 막습니다.",
            "업체가 사용할 모듈을 결정합니다. 체크 해제시 업체 대시보드에서 보이지 않고, 에이전트도 실행하지 않습니다.",
            "이 업체를 비활성화 합니다. 데이터(기록, 토큰 정보 등)도 남고, 언제든지 다시 활성화 할 수 있습니다.")
@@ -829,6 +975,15 @@ with sync_playwright() as pw:
     check(db_get("meta/companies/t_ui") is None, "물류대기 사용 여부를 안 고르면 빨간 알림, 아무것도 안 만든다")
     page.check("input[name=hold][value=yes]")
     page.click("#s-make")
+    page.wait_for_function("document.getElementById('flash')?.textContent.includes('AI 어시스트 사용 여부')", timeout=15000)
+    check(db_get("meta/companies/t_ui") is None and page.is_disabled("#s-ai-key"), "S5 AI 어시스트 사용 여부를 안 고르면 빨간 알림 (키 칸은 '예' 를 골라야 열린다)")
+    page.check("input[name=ai][value=yes]")
+    check(not page.is_disabled("#s-ai-key") and page.get_attribute("#s-ai-key", "type") == "password", "S5 '예' 면 키 칸이 열린다 (가림)")
+    page.click("#s-make")
+    page.wait_for_function("document.getElementById('flash')?.textContent.includes('API 키를 입력')", timeout=15000)
+    check(db_get("meta/companies/t_ui") is None, "S5 '예' 인데 키가 없으면 거절")
+    page.check("input[name=ai][value=no]")
+    page.click("#s-make")
     page.wait_for_selector("#setup-result:not(.hide) .secret pre", timeout=30000)
     sent = page.text_content("#setup-result .secret pre")
     seen = re.findall(r"비밀번호: (\S{24})", sent)
@@ -840,6 +995,8 @@ with sync_playwright() as pw:
     check(claims(email("t_ui", "ui_admin")) == {"cid": "t_ui", "role": "admin"} and claims(email("t_ui", "ui_boss2")) == {"cid": "t_ui", "role": "admin"}
           and claims(email("t_ui", "ui_view")) == {"cid": "t_ui", "role": "viewer"} and (db_get("meta/companies/t_ui/apps/rpa/modules") or {}) == {},
           "화면으로 만든 업체: 고른 역할대로 관리자 둘·유저 하나, 물류대기 씀 (정책 없음)")
+    check(db_get("meta/companies/t_ui/apps/rpa/features/ai") is None and "AI 어시스트 사용 안 함" in page.text_content("#setup-result"),
+          "S5 화면으로 만든 업체: AI 어시스트 사용 안 함 (단계 목록에 보인다)")
 
     page.click("nav button[data-view='rates']")
     page.wait_for_selector("#rates tr", timeout=15000)
@@ -910,6 +1067,83 @@ with sync_playwright() as pw:
     uh = [h.strip() for h in page.locator("#view-rates table").nth(1).locator("th").all_text_contents()]
     check("키" not in rh and rh[:2] == ["모듈", "배율"], f"토큰 배율 표: 키 칸 없음 ({rh})")
     check("현재 토큰" in uh and "이번 달 사용한 토큰" in uh, f"통계 표 머리 ({uh})")
+
+    print("AI 어시스트 화면 (계획 ② 2026-11-17)")
+    page.click("nav button[data-view='rates']")
+    page.wait_for_selector("#ai-plan #aip-tiers tr.tier", timeout=15000)
+    check(page.input_value("#aip-monthly") == "30000" and page.input_value("#aip-included") == "100"
+          and page.locator("#aip-tiers tr.tier").count() == 3 and page.locator("#aip-tiers tr.tier:last-child input.aip-to").count() == 0
+          and "그 이상" in page.text_content("#aip-tiers tr.tier:last-child"),
+          "S4 토큰 배율 화면에 'AI 어시스트 기본 요금표' - 월정액·포함 횟수·구간 표 (마지막 줄은 '그 이상')", page.text_content("#ai-plan")[:300])
+    page.click("#aip-add")
+    check(page.locator("#aip-tiers tr.tier").count() == 4, "S4 [+ 구간] 으로 줄 더하기")
+    page.locator("#aip-tiers tr.tier:nth-child(3) button.aip-del").click()
+    check(page.locator("#aip-tiers tr.tier").count() == 3, "S4 줄 빼기")
+    page.evaluate("document.getElementById('flash').classList.add('hide')")
+    page.locator("#aip-tiers tr.tier:nth-child(2) input.aip-to").fill("250")
+    page.click("#aip-save")
+    page.wait_for_function("document.getElementById('flash')?.textContent.includes('보다 커야')", timeout=10000)
+    check((fs_doc("aiPlans/default") or {}).get("included") == 100, "S4 구간 끝이 줄면 빨간 알림, 저장하지 않는다")
+    page.locator("#aip-tiers tr.tier:nth-child(2) input.aip-to").fill("600")
+    page.fill("#aip-included", "150")
+    page.click("#aip-save")
+    page.wait_for_function("document.getElementById('flash')?.textContent.includes('요금표를 저장하였습니다')", timeout=10000)
+    check((fs_doc("aiPlans/default") or {}).get("included") == 150, "S4 [적용] 으로 기본 요금표 저장 (포함 150)")
+    api("POST", "/api/ai-plan", {"values": GOOD_PLAN})
+
+    def open_ai(pg, cid):
+        pg.click("nav button[data-view='companies']")
+        pg.wait_for_timeout(1000)
+        pg.evaluate("document.getElementById('detail').replaceChildren()")
+        pg.click(f"#companies tr[data-cid='{cid}']")
+        pg.wait_for_selector("#detail .sec.ai .ai-month", timeout=15000)
+
+    open_ai(page, "t_new")
+    ai_text = page.text_content("#detail .sec.ai")
+    keybox = page.locator("#detail .sec.ai input.ai-key")
+    check(page.text_content("#detail .sec.ai h3").startswith("AI 어시스트") and not page.is_checked("#detail .sec.ai input[data-ai]")
+          and keybox.get_attribute("type") == "password" and keybox.get_attribute("placeholder") == "sk-ant-… (바꿀 때만 입력)"
+          and "키 없음" in ai_text and "막힌 단계의 화면 글을 개인정보를 가린 뒤 AI(Anthropic)가 처리합니다." in ai_text,
+          "S1 업체 상세에 'AI 어시스트' 상자 - [사용] 체크·키 칸(가림)·키 상태·안내 글", ai_text[:300])
+    check("AI가 살린 단계 650번" in ai_text and "AI를 부른 횟수 760번" in ai_text and "포함 100번" in ai_text
+          and page.locator("#detail .sec.ai table.ai-charge tbody tr").count() == 3 and "추가 금액 90,000원 · 합계 120,000원" in ai_text,
+          "S2 이번 달 줄·구간별 금액 표·합계", ai_text[:400])
+    page.evaluate("document.getElementById('flash').classList.add('hide')")
+    page.check("#detail .sec.ai input[data-ai]")
+    page.click("#detail .sec.ai button.ai-apply")
+    page.wait_for_function("document.getElementById('flash')?.textContent.includes('API 키를 입력하여 주십시오')", timeout=10000)
+    check(db_get("meta/companies/t_new/apps/rpa/features/ai") is None, "S6 키 없이 켜면 거절 글이 화면에 그대로 (AD1)")
+    call("DELETE", f"{DB}/apps/rpa/live/t_new/pc_b/ai_ready.json?ns={NS}", None, OWNER)
+    KEY_UI = "sk-ant-uiuikey5678"
+    SECRETS.append(KEY_UI)
+    page.check("#detail .sec.ai input[data-ai]")
+    page.fill("#detail .sec.ai input.ai-key", KEY_UI)
+    page.click("#detail .sec.ai button.ai-apply")
+    page.wait_for_function("document.getElementById('flash')?.textContent.includes('업데이트되지 않은 PC')", timeout=10000)
+    check("pc_b" in page.text_content("#flash") and db_get("apps/rpa/aikey/t_new") is None, "S6 옛 버전 PC 가 있으면 그 PC코드와 함께 거절 (AD5)")
+    for pc in ("pc_a", "pc_b"):          # 앞 화면 시험이 live 를 통째로 다시 쓴다 - 두 PC 모두 준비 표시를 다시
+        db_put(f"apps/rpa/live/t_new/{pc}/ai_ready", True)
+    open_ai(page, "t_new")
+    page.check("#detail .sec.ai input[data-ai]")
+    page.fill("#detail .sec.ai input.ai-key", KEY_UI)
+    page.click("#detail .sec.ai button.ai-apply")
+    page.wait_for_function("(document.querySelector('#detail .sec.ai')?.textContent || '').includes('키 있음 (…5678)')", timeout=15000)
+    check(db_get("meta/companies/t_new/apps/rpa/features/ai") is True and db_get("apps/rpa/aikey/t_new/key") == KEY_UI
+          and page.is_checked("#detail .sec.ai input[data-ai]") and page.input_value("#detail .sec.ai input.ai-key") == ""
+          and KEY_UI not in page.content(), "[적용] 으로 켜고 키를 둔다 - 다시 그린 화면에는 끝 4글자만")
+    page.fill("#detail .sec.ai input.aip-included", "200")
+    check(page.get_attribute("#detail .sec.ai input.aip-monthly", "placeholder") == "30000", "S3 업체 요금표 칸의 안내 글은 기본값")
+    page.click("#detail .sec.ai button.ai-plan-apply")
+    page.wait_for_function("(document.querySelector('#detail .sec.ai')?.textContent || '').includes('추가 금액 70,000원')", timeout=15000)
+    check((fs_doc("aiPlans/t_new") or {}).get("included") == 200, "S3 이 업체 요금표 [적용] - 포함 200 → 추가 70,000원")
+    page.fill("#detail .sec.ai input.aip-included", "")
+    page.click("#detail .sec.ai button.ai-plan-apply")
+    page.wait_for_function("(document.querySelector('#detail .sec.ai')?.textContent || '').includes('추가 금액 90,000원')", timeout=15000)
+    check("included" not in (fs_doc("aiPlans/t_new") or {}), "S3 칸을 비우고 [적용] 하면 기본값")
+    page.uncheck("#detail .sec.ai input[data-ai]")
+    page.click("#detail .sec.ai button.ai-apply")
+    page.wait_for_function("(document.querySelector('#detail .sec.ai')?.textContent || '').includes('키 없음')", timeout=15000)
+    check(db_get("meta/companies/t_new/apps/rpa/features/ai") is None and db_get("apps/rpa/aikey/t_new") is None, "체크를 풀고 [적용] 하면 끄고 키도 지운다")
 
     print("휴대폰 (5단계)")
     page.click("nav button[data-view='companies']")

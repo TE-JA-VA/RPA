@@ -294,7 +294,22 @@ def run_doc(rec, cid, pc_id, prices=None):
         "used": used, "cost": run_cost(used, prices or PRICES),
         "payload": json.dumps(rec, ensure_ascii=False, default=str),
     }
+    ai = ai_usage(rec.get("metrics"))
+    if ai:
+        doc["ai"] = ai
     return doc
+
+
+def ai_usage(metrics):
+    """ACTOR AI 어시스트 횟수 (계획 ② 2026-11-17) - 사이트마다의 지표 "{사이트}:ai" (value = 살린 수, total = 부른 수)를 더한다.
+    부른 적이 없으면 None (기록에 ai 칸을 싣지 않는다)."""
+    saved = called = 0
+    for m in metrics or []:
+        if isinstance(m, dict) and str(m.get("key") or "").endswith(":ai"):
+            v, t = m.get("value"), m.get("total")
+            if isinstance(v, int) and isinstance(t, int) and not isinstance(v, bool) and not isinstance(t, bool) and 0 <= v <= t:
+                saved, called = saved + v, called + t
+    return {"saved": saved, "called": called} if called > 0 else None
 
 
 def trim_logs(snapshot):
@@ -608,6 +623,7 @@ def live_extras(snap):
     snap["preset_transfer"] = PRESET_TRANSFER
     import rpa_status as st
     snap["preset_max"] = st.PRESET_MAX    # 관리 화면이 41개 이상을 열기 전에 본다 - 옛 PC 는 41 이상을 버려 기본 2개로 줄고 켠 프리셋이 꺼진다 (2026-11-06)
+    snap["ai_ready"] = True               # ACTOR AI 어시스트를 아는 PC - 관리 화면이 업체의 모든 PC 에 이것이 있어야 켠다 (계획 ② 2026-11-17)
     for v in (snap.get("programs") or {}).values():
         if isinstance(v, dict):
             v.pop("age_sec", None)
@@ -804,6 +820,21 @@ def company_policy(client, cid, app=APP):
     return (raw if ok else SCHEDULE_LIMIT_DEFAULT), sorted(off), wl, presets, parallel
 
 
+def ai_policy(client, cid, app=APP):
+    """ACTOR AI 어시스트 (켬, 키) - 켬은 meta/companies/{cid}/apps/{app}/features/ai (관리 화면), 키는 그 업체 에이전트만 읽는
+    apps/{app}/aikey/{cid}/key. 꺼졌으면 키 자리는 읽지 않는다. 못 읽으면 예외 - 부르는 쪽이 지난 값을 둔다."""
+    if client.get(f"meta/companies/{cid}/apps/{app}/features/ai") is not True:
+        return False, None
+    try:
+        key = client.get(f"apps/{app}/aikey/{cid}/key")
+    except fb.HttpError as e:
+        # 읽을 권한이 없다 (비활성화한 업체 등) - PC 에 봉인해 둔 키도 지운다. 망 오류는 그대로 올려 지난 값을 둔다 (최종 검토 3)
+        if e.status in (401, 403) and "Permission denied" in (e.body or ""):
+            return False, None
+        raise
+    return True, (key if isinstance(key, str) and key.strip() else None)
+
+
 class Policy:
     """업체 정책을 10분마다 읽어 PC 설정(settings.json schedule.policy)에 적는다 - 예약기가 그 값으로 줄을 자르고 모듈을 뺀다.
     못 읽으면 적힌 값 그대로 (지난 값)."""
@@ -840,6 +871,12 @@ class Policy:
                 st.ensure_wellife_section()          # 처음 열리면 로그인·매출처리만 켠 섹션 (메모장 편집 없음)
             except Exception as e:
                 log(f"웰라이프 설정을 생성하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
+        try:
+            st.set_ai(*ai_policy(self._client, self._cid))     # 꺼졌으면 PC 의 키를 지운다 (계획 ② Review Focus 2)
+        except fb.AuthError:
+            raise
+        except Exception as e:                       # 키는 로그에 쓰지 않는다 - 까닭의 종류만
+            log(f"AI 어시스트 설정을 읽지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
         return got
 
 

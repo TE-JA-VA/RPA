@@ -294,6 +294,130 @@ export async function setParallelLimit(cid, n) {
   await rtdb.ref(`meta/companies/${cid}/apps/rpa/limits/parallel`).set(Number(s));
   return { cid, parallel: Number(s) };
 }
+// --- ACTOR AI 어시스트 (계획 ② 2026-11-17) --------------------------------------
+// 켬 = meta/companies/{cid}/apps/rpa/features/ai, 키 = apps/rpa/aikey/{cid} {key, hint, at} (그 업체 에이전트만 읽는다).
+// 키는 응답·관리 기록 어디에도 싣지 않는다 - 끝 4글자(hint)만.
+const AI_KEY_RE = /^sk-ant-\S+$/;
+function aiKeyOf(key) {
+  const k = String(key ?? "").trim();
+  if (!k) return null;
+  if (!AI_KEY_RE.test(k)) throw new Refused("Anthropic API 키는 sk-ant-로 시작합니다.");
+  return k;
+}
+const aiKeyRow = (key) => ({ key, hint: key.slice(-4), at: nowKst() });
+export async function setAi(cid, on, key) {
+  checkKey("cid", cid);
+  const v = await companyOf(cid);
+  const at = rtdb.ref(`apps/rpa/aikey/${cid}`);
+  if (!on) {
+    await rtdb.ref(`meta/companies/${cid}/apps/rpa/features/ai`).set(null);
+    await at.set(null);
+    return { on: false, hint: null };
+  }
+  const k = aiKeyOf(key);
+  const had = (await at.child("hint").get()).val();
+  if (!k && !had) throw new Refused("AI 어시스트를 켜려면 API 키를 입력하여 주십시오.");
+  // 옛 버전 PC 는 AI 를 모른다 - 웹은 '사용 중' 인데 PC 는 그냥 실패한다 (Review Focus 1). live.ai_ready 는 에이전트가 올린다
+  const pcIds = Object.keys(v.pcs ?? {});
+  const ready = await Promise.all(pcIds.map((pc) => rtdb.ref(`apps/rpa/live/${cid}/${pc}/ai_ready`).get().then((x) => x.val())));
+  const old = pcIds.filter((_, i) => ready[i] !== true);
+  if (old.length) throw new Refused(`업데이트되지 않은 PC가 있어 AI 어시스트를 켤 수 없습니다. 먼저 업데이트하여 주십시오. (${old.join(", ")})`);
+  if (k) await at.set(aiKeyRow(k));
+  await rtdb.ref(`meta/companies/${cid}/apps/rpa/features/ai`).set(true);
+  return { on: true, hint: k ? k.slice(-4) : had };
+}
+
+// 요금표 {monthly 원, included 횟수, tiers: [{to 횟수|null, price 원}]} - 기본 aiPlans/default, 업체 aiPlans/{cid} 는 칸마다 덮는다
+const AI_PLAN_KEYS = ["monthly", "included", "tiers"];
+function aiNumber(name, value) {
+  const t = String(value ?? "").trim();
+  if (!/^\d+$/.test(t)) throw new Refused(`${name}은(는) 0 이상의 정수여야 합니다. (받은 값: ${t})`);
+  return Number(t);
+}
+function aiTiers(list) {
+  if (!Array.isArray(list) || !list.length) throw new Refused("추가 요금 구간을 하나 이상 입력하여 주십시오.");
+  return list.map((x, i) => {
+    const last = i === list.length - 1, to = String(x?.to ?? "").trim();
+    if (last && to) throw new Refused("마지막 구간의 끝은 비워 두어야 합니다. (그 이상 모두)");
+    if (!last && !to) throw new Refused(`${i + 1}번째 구간의 끝 횟수를 입력하여 주십시오.`);
+    return { to: last ? null : aiNumber(`${i + 1}번째 구간의 끝 횟수`, to), price: aiNumber(`${i + 1}번째 구간의 단가`, x?.price) };
+  });
+}
+// 합친 요금표가 계산할 수 있는 모양인가 - 구간 끝은 포함 횟수보다 크고 차례로 커진다 (Review Focus 5)
+function checkAiPlan(plan) {
+  let prev = plan.included;
+  for (const [i, t] of plan.tiers.entries()) {
+    if (t.to === null) break;
+    if (t.to <= prev) throw new Refused(`${i + 1}번째 구간의 끝(${t.to}번)은 ${i ? "앞 구간의 끝" : "포함 횟수"}(${prev}번)보다 커야 합니다.`);
+    prev = t.to;
+  }
+  return plan;
+}
+const aiComplete = (p) => AI_PLAN_KEYS.every((k) => p[k] !== undefined && p[k] !== null);
+/** 이번 달 금액 - 월정액 + 구간마다 (그 구간에 든 살린 횟수 × 단가). 첫 구간은 포함 횟수 다음부터 */
+export function aiCharge(plan, saved) {
+  let from = plan.included, extra = 0;
+  const rows = plan.tiers.map((t) => {
+    const end = t.to ?? Infinity, count = Math.max(0, Math.min(saved, end) - from), amount = count * t.price;
+    const row = { from, to: t.to, count, price: t.price, amount };
+    from = Math.max(from, end); extra += amount;   // 구간 끝이 포함 횟수보다 작아도 되돌아가 세지 않는다 (최종 검토 1)
+    return row;
+  });
+  return { monthly: plan.monthly, extra, total: plan.monthly + extra, rows };
+}
+export async function getAiPlan() {
+  return (await store.doc("aiPlans/default").get()).data() ?? {};
+}
+export async function setAiPlan(values) {
+  if (!values || typeof values !== "object") throw new Refused("요금표를 입력하여 주십시오.");
+  const plan = checkAiPlan({ monthly: aiNumber("월정액", values.monthly), included: aiNumber("포함 횟수", values.included), tiers: aiTiers(values.tiers) });
+  await store.doc("aiPlans/default").set(plan);
+  return getAiPlan();
+}
+// 업체 요금표 - 비운 칸은 지워 기본값을 따른다. 기본값과 합친 결과가 틀리면 거절
+export async function setCompanyAiPlan(cid, values) {
+  checkKey("cid", cid);
+  await companyOf(cid, { removed: true });
+  if (!values || typeof values !== "object") throw new Refused("요금표를 입력하여 주십시오.");
+  const own = (await store.doc(`aiPlans/${cid}`).get()).data() ?? {};
+  const next = { ...own }, write = {};
+  for (const k of AI_PLAN_KEYS) {
+    if (!(k in values)) continue;
+    const v = values[k], blank = k === "tiers" ? !Array.isArray(v) || !v.length : String(v ?? "").trim() === "";
+    if (blank) { delete next[k]; write[k] = FieldValue.delete(); continue; }
+    next[k] = write[k] = k === "tiers" ? aiTiers(v) : aiNumber(k === "monthly" ? "월정액" : "포함 횟수", v);
+  }
+  const merged = { ...(await getAiPlan()), ...next };
+  if (aiComplete(merged)) checkAiPlan(merged);
+  if (Object.keys(write).length) await store.doc(`aiPlans/${cid}`).set(write, { merge: true });
+  return aiInfo(cid);
+}
+const kstMonth = () => nowKst().slice(0, 7);
+const nextMonth = (m) => { const [y, mo] = m.split("-").map(Number); return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, "0")}`; };
+// 그 달(기본 이번 달, KST) 실행 기록의 AI 횟수 - 칸마다 따로 더한다 (한 질의에 여러 칸이면 칸이 다 있는 문서만 센다).
+// 끝도 막는다 - 시계가 틀린 PC 의 미래 시각 기록이 이번 달에 들지 않게. 색인 started_at + ai.saved / ai.called
+async function aiSum(cid, field, month) {
+  const q = store.collection(`runs/${cid}/items`).where("started_at", ">=", `${month}-01T00:00:00`).where("started_at", "<", `${nextMonth(month)}-01T00:00:00`);
+  return (await q.aggregate({ s: AggregateField.sum(field) }).get()).data().s ?? 0;
+}
+export async function aiInfo(cid, month) {
+  checkKey("cid", cid);
+  const v = await companyOf(cid, { removed: true });
+  const m = /^\d{4}-\d{2}$/.test(String(month ?? "")) ? String(month) : kstMonth();
+  const own = (await store.doc(`aiPlans/${cid}`).get()).data() ?? {};
+  const base = await getAiPlan();
+  const plan = { ...base, ...own };
+  const [saved, called, hint] = await Promise.all([aiSum(cid, "ai.saved", m), aiSum(cid, "ai.called", m),
+    rtdb.ref(`apps/rpa/aikey/${cid}/hint`).get().then((x) => x.val())]);
+  // 기본 요금표를 나중에 바꾸면 업체 요금표와 합친 결과가 틀어질 수 있다 - 틀린 금액 대신 까닭을 보인다 (최종 검토 1)
+  let ok = aiComplete(plan), planError = null;
+  if (ok) {
+    try { checkAiPlan(plan); } catch (e) { if (!(e instanceof Refused)) throw e; ok = false; planError = e.message; }
+  }
+  return { cid, month: m, on: v.apps?.rpa?.features?.ai === true, hint: hint ?? null, plan: ok ? plan : null, base, own, saved, called,
+    charge: ok ? aiCharge(plan, saved) : null, planError };
+}
+
 // 판 목록 (자동 업데이트 4절) - meta/releases. 판 키는 점을 _ 로 (RTDB 키에 . 을 못 쓴다)
 const relKey = (v) => String(v).replaceAll(".", "_");
 const VERSION_RE = /^\d{4}\.\d{2}\.\d{2}-\d+$/;
@@ -610,6 +734,8 @@ function checkPlan(plan) {
   }
   if (new Set(users.map((u) => String(u.id).trim())).size !== users.length) throw new Refused("계정 아이디가 중복되었습니다.");
   if (typeof plan.hold !== "boolean") throw new Refused("물류대기 관리 메뉴 사용 여부를 선택하여 주십시오. (업체마다 다릅니다)");
+  if (typeof plan.ai !== "boolean") throw new Refused("AI 어시스트 사용 여부를 선택하여 주십시오. (업체마다 다릅니다)");
+  if (plan.ai && !aiKeyOf(plan.aiKey)) throw new Refused("AI 어시스트를 켜려면 API 키를 입력하여 주십시오.");
   if (plan.tokens) {
     const a = String(plan.tokens.amount ?? "").trim();
     if (!/^\+?\d+$/.test(a) || Number(a) <= 0) throw new Refused(`최초 토큰량은 1 이상의 정수여야 합니다. (받은 값: ${a})`);
@@ -649,7 +775,14 @@ export async function setupCompany(plan) {
       () => skipExisting(async () => { made.users.push({ ...(await addUser(cid, String(u.id).trim(), u.role, u.name)), id: String(u.id).trim() }); })))
     && await each(plan.pcs, (p) => step(`에이전트 계정 ${p.pcId}`,
       () => skipExisting(async () => { made.agents.push({ ...(await addAgent(cid, p.pcId)), label: p.label ?? "" }); })))
-    && await step(`물류대기 관리 메뉴 ${plan.hold ? "사용" : "사용 안 함"}`, async () => { await setModules(cid, { Hold: plan.hold ? "on" : "off" }); });
+    && await step(`물류대기 관리 메뉴 ${plan.hold ? "사용" : "사용 안 함"}`, async () => { await setModules(cid, { Hold: plan.hold ? "on" : "off" }); })
+    // 새 업체는 PC 가 아직 안 켜졌다 - ai_ready 검사 없이 켬만 적어 두면 PC 가 켜질 때 정책 읽기로 닿는다
+    && await step(`AI 어시스트 ${plan.ai ? "사용" : "사용 안 함"}`, async () => {
+      if (!plan.ai) return;
+      if (was) return void await setAi(cid, true, plan.aiKey);   // 이미 있던 업체는 옛 버전 PC 검사를 거친다 (최종 검토 2)
+      await rtdb.ref(`apps/rpa/aikey/${cid}`).set(aiKeyRow(aiKeyOf(plan.aiKey)));
+      await rtdb.ref(`meta/companies/${cid}/apps/rpa/features/ai`).set(true);
+    });
   if (ok && plan.tokens) {
     await step(`최초 토큰 ${Number(String(plan.tokens.amount).trim())}개`, async () => {
       if ((await store.doc(`wallet/${cid}`).get()).exists) return "이미 토큰 정보가 있어 건너뛰었습니다.";

@@ -1071,7 +1071,7 @@ MAIL_RECORD_VERSION = 2                  # 메일 2차인증 단계가 든 기�
 UPLOAD_RECORD_VERSION = 3                # 엑셀 파일 넣기(file) 단계가 든 기록 (업로드 설계 9절, 2026-11-09) - 옛 ACTOR 는 1·2 만 알아 거절한다
 RECORD_VERSIONS = (1, MAIL_RECORD_VERSION, UPLOAD_RECORD_VERSION)  # 이 PC 가 재생·받을 수 있는 기록 버전
 # 업체가 원하지 않을 수 있는 일을 하는 단추·화면의 낱말 - 재생기가 원래 대상 대신 같은 글자 단추를 누를지 볼 때 (web_replay._risky_layer,
-# 사용자 2026-11-16), ACTOR AI 도움이 AI 의 고름을 거를 때 같이 쓴다. 기록 대상 글에 같은 낱말이 있으면 그 낱말은 괜찮다
+# 사용자 2026-11-16), ACTOR AI 어시스트가 AI 의 고름을 거를 때 같이 쓴다. 기록 대상 글에 같은 낱말이 있으면 그 낱말은 괜찮다
 RISK_WORDS = ("동의", "결제", "구매", "주문하기", "삭제", "변경", "신청", "전송", "발송", "등록", "저장", "승인", "해지",
               "탈퇴", "취소", "출고", "확정")
 RECORD_VERSION = 1                       # 기록 모양. 다르면 재생하지 않는다 (옛 ACTOR 가 새 기록을 잘못 따라 하지 않게). web_replay·preset_transfer 가
@@ -1297,7 +1297,7 @@ def mail_memory_path(no):
     return os.path.join(data_dir(), "메일기억", f"{preset_site_key(no)}.json")
 
 
-AI_NAME = "ai.json"     # ACTOR AI 도움 설정 {"on", "key"} - 에이전트가 웹에서 받아 적는다 (계획 ②). 키는 DPAPI 로 잠가 적는다
+AI_NAME = "ai.json"     # ACTOR AI 어시스트 설정 {"on", "key"} - 에이전트가 웹에서 받아 적는다 (계획 ②). 키는 DPAPI 로 잠가 적는다
 
 
 def ai_settings():
@@ -1315,7 +1315,7 @@ def ai_settings():
 
 
 def set_ai(on, key):
-    """AI 도움 설정을 적는다. 키는 잠가 적고, 꺼졌거나 키가 비면 키를 지운다. 같은 값이면 다시 쓰지 않는다."""
+    """AI 어시스트 설정을 적는다. 키는 잠가 적고, 꺼졌거나 키가 비면 키를 지운다. 같은 값이면 다시 쓰지 않는다."""
     key = key if on and key else None
     want = {"on": bool(on), **({"key": key} if key else {})}
     if ai_settings() == want:

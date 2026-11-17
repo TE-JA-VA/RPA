@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ACTOR AI 도움 (설계 2026-11-16) - 실제 AI 는 부르지 않는다 (가짜 SDK 클라이언트·가짜 AI).
+"""ACTOR AI 어시스트 (설계 2026-11-16) - 실제 AI 는 부르지 않는다 (가짜 SDK 클라이언트·가짜 AI).
 
 앞 절(M·K·A·S·U)은 브라우저 없이 ai_rescue 만 본다. 뒤 절(C)은 가짜 쇼핑몰 화면에서 재생기가 후보를 모으는 것을 본다 (headless).
 재생 절(R)은 실제 기록기로 옛 화면을 기록하고, 서버가 '오늘은 화면이 다른 날' 을 보여 주며, 가짜 AI 가 글자로 후보를 고른다.
@@ -344,7 +344,7 @@ def results_text(r):
 
 
 def replay_part(base):
-    print("AI 도움 재생 (가짜 AI)")
+    print("AI 어시스트 재생 (가짜 AI)")
     recd = record(base)
     kinds = [x["kind"] for x in recd["steps"]]
     check("기록: 이동·누르기·넣기·누르기·누르기", kinds[-4:] == ["click", "fill", "click", "click"], kinds)
@@ -426,7 +426,7 @@ def replay_part(base):
     fake = FakeAi([ai.AiUnavailable("시간 초과")])
     ok, r, fail, logs = replay(recd, fake)
     check("R13 AI를 못 쓰면 실패 사유 끝에 까닭, 그 뒤는 부르지 않는다",
-          not ok and fail.endswith("(AI 도움을 쓰지 못함: 시간 초과)") and not r._ai_ok(3, recd["steps"][3]) and len(fake.users) == 1,
+          not ok and fail.endswith("(AI 어시스트를 쓰지 못함: 시간 초과)") and not r._ai_ok(3, recd["steps"][3]) and len(fake.users) == 1,
           (ok, fail, len(fake.users)))
 
     ok, r, fail, logs = replay(recd, None)
@@ -467,7 +467,7 @@ def settings_part():
             st.set_ai(True, "sk-test")
             web_runner.attach_ai(rp, "몰")
             check("P4 켜져 있으면 ACTOR 재생기에 AI 를 붙이고 키는 로그에 없다",
-                  isinstance(rp.ai, ai.Claude) and logs == ["  [몰] AI 도움 사용"], (rp.ai, logs))
+                  isinstance(rp.ai, ai.Claude) and logs == ["  [몰] AI 어시스트 사용"], (rp.ai, logs))
             os.remove(path)
             web_runner.attach_ai(rp, "몰")
             check("P4 설정이 없으면 AI 없음", rp.ai is None)
@@ -484,7 +484,7 @@ def settings_part():
             finally:
                 web_runner.ai_rescue.from_settings = keep_fs
             check("P5 AI 준비가 실패해도 재생은 AI 없이 간다 (최종 검토 I-6)",
-                  rp.ai is None and logs and "AI 도움을 쓰지 못함" in logs[0], logs)
+                  rp.ai is None and logs and "AI 어시스트를 쓰지 못함" in logs[0], logs)
         finally:
             web_runner.log = keep_log
     finally:
