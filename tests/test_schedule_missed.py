@@ -225,6 +225,13 @@ set_next(WED.replace(hour=9))
 d.apply_schedule(dict(BASE, slots=[s for s in BASE["slots"] if s["at"] != "09:00"]))
 check("아직 때가 안 된 줄을 지우면 예전처럼 다음 줄로만 (기록 없음)", nxt() == "2026-09-30T13:00:00" and len(rows("changed")) == 2,
       (nxt(), len(rows("changed"))))
+d.apply_schedule(BASE)
+clock[0] = WED.replace(hour=13, minute=2)                        # 수 13:00 시간대를 기다리는 중 오늘(수) 요일을 뺌
+set_next(WED.replace(hour=13))
+d.apply_schedule(dict(BASE, days=[0, 1, 3, 4]))
+got = rows("changed")
+check("기다리는 중 그 요일을 빼면 오늘 띄우지 않고 다음(목 06:00)으로, 그 회차를 기록 (검토 2026-11-18)",
+      nxt() == "2026-10-01T06:00:00" and len(got) == 3 and got[-1]["started_at"] == "2026-09-30T13:00:00", (nxt(), got[-1:]))
 
 print("실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

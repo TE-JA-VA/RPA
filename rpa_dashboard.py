@@ -1537,9 +1537,10 @@ def apply_schedule(payload):
         sch.update(enabled=enabled, days=days, slots=slots, skip_holidays=skip, off_dates=off_dates)
         if changed:
             sch["last_error"] = None
-            # 기다리던 줄이 [적용] 뒤에도 돌면 그대로 둔다 - set_policy 와 같다. 빠졌거나 자동 실행을 껐으면 다음으로 넘기고
-            # 그 회차를 기록에 남긴다 - 예전에는 다시 잡으며 기록도 없이 사라졌다 (#44)
-            if waiting is None or not enabled or slot_of(sch) is None:
+            # 기다리던 회차가 [적용] 뒤에도 그 시각의 예약이면 그대로 둔다 - set_policy 와 같다. 줄이 빠졌거나 그 요일·날을 뺐거나
+            # 자동 실행을 껐으면 다음으로 넘기고 그 회차를 기록에 남긴다 - 예전에는 다시 잡으며 기록도 없이 사라졌다 (#44)
+            when, slot = next_due(sch, due - datetime.timedelta(seconds=1)) if waiting is not None and enabled else (None, None)
+            if waiting is None or when != due or slot["at"] != waiting["at"]:
                 advance(sch, NOW())
                 missed = [(due, waiting)] if waiting is not None else []
         if not st.write_settings(cfg):
