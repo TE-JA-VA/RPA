@@ -93,6 +93,14 @@ def load_settings():
     return data
 
 
+def load_account():
+    """(업체코드, 아이디) - 창 제목으로 설정 계정의 ERPia 를 알아볼 때. 비밀번호는 읽지 않는다 - 비밀번호를 비워 두고 사람이
+    로그인하는 PC 에서도 알아봐야 한다 (검토 2026-11-17). 없으면 빈 글."""
+    creds = load_settings().get(LOGIN_SECTION)
+    creds = creds if isinstance(creds, dict) else {}
+    return str(creds.get("AdminCode") or ""), str(creds.get("ID") or "")
+
+
 def load_credentials():
     """(업체코드, 아이디, 비밀번호). 비밀번호는 여기서만 푼다 (잠긴 값을 못 풀면 RuntimeError)."""
     creds = load_settings().get(LOGIN_SECTION)
@@ -170,10 +178,12 @@ def load_hold_save_only():
         raise RuntimeError(f"{config_name()} 의 {e}") from None
 
 
-def find_login_window():
+def find_login_window(pid=None):
     """로그인 창을 찾는다. 닫힌 뒤에도 숨겨진 채 남아있는 잔재 창을 잘못 고르지 않도록
-    visible한 것을 우선한다."""
+    visible한 것을 우선한다. pid 를 주면 그 ERPia 의 창만 - 다른 계정 ERPia 가 함께 떠 있을 수 있다 (사용자 2026-11-16)."""
     wins = ec.find_erpia_windows_by_title("로그인")
+    if pid is not None:
+        wins = [w for w in wins if win32process.GetWindowThreadProcessId(w.handle)[1] == pid]
     if not wins:
         return None
     visible_wins = [w for w in wins if win32gui.IsWindowVisible(w.handle)]
@@ -183,9 +193,10 @@ def find_login_window():
 BASE_LOGIN_BUTTONS = {"닫기", "최소화", "최대화", "복원"}
 
 
-def find_other_erpia_popups(exclude_handles):
+def find_other_erpia_popups(exclude_handles, only_pid=None):
     """ERPiaMain.exe 소유의, exclude_handles에 없는 별도의 최상위 팝업 창을 찾는다
-    (일부 경고는 별도 창이 아니라 로그인 창 내부 오버레이로 뜨므로, 이건 보조 수단)."""
+    (일부 경고는 별도 창이 아니라 로그인 창 내부 오버레이로 뜨므로, 이건 보조 수단).
+    only_pid 를 주면 그 ERPia 의 창만 - 함께 떠 있는 다른 계정 ERPia 의 메인 창을 팝업으로 보지 않게 (검토 2026-11-16)."""
     results = []
     for w in Desktop(backend="uia").windows():
         if w.handle in exclude_handles:
@@ -193,6 +204,8 @@ def find_other_erpia_popups(exclude_handles):
         try:
             _, pid = win32process.GetWindowThreadProcessId(w.handle)
         except Exception:
+            continue
+        if only_pid is not None and pid != only_pid:
             continue
         if ec.get_process_name(pid) != "ERPiaMain.exe":
             continue
@@ -295,13 +308,17 @@ def click_login_button(login_win, log):
 def wait_for_popup(login_win, seconds=POPUP_POLL_SECONDS):
     """(팝업이 뜬 창, 그 팝업의 버튼 목록) 을 반환한다. 없으면 (None, None).
     로그인 창 내부 오버레이형 팝업과, 별도의 최상위 팝업 창 두 가지 모두 확인한다."""
+    try:        # 처음에 한 번 - 로그인 창이 닫힌 뒤 다시 읽으면 0 이 되어 별도 팝업을 놓친다 (검토 2026-11-17)
+        owner = win32process.GetWindowThreadProcessId(login_win.handle)[1] or None
+    except Exception:
+        owner = None
     elapsed = 0.0
     while elapsed < seconds:
         embedded = find_embedded_popup_buttons(login_win)
         if embedded:
             return login_win, embedded
 
-        others = find_other_erpia_popups({login_win.handle})
+        others = find_other_erpia_popups({login_win.handle}, owner)
         if others:
             return others[0], others[0].descendants(control_type="Button")
 
@@ -320,15 +337,16 @@ def write_error_log(reason_text):
     return path
 
 
-def login_flow(admin_code, user_id, password, log=None):
+def login_flow(admin_code, user_id, password, log=None, pid=None):
     """실제 로그인 자동화 로직. 다른 스크립트(GUI 등)에서 재사용할 수 있도록 함수로 분리함.
+    pid 를 주면 그 ERPia 의 로그인 창에만 넣는다 (다른 계정 ERPia 가 함께 떠 있을 수 있다, 사용자 2026-11-16).
     반환값: {"status": "success"|"already_logged_in"|"no_login_window"|"popup_error"|"max_retries"|"error",
              "message": str, "error_log_path": str|None}
     """
     if log is None:
         log = lambda msg: None
 
-    login_win = find_login_window()
+    login_win = find_login_window(pid)
     if login_win is None:
         log("로그인 창을 찾지 못했습니다 (이미 로그인되어 있을 수 있습니다).")
         return {"status": "already_logged_in", "message": "로그인 창을 찾지 못함 (이미 로그인 상태일 수 있음)", "error_log_path": None}
@@ -344,7 +362,7 @@ def login_flow(admin_code, user_id, password, log=None):
 
     two_fa = 0   # 2차 인증 팝업을 본 횟수 - 한 번도 없으면 끝 사유는 '응답 없음' (BugBuster L3)
     for attempt in range(1, MAX_TWO_FA_RETRIES + 1):
-        login_win = find_login_window()
+        login_win = find_login_window(pid)
         # 로그인 뒤 숨은 채 남는 잔재 창은 로그인 창이 아니다 - 그 창 단추 좌표를 누르면 메인 화면이 눌린다
         if login_win is None or not win32gui.IsWindowVisible(login_win.handle):
             log(f"[시도 {attempt}] 로그인 창이 사라짐 -> 로그인 성공으로 판단")

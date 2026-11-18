@@ -383,6 +383,20 @@ def main():
         check("I: 파일이 안 오면 정해진 시간 뒤 그 단계 실패 (끝없이 기다리지 않는다)", not ok and r.results[-1][0] == 8
               and "3초 동안 파일 다운로드가 시작되지 않았습니다" in r.results[-1][2] and time.time() - t0 < 60, str(r.results[-1]))
 
+        # ---------------- I2: 파일을 기다리는 동안 브라우저 창이 모두 닫힘 (#46) ----------------
+        class Shut:                        # 창이 하나도 없는 브라우저 (Edge 가 죽음·창을 모두 닫음)
+            pages = []
+        r = rec.Replayer(Shut(), bad, {}, os.path.join(OUT, "I2"), "012", today=day, log=print)
+        t0 = time.time()
+        try:
+            r._until_download(None, lambda: None)
+            err = None
+        except rec.NotFound as e2:
+            err = e2
+        check("I2: 기다리는 동안 창이 모두 닫히면 5분(대기 시간은 그대로)을 다 기다리지 않고 '브라우저 창이 닫혀…' 로 끝낸다",
+              err is not None and str(err) == "브라우저 창이 닫혀 파일을 다운로드하지 못했습니다." and time.time() - t0 < 5
+              and r.download_timeout_ms >= 300000, (err, time.time() - t0, r.download_timeout_ms))
+
         # ---------------- J: 미리보기 중 창을 닫음 (Review Focus 4) ----------------
         ev = threading.Event()
         srv.mall = m = fake_mall.Mall(day, False)

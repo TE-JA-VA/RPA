@@ -193,5 +193,45 @@ clock[0] = dt.datetime(2026, 9, 29, 13, 0, 5)          # 평소: 반복 시간�
 sched.tick()
 check("평소 반복 시간대가 열릴 때는 기록하지 않는다 (열려 있는 시간대는 반복이 맡는다)", len(rows("missed")) == before, len(rows("missed")))
 
+print("=== 9. 앞 실행을 기다리던 예약에 [적용] (#44) ===")
+BASE = {"enabled": True, "days": [0, 1, 2, 3, 4],
+        "slots": [{"at": "06:00"}, {"at": "09:00", "run": ["Logistics"]}, {"at": "13:00", "until": "15:00", "rest_min": 10, "run": ["Sales"]}]}
+WED = dt.datetime(2026, 9, 30)
+nxt = lambda: st.read_settings()["schedule"]["next_run_at"]     # noqa: E731
+clock[0] = WED.replace(hour=9, minute=2)                         # 수 09:00 이 때가 됐는데 앞 실행이 돌아 못 띄운 채
+set_next(WED.replace(hour=9))
+d.apply_schedule(dict(BASE, slots=BASE["slots"] + [{"at": "17:00"}]))
+check("기다리던 줄이 [적용] 뒤에도 있으면 그대로 둔다 (다음 실행 09:00, 기록 없음)",
+      nxt() == "2026-09-30T09:00:00" and not rows("changed"), (nxt(), rows("changed")))
+d.apply_schedule(dict(BASE, slots=[s for s in BASE["slots"] if s["at"] != "09:00"] + [{"at": "17:00"}]))
+got = rows("changed")
+check("기다리던 줄을 지우면 다음 줄(13:00)로 넘기고 그 회차를 '설정이 바뀌었습니다' 로 한 줄 기록 (물류관리 줄 - PROCESS)",
+      nxt() == "2026-09-30T13:00:00" and [r["started_at"] for r in got] == ["2026-09-30T09:00:00"]
+      and got[0]["reason"] == "09:00 예약이 실행되지 않았습니다. 기다리는 동안 자동 실행 설정이 바뀌었습니다."
+      and got[0]["program"] == "routine" and got[0]["state"] == "crashed", (nxt(), got))
+d.apply_schedule(BASE)
+clock[0] = WED.replace(hour=6, minute=3)                          # 같은 날 06:00 을 기다리는 중 (같은 시각 기록은 이름이 겹쳐 한 번만 남는다)
+set_next(WED.replace(hour=6))
+d.apply_schedule(dict(BASE, enabled=False))
+got = rows("changed")
+check("기다리는 중 자동 실행을 끄면 다음 실행을 비우고 그 회차를 기록 (전체 줄 - ACTOR)",
+      nxt() is None and [r["started_at"] for r in got] == ["2026-09-30T06:00:00", "2026-09-30T09:00:00"]
+      and got[0]["program"] == "prepare", (nxt(), got))
+d.apply_schedule(BASE)
+check("다시 켤 때는 기다리던 줄이 없어 기록을 더하지 않는다", nxt() == "2026-09-30T09:00:00" and len(rows("changed")) == 2,
+      (nxt(), len(rows("changed"))))
+clock[0] = WED.replace(hour=8)
+set_next(WED.replace(hour=9))
+d.apply_schedule(dict(BASE, slots=[s for s in BASE["slots"] if s["at"] != "09:00"]))
+check("아직 때가 안 된 줄을 지우면 예전처럼 다음 줄로만 (기록 없음)", nxt() == "2026-09-30T13:00:00" and len(rows("changed")) == 2,
+      (nxt(), len(rows("changed"))))
+d.apply_schedule(BASE)
+clock[0] = WED.replace(hour=13, minute=2)                        # 수 13:00 시간대를 기다리는 중 오늘(수) 요일을 뺌
+set_next(WED.replace(hour=13))
+d.apply_schedule(dict(BASE, days=[0, 1, 3, 4]))
+got = rows("changed")
+check("기다리는 중 그 요일을 빼면 오늘 띄우지 않고 다음(목 06:00)으로, 그 회차를 기록 (검토 2026-11-18)",
+      nxt() == "2026-10-01T06:00:00" and len(got) == 3 and got[-1]["started_at"] == "2026-09-30T13:00:00", (nxt(), got[-1:]))
+
 print("실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

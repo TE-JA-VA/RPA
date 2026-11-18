@@ -310,6 +310,28 @@ def erpia_logged_in(pid):
     return any(re.fullmatch(r"\S+ - \S+", t.strip()) for t in titles) and not any("로그인" in t for t in titles)
 
 
+def my_erpia_pids(others=None):
+    """이 PC 설정 계정의 ERPia - 메인 창 제목이 '업체코드 - 아이디' 인 것 (사용자 2026-11-16: 설정 계정의 ERPia 만 조작한다,
+    다른 계정 ERPia 는 사람이 쓰는 것일 수 있다). others(이번 실행을 시작할 때 떠 있던 남의 ERPia) 를 주면 그 밖의 새 ERPia 도
+    우리 것 - 우리가 띄웠거나, 로그인 직후 자체 업데이트로 다시 켜진 것 (7c21fbf). 설정을 못 읽으면 제목으로는 못 찾는다.
+    업체코드·아이디만 읽는다 - 비밀번호가 비었거나 못 푸는 PC(사람이 로그인)도 떠 있는 ERPia 를 알아본다 (검토 2026-11-17)."""
+    try:
+        code, uid = pl.load_account()
+        mine = ec.erpia_pids_titled(f"{code} - {uid}") if code and uid else []
+    except Exception:
+        mine = []
+    if others is None:
+        return mine
+    # 새로 뜬 것이라도 다른 계정으로 로그인돼 있으면 남의 것 - 실행 중에 사람이 띄운 ERPia 일 수 있다 (검토 2026-11-17)
+    return mine + [p for p in ec.erpia_pids() if p not in others and p not in mine and not erpia_logged_in(p)]
+
+
+def _login_visible(pid):
+    """그 ERPia 에 보이는 로그인 창이 있나 (로그인 뒤 숨은 채 남는 잔재 창은 아니다)."""
+    w = pl.find_login_window(pid)
+    return w is not None and win32gui.IsWindowVisible(w.handle)
+
+
 def close_elevated_erpia(pid):
     """관리자 권한 ERPia 를 강제로 끈다. (ok, 사유). 일반 권한으로는 끌 수 없어(접근 거부) 사람이 띄운 실행이면
     관리자 권한 taskkill 을 띄우고(UAC 확인), 무인 실행(RPA_UNATTENDED)은 확인할 사람이 없어 멈춘다."""
@@ -331,26 +353,34 @@ def close_elevated_erpia(pid):
     return True, None
 
 
-def ensure_erpia_running():
-    """ERPia 가 떠 있으면 그 PID. 없으면 띄운다 - 위치는 이때만 찾는다 (떠 있으면 위치가 틀려도 상관없다).
-    떠 있는 ERPia 가 관리자 권한이라 이 RPA 가 다룰 수 없으면: 이미 로그인된 ERPia 일 때만 끄고 새로 띄운다
-    (새 ERPia 는 RPA 와 같은 권한). 로그인 전(로그인 창)이면 끄지 않고 멈춘다 (사용자 2026-10-14)."""
-    try:
-        pid = ec.find_erpia_pid()
-    except RuntimeError:
-        pid = None
+def ensure_erpia_running(ctx=None):
+    """쓸 ERPia 의 PID. 이 PC 설정 계정으로 로그인된 ERPia 가 있으면 그것, 없으면 로그인 전 ERPia(아직 어느 계정도 아님),
+    그것도 없으면 새로 띄운다 - 다른 계정으로 로그인된 ERPia 는 보지도 끄지도 않는다 (사용자 2026-11-16). 위치는 띄울 때만 찾는다.
+    우리 ERPia 가 관리자 권한이라 이 RPA 가 다룰 수 없으면 끄고 새로 띄운다 (새 ERPia 는 RPA 와 같은 권한).
+    로그인 전 ERPia 가 관리자 권한이면 끄지 않고 멈춘다 (사용자 2026-10-14). ctx 를 주면 남의 ERPia 를 ctx.others 에 적는다
+    (도중에 PID 가 바뀌어도 그것들로는 갈아타지 않는다 - acquire_main_window)."""
+    pids = ec.erpia_pids()
+    mine = my_erpia_pids()
+    others = [p for p in pids if p not in mine]
+    # 로그인 전 - 아직 어느 계정도 아니다 (예전처럼 거기에 로그인한다). 다만 ERPia 가 그것 하나뿐일 때만 - 여럿이면 사람이 로그인
+    # 창에 입력하거나 2차 인증 중인 ERPia 일 수 있어 새로 띄운다 (검토 2026-11-17)
+    fresh = [p for p in others if not erpia_logged_in(p)] if len(pids) == 1 else []
+    pid = mine[0] if mine else (fresh[0] if fresh else None)
     if pid is not None and erpia_unreachable(pid):
-        if not erpia_logged_in(pid):
+        if pid not in mine:
             raise RuntimeError(ERPIA_ELEVATED_NOTE + " (로그인 전이어서 종료하지 않습니다. ERPia를 닫은 뒤 다시 실행하여 주십시오)")
-        if len(ec.erpia_pids()) > 1:   # 어느 것을 끌지 모른다 - 다른 사람이 쓰는 ERPia 일 수 있다
-            raise RuntimeError(ERPIA_ELEVATED_NOTE + " (ERPia가 여러 개 실행되어 있어 종료하지 않습니다. 하나만 남긴 뒤 다시 실행하여 주십시오)")
-        ok, why = close_elevated_erpia(pid)
+        ok, why = close_elevated_erpia(pid)       # 제목으로 우리 것임을 안다 - 다른 ERPia 가 함께 떠 있어도 끌 것을 안다
         if not ok:
             raise RuntimeError(why)
         pid = None
+        pids = ec.erpia_pids()
+    if ctx is not None:
+        ctx.others = {p for p in others if p != pid}
     if pid is not None:
-        log(f"ERPiaMain.exe 이미 실행 중 (PID={pid})")
+        log(f"ERPiaMain.exe 이미 실행 중 (PID={pid}, {'이 PC 설정 계정' if pid in mine else '로그인 전'})")
         return pid
+    if others:
+        log(f"다른 계정으로 로그인된 ERPia(PID={others}) 는 그대로 두고 이 PC 설정 계정으로 새로 실행합니다.")
 
     exe_path = load_exe_path()
     log(f"ERPiaMain.exe 미실행 -> 실행: {exe_path}")
@@ -358,16 +388,17 @@ def ensure_erpia_running():
         subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
     except OSError as e:
         raise RuntimeError(f"ERPia 를 실행하지 못했습니다: {exe_path} ({e})") from e
+    if ctx is not None:
+        ctx.launched = True             # 로그인하지 못하면 끈다 (_close_launched)
 
     waited = 0.0
     while waited < PROCESS_WAIT_SECONDS:
-        try:
-            pid = ec.find_erpia_pid()
-            log(f"ERPiaMain.exe 실행 확인됨 (PID={pid})")
-            return pid
-        except RuntimeError:
-            time.sleep(1)
-            waited += 1
+        new = [p for p in ec.erpia_pids() if p not in pids]      # 방금 띄운 것 - 떠 있던 남의 ERPia 가 아니다
+        if new:
+            log(f"ERPiaMain.exe 실행 확인됨 (PID={new[0]})")
+            return new[0]
+        time.sleep(1)
+        waited += 1
     raise RuntimeError("ERPiaMain.exe 프로세스가 뜨는 것을 확인하지 못했습니다.")
 
 
@@ -415,14 +446,15 @@ def _window_note(hwnd):
 PID_SWITCH_MAX = 3   # 메인 창을 찾는 동안 ERPia PID 가 바뀌어 시도 횟수를 다시 세는 최대 횟수
 
 
-def acquire_main_window(pid, tries=12):
+def acquire_main_window(pid, tries=12, others=None):
     """로그인 완료된 메인 창을 잡아 (hwnd, app, win, pid) 를 돌려준다.
 
     로그인 직후(특히 2차 인증 안내 팝업을 거친 경우) ERPia 가 메인 창을 다시 만들어,
     방금 잡은 핸들로 UIA 를 호출하면 COMError(-2146233083, ElementFromHandle) 가 난다.
     그럴 때 창을 다시 찾아 재시도한다. 실제로 UIA 호출이 되는 창만 돌려준다.
     ERPia 가 로그인 직후 스스로 업데이트해 다시 켜지면 PID 가 바뀐다 (triif 2026-11-13 09:01 - 꺼진 PID 의 창만 72초 찾다 실패).
-    그래서 PID 가 끝났으면 떠 있는 ERPia 의 PID 를 다시 찾고, 바뀌면 시도 횟수를 처음부터 다시 센다.
+    그래서 PID 가 끝났으면 우리 ERPia 의 PID 를 다시 찾고(my_erpia_pids - 설정 계정 제목이거나 others 밖의 새 ERPia.
+    처음 보이는 ERPia 로 갈아타면 사람이 쓰는 다른 계정 ERPia 를 조작했다, 검토 2026-11-16), 바뀌면 시도 횟수를 처음부터 다시 센다.
     다시 세기는 PID_SWITCH_MAX 번까지 - ERPia 가 계속 꺼졌다 켜지면 끝없이 돌지 않게 남은 횟수 안에서 끝낸다.
     못 잡으면 (None, None, None, pid) - 마지막으로 본 창과 오류를 기록에 남긴다.
     """
@@ -431,10 +463,7 @@ def acquire_main_window(pid, tries=12):
     while attempt < tries:
         attempt += 1
         if pid is not None and not ec.pid_alive(pid):
-            try:
-                new_pid = ec.find_erpia_pid()
-            except RuntimeError:
-                new_pid = None      # 다시 켜지는 중일 수 있다 - 다음 시도에 다시 본다
+            new_pid = next(iter(my_erpia_pids(others)), None)     # 없으면 다시 켜지는 중일 수 있다 - 다음 시도에 다시 본다
             if new_pid is not None and new_pid != pid:
                 switches += 1
                 log(f"  ERPia 가 다시 켜졌습니다 (PID {pid} -> {new_pid}, ERPia 자체 업데이트 등) - 새 ERPia 의 메인 창을 찾습니다.")
@@ -490,25 +519,32 @@ class RoutineContext:
         self.resume = None       # ERPia 가 꺼져 다시 띄운 뒤 다시 도는 모듈 키 (run_module)
         self.restarts = 0        # 이번 실행에서 꺼진 ERPia 를 다시 띄운 횟수 (ERPIA_RESTARTS 까지)
         self.no_rerun = set()    # ERPia 가 꺼져도 다시 돌지 않는 모듈 키 - '1건' 모드 (다시 돌면 1건이 2건이 된다)
+        self.rerun = set()       # 이번 실행에서 ERPia 가 꺼져 다시 돈 모듈 키 (출력이 물류관리를 다시 돌았는지 본다 - module_output)
+        self.others = None       # 이번 실행을 시작할 때 떠 있던 남의 ERPia PID - 도중에 PID 가 바뀌어도 이리로 갈아타지 않는다
 
     def refresh(self):
         """메인 창을 다시 잡는다. 못 잡으면 False."""
-        self.hwnd, self.app, self.win, self.pid = acquire_main_window(self.pid)
+        self.hwnd, self.app, self.win, self.pid = acquire_main_window(self.pid, others=self.others)
         return self.hwnd is not None
 
     def attach(self):
-        """로그인 모듈 없이 시작할 때: 이미 떠 있는 ERPia 에 붙는다. (ok, 사유)"""
+        """로그인 모듈 없이 시작할 때: 이 PC 설정 계정으로 로그인돼 떠 있는 ERPia 에 붙는다 - 다른 계정 ERPia 에는 붙지 않는다
+        (사용자 2026-11-16). (ok, 사유)"""
         try:
-            self.pid = ec.find_erpia_pid()
+            pids = ec.erpia_pids()
         except Exception as e:
-            return False, ("ERPia가 실행되어 있지 않습니다. 로그인 모듈을 켜거나 ERPia를 먼저 실행하여 주십시오."
-                           f" ({type(e).__name__})")
+            return False, f"ERPia 실행 여부를 확인하지 못했습니다. ({type(e).__name__})"
+        mine = my_erpia_pids()
+        if not mine:
+            return False, ("이 PC 설정 계정으로 로그인된 ERPia가 없습니다. 로그인 모듈을 켜거나 ERPia를 먼저 실행해 로그인하여 주십시오."
+                           + (f" (다른 ERPia {len(pids)}개는 건드리지 않습니다)" if pids else ""))
+        self.pid = mine[0]
+        self.others = {p for p in pids if p != self.pid}
         # 로그인 창이 떠 있으면 메인 창을 1분 넘게 기다렸다 실패하므로 먼저 가려낸다.
         # find_login_window 는 로그인 뒤 숨은 채 남는 잔재 창도 돌려주므로 '보이는' 창만 본다.
         if erpia_unreachable(self.pid):   # 끄는 것은 로그인 모듈만 한다 (ensure_erpia_running) - 여기서는 끄지 않는다
             return False, ERPIA_ELEVATED_NOTE + " (로그인 모듈을 켜면 ERPia를 다시 실행하여 로그인합니다)"
-        login_win = pl.find_login_window()
-        if login_win is not None and win32gui.IsWindowVisible(login_win.handle):
+        if _login_visible(self.pid):
             return False, "ERPia 로그인 창이 열려 있습니다. 로그인 모듈을 켜거나 먼저 로그인하여 주십시오."
         if not self.refresh():
             return False, "메인 화면을 찾지 못했습니다. (로그인 전이거나 팝업이 열려 있을 수 있습니다)"
@@ -525,11 +561,18 @@ class RoutineContext:
         return self.options
 
 
-def wait_login_or_main(pid):
-    """로그인 창을 기다리되, 이미 메인 화면이 떠 있으면(이미 로그인) 그 사실을 알려준다."""
+def wait_login_or_main(pid, ctx=None):
+    """로그인 창을 기다리되, 이미 메인 화면이 떠 있으면(이미 로그인) 그 사실을 알려준다.
+    ctx 를 주면, 기다리는 동안 그 ERPia 가 끝나고 우리 ERPia 가 새로 떴을 때(로그인 전 자체 업데이트 등) 그것으로 갈아타
+    ctx.pid 를 바꾸고 이어 기다린다 - 남의 ERPia(ctx.others)로는 가지 않는다 (검토 2026-11-17)."""
     waited = 0.0
     while waited < LOGIN_WINDOW_WAIT_SECONDS:
-        login_win = pl.find_login_window()
+        if ctx is not None and not ec.pid_alive(pid):
+            new = next(iter(my_erpia_pids(getattr(ctx, "others", None))), None)   # 없으면 다시 켜지는 중 - 다음 차례에 다시 본다
+            if new is not None:
+                log(f"로그인 창을 기다리는 동안 ERPia 가 다시 실행되었습니다 (PID {pid} -> {new}). 새 ERPia 로 이어갑니다.")
+                pid = ctx.pid = new
+        login_win = pl.find_login_window(pid)     # 그 ERPia 의 것만 - 함께 떠 있는 남의 ERPia 로그인 창이 아니다
         # 로그인 뒤 숨은 채 남는 잔재 창은 아니다 (attach 와 같은 규칙) - 그 창 Edit 좌표를 누르면 메인 화면이 눌린다
         if login_win is not None and win32gui.IsWindowVisible(login_win.handle):
             return "login_window", login_win
@@ -560,7 +603,8 @@ def wait_for_active_main_tab(app, hwnd, keyword, timeout=20, interval=1.0, ctx=N
             # 창 핸들 자체가 죽었다 = 창이 다시 만들어졌다. 새 메인 창을 잡아 이어서 기다린다.
             log("  메인 창 핸들이 무효화되어 메인 창을 다시 찾습니다.")
             try:
-                new_hwnd, new_app, _win, new_pid = acquire_main_window(ec.find_erpia_pid())
+                pid0 = ctx.pid if ctx is not None else next(iter(my_erpia_pids()), None)     # 우리 ERPia 만 (검토 2026-11-16)
+                new_hwnd, new_app, _win, new_pid = acquire_main_window(pid0, others=getattr(ctx, "others", None))
             except Exception as e:
                 new_hwnd, new_app = None, None
                 log(f"  메인 창 재확보 실패(계속 기다림): {type(e).__name__}")
@@ -2791,7 +2835,9 @@ def find_open_dialog_filename_edit(dlg_hwnd):
 
 
 class UploadStop(RuntimeError):
-    """엑셀 업로드 중 누를 단추를 모르는 창이 떴다 - 누르지 않고 멈춘다."""
+    """엑셀 업로드 중 누를 단추를 모르는 창이 떴다 - 누르지 않고 멈춘다.
+    uploaded·errors: run_excel_upload_step 안에서 났으면 그때까지 올린 수·오류로 보낸 수 (검토 2026-11-16 - 잃으면 올린 파일이 있는데 '건너뜀')."""
+    uploaded = errors = 0
 
 
 class UploadGridHidden(RuntimeError):
@@ -3325,9 +3371,16 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
     if before:
         log(f"  업로드 전부터 떠 있던 별도 창 {len(before)}개는 건드리지 않습니다.")
 
+    def counted(e):
+        e.uploaded, e.errors = uploaded, errors     # 멈추는 쪽이 그때까지 올린 수를 알게
+        return e
+
     def popups_now(label):
         nonlocal seen_at
-        texts = upload_popups(pid, hwnd, before, label=label)
+        try:
+            texts = upload_popups(pid, hwnd, before, label=label)
+        except UploadStop as e:
+            raise counted(e)
         if texts and pending and seen_at is None:
             seen_at = time.time()
         return texts
@@ -3338,7 +3391,10 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
         nonlocal pending, seen, seen_at, uploaded, failed, errors
         left = max(closed_at, upload_pw["at"]) + upload_result_wait() - time.time()
         if not popups and left > 0:
-            popups = wait_upload_result(pid, hwnd, before, timeout=left)
+            try:
+                popups = wait_upload_result(pid, hwnd, before, timeout=left)
+            except UploadStop as e:
+                raise counted(e)
         at = (seen_at or time.time()) - closed_at
         path, pending, seen, seen_at = pending, None, [], None
         wait_file_unlocked(path)    # 읽는 도중 옮기면 '헤더 개수: 0' - 안 잠겼으면 바로 돌아온다
@@ -5953,20 +6009,40 @@ def run_uia_check():
 # ---------------------------------------------------------------------------
 
 def module_login(ctx):
-    """ERPia 를 띄우고(이미 떠 있으면 그대로) 로그인한 뒤 메인 창을 잡는다."""
+    """ERPia 를 띄우고(이미 떠 있으면 그대로) 로그인한 뒤 메인 창을 잡는다. 못 했으면 이번에 새로 실행한 ERPia 를 정리한다."""
+    result = _login(ctx)
+    if result[0] == "failed":
+        _close_launched(ctx)
+    return result
+
+
+def _close_launched(ctx):
+    """로그인하지 못했으면 이번 실행에서 새로 실행한 로그인 전 ERPia 를 끈다. 다른 계정 ERPia 가 떠 있으면 다음 실행은 로그인 전
+    ERPia 를 쓰지 않고(ensure_erpia_running) 또 실행해, 실패할 때마다 하나씩 쌓였다 (검토 2026-11-17). 혼자 떠 있으면 다음 실행이
+    거기에 로그인하니 그대로 둔다. 남의 ERPia(ctx.others)·로그인된 ERPia 는 끄지 않는다."""
+    pid, others = ctx.pid, getattr(ctx, "others", None)
+    if not (getattr(ctx, "launched", False) and others and pid is not None and pid not in others) or erpia_logged_in(pid):
+        return
+    log(f"로그인하지 못해 이번 실행에서 새로 실행한 ERPia(PID={pid})를 종료합니다. 다른 계정 ERPia 는 그대로 둡니다.")
+    why = ec.terminate_pid(pid)
+    if why:
+        log(f"  종료하지 못했습니다. ({why})")
+
+
+def _login(ctx):
     status.step("login")
     admin_code, user_id, password = pl.load_credentials()
     try:
-        ctx.pid = ensure_erpia_running()
+        ctx.pid = ensure_erpia_running(ctx)
     except RuntimeError as e:   # ERPia 를 못 찾음·관리자 권한 ERPia 를 끄지 않음/못 끔 - 프로그램 오류가 아니라 로그인 실패로 남긴다
         return "failed", str(e)
 
-    state, obj = wait_login_or_main(ctx.pid)
+    state, obj = wait_login_or_main(ctx.pid, ctx)
     if state == "timeout":
         return "failed", "로그인 창도 메인 화면도 나타나지 않았습니다."
     if state == "login_window":
         log(f"로그인 창 발견: handle={obj.handle}")
-        result = pl.login_flow(admin_code, user_id, password, log=log)
+        result = pl.login_flow(admin_code, user_id, password, log=log, pid=ctx.pid)
         if result["status"] not in ("success", "already_logged_in"):
             return "failed", f"로그인 실패: {result.get('status')} - {result.get('message')}"
     else:
@@ -5978,20 +6054,20 @@ def module_login(ctx):
     log("메인 화면 대기 중...")
     if not ctx.refresh():
         # 로그인 직후 ERPia 가 스스로 업데이트해 다시 켜지면서 로그인 창을 다시 띄웠을 수 있다 - 한 번만 다시 로그인한다
-        login_win = pl.find_login_window()
-        if login_win is None or not win32gui.IsWindowVisible(login_win.handle):
+        again = [p for p in my_erpia_pids(ctx.others) if _login_visible(p)]     # 우리 ERPia 의 로그인 창만 (검토 2026-11-16)
+        if not again:
             return "failed", "메인 화면을 안정적으로 잡지 못했습니다."
         log("ERPia 가 다시 켜져 로그인 창이 다시 떴습니다 (ERPia 자체 업데이트 등) - 한 번 더 로그인합니다.")
-        try:
-            ctx.pid = ec.find_erpia_pid()
-        except RuntimeError:
-            pass
-        result = pl.login_flow(admin_code, user_id, password, log=log)
+        ctx.pid = again[0]
+        result = pl.login_flow(admin_code, user_id, password, log=log, pid=ctx.pid)
         if result["status"] not in ("success", "already_logged_in"):
             return "failed", f"로그인 실패: {result.get('status')} - {result.get('message')}"
         if not ctx.refresh():
             return "failed", "메인 화면을 안정적으로 잡지 못했습니다."
     log(f"메인 창 확보: hwnd={ctx.hwnd}")
+    if ctx.pid not in my_erpia_pids():   # 우리가 로그인했는데 제목이 설정과 다르다 - 다음 실행이 이 ERPia 를 못 알아보고 새로 띄운다 (검토 2026-11-17)
+        log(f"경고: ERPia 창 제목('{win32gui.GetWindowText(ctx.hwnd)}')이 설정 계정 '{admin_code} - {user_id}' 와 달라 "
+            "다음 실행에서 이 ERPia 를 알아보지 못할 수 있습니다.")
     return "done", None
 
 
@@ -6053,7 +6129,7 @@ def excel_upload_together(ctx, grid):
                 late += between("업로드 사이 ")
                 try:
                     u, e = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, grid, skip=tried)
-                except UploadGridHidden as h:     # 멈추기 전에 그때까지 올린 수·오류 수를 센다 (BugBuster M18)
+                except (UploadGridHidden, UploadStop) as h:     # 멈추기 전에 그때까지 올린 수·오류 수를 센다 (BugBuster M18, UploadStop 은 검토 2026-11-16)
                     tried |= new
                     uploaded, errors = uploaded + h.uploaded, errors + h.errors
                     raise
@@ -6133,8 +6209,10 @@ def module_excel(ctx):
             try:
                 uploaded, errors = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, top_left)
             except Exception as e:
-                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 건너뜁니다: {e}")
+                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 중단합니다: {e}")
                 status.keep_record()      # 반복 회차라도 기록에 남긴다 - 못 올린 파일은 폴더에 그대로 (R2, 2026-11-03)
+                if getattr(e, "uploaded", 0):   # 멈추기 전에 올린 파일이 있다 - 완료 폴더로 갔다 (UploadStop·UploadGridHidden, 검토 2026-11-16)
+                    return "done", f"엑셀 {e.uploaded}개 업로드 뒤 오류로 중단: {e}"
                 return "skipped", f"엑셀업로드 오류로 건너뜀: {e}"
         note = f", 오류 폴더로 {errors}개 (확인할 것)" if errors else ""
         if uploaded:
@@ -6356,21 +6434,55 @@ def module_logistics(ctx):
     return "done", None
 
 
+def query_print_targets(ctx):
+    """출력 전 물류 관리 상단 [조회(F)] → 배송장 줄 수. 끝내지 못하거나 팝업이 뜨면 None (누르지 않고).
+    평소에는 누르지 않는다 (머리 주석 '조회(F)' - 하단 '개별 배송(B)' 이 꺼진다). 물류관리를 마친 뒤에만 부른다 (module_output)."""
+    try:
+        win = ctx.window()
+        top = min(get_onscreen_tables(win), key=lambda t: t.rectangle().top)
+        base = grid_overlay_count(ctx.hwnd, top)
+        if not click_toolbar_button(win, ctx.hwnd, "조회(F)"):
+            return None
+        time.sleep(2)
+        if not wait_grid_spinner_gone(ctx.hwnd, top, base, label="상단", max_wait=QUERY_DONE_MAX_WAIT_SECONDS):
+            return None
+        if find_popup_buttons(ctx.window()):        # 조회가 띄운 팝업은 누르지 않고 멈춘다
+            log("  출력 전 조회 뒤 팝업이 떠 있어 출력하지 않습니다.")
+            return None
+        top = min(get_onscreen_tables(ctx.window()), key=lambda t: t.rectangle().top)
+        return len(top.descendants(control_type="DataItem"))
+    except Exception as e:
+        log(f"  출력 전 조회 실패: {type(e).__name__}: {e}")
+        return None
+
+
 def module_output(ctx):
     """운송장 출력(자동) 또는 엑셀파일 생성(수동).
 
     - 물류관리 모듈이 이번 실행에서 'done' 이면 예전 흐름 그대로 (팝업 정책 continue).
     - 물류관리가 이번 실행에서 돌았는데 done 이 아니면(대상 없음/실패) 출력할 배송장이 없으니
-      아무것도 누르지 않고 '대상 없음'.
+      아무것도 누르지 않고 '대상 없음'. 다만 ERPia 가 꺼져 물류관리를 다시 돌았으면 꺼지기 전에 저장한 배송장이 있을 수
+      있어 상단을 조회해(query_print_targets) 있으면 출력한다 - [아니오] 정책 (사용자 2026-11-16).
     - 물류관리를 설정에서 끈 채 출력만 돌리면: 화면을 스스로 '물류 관리' 로 옮기고 자동/수동을
       설정값대로 맞춘 뒤(출력은 화면 콤보의 현재값을 따른다), '이미 출력한 배송장' 팝업에서는
       아니오를 누르고 끝낸다 (중복 인쇄 금지).
     """
     status.step("output")
     logistics_result = ctx.results.get("logistics")
+    queried = False                     # 출력 전에 상단을 조회했나 - 그 조회에는 앞서 출력한 배송장이 섞일 수 있다
     if logistics_result is not None and logistics_result != "done":
-        return "no_target", (f"물류관리 모듈이 '{MODULE_RESULT_LABEL.get(logistics_result, logistics_result)}' "
-                             f"로 끝나 출력할 배송장이 없습니다.")
+        if "logistics" not in ctx.rerun:
+            return "no_target", (f"물류관리 모듈이 '{MODULE_RESULT_LABEL.get(logistics_result, logistics_result)}' "
+                                 f"로 끝나 출력할 배송장이 없습니다.")
+        # 물류관리가 ERPia 가 꺼져 다시 돌았다 - 꺼지기 전에 저장한 배송장은 하단에서 빠져 다시 돈 물류관리가 '대상 없음' 이다.
+        # 출력 전에 상단을 조회해 남은 배송장이 있으면 출력한다 ([아니오] 정책 - 이미 출력한 배송장은 다시 찍지 않는다, 사용자 2026-11-16)
+        n = query_print_targets(ctx)
+        if n is None:
+            return "failed", "물류관리를 다시 실행한 뒤 출력 전 배송장 조회를 끝내지 못해 출력하지 않았습니다. 화면에서 확인하여 주십시오."
+        if not n:
+            return "no_target", "물류관리를 다시 실행한 뒤 출력 전에 조회해 보니 출력할 배송장이 없습니다."
+        log(f"  물류관리를 다시 실행한 뒤 조회한 배송장 {n}줄 - 출력합니다 (이미 출력한 배송장이면 [아니오]).")
+        queried = True
     # 출력 도중 ERPia 가 꺼져 다시 도는 것이면 새 ERPia 는 물류 관리 화면이 아니고 이미 출력했을 수 있다 - 출력 단독처럼
     again = ctx.resume == "output"
 
@@ -6391,6 +6503,9 @@ def module_output(ctx):
     result = run_print_step(ctx.app, ctx.pid, ctx.hwnd, options=ctx.logistic_options(),
                             already_printed=policy)
     if result == "already_printed":
+        if queried:     # 조회에 앞선 실행이 출력한 배송장이 섞이면 [아니오] 로 이번에 저장한 배송장도 출력되지 않는다 (검토 2026-11-17)
+            return "failed", ("출력 전 조회에 이미 출력한 배송장이 섞여 있어 출력하지 않았습니다. 이번에 저장한 배송장도 출력되지 "
+                              "않았을 수 있습니다. 화면에서 확인하여 주십시오.")
         return "no_target", "이미 출력한 배송장이라 다시 출력하지 않았습니다."
     if result == "stuck":
         return "failed", "출력 팝업을 처리하지 못해 메인 창에 남겨두었습니다. 팝업을 닫은 뒤 다시 실행하세요."
@@ -6433,7 +6548,11 @@ def run_modules(selected, modules=None, funcs=None, section=None):
     modules = routine_modules() if modules is None else modules
     funcs = MODULE_FUNCS if funcs is None else funcs
     section = section or pl.ROUTINE_SECTION
-    on = lambda cfg: selected.get(cfg, cfg not in ROUTINE_OFF_BY_DEFAULT)   # noqa: E731 - 칸이 없으면 켬, 운송장번호 전송만 끔
+    try:        # 관리자가 끈 모듈(업체 정책 off) - 예약 줄은 띄울 때 빼지만 [실행] 단추·'전체' 줄은 설정 파일만 봐서 돌았다 (검토 2026-11-16)
+        admin_off = set((status.read_settings()["schedule"].get("policy") or {}).get("off") or [])
+    except Exception:
+        admin_off = set()
+    on = lambda cfg: cfg not in admin_off and selected.get(cfg, cfg not in ROUTINE_OFF_BY_DEFAULT)   # noqa: E731 - 칸이 없으면 켬, 운송장번호 전송만 끔
     if not any(on(cfg) for _, cfg, _, _, _ in modules):
         for key, _cfg, _label, steps, _bit in modules:
             status.module_off(key, status.OFF_NOTE)
@@ -6446,7 +6565,8 @@ def run_modules(selected, modules=None, funcs=None, section=None):
     for key, cfg_key, label, steps, _bit in modules:
         if not on(cfg_key):
             note = status.PICK_NOTE if picked else status.OFF_NOTE
-            log(f"\n=== [{label}] 이번 실행에서 고르지 않아 건너뜁니다 ===" if picked
+            log(f"\n=== [{label}] 관리자가 사용하지 않도록 설정한 모듈이라 건너뜁니다 (업체 정책) ===" if cfg_key in admin_off
+                else f"\n=== [{label}] 이번 실행에서 고르지 않아 건너뜁니다 ===" if picked
                 else f"\n=== [{label}] 설정에서 꺼져 있어 건너뜁니다 ({cfg_key}=N) ===")
             status.module_off(key, note)
             for s in steps:
@@ -6499,9 +6619,8 @@ def run_module(ctx, key, label, funcs):
                 return "failed", "ERPia 가 꺼졌습니다 - '1건' 모드라 다시 돌지 않고 멈춥니다 (몇 건 처리됐는지 확인할 것)"
             if ctx.restarts >= ERPIA_RESTARTS:
                 return "failed", f"ERPia 가 실행 도중 {ERPIA_RESTARTS + 1}번 꺼져 멈춥니다"
-            others = ec.erpia_pids()
-            if others:   # 사람이 띄운 ERPia 일 수 있다 - 그것을 쓰거나 끄지 않는다
-                return "failed", f"ERPia 가 꺼진 뒤 다른 ERPia(PID={others}) 가 떠 있어 다시 띄우지 않고 멈춥니다"
+            # 다른 ERPia 가 떠 있어도 쓰거나 끄지 않고 우리 것을 새로 띄운다 - module_login(ensure_erpia_running) 이 설정 계정의 ERPia 만 고른다
+            # (사용자 2026-11-16. 예전에는 사람이 띄운 ERPia 일 수 있어 멈췄다)
             ctx.restarts += 1
             status.fail_step(f"ERPia 가 꺼짐 - 다시 띄워 이어갑니다 ({ctx.restarts}/{ERPIA_RESTARTS})")
             log(f"=== ERPia 를 다시 띄워 [{label}] 를 이어갑니다 ({ctx.restarts}/{ERPIA_RESTARTS}) ===")
@@ -6513,6 +6632,7 @@ def run_module(ctx, key, label, funcs):
             if done != "done":
                 return "failed", f"꺼진 ERPia 를 다시 띄우지 못했습니다: {why}"
             ctx.resume = key
+            ctx.rerun.add(key)
     finally:
         ctx.resume = None
 

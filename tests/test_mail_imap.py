@@ -179,7 +179,8 @@ try:
     check("실패한 첨부는 까닭과 함께", r1["mails"] == 4 and any(n == "bad.xlsx" for n, _ in r1["skipped"]), r1)
     m1 = json.load(open(mem, encoding="utf-8"))
     keys6 = re.search(rb"Message-ID: (<[^>]+>)", fake.boxes["INBOX"][u6 - 1]["raw"])[1].decode()
-    check("첨부 하나라도 실패한 메일은 기억 안 함", len(m1) == 4 and keys6 not in m1, m1)
+    check("첨부 하나라도 실패한 메일은 기억 안 함 - 끝까지 못 간 첫 실행은 이번 기간 첫날을 적어 둔다 (검토 2026-11-16)",
+          len(m1) == 5 and keys6 not in m1 and m1.get(mi.LAST_RUN) == "2026-10-22", m1)
     check("90일 지난 기억은 지움", "old@x" not in m1 and "recent@x" in m1, m1)
     check("읽음 표시 끔: 서버 플래그 그대로", fake.flags() == flags0, fake.flags())
     cmds = fake.commands[n_cmd:]
@@ -226,6 +227,12 @@ try:
     check("암호화 없는 연결은 거절", "암호화" in why({**S, "security": "plain"}))
     bad = why({**S, "password": "wrong-pw"})
     check("로그인 거부", bad == mi.LOGIN_FAIL and "wrong-pw" not in bad, bad)
+    mem_bad = os.path.join(work, "bad_login.json")
+    raises(mi.fetch, {**S, "password": "wrong-pw"}, {"subject_prefix": ">>>"}, os.path.join(work, "bad_login"), "P", mem_bad,
+           log=lines.append, now=NOW)
+    check("로그인에서 끊긴 첫 실행은 기준일을 적지 않는다 - 목록을 읽은 뒤에만 (검토 2026-11-17)",
+          not os.path.exists(mem_bad) or mi.LAST_RUN not in json.load(open(mem_bad, encoding="utf-8")),
+          open(mem_bad, encoding="utf-8").read() if os.path.exists(mem_bad) else "")
     check("없는 메일함", why(S, {"subject_prefix": ">>>", "mailbox": "없는함"}) == "메일함 '없는함'이(가) 없습니다.")
     check("STARTTLS 로도", [i["uid"] for i in mi.find(fake.server("starttls"), {"subject_prefix": ">>>", "max": 1}, now=NOW)] == [u1])
     fake.boxes["RO"] = []
@@ -253,6 +260,12 @@ try:
     check("다음 실행은 마지막 실행 날(어제)부터 - 어제 저녁 메일도, 오래된 것부터 저장 (I8·I7)", names3 == ["(P9)가.xlsx", "(P9)다.xlsx"], names3)
     check("파일 시각 = 메일 시각 (I7)", abs(os.path.getmtime(f3["saved"][0]) - Y22.timestamp()) < 2
           and os.path.getmtime(f3["saved"][0]) < os.path.getmtime(f3["saved"][1]))
+    mb4 = os.path.join(work, "b2c.json")        # 기억이 없는 첫 실행이 한 번에 최대를 넘겨 끝까지 못 갔다
+    g1 = mi.fetch(S, dict(rb, max=1), os.path.join(work, "b2c"), "P9", mb4, log=lines.append, now=NOW)
+    g2 = mi.fetch(S, rb, os.path.join(work, "b2c"), "P9", mb4, log=lines.append, now=NOW + dt.timedelta(days=1))
+    check("첫 실행이 끝까지 못 가도 다음 날 실행이 남은 메일을 받는다 - 기간 밖으로 거르지 않는다 (검토 2026-11-16)",
+          len(g1["saved"]) == 1 and sorted(os.path.basename(p) for p in g1["saved"] + g2["saved"]) == ["(P9)나.xlsx", "(P9)다.xlsx"],
+          (g1["saved"], g2["saved"]))
 
     fake.add(mail("a <a@b.kr>", ">>> 큰 메일", [("큰.xlsx", b"z" * 2000)]), TODAY + dt.timedelta(hours=1), box="B3")
     fake.add(mail("a <a@b.kr>", ">>> 첨부 없음", []), TODAY + dt.timedelta(hours=2), box="B3")

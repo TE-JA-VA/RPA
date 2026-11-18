@@ -63,6 +63,24 @@ def erpia_pids(process_name="ERPiaMain.exe"):
     return [int(p.ProcessId) for p in _erpia_procs(process_name)]
 
 
+def erpia_pids_titled(title, process_name="ERPiaMain.exe"):
+    """최상위 창 제목이 title 과 같은 ERPia 프로세스 번호 (공백·대소문자 무시). 로그인된 ERPia 의 메인 창 제목은
+    '업체코드 - 아이디' 다 (10-14·11-16 실측). win32 라 관리자 권한 ERPia 의 제목도 읽힌다. 못 읽으면 빈 목록."""
+    want, found = title.strip().casefold(), []
+    try:
+        pids = set(erpia_pids(process_name))
+
+        def each(h, _):
+            pid = win32process.GetWindowThreadProcessId(h)[1]
+            if pid in pids and pid not in found and win32gui.GetWindowText(h).strip().casefold() == want:
+                found.append(pid)
+            return True
+        win32gui.EnumWindows(each, None)
+    except Exception:
+        return []
+    return found
+
+
 def _kernel32():
     """오류 번호를 확실히 읽는 kernel32 (ctypes.windll + GetLastError 는 그 사이 다른 호출이 번호를 덮을 수 있다).
     손잡이는 포인터 크기로 받는다."""

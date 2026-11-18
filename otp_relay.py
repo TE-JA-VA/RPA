@@ -15,6 +15,7 @@ import time
 
 OPEN_MS = 120000          # 요청이 열려 있는 시간 (서버 규칙과 같은 값)
 POLL = 2.0                # 번호를 보러 가는 간격 (초)
+DENIED = "인증번호 요청이 거절되었습니다. 허용 발신번호가 아니거나 업체 사용이 정지되었을 수 있습니다."
 _AGENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "firebase", "agent")
 
 
@@ -71,6 +72,7 @@ class PhoneRelay:
         지난번에 남은 번호는 요청을 차지한 뒤에만 지운다 - 먼저 지우면 남의 PC 가 받아 둔 번호가 사라진다 (BugBuster M7)."""
         req_id = "req_" + secrets.token_hex(8)
         end = time.time() + OPEN_MS / 1000 + 10
+        retried = False                       # 자리가 비었는데 거절된 뒤 한 번 더 해 봤나
         while True:
             try:
                 self.client.put(self.req_path, {"req_id": req_id, "site": self.site, "senders": self.senders,
@@ -79,17 +81,28 @@ class PhoneRelay:
             except Exception as e:
                 if getattr(e, "status", None) not in (401, 403) or time.time() >= end:
                     raise
+                if self._free():              # 남의 요청이 없는데 거절 - 막 비었을 수 있어 한 번만 다시. 또 거절이면 규칙 거절
+                    if retried:               # (허용 발신번호 밖·업체 정지) - 남의 요청을 기다리듯 2분을 쓰지 않는다 (검토 2026-11-16)
+                        raise RuntimeError(DENIED) from e
+                    retried = True
+                    tick(POLL)                # 막 비운 자리가 서버 규칙에 반영될 틈을 두고 다시 (검토 2026-11-17)
+                    continue
+            retried = False
             while time.time() < end:          # 남의 요청 - 비거나 만료될 때까지 읽어 보며 기다린다 (거부된 put 을 되풀이하면 매번 토큰 갱신)
                 tick(POLL)
-                try:
-                    cur = self.client.get(self.req_path)
-                except Exception:
-                    continue
-                now_ms = getattr(self.client, "server_now", time.time)() * 1000
-                if not isinstance(cur, dict) or cur.get("pcId") == self.pc_id or (cur.get("created_at") or 0) + OPEN_MS < now_ms:
+                if self._free():
                     break
         self._quiet_delete(self.code_path)
         return req_id
+
+    def _free(self):
+        """요청 자리가 비었나 - 없음·내 요청·만료. 못 읽으면 False (남의 요청이 있다고 보고 기다린다)."""
+        try:
+            cur = self.client.get(self.req_path)
+        except Exception:
+            return False
+        now_ms = getattr(self.client, "server_now", time.time)() * 1000
+        return not isinstance(cur, dict) or cur.get("pcId") == self.pc_id or (cur.get("created_at") or 0) + OPEN_MS < now_ms
 
     def wait(self, req_id, seconds, tick, field=None):
         """req_id 가 맞는 번호가 오면 그 번호, seconds 안에 안 오면 None. tick(초) 로 쉰다 (재생기의 [■ 중단] 을 본다)."""

@@ -1192,6 +1192,23 @@ with tempfile.TemporaryDirectory() as d:
             except RuntimeError as e:
                 check("이미 최신" in str(e), f"멀쩡한 PC 는 같은 버전을 거절 ({e})")
             upd.write_state({"state": "done"})
+            # 되돌리기는 보관본 파일만 바꾼다 - 바뀐·빠진 파일이 있으면 먼저 같은 버전으로 고치라고 거절 (검토 2026-11-16)
+            real_back, upd.backup_version = upd.backup_version, lambda: "2026.10.07-3"
+            try:
+                for s in ("mixed", "tampered"):
+                    st.check_install = lambda root=None, s=s: {"version": "2026.10.07-4", "state": s}
+                    started.clear()
+                    try:
+                        acts["rollback"](None); check(False, f"{s} 인데 되돌리기")
+                    except RuntimeError as e:
+                        check("변경되었거나 누락된 파일" in str(e) and not started, f"{s}: 되돌리지 않고 같은 버전으로 고치라고 ({e})")
+                st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "ok"}
+                started.clear()
+                acts["rollback"](None)
+                check(started == [("2026.10.07-3", "rollback")], f"멀쩡한 PC 는 되돌리기 예약 ({started})")
+            finally:
+                upd.backup_version = real_back
+            upd.write_state({"state": "done"})
         finally:
             st.check_install = orig
     finally:

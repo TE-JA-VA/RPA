@@ -1030,7 +1030,8 @@ def stop_reason(status):
         return f"{(status.get('finished_at') or '')[11:16]} {STOPPED_TEXT}. 반복 실행을 중단하였습니다.".strip()
     word = "오류" if status.get("state") == "crashed" else "실패"
     why = status.get("reason") or bad.get("reason") or "까닭 없음"
-    return f"{(status.get('finished_at') or '')[11:16]} {bad.get('label') or 'PROCESS'} {word}로 반복 실행을 중단하였습니다: {why}".strip()
+    who = bad.get("label") or ("ACTOR" if status.get("program") == "prepare" else "PROCESS")    # 사이트 수집만 고른 반복 회차는 프리페어 - 모듈 목록이 없다 (검토 2026-11-16)
+    return f"{(status.get('finished_at') or '')[11:16]} {who} {word}로 반복 실행을 중단하였습니다: {why}".strip()
 
 
 def repeat_state(sch, win, now):
@@ -1432,10 +1433,11 @@ class Scheduler(threading.Thread):
                 return
             rep["pending"] = None
             stamp = now.isoformat(timespec="seconds")
-            if not fresh:                        # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
-                rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차를 시작하지 못했습니다."}
-            elif not launched_in(rep, since):
+            if not launched_in(rep, since):     # 먼저 본다 - program 을 지금 시간대로 골랐으니 앞 시간대 회차는 다른 상태 파일을 읽어 fresh 가 틀린다
                 pass                             # 앞 시간대에 띄운 회차가 붙은 시간대가 열린 뒤 끝났다 - 이 시간대 회차가 아니니 세지도 멈추지도 않는다
+                #                                  (사이트 수집만 ↔ PROCESS 처럼 종류가 다른 붙은 시간대에서 뒤 시간대가 '시작하지 못함' 으로 멈췄다, 검토 2026-11-16)
+            elif not fresh:                      # 띄운 회차가 기록도 못 남기고 끝났다 ('시작하지 못함' 이력은 launch_state 가 남긴다)
+                rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차를 시작하지 못했습니다."}
             elif v.get("trigger") != "repeat":
                 pass                             # 다른 실행(사람이 누른 단추 등)이 상태를 덮었다 - 회차 결과를 모르니 세지도 멈추지도 않는다
             elif v.get("state") == "success" or locked_round(v):
@@ -1522,6 +1524,7 @@ def apply_schedule(payload):
         slots = normalize_slots(raw)
     else:
         slots = [{"at": t} for t in normalize_times(raw)]
+    missed = []
     with _settings_lock:
         cfg = st.read_settings()
         sch = cfg["schedule"]
@@ -1529,13 +1532,21 @@ def apply_schedule(payload):
         off_dates = (sch.get("off_dates") or []) if off_dates is None else off_dates
         changed = (bool(sch.get("enabled")) != enabled or sch.get("days") != days or sch.get("slots") != slots
                    or sch.get("skip_holidays", True) != skip or (sch.get("off_dates") or []) != off_dates)
+        due = st.parse_iso(sch.get("next_run_at"))
+        waiting = slot_of(sch) if sch.get("enabled") and due is not None and due <= NOW() else None    # 때가 됐는데 아직 못 띄운 줄 (앞 실행 등)
         sch.pop("interval_min", None)   # 예전 '실행 주기' 방식의 값
         sch.update(enabled=enabled, days=days, slots=slots, skip_holidays=skip, off_dates=off_dates)
         if changed:
             sch["last_error"] = None
-            advance(sch, NOW())
+            # 기다리던 회차가 [적용] 뒤에도 그 시각의 예약이면 그대로 둔다 - set_policy 와 같다. 줄이 빠졌거나 그 요일·날을 뺐거나
+            # 자동 실행을 껐으면 다음으로 넘기고 그 회차를 기록에 남긴다 - 예전에는 다시 잡으며 기록도 없이 사라졌다 (#44)
+            when, slot = next_due(sch, due - datetime.timedelta(seconds=1)) if waiting is not None and enabled else (None, None)
+            if waiting is None or when != due or slot["at"] != waiting["at"]:
+                advance(sch, NOW())
+                missed = [(due, waiting)] if waiting is not None else []
         if not st.write_settings(cfg):
             raise RuntimeError("설정 파일을 저장하지 못했습니다.")
+    record_missed(sch, missed, lambda t, s: f"{due_text(t, s)} 실행되지 않았습니다. 기다리는 동안 자동 실행 설정이 바뀌었습니다.", "changed")
     return changed
 
 

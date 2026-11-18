@@ -314,6 +314,25 @@ check(rep().get("stopped") is None and rep().get("runs") == 0 and rep().get("pen
 CLOCK[0] = at("12:03", day=8); sched.tick()
 check(len(d.LAUNCHED) == n + 2, "쉬는 시간 뒤 뒤 시간대 첫 회차")
 
+print("\n=== 17-2. 붙은 시간대의 종류가 다르면 (사이트 수집만 → PROCESS) - 뒤 시간대가 멈추지 않는다 (검토 2026-11-16) ===")
+ended(); put_status("routine", "success", at("12:03", 8, 5), at("12:05", 8), [LOGIN, DONE])
+d.apply_schedule({"enabled": True, "days": ALL, "slots": [{"at": "14:00", "until": "15:00", "rest_min": 2, "run": ["Prepare"]},
+                                                           {"at": "15:00", "until": "16:00", "rest_min": 2, "run": ["Logistics"]}]})
+CLOCK[0] = at("14:58", day=8); n = len(d.LAUNCHED); sched.tick()
+check(d.LAUNCHED[n:] == ["prepare:auto"] and rep().get("at") == "14:00", f"14:58 앞 시간대(사이트 수집만) 회차 ({d.LAUNCHED[n:]})")
+put_status("prepare", "running", at("14:58", 8, 5))
+CLOCK[0] = at("15:00", day=8, sec=30); sched.tick()
+put_status("prepare", "success", at("14:58", 8, 5), at("15:01", 8), [{"key": "site1", "label": "쇼핑몰1", "state": "done"}]); ended()
+CLOCK[0] = at("15:02", day=8, sec=40); sched.tick()      # 프리페어가 막 끝난 유예(90초)는 지났고 쉬는 시간(15:03)은 아직
+check(rep().get("at") == "15:00" and rep().get("stopped") is None and rep().get("pending") is None and rep().get("runs") == 0,
+      f"앞 시간대 회차가 끝나도 뒤 시간대(PROCESS)를 '시작하지 못했습니다' 로 멈추지 않고 세지도 않는다 ({rep()})")
+CLOCK[0] = at("15:03", day=8); sched.tick()
+check(d.LAUNCHED[n + 1:] == ["routine:auto"], f"쉬는 시간 뒤 뒤 시간대 첫 회차는 PROCESS ({d.LAUNCHED[n:]})")
+put_status("routine", "success", at("15:03", 8, 5), at("15:04", 8), [LOGIN, DONE]); ended()     # 뒤 절과 섞이지 않게 정리
+c = st.read_settings(); c["schedule"]["repeat"] = None; st.write_settings(c)
+why = d.stop_reason({"program": "prepare", "state": "failed", "modules": [], "reason": "쇼핑몰1: 로그인 실패", "finished_at": "2026-09-22T15:01:00"})
+check(why.startswith("15:01 ACTOR 실패로") and "PROCESS" not in why, f"사이트 수집만 반복이 멈춘 까닭은 ACTOR 로 적는다 (검토 2026-11-16, {why})")
+
 print("\n=== 사이트 수집만 반복 (사용자 2026-10-08) ===")
 d.apply_schedule({"enabled": True, "days": ALL, "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5, "run": ["Prepare"]}]})
 ended(); put_status("routine", "success", at("12:03", 8, 5), at("12:05", 8), [LOGIN, DONE])   # 앞 절의 회차를 끝낸다

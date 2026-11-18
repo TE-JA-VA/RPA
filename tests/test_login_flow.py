@@ -31,7 +31,7 @@ def run(windows, visible, popup=None, popup_text="", pids=None):
     saved = {n: getattr(pl, n) for n in ("find_login_window", "fill_login_fields", "click_login_button", "wait_for_popup",
                                           "collect_text", "write_error_log")}
     saved_mods = (pl.win32gui, pl.win32process, pl.ec, pl.time)
-    pl.find_login_window = lambda: seq.pop(0) if seq else None
+    pl.find_login_window = lambda pid=None: seq.pop(0) if seq else None
     pl.fill_login_fields = lambda *a, **k: None
     pl.click_login_button = lambda *a, **k: calls.__setitem__("click", calls["click"] + 1)
     pl.wait_for_popup = lambda w, *a, **k: (popup, [])

@@ -438,6 +438,24 @@ s = up.read_state()
 check(s["state"] == "rolled_back" and read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None,
       f"옛 판 파일 그대로 돌아왔다 ({s.get('reason')}, a={read(PROG, 'a.py')} b={read(PROG, 'b.py')})")
 
+print("\n=== 16. 같은 판 다시 받기는 직전 판 보관본을 덮지 않는다 (검토 2026-11-16) ===")
+setup_a_and_staged_b()
+uh.main(FakeOps())                            # A → B 성공 - 보관본 = A
+put(PROG, "a.py", "바뀐 A2")                   # 누가 B 의 a.py 를 바꿨다
+shutil.rmtree(up.path("staging"), ignore_errors=True)
+stg = up.path("staging")
+put(os.path.join(stg, "files"), "a.py", B["a.py"])
+with open(os.path.join(stg, "manifest.json"), "w", encoding="utf-8") as f:
+    json.dump(man("2026.10.07-2", B), f)
+with open(os.path.join(stg, "plan.json"), "w", encoding="utf-8") as f:
+    json.dump({"version": "2026.10.07-2", "from": "2026.10.07-2", "fetch": ["a.py"], "remove": [], "new": []}, f)
+up.write_state({"state": "ready", "mode": "update", "target": "2026.10.07-2", "from": "2026.10.07-2",
+                "program_dir": PROG, "staging": stg, "at": up.now_text()})
+check(uh.main(FakeOps()) == 0 and up.read_state()["state"] == "done" and read(PROG, "a.py") == "A2", "같은 판으로 바뀐 파일을 되돌렸다")
+check(up.backup_version() == "2026.10.07-1" and read(up.path("backup", "files"), "a.py") == "A1"
+      and not os.path.exists(up.path("backup_new")),
+      f"보관본은 직전 판(A) 그대로 - [되돌리기]가 A 로 간다 ({up.backup_version()}, {read(up.path('backup', 'files'), 'a.py')})")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

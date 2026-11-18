@@ -297,12 +297,8 @@ def run_main(rr):
                       record=os.environ.get("RPA_RUN_TRIGGER") != "repeat")
         log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
         return
-    pids = rr.ec.erpia_pids()
-    if len(pids) > 1:   # 어느 ERPia 에 붙을지 몰라 다른 세션을 조작할 수 있다 (10-07: 다른 계정 ERPia 가 함께 떠 있었다)
-        log(f"ERPia가 {len(pids)}개 열려 있어 실행하지 않았습니다. ({pids})")
-        status.finish("stopped", f"ERPia가 {len(pids)}개 열려 있어 실행하지 않았습니다. (하나만 남기거나 모두 닫은 뒤 다시 실행하여 주십시오)")
-        log(f"=== 웰라이프 실행 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
-        return
+    # ERPia 가 여럿이어도 멈추지 않는다 - 로그인·붙기가 이 PC 설정 계정('업체코드 - 아이디' 제목)의 ERPia 만 고르고
+    # 다른 계정 ERPia 는 건드리지 않는다 (사용자 2026-11-16, run_routine.my_erpia_pids. 10-07 에는 어느 것에 붙을지 몰라 멈췄다)
 
     def once(key, f):   # '1건' 모드가 걸린 모듈은 ERPia 가 꺼져도 다시 돌지 않는다 (run_routine.run_module - 1건이 2건이 된다)
         mod = next(m for m in MODULES if m[0] == key)

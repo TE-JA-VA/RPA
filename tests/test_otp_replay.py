@@ -224,6 +224,25 @@ check("번호 기다리는 중 망 오류·5xx 는 다음 폴링에 다시 (M8)"
 fc.fail_get = [Denied(401)]
 check("권한 거부(401)면 None - 새 요청으로 (M8)", relay.wait(rid, 30, lambda s: None) is None)
 
+
+class RuleDenied(FakeClient):
+    """규칙이 요청 자체를 거절 - 허용 발신번호 밖·업체 정지 (자리는 비어 있다)."""
+
+    def put(self, p, v):
+        self.log.append("put-denied")
+        raise Denied(401)
+
+
+fc = RuleDenied()
+ticks.clear()
+try:
+    otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰").open(tick=lambda s: ticks.append(s))
+    got = None
+except RuntimeError as e:
+    got = str(e)
+check("자리가 비었는데도 거절되면 한 번만 잠깐(POLL) 쉬고 다시, 또 거절이면 2분 기다리지 않고 까닭과 함께 중단 (검토 2026-11-16·17)",
+      got == otp_relay.DENIED and ticks == [otp_relay.POLL] and fc.log.count("put-denied") == 2, (got, ticks, fc.log))
+
 srv.shutdown()
 print("실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
