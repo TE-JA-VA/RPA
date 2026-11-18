@@ -240,8 +240,8 @@ try:
     got = None
 except RuntimeError as e:
     got = str(e)
-check("자리가 비었는데도 거절되면 남의 요청처럼 2분 기다리지 않고 까닭과 함께 멈춘다 (검토 2026-11-16)",
-      got == otp_relay.DENIED and not ticks and fc.log.count("put-denied") == 2, (got, ticks, fc.log))
+check("자리가 비었는데도 거절되면 한 번만 잠깐(POLL) 쉬고 다시, 또 거절이면 2분 기다리지 않고 까닭과 함께 중단 (검토 2026-11-16·17)",
+      got == otp_relay.DENIED and ticks == [otp_relay.POLL] and fc.log.count("put-denied") == 2, (got, ticks, fc.log))
 
 srv.shutdown()
 print("실패:", fails if fails else "없음")

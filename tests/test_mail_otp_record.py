@@ -86,6 +86,25 @@ r = rec.finalize(only_date, TODAY, "https://shop.example/login")
 check("목록의 날짜 칸을 눌렀어도 제목이 빈 인증 메일 열기를 만들지 않는다", all(x["mailOpen"]["fp"] for x in r["steps"] if x.get("mailOpen")), [x.get("mailOpen") for x in r["steps"]])
 check("제목이 빈 옛 기록은 저장을 막는다", "제목" in (rec.mail_auth_problem([{"kind": "click", "page": 1, "mailOpen": {"fp": ""}}]) or ""))
 
+
+# --- 버린 복사 단계도 '몇 단계 뒤에 나타남' 을 당긴다 (#45 - 예전에는 번호 고르기 누르기만 당겨 받기가 지난 파일을 골랐다)
+def drop_steps(*copies):
+    steps = [st("fill", 0, ph="아이디"), st("secret", 0, host="shop.example"), st("click", 0, "로그인")]
+    steps += [st("copy", 0, copied=c) for c in copies]
+    steps.append(st("click", 0, "주문 조회"))
+    steps.append(st("click", 0, "주문 엑셀", firstSeen=T[0] + 1))     # [주문 조회] 뒤에 새로 생긴 줄
+    return rec.finalize(steps, TODAY, "https://shop.example/login")["steps"]
+
+
+for what, copies in (("인증번호 모양이 아닌 복사 하나", ("주문 목록",)), ("붙여넣지 않은 번호 복사 하나", ("123456",)),
+                     ("둘 다 (예전에는 기준 없이 n번째 줄)", ("주문 목록", "123456"))):
+    s = drop_steps(*copies)
+    k = s[-1].get("appearsAfter")
+    check(f"버린 복사 - {what}: 받기 기준이 [주문 조회] 를 가리킨다", len(s) == 5 and k == 3 and s[k]["target"]["text"] == "주문 조회",
+          (len(s), k, [rec.describe(x) for x in s]))
+s = rec.finalize([st("copy", 0, copied="주문 목록"), st("click", 0, "주문 엑셀", firstSeen=T[0] + 1)], TODAY, "https://shop.example/login")["steps"]
+check("앞이 모두 버린 단계면 기준 번호를 남기지 않는다 (음수로 마지막 단계를 가리키지 않게)", "appearsAfter" not in s[-1], s)
+
 # --- 번호 복사·붙여넣기
 r = rec.finalize(copy_paste_steps(), TODAY, "https://shop.example/login")
 s = r["steps"]

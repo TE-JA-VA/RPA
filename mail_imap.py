@@ -396,10 +396,12 @@ def fetch(server, rules, dest_dir, code, memory_path, log=print, now=None):
     result = {"mails": 0, "saved": [], "skipped": [], "no_attach": 0}
     done = []
     complete = False        # 대상 메일을 모두 처리했나 - 그때만 마지막 실행 날을 옮긴다 (남은 메일이 기간 밖으로 밀리지 않게)
+    listed = False          # 후보 메일 목록을 읽었나 - 로그인·목록 읽기에서 끊긴 첫 실행은 기준일을 적지 않는다 (검토 2026-11-17)
     os.makedirs(dest_dir, exist_ok=True)
     try:
         with _session(server, rules["mailbox"], readonly=not rules["mark_seen"]) as (M, uv):
             pending = [m for m in _candidates(M, rules, uv, now, log) if m["key"] not in memory]
+            listed = True
             mails = sorted(pending[:rules["max"]], key=lambda m: (m["date"], m["uid"]))    # 오래된 것부터 저장 (BugBuster I7)
             log(f"대상 메일 {len(mails)}통")
             for m in mails:
@@ -439,7 +441,7 @@ def fetch(server, rules, dest_dir, code, memory_path, log=print, now=None):
         anchored = False
         if complete:
             memory[LAST_RUN] = now.date().isoformat()
-        elif not memory.get(LAST_RUN):      # 첫 실행이 끝까지 못 갔다 - 이번 기간의 첫날을 적어, 다음 실행이 남은 메일을
+        elif listed and not memory.get(LAST_RUN):      # 첫 실행이 목록을 읽고 끝까지 못 갔다 - 이번 기간의 첫날을 적어, 다음 실행이 남은 메일을
             memory[LAST_RUN] = (now.date() - dt.timedelta(days=rules["days"])).isoformat()   # 기간 밖으로 거르지 않게 (검토 2026-11-16)
             anchored = True
         if done or complete or anchored:

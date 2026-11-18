@@ -227,6 +227,12 @@ try:
     check("암호화 없는 연결은 거절", "암호화" in why({**S, "security": "plain"}))
     bad = why({**S, "password": "wrong-pw"})
     check("로그인 거부", bad == mi.LOGIN_FAIL and "wrong-pw" not in bad, bad)
+    mem_bad = os.path.join(work, "bad_login.json")
+    raises(mi.fetch, {**S, "password": "wrong-pw"}, {"subject_prefix": ">>>"}, os.path.join(work, "bad_login"), "P", mem_bad,
+           log=lines.append, now=NOW)
+    check("로그인에서 끊긴 첫 실행은 기준일을 적지 않는다 - 목록을 읽은 뒤에만 (검토 2026-11-17)",
+          not os.path.exists(mem_bad) or mi.LAST_RUN not in json.load(open(mem_bad, encoding="utf-8")),
+          open(mem_bad, encoding="utf-8").read() if os.path.exists(mem_bad) else "")
     check("없는 메일함", why(S, {"subject_prefix": ">>>", "mailbox": "없는함"}) == "메일함 '없는함'이(가) 없습니다.")
     check("STARTTLS 로도", [i["uid"] for i in mi.find(fake.server("starttls"), {"subject_prefix": ">>>", "max": 1}, now=NOW)] == [u1])
     fake.boxes["RO"] = []

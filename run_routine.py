@@ -313,10 +313,11 @@ def erpia_logged_in(pid):
 def my_erpia_pids(others=None):
     """이 PC 설정 계정의 ERPia - 메인 창 제목이 '업체코드 - 아이디' 인 것 (사용자 2026-11-16: 설정 계정의 ERPia 만 조작한다,
     다른 계정 ERPia 는 사람이 쓰는 것일 수 있다). others(이번 실행을 시작할 때 떠 있던 남의 ERPia) 를 주면 그 밖의 새 ERPia 도
-    우리 것 - 우리가 띄웠거나, 로그인 직후 자체 업데이트로 다시 켜진 것 (7c21fbf). 설정을 못 읽으면 제목으로는 못 찾는다."""
+    우리 것 - 우리가 띄웠거나, 로그인 직후 자체 업데이트로 다시 켜진 것 (7c21fbf). 설정을 못 읽으면 제목으로는 못 찾는다.
+    업체코드·아이디만 읽는다 - 비밀번호가 비었거나 못 푸는 PC(사람이 로그인)도 떠 있는 ERPia 를 알아본다 (검토 2026-11-17)."""
     try:
-        code, uid, _pw = pl.load_credentials()
-        mine = ec.erpia_pids_titled(f"{code} - {uid}")
+        code, uid = pl.load_account()
+        mine = ec.erpia_pids_titled(f"{code} - {uid}") if code and uid else []
     except Exception:
         mine = []
     if others is None:
@@ -379,7 +380,7 @@ def ensure_erpia_running(ctx=None):
         log(f"ERPiaMain.exe 이미 실행 중 (PID={pid}, {'이 PC 설정 계정' if pid in mine else '로그인 전'})")
         return pid
     if others:
-        log(f"다른 계정으로 로그인된 ERPia(PID={others}) 는 그대로 두고 이 PC 설정 계정으로 새로 띄웁니다.")
+        log(f"다른 계정으로 로그인된 ERPia(PID={others}) 는 그대로 두고 이 PC 설정 계정으로 새로 실행합니다.")
 
     exe_path = load_exe_path()
     log(f"ERPiaMain.exe 미실행 -> 실행: {exe_path}")
@@ -387,6 +388,8 @@ def ensure_erpia_running(ctx=None):
         subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
     except OSError as e:
         raise RuntimeError(f"ERPia 를 실행하지 못했습니다: {exe_path} ({e})") from e
+    if ctx is not None:
+        ctx.launched = True             # 로그인하지 못하면 끈다 (_close_launched)
 
     waited = 0.0
     while waited < PROCESS_WAIT_SECONDS:
@@ -558,10 +561,17 @@ class RoutineContext:
         return self.options
 
 
-def wait_login_or_main(pid):
-    """로그인 창을 기다리되, 이미 메인 화면이 떠 있으면(이미 로그인) 그 사실을 알려준다."""
+def wait_login_or_main(pid, ctx=None):
+    """로그인 창을 기다리되, 이미 메인 화면이 떠 있으면(이미 로그인) 그 사실을 알려준다.
+    ctx 를 주면, 기다리는 동안 그 ERPia 가 끝나고 우리 ERPia 가 새로 떴을 때(로그인 전 자체 업데이트 등) 그것으로 갈아타
+    ctx.pid 를 바꾸고 이어 기다린다 - 남의 ERPia(ctx.others)로는 가지 않는다 (검토 2026-11-17)."""
     waited = 0.0
     while waited < LOGIN_WINDOW_WAIT_SECONDS:
+        if ctx is not None and not ec.pid_alive(pid):
+            new = next(iter(my_erpia_pids(getattr(ctx, "others", None))), None)   # 없으면 다시 켜지는 중 - 다음 차례에 다시 본다
+            if new is not None:
+                log(f"로그인 창을 기다리는 동안 ERPia 가 다시 실행되었습니다 (PID {pid} -> {new}). 새 ERPia 로 이어갑니다.")
+                pid = ctx.pid = new
         login_win = pl.find_login_window(pid)     # 그 ERPia 의 것만 - 함께 떠 있는 남의 ERPia 로그인 창이 아니다
         # 로그인 뒤 숨은 채 남는 잔재 창은 아니다 (attach 와 같은 규칙) - 그 창 Edit 좌표를 누르면 메인 화면이 눌린다
         if login_win is not None and win32gui.IsWindowVisible(login_win.handle):
@@ -5999,7 +6009,27 @@ def run_uia_check():
 # ---------------------------------------------------------------------------
 
 def module_login(ctx):
-    """ERPia 를 띄우고(이미 떠 있으면 그대로) 로그인한 뒤 메인 창을 잡는다."""
+    """ERPia 를 띄우고(이미 떠 있으면 그대로) 로그인한 뒤 메인 창을 잡는다. 못 했으면 이번에 새로 실행한 ERPia 를 정리한다."""
+    result = _login(ctx)
+    if result[0] == "failed":
+        _close_launched(ctx)
+    return result
+
+
+def _close_launched(ctx):
+    """로그인하지 못했으면 이번 실행에서 새로 실행한 로그인 전 ERPia 를 끈다. 다른 계정 ERPia 가 떠 있으면 다음 실행은 로그인 전
+    ERPia 를 쓰지 않고(ensure_erpia_running) 또 실행해, 실패할 때마다 하나씩 쌓였다 (검토 2026-11-17). 혼자 떠 있으면 다음 실행이
+    거기에 로그인하니 그대로 둔다. 남의 ERPia(ctx.others)·로그인된 ERPia 는 끄지 않는다."""
+    pid, others = ctx.pid, getattr(ctx, "others", None)
+    if not (getattr(ctx, "launched", False) and others and pid is not None and pid not in others) or erpia_logged_in(pid):
+        return
+    log(f"로그인하지 못해 이번 실행에서 새로 실행한 ERPia(PID={pid})를 종료합니다. 다른 계정 ERPia 는 그대로 둡니다.")
+    why = ec.terminate_pid(pid)
+    if why:
+        log(f"  종료하지 못했습니다. ({why})")
+
+
+def _login(ctx):
     status.step("login")
     admin_code, user_id, password = pl.load_credentials()
     try:
@@ -6007,7 +6037,7 @@ def module_login(ctx):
     except RuntimeError as e:   # ERPia 를 못 찾음·관리자 권한 ERPia 를 끄지 않음/못 끔 - 프로그램 오류가 아니라 로그인 실패로 남긴다
         return "failed", str(e)
 
-    state, obj = wait_login_or_main(ctx.pid)
+    state, obj = wait_login_or_main(ctx.pid, ctx)
     if state == "timeout":
         return "failed", "로그인 창도 메인 화면도 나타나지 않았습니다."
     if state == "login_window":
@@ -6179,10 +6209,10 @@ def module_excel(ctx):
             try:
                 uploaded, errors = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, top_left)
             except Exception as e:
-                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 멈춥니다: {e}")
+                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 중단합니다: {e}")
                 status.keep_record()      # 반복 회차라도 기록에 남긴다 - 못 올린 파일은 폴더에 그대로 (R2, 2026-11-03)
                 if getattr(e, "uploaded", 0):   # 멈추기 전에 올린 파일이 있다 - 완료 폴더로 갔다 (UploadStop·UploadGridHidden, 검토 2026-11-16)
-                    return "done", f"엑셀 {e.uploaded}개 업로드 뒤 오류로 멈춤: {e}"
+                    return "done", f"엑셀 {e.uploaded}개 업로드 뒤 오류로 중단: {e}"
                 return "skipped", f"엑셀업로드 오류로 건너뜀: {e}"
         note = f", 오류 폴더로 {errors}개 (확인할 것)" if errors else ""
         if uploaded:
@@ -6439,6 +6469,7 @@ def module_output(ctx):
     """
     status.step("output")
     logistics_result = ctx.results.get("logistics")
+    queried = False                     # 출력 전에 상단을 조회했나 - 그 조회에는 앞서 출력한 배송장이 섞일 수 있다
     if logistics_result is not None and logistics_result != "done":
         if "logistics" not in ctx.rerun:
             return "no_target", (f"물류관리 모듈이 '{MODULE_RESULT_LABEL.get(logistics_result, logistics_result)}' "
@@ -6447,10 +6478,11 @@ def module_output(ctx):
         # 출력 전에 상단을 조회해 남은 배송장이 있으면 출력한다 ([아니오] 정책 - 이미 출력한 배송장은 다시 찍지 않는다, 사용자 2026-11-16)
         n = query_print_targets(ctx)
         if n is None:
-            return "failed", "물류관리를 다시 돈 뒤 출력 전 배송장 조회를 끝내지 못해 출력하지 않았습니다. 화면에서 확인하여 주십시오."
+            return "failed", "물류관리를 다시 실행한 뒤 출력 전 배송장 조회를 끝내지 못해 출력하지 않았습니다. 화면에서 확인하여 주십시오."
         if not n:
-            return "no_target", "물류관리를 다시 돈 뒤 출력 전에 조회해 보니 출력할 배송장이 없습니다."
-        log(f"  물류관리를 다시 돈 뒤 조회한 배송장 {n}줄 - 출력합니다 (이미 출력한 배송장이면 [아니오]).")
+            return "no_target", "물류관리를 다시 실행한 뒤 출력 전에 조회해 보니 출력할 배송장이 없습니다."
+        log(f"  물류관리를 다시 실행한 뒤 조회한 배송장 {n}줄 - 출력합니다 (이미 출력한 배송장이면 [아니오]).")
+        queried = True
     # 출력 도중 ERPia 가 꺼져 다시 도는 것이면 새 ERPia 는 물류 관리 화면이 아니고 이미 출력했을 수 있다 - 출력 단독처럼
     again = ctx.resume == "output"
 
@@ -6471,6 +6503,9 @@ def module_output(ctx):
     result = run_print_step(ctx.app, ctx.pid, ctx.hwnd, options=ctx.logistic_options(),
                             already_printed=policy)
     if result == "already_printed":
+        if queried:     # 조회에 앞선 실행이 출력한 배송장이 섞이면 [아니오] 로 이번에 저장한 배송장도 출력되지 않는다 (검토 2026-11-17)
+            return "failed", ("출력 전 조회에 이미 출력한 배송장이 섞여 있어 출력하지 않았습니다. 이번에 저장한 배송장도 출력되지 "
+                              "않았을 수 있습니다. 화면에서 확인하여 주십시오.")
         return "no_target", "이미 출력한 배송장이라 다시 출력하지 않았습니다."
     if result == "stuck":
         return "failed", "출력 팝업을 처리하지 못해 메인 창에 남겨두었습니다. 팝업을 닫은 뒤 다시 실행하세요."
@@ -6530,7 +6565,7 @@ def run_modules(selected, modules=None, funcs=None, section=None):
     for key, cfg_key, label, steps, _bit in modules:
         if not on(cfg_key):
             note = status.PICK_NOTE if picked else status.OFF_NOTE
-            log(f"\n=== [{label}] 관리자가 끈 모듈이라 건너뜁니다 (업체 정책) ===" if cfg_key in admin_off
+            log(f"\n=== [{label}] 관리자가 사용하지 않도록 설정한 모듈이라 건너뜁니다 (업체 정책) ===" if cfg_key in admin_off
                 else f"\n=== [{label}] 이번 실행에서 고르지 않아 건너뜁니다 ===" if picked
                 else f"\n=== [{label}] 설정에서 꺼져 있어 건너뜁니다 ({cfg_key}=N) ===")
             status.module_off(key, note)

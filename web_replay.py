@@ -1095,7 +1095,8 @@ def finalize(steps, record_date, start_url, viewport=None, prior=()):
     out, prev = [], None
     prior = list(prior)
     ts = [s["t"] for s in steps]
-    raw_no = {}                           # 다듬은 단계 → 원 번호 (아래에서 번호 고르기 누르기를 뺄 때 appearsAfter 를 당긴다)
+    raw_no = {}                           # 다듬은 단계 → 원 번호 (아래에서 단계를 뺄 때 appearsAfter 를 당긴다)
+    dropped = []                          # 버린 단계의 원 번호 - 인증번호 모양이 아닌 복사·짝 없는 복사·번호 고르기 누르기 (#45)
     codes = []                            # (창, 복사해 붙여 넣은 번호)
     copied = None                         # 메일에서 복사한 글 - 붙여넣기와 맞춰 보는 데만, 기록에는 남기지 않는다
     copy_at = None                        # 그 복사 단계 (out 안) - 다른 창에 붙여넣은 것만 메일 인증 (같은 창 복사·붙여넣기는 평범한 칸, 검토 M4)
@@ -1117,7 +1118,10 @@ def finalize(steps, record_date, start_url, viewport=None, prior=()):
             shape = code_shape(text)
             if shape:
                 copied, copy_at = str(text).strip(), dict(s, kind="copyCode", shape=shape)
+                raw_no[id(copy_at)] = i
                 out.append(copy_at)
+            else:
+                dropped.append(i)
             continue
         pasted = s.pop("pasted", False) and s["kind"] == "fill"
         value = str(s.get("value", "")).strip()
@@ -1167,16 +1171,19 @@ def finalize(steps, record_date, start_url, viewport=None, prior=()):
                 p.pop("value", None)
                 break
     # 붙여넣기와 짝이 안 된 복사는 버린다 (메일 인증이 아니다 - 같은 창 복사·붙여넣기, 복사만 하고 손으로 친 것)
-    out = [x for x in out if not (x["kind"] == "copyCode" and not x.pop("paired", False))]
+    lone = [x for x in out if x["kind"] == "copyCode" and not x.pop("paired", False)]
     # 메일의 번호를 고르려고 그 칸을 누른 것은 조작이 아니다 - 번호가 매번 바뀌어 재생이 못 찾고, 메일이 표로 된 메일함에서는 '목록 줄' 로
     # 잘못 보여 인증 메일 열기가 된다 (2026-11-06 실사용). 복사해 붙여 넣은 번호가 든 글자를 누른 것만 뺀다
     gone = [x for x in out if x["kind"] == "click" and any(p == x["page"] and c in (x["target"].get("text") or "") for p, c in codes)]
-    if gone:
-        nos = [raw_no[id(x)] for x in gone]
-        out = [x for x in out if not any(x is y for y in gone)]
-        for x in out:
-            if "appearsAfter" in x:
-                x["appearsAfter"] -= sum(1 for n in nos if n <= x["appearsAfter"])
+    dropped += [raw_no[id(x)] for x in lone + gone]
+    out = [x for x in out if not any(x is y for y in lone + gone)]
+    for x in out:                         # 버린 만큼 '몇 번째 단계 뒤에 나타남' 을 당긴다 - 안 당기면 받기가 지난 파일을 고른다 (#45)
+        if "appearsAfter" in x:
+            k = x["appearsAfter"] - sum(1 for n in dropped if n <= x["appearsAfter"])
+            if k < 0:                     # 그 앞이 모두 버린 단계 - 처음부터 있던 것과 같다 (firstSeen 앞 단계가 없을 때처럼)
+                x.pop("appearsAfter")
+            else:
+                x["appearsAfter"] = k
     _mark_mail(prior + out)               # 앞부분과 함께 - 쇼핑몰·메일함 계정 가리기, 메일 열기·보내기 표시 (검토 C1)
     for x in prior:
         x.pop("paired", None)
@@ -1636,9 +1643,17 @@ class Replayer:
         act()
         end, note = start + self.download_timeout_ms / 1000, start + self.step_timeout
         said = said_at = None
+        shut = None                     # 창이 모두 닫힌 것을 처음 본 때
         while not self.downloads:
             self._check_cancel()
             now = time.time()
+            try:
+                alive = any(not pg.is_closed() for pg in self.context.pages)
+            except Exception:           # 브라우저 연결이 끊김
+                alive = False
+            shut = None if alive else (shut or now)
+            if shut and now > shut + 1:  # 새 창이 뜨며 앞 창이 닫히는 틈은 넘긴다. 5분 대기는 느린 쇼핑몰 몫이라 그대로 (#46)
+                raise NotFound("브라우저 창이 닫혀 파일을 다운로드하지 못했습니다.")
             if said is None:
                 said = next((m for m in self.alerts[mark:] if no_data(m)), None)
                 said_at = now

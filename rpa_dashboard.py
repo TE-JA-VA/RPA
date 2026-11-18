@@ -1523,6 +1523,7 @@ def apply_schedule(payload):
         slots = normalize_slots(raw)
     else:
         slots = [{"at": t} for t in normalize_times(raw)]
+    missed = []
     with _settings_lock:
         cfg = st.read_settings()
         sch = cfg["schedule"]
@@ -1530,13 +1531,20 @@ def apply_schedule(payload):
         off_dates = (sch.get("off_dates") or []) if off_dates is None else off_dates
         changed = (bool(sch.get("enabled")) != enabled or sch.get("days") != days or sch.get("slots") != slots
                    or sch.get("skip_holidays", True) != skip or (sch.get("off_dates") or []) != off_dates)
+        due = st.parse_iso(sch.get("next_run_at"))
+        waiting = slot_of(sch) if sch.get("enabled") and due is not None and due <= NOW() else None    # 때가 됐는데 아직 못 띄운 줄 (앞 실행 등)
         sch.pop("interval_min", None)   # 예전 '실행 주기' 방식의 값
         sch.update(enabled=enabled, days=days, slots=slots, skip_holidays=skip, off_dates=off_dates)
         if changed:
             sch["last_error"] = None
-            advance(sch, NOW())
+            # 기다리던 줄이 [적용] 뒤에도 돌면 그대로 둔다 - set_policy 와 같다. 빠졌거나 자동 실행을 껐으면 다음으로 넘기고
+            # 그 회차를 기록에 남긴다 - 예전에는 다시 잡으며 기록도 없이 사라졌다 (#44)
+            if waiting is None or not enabled or slot_of(sch) is None:
+                advance(sch, NOW())
+                missed = [(due, waiting)] if waiting is not None else []
         if not st.write_settings(cfg):
             raise RuntimeError("설정 파일을 저장하지 못했습니다.")
+    record_missed(sch, missed, lambda t, s: f"{due_text(t, s)} 실행되지 않았습니다. 기다리는 동안 자동 실행 설정이 바뀌었습니다.", "changed")
     return changed
 
 

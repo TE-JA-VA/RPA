@@ -85,6 +85,7 @@ class PhoneRelay:
                     if retried:               # (허용 발신번호 밖·업체 정지) - 남의 요청을 기다리듯 2분을 쓰지 않는다 (검토 2026-11-16)
                         raise RuntimeError(DENIED) from e
                     retried = True
+                    tick(POLL)                # 막 비운 자리가 서버 규칙에 반영될 틈을 두고 다시 (검토 2026-11-17)
                     continue
             retried = False
             while time.time() < end:          # 남의 요청 - 비거나 만료될 때까지 읽어 보며 기다린다 (거부된 put 을 되풀이하면 매번 토큰 갱신)

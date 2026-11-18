@@ -93,6 +93,14 @@ def load_settings():
     return data
 
 
+def load_account():
+    """(업체코드, 아이디) - 창 제목으로 설정 계정의 ERPia 를 알아볼 때. 비밀번호는 읽지 않는다 - 비밀번호를 비워 두고 사람이
+    로그인하는 PC 에서도 알아봐야 한다 (검토 2026-11-17). 없으면 빈 글."""
+    creds = load_settings().get(LOGIN_SECTION)
+    creds = creds if isinstance(creds, dict) else {}
+    return str(creds.get("AdminCode") or ""), str(creds.get("ID") or "")
+
+
 def load_credentials():
     """(업체코드, 아이디, 비밀번호). 비밀번호는 여기서만 푼다 (잠긴 값을 못 풀면 RuntimeError)."""
     creds = load_settings().get(LOGIN_SECTION)
