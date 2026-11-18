@@ -1143,7 +1143,7 @@ with tempfile.TemporaryDirectory() as d:
                     try:
                         acts["rollback"](None); check(False, f"{s} 인데 되돌리기")
                     except RuntimeError as e:
-                        check("바뀌었거나 빠진" in str(e) and not started, f"{s}: 되돌리지 않고 같은 버전으로 고치라고 ({e})")
+                        check("변경되었거나 누락된 파일" in str(e) and not started, f"{s}: 되돌리지 않고 같은 버전으로 고치라고 ({e})")
                 st.check_install = lambda root=None: {"version": "2026.10.07-4", "state": "ok"}
                 started.clear()
                 acts["rollback"](None)
