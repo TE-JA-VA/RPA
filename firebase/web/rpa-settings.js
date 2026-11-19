@@ -27,6 +27,7 @@ const HTML = `
         <div id="shop-list"></div>
         <div class="shop-count" id="shop-count"></div>
         <div class="msg" id="shop-info"></div>
+        <div class="msg" id="shop-xl-note">엑셀 파일에 비밀번호가 설정된 쇼핑몰은 오토파일럿이 설치된 PC의 '옵저버'에서 프리셋마다 엑셀 비밀번호를 입력하여 주십시오.</div>
         <button class="apply" id="shop-apply" disabled>적용</button>
       </div>
       <div class="msg hide" id="shop-none">이 PC 는 아직 사이트 수집 정보를 보내지 않았습니다 (에이전트를 새 버전으로 업데이트하세요)</div>
@@ -104,8 +105,8 @@ const HTML = `
 let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, stopPar = null, busy = false, live = null, liveLimit;
 let stopPeers = [], transferOk = {};   // 다른 PC 의 live.preset_transfer (새 명령을 아는 PC 만 복사 상대로 고른다 - Review Focus 5)
 let copyKey = "";
-// 2026-11-13: 프리셋 찾기·거르기, 펼친 엑셀 비밀번호 칸, 자동 실행 줄의 열린 시계·사이트 목록 - live 가 다시 그려도 남게 모듈 상태로
-let shopQ = "", shopFilter = "all", xlOpen = new Set(), openClock = null, openPicker = null;   // 복사 카드의 줄·받을 PC 목록을 마지막으로 만든 기준 - 같으면 다시 안 만든다 (heartbeat 가 5초마다 live 를 바꾼다, Task 7 검토)
+// 2026-11-13: 프리셋 찾기·거르기, 자동 실행 줄의 열린 시계·사이트 목록 - live 가 다시 그려도 남게 모듈 상태로
+let shopQ = "", shopFilter = "all", openClock = null, openPicker = null;   // 복사 카드의 줄·받을 PC 목록을 마지막으로 만든 기준 - 같으면 다시 안 만든다 (heartbeat 가 5초마다 live 를 바꾼다, Task 7 검토)
 let parLimit;    // 관리 화면이 허용한 동시 실행 최대 (limits/parallel) - 2 미만이면 '동시 실행' 카드가 없다 (업체는 이 기능을 모른다)
 let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을 기다리는 동안은 '적용 안 한 변경' 이 아니다 (떠날 때 확인)
 let form = { modules: {}, shops: {}, parallel: 1, together: "off", sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] }, copy: { to: "", pick: {} } };
@@ -115,7 +116,7 @@ const show = (el, on) => el.classList.toggle("hide", !on);
 export function mount(el, context) {
   root = el; c = context; busy = false; live = null; liveLimit = undefined; parLimit = undefined; sent = {};
   form.copy = { to: "", pick: {} }; transferOk = {}; copyKey = "";
-  shopQ = ""; shopFilter = "all"; xlOpen = new Set(); openClock = null; openPicker = null;
+  shopQ = ""; shopFilter = "all"; openClock = null; openPicker = null;
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
   paintAi();
@@ -229,7 +230,7 @@ export function dirty() {
     || (shopsDirty() && sent.shops !== keyOf.shops()) || (scheduleDirty() && sent.sch !== keyOf.sch())
     || (parDirty() && sent.par !== keyOf.par()) || (togDirty() && sent.tog !== keyOf.tog()));
 }
-const keyOf = { modules: () => JSON.stringify([form.modules, form.holdReview]), shops: () => JSON.stringify([form.shops, form.xlPw]), sch: () => JSON.stringify(payloadOf()),
+const keyOf = { modules: () => JSON.stringify([form.modules, form.holdReview]), shops: () => JSON.stringify([form.shops]), sch: () => JSON.stringify(payloadOf()),
   par: () => String(form.parallel), tog: () => form.together };
 
 // 카드 차례: 모듈·프리셋·자동 실행·동시 실행·전체 실행 방식 (I14). PC 값 열쇠에는 사람이 고치는 칸만 (next_run_at 처럼 저절로 바뀌는 것은 뺀다)
@@ -237,7 +238,7 @@ const SENT_KEYS = ["modules", "shops", "sch", "par", "tog"];
 const dirtyList = () => [modulesDirty(), shopsDirty(), scheduleDirty(), parDirty(), togDirty()];
 const savedKeys = () => {
   const s = savedSch();
-  return [JSON.stringify([savedModules(), live?.hold_review ?? null]), JSON.stringify(savedShops().map((p) => [p.no, !!p.on, p.excel_pw ?? null])),
+  return [JSON.stringify([savedModules(), live?.hold_review ?? null]), JSON.stringify(savedShops().map((p) => [p.no, !!p.on])),
     JSON.stringify([!!s.enabled, s.days || [], slotsKey(savedSlots()), s.skip_holidays, savedOff()]), String(savedPar()), savedTog()];
 };
 /** [다시 불러오기] - 폼을 모두 PC 값으로 (I14) */
@@ -366,31 +367,14 @@ async function applyModules() {
 const circled = (n) => String.fromCharCode(n <= 20 ? 0x2460 + n - 1 : n <= 35 ? 0x3251 + n - 21 : 0x32B1 + n - 36);
 const savedShops = () => (Array.isArray(live?.presets) ? live.presets : []);
 const shopReady = (p) => p.steps > 0 && p.has_login;
-// 엑셀 비밀번호 (사용자 2026-11-05) - 프리셋마다. 업로드할 엑셀에 쇼핑몰이 건 값이라 로그인 비밀번호가 아니다. PC 가 칸을 올릴 때만 보인다 (옛 에이전트는 없다)
-const hasXlPw = (p) => typeof p.excel_pw === "string";
+// 엑셀 비밀번호 (사용자 2026-11-19, 고객사 보안 검토): 웹에서는 넣지도 보이지도 않는다 - PC 의 옵저버에서만 넣고 잠가서 저장한다.
+// PC 는 있는지만 올린다 (xl_set). 2026-11-05 ~ 11-19 의 PC 가 올리는 값(옛 칸)은 화면에 쓰지 않는다
 function resetShops() {
   form.shops = Object.fromEntries(savedShops().map((p) => [p.no, !!p.on]));
-  form.xlPw = Object.fromEntries(savedShops().map((p) => [p.no, p.excel_pw || ""]));
   paintShops();
 }
 function shopsDirty() {
-  return savedShops().some((p) => !!form.shops?.[p.no] !== !!p.on || (hasXlPw(p) && (form.xlPw?.[p.no] ?? "").trim() !== p.excel_pw));
-}
-/** 엑셀 비밀번호 칸 (2026-11-13): 값이 있거나 [엑셀 비밀번호 설정] 으로 연 줄만 펼친다. [취소]·Esc 는 PC 값으로 되돌리고, 값이 없으면 다시 접는다 */
-const xlShown = (p) => !!(form.xlPw?.[p.no] ?? "") || xlOpen.has(p.no);
-function xlPwRow(p) {
-  const row = Object.assign(document.createElement("label"), { className: "xl-pw" });
-  row.dataset.no = p.no;
-  const inp = Object.assign(document.createElement("input"), { type: "text", maxLength: 100, autocomplete: "off", value: form.xlPw?.[p.no] ?? "", disabled: !c.isAdmin || busy });
-  inp.setAttribute("aria-label", `${circled(p.no)} 엑셀 비밀번호`);
-  const cancel = Object.assign(document.createElement("button"), { type: "button", className: "xl-cancel", textContent: "취소", disabled: !c.isAdmin || busy });
-  const showCancel = () => { cancel.hidden = !xlOpen.has(p.no) && (form.xlPw[p.no] ?? "").trim() === (p.excel_pw ?? ""); };
-  cancel.onclick = (e) => { e.preventDefault(); form.xlPw[p.no] = p.excel_pw || ""; xlOpen.delete(p.no); paintShopList(); paintShopMeta(); };
-  inp.oninput = () => { form.xlPw[p.no] = inp.value; showCancel(); paintShopMeta(); };
-  inp.onkeydown = (e) => { if (e.key === "Escape") cancel.click(); };
-  showCancel();
-  row.append("엑셀 비밀번호", inp, cancel);
-  return row;
+  return savedShops().some((p) => !!form.shops?.[p.no] !== !!p.on);
 }
 /** 거르기 (2026-11-13). 입력 필요 = 아이디·비밀번호를 넣어야 하거나 아직 기록하지 않은 프리셋 */
 const SHOP_FILTERS = [["all", "전체", () => true], ["on", "켬", (p) => !!form.shops?.[p.no]], ["off", "끔", (p) => !form.shops?.[p.no]],
@@ -409,8 +393,6 @@ function shopLine(p) {
 function paintShops() {
   show($("shop-card"), Array.isArray(live?.presets));   // 옛 에이전트·설정이 깨진 PC 는 카드를 숨긴다
   show($("shop-none"), !!live && !Array.isArray(live.presets));
-  // 치는 중인 칸을 live 가 다시 그려 지우지 않게 (찾기 칸은 목록 밖이라 다시 그려도 남지만 목록이 깜빡이지 않게)
-  if (document.activeElement?.closest?.(".xl-pw") && $("shop-list").contains(document.activeElement)) { paintShopMeta(); paintCopy(); return; }
   paintShopList();
   paintShopMeta();
   paintCopy();
@@ -440,19 +422,14 @@ function paintShopList() {
       b.onclick = (e) => { e.preventDefault(); restorePreset(p.no); };   // 스위치(label)는 안 건드린다
       extras.push(b);
     }
-    const xl = hasXlPw(p) && p.steps > 0;
-    if (xl && !xlShown(p)) {                     // 값이 없는 줄은 작은 단추만 (2026-11-13)
-      const b = Object.assign(document.createElement("button"), { type: "button", className: "xl-open", textContent: "엑셀 비밀번호 설정", disabled: !c.isAdmin || busy });
-      b.onclick = (e) => { e.preventDefault(); xlOpen.add(p.no); paintShopList(); $("shop-list").querySelector(`.xl-pw[data-no="${p.no}"] input`)?.focus(); };
-      extras.unshift(b);
-    }
+    if (p.xl_set === true && p.steps > 0) extras.push(Object.assign(document.createElement("span"), { className: "pill note xl-set", textContent: "엑셀 비밀번호 설정됨" }));
     if (extras.length) text.firstChild.after(" ", ...extras);
     row.append(text, cb, Object.assign(document.createElement("span"), { className: "knob" }));
-    return xl && xlShown(p) ? [row, xlPwRow(p)] : [row];
+    return [row];
   }));
   const rows = box.querySelectorAll(".switch"), scroll = rows.length > SHOP_ROWS_MAX;
   if (scroll) {
-    const last = rows[SHOP_ROWS_MAX - 1], end = last.nextElementSibling?.classList.contains("xl-pw") ? last.nextElementSibling : last;
+    const end = rows[SHOP_ROWS_MAX - 1];
     box.style.maxHeight = `${Math.ceil(end.getBoundingClientRect().bottom - box.getBoundingClientRect().top) + 1}px`;   // 높이를 비운 직후라 scrollTop 은 0
   }
   box.classList.toggle("scroll", scroll);
@@ -481,7 +458,7 @@ function paintShopMeta() {
   const on = list.filter((p) => form.shops?.[p.no]).length;
   $("shop-meta").textContent = list.length ? `${on}/${list.length} 켬` : "";
   $("shop-apply").disabled = !c.isAdmin || busy || !shopsDirty();
-  for (const b of $("shop-list").querySelectorAll(".restore, .xl-open, .xl-cancel")) b.disabled = !c.isAdmin || busy;   // 줄은 live 가 올 때만 다시 만든다 - 잠금은 여기서
+  for (const b of $("shop-list").querySelectorAll(".restore")) b.disabled = !c.isAdmin || busy;   // 줄은 live 가 올 때만 다시 만든다 - 잠금은 여기서
 }
 async function applyShops() {
   const wanted = Object.fromEntries(savedShops().map((p) => [`PRESET${p.no}`, !!form.shops[p.no]]));
@@ -489,9 +466,7 @@ async function applyShops() {
     await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/presets`), wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.shops = keyOf.shops();
-  const xl = savedShops().filter(hasXlPw);      // 옛 에이전트는 모르는 키를 프리셋 번호로 읽어 거절한다
-  xlOpen.clear(); paintShopList();               // 비운 채 적용한 칸은 다시 접힌다 (2026-11-13)
-  await send("set_presets", xl.length ? { ...wanted, excel_pw: Object.fromEntries(xl.map((p) => [`PRESET${p.no}`, (form.xlPw[p.no] ?? "").trim()])) } : wanted, "쇼핑몰 프리셋", "shops");
+  await send("set_presets", wanted, "쇼핑몰 프리셋", "shops");
 }
 
 // --- 프리셋 복사 (설계 2026-10-19 4.3절) --------------------------------

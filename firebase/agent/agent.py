@@ -666,6 +666,47 @@ def cleanup_commands(client, cid, pc_id, now, app=APP):
     return n
 
 
+EXCEL_SEAL_AFTER_SEC = 300     # 켜진 지 이만큼 지나야 엑셀 비밀번호를 잠근다 - 업데이트 뒤 3분 점검(rpa_update.HEALTH_WAIT_SEC)보다 길게
+
+
+def late_seal():
+    """켜진 지 EXCEL_SEAL_AFTER_SEC 뒤 한 번: 엑셀 비밀번호 두 가지와, 옛 버전이 남긴 사본의 평문 엑셀 비밀번호를 잠근다.
+    켜자마자 잠그면, 새 버전이 3분 점검에 실패해 이전 버전으로 돌아갔을 때 그 버전이 잠긴 값을 못 읽는다 (검토 2026-11-19).
+    실패해도 에이전트는 계속 돈다."""
+    import rpa_status as st
+    try:
+        said = st.migrate_user_config()
+        if said:
+            log(said)
+        n = st.seal_backup_excel_pw()
+        if n:
+            log(f"프리셋 사본의 평문 엑셀 비밀번호 {n}개를 잠갔습니다")
+    except Exception as e:
+        log(f"엑셀 비밀번호를 잠그지 못했습니다 ({type(e).__name__})")
+
+
+def purge_excel_pw_commands(client, cid, pc_id, app=APP):
+    """켤 때 한 번: 자기 PC 명령함의 끝난 set_presets 명령 가운데 args.excel_pw 가 든 것을 나이와 상관없이 지운다 → 지운 수.
+    2026-11-19 전에는 웹 환경설정이 엑셀 비밀번호를 명령에 실어 보냈고, 끝난 명령은 7일 동안 클라우드에 남았다 (고객사 보안 검토).
+    이제는 PC 에서만 넣으므로 남은 것을 지운다 - 옛 웹 탭이 그 뒤에 보낸 것도 다음에 켤 때 지워진다.
+    질의는 색인이 있는 state 로만. 못 읽으면 0, 인증이 죽었으면 AuthError 그대로."""
+    base = app_path("commands", cid, pc_id, app)
+    n = 0
+    try:
+        for state in ("done", "failed", "expired"):
+            got = client.get(base, {"orderBy": '"state"', "equalTo": f'"{state}"'}) or {}
+            for key, cmd in got.items():
+                if (isinstance(cmd, dict) and cmd.get("type") == "set_presets"
+                        and isinstance(cmd.get("args"), dict) and "excel_pw" in cmd["args"]):
+                    client.delete(f"{base}/{key}")
+                    n += 1
+    except fb.AuthError:
+        raise
+    except Exception as e:
+        log(f"엑셀 비밀번호가 든 지난 명령 정리 실패: {type(e).__name__}")
+    return n
+
+
 def fail_stale_slow(client, cid, pc_id, now, app=APP):
     """켤 때 한 번: 지난 에이전트가 running 으로 두고 죽은 명령을 모두 failed 로 → 고친 수. 업데이트·재시작으로 스레드가 죽거나
     done/failed 표시를 못 올리고 끝나면 영영 running 으로 남는다 (규칙: running→failed 는 agent 가 한다). 느린 명령만 보던 것을
@@ -956,18 +997,19 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
     def do_presets(args):
         if not isinstance(args, dict) or not args:
             raise RuntimeError("프리셋이 비어있거나 알 수 없는 프리셋입니다.")
-        pw = args.get("excel_pw")       # 프리셋별 엑셀 비밀번호 - 같은 명령에 실어 온다 (옛 화면은 안 보낸다, 사용자 2026-11-05)
+        # 엑셀 비밀번호는 PC(옵저버)에서만 넣는다 (사용자 2026-11-19, 고객사 보안 검토). 2026-11-05 ~ 11-19 의 웹 화면은 같은 명령에
+        # excel_pw 를 실어 보냈다 - 열어 둔 옛 탭이 보내도 쓰지 않고 켬/끔만 적용한다 (값은 기록에 남기지 않는다)
+        sent_pw = "excel_pw" in args
         try:
             final = st.set_preset_switches({k: v for k, v in args.items() if k != "excel_pw"})
-            if isinstance(pw, dict):
-                st.set_preset_excel_pw(pw)
         except FileNotFoundError:
             raise RuntimeError("이 PC의 사용자 설정이 없습니다.") from None
         except ValueError as e:
             raise RuntimeError(str(e)) from None
         names = {p["no"]: p["name"] for p in (st.preset_summary() or [])}
         on = [f"{st.circled(no)} {names.get(no, no)}" for no, v in sorted(final.items()) if v]
-        return f"프리셋을 변경하였습니다. ({', '.join(on) or '없음'})"
+        tail = " 엑셀 비밀번호는 PC의 옵저버에서 입력하여 주십시오." if sent_pw else ""
+        return f"프리셋을 변경하였습니다. ({', '.join(on) or '없음'}){tail}"
 
     def do_parallel(args):
         # 동시 실행 창 수 (사용자 2026-10-16) - 관리 화면이 허용한 최대(limits.parallel)까지만. 허용하지 않은 업체는 웹에 설정이 안 보인다 -
@@ -1462,14 +1504,20 @@ def run(cfg):
         n = fail_stale_slow(client, cfg["cid"], cfg["pc_id"], client.server_now())   # 지난 실행이 running 으로 두고 죽은 명령
         if n:
             log(f"끝나지 못한 명령 {n}건을 실패로 표시하였습니다")
+        n = purge_excel_pw_commands(client, cfg["cid"], cfg["pc_id"])
+        if n:
+            log(f"엑셀 비밀번호가 든 지난 명령 {n}건을 지웠습니다")
     except fb.AuthError as e:
         return e
     # 사용자 설정 한 파일로 옮기기 (옛 ERPIA_AI.txt·WebManageConfig.json·login_manager_config.json → RPA_UserConfig.json,
     # 비밀번호 잠금). 실패해도 에이전트는 계속 돈다 - RPA 는 옛 파일이나 평문으로도 돈다
     try:
-        moved = st.migrate_user_config()
+        moved = st.migrate_user_config(excel=False)     # 엑셀 비밀번호 둘은 켜진 지 EXCEL_SEAL_AFTER_SEC 뒤에 (late_seal)
         if moved:
             log(moved)
+        gone = st.cleanup_old_configs()        # 평문 비밀번호가 든 옛 설정 사본 (.old·.broken) - 7일 지난 것
+        if gone:
+            log(f"옛 설정 파일 {len(gone)}개를 지웠습니다 ({' · '.join(gone)})")
     except Exception as e:
         log(f"사용자 설정을 옮기지 못했습니다 ({type(e).__name__}: {e}). 옛 파일 그대로 돕니다")
     # ERPia 위치: 적힌 값이 틀렸으면 찾아 고친다. 못 찾으면 사람이 띄운 창일 때만 고르는 창을 띄운다
@@ -1508,11 +1556,15 @@ def run(cfg):
         last_full, last_live = None, float("-inf")
         last_beat = float("-inf")    # monotonic 은 부팅부터 센다 - 0.0 이면 부팅 직후 첫 신호가 늦는다 (R14)
         last_clean = float("-inf")
+        seal_at = time.monotonic() + EXCEL_SEAL_AFTER_SEC      # 엑셀 비밀번호 잠그기 (late_seal) - 한 번
         recent_key = [None, []]   # (이력 파일 mtime, 오늘) 과 그때 센 요약
         last_sched = None         # 마지막으로 제대로 읽은 schedule - settings.json 을 잠깐 못 읽으면 이것을 올린다 (BugBuster M20)
         inst = [install, time.monotonic()]   # 설치 점검 결과와 잰 때 - INSTALL_CHECK_SEC 마다 다시 (파일 변조 감지)
         while not stop.is_set():
             try:
+                if seal_at is not None and time.monotonic() >= seal_at:
+                    seal_at = None
+                    late_seal()
                 snap = live_extras(st.dashboard_snapshot())
                 try:
                     snap["modules"] = (st.read_wellife_modules() if st.wellife_policy() else st.read_routine_modules())[0]   # PC 의 실제 실행 모듈 (RPA_UserConfig.json)

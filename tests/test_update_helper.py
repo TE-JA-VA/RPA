@@ -99,10 +99,15 @@ class FakeOps:
 uh.HEALTH_POLL_SEC = 0
 uh.HEALTH_WAIT_SEC = 0.05
 
+# 검토 2026-11-19: 이전 버전은 잠긴 엑셀 비밀번호를 못 읽는다 - 옛 버전으로 돌아갈 때(되돌리기)만 평문으로 되돌린다
+_plain = []
+uh.st.unseal_excel_passwords = lambda: (_plain.append(up.read_state().get("state")), 0)[1]
+
 print("=== 1. 성공 ===")
 setup_a_and_staged_b()
 ops = FakeOps()
 check(uh.main(ops) == 0, "도우미 끝 (0)")
+check(_plain == [], f"평소 업데이트는 엑셀 비밀번호를 건드리지 않는다 ({_plain})")
 s = up.read_state()
 check(read(PROG, "a.py") == "A2" and read(PROG, "c.py") == "C2" and read(PROG, "b.py") is None and read(PROG, "keep.py") == "K",
       "새 판 파일로 바뀌고 없어진 파일은 치웠다")
@@ -120,6 +125,7 @@ ops = FakeOps(good=("2026.10.07-1",))
 uh.main(ops)
 s = up.read_state()
 check(read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None, "옛 판 파일 그대로 돌아왔다")
+check(_plain == ["rolling_back"], f"점검 실패로 되돌릴 때 엑셀 비밀번호를 평문으로 되돌린다 - 에이전트를 끈 뒤에 ({_plain}, {ops.calls[:4]})")
 check(json.load(open(os.path.join(PROG, "manifest.json"), encoding="utf-8"))["version"] == "2026.10.07-1", "manifest 도 옛 판")
 check(s["state"] == "rolled_back" and "3분" in (s.get("reason") or "") and "설치 파일" not in s["reason"], f"rolled_back + 까닭 ({s.get('reason')})")
 check(ops.calls == ["end", "ver:2026.10.07-2", "after:2026.10.07-2", "end", "ver:2026.10.07-1", "after:2026.10.07-1", "deltask"], f"순서 ({ops.calls})")
@@ -209,9 +215,11 @@ uh.main(FakeOps())                                    # A → B (보관 A)
 up.stage_rollback(PROG, up.path("staging"))           # 보관 A → staging
 up.write_state({"state": "ready", "mode": "rollback", "target": "2026.10.07-1", "from": "2026.10.07-2",
                 "program_dir": PROG, "staging": up.path("staging"), "at": up.now_text()})
+_plain.clear()
 uh.main(FakeOps())
 check(read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None and up.backup_version() == "2026.10.07-2",
       "B → A, 보관본은 B (다시 앞으로 갈 수 있다)")
+check(_plain == ["applying"], f"[이전 판으로 되돌리기] 도 옛 버전으로 바꾸기 전에 엑셀 비밀번호를 평문으로 되돌린다 ({_plain})")
 
 print("\n=== 8. 성공 정리 도중 끊겨도 다음 실행이 마저 정리 - 되돌리지 않는다 ===")
 real_rmtree, real_replace, real_remove = shutil.rmtree, os.replace, os.remove

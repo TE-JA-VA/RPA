@@ -1471,6 +1471,14 @@ _pw_rr = lambda cfg: types.SimpleNamespace(pl=types.SimpleNamespace(load_setting
 check("엑셀 비밀번호: 설정이 없으면 0000", wellife.export_password(_pw_rr({})) == "0000")
 check("엑셀 비밀번호: 빈 값도 0000", wellife.export_password(_pw_rr({"InvoiceExcel": {"Password": "  "}})) == "0000")
 check("엑셀 비밀번호: 설정 값을 쓴다 (앞뒤 빈칸 뗌)", wellife.export_password(_pw_rr({"InvoiceExcel": {"Password": " 4321 "}})) == "4321")
+import rpa_status as _st_pw   # noqa: E402
+check("엑셀 비밀번호: 잠긴 값(dpapi:)은 풀어서 쓴다 (사용자 2026-11-19 - 에이전트가 켤 때 잠근다)",
+      wellife.export_password(_pw_rr({"InvoiceExcel": {"Password": _st_pw.seal("4321")}})) == "4321")
+try:
+    wellife.export_password(_pw_rr({"InvoiceExcel": {"Password": "dpapi:AAAA"}})); check("엑셀 비밀번호: 못 푸는 값 거부", False)
+except RuntimeError as e:
+    check(f"엑셀 비밀번호: 못 푸는 값은 설정 오류 - 어느 값인지(InvoiceExcel)와 다시 적는 법을 알리고 글에 값은 넣지 않는다 ({e})",
+          "AAAA" not in str(e) and "InvoiceExcel" in str(e) and "평문" in str(e))
 for _bad in ({"InvoiceExcel": "4321"}, {"InvoiceExcel": {"Password": 4321}}):
     try:
         wellife.export_password(_pw_rr(_bad)); check(f"엑셀 비밀번호 거부 {_bad}", False)

@@ -185,6 +185,7 @@ st.write_user_config(data, L["user_config"])
 check("출력 방식 값이 없으면 수동 (RPA 도 수동으로 돈다)", rs.load_state(L)[0]["print_mode"] == rs.PRINT_MANUAL)
 
 print("=== 3. 메일 칸은 없다 (2026-09-30 - 다른 프로그램이 맡는다) ===")
+check("이전 업체 프리셋 폴더 이름이 설정 창과 rpa_status 에서 같다 (사본의 엑셀 비밀번호 잠그기가 그 폴더를 찾는다)", rs.PRESET_STASH == st.PRESET_STASH)
 check("메일 칸·메일 사이트 찾기가 없다", not hasattr(rs, "mail_site") and not {"mail_id", "mail_pw"} & set(rs.FORM_KEYS)
       and rs.PASSWORD_KEYS == ("agent_pw", "erp_pw"))
 

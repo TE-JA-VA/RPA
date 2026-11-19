@@ -83,6 +83,9 @@ Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut
 ; 설치 전에 누가 이 폴더를 미리 만들어 두었어도 막히게 (2026-09-29 검토): 주인을 Administrators 로 바꾸고, 아래 폴더·파일은
 ; 따로 붙은 권한을 지우고 위의 것을 물려받게 한다 (주인은 권한을 다시 바꿀 수 있고, 따로 붙은 권한은 상속으로 안 지워진다)
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" /setowner *S-1-5-32-544 /T /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
+; 맨 위 폴더 자신에 따로 붙어 있던 권한도 지운다 (보안 감사 2026-11-13 C16, 고객사 보안 검토 2026-11-19): /inheritance:r /grant:r 는
+; 물려받은 것과 관리자·SYSTEM 것만 바꾸고, 설치 전에 누가 개별로 붙여 둔 사용자 권한은 남겼다. /reset 으로 먼저 비운 뒤 아래에서 상속을 끊는다
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" /reset /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" /inheritance:r /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA\*"" /reset /T /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
 ; 처음 설치면 설정 창, 판 올림이면 창 없이 작업 등록·에이전트 켜기. 조용한 설치에서는 창을 절대 띄우지 않는다 (기다리며 멈춘다)
@@ -164,7 +167,8 @@ begin
   end;
 end;
 
-// 파일을 지우기 직전 작업을 지우고, 끝에 설정·기록을 지울지 묻는다 (기본 아니요 - 조용한 제거면 남긴다)
+// 파일을 지우기 직전 작업을 지우고, 끝에 설정·기록을 지울지 묻는다. 창의 기본 단추는 [예] (보안 감사 2026-11-13 C11, 고객사 보안 검토
+// 2026-11-19 - 그 전엔 [아니요] 라 잠근 비밀번호가 든 설정이 PC 에 남기 쉬웠다). 조용한 제거는 묻지 않고 남긴다 (다시 설치하는 경우)
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Data: String;
@@ -175,8 +179,8 @@ begin
   begin
     Data := ExpandConstant('{commonappdata}\AFTER MARKET\RPA');
     if DirExists(Data) and (SuppressibleMsgBox('설정과 기록(' + Data + ')도 지울까요?' + #13#10 +
-         '다시 설치해서 쓰려면 [아니요] 를 누르세요. 설정에는 잠근 비밀번호가 들어 있습니다.',
-         mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES) then
+         '지우면 저장된 비밀번호·프리셋·실행 기록이 모두 없어집니다. 다시 설치해서 계속 쓰려면 [아니요] 를 누르세요.',
+         mbConfirmation, MB_YESNO or MB_DEFBUTTON1, IDNO) = IDYES) then
     begin
       DelTree(Data, True, True, True);
       RemoveDir(ExpandConstant('{commonappdata}\AFTER MARKET'));

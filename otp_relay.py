@@ -52,9 +52,14 @@ def check_line():
     """--check 한 줄 (빌드·샌드박스가 본다): exe 안에서 서버 모듈을 불러오나."""
     try:
         fb, secret = _agent_modules()
-        return f"인증번호 중계: 준비됨 (fb {'있음' if hasattr(fb, 'Client') else '없음'})"
+        # '설치본' 은 fb 가 프로그램 폴더를 제대로 알아보는가 - 틀리면 시험용 환경 변수 무시(보안 감사 C2)가 exe 에서 안 걸린다 (샌드박스가 본다)
+        return f"인증번호 중계: 준비됨 (fb {'있음' if hasattr(fb, 'Client') else '없음'}, 설치본 {'예' if fb._shipped() else '아니오'})"
     except Exception as e:
         return f"문제: 인증번호 중계를 불러오지 못했습니다. ({type(e).__name__}: {e})"
+
+
+CLOSE_TRIES, CLOSE_RETRY_SEC = 3, 1.0     # 끝날 때 번호·요청 지우기: 몇 번까지, 사이 쉬는 초 (PhoneRelay.close)
+CLOSE_BUDGET_SEC = 10.0                   # 한 바퀴가 이보다 오래 걸렸으면 다시 하지 않는다
 
 
 class PhoneRelay:
@@ -123,10 +128,29 @@ class PhoneRelay:
                 return None
             tick(min(POLL, max(0.1, end - time.time())))
 
-    def close(self, req_id):
-        """번호와 요청을 지운다 (성공·실패·중단 모두)."""
-        self._quiet_delete(self.code_path)
-        self._quiet_delete(self.req_path)
+    def close(self, req_id, tick=time.sleep, clock=time.monotonic):
+        """번호와 요청을 지운다 (성공·실패·중단 모두). 망이 잠깐 끊겨 못 지우면 CLOSE_TRIES 번까지 다시 지운다 - 그 전에는 한 번
+        실패하면 같은 휴대폰의 다음 요청 때까지 서버에 남았다 (보안 감사 2026-11-13 C17, 고객사 보안 검토 2026-11-19).
+        끝내 못 지우면 RuntimeError (부른 쪽이 기록에 남긴다 - 다음 요청을 열 때 지워진다). 규칙이 막은 것(401·403 - 남의 요청이
+        2분 안)은 우리 것이 아니라 다시 하지 않는다."""
+        left, err, started = [self.code_path, self.req_path], None, clock()
+        for i in range(CLOSE_TRIES):
+            still = []
+            for path in left:
+                try:
+                    self.client.delete(path)
+                except Exception as e:
+                    if getattr(e, "status", None) not in (401, 403):
+                        still.append(path)
+                        err = e
+            left = still
+            if not left:
+                return
+            if i < CLOSE_TRIES - 1:
+                if clock() - started > CLOSE_BUDGET_SEC:     # 망이 먹통 (요청마다 30초씩 걸린다) - 실행 끝을 몇 분씩 붙잡지 않는다
+                    break
+                tick(CLOSE_RETRY_SEC)
+        raise RuntimeError(f"인증번호 중계 항목을 지우지 못했습니다. ({type(err).__name__}) 다음 인증번호 요청 때 지워집니다.")
 
     def _quiet_delete(self, path):
         try:

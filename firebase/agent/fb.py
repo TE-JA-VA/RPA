@@ -7,7 +7,7 @@
 
 비밀번호는 로그인 요청에만 실린다 - 처음 한 번, 그리고 갱신이 거부됐을 때(비밀번호 변경·회수) 다시. 기록에는 어떤 경우에도 남기지 않는다.
 로그인까지 거부되면 그 뒤로는 망에 나가지 않고 같은 AuthError 만 올린다 (매초 두드리지 않게).
-FIREBASE_AUTH_EMULATOR_HOST 가 있으면 로그인·갱신을 에뮬레이터로 보낸다 (통합 시험용).
+FIREBASE_AUTH_EMULATOR_HOST 가 있으면 로그인·갱신을 에뮬레이터로 보낸다 (통합 시험용) - 소스에서 돌 때만. 설치본은 무시한다 (_dev_env).
 """
 import base64
 import email.utils
@@ -21,13 +21,38 @@ import urllib.request
 RENEW_BEFORE_SEC = 60
 
 
+def _program_dir(file=None, compiled_dir=None):
+    """프로그램 폴더. 에이전트는 원본 {프로그램}\\firebase\\agent\\fb.py 로 돌아 두 단계 위다. ACTOR·옵저버는 컴파일된 것을 쓴다 -
+    조각은 {프로그램}\\app\\fb.pyd 라 app 의 한 단계 위, onefile exe 는 exe 가 놓인 폴더 (rpa_status.compiled_dir 와 같은 규칙).
+    파일 자리로만 세면 조각에서 한 단계 위로 잘못 잡아 _shipped 가 거짓이 됐다 (검토 2026-11-19).
+    compiled_dir: None 이면 스스로 알아본다 (__compiled__), "" 면 컴파일되지 않은 것으로 본다 (시험)."""
+    if compiled_dir is None:
+        compiled = globals().get("__compiled__")
+        compiled_dir = getattr(compiled, "containing_dir", None) if compiled is not None else None
+    if compiled_dir:
+        return os.path.dirname(compiled_dir) if os.path.basename(compiled_dir).lower() == "app" else compiled_dir
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(file or __file__))))
+
+
+def _shipped():
+    """설치된 프로그램 폴더에서 도는가 - 프로그램 폴더에 버전 목록 manifest.json 이 있다 (소스 폴더에는 없다).
+    rpa_status.shipped 와 같은 기준 (이 모듈은 표준 라이브러리만 쓴다)."""
+    return os.path.isfile(os.path.join(_program_dir(), "manifest.json"))
+
+
+def _dev_env(name):
+    """시험용 환경 변수. 설치본에서는 무시한다 (보안 감사 2026-11-13 C2, 고객사 보안 검토 2026-11-19) - 그 전에는 같은 윈도우 계정의
+    다른 프로그램이 에뮬레이터 주소 변수를 넣으면 에이전트 로그인 요청(비밀번호)이 그 주소로 암호화 없이 갔다."""
+    return None if _shipped() else os.environ.get(name)
+
+
 def _auth_host():
-    host = os.environ.get("FIREBASE_AUTH_EMULATOR_HOST")
+    host = _dev_env("FIREBASE_AUTH_EMULATOR_HOST")
     return f"http://{host}/identitytoolkit.googleapis.com" if host else "https://identitytoolkit.googleapis.com"
 
 
 def _token_host():
-    host = os.environ.get("FIREBASE_AUTH_EMULATOR_HOST")
+    host = _dev_env("FIREBASE_AUTH_EMULATOR_HOST")
     return f"http://{host}/securetoken.googleapis.com" if host else "https://securetoken.googleapis.com"
 
 
@@ -112,6 +137,8 @@ def parse_sse(lines):
 
 class Client:
     def __init__(self, cfg, opener=None, clock=time.time):
+        if _shipped() and not str(cfg.get("database_url") or "").lower().startswith("https://"):    # 설치본은 암호화된 주소만 (C2)
+            raise ValueError("클라우드 주소가 https 가 아닙니다. '오토파일럿 설정'에서 에이전트 계정을 다시 설정하여 주십시오.")
         self._cfg = cfg
         self._open = opener or urllib.request.urlopen
         self._now = clock
@@ -230,7 +257,7 @@ class Client:
 
     # --- Firestore (이력) ----------------------------------------------
     def _fs_base(self):
-        host = os.environ.get("FIRESTORE_EMULATOR_HOST")
+        host = _dev_env("FIRESTORE_EMULATOR_HOST")
         root = f"http://{host}/v1" if host else "https://firestore.googleapis.com/v1"
         return f"{root}/projects/{self._cfg['project_id']}/databases/(default)/documents"
 

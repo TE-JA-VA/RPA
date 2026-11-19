@@ -1447,8 +1447,13 @@ with tempfile.TemporaryDirectory() as d:
         check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 0 and "① 지마켓" in msg, f"켜면 Stts 0, 결과에 이름 ({msg})")
         acts["set_presets"]({"PRESET1": False})
         check(st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 9, "끄면 Stts 9")
-        acts["set_presets"]({"PRESET1": False, "excel_pw": {"PRESET1": "1234"}})
-        check(st.read_user_config()["Sites"]["PRESET1"].get("ExcelPW") == "1234", "같은 명령의 excel_pw 는 프리셋 번호가 아니라 엑셀 비밀번호로 저장")
+        # 엑셀 비밀번호는 PC(옵저버)에서만 넣는다 (사용자 2026-11-19, 고객사 보안 검토) - 옛 웹 탭이 실어 보내도 쓰지 않는다
+        acts["set_presets"]({"PRESET1": True})
+        msg = acts["set_presets"]({"PRESET1": False, "excel_pw": {"PRESET1": "xl-1234"}})
+        site = st.read_user_config()["Sites"]["PRESET1"]
+        check("ExcelPW" not in site and site["Stts"] == 9 and "옵저버에서 입력" in msg and "xl-1234" not in msg,
+              f"옛 웹 탭의 excel_pw 는 쓰지 않고 켬/끔만 적용, 결과 글에 옵저버에서 넣으라고 알린다 ({msg})")
+        check(all("excel_pw" not in p and "xl_set" in p for p in st.preset_summary()), "현황에 올리는 프리셋 요약에 excel_pw 가 없다 (있는지만 xl_set)")
         for args, why in (({"PRESET7": True}, "알 수 없는 프리셋"), ({"PRESET2": True}, "아이디·비밀번호가 없습니다")):
             try:
                 acts["set_presets"](args)
@@ -1759,6 +1764,53 @@ with tempfile.TemporaryDirectory() as d:
               f"명령함은 state=running 만 질의한다 (규칙 .indexOn state) ({cc.get_calls})")
         check(ag.fail_stale_slow(CmdClient(None), "c_demo", "pc_office", 4000) == 0 and ag.fail_stale_slow(CmdClient(OSError("망")), "c_demo", "pc_office", 4000) == 0,
               "없거나 못 읽으면 0")
+        # 엑셀 비밀번호는 켜자마자가 아니라 3분 점검이 끝난 뒤에 잠근다 (검토 2026-11-19 - 점검에 실패해 돌아간 이전 버전은 잠긴 값을 못 읽는다)
+        import rpa_update as _upd
+        check(ag.EXCEL_SEAL_AFTER_SEC > _upd.HEALTH_WAIT_SEC, f"엑셀 비밀번호 잠그기는 업데이트 3분 점검보다 늦게 ({ag.EXCEL_SEAL_AFTER_SEC} > {_upd.HEALTH_WAIT_SEC})")
+        import rpa_status as _rs
+        _calls, _m0, _s0 = [], _rs.migrate_user_config, _rs.seal_backup_excel_pw
+        _rs.migrate_user_config = lambda **kw: (_calls.append(("migrate", kw)), None)[1]
+        _rs.seal_backup_excel_pw = lambda: (_calls.append(("backups", {})), 0)[1]
+        try:
+            ag.late_seal()
+            check(_calls == [("migrate", {}), ("backups", {})], f"늦게 잠그기: 설정의 엑셀 비밀번호(기본 migrate)와 사본을 잠근다 ({_calls})")
+            _rs.migrate_user_config = lambda **kw: (_ for _ in ()).throw(OSError("잠김"))
+            ag.late_seal()
+            check(True, "늦게 잠그기가 실패해도 예외를 올리지 않는다 (에이전트는 계속 돈다)")
+        finally:
+            _rs.migrate_user_config, _rs.seal_backup_excel_pw = _m0, _s0
+        # 시험용 환경 변수 (보안 감사 C2, 고객사 보안 검토 2026-11-19): 설치본은 에뮬레이터 주소를 무시한다 - 로그인 요청이
+        # 환경 변수의 주소로 암호화 없이 가지 않게. 클라우드 주소도 https 만
+        _envs = {k: os.environ.get(k) for k in ("FIREBASE_AUTH_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST")}
+        _real = fb._shipped
+        os.environ["FIREBASE_AUTH_EMULATOR_HOST"], os.environ["FIRESTORE_EMULATOR_HOST"] = "evil.example.com:9099", "evil.example.com:8080"
+        try:
+            check(fb._shipped() is False, "소스 폴더는 설치본이 아니다 (두 단계 위에 manifest.json 이 없다)")
+            # 검토 2026-11-19: ACTOR·옵저버는 조각 app\fb.pyd 를 불러 온다 - 파일 자리로만 세면 프로그램 폴더를 한 단계 위로 잘못 잡아
+            # 보호가 에이전트(firebase\agent\fb.py)에만 걸렸다. 컴파일된 것은 rpa_status.compiled_dir 과 같은 규칙으로
+            check(fb._program_dir(r"C:\P\firebase\agent\fb.py", "") == r"C:\P", "프로그램 폴더: 에이전트 원본(firebase\\agent\\fb.py)은 두 단계 위")
+            check(fb._program_dir(r"C:\P\app\fb.py", r"C:\P\app") == r"C:\P", "프로그램 폴더: 조각(app\\fb.pyd)은 app 의 한 단계 위")
+            check(fb._program_dir(r"C:\Temp\onefile_1\fb.py", r"C:\P") == r"C:\P", "프로그램 폴더: onefile exe 는 exe 가 놓인 폴더")
+            ecl = fb.Client({"project_id": "p", "database_url": "https://db.example.com"})
+            check(fb._auth_host().startswith("http://evil.example.com:9099") and ecl._fs_base().startswith("http://evil.example.com:8080"),
+                  "소스에서는 에뮬레이터 환경 변수를 쓴다 (통합 시험)")
+            fb._shipped = lambda: True
+            check(fb._auth_host() == "https://identitytoolkit.googleapis.com" and fb._token_host() == "https://securetoken.googleapis.com"
+                  and ecl._fs_base().startswith("https://firestore.googleapis.com/"), "설치본은 에뮬레이터 환경 변수를 무시하고 실제 https 주소만 쓴다")
+            try:
+                fb.Client({"project_id": "p", "database_url": "http://db.example.com"})
+                check(False, "설치본은 https 가 아닌 클라우드 주소를 거절한다")
+            except ValueError as e:
+                check("https" in str(e), f"설치본은 https 가 아닌 클라우드 주소를 거절한다 ({e})")
+            fb._shipped = lambda: False
+            check(fb.Client({"project_id": "p", "database_url": "http://127.0.0.1:9000"}) is not None, "소스에서는 http 에뮬레이터 주소도 된다")
+        finally:
+            fb._shipped = _real
+            for k, v in _envs.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
         # 끝난 지 7일 넘은 명령 지우기 (보안 감사 2026-11-12) - 끝난 것만, 질의는 created_at 기준
         class CleanClient(CmdClient):
             def __init__(self, got):
@@ -1774,6 +1826,31 @@ with tempfile.TemporaryDirectory() as d:
         check(ccl.get_calls == [("apps/rpa/commands/c_demo/pc_office", {"orderBy": '"created_at"', "endAt": str(3 * 86400), "limitToFirst": "200"})],
               f"만든 지 7일 넘은 것만 200개씩 질의한다 ({ccl.get_calls})")
         check(ag.cleanup_commands(CleanClient(OSError("망")), "c_demo", "pc_office", 10 * 86400) == 0, "못 읽으면 0")
+        # 클라우드에 남은 엑셀 비밀번호 지우기 (사용자 2026-11-19): 끝난 set_presets 명령의 args.excel_pw - 7일을 기다리지 않는다
+        class StateClient(CleanClient):
+            def get(self, path, params=None):
+                self.get_calls.append((path, params))
+                if isinstance(self.got, Exception):
+                    raise self.got
+                want = json.loads(params["equalTo"])
+                return {k: v for k, v in self.got.items() if isinstance(v, dict) and v.get("state") == want}
+        xc = StateClient({"x1": {"type": "set_presets", "state": "done", "args": {"PRESET1": True, "excel_pw": {"PRESET1": "xl-1"}}},
+                          "x2": {"type": "set_presets", "state": "done", "args": {"PRESET1": True}},
+                          "x3": {"type": "set_presets", "state": "failed", "args": {"excel_pw": {}}},
+                          "x4": {"type": "set_presets", "state": "queued", "args": {"excel_pw": {"PRESET1": "xl-2"}}},
+                          "x5": {"type": "launch", "state": "done", "args": {"target": "all"}},
+                          "x6": {"type": "set_presets", "state": "expired", "args": {"excel_pw": {"PRESET2": "xl-3"}}}, "x7": "x"})
+        n = ag.purge_excel_pw_commands(xc, "c_demo", "pc_office")
+        check(n == 3 and sorted(xc.deletes) == [f"apps/rpa/commands/c_demo/pc_office/{k}" for k in ("x1", "x3", "x6")],
+              f"끝난 set_presets 중 excel_pw 가 든 것만 지운다 - 대기 중·다른 명령·excel_pw 없는 것은 남긴다 ({n}, {xc.deletes})")
+        check([p for _, p in xc.get_calls] == [{"orderBy": '"state"', "equalTo": f'"{s}"'} for s in ("done", "failed", "expired")],
+              f"명령함은 state 색인으로만 질의한다 ({xc.get_calls})")
+        check(ag.purge_excel_pw_commands(StateClient(OSError("망")), "c_demo", "pc_office") == 0, "못 읽으면 0")
+        try:
+            ag.purge_excel_pw_commands(StateClient(fb.AuthError(401, "USER_DISABLED")), "c_demo", "pc_office")
+            check(False, "AuthError 올림 (엑셀 비밀번호 명령 정리)")
+        except fb.AuthError:
+            check(True, "인증이 죽었으면 AuthError 그대로 (엑셀 비밀번호 명령 정리)")
         try:
             ag.fail_stale_slow(CmdClient(fb.AuthError(401, "USER_DISABLED")), "c_demo", "pc_office", 4000)
             check(False, "AuthError 올림")

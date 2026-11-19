@@ -215,7 +215,7 @@ pressed.clear()
 wins[5] = ("popup", False, True)
 check("눌러도 안 닫히면 거듭 누르지 않고 멈춘다", stops(lambda: rr.upload_popups(0, 0)) and pressed == [5], str(pressed))
 
-print("--- 엑셀 비밀번호 (웹 환경설정, 사용자 2026-11-05)")
+print("--- 엑셀 비밀번호 (옵저버에서 넣은 값 - 2026-11-19 부터 PC 에서만, 잠가서 저장)")
 typed, logged, real_log, real_pw = [], [], rr.log, rr.status.excel_password
 rr.log = logged.append
 rr.status.excel_password = lambda code: {"013": "1234"}.get(code)
@@ -243,6 +243,17 @@ pw_popup(9)
 rr.upload_pw.update(code="014", at=0.0)
 texts = rr.upload_popups(0, 0)
 check("값이 없는 사이트는 예전처럼 빈 칸으로 [확인] - 그 파일은 실패", typed == ["1234"] and pressed == [9] and bool(texts), f"{typed} {pressed} {texts}")
+def _cannot_unseal(code):
+    raise RuntimeError("RPA_UserConfig.json의 비밀번호를 복호화하지 못했습니다.")
+
+
+rr.status.excel_password = _cannot_unseal       # 다른 PC·다른 윈도우 계정에서 잠근 값 (설정 파일 복사)
+logged.clear()
+pw_popup(9)
+rr.upload_pw.update(code="013", at=0.0)
+texts = rr.upload_popups(0, 0)
+check("이 PC 에서 못 푸는 값이면 멈추지 않고 빈 칸으로 [확인] - 그 파일은 실패, 기록에 옵저버에서 다시 입력하라고 남긴다",
+      typed == ["1234"] and pressed == [9] and bool(texts) and any("옵저버에서 다시 입력" in str(x) for x in logged), f"{typed} {pressed} {texts} {logged}")
 rr.upload_pw.update(code=None, at=0.0)
 rr.log, rr.status.excel_password = real_log, real_pw
 titles.clear()

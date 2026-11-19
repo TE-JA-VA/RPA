@@ -335,6 +335,9 @@ import web_runner as wr  # noqa: E402
 sites = wr.load_config()
 check("옮기기 전에도 프리페어는 옛 파일로 사이트를 읽는다 (주석 키는 빠진다)", list(sites) == ["PRESET1", "PRESET2"] and sites["PRESET1"]["PW"] == SITE_PW)
 
+_month = __import__("time").time() - 30 * 86400            # 옛 파일은 오래전에 만든 것이다 - .old 는 이름을 바꾼 때부터 7일을 센다 (검토 2026-11-19)
+for _x in (cred_old, web_old, lm_old):
+    os.utime(_x, (_month, _month))
 msg = st.migrate_user_config()
 check("옮기면 한 문장으로 알린다 (비밀번호 3개 잠금, 옛 파일 .old)", msg and "만들었습니다" in msg and "3개" in msg and ".old" in msg, str(msg))
 new = st.user_config_path()
@@ -353,6 +356,38 @@ sites = wr.load_config()
 check("옮긴 뒤 프리페어도 사이트 비밀번호를 풀어 쓴다", sites["PRESET1"]["PW"] == SITE_PW and sites["PRESET2"]["PW"] == "둘째-비번")
 check("검사(validate_site)도 예전처럼 통과", wr.validate_site("PRESET1", sites["PRESET1"]) == [], str(wr.validate_site("PRESET1", sites["PRESET1"])))
 check("다시 켜면 할 일이 없다", st.migrate_user_config() is None)
+
+# 옛 설정 파일(.old·.broken)의 평문 비밀번호 정리 (사용자 2026-11-19, 고객사 보안 검토): 새 설정이 잘 읽히고 7일 지난 것만 지운다
+import time as _time  # noqa: E402
+check("옛 파일 정리: 갓 옮긴 .old 는 남긴다 (되돌릴 여유 7일)", st.cleanup_old_configs() == []
+      and all(os.path.isfile(x + ".old") for x in (cred_old, web_old, lm_old)))
+_week = _time.time() - 8 * 86400
+for _x in (cred_old + ".old", web_old + ".old", lm_old + ".old"):
+    os.utime(_x, (_week, _week))
+with open(new + ".broken", "w", encoding="utf-8") as _f:        # 설정 창이 깨진 설정을 남겨 둔 사본 (rpa_settings)
+    _f.write("{깨진 설정 - 평문 비밀번호}")
+os.utime(new + ".broken", (_week, _week))
+_good = open(new, encoding="utf-8").read()
+with open(new, "w", encoding="utf-8") as _f:
+    _f.write("{")
+check("옛 파일 정리: 새 설정이 깨져 있으면 지우지 않는다 (옛 파일이 마지막 사본일 수 있다)", st.cleanup_old_configs() == []
+      and os.path.isfile(cred_old + ".old") and os.path.isfile(new + ".broken"))
+with open(new, "w", encoding="utf-8") as _f:
+    _f.write(_good)
+_now = _time.time()
+os.utime(lm_old + ".old", (_now, _now))
+_kept = {x: open(x + ".old", "rb").read() for x in (cred_old, web_old)}      # 아래 시험이 이 파일들을 다시 본다 - 지운 뒤 되돌려 둔다
+_gone = st.cleanup_old_configs()
+check("옛 파일 정리: 7일 지난 .old·.broken 만 지우고 그 이름을 돌려준다", sorted(_gone) == sorted(
+      [os.path.basename(cred_old) + ".old", os.path.basename(web_old) + ".old", os.path.basename(new) + ".broken"])
+      and not any(os.path.exists(x) for x in (cred_old + ".old", web_old + ".old", new + ".broken")) and os.path.isfile(lm_old + ".old"), str(_gone))
+check("옛 파일 정리: 새 설정은 그대로다", open(new, encoding="utf-8").read() == _good and st.cleanup_old_configs() == [])
+# 검토 2026-11-19: ERPIA_AI.txt 는 바탕화면\ERPIA_AI 와 바탕화면 바로 아래 두 자리에 있었다 - 옮긴 뒤에는 둘 다 없어 한 자리만 보면 다른 자리의 .old 가 남는다
+check("옛 파일 정리: ERPIA_AI.txt 의 두 자리(바탕화면\\ERPIA_AI, 바탕화면)를 모두 본다",
+      st.cred_file_candidates(r"D:\desk") == [os.path.join(r"D:\desk", st.AI_DIR_NAME, st.CRED_FILE_NAME), os.path.join(r"D:\desk", st.CRED_FILE_NAME)])
+for _x, _b in _kept.items():
+    with open(_x + ".old", "wb") as _f:
+        _f.write(_b)
 
 data["LogIn"]["PW"] = "새로-적은-평문"
 json.dump(data, open(new, "w", encoding="utf-8"), ensure_ascii=False, indent=2)

@@ -147,10 +147,31 @@ check("다른 프리셋으로 가면 그 프리셋 값", app.market_box.get() ==
 app.market_box.current(0)
 app._market_changed()
 check("'(선택 안 함)' 은 빈 값", app.presets[0]["market"] == "")
+# 엑셀 비밀번호 칸 (사용자 2026-11-19): 운송장 전송 마켓 옆 칸. 값은 화면에 다시 보이지 않고, 저장된 값이 있을 때만 [지우기]
+check("엑셀 비밀번호 칸: 마켓 칸이 보이는 PC 는 그 오른쪽 칸 (가려서 입력)",
+      int(app.xl_clear_link.master.grid_info()["column"]) == 3 and int(app.xl_clear_link.master.grid_info()["row"]) == int(app.market_box.grid_info()["row"])
+      and app.xl_clear_link.master.winfo_children()[0].entry.cget("show") == "•", app.xl_clear_link.master.grid_info())
+check("엑셀 비밀번호 칸: 저장된 값이 없으면 [지우기] 가 없고 안내 글에 쓰임새가 있다", not app.xl_clear_link.winfo_manager()
+      and obs.XL_PW_HINT in app.pw_hint.cget("text") and "저장된 엑셀 비밀번호" not in app.pw_hint.cget("text"))
+app.xl_pw_var.set("xl-typed")
+check("엑셀 비밀번호 칸: 치면 그 프리셋 값이 된다", app.presets[0]["xl_pw"] == "xl-typed" and app.presets[1]["xl_pw"] == "")
+app.presets[0].update(xl_pw="", has_xl_pw=True)
+app._load_fields()
+check("엑셀 비밀번호 칸: 저장된 값이 있으면 칸은 비어 있고 [지우기] 와 '저장된 …' 안내가 보인다", app.xl_pw_var.get() == ""
+      and app.xl_clear_link.winfo_manager() == "pack" and "엑셀 비밀번호가 있습니다" in app.pw_hint.cget("text"), app.pw_hint.cget("text")[:60])
+app.id_var.set("seller-NEW"); app.pw_var.set("pw-NEW")        # 아이디·비밀번호 칸은 치는 대로 담기지 않는다 (저장·칸 옮길 때 담는다)
+app.xl_clear_link.invoke()
+check("엑셀 비밀번호 칸: [지우기] 를 눌러도 치던 아이디·비밀번호가 그대로다 (검토 2026-11-19)",
+      app.id_var.get() == "seller-NEW" and app.pw_var.get() == "pw-NEW", (app.id_var.get(), bool(app.pw_var.get())))
+check("엑셀 비밀번호 칸: [지우기] 를 누르면 저장할 때 지울 표시가 서고 단추·안내가 사라진다", app.presets[0]["xl_clear"] is True
+      and not app.xl_clear_link.winfo_manager() and "엑셀 비밀번호가 있습니다" not in app.pw_hint.cget("text"))
+app.select(1)
+check("엑셀 비밀번호 칸: 다른 프리셋으로 가면 그 프리셋 것 (없음)", app.xl_pw_var.get() == "" and not app.xl_clear_link.winfo_manager())
 root.destroy()
 root, app = app_with(False)
 check("꺼진 PC 는 칸이 안 보인다", not app.market_box.grid_info())
 check("꺼져 있어도 고른 값은 그대로 들고 있다", app.presets[0]["market"] == "쿠팡")
+check("엑셀 비밀번호 칸: 마켓 칸이 없는 PC 는 왼쪽 칸에 보인다", int(app.xl_clear_link.master.grid_info()["column"]) == 1)
 root.destroy()
 
 shutil.rmtree(TMP, ignore_errors=True)

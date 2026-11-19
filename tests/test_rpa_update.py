@@ -26,6 +26,24 @@ def check(cond, what):
         fails.append(what)
 
 
+# 시험용 환경 변수 (보안 감사 C2, 고객사 보안 검토 2026-11-19): 설치본은 RPA_UPDATE_BASE_URL 을 무시하고 https 주소만 쓴다
+_real_shipped, _env0 = st.shipped, os.environ.get("RPA_UPDATE_BASE_URL")
+check(st.shipped() is False, "소스·시험 폴더는 설치본이 아니다 (프로그램 폴더에 manifest.json 이 없다)")
+os.environ["RPA_UPDATE_BASE_URL"] = "http://evil.example.com"
+check(up.update_urls() == ("http://evil.example.com",), "소스에서는 시험용 주소(RPA_UPDATE_BASE_URL)를 쓴다")
+st.shipped = lambda: True
+check(up.update_urls() == (up.server_info.UPDATE_BASE_URL, *up.server_info.UPDATE_FALLBACK_URLS) and all(u.startswith("https://") for u in up.update_urls()),
+      f"설치본은 시험용 주소를 무시하고 정해진 https 주소만 쓴다 ({up.update_urls()})")
+_fb0 = up.server_info.UPDATE_FALLBACK_URLS
+up.server_info.UPDATE_FALLBACK_URLS = ("http://old.example.com", "https://old2.example.com")
+check(up.update_urls() == (up.server_info.UPDATE_BASE_URL, "https://old2.example.com"), f"설치본은 https 가 아닌 받기 주소를 뺀다 ({up.update_urls()})")
+up.server_info.UPDATE_FALLBACK_URLS = _fb0
+st.shipped = _real_shipped
+if _env0 is None:
+    os.environ.pop("RPA_UPDATE_BASE_URL", None)
+else:
+    os.environ["RPA_UPDATE_BASE_URL"] = _env0
+
 SK, PK = us.keygen()
 PROG = os.path.join(tmp, "prog")
 

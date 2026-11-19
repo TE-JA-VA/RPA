@@ -27,6 +27,15 @@ if (-not $admin) {
     exit
 }
 
+# 0-1. 설치 전에 설정 폴더가 이미 있고 개별 사용자 권한이 걸려 있던 PC 를 흉내 낸다 (보안 감사 C16) - 설치가 그 권한까지 지워야 한다.
+# 전환 시험(--from)은 옛 설치 파일을 깔아 그 권한을 못 지우므로 하지 않는다 (검토 2026-11-19)
+$oldSetup = Test-Path "$T\site\transition.txt"
+if (-not $oldSetup) {
+  New-Item -ItemType Directory -Force $PD | Out-Null
+  icacls $PD /grant "${env:USERNAME}:(OI)(CI)F" | Out-Null
+  icacls $PD /grant "*S-1-5-32-545:(OI)(CI)RX" | Out-Null
+}
+
 # 1. 조용한 설치
 $p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup1.log`"" -Wait -PassThru
 Check "조용한 설치 (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.ExitCode)"
@@ -38,6 +47,13 @@ Check "새 자리 config·data" ((Test-Path "$PD\config") -and (Test-Path "$PD\d
 $acl = (icacls "$PD\config") -join "`n"
 $acl | Set-Content "$O\acl.txt" -Encoding UTF8
 Check "config 는 관리자·SYSTEM 만" (($acl -match "Administrators") -and ($acl -match "SYSTEM") -and -not ($acl -match "Users") -and -not ($acl -match "CREATOR OWNER")) $acl
+# 글자 대신 SID 로: 설정 폴더(맨 위)와 config 에 관리자(S-1-5-32-544)·SYSTEM(S-1-5-18) 외 권한이 하나도 없어야 한다 (C16)
+function AclSids($path) { @((Get-Acl $path).Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } | Sort-Object -Unique) }
+$rootSids = AclSids $PD; $cfgSids = AclSids "$PD\config"
+$extra = @(($rootSids + $cfgSids) | Where-Object { $_ -notin "S-1-5-32-544", "S-1-5-18" })
+if (-not $oldSetup) {
+  Check "설정 폴더에 설치 전부터 걸려 있던 개별 권한도 지워져 관리자·SYSTEM 만 남는다" (($extra.Count -eq 0) -and ($rootSids.Count -eq 2) -and ($cfgSids.Count -eq 2)) "맨 위: $rootSids / config: $cfgSids"
+}
 Check "시작 메뉴 바로 가기 둘" ((Test-Path "$SM\오토파일럿 설정.lnk") -and (Test-Path "$SM\오토파일럿 대시보드.url"))
 $un = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" | Where-Object { $_.GetValue("DisplayName") -eq "오토파일럿" }
 Check "앱 및 기능 목록" ($null -ne $un)
@@ -76,6 +92,8 @@ foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝"), @("Prepare_RPA
     Check "$n 가 켜져 끝까지 간다" ($done -and ($u8.Contains($e[2]) -or $ks.Contains($e[2]))) ($u8.Substring([Math]::Max(0, $u8.Length - 300)))
 }
 # 브라우저는 깔린 Edge (2026-10-06 - 같이 싣던 Chromium 713MB 를 뺐다). 프리페어 --selftest 는 위에서 Edge 로 내장 로그인 폼을 채웠다
+# 검토 2026-11-19: exe 안의 fb 도 프로그램 폴더를 알아봐야 시험용 환경 변수(에뮬레이터 주소)를 무시한다 - 조각은 app\ 에 있어 한 단계 위다
+Check "ACTOR·옵저버 exe 가 설치본임을 알아본다 (시험용 환경 변수 무시 - 보안 감사 C2)" (($outs["Prepare_RPA.exe --check"] -match "설치본 예") -and ($outs["Prepare_Observer.exe --check"] -match "설치본 예")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
 Check "ACTOR 오토파일럿·ACTOR exe 가 인증번호 중계 모듈을 불러온다 (fb·secret 을 exe 에 실음 - 설계 13절)" (($outs["Prepare_RPA.exe --check"] -match "인증번호 중계: 준비됨") -and ($outs["Prepare_Observer.exe --check"] -match "인증번호 중계: 준비됨")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
 Check "옵저버 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: Microsoft Edge …')" ($outs["Prepare_Observer.exe --check"] -match "브라우저: Microsoft Edge \d") (($outs["Prepare_Observer.exe --check"] -split "`n" | Where-Object { $_ -match "브라우저" }) -join " / ")
 # 조각 방식 버전 (lib.zip 이 있다, 설계 2026-11-11): 라이브러리 묶음이 풀렸고, 우리 소스(.py)는 실리지 않았다

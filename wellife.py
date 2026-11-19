@@ -1399,12 +1399,19 @@ def export_market(rr, ctx, market, pw):
 
 def export_password(rr):
     """마켓업로드용 엑셀 비밀번호 - RPA_UserConfig.json 의 InvoiceExcel.Password, 없거나 비면 0000 (사용자 2026-11-09).
-    모양이 틀리면 RuntimeError - 글에 값을 넣지 않는다 (비밀번호)."""
+    파일에는 잠긴 값(dpapi:)으로 있다 - 사람이 평문으로 적으면 에이전트가 켤 때 잠근다 (사용자 2026-11-19, rpa_status._pw_slots).
+    모양이 틀리거나 이 PC 에서 못 푸는 값이면 RuntimeError - 글에 값을 넣지 않는다 (비밀번호)."""
     where = f"{rr.pl.config_name()}의 '{EXPORT_PW_SECTION}'"
     sec = rr.pl.load_settings().get(EXPORT_PW_SECTION) or {}
     if not isinstance(sec, dict):
         raise RuntimeError(f"{where}은(는) 섹션이어야 합니다.")
     pw = sec.get(EXPORT_PW_KEY, EXPORT_PW_DEFAULT)
+    if isinstance(pw, str):
+        try:
+            pw = st.unseal(pw)
+        except RuntimeError:        # 다른 PC·다른 윈도우 계정에서 잠근 값 - 어느 값인지와 고치는 법을 알린다 (검토 2026-11-19)
+            raise RuntimeError(f"{where} {EXPORT_PW_KEY} 값을 이 PC에서 복호화하지 못했습니다. 설정 파일에 평문으로 다시 적어 주십시오. "
+                               "(에이전트가 실행될 때 암호화합니다)") from None
     if not isinstance(pw, str) or len(pw.strip()) > 100:
         raise RuntimeError(f"{where} {EXPORT_PW_KEY} 값은 100자 이하의 글자여야 합니다.")
     return pw.strip() or EXPORT_PW_DEFAULT

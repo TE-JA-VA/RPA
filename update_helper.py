@@ -151,6 +151,8 @@ def apply(state, ops):
     up.log(f"바꾸기 시작 {state['from']} → {state['target']} ({state.get('mode')}) 받을 {len(plan['fetch'])}·치울 {len(plan['remove'])}")
     try:
         ops.end_agent()
+        if state.get("mode") == "rollback":      # [이전 버전으로 되돌리기] - 옛 버전으로 바꾸기 전에
+            plain_excel_passwords()
         os.makedirs(os.path.join(bnew, "files"), exist_ok=True)
         with open(os.path.join(bnew, "plan.json"), "w", encoding="utf-8") as f:   # 되돌리기 계획 사본 - staging 이 지워져도 restore 한다 (BugBuster K6)
             json.dump(plan, f, ensure_ascii=False)
@@ -180,6 +182,18 @@ def apply(state, ops):
     return 0
 
 
+def plain_excel_passwords():
+    """이전 버전으로 돌아가기 직전에 엑셀 비밀번호 두 가지를 평문으로 되돌린다 (에이전트를 끈 뒤 - 그사이 다시 잠그는 쓰기가 없게).
+    2026-11-19 전 버전은 잠긴 엑셀 비밀번호를 못 읽는다 (rpa_status.unseal_excel_passwords, 검토 2026-11-19). 도우미는 에이전트와 같은
+    윈도우 계정으로 돌아 풀 수 있다. 못 해도 되돌리기는 계속한다 (기록만)."""
+    try:
+        n = st.unseal_excel_passwords()
+        if n:
+            up.log(f"엑셀 비밀번호 {n}개를 이전 버전이 읽을 수 있게 되돌렸습니다")
+    except Exception as e:
+        up.log(f"엑셀 비밀번호를 되돌리지 못했습니다 ({type(e).__name__}) - 이전 버전에서 엑셀 비밀번호를 다시 입력하여 주십시오")
+
+
 def rollback(state, ops, reason):
     prog, bnew = state["program_dir"], up.path("backup_new")
     started = up.now_text()
@@ -189,6 +203,7 @@ def rollback(state, ops, reason):
     err, rc = None, 0
     try:
         ops.end_agent()
+        plain_excel_passwords()
         try:
             plan = _plan(state)
         except Exception:

@@ -27,6 +27,7 @@ import threading
 import time
 import tkinter as tk
 import unicodedata
+import urllib.parse
 from ctypes import wintypes
 from tkinter import filedialog, messagebox
 
@@ -47,6 +48,7 @@ PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
 MAIL_ACCOUNT_HINT = "인증 메일을 받는 메일 계정입니다. 이 PC에만 암호화하여 저장되며, 오토파일럿이 인증번호를 확인하는 데만 사용합니다."
 MAIL_HINT = ("엑셀파일을 받으려는 메일이 '메일 시작 문구'로 시작하는 경우, 그 글자로 시작하는 메일이 처리대상이 됩니다."   # 메일 첨부파일일 때 안내 (사용자 2026-10-14 검수)
              " 메일이 많으면 제목으로 검색한 뒤 고르십시오.")      # (BugBuster I5)
+XL_PW_HINT = "엑셀 비밀번호는 쇼핑몰이 주문 엑셀 파일에 열기 비밀번호를 설정한 경우에만 입력합니다. 암호화하여 이 PC에만 저장합니다."
 IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부파일을 받습니다. 아이디·비밀번호는 메일 계정의 것입니다 "
              "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣어 주십시오).")
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
@@ -463,6 +465,9 @@ def new_preset(no, name=None, code=""):
             "phone": "", "senders": "", "otp": {},       # 인증 휴대폰(phoneId)·발신번호(쉼표), otp = 단계 목록에서 바꾼 인증번호 칸 {sid: 켬/끔}
             "wait": {},         # 단계 목록에서 바꾼 'n초 대기' {sid: (켬, 글자)} (apply_waits)
             "mail_id": "", "mail_pw": "", "has_mail_pw": False,   # 메일 2차인증 메일함 계정 (설계 2026-11-02, 비밀번호는 저장하면 비우고 has_mail_pw)
+            # 엑셀 비밀번호 (사용자 2026-11-19): 쇼핑몰이 주문 엑셀에 거는 값. PC 에서만 넣는다 - 새로 친 글자 xl_pw 는 저장하면 비우고
+            # has_xl_pw 만, xl_clear = [지우기] 를 눌렀다 (저장하면 지운다)
+            "xl_pw": "", "has_xl_pw": False, "xl_clear": False,
             "source": "shop", "prefix": "",              # 주문 수집용 엑셀파일 경로 (shop 쇼핑몰 / mail 메일 첨부파일 / imap 메일 서버), 메일 시작 문구
             "market": "",       # 운송장 전송 마켓 (st.INVOICE_MARKETS 하나 - 프리셋 하나에 마켓 하나, 여러 프리셋이 같은 마켓은 된다. 사용자 2026-11-09)
             "upload": False,    # 사이트에 엑셀을 올리는 프리셋 (st.EXCEL_UPLOAD_ON 이 꺼져 있으면 무시 - is_up)
@@ -482,7 +487,8 @@ def edit_view(presets):
     return [(p["name"].strip(), unicodedata.normalize("NFKC", p["code"]).strip(), p["id"], bool(p["pw"]), p["phone"], p["senders"],
              p["mail_id"], bool(p["mail_pw"]), p["source"], p["prefix"].strip(), repr(p["imap"]), sorted(p["deleted"]), sorted(p["otp"].items()),
              sorted(k for k, v in p["enabled"].items() if not v.get()), sorted(p["wait"].items()),
-             p["market"])     # 운송장 전송 마켓만 고르고 닫으면 묻지 않고 버렸다 (2026-11-10)
+             p["market"],     # 운송장 전송 마켓만 고르고 닫으면 묻지 않고 버렸다 (2026-11-10)
+             bool(p["xl_pw"].strip()), p["xl_clear"])     # 엑셀 비밀번호를 새로 쳤거나 [지우기] 를 눌렀다
             for p in presets if p["loaded"] or p["raw"] or p["head"]]
 
 
@@ -503,7 +509,8 @@ def load_file_into(p, obj):
     for k, s in enumerate(r["steps"]):
         s["id"] = k
     if obj["code"] != p["code"]:
-        p.update(id="", pw="", has_pw=False, phone="", senders="", mail_id="", mail_pw="", has_mail_pw=False)
+        p.update(id="", pw="", has_pw=False, phone="", senders="", mail_id="", mail_pw="", has_mail_pw=False,
+                 xl_pw="", has_xl_pw=False, xl_clear=False)
     pick = next((s["pick"] for s in r["steps"] if s.get("pick")), None)
     p.update(name=obj["name"], code=obj["code"], loaded=r, raw=[], head=None, start_url=None, viewport=r.get("viewport"),
              enabled={}, deleted=set(), otp={}, wait={}, fresh=True,
@@ -546,6 +553,7 @@ def load_presets():
             if not st.login_mismatch(site, p["code"]):     # 다른 사이트의 계정이면 비워 둔다 - 다시 저장해도 잘못된 짝이 굳지 않게 (이슈 #13 검토)
                 q["id"], q["has_pw"] = site.get("ID") or "", bool(site.get("PW"))
                 q["mail_id"], q["has_mail_pw"] = site.get("MailID") or "", bool(site.get("MailPW"))
+                q["has_xl_pw"] = bool(site.get(st.EXCEL_PW_KEY))
             q["phone"], q["senders"] = site.get("Phone") or "", ", ".join(site.get("SmsSenders") or [])
         out.append(q)
     return out
@@ -655,7 +663,24 @@ def keep_dates(files, old, logins_changed, now):
     return files
 
 
-def store(files, logins, phones=None, origs=None, dropped=(), mail_logins=None):
+def plain_http_warn(record):
+    """https 가 아닌(http) 사이트를 기록했으면 저장 때 보일 경고, 아니면 None (보안 감사 2026-11-13 C12, 고객사 보안 검토 2026-11-19).
+    시작 주소가 http 이거나, 비밀번호를 넣는 화면이 http 였다 (기록기가 plainHttp 를 적는다). 이 PC 자신의 주소(시험용)는 뺀다."""
+    if not record:
+        return None
+    start = urllib.parse.urlparse(str(record.get("start_url") or ""))
+    hit = start.scheme.lower() == "http" and not rec.is_local_host(start.hostname)
+    hit = hit or any(s.get("kind") == "secret" and s.get("plainHttp") and not rec.is_local_host(s.get("host")) for s in record.get("steps") or [])
+    return ("사이트 주소가 https가 아니어서(http) 아이디·비밀번호가 암호화되지 않은 채 전송됩니다. "
+            "사이트에 https 주소가 있는지 확인하여 주십시오.") if hit else None
+
+
+def excel_pw_changes(out):
+    """저장할 칸들 → save_preset_sites 의 excel_pws {번호: 새 값 | "" (지움) | None (그대로)}. 새로 친 글자가 [지우기] 보다 먼저다."""
+    return {o["no"]: (o.get("xl_pw") or "").strip() or ("" if o.get("xl_clear") else None) for o in out if o["record"]}
+
+
+def store(files, logins, phones=None, origs=None, dropped=(), mail_logins=None, excel_pws=None):
     """프리셋 파일과 Sites 의 PRESETn 을 쓴다. 못 쓰면 화면에 보일 문장 (콘솔 없는 exe 라 조용히 넘어가면 안 된다), 되면 None.
     origs: {번호: 불러올 때 번호}·dropped: 지운 옛 번호 - 프리셋을 지워 번호가 당겨졌을 때 (이슈 #13) Sites 의 옛 값은 옛 번호에서 찾고,
     메일 기억·로그인 세션·보관 파일도 따라 옮긴다. 순서는 프리셋 → 설정 → 파일: 설정 쓰기가 실패해도 Sites 는 옛 번호 그대로라
@@ -666,7 +691,7 @@ def store(files, logins, phones=None, origs=None, dropped=(), mail_logins=None):
         old_codes = None                     # 옛 파일을 못 읽으면 메일 기억은 그대로 둔다
     try:
         st.write_presets(files)
-        st.save_preset_sites(files, logins, phones=phones, origs=origs, mail_logins=mail_logins)
+        st.save_preset_sites(files, logins, phones=phones, origs=origs, mail_logins=mail_logins, excel_pws=excel_pws)
     except (OSError, ValueError, RuntimeError) as e:
         return f"저장하지 못했습니다. ({e}) 잠시 후 다시 저장하여 주십시오."
     pt.move_preset_files(origs or {}, dropped)
@@ -805,6 +830,7 @@ class App:
         self.name_var, self.code_var = tk.StringVar(root), tk.StringVar(root)
         self.id_var, self.pw_var = tk.StringVar(root), tk.StringVar(root)
         self.mail_id_var, self.mail_pw_var = tk.StringVar(root), tk.StringVar(root)   # 메일 2차인증 메일함 계정
+        self.xl_pw_var = tk.StringVar(root)                                           # 엑셀 비밀번호 (사용자 2026-11-19)
         self.senders_var, self.phones, self.phone_ids = tk.StringVar(root), None, [""]
         self.source_var, self.prefix_var = tk.StringVar(root, value="shop"), tk.StringVar(root)
         self._build()
@@ -907,6 +933,15 @@ class App:
         if st.invoice_send_on():
             tk.Label(form, text="운송장 전송 마켓", font=F, bg=CARD, fg=MUTED).grid(row=7, column=0, sticky="w", pady=(3, 0))
             self.market_box.grid(row=7, column=1, sticky="we", padx=(6, 0), pady=(3, 0))
+        # 엑셀 비밀번호 (사용자 2026-11-19, 고객사 보안 검토): 쇼핑몰이 주문 엑셀 파일에 거는 열기 비밀번호. 2026-11-05 에는 웹 환경설정에서
+        # 넣었는데(클라우드에 평문) 이제 이 PC 에서만 넣고 잠가서 저장한다. 운송장 전송 마켓 옆 칸, 그 칸이 없는 PC 는 왼쪽 칸에
+        xl_col = 2 if st.invoice_send_on() else 0
+        tk.Label(form, text="엑셀 비밀번호", font=F, bg=CARD, fg=MUTED).grid(row=7, column=xl_col, sticky="w", padx=(12 if xl_col else 0, 0), pady=(3, 0))
+        xl = tk.Frame(form, bg=CARD)
+        xl.grid(row=7, column=xl_col + 1, sticky="we", padx=(6, 0), pady=(3, 0))
+        self._entry(xl, self.xl_pw_var, 6, show="•").pack(side="left", fill="x", expand=True)
+        self.xl_clear_link = w.Link(xl, "지우기", self._xl_clear)        # 저장된 값이 있을 때만 보인다 (_load_fields)
+        self.xl_pw_var.trace_add("write", lambda *a: self._field_changed())
         form.columnconfigure(0, minsize=self.prefix_label.winfo_reqwidth())    # '메일 시작 문구' 가 나타나도 칸이 옆으로 밀리지 않게 (사용자 2026-10-20)
         for col in (1, 3):              # 왼쪽(이름·아이디·인증 휴대폰)·오른쪽(사이트코드·비밀번호·발신번호) 칸을 같은 너비로 (사용자 2026-10-13)
             form.columnconfigure(col, weight=1, uniform="field")
@@ -1039,14 +1074,22 @@ class App:
         self.pw_var.set(p["pw"])
         self.mail_id_var.set(p["mail_id"])
         self.mail_pw_var.set(p["mail_pw"])
+        self.xl_pw_var.set(p["xl_pw"])
+        if p["has_xl_pw"] and not p["xl_clear"]:
+            self.xl_clear_link.pack(side="left", padx=(6, 0))
+        else:
+            self.xl_clear_link.pack_forget()
         self.senders_var.set(p["senders"])
         self.source_var.set(p["source"])
         self.prefix_var.set(p["prefix"])
         self._fill_phone_box()
         self._loading = False
         self._show_prefix()
-        self.pw_hint.config(text=("저장된 비밀번호가 있습니다. " if p["has_pw"] else "")
+        xl_saved = p["has_xl_pw"] and not p["xl_clear"]
+        self.pw_hint.config(text=("저장된 비밀번호·엑셀 비밀번호가 있습니다. " if p["has_pw"] and xl_saved else
+                                  "저장된 비밀번호가 있습니다. " if p["has_pw"] else "저장된 엑셀 비밀번호가 있습니다. " if xl_saved else "")
                             + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.\n"
+                            + XL_PW_HINT + "\n"
                             + (IMAP_HINT if p["source"] == "imap" else
                                "문자 인증번호를 받는 사이트면 인증 휴대폰과 발신번호(여러 개면 쉼표로)를 정해 주십시오.")
                             + ("\n" + MAIL_HINT if p["source"] == "mail" else "")
@@ -1075,8 +1118,16 @@ class App:
         p.update(name=self.name_var.get().strip() or p["name"],
                  code=unicodedata.normalize("NFKC", self.code_var.get()).strip(),     # 전각 '１０１' → '101' (ERPia 사이트코드와 맞게, 2026-10-22)
                  id=self.id_var.get(), pw=self.pw_var.get(), senders=self.senders_var.get(),
-                 mail_id=self.mail_id_var.get(), mail_pw=self.mail_pw_var.get(),
+                 mail_id=self.mail_id_var.get(), mail_pw=self.mail_pw_var.get(), xl_pw=self.xl_pw_var.get(),
                  phone=self.phone_ids[i] if 0 <= i < len(self.phone_ids) else p["phone"], source=source, prefix=prefix)
+
+    def _xl_clear(self):
+        """[지우기]: 저장된 엑셀 비밀번호를 저장할 때 지운다 (값을 화면에 보이지 않으므로 지우는 단추를 따로 둔다)."""
+        self._store_fields()          # 치던 아이디·비밀번호를 먼저 담는다 - 그 칸들은 치는 대로 담기지 않아 다시 그리면 지워진다 (검토 2026-11-19)
+        p = self.presets[self.cur]
+        p.update(xl_pw="", xl_clear=True)
+        self._load_fields()
+        self._title()
 
     def _field_changed(self):
         if not getattr(self, "_loading", False) and hasattr(self, "list_title"):
@@ -1647,6 +1698,8 @@ class App:
                 if dl > 1:                             # 같은 사이트코드 파일은 하나만 올린다 (run_routine.collect_upload_files)
                     warns.append(f"{circled(no)} 파일 받기 단계가 {dl}개입니다. 같은 사이트코드의 파일은 가장 나중에 받은 1개만 "
                                  "업로드하고 나머지는 오류 폴더로 옮깁니다.")
+                if plain_http_warn(r):                 # (보안 감사 C12)
+                    warns.append(f"{circled(no)} {plain_http_warn(r)}")
                 if imap_warn(st.imap_step(final)):     # (BugBuster I6)
                     warns.append(f"{circled(no)} {imap_warn(st.imap_step(final))}")
                 pw_sites = rec.password_sites([s for k, s in enumerate(final["steps"]) if k in kept])
@@ -1655,7 +1708,8 @@ class App:
                                  "실행할 때마다 모든 사이트에 이 프리셋의 비밀번호를 입력합니다.")
             out.append({"no": no, "name": p["name"], "code": p["code"], "record": r, "source": p["source"], "prefix": p["prefix"], "upload": is_up(p), "market": p["market"],
                         "id": p["id"], "pw": p["pw"], "has_pw": p["has_pw"], "phone": p["phone"], "senders": p["senders"],
-                        "mail_id": p["mail_id"], "mail_pw": p["mail_pw"], "has_mail_pw": p["has_mail_pw"]})
+                        "mail_id": p["mail_id"], "mail_pw": p["mail_pw"], "has_mail_pw": p["has_mail_pw"],
+                        "xl_pw": p["xl_pw"], "xl_clear": p["xl_clear"]})
         problem = validate_presets(out, need_market=bool(self.market_box.grid_info())) or pick_problem(out)
         if problem:
             self.select(problem[0] - 1)
@@ -1701,15 +1755,25 @@ class App:
                                             "해당 단계를 수정해주십시오.", fg=RED)
         problem = store(files, {o["no"]: (o["id"].strip(), o["pw"] or None) for o in out if o["record"]},
                         phones={o["no"]: (o["phone"], senders_list(o["senders"])) for o in out if o["record"]}, origs=origs, dropped=dropped,
-                        mail_logins={o["no"]: (o["mail_id"].strip(), o["mail_pw"] or None) for o in out if o["record"]})
+                        mail_logins={o["no"]: (o["mail_id"].strip(), o["mail_pw"] or None) for o in out if o["record"]},
+                        excel_pws=excel_pw_changes(out))
         if problem:
             return self.status.config(text=problem, fg=RED)
         self.unsaved_drop = False
+        try:                                     # 엑셀 비밀번호가 실제로 남았나 - 사이트코드를 바꾼 칸은 저장하며 지운다 (다른 사이트의 값, save_preset_sites)
+            saved_sites = st.read_user_config().get(st.SITES_SECTION) or {}
+        except (OSError, ValueError):
+            saved_sites = None
         for p, f in zip(self.presets, files):
             p["orig"] = f["no"]                  # 이제부터는 이 번호가 옛 번호
             if f["record"]:
+                kept = bool(p["xl_pw"].strip()) or (p["has_xl_pw"] and not p["xl_clear"])
+                has_xl = kept if saved_sites is None else bool((saved_sites.get(st.preset_site_key(f["no"])) or {}).get(st.EXCEL_PW_KEY))
+                if kept and not has_xl:          # '저장됨' 이라 해 놓고 업로드 때 '없습니다' 로 실패했다 (검토 2026-11-19)
+                    warns.append(f"{circled(f['no'])} 사이트코드가 바뀌어 저장된 엑셀 비밀번호를 지웠습니다. 필요하면 다시 입력하여 주십시오.")
                 p.update(pw="", has_pw=True, saved_at=f["saved_at"], fresh=False,
-                         mail_pw="", has_mail_pw=has_mail_login(f["record"]) and bool(p["mail_pw"] or p["has_mail_pw"]))
+                         mail_pw="", has_mail_pw=has_mail_login(f["record"]) and bool(p["mail_pw"] or p["has_mail_pw"]),
+                         xl_pw="", xl_clear=False, has_xl_pw=has_xl)
         self._load_fields()
         self.saved_view = edit_view(self.presets)
         self.status.config(text=" ".join(["저장했습니다."] + warns), fg=BLUE if warns else GREEN_D)     # 기록 때 보이던 메일도 실행 때 받는다 - '이미 처리' 로 미리 채우지 않는다 (사용자 2026-10-20, 중복은 주문번호로 막힌다)

@@ -284,6 +284,12 @@ def install_root():
         os.environ.get("ProgramData") or r"C:\ProgramData", *PRODUCT_DIRS)
 
 
+def shipped():
+    """설치된 프로그램 폴더에서 도는가 - 프로그램 폴더에 버전 목록(manifest.json)이 있다 (소스·시험 폴더에는 없다).
+    설치본은 시험용 환경 변수(에뮬레이터·업데이트 주소)를 무시한다 (보안 감사 2026-11-13 C2)."""
+    return os.path.isfile(os.path.join(program_dir(), MANIFEST_NAME))
+
+
 def new_layout():
     """설치 마법사(2부)가 install_root()\\config 를 만든 PC 인가. 아니면 옛 구조 (설정·기록 = exe 옆)."""
     return os.path.isdir(os.path.join(install_root(), "config"))
@@ -502,8 +508,12 @@ def unseal(value):
             "이 PC에서 비밀번호를 다시 입력하여 주십시오. (파일에 평문으로 적으면 에이전트가 실행될 때 암호화합니다)") from None
 
 
-def _pw_slots(data):
-    """비밀번호 자리 (담은 dict, 키): LogIn.PW 와 사이트마다 PW."""
+def _pw_slots(data, excel=True):
+    """비밀번호 자리 (담은 dict, 키): LogIn.PW, 사이트마다 PW·MailPW·ExcelPW, InvoiceExcel.Password.
+    엑셀 비밀번호 둘(쇼핑몰이 주문 엑셀에 거는 값·운송장 엑셀에 거는 값)도 잠근다 (사용자 2026-11-19, 고객사 보안 검토 - 그 전엔 평문).
+    excel=False 면 그 둘은 빼고 (있는 그대로 둔다 - 이전 버전은 잠긴 엑셀 비밀번호를 못 읽는다: migrate_user_config·unseal_excel_passwords).
+    운송장 엑셀 비밀번호가 누구나 아는 기본값(0000)이면 잠그지 않는다 - 지키는 것이 없고, 윈도우 계정이 바뀌어 못 풀면 운송장
+    엑셀출력이 통째로 멈춘다 (검토 2026-11-19)."""
     login = data.get(LOGIN_SECTION)
     if isinstance(login, dict) and "PW" in login:
         yield login, "PW"
@@ -513,6 +523,12 @@ def _pw_slots(data):
             yield site, "PW"
         if isinstance(site, dict) and "MailPW" in site:     # 메일 2차인증 메일함 비밀번호 (설계 2026-11-02)
             yield site, "MailPW"
+        if excel and isinstance(site, dict) and EXCEL_PW_KEY in site:
+            yield site, EXCEL_PW_KEY
+    invoice = data.get(INVOICE_PW_SECTION)
+    if (excel and isinstance(invoice, dict) and isinstance(invoice.get(INVOICE_PW_KEY), str)   # 글자가 아닌 값(잘못 적음)은 그대로 둬서 읽는 쪽이 알린다
+            and invoice[INVOICE_PW_KEY].strip() != INVOICE_PW_DEFAULT):
+        yield invoice, INVOICE_PW_KEY
 
 
 def _read_json(path):
@@ -576,13 +592,13 @@ def _replace_retry(tmp, target):
             time.sleep(0.1)
 
 
-def write_user_config(data, path=None):
+def write_user_config(data, path=None, seal_excel=True):
     """사용자 설정을 쓴다. 평문 비밀번호는 잠가서 넣는다. 임시 파일에 다 쓴 뒤 바꿔치기한다 (반쯤 쓴 파일이 남지 않게).
     평문이 남는 사본(.bak)은 만들지 않는다. 기본 자리에 쓰면 옛 파일들을 .old 로 바꾸고 그 목록을 돌려준다
     (이제 안 읽는다는 표시. 평문 비밀번호가 들어 있으니 RPA 가 잘 도는 것을 본 뒤 지운다)."""
     target = path or user_config_path()
     data = json.loads(json.dumps(data, ensure_ascii=False))   # 사본 - 부른 쪽 dict 에 잠근 값이 섞이지 않게
-    for holder, key in _pw_slots(data):
+    for holder, key in _pw_slots(data, excel=seal_excel):     # seal_excel=False: 엑셀 비밀번호 둘은 있는 그대로 (unseal_excel_passwords)
         holder[key] = seal(holder[key])
     # 임시 파일에도 설정이 통째로 들어가므로, 바꿔치기가 실패하면 반드시 지운다.
     tmp = f"{target}.{os.getpid()}.tmp"
@@ -606,13 +622,105 @@ def write_user_config(data, path=None):
             try:
                 os.replace(old, old + ".old")
                 moved.append(old)
+                os.utime(old + ".old", None)     # 이름을 바꾼 때부터 센다 - 원본의 옛 날짜가 남으면 곧바로 지워진다 (cleanup_old_configs, 검토 2026-11-19)
             except OSError:
                 pass        # 다른 프로그램이 잡고 있으면 둔다 - 새 파일이 있으면 어차피 안 읽는다
     return moved
 
 
-def migrate_user_config():
-    """에이전트가 켤 때 부른다. RPA_UserConfig.json 이 없으면 옛 파일들을 합쳐 만들고, 있으면 평문 비밀번호를 잠그고
+OLD_CONFIG_KEEP_DAYS = 7     # 옛 설정 파일(.old·.broken)을 남겨 두는 날 수 - 새 설정이 잘 도는지 볼 여유
+
+
+def cleanup_old_configs(now=None):
+    """에이전트가 켤 때 부른다. 평문 비밀번호가 든 옛 설정 사본을 지운다 → 지운 파일 이름들 (사용자 2026-11-19, 고객사 보안 검토 -
+    그 전에는 설치 담당자가 손으로 지워야 했다). 대상: 옛 세 파일을 옮기며 남긴 *.old, 설정 창이 깨진 설정을 남긴 RPA_UserConfig.json.broken.
+    새 설정이 잘 읽히고(깨졌으면 옛 파일이 마지막 사본일 수 있다) 만든 지 OLD_CONFIG_KEEP_DAYS 가 지난 것만 지운다. 못 지우면 넘어간다."""
+    new = user_config_path()
+    try:
+        if not (os.path.isfile(new) and read_user_config(new)):
+            return []
+    except (ValueError, OSError):
+        return []
+    limit = (time.time() if now is None else now) - OLD_CONFIG_KEEP_DAYS * 86400
+    gone = []
+    # ERPIA_AI.txt 는 두 자리(바탕화면\ERPIA_AI, 바탕화면)에 있었다 - 옮긴 뒤에는 둘 다 없어 cred_file_path() 는 새 자리만 돌려준다 (검토 2026-11-19)
+    base = os.path.dirname(new)
+    if os.environ.get("RPA_CRED_FILE"):
+        creds = [os.environ["RPA_CRED_FILE"]]
+    elif os.environ.get("RPA_USER_CONFIG"):
+        creds = [os.path.join(base, CRED_FILE_NAME)]
+    else:
+        creds = cred_file_candidates(find_desktop_dir())
+    olds = [*creds, os.path.join(base, WEB_CONFIG_NAME), os.path.join(base, LOGIN_MANAGER_NAME)]
+    for path in [p + ".old" for p in olds] + [new + ".broken"]:
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < limit:
+                os.remove(path)
+                gone.append(os.path.basename(path))
+        except OSError:
+            pass
+    return gone
+
+
+def unseal_excel_passwords():
+    """엑셀 비밀번호 두 가지(Sites 의 ExcelPW, InvoiceExcel.Password)를 평문으로 되돌린다 → 되돌린 수. 로그인 비밀번호는 잠긴 그대로.
+    업데이트 도우미가 이전 버전으로 돌아가기 직전에 부른다 (update_helper.plain_excel_passwords) - 2026-11-19 전 버전은 이 둘을 평문으로만
+    읽어, 잠긴 채 돌아가면 엑셀 업로드 비밀번호 칸에 'dpapi:…' 를 넣고 운송장 엑셀출력은 설정 오류로 멈춘다 (검토 2026-11-19).
+    잠글 줄 아는 버전으로 돌아간 것이면 그 에이전트가 켜진 뒤 다시 잠근다. 이 PC 에서 못 푸는 값은 그대로 둔다."""
+    path = user_config_path()
+    if not os.path.isfile(path):
+        return 0
+    data = read_user_config(path)
+    n = 0
+    for holder, key in _pw_slots(data):
+        value = holder[key]
+        if key in (EXCEL_PW_KEY, INVOICE_PW_KEY) and isinstance(value, str) and value.startswith(SEALED_PREFIX):
+            try:
+                holder[key] = unseal(value)
+                n += 1
+            except RuntimeError:
+                pass
+    if n:
+        write_user_config(data, seal_excel=False)
+    return n
+
+
+def seal_backup_excel_pw():
+    """옛 버전(2026-11-05 ~ 11-19)이 남긴 사본의 평문 엑셀 비밀번호를 잠근다 → 잠근 수 (검토 2026-11-19). 사본 = 넣어 주기·복사 전
+    프리셋 보관(data\\프리셋보관\\PRESETn.json 의 site)과 업체코드를 바꾸며 옮겨 둔 이전 업체 프리셋(config\\이전 업체 프리셋\\…\\Sites.json).
+    새 버전이 만드는 사본은 이미 잠긴 값을 담는다. 못 읽거나 못 쓰는 파일은 넘어간다."""
+    files = []
+    for folder, kind in ((os.path.dirname(preset_backup_path(1)), "backup"), (os.path.join(config_dir(), PRESET_STASH), "stash")):
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        files += [(os.path.join(folder, n), kind) for n in names if n.lower().endswith(".json")] if kind == "backup" else \
+                 [(os.path.join(folder, n, "Sites.json"), kind) for n in names]
+    n = 0
+    for path, kind in files:
+        try:
+            data = read_json(path)
+            if not isinstance(data, dict):
+                continue
+            cells = [data.get("site")] if kind == "backup" else list(data.values())
+            hit = 0
+            for cell in cells:
+                value = cell.get(EXCEL_PW_KEY) if isinstance(cell, dict) else None
+                if isinstance(value, str) and value and not value.startswith(SEALED_PREFIX):
+                    cell[EXCEL_PW_KEY] = seal(value)
+                    hit += 1
+            if hit and write_json_atomic(path, data):
+                n += hit
+        except Exception:
+            pass
+    return n
+
+
+def migrate_user_config(excel=True):
+    """excel=False: 엑셀 비밀번호 둘은 건드리지 않는다 - 에이전트가 막 켜졌을 때. 새 버전이 3분 점검에 실패해 이전 버전으로 돌아가면
+    그 버전은 잠긴 엑셀 비밀번호를 못 읽으므로, 점검이 끝난 뒤(agent.late_seal)에 잠근다 (검토 2026-11-19).
+    에이전트가 켤 때 부른다. RPA_UserConfig.json 이 없으면 옛 파일들을 합쳐 만들고, 있으면 평문 비밀번호를 잠그고
     아직 남은 login_manager_config.json 의 ERPia 위치를 가져온다 (그 파일보다 먼저 옮긴 PC).
     한 일을 한 문장으로 돌려준다 (할 일이 없으면 None). 실패하면 예외 - 부른 쪽이 기록만 하고 넘어간다
     (RPA 는 옛 파일이나 평문으로도 돈다)."""
@@ -621,7 +729,7 @@ def migrate_user_config():
     if not data:
         return None
     parts = []
-    plain = sum(1 for h, k in _pw_slots(data)
+    plain = sum(1 for h, k in _pw_slots(data, excel=excel)
                 if isinstance(h[k], str) and h[k] and not h[k].startswith(SEALED_PREFIX))
     if plain:
         parts.append(f"평문 비밀번호 {plain}개를 잠갔습니다")
@@ -632,10 +740,10 @@ def migrate_user_config():
         parts.append("ERPia 위치를 옮겨 왔습니다")
     if existed and not parts:
         return None
-    moved = write_user_config(data)
+    moved = write_user_config(data, seal_excel=excel)
     if moved:
         parts.append(f"옛 파일 {' · '.join(os.path.basename(p) for p in moved)} 은 .old 로 바꿨습니다 - "
-                     "평문 비밀번호가 들어 있으니 오토파일럿이 잘 돌면 지우세요")
+                     f"평문 비밀번호가 들어 있어 {OLD_CONFIG_KEEP_DAYS}일 뒤 자동으로 지웁니다")
     head = USER_CONFIG_NAME if existed else f"{USER_CONFIG_NAME} 을 만들었습니다"
     return f"{head} ({', '.join(parts)})" if parts else head
 
@@ -850,12 +958,13 @@ def cred_file_path():
     override = os.environ.get("RPA_CRED_FILE")
     if override:
         return override
-    desktop = find_desktop_dir()
-    for folder in (os.path.join(desktop, AI_DIR_NAME), desktop):
-        path = os.path.join(folder, CRED_FILE_NAME)
-        if os.path.isfile(path):
-            return path
-    return os.path.join(desktop, AI_DIR_NAME, CRED_FILE_NAME)
+    found = cred_file_candidates(find_desktop_dir())
+    return next((p for p in found if os.path.isfile(p)), found[0])
+
+
+def cred_file_candidates(desktop):
+    """ERPIA_AI.txt 가 있을 수 있는 두 자리 - 새 자리(바탕화면\\ERPIA_AI)가 먼저, 그다음 예전 자리(바탕화면)."""
+    return [os.path.join(desktop, AI_DIR_NAME, CRED_FILE_NAME), os.path.join(desktop, CRED_FILE_NAME)]
 
 
 def _merge_routine_section(existing, final, modes=(), default_mode=DEFAULT_MODE):
@@ -1058,7 +1167,10 @@ PRESET_MIN, PRESET_MAX = 2, 50           # PRESET_MAX = PC 가 받는 최대 (20
 PRESET_WELLIFE = 50                      # 업체코드에 wellife 가 든 업체는 늘 50 (사용자 2026-10-15 40, 2026-11-06 50, agent.company_policy)
 
 
-EXCEL_PW_KEY, EXCEL_PW_MAX = "ExcelPW", 100   # Sites 칸의 엑셀 비밀번호 (excel_password)
+EXCEL_PW_KEY, EXCEL_PW_MAX = "ExcelPW", 100   # Sites 칸의 엑셀 비밀번호 (excel_password) - 잠가서 둔다 (_pw_slots)
+INVOICE_PW_SECTION, INVOICE_PW_KEY = "InvoiceExcel", "Password"   # 운송장(마켓업로드용) 엑셀 비밀번호 (wellife.export_password) - 잠가서 둔다
+INVOICE_PW_DEFAULT = "0000"              # 그 기본값 (wellife.EXPORT_PW_DEFAULT 와 같다) - 누구나 아는 값이라 잠그지 않는다
+PRESET_STASH = "이전 업체 프리셋"        # 업체코드를 바꾸며 비운 프리셋을 옮겨 둔 폴더 (config 안 - rpa_settings.PRESET_STASH 와 같다)
 
 
 def circled(n):
@@ -1380,7 +1492,7 @@ def login_mismatch(site, code):
     return c is not None and str(c) != str(code or "")
 
 
-def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None):
+def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None, excel_pws=None):
     """Sites 의 PRESETn 칸을 프리셋에 맞춘다. 다른 섹션·다른 사이트는 그대로 (설정 창·에이전트가 쓴 것).
     presets: read_presets 모양. logins: {번호: (아이디, 비밀번호 또는 None = 저장된 것 그대로)}.
     기록이 있는 프리셋만 칸을 둔다 - 새 칸은 꺼짐(Stts 9), 있던 칸은 다시 기록·[수정] 했어도 켬/끔 그대로 (사용자 2026-11-03 -
@@ -1391,6 +1503,8 @@ def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None
     None 이면 새 칸 (옛 값 없음). 칸마다 Code 에 프리셋 사이트코드를 적는다 - 읽는 쪽이 login_mismatch 로 짝을 확인한다.
     mail_logins: {번호: (메일 아이디, 메일 비밀번호 또는 None = 저장된 것 그대로)} - 메일 2차인증 메일함 계정 MailID·MailPW (잠김).
     기록에 메일함 로그인(MAIL_PW)이 있는 프리셋만 둔다. 없는 번호는 있던 값 그대로.
+    excel_pws: {번호: 새 엑셀 비밀번호 | "" = 지움 | None = 있던 값 그대로} - 옵저버의 '엑셀 비밀번호' 칸 (사용자 2026-11-19).
+    없는 번호는 있던 값 그대로. 쓰는 순간 잠긴다 (write_user_config).
     사용자 설정이 아예 없으면 FileNotFoundError (자격증명 없는 설정을 새로 만들지 않는다 - write_routine_modules 와 같다)."""
     data = read_user_config()
     if not data:
@@ -1410,8 +1524,12 @@ def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None
         mine[key] = {"URL": p["record"].get("start_url") or old.get("URL", ""), "ID": (login_id or "").strip(),
                      "PW": pw or old.get("PW", ""), "Action": [REPLAY_ACTION],
                      "Stts": old.get("Stts", 9) if same_site else 9, "Preset": p["no"], "Code": p["code"], "note": p["name"]}
-        if same_site and old.get(EXCEL_PW_KEY):     # 웹 환경설정에서 넣은 값 - 옵저버 저장에 지워지지 않게
-            mine[key][EXCEL_PW_KEY] = old[EXCEL_PW_KEY]
+        xl = (excel_pws or {}).get(p["no"])
+        if xl is None:
+            if same_site and old.get(EXCEL_PW_KEY):     # 값을 안 주면 있던 값 그대로 (다른 사이트코드로 덮은 칸은 버린다)
+                mine[key][EXCEL_PW_KEY] = old[EXCEL_PW_KEY]
+        elif str(xl).strip():
+            mine[key][EXCEL_PW_KEY] = str(xl).strip()[:EXCEL_PW_MAX]
         phone, senders = (phones or {}).get(p["no"]) or (old.get("Phone"), old.get("SmsSenders"))
         if phone and senders:
             mine[key].update(Phone=phone, SmsSenders=list(senders))
@@ -1426,12 +1544,13 @@ def save_preset_sites(presets, logins, phones=None, origs=None, mail_logins=None
 
 
 def excel_password(code):
-    """사이트코드 code 프리셋의 엑셀 비밀번호 (웹 환경설정 '엑셀 비밀번호', 사용자 2026-11-05). 없으면 None.
-    로그인 비밀번호가 아니라 쇼핑몰이 엑셀에 의무로 거는 값(1234 등)이라 잠그지 않고 웹에도 보인다 (사용자)."""
+    """사이트코드 code 프리셋의 엑셀 비밀번호 - 푼 값 (옵저버 '엑셀 비밀번호' 칸). 없으면 None, 이 PC 에서 못 푸는 값이면 RuntimeError.
+    로그인 비밀번호가 아니라 쇼핑몰이 엑셀에 의무로 거는 값(1234 등)이다. 2026-11-05 에는 웹 환경설정에서 넣고 평문으로 뒀는데,
+    2026-11-19 부터 PC 에서만 넣고 잠가서 둔다 - 클라우드로 보내지 않는다 (사용자, 고객사 보안 검토)."""
     sites = (read_user_config() or {}).get(SITES_SECTION)
     for key, s in (sites if isinstance(sites, dict) else {}).items():
         if is_preset_site(key) and isinstance(s, dict) and str(s.get("Code") or "") == str(code) and s.get(EXCEL_PW_KEY):
-            return str(s[EXCEL_PW_KEY])
+            return str(unseal(str(s[EXCEL_PW_KEY])))
     return None
 
 
@@ -1444,7 +1563,13 @@ def set_preset_excel_pw(wanted):
     changed = False
     for key, value in wanted.items():
         site, value = sites.get(key), str(value or "").strip()[:EXCEL_PW_MAX]
-        if isinstance(site, dict) and is_preset_site(key) and site.get(EXCEL_PW_KEY, "") != value:
+        if not (isinstance(site, dict) and is_preset_site(key)):
+            continue
+        try:
+            now = unseal(site.get(EXCEL_PW_KEY) or "")
+        except RuntimeError:        # 이 PC 에서 못 푸는 값 - 새 값으로 바꾸거나 지운다
+            now = None
+        if now != value:
             site.pop(EXCEL_PW_KEY, None)
             if value:
                 site[EXCEL_PW_KEY] = value
@@ -1454,8 +1579,8 @@ def set_preset_excel_pw(wanted):
 
 
 def preset_summary():
-    """대시보드용 [{no, name, code, steps, saved_at, has_login, on, backup, excel_pw}] - 기록 내용·아이디·비밀번호는 싣지 않는다.
-    excel_pw: 엑셀 비밀번호 (로그인 비밀번호가 아니다 - excel_password). 이 칸이 있으면 화면이 새 PC 로 알아본다.
+    """대시보드용 [{no, name, code, steps, saved_at, has_login, on, backup, xl_set}] - 기록 내용·아이디·비밀번호는 싣지 않는다.
+    xl_set: 엑셀 비밀번호가 있나 (값은 싣지 않는다 - 2026-11-19 전에는 excel_pw 로 값을 올렸다).
     backup: 넣어 주기·복사 전 기록이 보관돼 있어 되돌릴 수 있다 (preset_transfer).
     사용자 설정이 없거나 프리셋 파일이 깨졌으면 None (화면이 카드를 숨긴다 - 빈 목록으로 속이지 않는다)."""
     try:
@@ -1475,7 +1600,7 @@ def preset_summary():
                     "imap": bool(imap_step(p["record"])),      # 메일 받기 - 화면이 'N단계' 대신 '메일 받기' (2026-10-22)
                     "upload": is_upload(p["record"]),          # 업로드 프리셋 - 예약 줄의 수집 사이트 고르기에서 뺀다 (판 9)
                     "has_login": bool(site.get("ID")) and bool(site.get("PW")) and not login_mismatch(site, p["code"]),
-                    "on": str(site.get("Stts", "")).strip() == "0", "excel_pw": str(site.get(EXCEL_PW_KEY) or ""),
+                    "on": str(site.get("Stts", "")).strip() == "0", "xl_set": bool(site.get(EXCEL_PW_KEY)),
                     "backup": os.path.isfile(preset_backup_path(p["no"]))})
     return out
 

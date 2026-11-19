@@ -24,8 +24,17 @@ import server_info
 import update_sign
 
 # 받을 주소 차례 - 앞 주소에서 못 받으면 다음 주소 (서버를 옮길 때 새 주소 → 옛 주소, docs/server-move-stage1.md)
-UPDATE_BASE_URLS = ((os.environ["RPA_UPDATE_BASE_URL"],) if os.environ.get("RPA_UPDATE_BASE_URL")
-                    else (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS))
+def update_urls():
+    """받을 주소 차례. 시험용 환경 변수 RPA_UPDATE_BASE_URL 은 소스에서 돌 때만 쓴다 - 설치본은 무시하고 정해진 주소 가운데 https 만
+    (보안 감사 2026-11-13 C2, 고객사 보안 검토 2026-11-19: 같은 윈도우 계정의 다른 프로그램이 환경 변수로 받기 주소를 바꿀 수 있었다.
+    받은 파일은 서명으로 다시 확인하지만 주소부터 막는다). 샌드박스 시험은 fetch_release(base_url=) 로 직접 준다."""
+    env = os.environ.get("RPA_UPDATE_BASE_URL")
+    if st.shipped():
+        return tuple(u for u in (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS) if u.startswith("https://"))
+    return (env,) if env else (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS)
+
+
+UPDATE_BASE_URLS = update_urls()
 HEALTH_WAIT_SEC = 180
 DISK_MARGIN = 200 * 1024 * 1024
 BUSY_STATES = ("waiting", "ready", "applying", "rolling_back")

@@ -121,6 +121,37 @@ check(tv["me"]["is_admin"] and tv["me"]["default_password"] is True and "schedul
 tv = d.settings_view({"user_id": "user", "role": "user", "admin_code": "e"})
 check(tv["me"]["is_admin"] is False and tv["me"]["default_password"] is False, "settings_view(일반, 바꾼 비밀번호)")
 
+# 옛 로컬 화면 서버 (보안 감사 C13, 고객사 보안 검토 2026-11-19): 설치된 프로그램 폴더에서는 열지 않는다, 개발용으로 열 때도 기본은 이 PC 에서만
+_ship = tempfile.mkdtemp(prefix="rpa_ship_")
+open(os.path.join(_ship, st.MANIFEST_NAME), "w").close()
+check(d.shipped(_ship) is True and d.shipped(tmp) is False and d.shipped() is False, "버전 목록(manifest.json)이 옆에 있으면 설치본, 소스 폴더는 아니다")
+_opened, _argv, _real_srv, _real_shipped = [], sys.argv, d.DashboardServer, d.shipped
+
+
+def _no_server(addr, handler):
+    _opened.append(addr)
+    raise OSError("시험 - 열지 않는다")
+
+
+d.DashboardServer = _no_server
+sys.argv = ["rpa_dashboard.py", "--port", "8799", "--no-scheduler"]
+d.shipped = lambda here=None: True
+_out, sys.stdout = sys.stdout, io.StringIO()
+try:
+    _code, _said = d.main(), sys.stdout.getvalue()
+finally:
+    sys.stdout = _out
+check(_code == 2 and _opened == [] and "설치된" in _said and "웹" in _said, f"설치본에서 직접 실행하면 서버를 열지 않고 안내만 한다 ({_code}, {_opened}, {_said.strip()[:60]})")
+d.shipped = lambda here=None: False
+_out, sys.stdout = sys.stdout, io.StringIO()
+try:
+    _code = d.main()
+finally:
+    sys.stdout = _out
+check(_opened == [("127.0.0.1", 8799)], f"소스에서 열 때 기본 주소는 이 PC 에서만 (127.0.0.1) - 사내망에 열려면 --host 를 줘야 한다 ({_opened})")
+d.DashboardServer, sys.argv, d.shipped = _real_srv, _argv, _real_shipped
+shutil.rmtree(_ship, ignore_errors=True)
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)

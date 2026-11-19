@@ -999,36 +999,25 @@ with sync_playwright() as pw:
     page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
     check("1/2 켬" in page.text_content("#shop-meta"), "PC 값이 돌아오면 기준값 갱신")
 
-    print("5-2-0절 엑셀 비밀번호 (사용자 2026-11-05)")
-    check(page.locator(".xl-pw").count() == 0, "옛 PC (excel_pw 를 안 올림) 는 칸이 없다")
-    db_patch(f"{LIVE}/presets/0", {"excel_pw": ""})
-    page.wait_for_selector("#shop-list .xl-open", timeout=10000)
-    if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "xl_open.png"))
-    check(page.locator(".xl-pw").count() == 0 and page.locator("#shop-list .xl-open").count() == 1 and page.is_disabled("#shop-apply")
-          and page.text_content("#shop-list .xl-open").strip() == "엑셀 비밀번호 설정",
-          "새 PC: 값이 없으면 칸 대신 [엑셀 비밀번호 설정] (기록이 있는 줄에만), 적용 비활성 (2026-11-13)")
-    on_before = page.is_checked("#shop-list .switch[data-no='1'] input")
-    page.click("#shop-list .xl-open")
-    check(page.locator(".xl-pw input").count() == 1 and page.evaluate("document.activeElement?.closest('.xl-pw') !== null")
-          and page.is_checked("#shop-list .switch[data-no='1'] input") == on_before, "누르면 칸이 펼쳐지고 초점, 스위치는 그대로")
-    page.click(".xl-pw .xl-cancel")
-    check(page.locator(".xl-pw").count() == 0 and page.locator("#shop-list .xl-open").count() == 1, "[취소] 하면 다시 접힌다")
-    page.click("#shop-list .xl-open")
-    page.fill(".xl-pw input", " 1234 ")
-    check(not page.is_disabled("#shop-apply"), "값을 넣으면 적용 활성")
-    page.click("#shop-apply")
+    print("5-2-0절 엑셀 비밀번호는 웹에 없다 (사용자 2026-11-19 - PC 옵저버에서만 넣는다, 고객사 보안 검토)")
+    check(page.locator(".xl-pw, .xl-open, .xl-set").count() == 0, "엑셀 비밀번호가 없는 PC 는 아무 표시도 없다")
+    db_patch(f"{LIVE}/presets/0", {"excel_pw": "old-1234"})          # 옛 버전 PC 가 올린 값 (2026-11-05 ~ 11-19)
     time.sleep(1.5)
-    sent = [x for x in cmds_of("set_presets") if "excel_pw" in x["args"]]
-    check(len(sent) == 1 and sent[0]["args"]["excel_pw"] == {"PRESET1": "1234"} and sent[0]["args"]["PRESET1"] is True, f"같은 명령에 프리셋별로 실어 보낸다 ({sent})")
-    check("excel_pw" not in (db_get(f"{SETTINGS}/presets") or {}), "settings 에는 켬/끔만")
-    key = next(k for k, v in (db_get(CMDS) or {}).items() if v.get("type") == "set_presets" and "excel_pw" in v.get("args", {}))
-    db_patch(f"{CMDS}/{key}", {"state": "done", "result": "프리셋을 변경하였습니다.", "started_at": 1, "ended_at": 2})
-    db_put(f"{LIVE}/presets/0/excel_pw", "1234")
-    page.wait_for_function("document.getElementById('shop-apply')?.disabled === true", timeout=10000)
-    check(page.input_value(".xl-pw input").strip() == "1234", "PC 값이 돌아오면 그 값이 칸에 보인다")
-    page.evaluate("document.activeElement?.blur?.()")
-    db_patch(f"{LIVE}/presets/0", {"excel_pw": None})
-    page.wait_for_function("!document.querySelector('.xl-pw') && !document.querySelector('.xl-open')", timeout=10000)
+    check(page.locator(".xl-pw, .xl-open, .xl-set").count() == 0 and "old-1234" not in page.content() and page.is_disabled("#shop-apply"),
+          "옛 PC 가 올린 excel_pw 값은 화면에 쓰지 않는다 (입력 칸·단추·값 없음)")
+    db_patch(f"{LIVE}/presets/0", {"excel_pw": None, "xl_set": True})
+    page.wait_for_selector("#shop-list .switch[data-no='1'] .xl-set", timeout=10000)
+    if os.environ.get("SHOT_DIR"): page.locator("#shop-card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "xl_set.png"))
+    check(page.text_content("#shop-list .xl-set").strip() == "엑셀 비밀번호 설정됨" and page.locator("#shop-list .xl-set").count() == 1
+          and page.locator("#shop-list input[type='text']").count() == 0 and page.is_disabled("#shop-apply"),
+          "새 PC: 엑셀 비밀번호가 있는 줄에 '엑셀 비밀번호 설정됨' 만 보인다 (값·입력 칸 없음), 적용 비활성")
+    check("옵저버" in page.text_content("#shop-xl-note") and "엑셀 비밀번호" in page.text_content("#shop-xl-note")
+          and "오토파일럿이 설치된 PC" in page.text_content("#shop-xl-note"),
+          "엑셀 비밀번호는 오토파일럿이 설치된 PC 의 옵저버에서 넣는다는 안내가 카드에 있다 ('이 PC' 는 웹을 보는 PC 로 읽힌다 - 검토 2026-11-19)")
+    with open(os.path.join("..", "web", "rpa-settings.js"), encoding="utf-8") as f:     # 시험은 firebase/tests 에서 돈다
+        check("excel_pw" not in f.read(), "웹 화면 코드는 excel_pw 를 읽지도 보내지도 않는다")
+    db_patch(f"{LIVE}/presets/0", {"xl_set": None})
+    page.wait_for_function("!document.querySelector('.xl-set')", timeout=10000)
 
     print("5-2-0b절 프리셋 찾기·거르기·10개 스크롤 (2026-11-13)")
     saved_shops = db_get(f"{LIVE}/presets")
@@ -2302,6 +2291,75 @@ with sync_playwright() as pw:
     page.wait_for_function("(document.getElementById('hist-msg')?.textContent || '').endsWith('건')", timeout=15000)
     check(page.text_content("#hist-rows tr.hist td:nth-child(3)") == "PROCESS · 반복", "처리한 반복 회차는 기록 표에 'PROCESS · 반복'")
     page.click("#logout-btn"); page.wait_for_selector("#login:not(.hide)")
+
+    print("15절 탭 단위 로그인·미사용 자동 로그아웃 (사용자 2026-11-19, 고객사 보안 검토)")
+    login(page, "viewer@t.local")
+    check(page.evaluate("Object.keys(sessionStorage).some(k => k.startsWith('firebase:authUser:'))")
+          and not page.evaluate("Object.keys(localStorage).some(k => k.startsWith('firebase:authUser:'))"),
+          "로그인 정보는 탭 저장소에만 둔다 (브라우저 저장소에 남기지 않는다)")
+    in_idb = page.evaluate("""async () => {
+      const dbs = await indexedDB.databases();
+      if (!dbs.some((d) => d.name === 'firebaseLocalStorageDb')) return 0;
+      return await new Promise((res) => {
+        const r = indexedDB.open('firebaseLocalStorageDb');
+        r.onerror = () => res(-1);
+        r.onsuccess = () => {
+          const db = r.result;
+          if (!db.objectStoreNames.contains('firebaseLocalStorage')) { res(0); return; }
+          const q = db.transaction('firebaseLocalStorage').objectStore('firebaseLocalStorage').getAllKeys();
+          q.onerror = () => res(-1);
+          q.onsuccess = () => res(q.result.filter((k) => String(k).startsWith('firebase:authUser:')).length);
+        };
+      });
+    }""")
+    check(in_idb == 0, f"브라우저의 IndexedDB 에도 로그인 정보가 없다 - 새 탭·다시 연 브라우저는 로그인되어 있지 않다 ({in_idb})")
+    page.reload(); page.wait_for_selector("#main:not(.hide)", timeout=15000)
+    check(page.is_visible("#main"), "새로고침은 로그인을 유지한다")
+    idle_min = page.evaluate("(async () => (await import(location.origin + '/app.js')).IDLE_MIN)()")
+    check(idle_min == 30, f"미사용 자동 로그아웃 시간은 30분 ({idle_min})")
+    ago = lambda m: page.evaluate(f"sessionStorage.setItem('lastActive', String(Date.now() - {m} * 60 * 1000))")
+    ago(29)
+    page.mouse.move(40, 40); page.keyboard.press("Shift")
+    time.sleep(0.5)
+    check(page.is_visible("#main") and page.evaluate("Date.now() - Number(sessionStorage.getItem('lastActive'))") < 5000,
+          "30분 안에 입력하면 그대로 쓰고 마지막 입력 시각이 지금으로 바뀐다")
+    ago(31)
+    page.keyboard.press("Shift")
+    page.wait_for_selector("#login:not(.hide)", timeout=10000)
+    alert = page.text_content("#login-alert")
+    check(page.is_visible("#login-alert") and "30분" in alert and "로그아웃" in alert,
+          f"30분 넘게 입력이 없었으면 다음 입력은 로그인을 살리지 않고 로그아웃한다 - 까닭을 알린다 ({alert})")
+    check(not page.evaluate("Object.keys(sessionStorage).some(k => k.startsWith('firebase:authUser:'))"), "로그아웃하면 탭 저장소의 로그인 정보도 없다")
+    login(page, "viewer@t.local")
+    check(page.is_visible("#main") and page.evaluate("Date.now() - Number(sessionStorage.getItem('lastActive'))") < 15000,
+          "다시 로그인하면 바로 들어간다 (지난 입력 시각 때문에 곧바로 로그아웃되지 않는다)")
+    ago(31)
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_selector("#login:not(.hide)", timeout=10000)
+    check("30분" in page.text_content("#login-alert"), "다른 탭을 보다가 30분 넘겨 돌아오면 로그아웃")
+    login(page, "viewer@t.local")
+    ago(31)
+    page.reload(); page.wait_for_selector("#login:not(.hide)", timeout=15000)
+    check("30분" in page.text_content("#login-alert") and not page.is_visible("#main"),
+          "30분 넘겨 새로고침해도 로그인 화면 (탭 저장소의 로그인을 되살리지 않는다)")
+    # 검토 2026-11-19: 시간을 넘긴 뒤의 첫 누름은 대상에 닿지 않는다 - 로그아웃보다 먼저 [실행]·[적용] 이 눌리지 않게
+    login(page, "viewer@t.local")
+    theme0 = page.evaluate("document.documentElement.dataset.theme || ''")
+    ago(31)
+    page.evaluate("document.getElementById('theme').focus()")      # 초점만 옮긴다 (입력이 아니다) - 마우스를 움직이면 그 움직임이 먼저 로그아웃시킨다
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#login:not(.hide)", timeout=10000)
+    check(page.evaluate("document.documentElement.dataset.theme || ''") == theme0 and "30분" in page.text_content("#login-alert"),
+          "30분 넘긴 뒤의 첫 누름(Enter)은 초점이 있던 단추를 누르지 않고 로그아웃만 한다 (테마 단추로 확인)")
+    # 검토 2026-11-19: 주소에 관리 화면 열쇠 꼴(#t=…)을 붙여 새로고침해도 30분 넘긴 로그인은 살아나지 않는다
+    login(page, "viewer@t.local")
+    ago(31)
+    page.goto(WEB + "#t=bogus"); page.reload()
+    page.wait_for_selector("#login:not(.hide)", timeout=15000)
+    time.sleep(1)
+    check(not page.is_visible("#main") and not page.evaluate("Object.keys(sessionStorage).some(k => k.startsWith('firebase:authUser:'))"),
+          "30분 넘긴 탭에 못 쓰는 관리 화면 열쇠(#t=)를 붙여 새로고침해도 로그인이 되살아나지 않는다")
+    page.goto(WEB); page.wait_for_selector("#login:not(.hide)", timeout=15000)
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")
     browser.close()

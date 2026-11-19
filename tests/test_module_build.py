@@ -205,7 +205,8 @@ check("같은 재료면 묶음이 한 바이트도 안 다르다", open(z1, "rb"
 check("실을 것이 들어 있다", {"playwright/__init__.py", "pywinauto/__init__.py", "pythonwin/mfc140u.dll", "pywin32.pth",
                               "pythoncom.py", "greenlet/__init__.py", "PIL/__init__.py"} <= set(lib_names))
 check("뺄 것은 빠졌다", not any("__pycache__" in n or n.endswith("driver/node.exe") or n.startswith("comtypes/test/")
-                                or ".dist-info/" in n for n in lib_names))
+                                or (".dist-info/" in n and n.split("/")[0] not in br.LIB_NAMES)   # 일부러 싣는 것만 (AI 어시스트의 httpx2·httpcore2·opentelemetry - 2026-11-16)
+                                for n in lib_names))
 check("comtypes 시각 검사를 껐다", b'if not hasattr(sys, "frozen"):' not in checker and b"if False:" in checker)
 check("빌드 PC 의 comtypes gen 을 같이 싣는다", any(n.startswith("comtypes/gen/") and n.endswith(".py") for n in lib_names))
 check("우리 코드·개발 도구는 싣지 않는다", not any(n.split("/")[0] in ("nuitka", "pip", "numpy", "setuptools") for n in lib_names))

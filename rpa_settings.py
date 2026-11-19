@@ -36,7 +36,7 @@ import rpa_status as st  # noqa: E402
 TASK_NAME = r"AFTER MARKET\RPA Agent"
 TEMPLATE_NAME = "RPA_UserConfig.template.json"   # 설치 파일이 빈 틀 RPA_UserConfig.json 을 이 이름으로 넣는다
 AGENT_CONFIG_NAME = "agent_config.json"
-PRESET_STASH = "이전 업체 프리셋"     # 업체코드를 바꾸며 비운 프리셋을 옮겨 두는 폴더 (config 안, 사용자 2026-10-15)
+PRESET_STASH = "이전 업체 프리셋"     # 업체코드를 바꾸며 비운 프리셋을 옮겨 두는 폴더 (config 안, 사용자 2026-10-15) - rpa_status.PRESET_STASH 와 같다
 # 설정 창은 하나만 - 두 창이 각자 저장하면 늦은 창이 앞 창의 업체코드·계정을 연 때의 옛 값으로 덮는다 (2026-10-22)
 SETTINGS_LOCK = os.environ.get("RPA_SETTINGS_LOCK") or r"Local\AFTER_MARKET_RPA_SETTINGS"
 RECHECK_MS = 90_000   # 저장 뒤 에이전트 상태를 다시 보는 때 - 감독이 켜고 로그인하기까지 약 1분 (S11)

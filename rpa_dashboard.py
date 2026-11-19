@@ -10,16 +10,16 @@ r"""RPA 현황 대시보드. 사내 다른 PC 나 휴대폰 브라우저에서 �
         일반 사용자 user  / user    현황·이력 보기
     비밀번호를 잊었으면 settings.json 의 "accounts" 를 지우고 대시보드를 다시 띄운다 (기본값으로 돌아간다).
 
-실행
-    RPA_Dashboard.exe                  포트 8765 로 띄운다
-    RPA_Dashboard.exe --port 9000      포트 바꾸기
-    RPA_Dashboard.exe --host 127.0.0.1 이 PC 에서만 볼 수 있게 한다
+실행 (개발·시험용 - 2026-11-19 부터 설치된 프로그램 폴더에서는 열리지 않는다. 설치본의 화면은 업체 웹이 맡고, 이 파일은
+예약·실행 함수만 에이전트가 쓴다)
+    python rpa_dashboard.py                    포트 8765, 이 PC 에서만 (127.0.0.1)
+    python rpa_dashboard.py --port 9000        포트 바꾸기
+    python rpa_dashboard.py --host 0.0.0.0     사내망에서도 보게 한다 (HTTP 라 비밀번호가 평문으로 지나간다 - 시험 때만)
     python rpa_dashboard.py --status-dir <폴더>   (점검용) 다른 기록 폴더를 본다
 
 보는 주소
     같은 PC     http://localhost:8765
-    다른 PC/폰  http://<이 PC 의 IP>:8765   (시작할 때 창에 주소를 찍어 준다)
-    사내망에서만 쓸 것. HTTP 라 비밀번호가 사내망 안에서 평문으로 지나간다.
+    다른 PC/폰  --host 0.0.0.0 으로 띄웠을 때만 http://<이 PC 의 IP>:8765   (시작할 때 창에 주소를 찍어 준다)
 
 권한
     지금 실행·자동 실행·ERPia 종료는 ERPia(관리자 권한) 를 다루므로, 이 프로그램도 관리자 권한으로
@@ -2063,15 +2063,26 @@ def already_running(port):
         return False
 
 
+def shipped(here=None):
+    """설치된 프로그램 폴더인가 - 버전 목록(manifest.json)이 이 파일 옆에 있다 (소스 폴더에는 없다)."""
+    return os.path.isfile(os.path.join(here or os.path.dirname(os.path.abspath(__file__)), st.MANIFEST_NAME))
+
+
 def main():
-    ap = argparse.ArgumentParser(description="오토파일럿 현황 대시보드")
+    """개발 초기의 로컬 현황 화면 서버 - 개발·시험용이다. 설치본은 이 파일의 예약·실행 함수만 쓰고(에이전트) 화면은 업체 웹이 맡는다.
+    설치된 폴더에서 직접 실행해도 서버를 열지 않는다 - 예전에는 사내망(0.0.0.0)에 평문 HTTP 가 기본 계정(admin/admin)으로 열렸다
+    (보안 감사 2026-11-13 C13, 고객사 보안 검토 2026-11-19). 소스에서 열 때도 기본은 이 PC 에서만."""
+    ap = argparse.ArgumentParser(description="오토파일럿 현황 대시보드 (개발·시험용)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help="포트 (기본 8765)")
-    ap.add_argument("--host", default="0.0.0.0",
-                    help="0.0.0.0 = 사내망에서 접속 허용(기본), 127.0.0.1 = 이 PC 에서만")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="127.0.0.1 = 이 PC 에서만 (기본), 0.0.0.0 = 사내망에서 접속 허용")
     ap.add_argument("--status-dir", help="(점검용) 기록 폴더를 직접 지정")
     ap.add_argument("--no-scheduler", action="store_true", help="(점검용) 자동 실행을 돌리지 않는다")
     args = ap.parse_args()
 
+    if shipped():
+        print("설치된 오토파일럿에서는 이 화면을 사용하지 않습니다. 업체 웹 대시보드를 이용하여 주십시오.")
+        return 2
     if args.status_dir:
         os.environ["RPA_STATUS_DIR"] = os.path.abspath(args.status_dir)
 

@@ -656,7 +656,10 @@ class Recorder:
         if step["kind"] == "click" and (ev.get("target") or {}).get("href"):   # 누른 창의 사이트 - 메일함 안 링크와 인증 링크를 가린다 (검토 I2)
             step["pageHost"] = urllib.parse.urlparse(ev["url"]).hostname or ""
         if step["kind"] == "secret":       # 비밀번호를 넣는 사이트 - 저장 때 다른 사이트가 섞였나 본다 (password_sites, BugBuster I1)
-            step["host"] = urllib.parse.urlparse(ev["url"]).hostname or ""
+            where = urllib.parse.urlparse(ev["url"])
+            step["host"] = where.hostname or ""
+            if where.scheme == "http" and not is_local_host(step["host"]):    # 암호화되지 않는 화면에 비밀번호를 넣는다 - 저장 때 경고 (보안 감사 C12)
+                step["plainHttp"] = True
         if ev.get("row"):
             step["row"] = ev["row"]        # 목록 줄을 눌렀다 - 메일 고르기 (set_pick)
         last = self.steps[-1] if self.steps else None
@@ -741,6 +744,11 @@ def date_like_fills(steps):
 
 
 site_domain = rpa_status.site_domain       # 호스트의 등록 도메인 (rpa_status 에 - 메일 계정의 메일함 비교도 쓴다)
+
+
+def is_local_host(host):
+    """이 PC 자신을 가리키는 주소인가 (시험용 가짜 쇼핑몰 등) - 망으로 나가지 않으니 http 여도 경고하지 않는다."""
+    return (host or "").lower() in ("127.0.0.1", "localhost", "::1")
 
 
 def password_sites(steps):
@@ -2546,8 +2554,8 @@ class Replayer:
         if self.otp is not None and self.otp_req is not None:
             try:
                 self.otp.close(self.otp_req)
-            except Exception as e:
-                self.log(f"      (인증번호 요청을 지우지 못했습니다: {type(e).__name__})")
+            except Exception as e:      # 몇 번 다시 지워 보고도 못 지웠다 (otp_relay.PhoneRelay.close) - 번호는 글에 없다
+                self.log(f"      {e}" if isinstance(e, RuntimeError) else f"      (인증번호 요청을 지우지 못했습니다: {type(e).__name__})")
         self.otp_req = None
 
     def _otp_code(self, page, loc):

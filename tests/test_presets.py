@@ -78,13 +78,48 @@ check("기록 있는 프리셋만 칸이 생긴다, 처음엔 꺼짐 (Stts 9)", 
       and site.get("Stts") == 9 and site.get("Action") == ["replay"] and site.get("Preset") == 1 and site.get("note") == "지마켓"
       and site.get("URL") == REC["start_url"] and site.get("ID") == "seller01", str(site))
 check("비밀번호는 잠겨서 들어가고 풀면 같다", PW not in raw_config() and st.unseal(site.get("PW")) == PW)
-check("엑셀 비밀번호: 처음엔 없고 요약에는 빈 글자 (화면이 새 PC 로 알아본다)", st.preset_summary()[0]["excel_pw"] == "" and st.excel_password(ps[0]["code"]) is None)
-st.set_preset_excel_pw({"PRESET1": " 1234 ", "PRESET9": "없는칸"})
-check("엑셀 비밀번호: 쓰면 사이트코드로 찾고 요약에도 보인다, 없는 칸은 넘어간다",
-      st.excel_password(ps[0]["code"]) == "1234" and st.preset_summary()[0]["excel_pw"] == "1234" and "PRESET9" not in st.read_user_config()["Sites"])
+# 엑셀 비밀번호 (사용자 2026-11-19, 고객사 보안 검토): PC 에서만 넣고 DPAPI 로 잠근다. 요약(클라우드 현황)에는 값을 싣지 않는다
+check("엑셀 비밀번호: 처음엔 없고 요약에는 있는지만 (xl_set)", st.preset_summary()[0]["xl_set"] is False
+      and "excel_pw" not in st.preset_summary()[0] and st.excel_password(ps[0]["code"]) is None)
+st.set_preset_excel_pw({"PRESET1": " xl-1234 ", "PRESET9": "없는칸"})
+_xl = st.read_user_config()["Sites"]["PRESET1"].get("ExcelPW", "")
+check("엑셀 비밀번호: 쓰면 잠겨서 들어가고 사이트코드로 찾으면 원래 글자, 없는 칸은 넘어간다",
+      _xl.startswith("dpapi:") and "xl-1234" not in raw_config() and st.excel_password(ps[0]["code"]) == "xl-1234"
+      and "PRESET9" not in st.read_user_config()["Sites"])
+check("엑셀 비밀번호: 요약에는 값이 없고 xl_set 만 참", st.preset_summary()[0]["xl_set"] is True
+      and "xl-1234" not in json.dumps(st.preset_summary(), ensure_ascii=False) and "excel_pw" not in st.preset_summary()[0])
+st.set_preset_excel_pw({"PRESET1": "xl-1234"})
+check("엑셀 비밀번호: 같은 값을 다시 쓰면 파일을 바꾸지 않는다 (잠긴 글자가 그대로)", st.read_user_config()["Sites"]["PRESET1"]["ExcelPW"] == _xl)
 st.save_preset_sites(ps, {1: ("seller01", None)})
-check("엑셀 비밀번호: 옵저버로 다시 저장해도 남는다", st.excel_password(ps[0]["code"]) == "1234")
+check("엑셀 비밀번호: 옵저버로 다시 저장해도 남는다 (값을 안 주면 그대로)", st.excel_password(ps[0]["code"]) == "xl-1234")
+st.save_preset_sites(ps, {1: ("seller01", None)}, excel_pws={1: None})
+check("엑셀 비밀번호: 옵저버 저장 - None 은 그대로", st.excel_password(ps[0]["code"]) == "xl-1234")
+st.save_preset_sites(ps, {1: ("seller01", None)}, excel_pws={1: " xl-9999 "})
+check("엑셀 비밀번호: 옵저버 저장 - 새 값은 잠겨서 바뀐다", st.excel_password(ps[0]["code"]) == "xl-9999" and "xl-9999" not in raw_config())
+st.save_preset_sites(ps, {1: ("seller01", None)}, excel_pws={1: ""})
+check("엑셀 비밀번호: 옵저버 저장 - 빈 글자는 지운다", "ExcelPW" not in st.read_user_config()["Sites"]["PRESET1"] and st.excel_password(ps[0]["code"]) is None)
+_c = json.loads(raw_config())           # 옛 버전이 평문으로 적어 둔 파일 (웹 환경설정에서 넣은 값·사람이 적은 운송장 엑셀 비밀번호)
+_c["Sites"]["PRESET1"]["ExcelPW"] = "xl-plain"
+_c["InvoiceExcel"] = {"Password": "inv-plain"}
+Path(os.environ["RPA_USER_CONFIG"]).write_text(json.dumps(_c, ensure_ascii=False), encoding="utf-8")
+_said = st.migrate_user_config() or ""
+_c = st.read_user_config()
+check("엑셀 비밀번호: 에이전트가 켤 때 평문 둘(프리셋·운송장 엑셀)을 잠근다", "평문 비밀번호 2개" in _said
+      and "xl-plain" not in raw_config() and "inv-plain" not in raw_config() and _c["Sites"]["PRESET1"]["ExcelPW"].startswith("dpapi:")
+      and _c["InvoiceExcel"]["Password"].startswith("dpapi:") and st.excel_password(ps[0]["code"]) == "xl-plain"
+      and st.unseal(_c["InvoiceExcel"]["Password"]) == "inv-plain", _said)
+_c["Sites"]["PRESET1"]["ExcelPW"] = "dpapi:AAAA"       # 다른 PC·다른 윈도우 계정에서 잠근 값 (설정 파일 복사)
+st.write_user_config(_c)
+try:
+    st.excel_password(ps[0]["code"])
+    check("엑셀 비밀번호: 못 푸는 값은 RuntimeError", False)
+except RuntimeError as e:
+    check("엑셀 비밀번호: 못 푸는 값은 RuntimeError - 글에 값은 없다", "AAAA" not in str(e), str(e))
+check("엑셀 비밀번호: 못 푸는 값도 요약은 xl_set 참 (값은 싣지 않는다)", st.preset_summary()[0]["xl_set"] is True)
 st.set_preset_excel_pw({"PRESET1": ""})
+_c = st.read_user_config()
+_c.pop("InvoiceExcel", None)
+st.write_user_config(_c)
 check("엑셀 비밀번호: 비우면 지운다", "ExcelPW" not in st.read_user_config()["Sites"]["PRESET1"] and st.excel_password(ps[0]["code"]) is None)
 cfg = st.read_user_config()
 check("다른 섹션·다른 사이트는 그대로", cfg["LogIn"]["ID"] == "erp" and cfg["Routine"] == {"Login": "Y"}
@@ -98,9 +133,9 @@ check("다시 저장: 비밀번호를 안 주면 그대로, 켬/끔도 그대로
       and site["Stts"] == 0 and site["note"] == "지마켓 판매자" and site["ID"] == "seller02", str(site))
 summary = st.preset_summary()
 check("요약: 번호·이름·코드·단계 수·저장 시각·아이디 여부·켬·보관", summary[0] == {
-      "no": 1, "name": "지마켓", "code": "012", "steps": 1, "saved_at": "2026-09-30T18:20:00", "imap": False, "upload": False, "has_login": True, "on": True, "excel_pw": "", "backup": False}
+      "no": 1, "name": "지마켓", "code": "012", "steps": 1, "saved_at": "2026-09-30T18:20:00", "imap": False, "upload": False, "has_login": True, "on": True, "xl_set": False, "backup": False}
       and summary[1]["steps"] == 0 and summary[1]["has_login"] is False, str(summary))
-check("요약에는 기록 내용·아이디·비밀번호가 없다", all(set(s) == {"no", "name", "code", "steps", "saved_at", "imap", "upload", "has_login", "on", "excel_pw", "backup"}
+check("요약에는 기록 내용·아이디·비밀번호가 없다", all(set(s) == {"no", "name", "code", "steps", "saved_at", "imap", "upload", "has_login", "on", "xl_set", "backup"}
                                                   for s in summary) and "seller" not in json.dumps(summary, ensure_ascii=False))
 check("켜기·끄기는 Stts 0/9 (키는 PRESET1·'1'·1 모두)",
       st.set_preset_switches({"PRESET1": False}) == {1: False} and st.read_user_config()["Sites"]["PRESET1"]["Stts"] == 9
@@ -843,6 +878,108 @@ app = _app()
 rr.App.save(app)
 check("지우지 않은 평소 저장은 그대로 (번호·날짜·계정 안 바뀜)", before == (json.dumps(_sites_now(), sort_keys=True), json.dumps(st.read_presets(), sort_keys=True))
       and app.said[-1] == "저장했습니다.", str(app.said))
+
+# http 주소 경고 (보안 감사 C12, 고객사 보안 검토 2026-11-19): https 가 아닌 사이트는 아이디·비밀번호가 암호화되지 않고 오간다
+check("http 경고: https 주소·이 PC 주소(시험용)는 경고하지 않는다", rr.plain_http_warn({"start_url": "https://shop.example.com/login", "steps": []}) is None
+      and rr.plain_http_warn({"start_url": "http://127.0.0.1:8080/login", "steps": []}) is None
+      and rr.plain_http_warn({"start_url": "http://localhost/login", "steps": []}) is None and rr.plain_http_warn(None) is None
+      and rr.plain_http_warn({"start_url": "imap://imap.example.com", "steps": []}) is None)
+_w = rr.plain_http_warn({"start_url": "HTTP://shop.example.com/login", "steps": []})
+check("http 경고: 시작 주소가 http 면 암호화되지 않는다고 알린다", bool(_w) and "https" in _w and "암호화" in _w, str(_w))
+_w = rr.plain_http_warn({"start_url": "https://shop.example.com/login", "steps": [
+    {"kind": "secret", "host": "login.example.com", "url": "/auth", "plainHttp": True}]})
+check("http 경고: 시작은 https 여도 비밀번호를 넣는 화면이 http 면 알린다", bool(_w) and "암호화" in _w, str(_w))
+_seed(2)
+_ps = st.read_presets()
+_ps[0]["record"]["start_url"] = "http://shop1.example.com/login"
+st.write_presets(_ps)
+app = _app()
+rr.App.save(app)
+check("http 경고: 저장은 되고 저장 글 뒤에 그 프리셋의 경고가 붙는다", app.said[-1].startswith("저장했습니다.") and "①" in app.said[-1]
+      and "https" in app.said[-1] and "②" not in app.said[-1], str(app.said[-1]))
+
+# 엑셀 비밀번호 칸 (사용자 2026-11-19, 고객사 보안 검토): 옵저버에서만 넣는다 - 새로 친 값은 잠겨 저장, [지우기] 는 지움, 손대지 않으면 그대로
+_seed(2)
+app = _app()
+check("엑셀 비밀번호 칸: 불러온 칸은 있는지만 든다 (값은 화면에 없다)",
+      [(p.get("xl_pw"), p.get("has_xl_pw"), p.get("xl_clear")) for p in app.presets] == [("", False, False)] * 2, str(app.presets[0].keys()))
+app.presets[0]["xl_pw"] = " xl-new "
+check("엑셀 비밀번호 칸: 새로 친 글자가 있으면 '저장하지 않은 변경'", rr.edit_view(app.presets) != rr.edit_view(rr.load_presets()))
+rr.App.save(app)
+check("엑셀 비밀번호 칸: 저장하면 잠겨 들어가고 칸은 비운 채 '있음' - 다른 프리셋은 그대로 없음", st.excel_password("011") == "xl-new"
+      and "xl-new" not in raw_config() and (app.presets[0].get("xl_pw"), app.presets[0].get("has_xl_pw")) == ("", True)
+      and st.excel_password("021") is None and app.presets[1].get("has_xl_pw") is False, str(app.said))
+app = _app()
+check("엑셀 비밀번호 칸: 다시 열면 있는지만", (app.presets[0].get("xl_pw"), app.presets[0].get("has_xl_pw")) == ("", True))
+rr.App.save(app)
+check("엑셀 비밀번호 칸: 손대지 않고 저장하면 그대로", st.excel_password("011") == "xl-new")
+app.presets[0]["xl_clear"] = True
+check("엑셀 비밀번호 칸: [지우기] 도 '저장하지 않은 변경'", rr.edit_view(app.presets) != rr.edit_view(rr.load_presets()))
+rr.App.save(app)
+check("엑셀 비밀번호 칸: [지우기] 뒤 저장하면 지워지고 표시도 꺼진다", st.excel_password("011") is None
+      and (app.presets[0].get("has_xl_pw"), app.presets[0].get("xl_clear")) == (False, False), str(app.said))
+app.presets[0].update(xl_clear=True, xl_pw="xl-again")
+rr.App.save(app)
+check("엑셀 비밀번호 칸: [지우기] 뒤에 새로 치면 새 값이 들어간다", st.excel_password("011") == "xl-again" and app.presets[0].get("has_xl_pw") is True)
+# 검토 2026-11-19: 사이트코드를 고쳐 저장하면 엑셀 비밀번호는 지워지는데(다른 사이트의 값) 화면은 '저장됨' 이라 했다 - 지웠다고 알리고 표시도 끈다
+app.presets[0]["code"] = "019"
+rr.App.save(app)
+check("엑셀 비밀번호 칸: 사이트코드를 바꿔 저장하면 지워졌다고 알리고 '있음' 표시도 꺼진다", st.excel_password("019") is None and st.excel_password("011") is None
+      and app.presets[0].get("has_xl_pw") is False and "엑셀 비밀번호" in app.said[-1] and "①" in app.said[-1], str(app.said[-1]))
+app.presets[0].update(code="011", xl_pw="xl-back")
+rr.App.save(app)
+check("엑셀 비밀번호 칸: 사이트코드를 바꾸면서 새로 넣은 값은 들어간다 (경고 없음)", st.excel_password("011") == "xl-back" and app.presets[0].get("has_xl_pw") is True
+      and "엑셀 비밀번호" not in app.said[-1], str(app.said[-1]))
+# 되돌리기 대비 (검토 2026-11-19): 이전 버전은 잠긴 엑셀 비밀번호를 못 읽는다 - 도우미가 옛 버전으로 돌아가기 전에 평문으로 되돌린다
+_c = st.read_user_config()
+_c["InvoiceExcel"] = {"Password": "inv-custom"}
+st.write_user_config(_c)
+_pw_before = st.read_user_config()["Sites"]["PRESET1"]["PW"]
+check("되돌리기 대비: 평소에는 둘 다 잠겨 있다", st.read_user_config()["Sites"]["PRESET1"]["ExcelPW"].startswith("dpapi:")
+      and st.read_user_config()["InvoiceExcel"]["Password"].startswith("dpapi:"))
+_n = st.unseal_excel_passwords()
+_c = st.read_user_config()
+check("되돌리기 대비: unseal_excel_passwords 는 엑셀 비밀번호 둘만 평문으로 되돌리고 로그인 비밀번호는 잠긴 그대로", _n == 2
+      and _c["Sites"]["PRESET1"]["ExcelPW"] == "xl-back" and _c["InvoiceExcel"]["Password"] == "inv-custom" and _c["Sites"]["PRESET1"]["PW"] == _pw_before
+      and _pw_before.startswith("dpapi:"), f"{_n} {_c['Sites']['PRESET1'].get('ExcelPW', '')[:8]}")
+check("되돌리기 대비: 다시 부르면 할 일이 없다", st.unseal_excel_passwords() == 0)
+_said = st.migrate_user_config(excel=False) or ""
+_c = st.read_user_config()
+check("에이전트가 막 켜졌을 때(excel=False)는 엑셀 비밀번호를 잠그지 않는다 - 새 버전이 점검에 실패해 옛 버전으로 돌아가도 읽히게",
+      _c["Sites"]["PRESET1"]["ExcelPW"] == "xl-back" and _c["InvoiceExcel"]["Password"] == "inv-custom" and "평문" not in _said, _said)
+_said = st.migrate_user_config() or ""
+_c = st.read_user_config()
+check("몇 분 뒤 다시 부르면(기본) 둘 다 잠근다", "평문 비밀번호 2개" in _said and _c["Sites"]["PRESET1"]["ExcelPW"].startswith("dpapi:")
+      and _c["InvoiceExcel"]["Password"].startswith("dpapi:") and st.excel_password("011") == "xl-back", _said)
+# 누구나 아는 기본값 0000 은 잠그지 않는다 (검토 2026-11-19): 잠가도 지키는 것이 없고, 윈도우 계정이 바뀌면 운송장 엑셀출력이 통째로 멈춘다
+_c["InvoiceExcel"] = {"Password": " 0000 "}
+Path(os.environ["RPA_USER_CONFIG"]).write_text(json.dumps(_c, ensure_ascii=False), encoding="utf-8")
+_said = st.migrate_user_config() or ""
+check("운송장 엑셀 비밀번호가 기본값(0000)이면 잠그지 않는다", st.read_user_config()["InvoiceExcel"]["Password"].strip() == "0000" and "평문" not in _said, _said)
+# 옛 버전이 남긴 사본의 평문 엑셀 비밀번호도 잠근다 (검토 2026-11-19): 프리셋 보관(넣어 주기·복사 전 기록), 이전 업체 프리셋
+st.write_json_atomic(st.preset_backup_path(1), {"preset": {"no": 1}, "site": {"ID": "a", "PW": st.seal("pw-a"), "ExcelPW": "bk-plain"}, "mail": None})
+st.write_json_atomic(st.preset_backup_path(2), {"preset": {"no": 2}, "site": {"ID": "b", "PW": st.seal("pw-b")}, "mail": None})
+_stash = os.path.join(st.config_dir(), st.PRESET_STASH, "c_old_20261110-101010")
+os.makedirs(_stash, exist_ok=True)
+with open(os.path.join(_stash, "Sites.json"), "w", encoding="utf-8") as _f:
+    json.dump({"PRESET1": {"ID": "s", "PW": st.seal("pw-s"), "ExcelPW": "st-plain"}, "PRESET2": {"ID": "t"}}, _f, ensure_ascii=False)
+_n = st.seal_backup_excel_pw()
+_bk = st.read_json(st.preset_backup_path(1))
+_ss = st.read_json(os.path.join(_stash, "Sites.json"))
+check("사본의 평문 엑셀 비밀번호 둘(프리셋 보관·이전 업체 프리셋)을 잠근다 - 다른 값은 그대로", _n == 2
+      and st.unseal(_bk["site"]["ExcelPW"]) == "bk-plain" and _bk["site"]["ExcelPW"].startswith("dpapi:") and st.unseal(_bk["site"]["PW"]) == "pw-a"
+      and st.unseal(_ss["PRESET1"]["ExcelPW"]) == "st-plain" and _ss["PRESET1"]["ExcelPW"].startswith("dpapi:") and _ss["PRESET2"] == {"ID": "t"},
+      f"{_n} {_bk['site'].get('ExcelPW', '')[:8]} {_ss['PRESET1'].get('ExcelPW', '')[:8]}")
+check("사본 잠그기: 다시 부르면 할 일이 없다", st.seal_backup_excel_pw() == 0)
+os.remove(st.preset_backup_path(1)); os.remove(st.preset_backup_path(2))
+import shutil as _sh  # noqa: E402
+_sh.rmtree(os.path.join(st.config_dir(), st.PRESET_STASH), ignore_errors=True)
+_c = st.read_user_config()
+_c.pop("InvoiceExcel", None)
+st.write_user_config(_c)
+p_other = rr.load_file_into(dict(rr.new_preset(1, "몰1", "011"), has_xl_pw=True, xl_pw="x"), {"name": "다른몰", "code": "099", "record": _rec(9)})
+check("엑셀 비밀번호 칸: 다른 사이트코드의 파일을 불러오면 비운다 (옛 사이트 값이 따라가지 않게)",
+      (p_other.get("xl_pw"), p_other.get("has_xl_pw"), p_other.get("xl_clear")) == ("", False, False))
 
 _seed()
 app = _app()

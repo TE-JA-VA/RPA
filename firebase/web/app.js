@@ -2,7 +2,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, signInWithEmailAndPassword, signInWithCustomToken, signOut, onAuthStateChanged, connectAuthEmulator,
-  setPersistence, browserSessionPersistence, browserLocalPersistence,
+  setPersistence, browserSessionPersistence,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getDatabase, ref, get, connectDatabaseEmulator,
@@ -43,6 +43,41 @@ applyTheme(getTheme());
 paintThemeButton();
 applyAccent(getAccent());
 
+// --- 탭 단위 로그인·미사용 자동 로그아웃 (사용자 2026-11-19, 고객사 보안 검토) ---------------
+// 로그인 정보는 탭 저장소에만 둔다 - 탭(브라우저)을 닫으면 로그인이 끝난다. 그 전에는 브라우저에 남아 닫았다 열어도 로그인돼 있었다.
+// 옛 방식으로 브라우저에 남아 있던 로그인도 여기서 탭 저장소로 옮겨진다 (setPersistence 는 지금 로그인한 계정을 새 저장소로 옮긴다)
+await setPersistence(auth, browserSessionPersistence).catch(() => {});
+// 입력(마우스·키보드·터치·휠)이 IDLE_MIN 분 없으면 로그아웃한다. 마지막 입력 시각도 탭 저장소에 둔다 - 새로고침해도 이어서 센다
+export const IDLE_MIN = 30;
+const IDLE_KEY = "lastActive";
+const lastActive = () => { try { return Number(sessionStorage.getItem(IDLE_KEY)) || 0; } catch { return 0; } };
+const touch = () => { try { sessionStorage.setItem(IDLE_KEY, String(Date.now())); } catch {} };
+const idleOver = () => { const t = lastActive(); return t > 0 && Date.now() - t > IDLE_MIN * 60000; };
+let idleNote = null;       // 미사용으로 로그아웃했다 ("user" | "console") - onAuthStateChanged 가 로그인 화면에 까닭을 적는다
+let justSignedIn = false;  // 방금 로그인에 성공했다 - onAuthStateChanged 가 입력 시각을 지금으로 적는다. 로그인을 시도하기 전에 적으면
+                           // 못 쓰는 열쇠(#t=)를 붙여 새로고침하는 것만으로 시간을 넘긴 로그인이 되살아났다 (검토 2026-11-19)
+async function idleCheck() {
+  if (!auth.currentUser || !idleOver()) return;
+  idleNote = auth.currentUser.uid === CONSOLE_UID ? "console" : "user";
+  await signOut(auth);
+}
+let lastTouch = 0;
+function onInput(e) {
+  if (!auth.currentUser) return;
+  if (idleOver()) {          // 시간을 넘긴 뒤의 첫 입력은 로그인을 살리지 않고, 누르려던 단추에도 닿지 않는다 ([실행]·[적용] 이 로그아웃보다 먼저 눌리지 않게)
+    if (e.cancelable) e.preventDefault();
+    e.stopImmediatePropagation();
+    idleCheck();
+    return;
+  }
+  const now = Date.now();
+  if (now - lastTouch > 5000) { lastTouch = now; touch(); }     // 저장소 쓰기는 5초에 한 번
+}
+for (const ev of ["pointermove", "wheel", "touchstart"]) window.addEventListener(ev, onInput, { passive: true, capture: true });
+for (const ev of ["pointerdown", "keydown", "click", "submit"]) window.addEventListener(ev, onInput, { capture: true });   // 막아야 하는 것 (passive 면 못 막는다)
+document.addEventListener("visibilitychange", () => { if (!document.hidden) idleCheck(); });   // 다른 탭을 보다 돌아왔을 때 (숨은 탭은 타이머가 느려진다)
+setInterval(idleCheck, 30000);
+
 // --- 로그인 ---------------------------------------------------------
 // 공유 계약 (agent.py·setup.js 와 같은 규칙): 아이디에 @ 가 있으면 그대로, 없으면 아이디@회사코드.프로젝트도메인. '_' 는 '-' 로. 업체코드가 비면(총괄) 프로젝트 도메인만
 export const emailFor = (cid, id) => id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}${firebaseConfig.authDomain}`;
@@ -59,15 +94,15 @@ $("login-form").addEventListener("submit", async (ev) => {
   $("login-btn").disabled = true;
   const cid = $("cid").value.trim().replace(/^-$/, "");   // setup.js 관습대로 '-' 도 '회사 없음'
   try {
-    await signInWithEmailAndPassword(auth, emailFor(cid, $("login-id").value.trim()), $("password").value);
-    // 관리 화면 열쇠가 탭 저장소로 바꿨을 수 있다 - 업체 계정은 브라우저에 남긴다. 로그인된 뒤에 바꿔 열쇠 계정이 브라우저에 옮겨지지 않게 (BugBuster I15)
-    await setPersistence(auth, browserLocalPersistence).catch(() => {});
+    justSignedIn = true;                 // 지난 로그인의 입력 시각이 남아 있어도 들어가자마자 미사용으로 로그아웃되지 않게 (onAuthStateChanged)
+    await signInWithEmailAndPassword(auth, emailFor(cid, $("login-id").value.trim()), $("password").value);   // 탭 저장소에만 (위 setPersistence)
     $("password").value = "";
     try {
       if ($("remember").checked) localStorage.setItem("login", JSON.stringify({ cid, id: $("login-id").value.trim() }));
       else localStorage.removeItem("login");
     } catch {}
   } catch (e) {
+    justSignedIn = false;
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password",
       "auth/user-not-found", "auth/invalid-email", "auth/missing-password"];
     alert.textContent = wrong.includes(e.code) ? "업체코드, 아이디 또는 비밀번호가 일치하지 않습니다."
@@ -85,7 +120,7 @@ window.addEventListener("beforeunload", (e) => { if (current?.dirty?.()) { e.pre
 // 관리 화면 [대시보드 보기] 가 주소 # 뒤에 붙인 1시간짜리 총괄 로그인 열쇠 (2026-10-16) - 주소창에서 곧바로 지우고 그 열쇠로 로그인한다.
 // 이미 다른 계정으로 로그인돼 있어도 바꾼다 (총괄 화면을 보려고 누른 것). 못 쓰면 (1시간 지남) 로그인 화면 안내
 const handoff = new URLSearchParams(location.hash.slice(1)).get("t");
-// 이 로그인은 탭 저장소에만 둔다 - 탭을 닫으면 끝나고, 로그인 1시간 뒤에는 스스로 로그아웃한다 (BugBuster I15, 아래 onAuthStateChanged)
+// 이 로그인도 탭 저장소에만 둔다 (2026-11-19 부터 모든 로그인이 그렇다) - 탭을 닫으면 끝나고, 로그인 1시간 뒤에는 스스로 로그아웃한다 (BugBuster I15, 아래 onAuthStateChanged)
 const CONSOLE_UID = "admin-console";   // ops.CONSOLE_UID 와 같다
 const CONSOLE_SEC = 3600;
 let consoleTimer = null;
@@ -93,9 +128,10 @@ if (handoff) {
   history.replaceState(null, "", location.pathname + location.search);
   try {
     await setPersistence(auth, browserSessionPersistence);
+    justSignedIn = true;
     await signInWithCustomToken(auth, handoff);
   } catch {
-    await setPersistence(auth, browserLocalPersistence).catch(() => {});   // 열쇠를 못 썼으면 원래대로
+    justSignedIn = false;
     $("login-alert").textContent = "관리 화면 로그인 정보가 만료되었습니다. 관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오."; show($("login-alert"), true);
   }
 }
@@ -106,8 +142,17 @@ onAuthStateChanged(auth, async (user) => {
   if (!user) {
     me = null; company = null; pcId = null;
     show($("login"), true); show($("main"), false);
+    if (idleNote) {
+      $("login-alert").textContent = `${IDLE_MIN}분 동안 사용하지 않아 로그아웃되었습니다. `
+        + (idleNote === "console" ? "관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오." : "다시 로그인하여 주십시오.");
+      show($("login-alert"), true);
+      idleNote = null;
+    }
     return;
   }
+  if (justSignedIn) { justSignedIn = false; lastTouch = Date.now(); touch(); }
+  else if (idleOver()) { idleNote = user.uid === CONSOLE_UID ? "console" : "user"; await signOut(auth); return; }   // 새로고침으로 되살아난 로그인도 시간을 넘겼으면 끝낸다
+  else if (!lastActive()) touch();
   let t;
   try { t = await user.getIdTokenResult(true); } catch {   // 네트워크가 끊겨 토큰을 못 받으면 빈 화면에서 멈췄다 (BugBuster M4)
     show($("login"), true); show($("main"), false);

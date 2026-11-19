@@ -2881,14 +2881,18 @@ upload_pw = {"code": None, "at": 0.0}   # 넘기는 파일의 사이트코드 (�
 
 
 def fill_excel_password(popup_hwnd):
-    """'비밀번호 입력' 창에 그 파일 프리셋의 엑셀 비밀번호(웹 환경설정, 사용자 2026-11-05)를 넣고 [확인]. 넣었으면 True.
+    """'비밀번호 입력' 창에 그 파일 프리셋의 엑셀 비밀번호(옵저버 '엑셀 비밀번호' 칸 - 2026-11-19 부터 PC 에서만 넣는다)를 넣고 [확인]. 넣었으면 True.
     못 넣으면 False - 예전처럼 빈 칸으로 [확인] 을 눌러 그 파일은 실패다. 틀려서 창이 다시 떠도 같은 값을 거듭 넣지 않는다.
     창이 ERPia 뒤에 깔려도 되게 키보드를 쓰지 않는다. 값은 로그에 남기지 않고, 넣은 뒤 창 글자를 읽지 않는다."""
     code, upload_pw["code"] = upload_pw["code"], None
     try:
-        pw = status.excel_password(code) if code is not None else None
+        try:
+            pw = status.excel_password(code) if code is not None else None
+        except RuntimeError:            # 다른 PC·다른 윈도우 계정에서 잠근 값 (설정 파일 복사) - 값은 남기지 않는다
+            log(f"    사이트코드 {code} 프리셋의 엑셀 비밀번호를 이 PC에서 복호화하지 못했습니다. 옵저버에서 다시 입력하여 주십시오.")
+            return False
         if not pw:
-            log(f"    사이트코드 {code} 프리셋에 엑셀 비밀번호가 없습니다. (웹 환경설정 '엑셀 비밀번호')")
+            log(f"    사이트코드 {code} 프리셋에 엑셀 비밀번호가 없습니다. (옵저버 프리셋의 '엑셀 비밀번호')")
             return False
         w = Desktop(backend="uia").window(handle=popup_hwnd)
         edit = w.descendants(control_type="Edit")[0]

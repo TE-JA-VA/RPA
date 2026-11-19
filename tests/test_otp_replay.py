@@ -225,6 +225,60 @@ fc.fail_get = [Denied(401)]
 check("권한 거부(401)면 None - 새 요청으로 (M8)", relay.wait(rid, 30, lambda s: None) is None)
 
 
+class FlakyDelete(FakeClient):
+    """지우기가 차례로 실패한다 (fails 의 예외를 하나씩 - None 은 성공)."""
+
+    def __init__(self, fails):
+        super().__init__()
+        self.fails = list(fails)
+
+    def delete(self, p):
+        e = self.fails.pop(0) if self.fails else None
+        if e is not None:
+            self.log.append("del-fail")
+            raise e
+        super().delete(p)
+
+
+# 끝날 때 번호·요청 지우기 (보안 감사 C17, 고객사 보안 검토 2026-11-19): 망이 잠깐 끊겨도 몇 번 다시 지운다 - 그 전엔 한 번 실패하면
+# 같은 휴대폰의 다음 요청 때까지 서버에 남았다
+fc = FlakyDelete([OSError("망"), OSError("망")])
+fc.db[REQ], fc.db[CODE] = {"req_id": "r", "pcId": "pc1", "created_at": T[0] * 1000}, {"req_id": "r", "code": "123456"}
+ticks.clear()
+otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰").close("r", tick=lambda s: ticks.append(s))
+check("끝날 때 지우기가 실패하면 다시 지운다 - 번호·요청 모두 서버에서 사라진다", fc.db == {} and fc.log.count("del-fail") == 2 and len(ticks) == 1, f"{fc.db} {fc.log} {ticks}")
+fc = FlakyDelete([OSError("망")] * 20)
+fc.db[REQ], fc.db[CODE] = {"req_id": "r", "pcId": "pc1", "created_at": T[0] * 1000}, {"req_id": "r", "code": "123456"}
+ticks.clear()
+try:
+    otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰").close("r", tick=lambda s: ticks.append(s))
+    check("끝내 못 지우면 RuntimeError", False)
+except RuntimeError as e:
+    check("끝내 못 지우면 세 번까지만 해 보고 RuntimeError - 부른 쪽이 기록에 남긴다 (번호는 글에 없다)",
+          fc.log.count("del-fail") == 6 and len(ticks) == 2 and "123456" not in str(e) and "지우지 못했습니다" in str(e), f"{fc.log} {ticks} {e}")
+fc = FlakyDelete([OSError("망")] * 20)                      # 지우기 한 번이 오래 걸린다 (요청마다 시간 제한 30초)
+_t = [0.0]
+
+
+def _slow_clock():
+    _t[0] += 12.0
+    return _t[0]
+
+
+ticks.clear()
+try:
+    otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰").close("r", tick=lambda s: ticks.append(s), clock=_slow_clock)
+    check("망이 먹통이면 RuntimeError", False)
+except RuntimeError:
+    check("망이 먹통이라 한 바퀴가 오래 걸리면 더 붙잡지 않고 끝낸다 (검토 2026-11-19 - 실행 끝이 몇 분씩 멈추지 않게)",
+          fc.log.count("del-fail") == 2 and ticks == [], f"{fc.log} {ticks}")
+fc = FlakyDelete([Denied(401), Denied(403)])
+fc.db[REQ] = {"req_id": "other", "pcId": "pc2", "created_at": T[0] * 1000}
+ticks.clear()
+otp_relay.PhoneRelay(fc, "c", "pc1", "ph", ["1588-1234"], "가나몰").close("r", tick=lambda s: ticks.append(s))
+check("규칙이 막은 것(남의 요청)은 다시 지우지 않고 조용히 넘어간다", fc.log.count("del-fail") == 2 and ticks == [] and REQ in fc.db, f"{fc.log} {ticks}")
+
+
 class RuleDenied(FakeClient):
     """규칙이 요청 자체를 거절 - 허용 발신번호 밖·업체 정지 (자리는 비어 있다)."""
 
