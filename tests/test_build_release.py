@@ -258,12 +258,12 @@ icon_opts = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.start
              for exe in br.EXES}
 prep = getattr(br, "ICON_PREPARE", "")
 icons = [br.ICON, getattr(br, "ICON_PROCESS", ""), getattr(br, "ICON_ACTOR", ""), prep]
-check("아이콘: PROCESS·ACTOR 오토파일럿·옵저버 exe 는 각자 색 한 벌씩, 네 ico 가 모두 다르고 판에 들어간다 (2026-10-13 오토파일럿)",
+check("아이콘: PROCESS·ACTOR 오토파일럿·옵저버 exe 는 각자 ico 파일을 쓰고 판에 들어간다 - 그림은 모두 오토파일럿 파랑 하나 (2026-11-19)",
       icon_opts == {"ERPia_RPA.exe": [f"--windows-icon-from-ico={icons[1]}"],
                     "Prepare_RPA.exe": [f"--windows-icon-from-ico={icons[2]}"],
                     "Prepare_Observer.exe": [f"--windows-icon-from-ico={prep}"]}
       and all(os.path.isfile(p) and br.icon_resources(p)[1] for p in icons)
-      and len({open(p, "rb").read() for p in icons}) == 3     # 오토파일럿과 PROCESS 는 같은 파랑 (사용자 2026-11-06)
+      and len({open(p, "rb").read() for p in icons}) == 1     # 오토파일럿 관련은 모두 같은 파랑 로고 (사용자 2026-11-19)
       and all((os.path.basename(p), "release/" + os.path.basename(p)) in br.PROGRAM_FILES for p in icons), icon_opts)
 console = {exe: [o for o in br.NUITKA_COMMON + br.NUITKA_EXTRA[exe] if o.startswith("--windows-console-mode=")]
            for exe in br.EXES}

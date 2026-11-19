@@ -2,9 +2,9 @@ r"""오토파일럿 아이콘을 만든다 (2026-11-06 사용자가 고른 '마.
 
     release/AFTER_MARKET.ico          오토파일럿 (파랑)            설치 파일·설정 창·바로 가기·에이전트·감독
     release/AUTOPILOT_PROCESS.ico     PROCESS 오토파일럿 (파랑)    ERPia_RPA.exe
-    release/AUTOPILOT_ACTOR.ico       ACTOR 오토파일럿 (분홍·보라) Prepare_RPA.exe (기록대로 엑셀을 받는 쪽)
-    release/AFTER_MARKET_PREPARE.ico  옵저버 (주황)                Prepare_Observer.exe·그 창·시작 메뉴 바로 가기 (기록하는 창)
-    firebase/web/img/icon.png         웹 대시보드 (민트)           브라우저 탭·휴대폰 홈 화면
+    release/AUTOPILOT_ACTOR.ico       ACTOR 오토파일럿 (파랑)      Prepare_RPA.exe (기록대로 엑셀을 받는 쪽)
+    release/AFTER_MARKET_PREPARE.ico  옵저버 (파랑)                Prepare_Observer.exe·그 창·시작 메뉴 바로 가기 (기록하는 창)
+    firebase/web/img/icon.png         웹 대시보드 (파랑)           브라우저 탭·휴대폰 홈 화면
 
     .venv\Scripts\python.exe tools\make_icon.py
 
@@ -25,14 +25,15 @@ PINK = ("#FF3DCB", "#8A3FFC", "#2F3CF0", "#1D1A9E")     # 뒤 날개 시작, 두
 BLUE = ("#22C3E6", "#2F7BF0", "#2A35C8", "#16207F")
 ORANGE = ("#FF9A3D", "#FF3D81", "#A12BD6", "#6E1296")
 MINT = ("#3DE0A8", "#12B5B0", "#1C6FD6", "#0E4F9C")
-ICONS = {                              # 파일 → 색 (사용자가 정함 2026-11-06)
+# 2026-11-19 사용자: 오토파일럿 관련 프로그램은 모두 오토파일럿 로고(파랑) 하나. 분홍보라·주황·민트는 앞으로 다른 프로그램용으로 남긴다
+ICONS = {                              # 파일 → 색
     "AFTER_MARKET.ico": BLUE,
     "AUTOPILOT_PROCESS.ico": BLUE,
-    "AUTOPILOT_ACTOR.ico": PINK,
-    "AFTER_MARKET_PREPARE.ico": ORANGE,
+    "AUTOPILOT_ACTOR.ico": BLUE,
+    "AFTER_MARKET_PREPARE.ico": BLUE,
 }
 WEB_ICON = os.path.join(REPO, "firebase", "web", "img", "icon.png")
-WEB_COLOR, WEB_SIZE = MINT, 180
+WEB_COLOR, WEB_SIZE = BLUE, 180
 N = 1024                               # 그리는 해상도
 SS = 4                                 # 도형은 4배로 그려 줄인다
 FILL = 0.78                            # 날개가 네모에서 차지하는 비율 (흰 바탕은 밝은 작업 표시줄에서 사라져 66% 는 작았다)
