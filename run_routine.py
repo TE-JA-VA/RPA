@@ -102,6 +102,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 
 import ctypes.wintypes
 
@@ -128,6 +129,7 @@ PROCESS_WAIT_SECONDS = 30
 ERPIA_EXIT_WAIT_SECONDS = 30   # 관리자 권한 ERPia 를 끈 뒤 프로세스가 사라지기를 기다리는 최대 시간
 ERPIA_ELEVATED_NOTE = "ERPia가 관리자 권한으로 실행되어 있어 일반 권한 RPA가 다룰 수 없습니다."
 ERPIA_RESTARTS = 2             # 실행 한 번에 도중에 꺼진 ERPia 를 다시 띄우는 최대 횟수 (계속 꺼지면 멈춘다)
+ERPIA_DYING_WAIT_SECONDS = 5   # 모듈 예외 뒤 ERPia 프로세스가 끝나는지 지켜보는 시간 - 꺼질 때 창이 먼저 사라지고 프로세스는 늦게 끝난다
 LOGIN_WINDOW_WAIT_SECONDS = 30
 # 로그인 후 메인 화면(좌측 메뉴 포함)이 완전히 뜰 때까지 기다리는 최대 시간
 MAIN_WINDOW_READY_TIMEOUT = 90
@@ -2933,6 +2935,10 @@ def upload_popups(pid, hwnd, before=(), label=""):
             log(f"    {label}팝업: {why}")
         else:
             ok, why, msg = invoke_popup_window(h)
+            if not ok and dialog_gone(h, settle=1.0):
+                # '비밀번호 입력' 과 함께 떴다 같이 닫히는 제목 없는 창(단추 없음) - 남아 있을 때 보면 멈췄다 (2026-11-19 개발기 3번 중 2번)
+                log(f"    {label}팝업: 곧 닫힌 창이라 넘어갑니다 ({why})")
+                continue
             log(f"    {label}팝업: {why}")
             if not ok:
                 raise UploadStop(why)
@@ -5403,8 +5409,8 @@ def run_import_step(app, pid, hwnd, win, wait=True):
     도중에 뜨는 안내 팝업은 규칙대로 닫는다. 팝업이 떠 있는 동안에는 메인 창이
     잠겨 버튼도 비활성으로 보이므로, 닫지 않으면 영영 기다리게 된다.
 
-    돌려주는 값: 끝남 True / 눌렀지만 끝을 확인 못 함 False / 누르지 못함(단추 없음·클릭 실패) None
-    - 자동 수집 모듈이 누르지 못한 것만 건너뜀(토큰 0)으로 가른다 (사용자 2026-11-02).
+    돌려주는 값: 끝남 True / 조회가 시작된 뒤 끝을 확인 못 함 False / 누르지 못함(단추 없음·클릭 실패)·눌러도 '조회중' 이 안 됨 None
+    - 자동 수집 모듈이 None 을 건너뜀(토큰 0)으로 가른다 (사용자 2026-11-02, 조회 미시작은 2026-11-19).
     """
     imp = find_by_text(win, IMPORT_BUTTON_NAME, control_types=("Button",))
     if imp is None:
@@ -5492,7 +5498,7 @@ def run_import_step(app, pid, hwnd, win, wait=True):
         handle_import_popups(pid, hwnd, seen_popups)
         log(f"  경고: {IMPORT_BUSY_WAIT_SECONDS}초 안에 '조회중'으로 바뀌지 않았습니다."
             f" 가져올 주문이 없었거나 클릭이 먹지 않았을 수 있습니다.")
-        return False
+        return None     # 누르지 못함과 같이 건너뜀 - 덮인 클릭을 '완료' 로 남기지 않는다 (웰라이프·일반 같게, 사용자 2026-11-19)
 
     def finish():
         """2) 둘 다 활성으로 돌아오고, 잠깐 유지되면 완료 (True). wait=False 면 이 함수를 돌려준다 - 부르는 쪽이 다른 일을
@@ -6193,8 +6199,8 @@ def module_import(ctx):
             status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
         log("\n=== 주문 가져오기 ===")
         ok = run_import_step(ctx.app, ctx.pid, ctx.hwnd, win)
-        if ok is None:      # 누르지 못했다 - 돈 것이 없으니 토큰을 쓰지 않는다 (사용자 2026-11-02, 엑셀 수집의 '올릴 엑셀 없음' 과 같이)
-            return "skipped", f"'{IMPORT_BUTTON_NAME}'를 누르지 못해 건너뛰었습니다."
+        if ok is None:      # 누르지 못했거나 조회가 시작되지 않았다 - 돈 것이 없으니 토큰을 쓰지 않는다 (사용자 2026-11-02·11-19)
+            return "skipped", f"'{IMPORT_BUTTON_NAME}'를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
         if not ok:
             log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
         return "done", None
@@ -6613,7 +6619,18 @@ def run_module(ctx, key, label, funcs):
                 error = None
             except Exception as e:
                 result, reason, error = "failed", f"{type(e).__name__}: {e}", e
+            if (error is not None or result == "failed") and key != "login" and ctx.pid is not None:
+                # 꺼지는 중이면 UI 예외가 먼저 나고 프로세스는 조금 뒤에 끝난다 - 그 순간만 보면 '떠 있음' 이라
+                # 다시 띄우지 않고 '프로그램 오류' 로 끝났다 (2026-11-19 개발기: 상단 전체선택 중 종료 → KeyError: None).
+                # 웰라이프 모듈은 예외를 '실패' 결과로 돌려준다(wellife.ui_error) - 같은 동작이게 실패 결과도 본다 (사용자 11-19)
+                end = time.time() + ERPIA_DYING_WAIT_SECONDS
+                while ec.pid_alive(ctx.pid) and time.time() < end:
+                    time.sleep(0.2)
             if key == "login" or ctx.pid is None or ec.pid_alive(ctx.pid):
+                if error is not None and key != "login":
+                    # 실행 전체를 '프로그램 오류' 로 끝내지 않고 이 모듈의 실패로 남긴다 - 웰라이프(ui_error)와 같게 (사용자 2026-11-19)
+                    log("".join(traceback.format_exception(type(error), error, error.__traceback__)).rstrip())
+                    return wellife.ui_error(sys.modules[__name__], error)
                 if error is not None:
                     raise error
                 return result, reason

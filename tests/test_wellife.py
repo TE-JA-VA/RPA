@@ -1159,15 +1159,21 @@ def upload_stop(app, pid, hwnd, grid):
     raise rr.UploadStop("처리할 수 있는 버튼이 없습니다.")
 
 
-stop_rr = order_rr({"101": "x"})
-stop_rr.run_excel_upload_step, stop_rr.UploadStop = upload_stop, rr.UploadStop
-try:
-    wellife.excel_collect(stop_rr, octx, True)
-    res = None
-except wellife.Stop as e:
-    res = e.result, str(e)
-check("엑셀 업로드 중 누를 단추를 모르는 창이 뜨면 멈춤 (누르지 않음)", res is not None and res[0] == "stopped" and "알 수 없는 창" in res[1],
-      str(res))
+def upload_stop_after2(app, pid, hwnd, grid):
+    e = rr.UploadStop("처리할 수 있는 버튼이 없습니다.")
+    e.uploaded = 2
+    raise e
+
+
+for fn, want in ((upload_stop, "skipped"), (upload_stop_after2, "done")):
+    stop_rr = order_rr({"101": "x"})
+    stop_rr.run_excel_upload_step, stop_rr.UploadStop, stop_rr.UploadGridHidden = fn, rr.UploadStop, rr.UploadGridHidden
+    try:
+        res = wellife.excel_collect(stop_rr, octx, True)
+    except wellife.Stop as e:
+        res = ("Stop", e.result, str(e))
+    check(f"엑셀 업로드 중 누를 단추를 모르는 창이 뜨면 그 창은 누르지 않고 업로드를 멈추되, 올린 수를 남기고 뒤 모듈은 이어간다 -> {want} "
+          f"(보통 PROCESS 와 같게, 사용자 11-19)", res[0] == want and "오류로" in res[1] and "버튼이 없습니다" in res[1], str(res))
 press = ("click", "가져오기", "떠 있는 화면")
 for live in (True, False):
     acts.clear(); uploads.clear()
@@ -1190,9 +1196,20 @@ def collect_stop(rr_, ctx_=octx):
 
 
 IMPORTED[0] = False
-res = collect_stop(order_rr({}))
-check("[가져오기] 끝을 확인 못 하면 다음 모듈로 넘어가지 않고 멈춘다 ('확인할 것', 리뷰 10-14)",
-      res and res[0] == "stopped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
+acts.clear()
+try:
+    res = wellife.import_collect(order_rr({}), octx, True)
+except wellife.Stop as e:
+    res = ("Stop", e.result, str(e))
+check("[가져오기] 조회는 시작됐는데 끝을 확인 못 하면 '완료' 로 남기고 이어간다 - 보통 PROCESS 와 같게 (사용자 11-19, 예전엔 멈춤)",
+      res[0] == "done" and "확인하지 못" in res[1], f"{res} {acts}")
+IMPORTED[0] = None
+acts.clear()
+res = wellife.import_collect(order_rr({}), octx, True)
+later = wellife.import_collect(order_rr({}), octx, True, wait=False)
+later = later() if callable(later) else later
+check("[가져오기] 를 누르지 못했거나 눌러도 조회가 시작되지 않으면(None) 건너뜀 (토큰 0) - 보통 PROCESS 와 같게 (사용자 11-19)",
+      res[0] == "skipped" and later[0] == "skipped" and "시작되지 않" in res[1], f"{res} {later}")
 IMPORTED[0] = True
 zero_rr = order_rr({})
 zero_rr.select_all_and_verify = lambda *a: None
@@ -2787,6 +2804,7 @@ trr = types.SimpleNamespace(
     win32gui=types.SimpleNamespace(GetWindowRect=lambda h: (0, 0, 1920, 1032),
                                    SetWindowPos=lambda h, after, *a: tev.append(("topmost", after == _wc.HWND_TOPMOST))),
     status=types.SimpleNamespace(step=lambda s, *a, **k: tsteps.append(s), metric=lambda *a, **k: None,
+                                 keep_record=lambda: tev.append(("keep record",)),
                                  release_prepare=lambda rect=None: tev.append(("release", rect)),
                                  running_programs=lambda: ["prepare"] if prep["on"] else []))
 _saved_tog = {n: getattr(wellife, n) for n in ("import_collect", "open_order_copy", "close_order_copy", "site_grid", "switch_tab",
@@ -2834,23 +2852,25 @@ def stop_upload(*a, **k):
 
 
 trr.run_excel_upload_step = stop_upload
-try:
-    wellife.excel_together(trr, tctx, False)
-    stop = None
-except wellife.Stop as e:
-    stop = (e.result, str(e))
-check("업로드 중 모르는 창이면 멈추되 키보드 없음을 푼다 (자동 수집 안 하면 '+' 도 없이)",
-      stop is not None and stop[0] == "stopped" and not trr.UPLOAD_NO_KEYS
-      and not [e for e in tev if e[0] in ("import start", "copy open")], f"{stop} {tev}")
+
+
+def together(import_live):
+    try:
+        return wellife.excel_together(trr, tctx, import_live)
+    except wellife.Stop as e:
+        return ("Stop", e.result, str(e))
+
+
+res = together(False)
+check("업로드 중 모르는 창이면 업로드를 멈추되 '중단' 이 아니라 결과(올린 수)를 남기고 뒤 모듈은 이어간다, 키보드 없음을 푼다 "
+      "(보통 PROCESS 와 같게, 사용자 11-19 / 자동 수집 안 하면 '+' 도 없이)",
+      res[0] == "skipped" and "알 수 없는 창" in res[1] and not trr.UPLOAD_NO_KEYS
+      and not [e for e in tev if e[0] in ("import start", "copy open")], f"{res} {tev}")
 tev.clear()
 prep["on"] = True
-try:
-    wellife.excel_together(trr, tctx, True)
-    stop = None
-except wellife.Stop as e:
-    stop = (e.result, str(e))
-check("'+' 화면을 연 뒤 멈춰도 그 화면은 닫는다 (남으면 다음 실행이 '(3)' 을 연다, 검토 10-20)",
-      stop is not None and stop[0] == "stopped" and tev[-1] == ("copy close", "주문매핑 매출처리 (2)"), f"{stop} {tev}")
+res = together(True)
+check("'+' 화면을 연 뒤 업로드를 멈춰도 그 화면은 닫는다 (남으면 다음 실행이 '(3)' 을 연다, 검토 10-20)",
+      res[0] != "Stop" and tev[-1] == ("copy close", "주문매핑 매출처리 (2)"), f"{res} {tev}")
 
 tev.clear()
 prep["on"] = True
@@ -2883,16 +2903,12 @@ def always_hidden(*a, **k):
 
 
 trr.run_excel_upload_step = always_hidden
-try:
-    wellife.excel_together(trr, tctx, True)
-    stop = None
-except wellife.Stop as e:
-    stop = (e.result, str(e))
-check(f"그리드가 계속 사라지면 {wellife.HIDDEN_MAX}번 넘어 멈추고 남은 파일은 그대로 둔다",
-      stop is not None and stop[0] == "stopped" and os.path.exists(os.path.join(tog, "(112)f.xlsx"))
-      and not trr.UPLOAD_NO_KEYS, str(stop))
+res = together(True)
+check(f"그리드가 계속 사라지면 {wellife.HIDDEN_MAX}번 넘어 업로드를 멈추고 남은 파일은 그대로 둔다 - 결과를 남기고 뒤 모듈은 이어간다 (사용자 11-19)",
+      res[0] == "skipped" and "계속 화면에서 사라져" in res[1] and os.path.exists(os.path.join(tog, "(112)f.xlsx"))
+      and not trr.UPLOAD_NO_KEYS, str(res))
 check("멈추면 올리지 못하고 남은 파일 수를 사유에 붙인다 (수집이 뒤에 넘기는 파일도 이번 실행에서는 안 올라감 - 검토 10-20)",
-      stop is not None and "업로드하지 못한 파일이 1개" in stop[1] and wellife.LEFT_NOTE in stop[1], str(stop))
+      "남은 파일 1개" in res[1] and wellife.LEFT_NOTE in res[1], str(res))
 os.remove(os.path.join(tog, "(112)f.xlsx"))
 
 tev.clear()
@@ -2933,13 +2949,9 @@ tev.clear()
 prep["on"] = True
 open(os.path.join(tog, "(115)i.xlsx"), "w").close()
 flaky[:] = [rr.UploadStop("처리할 수 있는 버튼이 없습니다."), rr.UploadStop("처리할 수 있는 버튼이 없습니다.")]
-try:
-    wellife.excel_together(trr, tctx, False)
-    stop = None
-except wellife.Stop as e:
-    stop = (e.result, str(e))
-check("다시 봐도 누를 단추가 없으면 누르지 않고 멈추고, 올리지 못한 파일 수를 알린다",
-      stop is not None and stop[0] == "stopped" and "업로드하지 못한 파일이 1개" in stop[1], str(stop))
+res = together(False)
+check("다시 봐도 누를 단추가 없으면 누르지 않고 업로드를 멈추고, 올리지 못한 파일 수를 알린다 (결과를 남기고 이어감, 사용자 11-19)",
+      res[0] == "skipped" and "알 수 없는 창" in res[1] and "남은 파일 1개" in res[1], str(res))
 os.remove(os.path.join(tog, "(115)i.xlsx"))
 trr.upload_popups = lambda pid, hwnd, before=(), label="": []
 tev.clear()

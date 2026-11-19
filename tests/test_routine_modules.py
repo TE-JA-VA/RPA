@@ -1112,17 +1112,60 @@ check("'1건' 모드 모듈은 ERPia 가 꺼져도 다시 돌지 않고 멈춘�
 out, called, rec = run_crash(raise_dead)
 check("꺼지면서 난 UI 예외도 다시 띄워 잇는다", out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
 
+DYING = [0]
+
+
+def alive_dying(pid):
+    """예외 순간에는 아직 떠 있다가 조금 뒤 끝나는 ERPia - 창이 먼저 사라지고 프로세스는 늦게 끝난다."""
+    if DYING[0] > 0:
+        DYING[0] -= 1
+        ALIVE[0] = DYING[0] > 0
+        return True
+    return ALIVE[0]
+
+
+def raise_dying(ctx):
+    seen.append(ctx.resume)
+    if len(seen) == 1:
+        DYING[0] = 3
+        raise KeyError(None)             # pywinauto - 사라지는 창의 요소 종류를 못 읽음 (2026-11-19 개발기 A3)
+    return "done", None
+
+
+rr.ec.pid_alive, rr.ERPIA_DYING_WAIT_SECONDS = alive_dying, 3
+try:
+    out, called, rec = run_crash(raise_dying)
+except KeyError as e:
+    out = f"KeyError 그대로: {e}"
+check("예외 순간엔 아직 떠 있다가 곧 끝나는 ERPia(꺼지는 중)도 기다려 보고 다시 띄워 잇는다 (11-19 개발기: '프로그램 오류 - KeyError: None')",
+      out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
+
+
+def fail_dying(ctx):
+    seen.append(ctx.resume)
+    if len(seen) == 1:
+        DYING[0] = 3
+        return "failed", "UI 오류: KeyError"      # 웰라이프 ui_error 처럼 예외를 '실패' 결과로 돌려준다
+    return "done", None
+
+
+out, called, rec = run_crash(fail_dying)
+check("예외를 '실패' 결과로 돌려주는 모듈(웰라이프 ui_error)도 꺼지는 중이면 기다려 보고 다시 띄워 잇는다 (웰라이프·일반 같은 동작, 사용자 11-19)",
+      out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
+rr.ec.pid_alive, rr.ERPIA_DYING_WAIT_SECONDS = (lambda pid: ALIVE[0]), 0.5
+
 
 def raise_alive(ctx):
     raise ValueError("진짜 버그")
 
 
 try:
-    run_crash(raise_alive)
-    res = None
+    out, called, rec = run_crash(raise_alive)
 except ValueError as e:
-    res = str(e)
-check("ERPia 가 떠 있는데 난 예외는 예전처럼 그대로 올린다", res == "진짜 버그", str(res))
+    out = f"예외 그대로: {e}"
+check("ERPia 가 떠 있는데 난 예외는 그 모듈의 실패로 남기고 사유를 보이고 뒤 모듈은 멈춘다 (웰라이프 ui_error 와 같게, 사용자 11-19)",
+      isinstance(out, tuple) and out[0] == "stopped" and out[1].startswith("UI 오류: ValueError") and "진짜 버그" in out[1]
+      and rec.of("module_done")[-1][:2] == ("sales", "failed"), f"{out} {rec.of('module_done')}")
 
 
 def login_fails_after(ctx):
@@ -1202,11 +1245,20 @@ for ret, left, keep, word in (((0, 0), set(), False, "올릴 엑셀 없음"), ((
           word in res[1] and bool(rr.status.of("keep_record")) == keep, f"{res} {rr.status.of('keep_record')}")
 rr.wellife.upload_paths = _saved_up
 EXCEL_RET[0] = (2, 0)
-# 자동 수집: [가져오기] 를 누르지 못했으면(단추 없음·클릭 실패 - None) 건너뜀(토큰 0), 누른 뒤 끝을 못 봤으면(False) 예전처럼 완료 (사용자 2026-11-02)
-for ret, want, why in ((None, "skipped", "누르지 못했으면 건너뜀 (토큰 0)"), (False, "done", "눌렀으면 끝을 못 봐도 완료 (토큰)")):
+# 자동 수집: [가져오기] 를 누르지 못했거나 눌러도 조회가 시작되지 않았으면(None) 건너뜀(토큰 0, 사용자 2026-11-02·11-19),
+# 시작된 뒤 끝을 못 봤으면(False) 예전처럼 완료 (사용자 2026-11-02)
+for ret, want, why in ((None, "skipped", "누르지 못했거나 조회가 시작되지 않았으면 건너뜀 (토큰 0)"), (False, "done", "시작된 뒤 끝을 못 봐도 완료 (토큰)")):
     rr.run_import_step = lambda *a, r=ret: r
     res = rr.module_import(make_ctx())
     check(f"자동 수집 {ret!r}: {why}", res[0] == want, str(res))
+rr.run_import_step = _saved_s["run_import_step"]
+_saved_i = (rr.find_by_text, rr.native_enabled, rr.handle_import_popups, rr.IMPORT_BUSY_WAIT_SECONDS, rr.ec.ensure_foreground, rr.status)
+_btn = types.SimpleNamespace(click_input=lambda: None, element_info=types.SimpleNamespace(handle=None))
+rr.find_by_text, rr.native_enabled, rr.handle_import_popups = (lambda win, text, control_types=(): _btn), (lambda el: True), (lambda *a: None)
+rr.IMPORT_BUSY_WAIT_SECONDS, rr.ec.ensure_foreground, rr.status = 0.3, (lambda h: None), StatusRec()
+check("[가져오기] 를 눌러도 '조회중' 이 안 되면(덮인 클릭 등) None - 누르지 못함과 같이 건너뜀 (웰라이프·일반 같게, 사용자 11-19)",
+      rr.run_import_step(None, 1, 2, None) is None and rr.run_import_step(None, 1, 2, None, wait=False) is None)
+(rr.find_by_text, rr.native_enabled, rr.handle_import_popups, rr.IMPORT_BUSY_WAIT_SECONDS, rr.ec.ensure_foreground, rr.status) = _saved_i
 rr.run_import_step = lambda *a: sales_acts.append(("import",)) or True
 # 매출처리: 하단이 0줄이면 전체선택도 정상매출도 하지 않고 건너뜀 (토큰 0 - 사용자 2026-11-02). 줄을 못 세면 예전처럼 진행 (위 시험)
 rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300, rows=[])]

@@ -439,8 +439,13 @@ def excel_collect(rr, ctx, live):
     rr.log(f"  [실행] 엑셀 업로드: 사이트 {names}")
     try:
         uploaded, errors = rr.run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, sites)
-    except rr.UploadStop as e:
-        raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 알 수 없는 창이 나타나 누르지 않고 중단하였습니다. ({e})") from e
+    except (rr.UploadStop, rr.UploadGridHidden) as e:   # 올린 수를 남기고 뒤 모듈은 이어간다 - 보통 PROCESS 와 같게 (사용자 11-19)
+        rr.log(f"  경고: 엑셀 업로드 중 오류로 멈춥니다 (남은 파일은 업로드 폴더에 그대로 - 다음 실행에): {e}")
+        rr.status.keep_record()
+        what = "누를 단추를 알 수 없는 창이 나타나 누르지 않고" if isinstance(e, rr.UploadStop) else "사이트 그리드가 화면에서 사라져"
+        if e.uploaded:
+            return "done", f"[{mode_tag(live)}] 엑셀 {e.uploaded}개 업로드 뒤 오류로 멈춤 - {what} 멈추었습니다. ({e})"
+        return "skipped", f"[{mode_tag(live)}] 엑셀업로드 오류로 건너뜀 - {what} 멈추었습니다. ({e})"
     return ("done" if uploaded else "skipped"), (f"[{mode_tag(live)}] 엑셀 {len(files)}건 중 {uploaded}건 업로드"
                                                  + (f", {errors}건은 오류 폴더로 이동 (확인하여 주십시오)" if errors else ""))
 
@@ -472,7 +477,7 @@ def excel_together(rr, ctx, import_live):
         no_popup(rr, ctx, "엑셀 업로드 전")
         base = popup_windows(rr, ctx)
         uploaded = errors = hidden = late = 0
-        tried = set()
+        tried, stop_note = set(), ""
 
         def between(label):
             nonlocal late
@@ -498,7 +503,13 @@ def excel_together(rr, ctx, import_live):
                     except rr.UploadGridHidden as h:     # 남은 파일은 그 자리에 있다 - 다음 차례에 화면을 되돌려 이어서 올린다
                         u, e, hidden = h.uploaded, h.errors, hidden + 1
                         if not copy or hidden > HIDDEN_MAX:
-                            raise Stop("stopped", f"엑셀 업로드 중 사이트 그리드가 계속 화면에서 사라져({hidden}번) 중단하였습니다.") from h
+                            uploaded, errors = uploaded + u, errors + e
+                            stop_note = f"사이트 그리드가 계속 화면에서 사라져({hidden}번) 업로드를 멈추었습니다."
+                            break
+                    except rr.UploadStop as s:          # 멈추기 전에 올린 수·오류 수를 센다 (보통 PROCESS excel_upload_together 와 같게)
+                        tried |= new
+                        uploaded, errors = uploaded + s.uploaded, errors + s.errors
+                        raise
                     uploaded, errors = uploaded + u, errors + e
                 elif "prepare" in rr.status.running_programs():
                     time.sleep(1)
@@ -506,9 +517,12 @@ def excel_together(rr, ctx, import_live):
                     break
             between("업로드 끝 ")
         except rr.UploadStop as e:
-            raise Stop("stopped", f"엑셀 업로드 중 누를 단추를 알 수 없는 창이 나타나 누르지 않고 중단하였습니다. ({e})") from e
+            stop_note = f"누를 단추를 알 수 없는 창이 나타나 누르지 않고 업로드를 멈추었습니다. ({e})"
         finally:
             rr.UPLOAD_NO_KEYS = False
+        if stop_note:   # '중단' 하지 않고 올린 수를 남기고 뒤 모듈은 이어간다 - 보통 PROCESS 와 같게 (사용자 11-19)
+            rr.log(f"  경고: 엑셀 업로드 중 오류로 멈춥니다 (남은 파일은 업로드 폴더에 그대로 - 다음 실행에): {stop_note}")
+            rr.status.keep_record()
         left = len(upload_paths(rr))
         rr.status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개",
                          note=", ".join(n for n in (f"오류 폴더 {errors}개" if errors else "", f"남은 파일 {left}개" if left else "",
@@ -522,7 +536,8 @@ def excel_together(rr, ctx, import_live):
     finally:
         if copy:    # 멈춰도 닫는다 - 남으면 다음 실행이 '(3)' 을 연다 (검토 10-20)
             close_order_copy(rr, ctx, copy)
-    return ("done" if uploaded else "skipped"), (f"[{mode_tag(True)}] 엑셀 {len(tried)}건 중 {uploaded}건 업로드 (사이트 수집과 함께)"
+    return ("done" if uploaded else "skipped"), (f"[{mode_tag(True)}] " + (f"엑셀 업로드 오류로 멈춤 - {stop_note} " if stop_note else "")
+                                                 + f"엑셀 {len(tried)}건 중 {uploaded}건 업로드 (사이트 수집과 함께)"
                                                  + (f", {errors}건은 오류 폴더로 이동 (확인하여 주십시오)" if errors else "")
                                                  + (f", 업로드하지 못해 남은 파일 {left}개 ({LEFT_NOTE})" if left else "")
                                                  + (f", 업로드 사이에 ERPia 팝업 {late}개를 닫음 (앞서 완료 폴더로 옮긴 파일이 실패였을 수 "
@@ -696,14 +711,18 @@ def import_collect(rr, ctx, live, wait=True):
     clear_point(rr, ctx, imp, what)
     rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
     started = rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page, wait=wait)
+    if started is None:     # 누르지 못했거나 눌러도 조회가 시작되지 않았다 - 건너뜀(토큰 0), 보통 PROCESS 와 같게 (사용자 11-19)
+        return "skipped", f"[{mode_tag(live)}] 자동 수집: [{rr.IMPORT_BUTTON_NAME}]를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
 
     def end(ok):
-        if not ok:
-            raise Stop("stopped", f"{what}를 눌렀으나 완료를 확인하지 못해 다음 모듈로 넘어가지 않고 중단하였습니다. 확인하여 주십시오.")
+        if not ok:      # 조회는 시작됐다 - 끝을 못 봐도 완료로 남기고 이어간다 (보통 PROCESS 와 같게, 사용자 11-02·11-19)
+            rr.log("  경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
+            return "done", (f"[{mode_tag(live)}] 자동 수집: 사이트 {n}줄 전체선택 → [{rr.IMPORT_BUTTON_NAME}] 눌러 조회가 시작되었으나 "
+                            "완료를 확인하지 못했습니다 (이어서 진행)")
         return "done", f"[{mode_tag(live)}] 자동 수집: 사이트 {n}줄 전체선택 → [{rr.IMPORT_BUTTON_NAME}] 완료"
     if wait:
         return end(started)
-    # 함께 실행: 끝은 ② 자동 수집 모듈에서 (module_import) - 시작을 못 봤으면 그때 멈춘다
+    # 함께 실행: 끝은 ② 자동 수집 모듈에서 (module_import) 기다린다 (시작을 못 봤으면 위에서 이미 건너뜀)
     return lambda: end(bool(started) and started())
 
 
@@ -778,7 +797,8 @@ def normal_sales(rr, ctx, live):
 
 def after_normal_sales(rr, ctx, baseline):
     """'정상매출' 을 누른 뒤 - 원래 PROCESS module_sales 10~11 단계 그대로 (사용자 10-14: 매출처리 팝업은 원래 규칙).
-    메인 창 안 확인·완료 팝업은 [예]/[확인], 따로 뜬 창 팝업은 예/아니오면 [아니오]·그 밖은 [확인] (handle_sales_popups).
+    메인 창 안 확인·완료 팝업은 [예]/[확인], 따로 뜬 창 팝업도 주문매핑 동안은 [예]/[확인] - order_screen 이 rr.POPUP_PREFER_YES 를
+    켠다 (사용자 10-15, 11-19 확인: [예] 가 맞다. 보통 PROCESS 는 예/아니오면 [아니오] - handle_sales_popups).
     매출처리 실패 문구면 닫고 멈춘다 (뒤 모듈을 돌리지 않는다). 사유에 덧붙일 글."""
     hwnd, notes = ctx.hwnd, []
     time.sleep(1.5)
