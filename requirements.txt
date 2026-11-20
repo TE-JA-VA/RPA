@@ -1,4 +1,4 @@
-# 새 PC 에서: Python 3.14.7 로 .venv 를 만든 뒤
+# 새 PC 에서: Python 3.14.10 으로 .venv 를 만든 뒤 (배포에 싣는 내장 파이썬 D:\AX\runtime\python 과 같은 버전이어야 한다 - 2026-11-20 3.14.7 → 3.14.10)
 #   .venv\Scripts\python.exe -m pip install -r requirements.txt
 # 브라우저는 PC 에 깔린 Edge 를 쓴다 (playwright install 은 하지 않는다).
 # pip 밖에서 따로: Inno Setup 6 (설치 파일), Node.js·firebase CLI (버전 내보내기). zig 는 Nuitka 가 첫 빌드 때 받는다.
