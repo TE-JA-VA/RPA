@@ -223,8 +223,11 @@ check(_plain == ["applying"], f"[이전 판으로 되돌리기] 도 옛 버전�
 
 print("\n=== 8. 성공 정리 도중 끊겨도 다음 실행이 마저 정리 - 되돌리지 않는다 ===")
 real_rmtree, real_replace, real_remove = shutil.rmtree, os.replace, os.remove
-for n in range(1, 5):            # 보관 지우기·보관 바꾸기·staging 지우기·alive 지우기
+for n in range(1, 6):            # 옛 보관 비키기·보관 바꾸기·비켜 둔 옛 보관 지우기·staging 지우기·alive 지우기 (2026-11-20 부터 옛 보관은 지우지 않고 비킨다)
     setup_a_and_staged_b()
+    put(up.path("backup", "files"), "z.py", "더 옛 판의 보관")
+    with open(up.path("backup", "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(man("2026.10.06-9", {"z.py": "더 옛 판의 보관"}), f)
     cnt = [0]
 
     def wrap(real, n=n):
@@ -250,8 +253,9 @@ for n in range(1, 5):            # 보관 지우기·보관 바꾸기·staging �
     check(s["state"] == "done" and read(PROG, "a.py") == "A2" and read(PROG, "c.py") == "C2" and read(PROG, "b.py") is None
           and json.load(open(os.path.join(PROG, "manifest.json"), encoding="utf-8"))["version"] == "2026.10.07-2"
           and up.backup_version() == "2026.10.07-1" and read(up.path("backup", "files"), "a.py") == "A1"
-          and not os.path.exists(up.path("backup_new")) and not os.path.exists(up.path("staging")) and not os.path.exists(up.path("alive.json")),
-          f"정리 {n}번째에서 끊김 → 다시 실행하면 done·새 판·보관은 옛 판 ({s['state']})")
+          and not os.path.exists(up.path("backup_new")) and not os.path.exists(up.path("staging")) and not os.path.exists(up.path("alive.json"))
+          and not [x for x in os.listdir(up.update_dir()) if x.startswith("backup_old_")],
+          f"정리 {n}번째에서 끊김 → 다시 실행하면 done·새 판·보관은 옛 판, 비켜 둔 옛 보관도 없다 ({s['state']}, {os.listdir(up.update_dir())})")
     check("deltask" not in ops1.calls and "end" not in ops2.calls, f"정리 {n}: 끊긴 쪽은 작업을 안 지움, 다시 실행은 되돌리기 안 함")
 
 print("\n=== 9. 보통 오류(끊김 아님) → 바로 되돌린다 ===")
@@ -463,6 +467,161 @@ check(uh.main(FakeOps()) == 0 and up.read_state()["state"] == "done" and read(PR
 check(up.backup_version() == "2026.10.07-1" and read(up.path("backup", "files"), "a.py") == "A1"
       and not os.path.exists(up.path("backup_new")),
       f"보관본은 직전 판(A) 그대로 - [되돌리기]가 A 로 간다 ({up.backup_version()}, {read(up.path('backup', 'files'), 'a.py')})")
+
+print("\n=== 17. 옛 보관본을 못 지워도 새 보관본으로 바꾼다 - 오래 켜 둔 프로그램이 옛 python314.dll 을 쥔 경우 (검토 2026-11-20) ===")
+setup_a_and_staged_b()
+put(up.path("backup", "files"), "python/python314.dll", "쥔 파일")
+with open(up.path("backup", "manifest.json"), "w", encoding="utf-8") as f:
+    json.dump(man("2026.10.06-9", {}), f)
+real_rmtree = shutil.rmtree
+
+
+def held_rmtree(p, *a, **k):
+    name = os.path.basename(os.path.normpath(p))
+    if name == "backup" or name.startswith("backup_old_"):
+        return None                                   # 쥔 파일이 남아 폴더가 안 지워진다 (ignore_errors 라 말없이)
+    return real_rmtree(p, *a, **k)
+
+
+shutil.rmtree = held_rmtree
+ops = FakeOps()
+try:
+    uh.main(ops)
+finally:
+    shutil.rmtree = real_rmtree
+olds = [n for n in os.listdir(up.update_dir()) if n.startswith("backup_old_")]
+check(up.read_state()["state"] == "done" and not up.read_state().get("staging") and up.backup_version() == "2026.10.07-1"
+      and read(up.path("backup", "files"), "a.py") == "A1" and not os.path.exists(up.path("backup_new")) and ops.calls[-1] == "deltask",
+      f"옛 보관본이 안 지워져도 새 보관본(A)이 자리를 잡고 정리가 끝난다 ({up.read_state()['state']}, 보관 {up.backup_version()}, {ops.calls})")
+check(len(olds) == 1 and read(os.path.join(up.update_dir(), olds[0], "files"), "python/python314.dll") == "쥔 파일",
+      f"못 지운 옛 보관본은 옆으로 비켜 둔다 ({olds})")
+uh.finish_cleanup({"state": "done", "target": "2026.10.07-2", "from": "2026.10.07-1", "staging": None})
+check(not [n for n in os.listdir(up.update_dir()) if n.startswith("backup_old_")] and up.backup_version() == "2026.10.07-1",
+      "비켜 둔 옛 보관본은 다음 정리 때 지운다 (보관본은 그대로)")
+
+print("\n=== 18. 되돌리는데 다시 켜진 에이전트가 파일을 쥐고 있으면 한 번 더 끄고 이어서 되돌린다 (로그온 때 같이 뜨는 경우, 검토 2026-11-20) ===")
+setup_a_and_staged_b()
+locked = [False]
+
+
+class RacingOps(FakeOps):
+    def end_agent(self):
+        super().end_agent()
+        if self.calls.count("end") >= 3:              # 바꾸기 전 1번, 되돌리기 전 2번, 쥔 파일을 만나 한 번 더 = 3번
+            locked[0] = False
+
+    def after_install(self, program_dir):
+        r = super().after_install(program_dir)
+        if sum(c.startswith("after") for c in self.calls) == 1:
+            locked[0] = True                          # 새 판 에이전트가 켜져 파일을 쥐었다 - 되돌리기의 첫 끄기 뒤에 또 켜진다
+        return r
+
+
+def racy_move(src, dst):
+    if locked[0]:
+        raise PermissionError(5, "다른 프로세스가 파일을 사용 중")
+    real_move(src, dst)
+
+
+uh._move = racy_move
+ops = RacingOps(good=("2026.10.07-1",))
+try:
+    uh.main(ops)
+finally:
+    uh._move = real_move
+s = up.read_state()
+check(s["state"] == "rolled_back" and "설치 파일" not in (s.get("reason") or "") and read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1"
+      and read(PROG, "c.py") is None and ops.calls.count("end") == 3,
+      f"쥔 파일을 만나면 에이전트를 한 번 더 끄고 되돌리기를 마친다 ({s.get('reason')}, 끄기 {ops.calls.count('end')}번)")
+setup_a_and_staged_b()
+uh._move = lambda src, dst: (_ for _ in ()).throw(PermissionError(5, "끝까지 쥠")) if up.read_state().get("state") == "rolling_back" else real_move(src, dst)
+ops = FakeOps(good=("2026.10.07-1",))
+try:
+    uh.main(ops)
+finally:
+    uh._move = real_move
+s = up.read_state()
+check(s["state"] == "rolled_back" and "설치 파일로" in s["reason"] and ops.calls.count("end") == 3 and ops.calls[-1] == "deltask",
+      f"한 번 더 꺼도 쥐고 있으면 남기고 멈춘다 - 되풀이하지 않는다 ({s.get('reason')}, 끄기 {ops.calls.count('end')}번)")
+
+print("\n=== 19. 내장 파이썬 파일이 든 계획도 같은 길 - 바꾸기·점검 실패 되돌림·도중 끊김 (설계 2026-11-20) ===")
+PA = {"a.py": "A1", "python/AFTER_MARKET_RPA_Agent.exe": "EXE7"}
+PB = {"a.py": "A1", "python/AFTER_MARKET_RPA_Agent.exe": "EXE10"}
+RTA = {"python/python314.dll": "DLL7", "python/Lib/os.py": "OS7", "python/Lib/old.py": "OLD"}
+RTB = {"python/python314.dll": "DLL10", "python/Lib/os.py": "OS10", "python/Lib/new.py": "NEW"}
+KEEP = {"python/Lib/__pycache__/os.cpython-314.pyc": "PYC", "python/Lib/stray.py": "목록 밖 파이썬 파일"}
+
+
+def man_rt(version, files, rt, runtime):
+    m = man(version, files)
+    m["runtime"], m["runtime_files"] = {"python": runtime}, man(version, rt)["files"]
+    return m
+
+
+def setup_python_swap():
+    shutil.rmtree(PROG, ignore_errors=True); shutil.rmtree(up.update_dir(), ignore_errors=True)
+    for r, t in {**PA, **RTA, **KEEP}.items():
+        put(PROG, r, t)
+    with open(os.path.join(PROG, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(man_rt("2026.10.07-1", PA, RTA, "3.14.7"), f)
+    stg = up.path("staging")
+    fetch = ["python/AFTER_MARKET_RPA_Agent.exe", "python/Lib/new.py", "python/Lib/os.py", "python/python314.dll"]
+    for r in fetch:
+        put(os.path.join(stg, "files"), r, {**PB, **RTB}[r])
+    with open(os.path.join(stg, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(man_rt("2026.10.07-2", PB, RTB, "3.14.10"), f)
+    with open(os.path.join(stg, "plan.json"), "w", encoding="utf-8") as f:
+        json.dump({"version": "2026.10.07-2", "from": "2026.10.07-1", "fetch": fetch, "remove": ["python/Lib/old.py"], "new": ["python/Lib/new.py"]}, f)
+    up.write_state({"state": "ready", "mode": "update", "target": "2026.10.07-2", "from": "2026.10.07-1",
+                    "program_dir": PROG, "staging": stg, "at": up.now_text()})
+
+
+def tree(root):
+    out = {}
+    for base, _, files in os.walk(root):
+        for n in files:
+            if n != "manifest.json":
+                out[os.path.relpath(os.path.join(base, n), root).replace(os.sep, "/")] = open(os.path.join(base, n), encoding="utf-8").read()
+    return out
+
+
+TREE_A, TREE_B = {**PA, **RTA, **KEEP}, {**PB, **RTB, **KEEP}
+setup_python_swap()
+uh.main(FakeOps())
+check(tree(PROG) == TREE_B and up.read_state()["state"] == "done" and read(up.path("backup", "files"), "python/python314.dll") == "DLL7"
+      and read(up.path("backup", "files"), "python/Lib/old.py") == "OLD",
+      f"파이썬 폴더가 새 버전 것으로 바뀌고 (__pycache__·목록 밖 파일은 그대로) 옛 파이썬 파일은 보관된다 ({sorted(tree(PROG))})")
+up.stage_rollback(PROG, up.path("staging"))
+up.write_state({"state": "ready", "mode": "rollback", "target": "2026.10.07-1", "from": "2026.10.07-2",
+                "program_dir": PROG, "staging": up.path("staging"), "at": up.now_text()})
+uh.main(FakeOps())
+check(tree(PROG) == TREE_A and up.read_state()["state"] == "done" and up.backup_version() == "2026.10.07-2",
+      f"[이전 판으로 되돌리기] 로 파이썬 폴더까지 옛 버전 그대로 ({sorted(tree(PROG))})")
+setup_python_swap()
+uh.main(FakeOps(good=("2026.10.07-1",)))
+check(tree(PROG) == TREE_A and up.read_state()["state"] == "rolled_back", f"3분 점검 실패 → 파이썬 폴더까지 옛 버전 그대로 ({sorted(tree(PROG))})")
+bad_at = []
+for n in range(1, 9):            # 옮기기 = 보관 4번(exe·os·dll·old, new 는 원래 없음) + 넣기 4번 - 그 모든 자리에서
+    setup_python_swap()
+    count = [0]
+
+    def boom(src, dst, n=n):
+        count[0] += 1
+        if count[0] == n:
+            raise Crash()
+        real_move(src, dst)
+
+    uh._move = boom
+    try:
+        uh.main(FakeOps())
+    except Crash:
+        pass
+    finally:
+        uh._move = real_move
+    uh.main(FakeOps(good=("2026.10.07-1",)))
+    if tree(PROG) != TREE_A or up.read_state()["state"] not in ("rolled_back", "done"):
+        bad_at.append(n)
+check(bad_at == [], f"파이썬 파일을 옮기는 도중 어디서 끊겨도 다음 로그온에 옛 파이썬 폴더 그대로 (틀린 자리 {bad_at})")
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")

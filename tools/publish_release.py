@@ -39,6 +39,13 @@ def _secret(key_path):
         return bytes.fromhex(f.read().strip())
 
 
+def _blob_files(man):
+    """그 버전이 호스팅에 두는 파일 {상대 경로: {"sha256", "size"}} - 프로그램 파일(files)과 내장 파이썬 파일(runtime_files, 2026-11-20 부터).
+    내장 파이썬 파일은 파이썬이 바뀐 버전으로 업데이트할 때 받는다 (rpa_update.runtime_files) - 안 올리거나 정리에서 지우면 그 업데이트가 404 로 실패한다."""
+    rt = man.get("runtime_files")
+    return {**(rt if isinstance(rt, dict) else {}), **man["files"]}
+
+
 def publish(version, release_dir, site_dir, key_path, memo="", stable=None, deploy=None, set_releases=None,
             get_stable=None, set_stable=None):
     with open(os.path.join(release_dir, "manifest.json"), "rb") as f:
@@ -50,7 +57,7 @@ def publish(version, release_dir, site_dir, key_path, memo="", stable=None, depl
     os.makedirs(rel_dir, exist_ok=True)
     os.makedirs(os.path.join(site_dir, "blobs"), exist_ok=True)
     total = 0
-    for rel, d in man["files"].items():
+    for rel, d in _blob_files(man).items():
         dst = os.path.join(site_dir, "blobs", d["sha256"])
         if not os.path.isfile(dst) or os.path.getsize(dst) != int(d.get("size") or 0):   # 끊긴 복사가 남긴 잘린 파일도 다시
             shutil.copy2(os.path.join(release_dir, *rel.split("/")), dst + ".tmp")
@@ -82,7 +89,7 @@ def _prune(site_dir, info, keep, deploy, set_releases):
     used = set()
     for v in info:
         with open(os.path.join(site_dir, "releases", v, "manifest.json"), encoding="utf-8") as f:
-            used |= {d["sha256"] for d in json.load(f)["files"].values()}
+            used |= {d["sha256"] for d in _blob_files(json.load(f)).values()}
     for name in os.listdir(os.path.join(site_dir, "blobs")):
         if name not in used:
             os.remove(os.path.join(site_dir, "blobs", name))

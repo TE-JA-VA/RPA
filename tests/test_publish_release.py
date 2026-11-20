@@ -142,6 +142,34 @@ pr.publish("2026.10.03-1", d, SITE3, KEY, deploy=None, set_releases=None, get_st
 check(open(os.path.join(SITE3, "blobs", sha_a), "rb").read() == b"A3", "잘린 blob 을 고쳐 놓는다")
 check(not [x for x in os.listdir(os.path.join(SITE3, "blobs")) if x.endswith(".tmp")], ".tmp 가 안 남는다")
 
+# --- 내장 파이썬 파일 (목록의 runtime_files, 설계 2026-11-20): 업데이트가 받을 수 있게 올리고, 정리할 때 쓰는 파일로 센다
+SITE4 = os.path.join(tmp, "site4")
+
+
+def make_rt_release(n, dll):
+    d, man = make_release(n, True)
+    full = os.path.join(d, "python", "python314.dll")
+    open(full, "w", encoding="utf-8").write(dll)
+    man["runtime_files"] = {"python/python314.dll": st.file_digest(full)}
+    open(os.path.join(d, "manifest.json"), "w", encoding="utf-8").write(json.dumps(man))
+    return d, man
+
+
+d, m = make_rt_release(1, "DLL7")
+r = pr.publish("2026.10.01-1", d, SITE4, KEY, deploy=None, set_releases=None, get_stable=lambda: None)
+sha7 = m["runtime_files"]["python/python314.dll"]["sha256"]
+blob7 = os.path.join(SITE4, "blobs", sha7)
+check(os.path.isfile(blob7) and open(blob7, encoding="utf-8").read() == "DLL7", "내장 파이썬 파일도 지문 이름으로 올린다")
+check(r["bytes"] == sum(f["size"] for f in m["files"].values()) + 4, f"크기 합계에 내장 파이썬 파일도 넣는다 ({r['bytes']})")
+d, m2 = make_rt_release(2, "DLL10")
+pr.publish("2026.10.02-1", d, SITE4, KEY, deploy=None, set_releases=None, get_stable=lambda: None)
+sha10 = m2["runtime_files"]["python/python314.dll"]["sha256"]
+check(os.path.isfile(blob7) and os.path.isfile(os.path.join(SITE4, "blobs", sha10)),
+      "다른 버전을 내보내도, 남아 있는 버전이 쓰는 내장 파이썬 파일은 지우지 않는다")
+pr.keep_only(["2026.10.02-1"], SITE4, deploy=None, set_releases=None, get_stable=lambda: "2026.10.02-1")
+want = {f["sha256"] for f in m2["files"].values()} | {sha10}
+check(set(os.listdir(os.path.join(SITE4, "blobs"))) == want, "아무 버전도 안 쓰는 내장 파이썬 파일은 지운다")
+
 # --- 남길 판만 (keep_only, 2026-10-12 사용자: 옛 판 정리) - 고른 판만 남기고 배포가 먼저, DB 목록도
 n_before = len(os.listdir(os.path.join(SITE, "releases")))
 for bad, why, stable in ((["2026.10.07-1"], "안정본", "2026.10.02-1"), (["2099.01.01-1"], "없는 판", "2026.10.02-1"),

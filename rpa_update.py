@@ -107,6 +107,27 @@ def _read_manifest(root):
         return json.load(f)
 
 
+RUNTIME_PREFIXES = ("python/",)      # 내장 파이썬 폴더 - tools/build_release.py 의 RUNTIME_DIRS 와 같다 (tests/test_build_release.py 가 본다)
+
+
+def runtime_files(man):
+    """목록의 내장 파이썬 파일 칸 {"python/…": {"sha256", "size"}} - 2026-11-20 부터의 목록에만 있다 (없으면 빈 사전).
+    files 와 따로 둔 까닭: 그 전 버전의 업데이트 코드는 모르는 칸을 무시하므로 이 목록의 버전으로 올라올 때 python 폴더를 건드리지 않는다
+    (설계 docs/superpowers/specs/2026-11-20-runtime-update-design.md). 파일 변조 감지(rpa_status.check_install)도 files 만 본다."""
+    v = man.get("runtime_files") if isinstance(man, dict) else None
+    return v if isinstance(v, dict) else {}
+
+
+def runtime_changed(a, b):
+    """두 목록의 내장 파이썬 표기가 다른가."""
+    return (a.get("runtime") or {}) != (b.get("runtime") or {})
+
+
+def _files(man, with_runtime):
+    """계획에 쓸 파일 목록 - 내장 파이썬이 바뀌는 업데이트·되돌리기면 runtime_files 도 같이."""
+    return {**runtime_files(man), **man["files"]} if with_runtime else man["files"]
+
+
 def _check_manifest(man, version=None):
     files = man.get("files") if isinstance(man, dict) else None
     if man.get("format") != st.MANIFEST_FORMAT or not isinstance(files, dict):
@@ -115,6 +136,16 @@ def _check_manifest(man, version=None):
         raise UpdateError(f"요청한 버전({version})과 버전 목록의 버전({man.get('version')})이 다릅니다.")
     for rel, d in files.items():
         if not st.manifest_path_ok(rel) or not isinstance(d, dict):
+            raise UpdateError(f"판 목록의 경로가 잘못되었습니다: {rel!r}")
+    rt = man.get("runtime_files")
+    if rt is None:
+        return
+    if not isinstance(rt, dict):
+        raise UpdateError("버전 목록 형식이 올바르지 않습니다.")
+    taken = {r.casefold() for r in files}          # 윈도우 경로는 대소문자를 가리지 않는다
+    for rel, d in rt.items():                      # 내장 파이썬 폴더 안만, files 와 겹치지 않게 (겹치면 어느 지문이 맞는지 모른다)
+        if (not st.manifest_path_ok(rel) or not isinstance(d, dict) or not rel.casefold().startswith(RUNTIME_PREFIXES)
+                or rel.casefold() in taken):
             raise UpdateError(f"판 목록의 경로가 잘못되었습니다: {rel!r}")
 
 
@@ -156,21 +187,26 @@ def ensure_installed_sig(program_root, get=None):
         return None
 
 
-def _write_plan(staging, version, cur_man, new_man, man_bytes, fetch=None):
-    _, remove, _ = plan_files(cur_man["files"], new_man["files"])
+def _write_plan(staging, version, cur_version, cur_files, new_files, man_bytes, fetch=None, program_root=None, runtime=()):
+    """staging 에 manifest·plan 을 쓴다. cur_files·new_files 는 _files() 가 준 목록 (파이썬이 바뀌면 runtime_files 포함).
+    plan.new (새로 생기는 것) 는 바꾸다 끊겼을 때 되돌리기가 보관본 없이 지우는 파일이다. 프로그램 파일은 지금 목록에 없는 것.
+    파이썬 파일(runtime - 새 목록의 runtime_files)은 디스크에 없던 것만: 이 PC 의 python 폴더가 목록과 같다는 보장이 없어, 디스크에 있던 파일을
+    '새 파일' 로 적으면 보관으로 옮기기 전에 끊겼을 때 멀쩡한 파이썬 파일이 지워진다 (검토 2026-11-20)."""
+    _, remove, _ = plan_files(cur_files, new_files)
     if fetch is None:
-        fetch = plan_files(cur_man["files"], new_man["files"])[0]
-    new = sorted(r for r in fetch if r not in cur_man["files"])
+        fetch = plan_files(cur_files, new_files)[0]
+    new = sorted(r for r in fetch
+                 if (not os.path.isfile(os.path.join(program_root, *r.split("/"))) if r in runtime else r not in cur_files))
     with open(os.path.join(staging, "manifest.json"), "wb") as f:
         f.write(man_bytes)
     with open(os.path.join(staging, "plan.json"), "w", encoding="utf-8") as f:
-        json.dump({"version": version, "from": cur_man.get("version"), "fetch": fetch, "remove": remove, "new": new}, f, ensure_ascii=False)
+        json.dump({"version": version, "from": cur_version, "fetch": fetch, "remove": remove, "new": new}, f, ensure_ascii=False)
     return fetch, remove
 
 
-def _need_bytes(cur_man, new_man, fetch, remove):
-    new_sz = sum(int(new_man["files"][r].get("size") or 0) for r in fetch)
-    old_sz = sum(int((cur_man["files"].get(r) or {}).get("size") or 0) for r in fetch + remove)
+def _need_bytes(cur_files, new_files, fetch, remove):
+    new_sz = sum(int(new_files[r].get("size") or 0) for r in fetch)
+    old_sz = sum(int((cur_files.get(r) or {}).get("size") or 0) for r in fetch + remove)
     return new_sz + old_sz + DISK_MARGIN
 
 
@@ -203,18 +239,21 @@ def _fetch_from(base, version, program_root, staging, get, pub):
         new_man = json.loads(man_bytes.decode("utf-8"))
         _check_manifest(new_man, version)
         cur_man = _read_manifest(program_root)
-        if (new_man.get("runtime") or {}) != (cur_man.get("runtime") or {}):
+        swap = runtime_changed(new_man, cur_man)       # 내장 파이썬이 바뀐 버전 - 목록에 파이썬 파일 칸이 있어야 바꿀 수 있다 (2026-11-20)
+        if swap and not runtime_files(new_man):
             raise UpdateError("파이썬이 변경된 버전입니다. 설치 파일로 설치하여 주십시오.")
-        fetch, remove, _ = plan_files(cur_man["files"], new_man["files"])
-        fetch = sorted(set(fetch) | set(disk_differs(program_root, new_man["files"], skip=fetch)))   # 손댄·빠진 파일도 되돌린다
+        cur_files, new_files = _files(cur_man, swap), _files(new_man, swap)
+        fetch, remove, _ = plan_files(cur_files, new_files)
+        # 손댄·빠진 파일도 되돌린다. 파이썬 파일은 이 PC 의 python 폴더가 지금 목록과 같다는 보장이 없어 디스크와 다른 것을 모두 받는다
+        fetch = sorted(set(fetch) | set(disk_differs(program_root, new_files, skip=fetch)))
         os.makedirs(update_dir(), exist_ok=True)
-        need = _need_bytes(cur_man, new_man, fetch, remove)
+        need = _need_bytes(cur_files, new_files, fetch, remove)
         free = shutil.disk_usage(update_dir()).free
         if free < need:
             raise UpdateError(f"디스크 여유 공간이 부족합니다. ({need // (1 << 20)}MB 필요, {free // (1 << 20)}MB 남음)")
         os.makedirs(os.path.join(staging, "files"), exist_ok=True)
         for rel in fetch:
-            want = new_man["files"][rel]
+            want = new_files[rel]
             data = get(f"{base}/blobs/{want['sha256']}")
             size = want.get("size")
             if not isinstance(size, int) or len(data) != size or hashlib.sha256(data).hexdigest() != want["sha256"]:
@@ -223,7 +262,8 @@ def _fetch_from(base, version, program_root, staging, get, pub):
             os.makedirs(os.path.dirname(full), exist_ok=True)
             with open(full, "wb") as f:
                 f.write(data)
-        _write_plan(staging, version, cur_man, new_man, man_bytes, fetch)
+        _write_plan(staging, version, cur_man.get("version"), cur_files, new_files, man_bytes, fetch,
+                    program_root=program_root, runtime=runtime_files(new_man) if swap else ())
         return new_man
     except UpdateError:
         shutil.rmtree(staging, ignore_errors=True)
@@ -250,16 +290,21 @@ def stage_rollback(program_root, staging):
         bman = json.loads(man_bytes.decode("utf-8"))
         _check_manifest(bman)
         cur_man = _read_manifest(program_root)
-        fetch, remove, _ = plan_files(cur_man["files"], bman["files"])
+        swap = runtime_changed(bman, cur_man)          # 내장 파이썬이 다른 이전 버전 - 파이썬 파일도 보관본에서 되돌린다 (2026-11-20)
+        if swap and not runtime_files(bman):           # 설치 파일로 파이썬을 올린 PC 의 옛 보관본 - 파이썬 파일이 보관돼 있지 않다
+            raise UpdateError("이전 버전의 파이썬이 현재 버전과 달라 되돌릴 수 없습니다. 설치 파일로 설치하여 주십시오.")
+        cur_files, b_files = _files(cur_man, swap), _files(bman, swap)
+        fetch, remove, _ = plan_files(cur_files, b_files)
         os.makedirs(os.path.join(staging, "files"), exist_ok=True)
         for rel in fetch:
             src = path("backup", "files", *rel.split("/"))
-            if not os.path.isfile(src) or st.file_digest(src)["sha256"] != bman["files"][rel]["sha256"]:
+            if not os.path.isfile(src) or st.file_digest(src)["sha256"] != b_files[rel]["sha256"]:
                 raise UpdateError(f"보관본에 {rel}이(가) 없거나 다릅니다. 되돌릴 수 없습니다.")
             dst = os.path.join(staging, "files", *rel.split("/"))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
-        _write_plan(staging, bman.get("version"), cur_man, bman, man_bytes)
+        _write_plan(staging, bman.get("version"), cur_man.get("version"), cur_files, b_files, man_bytes,
+                    program_root=program_root, runtime=runtime_files(bman) if swap else ())
         return bman
     except UpdateError:
         shutil.rmtree(staging, ignore_errors=True)
@@ -300,7 +345,8 @@ RUNNER_FILES = ("update_helper.py", "rpa_update.py", "rpa_status.py", "update_si
 
 def handoff(program_root, state, register, run_task):
     """도우미와 파이썬을 runner 로 복사하고 state 를 ready 로 적은 뒤 도우미 작업을 등록·실행한다.
-    파이썬(python\\)은 업데이트가 바꾸지 않는다 (판 목록 밖) - 그래서 지금 것을 복사해 써도 된다."""
+    도우미는 이 사본의 파이썬으로 돈다 - 프로그램 폴더의 python\\ 을 바꾸는 업데이트(내장 파이썬이 바뀐 버전, 2026-11-20)에서도
+    도우미가 쓰는 파이썬은 그대로다."""
     runner = path("runner")
     shutil.rmtree(runner, ignore_errors=True)
     shutil.copytree(os.path.join(program_root, "python"), os.path.join(runner, "python"))

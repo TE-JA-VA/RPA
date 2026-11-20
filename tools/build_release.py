@@ -356,6 +356,22 @@ def _runtime_python(out_dir):
         return "?"
 
 
+def runtime_file_list(out_dir, program):
+    """배포판의 내장 파이썬 파일 {"python/…": {"sha256", "size"}} - RUNTIME_DIRS 안의 파일에서 __pycache__ (파이썬이 스스로 쓴다)와
+    program 에 이미 있는 것(이름 붙인 exe 둘)을 뺀 것. 내장 파이썬이 바뀐 버전으로 업데이트할 때 쓴다 (rpa_update.runtime_files,
+    설계 docs/superpowers/specs/2026-11-20-runtime-update-design.md). 판 점검(파일 변조 감지)은 이 칸을 보지 않는다."""
+    have, out = set(program), {}
+    for d in RUNTIME_DIRS:
+        for base, dirs, files in os.walk(os.path.join(out_dir, d)):
+            dirs[:] = sorted(x for x in dirs if x != "__pycache__")
+            for name in sorted(files):
+                full = os.path.join(base, name)
+                rel = os.path.relpath(full, out_dir).replace(os.sep, "/")
+                if rel not in have:
+                    out[rel] = st.file_digest(full)
+    return out
+
+
 def write_manifest(out_dir, version, builder, program):
     """manifest.json 을 쓰고 그 내용을 돌려준다."""
     man = {
@@ -365,6 +381,7 @@ def write_manifest(out_dir, version, builder, program):
         "builder": builder,
         "runtime": {"python": _runtime_python(out_dir)},
         "files": {rel: st.file_digest(os.path.join(out_dir, *rel.split("/"))) for rel in program},
+        "runtime_files": runtime_file_list(out_dir, program),
     }
     with open(os.path.join(out_dir, st.MANIFEST_NAME), "w", encoding="utf-8", newline="\n") as f:
         json.dump(man, f, ensure_ascii=False, indent=2)
@@ -412,7 +429,12 @@ def verify_zip(zip_path, man, program, others):
                 problems.append(f"없음: {rel}")
             elif hashlib.sha256(z.read(f"{top}/{rel}")).hexdigest() != man["files"][rel]["sha256"]:
                 problems.append(f"지문 다름: {rel}")
-        ours = {rel for rel in inside if rel.split("/")[0] not in RUNTIME_DIRS}
+        for rel, d in (man.get("runtime_files") or {}).items():      # 내장 파이썬 파일 - 업데이트가 이 지문으로 받는다
+            if rel not in inside:
+                problems.append(f"없음: {rel}")
+            elif hashlib.sha256(z.read(f"{top}/{rel}")).hexdigest() != d["sha256"]:
+                problems.append(f"지문 다름: {rel}")
+        ours ={rel for rel in inside if rel.split("/")[0] not in RUNTIME_DIRS}
         for rel in sorted(ours):
             if any(fnmatch.fnmatch(part, pat) for part in rel.split("/") for pat in FORBIDDEN):
                 problems.append(f"들어가면 안 되는 파일: {rel}")

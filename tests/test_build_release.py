@@ -133,6 +133,19 @@ check("한글 파일 이름도 지문", man["files"][bat]["sha256"]
       == hashlib.sha256(f"{bat} 내용\r\n".encode("cp949")).hexdigest())
 check("같이 싣는 브라우저(ms-playwright 713MB)는 판에 없다 - 깔린 Edge 를 쓴다 (runtime 에 남아 있어도)",
       not os.path.exists(os.path.join(out_dir, "ms-playwright")) and list(man["runtime"]) == ["python"], str(man["runtime"]))
+import rpa_update as _up  # noqa: E402
+check("내장 파이썬 파일 목록(runtime_files): python 폴더의 파일 - __pycache__ 와 이미 files 에 있는 이름 붙인 exe 둘은 뺀다 (업데이트가 파이썬을 바꿀 때 쓴다, 설계 2026-11-20)",
+      set(man.get("runtime_files") or {}) == {"python/python.exe", "python/pythonw.exe"}
+      and man["runtime_files"]["python/python.exe"] == st.file_digest(os.path.join(out_dir, "python", "python.exe"))
+      and not set(man["runtime_files"]) & set(man["files"]), str(sorted(man.get("runtime_files") or {})))
+check("업데이트가 아는 내장 파이썬 폴더(rpa_update.RUNTIME_PREFIXES)가 빌드의 RUNTIME_DIRS 와 같다",
+      _up.RUNTIME_PREFIXES == tuple(d + "/" for d in br.RUNTIME_DIRS), f"{_up.RUNTIME_PREFIXES} {br.RUNTIME_DIRS}")
+try:
+    _up._check_manifest(man, "2026.09.29-3")
+    ok = True
+except _up.UpdateError as e:
+    ok = str(e)
+check("빌드가 쓴 목록을 업데이트 코드가 받아들인다 (runtime_files 경로 검사)", ok is True, str(ok))
 check("만든 판은 에이전트의 판 점검에서 ok", st.check_install(out_dir)["state"] == "ok", str(st.check_install(out_dir)))
 try:
     br.collect(out_dir, exe_dir, repo=repo, runtime_root=runtime)
@@ -162,6 +175,9 @@ def variant(name, change):
     return br.verify_zip(d + ".zip", man, program, others)
 
 
+p = variant("배포_rt", lambda d: [write(os.path.join(d, "python", "python.exe"), b"MZ other"), os.remove(os.path.join(d, "python", "pythonw.exe"))])
+check("내장 파이썬 파일이 목록(runtime_files)과 다르거나 없으면 문제로 잡는다",
+      "지문 다름: python/python.exe" in p and "없음: python/pythonw.exe" in p, str(p))
 p = variant("배포_junk", lambda d: [write(os.path.join(d, "firebase", "agent", "queue.jsonl"), b""),
                                      write(os.path.join(d, "__pycache__", "rpa_status.cpython-314.pyc"), b""),
                                      write(os.path.join(d, "run_routine_result.txt"), b""),

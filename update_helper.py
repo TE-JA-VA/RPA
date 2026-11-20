@@ -119,6 +119,20 @@ def restore(program_dir, backup_new, plan):
         _copy_atomic(old_man, os.path.join(program_dir, st.MANIFEST_NAME))
 
 
+OLD_BACKUP_PREFIX = "backup_old_"
+
+
+def sweep_old_backups():
+    """비켜 둔 옛 보관본(backup_old_*)을 지운다. 아직 쥔 파일이 있으면 그것만 남고 다음 정리 때 다시 지운다."""
+    try:
+        names = os.listdir(up.update_dir())
+    except OSError:
+        return
+    for name in names:
+        if name.startswith(OLD_BACKUP_PREFIX):
+            shutil.rmtree(up.path(name), ignore_errors=True)
+
+
 def finish_cleanup(state):
     """성공(done) 뒤 정리 - 몇 번을 다시 해도 같다. done 을 먼저 적은 뒤 하므로 끊겨도 다음 실행이 마저 한다."""
     bnew = up.path("backup_new")
@@ -128,8 +142,13 @@ def finish_cleanup(state):
             # 아무것도 안 바꾸고 '성공' 한다 (검토 2026-11-16)
             shutil.rmtree(bnew, ignore_errors=True)
         else:
-            shutil.rmtree(up.path("backup"), ignore_errors=True)
+            # 옛 보관본은 지우지 않고 옆으로 비킨 뒤 새 보관본을 놓는다. 오래 켜 둔 프로그램(설정 창 등)이 옛 보관본의 파일을 쥐고 있으면
+            # (내장 파이썬을 바꾼 업데이트의 옛 python314.dll 등) 폴더가 다 안 지워져 그 위로 바꿔 놓기가 실패했다 (검토 2026-11-20).
+            # 쥔 파일이 든 폴더도 이름은 바꿀 수 있다
+            if os.path.isdir(up.path("backup")):
+                os.replace(up.path("backup"), up.path(f"{OLD_BACKUP_PREFIX}{time.strftime('%Y%m%d%H%M%S')}_{os.getpid()}"))
             os.replace(bnew, up.path("backup"))
+    sweep_old_backups()
     shutil.rmtree(state.get("staging") or up.path("staging"), ignore_errors=True)
     try:
         os.remove(up.path("alive.json"))
@@ -213,7 +232,14 @@ def rollback(state, ops, reason):
             except Exception:
                 plan = None                      # 사본도 없다 = 아직 아무것도 안 옮겼다
         if plan is not None:
-            restore(prog, bnew, plan)
+            try:
+                restore(prog, bnew, plan)
+            except PermissionError as e:
+                # 위에서 끈 뒤에 에이전트 작업이 또 떠서 (로그온 때는 에이전트 작업과 이 도우미가 같이 뜬다) 되돌릴 자리의 파일을 쥐었다 -
+                # 한 번 더 끄고 이어서 되돌린다 (restore 는 다시 해도 같다). 그래도 안 되면 아래에서 남기고 멈춘다 (검토 2026-11-20)
+                up.log(f"되돌리는 중 쥔 파일 ({e}) - 에이전트를 한 번 더 끄고 다시"[:300])
+                ops.end_agent()
+                restore(prog, bnew, plan)
         ops.set_display_version(state["from"])
         rc = ops.after_install(prog)
         ok = not rc and wait_alive(state["from"], started, ops)   # (BugBuster M22)

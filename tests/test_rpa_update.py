@@ -148,14 +148,15 @@ finally:
     up.UPDATE_BASE_URLS = saved_urls
 
 
-def refused(what, host=None, pub=PK, version="2026.10.07-2", contains=""):
+def refused(what, host=None, pub=PK, version="2026.10.07-2", contains="", prog=None):
+    prog = prog or PROG
     shutil.rmtree(STG, ignore_errors=True)
-    b = tree_digest(PROG)
+    b = tree_digest(prog)
     try:
-        up.fetch_release(version, PROG, STG, base_url=BASE, get=lambda u: get(u, host or HOST), pub=pub)
+        up.fetch_release(version, prog, STG, base_url=BASE, get=lambda u: get(u, host or HOST), pub=pub)
         check(False, what + " (거절 안 됨)")
     except up.UpdateError as e:
-        check(contains in str(e) and tree_digest(PROG) == b and not os.path.exists(os.path.join(STG, "files")),
+        check(contains in str(e) and tree_digest(prog) == b and not os.path.exists(os.path.join(STG, "files")),
               f"{what} - 프로그램 폴더 그대로, 받은 것 지움 ({e})")
 
 
@@ -228,6 +229,116 @@ try:
 finally:
     shutil.disk_usage = real_usage
 
+print("\n=== 2-2. 내장 파이썬이 바뀐 버전도 받는다 (목록의 runtime_files, 설계 2026-11-20) ===")
+PR = os.path.join(tmp, "progR")
+RT_A = ["python/python314.dll", "python/Lib/os.py", "python/Lib/old.py", "python/Lib/same.py"]
+RT_B = ["python/python314.dll", "python/Lib/os.py", "python/Lib/same.py", "python/Lib/new.py"]
+FILES_R = ["a.py", "python/AFTER_MARKET_RPA_Agent.exe"]
+
+
+def manifest_rt(root, version, rt_rels, runtime):
+    m = manifest_of(root, version, FILES_R, runtime)
+    m["runtime_files"] = {r: st.file_digest(os.path.join(root, *r.split("/"))) for r in rt_rels}
+    return m
+
+
+def install_ra():
+    """PR 을 버전 A(파이썬 3.14.7) 가 깔린 모양으로."""
+    shutil.rmtree(PR, ignore_errors=True)
+    for rel, text in (("a.py", "A1"), ("python/AFTER_MARKET_RPA_Agent.exe", "EXE7"), ("python/python314.dll", "DLL7"), ("python/Lib/os.py", "OS"),
+                      ("python/Lib/old.py", "OLD"), ("python/Lib/same.py", "SAME"), ("python/Lib/__pycache__/os.cpython-314.pyc", "PYC")):
+        put(PR, rel, text)
+    m = manifest_rt(PR, "2026.11.20-1", RT_A, "3.14.7")
+    with open(os.path.join(PR, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(m, f)
+    return m
+
+
+MAN_RA = install_ra()
+SRC_R = os.path.join(tmp, "srcR")
+for rel, text in (("a.py", "A1"), ("python/AFTER_MARKET_RPA_Agent.exe", "EXE10"), ("python/python314.dll", "DLL10"), ("python/Lib/os.py", "OS"),
+                  ("python/Lib/same.py", "SAME"), ("python/Lib/new.py", "NEW")):
+    put(SRC_R, rel, text)
+MAN_RB = manifest_rt(SRC_R, "2026.11.20-2", RT_B, "3.14.10")
+
+
+def host_of(man, src=SRC_R):
+    mb = json.dumps(man).encode("utf-8")
+    h = {f"{BASE}/releases/{man['version']}/manifest.json": mb, f"{BASE}/releases/{man['version']}/manifest.sig": us.sign(SK, mb).hex().encode()}
+    for rel, d in {**man["files"], **(man.get("runtime_files") if isinstance(man.get("runtime_files"), dict) else {})}.items():
+        full = os.path.join(src, *rel.split("/"))
+        if os.path.isfile(full):
+            h[f"{BASE}/blobs/{d['sha256']}"] = open(full, "rb").read()
+    return h, mb
+
+
+HOST_R, MRB = host_of(MAN_RB)
+put(PR, "python/Lib/same.py", "SAME 손댐")                      # 목록끼리는 같지만 디스크가 다른 파이썬 파일
+os.remove(os.path.join(PR, "python", "Lib", "os.py"))           # 목록끼리는 같지만 디스크에 없는 파이썬 파일
+GOT.clear()
+before = tree_digest(PR)
+man = up.fetch_release("2026.11.20-2", PR, STG, base_url=BASE, get=lambda u: get(u, HOST_R), pub=PK)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check(man["version"] == "2026.11.20-2" and plan["fetch"] == ["python/AFTER_MARKET_RPA_Agent.exe", "python/Lib/new.py", "python/Lib/os.py", "python/Lib/same.py",
+                                                             "python/python314.dll"],
+      f"파이썬이 바뀐 버전: 바뀐 파이썬 파일과 디스크가 새 목록과 다른 파이썬 파일(손댄 것·없는 것)을 받는다 ({plan['fetch']})")
+check(plan["remove"] == ["python/Lib/old.py"], f"새 목록에 없는 옛 파이썬 파일은 치운다 ({plan['remove']})")
+check(plan["new"] == ["python/Lib/new.py", "python/Lib/os.py"],
+      f"새로 생기는 것 = 디스크에 없던 파이썬 파일 - 되돌릴 때 지운다 ({plan['new']})")
+check(open(os.path.join(STG, "files", "python", "python314.dll"), encoding="utf-8").read() == "DLL10"
+      and open(os.path.join(STG, "files", "python", "Lib", "same.py"), encoding="utf-8").read() == "SAME", "받은 파이썬 파일은 새 버전 것")
+check(not any("__pycache__" in r for r in plan["fetch"] + plan["remove"] + plan["new"]) and tree_digest(PR) == before,
+      "__pycache__ 는 계획에 없고, 받기만으로는 프로그램 폴더가 안 바뀐다")
+check(not any(u.endswith(MAN_RB["files"]["a.py"]["sha256"]) for u in GOT), "그대로인 프로그램 파일은 내려받지 않는다")
+cur_all, new_all = {**MAN_RA["runtime_files"], **MAN_RA["files"]}, {**MAN_RB["runtime_files"], **MAN_RB["files"]}
+check(up._need_bytes(cur_all, new_all, plan["fetch"], plan["remove"]) > up._need_bytes(MAN_RA["files"], MAN_RB["files"], ["python/AFTER_MARKET_RPA_Agent.exe"], []),
+      "디스크 여유 계산에 파이썬 파일도 들어간다")
+
+# 디스크에 이미 있던 파이썬 파일은 지금 목록에 없어도 '새로 생기는 것' 이 아니다 - 바꾸다 끊기면 되돌리기가 보관본 없는 new 를 지운다 (검토 2026-11-20)
+put(PR, "python/Lib/new.py", "목록에 없이 디스크에 있던 파일")
+up.fetch_release("2026.11.20-2", PR, STG, base_url=BASE, get=lambda u: get(u, HOST_R), pub=PK)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check("python/Lib/new.py" in plan["fetch"] and plan["new"] == ["python/Lib/os.py"],
+      f"디스크에 있던 파이썬 파일은 받되 '새로 생기는 것' 에 넣지 않는다 ({plan['new']})")
+os.remove(os.path.join(PR, "python", "Lib", "new.py"))
+with open(os.path.join(PR, "manifest.json"), "w", encoding="utf-8") as f:      # 지금 목록에 파이썬 파일 칸이 없는 뜻밖의 경우
+    json.dump({k: v for k, v in MAN_RA.items() if k != "runtime_files"}, f)
+up.fetch_release("2026.11.20-2", PR, STG, base_url=BASE, get=lambda u: get(u, HOST_R), pub=PK)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check("python/python314.dll" in plan["fetch"] and plan["new"] == ["python/Lib/new.py", "python/Lib/os.py"] and plan["remove"] == [],
+      f"지금 목록에 파이썬 파일 칸이 없어도 디스크에 있는 파이썬 파일(python314.dll)은 '새로 생기는 것' 이 아니다 ({plan['new']})")
+with open(os.path.join(PR, "manifest.json"), "w", encoding="utf-8") as f:
+    json.dump(MAN_RA, f)
+
+# 파이썬 표기가 같으면 runtime_files 가 달라도 python 폴더를 보지 않는다 (지금과 같다)
+MAN_RS = dict(MAN_RB, version="2026.11.20-3", runtime={"python": "3.14.7"})
+HOST_S, _ = host_of(MAN_RS)
+up.fetch_release("2026.11.20-3", PR, STG, base_url=BASE, get=lambda u: get(u, HOST_S), pub=PK)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check(plan["fetch"] == ["python/AFTER_MARKET_RPA_Agent.exe"] and plan["remove"] == [] and plan["new"] == [],
+      f"파이썬 표기가 같으면 runtime_files 는 계획에 넣지 않는다 ({plan})")
+
+
+def bad_rt(what, change, contains):
+    m = json.loads(MRB)
+    change(m)
+    h, _ = host_of(m)
+    refused(what, host=h, version="2026.11.20-2", contains=contains, prog=PR)
+
+
+bad_rt("파이썬이 바뀌었는데 runtime_files 가 없는 목록은 거절 (설치 파일로)", lambda m: m.pop("runtime_files"), "설치 파일")
+bad_rt("runtime_files 가 python 폴더 밖을 가리키면 서명이 맞아도 거절",
+       lambda m: m["runtime_files"].update({"firebase/agent/agent.py": m["files"]["a.py"]}), "경로")
+bad_rt("runtime_files 의 .. 경로는 거절", lambda m: m["runtime_files"].update({"python/../evil.py": m["files"]["a.py"]}), "경로")
+bad_rt("runtime_files 가 files 와 겹치면 거절",
+       lambda m: m["runtime_files"].update({"python/AFTER_MARKET_RPA_Agent.exe": m["files"]["a.py"]}), "경로")
+bad_rt("runtime_files 가 files 와 대소문자만 다르게 겹쳐도 거절 (윈도우에서는 같은 파일)",
+       lambda m: m["runtime_files"].update({"python/after_market_rpa_agent.EXE": m["files"]["a.py"]}), "경로")
+bad_rt("runtime_files 가 사전이 아니면 거절", lambda m: m.update(runtime_files=["python/python314.dll"]), "형식")
+gone_r = dict(HOST_R); del gone_r[f"{BASE}/blobs/{MAN_RB['runtime_files']['python/python314.dll']['sha256']}"]
+refused("파이썬 파일이 호스팅에 없으면(404) 거절", host=gone_r, version="2026.11.20-2", contains="404", prog=PR)
+shutil.rmtree(STG, ignore_errors=True)
+
 print("\n=== 3. 상태·실행 막기·화면 값 ===")
 check(up.read_state() == {} and up.busy_reason() is None and up.live_view() is None, "상태가 없으면 막지 않고 화면 값도 없다")
 for s in ("downloading", "done", "failed", "rolled_back"):
@@ -269,6 +380,61 @@ try:
     up.stage_rollback(PROG, STG); check(False, "보관본이 모자라는데 되돌리기 준비됨")
 except up.UpdateError as e:
     check("보관본" in str(e), f"보관본 파일이 모자라면 거절 ({e})")
+
+print("\n=== 4-1. 파이썬이 다른 이전 버전으로 되돌리기 준비 (설계 2026-11-20) ===")
+shutil.rmtree(up.path("backup"), ignore_errors=True)
+shutil.rmtree(STG, ignore_errors=True)
+
+
+def install_rb():
+    """PR 을 버전 B(파이썬 3.14.10) 로 올라온 모양으로, 보관본은 A 에서 옮겨 둔 파일들."""
+    shutil.rmtree(PR, ignore_errors=True)
+    shutil.copytree(SRC_R, PR)
+    put(PR, "python/Lib/__pycache__/os.cpython-314.pyc", "PYC")
+    with open(os.path.join(PR, "manifest.json"), "wb") as f:
+        f.write(MRB)
+    shutil.rmtree(up.path("backup"), ignore_errors=True)
+    for rel, text in (("python/AFTER_MARKET_RPA_Agent.exe", "EXE7"), ("python/python314.dll", "DLL7"), ("python/Lib/old.py", "OLD")):
+        put(up.path("backup", "files"), rel, text)
+    with open(up.path("backup", "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(MAN_RA, f)
+
+
+install_rb()
+bman = up.stage_rollback(PR, STG)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check(bman["version"] == "2026.11.20-1" and plan["fetch"] == ["python/AFTER_MARKET_RPA_Agent.exe", "python/Lib/old.py", "python/python314.dll"]
+      and plan["remove"] == ["python/Lib/new.py"] and plan["new"] == ["python/Lib/old.py"],
+      f"파이썬이 다른 이전 버전: 파이썬 파일도 보관본에서 되돌리고 새 버전에만 있는 파일은 치운다 ({plan})")
+check(open(os.path.join(STG, "files", "python", "python314.dll"), encoding="utf-8").read() == "DLL7", "되돌릴 파이썬 파일은 보관본 것")
+put(PR, "python/Lib/old.py", "되돌리기 전에 디스크에 있던 파일")
+up.stage_rollback(PR, STG)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check("python/Lib/old.py" in plan["fetch"] and plan["new"] == [],
+      f"되돌리기도 디스크에 있던 파이썬 파일은 '새로 생기는 것' 에 넣지 않는다 ({plan['new']})")
+os.remove(os.path.join(PR, "python", "Lib", "old.py"))
+put(up.path("backup", "files"), "python/python314.dll", "DLL 손댐")
+shutil.rmtree(STG, ignore_errors=True)
+try:
+    up.stage_rollback(PR, STG); check(False, "보관본의 파이썬 파일이 목록과 다른데 되돌리기 준비됨")
+except up.UpdateError as e:
+    check("보관본" in str(e) and "python314.dll" in str(e) and not os.path.exists(STG), f"보관본의 파이썬 파일이 목록과 다르면 거절 ({e})")
+install_rb()
+with open(up.path("backup", "manifest.json"), "w", encoding="utf-8") as f:
+    json.dump({k: v for k, v in MAN_RA.items() if k != "runtime_files"}, f)      # 2026-11-20 전 버전의 보관본 (설치 파일로 파이썬을 올린 PC)
+try:
+    up.stage_rollback(PR, STG); check(False, "파이썬 파일 목록이 없는 보관본으로 파이썬이 다른데 되돌리기 준비됨")
+except up.UpdateError as e:
+    check("파이썬" in str(e) and "설치 파일" in str(e) and not os.path.exists(STG), f"파이썬이 다른데 보관본에 파이썬 파일 목록이 없으면 거절 ({e})")
+install_rb()
+with open(up.path("backup", "manifest.json"), "w", encoding="utf-8") as f:
+    json.dump(dict(MAN_RA, runtime={"python": "3.14.10"}), f)                   # 파이썬 표기가 같은 이전 버전
+up.stage_rollback(PR, STG)
+plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
+check(plan["fetch"] == ["python/AFTER_MARKET_RPA_Agent.exe"] and plan["remove"] == [],
+      f"파이썬 표기가 같은 이전 버전으로는 python 폴더를 건드리지 않는다 ({plan})")
+shutil.rmtree(up.path("backup"), ignore_errors=True)
+shutil.rmtree(STG, ignore_errors=True)
 
 print("\n=== 5. 살아 있음 표시 (도우미 3분 점검이 본다) ===")
 up.write_state({"state": "done"})

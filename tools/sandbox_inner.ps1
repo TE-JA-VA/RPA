@@ -93,7 +93,7 @@ foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝"), @("Prepare_RPA
 }
 # 브라우저는 깔린 Edge (2026-10-06 - 같이 싣던 Chromium 713MB 를 뺐다). 프리페어 --selftest 는 위에서 Edge 로 내장 로그인 폼을 채웠다
 # 검토 2026-11-19: exe 안의 fb 도 프로그램 폴더를 알아봐야 시험용 환경 변수(에뮬레이터 주소)를 무시한다 - 조각은 app\ 에 있어 한 단계 위다
-Check "ACTOR·옵저버 exe 가 설치본임을 알아본다 (시험용 환경 변수 무시 - 보안 감사 C2)" (($outs["Prepare_RPA.exe --check"] -match "설치본 예") -and ($outs["Prepare_Observer.exe --check"] -match "설치본 예")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
+Check "ACTOR·옵저버 exe 가 설치본임을 알아본다 (시험용 환경 변수 무시 - 보안 감사 C2, 전환 시험의 옛 판은 이 줄이 없어 건너뜀)" ($oldSetup -or (($outs["Prepare_RPA.exe --check"] -match "설치본 예") -and ($outs["Prepare_Observer.exe --check"] -match "설치본 예"))) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
 Check "ACTOR 오토파일럿·ACTOR exe 가 인증번호 중계 모듈을 불러온다 (fb·secret 을 exe 에 실음 - 설계 13절)" (($outs["Prepare_RPA.exe --check"] -match "인증번호 중계: 준비됨") -and ($outs["Prepare_Observer.exe --check"] -match "인증번호 중계: 준비됨")) (($outs["Prepare_RPA.exe --check"] + $outs["Prepare_Observer.exe --check"]) -split "`n" | Where-Object { $_ -match "인증번호 중계" })
 Check "옵저버 exe 가 깔린 Edge 를 띄운다 (--check 의 '브라우저: Microsoft Edge …')" ($outs["Prepare_Observer.exe --check"] -match "브라우저: Microsoft Edge \d") (($outs["Prepare_Observer.exe --check"] -split "`n" | Where-Object { $_ -match "브라우저" }) -join " / ")
 # 조각 방식 버전 (lib.zip 이 있다, 설계 2026-11-11): 라이브러리 묶음이 풀렸고, 우리 소스(.py)는 실리지 않았다
@@ -245,7 +245,10 @@ Stop-Process -Id $w.Id -Force -ErrorAction SilentlyContinue
 if (Test-Path "$T\site") {
   New-Item -ItemType Directory -Force "$PD\update" | Out-Null
   Set-Content "$PD\update\health_local" ""                                                   # 가짜 계정 - 로그인 없이 판 점검만
-  $web = Start-Process "$App\python\python.exe" -ArgumentList "-m http.server 8799 --bind 127.0.0.1 --directory `"$T\site`"" -PassThru -WindowStyle Hidden
+  # 가짜 호스팅은 프로그램 폴더 밖 사본의 파이썬으로 띄운다 - 프로그램 폴더의 파이썬으로 띄우면 내장 파이썬을 바꾸는 업데이트(아래 7-1)에서
+  # 이 프로세스가 옛 python314.dll 을 쥐고 있어 도우미가 옛 보관본을 못 지운다 (2026-11-20)
+  Copy-Item "$App\python" "$X\webpy" -Recurse
+  $web = Start-Process "$X\webpy\python.exe" -ArgumentList "-m http.server 8799 --bind 127.0.0.1 --directory `"$T\site`"" -PassThru -WindowStyle Hidden
   $B = (Get-Content "$T\site\versions.txt")[0]; $C = (Get-Content "$T\site\versions.txt")[1]; $A = (Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version
   $py = "$App\python\python.exe"
   # 가짜 계정이라 명령이 안 온다 - 에이전트의 업데이트 스레드가 하는 일(run_update)을 직접 부른다 (받기 주소만 샌드박스 안, 서명은 시험용 공개 열쇠로 확인)
@@ -253,9 +256,21 @@ if (Test-Path "$T\site") {
     & $py -c "import sys; sys.path[:0]=[r'$App', r'$App\firebase\agent']; import rpa_update as u, rpa_settings as rs; u.run_update('$ver' or u.backup_version(), '$mode', r'$App', lambda: True, rs.register_helper_task, rs.run_helper_task, fetch=lambda v, p, s: u.fetch_release(v, p, s, base_url='http://127.0.0.1:8799', pub=bytes.fromhex(open(r'$T\site\pub.txt').read().strip()))); print(u.read_state())" 2>&1
   }
   function WaitState($want, $sec = 400, $step = 5) {
-    for ($i = 0; $i -lt $sec; $i += $step) { $s = (Get-Content "$PD\update\state.json" -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).state; if ($want -contains $s) { return $s }; Start-Sleep $step }
+    # state.json 은 BOM 없는 UTF-8 - PowerShell 5.1 은 -Encoding 없이 읽으면 한글 까닭(reason)이 깨져 ConvertFrom-Json 이 실패할 수 있다 (검토 2026-11-20)
+    for ($i = 0; $i -lt $sec; $i += $step) { $s = (Get-Content "$PD\update\state.json" -Raw -Encoding UTF8 -ErrorAction SilentlyContinue | ConvertFrom-Json).state; if ($want -contains $s) { return $s }; Start-Sleep $step }
     return $s
   }
+  # 내장 파이썬 점검 (설계 2026-11-20) - 7-1 (--runtime) 과 내장 파이썬이 다른 옛 판에서 올라오는 전환(--from) 이 같이 쓴다
+  function PyInfo { ("$(& "$App\python\python.exe" -I -B -c "import sys, ssl; print(sys.version.split()[0], ssl.OPENSSL_VERSION)" 2>&1)").Trim() }
+  function InstState { ("$(& "$App\python\python.exe" -I -B -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; r = st.check_install(r'$App'); print(r['state'], r.get('version'))" 2>&1)").Trim() }
+  function WaitNoHelper { for ($i = 0; $i -lt 30; $i++) { schtasks /Query /TN "\AFTER MARKET\RPA Update" *> $null; if ($LASTEXITCODE -ne 0) { break }; Start-Sleep 1 } }
+  # 섞인 파이썬 폴더를 잡는다 (버전 글만으로는 python314.dll 하나만 본다): "지금 목록의 파이썬 파일 가운데 디스크와 다른 수, 목록의 파일 수,
+  # 보관본 목록에만 있는데 디스크에 남은 파이썬 파일 수" - 맞으면 "0 <수> 0"
+  function RtDiff { ("$(& "$App\python\python.exe" -I -B -c "import sys, os, json; sys.path.insert(0, r'$App'); import rpa_update as u; m = json.load(open(r'$App\manifest.json', encoding='utf-8')); b = json.load(open(r'$PD\update\backup\manifest.json', encoding='utf-8')); rt = u.runtime_files(m); left = [r for r in u.runtime_files(b) if r not in rt and r not in m['files'] and os.path.isfile(os.path.join(r'$App', *r.split('/')))]; print(len(u.disk_differs(r'$App', rt)), len(rt), len(left))" 2>&1)").Trim() }
+  function RtOk($d) { ($d -match '^0 \d+ 0$') -and ($d -notmatch '^0 0 ') }
+  # 전환인데 runtime.txt 가 있으면 옛 판과 새 판의 내장 파이썬이 다르다 (첫 줄 옛 판, 둘째 줄 새 판 - sandbox_test.py 가 쓴다)
+  $rtT = $null
+  if ((Test-Path "$T\site\transition.txt") -and (Test-Path "$T\site\runtime.txt")) { $rtT = @(Get-Content "$T\site\runtime.txt") }
   Upd "update" $B | Out-File "$O\upd_b.txt"
   $s = WaitState @("done", "rolled_back", "failed")
   Check "판 B 로 업데이트 → done" ($s -eq "done") "$s $(Get-Content "$PD\update\state.json" -Raw)"
@@ -283,9 +298,19 @@ if (Test-Path "$T\site") {
   # 도우미는 done 을 적고 뒷정리를 한 뒤에야 작업을 지운다 - 지워질 때까지 30초 기다린다
   for ($i = 0; $i -lt 30; $i++) { schtasks /Query /TN "\AFTER MARKET\RPA Update" *> $null; if ($LASTEXITCODE -ne 0) { break }; Start-Sleep 1 }
   Check "도우미 작업은 끝나면 지운다" ($LASTEXITCODE -ne 0)
+  if ($rtT) {
+    $i1 = PyInfo; $rd = RtDiff
+    Check "전환: 업데이트 뒤 설치 폴더의 파이썬이 새 판 것이다 ($($rtT[1]), 옛 판 $($rtT[0]))" (($i1 -eq $rtT[1]) -and ($rtT[0] -ne $rtT[1])) "$i1"
+    Check "전환: 업데이트 뒤 python 폴더의 파일이 모두 새 판의 목록(runtime_files)과 같고 옛 판에만 있던 파일은 없다 (섞이지 않았다)" (RtOk $rd) "$rd"
+  }
   Upd "rollback" "" | Out-File "$O\upd_back.txt"
   $s = WaitState @("done", "rolled_back", "failed")
   Check "[이전 판으로 되돌리기] → 판 A" (($s -eq "done") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
+  if ($rtT) {
+    WaitNoHelper
+    $i2 = PyInfo; $rd = RtDiff
+    Check "전환: 옛 판으로 되돌린 뒤 파이썬도 옛 판 것이고 python 폴더의 파일이 모두 옛 판의 목록과 같다" (($i2 -eq $rtT[0]) -and (RtOk $rd)) "$i2 / $rd"
+  }
   if ($transition) {
     $txt = RunExe "Prepare_Observer.exe" "--check" "ta_obs"
     Check "전환: 옛 판으로 되돌린 뒤에도 옵저버가 Edge 를 띄운다 (옛 exe 는 node 를 품고 있다)" ($txt -match "브라우저: Microsoft Edge \d") (($txt -split "`n" | Where-Object { $_ -match "브라우저|문제" }) -join " / ")
@@ -306,6 +331,10 @@ if (Test-Path "$T\site") {
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" } | Out-File "$O\py_procs.txt"
   }
   Check "다음 로그온(도우미 다시)에 되돌림 → 판 A (Review Focus 2)" (($s -eq "rolled_back") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A)) "$s"
+  if ($rtT) {
+    $i3 = PyInfo; $rd = RtDiff
+    Check "전환: 켜지지 않는 판·끊긴 업데이트에서 돌아온 뒤에도 파이썬은 옛 판 것이고 python 폴더가 옛 판의 목록과 같다" (($i3 -eq $rtT[0]) -and (RtOk $rd)) "$i3 / $rd"
+  }
   # 파일 변조 감지 (2026-10-23): 깔린 파일 하나를 메모장처럼 고치면 점검이 tampered, 실행 막기 까닭이 나온다 - 손으로 되돌린 뒤 ok
   $dashPy = "$App\rpa_dashboard.py"; $orig = [IO.File]::ReadAllBytes($dashPy)
   Add-Content -Path $dashPy -Value "# 손댐" -Encoding UTF8
@@ -314,6 +343,50 @@ if (Test-Path "$T\site") {
   [IO.File]::WriteAllBytes($dashPy, $orig)
   $tam = & $py -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; print(st.check_install(r'$App')['state'])" 2>&1
   Check "파일 변조 감지: 되돌리면 다시 ok" ("$tam" -eq "ok") "$tam"
+  # 7-1. 내장 파이썬이 바뀐 버전 (설계 2026-11-20, sandbox_test.py --runtime): 판 R = 판 A 에 다른 버전의 파이썬, 판 RC = R 인데 켜지지 않음.
+  # runtime.txt 의 첫 줄은 판 A 의 파이썬, 둘째 줄은 새 파이썬 ("3.14.10 OpenSSL 3.5.9 …" - 빌드 PC 에서 그 python.exe 로 찍은 글)
+  $vers = @(Get-Content "$T\site\versions.txt")
+  if ($vers.Count -ge 4) {
+    $R = $vers[2]; $RC = $vers[3]; $rt = @(Get-Content "$T\site\runtime.txt")
+    $i0 = PyInfo
+    Check "파이썬 바꾸기 전: 설치 폴더의 파이썬은 판 A 것 ($($rt[0]))" (($i0 -eq $rt[0]) -and ($rt[0] -ne $rt[1])) "$i0"
+    Upd "update" $R | Out-File "$O\upd_rt.txt"
+    $s = WaitState @("done", "rolled_back", "failed")
+    if ($s -ne "done") { Copy-Item "$PD\update\업데이트_기록.txt" "$O\update_log_rt.txt" -ErrorAction SilentlyContinue }
+    Check "내장 파이썬이 바뀐 판 R 로 업데이트 → done" ($s -eq "done") "$s $(Get-Content "$PD\update\state.json" -Raw)"
+    $i1 = PyInfo
+    Check "업데이트 뒤 설치 폴더의 파이썬이 새 버전이다 ($($rt[1]))" ($i1 -eq $rt[1]) "$i1"
+    $ist = InstState
+    Check "파이썬이 바뀐 뒤 판 점검 ok · 판 R" ($ist -eq "ok $R") "$ist"
+    foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝", "rt_proc"), @("Prepare_Observer.exe", "--check", "옵저버 점검 끝", "rt_obs"),
+                     @("Prepare_RPA.exe", "--selftest --headless", "자체 테스트 통과", "rt_actor"))) {
+      $txt = RunExe $e[0] $e[1] $e[3]
+      Check "파이썬이 바뀐 뒤 $($e[0]) $($e[1]) 가 켜져 끝까지 간다" ($txt.Contains($e[2])) ($txt.Substring([Math]::Max(0, $txt.Length - 300)))
+    }
+    WaitNoHelper
+    Check "파이썬을 바꾼 업데이트도 도우미 작업은 끝나면 지운다 (옛 보관본 정리까지 끝)" ($LASTEXITCODE -ne 0)
+    $rd = RtDiff
+    Check "업데이트 뒤 python 폴더의 파일이 모두 판 R 의 목록(runtime_files)과 같고 판 A 에만 있던 파일은 없다 (섞이지 않았다)" (RtOk $rd) "$rd"
+    Upd "rollback" "" | Out-File "$O\upd_rt_back.txt"
+    $s = WaitState @("done", "rolled_back", "failed")
+    $i2 = PyInfo
+    Check "[이전 버전으로 되돌리기] → 판 A, 파이썬도 판 A 것" (($s -eq "done") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A) -and ($i2 -eq $rt[0])) "$s / $i2"
+    $ist = InstState
+    Check "파이썬까지 되돌린 뒤 판 점검 ok · 판 A" ($ist -eq "ok $A") "$ist"
+    WaitNoHelper
+    Check "파이썬까지 되돌린 뒤에도 도우미 작업은 지워진다 (보관본 정리까지 끝)" ($LASTEXITCODE -ne 0)
+    $rd = RtDiff
+    Check "되돌린 뒤 python 폴더의 파일이 모두 판 A 의 목록과 같고 판 R 에만 있던 파일은 없다" (RtOk $rd) "$rd"
+    Upd "update" $RC | Out-File "$O\upd_rt_c.txt"
+    $s = WaitState @("rolled_back", "done", "failed")
+    $i3 = PyInfo; $why = (Get-Content "$PD\update\state.json" -Raw -Encoding UTF8 -ErrorAction SilentlyContinue | ConvertFrom-Json).reason
+    if ($s -ne "rolled_back") { Copy-Item "$PD\update\업데이트_기록.txt" "$O\update_log_rtc.txt" -ErrorAction SilentlyContinue }
+    Check "파이썬이 바뀌었고 켜지지 않는 판 RC → 3분 점검 실패 → 되돌림 (판 A, 파이썬도 판 A 것, 옛 버전은 정상으로 켜짐)" (($s -eq "rolled_back") -and ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $A) -and ($i3 -eq $rt[0]) -and ("$why" -notmatch "설치 파일")) "$s / $i3 / $why"
+    $rd = RtDiff
+    Check "저절로 되돌아간 뒤 python 폴더의 파일이 모두 판 A 의 목록과 같고 판 R 에만 있던 파일은 없다" (RtOk $rd) "$rd"
+    $txt = RunExe "Prepare_RPA.exe" "--check" "rt_back_actor"
+    Check "파이썬까지 되돌린 뒤 ACTOR exe 가 켜진다" ($txt.Contains("쓸 수 있는 Action")) ($txt.Substring([Math]::Max(0, $txt.Length - 300)))
+  }
   Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue
 }
 
