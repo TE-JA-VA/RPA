@@ -22,9 +22,13 @@
     --ecam-red:#df0000; --ecam-amber:#9c6200; --ecam-green:#148014; --run:#2563eb;
     --good-fill:#1b7f79; --warn-fill:#856a00; --bad-fill:#c92b22; --run-fill:#2a6fc4; --on-fill:#ffffff;
     --good-bg:#e7f1f0; --warn-bg:#f7ede4; --bad-bg:#fcebeb; --run-bg:#e9effd;   /* 알약·토스트 바탕 (카드 위 9% 섞음, 토스트가 비치지 않게 불투명) */
-    --warn-pill:#e0b50f; --warn-pill-ink:#1e1e2c;   /* 기록 표의 오류 알약. 밝은 모드는 밝은 노랑에 남색 글자 */
+    /* 화면의 노랑은 #FECE00 하나 (사용자 2026-11-20): 기록 표의 오류 알약(--warn-pill), 오류 점·도넛·범례(--warn-mark),
+       [로그아웃] 단추의 10분 미만 알약(--idle-warn). 두 모드 모두 같은 노랑에 남색 글자 - 어두운 모드에서도 올리브로 낮추지 않는다.
+       ECAM 호박색(#ffa000)은 화면과 안 어울려 쓰지 않는다. 글자로 쓰는 노랑 계열은 --warn (노란 글자는 흰 바탕에서 안 읽힌다) */
+    --warn-pill:#fece00; --warn-pill-ink:#1e1e2c;
+    --idle-warn:#fece00; --idle-warn-ink:#1e1e2c;
     /* 도넛 호·범례처럼 글자가 아닌 표시용 노랑. --warn 은 글자라 대비 4.5:1 을 맞추느라 진해서 초록·빨강 옆에서 탁해 보인다 */
-    --warn-mark:#e0b50f;
+    --warn-mark:#fece00;
     --mk1:#2fb5a7; --mk2:#0f766e; --mk3:#0b4f4a;   /* 로고 (접힌 날개) 뒤 날개 · 앞 날개 · 겹침 - 웹은 민트 */
   }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
@@ -35,8 +39,9 @@
     --ecam-red:#ff6a6a; --ecam-amber:#ffa000; --ecam-green:#22dd22; --run:#5aa2f5;
     --good-fill:#1b7f79; --warn-fill:#856a00; --bad-fill:#c92b22; --run-fill:#2a6fc4; --on-fill:#ffffff;
     --good-bg:#263233; --warn-bg:#36302a; --bad-bg:#382c2f; --run-bg:#2a303b;
-    --warn-pill:#705a00; --warn-pill-ink:#fdf6e3;   /* 어두운 모드는 짙은 올리브에 밝은 글자 */
-    --warn-mark:#e0b50f;
+    --warn-pill:#fece00; --warn-pill-ink:#1e1e2c;   /* 어두운 모드에서도 같은 노랑 (2026-11-20 전에는 짙은 올리브 #705a00 에 밝은 글자) */
+    --idle-warn:#fece00; --idle-warn-ink:#1e1e2c;
+    --warn-mark:#fece00;
     --mk1:#4fd1c1; --mk2:#2fb5a7; --mk3:#0f766e;
   } }
   :root[data-theme="dark"] {
@@ -47,8 +52,9 @@
     --ecam-red:#ff6a6a; --ecam-amber:#ffa000; --ecam-green:#22dd22; --run:#5aa2f5;
     --good-fill:#1b7f79; --warn-fill:#856a00; --bad-fill:#c92b22; --run-fill:#2a6fc4; --on-fill:#ffffff;
     --good-bg:#263233; --warn-bg:#36302a; --bad-bg:#382c2f; --run-bg:#2a303b;
-    --warn-pill:#705a00; --warn-pill-ink:#fdf6e3;
-    --warn-mark:#e0b50f;
+    --warn-pill:#fece00; --warn-pill-ink:#1e1e2c;
+    --idle-warn:#fece00; --idle-warn-ink:#1e1e2c;
+    --warn-mark:#fece00;
     --mk1:#4fd1c1; --mk2:#2fb5a7; --mk3:#0f766e;
   }
   /* 강조색은 theme.js 가 고른 값으로 덮는다 - 옅은 바탕·글자용은 거기서 섞어 만든다 (어두운 모드 글자는 조금 밝게) */
@@ -121,6 +127,16 @@
   .side .foot .row { display:flex; gap:4px; margin-left:-8px; }
   .side .foot button { padding:5px 8px; font-size:12px; white-space:nowrap; border-color:transparent; background:transparent; color:var(--text2); }
   .side .foot button:hover { background:var(--soft); color:var(--strong); }
+  /* 자동 로그아웃까지 남은 시간 (사용자 2026-11-20): [로그아웃] 단추가 10분 미만 노란색 알약 → 3분 미만 빨간색 알약 → 1분 미만 깜빡임
+     (app.js paintIdle). 마우스를 올리면 그 움직임이 입력이라 평소 단추로 돌아간다 - :hover 도 같은 색으로 둬 그 사이 깜빡이지 않게.
+     숫자 폭을 고정해 1초마다 단추가 흔들리지 않게 */
+  #idle-left { font-variant-numeric:tabular-nums; }
+  #idle-left:not(:empty) { margin-left:6px; }
+  .side .foot button.idle-warn, .side .foot button.idle-warn:hover { background:var(--idle-warn); color:var(--idle-warn-ink); }
+  .side .foot button.idle-bad, .side .foot button.idle-bad:hover { background:var(--bad-fill); color:var(--on-fill); }
+  .side .foot button.idle-blink { animation:idle-blink 2s ease-in-out infinite; }   /* 숨쉬듯 부드럽게 - 2초에 한 번, 45%까지 (사용자 2026-11-20) */
+  @keyframes idle-blink { 50% { opacity:.45; } }
+  @media (prefers-reduced-motion:reduce) { .side .foot button.idle-blink { animation:none; } }
   .main { flex:1; min-width:0; padding:24px 32px 48px; }
   .super-bar { background:var(--warn-bg); color:var(--strong); border:1px solid color-mix(in srgb, var(--warn) 25%, transparent); border-radius:10px; padding:10px 14px; margin-bottom:16px; font-weight:500; }   /* 총괄 계정이 업체 화면을 보는 중 */
   .main .top { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }

@@ -37,7 +37,7 @@ let current = null;     // 떠 있는 모듈
 
 // --- 테마·강조색: 고른 값은 이 브라우저에만 남는다 ----------------------
 function paintThemeButton() { $("theme").innerHTML = isDark() ? `${icon("sun")}밝게` : `${icon("moon")}어둡게`; }
-$("logout-btn").innerHTML = `${icon("log-out")}로그아웃`;
+$("logout-btn").innerHTML = `${icon("log-out")}로그아웃<span id="idle-left" role="timer"></span>`;   // idle-left: 자동 로그아웃까지 남은 시간 (10분 미만일 때만, paintIdle)
 $("theme").onclick = () => { applyTheme(isDark() ? "light" : "dark"); paintThemeButton(); };
 applyTheme(getTheme());
 paintThemeButton();
@@ -71,8 +71,26 @@ function onInput(e) {
     return;
   }
   const now = Date.now();
-  if (now - lastTouch > 5000) { lastTouch = now; touch(); }     // 저장소 쓰기는 5초에 한 번
+  if (now - lastTouch > 5000) { lastTouch = now; touch(); paintIdle(); }     // 저장소 쓰기는 5초에 한 번. 알약이 떠 있었다면 바로 지운다
 }
+// 자동 로그아웃까지 남은 시간을 [로그아웃] 단추에 보인다 (사용자 2026-11-20). 평소에는 그냥 단추이고, 남은 시간이 10분 미만이면
+// '로그아웃 9:59' 를 노란색 알약으로, 3분 미만이면 빨간색 알약으로, 1분 미만이면 빨간색이 깜빡인다. 입력하면 다시 30분이라 바로 평소 단추로
+// 돌아간다. 0:00 이 되면 그 자리에서 로그아웃한다. 단추는 언제 눌러도 로그아웃이다
+export const IDLE_SHOW_SEC = 600, IDLE_BAD_SEC = 180, IDLE_BLINK_SEC = 60;
+$("logout-btn").title = `${IDLE_MIN}분 동안 사용하지 않으면 자동으로 로그아웃됩니다. 마우스를 움직이거나 화면을 누르면 다시 ${IDLE_MIN}분이 됩니다.`;
+function paintIdle() {
+  const btn = document.getElementById("logout-btn"), el = document.getElementById("idle-left");
+  if (!btn || !el) return;
+  const t = lastActive();
+  const left = auth.currentUser && t > 0 ? Math.ceil((IDLE_MIN * 60000 - (Date.now() - t)) / 1000) : Infinity;
+  if (left <= 0) idleCheck();
+  const show = left > 0 && left < IDLE_SHOW_SEC;
+  el.textContent = show ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "";
+  btn.classList.toggle("idle-warn", show && left >= IDLE_BAD_SEC);
+  btn.classList.toggle("idle-bad", show && left < IDLE_BAD_SEC);
+  btn.classList.toggle("idle-blink", show && left < IDLE_BLINK_SEC);
+}
+setInterval(paintIdle, 1000);
 for (const ev of ["pointermove", "wheel", "touchstart"]) window.addEventListener(ev, onInput, { passive: true, capture: true });
 for (const ev of ["pointerdown", "keydown", "click", "submit"]) window.addEventListener(ev, onInput, { capture: true });   // 막아야 하는 것 (passive 면 못 막는다)
 document.addEventListener("visibilitychange", () => { if (!document.hidden) idleCheck(); });   // 다른 탭을 보다 돌아왔을 때 (숨은 탭은 타이머가 느려진다)

@@ -306,6 +306,7 @@ with sync_playwright() as pw:
         for st_ in ["red", "amber", "green"]:
             pairs[f"환경설정 글자 {st_}"] = contrast(tok(f"--ecam-{st_}"), card)
             pairs[f"환경설정 글자 {st_} (바탕)"] = contrast(tok(f"--ecam-{st_}"), tok("--bg"))
+        pairs["자동 로그아웃 노란색 알약"] = contrast(tok("--idle-warn-ink"), tok("--idle-warn"))   # [로그아웃] 단추 (사용자 2026-11-20). 빨간색은 위 '채운 카드 bad'
         low = {k: round(v, 2) for k, v in pairs.items() if v < 4.5}
         check(not low, f"{theme} 대비 4.5:1 이상 {low or ''}")
         # 환경설정 안내 글자만 AIRBUS ECAM 처럼 빨강·호박색·초록 (사용자 2026-10-08) - 색상(hue)으로 본다, 밝기는 대비에 맞춘다
@@ -315,6 +316,12 @@ with sync_playwright() as pw:
         check((hues["red"] <= 5 or hues["red"] >= 355) and 30 <= hues["amber"] <= 42 and 110 <= hues["green"] <= 130,
               f"{theme} 환경설정 글자색은 ECAM 빨강·호박색·초록 ({hues})")
         check(round(hue(tok("--good"))) > 150, f"{theme} RPA 메뉴의 상태 색은 그대로 (환경설정만 ECAM) ({round(hue(tok('--good')))})")
+        # [로그아웃] 단추의 10분 미만 알약은 두 모드 모두 선명한 노랑 (사용자 2026-11-20 #FECE00): 호박색·주황 쪽이 아니고(ECAM 호박색은
+        # 화면과 안 어울렸다), 어두운 모드에서도 올리브처럼 탁하거나 어둡게 낮추지 않는다
+        iw = tok("--idle-warn")
+        _h, _s, _v = colorsys.rgb_to_hsv(*[int(iw[i:i + 2], 16) / 255 for i in (1, 3, 5)]) if iw else (0, 0, 0)
+        check(44 <= _h * 360 <= 54 and _s >= 0.9 and _v >= 0.9,
+              f"{theme} [로그아웃] 의 10분 미만 알약은 선명한 노랑 - 색상 44~54도, 채도·명도 0.9 이상 ({iw})")
     check(page.evaluate("getComputedStyle(document.body).fontFamily").startswith('"Pretendard Variable"'), "본문 서체 Pretendard")
     contrast_ok("밝음")
     if os.environ.get("SHOT_DIR"): page.screenshot(path=os.path.join(os.environ["SHOT_DIR"], "theme_light.png"), full_page=True)
@@ -445,9 +452,9 @@ with sync_playwright() as pw:
           f"오류 호는 초록 다음부터 1/3 (dasharray {c13[2][1]}, offset {c13[2][2]})")
     # 도넛·범례의 노랑은 글자용 --warn(대비 4.5:1 맞추느라 올리브색)이 아니라 밝은 표시용 --warn-mark
     arc_hex = lambda: rgb2hex(page.evaluate("getComputedStyle(document.querySelector(\"#recent-strip .day[data-date='2026-09-13'] svg circle:nth-child(3)\")).stroke"))
-    check(arc_hex() == tok("--warn-mark") == "#e0b50f" and tok("--warn") != tok("--warn-mark"),
+    check(arc_hex() == tok("--warn-mark") == "#fece00" and tok("--warn") != tok("--warn-mark"),
           f"밝은 모드 오류 호는 밝은 노랑 (호 {arc_hex()}, 글자용 {tok('--warn')})")
-    check(rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#recent-donut .legend span:nth-child(3) i')).backgroundColor")) == "#e0b50f", "범례 표식도 같은 노랑")
+    check(rgb2hex(page.evaluate("getComputedStyle(document.querySelector('#recent-donut .legend span:nth-child(3) i')).backgroundColor")) == "#fece00", "범례 표식도 같은 노랑")
 
     print("3절 실패·끊김 표시")
     db_patch(f"{LIVE}/programs/routine", {"state": "stopped", "reason": "물류 관리 저장 실패 - 주소를 입력하세요",
@@ -1949,9 +1956,10 @@ with sync_playwright() as pw:
     check("crash" in (crash.get_attribute("class") or "") and crash.text_content() == "오류", "죽은 실행은 '오류' 알약")
     check(rows.nth(1).locator(".pill").text_content() == "실패", "단계에서 멈춘 실행은 '실패' 알약 (중단이라 안 쓴다)")
     crash_css = lambda p: rgb2hex(page.evaluate(f"getComputedStyle(document.querySelector('#hist-rows .pill.crash')).{p}"))
-    check(crash_css("backgroundColor") == "#e0b50f" and crash_css("color") == "#1e1e2c", "비정상 종료는 노랑 채움 (밝음: 밝은 노랑 + 남색 글자)")
+    check(crash_css("backgroundColor") == "#fece00" and crash_css("color") == "#1e1e2c", "비정상 종료는 노랑 채움 (밝음: 노랑 #FECE00 + 남색 글자, 사용자 2026-11-20)")
     page.click("#theme"); page.wait_for_timeout(600)
-    check(crash_css("backgroundColor") == "#705a00" and crash_css("color") == "#fdf6e3", "어두움: 짙은 올리브 + 크림 글자")
+    check(crash_css("backgroundColor") == "#fece00" and crash_css("color") == "#1e1e2c",
+          "어두움에서도 같은 노랑 + 남색 글자 - 올리브로 낮추지 않는다 (사용자 2026-11-20, 그 전에는 짙은 올리브 + 크림 글자)")
     if os.environ.get("SHOT_DIR"): page.locator("#view-history .card").screenshot(path=os.path.join(os.environ["SHOT_DIR"], "hist_dark.png"))
     page.click("#theme"); page.wait_for_timeout(600)
     stop_pill = page.evaluate("getComputedStyle(document.querySelector('#hist-rows .pill.bad')).backgroundColor")
@@ -2360,6 +2368,54 @@ with sync_playwright() as pw:
     check(not page.is_visible("#main") and not page.evaluate("Object.keys(sessionStorage).some(k => k.startsWith('firebase:authUser:'))"),
           "30분 넘긴 탭에 못 쓰는 관리 화면 열쇠(#t=)를 붙여 새로고침해도 로그인이 되살아나지 않는다")
     page.goto(WEB); page.wait_for_selector("#login:not(.hide)", timeout=15000)
+
+    # 자동 로그아웃까지 남은 시간 (사용자 2026-11-20): 10분 미만이면 [로그아웃] 단추가 남은 시간과 함께 호박색 알약, 3분 미만 빨간색, 1분 미만 깜빡임.
+    # 단추는 언제 눌러도 로그아웃이다
+    login(page, "viewer@t.local")
+
+    def pill():
+        return page.evaluate("""(() => { const b = document.getElementById('logout-btn'), e = document.getElementById('idle-left'); if (!b || !e) return null;
+          return [e.textContent.trim() !== '', b.textContent.trim(), b.classList.contains('idle-warn'), b.classList.contains('idle-bad'),
+                  b.classList.contains('idle-blink'), getComputedStyle(b).animationName]; })()""") or [None, "", False, False, False, ""]
+
+    time.sleep(1.5)
+    p = pill()
+    check(p[0] is False and p[1] == "로그아웃" and not (p[2] or p[3] or p[4]), f"남은 시간이 넉넉하면 [로그아웃] 은 그냥 단추다 ({p})")
+    check("30분" in (page.get_attribute("#logout-btn", "title") or ""), "[로그아웃] 에 마우스를 올리면 30분 규칙을 알려 준다 (평소에도)")
+    ago(19.5); time.sleep(1.5)
+    p = pill()
+    check(p[0] is False and p[1] == "로그아웃" and not p[2], f"10분 30초 남았을 때도 그냥 단추다 ({p})")
+    ago(20.5); time.sleep(1.5)
+    p = pill()
+    check(p[0] is True and re.fullmatch(r"로그아웃\s*9:[0-5]\d", p[1]) and p[2] and not p[3] and not p[4],
+          f"10분 미만이면 [로그아웃] 이 남은 시간(분:초)과 함께 호박색 알약이 된다 ({p})")
+    t1 = p[1]; time.sleep(1.3)
+    check(pill()[1] != t1, f"남은 시간은 1초마다 줄어든다 ({t1} → {pill()[1]})")
+    ago(27.5); time.sleep(1.5)
+    p = pill()
+    check(p[0] is True and re.fullmatch(r"로그아웃\s*2:[0-5]\d", p[1]) and p[3] and not p[2] and not p[4], f"3분 미만이면 빨간색 알약 ({p})")
+    ago(29.4); time.sleep(1.5)
+    p = pill()
+    check(p[0] is True and re.fullmatch(r"로그아웃\s*0:[0-5]\d", p[1]) and p[3] and p[4] and p[5] not in ("", "none"),
+          f"1분 미만이면 빨간색 알약이 깜빡인다 ({p})")
+    how = page.evaluate("(() => { const s = getComputedStyle(document.getElementById('logout-btn')); return [s.animationDuration, s.animationTimingFunction]; })()")
+    check(how == ["2s", "ease-in-out"], f"깜빡임은 2초에 한 번 부드럽게 (시험 페이지의 '나. 숨쉬듯' - 사용자 2026-11-20) ({how})")
+    page.emulate_media(reduced_motion="reduce")
+    check(pill()[4] and pill()[5] == "none", f"움직임 줄이기를 켠 사용자에게는 깜빡이지 않는다 - 빨간색 그대로 ({pill()})")
+    page.emulate_media(reduced_motion="no-preference")
+    page.keyboard.press("Shift"); time.sleep(0.4)
+    p = pill()
+    check(p[0] is False and p[1] == "로그아웃" and not (p[2] or p[3] or p[4]) and page.is_visible("#main"),
+          f"입력하면 바로 평소 단추로 돌아가고 (다시 30분) 그대로 쓴다 ({p})")
+    ago(27.5); time.sleep(1.5)
+    check(pill()[3], "다시 3분 미만 - 빨간색 알약")
+    page.click("#logout-btn")
+    page.wait_for_selector("#login:not(.hide)", timeout=10000)
+    check(not page.is_visible("#login-alert"), "남은 시간이 보이는 동안에도 [로그아웃] 을 누르면 바로 로그아웃한다 (미사용 안내는 없다 - 사람이 누른 것)")
+    login(page, "viewer@t.local")
+    ago(29.97); time.sleep(4)
+    check(page.is_visible("#login") and "30분" in (page.text_content("#login-alert") or ""),
+          "0:00 이 되면 입력이 없어도 바로 로그아웃하고 까닭을 알린다 (30초를 더 기다리지 않는다)")
 
     check(not errors, f"페이지 오류 없음 {errors[:2]}")
     browser.close()
