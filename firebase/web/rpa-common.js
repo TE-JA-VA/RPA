@@ -1,6 +1,6 @@
 // RPA 화면 둘이 같이 쓰는 것 - 현황(rpa.js)·환경설정(rpa-settings.js). 경로, 모듈 표, 글 도우미, 명령 보내기.
-import { ref, onValue, push } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import { COMMAND_TTL_SEC } from "./firebase-config.js";
+import { watch, skewReady, skewMs, pushCommand } from "./data.js";
+import { COMMAND_TTL_SEC } from "./config.js";
 import { toast } from "./toast.js";
 
 export const P = (kind, cid, pcId) => `apps/rpa/${kind}/${cid}/${pcId}`;
@@ -76,15 +76,8 @@ export function sendPair(c, cmds, label, alive = () => true) {
   return sendTo(c, cmds, label, alive);
 }
 
-// 명령 시각은 서버 시각 = 이 브라우저 시각 + RTDB 가 알려 주는 차이 (BugBuster M1) - 브라우저 시계가 틀려도 규칙(서버 now±60초)·PC 판정이 맞게
-let skew = { db: null, ms: 0, ready: null };
-function serverNowMs(db) {
-  if (skew.db !== db) {
-    const s = skew = { db, ms: 0, ready: null };
-    s.ready = new Promise((ok) => onValue(ref(db, ".info/serverTimeOffset"), (snap) => { s.ms = Number(snap.val()) || 0; ok(); }, () => ok()));
-  }
-  return skew.ready.then(() => Date.now() + skew.ms);
-}
+// 명령 시각은 서버 시각 = 이 브라우저 시각 + 서버가 알려 주는 차이 (BugBuster M1) - 브라우저 시계가 틀려도 규칙(서버 now±60초)·PC 판정이 맞게
+const serverNowMs = () => skewReady().then(() => Date.now() + skewMs());
 // 바로 하는 명령은 90초 안에 못 받으면 버린다 (BugBuster I12) - 화면은 60초 뒤 '응답하지 않습니다' 로 끝나는데 늦게 붙은 PC 가 그 뒤에 실행하지 않게
 const QUICK = new Set(["launch", "stop_erpia", "stop_rpa"]);
 export const ttlOf = (type) => (QUICK.has(type) ? 90 : COMMAND_TTL_SEC);
@@ -97,13 +90,13 @@ async function sendTo(c, cmds, label, alive) {
   label = pcWho(c) + label;
   notify("info", `${label} 명령을 전송하였습니다. PC 응답을 기다리는 중입니다.`);
   try {
-    const now = Math.floor(await serverNowMs(c.db) / 1000);
+    const now = Math.floor(await serverNowMs() / 1000);
     const sent = [];
     for (const [pcId, type, args] of cmds) {
-      const node = await push(ref(c.db, P("commands", c.me.cid, pcId)), {
+      const key = await pushCommand(c.me.cid, pcId, {
         type, args: args ?? null, by: c.me.uid, created_at: now, expires_at: now + ttlOf(type), state: "queued",
       });
-      sent.push([pcId, node.key]);
+      sent.push([pcId, key]);
     }
     return await watchCommands(c, sent, label, alive, ttlOf(cmds.at(-1)[1]));
   } catch (e) {
@@ -130,14 +123,13 @@ function watchCommands(c, sent, label, alive, ttl) {
     let started = false;
     const lastKey = sent.at(-1)[1];
     for (const [pcId, cmdKey] of sent) {
-      offs.push(onValue(ref(c.db, `${P("commands", c.me.cid, pcId)}/${cmdKey}`), (snap) => {
-        const v = snap.val();
+      offs.push(watch(`${P("commands", c.me.cid, pcId)}/${cmdKey}`, (v) => {
         if (!v) return;
         if (cmdKey === lastKey && v.state === "running" && !started) {
           started = true;
           if (alive()) notify("info", `${label} 진행 중`);
           clearTimeout(timer);
-          timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - (Date.now() + skew.ms)) + 5000);   // 서버 시각으로 (M1)
+          timer = setTimeout(() => end("info", "PC에서 진행 중입니다. 결과는 기록에서 확인하여 주십시오."), Math.max(0, (v.expires_at || 0) * 1000 - (Date.now() + skewMs())) + 5000);   // 서버 시각으로 (M1)
         }
         if (v.state === "failed" || v.state === "expired") end("bad", v.result || v.state);
         else if (cmdKey === lastKey && v.state === "done") end("ok", v.result || v.state);

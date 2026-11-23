@@ -1,11 +1,7 @@
 // RPA 앱 화면. 껍데기(app.js)가 mount(root, ctx) 로 띄우고 unmount() 로 걷는다.
 // 현황은 apps/rpa/live/{cid}/{pcId} (RTDB), 기록은 runs/{cid}/items (Firestore). 기준값은 PC 가 올린 live 다.
-import { ref, onValue } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import {
-  getFirestore, collection, query, where, orderBy, limit, getDocs, connectFirestoreEmulator,
-  doc, getDoc, getAggregateFromServer, sum, onSnapshot,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./firebase-config.js";
+import { watch, listRuns, getWallet, watchWallet, sumRuns } from "./data.js";
+import { HEARTBEAT_EVERY_DEFAULT, HEARTBEAT_MISS } from "./config.js";
 import { toast } from "./toast.js";
 import { icon as lucide } from "./icons.js";
 import { hideAi, hideAiRun, P, esc, MODULES, WELLIFE_MODULES, wellifeOn, hhmm, when, isoDay, sendCommand, slotNames, openWindow, repeatOf, pcWho, schedNote } from "./rpa-common.js";
@@ -110,7 +106,6 @@ let root = null, c = null;
 let stopLive = null, stopWallet = null;
 let busy = false;
 let live = null;
-let fs = null;
 let resizeObs = null;
 let tick = null;   // 1초마다 상태 카드·연결 칸을 다시 그린다 - 진행 시간이 올라가고, 에이전트가 죽어도(값이 안 바뀜) 끊김이 보이게
 const STOPPED_TEXT = "대시보드에서 중단했습니다";   // rpa_dashboard.STOPPED_TEXT 와 같다
@@ -146,10 +141,6 @@ export function mount(el, context) {
   if (!c.pcId) { root.innerHTML = NO_PC_HTML; return; }
   root.innerHTML = HTML;
   busy = false; live = null; seenRun = {}; boots = {}; lastBoot = null; dupUntil = 0; tokBal = undefined;
-  fs = getFirestore(c.db.app);
-  if (location.hostname === "127.0.0.1" && new URLSearchParams(location.search).get("emu") === "1") {
-    try { connectFirestoreEmulator(fs, "127.0.0.1", 8080); } catch {}   // 두 번째 mount 부터는 이미 붙어 있다
-  }
   $("tab-status").onclick = () => showView("status");
   $("tab-history").onclick = () => showView("history");
   $("hist-date").onchange = () => loadHistory($("hist-date").value || null);
@@ -177,8 +168,7 @@ export function mount(el, context) {
     strip.scrollLeft += e.deltaY; e.preventDefault();
   }, { passive: false });
   tick = setInterval(() => { if (root && live) { paintHero(); paintTiles(); paintRepeat(); } }, 1000);   // 시간대가 열리고 닫히는 것은 시각이 정한다
-  stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
-    const v = snap.val();
+  stopLive = watch(P("live", c.me.cid, c.pcId), (v) => {
     const first = live == null;
     live = c.me?.role === "super" ? v || {} : hideAi(v || {});   // AI 어시스트 흔적은 총괄만 (사용자 2026-11-17)
     seeBoot(live.heartbeat?.boot);   // (I13)
@@ -188,7 +178,7 @@ export function mount(el, context) {
   }, (e) => { $("h-state").textContent = e.code === "PERMISSION_DENIED" ? "권한 없음" : "읽지 못했습니다."; });
   // 충전하면 남은 토큰을 바로 다시 센다 - PC 값(10분마다)을 기다리면 충전 직후 실행 단추가 잠겨 있었다 (PR #29 검토, 2026-10-30).
   // 통장 문서가 바뀔 때만 읽기 1번
-  stopWallet = onSnapshot(doc(fs, "wallet", c.me.cid), () => { tokKey = undefined; if (root && live) paintTokens(); }, () => {});
+  stopWallet = watchWallet(c.me.cid, () => { tokKey = undefined; if (root && live) paintTokens(); }, () => {});
 }
 
 export function unmount() {
@@ -556,13 +546,9 @@ async function loadHistory(date) {
   msg.textContent = "불러오는 중"; msg.className = "msg";
   rows.replaceChildren(); histItems = null;
   try {
-    const col = collection(fs, "runs", c.me.cid, "items");
-    const q = date
-      ? query(col, where("pcId", "==", c.pcId), where("date", "==", date), orderBy("started_at", "desc"), limit(HISTORY_LIMIT))
-      : query(col, where("pcId", "==", c.pcId), orderBy("started_at", "desc"), limit(HISTORY_LIMIT));
-    const snap = await getDocs(q);
+    const docs = await listRuns(c.me.cid, { pcId: c.pcId, date, limit: HISTORY_LIMIT });
     if (seq !== histSeq || !root) return;
-    histItems = snap.docs.map((d) => (c.me?.role === "super" ? d.data() : hideAiRun(d.data())));   // AI 어시스트 흔적은 총괄만
+    histItems = docs.map((d) => (c.me?.role === "super" ? d : hideAiRun(d)));   // AI 어시스트 흔적은 총괄만
     paintHist();
   } catch (e) {
     if (seq !== histSeq || !root) return;
@@ -671,13 +657,10 @@ function serverTokens(t) {
   const key = `${cid}|${t?.balance}|${Math.floor(Date.now() / TOKEN_REREAD_MS)}`;
   if (tokKey !== key || !tokP) {
     tokKey = key;
-    tokP = getDoc(doc(fs, "wallet", cid)).then(async (snap) => {
-      const w = snap.data();
+    tokP = getWallet(cid).then(async (w) => {
       if (!w) return null;
       const g = Number(w.granted) || 0;
-      const q = collection(fs, "runs", cid, "items");
-      const spent = await getAggregateFromServer(w.since ? query(q, where("started_at", ">=", w.since)) : q, { s: sum("cost") })
-        .then((r) => r.data().s ?? 0, () => null);
+      const spent = await sumRuns(cid, "cost", w.since ? { from: w.since } : {}).catch(() => null);
       return { w, g, bal: spent === null ? null : g - spent };
     }, () => undefined);
   }
@@ -760,8 +743,7 @@ async function paintUsage() {
     // 오늘 끝까지만 - 시계가 틀린 PC 가 남긴 미래 시각 기록이 다음 달에도 '이번 달' 로 세어졌다 ((c), 2026-11-03).
     // 같은 칸(started_at)의 범위라 색인은 그대로 (started_at + used.<키>)
     const end = `${kst.slice(0, 10)}T23:59:59`;
-    const one = (at, field) => getAggregateFromServer(query(collection(fs, "runs", c.me.cid, "items"), where("started_at", ">=", at),
-      where("started_at", "<=", end)), { s: sum(field) }).then((r) => r.data().s ?? 0);
+    const one = (at, field) => sumRuns(c.me.cid, field, { from: at, to: end });
     const list = usageKeys(), keys = list.map(([k]) => k);
     const [total, todayTotal, ...counts] = await Promise.all([
       one(from, "cost"), one(from > today ? from : today, "cost"), ...keys.map((k) => one(from, `used.${k}`).catch(() => 0))]);   // 한 칸이 안 돼도 나머지는 보인다

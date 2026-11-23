@@ -1,6 +1,6 @@
 // RPA 의 환경설정 - 관리 > 환경설정 (settings.js) 이 붙인다. 프리페어 RPA(사이트 수집: 쇼핑몰 프리셋) · 루틴 RPA(실행 모듈) · 자동 실행 (PC 마다).
 // 값의 기준은 PC 가 올린 live. 적용 = settings 에 쓰고 명령을 넣는다 - PC 가 반영해 live 로 돌려준다
-import { ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+import { watch, saveSettings } from "./data.js";
 import { P, MODULES, WELLIFE_MODULES, wellifeOn, LOCKED, NEEDS, DAYS, when, switchText, notify, sendCommand, sendPair, RUN_CHIPS, WELLIFE_RUN_CHIPS, slotNames, slotText, isoDay, schedNote } from "./rpa-common.js";
 
 export const title = "오토파일럿";
@@ -134,8 +134,8 @@ export function mount(el, context) {
   $("copy-all").onclick = () => { for (const p of copyable()) form.copy.pick[p.no] = { ...form.copy.pick[p.no], on: true }; copyKey = ""; paintCopy(); };
   $("copy-to").onchange = (e) => { form.copy.to = e.target.value; paintCopyMeta(); };
   if (copyPeers().length) {
-    stopPeers = copyPeers().map((pc) => onValue(ref(c.db, `${P("live", c.me.cid, pc)}/preset_transfer`), (snap) => {
-      transferOk[pc] = snap.val() === 1;
+    stopPeers = copyPeers().map((pc) => watch(`${P("live", c.me.cid, pc)}/preset_transfer`, (v) => {
+      transferOk[pc] = v === 1;
       if (root && live) paintCopy();
     }, () => {}));
   }
@@ -171,33 +171,33 @@ export function mount(el, context) {
     return b;
   }));
   // 업체 한도는 총괄·관리 도구가 바꾼다 - 로그인 때 읽은 값(c.policy) 대신 바로 따라간다
-  stopLimit = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/limits/schedule`), (snap) => {
-    liveLimit = snap.val();
+  stopLimit = watch(`meta/companies/${c.me.cid}/apps/rpa/limits/schedule`, (v) => {
+    liveLimit = v;
     if (root && live) { paintTimes(); paintScheduleMeta(); }
   }, () => {});
   // 동시 실행 허용도 같은 방식 (사용자 2026-10-16) - 허용을 거두면 카드가 바로 사라진다
-  stopPar = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/limits/parallel`), (snap) => {
+  stopPar = watch(`meta/companies/${c.me.cid}/apps/rpa/limits/parallel`, (v) => {
     const was = root && live ? parDirty() : null;
-    parLimit = snap.val();
+    parLimit = v;
     if (was === null) return;
     if (!was) resetParallel(); else paintParallel();
   }, () => {});
   // 웰라이프 열림도 같은 방식 - 로그인 뒤 관리 화면에서 바뀌어도 따라간다
-  stopFeatures = onValue(ref(c.db, `meta/companies/${c.me.cid}/apps/rpa/features`), (snap) => {
+  stopFeatures = watch(`meta/companies/${c.me.cid}/apps/rpa/features`, (v) => {
     const was = root && live ? [modulesDirty(), scheduleDirty(), togDirty()] : null;   // 정책을 바꾸기 전 목록으로 편집 중인지 본다
-    c.policy = { ...c.policy, rpa: { ...c.policy?.rpa, features: snap.val() || {} } };
+    c.policy = { ...c.policy, rpa: { ...c.policy?.rpa, features: v || {} } };
     paintAi();                     // AI 어시스트 켬·끔은 관리 화면이 바꾼다 - 업체 웹은 보여 주기만 (켜지면 그때 한 번 읽는다)
     if (!was) return;
     if (!was[0]) resetModules();   // 편집 중인 폼은 건드리지 않는다 (보내는 값은 어차피 규칙대로 거른다)
     if (!was[1]) resetSchedule(); else { paintTimes(); paintScheduleMeta(); }
     if (!was[2]) resetTogether(); else paintTogether();   // 전체 실행 방식 - 정책이 바뀌면 카드를 다시 그린다
   }, () => {});
-  stopLive = onValue(ref(c.db, P("live", c.me.cid, c.pcId)), (snap) => {
+  stopLive = watch(P("live", c.me.cid, c.pcId), (v) => {
     const first = live == null;
     // 편집 중이 아닐 때만 폼을 PC 값으로 맞춘다 (적용 뒤 돌아온 값으로 갱신). 편집 중인지는 바뀌기 전 PC 값과 견준다 -
     // 새 값과 견주면 PC 쪽이 바뀌었을 때 손대지 않은 폼도 '편집 중' 으로 보여 옛 값에 머문다
     const was = first ? [] : dirtyList(), before = first ? [] : savedKeys();
-    live = snap.val() || {};
+    live = v || {};
     if (first || !was[0]) resetModules();
     if (first || !was[1]) resetShops();
     if (first || !was[3]) resetParallel();
@@ -353,7 +353,7 @@ async function applyModules() {
   const wanted = applyNeeds(Object.fromEntries(ownModules().map(([k]) => [k, !!form.modules[k]])));
   if (!Object.values(wanted).some(Boolean)) { notify("warn", "최소 하나 이상의 모듈을 선택해야 합니다."); return; }
   try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/modules`), wanted);
+    await saveSettings(c.me.cid, c.pcId, "modules", wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.modules = keyOf.modules();
   // 상품별 재고검토는 같은 명령에 실어 보낸다 (새 명령 종류는 RTDB 규칙을 바꿔야 한다). 물류대기를 꺼도 고른 값은 그대로 둔다
@@ -463,7 +463,7 @@ function paintShopMeta() {
 async function applyShops() {
   const wanted = Object.fromEntries(savedShops().map((p) => [`PRESET${p.no}`, !!form.shops[p.no]]));
   try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/presets`), wanted);
+    await saveSettings(c.me.cid, c.pcId, "presets", wanted);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.shops = keyOf.shops();
   await send("set_presets", wanted, "쇼핑몰 프리셋", "shops");
@@ -571,7 +571,7 @@ function paintParMeta() {
 async function applyParallel() {
   const n = form.parallel;
   try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/parallel`), n);
+    await saveSettings(c.me.cid, c.pcId, "parallel", n);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.par = keyOf.par();
   await send("set_parallel", { parallel: n }, "동시 실행", "par");
@@ -612,7 +612,7 @@ function paintTogMeta() {
 async function applyTogether() {
   const mode = form.together;
   try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/together`), mode);
+    await saveSettings(c.me.cid, c.pcId, "together", mode);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.tog = keyOf.tog();
   await send("set_together", { mode }, "전체 실행 방식", "tog");
@@ -1142,7 +1142,7 @@ function slotPayload(x) {
 async function applySchedule() {
   const payload = payloadOf();
   try {
-    await set(ref(c.db, `${P("settings", c.me.cid, c.pcId)}/schedule`), payload);
+    await saveSettings(c.me.cid, c.pcId, "schedule", payload);
   } catch (e) { notify("bad", e.code === "PERMISSION_DENIED" ? "권한이 없습니다." : `저장하지 못했습니다. (${e.code || e})`); return; }
   sent.sch = keyOf.sch();
   await send("set_schedule", payload, "자동 실행", "sch");

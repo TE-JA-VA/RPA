@@ -1,13 +1,7 @@
 // AFTER MARKET 껍데기: 로그인, 회사·PC, 사이드바(앱·관리), 테마. 페이지 내용은 각 모듈이 mount/unmount 한다.
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {
-  getAuth, signInWithEmailAndPassword, signInWithCustomToken, signOut, onAuthStateChanged, connectAuthEmulator,
-  setPersistence, browserSessionPersistence,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import {
-  getDatabase, ref, get, connectDatabaseEmulator,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
-import { firebaseConfig } from "./firebase-config.js";
+import * as data from "./data.js";
+import { EDITION, init, onSession, signIn, signOut, signedIn, sessionUid, handoffFailed, getCompany } from "./data.js";
+import { CONSOLE_UID } from "./config.js";
 import { icon } from "./icons.js";
 import { applyTheme, getTheme, isDark, applyAccent, getAccent } from "./theme.js";
 import * as rpa from "./rpa.js";
@@ -17,15 +11,6 @@ import * as settings from "./settings.js";
 // 앱 목록과 관리 페이지. 새 앱은 여기 한 줄과 모듈 파일 하나로 붙는다.
 const APPS = [rpa];
 const PAGES = [settings, account];
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getDatabase(app);
-// 화면 시험용: 에뮬레이터 Hosting(127.0.0.1)에서 ?emu=1 로 열면 에뮬레이터에 붙는다. 실제 주소에서는 무시된다.
-if (location.hostname === "127.0.0.1" && new URLSearchParams(location.search).get("emu") === "1") {
-  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
-  connectDatabaseEmulator(db, "127.0.0.1", 9000);
-}
 
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => el.classList.toggle("hide", !on);
@@ -45,25 +30,24 @@ applyAccent(getAccent());
 
 // --- 탭 단위 로그인·미사용 자동 로그아웃 (사용자 2026-11-19, 고객사 보안 검토) ---------------
 // 로그인 정보는 탭 저장소에만 둔다 - 탭(브라우저)을 닫으면 로그인이 끝난다. 그 전에는 브라우저에 남아 닫았다 열어도 로그인돼 있었다.
-// 옛 방식으로 브라우저에 남아 있던 로그인도 여기서 탭 저장소로 옮겨진다 (setPersistence 는 지금 로그인한 계정을 새 저장소로 옮긴다)
-await setPersistence(auth, browserSessionPersistence).catch(() => {});
+// (저장소를 정하는 것은 아래 init() - data-firebase.js 의 setPersistence)
 // 입력(마우스·키보드·터치·휠)이 IDLE_MIN 분 없으면 로그아웃한다. 마지막 입력 시각도 탭 저장소에 둔다 - 새로고침해도 이어서 센다
 export const IDLE_MIN = 30;
 const IDLE_KEY = "lastActive";
 const lastActive = () => { try { return Number(sessionStorage.getItem(IDLE_KEY)) || 0; } catch { return 0; } };
 const touch = () => { try { sessionStorage.setItem(IDLE_KEY, String(Date.now())); } catch {} };
 const idleOver = () => { const t = lastActive(); return t > 0 && Date.now() - t > IDLE_MIN * 60000; };
-let idleNote = null;       // 미사용으로 로그아웃했다 ("user" | "console") - onAuthStateChanged 가 로그인 화면에 까닭을 적는다
-let justSignedIn = false;  // 방금 로그인에 성공했다 - onAuthStateChanged 가 입력 시각을 지금으로 적는다. 로그인을 시도하기 전에 적으면
+let idleNote = null;       // 미사용으로 로그아웃했다 ("user" | "console") - onSession 콜백이 로그인 화면에 까닭을 적는다
+let justSignedIn = false;  // 방금 로그인에 성공했다 - onSession 콜백이 입력 시각을 지금으로 적는다. 로그인을 시도하기 전에 적으면
                            // 못 쓰는 열쇠(#t=)를 붙여 새로고침하는 것만으로 시간을 넘긴 로그인이 되살아났다 (검토 2026-11-19)
 async function idleCheck() {
-  if (!auth.currentUser || !idleOver()) return;
-  idleNote = auth.currentUser.uid === CONSOLE_UID ? "console" : "user";
-  await signOut(auth);
+  if (!signedIn() || !idleOver()) return;
+  idleNote = sessionUid() === CONSOLE_UID ? "console" : "user";
+  await signOut();
 }
 let lastTouch = 0;
 function onInput(e) {
-  if (!auth.currentUser) return;
+  if (!signedIn()) return;
   if (idleOver()) {          // 시간을 넘긴 뒤의 첫 입력은 로그인을 살리지 않고, 누르려던 단추에도 닿지 않는다 ([실행]·[적용] 이 로그아웃보다 먼저 눌리지 않게)
     if (e.cancelable) e.preventDefault();
     e.stopImmediatePropagation();
@@ -82,7 +66,7 @@ function paintIdle() {
   const btn = document.getElementById("logout-btn"), el = document.getElementById("idle-left");
   if (!btn || !el) return;
   const t = lastActive();
-  const left = auth.currentUser && t > 0 ? Math.ceil((IDLE_MIN * 60000 - (Date.now() - t)) / 1000) : Infinity;
+  const left = signedIn() && t > 0 ? Math.ceil((IDLE_MIN * 60000 - (Date.now() - t)) / 1000) : Infinity;
   if (left <= 0) idleCheck();
   const show = left > 0 && left < IDLE_SHOW_SEC;
   el.textContent = show ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "";
@@ -97,8 +81,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) idle
 setInterval(idleCheck, 30000);
 
 // --- 로그인 ---------------------------------------------------------
-// 공유 계약 (agent.py·setup.js 와 같은 규칙): 아이디에 @ 가 있으면 그대로, 없으면 아이디@회사코드.프로젝트도메인. '_' 는 '-' 로. 업체코드가 비면(총괄) 프로젝트 도메인만
-export const emailFor = (cid, id) => id.includes("@") ? id : `${id.replaceAll("_", "-")}@${cid ? cid.replaceAll("_", "-") + "." : ""}${firebaseConfig.authDomain}`;
+// 로그인 아이디 → 계정 이메일 (공유 계약, data-firebase.js). 화면 시험이 app.js 에서 가져간다. 스탠드얼론은 undefined
+export const emailFor = data.emailFor;
 // '업체코드·아이디 저장' 을 켜고 로그인하면 이 브라우저에 남긴다. 끄고 로그인하면 지운다
 try {
   localStorage.removeItem("cid");   // 옛 저장(업체코드만, 항상)은 버린다
@@ -112,8 +96,8 @@ $("login-form").addEventListener("submit", async (ev) => {
   $("login-btn").disabled = true;
   const cid = $("cid").value.trim().replace(/^-$/, "");   // setup.js 관습대로 '-' 도 '회사 없음'
   try {
-    justSignedIn = true;                 // 지난 로그인의 입력 시각이 남아 있어도 들어가자마자 미사용으로 로그아웃되지 않게 (onAuthStateChanged)
-    await signInWithEmailAndPassword(auth, emailFor(cid, $("login-id").value.trim()), $("password").value);   // 탭 저장소에만 (위 setPersistence)
+    justSignedIn = true;                 // 지난 로그인의 입력 시각이 남아 있어도 들어가자마자 미사용으로 로그아웃되지 않게 (onSession)
+    await signIn(cid, $("login-id").value.trim(), $("password").value);   // 탭 저장소에만 (init 의 setPersistence)
     $("password").value = "";
     try {
       if ($("remember").checked) localStorage.setItem("login", JSON.stringify({ cid, id: $("login-id").value.trim() }));
@@ -131,33 +115,28 @@ $("login-form").addEventListener("submit", async (ev) => {
     $("login-btn").disabled = false;
   }
 });
-$("logout-btn").addEventListener("click", () => { if (leaveOk()) signOut(auth); });
+$("logout-btn").addEventListener("click", () => { if (leaveOk()) signOut(); });
 // 탭 닫기·새로고침은 브라우저가 묻는다 (글은 브라우저가 정한다)
 window.addEventListener("beforeunload", (e) => { if (current?.dirty?.()) { e.preventDefault(); e.returnValue = ""; } });
 
-// 관리 화면 [대시보드 보기] 가 주소 # 뒤에 붙인 1시간짜리 총괄 로그인 열쇠 (2026-10-16) - 주소창에서 곧바로 지우고 그 열쇠로 로그인한다.
+// 관리 화면 [대시보드 보기] 가 주소 # 뒤에 붙인 1시간짜리 총괄 로그인 열쇠 (2026-10-16) - init() 이 주소창에서 곧바로 지우고 그 열쇠로 로그인한다.
 // 이미 다른 계정으로 로그인돼 있어도 바꾼다 (총괄 화면을 보려고 누른 것). 못 쓰면 (1시간 지남) 로그인 화면 안내
 const handoff = new URLSearchParams(location.hash.slice(1)).get("t");
-// 이 로그인도 탭 저장소에만 둔다 (2026-11-19 부터 모든 로그인이 그렇다) - 탭을 닫으면 끝나고, 로그인 1시간 뒤에는 스스로 로그아웃한다 (BugBuster I15, 아래 onAuthStateChanged)
-const CONSOLE_UID = "admin-console";   // ops.CONSOLE_UID 와 같다
-const CONSOLE_SEC = 3600;
+// 이 로그인도 탭 저장소에만 둔다 (2026-11-19 부터 모든 로그인이 그렇다) - 탭을 닫으면 끝나고, 로그인 1시간 뒤에는 스스로 로그아웃한다 (BugBuster I15, 아래 onSession)
 let consoleTimer = null;
-if (handoff) {
-  history.replaceState(null, "", location.pathname + location.search);
-  try {
-    await setPersistence(auth, browserSessionPersistence);
-    justSignedIn = true;
-    await signInWithCustomToken(auth, handoff);
-  } catch {
-    justSignedIn = false;
-    $("login-alert").textContent = "관리 화면 로그인 정보가 만료되었습니다. 관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오."; show($("login-alert"), true);
-  }
+if (handoff) justSignedIn = true;
+await init();
+if (handoffFailed()) {
+  justSignedIn = false;
+  $("login-alert").textContent = "관리 화면 로그인 정보가 만료되었습니다. 관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오."; show($("login-alert"), true);
 }
 
-onAuthStateChanged(auth, async (user) => {
+// 로그인·로그아웃·새로고침 복원을 이 콜백 하나가 맡는다. s = null 로그아웃 / {error: "network"} 토큰을 못 받음 /
+// {uid, email, cid, role, consoleLeftMs?} 로그인 (토큰을 새로 받은 뒤)
+onSession(async (s) => {
   unmount();
   clearTimeout(consoleTimer); consoleTimer = null;
-  if (!user) {
+  if (!s) {
     me = null; company = null; pcId = null;
     show($("login"), true); show($("main"), false);
     if (idleNote) {
@@ -169,38 +148,37 @@ onAuthStateChanged(auth, async (user) => {
     return;
   }
   if (justSignedIn) { justSignedIn = false; lastTouch = Date.now(); touch(); }
-  else if (idleOver()) { idleNote = user.uid === CONSOLE_UID ? "console" : "user"; await signOut(auth); return; }   // 새로고침으로 되살아난 로그인도 시간을 넘겼으면 끝낸다
+  else if (idleOver()) { idleNote = sessionUid() === CONSOLE_UID ? "console" : "user"; await signOut(); return; }   // 새로고침으로 되살아난 로그인도 시간을 넘겼으면 끝낸다
   else if (!lastActive()) touch();
-  let t;
-  try { t = await user.getIdTokenResult(true); } catch {   // 네트워크가 끊겨 토큰을 못 받으면 빈 화면에서 멈췄다 (BugBuster M4)
+  if (s.error) {   // 네트워크가 끊겨 토큰을 못 받으면 빈 화면에서 멈췄다 (BugBuster M4)
     show($("login"), true); show($("main"), false);
     $("login-alert").textContent = "네트워크 연결을 확인한 뒤 새로고침하여 주십시오."; show($("login-alert"), true);
     return;
   }
-  if (user.uid === CONSOLE_UID) {   // 관리 화면 [대시보드 보기] 로그인 - 로그인 1시간 뒤 로그아웃 (I15)
-    // 남은 시간은 서버 시각끼리(방금 받은 토큰의 iat - 로그인 auth_time)로 잰다 - 브라우저 시계가 틀려도 맞게
-    const left = (CONSOLE_SEC - ((Number(t.claims.iat) || 0) - (Number(t.claims.auth_time) || 0))) * 1000;
+  if (s.uid === CONSOLE_UID) {   // 관리 화면 [대시보드 보기] 로그인 - 로그인 1시간 뒤 로그아웃 (I15)
+    // 남은 시간은 서버 시각끼리 잰다 (consoleLeftMs - data 쪽이 방금 받은 토큰의 iat - 로그인 auth_time 으로) - 브라우저 시계가 틀려도 맞게
+    const left = s.consoleLeftMs;
     const end = async () => {
-      await signOut(auth);
+      await signOut();
       $("login-alert").textContent = "관리 화면 로그인은 1시간 동안만 사용할 수 있습니다. 관리 화면에서 [대시보드 보기]를 다시 눌러 주십시오.";
       show($("login-alert"), true);
     };
-    if (!(left > 0) || !t.claims.auth_time) { await end(); return; }
+    if (!(left > 0)) { await end(); return; }   // 로그인 시각(auth_time)을 모르면 NaN
     consoleTimer = setTimeout(end, left);
   }
-  if (t.claims.role === "agent") {   // 기계 계정은 PC 에이전트 전용. 화면에서 비밀번호를 바꾸면 그 PC 가 죽으니 아예 안 들인다
-    await signOut(auth);
+  if (s.role === "agent") {   // 기계 계정은 PC 에이전트 전용. 화면에서 비밀번호를 바꾸면 그 PC 가 죽으니 아예 안 들인다
+    await signOut();
     $("login-alert").textContent = "에이전트 계정으로는 화면에 로그인할 수 없습니다."; show($("login-alert"), true);
     return;
   }
   // 총괄은 업체가 없다 - 관리 화면 [대시보드 보기] 가 연 주소의 ?cid= 업체를 본다 (규칙이 총괄에게 모든 업체를 연다). 다른 역할은 주소를 무시
   const want = new URLSearchParams(location.search).get("cid") || "";
-  const asSuper = t.claims.role === "super" ? (/^[A-Za-z0-9_-]{1,40}$/.test(want) ? want : "") : null;
-  me = { uid: user.uid, email: user.email, cid: asSuper ?? (t.claims.cid || null), role: t.claims.role || null };
-  $("who").textContent = `${user.email || "관리 화면"} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "유저"})`;
+  const asSuper = s.role === "super" ? (/^[A-Za-z0-9_-]{1,40}$/.test(want) ? want : "") : null;
+  me = { uid: s.uid, email: s.email, cid: asSuper ?? (s.cid || null), role: s.role || null };
+  $("who").textContent = `${s.email || "관리 화면"} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "유저"})`;
   const elsewhere = asSuper === null && want && want !== me.cid;   // 업체 계정이 [대시보드 보기] 주소를 연 것 - 이미 로그인된 브라우저에서 헷갈렸다 (2026-10-16)
   show($("super-bar"), asSuper !== null || elsewhere);
-  if (elsewhere) $("super-bar").textContent = `지금 로그인한 계정(${user.email || user.uid})은 다른 업체(${want}) 화면을 볼 수 없어 자기 업체 화면을 보여 드립니다. `
+  if (elsewhere) $("super-bar").textContent = `지금 로그인한 계정(${s.email || s.uid})은 다른 업체(${want}) 화면을 볼 수 없어 자기 업체 화면을 보여 드립니다. `
     + "다른 업체를 보려면 로그아웃한 뒤 업체코드를 비우고 총괄 계정으로 로그인하여 주십시오.";
   if (asSuper === "") {
     $("super-bar").textContent = "총괄 계정입니다. 관리 화면의 업체 상세에서 [대시보드 보기]를 눌러 업체 화면을 열어 주십시오.";
@@ -213,7 +191,7 @@ onAuthStateChanged(auth, async (user) => {
     $("super-bar").textContent = `총괄 계정으로 ${company.name || asSuper} (${asSuper}) 업체 화면을 보고 있습니다. 실행과 설정 변경은 실제로 적용됩니다.`
       + (company.stts === 9 ? " 사용이 중지된 업체입니다." : "");
   } else if (company.stts === 9) {   // 삭제(비활성)된 업체. setup.js remove 가 계정도 막지만 이미 받은 토큰은 1시간 살아서 화면에서도 막는다
-    await signOut(auth);
+    await signOut();
     $("login-alert").textContent = "사용이 중지된 업체입니다."; show($("login-alert"), true);
     return;
   }
@@ -224,10 +202,7 @@ onAuthStateChanged(auth, async (user) => {
 
 // --- 회사·PC --------------------------------------------------------
 async function loadCompany() {
-  try {
-    const snap = await get(ref(db, `meta/companies/${me.cid}`));
-    company = snap.val() || {};
-  } catch { company = {}; }
+  company = await getCompany(me.cid);   // 못 읽으면 {}
   $("company").textContent = company.name || "";
   const keys = Object.keys(company.pcs || {});
   // 마지막에 고른 PC 를 기억한다. 없으면 첫 PC (Firebase 는 키 이름순이라 pc_a 가 pc_office 앞에 온다)
@@ -263,7 +238,7 @@ document.addEventListener("click", (e) => { if (!$("pc-pick").contains(e.target)
 
 // --- 모듈 -----------------------------------------------------------
 function ctx() {
-  return { db, auth, me, pcId, pcLabel: company?.pcs?.[pcId]?.label || pcId || "",
+  return { edition: EDITION, me, pcId, pcLabel: company?.pcs?.[pcId]?.label || pcId || "",
            pcs: company?.pcs || {},         // 업체 PC 모두 {pcId: {label}} - 프리셋 복사의 받을 PC 목록
            policy: company?.apps || {},   // 업체가 안 쓰는 기능 (총괄이 정한다). 예: apps.rpa.modules.Hold === false
            isAdmin: !!me && (me.role === "admin" || me.role === "super"),

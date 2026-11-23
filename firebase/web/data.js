@@ -1,0 +1,14 @@
+// 화면이 데이터를 읽고 쓰는 곳은 여기 한 곳이다 (스탠드얼론 ② Task 1, 설계 6.3절).
+// 어느 구현을 쓸지는 edition.js 가 정한다 - 일반 버전은 data-firebase.js(Firebase), 스탠드얼론은 data-local.js(이 PC 의 로컬 서버).
+// 구현은 반드시 동적 import 로 불러온다 - 정적으로 부르면 스탠드얼론 웹에도 Firebase SDK·프로젝트 주소가 실린다.
+// 화면 모듈은 data-firebase.js·data-local.js 를 직접 부르지 않고 이 파일만 부른다.
+import { EDITION } from "./edition.js";
+
+const impl = await import(EDITION === "standalone" ? "./data-local.js" : "./data-firebase.js");
+
+export { EDITION };
+export const {
+  init, onSession, signIn, signOut, signedIn, sessionUid, handoffFailed, changePassword, emailFor,
+  getCompany, watch, skewReady, skewMs, pushCommand, saveSettings,
+  listRuns, getWallet, watchWallet, sumRuns,
+} = impl;

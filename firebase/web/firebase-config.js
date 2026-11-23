@@ -8,9 +8,4 @@ export const firebaseConfig = {
   messagingSenderId: "420865367421",
   appId: "1:420865367421:web:14b9e1e10c5fadc7e04014",
 };
-// 끊김 기준은 에이전트가 올리는 heartbeat.every(신호 주기)로 잡는다.
-// 새 에이전트는 5초마다 보내니 20초, every 를 안 올리는 옛 에이전트는 30초 주기로 보아 95초.
-// 이렇게 하지 않으면 아직 안 고친 PC 가 정상과 끊김을 오간다.
-export const HEARTBEAT_EVERY_DEFAULT = 30;
-export const HEARTBEAT_MISS = 3;         // 이만큼 연달아 놓치면 끊김
-export const COMMAND_TTL_SEC = 600;
+// 일반 버전만 쓴다 (data-firebase.js). 끊김 기준·명령 만료처럼 Firebase 와 상관없는 값은 config.js 로 옮겼다 (스탠드얼론 ② Task 1)

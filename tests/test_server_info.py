@@ -41,7 +41,9 @@ check("ops.js 의 DB 주소는 PROJECT 로 만든다 (따로 박지 않는다)",
 d = re.search(r"export const DASHBOARD_URL = [`\"]([^`\"]+)[`\"]", ops)
 dash = d and d.group(1).replace("${PROJECT}", m.group(1) if m else "")
 check("ops.js 의 업체 웹 주소(DASHBOARD_URL)가 server_info.DASHBOARD_URL 과 같다", dash == srv.DASHBOARD_URL, dash)
-check("업체 웹 app.js 의 계정 이메일 도메인은 firebaseConfig.authDomain", "${firebaseConfig.authDomain}" in read("firebase/web/app.js"))
+check("업체 웹 data-firebase.js 의 계정 이메일 도메인은 firebaseConfig.authDomain (app.js 의 emailFor 는 그것을 그대로 내보낸다 - 스탠드얼론 ② Task 1)",
+      "${firebaseConfig.authDomain}" in read("firebase/web/data-firebase.js")
+      and "export const emailFor = data.emailFor" in read("firebase/web/app.js"))
 
 sys.path.insert(0, os.path.join(ROOT, "firebase", "agent"))
 import secret  # noqa: E402

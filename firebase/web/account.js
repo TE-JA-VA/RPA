@@ -1,7 +1,5 @@
 // 관리 > 계정: 비밀번호 바꾸기. 현재 비밀번호로 다시 인증한 뒤 바꾼다 (Firebase 가 요구한다).
-import {
-  EmailAuthProvider, reauthenticateWithCredential, updatePassword,
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { changePassword } from "./data.js";
 import { ACCENTS, DEFAULT_ACCENT, applyAccent, getAccent, accentFor } from "./theme.js";
 
 export const key = "account";
@@ -76,9 +74,7 @@ async function change() {
   $("pw-btn").disabled = true;
   msg.textContent = "바꾸는 중";
   try {
-    const user = c.auth.currentUser;
-    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, cur));
-    await updatePassword(user, nw);
+    await changePassword(cur, nw);
     msg.textContent = "비밀번호를 바꿨습니다. 다른 기기는 다시 로그인해야 합니다.";
     for (const id of ["pw-cur", "pw-new", "pw-new2"]) $(id).value = "";
   } catch (e) {
