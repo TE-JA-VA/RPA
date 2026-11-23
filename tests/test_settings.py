@@ -617,12 +617,14 @@ try:
           and "일부러 깨뜨림" in open(crash, encoding="utf-8").read())
     shown.clear()
     check("--no-window 면 알림 창 없이 1", rs.main(["--after-install", "--no-window"]) == 1 and not shown, shown)
-    _more = (rs.start_problem, rs.configured, rs.finish_upgrade)
+    _more = (rs.start_problem, rs.configured, rs.finish_upgrade, rs.unpack_lib)
 
     def _upgrade_fails(paths):
         raise RuntimeError("작업을 등록하지 못했습니다 (M22 시험)")
     try:
-        rs.default_paths, rs.start_problem, rs.configured, rs.finish_upgrade = dict, (lambda: None), (lambda p: True), _upgrade_fails
+        # 라이브러리 풀기(조각 방식, 2026-11-11)도 건너뛴다 - 빈 paths 로는 그 단계가 KeyError 로 먼저 끝나 M22 까닭이 안 남았다 (2026-11-23)
+        rs.default_paths, rs.start_problem, rs.configured, rs.finish_upgrade = (lambda: {"program_dir": ""}), (lambda: None), (lambda p, **k: True), _upgrade_fails
+        rs.unpack_lib = lambda program_dir: None
         code = rs.main(["--after-install", "--no-window"])
         check("창 없는 업데이트 마무리가 실패하면 1 이고 까닭이 설정창_오류.txt 에 남는다 (BugBuster M22)", code == 1 and not shown
               and "M22 시험" in open(crash, encoding="utf-8").read(), code)
@@ -630,7 +632,7 @@ try:
         check("창 없는 시작 점검 실패도 까닭이 남는다 (BugBuster M22)", rs.main(["--after-install", "--no-window"]) == 1
               and "M22 문제 시험" in open(crash, encoding="utf-8").read())
     finally:
-        rs.start_problem, rs.configured, rs.finish_upgrade = _more
+        rs.start_problem, rs.configured, rs.finish_upgrade, rs.unpack_lib = _more
 finally:
     rs.is_admin, rs.default_paths, rs.show_error_box = saved_funcs
 # 설정 창은 하나만 - 두 창이 각자 저장하면 늦은 창이 앞 창의 업체코드·계정을 옛 값으로 덮는다 (2026-10-22)

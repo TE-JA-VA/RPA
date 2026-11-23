@@ -10,10 +10,10 @@ service cloud.firestore {
 
     // 토큰 (2026-10-06): 기록 한 장의 쓴 것(used, 모듈별 횟수)·쓴 토큰(cost). 없으면 옛 에이전트라 그대로 받는다
     function validUsage(d) {
-      return (!('cost' in d) || (d.cost is int && d.cost >= 0))
+      return (!('cost' in d) || (d.cost is int && d.cost >= 0 && d.cost <= 10000))
           && (!('used' in d) || d.used is map)
           // ACTOR AI 도움 (2026-11-17): 이 실행에서 AI 가 살린 단계 수·부른 수
-          && (!('ai' in d) || (d.ai is map && d.ai.saved is int && d.ai.called is int && d.ai.saved >= 0 && d.ai.called >= d.ai.saved));
+          && (!('ai' in d) || (d.ai is map && d.ai.saved is int && d.ai.called is int && d.ai.saved >= 0 && d.ai.called >= d.ai.saved && d.ai.called <= 10000));
     }
 
     // 실행 이력. 에이전트가 만들고 아무도 고치지 않는다 - 그래서 한 번 적힌 쓴 토큰은 바뀌지 않는다.
