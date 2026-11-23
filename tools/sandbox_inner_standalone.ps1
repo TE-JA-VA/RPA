@@ -171,6 +171,40 @@ Note "가드 판정 (내장 python.exe 로 부름 - startup_problem·shipped 는
 $r = RunExe "Prepare_RPA.exe" "" "lic_run" 120
 Check "맞는 라이선스·고치지 않은 설치: Prepare_RPA.exe 가 가드를 지나 도움말로 끝난다 (종료 코드 0)" ($r.Code -eq 0) "코드 $($r.Code) / $(Tail $r.Text)"
 
+# 2-1. edition.json 을 지워도 일반 버전으로 넘어가지 않는다 (검토 2026-11-23 I-1 - 남은 표시: 빈 server_info 조각·manifest.sig·목록)
+$edPath = "$App\edition.json"; $edBytes = [IO.File]::ReadAllBytes($edPath)
+Remove-Item $edPath -Force
+Remove-Item "$PD\license.json" -Force
+foreach ($exe in "ERPia_RPA.exe", "Prepare_RPA.exe") {
+    $r = RunExe $exe "" "noed_nolic_$exe" 120
+    $stt = StatusOf $(if ($exe -eq "ERPia_RPA.exe") { "routine" } else { "prepare" })
+    Check "edition.json 지움 + 라이선스 없음: $exe 2 · '라이선스 파일이 없습니다' (일반 버전으로 넘어가지 않는다)" (($r.Code -eq 2) -and ($stt -match "라이선스 파일이 없습니다")) "코드 $($r.Code) / $(Tail $stt 200)"
+}
+$r = RunExe "Prepare_Observer.exe" "--check" "noed_nolic_obs"
+Check "edition.json 지움 + 라이선스 없음: Prepare_Observer.exe --check 에 '라이선스: 라이선스 파일이 없습니다'" ($r.Text.Contains("라이선스: 라이선스 파일이 없습니다")) (Tail $r.Text)
+Copy-Item "$T\license.json" "$PD\license.json" -Force
+foreach ($exe in "ERPia_RPA.exe", "Prepare_RPA.exe") {
+    $r = RunExe $exe "" "noed_$exe" 120
+    $stt = StatusOf $(if ($exe -eq "ERPia_RPA.exe") { "routine" } else { "prepare" })
+    Check "edition.json 지움 (라이선스 맞음): $exe 2 · 현황에 'edition.json'" (($r.Code -eq 2) -and ($stt -match "edition\.json")) "코드 $($r.Code) / $(Tail $stt 200)"
+}
+$r = RunExe "Prepare_Observer.exe" "--check" "noed_obs"
+Check "edition.json 지움: Prepare_Observer.exe --check 에 '라이선스: 확인됨' (여전히 스탠드얼론으로 본다)" ($r.Text.Contains("라이선스: 확인됨")) (Tail $r.Text)
+foreach ($m in "run_routine", "web_runner", "rpa_observer") {
+    $pf = "$X\imp_$m.py"
+    $src = "import sys, os, site`nsys.path.insert(0, os.path.join(r'$App', 'app'))`nsite.addsitedir(os.path.join(r'$App', 'lib'))`nimport $m`nprint('imported')`n"
+    [IO.File]::WriteAllText($pf, $src, (New-Object Text.UTF8Encoding($false)))
+    $p = Start-Process $Py -ArgumentList "-E -s `"$pf`"" -WorkingDirectory $X -PassThru -WindowStyle Hidden -RedirectStandardOutput "$X\imp_$m.out.txt" -RedirectStandardError "$X\imp_$m.err.txt"
+    $null = $p.Handle
+    $ended = $p.WaitForExit(120000)
+    if (-not $ended) { taskkill /F /T /PID $p.Id 2>&1 | Out-Null }
+    $ie = (Get-Content "$X\imp_$m.err.txt" -Raw -ErrorAction SilentlyContinue) + (Get-Content "$X\imp_$m.out.txt" -Raw -ErrorAction SilentlyContinue)
+    Check "edition.json 지움: python.exe 로 $m 를 직접 불러오면 2 · stderr 에 'edition.json' (import_guard)" ($ended -and ($p.ExitCode -eq 2) -and ("$ie" -match "edition\.json")) "코드 $(if ($ended) { $p.ExitCode } else { '시간 넘김' }) / $(Tail $ie 200)"
+}
+[IO.File]::WriteAllBytes($edPath, $edBytes)
+$r = RunExe "Prepare_RPA.exe" "" "ed_back" 120
+Check "edition.json 을 되돌리면 Prepare_RPA.exe 가 다시 0" ($r.Code -eq 0) "코드 $($r.Code) / $(Tail $r.Text)"
+
 # 3. 설정 (창 없이): 관리자 계정 → --after-install --no-window → 작업 등록, 감독이 로컬 서버·에이전트를 띄운다
 $a = PyOut "import rpa_settings as rs`np = rs.default_paths()`nuid = rs.create_admin(p, '$Admin', '$Pw1', '$Pw1')`n_out.write(' '.join(str(x) for x in (uid, rs.admin_exists(p), rs.license_state(p)['ok'], rs.configured(p))))" "admin"
 Check "관리자 계정을 만들었다 · 라이선스 맞음 · 설정 끝 (configured)" ("$a" -eq "$Admin True True True") "$a"
