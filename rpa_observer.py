@@ -46,11 +46,14 @@ RECORD_DL = os.path.join(REC_DIR, "기록")
 PREVIEW_DL = os.path.join(REC_DIR, "미리보기")
 # 메일 2차인증 메일함 계정 칸 안내 (설계 2026-11-02 6절 - 사용자 검수)
 MAIL_ACCOUNT_HINT = "인증 메일을 받는 메일 계정입니다. 이 PC에만 암호화하여 저장되며, 오토파일럿이 인증번호를 확인하는 데만 사용합니다."
-MAIL_HINT = ("엑셀파일을 받으려는 메일이 '메일 시작 문구'로 시작하는 경우, 그 글자로 시작하는 메일이 처리대상이 됩니다."   # 메일 첨부파일일 때 안내 (사용자 2026-10-14 검수)
-             " 메일이 많으면 제목으로 검색한 뒤 고르십시오.")      # (BugBuster I5)
-XL_PW_HINT = "엑셀 비밀번호는 쇼핑몰이 주문 엑셀 파일에 열기 비밀번호를 설정한 경우에만 입력합니다. 암호화하여 이 PC에만 저장합니다."
-IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부파일을 받습니다. 아이디·비밀번호는 메일 계정의 것입니다 "
-             "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣어 주십시오).")
+# 프리셋 칸 아래 안내 - 줄마다 문단 기호로 (사용자 2026-11-23: 글이 많아 보여 짧게 · 엑셀 비밀번호는 조금 더 설명)
+PW_SAVE_HINT = "비밀번호와 엑셀 비밀번호는 암호화해 이 PC에만 저장합니다."
+XL_PW_HINT = ("엑셀 비밀번호: 쇼핑몰에서 받은 주문 엑셀이 열 때 비밀번호를 묻는 경우에만 넣으십시오. "
+              "오토파일럿이 이 비밀번호로 파일을 열어 주문을 처리합니다. 비밀번호가 없는 엑셀이면 비워 두십시오.")
+SMS_HINT = "문자 인증 사이트는 인증 휴대폰과 발신번호를 정해 주십시오. (여러 개는 쉼표로)"
+MAIL_HINT = "'메일 시작 문구'로 시작하는 메일만 받습니다. 메일이 많으면 제목으로 검색해 고르십시오."   # 메일 첨부파일일 때 (BugBuster I5)
+IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부파일을 받습니다. 아이디·비밀번호는 메일 계정의 것입니다. "
+             "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣으십시오)")
 PICK_NOTE = "# 알림 : 미리보기 중에는 가장 적절한 메일 1통으로 테스트합니다. (이미 받은 메일도 포함)"   # 메일 고르기 미리보기 알림 (사용자 2026-10-14 검수)
 MIN_PRESETS = st.PRESET_MIN             # 최대는 업체마다 (st.preset_limit - App.max_presets)
 MARKET_NONE = "(선택 안 함)"
@@ -945,8 +948,7 @@ class App:
         form.columnconfigure(0, minsize=self.prefix_label.winfo_reqwidth())    # '메일 시작 문구' 가 나타나도 칸이 옆으로 밀리지 않게 (사용자 2026-10-20)
         for col in (1, 3):              # 왼쪽(이름·아이디·인증 휴대폰)·오른쪽(사이트코드·비밀번호·발신번호) 칸을 같은 너비로 (사용자 2026-10-13)
             form.columnconfigure(col, weight=1, uniform="field")
-        self.pw_hint = tk.Label(inner, text="", font=F_SMALL, bg=CARD, fg=w.TEXT3, anchor="w", justify="left",
-                                wraplength=self.panel_w - 2 * (pad + card_pad))
+        self.pw_hint = w.Notes(inner, font=F_SMALL, bg=CARD, fg=w.TEXT3, wrap=self.panel_w - 2 * (pad + card_pad))
         self.pw_hint.pack(fill="x", pady=(6, 0))
         self.name_var.trace_add("write", lambda *a: self._field_changed())
         self.code_var.trace_add("write", lambda *a: self._field_changed())
@@ -1086,14 +1088,12 @@ class App:
         self._loading = False
         self._show_prefix()
         xl_saved = p["has_xl_pw"] and not p["xl_clear"]
-        self.pw_hint.config(text=("저장된 비밀번호·엑셀 비밀번호가 있습니다. " if p["has_pw"] and xl_saved else
-                                  "저장된 비밀번호가 있습니다. " if p["has_pw"] else "저장된 엑셀 비밀번호가 있습니다. " if xl_saved else "")
-                            + "아이디·비밀번호는 암호화하여 이 PC 설정에 저장합니다. 사이트 로그인 외 다른 용도로 사용하지 않습니다.\n"
-                            + XL_PW_HINT + "\n"
-                            + (IMAP_HINT if p["source"] == "imap" else
-                               "문자 인증번호를 받는 사이트면 인증 휴대폰과 발신번호(여러 개면 쉼표로)를 정해 주십시오.")
-                            + ("\n" + MAIL_HINT if p["source"] == "mail" else "")
-                            + (" (휴대폰 목록을 불러오지 못했습니다)" if self.phones == [] and getattr(self, "phones_failed", False) else ""))
+        status = ("저장된 비밀번호·엑셀 비밀번호가 있습니다." if p["has_pw"] and xl_saved else
+                  "저장된 비밀번호가 있습니다." if p["has_pw"] else "저장된 엑셀 비밀번호가 있습니다." if xl_saved else "")
+        third = IMAP_HINT if p["source"] == "imap" else SMS_HINT
+        if self.phones == [] and getattr(self, "phones_failed", False):
+            third += " (휴대폰 목록을 불러오지 못했습니다)"
+        self.pw_hint.set(status, [PW_SAVE_HINT, XL_PW_HINT, third] + ([MAIL_HINT] if p["source"] == "mail" else []))
 
     def _load_phones(self):
         """업체 휴대폰 목록 (관리 화면 '휴대폰 추가') - 에이전트 계정으로. 못 읽으면 빈 목록 (저장된 값은 그대로 보인다)."""

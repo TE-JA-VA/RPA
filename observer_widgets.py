@@ -622,6 +622,41 @@ class Tabs(tk.Frame):
         return [text for text, *_ in self.items]
 
 
+class Notes(tk.Frame):
+    """칸 아래 안내 - 맨 위 상태 글(기호 없음) + 줄마다 문단 기호(•). 기호 칸과 글 칸을 나눠 넘어간 줄이 글 칸에 맞춰 들여 쓰인다
+    (사용자 2026-11-23: 한 덩어리 글은 많아 보여 읽기 어렵다). cget('text') 는 보이는 글 전체."""
+    BULLET = "•"
+
+    def __init__(self, master, font, bg, fg, wrap):
+        super().__init__(master, bg=bg)
+        self.font, self.bg, self.fg, self.wrap = font, bg, fg, wrap
+        self.status = tk.Label(self, text="", font=font, bg=bg, fg=fg, anchor="w", justify="left", wraplength=wrap)
+        self.rows = tk.Frame(self, bg=bg)
+        self.rows.pack(fill="x", side="bottom")
+        self.text = ""
+
+    def set(self, status, items):
+        self.status.config(text=status)
+        if status:
+            self.status.pack(fill="x", side="top", before=self.rows)
+        else:
+            self.status.pack_forget()
+        for r in self.rows.winfo_children():
+            r.destroy()
+        # 한 틀 안 grid (기호 칸·글 칸) - 줄마다 틀을 두고 pack(expand) 하면 창이 감춰진 동안 옆 칸들의 배치가 멈췄다 (2026-11-23 시험)
+        dot_w = px(14)
+        self.rows.columnconfigure(1, weight=1)
+        for i, text in enumerate(items):
+            tk.Label(self.rows, text=self.BULLET, font=self.font, bg=self.bg, fg=self.fg, anchor="n").grid(
+                row=i, column=0, sticky="nw", pady=(px(1), 0))
+            tk.Label(self.rows, text=text, font=self.font, bg=self.bg, fg=self.fg, anchor="w", justify="left",
+                     wraplength=max(px(40), self.wrap - dot_w)).grid(row=i, column=1, sticky="nw", padx=(px(4), 0), pady=(px(1), 0))
+        self.text = "\n".join([status] * bool(status) + list(items))
+
+    def cget(self, key):
+        return self.text if key == "text" else super().cget(key)
+
+
 class Status(tk.Label):
     """상태 줄. '●' 로 시작하는 글(기록 중)은 굵게."""
     def configure(self, cnf=None, **kw):
