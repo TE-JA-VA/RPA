@@ -14,6 +14,17 @@ r"""설치 파일을 윈도우 샌드박스에서 시험한다 (설계 9절). �
 --from <옛 판 설치 파일>: 그 옛 판을 깔고 판 B = 새 판 그대로로 업데이트한다 (구조가 바뀐 판으로 넘어가는 전환 시험).
 --runtime <python.exe 가 든 폴더>: --update 에 더해, 내장 파이썬을 그 폴더 것으로 바꾼 판 R·RC(켜지지 않음)를 만들어
 업데이트 → 되돌리기 → 켜지지 않는 판의 자동 되돌림에서 python 폴더까지 바뀌고 돌아오는지 본다 (설계 2026-11-20).
+--offline: 샌드박스의 네트워크를 끈다 (<Networking>Disable</Networking>) - 실서버에 가짜 계정 로그인도 보내지 않는다.
+    샌드박스 안 스크립트는 '인터넷 없음' 쪽을 본다 (에이전트가 죽지 않고 다시 붙으려 한다).
+
+스탠드얼론 (계획 docs/superpowers/plans/2026-11-23-standalone-3-install-build.md Task 6):
+    .venv\\Scripts\\python.exe tools\\sandbox_test.py --standalone [--cloud-setup <일반 설치 파일>] [--over-cloud <일반 설치 파일>]
+        D:\\AX\\AUTOPILOT_Standalone_TEST_Setup_<v>.exe
+시험용 빌드(--test-build)의 설치 파일만 받는다 (이름에 TEST, 옆에 배포_SA_TEST_<v>.testkey.txt). 그 열쇠로 샌드박스 PC 번호
+(SANDBOX_GUID)의 라이선스를 만들어 넣고 (열쇠 파일 자체는 넣지 않는다) tools\\sandbox_inner_standalone.ps1 이 설치·라이선스·
+로그인·명령·기록·변조·덮어 설치·제거와 막은 주소로의 연결 시도(덫)를 본다.
+--cloud-setup: 스탠드얼론이 깔린 PC 에서 일반 설치 파일이 멈추는지도 본다.
+--over-cloud: 일반 버전을 먼저 깔고 스탠드얼론 설치 파일이 멈추는지만 본다.
 """
 import json
 import os
@@ -34,8 +45,141 @@ WSB = """<Configuration>
   <MappedFolders><MappedFolder><HostFolder>{work}</HostFolder><SandboxFolder>C:\\test</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder></MappedFolders>
   <LogonCommand><Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\test\\inner.ps1</Command></LogonCommand>
   <MemoryInMB>4096</MemoryInMB>
-</Configuration>
+{extra}</Configuration>
 """
+OFFLINE = "  <Networking>Disable</Networking>\n"
+
+# 스탠드얼론 (계획 ③ Task 6)
+SANDBOX_GUID = "5a17db0c-0000-4000-8000-000000000001"     # 샌드박스 안에서 MachineGuid 를 이 값으로 바꾼다
+OTHER_GUID = "5a17db0c-0000-4000-8000-0000000000ff"       # 다른 PC 의 라이선스 (license_other.json)
+SBX_COMPANY = {"company": "샌드박스상사", "cid": "c_sbx", "limits": {"schedule": 3}}
+TRAP_IP = "127.0.0.2"
+TEST_ONLY = "시험용 빌드(--test-build)로 만든 설치 파일만 시험합니다"
+SA_SETUP_RE = re.compile(r"AUTOPILOT_Standalone_TEST_Setup_(.+)\.exe$")
+SA_FILES = {"inner.ps1": "sandbox_inner_standalone.ps1", "trap.ps1": "sandbox_trap.ps1",
+            "check_standalone.py": "sandbox_check_standalone.py"}     # 작업 폴더 이름 → tools\ 의 원본
+
+
+def BLOCK_HOSTS(info=None):                                  # noqa: N802 (계획서의 이름)
+    """샌드박스에서 덫(127.0.0.2)으로 돌릴 주소 - server_info 값으로 만든다 (주소를 옮겨도 따라간다).
+    gstatic 은 넣지 않는다 (윈도우·Edge 가 연결 확인에 쓰는 주소 - 우리 코드와 상관없는 시도가 덫에 걸린다)."""
+    import urllib.parse
+    if info is None:
+        import server_info as info
+    pid = info.PROJECT_ID
+    out = [urllib.parse.urlsplit(info.DATABASE_URL).hostname, info.AUTH_HOST, info.TOKEN_HOST, info.FIRESTORE_HOST,
+           f"{pid}.web.app", f"{pid}-releases.web.app", f"{pid}.firebaseapp.com",
+           "api.anthropic.com", "fonts.googleapis.com", "cdn.jsdelivr.net"]
+    for url in (info.DASHBOARD_URL, info.UPDATE_BASE_URL, *info.UPDATE_FALLBACK_URLS):
+        out.append(urllib.parse.urlsplit(url).hostname)
+    seen = []
+    for h in out:
+        if h and h not in seen:
+            seen.append(h)
+    return seen
+
+
+def find_release(setup, prefix="배포_"):
+    """설치 파일의 배포 폴더: 설치 파일이 있는 폴더의 <prefix><v> 를 먼저, 없으면 D:\\AX 의 것 (--out-root 로 만든 빌드도 시험한다).
+    못 찾으면 그 이름의 D:\\AX 자리 (부르는 쪽이 manifest.json 으로 확인한다)."""
+    m = re.search(r"Setup_(.+)\.exe$", os.path.basename(setup))
+    if not m:
+        return ""
+    name = f"{prefix}{m.group(1)}"
+    near = os.path.join(os.path.dirname(os.path.abspath(setup)), name)
+    return near if os.path.isfile(os.path.join(near, "manifest.json")) else os.path.join(r"D:\AX", name)
+
+
+def test_key_path(setup):
+    """시험용 빌드 설치 파일 옆의 시험용 라이선스 열쇠 자리 (없으면 "")."""
+    m = SA_SETUP_RE.search(os.path.basename(setup))
+    if not m:
+        return ""
+    return os.path.join(os.path.dirname(os.path.abspath(setup)), f"배포_SA_TEST_{m.group(1)}.testkey.txt")
+
+
+def prepare_standalone(setup, work, cloud_setup=None, over_cloud=None):
+    """스탠드얼론 샌드박스 작업 폴더를 채운다: setup.exe·inner.ps1·trap.ps1·check_standalone.py·license.json(샌드박스 PC 번호)·
+    license_other.json(다른 PC 번호)·hosts_block.txt·guid.txt, 주면 cloud_setup.exe / over_cloud.exe.
+    시험용 빌드가 아니면 (이름에 TEST 가 없거나 옆에 열쇠 파일이 없으면) ValueError(TEST_ONLY). 열쇠 파일은 작업 폴더에 넣지 않는다."""
+    key_file = test_key_path(setup)
+    if not key_file or not os.path.isfile(key_file):
+        raise ValueError(TEST_ONLY)
+    import license_check
+    import make_license
+    with open(key_file, encoding="ascii") as f:
+        secret = bytes.fromhex(f.read().strip())
+    os.makedirs(work, exist_ok=True)
+    shutil.copy2(setup, os.path.join(work, "setup.exe"))
+    for dst, src in SA_FILES.items():
+        shutil.copy2(os.path.join(HERE, src), os.path.join(work, dst))
+    for name, guid in (("license.json", SANDBOX_GUID), ("license_other.json", OTHER_GUID)):
+        doc = license_check.sign_body(secret, make_license.build_body(guid, SBX_COMPANY))
+        with open(os.path.join(work, name), "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=1)
+    with open(os.path.join(work, "hosts_block.txt"), "w", encoding="ascii", newline="\r\n") as f:
+        f.write("".join(f"{TRAP_IP} {h}\n" for h in BLOCK_HOSTS()))
+    with open(os.path.join(work, "guid.txt"), "w", encoding="ascii") as f:
+        f.write(SANDBOX_GUID + "\n")
+    for src, name in ((cloud_setup, "cloud_setup.exe"), (over_cloud, "over_cloud.exe")):
+        if src:
+            shutil.copy2(src, os.path.join(work, name))
+    return work
+
+
+def _take(args, flag):
+    """args 에서 '<flag> <값>' 을 빼 값을 돌려준다 (없으면 None, 값이 없으면 "")."""
+    if flag not in args:
+        return None
+    i = args.index(flag)
+    value = args[i + 1] if i + 1 < len(args) else ""
+    del args[i:i + 2]
+    return value
+
+
+def wait_sandbox(work, minutes):
+    """샌드박스를 띄우고 done.txt 를 기다린다 → 종료 코드 (끝 줄 '실패: 0' 이면 0)."""
+    wsb = os.path.join(work, "test.wsb")
+    print(f"샌드박스를 띄웁니다. 결과 폴더: {work}\\out (창을 건드리지 마세요, 끝나면 저절로 닫힙니다)")
+    subprocess.Popen([SANDBOX, wsb])
+    done = os.path.join(work, "done.txt")
+    results = os.path.join(work, "out", "results.txt")
+    until = time.time() + minutes * 60
+    while time.time() < until and not os.path.exists(done):
+        time.sleep(5)
+    text = open(results, encoding="utf-8-sig").read() if os.path.exists(results) else "(결과 없음)"
+    print(text)
+    return 0 if os.path.exists(done) and text.rstrip().endswith("실패: 0") else 1
+
+
+def main_standalone(args, offline=False):
+    cloud = _take(args, "--cloud-setup")
+    over = _take(args, "--over-cloud")
+    for label, path in (("--cloud-setup", cloud), ("--over-cloud", over)):
+        if path is not None and not os.path.isfile(path):
+            print(f"{label} 의 일반 설치 파일이 없습니다: {path}")
+            return 2
+    if len(args) != 1 or not os.path.isfile(args[0]):
+        print(__doc__)
+        return 2
+    if not SA_SETUP_RE.search(os.path.basename(args[0])) or not os.path.isfile(test_key_path(args[0])):
+        print(TEST_ONLY)
+        return 2
+    if not os.path.isfile(SANDBOX):
+        print("윈도우 샌드박스가 꺼져 있습니다 (위 설명의 명령으로 켜고 재부팅)")
+        return 2
+    work = tempfile.mkdtemp(prefix="rpa_sbx_sa_")
+    try:
+        prepare_standalone(args[0], work, cloud_setup=cloud, over_cloud=over)
+    except ValueError as e:
+        print(e)
+        return 2
+    with open(os.path.join(work, "test.wsb"), "w", encoding="utf-8") as f:
+        f.write(WSB.format(work=work, extra=OFFLINE if offline else ""))
+    print(f"스탠드얼론 시험: {os.path.basename(args[0])}"
+          + (f", 일반 설치 파일 멈춤 확인 {os.path.basename(cloud)}" if cloud else "")
+          + (f", 일반 버전 위에 설치 {os.path.basename(over)}" if over else ""))
+    return wait_sandbox(work, 30)
 
 
 def python_info(python_dir):
@@ -144,7 +288,11 @@ def build_site(version_a, release_dir, work, a_manifest=None, runtime=None):
 
 
 def main(argv=None):
-    args = sys.argv[1:] if argv is None else argv
+    args = list(sys.argv[1:] if argv is None else argv)
+    offline = "--offline" in args
+    args = [a for a in args if a != "--offline"]
+    if "--standalone" in args:
+        return main_standalone([a for a in args if a != "--standalone"], offline=offline)
     update = "--update" in args
     args = [a for a in args if a != "--update"]
     old = None
@@ -175,14 +323,14 @@ def main(argv=None):
     shutil.copy2(os.path.join(HERE, "sandbox_inner.ps1"), os.path.join(work, "inner.ps1"))
     if update:
         m = re.search(r"Setup_(.+)\.exe$", os.path.basename(args[0]))
-        release = os.path.join(r"D:\AX", f"배포_{m.group(1)}") if m else ""
+        release = find_release(args[0])                 # 설치 파일 옆의 배포 폴더 먼저 (--out-root 로 만든 확인 빌드), 없으면 D:\AX
         if not os.path.isfile(os.path.join(release, "manifest.json")):
             print(f"배포 폴더를 찾지 못했습니다: {release}")
             return 2
         a_man = None
         if old:
-            mo = re.search(r"Setup_(.+)\.exe$", os.path.basename(old))
-            a_man = os.path.join(r"D:\AX", f"배포_{mo.group(1)}", "manifest.json") if mo else ""
+            a_rel = find_release(old)
+            a_man = os.path.join(a_rel, "manifest.json") if a_rel else ""
             if not os.path.isfile(a_man):
                 print(f"옛 판 배포 폴더를 찾지 못했습니다: {a_man}")
                 return 2
@@ -192,19 +340,9 @@ def main(argv=None):
         vb, vc, _ = build_site(m.group(1), release, work, a_manifest=a_man, runtime=runtime)
         print(f"업데이트 시험: {'옛 판 ' + os.path.basename(old) + ' 설치 → ' if old else ''}판 B {vb}, 판 C(켜지지 않음) {vc}"
               + (f", 내장 파이썬이 바뀐 판 R·RC ({runtime})" if runtime else ""))
-    wsb = os.path.join(work, "test.wsb")
-    with open(wsb, "w", encoding="utf-8") as f:
-        f.write(WSB.format(work=work))
-    print(f"샌드박스를 띄웁니다. 결과 폴더: {work}\\out (창을 건드리지 마세요, 끝나면 저절로 닫힙니다)")
-    subprocess.Popen([SANDBOX, wsb])
-    done = os.path.join(work, "done.txt")
-    results = os.path.join(work, "out", "results.txt")
-    until = time.time() + (60 if runtime else 45) * 60  # 업데이트 시험은 3분 점검이 세 번 더 든다 (--runtime 은 거기에 업데이트 셋 더)
-    while time.time() < until and not os.path.exists(done):
-        time.sleep(5)
-    text = open(results, encoding="utf-8-sig").read() if os.path.exists(results) else "(결과 없음)"
-    print(text)
-    return 0 if os.path.exists(done) and text.rstrip().endswith("실패: 0") else 1
+    with open(os.path.join(work, "test.wsb"), "w", encoding="utf-8") as f:
+        f.write(WSB.format(work=work, extra=OFFLINE if offline else ""))
+    return wait_sandbox(work, 60 if runtime else 45)    # 업데이트 시험은 3분 점검이 세 번 더 든다 (--runtime 은 거기에 업데이트 셋 더)
 
 
 if __name__ == "__main__":

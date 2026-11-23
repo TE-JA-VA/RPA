@@ -86,6 +86,12 @@ Type: filesandordirs; Name: "{app}\ms-playwright"
 Type: filesandordirs; Name: "{commonprograms}\AFTER MARKET RPA"
 ; 2026.10.13-2~-6 이 기록하는 창에 붙인 이름 - 그 저녁 '옵저버' 와 맞바꿨다 (사용자 2026-10-13)
 Type: files; Name: "{group}\ACTOR 오토파일럿.lnk"
+#if Edition == "standalone"
+; app\ 에 끼운 .py·.pyc 는 exe 셋이 켜지지 않게 막는다 (ap_guard.loose_sources) - 안내대로 같은 버전 설치 파일로 다시 깔면 풀리게 지운다.
+; _start.py 는 아래 [Files] 가 다시 넣는다 (2026-11-23 Task 6 샌드박스 준비 중 찾음)
+Type: files; Name: "{app}\app\*.py"
+Type: files; Name: "{app}\app\*.pyc"
+#endif
 
 [Files]
 ; 판 폴더 전부. 빈 틀은 template 이름으로 (프로그램 폴더에 진짜 설정처럼 보이는 파일을 두지 않는다), 안내 문서는 넣지 않는다
