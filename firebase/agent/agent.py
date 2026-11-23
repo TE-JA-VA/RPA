@@ -287,9 +287,20 @@ class Tokens:
 
 def run_doc(rec, cid, pc_id, prices=None):
     """history_record 한 건 → Firestore 문서 (조회용 필드 + 쓴 것·쓴 토큰 + payload JSON). 규칙이 cid·pcId 를 claim 과 대조한다."""
+    import rpa_status as st
     rec = dict(rec)
-    rec["log"] = (rec.get("log") or rec.get("log_tail") or [])[-LOG_LINES:]
+    # 클라우드에는 ERPia 업체코드·아이디를 싣지 않고, 로그 줄·사유의 전화·메일·긴 숫자·토큰을 가린다 (보안 진단 2026-11-23 E-3·C4) - PC 기록은 그대로
+    acct = rec.pop("account", None) or {}
+    hide = [v for v in (acct.get("admin_code"), acct.get("user_id")) if isinstance(v, str) and len(v) >= 3] if isinstance(acct, dict) else []
+
+    def clean(x):
+        if isinstance(x, str):
+            for v in hide:
+                x = x.replace(v, "***")
+        return st.scrub(x)
+    rec["log"] = [clean(x) for x in (rec.get("log") or rec.get("log_tail") or [])[-LOG_LINES:]]
     rec.pop("log_tail", None)
+    rec["reason"] = clean(rec.get("reason"))
     used = usage(rec)
     doc = {
         "cid": cid, "pcId": pc_id,
@@ -321,10 +332,14 @@ def ai_usage(metrics):
 def trim_logs(snapshot):
     """RPA 원본 로그(log_tail)를 뺀 사본을 돌려준다 (원본은 건드리지 않는다). 업체 웹·관리 화면 어디서도 현황의 로그를 읽지 않는다 -
     전에는 없는 키 "log" 만 잘라 200줄이 통째로 올라갔다 (BugBuster M3). 실행 기록(run_doc)의 로그는 그대로."""
+    import rpa_status as st
     out = json.loads(json.dumps(snapshot, ensure_ascii=False, default=str))
     for view in (out.get("programs") or {}).values():
         if isinstance(view, dict):
             view.pop("log_tail", None)
+            view.pop("account", None)          # ERPia 업체코드·아이디는 클라우드에 싣지 않는다 (보안 진단 2026-11-23 C4)
+            if "reason" in view:
+                view["reason"] = st.scrub(view["reason"])
     return out
 
 

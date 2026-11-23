@@ -220,6 +220,9 @@ uh.main(FakeOps())
 check(read(PROG, "a.py") == "A1" and read(PROG, "b.py") == "B1" and read(PROG, "c.py") is None and up.backup_version() == "2026.10.07-2",
       "B → A, 보관본은 B (다시 앞으로 갈 수 있다)")
 check(_plain == ["applying"], f"[이전 판으로 되돌리기] 도 옛 버전으로 바꾸기 전에 엑셀 비밀번호를 평문으로 되돌린다 ({_plain})")
+check([uh.needs_plain(v) for v in ("2026.10.07-1", "2026.11.19-1", "", None, "이상한값", "2026.11.20-1", "2026.11.23-1", "2027.01.02-3")]
+      == [True, True, True, True, True, False, False, False],
+      "엑셀 비밀번호는 잠금을 모르는 버전(2026.11.20-1 앞)으로 돌아갈 때만 평문으로 푼다 - 모르는 값이면 푼다 (보안 진단 2026-11-23 C-12)")
 
 print("\n=== 8. 성공 정리 도중 끊겨도 다음 실행이 마저 정리 - 되돌리지 않는다 ===")
 real_rmtree, real_replace, real_remove = shutil.rmtree, os.replace, os.remove

@@ -170,7 +170,7 @@ def apply(state, ops):
     up.log(f"바꾸기 시작 {state['from']} → {state['target']} ({state.get('mode')}) 받을 {len(plan['fetch'])}·치울 {len(plan['remove'])}")
     try:
         ops.end_agent()
-        if state.get("mode") == "rollback":      # [이전 버전으로 되돌리기] - 옛 버전으로 바꾸기 전에
+        if state.get("mode") == "rollback" and needs_plain(state.get("target")):   # [이전 버전으로 되돌리기] - 잠금을 모르는 옛 버전으로 바꾸기 전에
             plain_excel_passwords()
         os.makedirs(os.path.join(bnew, "files"), exist_ok=True)
         with open(os.path.join(bnew, "plan.json"), "w", encoding="utf-8") as f:   # 되돌리기 계획 사본 - staging 이 지워져도 restore 한다 (BugBuster K6)
@@ -201,6 +201,20 @@ def apply(state, ops):
     return 0
 
 
+EXCEL_SEAL_SINCE = (2026, 11, 20, 1)     # 잠긴(DPAPI) 엑셀 비밀번호를 읽는 첫 버전 2026.11.20-1
+
+
+def needs_plain(version):
+    """돌아갈 버전이 잠긴 엑셀 비밀번호를 못 읽는 옛 버전인가 - 그때만 평문으로 푼다 (보안 진단 2026-11-23 C-12: 전엔 되돌릴 때마다
+    풀어, 되돌린 버전도 안 켜지면 평문으로 남았다). 버전 글자를 못 읽으면 푼다 (옛 버전일 수 있다)."""
+    try:
+        day, n = str(version).split("-")
+        y, m, d = (int(x) for x in day.split("."))
+        return (y, m, d, int(n)) < EXCEL_SEAL_SINCE
+    except (ValueError, AttributeError):
+        return True
+
+
 def plain_excel_passwords():
     """이전 버전으로 돌아가기 직전에 엑셀 비밀번호 두 가지를 평문으로 되돌린다 (에이전트를 끈 뒤 - 그사이 다시 잠그는 쓰기가 없게).
     2026-11-19 전 버전은 잠긴 엑셀 비밀번호를 못 읽는다 (rpa_status.unseal_excel_passwords, 검토 2026-11-19). 도우미는 에이전트와 같은
@@ -222,7 +236,8 @@ def rollback(state, ops, reason):
     err, rc = None, 0
     try:
         ops.end_agent()
-        plain_excel_passwords()
+        if needs_plain(state.get("from")):          # 돌아갈 버전(지금 바꾸던 앞 버전)이 잠금을 모를 때만 (C-12)
+            plain_excel_passwords()
         try:
             plan = _plan(state)
         except Exception:

@@ -617,7 +617,8 @@ try:
           and "일부러 깨뜨림" in open(crash, encoding="utf-8").read())
     shown.clear()
     check("--no-window 면 알림 창 없이 1", rs.main(["--after-install", "--no-window"]) == 1 and not shown, shown)
-    _more = (rs.start_problem, rs.configured, rs.finish_upgrade, rs.unpack_lib)
+    _more = (rs.start_problem, rs.configured, rs.finish_upgrade, rs.unpack_lib, rs.lock_data_acl)
+    rs.lock_data_acl = lambda *a, **k: None          # 이 PC 의 진짜 설정 폴더 권한을 건드리지 않게
 
     def _upgrade_fails(paths):
         raise RuntimeError("작업을 등록하지 못했습니다 (M22 시험)")
@@ -632,7 +633,7 @@ try:
         check("창 없는 시작 점검 실패도 까닭이 남는다 (BugBuster M22)", rs.main(["--after-install", "--no-window"]) == 1
               and "M22 문제 시험" in open(crash, encoding="utf-8").read())
     finally:
-        rs.start_problem, rs.configured, rs.finish_upgrade, rs.unpack_lib = _more
+        rs.start_problem, rs.configured, rs.finish_upgrade, rs.unpack_lib, rs.lock_data_acl = _more
 finally:
     rs.is_admin, rs.default_paths, rs.show_error_box = saved_funcs
 # 설정 창은 하나만 - 두 창이 각자 저장하면 늦은 창이 앞 창의 업체코드·계정을 옛 값으로 덮는다 (2026-10-22)
@@ -655,7 +656,7 @@ finally:
     rs.SETTINGS_LOCK, rs.is_admin, rs.start_problem, rs.show_error_box, rs.run_window = saved_funcs
     shown.clear()
 deleted = []
-saved_funcs = (rs.stop_agent, rs.delete_task)
+saved_funcs = (rs.stop_agent, rs.delete_task, rs.delete_helper_task)
 
 
 def stop_fails(**kw):
@@ -664,14 +665,30 @@ def stop_fails(**kw):
 
 try:
     rs.stop_agent, rs.delete_task = stop_fails, (lambda run=None: deleted.append(1))
+    rs.delete_helper_task = lambda run=None: deleted.append(2)      # 이 PC 의 진짜 작업을 지우지 않게
     code = rs.main(["--remove-task"])
     check("--remove-task: 멈추다 오류가 나도 작업은 지운다 (지워진 프로그램을 가리키는 작업이 남지 않게)",
-          deleted == [1] and code == 1, (deleted, code))
+          sorted(deleted) == [1, 2] and code == 1, (deleted, code))
 finally:
-    rs.stop_agent, rs.delete_task = saved_funcs
+    rs.stop_agent, rs.delete_task, rs.delete_helper_task = saved_funcs
 
 print("\n=== 자동 업데이트 도우미 작업 (설계 7절) ===")
 x = rs.helper_task_xml("PC\\user", r"C:\ProgramData\AFTER MARKET\RPA\update\runner")
+ran_acl = []
+codes = rs.lock_data_acl(r"C:\PD\AFTER MARKET\RPA", run=lambda a, timeout=0: (ran_acl.append(a[1:]), (0, ""))[1])
+check(codes == [0] * 6 and ran_acl[0] == [r"C:\PD\AFTER MARKET\RPA", "/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"]
+      and ran_acl[2][1:3] == ["/inheritance:r", "/grant:r"] and ran_acl[4] == [r"C:\PD\AFTER MARKET", "/setowner", "*S-1-5-32-544", "/C", "/Q"]
+      and ran_acl[5] == [r"C:\PD\AFTER MARKET", "/reset", "/C", "/Q"],
+      "설치 마무리가 설정 폴더를 관리자 전용으로 + 상위 폴더 주인·개별 권한 정리 (업데이트로 올라온 PC 도, 보안 진단 2026-11-23 C-03)")
+gone = []
+_keep = (rs.stop_agent, rs.delete_task, rs.delete_helper_task)
+try:
+    rs.stop_agent, rs.delete_task, rs.delete_helper_task = (lambda: 0), (lambda: gone.append("agent")), (lambda: gone.append("helper"))
+    rs.main(["--remove-task"])
+finally:
+    rs.stop_agent, rs.delete_task, rs.delete_helper_task = _keep
+check(sorted(gone) == ["agent", "helper"],
+      "--remove-task(제거)는 업데이트 도우미 작업도 지운다 - 끊긴 업데이트 뒤 남은 작업이 지워진 경로를 관리자 권한으로 띄우지 않게 (보안 진단 2026-11-23 C-07)")
 check(r"<Command>C:\ProgramData\AFTER MARKET\RPA\update\runner\python\pythonw.exe</Command>" in x
       and '"C:\\ProgramData\\AFTER MARKET\\RPA\\update\\runner\\update_helper.py"' in x, "도우미는 runner 의 파이썬으로 (프로그램 폴더 밖)")
 check("<LogonTrigger>" in x and "<RunLevel>HighestAvailable</RunLevel>" in x and "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in x,

@@ -579,6 +579,24 @@ def configured(paths, updating=False):
         return False
 
 
+def lock_data_acl(root=None, run=run_quiet):
+    """설정·기록 폴더(%ProgramData%\\AFTER MARKET\\RPA)를 관리자·SYSTEM 만 열게 - 설치 파일(installer.iss)과 같은 차례 + 상위 폴더.
+    설치 파일의 권한 정리(2026-11-19 C16)는 새로 깐 PC 에만 닿아, 자동 업데이트로 올라온 PC 는 사용자 권한이 남아 있었다. 업데이트도
+    지나는 설치 마무리(--after-install)에서 다시 한다. 상위 AFTER MARKET 은 주인을 관리자로 바꾸고 따로 붙은 권한을 지운다 - 그 폴더를
+    먼저 만든 일반 사용자가 잠긴 RPA 폴더를 이름 바꿔 치우고 새로 놓을 수 있었다 (보안 진단 2026-11-23 C-03). 실패해도 업데이트는 계속."""
+    root = root or st.install_root()
+    icacls = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "icacls.exe")
+    out = []
+    for args in ([root, "/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"],
+                 [root, "/reset", "/C", "/Q"],
+                 [root, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"],
+                 [os.path.join(root, "*"), "/reset", "/T", "/C", "/Q"],
+                 [os.path.dirname(root), "/setowner", "*S-1-5-32-544", "/C", "/Q"],
+                 [os.path.dirname(root), "/reset", "/C", "/Q"]):
+        out.append(run([icacls, *args], timeout=300)[0])
+    return out
+
+
 def inherit_acl(program_dir, run=run_quiet):
     """프로그램 폴더 파일 권한을 폴더 것으로 되돌린다. 업데이트 도우미는 관리자만 여는 ProgramData 에서 파일을 옮겨 와서
     바뀐 파일만 관리자 전용이 되어 사용자가 옵저버를 못 켰다 (2026-10-12). 도우미는 옛 판 것이 돌지만 이것은 새 판 것이
@@ -1162,6 +1180,7 @@ def _main(args):
             return stop_agent()
         finally:
             delete_task()          # 멈추다 오류가 나도 지운다 - 지워진 프로그램을 가리키는 작업이 남지 않게
+            delete_helper_task()   # 끊긴 업데이트가 남긴 도우미 작업도 - 남으면 지워진 경로의 pythonw 를 관리자 권한으로 띄운다 (보안 진단 2026-11-23 C-07)
     after, quiet = "--after-install" in args, "--no-window" in args
     if not is_admin():
         if not quiet:
@@ -1183,6 +1202,10 @@ def _main(args):
                 show_error_box(str(e))
             return 1
     if after and configured(paths, updating=quiet):
+        try:
+            lock_data_acl()                # 자동 업데이트로 올라온 PC 도 설정 폴더를 관리자 전용으로 (C-03)
+        except Exception as e:
+            crash_log(e)
         try:
             finish_upgrade(paths)
         except RuntimeError as e:

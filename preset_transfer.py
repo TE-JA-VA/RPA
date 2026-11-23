@@ -14,6 +14,13 @@ import rpa_status as st
 FILE_KIND = "autopilot-preset"
 FILE_VERSION = 1
 LOGIN_KEYS = ("id", "pw", "ID", "PW", "MailID", "MailPW", "mail_id", "mail_pw")   # 파일에 있으면 안 되는 칸 (메일 계정 2026-11-02)
+PHONE_KEY = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def phone_ok(key):
+    """옮겨 온 휴대폰 키가 관리 도구가 만드는 꼴인가 - 아니면 휴대폰·발신번호를 받지 않는다 (보안 진단 2026-11-23 E-4:
+    빈칸·제어 글자가 든 키는 인증번호 중계 주소를 깨뜨려 ID 토큰이 든 예외 글이 로그로 갔다)."""
+    return isinstance(key, str) and bool(PHONE_KEY.fullmatch(key))
 backup_path = st.preset_backup_path
 
 
@@ -198,7 +205,7 @@ def apply(items):
             sites[key] = dict(old_site, URL=url or old_site.get("URL", ""), note=obj["name"], Preset=no, Code=obj["code"])
         else:
             sites[key] = {"URL": url, "ID": "", "PW": "", "Action": [st.REPLAY_ACTION], "Stts": 9, "Preset": no, "Code": obj["code"], "note": obj["name"]}
-            if obj.get("phone") and obj.get("senders"):
+            if obj.get("phone") and obj.get("senders") and phone_ok(obj["phone"]):
                 sites[key].update(Phone=obj["phone"], SmsSenders=list(obj["senders"]))
         done.append(no)
     if done:

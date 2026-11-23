@@ -146,6 +146,8 @@ class Client:
         self._refresh_token = None
         self._expires_at = 0.0
         self._dead = None       # 비밀번호 로그인까지 거부한 AuthError. 새 Client 를 만들면 당연히 비어 있다
+        # 토큰 갱신·로그인이 망 오류로 실패하면 2·4·8…60초 물러선다 - 그동안은 망에 안 나가고 같은 예외 (보안 진단 2026-11-23 E-5)
+        self._backoff, self._retry_at, self._last_err = 0.0, 0.0, None
         self._offset = 0.0      # 서버 시각 - PC 시각 (RTDB 응답의 Date 머리글, 초 단위 정밀도)
 
     def server_now(self):
@@ -197,17 +199,30 @@ class Client:
             raise self._dead
         if self._id_token and self._now() < self._expires_at - RENEW_BEFORE_SEC:
             return self._id_token
-        if self._refresh_token:
-            try:
-                self._refresh()
-                return self._id_token
-            except AuthError:
-                pass          # 갱신이 거부됐다(비밀번호 변경·회수) - 비밀번호로 처음부터 다시 로그인한다. 망 오류는 그대로 올라간다
+        if self._last_err is not None and self._now() < self._retry_at:
+            raise self._last_err
         try:
-            self._sign_in()
-        except AuthError as e:
-            self._dead = e    # 이 뒤로는 망에 안 나가고 같은 예외를 올린다. agent 가 멈추고 비밀번호를 다시 묻는다
+            if self._refresh_token:
+                try:
+                    self._refresh()
+                    return self._ok()
+                except AuthError:
+                    pass      # 갱신이 거부됐다(비밀번호 변경·회수) - 비밀번호로 처음부터 다시 로그인한다. 망 오류는 그대로 올라간다
+            try:
+                self._sign_in()
+            except AuthError as e:
+                self._dead = e    # 이 뒤로는 망에 안 나가고 같은 예외를 올린다. agent 가 멈추고 비밀번호를 다시 묻는다
+                raise
+            return self._ok()
+        except AuthError:
             raise
+        except Exception as e:      # 망 오류 (5xx·429·끊김) - 물러선다
+            self._backoff = min(60.0, max(2.0, self._backoff * 2))
+            self._retry_at, self._last_err = self._now() + self._backoff, e
+            raise
+
+    def _ok(self):
+        self._backoff, self._retry_at, self._last_err = 0.0, 0.0, None
         return self._id_token
 
     def renew(self):
@@ -224,7 +239,10 @@ class Client:
             base, extra = base.split("?", 1)
             base = base.rstrip("/")
             q.update(urllib.parse.parse_qsl(extra))
-        return f"{base}/{path.strip('/')}.json?{urllib.parse.urlencode(q)}"
+        # 경로 조각을 인코딩한다 - 빈칸·제어 글자가 섞인 키(옮겨 온 휴대폰 키 등)면 http.client 가 연결 전에 InvalidURL 을 내며
+        # 주소 전체(?auth=<ID 토큰>)를 예외 글에 실었고, 그 글이 실행 로그·클라우드로 갔다 (보안 진단 2026-11-23 E-4)
+        path = "/".join(urllib.parse.quote(seg, safe="-_~$:@!") for seg in path.strip("/").split("/"))
+        return f"{base}/{path}.json?{urllib.parse.urlencode(q)}"
 
     def _send(self, method, path, value, params=None, retried=False):
         body = None if value is None else json.dumps(value, ensure_ascii=False).encode("utf-8")

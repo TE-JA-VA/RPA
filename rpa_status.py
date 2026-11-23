@@ -391,6 +391,23 @@ def manifest_path_ok(rel):
             and all(part not in ("", ".", "..") for part in rel.split("/")))
 
 
+RUNTIME_HOOK_NAMES = ("sitecustomize.py", "usercustomize.py", "sitecustomize.pyc", "usercustomize.pyc")
+
+
+def _runtime_extras(root, listed):
+    """python 폴더에서 목록에 없는 .pth·sitecustomize·usercustomize (파이썬이 켤 때 스스로 읽어 실행하는 파일). __pycache__ 는 뺀다."""
+    out, base = [], os.path.join(root, "python")
+    known = {r.casefold() for r in listed}
+    for here, dirs, names in os.walk(base):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for n in names:
+            if n.lower().endswith(".pth") or n.lower() in RUNTIME_HOOK_NAMES:
+                rel = os.path.relpath(os.path.join(here, n), root).replace("\\", "/")
+                if rel.casefold() not in known:
+                    out.append(rel)
+    return sorted(out)
+
+
 def check_install(root=None):
     """프로그램 폴더를 판 목록과 맞춰 본다. 예외를 내보내지 않는다 (에이전트가 켤 때 부른다).
 
@@ -415,6 +432,12 @@ def check_install(root=None):
             raise ValueError("버전 목록 형식이 올바르지 않습니다.")
         out["version"] = str(man.get("version") or "") or None
         modified, missing = [], []
+        # 내장 파이썬 폴더(runtime_files, 2026-11-20 부터)도 본다 + 목록에 없는 .pth·sitecustomize·usercustomize 는 켤 때마다 실행되는
+        # 자리라 '바뀐 파일' 로 친다 (보안 진단 2026-11-23 C-05 - 지문이 목록에 있는데 python 폴더를 바꿔도 ok 였다)
+        rt = man.get("runtime_files")
+        if isinstance(rt, dict):
+            files = {**rt, **files}
+            modified += _runtime_extras(root, rt)
         for rel, want in files.items():
             if not manifest_path_ok(rel) or not isinstance(want, dict):
                 raise ValueError(f"판 목록의 경로가 잘못되었습니다: {rel!r}")
@@ -1933,6 +1956,24 @@ def write_json_atomic(path, data):
     except Exception:
         pass
     return False
+
+
+# 클라우드로 올리기 직전 가림 (보안 진단 2026-11-23 E-3·C4) - 실행 기록·현황의 로그 줄·사유. PC 안의 기록은 그대로 둔다.
+# 주소의 토큰 값 → 메일 → 전화(숫자 경계) → 7자리 이상 숫자 차례 (ai_rescue.mask 와 같은 꼴, 긴 주문번호가 전화로 먼저 잡혀 앞뒤가 남지 않게)
+_SCRUB_TOKEN = re.compile(r"((?:^|[?&\s])(?:auth|access_token|id_token|refresh_token|token|key)=)[^&\s'\"]+", re.I)
+_SCRUB_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_SCRUB_PHONE = re.compile(r"(?<!\d)\(?0\d{1,2}\)?[-. ]?\d{3,4}[-. ]?\d{4}(?!\d)")
+_SCRUB_LONG = re.compile(r"(?<!\d)\d(?:-?\d){6,}(?!\d)")
+
+
+def scrub(text):
+    """한 줄의 전화·메일·7자리 이상 숫자·주소의 토큰 값을 *** 로. 글이 아니면 그대로."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = _SCRUB_TOKEN.sub(r"\1***", text)
+    for rx in (_SCRUB_EMAIL, _SCRUB_PHONE, _SCRUB_LONG):
+        text = rx.sub("***", text)
+    return text
 
 
 def history_record(state):

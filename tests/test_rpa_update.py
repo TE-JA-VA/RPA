@@ -136,13 +136,19 @@ SIG_HOST = {f"{BASE}/releases/2026.10.07-1/manifest.sig": us.sign(SK, MA_BYTES).
 saved_urls = up.UPDATE_BASE_URLS
 up.UPDATE_BASE_URLS = ("https://old.test", BASE)
 try:
-    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, {}) ) is None and not os.path.exists(st.installed_sig_path()),
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, {}), pub=PK) is None and not os.path.exists(st.installed_sig_path()),
           "못 받으면 None - 아무것도 안 쓴다")
-    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, SIG_HOST)) == "saved", "첫 주소가 안 되면 다음 주소에서 받아 둔다")
+    junk = {k: b"<html>not a signature</html>" for k in SIG_HOST}
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, junk), pub=PK) is None and not os.path.exists(st.installed_sig_path()),
+          "받은 서명이 설치된 목록과 맞지 않으면 저장하지 않는다 - 틀린 값이 그 버전 내내 실행을 막지 않게 (보안 진단 2026-11-23 C-08)")
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, SIG_HOST), pub=PK) == "saved", "첫 주소가 안 되면 다음 주소에서 받아 둔다")
     have = st.read_json(st.installed_sig_path())
     check(have["version"] == "2026.10.07-1" and us.verify(PK, MA_BYTES, bytes.fromhex(have["sig"])), "설치된 목록과 맞는 서명")
     GOT.clear()
-    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, SIG_HOST)) == "kept" and not GOT, "이미 그 버전 것이 있으면 다시 안 받는다")
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, SIG_HOST), pub=PK) == "kept" and not GOT, "이미 그 버전 것이 있으면 다시 안 받는다")
+    st.write_json_atomic(st.installed_sig_path(), {"version": "2026.10.07-1", "sig": "00" * 64})
+    check(up.ensure_installed_sig(PROG, get=lambda u: get(u, SIG_HOST), pub=PK) == "saved",
+          "같은 버전이어도 저장된 서명이 틀렸으면 다시 받는다 (C-08)")
     os.remove(st.installed_sig_path())
 finally:
     up.UPDATE_BASE_URLS = saved_urls
@@ -315,8 +321,10 @@ MAN_RS = dict(MAN_RB, version="2026.11.20-3", runtime={"python": "3.14.7"})
 HOST_S, _ = host_of(MAN_RS)
 up.fetch_release("2026.11.20-3", PR, STG, base_url=BASE, get=lambda u: get(u, HOST_S), pub=PK)
 plan = json.load(open(os.path.join(STG, "plan.json"), encoding="utf-8"))
-check(plan["fetch"] == ["python/AFTER_MARKET_RPA_Agent.exe"] and plan["remove"] == [] and plan["new"] == [],
-      f"파이썬 표기가 같으면 runtime_files 는 계획에 넣지 않는다 ({plan})")
+check(plan["fetch"] == ["python/AFTER_MARKET_RPA_Agent.exe", "python/Lib/os.py", "python/Lib/same.py"] and plan["remove"] == []
+      and "python/python314.dll" not in plan["fetch"],
+      "파이썬 표기가 같으면 목록끼리 다른 파이썬 파일(dll)은 건드리지 않고, 두 목록에서 같은데 디스크와 다른 것(손댐 same.py·빠짐 os.py)만 "
+      f"받아 고친다 - 치우는 것 없음 (보안 진단 2026-11-23 C-05, {plan})")
 
 
 def bad_rt(what, change, contains):

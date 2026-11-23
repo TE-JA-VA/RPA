@@ -280,10 +280,14 @@ if (Test-Path "$T\site") {
   # 전환인데 runtime.txt 가 있으면 옛 판과 새 판의 내장 파이썬이 다르다 (첫 줄 옛 판, 둘째 줄 새 판 - sandbox_test.py 가 쓴다)
   $rtT = $null
   if ((Test-Path "$T\site\transition.txt") -and (Test-Path "$T\site\runtime.txt")) { $rtT = @(Get-Content "$T\site\runtime.txt") }
+  # 자동 업데이트로 올라온 PC 흉내: 설정 폴더에 사용자 권한을 붙여 둔다 → 업데이트의 설치 마무리가 다시 관리자 전용으로 (보안 진단 2026-11-23 C-03)
+  icacls "$PD" /grant "*S-1-5-32-545:(OI)(CI)F" | Out-Null
   Upd "update" $B | Out-File "$O\upd_b.txt"
   $s = WaitState @("done", "rolled_back", "failed")
   Check "판 B 로 업데이트 → done" ($s -eq "done") "$s $(Get-Content "$PD\update\state.json" -Raw)"
   Check "판 점검 ok · 판 B" ((Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version -eq $B)
+  $pdacl = (icacls "$PD") -join " "
+  Check "업데이트 뒤 설정 폴더에 붙여 둔 사용자 권한이 지워졌다 (설치 마무리가 다시 잠금, C-03 - 전환 시험의 옛 판 도우미도 새 판 설정 창을 부른다)" ($pdacl -notmatch "BUILTIN\\Users|S-1-5-32-545") $pdacl
   Check "제거 목록의 판 번호도 B" ((Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}_is1").DisplayVersion -eq $B)
   $uacl = (icacls "$App\rpa_dashboard.py") -join " "      # 바뀐 파일이 ProgramData 권한(관리자 전용)을 들고 와 옵저버가 안 열렸다 (2026-10-12)
   Check "업데이트로 바뀐 파일도 사용자가 읽고 실행할 수 있다 (Users)" ($uacl -match "Users") $uacl

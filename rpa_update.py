@@ -161,23 +161,35 @@ def disk_differs(program_root, files, skip=()):
     return out
 
 
-def ensure_installed_sig(program_root, get=None):
+def ensure_installed_sig(program_root, get=None, pub=None):
     """설치된 버전 목록의 서명(manifest.sig)을 업데이트 사이트에서 받아 st.installed_sig_path() 에 둔다 (파일 변조 감지).
-    이미 그 버전 것이 있으면 그대로. 못 받으면(망 끊김·지운 버전) None - 점검은 서명을 '모름' 으로 본다. 예외를 내지 않는다."""
+    이미 그 버전의 맞는 서명이 있으면 그대로. 못 받으면(망 끊김·지운 버전) None - 점검은 서명을 '모름' 으로 본다. 예외를 내지 않는다.
+    받은 서명은 설치된 manifest.json 과 맞을 때만 저장한다 - 틀린 값(HTML 오류 쪽 등)이 한 번 들어가면 그 버전 내내 'tampered' 로
+    실행을 막았다. 저장된 서명이 틀렸으면 다시 받는다 (보안 진단 2026-11-23 C-08). pub = 시험용 공개 열쇠 (없으면 박힌 열쇠)."""
     try:
         version = _read_manifest(program_root).get("version")
         if not version:
             return None
+        key = pub or update_sign.public_key()
+        with open(os.path.join(program_root, st.MANIFEST_NAME), "rb") as f:
+            man = f.read()
+
+        def good(sig_hex):
+            try:
+                return bool(key) and update_sign.verify(key, man, bytes.fromhex(sig_hex))
+            except ValueError:
+                return False
         have = st.read_json(st.installed_sig_path(), tries=2)
-        if isinstance(have, dict) and have.get("version") == version and have.get("sig"):
+        if isinstance(have, dict) and have.get("version") == version and have.get("sig") and good(str(have["sig"])):
             return "kept"
         get = get or (lambda url: http_get(url, timeout=15))
         for base in UPDATE_BASE_URLS:
             try:
-                sig = get(f"{base.rstrip('/')}/releases/{version}/manifest.sig").decode("ascii").strip()
-                break
+                sig = get(f"{base.rstrip('/')}/releases/{version}/manifest.sig").decode("ascii", "replace").strip()
             except FetchError:
                 continue
+            if good(sig):
+                break
         else:
             return None
         os.makedirs(update_dir(), exist_ok=True)
@@ -246,6 +258,16 @@ def _fetch_from(base, version, program_root, staging, get, pub):
         fetch, remove, _ = plan_files(cur_files, new_files)
         # 손댄·빠진 파일도 되돌린다. 파이썬 파일은 이 PC 의 python 폴더가 지금 목록과 같다는 보장이 없어 디스크와 다른 것을 모두 받는다
         fetch = sorted(set(fetch) | set(disk_differs(program_root, new_files, skip=fetch)))
+        if not swap and runtime_files(cur_man) and runtime_files(new_man):
+            # 파이썬 표기가 같아도, 두 목록에서 지문이 같은 내장 파이썬 파일이 디스크와 다르면(손댐·빠짐) 받아 되돌린다 - 같은 버전 다시 받기로
+            # python 폴더도 고친다 (보안 진단 2026-11-23 C-05). 목록끼리 다른 파일은 건드리지 않는다 (파이썬 바꾸기는 표기가 바뀔 때만)
+            cur_rt, new_rt = runtime_files(cur_man), runtime_files(new_man)
+            same = {r: d for r, d in new_rt.items() if isinstance(cur_rt.get(r), dict) and cur_rt[r].get("sha256") == d.get("sha256")}
+            repair = disk_differs(program_root, same)
+            if repair:
+                new_files = {**new_files, **{r: same[r] for r in repair}}
+                cur_files = {**cur_files, **{r: cur_rt[r] for r in repair}}
+                fetch = sorted(set(fetch) | set(repair))
         os.makedirs(update_dir(), exist_ok=True)
         need = _need_bytes(cur_files, new_files, fetch, remove)
         free = shutil.disk_usage(update_dir()).free

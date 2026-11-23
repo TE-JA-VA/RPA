@@ -184,11 +184,17 @@ try:
     c4.token(); check(False, "갱신이 망 오류면 비밀번호를 보내지 않고 그대로 올린다")
 except urllib.error.URLError:
     check(len(h4.calls) == 2 and "pw" not in h4.calls[-1][2], "갱신이 망 오류면 비밀번호를 보내지 않고 그대로 올린다")
+try:
+    c4.token()
+except urllib.error.URLError:
+    check(len(h4.calls) == 2, "망 오류 뒤 잠깐(2초)은 망에 안 나가고 같은 예외 - 1초마다 다시 로그인하지 않는다 (보안 진단 2026-11-23 E-5)")
+h4.now += 3
 h4.add({"error": {"code": 503, "message": "BACKEND_ERROR"}}, status=503)
 try:
     c4.token(); check(False, "갱신이 5xx 면 그대로 올리고, 비밀번호는 안 나간다")
 except urllib.error.HTTPError as e:
     check(e.code == 503 and len(h4.calls) == 3 and "pw" not in h4.calls[-1][2], "갱신이 5xx 면 그대로 올리고, 비밀번호는 안 나간다")
+h4.now += 5
 h4.add({"id_token": "T2", "refresh_token": "R2", "expires_in": "3600"})
 check(c4.token() == "T2", "망이 돌아오면 갱신해서 이어간다")
 
@@ -198,11 +204,13 @@ try:
     c6.token(); check(False, "본문이 JSON 이 아닌 4xx 는 망 사정 - 그대로 올리고 _dead 가 안 된다")
 except urllib.error.HTTPError as e:
     check(e.code == 403 and c6._dead is None and "pw" not in h6.calls[-1][2], "본문이 JSON 이 아닌 4xx 는 망 사정 - 그대로 올리고 _dead 가 안 된다")
+h6.now += 3                                               # 망 오류 뒤 물러서기 (E-5) 를 넘긴다
 h6.add({"error": {"code": 429, "message": "RESOURCE_EXHAUSTED"}}, status=429)
 try:
     c6.token(); check(False, "429 도 망 사정 - _dead 가 안 된다")
 except urllib.error.HTTPError as e:
     check(e.code == 429 and c6._dead is None, "429 도 망 사정 - _dead 가 안 된다")
+h6.now += 5
 h6.add({"id_token": "T2", "refresh_token": "R2", "expires_in": "3600"})
 check(c6.token() == "T2" and len(h6.calls) == 4, "망이 돌아오면 다시 나가서 갱신한다")
 

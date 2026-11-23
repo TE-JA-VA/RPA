@@ -186,6 +186,33 @@ for i in range(15):
 with open(os.path.join(prog, "firebase", "agent", "에이전트_시작.bat"), "wb") as f:
     f.write(files["firebase/agent/에이전트_시작.bat"])
 
+# --- 내장 파이썬 폴더(runtime_files)도 본다 (보안 진단 2026-11-23 C-05: 지문이 목록에 있는데 바꿔도 ok 였다)
+os.makedirs(os.path.join(prog, "python", "Lib", "site-packages"))
+pyf = os.path.join(prog, "python", "Lib", "os.py")
+with open(pyf, "wb") as f:
+    f.write(b"x = 1\n")
+with open(os.path.join(prog, st.MANIFEST_NAME), "w", encoding="utf-8") as f:
+    json.dump({"format": 1, "version": "2026.09.29-1", "files": entries, "runtime_files": {"python/Lib/os.py": st.file_digest(pyf)}}, f)
+check("내장 파이썬 파일도 같으면 ok", st.check_install(prog)["state"] == "ok", str(st.check_install(prog)))
+with open(pyf, "wb") as f:
+    f.write(b"x = 2\n")
+r = st.check_install(prog)
+check("내장 파이썬 파일의 지문이 다르면 tampered (C-05)", r["state"] == "tampered" and r["modified"] == ["python/Lib/os.py"], str(r))
+with open(pyf, "wb") as f:
+    f.write(b"x = 1\n")
+for bad in (("python", "Lib", "site-packages", "evil.pth"), ("python", "Lib", "sitecustomize.py"), ("python", "usercustomize.py")):
+    p = os.path.join(prog, *bad)
+    open(p, "w").close()
+    r = st.check_install(prog)
+    check(f"목록에 없는 {bad[-1]} 가 내장 파이썬 폴더에 생기면 tampered (켤 때마다 실행되는 자리, C-05)",
+          r["state"] == "tampered" and "/".join(bad) in r["modified"], str(r))
+    os.remove(p)
+os.makedirs(os.path.join(prog, "python", "Lib", "__pycache__"))
+open(os.path.join(prog, "python", "Lib", "__pycache__", "os.cpython-314.pyc"), "wb").close()
+check("파이썬이 스스로 만드는 __pycache__ 는 무시한다", st.check_install(prog)["state"] == "ok", str(st.check_install(prog)))
+import shutil  # noqa: E402
+shutil.rmtree(os.path.join(prog, "python"))
+
 # --- 서명 (파일 변조 감지): 받아 둔 manifest.sig 로 설치된 목록을 확인한다. 공개 열쇠는 시험 열쇠로 바꿔 끼운다
 import update_sign  # noqa: E402
 real_pub, real_pd = update_sign.public_key, os.environ.get("RPA_PROGRAMDATA")
