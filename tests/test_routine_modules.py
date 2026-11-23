@@ -1862,6 +1862,20 @@ try:
 except rr.wellife.Stop as e:
     res = (e.result, str(e))
 check("press: 누를 자리를 다른 창이 덮으면 누르지 않고 Stop", res and res[0] == "failed" and "시험 덮개" in res[1] and not pressed_p, f"{res} {pressed_p}")
+seen_p.clear()
+rr.wellife.clear_point = lambda rr_, ctx, el, what, pt=None, allow=(): seen_p.append(("clear", what, set(allow))) or (55, 66)
+_saved_fpw = rr.find_popup_windows
+rr.find_popup_windows = lambda pid, hwnd: [888]
+rr.press(777, el_p, "팝업 단추", popup=True)
+rr.press(777, el_p, "저장 단추")
+rr.find_popup_windows = _saved_fpw
+check("press(popup=True): 팝업 단추는 ERPia 가 따로 띄운 팝업 창이 맨 위여도 누른다 - 메인 창 UIA 훑기에 그 창 단추도 잡힌다 "
+      "(검토 11-23, wellife.confirm_popups 와 같은 판정). 다른 단추는 그대로 메인 창만",
+      [x for x in seen_p if x[0] == "clear"] == [("clear", "팝업 단추", {888}), ("clear", "저장 단추", set())]
+      and pressed_p == [("click", {"coords": (55, 66), "absolute": True})] * 2, f"{seen_p} {pressed_p}")
+_src_rr = Path(_rr.__file__).read_text(encoding="utf-8")
+check("팝업 단추 누르기는 popup=True 로 (이어 뜨는 팝업·배송보류 확인 팝업 둘)",
+      'press(hwnd, btn, "팝업 단추", popup=True)' in _src_rr and _src_rr.count('"배송보류 확인 팝업 단추", popup=True)') == 2)
 rr.wellife.front, rr.wellife.clear_point, rr.win32process, rr.Desktop = _saved_p
 # 메인 창 안을 누르는 자리는 press 로 (덮개·잠김·앞으로) - 대화상자·팝업 창 단추·스크롤 단추는 그대로
 GUARDED = {"_press_icon": "target.click_input(", "sort_grid_by_status_desc": "header.click_input(",
@@ -2214,7 +2228,13 @@ rr.element_at_point, rr.get_row_height = pc_at, lambda grid: 23
 got_pc = rr.pick_grid_cell(pc_grid)
 check("대상이 1줄이어도 우클릭할 데이터 칸을 찾는다 - 머리글 두 겹 아래(빈 곳)를 짚지 않고 grid_rows 의 첫 줄 칸 (체크 칸 아님)",
       got_pc is not None and got_pc.name == "매출구분 행 1", str(got_pc and got_pc.name))
-pc_cells[:] = [pc_cells[0]]
+_pc_keep = list(pc_cells)
+pc_cells[:] = [PcEl("row Check Box 행 1", PC_R(-1651, 758, -1600, 778)), PcEl("매출구분 행 1", PC_R(-1640, 758, -1610, 778)),
+               PcEl("매출처 행 1", PC_R(-1561, 758, -1491, 778))]
+got_pc = rr.pick_grid_cell(pc_grid)
+check("가로 스크롤로 칸이 고정된 체크 칸 아래 깔려 가운데 점이 체크 칸이면 그 칸은 고르지 않는다 - 누르면 첫 줄 체크가 켜진다 (검토 11-23)",
+      got_pc is not None and got_pc.name == "매출처 행 1", str(got_pc and got_pc.name))
+pc_cells[:] = [_pc_keep[0]]
 check("체크 칸밖에 없으면 체크 칸은 고르지 않는다 (누르면 체크가 바뀐다)", rr.pick_grid_cell(pc_grid) is None)
 rr.element_at_point, rr.get_row_height = _saved_pc
 print("=== 화면 이동은 웰라이프와 같은 길로 - 화면이 많이 열려 있어도 (11-23 회차5 B6·B7, 사용자: '명백한 버그') ===")

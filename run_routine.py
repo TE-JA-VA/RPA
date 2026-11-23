@@ -625,10 +625,12 @@ def wait_for_active_main_tab(app, hwnd, keyword, timeout=20, interval=1.0, ctx=N
     return False, last
 
 
-def press(hwnd, el, what, coords=None, **kw):
+def press(hwnd, el, what, coords=None, popup=False, **kw):
     """ERPia 메인 창 안을 누른다 - 웰라이프 click 과 같은 안전장치 (사용자 2026-11-19): 화면이 잠겼거나·ERPia 를 앞으로 못 가져오거나·
     누를 자리가 창 밖이거나·다른 창이 덮고 있으면(5초까지 비켜나기를 기다림) 누르지 않고 wellife.Stop. 확인한 그 점을 누른다.
-    coords: el 왼쪽 위 기준 (click_input 과 같다), 없으면 가운데. kw 는 click_input 에 그대로 (button·pressed·double)."""
+    coords: el 왼쪽 위 기준 (click_input 과 같다), 없으면 가운데. kw 는 click_input 에 그대로 (button·pressed·double).
+    popup: 팝업 단추 - ERPia 가 따로 띄운 팝업 창이 맨 위여도 누른다. 메인 창 UIA 훑기에는 그 창 단추도 잡힌다
+    (wellife.confirm_popups 와 같은 판정, 검토 2026-11-23)."""
     me = sys.modules[__name__]
     ctx = types.SimpleNamespace(hwnd=hwnd, pid=win32process.GetWindowThreadProcessId(hwnd)[1],
                                 window=lambda: Desktop(backend="uia").window(handle=hwnd))
@@ -637,7 +639,8 @@ def press(hwnd, el, what, coords=None, **kw):
         r = el.rectangle()
         pt = (r.left + coords[0], r.top + coords[1])
     wellife.front(me, ctx, what)
-    pt = wellife.clear_point(me, ctx, el, what, pt)
+    pt = (wellife.clear_point(me, ctx, el, what, pt, allow=wellife.popup_windows(me, ctx)) if popup
+          else wellife.clear_point(me, ctx, el, what, pt))
     el.click_input(coords=pt, absolute=True, **kw)
 
 
@@ -1695,7 +1698,7 @@ def close_follow_up_popups(app, hwnd, what, rounds=3, wait=1.5):
             return None
         said = popup_says(btn, HOLD_FAIL_WORDS)
         log(f"  {what} 뒤 팝업 -> '{btn.window_text()}' 클릭" + (f" ({said})" if said else ""))
-        press(hwnd, btn, "팝업 단추")
+        press(hwnd, btn, "팝업 단추", popup=True)
         if said:
             return f"{what} 뒤 실패 팝업이 떴습니다: {said}"
     time.sleep(wait)
@@ -1801,7 +1804,8 @@ def pick_grid_cell(grid):
                         and g.top <= r.top and r.bottom <= g.bottom):
                     continue
                 hit = element_at_point((r.left + r.right) // 2, (r.top + r.bottom) // 2)
-                if str(hit.element_info.control_type) == "DataItem":
+                # 고정된 체크 칸 아래 깔린 칸이면 그 점은 체크 칸이다 - 누르면 체크가 바뀐다 (검토 2026-11-23)
+                if str(hit.element_info.control_type) == "DataItem" and not hit.window_text().startswith("row Check Box"):
                     return cell
             except Exception:
                 continue
@@ -3800,7 +3804,7 @@ def run_stock_review_step(app, pid, hwnd):
             if btn is None:
                 break
             log(f"    배송보류 확인 팝업 -> '{btn.window_text()}' 클릭")
-            press(hwnd, btn, "배송보류 확인 팝업 단추")
+            press(hwnd, btn, "배송보류 확인 팝업 단추", popup=True)
             time.sleep(1.5)
 
         # 배송보류 클릭 후에는 따로 검증하지 않고 바로 다음 부족수량 셀로 넘어간다.
@@ -5343,7 +5347,7 @@ def run_hold_logistics_step(app, pid, hwnd, save_only=False):
                 btn = find_popup_ok_button(win2)
                 if btn is not None:
                     log(f"  배송보류 확인 팝업 -> '{btn.window_text()}' 클릭")
-                    press(hwnd, btn, "배송보류 확인 팝업 단추")
+                    press(hwnd, btn, "배송보류 확인 팝업 단추", popup=True)
             else:
                 log("  배송보류 실행에 실패하여 전체 저장으로 진행합니다.")
 
@@ -6331,13 +6335,13 @@ def module_import(ctx):
             return "skipped", f"'{IMPORT_BUTTON_NAME}'를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
         log("\n=== 좌측 상단 그리드 전체선택 ===")
         n_top = wellife.select_sites(rr, ctx, imp, top_left, what)
-        if n_top is not None:
-            status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
         def reselect():     # 풀렸으면 그리드를 다시 잡고 다시 전체선택 (웰라이프와 같게, 사용자 2026-11-23)
             tables = get_onscreen_tables(page)
             grid = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left)) if tables else top_left
             return grid, wellife.select_sites(rr, ctx, imp, grid, what)
-        wellife.ready_to_import(rr, ctx, page, imp, top_left, n_top, what, reselect)
+        n_top = wellife.ready_to_import(rr, ctx, page, imp, top_left, n_top, what, reselect)   # 다시 전체선택했으면 다시 센 수
+        if n_top is not None:
+            status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
         log("\n=== 주문 가져오기 ===")
         t0 = time.time()
         ok = run_import_step(ctx.app, ctx.pid, ctx.hwnd, page)

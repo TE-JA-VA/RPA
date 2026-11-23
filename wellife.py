@@ -700,7 +700,7 @@ def import_collect(rr, ctx, live, wait=True):
     def reselect():     # 풀렸으면 그리드를 다시 잡고 다시 전체선택 (사용자 11-23)
         again = site_grid(rr, ctx)
         return again, select_sites(rr, ctx, imp, again, what, live)
-    ready_to_import(rr, ctx, page, imp, sites, n, what, reselect)
+    n = ready_to_import(rr, ctx, page, imp, sites, n, what, reselect)
     rr.log(f"  [실행] {what}: 사이트 {n}줄 전체선택 뒤")
     t0 = time.time()
     started = rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page, wait=wait)
@@ -739,7 +739,7 @@ def ready_to_import(rr, ctx, page, imp, sites, n, what, reselect=None):
     run_import_step 은 넘긴 범위에서 첫 같은 이름 단추를 다시 찾아 누른다 - 떠 있는 화면만 넘기고, 그 단추가 확인한 단추와 같은
     자리인지, 그 자리가 창 안에 보이고 덮이지 않았는지 본 뒤 누른다 (숨은 화면 단추를 누르지 않게).
     reselect() -> (사이트 그리드, 선택 줄 수): 전체선택을 못 했거나 다시 그려져 풀렸으면 그리드를 다시 잡고 다시 전체선택한다,
-    CHECK_TRIES 번까지 (사용자 2026-11-23: 체크를 확실히 - 예전엔 한 번에 실패, 10-19 실측의 다시 그려짐)."""
+    CHECK_TRIES 번까지 (사용자 2026-11-23: 체크를 확실히 - 예전엔 한 번에 실패, 10-19 실측의 다시 그려짐). 마지막에 센 줄 수를 돌려준다."""
     for attempt in range(1, CHECK_TRIES + 1):
         if n:
             wait_idle(rr, imp, what)
@@ -759,6 +759,7 @@ def ready_to_import(rr, ctx, page, imp, sites, n, what, reselect=None):
         raise Stop("failed", f"{what}: 누를 단추가 현재 화면의 단추와 달라 누르지 않고 중단하였습니다.")
     front(rr, ctx, what)
     clear_point(rr, ctx, imp, what)
+    return n
 
 
 def wait_idle(rr, button, what):
@@ -2802,19 +2803,20 @@ def close_separate_popup(rr, h):
     """따로 뜬 팝업 창 h 를 닫는다 (사용자 2026-11-20: X 나 [확인] 으로 지운다). [확인] 이 있으면 [확인], 예/아니오 질문이면 [아니오],
     그 밖에는 X(창 닫기). (누른 것, 닫혔는가). 창이 뒤에 깔려 있어도 되게 UI 자동화 Invoke·창 메시지로 누른다."""
     try:
-        buttons = rr.Desktop(backend="uia").window(handle=h).descendants(control_type="Button")
+        buttons = [(b, b.window_text()) for b in rr.Desktop(backend="uia").window(handle=h).descendants(control_type="Button")]
     except Exception:
-        buttons = []
-    btn = (next((b for b in buttons if b.window_text() in SEPARATE_CONFIRM), None)
-           or next((b for b in buttons if b.window_text() in rr.NO_BUTTON_TEXTS), None))
+        buttons = []        # 그새 닫힌 창이면 아래 X 에서 닫힘을 본다
+    pick = (next((p for p in buttons if p[1] in SEPARATE_CONFIRM), None)
+            or next((p for p in buttons if p[1] in rr.NO_BUTTON_TEXTS), None))
+    how = f"[{pick[1]}]" if pick else "X(창 닫기)"
     try:
-        if btn is not None:
-            how = f"[{btn.window_text()}]"
-            btn.invoke()
+        if pick:
+            pick[0].invoke()
         else:
-            how = "X(창 닫기)"
             rr.win32gui.PostMessage(h, rr.win32con.WM_CLOSE, 0, 0)
     except Exception as e:
+        if rr.dialog_gone(h, settle=2.0):     # 누르는 사이에 저절로 닫힌 창 - 닫지 못해 멈추지 않는다 (검토 2026-11-23)
+            return how, True
         return f"{how} - 누르지 못함 ({type(e).__name__})", False
     return how, rr.dialog_gone(h, settle=2.0)
 
@@ -3242,10 +3244,10 @@ def click(rr, ctx, el, what):
     el.click_input(coords=pt, absolute=True)   # 확인한 그 점을 누른다 (사각형을 다시 읽어 다른 점을 누르지 않게)
 
 
-def clear_point(rr, ctx, el, what, pt=None):
+def clear_point(rr, ctx, el, what, pt=None, allow=()):
     """누를 점(pt, 없으면 가운데). 창 안에 보이고 그 점의 맨 위 창이 ERPia 메인 창일 때만 돌려주고, 아니면 멈춘다 - 빈 사각형이면
     (0,0) 이, 열린 내림 메뉴나 다른 프로그램 창이 덮고 있으면 그것이 눌린다. 마우스를 그 점으로 먼저 옮긴다 (툴팁 치우기).
-    보통 PROCESS 도 run_routine.press 로 같이 쓴다 (사용자 11-19)."""
+    보통 PROCESS 도 run_routine.press 로 같이 쓴다 (사용자 11-19). allow: 맨 위여도 되는 창 - 팝업 단추면 ERPia 가 따로 띄운 팝업 창."""
     r = el.rectangle()
     pt = pt or ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
     wr = ctx.window().rectangle()
@@ -3255,7 +3257,7 @@ def clear_point(rr, ctx, el, what, pt=None):
     deadline = time.time() + COVER_WAIT_SECONDS
     top = _top_window(rr, pt)
     escaped = False
-    while top != ctx.hwnd:
+    while top != ctx.hwnd and top not in allow:
         # ERPia 자신의 제목 없는 작은 창(남은 내림 목록·풍선 도움말)이면 ESC 로 한 번만 닫아 본다. 제목 있는 ERPia 창(안내·확인)과
         # 다른 프로그램 창은 건드리지 않는다 - 함부로 닫으면 안 된다 (triif 2026-11-13 10:40 처음, 사용자 승인)
         if (not escaped and top and _window_pid(rr, top) == ctx.pid and not _title(rr, top)

@@ -1418,6 +1418,9 @@ try:
 except (wellife.Stop, TypeError) as e:
     res = (type(e).__name__, str(e))
 check("자동 수집: 다시 전체선택해도 계속 풀리면 누르지 않고 실패로 멈춘다", res[0] == "Stop" and "체크" in res[1], str(res))
+_ri_seq[:] = [True]
+_ri_got = wellife.ready_to_import(_ri_rr, octx, "화면", _ri_imp, "사이트", None, "자동 수집 [가져오기]", reselect=lambda: ("사이트", 5))
+check("다시 전체선택해 통과하면 다시 센 줄 수를 돌려준다 - 사유·상단 선택 지표에 처음 값(None)이 남지 않게 (검토 11-23)", _ri_got == 5, str(_ri_got))
 (wellife.wait_idle, wellife.sites_checked, wellife.front, wellife.clear_point) = _saved_ri
 res = run_rdy([True])
 check("매출처리 ▼ 가 켜져 있으면 기다리지 않는다", res is False and RDY["pops"] == 0 and not RDY["log"], f"{res} {RDY}")
@@ -3355,6 +3358,12 @@ try:
 except wellife.Stop as e:
     res = str(e)
 check("제목 있는 ERPia 창(안내·확인)은 ESC 로 닫지 않고 멈춘다", res and COV["keys"] == [], str((res, COV["keys"])))
+COV.update(top=700, keys=[])
+try:
+    res = wellife.clear_point(cov_rr, cov_ctx, _CovEl(), "팝업 단추", allow={700})
+except (wellife.Stop, TypeError) as e:
+    res = str(e)
+check("allow 로 준 창(ERPia 가 따로 띄운 팝업 창)이 맨 위면 그 창 단추를 누를 점으로 돌려준다 (검토 11-23)", res == (110, 110) and COV["keys"] == [], str(res))
 check("덮은 창은 5초까지 기다린다 (잠깐 뜨는 알림·도움말)", _saved_cov[1] == 5)
 check("exe 이름 읽기: 이 시험 프로세스는 python", (wellife._exe_name(os.getpid()) or "").lower().startswith("python"))
 wellife.mouse.move, wellife.COVER_WAIT_SECONDS, wellife._top_window = _saved_cov
@@ -3597,6 +3606,31 @@ SEP_NOCLOSE.add(37)
 res = sep_clear(sep_rr())
 check("단추도 닫기 단추도 없는 창('불러오는 중' 같은 진행 창)은 메인 창을 막아도 건드리지 않고 기다린다 (검토 11-20)",
       res == 0 and not pressed_sep and 37 in SEP, f"{res} {pressed_sep}")
+
+
+def _uia_gone(*a, **k):
+    raise RuntimeError("COMError 흉내 - 창이 닫혔다")
+
+
+def _gone_rr(btns, gone=True):          # 찾은 뒤 창이 저절로 닫혀 단추 읽기·누르기·창 메시지가 오류
+    return sep_rr(Desktop=lambda backend=None: types.SimpleNamespace(window=lambda handle: types.SimpleNamespace(
+                      descendants=lambda control_type=None: btns)),
+                  dialog_gone=lambda h, settle=2.0: gone, win32gui=types.SimpleNamespace(PostMessage=_uia_gone))
+
+
+try:
+    got = wellife.close_separate_popup(_gone_rr([types.SimpleNamespace(window_text=_uia_gone, invoke=_uia_gone)]), 50)
+except Exception as e:
+    got = (type(e).__name__, str(e))
+check("찾은 뒤 창이 저절로 닫혀 단추 이름을 못 읽어도 UI 오류로 멈추지 않고, 닫혔으면 닫힘으로 본다 (검토 11-23)", got[1] is True, str(got))
+_dying = types.SimpleNamespace(window_text=lambda: "확인", invoke=_uia_gone)
+try:
+    got = wellife.close_separate_popup(_gone_rr([_dying]), 51)
+except Exception as e:
+    got = (type(e).__name__, str(e))
+check("누르는 사이에 창이 닫혀 누르기가 오류여도 닫혔으면 닫힘 - '팝업 창을 닫지 못해 중단' 으로 멈추지 않는다", got == ("[확인]", True), str(got))
+got = wellife.close_separate_popup(_gone_rr([_dying], gone=False), 52)
+check("누르기 오류이고 창도 그대로면 예전처럼 닫지 못함", got[1] is False and "누르지 못함" in got[0], str(got))
 SEP.clear()
 SEP[38] = ("", "WindowsForms10.Window.8", [], False, True)
 gone_seq = [False]          # 1초 안에는 안 닫히고, 그 뒤 계속 막는지 보는 사이에 닫힌다 (진행 창)
