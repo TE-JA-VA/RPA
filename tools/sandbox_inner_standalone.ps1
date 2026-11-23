@@ -23,12 +23,18 @@ function Finish {
     shutdown /s /t 5
     exit
 }
-$App = "C:\Program Files\AFTER MARKET\RPA"
-$PD = "C:\ProgramData\AFTER MARKET\RPA"
+# 폴더 나누기 (사용자 2026-11-23): 스탠드얼론은 AFTER MARKET\RPA Standalone·시작 메뉴 '오토파일럿 스탠드얼론'·작업 RPA Standalone Agent.
+# 일반 버전 자리(CloudApp·CloudPD·CloudSM·CloudTask)는 끝까지 생기지 않아야 한다 (NoCloudDirs)
+$App = "C:\Program Files\AFTER MARKET\RPA Standalone"
+$PD = "C:\ProgramData\AFTER MARKET\RPA Standalone"
 $KD = "$PD\standalone"
 $Py = "$App\python\python.exe"
-$SM = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\오토파일럿"
-$Task = "AFTER MARKET\RPA Agent"
+$SM = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\오토파일럿 스탠드얼론"
+$Task = "AFTER MARKET\RPA Standalone Agent"
+$CloudApp = "C:\Program Files\AFTER MARKET\RPA"
+$CloudPD = "C:\ProgramData\AFTER MARKET\RPA"
+$CloudSM = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\오토파일럿"
+$CloudTask = "AFTER MARKET\RPA Agent"
 $Uninst = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
 $SaKey = "$Uninst\{7D2E9A61-3B4F-4C8D-A5E2-91F0C6B3D7A4}_is1"
 $CloudKey = "$Uninst\{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}_is1"
@@ -66,6 +72,13 @@ function Listening($port) { $null -ne (Get-NetTCPConnection -LocalPort $port -St
 function WaitListen($port, $sec) { for ($i = 0; $i -lt $sec; $i++) { if (Listening $port) { return $true }; Start-Sleep 1 }; return $false }
 function ServerProcs { @(Get-CimInstance Win32_Process -Filter "Name='python.exe' or Name='pythonw.exe' or Name='AFTER_MARKET_RPA_Supervisor.exe' or Name='AFTER_MARKET_RPA_Agent.exe'" | Where-Object { $_.CommandLine -match "local_server\.py" }) }
 function TrapCount { if (Test-Path "$O\trap.txt") { @(Get-Content "$O\trap.txt").Count } else { 0 } }
+# 일반 버전 자리가 하나도 없나 (프로그램·설정 폴더·시작 메뉴·작업) - 있으면 그 이름들
+function NoCloudDirs {
+    $found = @(@($CloudApp, $CloudPD, $CloudSM) | Where-Object { Test-Path $_ })
+    schtasks /Query /TN $CloudTask *> $null
+    if ($LASTEXITCODE -eq 0) { $found += "작업 $CloudTask" }
+    return $found
+}
 
 # 0. 관리자 권한 - 아니면 조용한 설치가 UAC 창 앞에서 멈추니 바로 끝낸다
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -103,13 +116,15 @@ if ($Over) {
     # --over-cloud: 일반 버전이 깔린 PC 에 스탠드얼론 설치 파일 → 시작 전에 멈추고 일반 설치는 그대로
     $p = Start-Process "$T\over_cloud.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup_cloud.log`"" -Wait -PassThru
     Check "일반 버전 조용한 설치 (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.ExitCode)"
-    $v0 = (Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version
+    Check "일반 버전은 예전 폴더(...\RPA)에 깔린다" ((Test-Path "$CloudApp\manifest.json") -and (Test-Path "$CloudPD\config"))
+    $v0 = (Get-Content "$CloudApp\manifest.json" -Raw | ConvertFrom-Json).version
     $p = Start-Process "$T\setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup_sa_over.log`"" -Wait -PassThru
     Check "일반 버전이 깔린 PC 에서 스탠드얼론 설치 파일은 시작 전에 멈춘다 (코드 1)" ($p.ExitCode -eq 1) "코드 $($p.ExitCode)"
     $lg = if (Test-Path "$O\setup_sa_over.log") { Get-Content "$O\setup_sa_over.log" -Raw } else { "" }
     Note "스탠드얼론 설치 기록에 '일반 버전이 설치되어' 알림: $(if ($lg -match '일반 버전이 설치되어') { '있음' } else { '없음 (조용한 설치의 알림은 기록에 안 남을 수 있다)' })"
-    $v1 = (Get-Content "$App\manifest.json" -Raw | ConvertFrom-Json).version
-    Check "일반 설치가 그대로 (edition.json 없음, 같은 버전 $v0, 일반 제거 등록 있음·스탠드얼론 등록 없음)" ((-not (Test-Path "$App\edition.json")) -and ($v0 -eq $v1) -and (Test-Path $CloudKey) -and -not (Test-Path $SaKey)) "버전 $v0 → $v1"
+    $v1 = (Get-Content "$CloudApp\manifest.json" -Raw | ConvertFrom-Json).version
+    Check "일반 설치가 그대로 (edition.json 없음, 같은 버전 $v0, 일반 제거 등록 있음·스탠드얼론 등록 없음)" ((-not (Test-Path "$CloudApp\edition.json")) -and ($v0 -eq $v1) -and (Test-Path $CloudKey) -and -not (Test-Path $SaKey)) "버전 $v0 → $v1"
+    Check "멈춘 스탠드얼론 설치 파일은 스탠드얼론 폴더(프로그램·설정·시작 메뉴)를 만들지 않았다" ((-not (Test-Path $App)) -and (-not (Test-Path $PD)) -and (-not (Test-Path $SM)))
     $n = (TrapCount) - $base
     Check "덫에 걸린 연결 0 (막은 주소로 연결 시도 없음)" ($n -eq 0) ((Get-Content "$O\trap.txt" -ErrorAction SilentlyContinue | Select-Object -Skip $base) -join " | ")
     Finish
@@ -139,6 +154,10 @@ Check "일반 버전 제거 키는 없다" (-not (Test-Path $CloudKey))
 $url = Select-String -Path "$SM\오토파일럿 대시보드.url" -Pattern "^URL=(.*)$" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches[0].Groups[1].Value }
 Check "대시보드 바로 가기 주소 http://127.0.0.1:8781/ · 설정 바로 가기" (($url -eq "http://127.0.0.1:8781/") -and (Test-Path "$SM\오토파일럿 설정.lnk")) "url=$url"
 Check "설정 폴더 config·data·standalone" ((Test-Path "$PD\config") -and (Test-Path "$PD\data") -and (Test-Path $KD))
+$nc = @(NoCloudDirs)
+Check "폴더 나누기: 스탠드얼론은 ...\RPA Standalone 에 깔리고 일반 자리(프로그램·설정 폴더·시작 메뉴 '오토파일럿'·작업)는 만들지 않는다" ($nc.Count -eq 0) ($nc -join ", ")
+$root = PyOut "import rpa_status as st, rpa_settings as rs`n_out.write(st.install_root() + '|' + rs.task_name() + '|' + rs.install_dir())" "root1"
+Check "설치본의 install_root·작업 이름·설치 폴더가 스탠드얼론 것" ("$root" -eq "$PD|$Task|$App") "$root"
 schtasks /Query /TN $Task *> $null
 Check "라이선스·설정 전에는 작업이 없고 로컬 서버도 안 뜬다" (($LASTEXITCODE -ne 0) -and -not (Listening 8781))
 
@@ -211,7 +230,9 @@ Check "관리자 계정을 만들었다 · 라이선스 맞음 · 설정 끝 (co
 $p = Start-Process $Py -ArgumentList "-E -s `"$App\rpa_settings.py`" --after-install --no-window" -Wait -PassThru -WindowStyle Hidden
 Check "--after-install --no-window (코드 0)" ($p.ExitCode -eq 0) "코드 $($p.ExitCode)"
 schtasks /Query /TN $Task *> $null
-Check "작업 등록" ($LASTEXITCODE -eq 0)
+Check "작업 등록 ($Task)" ($LASTEXITCODE -eq 0)
+$nc = @(NoCloudDirs)
+Check "설정 뒤에도 일반 자리가 없다 (작업 '$CloudTask' 없음, 일반 설정 폴더 없음)" ($nc.Count -eq 0) ($nc -join ", ")
 $up = WaitListen 8781 120
 Check "로컬 서버가 127.0.0.1:8781 을 연다 (감독 아래)" $up
 $srv = @(ServerProcs)
@@ -299,6 +320,8 @@ if (Test-Path "$T\cloud_setup.exe") {
     $p = Start-Process "$T\cloud_setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$O\setup_cloud.log`"" -Wait -PassThru
     Check "스탠드얼론이 깔린 PC 에서 일반 설치 파일은 멈춘다 (코드 1)" ($p.ExitCode -eq 1) "코드 $($p.ExitCode)"
     Check "스탠드얼론 설치는 그대로 (edition.json, 로컬 서버, 스탠드얼론 등록, 일반 등록 없음)" ((Test-Path "$App\edition.json") -and (Listening 8781) -and (Test-Path $SaKey) -and -not (Test-Path $CloudKey))
+    $nc = @(NoCloudDirs)
+    Check "멈춘 일반 설치 파일은 일반 자리(프로그램·설정 폴더·시작 메뉴·작업)를 만들지 않았다" ($nc.Count -eq 0) ($nc -join ", ")
 }
 
 # 9. 조용한 제거: 프로그램·작업·시작 메뉴는 없어지고 설정·라이선스·계정은 남는다
@@ -312,6 +335,8 @@ Check "제거: 시작 메뉴가 없다" (-not (Test-Path $SM))
 Check "제거: 로컬 서버가 멈췄다 (8781 닫힘)" (-not (Listening 8781))
 Check "제거: 설정·라이선스·웹 계정은 남는다" ((Test-Path "$PD\license.json") -and (Test-Path "$KD\accounts.json") -and (Test-Path "$PD\config"))
 Check "제거: 스탠드얼론 제거 키가 없다" (-not (Test-Path $SaKey))
+$nc = @(NoCloudDirs)
+Check "제거 뒤에도 일반 자리는 처음부터 없던 그대로" ($nc.Count -eq 0) ($nc -join ", ")
 
 # 10. 덫
 $n = (TrapCount) - $base

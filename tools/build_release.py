@@ -15,7 +15,8 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 만들고 (고친 파일만 다시 - 파일 하나에 30초 안쪽), 라이브러리는 컴파일 없이 lib.zip 하나로 싣고 (설치 마무리 rpa_settings.unpack_lib 가
 lib\ 에 푼다), exe 셋은 내장 Python 을 켜는 작은 시작 파일(tools/launcher.c)이다. 기본은 옛 방식(--onefile 과 같다)이다.
 스탠드얼론 (--edition standalone [--test-build], 계획 docs/superpowers/plans/2026-11-23-standalone-3-install-build.md): 조각 방식으로만,
-배포_SA_<버전>·AUTOPILOT_Standalone_Setup_<버전>.exe. --out-root 로 D:\AX 밖에 만들 수 있다 (옛 버전 정리도 그 폴더에서만).
+배포_SA_<버전>·AUTOPILOT_Standalone_Setup_<버전>.exe 를 D:\AX\스탠드얼론\ 에 (폴더 나누기 2026-11-23 - 일반 D:\AX 와 섞지 않는다).
+--out-root 로 다른 곳에 만들 수 있다 (옛 버전 정리도 그 폴더에서만).
 보관 폴더 셋은 지우지 말 것 - 지우면 전부 새로 만들어 PC 가 다 다시 받는다: build\exe_cache (옛 방식 exe), build\pyd_cache (조각),
 build\launcher_cache (시작 파일).
 비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다. 설치 파일은 5번을 통과한 판 폴더로만 만든다).
@@ -54,6 +55,15 @@ import server_info  # noqa: E402
 import update_sign  # noqa: E402
 
 OUT_ROOT = r"D:\AX"
+# 스탠드얼론 빌드 결과는 따로 (폴더 나누기, 사용자 2026-11-23) - 일반 정리(prune_local)가 이 폴더를, 스탠드얼론 정리가 D:\AX 를 보지 않는다
+STANDALONE_OUT_ROOT = os.path.join(OUT_ROOT, "스탠드얼론")
+
+
+def default_out_root(edition="cloud"):
+    """--out-root 가 없을 때 결과 자리: 일반 OUT_ROOT (예전 그대로), 스탠드얼론 STANDALONE_OUT_ROOT."""
+    return OUT_ROOT if edition == "cloud" else STANDALONE_OUT_ROOT
+
+
 RUNTIME_ROOT = r"D:\AX\runtime"           # python\ (처음 한 번 배포_20260928_3 에서 복사)
 RUNTIME_DIRS = ("python",)                # 브라우저(ms-playwright 713MB)는 안 싣는다 - 깔린 Edge 를 쓴다 (2026-10-06, web_replay.edge)
 EXES = {"ERPia_RPA.exe": "run_routine.py", "Prepare_RPA.exe": "web_runner.py", "Prepare_Observer.exe": "rpa_observer.py"}
@@ -995,7 +1005,8 @@ def setup_name(version, edition="cloud", test=False):
     return f"AUTOPILOT_Standalone_{'TEST_' if test else ''}Setup_{version}.exe"
 
 
-def iscc_command(iscc, out_dir, version, out_root=OUT_ROOT, iss=ISS_PATH, edition="cloud", test=False):
+def iscc_command(iscc, out_dir, version, out_root=None, iss=ISS_PATH, edition="cloud", test=False):
+    out_root = out_root or default_out_root(edition)
     if edition == "cloud":
         return [iscc, "/Qp", f"/DAppVersion={version}", f"/DNumVersion={num_version(version)}", f"/DSourceDir={out_dir}",
                 f"/DDashboardURL={server_info.DASHBOARD_URL}",
@@ -1005,8 +1016,9 @@ def iscc_command(iscc, out_dir, version, out_root=OUT_ROOT, iss=ISS_PATH, editio
             f"/O{out_root}", f"/F{setup_name(version, edition, test)[:-4]}", iss]
 
 
-def build_setup(out_dir, version, out_root=OUT_ROOT, edition="cloud", test=False):
+def build_setup(out_dir, version, out_root=None, edition="cloud", test=False):
     """판 폴더로 설치 파일을 만든다. 경로를 돌려준다. ISCC 가 없거나 컴파일이 안 되면 RuntimeError."""
+    out_root = out_root or default_out_root(edition)
     iscc = find_iscc()
     if not iscc:
         raise RuntimeError("Inno Setup(ISCC.exe) 이 없습니다. winget install JRSoftware.InnoSetup --scope user 로 설치하거나 "
@@ -1058,7 +1070,8 @@ def main(argv=None):
     ap.add_argument("--onefile", action="store_true", help="옛 방식: exe 셋을 Nuitka onefile 로 (지금 기본과 같다)")
     ap.add_argument("--edition", choices=EDITIONS, default="cloud",
                     help="버전 종류: cloud(일반, 기본) / standalone(로컬 서버 - 조각 방식으로만, 설계 2026-11-23-standalone)")
-    ap.add_argument("--out-root", metavar="폴더", default=None, help=f"배포 폴더·압축·설치 파일을 둘 곳 (기본 {OUT_ROOT})")
+    ap.add_argument("--out-root", metavar="폴더", default=None,
+                    help=f"배포 폴더·압축·설치 파일을 둘 곳 (기본: 일반 {OUT_ROOT}, 스탠드얼론 {STANDALONE_OUT_ROOT})")
     ap.add_argument("--test-build", action="store_true",
                     help="스탠드얼론 시험용 빌드: 그 자리에서 만든 열쇠를 쓴다 (이름에 TEST, 고객 배포 금지)")
     ap.add_argument("--sign-key", metavar="파일", default=None,
@@ -1075,7 +1088,7 @@ def main(argv=None):
         print("  문제: --modules 는 --exes-from·--to-dist·--onefile 과 함께 쓸 수 없습니다")
         return 1
     modules = args.modules or edition == "standalone"
-    out_root = args.out_root or OUT_ROOT
+    out_root = args.out_root or default_out_root(edition)
     problem = signing_key_problem() or (license_key_problem(test) if edition == "standalone" else None)
     if problem:
         print("  문제:", problem)

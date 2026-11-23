@@ -17,7 +17,10 @@
   #error SourceDir 이 없습니다 - tools/build_release.py 로 컴파일하세요
 #endif
 ; 버전 종류 (스탠드얼론 계획 ③ Task 5): /DEdition=standalone [/DTestBuild=1]. 없으면 일반(cloud) - 그때 지금 설치 파일과 같다.
-; 파일을 둘로 나누지 않는다 - [Code] 고침이 두 설치 파일에 같이 간다. 설치 폴더·설정 폴더·시작 메뉴 이름은 같다 (설계 6.1)
+; 파일을 둘로 나누지 않는다 - [Code] 고침이 두 설치 파일에 같이 간다.
+; 폴더 나누기 (사용자 2026-11-23 "아예 일반버전과 스탠드얼론 버전이 있는 폴더를 분리"): 설치 폴더·설정 폴더·시작 메뉴 이름이
+; 버전 종류마다 다르다 - 일반 AFTER MARKET\RPA·'오토파일럿' (예전 그대로), 스탠드얼론 AFTER MARKET\RPA Standalone·'오토파일럿 스탠드얼론'.
+; ProductSub 는 rpa_status.PRODUCT_DIRS·STANDALONE_DIRS 의 뒤쪽과 같아야 한다 (tests/test_installer_edition.py 가 본다)
 #ifndef Edition
   #define Edition "cloud"
 #endif
@@ -27,8 +30,14 @@
   #else
     #define MyAppName "오토파일럿 스탠드얼론"
   #endif
+  #define ProductSub "RPA Standalone"
+  #define OtherSub "RPA"
+  #define GroupName "오토파일럿 스탠드얼론"
 #else
   #define MyAppName "오토파일럿"
+  #define ProductSub "RPA"
+  #define OtherSub "RPA Standalone"
+  #define GroupName "오토파일럿"
 #endif
 
 [Setup]
@@ -43,10 +52,14 @@ AppVersion={#AppVersion}
 AppVerName={#MyAppName} {#AppVersion}
 AppPublisher=오토파일럿
 VersionInfoVersion={#NumVersion}
-DefaultDirName={commonpf64}\AFTER MARKET\RPA
+DefaultDirName={commonpf64}\AFTER MARKET\{#ProductSub}
 DisableDirPage=yes
-DefaultGroupName=오토파일럿
+DefaultGroupName={#GroupName}
 DisableProgramGroupPage=yes
+#if Edition == "standalone"
+; 나누기 전 시험용 빌드(2026.11.23-1·-2)가 남긴 자리(...\RPA)를 물려받지 않는다 - 그 PC 는 InitializeSetup 이 먼저 지우라고 멈춘다
+UsePreviousAppDir=no
+#endif
 ; 이름을 바꿨다 (2026-10-13 AFTER MARKET RPA → 오토파일럿) - 덮어 설치할 때 옛 시작 메뉴 묶음 이름을 물려받지 않는다
 UsePreviousGroup=no
 PrivilegesRequired=admin
@@ -71,11 +84,11 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Dirs]
 ; 이 config 폴더가 생기면 그 PC 는 새 구조다 (1부 3절). 제거할 때 자동으로 지우지 않는다 (끝에 묻는다)
-Name: "{commonappdata}\AFTER MARKET\RPA\config"; Flags: uninsneveruninstall
-Name: "{commonappdata}\AFTER MARKET\RPA\data"; Flags: uninsneveruninstall
+Name: "{commonappdata}\AFTER MARKET\{#ProductSub}\config"; Flags: uninsneveruninstall
+Name: "{commonappdata}\AFTER MARKET\{#ProductSub}\data"; Flags: uninsneveruninstall
 #if Edition == "standalone"
 ; 로컬 서버 자료 (열쇠·계정·기록 - local_server.data_dir). 지울 때 남긴다 (끝에 묻는다)
-Name: "{commonappdata}\AFTER MARKET\RPA\standalone"; Flags: uninsneveruninstall
+Name: "{commonappdata}\AFTER MARKET\{#ProductSub}\standalone"; Flags: uninsneveruninstall
 #endif
 Name: "{group}"
 
@@ -115,12 +128,12 @@ Filename: "{group}\오토파일럿 대시보드.url"; Section: "InternetShortcut
 ; 상속을 끊고 Administrators(S-1-5-32-544)·SYSTEM(S-1-5-18) 만 남긴다. 한글 윈도우의 그룹 이름 차이에 흔들리지 않게 SID 로.
 ; 설치 전에 누가 이 폴더를 미리 만들어 두었어도 막히게 (2026-09-29 검토): 주인을 Administrators 로 바꾸고, 아래 폴더·파일은
 ; 따로 붙은 권한을 지우고 위의 것을 물려받게 한다 (주인은 권한을 다시 바꿀 수 있고, 따로 붙은 권한은 상속으로 안 지워진다)
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" /setowner *S-1-5-32-544 /T /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\{#ProductSub}"" /setowner *S-1-5-32-544 /T /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
 ; 맨 위 폴더 자신에 따로 붙어 있던 권한도 지운다 (보안 감사 2026-11-13 C16, 고객사 보안 검토 2026-11-19): /inheritance:r /grant:r 는
 ; 물려받은 것과 관리자·SYSTEM 것만 바꾸고, 설치 전에 누가 개별로 붙여 둔 사용자 권한은 남겼다. /reset 으로 먼저 비운 뒤 아래에서 상속을 끊는다
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" /reset /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" /inheritance:r /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA\*"" /reset /T /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\{#ProductSub}"" /reset /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\{#ProductSub}"" /inheritance:r /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\{#ProductSub}\*"" /reset /T /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
 ; 처음 설치면 설정 창, 판 올림이면 창 없이 작업 등록·에이전트 켜기. 조용한 설치에서는 창을 절대 띄우지 않는다 (기다리며 멈춘다)
 Filename: "{app}\python\pythonw.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"" --after-install"; WorkingDir: "{app}"; Flags: waituntilterminated; StatusMsg: "설정 창에서 설정을 마치고 [저장] 을 누르세요..."; Check: not WizardSilent
 Filename: "{app}\python\python.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"" --after-install --no-window"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Check: WizardSilent
@@ -145,10 +158,11 @@ const
   // 옵저버가 켜 있는 동안 쥐는 잠금 (rpa_status.OBSERVER_LOCK 과 같아야 한다). 켜진 exe 는 덮지도 지우지도 못한다
   OBSERVER_LOCK = 'Local\AFTER_MARKET_RPA_OBSERVER';
   OBSERVER_OPEN = '옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 다시 ';
-  // 다른 버전 종류 (계획 ③ Task 5) - 일반·스탠드얼론은 같은 폴더에 깔리므로 한 PC 에 하나만
+  // 다른 버전 종류 (계획 ③ Task 5) - 한 PC 에 하나만 (폴더는 2026-11-23 부터 따로지만, 같은 ERPia·바탕화면 작업 폴더를 같이 쓴다)
 #if Edition == "standalone"
   OTHER_APPID = '{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}';
   OTHER_EDITION_TEXT = '이 PC 에는 오토파일럿 일반 버전이 설치되어 있습니다. 스탠드얼론 버전은 일반 버전이 없는 PC 에만 설치할 수 있습니다.';
+  OLD_PLACE_TEXT = '이 PC 에는 예전 자리(C:\Program Files\AFTER MARKET\RPA)에 오토파일럿 스탠드얼론이 설치되어 있습니다. 앱 및 기능에서 먼저 제거한 뒤 다시 설치하세요.';
   DATA_LOSS = '지우면 저장된 비밀번호·프리셋·실행 기록·라이선스·웹 계정이 모두 없어집니다. 다시 설치해서 계속 쓰려면 [아니요] 를 누르세요.';
 #else
   OTHER_APPID = '{7D2E9A61-3B4F-4C8D-A5E2-91F0C6B3D7A4}';
@@ -156,21 +170,31 @@ const
   DATA_LOSS = '지우면 저장된 비밀번호·프리셋·실행 기록이 모두 없어집니다. 다시 설치해서 계속 쓰려면 [아니요] 를 누르세요.';
 #endif
 
-// 다른 버전 종류가 깔린 PC 인가: 상대 AppId 의 제거 등록 키(64비트 보기)가 있거나, 프로그램 폴더에 manifest.json 이 있는데
-// edition.json 이 (스탠드얼론 설치 파일이면) 없다 / (일반 설치 파일이면) 있다 - 등록이 지워진 채 파일만 남은 PC 도 막는다
+// 다른 버전 종류가 깔린 PC 인가: 상대 AppId 의 제거 등록 키(64비트 보기)가 있거나, 상대 프로그램 폴더(AFTER MARKET\{#OtherSub})에
+// manifest.json 이 있다 - 등록이 지워진 채 파일만 남은 PC 도 막는다
 function OtherEditionInstalled(): Boolean;
 var
   Dir: String;
 begin
-  Result := RegKeyExists(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\' + OTHER_APPID + '_is1');
+  Result := RegKeyExists(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\' + OTHER_APPID + '_is1')
+            or FileExists(ExpandConstant('{commonpf64}\AFTER MARKET\{#OtherSub}\manifest.json'));
+#if Edition == "standalone"
+  Dir := '';
+#else
+  // 폴더를 나누기 전 스탠드얼론 시험용 빌드(2026.11.23-1·-2)는 일반 폴더에 깔렸다 - 거기 edition.json 이 있으면 스탠드얼론
   Dir := ExpandConstant('{commonpf64}\AFTER MARKET\RPA');
   if (not Result) and FileExists(Dir + '\manifest.json') then
-#if Edition == "standalone"
-    Result := not FileExists(Dir + '\edition.json');
-#else
     Result := FileExists(Dir + '\edition.json');
 #endif
 end;
+
+#if Edition == "standalone"
+// 폴더를 나누기 전 스탠드얼론 시험용 빌드가 예전 자리(...\RPA)에 깔린 PC 인가 - 새 자리에 또 깔리지 않게 먼저 지우게 한다
+function OldPlaceInstalled(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{commonpf64}\AFTER MARKET\RPA\edition.json'));
+end;
+#endif
 
 // 설치 파일이 켜질 때: 다른 버전 종류가 깔려 있으면 알리고 그만둔다 (종료 코드 1, 깔려 있던 것은 그대로).
 // 시험용 빌드는 조용한 설치가 아니면 먼저 묻는다 (고객에게 나가지 않게)
@@ -180,6 +204,14 @@ begin
 #ifdef TestBuild
   if (not WizardSilent) and (MsgBox('시험용 빌드입니다. 고객 PC 에 설치하지 마십시오. 계속하시겠습니까?', mbConfirmation, MB_YESNO) = IDNO) then
   begin
+    Result := False;
+    exit;
+  end;
+#endif
+#if Edition == "standalone"
+  if OldPlaceInstalled() then
+  begin
+    SuppressibleMsgBox(OLD_PLACE_TEXT, mbError, MB_OK, IDOK);
     Result := False;
     exit;
   end;
@@ -262,7 +294,7 @@ begin
     RunSettings('--remove-task');
   if CurUninstallStep = usPostUninstall then
   begin
-    Data := ExpandConstant('{commonappdata}\AFTER MARKET\RPA');
+    Data := ExpandConstant('{commonappdata}\AFTER MARKET\{#ProductSub}');
     if DirExists(Data) and (SuppressibleMsgBox('설정과 기록(' + Data + ')도 지울까요?' + #13#10 + DATA_LOSS,
          mbConfirmation, MB_YESNO or MB_DEFBUTTON1, IDNO) = IDYES) then
     begin

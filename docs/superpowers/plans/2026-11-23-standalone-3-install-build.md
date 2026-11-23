@@ -187,8 +187,8 @@
 
 **Interfaces:**
 - Produces (`installer.iss` - `/DEdition` 이 없으면 `cloud` 이고 그때 지금 설치 파일과 같다):
-  - 스탠드얼론 `AppId={{7D2E9A61-3B4F-4C8D-A5E2-91F0C6B3D7A4}` (이 값으로 못박는다 - 바꾸면 덮어 설치가 다른 제품이 된다), `AppName`·`UninstallDisplayName` = `오토파일럿 스탠드얼론` (`/DTestBuild=1` 이면 뒤에 ` (시험용)`). 설치 폴더·설정 폴더·시작 메뉴 이름은 일반 버전과 같다 (설계 6.1).
-  - `[Dirs]` 에 `{commonappdata}\AFTER MARKET\RPA\standalone` (지울 때 남김). `[Files]` 의 `Excludes` 는 `\RPA_UserConfig.json,\배포안내_스탠드얼론.txt,\PC번호_확인.bat`. 대시보드 바로 가기 주소는 `/DDashboardURL`(= `http://127.0.0.1:8781/`).
+  - 스탠드얼론 `AppId={{7D2E9A61-3B4F-4C8D-A5E2-91F0C6B3D7A4}` (이 값으로 못박는다 - 바꾸면 덮어 설치가 다른 제품이 된다), `AppName`·`UninstallDisplayName` = `오토파일럿 스탠드얼론` (`/DTestBuild=1` 이면 뒤에 ` (시험용)`). 설치 폴더·설정 폴더·시작 메뉴 이름은 일반 버전과 같다 (설계 6.1) - **2026-11-23 사용자 지시로 바꿈: 아래 '폴더 나누기'**.
+  - `[Dirs]` 에 `{commonappdata}\AFTER MARKET\RPA\standalone` (지울 때 남김 - 폴더 나누기 뒤 `…\RPA Standalone\standalone`). `[Files]` 의 `Excludes` 는 `\RPA_UserConfig.json,\배포안내_스탠드얼론.txt,\PC번호_확인.bat`. 대시보드 바로 가기 주소는 `/DDashboardURL`(= `http://127.0.0.1:8781/`).
   - `InitializeSetup()` (두 버전 종류 모두): 다른 버전 종류가 깔려 있으면 알리고 `False` (설치 파일의 종료 코드 1). 가리는 법 = 상대 `AppId` 의 제거 등록 키(`…\Uninstall\{<AppId>}_is1`, 64비트 보기)가 있거나, 프로그램 폴더에 `manifest.json` 이 있는데 `edition.json` 이 (스탠드얼론 설치 파일이면) 없다 / (일반 설치 파일이면) 있다.
     - 스탠드얼론 설치 파일: `이 PC 에는 오토파일럿 일반 버전이 설치되어 있습니다. 스탠드얼론 버전은 일반 버전이 없는 PC 에만 설치할 수 있습니다.`
     - 일반 설치 파일: `이 PC 에는 오토파일럿 스탠드얼론 버전이 설치되어 있습니다. 일반 버전은 스탠드얼론 버전이 없는 PC 에만 설치할 수 있습니다.`
@@ -240,6 +240,10 @@
 - [ ] **Step 6: 샌드박스 (차례로 하나씩)** - ① `sandbox_test.py --standalone --cloud-setup <Step 5 의 설치 파일> <Step 4 의 설치 파일>` ② `sandbox_test.py --standalone --over-cloud D:\AX\AUTOPILOT_Setup_2026.11.23-2.exe <Step 4 의 설치 파일>` ③ `sandbox_test.py --update <Step 5 의 설치 파일>` ④ `sandbox_test.py --from D:\AX\AUTOPILOT_Setup_2026.11.23-2.exe <Step 5 의 설치 파일>`. 모두 `실패: 0`. 실패는 원인을 찾아 해당 Task 의 파일을 고친다 (시험을 고치지 않는다).
 - [ ] **Step 7: 끝 정리** - 스탠드얼론 시험 모두 + 일반 버전 시험, 계획 목록의 ③ 상태를 고친다. `D:\AX\SA_build_check` 는 사용자에게 물어 지운다.
 - [ ] **Step 8: 커밋** - "스탠드얼론 ③ Task 6 - 샌드박스 --standalone (설치·라이선스·로그인·명령·기록·변조·덮어 설치·막은 주소 시도 0), 시험용 빌드 확인".
+
+### 폴더 나누기 (사용자 2026-11-23)
+
+사용자 지시 "아예 일반버전과 스탠드얼론 버전이 있는 폴더를 분리(격리) 시켜놔야겠네" 로 Task 5 의 '설치 폴더·설정 폴더·시작 메뉴 이름은 일반 버전과 같다 (설계 6.1)' 를 바꿨다. 일반 버전의 자리·이름은 한 글자도 바꾸지 않고 스탠드얼론만 옮긴다 - 프로그램 `%ProgramFiles%\AFTER MARKET\RPA Standalone`, 설정·기록·로컬 서버 자료·라이선스 `%ProgramData%\AFTER MARKET\RPA Standalone` (`rpa_status.STANDALONE_DIRS`·`product_dirs()`, 판정은 `edition.edition()` 그대로 - 그 함수는 `install_root` 를 부르지 않아 돌지 않는다, 업데이트 도우미 runner 처럼 `edition` 이 없으면 일반), 시작 메뉴 '오토파일럿 스탠드얼론', 작업 `AFTER MARKET\RPA Standalone Agent`·`…Standalone Update` (`rpa_settings.task_name()`·`helper_task_name()`·`install_dir()`). 설치 파일은 `#define ProductSub`·`OtherSub`·`GroupName` 로 가르고, 다른 버전 종류 검사는 상대 AppId 등록 키 또는 상대 폴더의 `manifest.json` 을 본다 (일반 설치 파일은 나누기 전 자리 `…\RPA\edition.json` 도). 나누기 전 시험용 빌드가 `…\RPA` 에 깔린 PC 에서는 스탠드얼론 설치 파일이 먼저 지우라고 멈춘다 (`OldPlaceInstalled`, `UsePreviousAppDir=no`). 겹쳐도 그대로 둔 이름: 잠금(뮤텍스) `Local\AFTER_MARKET_RPA_*` - 한 PC 에 한 종류만 깔리고, 혹시 둘이 있어도 같은 ERPia 를 두 에이전트가 함께 누르지 않게 막아 준다. 작업 표시줄 ID `AFTERMARKET.RPA.*`·exe 이름·바탕화면 `ERPIA_AI` 작업 폴더도 그대로 (폴더가 달라 섞이지 않는다). 이 개발 PC 의 스탠드얼론 빌드 결과는 `D:\AX\스탠드얼론\` (`build_release.STANDALONE_OUT_ROOT`, 일반은 `D:\AX` 그대로), 이미 만든 시험용 빌드 2026.11.23-1·-2 도 그리로 옮겼다. 시험: `tests/test_folder_split.py`, `test_installer_edition.py`(일반 설치 파일의 자리 줄이 예전 글자 그대로), `test_build_edition.py`, `test_sandbox_standalone.py`, 샌드박스 두 스크립트의 '상대 자리를 만들지 않음' 확인.
 
 ---
 

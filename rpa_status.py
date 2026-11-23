@@ -235,6 +235,21 @@ def read_account():
 #   - 시험은 RPA_USER_CONFIG(또는 옛 RPA_CRED_FILE)로 임시 폴더를 가리킨다. 그러면 새 파일·옛 파일 모두 그 폴더만 본다.
 # ---------------------------------------------------------------------------
 PRODUCT_DIRS = ("AFTER MARKET", "RPA")   # 새 구조 폴더: Program Files\AFTER MARKET\RPA, ProgramData\AFTER MARKET\RPA
+# 스탠드얼론은 폴더를 따로 쓴다 (사용자 2026-11-23 "아예 일반버전과 스탠드얼론 버전이 있는 폴더를 분리") - installer.iss 의 ProductSub 와 같다
+STANDALONE_DIRS = ("AFTER MARKET", "RPA Standalone")
+
+
+def product_dirs():
+    """이 버전 종류의 폴더 이름 (Program Files·ProgramData 아래): 일반은 PRODUCT_DIRS, 스탠드얼론은 STANDALONE_DIRS.
+    판정은 edition.edition() 그대로 (설치본은 프로그램 폴더의 표시·컴파일 조각 값, 소스는 RPA_EDITION) - 라이선스·로컬 서버가
+    보는 판정과 같아 둘이 어긋나지 않는다. edition 은 program_dir·shipped·dev_env 만 부르고 install_root 를 부르지 않는다
+    (돌지 않는다 - tests/test_folder_split.py 가 못박는다). edition 모듈이 없으면 (업데이트 도우미 runner - 일반 버전에만 있다)
+    일반. 뜻밖의 오류도 일반 (rpa_settings._standalone 과 같다 - 기록 함수가 예외를 내면 안 된다)."""
+    try:
+        import edition
+        return STANDALONE_DIRS if edition.edition() == edition.STANDALONE else PRODUCT_DIRS
+    except Exception:
+        return PRODUCT_DIRS
 
 
 def _nuitka():
@@ -279,9 +294,10 @@ def program_dir():
 
 
 def install_root():
-    """새 구조의 설정·기록 뿌리 %ProgramData%\\AFTER MARKET\\RPA. 시험용 RPA_PROGRAMDATA 가 있으면 그 폴더 (소스·시험 표시가 있을 때만)."""
+    """새 구조의 설정·기록 뿌리 %ProgramData%\\AFTER MARKET\\RPA (스탠드얼론은 ...\\RPA Standalone - product_dirs).
+    시험용 RPA_PROGRAMDATA 가 있으면 그 폴더 (소스·시험 표시가 있을 때만)."""
     return dev_env("RPA_PROGRAMDATA") or os.path.join(
-        os.environ.get("ProgramData") or r"C:\ProgramData", *PRODUCT_DIRS)
+        os.environ.get("ProgramData") or r"C:\ProgramData", *product_dirs())
 
 
 def shipped():

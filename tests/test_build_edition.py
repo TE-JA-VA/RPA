@@ -112,6 +112,33 @@ check("시험용 정리는 시험용 것만 (열쇠 파일까지)",
       f"{removed} {sorted(n for n in left if '11.20' in n)}")
 check("다시 돌려도 지울 것이 없다", br.prune_local(pr, keep=4) == [] and br.prune_local(pr, keep=4, edition="standalone") == [])
 
+# 폴더 나누기 (사용자 2026-11-23): 이 개발 PC 의 스탠드얼론 빌드 결과는 D:\AX\스탠드얼론\ 에 (일반은 D:\AX 그대로)
+check("기본 결과 자리: 일반 D:\\AX (예전 그대로), 스탠드얼론 D:\\AX\\스탠드얼론",
+      br.OUT_ROOT == r"D:\AX" and getattr(br, "STANDALONE_OUT_ROOT", None) == r"D:\AX\스탠드얼론"
+      and getattr(br, "default_out_root", lambda e: None)("cloud") == r"D:\AX"
+      and getattr(br, "default_out_root", lambda e: None)("standalone") == r"D:\AX\스탠드얼론")
+src = open(br.__file__, encoding="utf-8").read()
+check("main 은 --out-root 가 없으면 버전 종류의 기본 자리", "out_root = args.out_root or default_out_root(edition)" in src)
+check("ISCC 명령의 기본 결과 자리도 버전 종류마다 (일반 /OD:\\AX, 스탠드얼론 /OD:\\AX\\스탠드얼론)",
+      r"/OD:\AX" in br.iscc_command("I", "D", "2026.11.24-1")
+      and r"/OD:\AX\스탠드얼론" in br.iscc_command("I", "D", "2026.11.24-1", edition="standalone", test=True))
+sp = os.path.join(tmp, "split")
+sub = os.path.join(sp, "스탠드얼론")
+for v in vs:
+    os.makedirs(os.path.join(sp, "배포_" + v))
+    write(os.path.join(sp, br.setup_name(v)), b"")
+    os.makedirs(os.path.join(sub, "배포_SA_TEST_" + v))
+    write(os.path.join(sub, br.setup_name(v, "standalone", True)), b"")
+    write(os.path.join(sub, f"배포_SA_TEST_{v}.testkey.txt"), b"k")
+before_sub = sorted(os.listdir(sub))
+r1 = br.prune_local(sp, keep=4)
+check("일반 정리(D:\\AX 흉내)는 아래 스탠드얼론 폴더를 보지 않는다", r1 == ["2026.11.20-1"] and sorted(os.listdir(sub)) == before_sub
+      and os.path.isdir(sub), str(r1))
+before_top = sorted(os.listdir(sp))
+r2 = br.prune_local(sub, keep=4, edition="standalone", test=True)
+check("스탠드얼론 정리(D:\\AX\\스탠드얼론 흉내)는 위 일반 폴더를 보지 않는다", r2 == ["2026.11.20-1"] and sorted(os.listdir(sp)) == before_top
+      and not any("2026.11.20-1" in n for n in os.listdir(sub)), str(r2))
+
 # ---------------------------------------------------------------------------
 print("=== 2. 스탠드얼론 재료 목록 ===")
 sa = br.program_files("standalone")

@@ -114,7 +114,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check("설치 파일 옆에 배포 폴더가 없으면 D:\\AX 의 것", sb.find_release(cloud) == os.path.join(r"D:\AX", "배포_2099.01.01-1"))
     open(os.path.join(near, "manifest.json"), "w").write("{}")
     check("설치 파일 옆의 배포 폴더를 먼저 (--out-root 빌드)", sb.find_release(cloud) == near)
-    check("스탠드얼론 접두사", sb.find_release(setup, "배포_SA_TEST_") == os.path.join(r"D:\AX", "배포_SA_TEST_2099.01.01-1"))
+    check("스탠드얼론 접두사 - 옆에 없으면 D:\\AX\\스탠드얼론 의 것 (폴더 나누기 2026-11-23)",
+          sb.find_release(setup, "배포_SA_TEST_") == os.path.join(r"D:\AX\스탠드얼론", "배포_SA_TEST_2099.01.01-1"))
 
 print("=== 5. 샌드박스 설정 파일 ===")
 check("--offline 은 네트워크 끄기 줄을 넣는다", "<Networking>Disable</Networking>" in sb.WSB.format(work="W", extra=sb.OFFLINE)
@@ -124,8 +125,31 @@ for name in ("sandbox_inner_standalone.ps1", "sandbox_trap.ps1"):
     check(f"{name} 는 BOM 있는 UTF-8", b.startswith(b"\xef\xbb\xbf") and bool(b[3:].decode("utf-8")))
 inner = open(os.path.join(ROOT, "tools", "sandbox_inner_standalone.ps1"), encoding="utf-8-sig").read()
 check("안쪽 스크립트가 결과 끝 줄 '실패: N' 을 쓰고 done.txt 를 남긴다", '"실패: $script:fails"' in inner and "done.txt" in inner)
-check("일반 버전의 sandbox_inner.ps1 은 그대로 (스탠드얼론 글자 없음)",
-      "standalone" not in open(os.path.join(ROOT, "tools", "sandbox_inner.ps1"), encoding="utf-8-sig").read())
+cloud_inner = open(os.path.join(ROOT, "tools", "sandbox_inner.ps1"), encoding="utf-8-sig").read()
+check("일반 버전의 sandbox_inner.ps1 은 스탠드얼론 기능을 시험하지 않는다 (소문자 standalone 글자 없음)", "standalone" not in cloud_inner)
+
+print("=== 6. 폴더 나누기 (사용자 2026-11-23) ===")
+for line in ('$App = "C:\\Program Files\\AFTER MARKET\\RPA Standalone"', '$PD = "C:\\ProgramData\\AFTER MARKET\\RPA Standalone"',
+             '$SM = "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\오토파일럿 스탠드얼론"', '$Task = "AFTER MARKET\\RPA Standalone Agent"',
+             '$CloudApp = "C:\\Program Files\\AFTER MARKET\\RPA"', '$CloudPD = "C:\\ProgramData\\AFTER MARKET\\RPA"'):
+    check(f"스탠드얼론 샌드박스 자리: {line}", line in inner)
+check("스탠드얼론 샌드박스: 설치 뒤·일반 설치 파일이 멈춘 뒤·제거 뒤에 일반 폴더(프로그램·설정)를 만들지 않았는지 본다",
+      inner.count("@(NoCloudDirs)") >= 4)
+check("스탠드얼론 샌드박스: 설치본의 install_root 가 새 설정 폴더, 작업 이름은 일반 이름이 아니다",
+      "st.install_root()" in inner and "AFTER MARKET\\RPA Agent" in inner)
+check("스탠드얼론 샌드박스 --over-cloud: 일반 설치는 일반 폴더에, 스탠드얼론 폴더는 생기지 않는다",
+      "$CloudApp\\manifest.json" in inner and "-not (Test-Path $App)" in inner)
+for line in ('$App = "C:\\Program Files\\AFTER MARKET\\RPA"', '$PD = "C:\\ProgramData\\AFTER MARKET\\RPA"',
+             '$SM = "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\오토파일럿"', '$Task = "AFTER MARKET\\RPA Agent"'):
+    check(f"일반 샌드박스 자리는 예전 그대로: {line}", line in cloud_inner)
+check("일반 샌드박스: 스탠드얼론 폴더(프로그램·설정)를 만들지 않았는지 본다",
+      'C:\\Program Files\\AFTER MARKET\\RPA Standalone' in cloud_inner and 'C:\\ProgramData\\AFTER MARKET\\RPA Standalone' in cloud_inner)
+src = open(os.path.join(ROOT, "tools", "sandbox_test.py"), encoding="utf-8").read()
+check("sandbox_test 안내의 스탠드얼론 설치 파일 예시는 D:\\AX\\스탠드얼론", "D:\\\\AX\\\\스탠드얼론\\\\AUTOPILOT_Standalone_TEST_Setup_" in src)
+import build_release as br  # noqa: E402
+check("sandbox_test 의 기본 결과 자리 = build_release 의 버전 종류별 기본값",
+      sb.OUT_ROOTS == {"배포_": br.default_out_root("cloud"), "배포_SA_": br.default_out_root("standalone"),
+                       "배포_SA_TEST_": br.default_out_root("standalone")})
 
 print(f"\n실패: {fails}")
 sys.exit(1 if fails else 0)

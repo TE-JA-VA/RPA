@@ -44,6 +44,14 @@ Check "빈 틀은 template 이름으로, 진짜 설정 이름·안내 문서는 
 $ver = & $Py -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; r = st.check_install(r'$App'); print(r['state'], r['version'])"
 Check "판 점검 ok" ("$ver" -like "ok *") "$ver"
 Check "새 자리 config·data" ((Test-Path "$PD\config") -and (Test-Path "$PD\data"))
+# 폴더 나누기 (사용자 2026-11-23): 일반 버전은 예전 자리 그대로, 스탠드얼론 자리(AFTER MARKET\RPA Standalone)는 만들지 않는다
+$SaDirs = @("C:\Program Files\AFTER MARKET\RPA Standalone", "C:\ProgramData\AFTER MARKET\RPA Standalone", "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\오토파일럿 스탠드얼론")
+function SaDirsFound { @($SaDirs | Where-Object { Test-Path $_ }) }
+Check "폴더 나누기: 일반은 예전 자리(...\RPA)에 깔리고 스탠드얼론 자리(...\RPA Standalone·시작 메뉴)는 만들지 않는다" ((Test-Path "$App\manifest.json") -and (@(SaDirsFound).Count -eq 0)) (@(SaDirsFound) -join ", ")
+if (-not $oldSetup) {
+  $names = & $Py -E -s -c "import sys; sys.path.insert(0, r'$App'); sys.path.insert(0, r'$App\firebase\agent'); import rpa_status as st, rpa_settings as rs; print(st.install_root() + '|' + rs.task_name() + '|' + rs.install_dir())" 2>&1
+  Check "설치본의 install_root·작업 이름·설치 폴더가 예전 글자 그대로" ("$names" -eq "$PD|$Task|$App") "$names"
+}
 $acl = (icacls "$PD\config") -join "`n"
 $acl | Set-Content "$O\acl.txt" -Encoding UTF8
 Check "config 는 관리자·SYSTEM 만" (($acl -match "Administrators") -and ($acl -match "SYSTEM") -and -not ($acl -match "Users") -and -not ($acl -match "CREATOR OWNER")) $acl
@@ -412,6 +420,7 @@ schtasks /Query /TN $Task *> $null
 Check "제거: 작업이 없다" ($LASTEXITCODE -ne 0)
 Check "제거: 시작 메뉴가 없다" (-not (Test-Path $SM))
 Check "제거: 설정·기록은 남는다" (Test-Path "$PD\config\agent_config.json")
+Check "제거 뒤에도 스탠드얼론 자리는 없다 (폴더 나누기)" (@(SaDirsFound).Count -eq 0) (@(SaDirsFound) -join ", ")
 
 $results.Add("실패: $script:fails")
 $results | Set-Content "$O\results.txt" -Encoding UTF8

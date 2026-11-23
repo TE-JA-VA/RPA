@@ -36,6 +36,7 @@ for _p in (HERE, os.path.join(HERE, "firebase", "agent")):
 import rpa_status as st  # noqa: E402
 
 TASK_NAME = r"AFTER MARKET\RPA Agent"
+STANDALONE_TASK_NAME = r"AFTER MARKET\RPA Standalone Agent"   # 스탠드얼론은 작업 이름을 따로 (폴더 나누기, 사용자 2026-11-23) - task_name()
 TEMPLATE_NAME = "RPA_UserConfig.template.json"   # 설치 파일이 빈 틀 RPA_UserConfig.json 을 이 이름으로 넣는다
 AGENT_CONFIG_NAME = "agent_config.json"
 PRESET_STASH = "이전 업체 프리셋"     # 업체코드를 바꾸며 비운 프리셋을 옮겨 두는 폴더 (config 안, 사용자 2026-10-15) - rpa_status.PRESET_STASH 와 같다
@@ -66,8 +67,9 @@ CRASH_LOG_NAME = "설정창_오류.txt"               # 뜻밖의 오류 추적 
 ICON_NAME = "AFTER_MARKET.ico"                  # 프로그램 폴더 (tools/make_icon.py 가 만든다)
 APP_ID = "AFTERMARKET.RPA.Settings"             # 작업 표시줄 묶음 이름. 시작 메뉴 바로 가기(installer.iss)와 같아야 한다
 # 설치 파일이 넣는 자리 {commonpf64}\AFTER MARKET\RPA (ProgramW6432 는 32비트 프로세스에서도 64비트 Program Files)
-INSTALL_DIR = os.path.normpath(os.path.join(os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles")
-                                            or r"C:\Program Files", *st.PRODUCT_DIRS))
+_PROGRAM_FILES = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles") or r"C:\Program Files"
+INSTALL_DIR = os.path.normpath(os.path.join(_PROGRAM_FILES, *st.PRODUCT_DIRS))
+STANDALONE_INSTALL_DIR = os.path.normpath(os.path.join(_PROGRAM_FILES, *st.STANDALONE_DIRS))   # {commonpf64}\AFTER MARKET\RPA Standalone
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +100,22 @@ def _standalone():
         return edition.is_standalone()
     except Exception:
         return False
+
+
+def install_dir():
+    """이 버전 종류의 설치 폴더 - 일반 INSTALL_DIR, 스탠드얼론 STANDALONE_INSTALL_DIR (폴더 나누기, 사용자 2026-11-23)."""
+    return STANDALONE_INSTALL_DIR if _standalone() else INSTALL_DIR
+
+
+def task_name():
+    """에이전트 자동 시작 작업 이름 - 일반 TASK_NAME (예전 그대로), 스탠드얼론 STANDALONE_TASK_NAME."""
+    return STANDALONE_TASK_NAME if _standalone() else TASK_NAME
+
+
+def helper_task_name():
+    """업데이트 도우미 작업 이름 - 일반 HELPER_TASK_NAME (update_helper.HELPER_TASK 와 같다). 스탠드얼론은 업데이트가 없어
+    등록하지 않지만, 제거 때 지우는 이름도 자기 것만 (일반 버전의 작업을 건드리지 않게)."""
+    return STANDALONE_HELPER_TASK_NAME if _standalone() else HELPER_TASK_NAME
 
 
 def _test_build():
@@ -199,13 +217,16 @@ def start_problem(session=None, me=None, here=None):
     session·me·here 는 시험용 (안 주면 이 PC 에서 알아낸다. session 이 빈 글자면 '못 알아냄' 으로 본다).
     설치 폴더 밖의 사본(손으로 넘긴 압축 폴더 등)에서 열면 멈춘다 - 그대로 저장하면 자동 시작 작업이 그 사본을 가리키는데,
     D:\\ 같은 곳의 폴더는 누구나 고칠 수 있어 그 파일이 관리자 권한으로 돌게 된다 (2026-09-29 검토)."""
+    standalone = _standalone()
     if not st.new_layout():
         return (f"설치 마법사로 설치한 PC가 아닙니다. ({os.path.join(st.install_root(), 'config')}이(가) 없습니다)\n"
-                "AUTOPILOT_Setup으로 설치한 뒤 시작 메뉴의 '오토파일럿 설정'을 실행하여 주십시오.")
+                f"{'AUTOPILOT_Standalone_Setup' if standalone else 'AUTOPILOT_Setup'}으로 설치한 뒤 "
+                "시작 메뉴의 '오토파일럿 설정'을 실행하여 주십시오.")
     here = here or HERE
-    if os.path.normcase(os.path.normpath(here)) != os.path.normcase(INSTALL_DIR):
-        return (f"이 설정 창은 설치 폴더({INSTALL_DIR})의 것이 아닙니다. ({here})\n"
-                "시작 메뉴 → 오토파일럿 → '오토파일럿 설정'을 실행하여 주십시오.")
+    inst = install_dir()
+    if os.path.normcase(os.path.normpath(here)) != os.path.normcase(inst):
+        return (f"이 설정 창은 설치 폴더({inst})의 것이 아닙니다. ({here})\n"
+                f"시작 메뉴 → {'오토파일럿 스탠드얼론' if standalone else '오토파일럿'} → '오토파일럿 설정'을 실행하여 주십시오.")
     me = me or process_user()
     session = session_user() if session is None else session
     if session and not same_account(me, session):
@@ -310,7 +331,7 @@ def register_task(xml_text, folder, run=run_quiet):
     with open(path, "w", encoding="utf-16") as f:
         f.write(xml_text)
     try:
-        code, out = run(["schtasks", "/Create", "/TN", TASK_NAME, "/XML", path, "/F"])
+        code, out = run(["schtasks", "/Create", "/TN", task_name(), "/XML", path, "/F"])
     finally:
         try:
             os.remove(path)
@@ -321,21 +342,22 @@ def register_task(xml_text, folder, run=run_quiet):
 
 
 def start_task(run=run_quiet):
-    code, out = run(["schtasks", "/Run", "/TN", TASK_NAME])
+    code, out = run(["schtasks", "/Run", "/TN", task_name()])
     if code != 0:
         raise RuntimeError(f"에이전트를 켜지 못했습니다: {out.strip()[-300:]}")
 
 
 def end_task(run=run_quiet):
     """작업을 끝낸다 - 감독이 죽으면 잡이 에이전트도 끝낸다. 작업이 없거나 안 돌고 있어도 괜찮다."""
-    run(["schtasks", "/End", "/TN", TASK_NAME])
+    run(["schtasks", "/End", "/TN", task_name()])
 
 
 def delete_task(run=run_quiet):
-    run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
+    run(["schtasks", "/Delete", "/TN", task_name(), "/F"])
 
 
 HELPER_TASK_NAME = r"AFTER MARKET\RPA Update"   # 자동 업데이트 도우미 - 바꾸는 동안만 있다 (update_helper.py 가 끝나면 지운다)
+STANDALONE_HELPER_TASK_NAME = r"AFTER MARKET\RPA Standalone Update"   # 스탠드얼론은 업데이트가 없다 - 제거 때 지우는 이름만 (helper_task_name)
 
 
 def helper_task_xml(user, runner_dir):
@@ -360,7 +382,7 @@ def register_helper_task(runner_dir, run=run_quiet, user=None):
     with open(path, "w", encoding="utf-16") as f:
         f.write(helper_task_xml(user or process_user(), runner_dir))
     try:
-        code, out = run(["schtasks", "/Create", "/TN", HELPER_TASK_NAME, "/XML", path, "/F"])
+        code, out = run(["schtasks", "/Create", "/TN", helper_task_name(), "/XML", path, "/F"])
     finally:
         try:
             os.remove(path)
@@ -371,13 +393,13 @@ def register_helper_task(runner_dir, run=run_quiet, user=None):
 
 
 def run_helper_task(run=run_quiet):
-    code, out = run(["schtasks", "/Run", "/TN", HELPER_TASK_NAME])
+    code, out = run(["schtasks", "/Run", "/TN", helper_task_name()])
     if code != 0:
         raise RuntimeError(f"업데이트 도우미를 켜지 못했습니다: {out.strip()[-300:]}")
 
 
 def delete_helper_task(run=run_quiet):
-    run(["schtasks", "/Delete", "/TN", HELPER_TASK_NAME, "/F"])
+    run(["schtasks", "/Delete", "/TN", helper_task_name(), "/F"])
 
 
 def wait_released(running, wait=STOP_WAIT_SEC, sleep=time.sleep):

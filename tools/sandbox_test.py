@@ -19,7 +19,9 @@ r"""설치 파일을 윈도우 샌드박스에서 시험한다 (설계 9절). �
 
 스탠드얼론 (계획 docs/superpowers/plans/2026-11-23-standalone-3-install-build.md Task 6):
     .venv\\Scripts\\python.exe tools\\sandbox_test.py --standalone [--cloud-setup <일반 설치 파일>] [--over-cloud <일반 설치 파일>]
-        D:\\AX\\AUTOPILOT_Standalone_TEST_Setup_<v>.exe
+        D:\\AX\\스탠드얼론\\AUTOPILOT_Standalone_TEST_Setup_<v>.exe
+(스탠드얼론 빌드 결과는 D:\\AX\\스탠드얼론\\ 에 있다 - 폴더 나누기 2026-11-23. 샌드박스 안에서는 Program Files·ProgramData 의
+AFTER MARKET\\RPA Standalone 에 깔리고, 일반 폴더 AFTER MARKET\\RPA 는 생기지 않아야 한다)
 시험용 빌드(--test-build)의 설치 파일만 받는다 (이름에 TEST, 옆에 배포_SA_TEST_<v>.testkey.txt). 그 열쇠로 샌드박스 PC 번호
 (SANDBOX_GUID)의 라이선스를 만들어 넣고 (열쇠 파일 자체는 넣지 않는다) tools\\sandbox_inner_standalone.ps1 이 설치·라이선스·
 로그인·명령·기록·변조·덮어 설치·제거와 막은 주소로의 연결 시도(덫)를 본다.
@@ -79,15 +81,19 @@ def BLOCK_HOSTS(info=None):                                  # noqa: N802 (계�
     return seen
 
 
+OUT_ROOTS = {"배포_": r"D:\AX", "배포_SA_": r"D:\AX\스탠드얼론", "배포_SA_TEST_": r"D:\AX\스탠드얼론"}   # build_release 의 기본 결과 자리
+
+
 def find_release(setup, prefix="배포_"):
-    """설치 파일의 배포 폴더: 설치 파일이 있는 폴더의 <prefix><v> 를 먼저, 없으면 D:\\AX 의 것 (--out-root 로 만든 빌드도 시험한다).
-    못 찾으면 그 이름의 D:\\AX 자리 (부르는 쪽이 manifest.json 으로 확인한다)."""
+    """설치 파일의 배포 폴더: 설치 파일이 있는 폴더의 <prefix><v> 를 먼저, 없으면 그 버전 종류의 기본 결과 자리 것
+    (일반 D:\\AX, 스탠드얼론 D:\\AX\\스탠드얼론 - --out-root 로 만든 빌드도 시험한다).
+    못 찾으면 그 이름의 기본 자리 (부르는 쪽이 manifest.json 으로 확인한다)."""
     m = re.search(r"Setup_(.+)\.exe$", os.path.basename(setup))
     if not m:
         return ""
     name = f"{prefix}{m.group(1)}"
     near = os.path.join(os.path.dirname(os.path.abspath(setup)), name)
-    return near if os.path.isfile(os.path.join(near, "manifest.json")) else os.path.join(r"D:\AX", name)
+    return near if os.path.isfile(os.path.join(near, "manifest.json")) else os.path.join(OUT_ROOTS.get(prefix, r"D:\AX"), name)
 
 
 def test_key_path(setup):

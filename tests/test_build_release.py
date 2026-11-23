@@ -236,8 +236,11 @@ check("ISCC 명령", cmd[0] == "ISCC.exe" and "/DAppVersion=2026.09.29-5" in cmd
       and "/FAUTOPILOT_Setup_2026.09.29-5" in cmd and cmd[-1] == br.ISS_PATH, cmd)
 iss = Path(br.ISS_PATH).read_bytes().decode("utf-8-sig")
 root_rel = "\\".join(st.PRODUCT_DIRS)
-check("설치 자리 = 1부 자리 규칙", f"DefaultDirName={{commonpf64}}\\{root_rel}" in iss)
-check("새 자리 config·data", all(f"{{commonappdata}}\\{root_rel}\\{d}" in iss for d in ("config", "data")))
+sys.path.insert(0, str(ROOT / "tests"))
+from iss_view import preprocess  # noqa: E402  일반 설치 파일로 펼친 글 (폴더 나누기 2026-11-23 부터 자리는 {#ProductSub})
+iss_cloud = preprocess(iss, {"Edition": "cloud"}, expand=True)
+check("설치 자리 = 1부 자리 규칙", f"DefaultDirName={{commonpf64}}\\{root_rel}\n" in iss_cloud + "\n")
+check("새 자리 config·data", all(f"{{commonappdata}}\\{root_rel}\\{d}\"" in iss_cloud for d in ("config", "data")))
 check("빈 틀 이름 바꾸기 = 설정 창이 찾는 이름", f'DestName: "{rs.TEMPLATE_NAME}"' in iss)
 check("안내 문서·빈 틀은 통째 복사에서 뺀다", all(f"\\{n}" in iss for n in ("RPA_UserConfig.json", "배포안내.txt", "클라우드_안내.txt")))
 check("권한은 SID 로 (관리자·SYSTEM), 상속 끊기", "*S-1-5-32-544:(OI)(CI)F" in iss and "*S-1-5-18:(OI)(CI)F" in iss

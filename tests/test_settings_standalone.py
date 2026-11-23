@@ -230,7 +230,9 @@ try:
     check("계정이 없으면 False", rs.configured(r) is False)
 
     print("=== 5. 멈추기 (--stop) - 남은 로컬 서버 ===")
-    prog = r"C:\Program Files\AFTER MARKET\RPA"
+    prog = r"C:\Program Files\AFTER MARKET\RPA Standalone"     # 스탠드얼론 설치 폴더 (폴더 나누기 2026-11-23)
+    check("스탠드얼론 설치 폴더·작업 이름 (rs.install_dir·task_name)", rs.install_dir().endswith(r"\AFTER MARKET\RPA Standalone")
+          and rs.task_name() == r"AFTER MARKET\RPA Standalone Agent", f"{rs.install_dir()} {rs.task_name()}")
     server = (77, "AFTER_MARKET_RPA_Agent.exe", prog + r"\python\AFTER_MARKET_RPA_Agent.exe",
               f'"{prog}\\python\\AFTER_MARKET_RPA_Agent.exe" -E -s -X utf8 "{prog}\\firebase\\agent\\local_server.py"')
     foreign = (88, "python.exe", r"C:\x\python.exe", r"python D:\dev\firebase\agent\local_server.py")
