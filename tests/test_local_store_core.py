@@ -111,9 +111,11 @@ def test_subscribe(tmpdir):
     s.put("apps/rpa/commands/c1/p1/k5", {"state": "queued", "type": "launch"})
     s.put("apps/rpa/commands/c1/p1/k5/type", "stop")
     got = drain(q)
-    check("자식 안쪽만 바뀌어도 그 자식을 통째로 다시 알림",
+    # 계속 조건에 맞는 자식의 안쪽 칸이 바뀌면 그 칸만 알린다 (Firebase 와 같다) - 자식을 통째로 다시 보내면
+    # 에이전트(watch_commands)가 같은 대기 명령을 또 받는다 (검토 2026-11-23 11번)
+    check("계속 맞는 자식의 안쪽 칸은 그 칸만 알림",
           got == [("put", {"path": "/k5", "data": {"state": "queued", "type": "launch"}}),
-                  ("put", {"path": "/k5", "data": {"state": "queued", "type": "stop"}})], str(got))
+                  ("put", {"path": "/k5/type", "data": "stop"})], str(got))
     s.put("apps/rpa/commands/c1/p1", None)
     check("구독 자리 통째로 지움", drain(q)[-1] == ("put", {"path": "/", "data": None}))
 

@@ -5,6 +5,7 @@
 표준 라이브러리만 쓴다.
 """
 import copy
+import hashlib
 import hmac
 import http.server
 import json
@@ -23,6 +24,8 @@ import urllib.parse
 RPA_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 if RPA_DIR not in sys.path:
     sys.path.insert(0, RPA_DIR)          # rpa_status·license_check (agent.py 와 같은 규칙)
+
+import local_store  # noqa: E402  요청·응답 서명 (클라이언트와 같은 함수)
 
 PORT = 8781
 
@@ -100,6 +103,13 @@ def _filtered(node, order_by, equal_to):
     return {k: v for k, v in node.items() if _matches(v, order_by, equal_to)} or None
 
 
+class Refused(Exception):
+    """쓰기 전 확인(guard)이 거절했다 - 아무것도 쓰지 않았다."""
+
+
+SUB_QUEUE_MAX = 2000      # 구독 하나에 밀려도 되는 이벤트 수 - 넘으면 그 구독을 끊는다 (읽지 않는 연결이 메모리를 잡지 못하게)
+
+
 class Store:
     """JSON 나무 하나를 파일에 둔 저장소 (RTDB 자리 흉내). 쓸 때마다 파일에 원자적으로 저장한다.
     - 값이 None 이거나 비어 있으면 지운 것 - 빈 가지는 없앤다 (get 은 None).
@@ -116,13 +126,20 @@ class Store:
 
     # --- 파일 ---
     def _load(self):
-        try:
-            with open(self.path, encoding="utf-8") as f:
-                text = f.read()
-        except FileNotFoundError:
-            return {}
-        except (OSError, UnicodeDecodeError):
-            return self._broken()
+        text = None
+        for attempt in range(5):          # 백신 등이 잠깐 잡고 있어 못 읽은 것은 다시 읽는다 - 멀쩡한 파일을 .broken 으로 치우지 않는다 (검토 10번)
+            try:
+                with open(self.path, encoding="utf-8") as f:
+                    text = f.read()
+                break
+            except FileNotFoundError:
+                return {}
+            except UnicodeDecodeError:
+                return self._broken()
+            except OSError:
+                if attempt == 4:
+                    raise             # 끝내 못 읽으면 서버가 끝나고 감독이 다시 켠다
+                time.sleep(0.2)
         try:
             data = json.loads(text)
             if not isinstance(data, dict):
@@ -173,21 +190,24 @@ class Store:
         return copy.deepcopy(_filtered(node, order_by, equal_to))
 
     # --- 쓰기 ---
-    def put(self, path, value):
-        self._write("put", _split(path), [(_split(path), _clean(value))], None)
+    def put(self, path, value, guard=None):
+        self._write("put", _split(path), [(_split(path), _clean(value))], None, guard)
 
-    def patch(self, path, value):
+    def patch(self, path, value, guard=None):
         """value 의 키마다 path 아래 그 자리를 새로 쓴다 (키에 '/' 가 있으면 여러 자리 쓰기 - RTDB PATCH 와 같다)."""
         base = _split(path)
         writes = [(base + _split(k), _clean(v)) for k, v in value.items()]
-        self._write("patch", base, writes, copy.deepcopy(value))
+        self._write("patch", base, writes, copy.deepcopy(value), guard)
 
-    def delete(self, path):
-        self._write("delete", _split(path), [(_split(path), None)], None)
+    def delete(self, path, guard=None):
+        self._write("delete", _split(path), [(_split(path), None)], None, guard)
 
-    def _write(self, kind, base, writes, raw):
+    def _write(self, kind, base, writes, raw, guard=None):
+        """guard(get): 쓰기 직전에 잠금 안에서 부른다 (get(자리 글) = 지금 값). 거짓이면 Refused - 확인과 쓰기 사이에 다른 쓰기가 끼지 못한다."""
         with self._lock:
             old = self._data
+            if guard is not None and not guard(lambda p: copy.deepcopy(_lookup(old, _split(p)))):
+                raise Refused()
             new = copy.deepcopy(old)
             for parts, value in writes:
                 if not parts:
@@ -200,14 +220,20 @@ class Store:
             self._data = new
             for sub in list(self._subs):
                 for ev in self._events(sub, kind, base, writes, raw, old, new):
-                    sub["q"].put(ev)
+                    try:
+                        sub["q"].put_nowait(ev)
+                    except queue.Full:            # 읽지 않는 구독 - 끊는다 (받는 쪽이 overflow 를 보고 닫는다)
+                        sub["q"].overflow = True
+                        self._subs = [s for s in self._subs if s is not sub]
+                        break
 
     # --- 구독 ---
     def subscribe(self, path, order_by=None, equal_to=None):
         """path 를 구독한다. 큐의 첫 항목은 ("put", {"path": "/", "data": 지금 값(거른 것)}), 그 뒤로 바뀔 때마다
         ("put"|"patch", {"path": "/<상대 경로>", "data": 값}). 거른 구독은 자식이 조건에 들어오면 그 자식 값을, 빠지면
         ("put", {"path": "/<키>", "data": None}) 을 넣는다. 다 쓰면 unsubscribe."""
-        q = queue.Queue()
+        q = queue.Queue(maxsize=SUB_QUEUE_MAX)
+        q.overflow = False
         sub = {"q": q, "parts": _split(path), "order_by": order_by, "equal_to": equal_to}
         with self._lock:
             node = _filtered(_lookup(self._data, sub["parts"]), order_by, equal_to)
@@ -238,12 +264,16 @@ class Store:
             out, seen = [], set()
             for rel in rels:
                 key = rel[0]
+                was = _matches(_lookup(old, S + [key]), order_by, equal_to)
+                child = _lookup(new, S + [key])
+                now_in = _matches(child, order_by, equal_to)
+                if was and now_in and len(rel) > 1:      # 계속 맞는 자식의 안쪽 칸 - 그 칸만 (Firebase 와 같다)
+                    out.append(("put", {"path": "/" + "/".join(rel), "data": copy.deepcopy(_lookup(new, S + rel))}))
+                    continue
                 if key in seen:
                     continue
                 seen.add(key)
-                was = _matches(_lookup(old, S + [key]), order_by, equal_to)
-                child = _lookup(new, S + [key])
-                if _matches(child, order_by, equal_to):
+                if now_in:
                     out.append(("put", {"path": "/" + key, "data": copy.deepcopy(child)}))
                 elif was:
                     out.append(("put", {"path": "/" + key, "data": None}))
@@ -333,38 +363,60 @@ class Runs:
 
 
 # ----------------------------------------------------------------------------------------------------
-# 창구 - HTTP 서버·열쇠·검사 (계획 ① Task 3)
+# 창구 - HTTP 서버·열쇠·검사 (계획 ① Task 3, 검토 2026-11-23 뒤 고침)
 # ----------------------------------------------------------------------------------------------------
 # 주소는 Firebase REST 와 같은 꼴이라 에이전트 코드가 그대로 돈다 (local_store.Client 가 부른다):
 #   /db/<자리>.json        GET·PUT·PATCH·DELETE, Accept: text/event-stream 이면 구독 (SSE)
 #   /fs/<parent>/<collection>?id=<문서 id>   POST 실행 기록 만들기,  /fs/<문서 자리>  GET,  /fs-sum?parent=&collection=&field=&since=
-# 열쇠 둘 (Authorization: Bearer): agent.key = 에이전트, relay.key = ACTOR 실행·옵저버의 인증번호 중계.
+# 열쇠 둘: agent.key = 에이전트, relay.key = ACTOR 실행·옵저버의 인증번호 중계.
+# 열쇠는 주고받지 않는다 - 요청마다 열쇠로 만든 서명(local_store.request_mac)을 확인하고, 응답·구독 이벤트에도 서명을 붙인다.
+# 그래서 포트를 먼저 잡은 다른 프로그램은 열쇠를 얻지 못하고, 에이전트는 그 프로그램의 답을 믿지 않는다 (검토 1번).
 # 검사는 지금 RTDB 규칙과 같은 뜻 - 에이전트는 자기 PC 자리만 쓰고, 명령은 만들지 못하고 상태만 옮긴다.
 
 APP = "rpa"
 MAX_BODY = 4 * 1024 * 1024
+MAX_CONN = 64                              # 동시에 붙을 수 있는 연결 - 넘으면 바로 닫는다 (빈 연결로 스레드를 잡아 두지 못하게)
+READ_TIMEOUT = 15                          # 요청 줄·머리글·본문을 이 안에 못 읽으면 끊는다
 KEEPALIVE_SEC = 30
+SIGN_WINDOW_MS = 60000                     # 요청 시각이 서버 시각과 이만큼 넘게 다르면 거절 (같은 PC 라 넉넉하다)
+NONCE_KEEP_SEC = 150
 LOG_NAME = "로컬서버_기록.txt"
+LOG_MAX = 1024 * 1024
 KEY_FILES = ("agent.key", "relay.key")
-VOLATILE = ("apps/otp",)                   # 인증번호 요청·번호는 메모리에만 (파일에 남기지 않는다 - 설계 6.2)
+VOLATILE = ("apps/otp", f"apps/{APP}/live")   # 인증번호와 현황은 메모리에만 (파일에 남기지 않는다 - 현황은 에이전트가 곧 다시 올린다)
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
-CMD_FIXED = ("type", "args", "by", "created_at", "expires_at")      # 에이전트가 못 바꾸는 명령 칸
+CMD_WRITABLE = ("state", "result", "started_at", "ended_at")        # 에이전트가 명령에 쓸 수 있는 칸 (그 밖 type·args·by·시각은 못 바꾼다)
 CMD_MOVES = {"queued": ("running", "expired", "failed"), "running": ("done", "failed")}
+CMD_FINAL = ("done", "failed", "expired")
+OTP_KEYS = ("req_id", "site", "senders", "pcId", "created_at")
+OTP_MAX_SENDERS = 20
 DENIED = {"error": "Permission denied"}     # fb.HttpError 본문을 보는 코드가 같은 글을 찾는다
 
 
+def _read_text(path, tries=5):
+    """글 파일을 읽는다. 없으면 None. 잠깐 못 읽는 것(백신이 잡고 있음 등)은 몇 번 다시 - 끝내 못 읽으면 OSError."""
+    for i in range(tries):
+        try:
+            with open(path, encoding="ascii") as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return None
+        except UnicodeDecodeError:
+            return ""
+        except OSError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.2)
+
+
 def ensure_keys(folder):
-    """에이전트·인증번호 중계 열쇠 (agent.key, relay.key). 없으면 만든다. 파일 권한은 설치 쪽이 잠근다 (계획 ③)."""
+    """에이전트·인증번호 중계 열쇠 (agent.key, relay.key). 없으면 만든다. 파일 권한은 설치 쪽이 잠근다 (계획 ③).
+    있는 파일을 잠깐 못 읽었다고 새 열쇠로 덮지 않는다 - 돌고 있던 ACTOR·옵저버가 끊긴다 (검토 10번). 그때는 OSError."""
     os.makedirs(folder, exist_ok=True)
     out = []
     for name in KEY_FILES:
         path = os.path.join(folder, name)
-        key = ""
-        try:
-            with open(path, encoding="ascii") as f:
-                key = f.read().strip()
-        except (OSError, UnicodeDecodeError):
-            pass
+        key = _read_text(path) or ""
         if len(key) < 32:
             key = secrets.token_urlsafe(32)
             tmp = f"{path}.{os.getpid()}.tmp"
@@ -376,9 +428,15 @@ def ensure_keys(folder):
 
 
 def log(folder, text):
-    """서버 기록 한 줄. 열쇠·인증번호는 싣지 않는다. 예외를 내지 않는다."""
+    """서버 기록 한 줄. 열쇠·인증번호는 싣지 않는다. 1MB 를 넘으면 .1 로 넘긴다. 예외를 내지 않는다."""
     try:
-        with open(os.path.join(folder, LOG_NAME), "a", encoding="utf-8") as f:
+        path = os.path.join(folder, LOG_NAME)
+        try:
+            if os.path.getsize(path) > LOG_MAX:
+                os.replace(path, path + ".1")
+        except OSError:
+            pass
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}\n")
     except OSError:
         pass
@@ -408,7 +466,7 @@ def classify(parts):
 
 
 def allowed(role, method, parts, lic):
-    """이 열쇠가 이 자리에 이 일을 해도 되는가. 명령 자리의 쓰기는 command_writes_ok 가 내용까지 본다."""
+    """이 열쇠가 이 자리에 이 일을 해도 되는가 (자리와 방법까지). 내용은 command_patch_ok·command_delete_ok·otp_request_ok 가 본다."""
     kind, cid, pc, rest = classify(parts)
     if kind is None or cid != lic["cid"]:
         return False
@@ -417,48 +475,75 @@ def allowed(role, method, parts, lic):
     if kind == "commands":
         if role != "agent" or pc != lic["pc_id"]:
             return False
-        return method in ("GET", "PATCH") or (method == "DELETE" and len(rest) == 1)
-    if kind in ("policy", "phones"):
-        return method == "GET"                       # 정책은 라이선스에서 온다 - 쓰는 길이 없다
+        return method == "GET" or (method == "PATCH" and len(rest) <= 1) or (method == "DELETE" and len(rest) == 1)
+    if kind == "policy":
+        return role == "agent" and method == "GET"   # 정책은 라이선스에서 온다 - 쓰는 길이 없다. 중계 열쇠는 읽지도 못한다
+    if kind == "phones":
+        return method == "GET"
+    one = len(rest) == 2 and rest[1] == "current"    # 인증번호 자리는 <휴대폰>/current 하나뿐 (규칙과 같다)
     if kind == "otp_requests":
-        return True                                  # 에이전트·중계 열쇠 모두 (같은 PC 의 실행)
+        return one and method in ("GET", "PUT", "DELETE")      # 에이전트·중계 열쇠 모두 (같은 PC 의 실행)
     if kind == "otp_codes":
-        return method in ("GET", "DELETE")           # 번호를 쓰는 쪽은 휴대폰 창구뿐 (계획 ④)
+        return one and method in ("GET", "DELETE")              # 번호를 쓰는 쪽은 휴대폰 창구뿐 (계획 ④)
     return False
 
 
-def command_writes_ok(store, base, rest, patch):
-    """에이전트가 명령함에 하는 PATCH 가 '있는 명령의 상태 옮기기' 뿐인가.
-    base = 명령함 자리(목록), rest = 그 아래 요청 자리, patch = 요청 본문. 명령 만들기·통째 덮기·고정 칸 바꾸기는 False."""
-    if not isinstance(patch, dict) or len(rest) > 1:
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def command_patch_ok(get, base, rest, patch):
+    """에이전트가 명령함에 하는 PATCH 가 '있는 명령의 상태를 한 칸 옮기기' 뿐인가 (규칙: queued→running 은 한 번만).
+    get(자리 글) = 지금 값 (Store 가 잠금 안에서 부른다 - 확인과 쓰기 사이에 다른 요청이 끼지 못한다).
+    base = 명령함 자리(조각 목록), rest = 그 아래 요청 자리, patch = 요청 본문.
+    명령 만들기·통째 덮기·지우기·고정 칸(type·args·by·시각)·모르는 칸·같은 상태로 다시 쓰기는 False."""
+    if not isinstance(patch, dict) or not patch or len(rest) > 1:
         return False
     per = {}                                         # 명령 키 → {칸: 값}
     for key, value in patch.items():
         parts = rest + _split(key)
-        if not parts:
+        if len(parts) != 2:                          # <명령>/<칸> 꼴만 - 명령 통째(1)·칸 안쪽(3 이상)은 안 된다
             return False
-        if len(parts) == 1:
-            if value is not None:
-                return False                         # 명령 통째로 쓰기 (None = 지우기는 둔다)
-            per.setdefault(parts[0], {})
-            continue
-        if len(parts) > 2 and parts[1] in CMD_FIXED:
-            return False                             # args 안쪽 고치기
-        per.setdefault(parts[0], {})["/".join(parts[1:])] = value
+        per.setdefault(parts[0], {})[parts[1]] = value
     for key, fields in per.items():
-        old = store.get("/".join(base + [key]))
-        if not isinstance(old, dict):
-            if fields:
-                return False                         # 없는 명령에 쓰기 = 만들기
-            continue
+        old = get("/".join(base + [key]))
+        if not isinstance(old, dict) or "state" not in fields:
+            return False
         for name, value in fields.items():
-            top = name.split("/")[0]
-            if top in CMD_FIXED and value != old.get(top):
+            if name not in CMD_WRITABLE:
                 return False
-        if "state" in fields and fields["state"] != old.get("state"):
-            if fields["state"] not in CMD_MOVES.get(old.get("state"), ()):
+            if name == "state" and not isinstance(value, str):
                 return False
+            if name == "result" and not (isinstance(value, str) and len(value) <= 2000):
+                return False
+            if name in ("started_at", "ended_at") and not _number(value):
+                return False
+        if fields["state"] not in CMD_MOVES.get(old.get("state"), ()):
+            return False
     return True
+
+
+def command_delete_ok(get, path):
+    """끝난 명령(done·failed·expired)만 지울 수 있다 (규칙과 같다) - 대기·진행 중인 명령을 지워 없던 일로 만들지 못한다."""
+    old = get(path)
+    return old is None or (isinstance(old, dict) and old.get("state") in CMD_FINAL)
+
+
+def otp_request_ok(body, lic):
+    """인증번호 요청의 모양 (규칙과 같은 뜻): 정해진 칸만, 이 PC 의 요청, 발신번호는 숫자 글 → true 로 OTP_MAX_SENDERS 개까지.
+    등록된 휴대폰·그 휴대폰의 발신번호 목록과 견주기는 휴대폰 창구(계획 ④)가 더한다."""
+    if not isinstance(body, dict) or set(body) - set(OTP_KEYS):
+        return False
+    if not (isinstance(body.get("req_id"), str) and 0 < len(body["req_id"]) <= 64):
+        return False
+    if not (isinstance(body.get("site"), str) and len(body["site"]) <= 200):
+        return False
+    if body.get("pcId") != lic["pc_id"]:
+        return False
+    senders = body.get("senders", {})
+    if not isinstance(senders, dict) or len(senders) > OTP_MAX_SENDERS:
+        return False
+    return all(isinstance(k, str) and k.isdigit() and len(k) <= 20 and v is True for k, v in senders.items())
 
 
 class LocalServer(http.server.ThreadingHTTPServer):
@@ -471,6 +556,32 @@ class LocalServer(http.server.ThreadingHTTPServer):
         socketserver.TCPServer.server_bind(self)     # HTTPServer.server_bind 의 getfqdn 은 망에 따라 수 초 멈춘다
         self.server_name, self.server_port = self.server_address[:2]
 
+    def process_request(self, request, client_address):
+        with self.conn_lock:
+            if self.conns >= MAX_CONN:               # 연결을 쌓아 두는 프로그램이 있어도 스레드가 끝없이 늘지 않게 (검토 4번)
+                self.shutdown_request(request)
+                return
+            self.conns += 1
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with self.conn_lock:
+                self.conns -= 1
+
+    def fresh_nonce(self, nonce, now):
+        """이 nonce 를 처음 보는가 (같은 요청을 다시 보내기 막기). 지난 것은 지운다."""
+        with self.conn_lock:
+            if len(self.nonces) > 5000:
+                for k in [k for k, t in self.nonces.items() if t < now]:
+                    del self.nonces[k]
+            if self.nonces.get(nonce, 0) >= now:
+                return False
+            self.nonces[nonce] = now + NONCE_KEEP_SEC
+            return True
+
     def shutdown(self):
         self.stopping.set()          # 열린 구독(SSE)이 먼저 끝나게 - 에이전트가 끝을 보고 다시 붙는다
         super().shutdown()
@@ -479,6 +590,8 @@ class LocalServer(http.server.ThreadingHTTPServer):
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "AutopilotLocal"
     sys_version = ""
+    timeout = READ_TIMEOUT           # 아무것도 보내지 않는 연결은 끊는다
+    _auth = None                     # (열쇠, nonce) - 서명을 확인한 뒤 채운다. 그 뒤의 응답에는 서명이 붙는다
 
     def log_message(self, *args):    # 요청마다 찍지 않는다 (창 없는 프로세스, 주소에 자리 이름이 든다)
         pass
@@ -491,75 +604,92 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if self._auth:
+            self.send_header(local_store.H_SIGN, local_store.response_mac(self._auth[0], self._auth[1], status, body))
         self.end_headers()
         if body:
             self.wfile.write(body)
 
-    def _body(self):
-        """요청 본문(JSON). 없으면 None. 크거나 깨졌으면 응답을 보내고 _Stop."""
+    def _read(self):
+        """요청 본문 → (bytes 또는 너무 크면 None, sha256 글). 길이가 이상하면 응답을 보내고 _Stop."""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        if length < 0:
+        if length < 0 or length > 16 * MAX_BODY:
             self._reply(400, {"error": "Bad request"})
             raise _Stop()
-        if length > MAX_BODY:
-            left = length
-            while left > 0 and length <= 16 * MAX_BODY:      # 다 읽어 줘야 보내는 쪽이 413 을 받는다
-                chunk = self.rfile.read(min(65536, left))
-                if not chunk:
-                    break
-                left -= len(chunk)
-            self._reply(413, {"error": "Too large"})
-            raise _Stop()
-        if not length:
-            return None
-        try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            self._reply(400, {"error": "Bad request"})
-            raise _Stop() from None
+        h, chunks, left = hashlib.sha256(), [], length
+        while left > 0:
+            chunk = self.rfile.read(min(65536, left))
+            if not chunk:
+                break
+            h.update(chunk)
+            if length <= MAX_BODY:
+                chunks.append(chunk)
+            left -= len(chunk)
+        return (b"".join(chunks) if length <= MAX_BODY else None), h.hexdigest()
 
     # --- 검사 ---
-    def _role(self):
-        """Host 와 열쇠를 보고 'agent'·'relay'. 아니면 응답을 보내고 _Stop."""
+    def _role(self, method, digest):
+        """Host 와 요청 서명을 보고 'agent'·'relay'. 아니면 (서명 없는) 응답을 보내고 _Stop."""
+        srv = self.server
         host = (self.headers.get("Host") or "").rsplit(":", 1)
-        if host[0] not in LOCAL_HOSTS or (len(host) == 2 and host[1] != str(self.server.server_port)):
+        if host[0] not in LOCAL_HOSTS or (len(host) == 2 and host[1] != str(srv.server_port)):
             self._reply(403, DENIED)                 # 다른 이름으로 이 PC 를 가리킨 요청 (DNS 바꿔치기)
             raise _Stop()
-        auth = self.headers.get("Authorization") or ""
-        given = auth[7:].strip() if auth.startswith("Bearer ") else ""
-        for role, key in zip(("agent", "relay"), self.server.keys):
-            if given and hmac.compare_digest(given.encode("utf-8"), key.encode("utf-8")):
-                return role
-        self._reply(401, {"error": "Unauthorized"})
-        raise _Stop()
+        role = self.headers.get(local_store.H_ROLE) or ""
+        ts, nonce = self.headers.get(local_store.H_TIME) or "", self.headers.get(local_store.H_NONCE) or ""
+        sign = self.headers.get(local_store.H_SIGN) or ""
+        now = time.time()
+        ok = role in local_store.ROLES and ts.isdigit() and 16 <= len(nonce) <= 64 and abs(now * 1000 - int(ts)) <= SIGN_WINDOW_MS
+        if ok:
+            key = srv.keys[local_store.ROLES.index(role)]
+            want = local_store.request_mac(key, role, method, self.path, ts, nonce, b"", digest=digest)
+            ok = hmac.compare_digest(sign, want) and srv.fresh_nonce(nonce, now)
+        if not ok:
+            self._reply(401, {"error": "Unauthorized"})
+            raise _Stop()
+        self._auth = (key, nonce)
+        return role
 
     def _parts(self, raw):
-        """주소의 자리 조각. 빈 조각·'.'·'..'·제어 글자가 있으면 400."""
+        """주소의 자리 조각. 빈 조각·'.'·'..'·제어 글자, 풀었을 때 '/'·'\\' 가 든 조각(%2F - 깊이 검사를 속인다, 검토 3번)은 400."""
         parts = [urllib.parse.unquote(p) for p in raw.split("/")]
-        if any(not p or p in (".", "..") or any(ord(c) < 32 for c in p) for p in parts):
+        if any(not p or p in (".", "..") or "/" in p or "\\" in p or any(ord(c) < 32 for c in p) for p in parts):
             self._reply(400, {"error": "Bad path"})
             raise _Stop()
         return parts
+
+    def _json_body(self, raw):
+        if raw is None:
+            self._reply(413, {"error": "Too large"})
+            raise _Stop()
+        if not raw:
+            return None
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self._reply(400, {"error": "Bad request"})
+            raise _Stop() from None
 
     # --- 길 ---
     def _route(self, method):
         try:
             url = urllib.parse.urlsplit(self.path)
             query = dict(urllib.parse.parse_qsl(url.query))
-            role = self._role()
+            raw, digest = self._read()
+            role = self._role(method, digest)
             if url.path.startswith("/db/") and url.path.endswith(".json"):
-                return self._db(method, role, self._parts(url.path[4:-5]) if url.path != "/db/.json" else [], query)
+                return self._db(method, role, self._parts(url.path[4:-5]), query, raw)
             if url.path.startswith("/fs/") and method in ("GET", "POST"):
-                return self._fs(method, role, self._parts(url.path[4:]), query)
+                return self._fs(method, role, self._parts(url.path[4:]), query, raw)
             if url.path == "/fs-sum" and method == "GET":
                 return self._fs_sum(role, query)
             self._reply(404, {"error": "Not found"})
         except _Stop:
             pass
-        except (BrokenPipeError, ConnectionError):
+        except (BrokenPipeError, ConnectionError, TimeoutError):
             pass
         except Exception as e:                       # 서버가 죽지 않게 - 까닭의 종류만 남긴다
             log(self.server.folder, f"요청 처리 오류: {type(e).__name__}")
@@ -584,7 +714,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._route("POST")
 
     # --- 자리 (RTDB 꼴) ---
-    def _db(self, method, role, parts, query):
+    def _db(self, method, role, parts, query, raw):
         srv, lic = self.server, self.server.lic
         if method not in ("GET", "PUT", "PATCH", "DELETE") or not allowed(role, method, parts, lic):
             return self._reply(403, DENIED)
@@ -603,53 +733,69 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if order_by is not None and isinstance(value, dict) and ("endAt" in query or "limitToFirst" in query):
                 value = _range(value, order_by, _json_arg(query.get("endAt")), query.get("limitToFirst"))
             return self._reply(200, value)
-        if method == "DELETE":
-            srv.store.delete(path)
-            return self._reply(200, None)
-        body = _server_values(self._body(), int(time.time() * 1000))
-        if kind == "commands":                       # PATCH 만 여기 온다 (allowed)
-            if not command_writes_ok(srv.store, parts[:5], rest, body):
-                return self._reply(403, DENIED)
-        if method == "PATCH":
-            if not isinstance(body, dict):
-                return self._reply(400, {"error": "Bad request"})
-            srv.store.patch(path, body)
-        else:
-            srv.store.put(path, body)
+        try:
+            if method == "DELETE":
+                guard = (lambda get: command_delete_ok(get, path)) if kind == "commands" else None
+                srv.store.delete(path, guard=guard)
+                return self._reply(200, None)
+            body = _server_values(self._json_body(raw), int(time.time() * 1000))
+            if kind == "commands":                   # PATCH 만 여기 온다 (allowed) - 확인과 쓰기를 한 잠금 안에서
+                if not isinstance(body, dict):
+                    return self._reply(403, DENIED)
+                srv.store.patch(path, body, guard=lambda get: command_patch_ok(get, parts[:5], rest, body))
+            elif kind == "otp_requests":             # PUT 만 여기 온다
+                if not otp_request_ok(body, lic):
+                    return self._reply(403, DENIED)
+                srv.store.put(path, dict(body, created_at=int(time.time() * 1000)))
+            elif method == "PATCH":
+                if not isinstance(body, dict):
+                    return self._reply(400, {"error": "Bad request"})
+                srv.store.patch(path, body)
+            else:
+                srv.store.put(path, body)
+        except Refused:
+            return self._reply(403, DENIED)
         if query.get("print") == "silent":
             return self._reply(204, empty=True)
         return self._reply(200, body)
 
     def _stream(self, path, order_by, equal_to):
         srv = self.server
+        key, nonce = self._auth
         q = srv.store.subscribe(path, order_by, equal_to)
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
+            self.send_header(local_store.H_SIGN, local_store.response_mac(key, nonce, 200, b""))
             self.end_headers()
-            quiet = time.monotonic()
+            quiet, seq = time.monotonic(), 0
             while not srv.stopping.is_set():
                 try:
                     event, data = q.get(timeout=0.5)
                 except queue.Empty:
+                    if getattr(q, "overflow", False):      # 읽지 않아 밀린 구독 - 끊는다 (다시 붙으면 처음 값부터 받는다)
+                        break
                     if time.monotonic() - quiet < KEEPALIVE_SEC:
                         continue
                     event, data = "keep-alive", None
-                self.wfile.write(f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8"))
+                seq += 1
+                text = json.dumps(data, ensure_ascii=False)
+                mac = local_store.event_mac(key, nonce, seq, event, text)
+                self.wfile.write(f"event: {event}\ndata: {text}\nmac: {mac}\n\n".encode("utf-8"))
                 self.wfile.flush()
                 quiet = time.monotonic()
         finally:
             srv.store.unsubscribe(q)
 
     # --- 실행 기록 (Firestore 꼴) ---
-    def _fs(self, method, role, parts, query):
+    def _fs(self, method, role, parts, query, raw):
         srv, lic = self.server, self.server.lic
         ok = role == "agent" and parts[:2] == ["runs", lic["cid"]] and parts[2:3] == ["items"]
         if method == "POST":
             if not ok or len(parts) != 3:
                 return self._reply(403, DENIED)
-            doc, doc_id = self._body(), query.get("id") or ""
+            doc, doc_id = self._json_body(raw), query.get("id") or ""
             if not isinstance(doc, dict) or not 0 < len(doc_id) <= 200:
                 return self._reply(400, {"error": "Bad request"})
             if not srv.runs.create("/".join(parts[:2]), parts[2], doc_id, doc):
@@ -683,9 +829,8 @@ def _json_arg(raw):
 
 def _range(children, order_by, end_at, limit):
     """orderBy 칸으로 줄 세워 endAt 이하·앞에서 limitToFirst 개 (지난 명령 정리 agent.cleanup_commands 가 쓴다). 칸이 없는 자식은 뺀다."""
-    rows = [(v.get(order_by), k, v) for k, v in children.items()
-            if isinstance(v, dict) and isinstance(v.get(order_by), (int, float)) and not isinstance(v.get(order_by), bool)]
-    if isinstance(end_at, (int, float)):
+    rows = [(v.get(order_by), k, v) for k, v in children.items() if isinstance(v, dict) and _number(v.get(order_by))]
+    if _number(end_at):
         rows = [r for r in rows if r[0] <= end_at]
     rows.sort(key=lambda r: (r[0], r[1]))
     try:
@@ -699,10 +844,17 @@ def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None
     """로컬 서버를 만든다 (serve_forever 는 부르는 쪽이). 이 PC 주소에만 묶는다 - 포트가 쓰이는 중이면 OSError."""
     if host not in LOCAL_HOSTS:
         raise ValueError("로컬 서버는 이 PC(127.0.0.1)에만 엽니다.")
-    srv = LocalServer(("127.0.0.1", port), Handler)
+    srv = LocalServer(("127.0.0.1", port), Handler, bind_and_activate=False)
     srv.store, srv.runs, srv.lic, srv.keys = store, runs, lic, tuple(keys)
     srv.folder = folder or os.path.dirname(store.path or "") or "."
     srv.stopping = threading.Event()
+    srv.conn_lock, srv.conns, srv.nonces = threading.Lock(), 0, {}
+    try:
+        srv.server_bind()
+        srv.server_activate()
+    except BaseException:
+        srv.server_close()
+        raise
     return srv
 
 

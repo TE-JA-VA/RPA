@@ -104,6 +104,18 @@ try:
     check("PC 번호 덮어쓰기 (소문자로)", with_env("RPA_MACHINE_GUID", "ABC-Def", license_check.machine_guid) == "abc-def")
     real = with_env("RPA_MACHINE_GUID", "", license_check.machine_guid)
     check("이 PC 의 번호를 읽는다", isinstance(real, str) and len(real) >= 8 and real == real.lower(), repr(real))
+    # 설치본은 시험 표시(test_env.ok)가 있어도 PC 번호·버전 종류를 환경 변수로 바꾸지 못한다 (검토 2026-11-23 6번 -
+    # 표시 파일 하나와 환경 변수로 다른 PC 의 라이선스가 통과했다)
+    import rpa_status as st
+    real_shipped, real_dev = st.shipped, st.dev_env
+    st.shipped, st.dev_env = (lambda: True), (lambda name: os.environ.get(name))       # 설치본 + 시험 표시가 있는 것처럼
+    try:
+        check("설치본은 PC 번호 덮어쓰기를 무시", with_env("RPA_MACHINE_GUID", "aaaa-1111", license_check.machine_guid) == real)
+        check("설치본은 버전 종류 덮어쓰기를 무시", with_env("RPA_EDITION", "standalone", edition.edition) == "cloud")
+        expect_error("설치본에서 남의 라이선스 + 환경 변수 → 거절",
+                     lambda: with_env("RPA_MACHINE_GUID", "aaaa-1111", lambda: license_check.load(good, public_key=pub)), "이 PC 의 라이선스가 아닙니다")
+    finally:
+        st.shipped, st.dev_env = real_shipped, real_dev
     pd = os.path.join(TMP, "pd")
     check("라이선스 자리", with_env("RPA_PROGRAMDATA", pd, license_check.license_path) == os.path.join(pd, "license.json"))
 

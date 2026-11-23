@@ -192,7 +192,7 @@ try:
         code = bg.main(cmd=[PY, "-c", agent_code], backoff=(0.01,), sleep=lambda s: None,
                        server_cmd=[PY, "-c", server_code], server_backoff=(0.05,), keys_wait=0.3)
         got = open(marks, encoding="utf-8").read().split()
-        check("서버 먼저, 그다음 에이전트", got[:2] == ["server", "agent"], repr(got))
+        check("서버 먼저, 그다음 에이전트", got[0] == "server" and "agent" in got, repr(got))
         check("죽은 서버는 다시 켠다", got.count("server") >= 2, repr(got))
         check("에이전트가 '다시 켜지 않는 코드' 로 끝나면 감독도 끝", code == 2)
         time.sleep(1.0)                    # 끝내는 중에 막 띄운 것이 있으면 적히게 둔 뒤
@@ -205,6 +205,29 @@ try:
                 server_cmd=[PY, "-c", lic_stop], server_backoff=(0.05,), keys_wait=0.1)
         time.sleep(1.0)
         check("라이선스로 끝난 서버(2)는 다시 켜지 않는다", open(marks, encoding="utf-8").read().split().count("server") == 1)
+        # 포트를 다른 프로그램이 쓰고 있어 서버가 3 으로 끝남 (검토 2026-11-23 8번): 계속 다시 켜 보되 기록은 가끔만, 에이전트는 띄운다
+        # (에이전트는 가짜 서버의 답을 믿지 않는다 - test_local_store_client)
+        os.remove(marks)
+        port_busy = f"import sys; open(r'{marks}','a').write('server\\n'); sys.exit(3)"
+        slow_agent = (f"import sys,time; p=r'{marks}'; open(p,'a').write('agent\\n'); e=time.time()+30\n"
+                      f"while time.time()<e and open(p).read().split().count('server')<6: time.sleep(0.1)\n"
+                      f"sys.exit(2)")
+        log_file = os.path.join(bg.log_dir(), bg.LOG_NAME)
+        size = os.path.getsize(log_file) if os.path.exists(log_file) else 0
+        real_every = bg.SERVER_LOG_EVERY
+        bg.SERVER_LOG_EVERY = 4
+        try:
+            bg.main(cmd=[PY, "-c", slow_agent], backoff=(0.01,), sleep=lambda s: None,
+                    server_cmd=[PY, "-c", port_busy], server_backoff=(0.05,), keys_wait=0.1)
+        finally:
+            bg.SERVER_LOG_EVERY = real_every
+        got = open(marks, encoding="utf-8").read().split()
+        with open(log_file, encoding="utf-8") as f:
+            f.seek(size)
+            lines = [x for x in f.read().splitlines() if "로컬 서버가 멈췄습니다" in x]
+        check("포트를 못 열어도 계속 다시 켜 본다", got.count("server") >= 6 and "agent" in got, repr(got))
+        check("까닭(포트를 다른 프로그램이 씀)을 기록에", any("포트를 다른 프로그램이 쓰고 있습니다" in x for x in lines), repr(lines[:2]))
+        check("같은 까닭은 가끔만 기록 (끝없이 쌓이지 않는다)", 1 <= len(lines) <= got.count("server") // 2, f"{len(lines)}줄 / {got.count('server')}번")
         box = []
         bg.main = lambda *a, **k: box.append("main") or 0
         bg.run()

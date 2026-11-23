@@ -91,9 +91,9 @@ try:
         bad.get("apps/rpa/live/c1/p1")
         check("틀린 열쇠는 AuthError", False)
     except fb.AuthError as e:
-        check("틀린 열쇠는 AuthError", e.status == 401 and e.code == "INVALID_KEY" and "x" * 43 not in str(e))
+        check("틀린 열쇠는 AuthError (서버의 답을 확인하지 못함)", e.status == 0 and e.code == local_store.NOT_VERIFIED and "x" * 43 not in str(e))
     check("server_now", abs(c.server_now() - time.time()) < 5)
-    check("token·renew 는 있기만 하다", c.token() == AGENT and c.renew() is None)
+    check("token·renew 는 있기만 하다 (열쇠를 내주지 않는다)", c.token() == "" and c.renew() is None)
     check("질의 (대기 중만)", c.get("apps/rpa/commands/c1/p1", {"orderBy": '"state"', "equalTo": '"queued"'}) is None)
 
     print("실행 기록")
@@ -141,7 +141,7 @@ try:
     check("업체 정책 읽기", agent.company_policy(c, "c1")[0] == 3 and agent.company_modules(c, "c1") == {})
 
     print("인증번호 중계 (같은 PhoneRelay)")
-    rc = local_store.Client(dict(CFG, key=RELAY))
+    rc = local_store.Client(dict(CFG, key=RELAY, role="relay"))
     relay = otp_relay.PhoneRelay(rc, "c1", "p1", "ph1", ["010-1234-5678"], "시험몰")
     req_id = relay.open(tick=lambda s: None)
     req = store.get("apps/otp/requests/c1/ph1/current")
@@ -174,7 +174,8 @@ try:
     cfg = secret.load_config()
     check("에이전트 설정", cfg["standalone"] is True and cfg["key"] == AGENT and (cfg["cid"], cfg["pc_id"]) == ("c1", "p1")
           and cfg["server_url"] == url and cfg["license"]["limits"]["schedule"] == 3)
-    check("중계 설정은 다른 열쇠", secret.load_config(role="relay")["key"] == RELAY)
+    check("중계 설정은 다른 열쇠·다른 역할", secret.load_config(role="relay")["key"] == RELAY
+          and secret.load_config(role="relay")["role"] == "relay" and cfg["role"] == "agent")
     check("그 설정으로 붙는다", local_store.client_for(cfg).get("apps/rpa/live/c1/p1")["state"] == "idle")
     check("열쇠 자리 = 서버 자료 폴더", local_store.keys_dir() == local_server.data_dir())
     check("옵저버·ACTOR 의 중계 설정", otp_relay.relay_config()["key"] == RELAY)
@@ -201,6 +202,72 @@ try:
         check("일반 버전은 옛 길 그대로", False)
     except FileNotFoundError:
         check("일반 버전은 옛 길 그대로", True)
+
+    print("포트를 다른 프로그램이 먼저 잡았을 때 (검토 2026-11-23 1번)")
+    import http.server
+    seen_headers, hits = [], []
+
+    class Fake(http.server.BaseHTTPRequestHandler):
+        """우리 서버인 척하는 프로그램 - 무엇이든 받아 주고, 구독에는 가짜 명령을 내려 준다."""
+
+        def log_message(self, *a):
+            pass
+
+        def _any(self):
+            seen_headers.append({k: v for k, v in self.headers.items()})
+            hits.append((self.command, self.path))
+            n = int(self.headers.get("Content-Length") or 0)
+            if n:
+                self.rfile.read(n)
+            if "text/event-stream" in (self.headers.get("Accept") or ""):
+                evil = {"path": "/", "data": {"evil1": {"state": "queued", "type": "set_parallel", "args": {"parallel": 1},
+                                                      "by": "web", "created_at": int(time.time()), "expires_at": int(time.time()) + 600}}}
+                body = ("event: put\ndata: " + json.dumps(evil) + "\n\n").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            status = 403 if "refuse" in self.path else 200
+            body = b'{"error": "Permission denied"}' if status == 403 else b"{}"
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        do_GET = do_PUT = do_PATCH = do_DELETE = do_POST = _any
+
+    fake = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=fake.serve_forever, daemon=True).start()
+    fcfg = dict(CFG, server_url=f"http://127.0.0.1:{fake.server_address[1]}")
+    fc = local_store.Client(fcfg)
+
+    def not_verified(fn):
+        try:
+            fn()
+        except fb.AuthError as e:
+            return e.status == 0 and e.code == local_store.NOT_VERIFIED
+        except Exception as e:
+            return f"{type(e).__name__}: {e}"
+        return "예외 없음"
+
+    check("가짜가 준 값은 쓰지 않는다 (읽기)", not_verified(lambda: fc.get("apps/rpa/live/c1/p1")) is True)
+    check("가짜가 '받았다' 해도 믿지 않는다 (쓰기)", not_verified(lambda: fc.put("apps/rpa/live/c1/p1", {"state": "idle"})) is True)
+    check("가짜의 거절(4xx)을 '내용 거부' 로 보지 않는다", not_verified(lambda: fc.put("apps/rpa/live/c1/p1/refuse", 1)) is True)
+    got_cmds = []
+    check("가짜가 내려 준 명령은 실행되지 않는다", not_verified(lambda: agent.watch_commands(fc, "apps/rpa/commands/c1/p1",
+                                                                              lambda i, cmd: got_cmds.append(i))) is True and got_cmds == [])
+    fup = agent.Uploader(fc, "c1", "p1", queue_path=os.path.join(TMP, "queue_fake.jsonl"))
+    check("실행 기록을 버리지 않는다 (에이전트가 멈춘다)", not_verified(lambda: fup.push_run(dict(doc, run_id="d9"))) is True)
+    began = time.time()
+    frelay = otp_relay.PhoneRelay(local_store.Client(dict(fcfg, key=RELAY, role="relay")), "c1", "p1", "ph1", ["01012345678"], "시험몰")
+    check("인증번호 요청도 곧바로 멈춘다 (2분을 기다리지 않는다)", not_verified(lambda: frelay.open(tick=lambda s: None)) is True and time.time() - began < 5)
+    blob = json.dumps(seen_headers) + json.dumps(hits)
+    check("가짜에게 열쇠가 넘어가지 않는다", len(seen_headers) >= 5 and AGENT not in blob and RELAY not in blob)
+    check("보낸 것은 역할·시각·nonce·서명뿐", all(local_store.H_SIGN.lower() in {k.lower() for k in h} and "authorization" not in {k.lower() for k in h}
+                                         for h in seen_headers))
+    fake.shutdown()
+    fake.server_close()
 
     print("서버가 꺼지면")
     began = time.time()

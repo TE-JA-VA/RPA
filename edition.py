@@ -3,7 +3,7 @@
 
 값은 빌드 때 정해진다: 스탠드얼론 설치 파일이 프로그램 폴더에 edition.json = {"edition": "standalone"} 을 싣는다.
 그 파일이 없으면 일반 버전. 화면에서 바꾸는 곳은 없다 (프로그램 폴더는 관리자만 쓴다).
-시험은 RPA_EDITION 환경 변수로 바꾼다 - 설치본은 프로그램 폴더에 시험 표시가 있을 때만 따른다 (rpa_status.dev_env).
+시험은 RPA_EDITION 환경 변수로 바꾼다 - 소스로 돌 때만 (설치본은 따르지 않는다).
 """
 import json
 import os
@@ -16,7 +16,8 @@ FILE_NAME = "edition.json"
 def edition():
     """'cloud' 또는 'standalone'. 못 읽거나 모르는 값이면 'cloud' (일반 버전 동작이 바뀌지 않게)."""
     import rpa_status as st
-    forced = (st.dev_env("RPA_EDITION") or "").strip().lower()
+    # 설치본은 환경 변수로 버전 종류를 바꾸지 못한다 (시험 표시가 있어도 - 프로그램 폴더의 edition.json 만 본다, 검토 2026-11-23 6번)
+    forced = "" if st.shipped() else (st.dev_env("RPA_EDITION") or "").strip().lower()
     if forced in (CLOUD, STANDALONE):
         return forced
     try:

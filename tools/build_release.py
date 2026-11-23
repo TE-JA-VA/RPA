@@ -70,6 +70,10 @@ PROGRAM_FILES = [
     ("AFTER_MARKET_PREPARE.ico", "release/AFTER_MARKET_PREPARE.ico"),         # 옵저버 exe·창·바로 가기 (Prepare_Observer)
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
+    ("firebase/agent/local_store.py", "firebase/agent/local_store.py"),       # 스탠드얼론의 서버 연결 - agent.py 가 늘 불러온다 (일반 버전에도 실어야 켜진다)
+    ("firebase/agent/local_server.py", "firebase/agent/local_server.py"),     # 스탠드얼론의 로컬 서버 (일반 버전에서는 돌지 않는다)
+    ("edition.py", "edition.py"),                                             # 버전 종류 (일반·스탠드얼론) - agent·secret·background 가 본다
+    ("license_check.py", "license_check.py"),                                 # 스탠드얼론 라이선스 확인
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
     ("firebase/agent/background.py", "firebase/agent/background.py"),         # 에이전트 감독 (2부)
     ("firebase/agent/에이전트_시작.bat", "firebase/agent/에이전트_시작.bat"),
@@ -125,7 +129,7 @@ PLAYWRIGHT = ["--include-package=playwright", "--include-package-data=playwright
 # 문자 2차인증 중계(otp_relay)가 쓰는 에이전트 모듈 - firebase/agent 에 있어 빌드 때 PYTHONPATH 로 찾게 한다 (설계 13절)
 AGENT_DIR = os.path.join(REPO, "firebase", "agent")
 EXE_CACHE = os.path.join(REPO, "build", "exe_cache")   # 지난번에 만든 exe 와 재료 지문 (exe_fingerprint) - 재료가 같으면 다시 만들지 않는다
-AGENT_MODULES = ["--include-module=fb", "--include-module=secret"]
+AGENT_MODULES = ["--include-module=fb", "--include-module=secret", "--include-module=local_store"]
 TK_PLUGIN = "--enable-plugin=tk-inter"
 # 콘솔은 exe 마다: 루틴·프리페어는 로그를 보여 주는 콘솔, 옵저버는 창 프로그램 (attach - 시작 메뉴로 켜면 검은 창이 없고,
 # --check 는 부른 쪽이 출력을 받는다)

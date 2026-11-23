@@ -198,6 +198,8 @@ def run():
 
 SERVER_BACKOFF = (2, 5, 15, 30)       # 로컬 서버가 죽었을 때 다시 켜기 전 기다림(초)
 SERVER_STOP_CODES = (2,)              # 라이선스가 없거나 맞지 않음 (local_server.main) - 다시 켜도 같다
+SERVER_PORT_CODE = 3                  # 포트를 못 엶 (다른 프로그램이 쓰는 중) - 풀릴 수 있으니 계속 다시 켜되, 그동안 에이전트는 가짜 서버를 믿지 않는다
+SERVER_LOG_EVERY = 20                 # 같은 코드로 잇따라 죽을 때 기록은 이 횟수마다
 KEYS_WAIT_SEC = 15                    # 처음 켤 때 서버가 열쇠 파일을 만들기를 기다리는 시간
 
 
@@ -208,7 +210,7 @@ def server_command(exe_dir=None):
 
 def watch_server(cmd, folder, job, stop, backoff=SERVER_BACKOFF):
     """스탠드얼론: 로컬 서버를 띄우고 죽으면 다시 켠다 (스레드로 돈다). stop 이 켜지면 서버를 끝내고 나온다."""
-    fails = 0
+    fails, last = 0, object()
     while not stop.is_set():
         started = time.monotonic()
         try:
@@ -232,14 +234,28 @@ def watch_server(cmd, folder, job, stop, backoff=SERVER_BACKOFF):
             return
         fails = 1 if time.monotonic() - started >= HEALTHY_SEC else fails + 1
         wait = backoff[min(fails, len(backoff)) - 1]
-        log(folder, f"로컬 서버가 멈췄습니다 (코드 {code}). {wait}초 뒤 다시 켭니다")
+        if code != last or fails % SERVER_LOG_EVERY == 0:      # 같은 까닭으로 잇따라 죽으면 기록을 가끔만 (30초마다 한 줄씩 끝없이 쌓이지 않게)
+            why = " - 포트를 다른 프로그램이 쓰고 있습니다. 그 프로그램을 끝내야 합니다" if code == SERVER_PORT_CODE else ""
+            log(folder, f"로컬 서버가 멈췄습니다 (코드 {code}){why}. {wait}초 뒤 다시 켭니다" + (f" ({fails}번째)" if fails > 1 else ""))
+        last = code
         stop.wait(wait)
 
 
-def _keys_ready():
+def _server_ready():
+    """로컬 서버가 열쇠 파일을 만들었고 포트를 듣고 있나 - 그 뒤에 에이전트를 띄워야 켤 때 한 번 하는 정리(끝나지 못한 명령 닫기 등)가
+    연결 거부로 건너뛰지 않는다 (검토 2026-11-23 8번). 듣는 쪽이 진짜 서버인지는 에이전트가 응답 서명으로 본다."""
+    import socket
     try:
         import local_store
-        return os.path.isfile(os.path.join(local_store.keys_dir(), "agent.key"))
+        import rpa_status
+        if not os.path.isfile(os.path.join(local_store.keys_dir(), "agent.key")):
+            return False
+        try:
+            port = int(rpa_status.dev_env("RPA_LOCAL_PORT") or local_store.PORT)
+        except ValueError:
+            port = local_store.PORT
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
     except Exception:
         return False
 
@@ -258,7 +274,7 @@ def main(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep, l
                                daemon=True, name="local-server")
     watcher.start()
     end = time.monotonic() + keys_wait        # 처음 켤 때: 서버가 열쇠 파일을 만든 뒤에 에이전트를 띄운다 (없으면 에이전트가 1 로 끝나 다시 켜진다)
-    while time.monotonic() < end and not _keys_ready():
+    while time.monotonic() < end and not _server_ready():
         time.sleep(0.1)
     try:
         return supervise(cmd, backoff, healthy_sec, sleep, later_sec)

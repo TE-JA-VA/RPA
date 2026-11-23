@@ -23,9 +23,10 @@ class LicenseError(ValueError):
 
 
 def machine_guid():
-    """이 PC 의 번호 (윈도우 MachineGuid, 소문자). 시험은 RPA_MACHINE_GUID 로 바꾼다 (설치본은 시험 표시가 있을 때만)."""
+    """이 PC 의 번호 (윈도우 MachineGuid, 소문자). 시험은 RPA_MACHINE_GUID 로 바꾼다 - **소스로 돌 때만**.
+    설치본은 시험 표시(test_env.ok)가 있어도 따르지 않는다: 표시 파일 하나와 환경 변수로 다른 PC 의 라이선스가 통과했다 (검토 2026-11-23 6번)."""
     import rpa_status as st
-    forced = (st.dev_env("RPA_MACHINE_GUID") or "").strip()
+    forced = "" if st.shipped() else (st.dev_env("RPA_MACHINE_GUID") or "").strip()
     if forced:
         return forced.lower()
     import winreg

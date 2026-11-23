@@ -108,7 +108,7 @@ def _standalone_config(role):
         port = int(_dev_env("RPA_LOCAL_PORT") or local_store.PORT)
     except ValueError:
         port = local_store.PORT
-    return {"standalone": True, "server_url": f"http://127.0.0.1:{port}", "key": key,
+    return {"standalone": True, "server_url": f"http://127.0.0.1:{port}", "key": key, "role": "relay" if role == "relay" else "agent",
             "cid": lic["cid"], "pc_id": lic["pc_id"], "license": lic}
 
 
