@@ -407,7 +407,7 @@ check("배터리여도 켜고 안 멈춤 (노트북)", val("t:Settings/t:Disallo
 check("실행 시간 제한 없음 (기본 3일)", val("t:Settings/t:ExecutionTimeLimit") == "PT0S")
 check("우선순위 5 (기본 7 은 낮음)", val("t:Settings/t:Priority") == "5")
 check("동작: AFTER MARKET 사본이 없으면 내장 pythonw 로 background.py", val("t:Actions/t:Exec/t:Command") == prog + r"\python\pythonw.exe"
-      and val("t:Actions/t:Exec/t:Arguments") == f'"{prog}\\firebase\\agent\\background.py"'
+      and val("t:Actions/t:Exec/t:Arguments") == f'-E -s "{prog}\\firebase\\agent\\background.py"'      # -E -s: 진단 2026-11-23 C-02
       and val("t:Actions/t:Exec/t:WorkingDirectory") == prog + r"\firebase\agent")
 with tempfile.TemporaryDirectory() as d:
     os.makedirs(os.path.join(d, "python"))

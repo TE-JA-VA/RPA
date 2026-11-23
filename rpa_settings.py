@@ -38,7 +38,7 @@ TEMPLATE_NAME = "RPA_UserConfig.template.json"   # 설치 파일이 빈 틀 RPA_
 AGENT_CONFIG_NAME = "agent_config.json"
 PRESET_STASH = "이전 업체 프리셋"     # 업체코드를 바꾸며 비운 프리셋을 옮겨 두는 폴더 (config 안, 사용자 2026-10-15) - rpa_status.PRESET_STASH 와 같다
 # 설정 창은 하나만 - 두 창이 각자 저장하면 늦은 창이 앞 창의 업체코드·계정을 연 때의 옛 값으로 덮는다 (2026-10-22)
-SETTINGS_LOCK = os.environ.get("RPA_SETTINGS_LOCK") or r"Local\AFTER_MARKET_RPA_SETTINGS"
+SETTINGS_LOCK = st.dev_env("RPA_SETTINGS_LOCK") or r"Local\AFTER_MARKET_RPA_SETTINGS"
 RECHECK_MS = 90_000   # 저장 뒤 에이전트 상태를 다시 보는 때 - 감독이 켜고 로그인하기까지 약 1분 (S11)
 LOGISTIC_SECTION = "Logistic"
 KEY_RE = re.compile(r"[a-z0-9_]+")               # 업체코드·PC코드 (agent.ask_key 와 같은 규칙)
@@ -91,7 +91,8 @@ is_admin, process_user, session_user, same_account = st.is_admin, st.process_use
 
 def relaunch_as_admin(args):
     """관리자 권한으로 자기를 다시 띄운다 (UAC 요청). 띄웠으면 True, 사용자가 거절하면 False."""
-    return st.run_as_admin(sys.executable, [os.path.abspath(__file__), *args], HERE)
+    # -E -s: 관리자 권한 파이썬이 사용자 쪽 파이썬 설정(PYTHON* 환경 변수·사용자 site 의 .pth)을 따르지 않게 (보안 진단 2026-11-23 C-02)
+    return st.run_as_admin(sys.executable, ["-E", "-s", os.path.abspath(__file__), *args], HERE)
 
 
 def start_problem(session=None, me=None, here=None):
@@ -197,7 +198,7 @@ def task_xml(user, program_dir):
     <Priority>5</Priority>
   </Settings>
   <Actions Context="Author">
-    <Exec><Command>{escape(py)}</Command><Arguments>"{escape(script)}"</Arguments><WorkingDirectory>{escape(agent_dir)}</WorkingDirectory></Exec>
+    <Exec><Command>{escape(py)}</Command><Arguments>-E -s "{escape(script)}"</Arguments><WorkingDirectory>{escape(agent_dir)}</WorkingDirectory></Exec>
   </Actions>
 </Task>
 """
@@ -247,7 +248,7 @@ def helper_task_xml(user, runner_dir):
     return (xml[:start].replace("오토파일럿 에이전트 - 윈도우 로그인 때 창 없이 켠다 (설치 마법사가 등록)",
                                 "오토파일럿 업데이트 도우미 - 업데이트가 끝나면 스스로 지운다")
             + f"""<Actions Context="Author">
-    <Exec><Command>{escape(py)}</Command><Arguments>"{escape(script)}"</Arguments><WorkingDirectory>{escape(runner_dir)}</WorkingDirectory></Exec>
+    <Exec><Command>{escape(py)}</Command><Arguments>-E -s "{escape(script)}"</Arguments><WorkingDirectory>{escape(runner_dir)}</WorkingDirectory></Exec>
   </Actions>
 </Task>
 """)

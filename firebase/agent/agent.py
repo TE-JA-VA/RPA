@@ -57,6 +57,12 @@ RETRY_LATER_CODE = 5            # agent.main 의 종료 코드 - background.py �
 LOG_LINES = 80
 
 
+def _dev_env(name):
+    """시험용 RPA_* 환경 변수 - 설치본은 무시한다 (rpa_status.dev_env, 보안 진단 2026-11-23 E-1)."""
+    import rpa_status as st
+    return st.dev_env(name)
+
+
 def _data_dir():
     """에이전트 큐·위치·기록을 둘 폴더. 새 구조면 %ProgramData%\\AFTER MARKET\\RPA\\data, 아니면 이 파일 옆 (옛 자리).
     옛 구조에서 rpa_status.data_dir() 을 쓰지 않는 까닭: 개발 PC 는 그 값이 dist 라 큐가 엉뚱한 곳에 생긴다."""
@@ -64,7 +70,7 @@ def _data_dir():
     return st.data_dir() if st.new_layout() else os.path.dirname(os.path.abspath(__file__))
 
 
-QUEUE_PATH = os.environ.get("RPA_AGENT_QUEUE") or os.path.join(_data_dir(), "queue.jsonl")
+QUEUE_PATH = _dev_env("RPA_AGENT_QUEUE") or os.path.join(_data_dir(), "queue.jsonl")
 QUEUE_MAX = 500
 
 
@@ -1408,7 +1414,7 @@ def ask_setup(known=None):
 # ---------------------------------------------------------------------------
 # 에이전트 하나만 (설치 마법사 2부 5절). 설정 창(rpa_settings)이 같은 이름으로 '돌고 있음' 을 본다
 # ---------------------------------------------------------------------------
-MUTEX_NAME = os.environ.get("RPA_AGENT_MUTEX") or r"Local\AFTER_MARKET_RPA_AGENT"   # 시험은 RPA_AGENT_MUTEX 로 따로
+MUTEX_NAME = _dev_env("RPA_AGENT_MUTEX") or r"Local\AFTER_MARKET_RPA_AGENT"   # 시험은 RPA_AGENT_MUTEX 로 따로
 
 
 def single_instance(name=None):

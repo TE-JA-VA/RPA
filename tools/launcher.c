@@ -55,10 +55,21 @@ static int run(int argc, wchar_t **argv) {
     if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) return fail(script, argc, argv);
     /* C 런타임의 환경 사본까지 바꾼다 (_wputenv_s) - Python 은 _wgetenv 로 읽어 SetEnvironmentVariableW 만으로는 못 본다.
        PC 에 잡혀 있는 파이썬 환경 변수가 우리 라이브러리(lib)를 가리거나 끝난 뒤 대화형으로 남게 하지 않는다 (빈 값 = 지움) */
+    /* PYTHON 으로 시작하는 환경 변수는 모두 지운다 (PYTHONPYCACHEPREFIX 의 조작한 .pyc, PYTHONWARNINGS·PYTHONBREAKPOINT 의 모듈 불러오기 등 -
+       보안 진단 2026-11-23 C-02). UTF-8·입출력 글자 설정만 남긴다. 이름을 먼저 모은 뒤 지운다 (지우는 동안 _wenviron 이 바뀐다) */
+    static wchar_t names[64][64];
+    int count = 0;
+    for (wchar_t **e = _wenviron; e && *e && count < 64; e++) {
+        const wchar_t *eq = wcschr(*e, L'=');
+        size_t n = eq ? (size_t)(eq - *e) : 0;
+        if (n < 6 || n >= 64 || _wcsnicmp(*e, L"PYTHON", 6) != 0) continue;
+        wcsncpy(names[count], *e, n);
+        names[count][n] = 0;
+        if (_wcsicmp(names[count], L"PYTHONUTF8") == 0 || _wcsicmp(names[count], L"PYTHONIOENCODING") == 0) continue;
+        count++;
+    }
+    for (int i = 0; i < count; i++) _wputenv_s(names[i], L"");
     _wputenv_s(L"PYTHONHOME", home);
-    _wputenv_s(L"PYTHONPATH", L"");
-    _wputenv_s(L"PYTHONSTARTUP", L"");
-    _wputenv_s(L"PYTHONINSPECT", L"");
     HMODULE py = LoadLibraryExW(dll, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!py) return fail(dll, argc, argv);
     py_main_fn py_main = (py_main_fn)(void *)GetProcAddress(py, "Py_Main");

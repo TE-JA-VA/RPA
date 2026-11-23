@@ -70,7 +70,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "\RPA_UserConfig.json,\배
 Source: "{#SourceDir}\RPA_UserConfig.json"; DestDir: "{app}"; DestName: "RPA_UserConfig.template.json"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\오토파일럿 설정"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"""; WorkingDir: "{app}"; Comment: "오토파일럿 설정 창 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET.ico"; AppUserModelID: "AFTERMARKET.RPA.Settings"
+Name: "{group}\오토파일럿 설정"; Filename: "{app}\python\pythonw.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"""; WorkingDir: "{app}"; Comment: "오토파일럿 설정 창 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET.ico"; AppUserModelID: "AFTERMARKET.RPA.Settings"
 Name: "{group}\옵저버"; Filename: "{app}\Prepare_Observer.exe"; WorkingDir: "{app}"; Comment: "쇼핑몰 조작을 기록해 ACTOR 오토파일럿이 따라 하게 (관리자 권한 요청이 뜹니다)"; IconFilename: "{app}\AFTER_MARKET_PREPARE.ico"; AppUserModelID: "AFTERMARKET.RPA.Observer"
 
 [INI]
@@ -89,8 +89,8 @@ Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" 
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA"" /inheritance:r /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA\*"" /reset /T /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "설정 폴더를 관리자만 열 수 있게 막는 중..."
 ; 처음 설치면 설정 창, 판 올림이면 창 없이 작업 등록·에이전트 켜기. 조용한 설치에서는 창을 절대 띄우지 않는다 (기다리며 멈춘다)
-Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\rpa_settings.py"" --after-install"; WorkingDir: "{app}"; Flags: waituntilterminated; StatusMsg: "설정 창에서 설정을 마치고 [저장] 을 누르세요..."; Check: not WizardSilent
-Filename: "{app}\python\python.exe"; Parameters: """{app}\rpa_settings.py"" --after-install --no-window"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Check: WizardSilent
+Filename: "{app}\python\pythonw.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"" --after-install"; WorkingDir: "{app}"; Flags: waituntilterminated; StatusMsg: "설정 창에서 설정을 마치고 [저장] 을 누르세요..."; Check: not WizardSilent
+Filename: "{app}\python\python.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"" --after-install --no-window"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Check: WizardSilent
 
 [UninstallDelete]
 Type: files; Name: "{group}\오토파일럿 대시보드.url"
@@ -117,7 +117,7 @@ begin
   Script := ExpandConstant('{app}\rpa_settings.py');
   if FileExists(Py) and FileExists(Script) then
   begin
-    if Exec(Py, AddQuotes(Script) + ' ' + Args, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) then
+    if Exec(Py, '-E -s ' + AddQuotes(Script) + ' ' + Args, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) then
       Result := Code
     else
       Result := -2;

@@ -86,6 +86,11 @@ check("보낸 사람 - 이름으로도", mi.matches(mi.check_rules({"senders": [
 check("보낸 사람 - @ 든 조건은 주소로만, 이름에 흉내 낸 주소는 안 맞음 (BugBuster I10)",
       not mi.matches(Rs, '"order@shop.co.kr" <evil@x.com>', "t", NOW, NOW) and not mi.matches(Rs, "order@shop.co.kr 담당 <evil@x.com>", "t", NOW, NOW)
       and mi.matches(mi.check_rules({"senders": "@shop.co.kr"}), "주문팀 <order@shop.co.kr>", "t", NOW, NOW))
+Rd = mi.check_rules({"senders": "@shop.co.kr"})
+check("보낸 사람 - 주소는 통째로 같아야, 도메인은 끝이 같아야 (진단 2026-11-23 D-3: 덧붙인 가짜 도메인)",
+      not mi.matches(Rs, "x <order@shop.co.kr.evil.invalid>", "t", NOW, NOW) and not mi.matches(Rs, "x <xorder@shop.co.kr>", "t", NOW, NOW)
+      and not mi.matches(Rd, "x <order@shop.co.kr.evil.invalid>", "t", NOW, NOW) and not mi.matches(Rd, "x <order@evilshop.co.kr>", "t", NOW, NOW)
+      and mi.matches(Rd, "x <order@mail.shop.co.kr>", "t", NOW, NOW))
 check("기간: 첫 실행은 규칙대로, 그 뒤는 마지막 실행 날부터, 최대 30일 (BugBuster I8)",
       (mi._days(R, {}, NOW), mi._days(R, {mi.LAST_RUN: "2026-10-20"}, NOW), mi._days(R, {mi.LAST_RUN: "2026-08-01"}, NOW),
        mi._days(dict(R, days=5), {mi.LAST_RUN: "2026-10-22"}, NOW), mi._days(R, {mi.LAST_RUN: "이상한 값"}, NOW)) == (0, 2, 30, 5, 0))

@@ -67,7 +67,7 @@ class Ops:
 
     def after_install(self, program_dir):
         py = os.path.join(program_dir, "python", "pythonw.exe")
-        return self._run([py, os.path.join(program_dir, "rpa_settings.py"), "--after-install", "--no-window"], timeout=300)
+        return self._run([py, "-E", "-s", os.path.join(program_dir, "rpa_settings.py"), "--after-install", "--no-window"], timeout=300)
 
     def set_display_version(self, version):
         import winreg

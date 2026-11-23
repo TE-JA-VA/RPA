@@ -119,12 +119,21 @@ def _days(rules, memory, now):
     return min(MAX_DAYS, max(rules["days"], (now.date() - last).days))
 
 
+def _addr_ok(cond, addr):
+    """@ 가 든 조건 하나와 보낸 주소 하나 (둘 다 _norm 거친 것). '@도메인' 은 도메인이 같거나 그 하위 도메인, 그 밖은 주소 전체가 같아야 -
+    부분 글자로 보면 'order@shop.co.kr.evil.invalid' 처럼 남의 도메인 뒤에 붙인 주소가 통과한다 (진단 2026-11-23 D-3)."""
+    if cond.startswith("@"):
+        dom = addr.rpartition("@")[2]
+        return dom == cond[1:] or dom.endswith("." + cond[1:])
+    return addr == cond
+
+
 def matches(rules, sender, subject, date, now):
     """규칙에 맞는 메일인가 (rules 는 check_rules 를 거친 것). date·now 는 PC 시각."""
     s, subj = _norm(sender), _norm(subject)
     addrs = [_norm(a) for _, a in email.utils.getaddresses([sender or ""]) if "@" in a]
     # @ 가 든 조건은 주소로만 - 표시 이름은 아무나 흉내 낼 수 있다 (BugBuster I10). 이름만 쓴 조건은 전체에서.
-    if rules["senders"] and not any(any(_norm(x) in a for a in addrs) if "@" in x else _norm(x) in s for x in rules["senders"]):
+    if rules["senders"] and not any(any(_addr_ok(_norm(x), a) for a in addrs) if "@" in x else _norm(x) in s for x in rules["senders"]):
         return False
     if not subj.startswith(_norm(rules["subject_prefix"])):
         return False

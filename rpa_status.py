@@ -132,7 +132,7 @@ def find_desktop_dir():
 
 
 def status_dir(create=True):
-    path = os.environ.get("RPA_STATUS_DIR") or os.path.join(
+    path = dev_env("RPA_STATUS_DIR") or os.path.join(
         find_desktop_dir(), AI_DIR_NAME, STATUS_DIR_NAME)
     if create:
         try:
@@ -279,8 +279,8 @@ def program_dir():
 
 
 def install_root():
-    """새 구조의 설정·기록 뿌리 %ProgramData%\\AFTER MARKET\\RPA. 시험용 RPA_PROGRAMDATA 가 있으면 그 폴더."""
-    return os.environ.get("RPA_PROGRAMDATA") or os.path.join(
+    """새 구조의 설정·기록 뿌리 %ProgramData%\\AFTER MARKET\\RPA. 시험용 RPA_PROGRAMDATA 가 있으면 그 폴더 (소스·시험 표시가 있을 때만)."""
+    return dev_env("RPA_PROGRAMDATA") or os.path.join(
         os.environ.get("ProgramData") or r"C:\ProgramData", *PRODUCT_DIRS)
 
 
@@ -288,6 +288,18 @@ def shipped():
     """설치된 프로그램 폴더에서 도는가 - 프로그램 폴더에 버전 목록(manifest.json)이 있다 (소스·시험 폴더에는 없다).
     설치본은 시험용 환경 변수(에뮬레이터·업데이트 주소)를 무시한다 (보안 감사 2026-11-13 C2)."""
     return os.path.isfile(os.path.join(program_dir(), MANIFEST_NAME))
+
+
+TEST_ENV_MARK = "test_env.ok"     # 빌드 점검·샌드박스가 프로그램 폴더(관리자만 쓰는 곳)에 잠깐 두는 시험 표시
+
+
+def dev_env(name):
+    """시험용 RPA_* 환경 변수 (설정·기록 자리, 잠금 이름). 설치본은 무시한다 - 같은 윈도우 계정의 다른 프로그램이 환경 변수로
+    자리를 사용자 폴더로 옮기면 관리자 권한 에이전트가 거기에 AI 키·비밀번호를 썼다 (보안 진단 2026-11-23 E-1·C-02).
+    설치본이어도 프로그램 폴더에 시험 표시(TEST_ENV_MARK)가 있으면 따른다 - 빌드 점검·샌드박스용, 그 폴더는 관리자만 쓴다."""
+    if shipped() and not os.path.isfile(os.path.join(program_dir(), TEST_ENV_MARK)):
+        return None
+    return os.environ.get(name)
 
 
 def new_layout():
@@ -316,10 +328,10 @@ def data_dir():
 def user_config_path():
     """RPA_UserConfig.json 위치. 시험용 RPA_USER_CONFIG 가 있으면 그 파일, RPA_CRED_FILE 만 있으면 그 옆.
     아니면 config_dir() (옛 구조는 exe 옆 그대로)."""
-    override = os.environ.get("RPA_USER_CONFIG")
+    override = dev_env("RPA_USER_CONFIG")
     if override:
         return override
-    cred = os.environ.get("RPA_CRED_FILE")
+    cred = dev_env("RPA_CRED_FILE")
     if cred:
         return os.path.join(os.path.dirname(cred), USER_CONFIG_NAME)
     return os.path.join(config_dir(), USER_CONFIG_NAME)
@@ -441,7 +453,7 @@ def _old_config_paths():
     """옮겨 올 옛 파일 (ERPIA_AI.txt, WebManageConfig.json, login_manager_config.json). 시험용 환경변수가 있으면
     그 폴더만 본다."""
     base = os.path.dirname(user_config_path())
-    only_new = os.environ.get("RPA_USER_CONFIG") and not os.environ.get("RPA_CRED_FILE")
+    only_new = dev_env("RPA_USER_CONFIG") and not dev_env("RPA_CRED_FILE")
     return (os.path.join(base, CRED_FILE_NAME) if only_new else cred_file_path(),
             os.path.join(base, WEB_CONFIG_NAME),
             os.path.join(base, LOGIN_MANAGER_NAME))
@@ -645,9 +657,9 @@ def cleanup_old_configs(now=None):
     gone = []
     # ERPIA_AI.txt 는 두 자리(바탕화면\ERPIA_AI, 바탕화면)에 있었다 - 옮긴 뒤에는 둘 다 없어 cred_file_path() 는 새 자리만 돌려준다 (검토 2026-11-19)
     base = os.path.dirname(new)
-    if os.environ.get("RPA_CRED_FILE"):
-        creds = [os.environ["RPA_CRED_FILE"]]
-    elif os.environ.get("RPA_USER_CONFIG"):
+    if dev_env("RPA_CRED_FILE"):
+        creds = [dev_env("RPA_CRED_FILE")]
+    elif dev_env("RPA_USER_CONFIG"):
         creds = [os.path.join(base, CRED_FILE_NAME)]
     else:
         creds = cred_file_candidates(find_desktop_dir())
@@ -955,7 +967,7 @@ def cred_file_path():
 
     환경변수 RPA_CRED_FILE 이 있으면 그 파일을 쓴다 - 시험이 실제 자격증명 파일을 건드리지 않게 하기 위한 것.
     """
-    override = os.environ.get("RPA_CRED_FILE")
+    override = dev_env("RPA_CRED_FILE")
     if override:
         return override
     found = cred_file_candidates(find_desktop_dir())
@@ -1787,7 +1799,7 @@ def process_alive(pid, created=None):
 # 잡은 프로세스가 끝나면 (죽어도) 윈도우가 푼다.
 SYNCHRONIZE = 0x00100000
 ERROR_ALREADY_EXISTS = 183
-OBSERVER_LOCK = os.environ.get("RPA_OBSERVER_LOCK") or r"Local\AFTER_MARKET_RPA_OBSERVER"   # 시험은 RPA_OBSERVER_LOCK 로 따로
+OBSERVER_LOCK = dev_env("RPA_OBSERVER_LOCK") or r"Local\AFTER_MARKET_RPA_OBSERVER"   # 시험은 RPA_OBSERVER_LOCK 로 따로
 _LOCKS = {}        # 이름 → 이 프로세스가 잡은 잠금
 
 

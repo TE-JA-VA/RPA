@@ -454,10 +454,20 @@ AI_CANDS_JS = """([start, max, sel]) => {
     e.setAttribute('data-ap-ai', String(k));
     out.push({mark: k++, tag: t, role: e.getAttribute('role') || '', type: typ, text: textOf(e), label: label.slice(0, 80),
               full: n(e.innerText || '').slice(0, 1000), container: lay ? n(lay.innerText).slice(0, 3000) : '', sig: sig(e),
-              inTable: !!e.closest('tbody')});
+              inTable: !!e.closest('tbody,[role=row],[role=gridcell],[role=cell]')});
   }
+  // 떠 있는 창은 제목과 단추 글만 AI 에게 보낸다 - 본문(받는 분 이름·주소·배송 메모)은 보내지 않는다 (진단 2026-11-23).
+  // 제목 = aria-label·aria-labelledby·제목 요소, 없으면 누를 것 밖의 첫 글 줄. 위험 낱말 검사는 우리만 보는 container(본문 전체)로 한다
+  const headOf = l => { let t = n(l.getAttribute('aria-label'));
+    const by = l.getAttribute('aria-labelledby'), x = by && document.getElementById(by.split(' ')[0]); if (!t && x) t = n(x.innerText);
+    const h = !t && l.querySelector('h1,h2,h3,h4,h5,h6,[role=heading],[class*=title],[class*=Title]'); if (h) t = n(h.innerText);
+    if (!t) { const w = document.createTreeWalker(l, NodeFilter.SHOW_TEXT);
+      for (let v; (v = w.nextNode());) { if (v.parentElement && v.parentElement.closest(sel)) continue; t = n(v.textContent); if (t) break; } }
+    return (t || '').slice(0, 80); };
+  const btnsOf = l => [...l.querySelectorAll('button,a,[role=button],input[type=button],input[type=submit]')].map(textOf).filter(Boolean).slice(0, 6);
   const heads = [...document.querySelectorAll('h1,h2,h3')].filter(h => h.getClientRects().length).map(h => n(h.innerText)).filter(Boolean);
-  return JSON.stringify({cands: out, heads, layers: [...layers].map(l => n(l.innerText).slice(0, 3000)),
+  return JSON.stringify({cands: out, heads, layers: [...layers].map(l => { const b = btnsOf(l);
+                           return headOf(l) + (b.length ? ' [단추: ' + b.join(', ') + ']' : ''); }),
                          body: document.body ? n(document.body.innerText).slice(0, 3000) : ''});
 }""".replace("__TEXT_OF__", TEXT_OF).replace("__SIG__", SIG)
 AI_CLEAR_JS = "() => document.querySelectorAll('[data-ap-ai]').forEach(e => e.removeAttribute('data-ap-ai'))"
@@ -1546,6 +1556,23 @@ class MailFail(Exception):
     """메일 2차인증에서 다시 시도해도 소용없는 실패 - 글 그대로 결과에 (설계 2026-11-02 6절)."""
 
 
+class SiteFail(Exception):
+    """쇼핑몰 아이디·비밀번호를 기록한 사이트가 아닌 화면에 넣으려 했다 - 넣지 않고 멈춘다, 글 그대로 결과에 (진단 2026-11-23 D-1·C10)."""
+
+
+def cred_site_ok(url, want_host, plain):
+    """아이디·비밀번호를 넣을 문서 주소가 기록한 비밀번호 사이트(want_host)와 같은 사이트이고 https 인가.
+    plain = 기록 때부터 http 였다 (그때 경고함). want_host 가 없는 옛 기록은 막지 않는다 (호스트를 적기 전 기록, BugBuster I1 앞)."""
+    if not want_host:
+        return True
+    u = urllib.parse.urlparse(url or "")
+    if u.scheme not in ("https", "http"):
+        return False
+    if u.scheme == "http" and not (plain or is_local_host(want_host)):
+        return False
+    return site_domain(u.hostname or "") == site_domain(want_host)
+
+
 # 메일 2차인증 결과 글 (설계 6절 - 사용자 검수)
 MAIL_NONE = f"인증 메일을 {OTP_TRIES}번 받지 못했습니다."
 MAIL_NO_CODE = "인증 메일에서 인증번호를 찾지 못했습니다."
@@ -1598,6 +1625,20 @@ class Replayer:
         # AI 어시스트 (설계 2026-11-16): ai = choose(system, user) -> Answer 를 가진 것 (ACTOR 만 붙인다, 없으면 지금과 같다).
         # ai_calls = 이 재생에서 부른 수, ai_saved = AI가 풀어 이어 간 단계 수, ai_down = 못 쓰게 된 까닭, ai_note = 실패 글에 붙일 AI 의 말
         self.ai, self.ai_calls, self.ai_saved, self.ai_down, self.ai_note = None, 0, 0, None, None
+        # AI 가 고른 것을 누르는 동안 뜬 확인 창(confirm·prompt)은 수락하지 않고 [취소] 한다 - ai_guard = 그래도 수락할 글(기록 때 사람이
+        # 그 단계에서 수락한 창) | None(지키지 않음), ai_blocked = 취소한 창의 글 (진단 2026-11-23: 속은 AI 가 누른 뒤 '처리하시겠습니까?' 까지 넘어가지 않게)
+        self.ai_guard, self.ai_blocked = None, None
+
+    def _ai_guard_on(self, keep=()):
+        self.ai_guard, self.ai_blocked = set(keep), None
+
+    def _ai_guard_off(self):
+        got, self.ai_guard, self.ai_blocked = self.ai_blocked, None, None
+        return got
+
+    @staticmethod
+    def _ai_dialog_msg(text):
+        return f"AI가 고른 것을 누르자 확인 창이 떠 취소하고 멈춤: '{_cut(text, True)}'"
 
     def _watch(self, page):
         if page in self.watched:
@@ -1608,6 +1649,14 @@ class Replayer:
             self.dialogs.append(d.message)
             if d.type == "alert":
                 self.alerts.append(d.message)
+            elif self.ai_guard is not None and d.message not in self.ai_guard:
+                self.ai_blocked = d.message
+                self.log(f"      AI가 누른 뒤 뜬 확인 창 '{_cut(d.message, self.hide_values)}' -> 취소")
+                try:
+                    d.dismiss()
+                except Exception:
+                    pass
+                return
             self.log(f"      알림창 '{_cut(d.message, self.hide_values)}' -> 확인")
             try:
                 d.accept()
@@ -1708,6 +1757,8 @@ class Replayer:
         shut = None                     # 창이 모두 닫힌 것을 처음 본 때
         while not self.downloads:
             self._check_cancel()
+            if self.ai_blocked is not None:     # AI 가 누른 뒤 뜬 확인 창을 취소했다 - 파일은 오지 않는다 (5분 기다리지 않는다)
+                raise NotFound(self._ai_dialog_msg(self.ai_blocked))
             now = time.time()
             try:
                 alive = any(not pg.is_closed() for pg in self.context.pages)
@@ -1910,16 +1961,17 @@ class Replayer:
                     if c["inTable"] and not ai.TABLE_ACTION.search(text) and ai.classify(text) == "substitute":
                         text = label = ""       # 표 본문 안 이름 링크 등 - 글은 보내지 않는다
                     allc.append(dict(c, page=pg, frame=f, loc=f.locator(f'[data-ap-ai="{c["mark"]}"]'), where=where,
-                                     overlay=bool(c["container"]) or new_win, here=pg is here, text=text, label=label))
+                                     overlay=bool(c["container"]) or new_win, here=pg is here, text=text, label=label, label0=c["label"]))
             if new_win:             # 기록에 없던 창 - 그 창의 글로 위험 낱말을 본다
                 for c in allc:
                     if c["page"] is pg and not c["container"]:
                         c["container"] = body
-            screen = " / ".join(dict.fromkeys([ai.mask(h, secrets) for h in heads] + [ai.mask(x, secrets)[:300] for x in layers]))
+            # 제목 글은 다섯 개·60자까지, 떠 있는 창은 '제목 [단추: …]' 요약만 (본문은 보내지 않는다, 진단 2026-11-23)
+            screen = " / ".join(dict.fromkeys([ai.mask(h, secrets)[:60] for h in heads[:5]] + [ai.mask(x, secrets)[:200] for x in layers]))
             screen = screen[:ai.SCREEN_TEXT_MAX]
             windows.append({"no": no, "title": ai.mask(title, secrets), "path": ai.mask(path, secrets), "screen": screen})
-        for c in allc:              # 위험 낱말은 잘리기 전 글 전체에서 본다 (요소 글·레이어 글, 최종 검토 I-3)
-            c["risk"] = f'{c["container"]} {c["full"]}'
+        for c in allc:              # 위험 낱말은 잘리기 전 글 전체에서 본다 (요소 글·레이어 글, 최종 검토 I-3) + 풍선말·aria 이름 (진단 2026-11-23)
+            c["risk"] = f'{c["container"]} {c["full"]} {c["label0"]}'
         allc.sort(key=lambda c: 0 if c["overlay"] else 1 if c["here"] else 2)
         cands = allc[:ai.CANDIDATES_MAX]
         for n, c in enumerate(cands):
@@ -1962,6 +2014,7 @@ class Replayer:
         info = {"kind": s["kind"], "what": say(s)}
         before, after = [say(x) for x in steps[max(0, i - 2):i]], [say(x) for x in steps[i + 1:i + 3]]
         prev, loose, target = self.baseline.get(i), i in self.loose, s["target"].get("text") or ""
+        want = [s["target"].get(k) or "" for k in ("text", "aria", "title", "placeholder", "label")]   # 대신 누르기는 이 가운데 하나와 글이 비슷해야
         picked, closed = set(), []
         try:
             for _ in range(ai.STEP_ACTS_MAX):
@@ -1989,18 +2042,25 @@ class Replayer:
                     break
                 picked.add(key)
                 kind = ai.classify(text)
-                ok, why = ai.allowed(kind, text, c["risk"], target, ans.info_only, s["kind"], c)
+                ok, why = ai.allowed(kind, text, c["risk"], target, ans.info_only, s["kind"], c, want)
                 if not ok:
                     self.ai_note = f"'{text}' 은(는) 누르지 않음 - {why}"
                     self.log(f"      AI 가 고른 '{text}' 은(는) 누르지 않습니다 ({why})")
                     break
                 if kind == "substitute":
                     return c["page"], c["frame"], c["loc"], f"AI가 고름: '{text}' (기록: '{target}')", True, c
-                c["loc"].click(timeout=4000)
+                self._ai_guard_on()         # 미루기·[확인] 뒤에 뜨는 확인 창은 수락하지 않는다
+                try:
+                    c["loc"].click(timeout=4000)
+                    self.log(f"      AI 가 고른 '{text}' 을(를) 눌렀습니다")
+                    self._ai_clear()
+                    (here or c["page"]).wait_for_timeout(500)
+                finally:
+                    blocked = self._ai_guard_off()
+                if blocked is not None:
+                    self.ai_note = f"'{text}' 을(를) 누르자 확인 창이 떠 취소함"
+                    break
                 closed.append(text)
-                self.log(f"      AI 가 고른 '{text}' 을(를) 눌렀습니다")
-                self._ai_clear()
-                (here or c["page"]).wait_for_timeout(500)
                 v = self._probe(here, s, prev, loose) if here is not None and not here.is_closed() else None
                 got = (here, v) if v is not None else (self._elsewhere(i, s, here) or (None, None))[:2]
                 if got[0] is not None:
@@ -2322,6 +2382,8 @@ class Replayer:
             self._click(page, loc)
         elif k == "fill":
             if s.get("credential") in ("ID", "MAIL_ID"):
+                if s["credential"] == "ID":
+                    self._shop_site(loc, s)
                 v = self._cred(page, s["credential"])
             elif s.get("date"):
                 v = date_text(s["date"], self.today)      # (BugBuster I3)
@@ -2329,6 +2391,8 @@ class Replayer:
                 v = s.get("value", "")
             self._fill(loc, v)
         elif k == "secret":
+            if not (s.get("credential") or "PW").startswith("MAIL_"):
+                self._shop_site(loc, s)
             self._fill(loc, self._cred(page, s.get("credential") or "PW"))
         elif k == "otp" and s.get("source") == "copy":     # 메일에서 뽑아 든 번호 (클립보드는 쓰지 않는다)
             if not self.mail_code:
@@ -2346,6 +2410,28 @@ class Replayer:
             loc.set_checked(bool(s["checked"]), timeout=5000)
         elif k == "enter":
             loc.press("Enter", timeout=5000)
+
+    def _shop_site(self, loc, s):
+        """쇼핑몰 아이디·비밀번호를 넣기 직전 - 그 칸이 있는 문서(틀 포함)가 기록한 비밀번호 사이트의 https 화면인가.
+        창·틀을 고쳐 잡아 단계가 옮겨 갔거나 다른 도메인 광고 틀이 끼어도 여기서 막는다 (진단 2026-11-23 D-1·C10)."""
+        ref = s
+        if s["kind"] != "secret":       # 아이디 칸 - 그 뒤(없으면 앞)의 쇼핑몰 비밀번호 단계 사이트 (두 사이트에 로그인하는 기록도 짝대로)
+            steps = self.rec["steps"]
+            at = next((k for k, x in enumerate(steps) if x is s or x == s), 0)
+            pw = [k for k, x in enumerate(steps) if x["kind"] == "secret" and not (x.get("credential") or "").startswith("MAIL_") and x.get("host")]
+            k = next((k for k in pw if k > at), pw[-1] if pw else None)
+            ref = steps[k] if k is not None else None
+        want = (ref or {}).get("host") or ""
+        if not want:
+            return
+        try:
+            url = loc.evaluate("e => e.ownerDocument.location.href", timeout=5000)
+        except Exception:
+            url = ""
+        if not cred_site_ok(url, want, bool(ref.get("plainHttp"))):
+            got = urllib.parse.urlparse(url).hostname or "알 수 없음"
+            what = "비밀번호" if s["kind"] == "secret" else "아이디"
+            raise SiteFail(f"{what}를 넣을 화면이 기록한 사이트가 아니어서 넣지 않고 중단하였습니다. (기록: {site_domain(want)} / 지금: {got})")
 
     def _cred(self, page, key):
         """아이디·비밀번호 칸의 값. 메일 계정(MAIL_*)은 기록한 메일함과 같은 사이트일 때만 - 고객 비밀번호가 엉뚱한 사이트로 가지 않게."""
@@ -2757,15 +2843,25 @@ class Replayer:
             except Exception:
                 handle = None
             before = (url_path(page.url), len(self.context.pages), handle, self._ai_next_seen(i, page))
+            self._ai_guard_on(s.get("dialogs", ()))     # 기록 때 사람이 수락한 확인 창만 수락한다 (그 밖은 [취소] 하고 멈춤)
+        blocked, followed = None, True
         try:
-            if s.get("download"):
-                how += f", 받음 {os.path.basename(self._save(self._until_download(page, act)))}"
-            else:
-                act()
+            try:
+                if s.get("download"):
+                    how += f", 받음 {os.path.basename(self._save(self._until_download(page, act)))}"
+                else:
+                    act()
+            finally:
+                if rescued is not None:
+                    self._ai_clear()
+            if sub and not s.get("opens") and not s.get("download"):
+                followed = self._ai_followed(i, s, page, before)
         finally:
-            if rescued is not None:
-                self._ai_clear()
-        if sub and not s.get("opens") and not s.get("download") and not self._ai_followed(i, s, page, before):
+            if sub:
+                blocked = self._ai_guard_off()
+        if blocked is not None:
+            raise NotFound(self._ai_dialog_msg(blocked))
+        if not followed:
             raise NotFound("AI가 고른 것을 눌렀지만 이어지지 않음")
         if rescued is not None:
             self.ai_saved += 1
@@ -3035,7 +3131,7 @@ class Replayer:
                     i, s = e.step, steps[e.step - 1]
                     text = describe(s, self.hide_values)
                 why = f"{type(e).__name__}: {str(e).splitlines()[0]}"
-                if isinstance(e, MailFail):
+                if isinstance(e, (MailFail, SiteFail)):
                     why = str(e)
                 elif self.mail_page is not None and s.get("page") == self.mail_page and self.mail_open_i and i < self.mail_open_i:
                     why = MAIL_LOGIN_FAIL           # 메일함 로그인 중 기록대로 안 됨 - 기록에 없던 2차인증 등 (다시 시도하지 않는다)

@@ -80,6 +80,8 @@ $X = "$O\exe"
 New-Item -ItemType Directory -Force "$X\cfg" | Out-Null
 Copy-Item "$App\RPA_UserConfig.template.json" "$X\cfg\RPA_UserConfig.json"
 $env:RPA_USER_CONFIG = "$X\cfg\RPA_UserConfig.json"; $env:RPA_PROGRAMDATA = "$X\pd"; $env:RPA_STATUS_DIR = "$X\st"; $env:RPA_UNATTENDED = "1"
+# 설치본은 프로그램 폴더에 시험 표시가 있어야 위 시험용 자리를 따른다 (보안 진단 2026-11-23 E-1) - 이 점검이 끝나면 지운다
+Set-Content "$App\test_env.ok" "sandbox" -Encoding ASCII
 $outs = @{}
 foreach ($e in @(@("ERPia_RPA.exe", "--check", "=== 점검 끝"), @("Prepare_RPA.exe", "--check", "쓸 수 있는 Action"), @("Prepare_Observer.exe", "--check", "옵저버 점검 끝"),
                  @("Prepare_RPA.exe", "--selftest --headless", "자체 테스트 통과"))) {
@@ -122,6 +124,13 @@ $edge0 = Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Objec
 Check "오토파일럿 설정 전에는 옵저버가 알림만 띄우고 켜지지 않는다 (Edge 없음)" (($null -ne $box) -and ($null -eq $edge0)) "알림창 $(if ($box) { '있음' } else { '없음' }), Edge $(if ($edge0) { '뜸' } else { '없음' })"
 Get-CimInstance Win32_Process -Filter "Name='Prepare_Observer.exe'" | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }
 Remove-Item Env:RPA_USER_CONFIG, Env:RPA_PROGRAMDATA, Env:RPA_STATUS_DIR, Env:RPA_UNATTENDED
+Remove-Item "$App\test_env.ok" -ErrorAction SilentlyContinue
+# 설치본은 시험용 경로 환경 변수를 무시한다 (표시 파일을 지운 뒤): 옮긴 자리를 주면 그 자리가 아니라 진짜 설정 자리를 쓴다
+$env:RPA_PROGRAMDATA = "$X\evil_pd"
+# 변수 이름 주의: PowerShell 은 대소문자를 가리지 않는다 - $pd 로 쓰면 위의 $PD(설정 폴더)를 덮는다 (2026-11-23 전환 시험에서 잡음)
+$rootSeen = & "$App\python\python.exe" -E -s -c "import sys; sys.path.insert(0, r'$App'); import rpa_status as st; print(st.install_root())" 2>&1
+Remove-Item Env:RPA_PROGRAMDATA
+Check "설치본은 시험용 경로 환경 변수(RPA_PROGRAMDATA)를 따르지 않는다 (보안 진단 E-1, 전환 시험의 옛 판은 건너뜀)" ($oldSetup -or (("$rootSeen" -notmatch "evil_pd") -and ("$rootSeen" -match "AFTER MARKET"))) "$rootSeen"
 
 # 2. 가짜 설정 (로그인 없이 파일만) → --after-install --no-window → 작업 등록·에이전트 켜기
 $cfg = @'

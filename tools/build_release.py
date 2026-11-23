@@ -471,6 +471,8 @@ def smoke_check(zip_path, timeout=180):
         shutil.copy2(os.path.join(top, "RPA_UserConfig.json"), cfg)
         env = dict(os.environ, RPA_USER_CONFIG=cfg, RPA_PROGRAMDATA=os.path.join(tmp, "programdata"),
                    RPA_STATUS_DIR=os.path.join(tmp, "status"), RPA_UNATTENDED="1")
+        # 설치본은 시험 표시가 있어야 위 시험용 자리를 따른다 (rpa_status.TEST_ENV_MARK, 보안 진단 2026-11-23 E-1) - 없으면 이 PC 의 진짜 설정을 본다
+        open(os.path.join(top, "test_env.ok"), "w").close()
         for exe, marker in MARKERS.items():
             try:
                 r = subprocess.run([os.path.join(top, exe), "--check"], cwd=top, env=env,

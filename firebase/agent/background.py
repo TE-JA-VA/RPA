@@ -86,9 +86,18 @@ def put_in_job(job, proc):
         return False
 
 
+def _dev_env(name):
+    """시험용 RPA_* 환경 변수 - 설치본은 무시한다 (rpa_status.dev_env, 보안 진단 2026-11-23 E-1)."""
+    root = os.path.abspath(os.path.join(HERE, "..", ".."))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import rpa_status
+    return rpa_status.dev_env(name)
+
+
 def log_dir():
     """에이전트 기록과 같은 폴더 (agent._data_dir 와 같은 규칙, 시험은 RPA_AGENT_QUEUE 의 폴더). 못 정하면 이 파일 옆."""
-    queue = os.environ.get("RPA_AGENT_QUEUE")
+    queue = _dev_env("RPA_AGENT_QUEUE")
     if queue:
         return os.path.dirname(queue)
     try:
@@ -119,11 +128,14 @@ def agent_command(exe_dir=None):
     """창 없이 띄울 에이전트 명령. 감독 옆 AFTER MARKET 사본, 없으면 python.exe (둘 다 내장 파이썬) - 콘솔 프로그램이라
     입출력이 있다."""
     exe_dir = exe_dir or os.path.dirname(sys.executable)
+    # -E -s: 관리자 권한 에이전트가 사용자 쪽 파이썬 설정(PYTHON* 환경 변수·사용자 site 의 .pth)을 따르지 않게, UTF-8 은 -X 로
+    # (보안 진단 2026-11-23 C-02 - 같은 계정의 일반 권한 프로그램이 파일 하나로 다음 로그인 때 관리자 권한 코드를 돌릴 수 있었다)
+    flags = ["-E", "-s", "-X", "utf8"]
     for name in (AGENT_EXE, "python.exe"):
         py = os.path.join(exe_dir, name)
         if os.path.isfile(py):
-            return [py, os.path.join(HERE, "agent.py")]
-    return [sys.executable, os.path.join(HERE, "agent.py")]
+            return [py, *flags, os.path.join(HERE, "agent.py")]
+    return [sys.executable, *flags, os.path.join(HERE, "agent.py")]
 
 
 def start_agent(cmd, folder):

@@ -434,7 +434,7 @@ fp = br.exe_fingerprint("ERPia_RPA.exe", "nuitka 4.2.2 · python 3.14.7")
 check("지문은 Nuitka·파이썬 버전이 바뀌어도 달라진다",
       fp != br.exe_fingerprint("ERPia_RPA.exe", "nuitka 4.2.3 · python 3.14.7") and fp == br.exe_fingerprint("ERPia_RPA.exe", "nuitka 4.2.2 · python 3.14.7"))
 
-lock = re.search(r'OBSERVER_LOCK = os\.environ\.get\("RPA_OBSERVER_LOCK"\) or r"([^"]+)"', (ROOT / "rpa_status.py").read_text(encoding="utf-8"))
+lock = re.search(r'OBSERVER_LOCK = dev_env\("RPA_OBSERVER_LOCK"\) or r"([^"]+)"', (ROOT / "rpa_status.py").read_text(encoding="utf-8"))
 prep_code = iss[iss.find("function PrepareToInstall"):iss.find("function InitializeUninstall")]
 check("옵저버가 켜져 있으면 판 올림·지우기를 시작 전에 멈춘다 (켜진 exe 는 덮지 못한다) - 잠금 이름은 rpa_status 와 같고, "
       "판 올림은 에이전트를 멈추기 전에 본다",

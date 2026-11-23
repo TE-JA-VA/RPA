@@ -29,8 +29,17 @@ def _default_config_path():
     return os.path.join(rpa_status.config_dir() if rpa_status.new_layout() else _HERE, "agent_config.json")
 
 
-# RPA_AGENT_CONFIG 는 시험용 - 통합 시험이 실제 설정을 덮어쓰지 않게 다른 파일을 가리킨다
-CONFIG_PATH = os.environ.get("RPA_AGENT_CONFIG") or _default_config_path()
+def _dev_env(name):
+    """시험용 RPA_* 환경 변수 - 설치본은 무시한다 (rpa_status.dev_env, 보안 진단 2026-11-23 E-1)."""
+    root = os.path.abspath(os.path.join(_HERE, "..", ".."))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import rpa_status
+    return rpa_status.dev_env(name)
+
+
+# RPA_AGENT_CONFIG 는 시험용 - 통합 시험이 실제 설정을 덮어쓰지 않게 다른 파일을 가리킨다 (설치본은 무시)
+CONFIG_PATH = _dev_env("RPA_AGENT_CONFIG") or _default_config_path()
 REQUIRED = ("project_id", "api_key", "database_url", "cid", "pc_id", "email")
 # 공개 값 (server_info - web/firebase-config.js 와 같다). 첫 실행 때 이메일·비밀번호만 물으면 되게 여기 둔다
 PUBLIC = {"project_id": server_info.PROJECT_ID, "api_key": server_info.API_KEY, "database_url": server_info.DATABASE_URL}
