@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """스탠드얼론 끝에서 끝까지 (계획 ① Task 6): 진짜 에이전트(agent.run)가 Firebase 없이 이 PC 의 로컬 서버로
 현황을 올리고 명령을 받아 돌며, 그동안 이 PC 밖으로 연결을 시도하지 않는다.
+계획 ② Task 5: 브라우저 자리에서 웹 창구로 로그인 → 명령(set_schedule) → 에이전트가 끝냄 → /api/stream 으로 결과가 온다.
 RPA 는 띄우지 않는다 (RPA_DASHBOARD_DRY_RUN), 설정·기록은 임시 폴더만 쓴다.
     .venv\\Scripts\\python.exe tests\\test_standalone_e2e.py
 """
@@ -59,8 +60,11 @@ import update_sign  # noqa: E402
 import license_check  # noqa: E402
 import rpa_status as st  # noqa: E402
 import local_server  # noqa: E402
+import local_web  # noqa: E402
 import secret  # noqa: E402
 import agent  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
 
 fails = []
 LOCAL = {"127.0.0.1", "localhost", "::1"}
@@ -94,6 +98,68 @@ def state(key):
     return (store.get(f"{CMD}/{key}") or {}).get("state")
 
 
+# --- 웹 창구 (브라우저 자리) - 프록시를 거치지 않고 이 PC 의 서버로만 ---
+NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+WEB_ID, WEB_PW = "boss", "e2e-boss-pw-0001"
+
+
+def api(method, path, body=None, token=None):
+    """웹 창구 요청 한 번 → (상태, JSON). 세션은 Authorization: Bearer, Origin 은 넣지 않는다 (같은 출처의 화면과 같다)."""
+    data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    hs = {"Content-Type": "application/json"} if data is not None else {}
+    if token:
+        hs["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}{path}", data=data, method=method, headers=hs)
+    try:
+        with NO_PROXY.open(req, timeout=15) as r:
+            got, status = r.read(), r.status
+    except urllib.error.HTTPError as e:
+        got, status = e.read(), e.code
+    try:
+        return status, json.loads(got) if got else None
+    except ValueError:
+        return status, got.decode("utf-8", "replace")
+
+
+class Stream:
+    """/api/stream 을 다른 스레드에서 읽어 (event, data) 를 모은다."""
+
+    def __init__(self, token):
+        self.events, self.status = [], None
+        self._req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}/api/stream",
+                                           headers={"Authorization": "Bearer " + token})
+        threading.Thread(target=self._run, daemon=True, name="stream").start()
+
+    def _run(self):
+        try:
+            with NO_PROXY.open(self._req, timeout=120) as r:      # 조용할 때 keep-alive 가 30초마다 온다
+                self.status = r.status
+                event = data = None
+                for line in r:
+                    line = line.decode("utf-8", "replace").rstrip("\r\n")
+                    if line.startswith("event:"):
+                        event = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data = line[5:].strip()
+                    elif line == "" and event is not None:
+                        self.events.append((event, json.loads(data) if data else None))
+                        event = data = None
+        except urllib.error.HTTPError as e:
+            self.status = e.code
+        except Exception:
+            pass
+
+    def named(self, name):
+        return [d for e, d in list(self.events) if e == name]
+
+    def command(self, key, want):
+        """이 명령의 상태가 want 인 command 이벤트 (없으면 None)."""
+        for d in self.named("command"):
+            if isinstance(d, dict) and d.get("key") == key and (d.get("value") or {}).get("state") == want:
+                return d["value"]
+        return None
+
+
 code = 1
 try:
     lic_secret, lic_public = update_sign.keygen()
@@ -107,7 +173,10 @@ try:
     store = local_server.Store(os.path.join(folder, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(os.path.join(folder, "runs.db"))
     keys = local_server.ensure_keys(folder)
-    srv = local_server.make_server(store, runs, license_check.load(), keys, port=0, folder=folder)
+    lic = license_check.load()
+    local_web.Accounts(os.path.join(folder, local_web.ACCOUNTS_NAME)).set(WEB_ID, WEB_PW, "admin")   # 설치 마법사가 만드는 첫 관리자 자리
+    web = local_web.Web(store, runs, lic, folder, local_web.web_dir())
+    srv = local_server.make_server(store, runs, lic, keys, port=0, folder=folder, web=web)
     os.environ["RPA_LOCAL_PORT"] = str(srv.server_address[1])
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
@@ -140,13 +209,36 @@ try:
     time.sleep(2.0)
     check("관리 화면 전용 명령을 웹이 보내면 손대지 않는다", state("k5") == "queued")
 
+    print("웹 창구로 (계획 ② Task 5)")
+    status, got = api("POST", "/api/login", {"id": WEB_ID, "password": WEB_PW})
+    token = (got or {}).get("token") if isinstance(got, dict) else None
+    check("웹 로그인", status == 200 and bool(token) and (got.get("session") or {}).get("role") == "admin", repr((status, got)))
+    stream = Stream(token or "")
+    # 스트림은 붙을 때 현황을 한 번 민다 - 그것이 오면 구독이 걸린 것 (그 뒤의 명령 변경은 빠짐없이 온다)
+    check("스트림이 붙어 현황을 받는다", wait_until(lambda: stream.status == 200 and stream.named("live")), repr((stream.status, stream.events[:3])))
+    at = time.strftime("%H:%M", time.localtime(time.time() + 3 * 3600))          # 시험 중에 돌 일이 없는 시각
+    args = {"enabled": True, "days": [0, 1, 2, 3, 4], "slots": [{"at": at, "run": ["Sales"]}]}   # rpa-settings.js payloadOf (판 2 이상) 꼴
+    status, got = api("POST", "/api/commands", {"type": "set_schedule", "args": args}, token=token)
+    wkey = (got or {}).get("key") if isinstance(got, dict) else None
+    check("명령을 보낸다 (by·상태는 서버가 정한다)", status == 200 and bool(wkey) and (got.get("value") or {}).get("state") == "queued"
+          and (got.get("value") or {}).get("by") == WEB_ID, repr((status, got)))
+    check("에이전트가 받아 끝낸다", wait_until(lambda: state(wkey) in ("done", "failed")) and state(wkey) == "done", repr(store.get(f"{CMD}/{wkey}")))
+    check("스트림으로 끝난 결과가 온다", wait_until(lambda: stream.command(wkey, "done") is not None),
+          repr([d for d in stream.named("command") if (d or {}).get("key") == wkey]))
+    pushed = stream.command(wkey, "done") or {}
+    check("스트림의 결과 글", (pushed.get("result") or "").startswith("자동 실행:") and at in pushed.get("result", ""), repr(pushed))
+    status, got = api("GET", f"/api/commands/{wkey}", token=token)
+    check("명령 하나 읽기도 끝남", status == 200 and isinstance(got, dict) and got.get("state") == "done", repr((status, got)))
+    sch = st.read_settings()["schedule"]
+    check("PC 설정(임시 폴더)에 적힌다", sch.get("enabled") is True and [s.get("at") for s in sch.get("slots") or []] == [at], repr(sch))
+
     print("서버가 다시 켜져도")
     port = srv.server_address[1]
     srv.shutdown()
     srv.server_close()
     time.sleep(1.5)
     command("k6", "set_schedule", {"enabled": False, "days": [0], "slots": []})      # 서버가 꺼진 동안 들어온 명령 (파일에는 적힌다)
-    srv = local_server.make_server(store, runs, license_check.load(), keys, port=port, folder=folder)
+    srv = local_server.make_server(store, runs, lic, keys, port=port, folder=folder, web=web)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     check("에이전트가 다시 붙어 밀린 명령을 받는다", wait_until(lambda: state("k6") in ("done", "failed"), 90) and state("k6") == "done",
           repr(store.get(f"{CMD}/k6")))

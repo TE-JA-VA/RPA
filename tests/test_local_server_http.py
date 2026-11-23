@@ -35,6 +35,16 @@ def check(name, ok, detail=""):
         fails.append(name)
 
 
+def until(fn, sec):
+    """fn() 이 참이 될 때까지 (시간이 아니라 조건으로 기다린다) → 참이 됐으면 True."""
+    end = time.time() + sec
+    while time.time() < end:
+        if fn():
+            return True
+        time.sleep(0.02)
+    return bool(fn())
+
+
 class Got:
     def __init__(self, status, raw, headers, signed):
         self.status, self.raw, self.headers, self.signed = status, raw, headers, signed
@@ -271,14 +281,33 @@ try:
     check("깨진 본문 400", call("PUT", "/db/apps/rpa/live/c1/p1/y.json", headers=hs, raw=b'{"a": ').status == 400)
     check("모르는 주소 404", call("GET", "/nothing", key=AGENT).status == 404)
     # 아무것도 보내지 않는 연결이 스레드를 잡아 두지 못한다 (검토 4번)
+    # 시각이 아니라 조건으로 본다. 윈도우는 listen 대기열(5)이 잠깐 차면 연결을 0.5초 뒤에 다시 시도한다 - 붙이는 데 0.5초 넘게
+    # 걸리는 회차가 있어, 예전처럼 '시간 제한 1초 + 0.5초 뒤 한 번' 세면 먼저 붙은 연결이 이미 끊긴 뒤라 상한 밑으로 세어졌다 (1 → 1).
+    # 그래서 상한은 시간 제한을 넉넉히 두고 보고, 시간이 지나 끊기는 것은 따로 몇 개로 본다
     real_timeout = local_server.Handler.timeout
-    local_server.Handler.timeout = 1
     before = srv.conns            # 앞 시험의 구독 연결이 남아 있을 수 있다 (끊긴 구독은 다음 쓰기·30초 신호 때 정리된다)
+    seen, watching = [srv.conns], threading.Event()
+    watching.set()
+
+    def watch():                  # 시험 내내 한 번이라도 상한을 넘는지
+        while watching.is_set():
+            seen.append(srv.conns)
+            time.sleep(0.005)
+    threading.Thread(target=watch, daemon=True).start()
+    local_server.Handler.timeout = 30
     idle = [socket.create_connection(("127.0.0.1", srv.server_address[1])) for _ in range(local_server.MAX_CONN + 30)]
-    time.sleep(0.5)
-    check("동시에 붙은 연결은 상한까지만", before < srv.conns <= local_server.MAX_CONN, f"{before} → {srv.conns}")
-    time.sleep(2.5)
-    check("말 없는 연결은 시간이 지나면 끊긴다", srv.conns <= before, f"{before} → {srv.conns}")
+    full = until(lambda: srv.conns >= local_server.MAX_CONN, 20)
+    check("동시에 붙은 연결은 상한까지만", full and before < local_server.MAX_CONN and max(seen) <= local_server.MAX_CONN,
+          f"{before} → {srv.conns} (가장 많을 때 {max(seen)})")
+    for s in idle:
+        s.close()
+    check("연결을 닫으면 자리가 돌아온다", until(lambda: srv.conns <= before, 10), f"{before} → {srv.conns}")
+    local_server.Handler.timeout = 1
+    idle = [socket.create_connection(("127.0.0.1", srv.server_address[1])) for _ in range(5)]
+    held = until(lambda: srv.conns > before, 10)
+    check("말 없는 연결은 시간이 지나면 끊긴다", held and until(lambda: srv.conns <= before, 10), f"{before} → {srv.conns}")
+    watching.clear()
+    check("상한을 한 번도 넘지 않았다", max(seen) <= local_server.MAX_CONN, f"가장 많을 때 {max(seen)}")
     for s in idle:
         s.close()
     local_server.Handler.timeout = real_timeout
