@@ -642,6 +642,36 @@ for name, el in (("빈 사각형", El("빈", Rect(0, 0, 0, 0))), ("창 밖", El(
         check(f"누를 자리가 {name}이면 누르지 않고 멈춘다", False, "멈추지 않음")
     except wellife.Stop as e:
         check(f"누를 자리가 {name}이면 누르지 않고 멈춘다 ((0,0)·다른 곳을 누르지 않게)", acts == [], f"{e} {acts}")
+_saved_om = wellife._open_menu
+strict_res = []
+for note_om in (" (▼ 자리를 확인하지 못해 메뉴를 열지 않았습니다. 확인하여 주십시오)", " (▼ 꺼짐)",
+                " (▼를 눌렀으나 메뉴가 나타나지 않았습니다. 확인하여 주십시오)", " (메뉴에 '정상매출'이(가) 없습니다. 로그의 실측 글자를 확인하여 주십시오)"):
+    wellife._open_menu = lambda rr_, ctx_, split, item, what, would, n=note_om: (None, n)
+    try:
+        strict_res.append(wellife.press_menu_item(drop_rr(), actx, None, "정상매출", "매출처리 ▼", confirm=False, strict=True))
+    except wellife.Stop as e:
+        strict_res.append((e.result, str(e)))
+    except TypeError as e:
+        strict_res.append(("TypeError", str(e)))
+check("strict: ▼ 자리·▼ 꺼짐·메뉴 안 뜸·항목 없음은 넘어가지 않고 실패로 멈춘다 - 사유에 그 까닭 (매출처리, 사용자 11-20)",
+      [r[0] for r in strict_res] == ["failed"] * 4 and "▼ 꺼짐" in strict_res[1][1] and strict_res[3][1].startswith("매출처리 ▼"), str(strict_res))
+wellife._open_menu = lambda rr_, ctx_, split, item, what, would: (None, " (▼ 꺼짐)")
+check("strict 가 아니면(4-1 [지정▼]) 예전처럼 '확인할 것' 으로 넘어간다",
+      wellife.press_menu_item(drop_rr(), actx, None, "선택 항목만", "4-1 [지정▼]") == (" (▼ 꺼짐)", False))
+_saved_cm, closed_om = wellife._close_menu, []
+wellife._close_menu = lambda rr_, ctx_, wins, what: closed_om.append(wins)
+_off_item = types.SimpleNamespace(is_enabled=lambda: False, window_text=lambda: "정상매출")
+wellife._open_menu = lambda rr_, ctx_, split, item, what, would: (_off_item, 7)
+try:
+    res = wellife.press_menu_item(drop_rr(), actx, None, "정상매출", "매출처리 ▼", confirm=False, strict=True)
+except wellife.Stop as e:
+    res = (e.result, str(e))
+check("strict: '정상매출' 이 꺼져 있어도 메뉴를 닫고 실패로 멈춘다 (사용자 11-23: 단추 꺼짐도 실패)",
+      res[0] == "failed" and "꺼져 있어" in res[1] and closed_om == [{7}], f"{res} {closed_om}")
+closed_om.clear()
+check("strict 가 아니면 꺼진 항목은 메뉴를 닫고 '확인할 것' 으로 넘어간다",
+      wellife.press_menu_item(drop_rr(), actx, None, "선택 항목만", "4-1 [지정▼]")[1] is False and closed_om == [{7}])
+wellife._open_menu, wellife._close_menu = _saved_om, _saved_cm
 
 # Stop 이 아닌 UI 오류는 실행 전체를 죽이지 않고 그 화면의 실패로
 _saved = wellife.goto_screen_by_menu, wellife.sales_slip_stage
@@ -1078,7 +1108,7 @@ def hold_rr(rows=1, tab=True, again="선택"):
                                  descendants=lambda control_type=None: [El(wellife.CHECK_COL)] if control_type == "Header"
                                  else [1] * rows)
     return pop_rr(status=Rec(), click_subtab=lambda app, hwnd, name: acts.append(("tab", name)) or tab,
-                  STOCK_GENERAL_TAB_NAME="일반", get_onscreen_tables=lambda win: [grid],
+                  STOCK_GENERAL_TAB_NAME="일반", get_onscreen_tables=lambda win: [grid], QUERY_DONE_MAX_WAIT_SECONDS=3600,
                   wait_grid_spinner_gone=lambda *a, **k: True,
                   grid_rows=lambda g: {n: {wellife.CHECK_COL: again} for n in range(1, rows + 1)},
                   legacy_value=lambda v: v,
@@ -1101,6 +1131,23 @@ for live in (False, True):
 acts.clear()
 res = wellife.hold_save(hold_rr(rows=0), hctx, True)
 check("물류대기 0건이면 저장하지 않는다", res[0] == "no_target" and ("click", "저장(S)") not in acts, f"{res} {acts}")
+acts.clear(); POP.clear()
+hr, waits_h, reads_h = hold_rr(), [], [0]
+
+
+def flaky_hold(control_type=None):
+    if control_type == "Header":
+        return [El(wellife.CHECK_COL)]
+    reads_h[0] += 1
+    return [] if reads_h[0] == 1 else [1]
+
+
+hr.get_onscreen_tables = lambda win: [types.SimpleNamespace(rectangle=lambda: Rect(0, 50, 200, 300), descendants=flaky_hold)]
+hr.wait_grid_spinner_gone = lambda *a, **k: waits_h.append(k.get("max_wait")) or True
+
+res = wellife.hold_save(hr, hctx, True)
+check("물류대기: 조회는 보통 PROCESS 와 같이 끝까지(3600초) 기다리고, 0줄로 읽히면 2초 뒤 한 번 더 본다 (사용자 11-19)",
+      res[0] == "done" and waits_h == [3600] and ("click", "저장(S)") in acts, f"{res} {waits_h} {acts}")
 for what, kw in (("'일반' 탭을 못 찾으면 조회·저장하지 않고 멈춘다 (다른 서브탭의 단추를 누르지 않게)", {"tab": False}),
                  ("저장 직전 다시 보니 체크가 풀려 있으면 저장하지 않는다 (사용자 10-13 - 재확인)", {"again": "선택안됨"})):
     acts.clear(); POP.clear()
@@ -1201,8 +1248,9 @@ try:
     res = wellife.import_collect(order_rr({}), octx, True)
 except wellife.Stop as e:
     res = ("Stop", e.result, str(e))
-check("[가져오기] 조회는 시작됐는데 끝을 확인 못 하면 '완료' 로 남기고 이어간다 - 보통 PROCESS 와 같게 (사용자 11-19, 예전엔 멈춤)",
-      res[0] == "done" and "확인하지 못" in res[1], f"{res} {acts}")
+check("[가져오기] 조회는 시작됐는데 끝을 확인 못 하면 실패로 멈춘다 - 뒤 매출처리를 돌리지 않게 (사용자 11-23: 실패면 그 단계에서 멈춤, 일반과 같게)",
+      res[0] == "failed" and "확인하지 못" in res[1], f"{res} {acts}")
+check("끝을 확인 못 했으면 누른 뒤 몇 초 기다렸는지 사유에 남긴다 (사용자 11-23)", "0초 기다려도" in res[1], str(res))
 IMPORTED[0] = None
 acts.clear()
 res = wellife.import_collect(order_rr({}), octx, True)
@@ -1249,10 +1297,14 @@ wellife.check_one_row = lambda rr_, ctx_, grid, label: acts.append(("one", grid.
 wellife.front = wellife.no_popup = lambda *a: None
 wellife.clear_point = lambda *a: (0, 0)
 wellife.check_header = lambda grid, label="": El("row Check Box")
-wellife.recheck = lambda rr_, grid, label, live: NS["again"]
+wellife.recheck = lambda rr_, grid, label, live: NS["again"].pop(0) if isinstance(NS["again"], list) else NS["again"]
 wellife.hover_menu_item = lambda rr_, ctx_, split, item, what, would: acts.append(("hover", item, would)) or ""
-wellife.press_menu_item = lambda rr_, ctx_, split, item, what, grid=None, confirm=True: (
-    acts.append(("press", item, confirm)), (f" -> '{item}' 누름", True))[1]
+ns_strict = []      # press_menu_item 에 넘긴 strict (▼·메뉴를 못 찾으면 실패)
+ns_ready = []       # wait_sales_ready 를 부른 때 이미 한 일 수 (그리드를 보기 전이어야 한다)
+_saved_n["wait_sales_ready"] = getattr(wellife, "wait_sales_ready", None)
+wellife.wait_sales_ready =lambda rr_, ctx_, find, what: ns_ready.append((len(acts), what)) or False
+wellife.press_menu_item = lambda rr_, ctx_, split, item, what, grid=None, confirm=True, strict=False: (
+    acts.append(("press", item, confirm)), ns_strict.append(strict), (f" -> '{item}' 누름", True))[2]
 wellife.after_normal_sales = lambda rr_, ctx_, base: acts.append(("after",)) or " (완료)"
 ns_top, ns_bottom = El("사이트", Rect(0, 50, 200, 100)), El("주문", Rect(0, 300, 200, 500))
 nrr = types.SimpleNamespace(status=Rec(), log=lambda m: None, visible_child_windows=lambda h: {},
@@ -1278,22 +1330,106 @@ check("리허설: 하단 전체선택(원래 select_all_and_verify) -> ▼ 를 �
 check("실행: 하단 전체선택 -> ▼ '정상매출' 누름 (팝업은 원래 코드가 - confirm=False) -> 원래 팝업·대기 처리",
       acts == [("select_all", "주문", tuple(wellife.BOTTOM_ID_COLUMNS)), ("press", "정상매출", False), ("after",)] and sold,
       f"{note} {acts}")
+check("실행: ▼·메뉴를 못 찾으면 건너뜀이 아니라 실패 (strict - 사용자 11-20: 꺼진 '정상매출'·체크 안 됨만 건너뜀)", ns_strict[-1:] == [True],
+      str(ns_strict))
+check("실행: 하단을 보기 전에 매출처리 ▼ 를 누를 수 있을 때까지 기다린다 (주문 수집 중이면 꺼져 있다 - 사용자 11-23)",
+      ns_ready[-1:] == [(0, f"{wellife.SALES_SPLIT} ▼")], str(ns_ready))
+ns_ready.clear()
+run_ns(False)
+check("리허설은 누르지 않으므로 기다리지 않는다", ns_ready == [], str(ns_ready))
 (note, sold), _ = run_ns(True, rows={})
 check("하단 0줄이면 전체선택도 매출처리도 하지 않는다 (원래 PROCESS 도 2026-11-02 부터 같다)",
       acts == [] and sold is False and "0줄" in note, f"{note} {acts}")
-(note, sold), _ = run_ns(True, again=False)
-check("실행: 누르기 직전 다시 보니 체크가 풀려 있으면 정상매출을 누르지 않는다",
-      ("press", "정상매출", False) not in acts and sold is False and "확인하여 주십시오" in note, f"{note} {acts}")
+_gr, reads_ns, _sl = nrr.grid_rows, [{}, {1: {}}], wellife.time.sleep
+nrr.grid_rows = lambda g: (reads_ns.pop(0) if reads_ns else {1: {}}) if g is ns_bottom else {}
+wellife.time.sleep = lambda s: None
+(note, sold), _ = run_ns(True)
+nrr.grid_rows, wellife.time.sleep = _gr, _sl
+check("하단이 0줄로 읽히면 2초 뒤 한 번 더 본다 (다시 그려지는 중일 수 있다 - 보통 PROCESS sales_flow 와 같게, 사용자 11-19)",
+      sold and ("press", "정상매출", False) in acts, f"{note} {acts}")
+_, err = run_ns(True, again=False)
+check("실행: 다시 체크해도 누르기 직전 체크가 계속 풀려 있으면 정상매출을 누르지 않고 실패로 멈춘다 (사용자 11-23)",
+      ("press", "정상매출", False) not in acts and err == "failed"
+      and [a[0] for a in acts].count("select_all") == wellife.CHECK_TRIES, f"{err} {acts}")
+(note, sold), err = run_ns(True, again=[False, True])
+check("실행: 한 번 풀렸다가 다시 체크하니 맞으면 정상매출을 누른다 (사용자 11-23: 체크를 확실히 - 바로 실패하지 않는다)",
+      sold and [a[0] for a in acts].count("select_all") == 2 and ("press", "정상매출", False) in acts, f"{err} {acts}")
 _, err = run_ns(True, split=False)
 check("'매출처리' 단추가 없으면 멈춘다", err == "failed")
 (note, sold), _ = run_ns(wellife.ONE)
 check("1건: 하단 첫 줄만 체크(전체선택 안 함) -> 정상매출",
       acts == [("one", "주문"), ("press", "정상매출", False), ("after",)] and sold and "첫 줄 1건" in note, f"{note} {acts}")
-(note, sold), _ = run_ns(wellife.ONE, one=False)
-check("1건: 첫 줄 체크를 못 했으면 다시 보기가 '한 줄 체크' 로 맞아도(이미 체크돼 있던 줄) 누르지 않는다",
-      ("press", "정상매출", False) not in acts and sold is False and "확인하여 주십시오" in note, f"{note} {acts}")
+_, err = run_ns(wellife.ONE, one=False)
+check("1건: 첫 줄 체크를 못 했으면 다시 보기가 '한 줄 체크' 로 맞아도(이미 체크돼 있던 줄) 누르지 않고 실패로 멈춘다 (사용자 11-23)",
+      ("press", "정상매출", False) not in acts and err == "failed", f"{err} {acts}")
 for n, f in _saved_n.items():
     setattr(wellife, n, f)
+
+# 매출처리 ▼ 를 누를 수 있을 때까지 - 정해진 간격마다 보고 켜지면 바로, 최대 시간까지 안 켜지면 실패 (사용자 11-23)
+RDY = {"seq": [], "pops": 0, "log": [], "finds": 0}
+_arrow_r = types.SimpleNamespace(name="오픈")
+_saved_sob = wellife.split_open_button
+wellife.split_open_button = lambda split: _arrow_r if split == "매출처리" else None
+
+
+def _rdy_on(el):
+    return RDY["seq"].pop(0) if len(RDY["seq"]) > 1 else RDY["seq"][0]
+
+
+rdy_rr = types.SimpleNamespace(log=lambda m: RDY["log"].append(m), status=Rec(), IMPORT_MAX_WAIT_SECONDS=0.3, IMPORT_POLL_SECONDS=0.01,
+                               native_enabled=_rdy_on,
+                               handle_import_popups=lambda pid, hwnd, seen: RDY.__setitem__("pops", RDY["pops"] + 1))
+
+
+def run_rdy(seq, found="매출처리"):
+    RDY.update(seq=list(seq), pops=0, log=[], finds=0)
+
+    def find():
+        RDY["finds"] += 1
+        return found
+    try:
+        return getattr(wellife, "wait_sales_ready")(rdy_rr, octx, find, "매출처리 ▼")
+    except wellife.Stop as e:
+        return ("Stop", e.result, str(e))
+    except AttributeError as e:
+        return ("없음", str(e))
+
+
+_saved_ri = (wellife.wait_idle, wellife.sites_checked, wellife.front, wellife.clear_point)
+wellife.wait_idle = wellife.front = lambda *a: None
+wellife.clear_point = lambda *a: (0, 0)
+_ri_seq, _ri_again = [False, True], []
+wellife.sites_checked = lambda rr_, grid: _ri_seq.pop(0) if _ri_seq else True
+_ri_imp = types.SimpleNamespace(rectangle=lambda: "자리")
+_ri_rr = types.SimpleNamespace(log=lambda m: None, IMPORT_BUTTON_NAME="가져오기",
+                               find_by_text=lambda page, text, control_types=(): _ri_imp)
+try:
+    wellife.ready_to_import(_ri_rr, octx, "화면", _ri_imp, "사이트", 3, "자동 수집 [가져오기]",
+                            reselect=lambda: _ri_again.append(1) or ("사이트", 3))
+    res = "누름"
+except (wellife.Stop, TypeError) as e:
+    res = (type(e).__name__, str(e))
+check("자동 수집: [가져오기] 직전 상단 체크가 풀렸으면 다시 전체선택하고, 맞으면 누른다 (10-19 실측의 다시 그려짐 - 사용자 11-23: 체크를 확실히)",
+      res == "누름" and _ri_again == [1], f"{res} {_ri_again}")
+_ri_seq[:] = [False] * 9
+try:
+    wellife.ready_to_import(_ri_rr, octx, "화면", _ri_imp, "사이트", 3, "자동 수집 [가져오기]", reselect=lambda: ("사이트", 3))
+    res = "누름"
+except (wellife.Stop, TypeError) as e:
+    res = (type(e).__name__, str(e))
+check("자동 수집: 다시 전체선택해도 계속 풀리면 누르지 않고 실패로 멈춘다", res[0] == "Stop" and "체크" in res[1], str(res))
+(wellife.wait_idle, wellife.sites_checked, wellife.front, wellife.clear_point) = _saved_ri
+res = run_rdy([True])
+check("매출처리 ▼ 가 켜져 있으면 기다리지 않는다", res is False and RDY["pops"] == 0 and not RDY["log"], f"{res} {RDY}")
+res = run_rdy([False, False, False, True])
+check("꺼져 있으면 정해진 간격마다 다시 보고 켜지면 바로 이어간다 - 기다린 초를 로그에, 기다리는 동안 팝업은 수집 대기와 같은 규칙으로",
+      res is True and RDY["pops"] == 3 and any("초 기다려 켜졌습니다" in m for m in RDY["log"]), f"{res} {RDY}")
+res = run_rdy([False])
+check("최대 시간까지 안 켜지면 실패 - 사유에 기다린 초와 '주문 수집' (사용자 11-23)",
+      isinstance(res, tuple) and res[:2] == ("Stop", "failed") and "초 기다려도" in res[2] and "주문 수집" in res[2], str(res))
+res = run_rdy([False], found=None)
+check("▼ 자리를 못 고르면 기다리지 않는다 (press_menu_item 이 실패로 남긴다)", res is False and RDY["pops"] == 0, f"{res} {RDY}")
+wellife.split_open_button = _saved_sob
 
 # 정상매출 뒤 - 원래 module_sales 10~11 단계 그대로: 확인 팝업 [예]/[확인], 실패 문구면 멈춤
 AF = {"ok": None, "failure": None, "async": "clicked", "sep": (None, 0)}
@@ -1322,7 +1458,8 @@ check("기다리는 중 실패 팝업이면 멈춘다", err and err[0] == "stopp
 aft, err = run_after(sep=("매출처리 실패", 1))
 check("따로 뜬 창의 실패 팝업이면 멈춘다", err and err[0] == "stopped", str(err))
 aft, err = run_after(**{"async": "timeout"})
-check("대기 시간 초과는 '확인할 것' 을 남기고 이어 간다 (원래와 같음)", err is None and "확인하여 주십시오" in aft, str(aft))
+check("정상매출 뒤 대기 시간 초과는 실패로 멈춘다 - 기다린 초를 사유에 (사용자 11-23, 예전엔 '확인할 것' 을 남기고 이어 감)",
+      err and err[0] == "failed" and "초" in err[1], f"{aft} {err}")
 wellife.time.sleep = _sleep
 TOP[0] = 1
 
@@ -1644,8 +1781,8 @@ check("엑셀(실행): 조회는 됐는데 양식 미리보기가 0건이면 받
       res[0] == "done" and "0건 YES24(110) (조회 2건, 양식 미리보기 0건)" in res[1]
       and [x[1] for x in _XLLOG if x[0] == "press"] == ["btn_NotSendCompletionProcessing"] and os.listdir(_xl_dir) == ["(109)이지웰송장2026-11-01~2026-11-09.xlsx"], f"{res} {_XLLOG}")
 res = xl_run(True, T2, {"109": 3, "110": 2}, checked=False)
-check("엑셀(실행): 전체 체크가 안 되면 완료처리를 누르지 않고 skipped (확인할 것) - 파일은 받아 둔다",
-      res[0] == "skipped" and "체크가 되지 않아 완료처리하지 않았습니다" in res[1] and all(x[2] is False for x in _XLLOG if x[0] == "press")
+check("엑셀(실행): 전체 체크가 안 되면 완료처리를 누르지 않고 그 사이트는 실패 - 모듈은 failed (사용자 11-23) - 파일은 받아 둔다",
+      res[0] == "failed" and "체크가 되지 않아 완료처리하지 않았습니다" in res[1] and all(x[2] is False for x in _XLLOG if x[0] == "press")
       and len(os.listdir(_xl_dir)) == 2, f"{res} {_XLLOG}")
 import re  # noqa: E402
 _stamp = re.compile(r"^실패_\((\d{3})\)_(.+)_\d\d-\d\d-\d\d-\d\d\.xlsx$")
@@ -1677,7 +1814,7 @@ wellife.unlock_excel(str(_u), "0000")
 check("엑셀 비밀번호 풀기: 잠기지 않은 엑셀은 그대로 둔다", _u.read_bytes() == _PLAIN and os.listdir(_udir) == ["u.xlsx"])
 res = xl_run(True, T2, {"109": 3, "110": 0}, nopress=True)
 check("엑셀(실행): [미전송 완료처리] 단추가 꺼져 누르지 못했으면 '실패_(109)_완료처리안됨_…' (두 번 올라가지 않게)",
-      _fails() == [("109", "완료처리안됨")] and "단추가 꺼져 있습니다" in res[1], f"{os.listdir(_xl_dir)} {res}")
+      _fails() == [("109", "완료처리안됨")] and "단추가 꺼져 있습니다" in res[1] and res[0] == "failed", f"{os.listdir(_xl_dir)} {res}")
 try:
     xl_run(True, T2, {"109": 3}, after={"이지웰": ("stopped", "윈도우 화면이 잠겨 있어")})
 except wellife.Stop:
@@ -1705,15 +1842,70 @@ except wellife.Stop as e:
 (wellife.export_password, wellife.excel_targets, wellife.ensure_query, wellife.export_market,
  wellife._close_export_windows, wellife.run_query, wellife.controls, wellife.check_all_rows, wellife.recheck, wellife.press_arrow,
  wellife.upload_codes, wellife.pick_sites) = _saved_loop
-res = inv_run(True, checked=False)
-check("실행: 전체 체크가 안 되면 전송요청을 누르지 않는다 (확인할 것)",
-      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
-res = inv_run(True, later="선택안됨")
-check("실행: 누르기 직전에 다시 보니 체크가 풀려 있으면 누르지 않는다 (조회가 늦게 끝난 경우)",
-      ("click", "btn_SendRequest") not in acts and res[0] == "skipped" and "확인하여 주십시오" in res[1], f"{res} {acts}")
-res = inv_run(True, on=False)
-check("실행: 단추가 꺼져 있으면 누르지 않는다", ("click", "btn_SendRequest") not in acts and res[0] == "skipped"
-      and "꺼져 있습니다" in res[1], f"{res} {acts}")
+def inv_try(*a, **k):
+    try:
+        return inv_run(*a, **k)
+    except wellife.Stop as e:
+        return e.result, str(e)
+
+
+res = inv_try(True, checked=False)
+check("실행: 전체 체크가 안 되면 전송요청을 누르지 않고 실패로 멈춘다 (사용자 11-23)",
+      ("click", "btn_SendRequest") not in acts and res[0] == "failed" and "체크" in res[1], f"{res} {acts}")
+res = inv_try(True, later="선택안됨")
+check("실행: 누르기 직전에 다시 보니 체크가 풀려 있으면 누르지 않고 실패로 멈춘다 (조회가 늦게 끝난 경우)",
+      ("click", "btn_SendRequest") not in acts and res[0] == "failed" and "체크" in res[1], f"{res} {acts}")
+res = inv_try(True, on=False)
+check("실행: 대상이 있는데 단추가 꺼져 있으면 누르지 않고 실패로 멈춘다 (사용자 11-23)", ("click", "btn_SendRequest") not in acts
+      and res[0] == "failed" and "꺼져 있" in res[1], f"{res} {acts}")
+_saved_rc = wellife.recheck
+_rc_seq = [False, True]
+wellife.recheck = lambda rr_, grid, label, live: _rc_seq.pop(0) if _rc_seq else True
+res = inv_try(True)
+wellife.recheck = _saved_rc
+check("실행: 누르기 직전 체크가 풀렸으면 다시 체크하고, 맞으면 [전송요청] 을 누른다 (사용자 11-23: 체크를 확실히)",
+      acts.count(("check_all",)) == 2 and ("click", "btn_SendRequest") in acts and res[0] == "done", f"{res} {acts}")
+_saved_is = (wellife.invoice_flags, wellife.invoice_excel, wellife.invoice_request)
+wellife.invoice_flags = lambda: {wellife.st.INVOICE_EXCEL, "auto"}
+wellife.invoice_excel = lambda rr_, ctx_, live: ("done", "엑셀 받음")
+for stop_as in ("skipped", "stopped"):
+    def _req(rr_, ctx_, live, s=stop_as):
+        raise wellife.Stop(s, f"전송요청 {s}")
+    wellife.invoice_request = _req
+    try:
+        res = wellife.invoice_send(pop_rr(status=Rec()), actx, True)
+    except wellife.Stop as e:
+        res = ("Stop", e.result, str(e))
+    check(f"엑셀 + 전송요청 줄: 전송요청이 {stop_as} 로 멈춰도 앞 엑셀 결과·사유를 버리지 않는다 (검토 11-23)",
+          res[0] == ("done" if stop_as == "skipped" else "stopped") and "엑셀 받음" in res[1] and f"전송요청 {stop_as}" in res[1], str(res))
+wellife.invoice_flags, wellife.invoice_excel, wellife.invoice_request = _saved_is
+_tmp_fs = os.path.join(_tmp, "(109)받은.xlsx")
+open(_tmp_fs, "w").close()
+_saved_fn = wellife.fail_name
+
+
+def _fn_boom(*a, **k):
+    raise OSError("다른 프로그램이 열고 있음")
+
+
+wellife.fail_name = _fn_boom
+_fs_ctx = types.SimpleNamespace(export_saved=_tmp_fs)
+res = wellife._fail_saved(pop_rr(), _fs_ctx, "109", "체크안됨", True)
+wellife.fail_name = _saved_fn
+check("받은 파일을 실패 이름으로 못 바꾸면 그 사실을 사유에 남긴다 - 원래 이름이면 업로드가 올릴 수 있다 (예전엔 로그만, 검토 11-23)",
+      res is not None and "바꾸지 못" in res and "(109)받은.xlsx" in res, str(res))
+import time as _time  # noqa: E402
+_saved_rq = (wellife.controls, wellife.no_popup, wellife.click, wellife.count_rows, wellife.time)
+CNT = [0, 3]
+wellife.controls = lambda rr_, ctx_, form: {"btn_Search": "조회", "gridCtrl_List": "그리드"}
+wellife.no_popup = lambda *a: None
+wellife.click = lambda *a: None
+wellife.count_rows = lambda rr_, ctx_, grid: CNT.pop(0) if CNT else 0
+wellife.time = types.SimpleNamespace(sleep=lambda s: None, time=_time.time)
+res = wellife.run_query(pop_rr(grid_overlay_count=lambda h, g: 0, wait_grid_spinner_gone=lambda *a, **k: True), actx)
+(wellife.controls, wellife.no_popup, wellife.click, wellife.count_rows, wellife.time) = _saved_rq
+check("운송장 조회 뒤 0줄로 읽히면 2초 뒤 한 번 더 센다 - 늦게 그려진 그리드를 '0건(대상 없음)' 으로 보지 않게 (매출처리·물류대기와 같게)",
+      res[0] == 3, str(res))
 try:
     inv_run(True, popup=[El("예")])
     res = None
@@ -2642,7 +2834,13 @@ print("=== 16. 창 전체를 훑지 않기 (10-14 리허설 9분 10초 - 화면 
 # 팝업 보기: 보이는 자식 창 목록이 마지막 '팝업 없음' 때와 같으면 다시 훑지 않는다 (ERPia 팝업은 자식 창으로 뜬다)
 scans, kids15, tops15 = [], [{1: ("a", (0, 0, 9, 9)), 2: ("b", (0, 0, 9, 9))}], [[]]
 prr = types.SimpleNamespace(visible_child_windows=lambda h: kids15[0], find_popup_windows=lambda pid, h: tops15[0], log=lambda m: None,
-                            find_popup_buttons=lambda win: scans.append(1) or POP15[0], collect_popup_text=lambda b: "팝업 글")
+                            find_popup_buttons=lambda win: scans.append(1) or POP15[0], collect_popup_text=lambda b: "팝업 글",
+                            # 따로 뜬 창 77 은 팝업이 아니다 (단추 없음, 메인 창 안 막음) - no_popup 의 따로 뜬 창 보기를 지나 안쪽 팝업을 훑는다
+                            OK_BUTTON_TEXTS=rr.OK_BUTTON_TEXTS, YES_BUTTON_TEXTS=rr.YES_BUTTON_TEXTS, NO_BUTTON_TEXTS=rr.NO_BUTTON_TEXTS,
+                            SAVE_DIALOG_CLASS="#32770", find_open_dialog_filename_edit=lambda h: None, dialog_gone=lambda h, settle=2.0: False,
+                            win32gui=types.SimpleNamespace(GetClassName=lambda h: "x", IsWindowEnabled=lambda h: True, GetWindowText=lambda h: ""),
+                            Desktop=lambda backend=None: types.SimpleNamespace(window=lambda handle: types.SimpleNamespace(
+                                descendants=lambda control_type=None: [])))
 POP15 = [[]]
 pctx = types.SimpleNamespace(hwnd=1, pid=5, window=lambda: None)
 wellife.no_popup(prr, pctx, "가")
@@ -2910,6 +3108,19 @@ check(f"그리드가 계속 사라지면 {wellife.HIDDEN_MAX}번 넘어 업로�
 check("멈추면 올리지 못하고 남은 파일 수를 사유에 붙인다 (수집이 뒤에 넘기는 파일도 이번 실행에서는 안 올라감 - 검토 10-20)",
       "남은 파일 1개" in res[1] and wellife.LEFT_NOTE in res[1], str(res))
 os.remove(os.path.join(tog, "(112)f.xlsx"))
+tev.clear()
+prep["on"] = True
+open(os.path.join(tog, "(114)h.xlsx"), "w").close()
+
+
+def hidden_after_one(*a, **k):      # 한 건 올린 뒤 그리드가 사라졌다
+    raise rr.UploadGridHidden(1, 0)
+
+
+trr.run_excel_upload_step = hidden_after_one
+res = together(False)
+check("그리드가 사라져 멈출 때 그 차례에 넘긴 파일도 센다 - '0건 중 1건 업로드' 가 되지 않게 (검토 11-20)", "엑셀 1건 중 1건 업로드" in res[1], str(res))
+os.remove(os.path.join(tog, "(114)h.xlsx"))
 
 tev.clear()
 prep["on"] = True
@@ -3311,5 +3522,214 @@ try:
 except wellife.Stop as e:
     w_stop = str(e)
 check("no_popup 도 새 길로 팝업을 보고 누르지 않고 멈춘다", bool(w_stop) and "예 팝업 글" in w_stop and not w_full, str(w_stop))
+
+print("=== 따로 뜬 ERPia 팝업 창 (사용자 11-20: X 나 [확인] 으로 지우고 다음 단계로 - 떠 있으면 메인 창 클릭이 먹지 않아 화면 이동이 2.5분 헛돌았다) ===")
+SEP = {}            # hwnd: (제목, 종류, 단추 이름들, 곧 닫히는가, 누르면 닫히는가)
+SEP_MAIN_ON = [True]
+SEP_DEAD, SEP_NOCLOSE, SEP_MAINS, SEP_UNREAD = set(), set(), set(), set()   # 죽은 창 / 제목 표시줄 닫기 단추 없는 창 / ERPia 메인 창 / 단추를 못 읽는 창
+pressed_sep = []
+_saved_block = getattr(wellife, "SEPARATE_BLOCK_SECONDS", 5), getattr(wellife, "TAB_AFTER_POPUP_SECONDS", 5)
+wellife.SEPARATE_BLOCK_SECONDS = 0.3      # 메인 창을 계속 막는지 보는 시간 - 시험에서는 짧게
+wellife.TAB_AFTER_POPUP_SECONDS = 0.5     # 화면 이동 기다림 중 팝업을 닫은 뒤 더 보는 시간 - 시험에서는 짧게
+
+
+def sep_rr(**kw):
+    def buttons(h):
+        if h in SEP_UNREAD:
+            raise RuntimeError("UIA 오류 흉내")
+
+        def invoke(n, h=h):
+            pressed_sep.append((h, n))
+            if SEP[h][4]:
+                SEP.pop(h)
+        return [types.SimpleNamespace(window_text=lambda n=n: n, invoke=lambda n=n: invoke(n)) for n in SEP[h][2]]
+
+    def post(h, msg, a, b):
+        pressed_sep.append((h, "X"))
+        if h in SEP and SEP[h][4]:
+            SEP.pop(h)
+    base = dict(log=lambda m: None, find_popup_windows=lambda pid, hwnd: [h for h in SEP if h != hwnd],
+                SAVE_DIALOG_CLASS="#32770", find_open_dialog_filename_edit=lambda h: 77 if SEP[h][1] == "파일 창" else None,
+                dialog_gone=lambda h, settle=2.0: h not in SEP or SEP[h][3], OK_BUTTON_TEXTS=rr.OK_BUTTON_TEXTS,
+                YES_BUTTON_TEXTS=rr.YES_BUTTON_TEXTS, NO_BUTTON_TEXTS=rr.NO_BUTTON_TEXTS, popup_window_text=lambda w: w.text,
+                is_main_app_window=lambda h: h in SEP_MAINS,
+                win32con=types.SimpleNamespace(WM_CLOSE=0x10, GWL_STYLE=-16, WS_SYSMENU=0x80000),
+                win32gui=types.SimpleNamespace(GetClassName=lambda h: "#32770" if SEP[h][1] == "파일 창" else SEP[h][1],
+                                               GetWindowText=lambda h: SEP[h][0] if h in SEP else "", IsWindowEnabled=lambda h: SEP_MAIN_ON[0],
+                                               IsWindow=lambda h: h not in SEP_DEAD,
+                                               GetWindowLong=lambda h, i: 0x14000000 if h in SEP_NOCLOSE else 0x14C80000,
+                                               PostMessage=post),
+                Desktop=lambda backend=None: types.SimpleNamespace(window=lambda handle: types.SimpleNamespace(
+                    descendants=lambda control_type=None, h=handle: buttons(h), text=f"{SEP[handle][0]} 본문", window_text=lambda: SEP[handle][0])),
+                ec=types.SimpleNamespace(screen_locked=lambda: False, ensure_foreground=lambda h: True))
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+sctx = types.SimpleNamespace(pid=1, hwnd=2, window=lambda: Nav([]))
+
+
+def sep_clear(rr_, after="화면 이동 전", ignore=()):
+    pressed_sep.clear()
+    try:
+        return wellife.clear_separate_popups(rr_, sctx, after, ignore)
+    except wellife.Stop as e:
+        return ("Stop", e.result, str(e))
+
+
+SEP.clear()
+check("따로 뜬 창이 없으면 아무것도 누르지 않는다", sep_clear(sep_rr()) == 0 and not pressed_sep, str(pressed_sep))
+SEP[30] = ("보류재처리 권한 획득 실패", "WindowsForms10.Window.8", ["확인(O)", "닫기"], False, True)
+n0 = getattr(sctx, "popups_closed", 0)
+res = sep_clear(sep_rr())
+check("[확인] 이 있는 따로 뜬 ERPia 팝업 창은 [확인] 으로 닫고 이어간다 (11-20 사용자, 11-19 개발기: 인터넷이 끊겨 뜬 창)",
+      res == 1 and pressed_sep == [(30, "확인(O)")] and 30 not in SEP and sctx.popups_closed == n0 + 1, f"{res} {pressed_sep}")
+SEP[34] = ("저장하시겠습니까", "WindowsForms10.Window.8", ["예(Y)", "아니오(N)"], False, True)
+res = sep_clear(sep_rr())
+check("예/아니오 질문 창은 [예] 를 누르지 않고 [아니오] 로 닫는다 (데이터를 바꿀 수 있다)", res == 1 and pressed_sep == [(34, "아니오(N)")], f"{res} {pressed_sep}")
+SEP_MAIN_ON[0] = False
+SEP[35] = ("", "WindowsForms10.Window.8", [], False, True)
+res = sep_clear(sep_rr())
+check("[확인]/[예]/[아니오] 가 없어도 제목 표시줄 닫기 단추가 있고 메인 창을 계속 막으면 X(창 닫기)로 닫는다",
+      res == 1 and pressed_sep == [(35, "X")], f"{res} {pressed_sep}")
+SEP[37] = ("", "WindowsForms10.Window.8", [], False, True)
+SEP_NOCLOSE.add(37)
+res = sep_clear(sep_rr())
+check("단추도 닫기 단추도 없는 창('불러오는 중' 같은 진행 창)은 메인 창을 막아도 건드리지 않고 기다린다 (검토 11-20)",
+      res == 0 and not pressed_sep and 37 in SEP, f"{res} {pressed_sep}")
+SEP.clear()
+SEP[38] = ("", "WindowsForms10.Window.8", [], False, True)
+gone_seq = [False]          # 1초 안에는 안 닫히고, 그 뒤 계속 막는지 보는 사이에 닫힌다 (진행 창)
+res = sep_clear(sep_rr(dialog_gone=lambda h, settle=2.0: gone_seq.pop(0) if gone_seq else True))
+check(f"닫기 단추가 있어도 메인 창을 {wellife.SEPARATE_BLOCK_SECONDS}초(실제 5초) 안 되게 막고 닫힌 창은 건드리지 않는다 (검토 11-20)",
+      res == 0 and not pressed_sep, f"{res} {pressed_sep}")
+SEP.clear()
+SEP_MAIN_ON[0] = True
+SEP[39] = ("보류재처리 권한 획득 실패", "WindowsForms10.Window.8", ["확인(O)"], False, True)
+SEP_UNREAD.add(39)
+sctx.calm_separate = set()
+res1 = sep_clear(sep_rr())
+SEP_UNREAD.clear()
+res2 = sep_clear(sep_rr())
+check("단추를 읽다 UI 오류가 나면 '팝업 아님' 으로 기억하지 않는다 - 다음에 다시 보고 [확인] 으로 닫는다 (검토 11-20)",
+      res1 == 0 and res2 == 1 and pressed_sep == [(39, "확인(O)")], f"{res1} {res2} {pressed_sep}")
+SEP.clear()
+SEP[40] = ("업체코드 - 아이디","WindowsForms10.Window.8", ["확인", "닫기"], False, True)     # 다시 만들어진 새 메인 창 (단추 많음)
+SEP_DEAD.add(sctx.hwnd)
+SEP_MAIN_ON[0] = False      # 죽은 핸들은 IsWindowEnabled 0 - '막힘' 으로도 보인다
+res = sep_clear(sep_rr())
+check("메인 창 핸들이 죽었으면(ERPia 가 메인 창을 다시 만드는 중) 따로 뜬 창을 보지 않는다 - 새 메인 창을 팝업으로 닫지 않게 (검토 11-20)",
+      res == 0 and not pressed_sep and 40 in SEP, f"{res} {pressed_sep}")
+SEP_DEAD.clear()
+SEP_MAINS.add(40)
+res = sep_clear(sep_rr())
+check("ERPia 메인 창(좌측 메뉴가 있는 창)은 메인 창이 막혀 있어도 팝업으로 보지 않는다 (검토 11-20)",
+      res == 0 and not pressed_sep and 40 in SEP, f"{res} {pressed_sep}")
+SEP_MAINS.clear()
+SEP.clear()
+sctx.calm_separate = set()
+SEP_MAIN_ON[0] = True
+SEP[36] = ("안 닫히는 팝업", "WindowsForms10.Window.8", ["확인(O)"], False, False)
+res = sep_clear(sep_rr())
+check("눌러도 닫히지 않으면 그때만 멈춘다 - 사유에 창 제목", isinstance(res, tuple) and res[1] == "stopped" and "안 닫히는 팝업" in res[2]
+      and "닫지 못해" in res[2], str(res))
+SEP.clear()
+SEP[30] = ("보류재처리 권한 획득 실패", "WindowsForms10.Window.8", ["확인(O)"], False, True)
+check("그 흐름이 연 창(ignore)은 건드리지 않는다", sep_clear(sep_rr(), ignore={30}) == 0 and not pressed_sep and 30 in SEP)
+SEP.clear()
+SEP[31] = ("", "WindowsForms10.Window.0", [], True, True)          # 팝업과 같이 떴다 같이 닫히는 제목 없는 창 (11-19 실측 408x165)
+SEP[32] = ("열기", "파일 창", ["열기(O)", "취소"], False, True)      # 파일 열기 창 - 엑셀 업로드 흐름이 다룬다
+SEP[33] = ("", "WindowsForms10.Window.0", [], False, True)         # 단추 없고 메인 창도 막지 않는 창
+check("곧 닫히는 창·파일 열기 창·메인 창을 막지 않는 단추 없는 창은 건드리지 않는다", sep_clear(sep_rr()) == 0 and not pressed_sep, str(pressed_sep))
+gone_calls = []
+sctx.calm_separate = set()
+crr = sep_rr(dialog_gone=lambda h, settle=2.0: gone_calls.append(h) or h not in SEP or SEP[h][3])
+sep_clear(crr), sep_clear(crr)
+check("팝업이 아니라고 본 따로 뜬 창은 기억해 다음부터 다시 보지 않는다 (1초 기다림·로그가 볼 때마다 되풀이되지 않게 - 11-20 실측)",
+      gone_calls.count(33) == 1 and 33 in sctx.calm_separate, f"{gone_calls} {sctx.calm_separate}")
+SEP_MAIN_ON[0] = False
+res = sep_clear(sep_rr())
+check("기억한 창이라도 메인 창이 막혀 있으면 다시 보고 닫는다", res and res != 0 and (33, "X") in pressed_sep, f"{res} {pressed_sep}")
+SEP_MAIN_ON[0] = True
+SEP.clear()
+SEP[30] = ("보류재처리 권한 획득 실패", "WindowsForms10.Window.8", ["확인(O)"], False, True)
+calm_rr = sep_rr(find_popup_buttons=lambda win: [], collect_popup_text=lambda b: "")
+sctx.calm_children = None
+pressed_sep.clear()
+try:
+    wellife.no_popup(calm_rr, sctx, "하단 전체선택 전")
+    res = None
+except wellife.Stop as e:
+    res = str(e)
+check("no_popup 은 따로 뜬 팝업 창을 닫고 메인 창 안 팝업 보기로 이어간다", res is None and pressed_sep == [(30, "확인(O)")], f"{res} {pressed_sep}")
+_saved_sep = (wellife.active_tab, wellife.goto_open_tab, wellife._goto_screen_once)
+opened_sep = []
+SEP[30] = ("보류재처리 권한 획득 실패", "WindowsForms10.Window.8", ["확인(O)"], False, True)
+wellife.goto_open_tab = lambda rr_, ctx_, name: opened_sep.append(name) or (True, "")
+res = wellife.goto_screen(sep_rr(), sctx, "주문매핑 매출처리", "lcg_OrderCollect", lambda: "ok")
+check("화면 이동 전에 따로 뜬 팝업 창을 닫고 이동한다", res == "ok" and opened_sep == ["주문매핑 매출처리"] and 30 not in SEP, f"{res} {opened_sep}")
+reads_sep = []
+
+
+def tab_then_popup(ctx_):
+    reads_sep.append(1)
+    if len(reads_sep) == 2:      # 기다리는 도중에 뜬다
+        SEP[30] = ("보류재처리 권한 획득 실패", "WindowsForms10.Window.8", ["확인(O)"], False, True)
+    return "물류 관리"
+
+
+wellife.active_tab = tab_then_popup
+t0 = _time.time()
+res = wellife.wait_tab(sep_rr(), sctx, "주문매핑 매출처리", timeout=60)
+check("탭 도착을 기다리는 동안 따로 뜬 팝업 창을 닫았으면 잠깐(실제 5초)만 더 보고 안 바뀌면 끝까지(60초) 기다리지 않고 돌아온다 "
+      "(그 클릭은 먹지 않았다 - 부른 쪽이 한 번 더)",
+      res[0] is False and 30 not in SEP and wellife.TAB_AFTER_POPUP_SECONDS <= _time.time() - t0 < 5, f"{res} {_time.time() - t0:.1f}")
+reads_sep.clear()
+
+
+def popup_then_tab(ctx_):
+    reads_sep.append(1)
+    if len(reads_sep) == 2:      # 화면이 열리면서 안내 팝업이 뜬다 - 닫고 나면 화면은 열려 있다
+        SEP[30] = ("안내", "WindowsForms10.Window.8", ["확인(O)"], False, True)
+    return "물류 관리" if len(reads_sep) < 3 else "주문매핑 매출처리"
+
+
+wellife.active_tab = popup_then_tab
+res = wellife.wait_tab(sep_rr(), sctx, "주문매핑 매출처리", timeout=60)
+check("닫은 뒤 다시 본 탭이 그 화면이면 도착으로 본다 - 화면이 열리면서 뜬 안내였다 (검토 11-20)", res[0] is True and 30 not in SEP, str(res))
+tries_sep = []
+
+
+def once(rr_, ctx_, name, icon, original):
+    tries_sep.append(1)
+    if len(tries_sep) == 1:       # 이동을 기다리는 동안 팝업을 닫았다 - 그 클릭은 먹지 않았다
+        ctx_.popups_closed = getattr(ctx_, "popups_closed", 0) + 1
+        return f"'{name}' 아이콘을 눌렀으나 그 화면으로 전환되지 않았습니다."
+    return "ok"
+
+
+wellife._goto_screen_once = once
+res = wellife.goto_screen(sep_rr(), sctx, "주문매핑 매출처리", "lcg_OrderCollect", lambda: "ok")
+check("이동을 기다리는 동안 팝업을 닫았으면 화면 이동을 한 번 더 한다", res == "ok" and len(tries_sep) == 2, f"{res} {tries_sep}")
+wellife.active_tab, wellife.goto_open_tab, wellife._goto_screen_once = _saved_sep
+_saved_obm = wellife._open_by_menu
+tries_sep.clear()
+
+
+def menu_once(rr_, ctx_, menu):
+    tries_sep.append(menu)
+    if len(tries_sep) == 1:       # 메뉴를 누른 뒤 기다리는 동안 팝업을 닫았다 - 그 클릭은 먹지 않았다
+        ctx_.popups_closed = getattr(ctx_, "popups_closed", 0) + 1
+        return False, f"'{menu}' 메뉴를 눌렀으나 화면이 열리지 않았습니다."
+    return True, None
+
+
+wellife._open_by_menu = menu_once
+res = wellife.goto_screen_by_menu(sep_rr(), sctx, "SAP 매출전표")
+check("메뉴 검색 이동(SAP·WMS)도 기다리는 동안 팝업을 닫았으면 한 번 더 한다 (검토 11-20)", res == (True, None) and len(tries_sep) == 2,
+      f"{res} {tries_sep}")
+wellife._open_by_menu = _saved_obm
+SEP.clear()
+wellife.SEPARATE_BLOCK_SECONDS, wellife.TAB_AFTER_POPUP_SECONDS = _saved_block
 
 finish()

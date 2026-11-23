@@ -243,7 +243,9 @@ def install(grid, cb_x=CB_X):
     rr.right_click_element_and_select = fake_right_click
     rr.find_bottom_code_column = lambda grid_, code_: CODE_COL
     rr._column_scan_geometry = lambda grid_, col_: GEO
-    rr.ec = types.SimpleNamespace(ensure_foreground=lambda *a, **k: True)
+    rr.ec = types.SimpleNamespace(ensure_foreground=lambda *a, **k: True, screen_locked=lambda: False)
+    # 누르기 안전장치(press - 잠김·앞 창·덮개, 진짜 창을 읽는다)는 test_routine_modules 가 따로 본다. 여기서는 흉내 칸을 바로 누른다
+    rr.press = lambda hwnd, el, what, **kw: el.click_input(**kw)
     rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime=_time.strftime)
     rr.log = lambda msg="": None        # 시험 출력이 지저분해지지 않게
     return grid
