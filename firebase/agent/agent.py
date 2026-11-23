@@ -22,6 +22,7 @@ if RPA_DIR not in sys.path:
     sys.path.insert(0, RPA_DIR)
 
 import fb   # noqa: E402
+import local_store   # noqa: E402  스탠드얼론이면 로컬 서버로 (client_for)
 
 APP = "rpa"                      # 이 에이전트가 맡는 앱. 경로는 apps/<앱>/... (플랫폼 AFTER MARKET 은 여러 앱을 담는다)
 BAD_KEY_CHARS = ".$#[]/"
@@ -860,8 +861,13 @@ def company_policy(client, cid, app=APP):
     한도가 없거나 이상하면 기본 2. 프리셋 수는 limits.presets (관리 화면) - 없거나 이상하면 None (PC 가 기본값, st.preset_limit).
     동시 창 수는 limits.parallel (관리 화면, 사이트를 동시에 몇 개까지 여나) - 없거나 이상하면 None (PC 가 하나씩, st.parallel_limit).
     못 읽으면 예외 - 부르는 쪽이 지난 값을 쓴다."""
+    return policy_from(cid, client.get(f"meta/companies/{cid}/apps/{app}") or {})
+
+
+def policy_from(cid, got):
+    """업체 정책 값 {limits, modules, features} → (자동 실행 개수, 안 쓰는 모듈 키 목록, 웰라이프, 프리셋 수, 동시 창 수).
+    company_policy 의 계산 부분 - 스탠드얼론은 서버 대신 라이선스의 같은 칸을 넣는다 (LicensePolicy)."""
     import rpa_status as st
-    got = client.get(f"meta/companies/{cid}/apps/{app}") or {}
     limits = got.get("limits") or {}
     raw = limits.get("schedule")
     ok = isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= SCHEDULE_LIMIT_MAX
@@ -897,6 +903,62 @@ def ai_policy(client, cid, app=APP):
     return True, (key if isinstance(key, str) and key.strip() else None)
 
 
+def apply_policy(got):
+    """읽은 업체 정책(policy_from 의 결과)을 PC 설정에 적는다 - 예약기가 그 값으로 줄을 자르고 모듈을 뺀다.
+    웰라이프가 열리면 섹션을 만들고 닫히면 지운다. Policy(서버)와 LicensePolicy(라이선스)가 같이 쓴다."""
+    import rpa_dashboard as dash
+    import rpa_status as st
+    was = st.wellife_policy()                    # 적기 전의 값 - 열렸다 닫힌 업체인지 본다
+    dash.set_policy(*got)
+    try:
+        dash.migrate_split_sales()               # 주문매핑을 셋으로 나눈 뒤 옛 예약 줄 (한 번만)
+    except Exception as e:
+        log(f"예약 설정을 수정하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
+    if was and not got[2]:
+        try:
+            st.remove_wellife_section()          # 닫히면 섹션도 지운다 (안 지우면 '열려 있지 않습니다' 로 영영 멈춘다)
+        except Exception as e:
+            log(f"웰라이프 설정을 삭제하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
+    if got[2]:
+        try:
+            st.ensure_wellife_section()          # 처음 열리면 로그인·매출처리만 켠 섹션 (메모장 편집 없음)
+        except Exception as e:
+            log(f"웰라이프 설정을 생성하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
+
+
+class LicensePolicy:
+    """스탠드얼론: 업체 정책을 서버 대신 라이선스에서 (설계 2026-11-23-standalone 6.2·6.4). Policy 와 같은 refresh -
+    같은 길(apply_policy)로 PC 설정에 적는다. AI 어시스트는 늘 끈다 (PC 에 남은 키가 있으면 지운다)."""
+
+    def __init__(self, lic, every=PRICES_EVERY_SEC):
+        self._lic, self._every, self._at = lic, every, None
+
+    def refresh(self, force=False):
+        """적었으면 (limit, off, wellife, presets, parallel), 아직 때가 아니면 None."""
+        if not force and self._at is not None and time.monotonic() - self._at < self._every:
+            return None
+        self._at = time.monotonic()
+        got = policy_from(self._lic.get("cid"), self._lic)
+        apply_policy(got)
+        try:
+            import rpa_status as st
+            st.set_ai(False, None)
+        except Exception as e:
+            log(f"AI 어시스트 설정을 끄지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
+        return got
+
+
+class NoTokens:
+    """스탠드얼론: 토큰 제도가 없다 (1회 구매·무제한) - Tokens 와 같은 겉모양으로 늘 '통장 없음' (막지 않고 화면은 줄을 숨긴다)."""
+    balance = None
+
+    def refresh(self, force=False):
+        return None
+
+    def view(self):
+        return None
+
+
 class Policy:
     """업체 정책을 10분마다 읽어 PC 설정(settings.json schedule.policy)에 적는다 - 예약기가 그 값으로 줄을 자르고 모듈을 뺀다.
     못 읽으면 적힌 값 그대로 (지난 값)."""
@@ -915,24 +977,8 @@ class Policy:
             raise
         except Exception:
             return None
-        import rpa_dashboard as dash
         import rpa_status as st
-        was = st.wellife_policy()                    # 적기 전의 값 - 열렸다 닫힌 업체인지 본다
-        dash.set_policy(*got)
-        try:
-            dash.migrate_split_sales()               # 주문매핑을 셋으로 나눈 뒤 옛 예약 줄 (한 번만)
-        except Exception as e:
-            log(f"예약 설정을 수정하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
-        if was and not got[2]:
-            try:
-                st.remove_wellife_section()          # 닫히면 섹션도 지운다 (안 지우면 '열려 있지 않습니다' 로 영영 멈춘다)
-            except Exception as e:
-                log(f"웰라이프 설정을 삭제하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
-        if got[2]:
-            try:
-                st.ensure_wellife_section()          # 처음 열리면 로그인·매출처리만 켠 섹션 (메모장 편집 없음)
-            except Exception as e:
-                log(f"웰라이프 설정을 생성하지 못했습니다. ({type(e).__name__}) 다음 주기에 다시 시도합니다.")
+        apply_policy(got)
         try:
             st.set_ai(*ai_policy(self._client, self._cid))     # 꺼졌으면 PC 의 키를 지운다 (계획 ② Review Focus 2)
         except fb.AuthError:
@@ -942,7 +988,12 @@ class Policy:
         return got
 
 
-def real_actions(policy=None, limits=None, start_update=None, client=None, cid=None, pc_id=None, busy=None, clock=None, sleep=time.sleep):
+STANDALONE_OFF = ("update", "rollback", "export_preset", "import_preset", "restore_preset")   # 스탠드얼론에서 안 쓰는 명령 (설계 3절)
+STANDALONE_OFF_TEXT = "스탠드얼론 버전에서는 사용하지 않는 기능입니다."
+
+
+def real_actions(policy=None, limits=None, start_update=None, client=None, cid=None, pc_id=None, busy=None, clock=None, sleep=time.sleep,
+                 standalone=False):
     """policy: 업체 정책 {키: False} 를 돌려주는 함수 (없으면 정책 없음)
     limits: 업체 정책을 지금 읽어 (limit, off, wellife) 를 돌려주는 함수 - 못 읽으면 None (PC 에 적힌 마지막 값을 쓴다)
     client·cid·pc_id: 프리셋 전송 자리를 읽고 쓸 때. busy·clock·sleep 은 시험이 바꿔 끼운다."""
@@ -1245,9 +1296,15 @@ def real_actions(policy=None, limits=None, start_update=None, client=None, cid=N
         note(meta, [msg] + ([rejected_text(rejected).strip()] if rejected else []))
         return msg + rejected_text(rejected)
 
-    return {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets, "set_parallel": do_parallel, "set_together": do_together,
+    acts = {"launch": do_launch, "stop_erpia": do_stop, "stop_rpa": do_stop_rpa,"set_modules": do_modules, "set_schedule": do_schedule, "set_presets": do_presets, "set_parallel": do_parallel, "set_together": do_together,
             "resume_repeat": do_resume, "update": do_update, "rollback": do_rollback,
             "export_preset": do_export, "import_preset": do_import, "restore_preset": do_restore}
+    if standalone:      # 업데이트는 설치 파일로, PC 사이 프리셋 옮기기는 상대 PC 가 없다 - 명령이 와도 거절 글로 닫는다
+
+        def unsupported(*_args):
+            raise RuntimeError(STANDALONE_OFF_TEXT)
+        acts.update({k: unsupported for k in STANDALONE_OFF})
+    return acts
 
 
 OTHER_BOOT_SEC = 120
@@ -1448,9 +1505,14 @@ def main():
     if not single_instance():
         log("이 PC 에서 에이전트가 이미 돌고 있습니다 (창 없이 도는 에이전트일 수 있습니다). 이 창은 닫아도 됩니다")
         return 4
+    import edition
+    standalone = edition.is_standalone()      # 스탠드얼론: 설정 = 라이선스 + 로컬 서버 열쇠 (계정을 묻지 않는다)
     try:
         cfg = secret.load_config()
     except FileNotFoundError:
+        if standalone:                        # 열쇠 파일은 로컬 서버가 처음 켜질 때 만든다 - 감독이 잠시 뒤 다시 켠다
+            log("로컬 서버 열쇠가 아직 없습니다. 로컬 서버가 켜진 뒤 다시 시도합니다.")
+            return 1
         if not sys.stdin.isatty():
             log(f"설정 파일이 없습니다: {secret.CONFIG_PATH}")
             return 2
@@ -1467,6 +1529,9 @@ def main():
         dead = run(cfg)
         if dead is None:
             return 0
+        if cfg.get("standalone"):             # 열쇠가 바뀌었다 (서버 자료 폴더를 새로 만든 경우 등) - 다시 켜면 새 열쇠를 읽는다
+            log("로컬 서버가 이 에이전트의 열쇠를 받아들이지 않았습니다. 잠시 뒤 다시 시도합니다.")
+            return 1
         log(f"인증이 죽어 멈췄습니다: {auth_message(dead.code)}")
         # 시도 초과·한도 초과는 잠시 뒤 풀린다 - 감독이 기다렸다 다시 켠다 (3 이면 영영 안 켜져 예약 실행도 멈췄다, BugBuster M2)
         if dead.code in TEMP_BLOCK_CODES:
@@ -1497,9 +1562,10 @@ def run(cfg):
     if upd.health_local():                     # 샌드박스 시험: 로그인 없이 판 점검만 (자동 업데이트 계획 Task 9)
         alive[0] = upd.mark_alive(st.check_install())
 
-    client = fb.Client(cfg)
+    standalone = bool(cfg.get("standalone"))     # 로컬 서버 (설계 2026-11-23-standalone) - 업체·PC 는 라이선스에서 이미 정해졌다
+    client = local_store.client_for(cfg)
     try:
-        c = fb.claims(client.token())
+        c = {"role": "agent"} if standalone else fb.claims(client.token())
         if c.get("role") != "agent":             # first_run 과 같다 (보안 감사 다듬기 2026-11-12) - 역할이 바뀐 계정으로 계속 돌지 않게
             return fb.AuthError(403, "NOT_AGENT")
         if c.get("cid") and c.get("pcId") and (c["cid"], c["pcId"]) != (cfg["cid"], cfg["pc_id"]):
@@ -1510,13 +1576,19 @@ def run(cfg):
     except Exception as e:
         log(f"첫 로그인을 못 했습니다 ({type(e).__name__}). 설정 값으로 시작하고 이어서 시도합니다")
     up = Uploader(client, cfg["cid"], cfg["pc_id"])
-    prices = Prices(client, cfg["cid"])   # 토큰 값표 (업체 배율 먼저) - 기록을 올릴 때 쓴 토큰을 센다
-    policy = Policy(client, cfg["cid"])         # 업체 정책 (자동 실행 개수·안 쓰는 모듈) - 10분마다 PC 설정에 적는다
-    tokens = Tokens(client, cfg["cid"], prices, next_plan=next_plan)
-    dash.TOKEN_GATE = tokens.gate      # 실행 단추·예약이 띄우기 직전에 남은 토큰을 본다 (0 이하면 거절)
+    if standalone:                        # 토큰 없음 (1회 구매), 정책은 라이선스
+        prices, tokens = None, NoTokens()
+        policy = LicensePolicy(cfg["license"])
+        dash.TOKEN_GATE = None
+    else:
+        prices = Prices(client, cfg["cid"])   # 토큰 값표 (업체 배율 먼저) - 기록을 올릴 때 쓴 토큰을 센다
+        policy = Policy(client, cfg["cid"])         # 업체 정책 (자동 실행 개수·안 쓰는 모듈) - 10분마다 PC 설정에 적는다
+        tokens = Tokens(client, cfg["cid"], prices, next_plan=next_plan)
+        dash.TOKEN_GATE = tokens.gate      # 실행 단추·예약이 띄우기 직전에 남은 토큰을 본다 (0 이하면 거절)
     cmds = Commands(client, cfg["cid"], cfg["pc_id"], real_actions(lambda: company_modules(client, cfg["cid"]),
                                                                    limits=lambda: policy.refresh(force=True),
-                                                                   client=client, cid=cfg["cid"], pc_id=cfg["pc_id"]), up=up)
+                                                                   client=client, cid=cfg["cid"], pc_id=cfg["pc_id"],
+                                                                   standalone=standalone), up=up)
     boot = secrets.token_hex(4)                # 이번 실행 번호 - heartbeat.boot 에 싣는다. 업체 웹이 이 값이 오락가락하면 경고 (BugBuster I13)
     log(f"에이전트 시작  회사={cfg['cid']}  PC={cfg['pc_id']}  실행 번호={boot}  밀린 기록={up.pending()}건")
     try:
@@ -1615,7 +1687,8 @@ def run(cfg):
                 policy.refresh()
                 if time.monotonic() - last_clean >= TRANSFER_CLEAN_SEC:       # 만료된 프리셋 전송 자리 (받는 PC 가 꺼져 있어 아무도 안 지운 것)
                     last_clean = time.monotonic()
-                    cleanup_transfers(client, cfg["cid"], int(client.server_now() * 1000))   # 서버 시각 - PC 시계가 앞서도 남의 전송을 일찍 안 지운다
+                    if not standalone:        # 프리셋 전송 자리는 스탠드얼론에 없다
+                        cleanup_transfers(client, cfg["cid"], int(client.server_now() * 1000))   # 서버 시각 - PC 시계가 앞서도 남의 전송을 일찍 안 지운다
                     cleanup_commands(client, cfg["cid"], cfg["pc_id"], client.server_now())
                 settings = st.read_settings()
                 last_sched, snap["schedule"] = live_schedule(settings, last_sched, dash.SCHEDULER.held_reason())
@@ -1644,7 +1717,7 @@ def run(cfg):
                 snap["version"] = inst[0]
                 snap["update"] = upd.live_view()
                 # 새 이력 줄은 Firestore 로 (읽은 위치를 파일에 남겨 다시 켜도 이어서 올린다)
-                sent = upload_new_history(hist_path, up, cfg, prices=fresh_prices(prices))
+                sent = upload_new_history(hist_path, up, cfg, prices=None if standalone else fresh_prices(prices))
                 tokens.refresh(force=bool(sent))           # 방금 올린 기록만큼 줄었다 - 아니면 10분마다 (우리가 넣은 것)
                 snap["tokens"] = tokens.view()
                 up.flush()     # 밀린 기록 먼저, 현황은 그 뒤 - 옛 것이 새 현황을 덮지 않게 (BugBuster H3)

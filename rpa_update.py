@@ -161,6 +161,17 @@ def disk_differs(program_root, files, skip=()):
     return out
 
 
+SHIPPED_SIG_NAME = "manifest.sig"     # 스탠드얼론 설치 파일이 프로그램 폴더에 싣는 버전 목록 서명 (계획 ③ 빌드)
+
+
+def _standalone():
+    try:
+        import edition
+        return edition.is_standalone()
+    except Exception:
+        return False
+
+
 def ensure_installed_sig(program_root, get=None, pub=None):
     """설치된 버전 목록의 서명(manifest.sig)을 업데이트 사이트에서 받아 st.installed_sig_path() 에 둔다 (파일 변조 감지).
     이미 그 버전의 맞는 서명이 있으면 그대로. 못 받으면(망 끊김·지운 버전) None - 점검은 서명을 '모름' 으로 본다. 예외를 내지 않는다.
@@ -182,6 +193,17 @@ def ensure_installed_sig(program_root, get=None, pub=None):
         have = st.read_json(st.installed_sig_path(), tries=2)
         if isinstance(have, dict) and have.get("version") == version and have.get("sig") and good(str(have["sig"])):
             return "kept"
+        if _standalone():       # 스탠드얼론은 업데이트 사이트에 닿지 않는다 - 설치 파일이 프로그램 폴더에 실어 둔 서명만 본다
+            try:
+                with open(os.path.join(program_root, SHIPPED_SIG_NAME), encoding="ascii") as f:
+                    sig = f.read().strip()
+            except (OSError, UnicodeDecodeError):
+                return None
+            if not good(sig):
+                return None
+            os.makedirs(update_dir(), exist_ok=True)
+            st.write_json_atomic(st.installed_sig_path(), {"version": version, "sig": sig, "at": now_text()})
+            return "saved"
         get = get or (lambda url: http_get(url, timeout=15))
         for base in UPDATE_BASE_URLS:
             try:

@@ -180,13 +180,94 @@ def warm_windows_roots(urls=ROOT_WARM_URLS, timeout=10, run=subprocess.run):
         pass
 
 
+def _standalone():
+    """스탠드얼론 버전인가 (로컬 서버를 함께 띄운다, Google 주소를 건드리지 않는다)."""
+    try:
+        import edition
+        return edition.is_standalone()
+    except Exception:
+        return False
+
+
 def run():
-    """작업이 띄울 때: 인증서를 채우고 감독을 시작한다."""
-    warm_windows_roots()
+    """작업이 띄울 때: 인증서를 채우고 감독을 시작한다. 스탠드얼론은 Google·업데이트 주소에 닿지 않으므로 채우지 않는다."""
+    if not _standalone():
+        warm_windows_roots()
     return main()
 
 
-def main(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep, later_sec=RETRY_LATER_SEC):
+SERVER_BACKOFF = (2, 5, 15, 30)       # 로컬 서버가 죽었을 때 다시 켜기 전 기다림(초)
+SERVER_STOP_CODES = (2,)              # 라이선스가 없거나 맞지 않음 (local_server.main) - 다시 켜도 같다
+KEYS_WAIT_SEC = 15                    # 처음 켤 때 서버가 열쇠 파일을 만들기를 기다리는 시간
+
+
+def server_command(exe_dir=None):
+    """창 없이 띄울 로컬 서버 명령 - 에이전트와 같은 파이썬·같은 깃발."""
+    return agent_command(exe_dir)[:-1] + [os.path.join(HERE, "local_server.py")]
+
+
+def watch_server(cmd, folder, job, stop, backoff=SERVER_BACKOFF):
+    """스탠드얼론: 로컬 서버를 띄우고 죽으면 다시 켠다 (스레드로 돈다). stop 이 켜지면 서버를 끝내고 나온다."""
+    fails = 0
+    while not stop.is_set():
+        started = time.monotonic()
+        try:
+            proc = start_agent(cmd, folder)
+        except OSError as e:
+            log(folder, f"로컬 서버를 띄우지 못했습니다 ({type(e).__name__}: {e})")
+            code = None
+        else:
+            put_in_job(job, proc)
+            while proc.poll() is None and not stop.wait(0.2):
+                pass
+            if stop.is_set():
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
+                return
+            code = proc.returncode
+        if code in SERVER_STOP_CODES:
+            log(folder, f"로컬 서버가 끝났습니다 (코드 {code}) - 라이선스를 확인하여 주십시오. 다시 켜지 않습니다")
+            return
+        fails = 1 if time.monotonic() - started >= HEALTHY_SEC else fails + 1
+        wait = backoff[min(fails, len(backoff)) - 1]
+        log(folder, f"로컬 서버가 멈췄습니다 (코드 {code}). {wait}초 뒤 다시 켭니다")
+        stop.wait(wait)
+
+
+def _keys_ready():
+    try:
+        import local_store
+        return os.path.isfile(os.path.join(local_store.keys_dir(), "agent.key"))
+    except Exception:
+        return False
+
+
+def main(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep, later_sec=RETRY_LATER_SEC,
+         server_cmd=None, server_backoff=SERVER_BACKOFF, keys_wait=KEYS_WAIT_SEC):
+    """감독. 일반 버전은 에이전트만, 스탠드얼론은 로컬 서버를 먼저 띄워 함께 지킨다 (서버가 죽으면 다시 켠다).
+    에이전트가 다시 켜지 않는 코드로 끝나 감독이 끝나면 서버도 끝낸다. server_cmd·server_backoff·keys_wait 는 시험용."""
+    if not _standalone():
+        return supervise(cmd, backoff, healthy_sec, sleep, later_sec)
+    import threading
+    folder = log_dir()
+    stop = threading.Event()
+    server_job = make_job()
+    watcher = threading.Thread(target=watch_server, args=(server_cmd or server_command(), folder, server_job, stop, server_backoff),
+                               daemon=True, name="local-server")
+    watcher.start()
+    end = time.monotonic() + keys_wait        # 처음 켤 때: 서버가 열쇠 파일을 만든 뒤에 에이전트를 띄운다 (없으면 에이전트가 1 로 끝나 다시 켜진다)
+    while time.monotonic() < end and not _keys_ready():
+        time.sleep(0.1)
+    try:
+        return supervise(cmd, backoff, healthy_sec, sleep, later_sec)
+    finally:
+        stop.set()
+        watcher.join(5)
+
+
+def supervise(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep, later_sec=RETRY_LATER_SEC):
     """에이전트를 띄우고 지킨다. 다시 켜지 않는 코드(STOP_CODES)로 끝나면 그 코드를 돌려주고 같이 끝난다.
     로그인 일시 차단(RETRY_LATER_CODE)이면 later_sec 기다렸다 다시 켠다.
     cmd·backoff·healthy_sec·sleep·later_sec 은 시험용 (가짜 에이전트, 짧은 기다림)."""
