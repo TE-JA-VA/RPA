@@ -2102,6 +2102,9 @@ def check():
         print(f"문제: 화면 그림을 만들지 못했습니다. ({type(e).__name__}: {e})")
         return 1
     print(otp_relay.check_line())
+    import ap_guard
+    if line := ap_guard.check_line():                   # 스탠드얼론만 '라이선스: …' (막지 않는다)
+        print(line)
     print(CHECK_DONE, flush=True)
     return 0
 
@@ -2122,6 +2125,11 @@ def main(argv=None):
             return 0
         show_error("관리자 권한이 있어야 기록을 저장할 수 있습니다. 관리자 권한으로 실행하여 주십시오.")
         return 1
+    import ap_guard                                     # 스탠드얼론: 라이선스·프로그램 파일 확인 (일반 버전은 None)
+    blocked = ap_guard.startup_problem()
+    if blocked:
+        show_error(blocked)
+        return ap_guard.EXIT_BLOCKED
     problem = start_problem() or setup_problem() or busy_problem()
     if problem:
         show_error(problem)

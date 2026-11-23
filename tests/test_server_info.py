@@ -45,6 +45,12 @@ check("업체 웹 data-firebase.js 의 계정 이메일 도메인은 firebaseCon
       "${firebaseConfig.authDomain}" in read("firebase/web/data-firebase.js")
       and "export const emailFor = data.emailFor" in read("firebase/web/app.js"))
 
+check("Google 주소 셋도 server_info 한 곳 (fb.py·background.py 가 조립한다 - 스탠드얼론 ③ Task 2)",
+      (srv.AUTH_HOST, srv.TOKEN_HOST, srv.FIRESTORE_HOST)
+      == ("identitytoolkit.googleapis.com", "securetoken.googleapis.com", "firestore.googleapis.com"))
+agent_code = read("firebase/agent/fb.py") + read("firebase/agent/background.py")
+check("fb.py·background.py 에 googleapis 주소 글자가 다시 박히지 않았다", "googleapis.com" not in agent_code)
+
 sys.path.insert(0, os.path.join(ROOT, "firebase", "agent"))
 import secret  # noqa: E402
 check("에이전트 첫 설정 값(secret.PUBLIC)이 server_info", secret.PUBLIC == {

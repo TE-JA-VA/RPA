@@ -14,6 +14,8 @@ r"""배포판을 만든다 (배포판 구조 1부 8절·2부 6절 - docs/superpo
 조각 방식 (--modules, docs/superpowers/specs/2026-11-11-module-build-design.md): 1번 대신 우리 파일을 하나씩 조각(app\*.pyd)으로
 만들고 (고친 파일만 다시 - 파일 하나에 30초 안쪽), 라이브러리는 컴파일 없이 lib.zip 하나로 싣고 (설치 마무리 rpa_settings.unpack_lib 가
 lib\ 에 푼다), exe 셋은 내장 Python 을 켜는 작은 시작 파일(tools/launcher.c)이다. 기본은 옛 방식(--onefile 과 같다)이다.
+스탠드얼론 (--edition standalone [--test-build], 계획 docs/superpowers/plans/2026-11-23-standalone-3-install-build.md): 조각 방식으로만,
+배포_SA_<버전>·AUTOPILOT_Standalone_Setup_<버전>.exe. --out-root 로 D:\AX 밖에 만들 수 있다 (옛 버전 정리도 그 폴더에서만).
 보관 폴더 셋은 지우지 말 것 - 지우면 전부 새로 만들어 PC 가 다 다시 받는다: build\exe_cache (옛 방식 exe), build\pyd_cache (조각),
 build\launcher_cache (시작 파일).
 비밀번호·쿠키·서비스 계정 키는 어떤 경우에도 배포판에 들어가지 않는다 (5번이 막는다. 설치 파일은 5번을 통과한 판 폴더로만 만든다).
@@ -143,17 +145,19 @@ NUITKA_EXTRA = {"ERPia_RPA.exe": ["--windows-console-mode=force", f"--windows-ic
 START_MODULES = {exe: os.path.splitext(src)[0] for exe, src in EXES.items()}      # exe → run_main() 을 가진 모듈
 MODULE_CACHE = os.path.join(REPO, "build", "pyd_cache")     # 지난번에 만든 조각과 재료 지문 - 지우면 모든 조각을 새로 만들고 PC 가 다 다시 받는다
 MODULE_OPTIONS = ["--module", "--assume-yes-for-downloads", "--remove-output", "--no-pyi-file"]
-SITE_PACKAGES = os.path.join(REPO, ".venv", "Lib", "site-packages")
+
 # 라이브러리 묶음(lib.zip)에 실을 것 - 옛 onefile exe 가 싣던 것과 같아야 한다. 빠지면 --check 가 ModuleNotFoundError 로 알려 준다
+# ACTOR AI 어시스트 (ai_rescue, 2026-11-16) - Anthropic SDK 와 그 의존성. httpx2·httpcore2 는 불러올 때 자기 dist-info 로 버전을 읽고
+# opentelemetry 는 entry_points 로 context 를 찾는다 (dist-info 이름에 버전 번호 - SDK 를 올리면 같이 고칠 것, 없으면 빌드가 멈춘다).
+# 스탠드얼론은 AI 를 싣지 않는다 (lib_names)
+LIB_NAMES_AI = ["anthropic", "anyio", "docstring_parser", "h11", "httpcore2", "httpx2", "httpx2-2.16.0.dist-info", "httpcore2-2.16.0.dist-info",
+                "opentelemetry_api-1.45.2.dist-info", "idna", "jiter",
+                "opentelemetry", "pydantic", "pydantic_core", "sniffio", "truststore", "typing_inspection", "annotated_types"]
 LIB_NAMES = ["playwright", "pywinauto", "comtypes", "win32", "win32com", "win32comext", "pythonwin", "pywin32_system32",
              "pywin32.pth", "pywin32.version.txt", "pythoncom.py", "greenlet", "pyee", "typing_extensions.py", "PIL", "six.py",
              # 운송장 엑셀 비밀번호 풀기 (PR #43, wellife.unlock_excel) - msoffcrypto 와 그 의존성
              "msoffcrypto", "cryptography", "cffi", "_cffi_backend.cp314-win_amd64.pyd", "olefile", "pycparser",
-             # ACTOR AI 어시스트 (ai_rescue, 2026-11-16) - Anthropic SDK 와 그 의존성. httpx2·httpcore2 는 불러올 때 자기 dist-info 로 버전을 읽고
-             # opentelemetry 는 entry_points 로 context 를 찾는다 (dist-info 이름에 버전 번호 - SDK 를 올리면 같이 고칠 것, 없으면 빌드가 멈춘다)
-             "anthropic", "anyio", "docstring_parser", "h11", "httpcore2", "httpx2", "httpx2-2.16.0.dist-info", "httpcore2-2.16.0.dist-info",
-             "opentelemetry_api-1.45.2.dist-info", "idna", "jiter",
-             "opentelemetry", "pydantic", "pydantic_core", "sniffio", "truststore", "typing_inspection", "annotated_types"]
+             *LIB_NAMES_AI]
 LIB_SKIP = ("playwright/driver/node.exe",)       # 프로그램 폴더 playwright\\node.exe 한 벌을 쓴다 (NODE_REL)
 LIB_SKIP_DIRS = ("comtypes/test",)
 LIB_TIME = (2026, 1, 1, 0, 0, 0)                 # 묶음 안 파일 시각 - 고정해야 같은 재료에서 같은 묶음이 나온다 (PC 가 다시 안 받는다)
@@ -169,12 +173,106 @@ ISCC_DIRS = (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno 
              os.path.join(os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)", "Inno Setup 6"),
              os.path.join(os.environ.get("ProgramFiles") or r"C:\Program Files", "Inno Setup 6"))
 
+# --- 버전 종류 (스탠드얼론 계획 ③ Task 1, 설계 2026-11-23-standalone 8절). 인자 edition 의 기본은 모두 "cloud" -
+# 그때 재료 목록·명령 줄·파일 이름은 지금 값 그대로다 (tests/test_build_edition.py 가 못박는다) ---
+EDITIONS = ("cloud", "standalone")
+STANDALONE_URL = "http://127.0.0.1:8781/"        # 스탠드얼론 바로 가기 주소 (local_server.PORT)
+# 스탠드얼론에서 빼는 프로그램 파일: 업데이트 도우미(새 설치 파일로 업데이트한다), 라이선스 확인 원본(조각으로만 싣는다 - Task 3)
+STANDALONE_DROP = ("update_helper.py", "license_check.py")
+WEB_DIR = "firebase/web"
+WEB_SKIP = ("firebase-config.js", "data-firebase.js", "edition.js")   # edition.js 는 로컬 서버가 파일 없이 만들어 낸다 (local_web.EDITION_JS)
+STANDALONE_OTHER_FILES = [
+    ("배포안내_스탠드얼론.txt", "release/배포안내_스탠드얼론.txt"),
+    ("PC번호_확인.bat", "release/PC번호_확인.bat"),
+    ("RPA_UserConfig.json", "release/RPA_UserConfig.template.json"),
+]
+MODULE_SKIP = {"standalone": ("ai_rescue",)}     # 스탠드얼론에 싣지 않는 조각 (AI 어시스트 - 없으면 끈다, Task 2)
+# 스탠드얼론 설치본(내장 파이썬 밖)에서 나오면 안 되는 것 (경로 조각마다 맞춰 본다)
+STANDALONE_FORBIDDEN = ["ai_rescue*", "update_helper.py", "firebase-config.js", "data-firebase.js", "license_check.py", "anthropic",
+                        "*signing_key*", "*.testkey.txt"]
+EDITION_FILE = "edition.json"                    # edition.FILE_NAME
+SIG_FILE = "manifest.sig"                        # rpa_update.SHIPPED_SIG_NAME - 버전 목록 서명 (스탠드얼론만, 목록에는 넣지 않는다)
 
-def next_version(out_root, today):
-    """YYYY.MM.DD-N. 그날 이미 있는 배포_<날짜>-N 폴더·압축의 다음 번호."""
+
+def venv_root():
+    """빌드에 쓰는 가상 환경 폴더: 저장소의 .venv, 없으면(워크트리) 지금 돌고 있는 가상 환경. 접합(junction)은 만들지 않는다 -
+    워크트리를 지우거나 git clean 이 접합을 타고 진짜 .venv 를 지울 수 있다."""
+    own = os.path.join(REPO, ".venv")
+    if os.path.isdir(own):
+        return own
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return sys.prefix
+    raise RuntimeError(".venv 를 찾지 못했습니다 - D:\\AX\\RPA\\.venv\\Scripts\\python.exe 로 돌리십시오")
+
+
+def site_packages():
+    return os.path.join(venv_root(), "Lib", "site-packages")
+
+
+def _src_path(repo, src):
+    """재료 원본의 실제 자리. '.venv/' 로 시작하는데 저장소에 없으면 venv_root() 아래 (워크트리에는 .venv 가 없다)."""
+    path = os.path.join(repo, *src.split("/"))
+    if src.startswith(".venv/") and not os.path.exists(path):
+        return os.path.join(venv_root(), *src.split("/")[1:])
+    return path
+
+
+def blank_server_info(text):
+    """server_info.py 의 빈 값 사본 - 맨 위 대입문 이름마다 '이름 = ""' (튜플은 ()). 스탠드얼론은 바깥 서버 주소를 싣지 않는다.
+    대입문·문서 글 말고 다른 실행 코드가 있으면 RuntimeError (그 코드가 무엇을 하는지 모른 채 비울 수 없다)."""
+    out = ["# 스탠드얼론 - 바깥 서버 주소가 없다 (tools/build_release.py 가 만든다)"]
+    for node in ast.parse(text).body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if all(isinstance(t, ast.Name) for t in targets):
+                empty = "()" if isinstance(node.value, ast.Tuple) else '""'
+                out += [f"{t.id} = {empty}" for t in targets]
+                continue
+        raise RuntimeError(f"server_info.py {node.lineno}행: 대입문이 아닌 코드가 있어 빈 값 사본을 만들 수 없습니다")
+    return "\n".join(out) + "\n"
+
+
+GENERATED = {"server_info.py": blank_server_info}   # 스탠드얼론: 원본 대신 만든 글을 싣는 자리 → 만드는 함수 (원본 글을 받는다)
+
+
+def web_files(repo=REPO):
+    """업체 웹 파일 [(자리, 원본)] - firebase/web 아래 모든 파일 (글꼴·그림 포함, 이름순), WEB_SKIP 은 뺀다."""
+    base = os.path.join(repo, *WEB_DIR.split("/"))
+    out = []
+    for folder, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for name in files:
+            if name not in WEB_SKIP:
+                out.append(os.path.relpath(os.path.join(folder, name), repo).replace(os.sep, "/"))
+    return [(rel, rel) for rel in sorted(out)]
+
+
+def program_files(edition="cloud"):
+    """버전 목록에 지문으로 드는 프로그램 파일 [(자리, 원본)]. 일반은 PROGRAM_FILES 그대로."""
+    if edition == "cloud":
+        return PROGRAM_FILES
+    return [(rel, src) for rel, src in PROGRAM_FILES if rel not in STANDALONE_DROP] + web_files()
+
+
+def other_files(edition="cloud"):
+    return OTHER_FILES if edition == "cloud" else STANDALONE_OTHER_FILES
+
+
+def lib_names(edition="cloud"):
+    return LIB_NAMES if edition == "cloud" else [n for n in LIB_NAMES if n not in LIB_NAMES_AI]
+
+
+def release_prefix(edition="cloud", test=False):
+    return "배포_" if edition == "cloud" else "배포_SA_TEST_" if test else "배포_SA_"
+
+
+def next_version(out_root, today, prefix="배포_"):
+    """YYYY.MM.DD-N. 그날 이미 있는 <prefix><날짜>-N 폴더·압축의 다음 번호 (버전 종류마다 따로 센다)."""
     day = today.strftime("%Y.%m.%d")
     used = [int(m.group(1)) for name in (os.listdir(out_root) if os.path.isdir(out_root) else [])
-            if (m := re.fullmatch(rf"배포_{re.escape(day)}-(\d+)(\.zip)?", name))]
+            if (m := re.fullmatch(rf"{re.escape(prefix)}{re.escape(day)}-(\d+)(\.zip)?", name))]
     return f"{day}-{max(used, default=0) + 1}"
 
 
@@ -182,20 +280,24 @@ LOCAL_KEEP = 4   # D:\AX 에 남길 판 - 최신 + 이전 3개 (사용자 2026-1
 _VER = r"(\d{4}\.\d\d\.\d\d)-(\d+)"
 
 
-def prune_local(out_root, keep=LOCAL_KEEP, protect=()):
+def prune_local(out_root, keep=LOCAL_KEEP, protect=(), edition="cloud", test=False):
     """out_root 의 판 묶음(배포_<판> 폴더·zip·설치 파일)을 최신 keep 개만 남기고 지운다. protect 는 남길 판 폴더
-    (--exes-from 이 가져온 판). 지운 판 목록 (오래된 것부터). 판이 아닌 파일·폴더는 안 건드린다."""
+    (--exes-from 이 가져온 판). 지운 판 목록 (오래된 것부터). 판이 아닌 파일·폴더는 안 건드린다.
+    버전 종류마다 자기 접두사의 것만 세고 지운다 (일반 빌드가 스탠드얼론 폴더를, 그 반대도 지우지 않는다)."""
+    prefix = release_prefix(edition, test)
+    setup_re = re.escape(setup_name("@", edition, test)).replace("@", _VER)
     found = {}
     for name in os.listdir(out_root) if os.path.isdir(out_root) else []:
-        m = re.fullmatch(rf"배포_{_VER}(?:\.zip)?", name) or re.fullmatch(rf"AUTOPILOT_Setup_{_VER}\.exe", name)
+        m = (re.fullmatch(rf"{re.escape(prefix)}{_VER}(?:\.zip|\.testkey\.txt)?", name) if test else
+             re.fullmatch(rf"{re.escape(prefix)}{_VER}(?:\.zip)?", name)) or re.fullmatch(setup_re, name)
         if m:
             found[f"{m.group(1)}-{m.group(2)}"] = (m.group(1), int(m.group(2)))
     order = sorted(found, key=found.get)
-    kept = set(order[-keep:]) | {os.path.basename(os.path.normpath(p)).removeprefix("배포_") for p in protect if p}
+    kept = set(order[-keep:]) | {os.path.basename(os.path.normpath(p)).removeprefix(prefix) for p in protect if p}
     removed = [v for v in order if v not in kept]
     for v in removed:
-        shutil.rmtree(os.path.join(out_root, f"배포_{v}"), ignore_errors=True)
-        for f in (f"배포_{v}.zip", setup_name(v)):
+        shutil.rmtree(os.path.join(out_root, f"{prefix}{v}"), ignore_errors=True)
+        for f in (f"{prefix}{v}.zip", setup_name(v, edition, test)) + ((f"{prefix}{v}.testkey.txt",) if test else ()):
             if os.path.exists(os.path.join(out_root, f)):
                 os.remove(os.path.join(out_root, f))
     return removed
@@ -318,9 +420,14 @@ def build_launchers(work_dir, cache=LAUNCHER_CACHE):
         shutil.rmtree(os.path.dirname(base), ignore_errors=True)
 
 
-def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0.0.0", modules=False):
+def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0.0.0", modules=False, edition="cloud", test=False,
+            replace=None):
     """배포판 폴더를 모은다. 판 목록에 들어갈 상대 경로('/')를 돌려준다. 이미 있으면 멈춘다 (덮어쓰지 않는다).
-    version 은 AFTER MARKET 파이썬 사본의 파일 버전 (num_version 모양)."""
+    version 은 AFTER MARKET 파이썬 사본의 파일 버전 (num_version 모양).
+    스탠드얼론: 프로그램 파일·안내 파일은 그 버전 종류의 목록, server_info.py 는 빈 값 사본(GENERATED), edition.json 을 더 쓰고,
+    app\\license_check 조각을 뿌리에도 한 벌 싣는다 (에이전트·로컬 서버가 부른다 - .py 는 싣지 않는다).
+    replace {자리: 글} 은 원본 대신 쓸 글 (시험용 빌드의 열쇠를 바꿔 끼운 update_sign.py)."""
+    replace = replace or {}
     if os.path.exists(out_dir):
         raise FileExistsError(out_dir)
     os.makedirs(out_dir)
@@ -336,11 +443,28 @@ def collect(out_dir, exe_dir, repo=REPO, runtime_root=RUNTIME_ROOT, version="0.0
         _copy(os.path.join(repo, "app_start.py"), out_dir, "app/_start.py")
         _copy(os.path.join(exe_dir, "lib.zip"), out_dir, "lib.zip")
         program += ["app/_start.py", "lib.zip"]
-    for rel, src in PROGRAM_FILES:
-        _copy(os.path.join(repo, *src.split("/")), out_dir, rel)
+        if edition != "cloud":
+            guard = "license_check" + suffix
+            _copy(os.path.join(exe_dir, "app", guard), out_dir, guard)
+            program.append(guard)
+    for rel, src in program_files(edition):
+        if rel in replace or (edition != "cloud" and rel in GENERATED):
+            if rel in replace:
+                made = replace[rel]
+            else:
+                with open(_src_path(repo, src), encoding="utf-8") as f:
+                    made = GENERATED[rel](f.read())
+            with open(os.path.join(out_dir, *rel.split("/")), "w", encoding="utf-8", newline="\n") as f:
+                f.write(made)
+        else:
+            _copy(_src_path(repo, src), out_dir, rel)
         program.append(rel)
-    for rel, src in OTHER_FILES:
-        _copy(os.path.join(repo, *src.split("/")), out_dir, rel)
+    if edition != "cloud":
+        with open(os.path.join(out_dir, EDITION_FILE), "w", encoding="utf-8", newline="\n") as f:
+            json.dump({"edition": edition, **({"test_build": True} if test else {})}, f, ensure_ascii=False)
+        program.append(EDITION_FILE)
+    for rel, src in other_files(edition):
+        _copy(_src_path(repo, src), out_dir, rel)
     for d in RUNTIME_DIRS:
         shutil.copytree(os.path.join(runtime_root, d), os.path.join(out_dir, d))
     for name, (src, desc) in BRANDED.items():           # 아이콘은 위 PROGRAM_FILES 가 판 폴더에 넣은 사본
@@ -422,8 +546,9 @@ def template_problems(cfg):
     return out
 
 
-def verify_zip(zip_path, man, program, others):
-    """압축 자체를 본다. 문제 목록 (빈 목록이면 통과)."""
+def verify_zip(zip_path, man, program, others, edition="cloud"):
+    """압축 자체를 본다. 문제 목록 (빈 목록이면 통과). 스탠드얼론은 STANDALONE_FORBIDDEN 도 보고, manifest.sig 를 봐준다."""
+    forbidden = FORBIDDEN + (STANDALONE_FORBIDDEN if edition != "cloud" else [])
     problems = []
     with zipfile.ZipFile(zip_path) as z:
         names = [n for n in z.namelist() if not n.endswith("/")]
@@ -441,9 +566,9 @@ def verify_zip(zip_path, man, program, others):
                 problems.append(f"지문 다름: {rel}")
         ours ={rel for rel in inside if rel.split("/")[0] not in RUNTIME_DIRS}
         for rel in sorted(ours):
-            if any(fnmatch.fnmatch(part, pat) for part in rel.split("/") for pat in FORBIDDEN):
+            if any(fnmatch.fnmatch(part, pat) for part in rel.split("/") for pat in forbidden):
                 problems.append(f"들어가면 안 되는 파일: {rel}")
-        extra = ours - set(program) - set(others) - {st.MANIFEST_NAME}
+        extra = ours - set(program) - set(others) - {st.MANIFEST_NAME} - ({SIG_FILE} if edition != "cloud" else set())
         problems += [f"모은 목록에 없는 파일: {rel}" for rel in sorted(extra)]
         if "RPA_UserConfig.json" in inside:
             problems += template_problems(json.loads(z.read(f"{top}/RPA_UserConfig.json").decode("utf-8-sig")))
@@ -457,9 +582,11 @@ def found_marker(out, marker):
     return marker.encode("utf-8") in out or marker.encode("cp949") in out
 
 
-def smoke_check(zip_path, timeout=180):
+def smoke_check(zip_path, timeout=180, edition="cloud"):
     """압축을 임시 폴더에 풀고 exe 셋을 임시 설정으로 --check 한다. 끝 줄이 찍히면 통과
-    (빈 설정이라 나오는 '문제' 줄과 종료 코드는 보지 않는다)."""
+    (빈 설정이라 나오는 '문제' 줄과 종료 코드는 보지 않는다).
+    스탠드얼론은 더: exe 셋의 출력에 '라이선스:' 줄, 내장 파이썬으로 agent·local_server·local_web 이 불러와지고,
+    lib 를 길에 넣어도 anthropic 이 없다 (AI 를 싣지 않았다)."""
     problems = []
     with tempfile.TemporaryDirectory(prefix="rpa_release_", ignore_cleanup_errors=True) as tmp:
         with zipfile.ZipFile(zip_path) as z:
@@ -487,10 +614,26 @@ def smoke_check(zip_path, timeout=180):
                     problems.append(f"{exe} --check 가 끝까지 가지 않았습니다: {out[-300:].decode('utf-8', 'replace')}")
                 elif exe == "Prepare_Observer.exe" and not found_marker(out, "브라우저: Microsoft Edge"):   # 따로 둔 node.exe 로 Playwright 가 도는지
                     problems.append(f"{exe} --check 가 브라우저를 띄우지 못했습니다: {out[-300:].decode('utf-8', 'replace')}")
+                elif edition != "cloud" and not found_marker(out, "라이선스:"):
+                    problems.append(f"{exe} --check 에 라이선스 줄이 없습니다: {out[-300:].decode('utf-8', 'replace')}")
             except subprocess.TimeoutExpired:
                 problems.append(f"{exe} --check 가 {timeout}초 안에 끝나지 않았습니다")
             except OSError as e:   # 보안 프로그램이 격리·차단했거나 실행 파일이 깨짐 - 오류 추적 대신 판정으로 끝낸다
                 problems.append(f"{exe} 를 실행하지 못했습니다 ({type(e).__name__}: {e})")
+        if edition != "cloud":
+            py = os.path.join(top, "python", "python.exe")
+            agent_dir = os.path.join(top, "firebase", "agent")
+            checks = (("import sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]; import agent, local_server, local_web; print('불러옴')",
+                       [agent_dir, top], "불러옴", "내장 파이썬으로 agent·local_server·local_web 을 불러오지 못했습니다"),
+                      ("import sys; sys.path.insert(0, sys.argv[1])\ntry:\n    import anthropic\nexcept ModuleNotFoundError:\n    print('없음')",
+                       [os.path.join(top, "lib")], "없음", "lib 에 anthropic 이 있습니다 (스탠드얼론은 AI 를 싣지 않는다)"))
+            for code, args, want, why in checks:
+                try:
+                    r = subprocess.run([py, "-I", "-c", code, *args], cwd=top, env=env, capture_output=True, timeout=timeout)
+                    if not found_marker(r.stdout, want):
+                        problems.append(f"{why}: {(r.stdout + r.stderr)[-300:].decode('utf-8', 'replace')}")
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    problems.append(f"{why} ({type(e).__name__})")
     return problems
 
 
@@ -628,9 +771,70 @@ def build_exes(work_dir, only=None, cache=EXE_CACHE, force=False):
     return f"{tool} (새로 {len(made)}{': ' + ', '.join(made) if made else ''}, 그대로 {len(kept)})"
 
 
-def module_sources():
-    """조각으로 만들 우리 파이썬 파일 - exe 셋에 들어가던 것 모두 (정렬, 겹치지 않게)."""
-    return sorted({p for exe in EXES for p in exe_sources(exe)})
+def module_sources(edition="cloud"):
+    """조각으로 만들 우리 파이썬 파일 - exe 셋에 들어가던 것 모두 (정렬, 겹치지 않게). 스탠드얼론은 MODULE_SKIP 을 뺀다."""
+    skip = MODULE_SKIP.get(edition, ())
+    return sorted({p for exe in EXES for p in exe_sources(exe) if os.path.splitext(os.path.basename(p))[0] not in skip})
+
+
+def _repo_text(rel):
+    with open(os.path.join(REPO, *rel.split("/")), encoding="utf-8") as f:
+        return f.read()
+
+
+def swap_key(text, name, hex_value):
+    """'<name> = "…"' 줄이 정확히 하나일 때만 그 값을 hex_value 로 바꾼 글. 아니면 RuntimeError (엉뚱한 줄을 바꾸지 않게)."""
+    pat = re.compile(rf'^({re.escape(name)} = ")[0-9A-Fa-f]*(")', re.M)
+    if len(pat.findall(text)) != 1:
+        raise RuntimeError(f"{name} 줄이 정확히 하나가 아닙니다 - 시험용 열쇠를 끼울 수 없습니다")
+    return pat.sub(lambda m: m.group(1) + hex_value + m.group(2), text)
+
+
+def module_overrides(edition="cloud", test_keys=None):
+    """원본 대신 컴파일할 글 {조각 이름: (글, 보관하나)}. 스탠드얼론의 server_info 는 빈 값 사본 (보관은 cache\\<버전 종류>).
+    test_keys {"update": 공개 열쇠 16진수, "license": …} (시험용 빌드)면 update_sign·license_check 는 그 열쇠를 끼운 사본 -
+    매번 새 열쇠라 보관하지 않는다."""
+    if edition == "cloud":
+        return {}
+    out = {"server_info": (blank_server_info(_repo_text("server_info.py")), True)}
+    if test_keys:
+        out["update_sign"] = (swap_key(_repo_text("update_sign.py"), "PUBLIC_KEY_HEX", test_keys["update"]), False)
+        out["license_check"] = (swap_key(_repo_text("license_check.py"), "LICENSE_PUBLIC_KEY_HEX", test_keys["license"]), False)
+    return out
+
+
+def standalone_materials():
+    """스탠드얼론 설치본에 실리는 우리 코드·웹 파일의 내용 [(자리, 바이트)] - 프로그램 파일(만든 server_info 적용), 조각의 원본,
+    시작 스크립트, 안내 파일. 내장 파이썬·남의 라이브러리(.venv 에서 오는 것, lib.zip)는 뺀다 (tests/test_standalone_offline.py ①)."""
+    out, seen = [], set()
+
+    def put(rel, data):
+        if rel not in seen:
+            seen.add(rel)
+            out.append((rel, data))
+    for rel, src in program_files("standalone"):
+        if src.startswith(".venv/"):
+            continue
+        with open(_src_path(REPO, src), "rb") as f:
+            data = f.read()
+        put(rel, GENERATED[rel](data.decode("utf-8")).encode("utf-8") if rel in GENERATED else data)
+    overrides = module_overrides("standalone")
+    for src in module_sources("standalone"):
+        name = os.path.splitext(os.path.basename(src))[0]
+        rel = os.path.relpath(src, REPO).replace(os.sep, "/")
+        if name in overrides:
+            put(rel, overrides[name][0].encode("utf-8"))
+        else:
+            with open(src, "rb") as f:
+                put(rel, f.read())
+    with open(os.path.join(REPO, "app_start.py"), "rb") as f:
+        put("app/_start.py", f.read())
+    for rel, src in other_files("standalone"):
+        path = _src_path(REPO, src)
+        if os.path.isfile(path):          # 안내 파일은 계획 ③ Task 5 가 만든다
+            with open(path, "rb") as f:
+                put(rel, f.read())
+    return out
 
 
 def module_fingerprint(src, tool):
@@ -648,34 +852,49 @@ def compile_module(src, out_dir):
     return os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + importlib.machinery.EXTENSION_SUFFIXES[0])
 
 
-def build_modules(work_dir, cache=MODULE_CACHE, force=False, compile=compile_module):
+def build_modules(work_dir, cache=MODULE_CACHE, force=False, compile=compile_module, edition="cloud", overrides=None):
     """우리 파일을 하나씩 조각으로 만들어 work_dir\\app 에 둔다. 재료 지문이 cache 에 보관한 것과 같으면 다시 만들지 않는다
     (force 면 늘 새로). 조각은 차례로 만든다 - 동시에 만들지 않는다 (exe 동시 빌드의 원인 모를 고장, 2026-10-21).
-    판 목록의 builder 칸 글자를 돌려준다 ("nuitka 4.2.2 · python 3.14.7 (조각 새로 1: web_replay, 그대로 16)")."""
+    판 목록의 builder 칸 글자를 돌려준다 ("nuitka 4.2.2 · python 3.14.7 (조각 새로 1: web_replay, 그대로 16)").
+    edition 의 조각 목록(module_sources)을 쓰고, overrides {이름: (글, 보관하나)} (기본 module_overrides(edition))의 조각은 그 글을
+    임시 파일로 컴파일한다 - 보관은 cache\\<버전 종류> (일반 조각을 덮지 않는다), 보관하지 않는 것은 늘 새로 만든다."""
     app = os.path.join(work_dir, "app")
     os.makedirs(app, exist_ok=True)
     os.makedirs(cache, exist_ok=True)
+    overrides = module_overrides(edition) if overrides is None else overrides
     ver = subprocess.run([sys.executable, "-m", "nuitka", "--version"], capture_output=True, text=True, check=True).stdout.split()[0]
     tool = f"nuitka {ver} · python {platform.python_version()}"
     suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
     made, kept, wanted = [], [], set()
-    for src in module_sources():
+    for src in module_sources(edition):
         name = os.path.splitext(os.path.basename(src))[0]
-        fp, keep = module_fingerprint(src, tool), os.path.join(cache, name + suffix)
-        try:
-            same = not force and os.path.isfile(keep) and open(keep + ".inputs", encoding="utf-8").read().split() == [fp, _sha(keep)]
-        except OSError:
-            same = False
-        if same:
-            kept.append(name)
-        else:
-            with tempfile.TemporaryDirectory(prefix="rpa_pyd_", ignore_cleanup_errors=True) as tmp:
-                shutil.copy2(compile(src, tmp), keep)
-            with open(keep + ".inputs", "w", encoding="utf-8") as f:          # 조각을 다 보관한 뒤에 지문 - 중간에 죽으면 다음에 다시 만든다
-                f.write(f"{fp}\n{_sha(keep)}\n")
-            made.append(name)
-            print(f"  {name}: 조각을 새로 만들었습니다", flush=True)
-        shutil.copy2(keep, os.path.join(app, name + suffix))
+        with tempfile.TemporaryDirectory(prefix="rpa_pyd_", ignore_cleanup_errors=True) as tmp:
+            store = cache
+            if name in overrides:
+                text, keep_it = overrides[name]
+                gen = os.path.join(tmp, "src")
+                os.makedirs(gen)
+                src = os.path.join(gen, name + ".py")
+                with open(src, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(text)
+                store = os.path.join(cache, edition) if keep_it else os.path.join(tmp, "nokeep")
+                os.makedirs(store, exist_ok=True)
+            fp, keep = module_fingerprint(src, tool), os.path.join(store, name + suffix)
+            try:
+                same = not force and os.path.isfile(keep) and open(keep + ".inputs", encoding="utf-8").read().split() == [fp, _sha(keep)]
+            except OSError:
+                same = False
+            if same:
+                kept.append(name)
+            else:
+                out = os.path.join(tmp, "out")
+                os.makedirs(out)
+                shutil.copy2(compile(src, out), keep)
+                with open(keep + ".inputs", "w", encoding="utf-8") as f:      # 조각을 다 보관한 뒤에 지문 - 중간에 죽으면 다음에 다시 만든다
+                    f.write(f"{fp}\n{_sha(keep)}\n")
+                made.append(name)
+                print(f"  {name}: 조각을 새로 만들었습니다", flush=True)
+            shutil.copy2(keep, os.path.join(app, name + suffix))
         wanted.add(name + suffix)
     for old in os.listdir(app):
         if old.endswith(suffix) and old not in wanted:
@@ -683,12 +902,13 @@ def build_modules(work_dir, cache=MODULE_CACHE, force=False, compile=compile_mod
     return f"{tool} (조각 새로 {len(made)}{': ' + ', '.join(made) if made else ''}, 그대로 {len(kept)})"
 
 
-def build_lib_zip(zip_path, site_packages=SITE_PACKAGES):
+def build_lib_zip(zip_path, site_packages=None, names=None):
     """라이브러리 묶음을 만든다 (컴파일하지 않고 그대로). 같은 재료면 늘 같은 바이트다.
     comtypes 의 형식 라이브러리 시각 검사는 끄고 (빌드 PC 와 윈도우 버전이 다른 PC 에서 죽는다, 2026-09-29),
-    win32ui 가 쓰는 MFC DLL 을 pythonwin 에 넣는다."""
+    win32ui 가 쓰는 MFC DLL 을 pythonwin 에 넣는다. site_packages 기본은 빌드 가상 환경(site_packages()), names 기본은 LIB_NAMES."""
+    site_packages = site_packages or os.path.join(venv_root(), "Lib", "site-packages")   # = site_packages()
     files = {}
-    for name in LIB_NAMES:
+    for name in (LIB_NAMES if names is None else names):
         full = os.path.join(site_packages, name)
         if os.path.isfile(full):
             files[name] = full
@@ -759,24 +979,30 @@ def num_version(version):
     return ".".join(str(int(p)) for p in day.split(".") + [n])
 
 
-def setup_name(version):
-    return f"AUTOPILOT_Setup_{version}.exe"
+def setup_name(version, edition="cloud", test=False):
+    if edition == "cloud":
+        return f"AUTOPILOT_Setup_{version}.exe"
+    return f"AUTOPILOT_Standalone_{'TEST_' if test else ''}Setup_{version}.exe"
 
 
-def iscc_command(iscc, out_dir, version, out_root=OUT_ROOT, iss=ISS_PATH):
+def iscc_command(iscc, out_dir, version, out_root=OUT_ROOT, iss=ISS_PATH, edition="cloud", test=False):
+    if edition == "cloud":
+        return [iscc, "/Qp", f"/DAppVersion={version}", f"/DNumVersion={num_version(version)}", f"/DSourceDir={out_dir}",
+                f"/DDashboardURL={server_info.DASHBOARD_URL}",
+                f"/O{out_root}", f"/F{setup_name(version)[:-4]}", iss]
     return [iscc, "/Qp", f"/DAppVersion={version}", f"/DNumVersion={num_version(version)}", f"/DSourceDir={out_dir}",
-            f"/DDashboardURL={server_info.DASHBOARD_URL}",
-            f"/O{out_root}", f"/F{setup_name(version)[:-4]}", iss]
+            f"/DDashboardURL={STANDALONE_URL}", f"/DEdition={edition}", *(["/DTestBuild=1"] if test else []),
+            f"/O{out_root}", f"/F{setup_name(version, edition, test)[:-4]}", iss]
 
 
-def build_setup(out_dir, version, out_root=OUT_ROOT):
+def build_setup(out_dir, version, out_root=OUT_ROOT, edition="cloud", test=False):
     """판 폴더로 설치 파일을 만든다. 경로를 돌려준다. ISCC 가 없거나 컴파일이 안 되면 RuntimeError."""
     iscc = find_iscc()
     if not iscc:
         raise RuntimeError("Inno Setup(ISCC.exe) 이 없습니다. winget install JRSoftware.InnoSetup --scope user 로 설치하거나 "
                            "--no-setup 으로 건너뛰세요")
-    r = subprocess.run(iscc_command(iscc, out_dir, version, out_root), capture_output=True)
-    path = os.path.join(out_root, setup_name(version))
+    r = subprocess.run(iscc_command(iscc, out_dir, version, out_root, edition=edition, test=test), capture_output=True)
+    path = os.path.join(out_root, setup_name(version, edition, test))
     if r.returncode != 0 or not os.path.isfile(path):
         raise RuntimeError(f"설치 파일을 만들지 못했습니다 (ISCC {r.returncode}): "
                            f"{(r.stdout + r.stderr)[-500:].decode('utf-8', 'replace')}")
@@ -790,6 +1016,26 @@ def signing_key_problem():
     return None
 
 
+def license_key_problem(test):
+    """진짜 스탠드얼론 빌드인데 라이선스 공개 열쇠가 비었으면 그 글 - 어떤 라이선스도 통하지 않는 설치 파일이 나온다."""
+    import license_check
+    if not test and not license_check.LICENSE_PUBLIC_KEY_HEX:
+        return ("라이선스 공개 열쇠(license_check.LICENSE_PUBLIC_KEY_HEX)가 비어 있습니다 - tools/make_license.py --keygen 이 "
+                "알려 준 값을 넣으십시오 (시험용이면 --test-build)")
+    return None
+
+
+def sign_manifest(out_dir, secret):
+    """out_dir\\manifest.json 바이트에 서명해 out_dir\\manifest.sig (16진수 한 줄)를 쓰고 그 16진수를 돌려준다.
+    스탠드얼론은 업데이트 사이트가 없어 설치 파일이 서명을 싣는다 (ap_guard·rpa_update.ensure_installed_sig 가 본다).
+    버전 목록의 files 에는 넣지 않는다 (목록에 대한 서명이라)."""
+    with open(os.path.join(out_dir, st.MANIFEST_NAME), "rb") as f:
+        sig = update_sign.sign(secret, f.read()).hex()
+    with open(os.path.join(out_dir, SIG_FILE), "w", encoding="ascii", newline="\n") as f:
+        f.write(sig + "\n")
+    return sig
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="배포판을 만든다")
     ap.add_argument("--to-dist", action="store_true",
@@ -800,34 +1046,78 @@ def main(argv=None):
     ap.add_argument("--modules", action="store_true",
                     help="조각 방식: 우리 파일을 하나씩 .pyd 로, 라이브러리는 lib.zip 으로, exe 셋은 시작 파일 (설계 2026-11-11)")
     ap.add_argument("--onefile", action="store_true", help="옛 방식: exe 셋을 Nuitka onefile 로 (지금 기본과 같다)")
+    ap.add_argument("--edition", choices=EDITIONS, default="cloud",
+                    help="버전 종류: cloud(일반, 기본) / standalone(로컬 서버 - 조각 방식으로만, 설계 2026-11-23-standalone)")
+    ap.add_argument("--out-root", metavar="폴더", default=None, help=f"배포 폴더·압축·설치 파일을 둘 곳 (기본 {OUT_ROOT})")
+    ap.add_argument("--test-build", action="store_true",
+                    help="스탠드얼론 시험용 빌드: 그 자리에서 만든 열쇠를 쓴다 (이름에 TEST, 고객 배포 금지)")
+    ap.add_argument("--sign-key", metavar="파일", default=None,
+                    help="진짜 스탠드얼론 빌드가 버전 목록을 서명하는 업데이트 비밀 열쇠 (기본 publish_release.KEY_PATH)")
     args = ap.parse_args(argv)
+    edition, test = args.edition, args.test_build
+    if edition == "standalone" and (args.onefile or args.exes_from or args.to_dist):
+        print("  문제: 스탠드얼론은 조각 방식으로만 만듭니다 (--onefile·--exes-from·--to-dist 와 함께 쓸 수 없습니다)")
+        return 1
+    if test and edition != "standalone":
+        print("  문제: --test-build 는 --edition standalone 과 함께만 씁니다")
+        return 1
     if args.modules and (args.exes_from or args.to_dist or args.onefile):
         print("  문제: --modules 는 --exes-from·--to-dist·--onefile 과 함께 쓸 수 없습니다")
         return 1
-    problem = signing_key_problem()
+    modules = args.modules or edition == "standalone"
+    out_root = args.out_root or OUT_ROOT
+    problem = signing_key_problem() or (license_key_problem(test) if edition == "standalone" else None)
     if problem:
         print("  문제:", problem)
         return 1
-    version = next_version(OUT_ROOT, datetime.date.today())
+    sign_secret = sign_public = test_keys = lic_secret = None
+    replace = {}
+    if edition == "standalone":
+        if test:            # 그 자리에서 열쇠 두 쌍 - 진짜 열쇠 파일은 열지 않는다. 진짜 라이선스는 이 빌드에서 통하지 않는다
+            sign_secret, sign_public = update_sign.keygen()
+            lic_secret, lic_public = update_sign.keygen()
+            test_keys = {"update": sign_public.hex(), "license": lic_public.hex()}
+            replace["update_sign.py"] = swap_key(_repo_text("update_sign.py"), "PUBLIC_KEY_HEX", test_keys["update"])
+        else:
+            import publish_release
+            key_path = args.sign_key or publish_release.KEY_PATH
+            if not os.path.isfile(key_path):
+                print(f"  문제: 업데이트 서명 열쇠 파일이 없습니다 ({key_path}) - 스탠드얼론은 버전 목록의 서명을 설치 파일에 싣습니다")
+                return 1
+            sign_secret, sign_public = publish_release._secret(key_path), update_sign.public_key()
+    prefix = release_prefix(edition, test)
+    version = next_version(out_root, datetime.date.today(), prefix)
     work = os.path.join(REPO, "build", "release")
-    print(f"판 {version} 을 만듭니다 ({'조각 방식' if args.modules else f'exe 는 {args.exes_from} 에서' if args.exes_from else 'Nuitka'})")
+    kind = "" if edition == "cloud" else " - 스탠드얼론 시험용" if test else " - 스탠드얼론"
+    print(f"판 {version}{kind} 을 만듭니다 ({'조각 방식' if modules else f'exe 는 {args.exes_from} 에서' if args.exes_from else 'Nuitka'})")
     try:
-        if args.modules:
-            work = os.path.join(REPO, "build", "release_modules")
+        if modules:
+            work = os.path.join(REPO, "build", "release_modules" if edition == "cloud" else "release_standalone")
             build_launchers(work)
-            builder = build_modules(work, force=args.rebuild_all)
-            build_lib_zip(os.path.join(work, "lib.zip"))
+            builder = build_modules(work, force=args.rebuild_all, edition=edition, overrides=module_overrides(edition, test_keys))
+            build_lib_zip(os.path.join(work, "lib.zip"), names=lib_names(edition))
         else:
             builder = reuse_exes(args.exes_from, work) if args.exes_from else build_exes(work, force=args.rebuild_all)
     except (FileNotFoundError, RuntimeError, subprocess.CalledProcessError) as e:
         print("  문제:", e)
         return 1
-    out_dir = os.path.join(OUT_ROOT, f"배포_{version}")
-    program = collect(out_dir, work, version=BRAND_VERSION, modules=args.modules)
+    out_dir = os.path.join(out_root, f"{prefix}{version}")
+    program = collect(out_dir, work, version=BRAND_VERSION, modules=modules, edition=edition, test=test, replace=replace)
     man = write_manifest(out_dir, version, builder, program)
+    sig_problem = []
+    if edition == "standalone":
+        sig = sign_manifest(out_dir, sign_secret)
+        with open(os.path.join(out_dir, st.MANIFEST_NAME), "rb") as f:
+            if not (sign_public and update_sign.verify(sign_public, f.read(), bytes.fromhex(sig))):   # 열쇠 짝이 틀리면 설치본이 모두 막힌다
+                sig_problem.append("업데이트 서명 열쇠가 update_sign.PUBLIC_KEY_HEX 와 짝이 아닙니다 - 설치하면 exe 셋이 켜지지 않습니다")
+        if test:            # make_license.py --key 가 읽는 꼴 (16진수 한 줄). 배포 폴더·압축 밖에 둔다
+            with open(os.path.join(out_root, f"{prefix}{version}.testkey.txt"), "w", encoding="ascii") as f:
+                f.write(lic_secret.hex() + "\n")
+            print(f"  시험용 라이선스 열쇠: {os.path.join(out_root, f'{prefix}{version}.testkey.txt')} (고객에게 보내지 않는다)")
     zip_path = out_dir + ".zip"
     make_zip(out_dir, zip_path)
-    problems = verify_zip(zip_path, man, program, [rel for rel, _ in OTHER_FILES]) + smoke_check(zip_path)
+    problems = (sig_problem + verify_zip(zip_path, man, program, [rel for rel, _ in other_files(edition)], edition=edition)
+                + smoke_check(zip_path, edition=edition))
     if not runtime_has_tkinter(out_dir):
         problems.append("내장 파이썬에 tkinter 가 없습니다 - 설정 창이 뜨지 않습니다 (2부 6절)")
     for p in problems:
@@ -839,7 +1129,7 @@ def main(argv=None):
         return 1
     if not args.no_setup:
         try:
-            setup = build_setup(out_dir, version)
+            setup = build_setup(out_dir, version, out_root, edition, test)
         except RuntimeError as e:
             print("  문제:", e)
             return 1
@@ -850,8 +1140,8 @@ def main(argv=None):
         _copy(os.path.join(out_dir, *NODE_REL), os.path.join(REPO, "dist"), "/".join(NODE_REL))   # ACTOR·옵저버가 dist 옆에서 찾는다 (검토 2026-10-16)
         print("  dist 에 exe 셋과 playwright\\node.exe 를 복사했습니다 (설정 파일은 그대로)")
     print(f"판 {version}  {zip_path}  ({os.path.getsize(zip_path) // 2 ** 20}MB)")
-    removed = prune_local(OUT_ROOT, protect=[args.exes_from])      # 새 판이 다 만들어진 뒤에만 옛 판을 찾아 지운다
-    print(f"  {OUT_ROOT} 의 옛 판을 지웠습니다: {', '.join(removed)}" if removed else f"  {OUT_ROOT} 에 지울 옛 판이 없습니다 (최신 {LOCAL_KEEP}개)")
+    removed = prune_local(out_root, protect=[args.exes_from], edition=edition, test=test)   # 새 판이 다 만들어진 뒤에만 옛 판을 찾아 지운다
+    print(f"  {out_root} 의 옛 판을 지웠습니다: {', '.join(removed)}" if removed else f"  {out_root} 에 지울 옛 판이 없습니다 (최신 {LOCAL_KEEP}개)")
     return 0
 
 

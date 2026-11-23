@@ -411,8 +411,39 @@ def _read_text(path, tries=5):
             time.sleep(0.2)
 
 
-def ensure_keys(folder):
-    """에이전트·인증번호 중계 열쇠 (agent.key, relay.key). 없으면 만든다. 파일 권한은 설치 쪽이 잠근다 (계획 ③).
+LOCKED_FILES = ("agent.key", "relay.key", "accounts.json")
+ADMIN_SIDS = ("*S-1-5-32-544", "*S-1-5-18")       # 관리자, SYSTEM
+
+
+def lock_key_files(folder, readers=(), run=None):
+    """열쇠·계정 파일(LOCKED_FILES)에 따로 붙은 권한을 지우고 관리자·SYSTEM 만 남긴다 (계획 ③ Task 4). readers(윈도우 계정 이름)가
+    있으면 relay.key 에만 읽기를 더한다 - 기본은 없다 (옵저버·ACTOR 도 관리자 권한으로 돈다). 설정 폴더의 권한 다시 잠그기
+    (rpa_settings.lock_data_acl 의 /reset /T)가 지운 뒤에도 같은 상태가 되게 서버가 켤 때마다·설치 마무리가 부른다.
+    icacls 종료 코드 목록. 예외를 내지 않는다 - 실패해도 서버는 켜진다. run 은 시험용 (args, timeout) → (코드, 출력)."""
+    import subprocess
+
+    def default(args, timeout=60):
+        r = subprocess.run(args, capture_output=True, timeout=timeout, creationflags=0x08000000)
+        return r.returncode, ""
+    run = run or default
+    icacls = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "icacls.exe")
+    codes = []
+    for name in LOCKED_FILES:
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            continue
+        grants = [f"{sid}:F" for sid in ADMIN_SIDS] + ([f"{r}:R" for r in readers] if name == "relay.key" else [])
+        for args in ([path, "/reset", "/C", "/Q"], [path, "/inheritance:r", "/grant:r", *grants, "/C", "/Q"]):
+            try:
+                codes.append(run([icacls, *args], timeout=60)[0])
+            except Exception:
+                codes.append(-1)
+    return codes
+
+
+def ensure_keys(folder, lock=None):
+    """에이전트·인증번호 중계 열쇠 (agent.key, relay.key). 없으면 만든다. 그 뒤 열쇠·계정 파일 권한을 잠근다 (lock_key_files) -
+    lock 이 None 이면 설치본에서만 (소스·시험은 일반 권한으로 돌아 잠그면 스스로 못 읽는다).
     있는 파일을 잠깐 못 읽었다고 새 열쇠로 덮지 않는다 - 돌고 있던 ACTOR·옵저버가 끊긴다 (검토 10번). 그때는 OSError."""
     os.makedirs(folder, exist_ok=True)
     out = []
@@ -426,6 +457,14 @@ def ensure_keys(folder):
                 f.write(key + "\n")
             os.replace(tmp, path)
         out.append(key)
+    if lock is None:
+        try:
+            import rpa_status
+            lock = rpa_status.shipped()
+        except Exception:
+            lock = False
+    if lock:
+        lock_key_files(folder)
     return tuple(out)
 
 

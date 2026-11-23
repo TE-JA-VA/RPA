@@ -16,12 +16,31 @@
 #ifndef SourceDir
   #error SourceDir 이 없습니다 - tools/build_release.py 로 컴파일하세요
 #endif
+; 버전 종류 (스탠드얼론 계획 ③ Task 5): /DEdition=standalone [/DTestBuild=1]. 없으면 일반(cloud) - 그때 지금 설치 파일과 같다.
+; 파일을 둘로 나누지 않는다 - [Code] 고침이 두 설치 파일에 같이 간다. 설치 폴더·설정 폴더·시작 메뉴 이름은 같다 (설계 6.1)
+#ifndef Edition
+  #define Edition "cloud"
+#endif
+#if Edition == "standalone"
+  #ifdef TestBuild
+    #define MyAppName "오토파일럿 스탠드얼론 (시험용)"
+  #else
+    #define MyAppName "오토파일럿 스탠드얼론"
+  #endif
+#else
+  #define MyAppName "오토파일럿"
+#endif
 
 [Setup]
+; AppId 는 못박는다 - 바꾸면 덮어 설치가 다른 제품이 된다
+#if Edition == "standalone"
+AppId={{7D2E9A61-3B4F-4C8D-A5E2-91F0C6B3D7A4}
+#else
 AppId={{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}
-AppName=오토파일럿
+#endif
+AppName={#MyAppName}
 AppVersion={#AppVersion}
-AppVerName=오토파일럿 {#AppVersion}
+AppVerName={#MyAppName} {#AppVersion}
 AppPublisher=오토파일럿
 VersionInfoVersion={#NumVersion}
 DefaultDirName={commonpf64}\AFTER MARKET\RPA
@@ -40,7 +59,7 @@ WizardStyle=modern
 SetupLogging=yes
 CloseApplications=no
 RestartApplications=no
-UninstallDisplayName=오토파일럿
+UninstallDisplayName={#MyAppName}
 ; 아이콘: tools/make_icon.py 가 만든다. 설치 파일 아이콘은 이 스크립트 옆 것, 나머지는 판 폴더에 들어간 사본
 SetupIconFile=AFTER_MARKET.ico
 UninstallDisplayIcon={app}\AFTER_MARKET.ico
@@ -54,6 +73,10 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 ; 이 config 폴더가 생기면 그 PC 는 새 구조다 (1부 3절). 제거할 때 자동으로 지우지 않는다 (끝에 묻는다)
 Name: "{commonappdata}\AFTER MARKET\RPA\config"; Flags: uninsneveruninstall
 Name: "{commonappdata}\AFTER MARKET\RPA\data"; Flags: uninsneveruninstall
+#if Edition == "standalone"
+; 로컬 서버 자료 (열쇠·계정·기록 - local_server.data_dir). 지울 때 남긴다 (끝에 묻는다)
+Name: "{commonappdata}\AFTER MARKET\RPA\standalone"; Flags: uninsneveruninstall
+#endif
 Name: "{group}"
 
 [InstallDelete]
@@ -66,7 +89,11 @@ Type: files; Name: "{group}\ACTOR 오토파일럿.lnk"
 
 [Files]
 ; 판 폴더 전부. 빈 틀은 template 이름으로 (프로그램 폴더에 진짜 설정처럼 보이는 파일을 두지 않는다), 안내 문서는 넣지 않는다
+#if Edition == "standalone"
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "\RPA_UserConfig.json,\배포안내_스탠드얼론.txt,\PC번호_확인.bat"; Flags: ignoreversion recursesubdirs createallsubdirs
+#else
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "\RPA_UserConfig.json,\배포안내.txt,\클라우드_안내.txt"; Flags: ignoreversion recursesubdirs createallsubdirs
+#endif
 Source: "{#SourceDir}\RPA_UserConfig.json"; DestDir: "{app}"; DestName: "RPA_UserConfig.template.json"; Flags: ignoreversion
 
 [Icons]
@@ -105,6 +132,51 @@ const
   // 옵저버가 켜 있는 동안 쥐는 잠금 (rpa_status.OBSERVER_LOCK 과 같아야 한다). 켜진 exe 는 덮지도 지우지도 못한다
   OBSERVER_LOCK = 'Local\AFTER_MARKET_RPA_OBSERVER';
   OBSERVER_OPEN = '옵저버가 켜져 있습니다. 옵저버를 닫은 뒤 다시 ';
+  // 다른 버전 종류 (계획 ③ Task 5) - 일반·스탠드얼론은 같은 폴더에 깔리므로 한 PC 에 하나만
+#if Edition == "standalone"
+  OTHER_APPID = '{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}';
+  OTHER_EDITION_TEXT = '이 PC 에는 오토파일럿 일반 버전이 설치되어 있습니다. 스탠드얼론 버전은 일반 버전이 없는 PC 에만 설치할 수 있습니다.';
+  DATA_LOSS = '지우면 저장된 비밀번호·프리셋·실행 기록·라이선스·웹 계정이 모두 없어집니다. 다시 설치해서 계속 쓰려면 [아니요] 를 누르세요.';
+#else
+  OTHER_APPID = '{7D2E9A61-3B4F-4C8D-A5E2-91F0C6B3D7A4}';
+  OTHER_EDITION_TEXT = '이 PC 에는 오토파일럿 스탠드얼론 버전이 설치되어 있습니다. 일반 버전은 스탠드얼론 버전이 없는 PC 에만 설치할 수 있습니다.';
+  DATA_LOSS = '지우면 저장된 비밀번호·프리셋·실행 기록이 모두 없어집니다. 다시 설치해서 계속 쓰려면 [아니요] 를 누르세요.';
+#endif
+
+// 다른 버전 종류가 깔린 PC 인가: 상대 AppId 의 제거 등록 키(64비트 보기)가 있거나, 프로그램 폴더에 manifest.json 이 있는데
+// edition.json 이 (스탠드얼론 설치 파일이면) 없다 / (일반 설치 파일이면) 있다 - 등록이 지워진 채 파일만 남은 PC 도 막는다
+function OtherEditionInstalled(): Boolean;
+var
+  Dir: String;
+begin
+  Result := RegKeyExists(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\' + OTHER_APPID + '_is1');
+  Dir := ExpandConstant('{commonpf64}\AFTER MARKET\RPA');
+  if (not Result) and FileExists(Dir + '\manifest.json') then
+#if Edition == "standalone"
+    Result := not FileExists(Dir + '\edition.json');
+#else
+    Result := FileExists(Dir + '\edition.json');
+#endif
+end;
+
+// 설치 파일이 켜질 때: 다른 버전 종류가 깔려 있으면 알리고 그만둔다 (종료 코드 1, 깔려 있던 것은 그대로).
+// 시험용 빌드는 조용한 설치가 아니면 먼저 묻는다 (고객에게 나가지 않게)
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+#ifdef TestBuild
+  if (not WizardSilent) and (MsgBox('시험용 빌드입니다. 고객 PC 에 설치하지 마십시오. 계속하시겠습니까?', mbConfirmation, MB_YESNO) = IDNO) then
+  begin
+    Result := False;
+    exit;
+  end;
+#endif
+  if OtherEditionInstalled() then
+  begin
+    SuppressibleMsgBox(OTHER_EDITION_TEXT, mbError, MB_OK, IDOK);
+    Result := False;
+  end;
+end;
 
 // 설치돼 있는 rpa_settings.py 를 창 없이 돌린다. 처음 설치라 파일이 없으면 -1, 못 띄우면 -2
 function RunSettings(const Args: String): Integer;
@@ -178,8 +250,7 @@ begin
   if CurUninstallStep = usPostUninstall then
   begin
     Data := ExpandConstant('{commonappdata}\AFTER MARKET\RPA');
-    if DirExists(Data) and (SuppressibleMsgBox('설정과 기록(' + Data + ')도 지울까요?' + #13#10 +
-         '지우면 저장된 비밀번호·프리셋·실행 기록이 모두 없어집니다. 다시 설치해서 계속 쓰려면 [아니요] 를 누르세요.',
+    if DirExists(Data) and (SuppressibleMsgBox('설정과 기록(' + Data + ')도 지울까요?' + #13#10 + DATA_LOSS,
          mbConfirmation, MB_YESNO or MB_DEFBUTTON1, IDNO) = IDYES) then
     begin
       DelTree(Data, True, True, True);

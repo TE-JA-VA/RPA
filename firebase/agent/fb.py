@@ -13,10 +13,16 @@ import base64
 import email.utils
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # 저장소·배포 폴더 뿌리 (secret.py 와 같다)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+import server_info  # noqa: E402  서버 주소 한 곳 - 스탠드얼론은 빈 값 (Firebase 에 연결하지 않는다)
 
 RENEW_BEFORE_SEC = 60
 
@@ -48,12 +54,12 @@ def _dev_env(name):
 
 def _auth_host():
     host = _dev_env("FIREBASE_AUTH_EMULATOR_HOST")
-    return f"http://{host}/identitytoolkit.googleapis.com" if host else "https://identitytoolkit.googleapis.com"
+    return f"http://{host}/{server_info.AUTH_HOST}" if host else f"https://{server_info.AUTH_HOST}"
 
 
 def _token_host():
     host = _dev_env("FIREBASE_AUTH_EMULATOR_HOST")
-    return f"http://{host}/securetoken.googleapis.com" if host else "https://securetoken.googleapis.com"
+    return f"http://{host}/{server_info.TOKEN_HOST}" if host else f"https://{server_info.TOKEN_HOST}"
 
 
 def fs_fields(data):
@@ -137,6 +143,8 @@ def parse_sse(lines):
 
 class Client:
     def __init__(self, cfg, opener=None, clock=time.time):
+        if not server_info.AUTH_HOST:      # 스탠드얼론 설치본 (빈 server_info) - 에이전트는 local_store 로 이 PC 의 로컬 서버에 붙는다
+            raise RuntimeError("스탠드얼론 버전에서는 Firebase 에 연결하지 않습니다.")
         if _shipped() and not str(cfg.get("database_url") or "").lower().startswith("https://"):    # 설치본은 암호화된 주소만 (C2)
             raise ValueError("클라우드 주소가 https 가 아닙니다. '오토파일럿 설정'에서 에이전트 계정을 다시 설정하여 주십시오.")
         self._cfg = cfg
@@ -276,7 +284,7 @@ class Client:
     # --- Firestore (이력) ----------------------------------------------
     def _fs_base(self):
         host = _dev_env("FIRESTORE_EMULATOR_HOST")
-        root = f"http://{host}/v1" if host else "https://firestore.googleapis.com/v1"
+        root = f"http://{host}/v1" if host else f"https://{server_info.FIRESTORE_HOST}/v1"
         return f"{root}/projects/{self._cfg['project_id']}/databases/(default)/documents"
 
     def fs_create(self, path, fields, doc_id, retried=False):

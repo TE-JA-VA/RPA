@@ -32,3 +32,16 @@ def edition():
 
 def is_standalone():
     return edition() == STANDALONE
+
+
+def test_build():
+    """시험용 빌드인가 - 스탠드얼론이고 edition.json 의 test_build 가 true (설정 창 제목·웹 띠가 본다). 일반 버전은 False."""
+    if not is_standalone():
+        return False
+    import rpa_status as st
+    try:
+        with open(os.path.join(st.program_dir(), FILE_NAME), encoding="utf-8") as f:
+            got = json.load(f)
+        return isinstance(got, dict) and got.get("test_build") is True
+    except (OSError, ValueError):
+        return False

@@ -306,6 +306,119 @@ check("창은 그대로 두고 빨간 글씨로 알리며 기록한다 (Tk 기�
       and os.path.isfile(os.path.join(st.data_dir(), rs.CRASH_LOG_NAME)), win.msg.get())
 
 root.destroy()
+
+print("=== 8. 스탠드얼론 (계획 ③ Task 4) ===")
+import json  # noqa: E402
+
+import license_check  # noqa: E402
+import local_web  # noqa: E402
+import update_sign  # noqa: E402
+
+os.environ.update(RPA_EDITION="standalone", RPA_MACHINE_GUID="5a17db0c-0000-4000-8000-000000000001")
+lic_secret, lic_public = update_sign.keygen()
+license_check.LICENSE_PUBLIC_KEY_HEX = lic_public.hex()
+sa = os.path.join(TMP, "sa")
+os.makedirs(os.path.join(sa, "config"))
+os.makedirs(os.path.join(sa, "standalone"))
+sa_paths = dict(paths, config_dir=os.path.join(sa, "config"), user_config=os.path.join(sa, "config", st.USER_CONFIG_NAME),
+                agent_config=os.path.join(sa, "config", rs.AGENT_CONFIG_NAME), license=os.path.join(sa, "license.json"),
+                accounts=os.path.join(sa, "standalone", local_web.ACCOUNTS_NAME))
+picked = os.path.join(TMP, "받은 license.json")
+with open(picked, "w", encoding="utf-8") as f:
+    json.dump(license_check.sign_body(lic_secret, {"edition": "standalone", "company": "샌드박스상사", "cid": "c_sbx",
+                                                   "pc_id": os.environ["RPA_MACHINE_GUID"], "issued": "2026-11-24",
+                                                   "modules": {}, "features": {}, "limits": {}}), f, ensure_ascii=False)
+
+
+class SaDialogs(FakeDialogs):
+    reset_answer = None
+
+    def license_file(self):
+        return picked
+
+    def reset_admin(self, ids):
+        self.said.append(("reset", list(ids)))
+        return self.reset_answer
+
+
+def shot(name):
+    """창만 찍는다 - 맨 위로 올려 뒤에 열린 다른 창이 끼지 않게."""
+    root.attributes("-topmost", True)
+    root.lift()
+    for _ in range(5):
+        root.update()
+        time.sleep(0.1)
+    path = os.path.splitext(SHOT)[0] + f"_{name}.png"
+    x, y, w, h = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height()
+    ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True).save(path)
+    root.attributes("-topmost", False)
+    return path, w, h
+
+
+root = tk.Tk()
+dlg = SaDialogs()
+calls.clear()
+win = rs.SettingsWindow(root, sa_paths, login=lambda *a: (_ for _ in ()).throw(AssertionError("로그인")), run=fake_run,
+                        running=lambda: False, procs=lambda: [], printers=["사무실 프린터"], dialogs=dlg)
+root.update()
+texts = [str(w.cget("text")) for w in all_widgets(root) if w.winfo_class() in ("TLabel", "TLabelframe", "Label", "TButton")]
+check("대시보드 연결 칸이 없고 라이선스·업체 웹 관리자 계정 칸이 맨 위", "대시보드 연결" not in texts and "라이선스" in texts
+      and "업체 웹 관리자 계정" in texts and "cid" not in win.entries and "agent_pw" not in win.hints, texts[:8])
+check("라이선스 없음: 붉은 안내·PC 번호·[PC 번호 복사]·[라이선스 파일 선택]",
+      win.lic_msg.cget("text") == rs.LICENSE_MISSING and win.lic_msg.cget("fg") == rs.RED
+      and win.lic_pc.cget("text") == f"PC 번호 {os.environ['RPA_MACHINE_GUID']}" and win.copy_btn.winfo_ismapped()
+      and win.lic_btn.winfo_ismapped(), (win.lic_msg.cget("text"), win.lic_pc.cget("text")))
+check("관리자 계정이 없으면 아이디·비밀번호·확인 칸과 안내", win.admin_new.winfo_ismapped() and not win.admin_have.winfo_ismapped()
+      and rs.ADMIN_NOTE in texts)
+check("창 제목 (시험용 빌드 아님)", root.title() == "오토파일럿 설정", root.title())
+check(f"창 폭 {root.winfo_width()} ≤ 600 (PC 번호 줄)", root.winfo_width() <= 600)
+check(f"창 높이 {root.winfo_height()} ≤ 690 (768 높이 노트북 - 라이선스 없음·관리자 없음이 가장 길다)", root.winfo_height() <= 690)
+p1 = shot("standalone_no_license")
+check(f"화면 사진 (라이선스 없음) {p1[0]} ({p1[1]}x{p1[2]})", os.path.isfile(p1[0]))
+win.on_copy_pc()
+check("PC 번호 복사 → 클립보드", root.clipboard_get() == os.environ["RPA_MACHINE_GUID"] and "복사하였습니다" in win.msg.get())
+for k, v in dict(admin_code="AM001", erp_id="rpa", erp_pw="Erp-Pw-1234!", carrier="한진연동", box="대", fare="신용").items():
+    win.vars[k].set(v)
+win.on_save()
+wait_idle()
+check("라이선스 없이 저장하면 붉은 글 (파일을 쓰지 않는다)", "라이선스 파일이 없습니다" in win.msg.get() and not os.path.exists(sa_paths["user_config"]),
+      win.msg.get())
+win.on_license()
+root.update()
+check("라이선스 파일 선택 → 업체 · 발급일, 복사 단추는 숨김", win.lic_msg.cget("text") == "업체 샌드박스상사 · 발급일 2026-11-24"
+      and not win.copy_btn.winfo_ismapped() and os.path.isfile(sa_paths["license"]), win.lic_msg.cget("text"))
+win.on_save()
+wait_idle()
+check("관리자 칸이 비면 저장 거절", "업체 웹 관리자 계정을 만들어 주십시오." in win.msg.get(), win.msg.get())
+win.admin_vars["id"].set("admin")
+win.admin_vars["pw"].set("Good-Pass-1")
+win.admin_vars["pw2"].set("Good-Pass-2")
+win.on_save()
+wait_idle()
+check("비밀번호가 다르면 붉은 글", "비밀번호가 서로 다릅니다." in win.msg.get(), win.msg.get())
+win.admin_vars["pw2"].set("Good-Pass-1")
+win.on_save()
+ok = wait_idle()
+check("관리자 칸을 채워 저장 → 계정을 만들고 저장·작업 등록·에이전트 켜기 (에이전트 로그인 없음)",
+      ok and win.saved and "에이전트를 실행하였습니다" in win.msg.get() and calls == ["/Create", "/End", "/Run"]
+      and local_web.Accounts(sa_paths["accounts"]).verify("admin", "Good-Pass-1") is not None, (win.msg.get(), calls))
+root.update()
+check("저장 뒤 '관리자 계정: admin' 과 [관리자 비밀번호 다시 정하기]", win.admin_have.winfo_ismapped()
+      and win.admin_label.cget("text") == "관리자 계정: admin" and win.admin_reset_btn.winfo_ismapped())
+p2 = shot("standalone_done")
+check(f"화면 사진 (설정 끝) {p2[0]} ({p2[1]}x{p2[2]})", os.path.isfile(p2[0]))
+real_is_admin = rs.is_admin
+rs.is_admin = lambda: True
+try:
+    dlg.reset_answer = ("admin", "New-Pass-11", "New-Pass-11")
+    win.on_reset_admin()
+    acc = local_web.Accounts(sa_paths["accounts"]).verify("admin", "New-Pass-11")
+    check("관리자 비밀번호 다시 정하기 → 새 비밀번호·다음 로그인에 바꾸기·안내",
+          acc and acc["must_change"] and ("info", rs.ADMIN_RESET_DONE) in dlg.said and dlg.said[-2] == ("reset", ["admin"]), dlg.said[-2:])
+finally:
+    rs.is_admin = real_is_admin
+root.destroy()
+os.environ.pop("RPA_EDITION", None)
 if len(sys.argv) > 1:
     shutil.rmtree(TMP, ignore_errors=True)
 print()

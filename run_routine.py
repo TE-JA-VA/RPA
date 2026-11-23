@@ -5868,6 +5868,9 @@ def run_self_check():
     log(f"=== 설정 점검 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
     log(f"실행 형태   : {status.run_kind()}")
     log(f"프로그램 폴더: {status.program_dir()}")
+    import ap_guard
+    if line := ap_guard.check_line():     # 스탠드얼론만 '라이선스: …' (막지 않는다 - 라이선스 없는 빌드 점검이 돈다)
+        log(line)
     log(f"기록 폴더   : {BASE_DIR}{'  (새 구조)' if status.new_layout() else ''}")
     log(f"바탕화면    : {pl.DESKTOP_DIR}  {'있음' if os.path.isdir(pl.DESKTOP_DIR) else '없음!'}")
     log(f"작업 폴더   : {pl.AI_DIR}  {'있음' if os.path.isdir(pl.AI_DIR) else '없음!'}")
@@ -6684,6 +6687,13 @@ def main():
     if "--uiacheck" in sys.argv[1:]:
         run_uia_check()
         return
+    import ap_guard              # 스탠드얼론: 라이선스·프로그램 파일 확인 (일반 버전은 None)
+    blocked = ap_guard.startup_problem()
+    if blocked:
+        status.start("routine", ROUTINE_STEPS)
+        log(f"실행하지 않습니다: {blocked}")
+        status.finish("stopped", blocked)
+        return ap_guard.EXIT_BLOCKED
     rr = sys.modules[__name__]   # exe 에서는 __main__ - wellife 가 다시 import 하지 않게 넘긴다
     route, why = wellife_route(status.wellife_policy(), wellife.enabled(rr))
     if route == "wellife":

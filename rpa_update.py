@@ -29,6 +29,8 @@ def update_urls():
     (보안 감사 2026-11-13 C2, 고객사 보안 검토 2026-11-19: 같은 윈도우 계정의 다른 프로그램이 환경 변수로 받기 주소를 바꿀 수 있었다.
     받은 파일은 서명으로 다시 확인하지만 주소부터 막는다). 샌드박스 시험은 fetch_release(base_url=) 로 직접 준다."""
     env = os.environ.get("RPA_UPDATE_BASE_URL")
+    if not server_info.UPDATE_BASE_URL:      # 스탠드얼론 설치본 (빈 server_info) - 업데이트 사이트에 닿지 않는다
+        return ()
     if st.shipped():
         return tuple(u for u in (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS) if u.startswith("https://"))
     return (env,) if env else (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS)
@@ -248,6 +250,8 @@ def fetch_release(version, program_root, staging, base_url=None, get=http_get, p
     """새 판의 manifest·서명을 받아 확인하고, 바뀐 파일만 staging 에 받는다. 틀리면 staging 을 지우고 UpdateError.
     주소가 여럿이면(UPDATE_BASE_URLS) 받기 실패(FetchError)일 때만 다음 주소로, 다 안 되면 마지막 까닭을 낸다.
     서명·형식·파이썬·디스크·지문 거절은 그 자리에서 낸다 - 다음 주소의 404 로 덮지 않는다 (BugBuster L21)."""
+    if not server_info.UPDATE_BASE_URL:
+        raise UpdateError("스탠드얼론 버전은 새 설치 파일로 업데이트합니다.")
     for base in ([base_url] if base_url else UPDATE_BASE_URLS):
         try:
             return _fetch_from(base.rstrip("/"), version, program_root, staging, get, pub)

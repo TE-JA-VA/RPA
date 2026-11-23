@@ -32,7 +32,10 @@ import time
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
-import ai_rescue
+try:
+    import ai_rescue
+except ImportError:         # 스탠드얼론에는 AI 어시스트가 없다 (attach_ai·--check 가 본다)
+    ai_rescue = None
 import rpa_status as status
 import web_replay              # 브라우저 띄우기(web_replay.edge - 깔린 Edge)와 프리셋 재생
 
@@ -372,6 +375,9 @@ def site_will_run(site):
 
 def attach_ai(rp, name):
     """PC 에 AI 어시스트가 켜져 있으면 재생기에 붙인다 (ACTOR 만 - 옵저버 미리보기는 붙이지 않는다). 키는 로그에 쓰지 않는다."""
+    if ai_rescue is None:       # 이 버전에는 없다 (스탠드얼론)
+        rp.ai = None
+        return
     try:
         rp.ai = ai_rescue.from_settings(status.ai_settings(), log=lambda m: log(f"  [{name}]       {m}"))
     except Exception as e:      # SDK 가 빠진 빌드 등 - AI 때문에 지금보다 나빠지면 안 된다 (최종 검토 I-6)
@@ -1707,6 +1713,9 @@ def run_site(browser, name, site, use_session=True, keep_open=False, gates=None)
 
 def cmd_check():
     log("=== 설정 점검 ===")
+    import ap_guard
+    if line := ap_guard.check_line():     # 스탠드얼론만 (막지 않는다)
+        log(f"  {line}")
     log(f"  설정 파일: {status.user_config_path()}"
         + ("" if os.path.isfile(status.user_config_path()) else " (아직 없음 - 옛 WebManageConfig.json 을 읽는다)"))
     try:
@@ -1734,11 +1743,14 @@ def cmd_check():
             log(f"          ! {p}")
 
     log(f"  사이트 {len(cfg)}건, 문제 {len(all_problems)}건")
-    try:                        # AI 어시스트 SDK 를 실제로 불러 본다 (요청은 보내지 않는다) - 빌드가 모듈·dist-info 를 빠뜨리면 끝 줄이 안 찍힌다
-        ai_rescue.Claude("check")
-    except Exception as e:
-        log(f"  ! AI 어시스트 SDK 를 불러오지 못했습니다: {type(e).__name__}: {e}")
-        return 1
+    if ai_rescue is None:
+        log("  AI 어시스트: 이 버전에는 없습니다")
+    else:
+        try:                    # AI 어시스트 SDK 를 실제로 불러 본다 (요청은 보내지 않는다) - 빌드가 모듈·dist-info 를 빠뜨리면 끝 줄이 안 찍힌다
+            ai_rescue.Claude("check")
+        except Exception as e:
+            log(f"  ! AI 어시스트 SDK 를 불러오지 못했습니다: {type(e).__name__}: {e}")
+            return 1
     log(f"  쓸 수 있는 Action: {', '.join(sorted(ACTIONS))}")
     return 1 if all_problems else 0
 
@@ -2016,6 +2028,13 @@ def main():
         return cmd_check()
     if args.selftest:
         return cmd_selftest(args.headless)
+    import ap_guard             # 스탠드얼론: 라이선스·프로그램 파일 확인 (일반 버전은 None)
+    blocked = ap_guard.startup_problem()
+    if blocked:
+        status.start("prepare")
+        log(f"실행하지 않습니다: {blocked}")
+        status.finish("stopped", blocked)
+        return ap_guard.EXIT_BLOCKED
     if args.site or args.all:
         override = None
         if args.fresh:

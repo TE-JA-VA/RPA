@@ -463,8 +463,14 @@ def tamper_text(install):
     n = int(install.get("changed_count") or 0) - int(install.get("missing_count") or 0)   # 바뀐 파일 전체 수 (목록은 10개까지)
     what = ("버전 목록의 서명이 맞지 않습니다" if not names
             else f"바뀐 파일: {', '.join(names[:3])}" + (f" 외 {n - 3}개" if n > 3 else ""))
+    try:                                   # 스탠드얼론은 업데이트가 없다 - 같은 버전 설치 파일로 다시 설치 (계획 ③ Task 3)
+        import edition
+        alone = edition.is_standalone()
+    except Exception:
+        alone = False
     return (f"프로그램 파일이 설치된 버전과 달라 실행하지 않습니다. ({what}) "
-            "관리자에게 [업데이트]를 요청하여 주십시오. 같은 버전으로 다시 받으면 원래 파일로 되돌립니다.")
+            + ("같은 버전 설치 파일로 다시 설치하여 주십시오." if alone else
+               "관리자에게 [업데이트]를 요청하여 주십시오. 같은 버전으로 다시 받으면 원래 파일로 되돌립니다."))
 
 
 def install_block_reason(root=None):

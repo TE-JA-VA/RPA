@@ -13,3 +13,7 @@ AUTH_DOMAIN = f"{PROJECT_ID}.firebaseapp.com"                           # 로그
 DASHBOARD_URL = f"https://{PROJECT_ID}.web.app"                         # 업체 웹
 UPDATE_BASE_URL = f"https://{PROJECT_ID}-releases.web.app"              # 업데이트 전용 호스팅
 UPDATE_FALLBACK_URLS = ()   # 위에서 못 받으면 차례로 - 서버를 옮기는 동안 옛 주소를 둔다 (docs/server-move-stage1.md)
+AUTH_HOST = "identitytoolkit.googleapis.com"                            # 에이전트 로그인 (fb.py·background.py 가 조립한다)
+TOKEN_HOST = "securetoken.googleapis.com"                               # 로그인 갱신
+FIRESTORE_HOST = "firestore.googleapis.com"                             # 실행 기록
+# 스탠드얼론 설치본에는 이 파일 대신 이름마다 빈 값인 사본이 실린다 (tools/build_release.py blank_server_info)

@@ -402,7 +402,7 @@ check(f"Playwright 를 쓰는 exe({pw_exes})는 node.exe 를 빼고 만든다 (N
       and all(br.NODE_EXCLUDE in br.NUITKA_EXTRA[e] for e in pw_exes) and br.NODE_EXCLUDE == "--noinclude-dlls=playwright/driver/node.exe")
 node = dict(br.PROGRAM_FILES).get("playwright/node.exe")
 check("node.exe 는 판 목록(프로그램 파일)에 한 벌 - 지문이 같으면 PC 가 다시 안 받는다, 원본은 깔린 playwright 의 것",
-      bool(node) and os.path.isfile(os.path.join(str(ROOT), *node.split("/"))) and os.path.getsize(os.path.join(str(ROOT), *node.split("/"))) > 50 * 2 ** 20, str(node))
+      bool(node) and os.path.isfile(br._src_path(str(ROOT), node)) and os.path.getsize(br._src_path(str(ROOT), node)) > 50 * 2 ** 20, str(node))
 import web_replay  # noqa: E402
 with tempfile.TemporaryDirectory() as d:
     check("exe 는 프로그램 폴더의 playwright\\node.exe 를 찾는다, 없으면 None (그때는 Playwright 기본 자리)",

@@ -159,16 +159,18 @@ def start_agent(cmd, folder):
 # 통신(schannel)이 필요할 때 받아 온다. 파이썬(OpenSSL)은 저장소에 이미 있는 것만 봐서 Firebase 에 CERTIFICATE_VERIFY_FAILED
 # 로 못 붙는다 - 그래서 파이썬이 처음 붙기 전에 PowerShell(schannel)로 한 번씩 찔러 윈도우가 받아 오게 한다.
 # 파이썬 urllib 은 처음 붙을 때 읽은 인증서를 다시 안 읽으므로(3.12+) 에이전트를 켜기 전에 해야 한다.
-ROOT_WARM_URLS = ("https://identitytoolkit.googleapis.com/", "https://securetoken.googleapis.com/",
-                  "https://firestore.googleapis.com/",
-                  server_info.DATABASE_URL + "/.json",
-                  # 업데이트 주소도 - 회사 서버 인증서는 Google 과 루트가 다를 수 있다 (2026-10-21)
-                  *(u.rstrip("/") + "/" for u in (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS)))
+ROOT_WARM_URLS = tuple([f"https://{h}/" for h in (server_info.AUTH_HOST, server_info.TOKEN_HOST, server_info.FIRESTORE_HOST) if h]
+                       + ([server_info.DATABASE_URL + "/.json"] if server_info.DATABASE_URL else [])
+                       # 업데이트 주소도 - 회사 서버 인증서는 Google 과 루트가 다를 수 있다 (2026-10-21)
+                       + [u.rstrip("/") + "/" for u in (server_info.UPDATE_BASE_URL, *server_info.UPDATE_FALLBACK_URLS) if u])
+# 스탠드얼론 설치본(빈 server_info)에서는 빈 튜플이다
 
 
 def warm_windows_roots(urls=ROOT_WARM_URLS, timeout=10, run=subprocess.run):
     """윈도우가 Firebase 주소의 루트 인증서를 받아 두게 한다. 응답(404·401 등)은 보지 않는다. 못 해도 조용히 넘어간다
-    (인터넷이 없으면 에이전트가 원래대로 다시 붙으려 한다)."""
+    (인터넷이 없으면 에이전트가 원래대로 다시 붙으려 한다). 주소가 없으면 아무것도 띄우지 않는다."""
+    if not urls:
+        return
     # 3072 = TLS 1.2 (옛 Windows 10 의 PowerShell 5.1 은 기본이 TLS 1.0 이라 Google 에 못 붙는다)
     script = "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; " + "; ".join(
         f"try {{ Invoke-WebRequest -Uri '{u}' -UseBasicParsing -TimeoutSec {timeout} | Out-Null }} catch {{ }}" for u in urls)

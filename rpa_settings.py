@@ -12,6 +12,8 @@ r"""RPA 설정 창 (배포판 구조 2부 4절 - docs/superpowers/specs/2026-09-
 
 비밀번호는 잠근 뒤에만 파일에 쓰고(rpa_status.write_user_config, secret.write_config), 창의 다른 곳·기록·오류 글에
 싣지 않는다. 시험: tests/test_settings.py (창 없이), tests/check_settings_ui.py (진짜 창).
+스탠드얼론 (계획 ③ Task 4): 대시보드 연결 칸 대신 맨 위 '라이선스'(PC 번호·파일 고르기)와 '업체 웹 관리자 계정'(만들기·비밀번호
+다시 정하기) 칸, 에이전트 로그인 없음. 시험: tests/test_settings_standalone.py.
 """
 import base64
 import ctypes
@@ -74,6 +76,8 @@ INSTALL_DIR = os.path.normpath(os.path.join(os.environ.get("ProgramW6432") or os
 def default_paths():
     """이 PC 의 자리: 설치 폴더(program_dir)와 새 구조 config·data. 시험은 같은 모양의 dict 를 직접 만든다."""
     import background
+    import license_check
+    import local_store
     import secret
     prog = st.program_dir()
     return {"program_dir": prog, "config_dir": st.config_dir(), "user_config": st.user_config_path(),
@@ -82,7 +86,102 @@ def default_paths():
             "stop_file": os.path.join(st.data_dir(), background.STOP_NAME),
             "mail_dir": os.path.dirname(st.mail_memory_path(1)),
             "backup_dir": os.path.dirname(st.preset_backup_path(1)),     # 업체를 바꿀 때 같이 옮긴다 (BugBuster M21)
-            "session_dir": os.path.dirname(st.session_path("PRESET1"))}
+            "session_dir": os.path.dirname(st.session_path("PRESET1")),
+            # 스탠드얼론 (계획 ③ Task 4): 라이선스 파일, 업체 웹 계정 파일 (local_web.ACCOUNTS_NAME)
+            "license": license_check.license_path(), "accounts": os.path.join(local_store.keys_dir(), "accounts.json")}
+
+
+def _standalone():
+    """스탠드얼론 버전인가 (라이선스·관리자 계정 단계가 있고 에이전트 계정이 없다). 못 알아내면 일반."""
+    try:
+        import edition
+        return edition.is_standalone()
+    except Exception:
+        return False
+
+
+def _test_build():
+    """시험용 빌드인가 (창 제목에 '(시험용 빌드)')."""
+    try:
+        import edition
+        return edition.test_build()
+    except Exception:
+        return False
+
+
+def _license_path(paths):
+    import license_check
+    return paths.get("license") or license_check.license_path()
+
+
+def _accounts(paths):
+    import local_store
+    import local_web
+    return local_web.Accounts(paths.get("accounts") or os.path.join(local_store.keys_dir(), local_web.ACCOUNTS_NAME))
+
+
+def license_state(paths):
+    """라이선스 상태 {ok, text, pc_id, company, issued} - text 는 LicenseError 글 그대로 (맞으면 "")."""
+    import license_check
+    try:
+        guid = license_check.machine_guid()
+    except Exception:
+        guid = ""
+    try:
+        body = license_check.load(path=_license_path(paths))
+    except license_check.LicenseError as e:
+        return {"ok": False, "text": str(e), "pc_id": guid, "company": None, "issued": None}
+    return {"ok": True, "text": "", "pc_id": guid, "company": body.get("company"), "issued": body.get("issued")}
+
+
+def install_license(src, paths):
+    """고른 라이선스 파일을 확인해 라이선스 자리로 옮긴다 (임시 파일 → os.replace). 맞지 않으면 LicenseError 가 그대로 나가고
+    있던 라이선스는 남는다. 라이선스 본문을 돌려준다."""
+    import license_check
+    body = license_check.load(path=src)
+    dst = _license_path(paths)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = f"{dst}.{os.getpid()}.tmp"
+    try:
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return body
+
+
+def admin_exists(paths):
+    """사용 중지가 아닌 업체 웹 관리자(admin) 계정이 하나 이상 있나. 못 읽으면 False."""
+    try:
+        return any(a["role"] == "admin" and not a["disabled"] for a in _accounts(paths).list())
+    except Exception:
+        return False
+
+
+def create_admin(paths, uid, pw, pw2):
+    """업체 웹 관리자 계정을 만든다 (기본 비밀번호 없음 - 설치하는 사람이 정하고 첫 로그인에 바꾼다) → 아이디.
+    두 비밀번호가 다르거나 규칙에 맞지 않거나 이미 있는 아이디면 ValueError (사람 말)."""
+    if pw != pw2:
+        raise ValueError("비밀번호가 서로 다릅니다.")
+    return _accounts(paths).add(uid, pw, "admin", must_change=True)
+
+
+def reset_admin_password(paths, uid, pw, pw2):
+    """관리자 비밀번호를 잊었을 때 (윈도우 관리자 권한만). 다음 로그인에 바꾸게 하고, 사용 중지였으면 푼다.
+    로컬 서버는 계정 파일이 바뀐 것을 스스로 알아채 그 계정의 열린 세션을 닫는다 (local_web 의 rev)."""
+    if not is_admin():
+        raise PermissionError("윈도우 관리자 권한으로 실행하여 주십시오.")
+    if pw != pw2:
+        raise ValueError("비밀번호가 서로 다릅니다.")
+    acc = _accounts(paths)
+    rec = acc.get(uid)
+    if not rec or rec["role"] != "admin":
+        raise ValueError("관리자 계정이 아닙니다. 관리자 아이디를 골라 주십시오.")
+    out = acc.set(uid, pw, "admin", must_change=True)
+    if rec["disabled"]:
+        acc.disable(out, False)
+    return out
 
 
 # 관리자·계정 확인은 옵저버도 쓴다 - rpa_status 에 있다 (시험은 이 모듈의 이름을 바꿔 끼운다)
@@ -128,7 +227,8 @@ def run_quiet(args, timeout=60):
 def list_processes():
     """[(pid, 이름, 실행 파일, 명령줄)] - python 과 RPA exe 만. 관리자 권한이어야 관리자로 뜬 프로세스의 명령줄도 보인다.
     PowerShell 명령은 인코딩해서 넘긴다 (따옴표가 명령줄에서 깨지지 않게)."""
-    names = " or ".join(f"Name='{n}'" for n in ("python.exe", "pythonw.exe") + RPA_EXES)
+    import background            # 스탠드얼론 로컬 서버는 에이전트 사본(AGENT_EXE)으로 돈다 - 남은 서버를 찾게 (leftover_servers)
+    names = " or ".join(f"Name='{n}'" for n in ("python.exe", "pythonw.exe", background.AGENT_EXE) + RPA_EXES)
     script = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; ConvertTo-Json -Compress -InputObject @("
               f"Get-CimInstance Win32_Process -Filter \"{names}\" | Select-Object ProcessId,Name,ExecutablePath,CommandLine)")
     r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
@@ -290,14 +390,42 @@ def wait_released(running, wait=STOP_WAIT_SEC, sleep=time.sleep):
     return True
 
 
-def stop_agent(procs=None, run=run_quiet, running=None, wait=STOP_WAIT_SEC, sleep=time.sleep):
+SERVER_PY_RE = re.compile(r"""(^|[\\/\s"'])local_server\.py\b""", re.IGNORECASE)
+
+
+def leftover_servers(procs, program_dir):
+    """설치 폴더의 local_server.py 를 돌리는 프로세스 pid (스탠드얼론 로컬 서버). 다른 곳의 local_server.py 는 건드리지 않는다."""
+    ours = os.path.normcase(os.path.join(program_dir, "firebase", "agent", "local_server.py"))
+    return [pid for pid, _name, _exe, cmd in procs if SERVER_PY_RE.search(cmd) and ours in os.path.normcase(cmd)]
+
+
+def stop_agent(procs=None, run=run_quiet, running=None, wait=STOP_WAIT_SEC, sleep=time.sleep, listing=None, program_dir=None):
     """--stop (설치 파일이 판을 올리거나 지우기 전에 부른다). RPA 가 돌면 5 - 도는 exe 는 덮어쓸 수 없다.
-    작업을 끝내고 잠금이 풀리면 0, 안 풀리면 6 (작업 밖에서 띄운 에이전트 창)."""
+    작업을 끝내고 잠금이 풀리면 0, 안 풀리면 6 (작업 밖에서 띄운 에이전트 창).
+    스탠드얼론: 작업을 끝낸 뒤에도 남은 로컬 서버(설치 폴더의 local_server.py)를 끝낸다 - 도는 python\\*.exe 는 덮어쓸 수 없다.
+    끝내 남으면 6. listing·program_dir 는 시험용 (기본 list_processes·이 파일의 폴더)."""
     procs = list_processes() if procs is None else procs
     if rpa_running(procs):
         return EXIT_RPA_RUNNING
     end_task(run)
-    return 0 if wait_released(running or agent_running, wait, sleep) else EXIT_STOP_FAILED
+    if not wait_released(running or agent_running, wait, sleep):
+        return EXIT_STOP_FAILED
+    if not _standalone():
+        return 0
+    listing, program_dir = listing or list_processes, program_dir or HERE
+    until = time.monotonic() + wait
+    killed = set()
+    while True:
+        left = leftover_servers(listing(), program_dir)
+        if not left:
+            return 0
+        if time.monotonic() >= until:
+            return EXIT_STOP_FAILED
+        for pid in left:
+            if pid not in killed:
+                run(["taskkill", "/PID", str(pid), "/F"])
+                killed.add(pid)
+        sleep(0.5)
 
 
 def restart_agent(run=run_quiet, running=None, wait=STOP_WAIT_SEC, sleep=time.sleep):
@@ -449,15 +577,16 @@ def needs_agent_login(form, state):
             or (form["cid"], form["pc_id"]) != tuple(state["saved"]))
 
 
-def validate(form, state):
-    """칸 확인 (설계 4절 표). 사람에게 보일 문장 목록 - 비면 통과."""
+def validate(form, state, standalone=False):
+    """칸 확인 (설계 4절 표). 사람에게 보일 문장 목록 - 비면 통과. 스탠드얼론은 대시보드 연결 칸(업체코드·PC코드·에이전트
+    비밀번호)이 없다 - 업체는 라이선스가 정한다."""
     out = []
-    for key, label in (("cid", "업체코드"), ("pc_id", "PC코드")):
+    for key, label in (() if standalone else (("cid", "업체코드"), ("pc_id", "PC코드"))):
         if not form[key]:
             out.append(f"{label}를 입력하여 주십시오.")
         elif not KEY_RE.fullmatch(form[key]):
             out.append(f"{label}는 영어 소문자·숫자·밑줄(_)만 사용할 수 있습니다.")
-    if needs_agent_login(form, state) and not form["agent_pw"]:
+    if not standalone and needs_agent_login(form, state) and not form["agent_pw"]:
         why = {"none": "처음 설정이라", "bad": "저장된 비밀번호를 이 PC에서 읽을 수 없어",
                "refused": "에이전트 로그인이 거부되어 중단되었으므로"}.get(state["agent_pw"], "업체코드 또는 PC코드가 변경되어")
         out.append(f"{why} 에이전트 계정 비밀번호를 입력하여 주십시오.")
@@ -519,14 +648,23 @@ def warm_roots():
     background.warm_windows_roots()
 
 
-def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None, clear_presets=False):
+def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None, clear_presets=False, standalone=None):
     """저장 (설계 4절 '저장' 1~5). 한 일 문장 목록. 칸이 틀리거나 로그인이 안 되면 ValueError, 빈 틀이 없거나
     작업 등록·켜기가 안 되면 RuntimeError (둘 다 사람에게 보일 문장). 로그인이 안 되면 아무 파일도 쓰지 않는다.
-    clear_presets: 업체코드를 바꾸며 이전 업체 프리셋을 비운다 (stash_presets - 창이 물어서 정한다)."""
+    clear_presets: 업체코드를 바꾸며 이전 업체 프리셋을 비운다 (stash_presets - 창이 물어서 정한다).
+    스탠드얼론(standalone, None 이면 스스로 알아본다): 에이전트 로그인·인증서 채우기가 없고, 라이선스가 맞지 않거나 업체 웹
+    관리자 계정이 없으면 아무 파일도 쓰지 않고 ValueError. 그 뒤는 같다 (설정 쓰기 → 작업 등록 → 에이전트 켜기)."""
+    standalone = _standalone() if standalone is None else standalone
     _, state = load_state(paths)
-    problems = validate(form, state)
+    problems = validate(form, state, standalone=standalone)
     if problems:
         raise ValueError("\n".join(problems))
+    if standalone:
+        lic = license_state(paths)
+        if not lic["ok"]:
+            raise ValueError(lic["text"])
+        if not admin_exists(paths):
+            raise ValueError("업체 웹 관리자 계정을 만들어 주십시오.")
     base_path = paths["user_config"] if os.path.isfile(paths["user_config"]) else paths["template"]
     if state["broken"] and base_path == paths["user_config"]:   # 깨진 설정은 .broken 으로 남기고 빈 틀에서 새로 쓴다 (BugBuster L2)
         shutil.copyfile(base_path, base_path + ".broken")
@@ -534,7 +672,7 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
     if not os.path.isfile(base_path):
         raise RuntimeError(f"설정 기본 파일({TEMPLATE_NAME})이 없습니다. 설치 파일로 다시 설치하여 주십시오.")
     done = []
-    relogin = needs_agent_login(form, state)
+    relogin = not standalone and needs_agent_login(form, state)
     if relogin:
         warm_roots()
         login(paths["agent_config"], form["cid"], form["pc_id"], form["agent_pw"])
@@ -569,6 +707,14 @@ def configured(paths, updating=False):
     updating: 업데이트 도우미(--no-window)는 이 멈춤을 보지 않는다 - 창을 띄울 수 없어 finish_upgrade 를 건너뛰면 에이전트가 안 켜져 업데이트가
     되돌려진다 (2026-11-05 샌드박스. 멈춤 기록은 설정 창 저장 때만 지워져 그 뒤 살아난 PC 에도 남아 있을 수 있다)."""
     import secret
+    if _standalone():             # 스탠드얼론: 사용자 설정 + 맞는 라이선스 + 관리자 계정 (agent_config.json·멈춤 코드 3 은 없다)
+        if not os.path.isfile(paths["user_config"]):
+            return False
+        try:
+            st.read_user_config(paths["user_config"])
+        except Exception:
+            return False
+        return license_state(paths)["ok"] and admin_exists(paths)
     if not os.path.isfile(paths["user_config"]) or (not updating and (read_stop(paths.get("stop_file")) or {}).get("code") == 3):
         return False
     try:
@@ -761,6 +907,13 @@ ROWS = (
         ("printer", "프린터", "", "printer"),      # 안 골랐으면 DEFAULT_PRINTER, 자동일 때만 켜진다 (sync_printer)
     )),
 )
+
+
+def rows(standalone):
+    """창의 묶음. 스탠드얼론은 '대시보드 연결' 이 없다 (업체는 라이선스가 정한다). 일반은 ROWS 그대로."""
+    return tuple(r for r in ROWS if r[0] != "대시보드 연결") if standalone else ROWS
+
+
 # 셋째 칸(설명)은 칸 안 흐린 안내 - 빈 칸일 때만 보인다. 오른쪽 설명 열을 없애 창 폭을 줄였다 (2026-09-30 사용자)
 # 묶음 맨 위 한 줄과 묶음 아래 늘 보이는 주황 한 줄 (2026-09-30 사용자 문구)
 LEADS = {"대시보드 연결": "담당자로부터 받은 정보를 입력해주세요."}
@@ -770,6 +923,12 @@ PW_HINTS = {"none": "", "ok": "저장됨 - 바꿀 때만 입력", "bad": "다시
 ERPIA_MISSING = "ERPia 를 못 찾음 - [찾기]"
 DEFAULT_PRINTER = "(기본 프린터)"                 # 프린터 목록 맨 위. 저장은 빈 값 = 윈도우 기본 프린터
 MISSING_PRINTER = "이 PC에 없는 프린터입니다. 다시 선택하여 주십시오."
+# 스탠드얼론 칸 (계획 ③ Task 4)
+LICENSE_MISSING = ("라이선스 파일이 없습니다. 아래 PC 번호를 공급사에 보내 라이선스 파일(license.json)을 받은 뒤 "
+                   "[라이선스 파일 선택]을 눌러 주십시오.")
+ADMIN_NOTE = "업체 웹에 로그인할 관리자 계정입니다. 처음 로그인하면 비밀번호를 바꾸게 됩니다."
+ADMIN_RESET_DONE = "관리자 비밀번호를 다시 정하였습니다. 다음 로그인 때 새 비밀번호로 바꾸게 됩니다."
+WRAP_SA = "400p"                                   # 스탠드얼론 칸의 줄바꿈 - PC 번호 줄 때문에 창이 넓어 안내를 한 줄 더 길게
 WRAP_STATUS, WRAP_MSG = "230p", "330p"            # 긴 글이 창을 넓히지 않게 줄바꿈 (포인트라 화면 배율을 따른다)
 GRAY, RED, GREEN, AMBER, PLACEHOLDER = "#6b7280", "#dc2626", "#15803d", "#b45309", "#9ca3af"
 
@@ -825,22 +984,59 @@ class Dialogs:
         return self._f.askopenfilename(title=f"ERPia 프로그램({st.ERPIA_EXE_NAME})을 선택하여 주십시오.", initialdir=start,
                                        filetypes=[("ERPia 프로그램", st.ERPIA_EXE_NAME)], parent=self._p)
 
+    def license_file(self):
+        """스탠드얼론: 공급사에서 받은 라이선스 파일 고르기."""
+        return self._f.askopenfilename(title="공급사에서 받은 라이선스 파일(license.json)을 선택하여 주십시오.",
+                                       filetypes=[("라이선스 파일", "*.json")], parent=self._p)
+
+    def reset_admin(self, ids):
+        """스탠드얼론: 관리자 아이디·새 비밀번호·확인을 받는 작은 창. (아이디, 비밀번호, 확인) 또는 None (취소)."""
+        import tkinter as tk
+        from tkinter import ttk
+        top = tk.Toplevel(self._p)
+        top.title("관리자 비밀번호 다시 정하기")
+        top.transient(self._p)
+        top.resizable(False, False)
+        uid = tk.StringVar(master=top, value=ids[0] if ids else "")
+        pw, pw2 = tk.StringVar(master=top), tk.StringVar(master=top)
+        f = ttk.Frame(top, padding=14)
+        f.grid()
+        for i, (label, w) in enumerate((("관리자 아이디", ttk.Combobox(f, textvariable=uid, values=list(ids), state="readonly", width=31)),
+                                       ("새 비밀번호", ttk.Entry(f, textvariable=pw, show="•", width=33)),
+                                       ("새 비밀번호 확인", ttk.Entry(f, textvariable=pw2, show="•", width=33)))):
+            ttk.Label(f, text=label, width=16).grid(row=i, column=0, sticky="w", pady=2)
+            w.grid(row=i, column=1, sticky="w", pady=2)
+        out = []
+
+        def ok():
+            out.append((uid.get(), pw.get(), pw2.get()))
+            top.destroy()
+        b = ttk.Frame(f)
+        b.grid(row=3, column=0, columnspan=2, sticky="e", pady=(6, 0))
+        ttk.Button(b, text="취소", command=top.destroy).pack(side="right")
+        ttk.Button(b, text="확인", command=ok).pack(side="right", padx=(0, 6))
+        top.grab_set()
+        top.wait_window()
+        return out[0] if out else None
+
 
 class SettingsWindow:
     """설정 창 (설계 4절). 시험은 login·run·running·procs·printers·dialogs 를 가짜로 넣는다."""
 
     def __init__(self, root, paths, after_install=False, login=agent_login, run=run_quiet, running=None,
-                 procs=list_processes, printers=None, dialogs=None):
+                 procs=list_processes, printers=None, dialogs=None, standalone=None):
         import tkinter as tk
         from tkinter import font, ttk
         self.root, self.paths, self.after_install = root, paths, after_install
+        self.standalone = _standalone() if standalone is None else standalone     # 라이선스·관리자 계정 칸, 대시보드 연결 없음
+        groups = rows(self.standalone)
         self.login, self.run, self.running, self.procs = login, run, running or agent_running, procs
         self.dialogs = dialogs or Dialogs(root)
         self.saved, self.imported_from, self.busy_now, self._result = False, None, False, None
         self.printers = list_printers() if printers is None else list(printers)
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont"):
             font.nametofont(name).configure(family="Malgun Gothic", size=10)
-        root.title("오토파일럿 설정")
+        root.title("오토파일럿 설정 (시험용 빌드)" if self.standalone and _test_build() else "오토파일럿 설정")
         root.resizable(False, False)
         self.vars = {k: tk.StringVar(master=root) for k in FORM_KEYS}
         self.status, self.msg = tk.StringVar(master=root), tk.StringVar(master=root)
@@ -853,9 +1049,10 @@ class SettingsWindow:
         self.status_label.pack(side="left")
         self.import_btn = ttk.Button(top, text="기존 설정값 가져오기", command=self.on_import)
         self.import_btn.pack(side="right")
-        for n, (title, fields) in enumerate(ROWS):
+        base = 1 + (self._build_standalone(frame) if self.standalone else 0)
+        for n, (title, fields) in enumerate(groups):
             box = ttk.LabelFrame(frame, text=title, padding=(10, 2, 10, 4))
-            box.grid(row=1 + n, column=0, sticky="ew", pady=3)
+            box.grid(row=base + n, column=0, sticky="ew", pady=3)
             first = 0
             if title in LEADS:
                 ttk.Label(box, text=LEADS[title], foreground=GRAY).grid(row=0, column=0, columnspan=3, sticky="w",
@@ -890,9 +1087,9 @@ class SettingsWindow:
                                                                                          sticky="w", pady=(2, 0))
         self.vars["print_mode"].trace_add("write", self.sync_printer)
         self.msg_label = tk.Label(frame, textvariable=self.msg, fg=RED, wraplength=WRAP_MSG, justify="left", anchor="w")
-        self.msg_label.grid(row=1 + len(ROWS), column=0, sticky="ew", pady=(6, 0))
+        self.msg_label.grid(row=base + len(groups), column=0, sticky="ew", pady=(6, 0))
         bottom = ttk.Frame(frame)
-        bottom.grid(row=2 + len(ROWS), column=0, sticky="e", pady=(4, 0))
+        bottom.grid(row=base + 1 + len(groups), column=0, sticky="e", pady=(4, 0))
         self.close_btn = ttk.Button(bottom, text="닫기", command=self.on_close)
         self.close_btn.pack(side="right")
         self.save_btn = ttk.Button(bottom, text="저장", command=self.on_save)
@@ -908,6 +1105,122 @@ class SettingsWindow:
             self.busy(False)
         self.say(f"예기치 않은 문제가 발생하였습니다. ({exc_type.__name__}: {exc}) 자세한 내용: {path or '(기록하지 못함)'}")
 
+    # --- 스탠드얼론 칸 (계획 ③ Task 4) -------------------------------------
+    def _build_standalone(self, frame):
+        """맨 위 '라이선스' 칸과 '업체 웹 관리자 계정' 칸을 frame 의 1·2 줄에 만든다. 차지한 줄 수(2)를 돌려준다."""
+        import tkinter as tk
+        from tkinter import ttk
+        lic = ttk.LabelFrame(frame, text="라이선스", padding=(10, 2, 10, 4))
+        lic.grid(row=1, column=0, sticky="ew", pady=3)
+        self.lic_msg = tk.Label(lic, text="", wraplength=WRAP_SA, justify="left", anchor="w")
+        self.lic_msg.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
+        self.lic_fg = self.lic_msg.cget("fg")
+        self.lic_pc = ttk.Label(lic, text="")
+        self.lic_pc.grid(row=1, column=0, sticky="w", pady=2)
+        btns = ttk.Frame(lic)
+        btns.grid(row=1, column=1, sticky="e", padx=(8, 0))
+        self.copy_btn = ttk.Button(btns, text="PC 번호 복사", command=self.on_copy_pc)
+        self.copy_btn.grid(row=0, column=0, padx=(0, 4))
+        self.lic_btn = ttk.Button(btns, text="라이선스 파일 선택", command=self.on_license)
+        self.lic_btn.grid(row=0, column=1)
+        lic.columnconfigure(0, weight=1)
+        adm = ttk.LabelFrame(frame, text="업체 웹 관리자 계정", padding=(10, 2, 10, 4))
+        adm.grid(row=2, column=0, sticky="ew", pady=3)
+        self.admin_vars = {k: tk.StringVar(master=self.root) for k in ("id", "pw", "pw2")}
+        self.admin_new = ttk.Frame(adm)
+        ttk.Label(self.admin_new, text="아이디", width=21).grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Entry(self.admin_new, textvariable=self.admin_vars["id"], width=33).grid(row=0, column=1, sticky="w", pady=2)
+        ttk.Label(self.admin_new, text="비밀번호", width=21).grid(row=1, column=0, sticky="w", pady=2)
+        pws = ttk.Frame(self.admin_new)          # 비밀번호·확인을 한 줄에 - 창 높이 (768 높이 노트북에 들어가게)
+        pws.grid(row=1, column=1, sticky="w", pady=2)
+        ttk.Entry(pws, textvariable=self.admin_vars["pw"], width=14, show="•").pack(side="left")
+        ttk.Label(pws, text="확인").pack(side="left", padx=6)
+        ttk.Entry(pws, textvariable=self.admin_vars["pw2"], width=14, show="•").pack(side="left")
+        ttk.Label(self.admin_new, text=ADMIN_NOTE, foreground=GRAY, wraplength=WRAP_SA, justify="left").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.admin_new.columnconfigure(1, weight=1)   # 긴 안내 줄의 남는 폭을 입력 칸 쪽으로 - 이름 열이 아래 묶음과 같은 자리에
+        self.admin_have = ttk.Frame(adm)
+        self.admin_label = ttk.Label(self.admin_have, text="")
+        self.admin_label.grid(row=0, column=0, sticky="w")
+        self.admin_reset_btn = ttk.Button(self.admin_have, text="관리자 비밀번호 다시 정하기", command=self.on_reset_admin)
+        self.admin_reset_btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.admin_have.columnconfigure(0, weight=1)
+        for w in (self.admin_new, self.admin_have):
+            w.grid(row=0, column=0, sticky="ew")
+        adm.columnconfigure(0, weight=1)
+        return 2
+
+    def refresh_standalone(self):
+        """라이선스·관리자 계정 칸을 지금 파일대로 (처음·저장·라이선스 넣기·비밀번호 다시 정하기 뒤)."""
+        s = self.lic_state = license_state(self.paths)
+        if s["ok"]:
+            self.lic_msg.configure(text=f"업체 {s['company'] or '?'} · 발급일 {s['issued'] or '?'}", fg=self.lic_fg)
+            self.copy_btn.grid_remove()
+        else:
+            missing = s["text"].startswith("라이선스 파일이 없습니다")
+            self.lic_msg.configure(text=LICENSE_MISSING if missing else s["text"], fg=RED)
+            self.copy_btn.grid()
+        self.lic_pc.configure(text=f"PC 번호 {s['pc_id'] or '(읽지 못함)'}")
+        try:
+            admins = [a["id"] for a in _accounts(self.paths).list() if a["role"] == "admin" and not a["disabled"]]
+        except Exception:
+            admins = []
+        for v in self.admin_vars.values():
+            v.set("")
+        if admins:
+            self.admin_label.configure(text=f"관리자 계정: {', '.join(admins)}")
+            self.admin_new.grid_remove()
+            self.admin_have.grid()
+        else:
+            self.admin_have.grid_remove()
+            self.admin_new.grid()
+
+    def admin_form(self):
+        """새 관리자 칸 값 (아이디, 비밀번호, 확인) - 관리자가 이미 있거나 셋 다 비었으면 None."""
+        if not self.standalone:
+            return None
+        got = (self.admin_vars["id"].get().strip(), self.admin_vars["pw"].get(), self.admin_vars["pw2"].get())
+        return got if any(got) and not admin_exists(self.paths) else None
+
+    def on_copy_pc(self):
+        pc = self.lic_state.get("pc_id") or ""
+        if not pc:
+            return self.say("PC 번호를 읽지 못했습니다. 공급사에 문의하여 주십시오.")
+        self.root.clipboard_clear()
+        self.root.clipboard_append(pc)
+        self.say("PC 번호를 복사하였습니다. 이 번호를 공급사에 보내 주십시오.", GREEN)
+
+    def on_license(self):
+        import license_check
+        path = self.dialogs.license_file()
+        if not path:
+            return
+        try:
+            install_license(path, self.paths)
+        except license_check.LicenseError as e:
+            self.refresh_standalone()
+            return self.say(str(e))
+        except OSError as e:
+            return self.say(f"라이선스 파일을 넣지 못했습니다. ({e.strerror or e})")
+        self.refresh_standalone()
+        self.say("라이선스 파일을 넣었습니다.", GREEN)
+
+    def on_reset_admin(self):
+        try:
+            ids = [a["id"] for a in _accounts(self.paths).list() if a["role"] == "admin"]
+        except Exception as e:
+            return self.say(f"계정 파일을 읽지 못했습니다. ({type(e).__name__})")
+        got = self.dialogs.reset_admin(ids)
+        if not got:
+            return
+        try:
+            reset_admin_password(self.paths, *got)
+        except (ValueError, PermissionError) as e:
+            return self.say(str(e))
+        self.refresh_standalone()
+        self.say(ADMIN_RESET_DONE, GREEN)
+        self.dialogs.info(ADMIN_RESET_DONE)
+
     # --- 채우기 -----------------------------------------------------------
     def reload(self):
         """파일에서 칸을 다시 채운다 (처음, 가져오기·저장 뒤). 비밀번호 칸은 비운다."""
@@ -916,8 +1229,10 @@ class SettingsWindow:
             self.vars[k].set(form[k])
         for key, (_, hint) in self.hints.items():
             self.set_hint(key, hint)
-        for key in PASSWORD_KEYS:
+        for key in (k for k in PASSWORD_KEYS if k in self.hints):     # 스탠드얼론은 에이전트 계정 칸이 없다
             self.set_hint(key, PW_HINTS[self.state[key]], AMBER if self.state[key] in ("bad", "refused") else PLACEHOLDER)
+        if self.standalone:
+            self.refresh_standalone()
         if self.state["erpia_missing"]:
             self.set_hint("erpia_path", ERPIA_MISSING, AMBER)
         self.printer_missing = bool(form["printer"]) and form["printer"] not in self.printers
@@ -981,7 +1296,7 @@ class SettingsWindow:
         for b in (self.save_btn, self.close_btn, self.import_btn):
             b.state(["disabled"] if on else ["!disabled"])
         if on:
-            self.say("확인하는 중입니다… (에이전트 계정 로그인·자동 시작 등록)", GRAY)
+            self.say("확인하는 중입니다… (자동 시작 등록)" if self.standalone else "확인하는 중입니다… (에이전트 계정 로그인·자동 시작 등록)", GRAY)
 
     def form(self):
         out = {k: self.vars[k].get() for k in FORM_KEYS}
@@ -1036,16 +1351,19 @@ class SettingsWindow:
                                        f"{n}개가 저장되어 있습니다.\n\n프리셋을 초기화하시겠습니까?\n\n"
                                        "[예] 이전 프리셋과 쇼핑몰 계정 정보를 별도 폴더에 보관한 뒤 초기화합니다.\n"
                                        "[아니요] 이전 프리셋을 그대로 사용합니다.")
+        admin = self.admin_form()           # 스탠드얼론: 관리자 칸이 차 있으면 저장 전에 계정부터 만든다
         self.busy(True)
         self._result = None
-        threading.Thread(target=self._save_worker, args=(form, clear), daemon=True).start()
+        threading.Thread(target=self._save_worker, args=(form, clear, admin), daemon=True).start()
         self.root.after(100, self._poll)
 
-    def _save_worker(self, form, clear=False):
+    def _save_worker(self, form, clear=False, admin=None):
         """저장은 로그인(인터넷)·작업 등록이 있어 따로 돌린다 - 창이 굳지 않게. 창은 _poll 이 만진다."""
         try:
+            if admin:
+                create_admin(self.paths, *admin)
             self._result = ("ok", save(form, self.paths, login=self.login, run=self.run, running=self.running,
-                                       clear_presets=clear))
+                                       clear_presets=clear, standalone=self.standalone))
         except (ValueError, RuntimeError) as e:
             self._result = ("error", str(e))
         except Exception as e:
@@ -1058,6 +1376,8 @@ class SettingsWindow:
         kind, value = self._result
         self.busy(False)
         if kind == "error":
+            if self.standalone and admin_exists(self.paths):
+                self.refresh_standalone()       # 계정은 만들어졌고 다른 칸이 틀렸다 - 관리자 칸을 '관리자 계정: …' 으로
             self.say(value)
             return
         self.saved = True
@@ -1204,6 +1524,10 @@ def _main(args):
     if after and configured(paths, updating=quiet):
         try:
             lock_data_acl()                # 자동 업데이트로 올라온 PC 도 설정 폴더를 관리자 전용으로 (C-03)
+            if _standalone():              # 위 /reset /T 가 지운 열쇠 파일 권한을 다시 (로컬 서버도 켤 때마다 한다)
+                import local_server
+                import local_store
+                local_server.lock_key_files(local_store.keys_dir())
         except Exception as e:
             crash_log(e)
         try:

@@ -18,8 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.stdout.reconfigure(encoding="utf-8")
-BATS = [ROOT / "Run_All.bat", ROOT / "firebase" / "agent" / "에이전트_시작.bat"]
-GUIDES = [ROOT / "release" / "배포안내.txt", ROOT / "release" / "클라우드_안내.txt"]
+BATS = [ROOT / "Run_All.bat", ROOT / "firebase" / "agent" / "에이전트_시작.bat", ROOT / "release" / "PC번호_확인.bat"]
+GUIDES = [ROOT / "release" / "배포안내.txt", ROOT / "release" / "클라우드_안내.txt", ROOT / "release" / "배포안내_스탠드얼론.txt"]
 
 fails = []
 _no = [0]
@@ -94,6 +94,24 @@ for rc, actor, routine in ((100, 0, 0), (101, 0, 1), (102, 1, 0), (103, 1, 1)):
           and "2/2  PROCESS 오토파일럿은 수집과 함께 돌았습니다." in text, text[-300:])
     check(f"{rc}: 전체 실행 표시가 프리페어에 넘어간다", "ALLRUN=1" in text, text[-300:])
     check(f"{rc}: 명령 창 오류가 없다", errs.strip() == "", errs[-300:])
+
+print("=== 3-3. PC번호_확인.bat (스탠드얼론) 을 클립보드 줄만 빼고 실제 실행 - 읽기만 한다 ===")
+sys.path.insert(0, str(ROOT))
+import license_check  # noqa: E402
+
+pc_bat = (ROOT / "release" / "PC번호_확인.bat").read_bytes()
+check("PC번호_확인.bat 에 괄호 블록이 없다 (블록 안 echo 의 괄호 하나로 통째 죽는다)",
+      not any(l.rstrip().endswith(b"(") or l.strip() == b")" for l in pc_bat.split(b"\r\n")))
+tmp = tempfile.mkdtemp(prefix="rpa_bat_")
+Path(tmp, "pc.bat").write_bytes(b"\r\n".join(l for l in pc_bat.split(b"\r\n") if b"| clip" not in l))
+r = subprocess.run(["cmd.exe", "/c", os.path.join(tmp, "pc.bat")], cwd=tmp, stdin=subprocess.DEVNULL,
+                   capture_output=True, creationflags=subprocess.CREATE_NEW_CONSOLE, timeout=60)
+shutil.rmtree(tmp, ignore_errors=True)
+text, errs = r.stdout.decode("cp949", "replace"), r.stderr.decode("cp949", "replace")
+m = [l.split(":", 1)[1].strip() for l in text.splitlines() if l.startswith("이 PC 의 번호:")]
+check("'이 PC 의 번호:' 뒤 값이 license_check.machine_guid() 와 같다 (대소문자 무시)",
+      r.returncode == 0 and len(m) == 1 and m[0].lower() == license_check.machine_guid().lower(), text[-300:])
+check("PC번호_확인.bat 명령 창 오류가 없다", errs.strip() == "", errs[-300:])
 
 print("=== 4. 설치 파일 스크립트는 BOM 있는 UTF-8 ===")
 for s in (ROOT / "release" / "installer.iss", ROOT / "tools" / "sandbox_inner.ps1"):

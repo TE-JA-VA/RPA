@@ -17,7 +17,10 @@ import unicodedata
 import urllib.parse
 import zipfile
 
-import ai_rescue as ai
+try:
+    import ai_rescue as ai
+except ImportError:         # 스탠드얼론에는 AI 어시스트가 없다 (ai_rescue 조각을 싣지 않는다) - 그때 재생기는 AI 를 부르지 않는다
+    ai = None
 import rpa_status
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
