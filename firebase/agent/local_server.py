@@ -372,6 +372,8 @@ class Runs:
 # 열쇠는 주고받지 않는다 - 요청마다 열쇠로 만든 서명(local_store.request_mac)을 확인하고, 응답·구독 이벤트에도 서명을 붙인다.
 # 그래서 포트를 먼저 잡은 다른 프로그램은 열쇠를 얻지 못하고, 에이전트는 그 프로그램의 답을 믿지 않는다 (검토 1번).
 # 검사는 지금 RTDB 규칙과 같은 뜻 - 에이전트는 자기 PC 자리만 쓰고, 명령은 만들지 못하고 상태만 옮긴다.
+# 브라우저 쪽(/api/*·웹 파일)은 local_web.py 가 맡는다 (계획 ② Task 2) - 서명이 아니라 로그인 세션 토큰으로 확인하고 응답에 서명이 없다.
+# Handler._route 가 서명 확인 앞에서 갈라 넘긴다. 위의 /db·/fs·/fs-sum 은 그대로 서명만 받는다 (세션 토큰은 통하지 않는다).
 
 APP = "rpa"
 MAX_BODY = 4 * 1024 * 1024
@@ -546,6 +548,18 @@ def otp_request_ok(body, lic):
     return all(isinstance(k, str) and k.isdigit() and len(k) <= 20 and v is True for k, v in senders.items())
 
 
+def local_host(headers, port):
+    """Host 머리글이 이 PC 주소·이 포트인가 - 다른 이름으로 이 PC 를 가리킨 요청(DNS 바꿔치기)을 거른다.
+    에이전트 창구(Handler._role)와 웹 창구(local_web.Web.handle)가 같이 쓴다."""
+    host = (headers.get("Host") or "").rsplit(":", 1)
+    return host[0] in LOCAL_HOSTS and (len(host) == 1 or host[1] == str(port))
+
+
+def _agent_path(path):
+    """에이전트 창구의 주소인가 (/db·/fs·/fs-sum) - 여기는 늘 요청 서명을 본다 (웹 창구로 넘기지 않는다)."""
+    return path in ("/db", "/fs", "/fs-sum") or path.startswith(("/db/", "/fs/"))
+
+
 class LocalServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False      # 윈도우에서 켜면 같은 포트에 두 번째 서버가 조용히 뜬다 (rpa_dashboard.DashboardServer 와 같다)
@@ -634,8 +648,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _role(self, method, digest):
         """Host 와 요청 서명을 보고 'agent'·'relay'. 아니면 (서명 없는) 응답을 보내고 _Stop."""
         srv = self.server
-        host = (self.headers.get("Host") or "").rsplit(":", 1)
-        if host[0] not in LOCAL_HOSTS or (len(host) == 2 and host[1] != str(srv.server_port)):
+        if not local_host(self.headers, srv.server_port):
             self._reply(403, DENIED)                 # 다른 이름으로 이 PC 를 가리킨 요청 (DNS 바꿔치기)
             raise _Stop()
         role = self.headers.get(local_store.H_ROLE) or ""
@@ -679,6 +692,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             url = urllib.parse.urlsplit(self.path)
             query = dict(urllib.parse.parse_qsl(url.query))
             raw, digest = self._read()
+            web = getattr(self.server, "web", None)
+            if web is not None and not _agent_path(url.path) and (url.path.startswith("/api/") or method == "GET"):
+                # 브라우저 창구 (/api/*·웹 파일) - 세션 토큰으로 확인하고 응답에 서명을 붙이지 않는다 (_auth 는 None 그대로).
+                # Host 검사는 local_web 이 같은 local_host 로 한다. 처리하지 않은 것(False)만 아래 서명 확인으로 간다
+                if web.handle(self, method, url.path, query, raw):
+                    return
             role = self._role(method, digest)
             if url.path.startswith("/db/") and url.path.endswith(".json"):
                 return self._db(method, role, self._parts(url.path[4:-5]), query, raw)
@@ -840,12 +859,14 @@ def _range(children, order_by, end_at, limit):
     return {k: v for _, k, v in rows} or None
 
 
-def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None):
-    """로컬 서버를 만든다 (serve_forever 는 부르는 쪽이). 이 PC 주소에만 묶는다 - 포트가 쓰이는 중이면 OSError."""
+def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None, web=None):
+    """로컬 서버를 만든다 (serve_forever 는 부르는 쪽이). 이 PC 주소에만 묶는다 - 포트가 쓰이는 중이면 OSError.
+    web: 브라우저 창구 (local_web.Web). 없으면 에이전트 창구만 연다 (/api·웹 파일은 서명 없는 요청으로 거절된다)."""
     if host not in LOCAL_HOSTS:
         raise ValueError("로컬 서버는 이 PC(127.0.0.1)에만 엽니다.")
     srv = LocalServer(("127.0.0.1", port), Handler, bind_and_activate=False)
     srv.store, srv.runs, srv.lic, srv.keys = store, runs, lic, tuple(keys)
+    srv.web = web
     srv.folder = folder or os.path.dirname(store.path or "") or "."
     srv.stopping = threading.Event()
     srv.conn_lock, srv.conns, srv.nonces = threading.Lock(), 0, {}
@@ -875,8 +896,13 @@ def main():
         port = int(st.dev_env("RPA_LOCAL_PORT") or PORT)
     except ValueError:
         port = PORT
+    sys.modules.setdefault("local_server", sys.modules[__name__])     # `python local_server.py` 로 켜면 이 모듈은 __main__ - local_web 이 같은 것을 쓰게 (두 벌로 불러오면 Refused 등이 서로 다른 클래스가 된다)
+    import local_web
+    web = local_web.Web(store, runs, lic, folder, local_web.web_dir())
+    if not os.path.isdir(web.web_dir):
+        log(folder, f"웹 파일 폴더가 없습니다 - 화면을 내주지 못합니다. ({web.web_dir})")
     try:
-        srv = make_server(store, runs, lic, keys, port=port, folder=folder)
+        srv = make_server(store, runs, lic, keys, port=port, folder=folder, web=web)
     except OSError as e:
         log(folder, f"로컬 서버를 열지 못했습니다 - 포트 {port} 을(를) 다른 프로그램이 쓰고 있습니다. ({type(e).__name__})")
         return 3

@@ -108,6 +108,13 @@
   - 본문은 64KB 까지 (`/api`).
   - 로그인 성공·실패·잠금, 계정 바꿈은 `local_server.log` 에 아이디만 남긴다 (비밀번호·토큰 없음).
 
+계획 ① 검토(2026-11-23) 뒤 바뀐 것 - 이 작업이 맞춰야 한다 (`local_server.py` 를 읽고 시작):
+- `/db`·`/fs` 는 이제 열쇠를 보내지 않고 요청 서명으로 확인한다 (`Handler._route` 가 본문을 읽고 `_role(method, digest)` 로 서명을 본 뒤 길을 고른다, 응답에도 서명). `/api/*` 와 웹 파일은 **서명 확인 앞에서** 갈라 `local_web` 로 넘긴다 - 세션 토큰(브라우저)과 서명(에이전트)은 서로의 창구에서 통하지 않는다. Host 검사·본문 읽기(`_read`)·연결 상한·읽기 15초 제한은 같이 쓴다.
+- `Store.put/patch/delete(..., guard=)` - 잠금 안에서 확인하고 쓴다 (`Refused`). 웹의 명령 만들기는 `guard=lambda get: get(path) is None` 로 (같은 키를 덮지 않게).
+- 현황(`apps/rpa/live`)은 파일에 남지 않는다 - 서버를 다시 켠 직후 `live` 가 비어 있을 수 있다 (`event: live` data = null). 화면은 그때 '연결 끊김' 모양이면 된다.
+- 주소 조각은 `Handler._parts` 처럼 풀었을 때 `/`·`\` 가 있으면 거절한다 (`%2F`).
+- `/api/stream` 의 구독도 `q.overflow` 를 보고 끊는다.
+
 - [ ] **Step 1: 실패하는 시험** `tests/test_local_web_api.py` - 임시 폴더에 서버를 띄우고(`make_server(..., port=0)`), `Accounts.set("boss", "pw-12345678", "admin")`·`set("staff", …, "viewer")` 뒤 urllib 로. 넣을 검사 (각각 이름 붙은 check):
   - 로그인: 맞음 → 토큰·`session.role == "admin"`; 틀림 401 `auth/invalid-credential`; 없는 아이디도 401 같은 code; 대문자 아이디 `BOSS` 도 로그인; 중지 계정 403.
   - 잠금 (Review Focus 2): 가짜 시계로 5번 틀린 뒤 맞는 비밀번호 429, 61초 뒤 로그인, 성공하면 실패 수가 0.
