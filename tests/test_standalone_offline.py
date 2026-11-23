@@ -24,9 +24,30 @@ import zipfile
 
 sys.stdout.reconfigure(encoding="utf-8")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BLOCKED = ("googleapis.com", "gstatic.com", "firebaseio.com", "firebasedatabase.app", "firebaseapp.com", ".web.app", "anthropic",
-           "jsdelivr", "rpa-test-f02e0", "AIzaSy")
 LOCAL = {"127.0.0.1", "localhost"}
+
+
+def server_words():
+    """일반 버전 server_info.py 의 실제 값 - 프로젝트 이름·공개 키·주소의 호스트 (검토 2026-11-23: 회사 서버로 옮겨도 그물에 걸리게).
+    모듈로 불러오지 않는다 (runpy - sys.modules 에 남지 않아 하위 프로세스가 빈 server_info 를 끼우는 데 방해되지 않는다)."""
+    import runpy
+    import urllib.parse
+    vals = runpy.run_path(os.path.join(ROOT, "server_info.py"))
+    out = []
+    for name, v in vals.items():
+        if name.startswith("_"):
+            continue
+        for item in (v if isinstance(v, (tuple, list)) else (v,)):
+            if not isinstance(item, str) or not item:
+                continue
+            host = urllib.parse.urlsplit(item).hostname if "://" in item else item
+            if host and host not in out:
+                out.append(host)
+    return tuple(out)
+
+
+BLOCKED = ("googleapis.com", "gstatic.com", "firebaseio.com", "firebasedatabase.app", "firebaseapp.com", ".web.app", "anthropic",
+           "jsdelivr", "rpa-test-f02e0", "AIzaSy") + server_words()
 
 
 def find_blocked(materials):
@@ -239,6 +260,10 @@ def main():
     import server_info
 
     print("① 실리는 우리 코드·웹 파일에 바깥 주소 글자가 없다")
+    words = server_words()
+    check("BLOCKED 에 일반 server_info 의 실제 값(프로젝트·공개 키·주소의 호스트)이 모두 든다 (회사 서버로 옮겨도 잡힌다)",
+          words and set(words) <= set(BLOCKED) and {"identitytoolkit.googleapis.com", server_info.PROJECT_ID} <= set(words),
+          str(sorted(set(words) - set(BLOCKED))))
     mats = br.standalone_materials()
     rels = {r for r, _ in mats}
     hits = find_blocked(mats)

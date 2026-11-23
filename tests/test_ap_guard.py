@@ -126,8 +126,10 @@ try:
             f.write(update_sign.sign(secret, data).hex() + "\n")
     sign()
     real_loose = ap_guard.loose_sources
+    import server_info  # noqa: E402
+    # 스탠드얼론 설치본의 server_info 조각은 빈 값 사본이다 (tools/build_release.blank_server_info)
     with patched(st, program_dir=lambda: P), patched(license_check, machine_guid=lambda: "pc-1"), \
-            patched(ap_guard, loose_sources=lambda root, modules=None: real_loose(root, modules={})):
+            patched(ap_guard, loose_sources=lambda root, modules=None: real_loose(root, modules={})), patched(server_info, AUTH_HOST=""):
         os.environ["RPA_EDITION"] = "cloud"           # 설치본은 환경 변수가 아니라 프로그램 폴더의 edition.json 을 본다
         check("설치본 흉내가 맞다 (shipped·스탠드얼론·RPA_PROGRAMDATA 따름)",
               st.shipped() and edition.is_standalone() and license_check.license_path() == LIC)
@@ -164,7 +166,104 @@ try:
         with open(os.path.join(P, "app", "run_routine.cp314-win_amd64.pyd"), "wb") as f:
             f.write(b"pyd")
         check("다시 맞으면 None", ap_guard.startup_problem() is None)
+        # 검토 2026-11-23 I-1: edition.json 하나만 지우면 일반 버전으로 보여 라이선스·복사 막기를 모두 건너뛰었다 (fail-open)
+        ed_path = os.path.join(P, "edition.json")
+        os.remove(ed_path)
+        p = ap_guard.startup_problem()
+        check("설치본에서 edition.json 을 지워도 스탠드얼론으로 보고 막는다 (그 이름이 든 글)",
+              edition.is_standalone() and (p or "").startswith("프로그램 파일이 설치된 버전과 달라 실행하지 않습니다.") and "edition.json" in (p or ""), p)
+        put_license(dict(BODY, pc_id="pc-9"))
+        p = ap_guard.startup_problem()
+        check("… 라이선스도 본다 (다른 PC 라이선스면 그 글)", "이 PC 의 라이선스가 아닙니다" in (p or ""), p)
+        put_license()
+        with open(ed_path, "w", encoding="utf-8") as f:
+            f.write('{"edition": "cloud"}')
+        p = ap_guard.startup_problem()
+        check("edition.json 을 cloud 로 바꿔도 스탠드얼론으로 보고 막는다", edition.is_standalone() and bool(p), p)
+        with open(ed_path, "wb") as f:
+            f.write(files["edition.json"])
+        with patched(server_info, AUTH_HOST="identitytoolkit.googleapis.com"):
+            p = ap_guard.startup_problem()
+            check("server_info 조각을 일반 버전 것으로 바꿔 끼워도 (edition.json 은 스탠드얼론) 막는다",
+                  edition.is_standalone() and "server_info" in (p or ""), p)
+        check("다시 맞으면 None (edition.json·빈 server_info)", ap_guard.startup_problem() is None, ap_guard.startup_problem())
         os.environ["RPA_EDITION"] = "standalone"
+
+    print("일반 버전 설치본 흉내 (edition.json 없음·목록에도 없음·서명 파일 없음·주소가 찬 server_info)")
+    C = os.path.join(TMP, "cloud_prog")
+    os.makedirs(os.path.join(C, "app"))
+    c_files = {"rpa_dashboard.py": b"print('dash')\n", "app/run_routine.cp314-win_amd64.pyd": b"pyd"}
+    for rel, data in c_files.items():
+        with open(os.path.join(C, *rel.split("/")), "wb") as f:
+            f.write(data)
+    with open(os.path.join(C, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump({"format": st.MANIFEST_FORMAT, "version": "2026.11.24-1",
+                   "files": {rel: {"sha256": hashlib.sha256(d).hexdigest(), "size": len(d)} for rel, d in c_files.items()}}, f)
+    os.environ["RPA_EDITION"] = "standalone"          # 설치본은 환경 변수를 따르지 않는다
+    calls = []
+    with patched(st, program_dir=lambda: C), patched(license_check, load=lambda *a, **k: calls.append(1)):
+        check("설치본 흉내 (shipped)", st.shipped())
+        check("일반 버전 설치본은 그대로 cloud·startup_problem None·라이선스를 읽지 않는다",
+              edition.edition() == "cloud" and ap_guard.startup_problem() is None and not calls, f"{edition.edition()} {calls}")
+        with patched(server_info, AUTH_HOST=""):
+            check("빈 server_info 조각이면 edition.json·목록이 없어도 스탠드얼론 (컴파일 조각이 정한다)", edition.is_standalone())
+        open(os.path.join(C, "manifest.sig"), "w").close()
+        check("목록 서명 파일(manifest.sig, 스탠드얼론만 싣는다)이 있으면 스탠드얼론", edition.is_standalone())
+        os.remove(os.path.join(C, "manifest.sig"))
+        check("지우면 다시 cloud", edition.edition() == "cloud")
+        saved = server_info.AUTH_HOST
+        del server_info.AUTH_HOST                     # 옛 일반 버전 조각 (AUTH_HOST 칸이 생기기 전) - 업데이트가 일부만 된 PC
+        try:
+            check("AUTH_HOST 칸이 없는 옛 일반 server_info 는 cloud (스탠드얼론으로 잘못 보고 막지 않는다)",
+                  edition.edition() == "cloud" and ap_guard.startup_problem() is None, edition.edition())
+        finally:
+            server_info.AUTH_HOST = saved
+        with patched(server_info, PROJECT_ID=""):
+            check("PROJECT_ID 가 빈 조각도 스탠드얼론", edition.is_standalone())
+    os.environ["RPA_EDITION"] = "standalone"
+
+    print("업무 주 모듈을 불러올 때의 가드 (python.exe -c 로 안쪽 함수를 직접 부르는 길)")
+    import ast  # noqa: E402
+    for mod in ("run_routine", "web_runner", "rpa_observer"):
+        with open(os.path.join(ROOT, mod + ".py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        first_def = next(i for i, n in enumerate(tree.body) if isinstance(n, (ast.FunctionDef, ast.ClassDef)))
+        calls_at = [i for i, n in enumerate(tree.body) if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+                    and ast.unparse(n.value.func) == "ap_guard.import_guard"]
+        check(f"{mod}.py 는 함수를 만들기 전 맨 위에서 ap_guard.import_guard() 를 부른다", bool(calls_at) and calls_at[0] < first_def, str(calls_at))
+    os.remove(LIC)
+    with patched(st, program_dir=lambda: P), patched(license_check, machine_guid=lambda: "pc-1"), \
+            patched(ap_guard, loose_sources=lambda root, modules=None: real_loose(root, modules={})), patched(server_info, AUTH_HOST=""):
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                ap_guard.import_guard()
+            code = None
+        except SystemExit as e:
+            code = e.code
+        check("설치본·라이선스 없음·시작 파일이 아닌 곳(python.exe)에서 불러오면 SystemExit(2), 까닭은 stderr",
+              code == ap_guard.EXIT_BLOCKED and "라이선스 파일이 없습니다" in err.getvalue(), f"{code} {err.getvalue()!r}")
+        with patched(sys, executable=os.path.join(P, "ERPia_RPA.exe")):
+            try:
+                ap_guard.import_guard()
+                code = None
+            except SystemExit as e:
+                code = e.code
+        check("시작 파일(프로그램 폴더의 ERPia_RPA.exe)로 켤 때는 건너뛴다 (main 이 확인하고 현황·알림 창으로 알린다)", code is None, code)
+    with patched(st, program_dir=lambda: C):
+        try:
+            ap_guard.import_guard()
+            code = None
+        except SystemExit as e:
+            code = e.code
+    check("일반 버전 설치본에서는 아무것도 하지 않는다", code is None, code)
+    try:
+        ap_guard.import_guard()
+        code = None
+    except SystemExit as e:
+        code = e.code
+    check("소스로 돌 때(시험·개발 PC)는 아무것도 하지 않는다 (라이선스가 없어도)", code is None, code)
+    put_license()
     fake_py = types.SimpleNamespace(__file__=os.path.join(TMP, "x", "license_check.py"))
     fake_pyd = types.SimpleNamespace(__file__=os.path.join(P, "app", "license_check.cp314-win_amd64.pyd"))
     fake_nuitka = types.SimpleNamespace(__file__=os.path.join(P, "app", "update_sign.py"), __compiled__=object())

@@ -194,6 +194,7 @@ STANDALONE_FORBIDDEN = ["ai_rescue*", "update_helper.py", "firebase-config.js", 
                         "*signing_key*", "*.testkey.txt"]
 EDITION_FILE = "edition.json"                    # edition.FILE_NAME
 SIG_FILE = "manifest.sig"                        # rpa_update.SHIPPED_SIG_NAME - 버전 목록 서명 (스탠드얼론만, 목록에는 넣지 않는다)
+NO_AI_LINE = "AI 어시스트: 이 버전에는 없습니다"   # ACTOR --check 가 ai_rescue 가 없을 때 찍는 줄 (web_runner.cmd_check) - 일반 버전 smoke_check 는 문제로 본다
 
 
 def venv_root():
@@ -572,6 +573,11 @@ def verify_zip(zip_path, man, program, others, edition="cloud"):
                 problems.append(f"들어가면 안 되는 파일: {rel}")
         extra = ours - set(program) - set(others) - {st.MANIFEST_NAME} - ({SIG_FILE} if edition != "cloud" else set())
         problems += [f"모은 목록에 없는 파일: {rel}" for rel in sorted(extra)]
+        # 일반 버전 조각 방식은 AI 어시스트 조각을 꼭 싣는다 - 빠지면 web_runner 가 ImportError 를 '이 버전에는 없다' 로 보고
+        # 말없이 AI 를 끈다 (검토 2026-11-23). 옛 방식(exe 하나)은 smoke_check 가 --check 출력으로 본다
+        if edition == "cloud" and "app/_start.py" in inside and not any(
+                rel.startswith("app/") and rel[4:].split(".")[0] == "ai_rescue" and rel.lower().endswith(".pyd") for rel in inside):
+            problems.append("없음: app/ai_rescue 조각 (일반 버전은 AI 어시스트를 싣는다)")
         if "RPA_UserConfig.json" in inside:
             problems += template_problems(json.loads(z.read(f"{top}/RPA_UserConfig.json").decode("utf-8-sig")))
         else:
@@ -618,6 +624,8 @@ def smoke_check(zip_path, timeout=180, edition="cloud"):
                     problems.append(f"{exe} --check 가 브라우저를 띄우지 못했습니다: {out[-300:].decode('utf-8', 'replace')}")
                 elif edition != "cloud" and not found_marker(out, "라이선스:"):
                     problems.append(f"{exe} --check 에 라이선스 줄이 없습니다: {out[-300:].decode('utf-8', 'replace')}")
+                elif edition == "cloud" and exe == "Prepare_RPA.exe" and found_marker(out, NO_AI_LINE):
+                    problems.append(f"{exe} --check: 일반 버전인데 AI 어시스트(ai_rescue)가 실리지 않았습니다")
             except subprocess.TimeoutExpired:
                 problems.append(f"{exe} --check 가 {timeout}초 안에 끝나지 않았습니다")
             except OSError as e:   # 보안 프로그램이 격리·차단했거나 실행 파일이 깨짐 - 오류 추적 대신 판정으로 끝낸다

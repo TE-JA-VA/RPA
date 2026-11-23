@@ -45,6 +45,7 @@ PHONES_NAME = "phones.json"
 PHONES_MAX = 20
 SENDERS_MAX = 20
 CODE_PUTS_MAX = 5                    # 같은 요청에 번호를 쓸 수 있는 횟수
+SMS_EARLY_MS = 30000                 # 요청이 열린 시각보다 이만큼 넘게 이른 문자는 받지 않는다 (지난 문자의 번호, 시계 오차는 이 안)
 SWEEP_SEC = 5
 NAME_MAX = 40
 H_PHONE = "X-AP-Phone"
@@ -400,11 +401,15 @@ class Desk:
                 and isinstance(sender, str) and SENDER_RE.fullmatch(sender) is not None
                 and isinstance(sms_at, int) and not isinstance(sms_at, bool) and sms_at >= 0)
 
-    def submit(self, phone_id, body):
-        """휴대폰이 보낸 번호 → (상태, 오류 코드|None). 본문은 정확히 {req_id, code, sender, sms_at} - 칸이 더 있으면(문자 본문 등) 거절."""
+    def submit(self, phone_id, body, sent_ms=None):
+        """휴대폰이 보낸 번호 → (상태, 오류 코드|None). 본문은 정확히 {req_id, code, sender, sms_at} - 칸이 더 있으면(문자 본문 등) 거절.
+        요청이 열린 시각보다 SMS_EARLY_MS 넘게 이른 문자(지난 문자)는 409 old_sms (검토 2026-11-23, 약속 7절).
+        sent_ms = 그 요청의 X-AP-Time (휴대폰 시계) - 있으면 문자 시각을 '보낸 때보다 얼마 전' 으로 바꿔 서버 시계로 견준다
+        (닫힌 망의 PC·휴대폰 시계가 틀려도 같은 시계끼리 뺀다)."""
         if not self._well_formed(body):
             return 400, "bad_request"
         now_ms = _now_ms(self._clock)
+        sms_ms = body["sms_at"] if sent_ms is None else now_ms - max(0, int(sent_ms) - body["sms_at"])
         why = []
         key = (phone_id, body["req_id"])
 
@@ -416,6 +421,8 @@ class Desk:
                 why.append((409, "req_mismatch"))
             elif body["sender"] not in (req.get("senders") or {}):
                 why.append((403, "sender_not_allowed"))
+            elif sms_ms < req["created_at"] - SMS_EARLY_MS:
+                why.append((409, "old_sms"))
             else:
                 with self._lock:
                     n = self._puts.get(key, 0)
@@ -791,7 +798,7 @@ class PhoneHandler:
             data = json.loads(body.decode("utf-8")) if body else None
         except (ValueError, UnicodeDecodeError):
             data = None
-        status, err = self.service.desk.submit(phone_id, data)
+        status, err = self.service.desk.submit(phone_id, data, sent_ms=int(ts))
         return self._send(status, {"ok": True} if status == 200 else {"error": err}, key, nonce)
 
     def _pair(self, phone_id, method, target, ts, nonce, sign, body):
@@ -802,7 +809,8 @@ class PhoneHandler:
         key = pair_key(cur["secret"]) if cur else _DUMMY_KEY
         good = hmac.compare_digest(sign, request_mac(key, phone_id, method, target, ts, nonce, body))
         if not (good and cur):
-            pairing.fail()
+            if cur:                                      # 번호가 맞는 짝짓기에서 서명이 틀렸을 때만 센다 - 번호를 모르는 기기는
+                pairing.fail()                           # 주소별 거절(note_bad)로만 (같은 망의 아무 기기나 짝짓기를 취소시키지 못하게, 검토 2026-11-23 I-2)
             self.server.note_bad(self.ip)
             return self._send(401, {"error": "unauthorized"})
         if not self.server.fresh_nonce(phone_id, nonce):
@@ -879,15 +887,41 @@ def parse_lan(text):
     return out
 
 
+LAN_PROBES = ("10.255.255.254", "172.31.255.254", "192.168.255.254")   # 사설 망 셋 - 그쪽으로 나갈 때 윈도우가 고르는 이 PC 주소를 본다
+
+
+def socket_lan():
+    """PowerShell 을 못 쓸 때의 대안 (검토 2026-11-23): UDP 소켓을 사설 주소 쪽으로 connect 만 하고 (아무것도 보내지 않는다 -
+    이름 풀이도 없다) 고른 이 PC 주소를 읽는다 → [{"ip", "category": "unknown"}] (사설 IPv4 만, 겹친 것은 하나로). 망의 종류는 모른다."""
+    out = []
+    for probe in LAN_PROBES:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((probe, 9))
+            ip = s.getsockname()[0]
+        except OSError:
+            continue
+        finally:
+            s.close()
+        try:
+            addr = ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        if addr.is_private and not (addr.is_loopback or addr.is_link_local or addr.is_unspecified) and ip not in [x["ip"] for x in out]:
+            out.append({"ip": ip, "category": "unknown"})
+    return out
+
+
 def lan_info():
-    """이 PC 의 IPv4 주소와 그 망의 종류 [{"ip", "category"}]. 못 읽으면 []."""
+    """이 PC 의 IPv4 주소와 그 망의 종류 [{"ip", "category"}]. PowerShell 로 못 읽으면 socket_lan (종류 unknown), 그것도 없으면 []."""
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
                             base64.b64encode(LAN_SCRIPT.encode("utf-16-le")).decode("ascii")],
                            capture_output=True, timeout=30, creationflags=CREATE_NO_WINDOW)
-        return parse_lan(r.stdout.decode("utf-8-sig", "replace"))
+        got = parse_lan(r.stdout.decode("utf-8-sig", "replace"))
     except (OSError, subprocess.SubprocessError):
-        return []
+        got = []
+    return got or socket_lan()
 
 
 def _run(cmd):
@@ -932,12 +966,13 @@ class Gate:
         self._fw = "skipped" if self.no_firewall else "none"
         self._checked = False                    # 처음 닫을 때 남은 규칙이 있는지 한 번 본다
         self._fail_at = 0.0
+        self._unsure = False                     # 마지막 hosts() 가 종류를 모르는 주소로 정했나
         self.last_error = None
 
     # --- 방화벽 (결과는 종료 코드만 본다) ---
     def rule_args(self):
         return (f'advfirewall firewall add rule name="{RULE_NAME}" dir=in action=allow protocol=TCP localport={self.rule_port} '
-                f'profile=private,domain program="{sys.executable}" enable=yes')
+                f'remoteip=localsubnet profile=private,domain program="{sys.executable}" enable=yes')
 
     def add_command(self):
         """PC 관리자가 직접 실행할 한 줄 (화면의 방화벽 실패 글 끝에 붙는다)."""
@@ -964,8 +999,14 @@ class Gate:
         except Exception:
             info = []
         good = [x["ip"] for x in info if x.get("category") in ("private", "domain")][:4]
+        self._unsure = False
         if good:
             return good
+        if info and all(x.get("category") == "unknown" for x in info):
+            # 망 종류를 하나도 모른다 (PowerShell 을 못 써 소켓으로 찾았다) - 그 주소로 연다. 규칙은 개인·도메인 프로필에만 있어
+            # 공용 망이면 어차피 닿지 않는다 - 화면이 status 의 network: unknown 을 보고 안내한다
+            self._unsure = True
+            return [x["ip"] for x in info][:4]
         if info and all(x.get("category") == "public" for x in info):
             raise GateError("public-network", PUBLIC_MSG)
         raise GateError("no-network", NO_LAN_MSG)
@@ -992,12 +1033,14 @@ class Gate:
                 raise GateError("cert", str(e)) from None
             self.service.lock_files()
             if not self.no_firewall:
-                if not self.firewall_has():
-                    if not self.firewall_add():
-                        self._fw = "failed"
-                        raise GateError("firewall", "휴대폰 포트의 방화벽 규칙을 만들지 못했습니다. 오토파일럿이 관리자 권한으로 실행 중인지 "
-                                                    "확인하거나, PC 관리자가 명령 프롬프트(관리자)에서 다음 명령을 한 번 실행한 뒤 다시 시도하여 "
-                                                    f"주십시오.\n{self.add_command()}")
+                # 이름만 보고 옛 규칙(다른 프로그램 경로·포트, remoteip 없음)을 그대로 쓰지 않게 늘 지우고 지금 값으로 다시 만든다
+                # (같은 이름이 여럿이어도 delete 가 모두 지운다 - 검토 2026-11-23). 권한이 없어 둘 다 못 하면 관리자가 직접 만든 규칙을 쓴다.
+                self.firewall_remove()
+                if not self.firewall_add() and not self.firewall_has():
+                    self._fw = "failed"
+                    raise GateError("firewall", "휴대폰 포트의 방화벽 규칙을 만들지 못했습니다. 오토파일럿이 관리자 권한으로 실행 중인지 "
+                                                "확인하거나, PC 관리자가 명령 프롬프트(관리자)에서 다음 명령을 한 번 실행한 뒤 다시 시도하여 "
+                                                f"주십시오.\n{self.add_command()}")
                 self._fw = "ok"
             try:
                 srv = make_phone_server(self.service, tls_context(cert, key), self.host, self.port)
@@ -1045,8 +1088,11 @@ class Gate:
 
     def status(self):
         srv = self.server
-        return {"open": srv is not None, "port": srv.server_address[1] if srv is not None else self.rule_port, "firewall": self._fw,
-                "hosts": list(self._hosts) if srv is not None else [], "fingerprint": self.fingerprint()}
+        out = {"open": srv is not None, "port": srv.server_address[1] if srv is not None else self.rule_port, "firewall": self._fw,
+               "hosts": list(self._hosts) if srv is not None else [], "fingerprint": self.fingerprint()}
+        if self._unsure:
+            out["network"] = "unknown"           # 망 종류(공용·개인)를 모른다 - 화면 안내 (phone-card.js)
+        return out
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -1059,7 +1105,9 @@ class Service:
 
     def __init__(self, folder, store, lic, clock=time.time, run=None, host=None, port=None):
         self.folder, self.store, self.lic, self.clock = folder, store, lic, clock
-        self.phones = Phones(os.path.join(folder, PHONES_NAME), on_save=self.lock_files)
+        self._lock_mu = threading.Lock()
+        self._lock_busy = self._lock_again = False
+        self.phones = Phones(os.path.join(folder, PHONES_NAME), on_save=self.lock_files_soon)
         self.pairing = Pairing(clock=clock)
         self.desk = Desk(store, self.phones, lic, clock=clock)
         self.gate = Gate(self, folder, run=run, host=host, port=port)
@@ -1074,6 +1122,30 @@ class Service:
                 local_server.lock_key_files(self.folder)
         except Exception:
             pass
+
+    def lock_files_soon(self):
+        """휴대폰 표를 쓴 뒤 (Phones.on_save) - lock_files(icacls 여러 번)를 따로 스레드에서 돌린다. 짝짓기 성공 응답이 그것을 기다리지
+        않게 (검토 2026-11-23). 도는 중에 또 쓰면 끝난 뒤 한 번 더 돈다. 프로세스가 그 사이 꺼져도 서버가 켤 때 다시 잠근다."""
+        with self._lock_mu:
+            if self._lock_busy:
+                self._lock_again = True
+                return
+            self._lock_busy = True
+
+        def work():
+            while True:
+                self.lock_files()
+                with self._lock_mu:
+                    if not self._lock_again:
+                        self._lock_busy = False
+                        return
+                    self._lock_again = False
+        try:
+            threading.Thread(target=work, daemon=True, name="phone-lock").start()
+        except Exception:
+            with self._lock_mu:
+                self._lock_busy = self._lock_again = False
+            self.lock_files()
 
     def tick(self):
         """고리 한 번: 지난 자리 지우기 + 포트 맞추기. 예외를 내지 않는다."""

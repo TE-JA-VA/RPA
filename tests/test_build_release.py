@@ -517,7 +517,7 @@ SUFFIX = importlib.machinery.EXTENSION_SUFFIXES[0]
 work_m = os.path.join(tmp, "work_m")
 for exe in br.EXES:
     write(os.path.join(work_m, exe), b"MZ launcher " + exe.encode())
-for mod in ("web_runner", "rpa_status"):
+for mod in ("web_runner", "rpa_status", "ai_rescue"):
     write(os.path.join(work_m, "app", mod + SUFFIX), b"pyd " + mod.encode())
 write(os.path.join(work_m, "lib.zip"), b"PK fake")
 write(os.path.join(repo, "app_start.py"), "print('start')\n")
@@ -527,11 +527,22 @@ check("조각 방식: 시작 파일·조각·묶음·시작 스크립트가 버�
       {"app/_start.py", "lib.zip", f"app/web_runner{SUFFIX}", f"app/rpa_status{SUFFIX}", *br.EXES} <= set(program_m), str(program_m))
 check("프로그램 파일·오토파일럿 이름의 파이썬은 그대로", {rel for rel, _ in br.PROGRAM_FILES} | {f"python/{n}" for n in br.BRANDED} <= set(program_m))
 check("lib 폴더는 싣지 않는다 (PC 에서 푼다)", not os.path.exists(os.path.join(out_m, "lib")))
-check("app 에는 조각과 _start.py 뿐", sorted(os.listdir(os.path.join(out_m, "app"))) == sorted(["_start.py", "web_runner" + SUFFIX, "rpa_status" + SUFFIX]))
+check("app 에는 조각과 _start.py 뿐", sorted(os.listdir(os.path.join(out_m, "app")))
+      == sorted(["_start.py", "web_runner" + SUFFIX, "rpa_status" + SUFFIX, "ai_rescue" + SUFFIX]))
 man_m = br.write_manifest(out_m, "2026.11.11-9", "시험", program_m)
 br.make_zip(out_m, out_m + ".zip")
 check("조각 방식 압축도 검사를 통과한다", br.verify_zip(out_m + ".zip", man_m, program_m, others) == [],
       str(br.verify_zip(out_m + ".zip", man_m, program_m, others)))
+# 검토 2026-11-23 Minor 7: 일반 빌드에서 ai_rescue 조각이 빠져도 (web_runner 가 ImportError 를 '스탠드얼론' 으로 보고) 막지 못했다
+os.remove(os.path.join(work_m, "app", "ai_rescue" + SUFFIX))
+out_m2 = os.path.join(out_root, "배포_2026.11.11-10")
+program_m2 = br.collect(out_m2, work_m, repo=repo, runtime_root=runtime, modules=True)
+man_m2 = br.write_manifest(out_m2, "2026.11.11-10", "시험", program_m2)
+br.make_zip(out_m2, out_m2 + ".zip")
+p = br.verify_zip(out_m2 + ".zip", man_m2, program_m2, others)
+check("일반 버전 조각 방식에 ai_rescue 조각이 없으면 문제로 잡는다", any("ai_rescue" in x for x in p), str(p))
+check("smoke_check 가 보는 'AI 없음' 줄은 ACTOR --check 가 찍는 글과 같다",
+      br.NO_AI_LINE in (ROOT / "web_runner.py").read_text(encoding="utf-8"), br.NO_AI_LINE)
 check("옛 방식 모으기에는 app·lib.zip 이 없다", not any(p.startswith("app/") or p == "lib.zip" for p in program))
 check("함께 못 쓰는 옵션은 문제로 끝난다", br.main(["--modules", "--exes-from", "x"]) == 1 and br.main(["--modules", "--to-dist"]) == 1
       and br.main(["--modules", "--onefile"]) == 1)

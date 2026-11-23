@@ -39,6 +39,9 @@ import otp_relay
 import preset_transfer as pt
 import rpa_status as st
 import web_replay as rec
+import ap_guard
+
+ap_guard.import_guard()     # 스탠드얼론 설치본에서 시작 파일이 아닌 곳에서 불러오면 라이선스·프로그램 파일 확인 (일반 버전·소스는 아무것도 안 한다)
 
 
 REC_DIR = os.path.join(st.data_dir(), "옵저버")          # 기록·미리보기로 받은 파일 (루틴이 읽는 ERPIA_AI_EXCEL 이 아니다)

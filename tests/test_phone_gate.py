@@ -56,8 +56,8 @@ class Clock:
 class FakeRun:
     """방화벽 명령 흉내 - 받은 명령 글을 모은다. 규칙이 있는지 기억한다 (show 는 있으면 0, 없으면 1)."""
 
-    def __init__(self, add_code=0, has=False):
-        self.calls, self.add_code, self.has = [], add_code, has
+    def __init__(self, add_code=0, has=False, delete_code=None):
+        self.calls, self.add_code, self.has, self.delete_code = [], add_code, has, delete_code
 
     def __call__(self, cmd):
         self.calls.append(cmd)
@@ -68,6 +68,8 @@ class FakeRun:
                 self.has = True
             return self.add_code
         if " delete rule " in cmd:
+            if self.delete_code is not None:          # 권한이 없어 지우지 못한다 (관리자가 직접 만든 규칙)
+                return self.delete_code
             was, self.has = self.has, False
             return 0 if was else 1
         return 1
@@ -189,15 +191,32 @@ try:
     info = svc.pairing.start("김OO 휴대폰", "김OO", ["15881234"])
     st = svc.gate.sync()
     want = (f'advfirewall firewall add rule name="AUTOPILOT Phone OTP" dir=in action=allow protocol=TCP localport=8782 '
-            f'profile=private,domain program="{sys.executable}" enable=yes')
-    check("짝짓기 시작 → 열림, add rule 이 그 글자 그대로", st["open"] is True and st["firewall"] == "ok" and len(fw.saw(" add rule ")) == 1
-          and fw.saw(" add rule ")[0].endswith(want), repr(fw.calls))
+            f'remoteip=localsubnet profile=private,domain program="{sys.executable}" enable=yes')
+    check("짝짓기 시작 → 열림, add rule 이 그 글자 그대로 (같은 망에서만 - remoteip=localsubnet)", st["open"] is True and st["firewall"] == "ok"
+          and len(fw.saw(" add rule ")) == 1 and fw.saw(" add rule ")[0].endswith(want), repr(fw.calls))
     check("status - 포트·주소·지문", st["port"] == svc.gate.server.server_address[1] and st["hosts"] == ["127.0.0.1"]
           and len(st["fingerprint"]) == 64, repr(st))
     check("휴대폰 포트의 인증서는 자료 폴더에", os.path.isfile(os.path.join(TMP, "main", "phone_cert.pem")))
+    deletes = len(fw.saw(" delete rule "))
     svc.pairing.cancel()
     st = svc.gate.sync()
-    check("짝짓기 취소 → 닫힘·delete rule", st["open"] is False and len(fw.saw(" delete rule ")) == 1 and svc.gate.server is None, repr(fw.calls))
+    check("짝짓기 취소 → 닫힘·delete rule", st["open"] is False and len(fw.saw(" delete rule ")) == deletes + 1 and svc.gate.server is None, repr(fw.calls))
+    # 검토 2026-11-23 Minor 1: 규칙을 이름으로만 확인했다 - 옛 규칙(다른 프로그램 경로·포트, remoteip 없음)이 남아 있으면 그대로 썼다
+    fw_old = FakeRun(has=True)
+    svc_o = local_phone.Service(os.path.join(TMP, "old_rule"), store, LIC, clock=clk, run=fw_old, host="127.0.0.1", port=0)
+    svc_o.pairing.start("x", "", [])
+    st = svc_o.gate.sync()
+    order = [c for c in fw_old.calls if " delete rule " in c or " add rule " in c]
+    check("같은 이름의 규칙이 이미 있어도 지우고 지금 값(프로그램·포트·remoteip)으로 다시 만든다",
+          st["open"] and st["firewall"] == "ok" and len(order) == 2 and " delete rule " in order[0] and order[1].endswith(want), repr(fw_old.calls))
+    svc_o.stop()
+    fw_admin = FakeRun(has=True, add_code=5, delete_code=5)
+    svc_a = local_phone.Service(os.path.join(TMP, "admin_rule"), store, LIC, clock=clk, run=fw_admin, host="127.0.0.1", port=0)
+    svc_a.pairing.start("x", "", [])
+    st = svc_a.gate.sync()
+    check("권한이 없어 지우지도 만들지도 못하지만 관리자가 직접 만든 규칙이 있으면 그 규칙으로 연다 (지금 동작)",
+          st["open"] and st["firewall"] == "ok", repr((st, fw_admin.calls)))
+    svc_a.stop()
     fixed = free_port()
     fw_bad = FakeRun(add_code=1)
     svc_f = local_phone.Service(os.path.join(TMP, "fail"), store, LIC, run=fw_bad, host="127.0.0.1", port=fixed)
@@ -208,7 +227,7 @@ try:
     except local_phone.GateError as e:
         check("add rule 실패 → GateError(firewall), 글 끝에 관리자 명령 한 줄", e.code == "firewall" and e.message.rstrip().endswith(
             f'netsh advfirewall firewall add rule name="AUTOPILOT Phone OTP" dir=in action=allow protocol=TCP localport={fixed} '
-            f'profile=private,domain program="{sys.executable}" enable=yes'), e.message)
+            f'remoteip=localsubnet profile=private,domain program="{sys.executable}" enable=yes'), e.message)
     try:
         socket.create_connection(("127.0.0.1", fixed), timeout=1).close()
         check("규칙을 못 만들면 bind 하지 않는다 (그 포트에 연결이 안 된다)", False)
@@ -235,6 +254,33 @@ try:
           == [{"ip": "10.0.0.1", "category": "private"}] and local_phone.parse_lan("") == [])
     real = local_phone.lan_info()
     check("진짜 lan_info (읽기만 - PowerShell 한 번) 은 목록을 돌려준다", isinstance(real, list) and all(set(x) == {"ip", "category"} for x in real), repr(real))
+    # 검토 2026-11-23 Minor 5: PowerShell 이 실패하면 주소를 못 찾았다 - 소켓으로 사설 주소를 찾고 망 종류는 '모름'
+    real_sp_run = local_phone.subprocess.run
+
+    def ps_fail(*a, **k):
+        raise OSError("powershell 없음")
+    local_phone.subprocess.run = ps_fail
+    try:
+        fb_info = local_phone.lan_info()
+    finally:
+        local_phone.subprocess.run = real_sp_run
+    import ipaddress  # noqa: E402
+    sock_info = local_phone.socket_lan()
+    check("소켓으로 찾은 주소는 사설 IPv4·종류 unknown (UDP connect 만 - 보내지 않는다)",
+          isinstance(sock_info, list) and all(x["category"] == "unknown" and ipaddress.IPv4Address(x["ip"]).is_private
+                                              and not ipaddress.IPv4Address(x["ip"]).is_loopback for x in sock_info), repr(sock_info))
+    check("PowerShell 이 실패하면 lan_info 는 소켓으로 찾은 것", fb_info == sock_info, repr((fb_info, sock_info)))
+    local_phone.subprocess.run = lambda *a, **k: types.SimpleNamespace(stdout=b"", returncode=1)
+    try:
+        check("PowerShell 이 빈 글을 돌려줘도 소켓으로", local_phone.lan_info() == sock_info)
+    finally:
+        local_phone.subprocess.run = real_sp_run
+    svc_f.gate.lan_info = lambda: [{"ip": "192.168.0.10", "category": "unknown"}, {"ip": "10.1.2.3", "category": "unknown"}]
+    check("모두 종류를 모르면 그 주소로 QR 을 만든다 (규칙은 개인·도메인만이라 공용이면 안 닿는다)", svc_f.gate.hosts() == ["192.168.0.10", "10.1.2.3"])
+    check("그때 status 의 network 는 unknown (화면이 '공용이면 연결되지 않는다' 안내)", svc_f.gate.status().get("network") == "unknown",
+          repr(svc_f.gate.status()))
+    svc_f.gate.lan_info = lambda: [{"ip": "192.168.0.10", "category": "private"}, {"ip": "10.9.9.9", "category": "unknown"}]
+    check("종류를 아는 개인 주소가 있으면 그것만 (network 없음)", svc_f.gate.hosts() == ["192.168.0.10"] and "network" not in svc_f.gate.status())
     os.environ["RPA_PHONE_NO_FIREWALL"] = "1"
     try:
         fw_skip = FakeRun()
@@ -316,6 +362,14 @@ try:
     r = phone.request()                   # 서버 시계가 601초 앞 - clock 을 받고 시계를 맞춘 뒤 다시
     check("가짜 시계 601초 뒤 200 (시계 차이는 clock 으로 맞춘다)", r.get("open") is False and abs(phone.offset_ms - (local_phone.BAD_SEC + 1) * 1000) < 5000,
           repr((r, phone.offset_ms)))
+    phone.offset_ms = 0                   # 휴대폰 시계가 601초 늦은 채로 문자를 받는다 - 번호도 clock 을 받고 다시 보낸다
+    svc.store.put(svc.desk.req_path(phone.phone_id), {"req_id": "req_clock000000001", "site": "가나몰", "pcId": "p1",
+                                                      "senders": {"15881234": True}, "created_at": int(clk() * 1000)})
+    got_code = phone.send_code("req_clock000000001", "482913", "15881234", sms_at=phone.now_ms())   # 받은 시각 = 휴대폰 시계
+    check("시계가 틀린 휴대폰도 clock 뒤 다시 보낸 번호가 들어간다 (받은 시각도 같은 차이를 더한다 - 지난 문자로 거절되지 않는다)",
+          got_code[0] == 200 and (svc.desk.read_code(phone.phone_id) or {}).get("code") == "482913", repr(got_code))
+    svc.store.delete(f"apps/otp/requests/c1/{phone.phone_id}")
+    svc.store.delete(f"apps/otp/codes/c1/{phone.phone_id}")
     psrv.peer_ip = lambda addr: "8.8.8.8"
     s = socket.create_connection(("127.0.0.1", PORT), timeout=10)
     closed, took = closed_within(s, 2)
@@ -338,6 +392,19 @@ try:
     p3 = FakePhone(qr3)
     p3.pair()
     check("301초 뒤 401", p3.pair_status == 401)
+    # 검토 2026-11-23 I-2: 같은 망의 아무 기기가 엉뚱한 번호와 엉터리 서명 5번으로 진행 중인 짝짓기를 취소시켰다
+    qr_d, info_d = qr_for(svc, "방해 시험", "", [])
+    pd_ = FakePhone(qr_d)
+    psrv.peer_ip = lambda addr: "10.0.0.81"
+    statuses = [pd_.call("POST", "/phone/v1/pair", {"rand": local_phone.b64url(os.urandom(32)), "os": "android", "app_version": "t", "device": "d"},
+                         key="3" * 64, headers={"X-AP-Phone": "ph_00000000"})[0] for _ in range(local_phone.BAD_LIMIT)]
+    check("엉뚱한 번호(ph_00000000)로 틀린 서명을 주소 거절까지 보내도 진행 중인 짝짓기는 그대로",
+          all(s in (401, 429) for s in statuses) and svc.pairing.state()["state"] == "waiting", repr((statuses, svc.pairing.state())))
+    check("그 주소는 주소별 거절(429)로 막힌다", pd_.call("POST", "/phone/v1/pair", {}, key="3" * 64, headers={"X-AP-Phone": "ph_00000000"})[0] == 429)
+    psrv.peer_ip = lambda addr: "10.0.0.80"
+    pd_.pair()
+    check("그 뒤 진짜 휴대폰이 QR 로 짝짓는다 (200)", pd_.pair_status == 200, pd_.pair_status)
+    SECRETS.append(pd_.key)
     qr4, info4 = qr_for(svc, "네 번째", "", [])
     p4 = FakePhone(qr4)
     for _ in range(local_phone.PAIR_FAIL_MAX):

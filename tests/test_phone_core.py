@@ -207,6 +207,20 @@ try:
     for _ in range(4):
         desk.submit(A, GOOD)
     check("같은 요청에 여섯 번째 → 429 too_many", desk.submit(A, GOOD) == (429, "too_many"))
+    # 검토 2026-11-23 Minor 3: 요청이 열리기 전에 받은 (지난) 문자의 번호를 받았다 - 요청보다 30초 넘게 이른 문자는 거절
+    opened = int(clk.t * 1000)
+    store.put(RQ, dict(REQ, req_id="req_1111111111111111", created_at=opened))
+    OLD = dict(GOOD, req_id="req_1111111111111111")
+    check("요청보다 31초 이른 문자 → 409 old_sms (쓰지 않는다)", desk.submit(A, dict(OLD, sms_at=opened - 31000)) == (409, "old_sms")
+          and (store.get(CD) or {}).get("req_id") != "req_1111111111111111")
+    check("요청보다 29초 이른 문자 (시계 오차) → 200", desk.submit(A, dict(OLD, sms_at=opened - 29000)) == (200, None))
+    clk.t += 5
+    phone_ts = int(clk.t * 1000) - 100000          # 휴대폰 시계가 100초 늦다 - 문자는 요청 4초 뒤 (휴대폰 시계로)
+    check("휴대폰 시계가 늦어도 보낸 시각(X-AP-Time)으로 견준다 → 200",
+          desk.submit(A, dict(OLD, sms_at=phone_ts - 1000), sent_ms=phone_ts) == (200, None))
+    check("… 휴대폰 시계로 요청보다 40초 이른 문자는 409 old_sms",
+          desk.submit(A, dict(OLD, sms_at=phone_ts - 45000), sent_ms=phone_ts) == (409, "old_sms"))
+    check("거절한 old_sms 는 같은 요청의 횟수를 쓰지 않는다 (성공 둘만 셈)", desk._puts.get((A, "req_1111111111111111")) == 2, repr(desk._puts))
     check("다른 휴대폰의 요청은 못 본다 (Review Focus 8)", desk.open_request(B) is None and desk.submit(B, GOOD) == (409, "no_request")
           and desk.read_code(B) is None)
     store.put(RQ, dict(REQ, req_id="req_9999999999999999", created_at=int(clk.t * 1000)))
@@ -222,6 +236,32 @@ try:
     check("sweep 은 열린 요청을 두고 간다", desk.sweep() == 0 and store.get(RQ) is not None)
     desk.forget(A)
     check("forget(휴대폰) - 그 휴대폰의 요청·번호 자리를 지운다", store.get(f"apps/otp/requests/c1/{A}") is None)
+
+    # ------------------------------------------------------------------------------------------
+    print("휴대폰 표를 쓴 뒤 권한 잠금 (검토 2026-11-23 Minor 4 - 짝짓기 응답이 icacls 여러 번을 기다렸다)")
+    import rpa_status  # noqa: E402
+    locked, real_lock, real_shipped = [], local_server.lock_key_files, rpa_status.shipped
+    local_server.lock_key_files = lambda folder, *a, **k: (time.sleep(1.0), locked.append(folder))
+    rpa_status.shipped = lambda: True
+    try:
+        lsvc = local_phone.Service(os.path.join(TMP, "lock"), local_server.Store(os.path.join(TMP, "lock", "store.json"), volatile=local_server.VOLATILE), LIC)
+        began = time.time()
+        lsvc.phones.add("ph_12121212", "가", "", [], key="k" * 64, fp="a" * 64, os="android", app_version="1", device="d")
+        took = time.time() - began
+        check("표를 쓰는 쪽(짝짓기 응답)은 잠금을 기다리지 않는다", took < 0.5, f"{took:.2f}초")
+        lsvc.phones.add("ph_34343434", "나", "", [], key="j" * 64, fp="a" * 64, os="android", app_version="1", device="d")
+        end = time.time() + 5
+        while time.time() < end and len(locked) < 2:
+            time.sleep(0.05)
+        check("잠금은 따로 돌아 반드시 된다 (겹친 쓰기는 한 번 더)", len(locked) == 2 and locked[0] == os.path.join(TMP, "lock"), repr(locked))
+        time.sleep(1.3)
+        check("더 쓰지 않으면 더 돌지 않는다", len(locked) == 2, repr(locked))
+        local_server.lock_key_files = lambda folder, *a, **k: locked.append("sync")
+        locked.clear()
+        lsvc.lock_files()
+        check("lock_files() 는 그대로 바로 잠근다 (휴대폰 포트를 열 때·서버가 켤 때)", locked == ["sync"], repr(locked))
+    finally:
+        local_server.lock_key_files, rpa_status.shipped = real_lock, real_shipped
 
     # ------------------------------------------------------------------------------------------
     print("HTTP (계획 ① 서버 + Service)")

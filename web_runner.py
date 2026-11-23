@@ -52,6 +52,9 @@ except Exception as e:                              # pragma: no cover
 # 바탕화면 경로는 ERPia 루틴과 같은 방식으로 찾는다.
 # 회사 PC는 OneDrive 로 바탕화면이 옮겨져 있는 경우가 있어 '~/Desktop' 으로 단정하면 안 된다.
 import perform_login as pl
+import ap_guard
+
+ap_guard.import_guard()     # 스탠드얼론 설치본에서 시작 파일이 아닌 곳에서 불러오면 라이선스·프로그램 파일 확인 (일반 버전·소스는 아무것도 안 한다)
 
 # ---------------------------------------------------------------------------
 # 설정값

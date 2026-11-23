@@ -150,7 +150,10 @@ class FakePhone:
     def _again_on_clock(self, method, path, body=None):
         status, rh, value = self.call(method, path, body)
         if status == 401 and isinstance(value, dict) and value.get("error") == "clock" and "x-ap-sign" in rh:
-            self.offset_ms += int(value["now_ms"]) - self.now_ms()      # 서버 시각에 맞추고 한 번만 다시
+            delta = int(value["now_ms"]) - self.now_ms()
+            self.offset_ms += delta                                      # 서버 시각에 맞추고 한 번만 다시
+            if isinstance(body, dict) and isinstance(body.get("sms_at"), int):
+                body = dict(body, sms_at=body["sms_at"] + delta)         # 받은 시각도 X-AP-Time 과 같은 시계로 (약속 5.4·5.7)
             status, rh, value = self.call(method, path, body)
         return status, rh, value
 

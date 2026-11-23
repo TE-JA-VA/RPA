@@ -16,6 +16,7 @@ const HTML = `
       <tbody id="phone-rows"></tbody>
     </table></div>
     <div class="msg hide" id="phone-none">등록된 휴대폰이 없습니다. 휴대폰을 등록하지 않으면 인증번호를 PC의 Edge 창에 직접 입력하여야 합니다.</div>
+    <div class="msg warn hide" id="phone-net">이 PC의 네트워크 종류(공용·개인)를 확인하지 못했습니다. 네트워크가 '공용'이면 휴대폰이 연결되지 않습니다. 연결되지 않으면 윈도우 설정 → 네트워크 및 인터넷에서 네트워크 프로필을 '개인'으로 변경하여 주십시오.</div>
     <div class="lbl">휴대폰 추가</div>
     <div class="seg" id="phone-add-row" style="gap:6px">
       <input id="phone-label" autocomplete="off" maxlength="40" placeholder="이름 (예: 김OO 휴대폰)" aria-label="휴대폰 이름" style="flex:1 1 150px;width:auto">
@@ -102,6 +103,7 @@ function paint() {
     + ` · 포트 ${gate.port || 8782} ${gate.open ? "열림" : "닫힘"}`;
   show($("phone-tbl"), phones.length > 0);
   show($("phone-none"), phones.length === 0);
+  show($("phone-net"), !!gate.open && gate.network === "unknown");   // 서버가 PowerShell 없이 소켓으로 주소를 찾았다 (local_phone.Gate.hosts)
   const rows = [];
   for (const p of phones) {
     const tr = document.createElement("tr");
@@ -110,6 +112,14 @@ function paint() {
     const name = document.createElement("td");
     name.append(Object.assign(document.createElement("div"), { textContent: p.label || p.id }));
     if (p.owner) name.append(Object.assign(document.createElement("div"), { className: "muted", textContent: p.owner, style: "font-size:12px" }));
+    // 짝지은 기기 · OS (짝지을 때 앱이 보낸 값) - QR 을 가로챈 짝짓기를 나중에도 알아보게. 기기 이름은 길 수 있어 줄을 넘긴다
+    const dev = [p.device, p.os].filter(Boolean).join(" · ");
+    if (dev) {
+      const d = Object.assign(document.createElement("div"), { className: "muted", textContent: dev });
+      d.dataset.col = "device";
+      d.style.cssText = "font-size:12px;white-space:normal;overflow-wrap:anywhere";
+      name.append(d);
+    }
     name.style.whiteSpace = "nowrap";
     const cells = [name, Object.assign(document.createElement("td"), { textContent: (p.senders || []).length ? p.senders.join(", ") : "제한 없음" })];
     const st = document.createElement("td");

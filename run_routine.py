@@ -120,6 +120,9 @@ import erpia_common as ec
 import perform_login as pl
 import rpa_status as status
 import wellife   # 설정에 "Wellife" 섹션이 있는 PC 만 쓴다 (main 참고)
+import ap_guard
+
+ap_guard.import_guard()     # 스탠드얼론 설치본에서 시작 파일이 아닌 곳에서 불러오면 라이선스·프로그램 파일 확인 (일반 버전·소스는 아무것도 안 한다)
 
 # 결과 로그를 둘 폴더. 옛 구조는 exe 옆, 새 구조는 ProgramData\AFTER MARKET\RPA\data (rpa_status 가 정한다)
 BASE_DIR = status.data_dir()

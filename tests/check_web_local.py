@@ -295,8 +295,12 @@ try:
         qr_box = []
         page.on("response", lambda r: qr_box.append(r) if r.url.endswith("/api/phone-pair") and r.request.method == "POST" else None)
         page.fill("#phone-label", "김OO 휴대폰"); page.fill("#phone-owner", "김OO"); page.fill("#phone-senders", "1588-1234")
+        PHONE.gate.lan_info = lambda: [{"ip": "127.0.0.1", "category": "unknown"}]     # PowerShell 을 못 써 망 종류를 모르는 PC 흉내
         page.click("#phone-add")
         page.wait_for_selector("#phone-qr-box svg", timeout=10000)
+        until(page, "!document.getElementById('phone-net')?.classList.contains('hide')", timeout=8000)
+        check("망 종류(공용·개인)를 모르면 카드에 안내 ('공용' 이면 연결되지 않는다)", page.is_visible("#phone-net")
+              and "'공용'" in page.text_content("#phone-net") and "'개인'" in page.text_content("#phone-net"), page.text_content("#phone-net"))
         qr_text = qr_box[-1].json()["qr"] if qr_box else ""
         n = int(page.get_attribute("#phone-qr-box svg", "data-modules") or 0)
         finders = page.evaluate("""async (t) => { const m = (await import('/qr.js')).qrMatrix(t); const n = m.length;
@@ -309,13 +313,16 @@ try:
               and "다른 사람에게 전달하지 마십시오" in page.text_content("#phone-pair"), page.text_content("#phone-pair-text"))
         fp1 = FakePhone(qr_text)
         began = time.time()
-        fp1.pair(device="Fake")
+        fp1.pair(device="Galaxy S23 Ultra")
         until(page, "(document.getElementById('phone-msg')?.textContent || '').includes('연결되었습니다')", timeout=8000)
         took = time.time() - began
         check("휴대폰이 짝지으면 2~4초 안에 표에 한 줄과 연결 글", fp1.pair_status == 200 and took <= 4.5
-              and page.text_content("#phone-msg") == "휴대폰 '김OO 휴대폰'이(가) 연결되었습니다. (Fake · android)"
+              and page.text_content("#phone-msg") == "휴대폰 '김OO 휴대폰'이(가) 연결되었습니다. (Galaxy S23 Ultra · android)"
               and page.locator("#phone-rows tr[data-id]").count() == 1 and page.is_hidden("#phone-pair")
               and "15881234" in page.text_content("#phone-rows"), f"{took:.1f}초 {page.text_content('#phone-msg')}")
+        check("표의 줄에 짝지은 기기 · OS (QR 을 가로챈 짝짓기를 나중에도 알아보게, 검토 2026-11-23)",
+              page.evaluate("document.querySelector('#phone-rows tr[data-id] [data-col=device]')?.textContent") == "Galaxy S23 Ultra · android",
+              page.text_content("#phone-rows"))
         check("머리: '1대 · 포트 <휴대폰 포트> 열림' (시험은 빈 포트)", page.text_content("#phone-meta")
               == f"1대 · 포트 {PHONE.gate.status()['port']} 열림", page.text_content("#phone-meta"))
         lines = page.evaluate("""(() => { const one = (el) => { const s = getComputedStyle(el), lh = parseFloat(s.lineHeight) || parseFloat(s.fontSize) * 1.4;

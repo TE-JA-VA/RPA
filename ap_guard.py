@@ -78,6 +78,9 @@ def startup_problem():
     import rpa_status as st
     if not st.shipped():                  # 소스로 도는 개발 PC - 라이선스만 본다
         return None
+    odd = edition.install_mismatch()      # edition.json 을 지우거나 바꿨거나 일반 버전 server_info 조각을 끼웠다 (검토 2026-11-23 I-1)
+    if odd:
+        return LOOSE_TEXT.format(odd)
     root = st.program_dir()
     if not manifest_signed(root):
         return SIG_TEXT
@@ -90,6 +93,37 @@ def startup_problem():
     if loose:
         return LOOSE_TEXT.format(loose[0])
     return None
+
+
+LAUNCHERS = ("erpia_rpa.exe", "prepare_rpa.exe", "prepare_observer.exe")   # app_start.START 의 시작 파일 이름
+
+
+def import_guard():
+    """업무 주 모듈(run_routine·web_runner·rpa_observer)이 불러와질 때 맨 위에서 부른다 (검토 2026-11-23 I-1 두 번째 길).
+    설치본에서 시작 파일이 아닌 곳 (python\\python.exe -c "import run_routine; …" 처럼 안쪽 함수를 직접 부르는 길) 에서 불러오면
+    여기서 startup_problem 을 돌리고, 막히면 까닭을 stderr 에 쓰고 SystemExit(EXIT_BLOCKED) - 모듈이 만들어지기 전에 멈춘다.
+    프로그램 폴더의 시작 파일로 켠 것은 건너뛴다 (main 이 확인하고 현황·알림 창으로 알린다). 소스·시험 프로세스·일반 버전은 아무것도 안 한다.
+    한계: 같은 프로세스에서 이 함수를 먼저 바꿔 끼우거나, 주 모듈이 아닌 조각(erpia_common 등)을 직접 부르는 것까지는 막지 못한다."""
+    import sys
+    import rpa_status as st
+    if not st.shipped():
+        return
+    exe = sys.executable or ""
+    try:
+        ours = os.path.basename(exe).lower() in LAUNCHERS and os.path.samefile(os.path.dirname(exe), st.program_dir())
+    except (OSError, ValueError):
+        ours = False
+    if ours:
+        return
+    problem = startup_problem()
+    if not problem:
+        return
+    try:
+        sys.stderr.write(problem + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+    raise SystemExit(EXIT_BLOCKED)
 
 
 def check_line():
