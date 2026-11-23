@@ -11,4 +11,6 @@ export const {
   init, onSession, signIn, signOut, signedIn, sessionUid, handoffFailed, changePassword, emailFor,
   getCompany, watch, skewReady, skewMs, pushCommand, saveSettings,
   listRuns, getWallet, watchWallet, sumRuns,
+  // 스탠드얼론에만 있는 것 (일반 버전은 undefined): 서버 미사용 시계 되돌리기, 계정 관리 (관리자)
+  touch, listAccounts, addAccount, updateAccount, removeAccount,
 } = impl;

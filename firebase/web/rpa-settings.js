@@ -112,6 +112,7 @@ let sent = {};   // 카드마다 마지막으로 [적용] 한 폼 - PC 응답을
 let form = { modules: {}, shops: {}, parallel: 1, together: "off", sch: { enabled: false, days: [], slots: [], holidays: true, offDates: [] }, copy: { to: "", pick: {} } };
 const $ = (id) => root.querySelector(`#${id}`);
 const show = (el, on) => el.classList.toggle("hide", !on);
+const standalone = () => c?.edition === "standalone";   // 스탠드얼론 (로컬 서버) - AI·프리셋 복사·자동 업데이트가 없다
 
 export function mount(el, context) {
   root = el; c = context; busy = false; live = null; liveLimit = undefined; parLimit = undefined; sent = {};
@@ -119,6 +120,10 @@ export function mount(el, context) {
   shopQ = ""; shopFilter = "all"; openClock = null; openPicker = null;
   root.innerHTML = HTML;
   if (!c.pcId) { show($("settings-grid"), false); show($("no-pc"), true); return; }
+  if (standalone()) {   // 스탠드얼론은 자동 업데이트가 없다 - 새 버전은 설치 파일로 (AI 어시스트 카드는 paintAi 가 숨긴다)
+    $("shop-none").textContent = "이 PC 는 아직 사이트 수집 정보를 보내지 않았습니다 (새 버전 설치 파일로 설치하세요)";
+    $("sch-old").textContent = "이 PC에 새 버전 설치 파일로 설치하면 시각별 모듈·반복 실행을 사용할 수 있습니다.";
+  }
   paintAi();
   // [적용] 은 저장(set)부터 명령 끝까지 잠근다 - 저장 왕복 사이에 두 번 눌러도 한 번만 (BugBuster K11)
   $("mod-apply").onclick = () => locked(applyModules);
@@ -255,6 +260,7 @@ const AI_GUIDE = "ACTOR 오토파일럿 실행 중 막힌 단계에서 개인정
 const AI_OFF = "AI 어시스트를 사용하지 않습니다. 사이트 화면이 바뀌어 수집이 멈추는 날, AI가 대신 찾아 이어 가게 할 수 있습니다. 사용하려면 담당자에게 문의하여 주십시오.";
 function paintAi() {
   if (!root || !c) return;
+  if (standalone()) { show($("ai-card"), false); return; }   // 스탠드얼론은 AI 를 쓰지 않는다 (설계: AI 완전 제외)
   const on = c.policy?.rpa?.features?.ai === true;
   $("ai-meta").textContent = on ? "사용 중" : "";
   const lines = on ? ["AI 어시스트 사용 중", AI_GUIDE] : [AI_OFF];
@@ -474,7 +480,7 @@ async function applyShops() {
 // 기록만 오간다 (아이디·비밀번호는 안 간다, 인증 휴대폰은 업체 안이라 따라간다 - with_phone). 받을 번호는 프리셋마다 (기본 같은 번호)
 const SLOT_MAX = 50;   // ops.importPreset 과 같다
 const copyPeers = () => Object.keys(c?.pcs || {}).filter((k) => k !== c.pcId);
-const copyShown = () => !!c?.isAdmin && copyPeers().length > 0 && Array.isArray(live?.presets);
+const copyShown = () => !standalone() && !!c?.isAdmin && copyPeers().length > 0 && Array.isArray(live?.presets);   // 스탠드얼론은 PC 가 하나 (프리셋 옮기기 명령도 없다)
 const copyable = () => savedShops().filter((p) => p.steps > 0);
 const pcLabel = (k) => c.pcs?.[k]?.label || k;
 function copyPicked() {
@@ -522,7 +528,8 @@ function paintCopyMeta() {
   if (!copyShown()) return;
   const picked = copyPicked(), problem = copyProblem();
   const old = live?.preset_transfer !== 1;   // 이 PC 가 옛 버전이면 보낼 수 없다
-  $("copy-info").textContent = problem || (old ? "이 PC를 새 버전으로 업데이트하면 프리셋을 복사할 수 있습니다." : copyable().length ? "" : "복사할 프리셋이 없습니다.");
+  $("copy-info").textContent = problem || (old ? (standalone() ? "이 PC에 새 버전 설치 파일로 설치하면 프리셋을 복사할 수 있습니다." : "이 PC를 새 버전으로 업데이트하면 프리셋을 복사할 수 있습니다.")
+    : copyable().length ? "" : "복사할 프리셋이 없습니다.");
   $("copy-info").className = "msg" + (problem ? " bad" : "");
   $("copy-meta").textContent = `${picked.length}개 선택`;
   for (const el of $("copy-card").querySelectorAll("input, select, button")) el.disabled = busy;
@@ -1078,7 +1085,8 @@ function paintScheduleMeta() {
   const off = [];                                        // PC 가 알려 준 가까운 휴무일·공휴일 표가 끝나 가는지
   if (s.enabled && s.next_off) off.push(`다음 휴무일: ${dayText(s.next_off.date)} ${s.next_off.name}. 해당 일에는 자동 실행을 진행하지 않습니다.`);
   const until = s.holidays_until || "";
-  if (until && isoDay(new Date()) >= `${until.slice(0, 4)}-11-01`) off.push(`공휴일 정보가 ${until.slice(0, 4)}년까지 등록되어 있습니다. 새 버전으로 업데이트하여 주십시오.`);
+  if (until && isoDay(new Date()) >= `${until.slice(0, 4)}-11-01`) off.push(`공휴일 정보가 ${until.slice(0, 4)}년까지 등록되어 있습니다. `
+    + (standalone() ? "새 버전 설치 파일로 설치하여 주십시오." : "새 버전으로 업데이트하여 주십시오."));
   $("sch-off-note").textContent = off.join(" · ");
   for (const id of ["sch-days-lbl", "sch-presets", "sch-days"]) show($(id), !isV3());
   $("sch-meta").textContent = !live ? "" : !s.enabled ? "비활성화"

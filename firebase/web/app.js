@@ -55,7 +55,8 @@ function onInput(e) {
     return;
   }
   const now = Date.now();
-  if (now - lastTouch > 5000) { lastTouch = now; touch(); paintIdle(); }     // 저장소 쓰기는 5초에 한 번. 알약이 떠 있었다면 바로 지운다
+  if (now - lastTouch > 5000) { lastTouch = now; touch(); data.touch?.(); paintIdle(); }     // 저장소 쓰기는 5초에 한 번. 알약이 떠 있었다면 바로 지운다
+                                                                                            // data.touch: 스탠드얼론은 서버의 미사용 시계도 되돌린다 (1분에 한 번까지, 일반 버전은 없음)
 }
 // 자동 로그아웃까지 남은 시간을 [로그아웃] 단추에 보인다 (사용자 2026-11-20). 평소에는 그냥 단추이고, 남은 시간이 10분 미만이면
 // '로그아웃 9:59' 를 노란색 알약으로, 3분 미만이면 빨간색 알약으로, 1분 미만이면 빨간색이 깜빡인다. 입력하면 다시 30분이라 바로 평소 단추로
@@ -83,6 +84,12 @@ setInterval(idleCheck, 30000);
 // --- 로그인 ---------------------------------------------------------
 // 로그인 아이디 → 계정 이메일 (공유 계약, data-firebase.js). 화면 시험이 app.js 에서 가져간다. 스탠드얼론은 undefined
 export const emailFor = data.emailFor;
+// 스탠드얼론은 PC 하나에 업체 하나 - 업체코드 칸이 없다 (아이디·비밀번호만)
+const STANDALONE = EDITION === "standalone";
+if (STANDALONE) {
+  $("cid").closest("label").hidden = true;
+  $("remember").nextSibling.textContent = " 아이디 저장";
+}
 // '업체코드·아이디 저장' 을 켜고 로그인하면 이 브라우저에 남긴다. 끄고 로그인하면 지운다
 try {
   localStorage.removeItem("cid");   // 옛 저장(업체코드만, 항상)은 버린다
@@ -107,8 +114,10 @@ $("login-form").addEventListener("submit", async (ev) => {
     justSignedIn = false;
     const wrong = ["auth/invalid-credential", "auth/invalid-login-credentials", "auth/wrong-password",
       "auth/user-not-found", "auth/invalid-email", "auth/missing-password"];
-    alert.textContent = wrong.includes(e.code) ? "업체코드, 아이디 또는 비밀번호가 일치하지 않습니다."
+    alert.textContent = wrong.includes(e.code) ? (STANDALONE ? "아이디 또는 비밀번호가 일치하지 않습니다." : "업체코드, 아이디 또는 비밀번호가 일치하지 않습니다.")
       : e.code === "auth/user-disabled" ? "사용이 중지된 계정입니다."   // setup.js disable, 또는 remove 로 업체째 막힘
+      : e.code === "auth/too-many-requests" ? "로그인 시도가 많아 잠시 잠겼습니다. 1분 뒤 다시 시도하여 주십시오."   // 두 버전 공통 (전엔 code 가 그대로 보였다)
+      : STANDALONE && e.code === "auth/network-request-failed" ? "오토파일럿 서버에 연결하지 못했습니다. 오토파일럿이 실행 중인지 확인하여 주십시오."
       : `로그인하지 못했습니다. (${e.code})`;
     show(alert, true);
   } finally {
@@ -121,7 +130,7 @@ window.addEventListener("beforeunload", (e) => { if (current?.dirty?.()) { e.pre
 
 // 관리 화면 [대시보드 보기] 가 주소 # 뒤에 붙인 1시간짜리 총괄 로그인 열쇠 (2026-10-16) - init() 이 주소창에서 곧바로 지우고 그 열쇠로 로그인한다.
 // 이미 다른 계정으로 로그인돼 있어도 바꾼다 (총괄 화면을 보려고 누른 것). 못 쓰면 (1시간 지남) 로그인 화면 안내
-const handoff = new URLSearchParams(location.hash.slice(1)).get("t");
+const handoff = STANDALONE ? null : new URLSearchParams(location.hash.slice(1)).get("t");   // 스탠드얼론에는 관리 화면 열쇠가 없다
 // 이 로그인도 탭 저장소에만 둔다 (2026-11-19 부터 모든 로그인이 그렇다) - 탭을 닫으면 끝나고, 로그인 1시간 뒤에는 스스로 로그아웃한다 (BugBuster I15, 아래 onSession)
 let consoleTimer = null;
 if (handoff) justSignedIn = true;
@@ -172,9 +181,11 @@ onSession(async (s) => {
     return;
   }
   // 총괄은 업체가 없다 - 관리 화면 [대시보드 보기] 가 연 주소의 ?cid= 업체를 본다 (규칙이 총괄에게 모든 업체를 연다). 다른 역할은 주소를 무시
-  const want = new URLSearchParams(location.search).get("cid") || "";
+  // 스탠드얼론은 업체가 하나라 ?cid= 띠가 없다
+  const want = STANDALONE ? "" : new URLSearchParams(location.search).get("cid") || "";
   const asSuper = s.role === "super" ? (/^[A-Za-z0-9_-]{1,40}$/.test(want) ? want : "") : null;
-  me = { uid: s.uid, email: s.email, cid: asSuper ?? (s.cid || null), role: s.role || null };
+  // mustChange: 스탠드얼론에서 처음 로그인했거나 관리자가 비밀번호를 다시 정한 계정 - 비밀번호를 바꿀 때까지 계정 화면만 (일반 버전은 늘 false)
+  me = { uid: s.uid, email: s.email, cid: asSuper ?? (s.cid || null), role: s.role || null, mustChange: !!s.mustChange };
   $("who").textContent = `${s.email || "관리 화면"} (${me.role === "admin" ? "관리자" : me.role === "super" ? "총괄" : "유저"})`;
   const elsewhere = asSuper === null && want && want !== me.cid;   // 업체 계정이 [대시보드 보기] 주소를 연 것 - 이미 로그인된 브라우저에서 헷갈렸다 (2026-10-16)
   show($("super-bar"), asSuper !== null || elsewhere);
@@ -197,7 +208,7 @@ onSession(async (s) => {
   }
   show($("login"), false); show($("main"), true);
   paintNav();
-  mount(APPS[0]);
+  mount(me.mustChange ? account : APPS[0]);   // 비밀번호를 바꿔야 하는 계정은 계정 화면만 (메뉴 잠금 - paintNav)
 });
 
 // --- 회사·PC --------------------------------------------------------
@@ -242,7 +253,16 @@ function ctx() {
            pcs: company?.pcs || {},         // 업체 PC 모두 {pcId: {label}} - 프리셋 복사의 받을 PC 목록
            policy: company?.apps || {},   // 업체가 안 쓰는 기능 (총괄이 정한다). 예: apps.rpa.modules.Hold === false
            isAdmin: !!me && (me.role === "admin" || me.role === "super"),
-           apps: APPS };   // 환경설정 페이지가 앱마다 설정 화면을 붙인다
+           apps: APPS,     // 환경설정 페이지가 앱마다 설정 화면을 붙인다
+           unlock };       // 계정 화면이 비밀번호를 바꾼 뒤 부른다 - mustChange 메뉴 잠금을 푼다 (스탠드얼론)
+}
+
+/** 비밀번호를 바꿔 mustChange 가 풀렸다 - 메뉴를 다시 그린다 (지금 보던 계정 화면은 그대로) */
+function unlock() {
+  if (!me?.mustChange) return;
+  me.mustChange = false;
+  paintNav();
+  for (const a of document.querySelectorAll(".nav a")) if (a.dataset.key === current?.key) a.setAttribute("aria-current", "page");
 }
 
 /** 적용 안 한 변경이 있는 페이지(환경설정)를 떠나기 전에 묻는다 - 메뉴·PC 바꾸기·로그아웃 */
@@ -260,6 +280,7 @@ function navLink(mod) {
 }
 
 function paintNav() {
+  if (me?.mustChange) { $("app-nav").replaceChildren(); $("admin-nav").replaceChildren(navLink(account)); return; }   // 비밀번호를 바꿀 때까지 계정 화면만
   $("app-nav").replaceChildren(...APPS.map(navLink));
   $("admin-nav").replaceChildren(...PAGES.filter((p) => (!p.adminOnly || ctx().isAdmin) && (p !== account || me?.email)).map(navLink));   // 관리 화면 열쇠로 들어온 계정은 이메일·비밀번호가 없다 - 계정 페이지 없음   // 유저는 환경설정 링크가 없다
 }

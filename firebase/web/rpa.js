@@ -133,13 +133,17 @@ const dur = (sec) => sec == null ? "" : sec >= 60 ? `${Math.floor(sec / 60)}분 
 const isToday = (v) => ((v?.started_at || v?.finished_at || "").slice(0, 10)) === isoDay(new Date());
 
 // PC 가 없는 업체: 빈 카드·눌리는 단추를 늘어놓지 않고 안내 한 장만 (2026-10-30)
-const NO_PC_HTML = `<div class="card"><h2>등록된 PC가 없습니다.</h2>
-  <div class="msg">PC에 오토파일럿을 설치하고 에이전트 계정을 연결하면 이곳에 현황과 기록이 표시됩니다.</div></div>`;
+// 스탠드얼론은 에이전트 계정이 없다 - 설치 마법사(오토파일럿 설정)를 마치면 이 PC 가 붙는다
+const NO_PC_HTML = (standalone) => `<div class="card"><h2>등록된 PC가 없습니다.</h2>
+  <div class="msg">PC에 오토파일럿을 설치하고 ${standalone ? "오토파일럿 설정을 마치면" : "에이전트 계정을 연결하면"} 이곳에 현황과 기록이 표시됩니다.</div></div>`;
+// 스탠드얼론: 토큰이 없다 (1회 구매) - 토큰 카드·사용량 카드·기록 표의 '토큰 사용량' 열이 없다. 업데이트도 설치 파일로 한다
+const standalone = () => c?.edition === "standalone";
 
 export function mount(el, context) {
   root = el; c = context;
-  if (!c.pcId) { root.innerHTML = NO_PC_HTML; return; }
+  if (!c.pcId) { root.innerHTML = NO_PC_HTML(standalone()); return; }
   root.innerHTML = HTML;
+  if (standalone()) root.querySelector("#view-history thead th:last-child").remove();   // '토큰 사용량' 열 머리 (칸은 histRow 가 안 만든다)
   busy = false; live = null; seenRun = {}; boots = {}; lastBoot = null; dupUntil = 0; tokBal = undefined;
   $("tab-status").onclick = () => showView("status");
   $("tab-history").onclick = () => showView("history");
@@ -333,13 +337,14 @@ function verStat(v) {
     const n = Number(v.changed_count) || list.length;
     const more = n > list.length ? ` 외 ${n - list.length}개` : "";
     // 파일 변조 감지 (2026-10-23): tampered = 바뀐 파일·틀린 서명 → PC 가 실행을 막는다. mixed = 빠진 파일만 (경고)
+    const again = standalone() ? "같은 버전 설치 파일로 다시 설치하면" : "같은 버전으로 다시 업데이트하면";   // 스탠드얼론은 자동 업데이트가 없다
     if (v.state === "tampered") {
       const why = v.signature === "bad" && !(Array.isArray(v.modified) && v.modified.length) ? "버전 목록의 서명이 맞지 않습니다" : `다른 파일: ${list.join(", ")}${more}`;
       return { text: `버전 ${name || "?"} · 파일 변조됨 (실행 막힘)`, warn: true,
-               title: `${why}. ERPia에 문의하여 주십시오. (같은 버전으로 다시 업데이트하면 원래 파일로 되돌립니다)` };   // 업체 웹엔 [업데이트] 가 없다 (W5)
+               title: `${why}. ERPia에 문의하여 주십시오. (${again} 원래 파일로 되돌립니다)` };   // 업체 웹엔 [업데이트] 가 없다 (W5)
     }
     return { text: `버전 ${name || "?"} · 빠진 파일 ${n}`, warn: true,
-             title: list.length ? `버전 목록에 있는데 없는 파일: ${list.join(", ")}${more}. ERPia에 문의하여 주십시오. (같은 버전으로 다시 업데이트하면 채웁니다)` : "" };
+             title: list.length ? `버전 목록에 있는데 없는 파일: ${list.join(", ")}${more}. ERPia에 문의하여 주십시오. (${again} 채웁니다)` : "" };
   }
   if (v.state === "error") return { text: "버전 확인 실패", title: typeof v.error === "string" ? v.error : "", warn: true };
   return null;
@@ -579,10 +584,11 @@ function histRow(r) {
   const t = (r.started_at || "").slice(5, 16).replace("T", " ").replace("-", "/");
   const prog = (PROGRAM_SHORT[r.program] || r.program_label || r.program || "") + (payload.trigger === "repeat" ? " · 반복" : "");   // 표에선 '오토파일럿' 을 뗀다. 처리한 반복 회차 (빈 회차는 기록에 없다)
   // 결과가 첫 칸 - 실패 줄을 눈으로 훑어 찾게 (2026-10-30)
-  tr.innerHTML = `<td><span class="pill ${cls}">${esc(stateText(r))}</span></td><td class="num">${esc(t)}</td><td>${esc(prog)}</td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td><td class="num">${typeof r.cost === "number" ? r.cost.toLocaleString("ko-KR") : "-"}</td>`;   // 토큰 전 옛 기록은 cost 가 없다
+  tr.innerHTML = `<td><span class="pill ${cls}">${esc(stateText(r))}</span></td><td class="num">${esc(t)}</td><td>${esc(prog)}</td><td class="num">${esc(dur(r.duration_sec))}</td><td class="muted">${esc(r.reason || ms)}</td>`
+    + (standalone() ? "" : `<td class="num">${typeof r.cost === "number" ? r.cost.toLocaleString("ko-KR") : "-"}</td>`);   // 토큰 전 옛 기록은 cost 가 없다. 스탠드얼론은 토큰 열이 없다
   const detail = document.createElement("tr");
   detail.className = "hist-detail hide";
-  const td = document.createElement("td"); td.colSpan = 6;
+  const td = document.createElement("td"); td.colSpan = standalone() ? 5 : 6;
   td.append(stepList(payload.steps));
   // 기록의 모듈에는 단계 목록이 없어(rpa_status.history_record) 완료 모듈의 사유는 단계 목록 아래 줄로 (R10)
   const notes = (payload.modules || []).filter((m) => m && m.state === "done" && m.reason);
@@ -616,7 +622,7 @@ function paintButtons() {
   const running = rpaRunning();
   // 화면이 센 남은 토큰(tokBal)을 먼저 본다 - PC 가 올린 값은 10분마다라 충전 직후에도 단추가 까닭 없이 잠겼다 (2026-10-22).
   // 에이전트도 띄우기 직전에 서버에서 다시 세어 0 이하면 거절한다 (2부, agent.Tokens.gate)
-  const bal = typeof tokBal === "number" ? tokBal : live?.tokens?.balance;
+  const bal = standalone() ? undefined : typeof tokBal === "number" ? tokBal : live?.tokens?.balance;   // 스탠드얼론은 토큰이 없다
   const empty = typeof bal === "number" && bal <= 0;
   const upd = updBusy(), bad = tampered();               // 변조: PC 가 실행을 거절한다 - 누를 수 없게 (2026-10-30)
   // 잠긴 까닭은 마우스 글(title)과 단추 아래 글 둘 다 - 휴대폰엔 마우스 글이 없다 (W13, 2026-11-03)
@@ -670,7 +676,7 @@ const count = (v) => Number(v).toLocaleString("ko-KR");
 function paintTokens() {
   const t = live?.tokens, line = $("token-line"), bar = $("tok-bar");
   paintUsage();                                          // 통장이 사라졌을 때 카드를 숨기는 것도 여기서
-  const has = typeof t?.balance === "number";
+  const has = !standalone() && typeof t?.balance === "number";   // 스탠드얼론은 live.tokens 가 없어 저절로 숨지만 조건도 건다
   show($("token-card"), has);
   if (!has) {
     tokSeq++;
@@ -727,7 +733,7 @@ let usageFor = null, usageSeq = 0, usageRetryAt = 0;
 const USAGE_RETRY_MS = 5 * 60 * 1000;          // 못 읽으면 5분 뒤에 - 현황(1초)마다 다시 읽으면 하루 읽기 한도를 다 쓴다 (2026-10-14 색인 빠진 칸)
 async function paintUsage() {
   const t = live?.tokens, card = $("usage-card");
-  if (typeof t?.balance !== "number") { card.classList.add("hide"); usageFor = null; usageSeq++; return; }
+  if (standalone() || typeof t?.balance !== "number") { card.classList.add("hide"); usageFor = null; usageSeq++; return; }
   if (usageFor === t.balance || Date.now() < usageRetryAt) return;
   usageFor = t.balance;
   const seq = ++usageSeq;                      // 읽는 사이 남은 토큰이 바뀌거나 통장이 사라지면 늦게 온 결과는 버린다

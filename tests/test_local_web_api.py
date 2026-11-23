@@ -552,10 +552,20 @@ try:
     check("토큰 없이 계정 창구 401", api("GET", "/api/accounts").status == 401 and api("POST", "/api/accounts", {"id": "x1", "password": "x1-pw-00001", "role": "viewer"}).status == 401)
     PASSWORDS.update({"temp1-pw-0001", "reset-pw-0001", "boss2-pw-0001"})
     r = api("POST", "/api/accounts", {"id": "Temp1", "password": "temp1-pw-0001", "role": "viewer"}, token=BOSS)
-    check("유저 추가 (아이디는 소문자로)", r.status == 200 and {"id": "temp1", "role": "viewer", "disabled": False, "mustChange": False} in r.json()["accounts"], repr(r))
+    check("유저 추가 (아이디는 소문자로) - 관리자가 만든 계정은 mustChange (관리자가 비밀번호를 안다 → 첫 로그인에 바꾸게)",
+          r.status == 200 and {"id": "temp1", "role": "viewer", "disabled": False, "mustChange": True} in r.json()["accounts"], repr(r))
     r = login("temp1", "temp1-pw-0001")
     TEMP = (r.json() or {}).get("token")
-    check("추가한 유저로 로그인", r.status == 200 and r.json()["session"]["role"] == "viewer", repr(r))
+    check("추가한 유저로 로그인 (mustChange 세션)", r.status == 200 and r.json()["session"]["role"] == "viewer"
+          and r.json()["session"]["mustChange"] is True, repr(r))
+    got = {p: api("GET", p, token=TEMP) for p in ("/api/runs", f"/api/commands/{K1}", "/api/accounts")}
+    got["POST /api/commands"] = api("POST", "/api/commands", {"type": "launch", "args": None}, token=TEMP)
+    got["POST /api/accounts"] = api("POST", "/api/accounts", {"id": "sneak2", "password": "sneak-pw-0002", "role": "viewer"}, token=TEMP)
+    check("mustChange 세션은 서버도 막는다 - 기록·명령·계정 403 auth/must-change", all(
+        g.status == 403 and g.code == "auth/must-change" and (g.json() or {}).get("message") == "비밀번호를 먼저 바꿔 주십시오."
+        for g in got.values()), repr(got))
+    check("mustChange 세션도 세션·업체 정보는 읽는다 (비밀번호 바꾸기 화면)", api("GET", "/api/session", token=TEMP).status == 200
+          and api("GET", "/api/session?touch=1", token=TEMP).status == 200 and api("GET", "/api/company", token=TEMP).status == 200)
     check("이미 있는 아이디 400", api("POST", "/api/accounts", {"id": "temp1", "password": "other-pw-0001", "role": "viewer"}, token=BOSS).status == 400
           and login("temp1", "temp1-pw-0001").status == 200)
     got = [api("POST", "/api/accounts", {"id": i, "password": "valid-pw-0001", "role": "viewer"}, token=BOSS).status for i in ("a", "a b", "한글", "x" * 33, 7)]
@@ -564,9 +574,9 @@ try:
     check("짧은 비밀번호 400 auth/weak-password", r.status == 400 and r.code == "auth/weak-password", repr(r))
     check("모르는 권한 400", api("POST", "/api/accounts", {"id": "role1", "password": "valid-pw-0001", "role": "owner"}, token=BOSS).status == 400)
     st_temp = Stream(TEMP)
-    st_temp.wait(lambda s: len(s.named("live")) >= 1)
+    check("mustChange 세션도 스트림은 붙는다", st_temp.wait(lambda s: len(s.named("live")) >= 1) and st_temp.status == 200, repr(st_temp.status))
     r = api("POST", "/api/accounts/temp1", {"disabled": True}, token=BOSS)
-    check("사용 중지", r.status == 200 and {"id": "temp1", "role": "viewer", "disabled": True, "mustChange": False} in r.json()["accounts"], repr(r))
+    check("사용 중지", r.status == 200 and {"id": "temp1", "role": "viewer", "disabled": True, "mustChange": True} in r.json()["accounts"], repr(r))
     r = login("temp1", "temp1-pw-0001")
     check("중지한 계정은 로그인 403", r.status == 403 and r.code == "auth/user-disabled", repr(r))
     check("중지한 계정의 열린 세션 401", api("GET", "/api/session", token=TEMP).status == 401)
@@ -593,7 +603,12 @@ try:
           and api("GET", "/api/session", token=BOSS).status == 200 and login("boss", BOSS_PW).status == 200)
     r = api("POST", "/api/accounts", {"id": "boss2", "password": "boss2-pw-0001", "role": "admin"}, token=BOSS)
     B2 = token_of("boss2", "boss2-pw-0001")
-    check("관리자 추가", r.status == 200 and api("GET", "/api/accounts", token=B2).status == 200)
+    PASSWORDS.add("boss2-pw-0002")
+    first = api("GET", "/api/accounts", token=B2)
+    changed = api("POST", "/api/password", {"current": "boss2-pw-0001", "next": "boss2-pw-0002"}, token=B2)
+    check("관리자 추가 - 새 관리자도 비밀번호를 바꾸기 전에는 계정 창구 403 auth/must-change, 바꾸면 200",
+          r.status == 200 and first.status == 403 and first.code == "auth/must-change" and changed.status == 200
+          and api("GET", "/api/accounts", token=B2).status == 200, repr((first, changed)))
     r = api("POST", "/api/accounts/boss2", {"disabled": True}, token=BOSS)
     check("다른 관리자 중지 - 그 세션은 끝", r.status == 200 and api("GET", "/api/accounts", token=B2).status == 401)
     check("남은 관리자 하나는 중지·삭제할 수 없다 (중지된 관리자는 세지 않는다)", raises(ValueError, web.accounts.disable, "boss", True)
@@ -610,6 +625,8 @@ try:
     PA = (r.json() or {}).get("token")
     PB = token_of("pwuser", "first-pw-0001")
     check("바꿔야 하는 계정은 mustChange", r.status == 200 and r.json()["session"]["mustChange"] is True)
+    PC_ = token_of("pwuser", "first-pw-0001")
+    check("mustChange 세션도 로그아웃은 된다", api("POST", "/api/logout", token=PC_).status == 200 and api("GET", "/api/session", token=PC_).status == 401)
     r = api("POST", "/api/password", {"current": "wrong-pw-0000", "next": "second-pw-001"}, token=PA)
     check("틀린 현재 비밀번호 auth/wrong-password (세션은 그대로)", r.status == 403 and r.code == "auth/wrong-password"
           and api("GET", "/api/session", token=PA).status == 200, repr(r))

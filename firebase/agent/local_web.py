@@ -594,14 +594,18 @@ class Web:
             return None
         return acct
 
-    def _auth(self, h, touch=False, admin=False):
-        """Authorization: Bearer <세션 토큰> → (토큰, 계정). 없거나 끝난 세션 401, admin 창구에 유저 403."""
+    def _auth(self, h, touch=False, admin=False, must_ok=False):
+        """Authorization: Bearer <세션 토큰> → (토큰, 계정). 없거나 끝난 세션 401, admin 창구에 유저 403.
+        비밀번호를 바꿔야 하는 계정(must_change)은 must_ok 창구(세션·로그아웃·비밀번호·업체 정보·스트림)만 쓴다 - 그 밖은
+        403 auth/must-change (화면도 계정 화면만 보이지만 서버가 한 겹 더 막는다, 계획 ② Task 3)."""
         raw = h.headers.get("Authorization") or ""
         token = raw[7:].strip() if raw.startswith("Bearer ") else ""
         token = token if TOKEN_RE.fullmatch(token) else None
         acct = self._account_of(token)
         if acct is None:
             raise _Fail(401, "unauthenticated", "로그인이 필요합니다. 다시 로그인하여 주십시오.")
+        if acct["must_change"] and not must_ok:
+            raise _Fail(403, "auth/must-change", "비밀번호를 먼저 바꿔 주십시오.")
         if admin and acct["role"] != "admin":
             raise _Fail(403, "PERMISSION_DENIED", "권한이 없습니다. 관리자 계정으로 로그인하여 주십시오.")
         if touch:
@@ -645,17 +649,17 @@ class Web:
         return {"token": token, "session": self._public(acct)}
 
     def _logout(self, h, query, body):
-        token, acct = self._auth(h)
+        token, acct = self._auth(h, must_ok=True)
         self.sessions.close(token)
         self._log(f"웹 로그아웃  아이디={acct['id']}")
         return {"ok": True}
 
     def _session_get(self, h, query, body):
-        _, acct = self._auth(h, touch=query.get("touch") == "1")
+        _, acct = self._auth(h, touch=query.get("touch") == "1", must_ok=True)
         return {"session": self._public(acct), "now_ms": int(self._clock() * 1000)}
 
     def _password(self, h, query, body):
-        token, acct = self._auth(h, touch=True)
+        token, acct = self._auth(h, touch=True, must_ok=True)
         data = self._dict(body)
         current, new = data.get("current"), data.get("next")
         if not isinstance(current, str) or not isinstance(new, str):
@@ -681,7 +685,7 @@ class Web:
         return {"ok": True, "session": self._public(fresh)}
 
     def _company(self, h, query, body):
-        self._auth(h)
+        self._auth(h, must_ok=True)
         lic = self.lic
         return {"name": lic.get("company") or "", "stts": 0, "pcs": {lic["pc_id"]: {"label": socket.gethostname()}},
                 "apps": {APP: {"modules": lic.get("modules") or {}, "limits": lic.get("limits") or {}, "features": lic.get("features") or {}}},
@@ -750,7 +754,7 @@ class Web:
         if not isinstance(raw_id, str) or not isinstance(password, str) or not isinstance(role, str):
             raise _Fail(400, "invalid-argument", "아이디·비밀번호·권한을 입력하여 주십시오.")
         try:
-            uid = self.accounts.add(raw_id, password, role)
+            uid = self.accounts.add(raw_id, password, role, must_change=True)     # 관리자가 비밀번호를 안다 → 첫 로그인에 바꾸게
         except WeakPassword as e:
             raise _Fail(400, "auth/weak-password", str(e)) from None
         except ValueError as e:
@@ -813,7 +817,7 @@ class Web:
             command   = {"key", "value"} 바뀐 명령 하나의 지금 값 (지워졌으면 null)
             keep-alive= 조용할 때 KEEPALIVE_SEC 마다,  gone = 세션이 끝났다 (보내고 닫는다 - 화면은 로그인으로)
         이벤트에 서명은 없다 (브라우저용). 세션은 1초에 한 번쯤 다시 본다 - 미사용 시계는 되돌리지 않는다."""
-        token, _ = self._auth(h)
+        token, _ = self._auth(h, must_ok=True)
         with self._streams_lock:
             if self._streams >= MAX_STREAMS:
                 raise _Fail(503, "unavailable", "열어 둔 화면이 너무 많습니다. 쓰지 않는 탭을 닫아 주십시오.")
