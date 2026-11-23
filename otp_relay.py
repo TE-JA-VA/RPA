@@ -192,6 +192,105 @@ class ManualOtp:
         pass
 
 
+MANUAL_SEC = 300                          # 스탠드얼론: 휴대폰이 없거나 답이 없으면 사람이 Edge 칸에 넣기를 기다리는 시간 (설계 7절)
+GIVE_UP = "인증번호를 받지 못함"            # 그때 그 사이트의 실패 사유 (재생기 결과·실행 기록)
+TYPED_STABLE_SEC = 1.0                    # 칸의 숫자가 이만큼 그대로면 사람이 다 친 것으로 본다 (ManualOtp 와 같다)
+
+
+class _Typed:
+    """칸에 사람이 친 번호 (숫자 4~8자리가 1초 그대로) 를 본다 - ManualOtp 와 같은 판단."""
+
+    def __init__(self, field):
+        self.field, self.last, self.since = field, "", 0.0
+
+    def code(self):
+        try:
+            v = (self.field.input_value() or "").strip() if self.field is not None else ""
+        except Exception:
+            v = ""
+        if not re.fullmatch(r"\d{4,8}", v):
+            self.last = ""
+            return None
+        if v != self.last:
+            self.last, self.since = v, time.time()
+            return None
+        return v if time.time() - self.since >= TYPED_STABLE_SEC else None
+
+
+class FallbackOtp:
+    """스탠드얼론 재생기의 인증번호 (계획 ④ Task 4, 설계 7절 '안 될 때'): 휴대폰이 있으면 재생기의 시간(2분) 동안 휴대폰 번호를 기다리되
+    그동안에도 Edge 칸에 사람이 넣은 번호를 받는다 (먼저 온 것). 그 뒤 on_manual() 을 한 번 부르고 manual_sec(5분) 동안 칸만 본다.
+    끝내 없으면 None → 재생기는 다시 하지 않고(once - 재발송 없음) 그 단계를 give_up 사유로 끝낸다 (그 사이트만 실패).
+    휴대폰 요청을 못 열면(짝짓지 않음·발신번호 거절·서버 없음) 까닭을 log 로 한 줄 남기고 이번 실행은 사람 입력만. 예외를 올리지 않는다.
+    인증번호 숫자는 log 에 싣지 않는다."""
+    once = True
+    give_up = GIVE_UP
+
+    def __init__(self, phone=None, manual_sec=MANUAL_SEC, on_manual=None, log=None):
+        self.phone, self.manual_sec, self.on_manual, self.log = phone, manual_sec, on_manual, log
+        self._req = None                  # 휴대폰 요청 (열었으면)
+
+    def _say(self, text):
+        if self.log:
+            try:
+                self.log(text)
+            except Exception:
+                pass
+
+    def open(self, tick=None):
+        self._req = None
+        if self.phone is not None:
+            try:
+                self._req = self.phone.open(tick) if tick is not None else self.phone.open()
+            except Exception as e:          # RuntimeError(DENIED)·OSError·fb.HttpError·AuthError - 사람 입력만
+                why = str(e) if isinstance(e, RuntimeError) else f"{type(e).__name__}{' ' + str(e.status) if getattr(e, 'status', None) else ''}"
+                self._say(f"휴대폰으로 인증번호를 받을 수 없어 직접 입력을 기다립니다. ({why})")
+        return self._req or "manual"
+
+    def wait(self, req_id, seconds, tick, field=None):
+        typed = _Typed(field)
+        if self.phone is not None and self._req is not None:
+            end = time.time() + seconds
+            while time.time() < end:
+                try:
+                    code = self.phone.wait(self._req, min(1.0, max(0.1, end - time.time())), tick, field)
+                except Exception as e:      # 휴대폰 쪽이 끊겼다 - 사람 입력으로
+                    self._say(f"휴대폰으로 인증번호를 받을 수 없어 직접 입력을 기다립니다. ({type(e).__name__})")
+                    break
+                if code:
+                    return code
+                got = typed.code()
+                if got:
+                    return got
+        if self.on_manual:
+            self.on_manual()
+        end = time.time() + self.manual_sec
+        while time.time() < end:
+            got = typed.code()
+            if got:
+                return got
+            tick(0.3)
+        return None
+
+    def close(self, req_id):
+        if self.phone is not None and self._req is not None:
+            req, self._req = self._req, None
+            self.phone.close(req)
+
+
+def standalone_relay(phone_id, senders, site, on_manual=None, log=None):
+    """스탠드얼론 ACTOR 실행·옵저버 미리보기의 인증번호: 인증 휴대폰과 발신번호를 정했으면 휴대폰 중계를 시도하고 (설정을 못 읽으면
+    사람 입력만), 아니면 바로 사람 입력만 → FallbackOtp."""
+    phone = None
+    if phone_id and senders:
+        try:
+            phone = agent_relay(phone_id, senders, site)
+        except RuntimeError as e:
+            if log:
+                log(f"휴대폰으로 인증번호를 받을 수 없어 직접 입력을 기다립니다. ({e})")
+    return FallbackOtp(phone=phone, on_manual=on_manual, log=log)
+
+
 def phone_list():
     """이 업체의 휴대폰 [(phoneId, 이름)] - 관리 화면 '휴대폰 추가' 로 등록한 것 (ACTOR 저장 화면이 고르게). 못 읽으면 예외."""
     cfg = relay_config()

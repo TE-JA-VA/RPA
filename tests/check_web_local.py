@@ -81,7 +81,7 @@ def start_server(web, port=0):
     end = time.time() + 30
     while True:
         try:
-            s = local_server.make_server(store, runs, LIC, KEYS, port=port, folder=DATA, web=web)
+            s = local_server.make_server(store, runs, LIC, KEYS, port=port, folder=DATA, web=web, phone=getattr(web, "phone", None))
             break
         except OSError:
             if time.time() > end:
@@ -103,6 +103,17 @@ try:
     runs = local_server.Runs(os.path.join(DATA, "runs.db"))
     KEYS = local_server.ensure_keys(DATA)
     web = local_web.Web(store, runs, LIC, DATA, WEB)
+    # 휴대폰 창구 (계획 ④ Task 3): 휴대폰 포트는 127.0.0.1 의 빈 포트, 방화벽 명령은 받아 적기만 (진짜 규칙을 만들지 않는다)
+    import local_phone  # noqa: E402
+    import edition  # noqa: E402
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    from fake_phone_local import FakePhone  # noqa: E402
+    fw_calls = []
+    PHONE = local_phone.Service(DATA, store, LIC, run=lambda cmd: (fw_calls.append(cmd), 1 if " show rule " in cmd else 0)[1],
+                                host="127.0.0.1", port=0)
+    web.phone = PHONE
+    real_test_build = edition.test_build
+    edition.test_build = lambda: False
     web.accounts.set("boss", BOSS_PW, "admin")
     web.accounts.set("staff", STAFF_PW, "viewer")
     srv = start_server(web)
@@ -119,11 +130,13 @@ try:
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         ctx = browser.new_context(viewport={"width": 1280, "height": 860})
-        outside, console_bad, net_errors, page_errors = [], [], [], []
+        outside, console_bad, net_errors, page_errors, net_urls = [], [], [], [], []
         expect_net = [False]                 # 일부러 거절받는 동안(틀린 비밀번호·서버 다시 켜기)의 '리소스를 못 받음' 콘솔 줄은 세지 않는다
 
         def watch_page(p):
             p.on("request", lambda r: outside.append(r.url) if not r.url.startswith(BASE + "/") else None)
+            p.on("response", lambda r: net_urls.append(f"{r.status} {r.request.method} {r.url[len(BASE):]}")
+                 if r.status >= 400 and not expect_net[0] else None)
             p.on("pageerror", lambda e: page_errors.append(str(e)))
 
             def on_console(m):
@@ -164,6 +177,7 @@ try:
         check("업체코드 칸이 없다 (PC 하나에 업체 하나)", page.is_hidden("#cid") and "업체코드" not in page.inner_text("#login"),
               page.inner_text("#login"))
         check("'아이디 저장' (업체코드 글 없음)", "아이디 저장" in page.inner_text("#login .remember"))
+        check("시험용 빌드가 아니면 맨 위 띠가 없다", page.is_hidden("#test-build"))
         check("글꼴은 로컬 사본 (fonts/fonts.css)", page.evaluate("[...document.styleSheets].some((s) => (s.href || '').endsWith('/fonts/fonts.css'))"))
         expect_net[0] = True
         login(page, "boss", "wrong-pw-0000", ok=False)
@@ -173,6 +187,15 @@ try:
         until(page, "(document.getElementById('login-alert')?.textContent || '').includes('잠시 잠겼습니다')", timeout=10000)
         check("여러 번 틀리면 잠금 문구 (code 가 아니라 사람 말)", page.text_content("#login-alert") == "로그인 시도가 많아 잠시 잠겼습니다. 1분 뒤 다시 시도하여 주십시오.",
               page.text_content("#login-alert"))
+        # 잠금 문구가 길어도 [로그인] 단추는 줄지 않는다 - 전엔 문구가 단추 폭을 밀어내 '로/그/인' 이 세로로 깨졌다 (사용자 2026-11-23)
+        for width in (1280, 820):
+            page.set_viewport_size({"width": width, "height": 860})
+            page.wait_for_timeout(150)
+            got = page.evaluate("(() => { const b = document.getElementById('login-btn'), r = b.getBoundingClientRect(); "
+                                "const s = getComputedStyle(b); const lh = parseFloat(s.lineHeight) || parseFloat(s.fontSize) * 1.4; "
+                                "return {w: r.width, h: r.height, lines: Math.round((b.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)) / lh)}; })()")
+            check(f"잠금 문구가 떠도 [로그인] 단추 글자는 한 줄 (폭 {width})", got["lines"] == 1 and got["w"] >= 80 and got["h"] < 60, repr(got))
+        page.set_viewport_size({"width": 1280, "height": 860})
         web.lockout.ok("boss")
         page.wait_for_timeout(300)
         expect_net[0] = False
@@ -260,6 +283,78 @@ try:
         page.wait_for_timeout(500)
 
         # --------------------------------------------------------------------------------------
+        print("휴대폰 인증 (계획 ④ Task 3)")
+        page.wait_for_selector("#phone-card", timeout=10000)
+        until(page, "(document.getElementById('phone-meta')?.textContent || '').includes('포트')", timeout=10000)
+        check("환경설정 왼쪽 열 끝에 '휴대폰 인증' 묶음과 '휴대폰' 카드", page.evaluate(
+            "(() => { const col = document.querySelector('#settings-grid > div'); const hs = [...col.querySelectorAll(':scope > h3.grp')];"
+            " return hs.at(-1)?.textContent === '휴대폰 인증' && col.lastElementChild?.id === 'phone-card'; })()")
+              and page.text_content("#phone-meta") == "등록된 휴대폰 없음 · 포트 8782 닫힘", page.text_content("#phone-meta"))
+        check("휴대폰이 없을 때 안내 (Edge 창에 직접 입력)", page.is_visible("#phone-none") and "Edge 창에 직접 입력" in page.text_content("#phone-none")
+              and page.is_hidden("#phone-tbl"))
+        qr_box = []
+        page.on("response", lambda r: qr_box.append(r) if r.url.endswith("/api/phone-pair") and r.request.method == "POST" else None)
+        page.fill("#phone-label", "김OO 휴대폰"); page.fill("#phone-owner", "김OO"); page.fill("#phone-senders", "1588-1234")
+        page.click("#phone-add")
+        page.wait_for_selector("#phone-qr-box svg", timeout=10000)
+        qr_text = qr_box[-1].json()["qr"] if qr_box else ""
+        n = int(page.get_attribute("#phone-qr-box svg", "data-modules") or 0)
+        finders = page.evaluate("""async (t) => { const m = (await import('/qr.js')).qrMatrix(t); const n = m.length;
+            const ring = (r0, c0) => [0, 6].every((k) => [...Array(7).keys()].every((i) => m[r0 + k][c0 + i] && m[r0 + i][c0 + k]))
+              && [...Array(3).keys()].every((i) => [...Array(3).keys()].every((j) => m[r0 + 2 + i][c0 + 2 + j])) && !m[r0 + 1][c0 + 1];
+            return {n, ok: ring(0, 0) && ring(0, n - 7) && ring(n - 7, 0)}; }""", qr_text)
+        check("[휴대폰 추가] → 카드 안에 QR (svg, 모듈 수 4×버전+17, 세 귀퉁이에 찾기 무늬)", n >= 21 and (n - 17) % 4 == 0 and finders == {"n": n, "ok": True}
+              and page.evaluate("document.querySelector('#phone-card #phone-qr-box svg') !== null"), repr((n, finders)))
+        check("남은 시간 글 (5분·한 번)", "QR 코드는 5분 동안 한 번만 사용할 수 있습니다. (남은 시간 " in page.text_content("#phone-pair-text")
+              and "다른 사람에게 전달하지 마십시오" in page.text_content("#phone-pair"), page.text_content("#phone-pair-text"))
+        fp1 = FakePhone(qr_text)
+        began = time.time()
+        fp1.pair(device="Fake")
+        until(page, "(document.getElementById('phone-msg')?.textContent || '').includes('연결되었습니다')", timeout=8000)
+        took = time.time() - began
+        check("휴대폰이 짝지으면 2~4초 안에 표에 한 줄과 연결 글", fp1.pair_status == 200 and took <= 4.5
+              and page.text_content("#phone-msg") == "휴대폰 '김OO 휴대폰'이(가) 연결되었습니다. (Fake · android)"
+              and page.locator("#phone-rows tr[data-id]").count() == 1 and page.is_hidden("#phone-pair")
+              and "15881234" in page.text_content("#phone-rows"), f"{took:.1f}초 {page.text_content('#phone-msg')}")
+        check("머리: '1대 · 포트 <휴대폰 포트> 열림' (시험은 빈 포트)", page.text_content("#phone-meta")
+              == f"1대 · 포트 {PHONE.gate.status()['port']} 열림", page.text_content("#phone-meta"))
+        lines = page.evaluate("""(() => { const one = (el) => { const s = getComputedStyle(el), lh = parseFloat(s.lineHeight) || parseFloat(s.fontSize) * 1.4;
+            const r = document.createRange(); r.selectNodeContents(el); return Math.round(r.getBoundingClientRect().height / lh); };
+            const card = document.getElementById('phone-card').getBoundingClientRect();
+            const inCard = [...document.querySelectorAll('#phone-rows button')].every((b) => { const r = b.getBoundingClientRect();
+              return r.width > 0 && r.right <= card.right - 8 && r.left >= card.left; });
+            return {name: one(document.querySelector('#phone-rows tr[data-id] td div')), add: one(document.getElementById('phone-add')), inCard}; })()""")
+        check("휴대폰 표의 이름·[휴대폰 추가] 단추 글자가 한 줄, [수정]·[삭제] 가 카드 안에 보인다", lines == {"name": 1, "add": 1, "inCard": True}, repr(lines))
+        # 화면 사진 (QR 이 보이는 상태 - 시험용 값)
+        page.fill("#phone-label", "공용 휴대폰")
+        page.click("#phone-add")
+        page.wait_for_selector("#phone-qr-box svg", timeout=10000)
+        if SHOT_DIR:
+            page.set_viewport_size({"width": 1280, "height": 1400})
+            page.wait_for_timeout(300)
+            page.locator("#phone-card").scroll_into_view_if_needed()
+            page.screenshot(path=os.path.join(SHOT_DIR, "standalone_phones.png"))
+            page.set_viewport_size({"width": 1280, "height": 860})
+        check("짝짓기 중에는 서버도 waiting", PHONE.pairing.state()["state"] == "waiting")
+        page.reload()
+        page.wait_for_selector("#main:not(.hide)", timeout=15000)
+        page.click("#admin-nav a[data-key='settings']")
+        page.wait_for_selector("#phone-card", timeout=10000)
+        until(page, "document.querySelectorAll('#phone-rows tr[data-id]').length === 1", timeout=10000)
+        page.wait_for_timeout(800)
+        check("새로 고치면 QR 이 없다 (QR 은 한 번만 - 남은 짝짓기는 취소)", page.locator("#phone-qr-box svg").count() == 0
+              and PHONE.pairing.state()["state"] != "waiting", repr(PHONE.pairing.state()))
+        msgs = []
+        page.once("dialog", lambda d: (msgs.append(d.message), d.accept()))
+        page.click("#phone-rows tr[data-id] button[data-act='remove']")
+        until(page, "document.querySelectorAll('#phone-rows tr[data-id]').length === 0", timeout=10000)
+        check("[삭제] 확인 뒤 줄이 없어지고 '포트 닫힘'", msgs == ["휴대폰 '김OO 휴대폰'을(를) 삭제하시겠습니까? 삭제하면 이 휴대폰은 인증번호를 전달할 수 없습니다."]
+              and page.text_content("#phone-meta") == "등록된 휴대폰 없음 · 포트 8782 닫힘"
+              and page.text_content("#phone-msg") == "휴대폰을 삭제하였습니다. 등록된 휴대폰이 없어 휴대폰 포트를 닫았습니다."
+              and PHONE.phones.count() == 0 and PHONE.gate.status()["open"] is False, repr((msgs, page.text_content("#phone-msg"))))
+        check("방화벽 명령은 가짜 실행기로만 (규칙 추가·삭제를 받아 적음)", any(" add rule " in c for c in fw_calls) and any(" delete rule " in c for c in fw_calls))
+
+        # --------------------------------------------------------------------------------------
         print("탭 단위 로그인")
         p2 = watch_page(ctx.new_page())
         p2.goto(BASE + "/")
@@ -318,6 +413,7 @@ try:
         until(q, "document.getElementById('h-state')?.textContent === '성공'", timeout=10000)
         check("유저: 현황은 보이고 [실행]·환경설정 메뉴가 없다", q.is_hidden("#act-card") and q.is_hidden("#sidecol")
               and q.locator("#admin-nav a[data-key='settings']").count() == 0)
+        check("유저(viewer)에게는 휴대폰 카드가 없다", q.locator("#phone-card").count() == 0)
         q.click("#logout-btn")
         q.wait_for_selector("#login:not(.hide)")
         expect_net[0] = True
@@ -410,16 +506,29 @@ try:
         until(page, "(document.getElementById('tiles')?.textContent || '').includes('56')", timeout=10000)
 
         # --------------------------------------------------------------------------------------
+        print("시험용 빌드 띠")
+        edition.test_build = lambda: True
+        page.reload()
+        page.wait_for_selector("#main:not(.hide)", timeout=15000)
+        check("시험용 빌드면 맨 위 띠 '시험용 빌드 - 고객 배포 금지'", page.is_visible("#test-build")
+              and page.text_content("#test-build") == "시험용 빌드 - 고객 배포 금지")
+        edition.test_build = lambda: False
+
         print("바깥 요청 · 콘솔")
         page.wait_for_timeout(500)
         check("바깥 요청 0 (모든 요청이 이 서버 주소)", not outside, repr(outside[:10]))
         check("콘솔 오류 0 (CSP 위반 포함)", not console_bad and not page_errors, repr((console_bad[:5], page_errors[:5])))
-        check("일부러 거절받은 때 말고는 '리소스를 못 받음' 도 없다", not net_errors, repr(net_errors[:5]))
+        check("일부러 거절받은 때 말고는 '리소스를 못 받음' 도 없다", not net_errors, repr((net_errors[:5], net_urls[:5])))
         browser.close()
 finally:
     try:
         if srv is not None:
             stop_server(srv)
+    except Exception:
+        pass
+    try:
+        edition.test_build = real_test_build
+        PHONE.stop()
     except Exception:
         pass
     try:

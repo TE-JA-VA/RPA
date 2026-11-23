@@ -51,6 +51,13 @@ PW_SAVE_HINT = "비밀번호와 엑셀 비밀번호는 암호화해 이 PC에만
 XL_PW_HINT = ("엑셀 비밀번호: 쇼핑몰에서 받은 주문 엑셀이 열 때 비밀번호를 묻는 경우에만 넣으십시오. "
               "오토파일럿이 이 비밀번호로 파일을 열어 주문을 처리합니다. 비밀번호가 없는 엑셀이면 비워 두십시오.")
 SMS_HINT = "문자 인증 사이트는 인증 휴대폰과 발신번호를 정해 주십시오. (여러 개는 쉼표로)"
+# 스탠드얼론: 휴대폰이 없어도 저장·실행된다 - 실행할 때 Edge 칸에 사람이 넣는다 (계획 ④ Task 4)
+SMS_HINT_STANDALONE = ("문자 인증 사이트는 인증 휴대폰과 발신번호를 정해 주십시오. 정하지 않으면 실행할 때 Edge 창의 인증번호 칸에 "
+                       "직접 입력하여야 합니다. (여러 개는 쉼표로)")
+
+
+def sms_hint(standalone):
+    return SMS_HINT_STANDALONE if standalone else SMS_HINT
 MAIL_HINT = "'메일 시작 문구'로 시작하는 메일만 받습니다. 메일이 많으면 제목으로 검색해 고르십시오."   # 메일 첨부파일일 때 (BugBuster I5)
 IMAP_HINT = ("메일 서버(IMAP)에서 조건에 맞는 메일의 엑셀 첨부파일을 받습니다. 아이디·비밀번호는 메일 계정의 것입니다. "
              "(네이버·다음·Gmail 은 메일 설정에서 IMAP 사용을 켜고, Gmail 은 앱 비밀번호를 넣으십시오)")
@@ -351,7 +358,11 @@ class Worker(threading.Thread):
         self.ui.put(("human_done",))
 
     def _otp_relay(self, creds, label, stamp):
-        """미리보기의 인증번호: 인증 휴대폰을 정했으면 휴대폰 중계, 아니면 (또는 서버에 못 붙으면) 사람이 미리보기 창 칸에 칠 때까지."""
+        """미리보기의 인증번호: 인증 휴대폰을 정했으면 휴대폰 중계, 아니면 (또는 서버에 못 붙으면) 사람이 미리보기 창 칸에 칠 때까지.
+        스탠드얼론은 실행과 같은 FallbackOtp - 휴대폰(있으면) 다음에 사람 5분 (계획 ④ Task 4)."""
+        if otp_relay._standalone():
+            return otp_relay.standalone_relay(creds.get("Phone"), creds.get("SmsSenders"), label, log=lambda m: st.log_line(f"{stamp()} {m}"),
+                                              on_manual=lambda: self.ui.put(("status", "미리보기 창의 인증번호 칸에 휴대폰으로 받은 번호를 넣어 주십시오 (5분 안).", BLUE)))
         if creds.get("Phone") and creds.get("SmsSenders"):
             try:
                 return otp_relay.agent_relay(creds["Phone"], creds["SmsSenders"], label)
@@ -778,7 +789,7 @@ def validate_presets(presets, need_market=False):
             return p["no"], f"{tag}: {why}"
         if has_mail_login(p["record"]) and not ((p.get("mail_id") or "").strip() and (p.get("mail_pw") or p.get("has_mail_pw"))):
             return p["no"], f"{tag}: 인증 메일 계정이 입력되지 않았습니다. 인증 메일 아이디와 비밀번호를 입력하여 주십시오."
-        if has_otp(p["record"]) and not (p.get("phone") and senders_list(p.get("senders"))):
+        if has_otp(p["record"]) and not (p.get("phone") and senders_list(p.get("senders"))) and not otp_relay._standalone():   # 스탠드얼론은 휴대폰 없이도 (Edge 칸에 사람이)
             return p["no"], f"{tag}: 인증번호 단계가 있습니다. 인증 휴대폰과 발신번호를 정해 주십시오."
         if not (p.get("id") or "").strip():
             return p["no"], f"{tag}: 아이디가 필요합니다."
@@ -1090,13 +1101,14 @@ class App:
         xl_saved = p["has_xl_pw"] and not p["xl_clear"]
         status = ("저장된 비밀번호·엑셀 비밀번호가 있습니다." if p["has_pw"] and xl_saved else
                   "저장된 비밀번호가 있습니다." if p["has_pw"] else "저장된 엑셀 비밀번호가 있습니다." if xl_saved else "")
-        third = IMAP_HINT if p["source"] == "imap" else SMS_HINT
+        third = IMAP_HINT if p["source"] == "imap" else sms_hint(otp_relay._standalone())
         if self.phones == [] and getattr(self, "phones_failed", False):
             third += " (휴대폰 목록을 불러오지 못했습니다)"
         self.pw_hint.set(status, [PW_SAVE_HINT, XL_PW_HINT, third] + ([MAIL_HINT] if p["source"] == "mail" else []))
 
     def _load_phones(self):
-        """업체 휴대폰 목록 (관리 화면 '휴대폰 추가') - 에이전트 계정으로. 못 읽으면 빈 목록 (저장된 값은 그대로 보인다)."""
+        """업체 휴대폰 목록 (일반 버전은 관리 화면 '휴대폰 추가', 스탠드얼론은 업체 웹 환경설정의 휴대폰) - 에이전트 계정으로.
+        못 읽으면 빈 목록 (저장된 값은 그대로 보인다)."""
         try:
             self.ui.put(("phones", otp_relay.phone_list()))
         except Exception:

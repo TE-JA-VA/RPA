@@ -88,12 +88,15 @@ def sse(path, key, until=1.5):
 PARAMS = {"orderBy": '"state"', "equalTo": '"queued"'}
 CMD = "/db/apps/rpa/commands/c1/p1"
 QUEUED = CMD + '.json?orderBy=%22state%22&equalTo=%22queued%22'
-OTP_REQ = {"req_id": "r1", "site": "시험몰", "pcId": "p1", "senders": {"01012345678": True}}
+OTP_REQ = {"req_id": "req_r1_0000", "site": "시험몰", "pcId": "p1", "senders": {"01012345678": True}}
 try:
+    import local_phone  # noqa: E402
     store = local_server.Store(os.path.join(TMP, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(os.path.join(TMP, "runs.db"))
     AGENT, RELAY = local_server.ensure_keys(TMP)
-    srv = local_server.make_server(store, runs, LIC, (AGENT, RELAY), port=0)
+    phone = local_phone.Service(TMP, store, LIC)          # 인증번호 요청은 짝지은 휴대폰에만 (계획 ④ Task 1)
+    phone.phones.add("ph1", "시험 휴대폰", "", [], key="k" * 64, fp="f" * 64, os="android", app_version="t", device="t")
+    srv = local_server.make_server(store, runs, LIC, (AGENT, RELAY), port=0, phone=phone)
     BASE = f"http://127.0.0.1:{srv.server_address[1]}"
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     LIVE = "/db/apps/rpa/live/c1/p1.json"
@@ -136,7 +139,8 @@ try:
     check("정책 쓰기 403", call("PUT", "/db/meta/companies/c1/apps/rpa/limits.json", {"schedule": 99}, key=AGENT).status == 403)
     check("다른 업체 정책 403", call("GET", "/db/meta/companies/c2/apps/rpa.json", key=AGENT).status == 403)
     check("중계 열쇠는 정책을 못 읽는다", call("GET", "/db/meta/companies/c1/apps/rpa.json", key=RELAY).status == 403)
-    check("휴대폰 목록 (비어 있음)", call("GET", "/db/meta/companies/c1/phones.json", key=AGENT).json() is None)
+    check("휴대폰 목록 (짝지은 휴대폰, 열쇠 없음)", call("GET", "/db/meta/companies/c1/phones.json", key=AGENT).json()
+          == {"ph1": {"label": "시험 휴대폰", "owner": ""}})
     check("AI 키 자리 403", call("GET", "/db/apps/rpa/aikey/c1/key.json", key=AGENT).status == 403)
     check("프리셋 옮기기 자리 403", call("GET", "/db/apps/rpa/transfers/c1.json", key=AGENT).status == 403)
 
@@ -210,8 +214,9 @@ try:
           and call("PATCH", "/db/apps/otp/requests/c1.json", {"": {"a": 1}}, key=RELAY).status == 403)
     check("요청 아래 다른 자리 403", call("PUT", "/db/apps/otp/requests/c1/ph1/other.json", OTP_REQ, key=RELAY).status == 403
           and call("PATCH", REQ, {"site": "y"}, key=RELAY).status == 403)
-    store.put("apps/otp/codes/c1/ph1/current", {"req_id": "r1", "code": "123456"})
-    check("번호 읽기", call("GET", "/db/apps/otp/codes/c1/ph1/current.json", key=RELAY).json() == {"req_id": "r1", "code": "123456"})
+    store.put("apps/otp/codes/c1/ph1/current", {"req_id": OTP_REQ["req_id"], "code": "123456"})
+    check("번호 읽기", call("GET", "/db/apps/otp/codes/c1/ph1/current.json", key=RELAY).json() == {"req_id": OTP_REQ["req_id"], "code": "123456"})
+    check("짝짓지 않은 휴대폰으로 요청 403", call("PUT", "/db/apps/otp/requests/c1/ph9/current.json", OTP_REQ, key=RELAY).status == 403)
     saved = open(os.path.join(TMP, "store.json"), encoding="utf-8").read()
     check("인증번호·요청·현황은 파일에 남지 않는다", "123456" not in saved and "otp" not in saved and "live" not in saved and "commands" in saved)
     check("번호 쓰기는 못 함 (휴대폰 창구만)", call("PUT", "/db/apps/otp/codes/c1/ph1/current.json", {"code": "1"}, key=RELAY).status == 403)
@@ -343,6 +348,7 @@ try:
     os.makedirs(pd)
     os.environ["RPA_PROGRAMDATA"] = pd
     os.environ["RPA_MACHINE_GUID"] = "p1"
+    os.environ["RPA_PHONE_NO_FIREWALL"] = "1"         # 휴대폰 포트의 방화벽 규칙은 건드리지 않는다 (시험)
     code = local_server.main()
     log_path = os.path.join(pd, "standalone", local_server.LOG_NAME)
     text = open(log_path, encoding="utf-8").read() if os.path.isfile(log_path) else ""
@@ -368,7 +374,7 @@ try:
     text = open(log_path, encoding="utf-8").read()
     check("포트를 남이 쓰면 3, 까닭을 기록에", code == 3 and "다른 프로그램이 쓰고 있습니다" in text, f"code={code} {text[-200:]}")
 finally:
-    for k in ("RPA_PROGRAMDATA", "RPA_MACHINE_GUID", "RPA_LOCAL_PORT"):
+    for k in ("RPA_PROGRAMDATA", "RPA_MACHINE_GUID", "RPA_LOCAL_PORT", "RPA_PHONE_NO_FIREWALL"):
         os.environ.pop(k, None)
     try:
         runs.close()

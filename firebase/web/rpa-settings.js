@@ -103,6 +103,7 @@ const HTML = `
   <p class="muted hide" id="no-pc">등록된 PC가 없습니다.</p>`;
 
 let root = null, c = null, stopLive = null, stopLimit = null, stopFeatures = null, stopPar = null, busy = false, live = null, liveLimit;
+let phoneCard = null;   // 스탠드얼론 '휴대폰 인증' 카드 모듈 (phone-card.js, 동적 import)
 let stopPeers = [], transferOk = {};   // 다른 PC 의 live.preset_transfer (새 명령을 아는 PC 만 복사 상대로 고른다 - Review Focus 5)
 let copyKey = "";
 // 2026-11-13: 프리셋 찾기·거르기, 자동 실행 줄의 열린 시계·사이트 목록 - live 가 다시 그려도 남게 모듈 상태로
@@ -125,6 +126,11 @@ export function mount(el, context) {
     $("sch-old").textContent = "이 PC에 새 버전 설치 파일로 설치하면 시각별 모듈·반복 실행을 사용할 수 있습니다.";
   }
   paintAi();
+  if (standalone()) {   // '휴대폰 인증' 묶음 - 왼쪽 열 끝 (계획 ④). 일반 버전은 phone-card.js·qr.js 를 받지 않는다
+    const my = root, col = root.querySelector("#settings-grid > div");
+    import("./phone-card.js").then((m) => { if (root === my) { phoneCard = m; m.mount(col); } },
+      (e) => notify("bad", `휴대폰 칸을 불러오지 못했습니다. (${e?.message || e})`));
+  }
   // [적용] 은 저장(set)부터 명령 끝까지 잠근다 - 저장 왕복 사이에 두 번 눌러도 한 번만 (BugBuster K11)
   $("mod-apply").onclick = () => locked(applyModules);
   $("shop-apply").onclick = () => locked(applyShops);
@@ -226,6 +232,7 @@ export function unmount() {
   if (stopPar) { stopPar(); stopPar = null; }
   for (const off of stopPeers) off();
   stopPeers = [];
+  if (phoneCard) { phoneCard.unmount(); phoneCard = null; }   // 짝짓기 중이면 취소한다
   root = null; c = null;
 }
 

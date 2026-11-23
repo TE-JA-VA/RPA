@@ -65,7 +65,10 @@ try:
     store = local_server.Store(os.path.join(folder, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(os.path.join(folder, "runs.db"))
     AGENT, RELAY = local_server.ensure_keys(folder)
-    srv = local_server.make_server(store, runs, LIC, (AGENT, RELAY), port=0)
+    import local_phone  # noqa: E402
+    phone = local_phone.Service(folder, store, LIC)       # 인증번호 요청은 짝지은 휴대폰에만 (계획 ④ Task 1)
+    phone.phones.add("ph1", "민기 휴대폰", "", [], key="k" * 64, fp="f" * 64, os="android", app_version="t", device="t")
+    srv = local_server.make_server(store, runs, LIC, (AGENT, RELAY), port=0, phone=phone)
     port = srv.server_address[1]
     url = f"http://127.0.0.1:{port}"
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -179,7 +182,7 @@ try:
     check("그 설정으로 붙는다", local_store.client_for(cfg).get("apps/rpa/live/c1/p1")["state"] == "idle")
     check("열쇠 자리 = 서버 자료 폴더", local_store.keys_dir() == local_server.data_dir())
     check("옵저버·ACTOR 의 중계 설정", otp_relay.relay_config()["key"] == RELAY)
-    store.put("phones/c1", {"ph1": {"label": "민기 휴대폰"}, "ph2": {"owner": "이름 없는 것"}})
+    phone.phones.add("ph2", "", "이름 없는 것", [], key="j" * 64, fp="f" * 64, os="android", app_version="t", device="t")
     check("휴대폰 목록 (이름순, 이름이 없으면 코드)", otp_relay.phone_list() == sorted([("ph1", "민기 휴대폰"), ("ph2", "ph2")], key=lambda x: x[1]),
           repr(otp_relay.phone_list()))
     r2 = otp_relay.agent_relay("ph1", ["0212345678"], "시험몰")

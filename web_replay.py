@@ -1550,9 +1550,10 @@ def xq(s):
 class OtpRetry(Exception):
     """인증번호를 못 받았거나 사이트가 거절했다 - '인증번호 받기' 부터 다시 (모두 OTP_TRIES 번). final = 다 실패했을 때의 글 (메일 인증)."""
 
-    def __init__(self, why, rejected=False, final=None, mail=False):
+    def __init__(self, why, rejected=False, final=None, mail=False, once=False):
         super().__init__(why)
         self.rejected, self.final, self.mail = rejected, final, mail   # mail = 메일 2차인증 쪽 - '인증 메일 보내기' 부터, 메일 횟수로
+        self.once = once     # 다시 하지 않는다 (스탠드얼론: 휴대폰·사람 입력을 다 기다렸다 - 재발송 없이 그 단계를 final 로 끝낸다, 계획 ④ Task 4)
 
 
 class MailFail(Exception):
@@ -2655,6 +2656,8 @@ class Replayer:
         self.log(f"      인증번호 문자를 기다리는 중입니다. ({self.otp_try}/{OTP_TRIES}, 최대 {self.otp_wait:.0f}초)")
         code = self.otp.wait(self.otp_req, self.otp_wait, lambda sec: self._wait(page, sec * 1000), field=loc)
         if not code:
+            if getattr(self.otp, "once", False):        # 스탠드얼론 FallbackOtp - 휴대폰 2분·사람 5분을 다 기다렸다 (재발송 없음)
+                raise OtpRetry(self.otp.give_up, final=self.otp.give_up, once=True)
             raise OtpRetry("인증번호 문자가 수신되지 않았습니다.")
         self.otp_mark = len(self.dialogs)
         return code
@@ -3098,7 +3101,7 @@ class Replayer:
             except OtpRetry as e:
                 self.results.append((i, "ok" if e.rejected else "fail", str(e)))
                 tries = self.mail_try if e.mail else self.otp_try
-                if tries < OTP_TRIES:
+                if tries < OTP_TRIES and not e.once:
                     back = (self.mail_send_i if e.mail else self.otp_send) or next(j for j in range(i, 0, -1) if steps[j - 1]["kind"] == "otp")
                     self.log(f"  {i:2d}/{len(steps)} {text}  - {e}. {back}단계부터 다시 ({tries + 1}/{OTP_TRIES})")
                     del self.results[back - 1:]

@@ -203,7 +203,30 @@ try:
     runs = local_server.Runs(os.path.join(DATA, "runs.db"))
     AGENT, RELAY = local_server.ensure_keys(DATA)
     web = local_web.Web(store, runs, LIC, DATA, WEB, clock=clock)
-    srv = local_server.make_server(store, runs, LIC, (AGENT, RELAY), port=0, folder=DATA, web=web)
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    import local_phone  # noqa: E402
+    from fake_phone_local import FakePhone  # noqa: E402
+
+    class FakeRun:
+        """방화벽 명령 흉내 (진짜 규칙을 만들지 않는다) - show 는 규칙이 있으면 0."""
+
+        def __init__(self):
+            self.calls, self.has, self.add_code = [], False, 0
+
+        def __call__(self, cmd):
+            self.calls.append(cmd)
+            if " show rule " in cmd:
+                return 0 if self.has else 1
+            if " add rule " in cmd:
+                self.has = self.add_code == 0
+                return self.add_code
+            if " delete rule " in cmd:
+                self.has = False
+            return 0
+    FW = FakeRun()
+    phone = local_phone.Service(DATA, store, LIC, run=FW, host="127.0.0.1", port=0)    # 휴대폰 포트는 127.0.0.1 의 빈 포트에만
+    web.phone = phone
+    srv = local_server.make_server(store, runs, LIC, (AGENT, RELAY), port=0, folder=DATA, web=web, phone=phone)
     PORT = srv.server_address[1]
     BASE = f"http://127.0.0.1:{PORT}"
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -649,10 +672,107 @@ try:
     check("현재 비밀번호를 5번 틀리면 잠금 (열린 탭으로 비밀번호를 찍어 맞히지 못한다)", got == [403] * 5 and r.status == 429
           and r.code == "auth/too-many-requests" and web.accounts.verify("pwuser", "second-pw-001") is not None, repr((got, r)))
     later(61)
+    # 비밀번호를 바꾸는 사이(파일은 바뀌고 세션 rev 는 아직)에 스트림의 1초 확인이 끼어도 자기 세션을 닫지 않는다 (2026-11-23 흔들리던 401)
+    PASSWORDS.update({"race-pw-00001", "race-pw-00002"})
+    web.accounts.set("raceuser", "race-pw-00001", "viewer")
+    RT = token_of("raceuser", "race-pw-00001")
+    seen_mid, real_refresh = [], web.sessions.refresh
+
+    def refresh_late(token, account):
+        th = threading.Thread(target=lambda: seen_mid.append(web._account_of(RT)))
+        th.start()
+        th.join(0.4)                              # 스트림 쪽이 파일과 세션이 어긋난 순간을 본다 (끝나기를 기다리게 된다)
+        real_refresh(token, account)
+        seen_mid.append(th)
+    web.sessions.refresh = refresh_late
+    try:
+        r = api("POST", "/api/password", {"current": "race-pw-00001", "next": "race-pw-00002"}, token=RT)
+    finally:
+        web.sessions.refresh = real_refresh
+    th = seen_mid.pop() if seen_mid and isinstance(seen_mid[-1], threading.Thread) else None
+    if th:
+        th.join(5)
+    check("비밀번호를 바꾸는 사이에 낀 세션 확인이 자기 세션을 닫지 않는다", r.status == 200 and seen_mid and seen_mid[0] is not None
+          and api("GET", "/api/session", token=RT).status == 200 and api("POST", "/api/logout", {}, token=RT).status == 200, repr((r, seen_mid)))
     # 설정 창(다른 프로세스)이 비밀번호를 다시 정하면 서버의 열린 세션도 끝난다
     PA = token_of("pwuser", "second-pw-001")
     local_web.Accounts(ACC).set("pwuser", "third-pw-0001", "viewer", must_change=True)
     check("밖에서 비밀번호를 다시 정해도 열린 세션은 끝난다", PA is not None and api("GET", "/api/session", token=PA).status == 401)
+
+    # ------------------------------------------------------------------------------------------
+    print("휴대폰 (계획 ④ Task 3)")
+    BOSS, STAFF = token_of("boss", BOSS_PW), token_of("staff", STAFF_PW)
+    six = [("GET", "/api/phones", None), ("POST", "/api/phone-pair", {"label": "x"}), ("GET", "/api/phone-pair", None),
+           ("DELETE", "/api/phone-pair", None), ("POST", "/api/phones/ph_00000000", {"label": "y"}), ("DELETE", "/api/phones/ph_00000000", None)]
+    got = [api(m, p, b, token=STAFF) for m, p, b in six]
+    check("유저(viewer)는 휴대폰 길 여섯 모두 403 PERMISSION_DENIED", all(g.status == 403 and g.code == "PERMISSION_DENIED" for g in got), repr(got))
+    check("로그인 없이 401", all(api(m, p, b).status == 401 for m, p, b in six))
+    r = api("GET", "/api/phones", token=BOSS)
+    check("처음: 휴대폰 없음·포트 닫힘", r.status == 200 and r.json()["phones"] == [] and r.json()["gate"]["open"] is False, repr(r))
+    r = api("POST", "/api/phone-pair", {"label": "김OO 휴대폰", "owner": "김OO", "senders": "1588-1234, 0212345678"}, token=BOSS)
+    pa = r.json() or {}
+    qr_a = pa.get("qr") or ""
+    m_ = re.fullmatch(r"autopilot-phone://pair\?v=1&h=127\.0\.0\.1&p=(\d+)&id=(ph_[0-9a-f]{8})&k=([A-Za-z0-9_-]{43})&fp=([0-9a-f]{64})", qr_a)
+    check("POST /api/phone-pair → QR 글 (조각 여섯·k 43자·fp 64자, 이 차례)", r.status == 200 and m_ is not None
+          and len(urllib.parse.parse_qsl(qr_a.split("?", 1)[1])) == 6, repr(r))
+    K_A = m_.group(3) if m_ else "none"
+    check("응답 칸: phone_id·expires_in 300·hosts·port·fingerprint", m_ is not None and pa.get("phone_id") == m_.group(2) and pa.get("expires_in") == 300
+          and pa.get("hosts") == ["127.0.0.1"] and pa.get("port") == int(m_.group(1)) and pa.get("fingerprint") == m_.group(4), repr(pa))
+    seen = web.sessions.get(BOSS)["seen"]
+    later(5)
+    r = api("GET", "/api/phone-pair", token=BOSS)
+    check("GET /api/phone-pair - waiting, QR·k 를 다시 주지 않는다", r.status == 200 and r.json().get("state") == "waiting" and "qr" not in r.json()
+          and K_A not in r.raw, repr(r))
+    check("GET /api/phone-pair 는 미사용 시계를 되돌리지 않는다", web.sessions.get(BOSS)["seen"] == seen)
+    fa = FakePhone(qr_a)
+    fa.pair(device="Galaxy S23")
+    r = api("GET", "/api/phone-pair", token=BOSS)
+    check("FakePhone 이 짝지으면 paired 와 기기 이름", fa.pair_status == 200 and r.json() == {"state": "paired", "phone": {
+        "id": pa.get("phone_id"), "label": "김OO 휴대폰", "os": "android", "device": "Galaxy S23"}}, repr(r))
+    r = api("GET", "/api/phones", token=BOSS)
+    ph = (r.json() or {}).get("phones") or [{}]
+    check("GET /api/phones 에 한 대 (열쇠 없음)", len(ph) == 1 and ph[0].get("id") == pa.get("phone_id") and ph[0].get("senders") == ["15881234", "0212345678"]
+          and "key" not in ph[0] and fa.key not in r.raw and r.json()["gate"]["open"] is True, repr(r))
+    r = api("POST", "/api/phone-pair", {"label": "취소할 것"}, token=BOSS)
+    qr_b = (r.json() or {}).get("qr")
+    r2 = api("DELETE", "/api/phone-pair", token=BOSS)
+    fb_ = FakePhone(qr_b)
+    fb_.pair()
+    check("DELETE /api/phone-pair 뒤 그 QR 로 pair() 401", r.status == 200 and r2.status == 200 and fb_.pair_status == 401
+          and api("GET", "/api/phone-pair", token=BOSS).json() == {"state": "none"}, repr((r, r2)))
+    r = api("POST", "/api/phone-pair", {"label": "공용 휴대폰"}, token=BOSS)
+    fc = FakePhone(r.json()["qr"])
+    fc.pair()
+    check("두 번째 휴대폰", fc.pair_status == 200 and len(api("GET", "/api/phones", token=BOSS).json()["phones"]) == 2)
+    bad = [api("POST", "/api/phone-pair", {"label": ""}, token=BOSS), api("POST", "/api/phone-pair", {"label": "  "}, token=BOSS),
+           api("POST", "/api/phone-pair", {"label": "x", "senders": "12ab"}, token=BOSS), api("POST", "/api/phone-pair", {"label": "가" * 41}, token=BOSS),
+           api("POST", "/api/phone-pair", {"owner": "x"}, token=BOSS)]
+    check("이름 없음·발신번호 12ab·41자 → 400 invalid-argument (사람 말)", all(b.status == 400 and b.code == "invalid-argument" for b in bad)
+          and "발신번호는 숫자 3~15자리여야 합니다: 12ab" in bad[2].raw, repr(bad))
+    r = api("POST", f"/api/phones/{fa.phone_id}", {"label": "김OO 새 휴대폰", "owner": "", "senders": ""}, token=BOSS)
+    one = {p["id"]: p for p in (r.json() or {}).get("phones", [])}.get(fa.phone_id, {})
+    check("POST /api/phones/<id> - 이름·담당자·발신번호 (빈 글이면 제한 없음)", r.status == 200 and one.get("label") == "김OO 새 휴대폰"
+          and one.get("senders") == [] and one.get("owner") == "", repr(r))
+    check("없는 휴대폰 고치기·지우기 404, 이상한 번호 400", api("POST", "/api/phones/ph_00000000", {"label": "y"}, token=BOSS).status == 404
+          and api("DELETE", "/api/phones/ph_00000000", token=BOSS).status == 404 and api("DELETE", "/api/phones/..%2f", token=BOSS).status == 400)
+    r = api("DELETE", f"/api/phones/{fa.phone_id}", token=BOSS)
+    check("DELETE /api/phones/<id> 뒤 그 휴대폰의 request() 401 (다른 휴대폰이 있어 포트는 열림)", r.status == 200
+          and fa.call("GET", "/phone/v1/request")[0] == 401 and r.json()["gate"]["open"] is True, repr(r))
+    n_del = len([c for c in FW.calls if " delete rule " in c])
+    r = api("DELETE", f"/api/phones/{fc.phone_id}", token=BOSS)
+    check("마지막 휴대폰을 지우면 포트 닫힘·delete rule", r.status == 200 and r.json()["gate"]["open"] is False and r.json()["phones"] == []
+          and len([c for c in FW.calls if " delete rule " in c]) == n_del + 1, repr(r))
+    FW.add_code = 1
+    r = api("POST", "/api/phone-pair", {"label": "방화벽 실패"}, token=BOSS)
+    FW.add_code = 0
+    check("방화벽 실패 → 409 phone/firewall, 글에 add rule 명령", r.status == 409 and r.code == "phone/firewall"
+          and 'netsh advfirewall firewall add rule name="AUTOPILOT Phone OTP"' in (r.json() or {}).get("message", "") and api("GET", "/api/phone-pair", token=BOSS).json()["state"] != "waiting"
+          and phone.gate.status()["open"] is False, repr(r))
+    log_text = open(os.path.join(DATA, local_server.LOG_NAME), encoding="utf-8").read()
+    check("기록에 짝짓기 시작·연결·삭제가 휴대폰 번호·이름과 함께", "휴대폰 짝짓기 시작" in log_text and "휴대폰 삭제" in log_text and fa.phone_id in log_text)
+    disk = "".join(open(os.path.join(DATA, n), encoding="utf-8", errors="replace").read() for n in os.listdir(DATA)
+                   if os.path.isfile(os.path.join(DATA, n)) and not n.endswith((".db", ".pem")))
+    check("저장소 파일·기록 파일에 짝 열쇠(k)가 없다", K_A not in disk and K_A not in log_text)
 
     # ------------------------------------------------------------------------------------------
     print("웹 파일 (Review Focus 5)")
@@ -666,7 +786,17 @@ try:
           and "google-site-verification" not in r.raw and "google-site-verification" not in api("GET", "/index.html").raw)
     check("그 줄만 빠진다", r.raw.count("\n") == disk.count("\n") - 1 and "<title>" in r.raw)
     r = api("GET", "/edition.js")
-    check("/edition.js 는 늘 standalone (파일에는 cloud)", r.status == 200 and r.raw.strip() == 'export const EDITION = "standalone";'
+    import edition  # noqa: E402
+    real_tb = edition.test_build
+    edition.test_build = lambda: True
+    try:
+        tb = api("GET", "/edition.js").raw
+    finally:
+        edition.test_build = real_tb
+    check("시험용 빌드면 edition.js 에 TEST_BUILD = true (업체 웹 띠), 아니면 false",
+          tb.strip() == 'export const EDITION = "standalone";\nexport const TEST_BUILD = true;'
+          and r.raw.strip().endswith("export const TEST_BUILD = false;"), repr((tb, r.raw)))
+    check("/edition.js 는 늘 standalone (파일에는 cloud)", r.status == 200 and r.raw.strip() == 'export const EDITION = "standalone";\nexport const TEST_BUILD = false;'
           and "cloud" in open(os.path.join(WEB, "edition.js"), encoding="utf-8").read() and "javascript" in (r.headers.get("Content-Type") or ""), repr(r))
     check("대소문자를 바꿔도 cloud 판 edition.js 는 나가지 않는다", all("cloud" not in api("GET", p).raw for p in ("/Edition.js", "/EDITION.JS", "/edition.JS")))
     check("firebase-config.js·data-firebase.js 는 404 (파일은 있다)", os.path.isfile(os.path.join(WEB, "firebase-config.js"))
@@ -778,6 +908,7 @@ try:
     os.makedirs(pd)
     os.environ["RPA_PROGRAMDATA"] = pd
     os.environ["RPA_MACHINE_GUID"] = "p1"
+    os.environ["RPA_PHONE_NO_FIREWALL"] = "1"         # main 이 켜는 휴대폰 창구는 방화벽 명령을 부르지 않는다 (시험)
     lic_secret, lic_public = update_sign.keygen()
     saved_pub = license_check.LICENSE_PUBLIC_KEY_HEX
     license_check.LICENSE_PUBLIC_KEY_HEX = lic_public.hex()
@@ -804,7 +935,8 @@ try:
         check("main 이 만든 서버에 웹 창구가 달린다", bool(made) and isinstance(made[0].web, local_web.Web), repr(codes))
         r = api("GET", "/", base=MB) if made else Got(0, "", {})
         check("main 서버가 웹 파일을 내준다 (계정 파일은 자료 폴더)", r.status == 200 and "<html" in r.raw.lower()
-              and api("GET", "/edition.js", base=MB).raw.strip() == 'export const EDITION = "standalone";'
+              and api("GET", "/edition.js", base=MB).raw.startswith('export const EDITION = "standalone";')
+              and isinstance(made[0].phone, local_phone.Service) and made[0].web.phone is made[0].phone
               and api("POST", "/api/login", {"id": "boss", "password": BOSS_PW}, base=MB).status == 401
               and made[0].web.accounts.path == os.path.join(pd, "standalone", "accounts.json"), repr(r)[:200])
     finally:
@@ -815,7 +947,7 @@ try:
         t.join(8)
     check("main 은 꺼지면 0 으로 끝난다", codes == [0], repr(codes))
 finally:
-    for k in ("RPA_PROGRAMDATA", "RPA_MACHINE_GUID", "RPA_LOCAL_PORT"):
+    for k in ("RPA_PROGRAMDATA", "RPA_MACHINE_GUID", "RPA_LOCAL_PORT", "RPA_PHONE_NO_FIREWALL"):
         os.environ.pop(k, None)
     for s in (srv, srv2):
         try:

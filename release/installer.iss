@@ -119,6 +119,13 @@ Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\AFTER MARKET\RPA\*"
 Filename: "{app}\python\pythonw.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"" --after-install"; WorkingDir: "{app}"; Flags: waituntilterminated; StatusMsg: "설정 창에서 설정을 마치고 [저장] 을 누르세요..."; Check: not WizardSilent
 Filename: "{app}\python\python.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"" --after-install --no-window"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; Check: WizardSilent
 
+#if Edition == "standalone"
+[UninstallRun]
+; 휴대폰 포트의 방화벽 규칙 (로컬 서버가 [휴대폰 추가] 때 만든다 - local_phone.RULE_NAME, 계획 ④). 규칙이 없으면 netsh 가 1 로 끝난다 (그대로 둔다).
+; 덮어 설치는 규칙·standalone 폴더(인증서·짝지은 휴대폰)를 그대로 둔다 - 지우면 모든 휴대폰을 다시 짝지어야 한다
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""AUTOPILOT Phone OTP"""; Flags: runhidden waituntilterminated; RunOnceId: "PhoneFirewallRule"
+#endif
+
 [UninstallDelete]
 Type: files; Name: "{group}\오토파일럿 대시보드.url"
 ; 파이썬이 만든 __pycache__ 까지 남지 않게 프로그램 폴더를 통째로 (자리가 고정이라 안전하다)

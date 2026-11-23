@@ -11,6 +11,7 @@ import http.server
 import json
 import os
 import queue
+import re
 import secrets
 import socket
 import socketserver
@@ -411,7 +412,8 @@ def _read_text(path, tries=5):
             time.sleep(0.2)
 
 
-LOCKED_FILES = ("agent.key", "relay.key", "accounts.json")
+LOCKED_FILES = ("agent.key", "relay.key", "accounts.json",
+                "phone_key.pem", "phones.json")     # 휴대폰 포트의 인증서 개인 열쇠·짝지은 휴대폰의 서명 열쇠 (계획 ④ - local_cert·local_phone)
 ADMIN_SIDS = ("*S-1-5-32-544", "*S-1-5-18")       # 관리자, SYSTEM
 
 
@@ -570,21 +572,31 @@ def command_delete_ok(get, path):
     return old is None or (isinstance(old, dict) and old.get("state") in CMD_FINAL)
 
 
-def otp_request_ok(body, lic):
-    """인증번호 요청의 모양 (규칙과 같은 뜻): 정해진 칸만, 이 PC 의 요청, 발신번호는 숫자 글 → true 로 OTP_MAX_SENDERS 개까지.
-    등록된 휴대폰·그 휴대폰의 발신번호 목록과 견주기는 휴대폰 창구(계획 ④)가 더한다."""
+OTP_REQ_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+
+def otp_request_ok(body, lic, phone=None):
+    """인증번호 요청의 모양 (규칙과 같은 뜻): 정해진 칸만, 이 PC 의 요청, req_id 는 [A-Za-z0-9_-] 8~64자, 사이트 이름 100자까지,
+    발신번호는 숫자 글 → true 로 1~OTP_MAX_SENDERS 개. phone = 짝지은 휴대폰 (local_phone.Phones.get) - 없으면 False
+    (짝짓지 않은 휴대폰으로는 요청을 못 연다). 그 휴대폰에 허용 발신번호가 있으면 요청의 발신번호가 모두 그 안이어야 한다
+    (PC 가 은행 번호를 넣어 직원 휴대폰의 다른 인증번호를 받아 가지 못하게 - 일반 버전 규칙과 같다)."""
+    if not isinstance(phone, dict):
+        return False
     if not isinstance(body, dict) or set(body) - set(OTP_KEYS):
         return False
-    if not (isinstance(body.get("req_id"), str) and 0 < len(body["req_id"]) <= 64):
+    if not (isinstance(body.get("req_id"), str) and OTP_REQ_ID.fullmatch(body["req_id"])):
         return False
-    if not (isinstance(body.get("site"), str) and len(body["site"]) <= 200):
+    if not (isinstance(body.get("site"), str) and len(body["site"]) <= 100):
         return False
     if body.get("pcId") != lic["pc_id"]:
         return False
-    senders = body.get("senders", {})
-    if not isinstance(senders, dict) or len(senders) > OTP_MAX_SENDERS:
+    senders = body.get("senders")
+    if not isinstance(senders, dict) or not 0 < len(senders) <= OTP_MAX_SENDERS:
         return False
-    return all(isinstance(k, str) and k.isdigit() and len(k) <= 20 and v is True for k, v in senders.items())
+    if not all(isinstance(k, str) and k.isdigit() and len(k) <= 20 and v is True for k, v in senders.items()):
+        return False
+    allow = phone.get("senders") or []
+    return not allow or all(k in allow for k in senders)
 
 
 def local_host(headers, port):
@@ -602,6 +614,9 @@ def _agent_path(path):
 class LocalServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False      # 윈도우에서 켜면 같은 포트에 두 번째 서버가 조용히 뜬다 (rpa_dashboard.DashboardServer 와 같다)
+    # listen 대기열. 기본 5 는 연결이 몰리면(화면 새로 고침·에이전트·구독이 한꺼번에) 윈도우가 차서 거절된 연결을 0.5초 뒤 다시 붙인다.
+    # 넉넉히 두어도 동시 처리 수는 MAX_CONN 이 막는다 (계획 ③ 남은 일)
+    request_queue_size = 64
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -782,8 +797,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if kind == "policy":
                 tree = {"modules": lic.get("modules") or {}, "features": lic.get("features") or {}, "limits": lic.get("limits") or {}}
                 return self._reply(200, _lookup(tree, rest))
-            if kind == "phones":
-                return self._reply(200, srv.store.get(f"phones/{cid}"))
+            phone = getattr(srv, "phone", None)
+            if kind == "phones":                     # 짝지은 휴대폰 표 (서명 열쇠·지문은 빼고 일반 버전과 같은 꼴) - 없으면 null
+                return self._reply(200, phone.phones.public() if phone is not None else None)
+            if kind == "otp_codes":                  # 번호는 요청이 열려 있고 req_id 가 같을 때만 (local_phone.Desk.read_code)
+                return self._reply(200, phone.desk.read_code(rest[0]) if phone is not None else None)
             order_by, equal_to = _json_arg(query.get("orderBy")), _json_arg(query.get("equalTo"))
             if "text/event-stream" in (self.headers.get("Accept") or ""):
                 return self._stream(path, order_by, equal_to)
@@ -801,8 +819,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not isinstance(body, dict):
                     return self._reply(403, DENIED)
                 srv.store.patch(path, body, guard=lambda get: command_patch_ok(get, parts[:5], rest, body))
-            elif kind == "otp_requests":             # PUT 만 여기 온다
-                if not otp_request_ok(body, lic):
+            elif kind == "otp_requests":             # PUT 만 여기 온다 - 짝지은 휴대폰에만 (계획 ④)
+                phone = getattr(srv, "phone", None)
+                if not otp_request_ok(body, lic, phone.phones.get(rest[0]) if phone is not None else None):
                     return self._reply(403, DENIED)
                 srv.store.put(path, dict(body, created_at=int(time.time() * 1000)))
             elif method == "PATCH":
@@ -898,14 +917,17 @@ def _range(children, order_by, end_at, limit):
     return {k: v for _, k, v in rows} or None
 
 
-def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None, web=None):
+def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None, web=None, phone=None):
     """로컬 서버를 만든다 (serve_forever 는 부르는 쪽이). 이 PC 주소에만 묶는다 - 포트가 쓰이는 중이면 OSError.
-    web: 브라우저 창구 (local_web.Web). 없으면 에이전트 창구만 연다 (/api·웹 파일은 서명 없는 요청으로 거절된다)."""
+    web: 브라우저 창구 (local_web.Web). 없으면 에이전트 창구만 연다 (/api·웹 파일은 서명 없는 요청으로 거절된다).
+    phone: 휴대폰 창구 (local_phone.Service) - 짝지은 휴대폰 표·인증번호 자리 규칙. 없으면 인증번호 요청을 열지 못한다.
+    사내망 휴대폰 포트는 이 서버와 따로 선다 (local_phone.Gate - 이 서버는 늘 127.0.0.1)."""
     if host not in LOCAL_HOSTS:
         raise ValueError("로컬 서버는 이 PC(127.0.0.1)에만 엽니다.")
     srv = LocalServer(("127.0.0.1", port), Handler, bind_and_activate=False)
     srv.store, srv.runs, srv.lic, srv.keys = store, runs, lic, tuple(keys)
     srv.web = web
+    srv.phone = phone
     srv.folder = folder or os.path.dirname(store.path or "") or "."
     srv.stopping = threading.Event()
     srv.conn_lock, srv.conns, srv.nonces = threading.Lock(), 0, {}
@@ -937,20 +959,25 @@ def main():
         port = PORT
     sys.modules.setdefault("local_server", sys.modules[__name__])     # `python local_server.py` 로 켜면 이 모듈은 __main__ - local_web 이 같은 것을 쓰게 (두 벌로 불러오면 Refused 등이 서로 다른 클래스가 된다)
     import local_web
+    import local_phone
     web = local_web.Web(store, runs, lic, folder, local_web.web_dir())
     if not os.path.isdir(web.web_dir):
         log(folder, f"웹 파일 폴더가 없습니다 - 화면을 내주지 못합니다. ({web.web_dir})")
+    phone = local_phone.Service(folder, store, lic)          # 휴대폰 창구 - 짝지은 휴대폰이 있거나 짝짓기 중일 때만 사내망 포트를 연다
+    web.phone = phone
     try:
-        srv = make_server(store, runs, lic, keys, port=port, folder=folder, web=web)
+        srv = make_server(store, runs, lic, keys, port=port, folder=folder, web=web, phone=phone)
     except OSError as e:
         log(folder, f"로컬 서버를 열지 못했습니다 - 포트 {port} 을(를) 다른 프로그램이 쓰고 있습니다. ({type(e).__name__})")
         return 3
     log(folder, f"로컬 서버 시작  업체={lic['cid']}  포트={port}")
+    phone.start()                                            # 첫 고리에서 휴대폰 포트를 맞춘다 (Gate.sync - 서버 시작을 붙잡지 않게 고리 스레드에서)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        phone.stop()                                         # 휴대폰 포트를 닫는다 (휴대폰이 0대면 방화벽 규칙도)
         srv.server_close()
         runs.close()
     return 0

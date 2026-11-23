@@ -406,7 +406,9 @@ def _replay_problems(name, site):
     if host and not (site.get("MailID") and site.get("MailPW")
                      and (not site.get("MailHost") or status.site_domain(site["MailHost"]) == status.site_domain(host))):   # 다른 메일함의 계정 (검토 I6)
         return [f"{name}: {web_replay.MAIL_NO_CREDS}"]
-    if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in steps) and not (site.get("Phone") and site.get("SmsSenders")):
+    import otp_relay       # 스탠드얼론은 휴대폰이 없어도 실행한다 - Edge 칸에 사람이 넣기를 5분 기다린다 (계획 ④ Task 4)
+    if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in steps) and not (site.get("Phone") and site.get("SmsSenders")) \
+            and not otp_relay._standalone():
         return [f"{name}: 프리셋 {no}에 인증번호 단계가 있으나 인증 휴대폰·발신번호가 설정되지 않았습니다. "
                 "(옵저버 저장 화면에서 설정하여 주십시오)"]
     if no > status.preset_limit():
@@ -1465,8 +1467,17 @@ def action_replay(page, name, site):
         rp.pause = KeysPause()
     if any(s.get("kind") == "otp" and s.get("source") != "copy" for s in p["record"]["steps"]):   # 2차인증 - 휴대폰 중계 (설계 13절)
         import otp_relay
-        rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
-        log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']}(으)로 수신합니다.")
+        if otp_relay._standalone():   # 휴대폰 2분(있으면) → Edge 칸에 사람 5분 → 그 사이트만 실패 (계획 ④ Task 4)
+            def on_manual():
+                log(f"  [{name}] Edge 창의 인증번호 칸에 인증번호를 직접 입력하여 주십시오. (5분 안)")
+                status.metric(f"{name}:otp_manual", "인증번호 직접 입력 대기", otp_relay.MANUAL_SEC, unit="초")
+            rp.otp = otp_relay.standalone_relay(site.get("Phone"), site.get("SmsSenders"), p["name"], on_manual=on_manual,
+                                                log=lambda m: log(f"  [{name}] {m}"))
+            if rp.otp.phone is not None:
+                log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']}(으)로 수신합니다.")
+        else:
+            rp.otp = otp_relay.agent_relay(site["Phone"], site["SmsSenders"], p["name"])
+            log(f"  [{name}] 인증번호는 휴대폰 {site['Phone']}(으)로 수신합니다.")
     # 메일 고르기·메일 2차인증 - 처리한(연) 메일은 건너뛰고 기억 (2026-10-14, 2026-11-02)
     if any(s.get("pick") or s.get("mailOpen") for s in p["record"]["steps"]):
         rp.mail_memory = web_replay.MailMemory(status.mail_memory_path(p["no"]))

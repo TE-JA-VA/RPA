@@ -101,6 +101,16 @@ check("InitializeSetup 이 False 면 설치 파일은 시작 전에 멈춘다 (�
       re.search(r"if OtherEditionInstalled\(\) then\s+begin\s+SuppressibleMsgBox\(OTHER_EDITION_TEXT", sa) is not None)
 for rel, src in br.other_files("standalone"):
     check(f"안내 파일 원본이 저장소에 있다: {src}", (ROOT / src).is_file())
+# 휴대폰 창구 (계획 ④): 제거 때 방화벽 규칙을 지우고, 덮어 설치는 standalone 폴더(인증서·짝지은 휴대폰)를 건드리지 않는다
+fw_line = 'Filename: "{sys}\\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""AUTOPILOT Phone OTP"""'
+check("스탠드얼론 제거 때 휴대폰 방화벽 규칙을 지운다 ([UninstallRun] netsh, 일반 버전엔 없음)",
+      "[UninstallRun]" in sa and fw_line in sa and fw_line not in cloud and "[UninstallRun]" not in cloud)
+inst_del = sa[sa.find("[InstallDelete]"):sa.find("[Files]")]
+check("덮어 설치가 standalone 폴더를 지우지 않는다 (InstallDelete·UninstallDelete 에 없음, 폴더는 uninsneveruninstall)",
+      "standalone" not in inst_del and "standalone" not in sa[sa.find("[UninstallDelete]"):sa.find("[Code]")] and dir_line in sa)
+check("배포 파일 목록에 휴대폰 창구 파일 (local_phone·local_cert·qr.js·vendor/qrcode.js·라이선스 글)",
+      {"firebase/agent/local_phone.py", "firebase/agent/local_cert.py", "firebase/web/qr.js", "firebase/web/phone-card.js",
+       "firebase/web/vendor/qrcode.js", "firebase/web/vendor/LICENSE-qrcode-generator.txt"} <= {r for r, _ in br.program_files("standalone")})
 
 print("=== 2. 배포 안내 (우리 쪽 담당자용) ===")
 guide_b = (ROOT / "release" / "배포안내_스탠드얼론.txt").read_bytes() if (ROOT / "release" / "배포안내_스탠드얼론.txt").exists() else b""

@@ -96,8 +96,8 @@
   #login .remember { display:flex; align-items:center; gap:8px; margin:2px 0 20px; font-weight:400; font-size:13px; }
   #login .remember input { margin:0; }
   #login .login-row { display:flex; align-items:center; gap:12px; }
-  #login-btn { padding:10px 32px; }
-  #login-alert { color:var(--bad); font-weight:600; }   /* 로그인 버튼 오른쪽, 빨간 글씨 */
+  #login-btn { padding:10px 32px; flex:0 0 auto; white-space:nowrap; }   /* 긴 알림 글이 단추 폭을 밀어내 '로/그/인' 이 세로로 깨지지 않게 (2026-11-23) */
+  #login-alert { color:var(--bad); font-weight:600; flex:1 1 auto; min-width:0; }   /* 로그인 버튼 오른쪽, 빨간 글씨 - 길면 여기서 줄을 바꾼다 */
   #login .login-art { flex:1; min-width:0; background:url(img/login.webp) center/cover no-repeat; }
   @media (max-width:720px) { #login .login-art { display:none; } }
 
@@ -504,9 +504,16 @@
   .pill.run { background:var(--run-bg); color:var(--run); }
   .pill.halt { background:var(--soft); color:var(--muted); }   /* 사람이 중단 (STOPPED_TEXT) - 실패가 아니다 */
   .narrow { max-width:420px; }
+  /* 스탠드얼론 시험용 빌드 띠 (edition.js 의 TEST_BUILD - 일반 버전·진짜 스탠드얼론에는 안 보인다) */
+  .test-build { position:sticky; top:0; z-index:50; background:var(--warn-pill); color:var(--warn-pill-ink); text-align:center; font-weight:600; font-size:13px; padding:6px 12px; }
+  /* 휴대폰 칸의 QR (스탠드얼론 환경설정) - 어두운 모드에서도 흰 바탕·검정 무늬 그대로 */
+  .phone-qr { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; margin-top:12px; }
+  .phone-qr svg { width:184px; height:184px; flex:0 0 auto; background:#fff; border-radius:8px; }
+  .phone-qr .msg { flex:1 1 200px; margin-top:0; }
 </style>
 </head>
 <body>
+<div id="test-build" class="test-build" role="note" hidden>시험용 빌드 - 고객 배포 금지</div>
 <!-- 빗금 무늬: 실행 없는 날의 도넛이 쓴다 (url(#hatch)) -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>

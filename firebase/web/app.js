@@ -1,6 +1,6 @@
 // AFTER MARKET 껍데기: 로그인, 회사·PC, 사이드바(앱·관리), 테마. 페이지 내용은 각 모듈이 mount/unmount 한다.
 import * as data from "./data.js";
-import { EDITION, init, onSession, signIn, signOut, signedIn, sessionUid, handoffFailed, getCompany } from "./data.js";
+import { EDITION, TEST_BUILD, init, onSession, signIn, signOut, signedIn, sessionUid, handoffFailed, getCompany } from "./data.js";
 import { CONSOLE_UID } from "./config.js";
 import { icon } from "./icons.js";
 import { applyTheme, getTheme, isDark, applyAccent, getAccent } from "./theme.js";
@@ -86,6 +86,8 @@ setInterval(idleCheck, 30000);
 export const emailFor = data.emailFor;
 // 스탠드얼론은 PC 하나에 업체 하나 - 업체코드 칸이 없다 (아이디·비밀번호만)
 const STANDALONE = EDITION === "standalone";
+// 시험용 빌드(스탠드얼론 시험 설치 파일)는 맨 위에 띠 - 고객에게 나가지 않게 (일반 버전·진짜 스탠드얼론은 TEST_BUILD = false)
+$("test-build").hidden = !(STANDALONE && TEST_BUILD === true);
 if (STANDALONE) {
   $("cid").closest("label").hidden = true;
   $("remember").nextSibling.textContent = " 아이디 저장";

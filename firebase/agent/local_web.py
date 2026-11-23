@@ -55,6 +55,16 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
          ".png": "image/png", ".webp": "image/webp", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".woff2": "font/woff2",
          ".json": "application/json; charset=utf-8"}
 EDITION_JS = b'export const EDITION = "standalone";\n'
+
+
+def edition_js():
+    """화면의 edition.js - 늘 스탠드얼론. 시험용 빌드(edition.test_build)면 TEST_BUILD = true (업체 웹 맨 위 띠 '시험용 빌드 - 고객 배포 금지')."""
+    try:
+        import edition
+        test = edition.test_build()
+    except Exception:
+        test = False
+    return EDITION_JS + f"export const TEST_BUILD = {'true' if test else 'false'};\n".encode("ascii")
 HIDDEN_FILES = ("firebase-config.js", "data-firebase.js")     # 스탠드얼론 서버는 내주지 않는다 (Firebase 프로젝트 설정·SDK 주소)
 STRIP_HTML = b"google-site-verification"                       # 이 글이 든 줄은 빼고 낸다 (일반 버전 사이트의 소유 확인 태그)
 SEG_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")           # 웹 파일 주소 조각 (점으로 시작하지 않는다)
@@ -486,7 +496,12 @@ class Web:
             ("runs", False): {"GET": self._runs},
             ("accounts", False): {"GET": self._accounts_list, "POST": self._account_add},
             ("accounts", True): {"POST": self._account_edit, "DELETE": self._account_remove},
+            # 휴대폰 (계획 ④ Task 3) - 관리자만. phone = local_phone.Service (main 이 단다)
+            ("phones", False): {"GET": self._phones_list},
+            ("phones", True): {"POST": self._phone_edit, "DELETE": self._phone_remove},
+            ("phone-pair", False): {"GET": self._pair_state, "POST": self._pair_start, "DELETE": self._pair_cancel},
         }
+        self.phone = None
 
     # --- 들어오는 길 ---
     def handle(self, handler, method, path, query, body=None):
@@ -590,8 +605,14 @@ class Web:
             return None
         acct = self.accounts.get(sess["id"])
         if acct is None or acct["disabled"] or acct["rev"] != sess["rev"]:
-            self.sessions.close(token)
-            return None
+            # 이 탭이 비밀번호를 바꾸는 중이면 파일은 이미 바뀌고 세션은 아직 옛 rev 다 (_password 가 _login_lock 안에서 둘을 차례로 고친다) -
+            # 그 사이에 스트림의 1초 확인이 끼면 자기 세션을 닫아 버렸다 (2026-11-23 화면 시험의 흔들리는 401). 끝나기를 기다려 다시 본다
+            with self._login_lock:
+                sess = self.sessions.get(token)
+                acct = self.accounts.get(sess["id"]) if sess is not None else None
+                if sess is None or acct is None or acct["disabled"] or acct["rev"] != sess["rev"]:
+                    self.sessions.close(token)
+                    return None
         return acct
 
     def _auth(self, h, touch=False, admin=False, must_ok=False):
@@ -809,6 +830,96 @@ class Web:
         self._log(f"웹 계정 삭제  아이디={uid}  처리={me['id']}")
         return self._accounts_out()
 
+    # --- 휴대폰 (관리자, 계획 ④ Task 3) ---
+    # 짝 열쇠(QR 의 k)는 POST /api/phone-pair 응답에 한 번만 나간다 - 기록·저장 파일·다른 응답에 싣지 않는다.
+    # GET /api/phone-pair·GET /api/phones 는 화면이 혼자 묻는 읽기라 미사용 시계를 되돌리지 않는다.
+    def _phone_service(self, h, touch):
+        _, me = self._auth(h, touch=touch, admin=True)
+        if self.phone is None:
+            raise _Fail(404, "not-found", "없는 주소입니다.")
+        return self.phone, me
+
+    def _phones_out(self, svc, gate=None):
+        gate = gate or svc.gate.status()
+        return {"phones": svc.phones.list(gate.get("fingerprint")), "gate": gate}
+
+    @staticmethod
+    def _phone_fields(data, need_label):
+        """{label, owner, senders} 에서 바꿀 값 (없는 칸은 None). 꼴이 틀리면 400 (사람 말)."""
+        import local_phone
+        out = {}
+        try:
+            if need_label or data.get("label") is not None:
+                label = local_phone.clean_name(data.get("label"), "휴대폰 이름")
+                if not label:
+                    raise ValueError("휴대폰 이름을 입력하여 주십시오. (예: 김OO 휴대폰)")
+                out["label"] = label
+            if data.get("owner") is not None:
+                out["owner"] = local_phone.clean_name(data.get("owner"), "담당자")
+            if data.get("senders") is not None:
+                out["senders"] = local_phone.parse_senders(data.get("senders"))
+        except ValueError as e:
+            raise _Fail(400, "invalid-argument", str(e)) from None
+        return out
+
+    def _phone_id(self, raw):
+        import local_phone
+        return self._arg(raw, local_phone.PHONE_ID_RE)
+
+    def _phones_list(self, h, query, body):
+        svc, _ = self._phone_service(h, touch=False)
+        return self._phones_out(svc)
+
+    def _pair_start(self, h, query, body):
+        import local_phone
+        svc, me = self._phone_service(h, touch=True)
+        fields = self._phone_fields(self._dict(body), need_label=True)
+        if svc.phones.count() >= local_phone.PHONES_MAX:
+            raise _Fail(400, "invalid-argument", f"휴대폰은 {local_phone.PHONES_MAX}대까지 등록할 수 있습니다.")
+        try:
+            gate = svc.gate.open()                                # 주소·방화벽·인증서 - 못 열면 짝짓기를 시작하지 않는다
+        except local_phone.GateError as e:
+            self._log(f"휴대폰 포트를 열지 못했습니다 ({e.code})  처리={me['id']}")
+            raise _Fail(409, f"phone/{e.code}", e.message) from None
+        got = svc.pairing.start(fields["label"], fields.get("owner", ""), fields.get("senders", []))
+        self._log(f"휴대폰 짝짓기 시작  번호={got['phone_id']}  이름={fields['label']}  처리={me['id']}")
+        return {"qr": local_phone.qr_text(gate["hosts"], gate["port"], got["phone_id"], got["secret"], gate["fingerprint"]),
+                "phone_id": got["phone_id"], "expires_in": local_phone.PAIR_SEC, "hosts": gate["hosts"], "port": gate["port"],
+                "fingerprint": gate["fingerprint"]}
+
+    def _pair_state(self, h, query, body):
+        svc, _ = self._phone_service(h, touch=False)
+        return svc.pairing.state()
+
+    def _pair_cancel(self, h, query, body):
+        svc, me = self._phone_service(h, touch=True)
+        was = svc.pairing.waiting()
+        svc.pairing.cancel()
+        gate = svc.gate.sync()
+        if was:
+            self._log(f"휴대폰 짝짓기 취소  처리={me['id']}")
+        return {"state": "none", "gate": gate}
+
+    def _phone_edit(self, h, query, body, raw_id):
+        svc, me = self._phone_service(h, touch=True)
+        pid = self._phone_id(raw_id)
+        fields = self._phone_fields(self._dict(body), need_label=False)
+        if not svc.phones.update(pid, **fields):
+            raise _Fail(404, "not-found", "없는 휴대폰입니다.")
+        self._log(f"휴대폰 정보 변경  번호={pid}  처리={me['id']}")
+        return self._phones_out(svc)
+
+    def _phone_remove(self, h, query, body, raw_id):
+        svc, me = self._phone_service(h, touch=True)
+        pid = self._phone_id(raw_id)
+        rec = svc.phones.get(pid)
+        if rec is None or not svc.phones.remove(pid):
+            raise _Fail(404, "not-found", "없는 휴대폰입니다.")
+        svc.desk.forget(pid)                                      # 그 휴대폰의 요청·번호 자리
+        gate = svc.gate.sync()                                    # 0대면 포트·방화벽 규칙을 닫는다
+        self._log(f"휴대폰 삭제  번호={pid}  이름={rec.get('label') or ''}  처리={me['id']}")
+        return self._phones_out(svc, gate)
+
     # --- 스트림 (SSE) ---
     def _stream(self, h, query, body):
         """현황·명령이 바뀔 때마다 민다 (Firebase onValue 자리). local_server.Handler._stream 과 같은 꼴 - 구독 큐를 0.5초씩 기다리며
@@ -905,7 +1016,7 @@ class Web:
         body = None
         if segs and ext in TYPES and segs[-1].lower() not in HIDDEN_FILES:
             if len(segs) == 1 and segs[0].lower() == "edition.js":
-                body = EDITION_JS                    # 파일에 무엇이 적혀 있든 스탠드얼론 (화면이 data-local 을 고른다)
+                body = edition_js()                  # 파일에 무엇이 적혀 있든 스탠드얼론 (화면이 data-local 을 고른다)
             elif self.web_dir:
                 # 두 번째 겹 (위의 글자 검사와 따로 선다): 웹 폴더 글 뒤에 조각을 **이어 붙인** 자리의 진짜 자리(realpath)가 그 글과
                 # 글자까지 같아야 한다. os.path.join 을 쓰지 않는다 - 조각이 'C:\\…' 같은 절대 경로면 앞을 버린다.

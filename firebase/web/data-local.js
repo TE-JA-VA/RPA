@@ -214,6 +214,19 @@ export const addAccount = async (id, password, role) => (await authed("POST", "/
 export const updateAccount = async (id, change) => (await authed("POST", `/api/accounts/${encodeURIComponent(id)}`, change)).accounts || [];
 export const removeAccount = async (id) => (await authed("DELETE", `/api/accounts/${encodeURIComponent(id)}`)).accounts || [];
 
+// --- 휴대폰 (관리자, 계획 ④ Task 3) ----------------------------------------------------
+// 실패는 e.code (phone/firewall·phone/public-network·invalid-argument 등)·e.message (서버의 사람 말)
+/** {phones: [{id, label, owner, senders, last_seen, os, device, stale, …}], gate: {open, port, firewall, hosts, fingerprint}} */
+export const listPhones = async () => await authed("GET", "/api/phones");
+/** 짝짓기 시작 → {qr, phone_id, expires_in, hosts, port, fingerprint}. QR 글은 이 응답에만 한 번 온다 (다시 받을 수 없다) */
+export const startPhonePair = async ({ label, owner, senders }) => await authed("POST", "/api/phone-pair", { label, owner, senders });
+/** {state: "none"|"waiting"|"paired"|"expired", left_sec?, phone?} - 화면이 2초마다 묻는다 (미사용 시계를 되돌리지 않는다) */
+export const phonePairState = async () => await authed("GET", "/api/phone-pair");
+export const cancelPhonePair = async () => await authed("DELETE", "/api/phone-pair");
+/** change = {label?, owner?, senders?} (senders 가 빈 글이면 제한 없음) → {phones, gate} */
+export const updatePhone = async (id, change) => await authed("POST", `/api/phones/${encodeURIComponent(id)}`, change);
+export const removePhone = async (id) => await authed("DELETE", `/api/phones/${encodeURIComponent(id)}`);
+
 // --- 지켜보기 (스트림 하나) -------------------------------------------------------
 let liveVal = null, liveKnown = false;
 const cmdCache = new Map();      // 명령 키 → 마지막으로 본 값 (스트림·보낸 응답·한 번 읽기)
