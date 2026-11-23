@@ -17,8 +17,9 @@ FILE_NAME = "license.json"
 EDITION = "standalone"
 
 
-class LicenseError(Exception):
-    """라이선스가 없거나 맞지 않는다. 글은 사람에게 그대로 보여 준다."""
+class LicenseError(ValueError):
+    """라이선스가 없거나 맞지 않는다. 글은 사람에게 그대로 보여 준다.
+    ValueError 의 하나다 - 설정을 읽는 쪽(에이전트 main·인증번호 중계)이 '설정 문제' 로 받아 같은 길로 안내한다."""
 
 
 def machine_guid():

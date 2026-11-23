@@ -194,17 +194,40 @@ class ManualOtp:
 
 def phone_list():
     """이 업체의 휴대폰 [(phoneId, 이름)] - 관리 화면 '휴대폰 추가' 로 등록한 것 (ACTOR 저장 화면이 고르게). 못 읽으면 예외."""
-    fb, secret = _agent_modules()
-    cfg = secret.load_config()
-    got = fb.Client(cfg).get(f"meta/companies/{cfg['cid']}/phones") or {}
+    cfg = relay_config()
+    got = _client(cfg).get(f"meta/companies/{cfg['cid']}/phones") or {}
     return sorted(((k, (v or {}).get("label") or k) for k, v in got.items()), key=lambda x: x[1])
 
 
-def agent_relay(phone_id, senders, site):
-    """이 PC 의 에이전트 계정으로 PhoneRelay. 설정이 없거나 깨졌으면 사람 말로 RuntimeError."""
-    fb, secret = _agent_modules()
+def _standalone():
+    """스탠드얼론 버전인가 (edition 모듈이 없는 옛 exe 는 일반 버전)."""
     try:
-        cfg = secret.load_config()
+        import edition
+        return edition.is_standalone()
+    except ImportError:
+        return False
+
+
+def relay_config():
+    """인증번호 중계가 서버에 붙을 설정. 일반 버전은 이 PC 의 에이전트 계정, 스탠드얼론은 로컬 서버의 중계 열쇠
+    (에이전트 열쇠보다 할 수 있는 일이 적다 - 인증번호 자리만). 못 읽으면 예외 (OSError·ValueError)."""
+    _, secret = _agent_modules()
+    return secret.load_config(role="relay") if _standalone() else secret.load_config()
+
+
+def _client(cfg):
+    """설정에 맞는 서버 연결 - 스탠드얼론 설정이면 로컬 서버(local_store), 아니면 Firebase(fb)."""
+    fb, _ = _agent_modules()
+    if cfg.get("standalone"):
+        import local_store
+        return local_store.Client(cfg)
+    return fb.Client(cfg)
+
+
+def agent_relay(phone_id, senders, site):
+    """이 PC 의 에이전트 계정(스탠드얼론은 로컬 서버 열쇠)으로 PhoneRelay. 설정이 없거나 깨졌으면 사람 말로 RuntimeError."""
+    try:
+        cfg = relay_config()
     except (OSError, ValueError) as e:
         raise RuntimeError(f"에이전트 설정을 읽지 못해 인증번호를 수신할 수 없습니다. ({type(e).__name__}) '오토파일럿 설정'을 확인하여 주십시오.") from None
-    return PhoneRelay(fb.Client(cfg), cfg["cid"], cfg["pc_id"], phone_id, senders, site)
+    return PhoneRelay(_client(cfg), cfg["cid"], cfg["pc_id"], phone_id, senders, site)

@@ -92,8 +92,32 @@ def write_config(path, values, password):
     os.replace(tmp, path)
 
 
-def load_config(path=None):
-    """설정을 읽고 비밀번호를 푼 dict 를 돌려준다."""
+def _standalone_config(role):
+    """스탠드얼론: 라이선스(업체·PC)와 로컬 서버 열쇠로 만든 설정 - 에이전트 계정·비밀번호가 없다 (설계 2026-11-23-standalone 6.2).
+    role 'agent' = 에이전트 열쇠, 'relay' = 인증번호 중계 열쇠 (ACTOR 실행·옵저버). 라이선스가 틀리면 LicenseError(ValueError),
+    열쇠 파일이 아직 없으면 FileNotFoundError (로컬 서버가 처음 켜질 때 만든다). 열쇠는 로그에 싣지 않는다."""
+    import license_check
+    import local_store
+    lic = license_check.load()
+    name = "relay.key" if role == "relay" else "agent.key"
+    with open(os.path.join(local_store.keys_dir(), name), encoding="ascii") as f:
+        key = f.read().strip()
+    if len(key) < 32:
+        raise ValueError(f"로컬 서버 열쇠 파일이 올바르지 않습니다. ({name})")
+    try:
+        port = int(_dev_env("RPA_LOCAL_PORT") or local_store.PORT)
+    except ValueError:
+        port = local_store.PORT
+    return {"standalone": True, "server_url": f"http://127.0.0.1:{port}", "key": key,
+            "cid": lic["cid"], "pc_id": lic["pc_id"], "license": lic}
+
+
+def load_config(path=None, role="agent"):
+    """설정을 읽고 비밀번호를 푼 dict 를 돌려준다. 스탠드얼론 버전이면 (path 를 따로 주지 않았을 때) 로컬 서버 설정 - role 은 그때만 쓴다."""
+    if path is None:
+        import edition
+        if edition.is_standalone():
+            return _standalone_config(role)
     path = path or CONFIG_PATH
     with open(path, encoding="utf-8") as f:
         data = json.load(f)

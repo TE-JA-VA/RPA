@@ -2039,7 +2039,7 @@ def setup_problem(load=None):
     """오토파일럿 설정(이 PC 의 에이전트 계정)을 마쳤나 - 안 했거나 깨졌으면 사람에게 보일 문장, 됐으면 None.
     설정 없이 옵저버만 다른 용도로 쓰지 못하게 (사용자 2026-10-14). 설정 내용은 보지도 찍지도 않는다. load 는 시험용."""
     try:
-        (load or (lambda: otp_relay._agent_modules()[1].load_config()))()
+        (load or otp_relay.relay_config)()       # 스탠드얼론은 로컬 서버의 중계 열쇠·라이선스 (일반은 에이전트 계정 그대로)
         return None
     except Exception:
         return "오토파일럿 설정이 되어 있지 않습니다. 오토파일럿 설정을 먼저 해 주십시오."
