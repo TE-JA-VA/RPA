@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """스탠드얼론 브랜치의 시험을 한꺼번에 돌린다 (종료 코드와 통과·실패 수).
-    .venv\\Scripts\\python.exe tests\\run_standalone_suite.py [all|sa|cloud]
+    .venv\\Scripts\\python.exe tests\\run_standalone_suite.py [all|sa|cloud|wsl]
 'sa' 는 스탠드얼론 시험만, 'cloud' 는 일반 버전 시험만. 없는 파일은 건너뛴다.
+'wsl' 은 WSL(Ubuntu) 의 python3 으로 tests/wsl_lan_smoke.py 하나만 (WSL 이 없으면 건너뜀).
 화면 시험(에뮬레이터, scratchpad 의 run_check_web.sh)과 실제 ERPia 를 누르는 시험은 여기 없다."""
 import os
+import shutil
 import subprocess
 import sys
 
@@ -20,16 +22,47 @@ SA = ["tests/test_license.py", "tests/test_local_store_core.py", "tests/test_loc
       "tests/test_phone_core.py", "tests/test_phone_gate.py", "tests/test_otp_fallback.py", "tests/check_phone_local.py",
       # 사내 서버 ① (여러 PC)
       "tests/test_pc_registry.py", "tests/test_lan_server.py", "tests/test_lan_web.py", "tests/test_lan_e2e.py",
-      "tests/test_lan_review_fixes.py", "tests/test_lan_web_tls.py"]
+      "tests/test_lan_review_fixes.py", "tests/test_lan_web_tls.py",
+      # 사내 서버 ② (사내망·TLS)
+      "tests/test_lan_config.py", "tests/test_lan_ca.py", "tests/test_lan_net.py", "tests/test_lan_tls.py"]
+WSL_SMOKE = "/mnt/d/AX/RPA_StandAlone/tests/wsl_lan_smoke.py"      # 'wsl' - 리눅스에서 사내 서버 한 번 (사내 서버 ② Task 8)
 CLOUD = ["firebase/tests/test_agent.py", "tests/test_fb_backoff.py", "tests/test_cloud_scrub.py", "tests/test_dev_env.py",
          "tests/test_background.py", "tests/test_rpa_update.py", "tests/test_otp_replay.py", "tests/test_build_release.py",
          "tests/test_server_info.py", "tests/test_settings.py", "tests/test_update_helper.py", "tests/test_observer_notes.py",
          "tests/test_module_build.py", "tests/test_encoding.py", "tests/test_ai_rescue.py"]
 
 
+def wsl():
+    """WSL(Ubuntu)의 python3 으로 wsl_lan_smoke.py 를 돈다. WSL·Ubuntu·python3 이 없으면 '건너뜀' (종료 코드 0)."""
+    exe = shutil.which("wsl.exe") or os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "wsl.exe")
+    rel = "tests/wsl_lan_smoke.py (WSL)"
+    probe = None
+    if os.name == "nt" and os.path.isfile(exe):
+        try:
+            probe = subprocess.run([exe, "-d", "Ubuntu", "-e", "python3", "-c", "print('ok')"], capture_output=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            probe = None
+    if probe is None or probe.returncode != 0 or probe.stdout.strip() != b"ok":
+        print(f"건너뜀 {rel}  (WSL Ubuntu 의 python3 을 찾지 못했습니다)")
+        print("실패한 파일: 0")
+        return 0
+    r = subprocess.run([exe, "-d", "Ubuntu", "-e", "python3", WSL_SMOKE], capture_output=True, timeout=300)
+    out = r.stdout.decode("utf-8", "replace")
+    print(f"{'OK  ' if r.returncode == 0 else 'FAIL'} {rel}  (통과 표시 {out.count('통과]')}개)")
+    for ln in [ln.strip() for ln in out.splitlines() if "[실패]" in ln][:8]:
+        print("      " + ln[:300])
+    if r.returncode != 0:
+        for ln in (out + r.stderr.decode("utf-8", "replace")).strip().splitlines()[-6:]:
+            print("      | " + ln[:300])
+    print("실패한 파일:", 1 if r.returncode else 0)
+    return 1 if r.returncode else 0
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
-    files = (SA if which in ("sa", "all") else []) + (CLOUD if which in ("cloud", "all") else [])
+    if which == "wsl":
+        return wsl()
+    files =(SA if which in ("sa", "all") else []) + (CLOUD if which in ("cloud", "all") else [])
     bad = 0
     for rel in files:
         if not os.path.isfile(os.path.join(ROOT, *rel.split("/"))):
