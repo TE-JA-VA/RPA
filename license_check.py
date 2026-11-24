@@ -12,7 +12,7 @@ import os
 
 import update_sign
 
-LICENSE_PUBLIC_KEY_HEX = ""     # tools/make_license.py --keygen 이 알려 준 값 (비어 있으면 어떤 라이선스도 통과하지 못한다)
+LICENSE_PUBLIC_KEY_HEX = "482bc5c2367953d22c9e5ba138865c3e9dec6f8fee78606ec521e141349a9a80"     # tools/make_license.py --keygen 이 알려 준 값 (사용자 2026-11-24). 비어 있으면 어떤 라이선스도 통과하지 못한다
 FILE_NAME = "license.json"
 EDITION = "standalone"
 
