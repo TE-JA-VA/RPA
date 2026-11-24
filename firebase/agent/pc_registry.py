@@ -1,0 +1,363 @@
+# -*- coding: utf-8 -*-
+"""사내 서버 PC 등록부 (계획 2026-11-24-lan-1-server-multi-pc Task 2, 설계 6.4).
+
+- pcs.json = {"v": 1, "next": N, "pcs": {<pc_01>: {label, guid, host, agent_key, relay_key, state, created_at, enrolled_at, removed_at?}}}.
+  agent_key·relay_key 는 저장한 이 값이 곧 열쇠다 - 그래서 파일은 관리자·SYSTEM 만 (local_server.LOCKED_FILES).
+- 등록 토큰은 디스크에 쓰지 않는다. 대기 중인 등록(번호·이름·토큰·만료·틀린 횟수)은 메모리에만 10분.
+- PC 번호는 next 로 매기고 하나씩 올린다. 대기만 했던 번호·지운 번호도 다시 쓰지 않는다.
+- 열쇠는 토큰과 PC 가 만든 난수로 양쪽이 따로 만든다 (휴대폰 짝짓기와 같은 방식) - 등록 글만 주운 사람은 열쇠를 만들지 못한다.
+표준 라이브러리만. 기록(local_server.log)에 토큰·열쇠·증명을 싣지 않는다.
+"""
+import base64
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import tempfile
+import threading
+import time
+
+PC_RE = re.compile(r"pc_\d{2,4}")
+ENROLL_SEC = 600                 # 등록 토큰 유효 시간
+ENROLL_FAIL_MAX = 5              # 등록 증명이 이만큼 틀리면 그 등록을 취소한다
+LABEL_MAX = 40
+PREFIX = "APE1."                 # 등록 글(한 줄) 머리
+PCS_NAME = "pcs.json"
+
+RAND_RE = re.compile(r"[0-9a-f]{64}")
+GUID_RE = re.compile(r"[0-9A-Fa-f-]{36}")
+HOST_MAX = 63
+ENROLL_KEYS = ("v", "url", "pc", "token", "exp")
+STATES = ("active", "disabled", "removed")
+
+
+class SeatsFull(Exception):
+    """등록할 수 있는 PC 수를 모두 썼다 (active + disabled + 살아 있는 대기)."""
+
+
+class EnrollError(Exception):
+    """등록 거절. code ∈ unknown(대기 중 아님) | expired(10분 지남) | bad_proof(증명·꼴 틀림) | duplicate(같은 윈도우 PC) | seats(자리 없음)."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+# ----------------------------------------------------------------------------------------------------
+# 증명 · 열쇠 (클라이언트 local_store 와 같은 함수 - 바꾸면 양쪽 시험을 같이 고친다)
+# ----------------------------------------------------------------------------------------------------
+
+def _hmac_hex(token, text):
+    return hmac.new(token.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def enroll_proof(token, pc_id, rand_hex, guid, host):
+    """등록 요청 증명 = HMAC-SHA256(열쇠 토큰, "ap2 enroll\\n{pc_id}\\n{rand_hex}\\n{guid}\\n{host}") 소문자 hex."""
+    return _hmac_hex(token, f"ap2 enroll\n{pc_id}\n{rand_hex}\n{guid}\n{host}")
+
+
+def derive_keys(token, rand_hex):
+    """(에이전트 열쇠, 중계 열쇠) = HMAC-SHA256(토큰, "ap2 pc agent\\n"+난수), HMAC-SHA256(토큰, "ap2 pc relay\\n"+난수) hex."""
+    return _hmac_hex(token, "ap2 pc agent\n" + rand_hex), _hmac_hex(token, "ap2 pc relay\n" + rand_hex)
+
+
+# ----------------------------------------------------------------------------------------------------
+# 등록 글 한 줄 (APE1.<base64url JSON>)
+# ----------------------------------------------------------------------------------------------------
+
+def encode_enrollment(info):
+    """등록 정보 → 붙여 넣을 수 있는 한 줄 = PREFIX + base64url(JSON, 채움 없음)."""
+    raw = json.dumps(info, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return PREFIX + base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def decode_enrollment(text):
+    """한 줄 → 등록 정보 dict (앞뒤 빈칸 무시). 꼴이 틀리거나 v(=1)·url·pc·token·exp 가 하나라도 없으면 ValueError."""
+    if not isinstance(text, str):
+        raise ValueError("등록 글이 아닙니다.")
+    text = text.strip()
+    if not text.startswith(PREFIX):
+        raise ValueError("등록 글의 형식이 올바르지 않습니다.")
+    body = text[len(PREFIX):]
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", body):
+        raise ValueError("등록 글의 형식이 올바르지 않습니다.")
+    try:
+        info = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode("utf-8"))
+    except ValueError as e:                     # binascii.Error·UnicodeDecodeError·JSONDecodeError 모두 ValueError
+        raise ValueError("등록 글의 형식이 올바르지 않습니다.") from e
+    if not isinstance(info, dict) or any(k not in info for k in ENROLL_KEYS):
+        raise ValueError("등록 글에 빠진 내용이 있습니다.")
+    if info["v"] != 1 or isinstance(info["v"], bool):
+        raise ValueError("지원하지 않는 등록 글 버전입니다.")
+    if not all(isinstance(info[k], str) and info[k] for k in ("url", "pc", "token")):
+        raise ValueError("등록 글의 형식이 올바르지 않습니다.")
+    if not isinstance(info["exp"], (int, float)) or isinstance(info["exp"], bool):
+        raise ValueError("등록 글의 형식이 올바르지 않습니다.")
+    return info
+
+
+def clean_label(value):
+    """PC 이름 (앞뒤 빈칸 없이 1~LABEL_MAX 자, 줄바꿈 등 제어 글자 없이). 아니면 ValueError."""
+    if not isinstance(value, str):
+        raise ValueError("PC 이름의 형식이 올바르지 않습니다.")
+    text = value.strip()
+    if not text:
+        raise ValueError("PC 이름을 입력하여 주십시오.")
+    if len(text) > LABEL_MAX:
+        raise ValueError(f"PC 이름은 {LABEL_MAX}자까지 입력할 수 있습니다.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in text):
+        raise ValueError("PC 이름에 쓸 수 없는 글자가 있습니다.")
+    return text
+
+
+def _pc_num(pc_id):
+    return int(pc_id[3:])
+
+
+# ----------------------------------------------------------------------------------------------------
+# Registry - PC 등록부
+# ----------------------------------------------------------------------------------------------------
+
+class Registry:
+    """PC 등록부. 모든 읽기·쓰기는 잠금 하나 안에서. 쓸 때마다 임시 파일 → os.replace.
+    깨진 파일은 .broken 으로 옮기고 빈 등록부 (+ 서버 기록). 대기 중인 등록·마지막 연결 시각은 메모리에만.
+    seats 는 바꿔 끼울 수 있다 (라이선스의 자리 수). on_save: 파일을 쓴 뒤 부른다 (설치본은 파일 권한을 다시 잠근다)."""
+
+    def __init__(self, path, seats, clock=time.time, on_save=None):
+        self.path = os.path.abspath(path)
+        self.seats = int(seats)
+        self.on_save = on_save
+        self._clock = clock
+        self._lock = threading.RLock()
+        self._pending = {}           # pc_id → {token, label, created_at(ms), expires_at(ms), fails}
+        self._seen = {}              # pc_id → 마지막 연결 ms
+        self._next, self._pcs = self._load()
+
+    # -- 파일 ----------------------------------------------------------------------------------------
+
+    def _load(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                raw = json.load(f)
+            rows = raw.get("pcs") if isinstance(raw, dict) else None
+            if not isinstance(rows, dict):
+                raise ValueError("PC 등록부 꼴이 아님")
+        except FileNotFoundError:
+            return 1, {}
+        except (ValueError, UnicodeDecodeError):
+            try:
+                os.replace(self.path, self.path + ".broken")
+            except OSError:
+                pass
+            try:
+                import local_server
+                local_server.log(os.path.dirname(self.path), f"PC 등록부 파일이 깨져 비우고 시작합니다 (옛 파일은 {PCS_NAME}.broken).")
+            except Exception:
+                pass
+            return 1, {}
+        pcs = {k: dict(v) for k, v in rows.items()
+               if isinstance(k, str) and PC_RE.fullmatch(k) and isinstance(v, dict)
+               and isinstance(v.get("agent_key"), str) and isinstance(v.get("relay_key"), str) and v.get("state") in STATES}
+        nxt = raw.get("next")
+        if not isinstance(nxt, int) or isinstance(nxt, bool) or nxt < 1:
+            nxt = 1
+        nxt = max([nxt] + [_pc_num(k) + 1 for k in pcs])         # 손으로 고친 파일이라도 있는 번호를 다시 쓰지 않는다
+        return nxt, pcs
+
+    def _save(self, nxt, pcs):
+        folder = os.path.dirname(self.path)
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=PCS_NAME + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"v": 1, "next": nxt, "pcs": pcs}, f, ensure_ascii=False, indent=1)
+                f.flush()
+                os.fsync(f.fileno())
+            for attempt in range(6):
+                try:
+                    os.replace(tmp, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 5:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+        self._next, self._pcs = nxt, pcs
+        if self.on_save:
+            try:
+                self.on_save()
+            except Exception:
+                pass
+
+    # -- 안쪽 도움 -----------------------------------------------------------------------------------
+
+    def _now_ms(self):
+        return int(self._clock() * 1000)
+
+    def _tick(self):
+        """10분 지난 대기를 버린다."""
+        now = self._now_ms()
+        for pc_id in [k for k, v in self._pending.items() if now >= v["expires_at"]]:
+            del self._pending[pc_id]
+
+    def _used(self):
+        return sum(1 for r in self._pcs.values() if r["state"] in ("active", "disabled")) + len(self._pending)
+
+    def _fail(self, pc_id):
+        cur = self._pending.get(pc_id)
+        if cur is not None:
+            cur["fails"] += 1
+            if cur["fails"] >= ENROLL_FAIL_MAX:
+                del self._pending[pc_id]
+        return EnrollError("bad_proof")
+
+    # -- 등록 ----------------------------------------------------------------------------------------
+
+    def start(self, label):
+        """새 등록 대기 → {"pc_id", "token", "expires_at"(ms)}. 토큰은 메모리에만 (돌려준 뒤 등록 글로 한 번 보여 준다).
+        이름이 틀리면 ValueError, 자리가 없으면 SeatsFull. 번호는 바로 올려 저장한다 (대기만 했던 번호도 다시 쓰지 않는다)."""
+        label = clean_label(label)
+        with self._lock:
+            self._tick()
+            if self._used() >= self.seats:
+                raise SeatsFull(f"등록할 수 있는 PC 수({self.seats}대)를 모두 썼습니다.")
+            pc_id = f"pc_{self._next:02d}"
+            self._save(self._next + 1, self._pcs)
+            now = self._now_ms()
+            token = secrets.token_urlsafe(32)
+            self._pending[pc_id] = {"token": token, "label": label, "created_at": now,
+                                    "expires_at": now + ENROLL_SEC * 1000, "fails": 0}
+            return {"pc_id": pc_id, "token": token, "expires_at": now + ENROLL_SEC * 1000}
+
+    def enroll(self, pc_id, rand_hex, guid, host, proof):
+        """PC 의 등록 요청 → (agent_key, relay_key). 거절은 EnrollError(code). 성공하면 기록을 저장하고 대기를 지운다."""
+        with self._lock:
+            now = self._now_ms()
+            cur = self._pending.get(pc_id) if isinstance(pc_id, str) else None
+            if cur is None:
+                raise EnrollError("unknown")
+            if now >= cur["expires_at"]:
+                del self._pending[pc_id]
+                raise EnrollError("expired")
+            if not (isinstance(rand_hex, str) and RAND_RE.fullmatch(rand_hex)
+                    and isinstance(guid, str) and GUID_RE.fullmatch(guid)
+                    and isinstance(host, str) and 0 < len(host) <= HOST_MAX and host.isprintable()
+                    and isinstance(proof, str)):
+                raise self._fail(pc_id)
+            want = enroll_proof(cur["token"], pc_id, rand_hex, guid, host)
+            if not hmac.compare_digest(proof.encode("utf-8"), want.encode("ascii")):
+                raise self._fail(pc_id)
+            g = guid.lower()
+            if any(r["state"] in ("active", "disabled") and str(r.get("guid", "")).lower() == g for r in self._pcs.values()):
+                raise EnrollError("duplicate")
+            if sum(1 for r in self._pcs.values() if r["state"] in ("active", "disabled")) >= self.seats:
+                raise EnrollError("seats")
+            agent_key, relay_key = derive_keys(cur["token"], rand_hex)
+            rec = {"label": cur["label"], "guid": guid, "host": host, "agent_key": agent_key, "relay_key": relay_key,
+                   "state": "active", "created_at": cur["created_at"], "enrolled_at": now}
+            self._save(self._next, dict(self._pcs, **{pc_id: rec}))
+            del self._pending[pc_id]
+            return agent_key, relay_key
+
+    def cancel(self, pc_id):
+        """대기 중인 등록을 버린다. 대기가 없으면 False."""
+        with self._lock:
+            return self._pending.pop(pc_id, None) is not None
+
+    # -- 읽기 ----------------------------------------------------------------------------------------
+
+    def state(self, pc_id):
+        """"active" | "disabled" | "removed" | None (모름·대기 중)."""
+        with self._lock:
+            rec = self._pcs.get(pc_id) if isinstance(pc_id, str) else None
+            return rec["state"] if rec is not None else None
+
+    def keys(self, pc_id):
+        """(agent_key, relay_key) - 지운 PC 도 돌려준다 (서버가 '지워짐' 답에 서명해야 해서). 모르면 None. 서버 안에서만 쓴다."""
+        with self._lock:
+            rec = self._pcs.get(pc_id) if isinstance(pc_id, str) else None
+            return (rec["agent_key"], rec["relay_key"]) if rec is not None else None
+
+    def label(self, pc_id):
+        with self._lock:
+            if not isinstance(pc_id, str):
+                return None
+            rec = self._pcs.get(pc_id)
+            if rec is not None:
+                return rec.get("label") or ""
+            self._tick()
+            cur = self._pending.get(pc_id)
+            return cur["label"] if cur is not None else None
+
+    def list(self):
+        """[{pcId, label, host, state("pending"|"active"|"disabled"), enrolledAt, expiresAt, lastSeen}] 번호 순.
+        지운 PC 는 뺀다. 열쇠·토큰·guid 는 싣지 않는다. 시각은 모두 ms (없으면 None)."""
+        with self._lock:
+            self._tick()
+            out = []
+            for pc_id, rec in self._pcs.items():
+                if rec["state"] == "removed":
+                    continue
+                out.append({"pcId": pc_id, "label": rec.get("label") or "", "host": rec.get("host") or "", "state": rec["state"],
+                            "enrolledAt": rec.get("enrolled_at"), "expiresAt": None, "lastSeen": self._seen.get(pc_id)})
+            for pc_id, cur in self._pending.items():
+                out.append({"pcId": pc_id, "label": cur["label"], "host": "", "state": "pending",
+                            "enrolledAt": None, "expiresAt": cur["expires_at"], "lastSeen": None})
+            return sorted(out, key=lambda r: _pc_num(r["pcId"]))
+
+    def used(self):
+        """쓴 자리 = active + disabled + 살아 있는 대기."""
+        with self._lock:
+            self._tick()
+            return self._used()
+
+    # -- 고치기 --------------------------------------------------------------------------------------
+
+    def rename(self, pc_id, label):
+        """이름 바꾸기 (대기 중인 등록도). 틀린 이름은 ValueError, 없는·지운 PC 는 False."""
+        label = clean_label(label)
+        with self._lock:
+            self._tick()
+            if isinstance(pc_id, str) and pc_id in self._pending:
+                self._pending[pc_id]["label"] = label
+                return True
+            rec = self._pcs.get(pc_id) if isinstance(pc_id, str) else None
+            if rec is None or rec["state"] == "removed":
+                return False
+            self._save(self._next, dict(self._pcs, **{pc_id: dict(rec, label=label)}))
+            return True
+
+    def disable(self, pc_id, on):
+        """사용 중지(on=True) / 다시 사용(on=False). 없는·지운 PC 는 False."""
+        with self._lock:
+            rec = self._pcs.get(pc_id) if isinstance(pc_id, str) else None
+            if rec is None or rec["state"] == "removed":
+                return False
+            want = "disabled" if on else "active"
+            if rec["state"] != want:
+                self._save(self._next, dict(self._pcs, **{pc_id: dict(rec, state=want)}))
+            return True
+
+    def remove(self, pc_id):
+        """지우기 - state=removed, removed_at 을 남기고 자리를 돌려준다. 대기 중인 등록이면 그 대기를 버린다. 없거나 이미 지웠으면 False."""
+        with self._lock:
+            if isinstance(pc_id, str) and self._pending.pop(pc_id, None) is not None:
+                return True
+            rec = self._pcs.get(pc_id) if isinstance(pc_id, str) else None
+            if rec is None or rec["state"] == "removed":
+                return False
+            self._save(self._next, dict(self._pcs, **{pc_id: dict(rec, state="removed", removed_at=self._now_ms())}))
+            self._seen.pop(pc_id, None)
+            return True
+
+    def seen(self, pc_id):
+        """마지막 연결 시각 (메모리에만, ms)."""
+        with self._lock:
+            self._seen[pc_id] = self._now_ms()
