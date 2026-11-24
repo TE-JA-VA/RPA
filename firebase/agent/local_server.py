@@ -920,8 +920,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             phone = getattr(srv, "phone", None)
             if kind == "phones":                     # 짝지은 휴대폰 표 (서명 열쇠·지문은 빼고 일반 버전과 같은 꼴) - 없으면 null
                 return self._reply(200, phone.phones.public() if phone is not None else None)
-            if kind == "otp_codes":                  # 번호는 요청이 열려 있고 req_id 가 같을 때만 (local_phone.Desk.read_code)
-                return self._reply(200, phone.desk.read_code(rest[0]) if phone is not None else None)
+            if kind == "otp_codes":                  # 번호는 요청이 열려 있고 req_id 가 같고 그 요청을 연 PC 일 때만 (local_phone.Desk.read_code)
+                pc_me = lic["pc_id"] if me is None else me
+                return self._reply(200, phone.desk.read_code(rest[0], pc_me) if phone is not None else None)
             order_by, equal_to = _json_arg(query.get("orderBy")), _json_arg(query.get("equalTo"))
             if "text/event-stream" in (self.headers.get("Accept") or ""):
                 return self._stream(path, order_by, equal_to, me)
@@ -932,6 +933,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             if method == "DELETE":
                 guard = (lambda get: command_delete_ok(get, path)) if kind == "commands" else None
+                phone = getattr(srv, "phone", None)
+                if kind in ("otp_requests", "otp_codes") and phone is not None:     # 다른 PC 의 살아 있는 요청·번호는 못 지운다 (Task 5)
+                    pc_me = lic["pc_id"] if me is None else me
+                    guard = lambda get: phone.desk.close_ok(get, rest[0], pc_me)    # noqa: E731
                 srv.store.delete(path, guard=guard)
                 return self._reply(200, None)
             body = _server_values(self._json_body(raw), int(time.time() * 1000))
@@ -943,7 +948,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 phone = getattr(srv, "phone", None)
                 if not otp_request_ok(body, lic, phone.phones.get(rest[0]) if phone is not None else None, me):
                     return self._reply(403, DENIED)
-                srv.store.put(path, dict(body, created_at=int(time.time() * 1000)))
+                # 휴대폰마다 요청 하나 (Task 5) - 다른 PC 의 살아 있는 요청이 있으면 일반 버전 규칙 거절과 같은 403 (otp_relay 가 기다렸다 다시 연다)
+                if not phone.desk.open(rest[0], body, lic["pc_id"] if me is None else me):
+                    return self._reply(403, DENIED)
             elif method == "PATCH":
                 if not isinstance(body, dict):
                     return self._reply(400, {"error": "Bad request"})

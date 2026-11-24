@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """사내 서버 ① Task 4 - 서버 LAN 배치: /enroll, PC 별 ap2 서명 확인, 자기 자리만, 서명된 시계 답, 중지·지워짐, 에이전트 구독 상한
 (계획 2026-11-24-lan-1-server-multi-pc, 설계 6.4·6.5).
+Task 5 - 인증번호 요청은 휴대폰마다 하나, 번호 읽기·지우기는 연 PC 만 (설계 7절).
 TLS·사내 주소 없이 127.0.0.1 서버 하나에 PC 등록부를 달고 가짜 PC 여럿으로 본다.
 ap2 머리글은 이 파일이 직접 만든다 (서명 글은 계획이 정한 꼴 - 클라이언트 Task 3 없이도 돈다).
 클라이언트(local_store.Client lan·enroll)가 있어야 하는 시험은 Task 3 가 들어온 뒤에만 돈다 ([보류] 줄).
@@ -363,6 +364,107 @@ try:
             check("300초 늦은 클라이언트도 한 번 다시 보내 성공 (Task 3)", False, repr(e))
     else:
         pending("300초 늦은 클라이언트의 한 번 다시 보내기")
+
+    # --- Task 5: 인증번호 요청 차례 - 짝지은 휴대폰 하나를 서버에 단다 (test_phone_core 의 준비 꼴) ---
+    import local_phone  # noqa: E402
+    import otp_relay  # noqa: E402
+
+    class Clock:                   # 지금 시각 + 밀어 둔 초 (요청 만료를 기다리지 않고 본다)
+        def __init__(self):
+            self.ahead = 0.0
+
+        def __call__(self):
+            return time.time() + self.ahead
+    clk = Clock()
+    PFOLD = os.path.join(TMP, "phone")
+    os.makedirs(PFOLD)
+    svc = local_phone.Service(PFOLD, store, LIC, clock=clk)
+    PH = "ph_5a5a5a5a"
+    svc.phones.add(PH, "총무 휴대폰", "", ["01012345678"], key="s" * 64, fp="f" * 64, os="android", app_version="1", device="Fake")
+    srv.phone = svc
+    RQP, CDP = f"/db/apps/otp/requests/c1/{PH}/current.json", f"/db/apps/otp/codes/c1/{PH}/current.json"
+
+    def otp_body(pc, req_id):
+        return {"req_id": req_id, "site": "시험몰", "pcId": pc, "senders": {"01012345678": True}, "created_at": {".sv": "timestamp"}}
+
+    print("test_otp_one_request_per_phone - 휴대폰마다 요청 하나")
+    r = call2("PUT", RQP, otp_body("pc_01", "req_lan_a0000001"), role="relay")
+    check("pc_01 이 요청 PUT 200 (서명된 답)", r.status == 200 and r.signed
+          and (store.get(f"apps/otp/requests/c1/{PH}/current") or {}).get("pcId") == "pc_01", f"{r.status} {r.raw}")
+    r = call2("PUT", RQP, otp_body("pc_02", "req_lan_b0000001"), pc="pc_02", role="relay")
+    check("2분 안에 pc_02 가 같은 휴대폰에 PUT → 403 (일반 규칙 거절과 같은 꼴)", r.status == 403 and r.signed
+          and r.json() == local_server.DENIED, f"{r.status} {r.raw}")
+    check("… pc_01 의 요청은 그대로", (store.get(f"apps/otp/requests/c1/{PH}/current") or {}).get("req_id") == "req_lan_a0000001")
+    r = call2("PUT", RQP, otp_body("pc_02", "req_lan_b0000002"), pc="pc_01", role="relay")
+    check("pc_01 이 pcId 를 pc_02 로 적어 PUT → 403", r.status == 403)
+    r = call2("PUT", RQP, otp_body("pc_01", "req_lan_a0000002"), role="relay")
+    check("pc_01 이 다시 PUT → 200 (같은 PC 는 덮어쓴다)", r.status == 200
+          and (store.get(f"apps/otp/requests/c1/{PH}/current") or {}).get("req_id") == "req_lan_a0000002", f"{r.status} {r.raw}")
+    created = (store.get(f"apps/otp/requests/c1/{PH}/current") or {}).get("created_at")
+    check("요청 시각은 서버(휴대폰 창구) 시계", isinstance(created, int) and abs(created - clk() * 1000) < 2000, repr(created))
+
+    print("test_otp_code_only_opener - 번호는 연 PC 만")
+    got = svc.desk.submit(PH, {"req_id": "req_lan_a0000002", "code": "482913", "sender": "01012345678", "sms_at": int(clk() * 1000)})
+    check("휴대폰이 번호를 넣는다", got == (200, None), repr(got))
+    r = call2("GET", CDP, role="relay")
+    check("pc_01 GET codes → 번호", r.status == 200 and (r.json() or {}).get("code") == "482913", f"{r.status} {r.raw}")
+    r = call2("GET", CDP, pc="pc_02", role="relay")
+    check("pc_02 GET codes → null", r.status == 200 and r.json() is None and "482913" not in r.raw, f"{r.status} {r.raw}")
+    r = call2("GET", CDP, pc="pc_02", role="agent")
+    check("pc_02 의 agent 열쇠로도 null", r.status == 200 and r.json() is None, f"{r.status} {r.raw}")
+    r = call2("DELETE", CDP, pc="pc_02", role="relay")
+    check("pc_02 DELETE codes → 403, 번호는 그대로", r.status == 403 and (store.get(f"apps/otp/codes/c1/{PH}/current") or {}).get("code") == "482913",
+          f"{r.status} {r.raw}")
+    r = call2("DELETE", RQP, pc="pc_02", role="relay")
+    check("pc_02 DELETE requests → 403, 요청은 그대로", r.status == 403 and store.get(f"apps/otp/requests/c1/{PH}/current") is not None,
+          f"{r.status} {r.raw}")
+    r = call2("DELETE", CDP, role="relay")
+    check("pc_01 DELETE codes → 200", r.status == 200 and store.get(f"apps/otp/codes/c1/{PH}/current") is None, f"{r.status} {r.raw}")
+    r = call2("DELETE", RQP, role="relay")
+    check("pc_01 DELETE requests → 200", r.status == 200 and store.get(f"apps/otp/requests/c1/{PH}/current") is None, f"{r.status} {r.raw}")
+    check("빈 자리는 누구나 지울 수 있다 (pc_02 DELETE → 200)", call2("DELETE", RQP, pc="pc_02", role="relay").status == 200)
+    if TASK3:                      # otp_relay 의 '기다렸다 다시 연다' 가 사내 서버의 403 으로 그대로 도는지
+        rc1 = local_store.Client({"standalone": True, "server_url": BASE, "key": PCS["pc_01"][1], "role": "relay", "lan": True, "pc_id": "pc_01"})
+        rc2 = local_store.Client({"standalone": True, "server_url": BASE, "key": PCS["pc_02"][1], "role": "relay", "lan": True, "pc_id": "pc_02"})
+        relay1 = otp_relay.PhoneRelay(rc1, "c1", "pc_01", PH, ["010-1234-5678"], "시험몰")
+        relay2 = otp_relay.PhoneRelay(rc2, "c1", "pc_02", PH, ["010-1234-5678"], "시험몰")
+        rid1 = relay1.open(tick=lambda s: time.sleep(0.05))
+        second = {}
+
+        def open2():
+            try:
+                second["req_id"] = relay2.open(tick=lambda s: time.sleep(0.05))
+            except Exception as e:
+                second["error"] = repr(e)
+        t2 = threading.Thread(target=open2, daemon=True)
+        t2.start()
+        time.sleep(0.6)
+        check("PhoneRelay: 뒤에 연 pc_02 는 기다린다 (Task 3)", t2.is_alive() and not second, repr(second))
+        svc.desk.submit(PH, {"req_id": rid1, "code": "135790", "sender": "01012345678", "sms_at": int(clk() * 1000)})
+        check("… pc_01 은 자기 번호를 받는다 (Task 3)", relay1.wait(rid1, 3, tick=time.sleep) == "135790")
+        relay1.close(rid1)
+        t2.join(5)
+        check("… pc_01 이 닫으면 pc_02 가 차지한다 (Task 3)", "req_id" in second
+              and (store.get(f"apps/otp/requests/c1/{PH}/current") or {}).get("pcId") == "pc_02", repr(second))
+        check("… pc_02 는 pc_01 의 번호를 못 읽는다 (Task 3)", relay2.wait(second.get("req_id", "x"), 0.3, tick=time.sleep) is None)
+        relay2.close(second.get("req_id", "x"))
+    else:
+        pending("PhoneRelay 기다렸다 다시 열기")
+
+    print("test_otp_after_expiry_other_pc - 2분 지난 요청")
+    r = call2("PUT", RQP, otp_body("pc_01", "req_lan_a0000003"), role="relay")
+    check("pc_01 이 요청 PUT 200", r.status == 200, f"{r.status} {r.raw}")
+    svc.desk.submit(PH, {"req_id": "req_lan_a0000003", "code": "246802", "sender": "01012345678", "sms_at": int(clk() * 1000)})
+    clk.ahead = 121
+    r = call2("PUT", RQP, otp_body("pc_02", "req_lan_b0000003"), pc="pc_02", role="relay")
+    check("121초 뒤 pc_02 PUT → 200", r.status == 200 and (store.get(f"apps/otp/requests/c1/{PH}/current") or {}).get("pcId") == "pc_02",
+          f"{r.status} {r.raw}")
+    check("… 옛 번호는 아무도 못 읽는다", call2("GET", CDP, role="relay").json() is None and call2("GET", CDP, pc="pc_02", role="relay").json() is None)
+    r = call2("PUT", RQP, otp_body("pc_01", "req_lan_a0000004"), role="relay")
+    check("… 이제 pc_01 이 403", r.status == 403, f"{r.status} {r.raw}")
+    check("기록에 인증번호가 없다", all(c not in open(os.path.join(TMP, local_server.LOG_NAME), encoding="utf-8").read()
+                                     for c in ("482913", "135790", "246802")))
+    srv.phone = None
 
     print("test_agent_stream_caps - 에이전트 구독 상한")
     held = [Stream("pc_03", "apps/rpa/commands/c1/pc_03") for _ in range(4)]

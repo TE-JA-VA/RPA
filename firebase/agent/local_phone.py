@@ -392,6 +392,26 @@ class Desk:
         req = self.store.get(self.req_path(phone_id))
         return req if self._alive(req, _now_ms(self._clock)) else None
 
+    def _others(self, req, pc_id, now_ms):
+        """다른 PC 의 살아 있는 요청인가 (사내 서버 ① Task 5 - 휴대폰 하나에 요청 하나, 설계 7절)."""
+        return self._alive(req, now_ms) and req.get("pcId") != pc_id
+
+    def open(self, phone_id, body, pc_id):
+        """요청 열기 (모양은 local_server.otp_request_ok 가 이미 봤다) → 열었으면 True. 시각은 이 창구의 시계.
+        다른 PC 의 살아 있는 요청이 있으면 쓰지 않고 False - 뒤에 온 PC 는 비거나 2분이 지날 때까지 기다린다 (otp_relay.PhoneRelay.open).
+        같은 PC 는 덮어쓴다. 확인과 쓰기는 Store 잠금 하나 안에서 (거의 동시에 연 둘 가운데 하나만)."""
+        now_ms = _now_ms(self._clock)
+        try:
+            self.store.put(self.req_path(phone_id), dict(body, created_at=now_ms),
+                           guard=lambda get: not self._others(get(self.req_path(phone_id)), pc_id, now_ms))
+        except local_server.Refused:
+            return False
+        return True
+
+    def close_ok(self, get, phone_id, pc_id):
+        """요청·번호 자리 지우기의 guard (Store 잠금 안에서 부른다) - 다른 PC 의 살아 있는 요청이면 False (남이 받는 번호를 지우지 못하게)."""
+        return not self._others(get(self.req_path(phone_id)), pc_id, _now_ms(self._clock))
+
     @staticmethod
     def _well_formed(body):
         if not isinstance(body, dict) or set(body) != set(CODE_KEYS):
@@ -439,11 +459,14 @@ class Desk:
             return why[0] if why else (409, "no_request")
         return 200, None
 
-    def read_code(self, phone_id):
-        """번호 - 그 휴대폰의 요청이 열려 있고 req_id 가 같을 때만 (요청이 닫히면 아무도 못 읽는다)."""
+    def read_code(self, phone_id, pc_id=None):
+        """번호 - 그 휴대폰의 요청이 열려 있고 req_id 가 같을 때만 (요청이 닫히면 아무도 못 읽는다).
+        pc_id 가 있으면 그 요청을 연 PC(pcId)일 때만 (사내 서버 ① Task 5 - 다른 PC 는 null)."""
         req = self.open_request(phone_id)
         code = self.store.get(self.code_path(phone_id))
         if req is None or not isinstance(code, dict) or code.get("req_id") != req.get("req_id"):
+            return None
+        if pc_id is not None and req.get("pcId") != pc_id:
             return None
         return code
 
