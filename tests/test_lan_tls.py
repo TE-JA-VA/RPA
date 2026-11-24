@@ -258,7 +258,7 @@ def test_layout():
     p = start({"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8"], "trusted_proxies": ["127.0.0.1"],
                "web_plain": True})
     check("웹 포트는 TLS 없음, 에이전트는 TLS", p.web.tls is None and isinstance(p.agent.tls, ssl.SSLContext))
-    g = call(p.wp, "GET", "/index.html", tls=False)
+    g = call(p.wp, "GET", "/index.html", headers={"X-Forwarded-Proto": "https"}, tls=False)     # 믿을 프록시(127.0.0.1)가 https 를 끝내고 넘긴 모양 (Task 6)
     check("웹 포트에 평문으로 로그인 화면 200", g.status == 200, g)
     check("에이전트 포트에 평문은 답 없이 끊긴다", closed_without_reply(p.ap))
     stop(p)

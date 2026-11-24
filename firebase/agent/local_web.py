@@ -7,7 +7,10 @@ local_server.Handler 가 서명 확인 **앞에서** `/api/*` 와 웹 파일 GET
 
 - 계정(Accounts): `<자료 폴더>/accounts.json`. 비밀번호는 pbkdf2_hmac(sha256, 310000) + 계정마다 소금 16바이트. 기본 계정은 없다.
 - 세션(Sessions): 메모리에만 - 서버를 다시 켜면 모두 풀린다. 탭 단위 (쿠키를 쓰지 않는다 → 다른 사이트의 요청에 로그인이 따라가지 않는다).
-- 잠금(Lockout): 아이디마다 연속 5번 틀리면 60초.
+- 잠금(Lockout): 아이디마다 연속 5번 틀리면 60초. 사내 서버(cfg 있음)는 같은 아이디가 잇따라 잠기면 60·300·900초 (성공하면 처음으로),
+  그리고 주소 잠금(AddrLock): 한 주소가 10분에 10번 틀리면 그 주소를 10분 막는다 - 비밀번호를 계산하기 **전에** 본다 (계획 ② Task 6).
+- 사내 서버만: 세션을 로그인한 주소에 묶고(cfg.bind_session_ip), Origin 은 https://<웹 Host 목록>, 평문 프록시 모양(web_plain)은
+  믿을 프록시에서 X-Forwarded-Proto: https 로 온 요청만, 응답에 HSTS, 기록의 로그인 줄에 보낸 쪽 주소.
 - 웹 파일: firebase/web 을 그대로 내주되 스탠드얼론에 없어야 할 것(Firebase 설정·SDK 를 부르는 파일)은 내주지 않는다.
 비밀번호·세션 토큰·열쇠는 기록에 싣지 않고, 어느 응답에도 열쇠·라이선스 서명·해시·소금을 싣지 않는다.
 표준 라이브러리만 쓴다.
@@ -15,6 +18,7 @@ local_server.Handler 가 서명 확인 **앞에서** `/api/*` 와 웹 파일 GET
 import hashlib
 import hmac
 import json
+import math
 import os
 import queue
 import re
@@ -39,7 +43,11 @@ ACCOUNTS_MAX = 50
 IDLE_SEC = 1800                            # 미사용 30분
 MAX_SEC = 43200                            # 로그인 뒤 12시간
 LOCK_LIMIT, LOCK_SEC = 5, 60
-LOCK_TRACK_MAX = 1000                      # 잠금 표에 기억하는 아이디 수 (없는 아이디를 끝없이 넣어도 메모리가 늘지 않게)
+LAN_LOCK_STEPS = (60, 300, 900)            # 사내 서버: 같은 아이디가 잇따라 잠길 때마다 다음 칸 (성공하면 처음으로)
+ADDR_LIMIT, ADDR_WINDOW, ADDR_BLOCK = 10, 600, 600     # 사내 서버: 한 주소가 10분에 10번 틀리면 그 주소를 10분 막는다
+LOCK_TRACK_MAX = 1000                      # 잠금 표에 기억하는 아이디·주소 수 (없는 아이디를 끝없이 넣어도 메모리가 늘지 않게)
+HSTS = "max-age=31536000"                  # 사내 서버 응답의 Strict-Transport-Security
+PROXY_MSG = "프록시를 거쳐 접속하여 주십시오."
 SESSIONS_MAX = 200
 QUICK_TTL = 90                             # 실행·중단 명령의 만료 (초) - 지금 RTDB 규칙과 같다
 COMMAND_TTL = 600
@@ -343,8 +351,8 @@ class Sessions:
     def _dead(self, s, now):
         return now - s["seen"] > self.idle_sec or now - s["opened"] > self.max_sec
 
-    def open(self, account):
-        """account({id, role, rev?})의 새 세션 → 토큰."""
+    def open(self, account, ip=None):
+        """account({id, role, rev?})의 새 세션 → 토큰. ip 를 주면 그 주소에 묶는다 (사내 서버 cfg.bind_session_ip)."""
         token = secrets.token_urlsafe(32)
         now = self._clock()
         with self._lock:
@@ -352,11 +360,13 @@ class Sessions:
                 del self._items[t]
             while len(self._items) >= SESSIONS_MAX:       # 가장 오래 안 쓴 세션부터 밀어낸다
                 del self._items[min(self._items, key=lambda t: self._items[t]["seen"])]
-            self._items[token] = {"id": account["id"], "role": account.get("role"), "rev": account.get("rev"), "opened": now, "seen": now}
+            self._items[token] = {"id": account["id"], "role": account.get("role"), "rev": account.get("rev"), "opened": now, "seen": now,
+                                  "ip": ip}
         return token
 
-    def get(self, token, touch=False):
-        """세션 {id, role, rev, opened, seen} 의 사본 - 없거나 끝났으면 (지우고) None. touch 면 미사용 시계를 다시 0 으로."""
+    def get(self, token, touch=False, ip=None):
+        """세션 {id, role, rev, opened, seen, ip} 의 사본 - 없거나 끝났으면 (지우고) None. touch 면 미사용 시계를 다시 0 으로.
+        주소에 묶인 세션을 다른 주소(ip)로 물으면 None - 세션은 지우지 않는다 (훔친 토큰으로 주인을 쫓아내지 못하게)."""
         with self._lock:
             s = self._items.get(token) if isinstance(token, str) else None
             if s is None:
@@ -364,6 +374,8 @@ class Sessions:
             now = self._clock()
             if self._dead(s, now):
                 del self._items[token]
+                return None
+            if s.get("ip") is not None and ip != s["ip"]:
                 return None
             if touch:
                 s["seen"] = now
@@ -390,19 +402,21 @@ class Sessions:
 
 
 class Lockout:
-    """아이디마다 연속 실패 limit 번이면 lock_sec 초 잠금. 없는 아이디도 똑같이 센다 (잠겼다고 아이디가 있는 것이 아니다).
+    """아이디마다 연속 실패 limit 번이면 잠금. 없는 아이디도 똑같이 센다 (잠겼다고 아이디가 있는 것이 아니다).
+    잠금 길이는 steps 의 칸 - 같은 아이디가 잇따라 잠길 때마다 다음 칸, 끝 칸에서 머문다, 성공(ok)하면 처음 칸으로.
+    단독은 steps=(lock_sec,) 하나라 늘 lock_sec (지금 그대로), 사내 서버의 Web 은 LAN_LOCK_STEPS.
     잠긴 동안의 시도는 세지 않는다 (잠금이 늘어나지 않는다). 잠금이 풀리면 0 부터 다시 센다."""
 
-    def __init__(self, limit=LOCK_LIMIT, lock_sec=LOCK_SEC, clock=time.time):
+    def __init__(self, limit=LOCK_LIMIT, lock_sec=LOCK_SEC, clock=time.time, steps=None):
         self.limit, self.lock_sec, self._clock = limit, lock_sec, clock
+        self.steps = tuple(steps) if steps else (lock_sec,)
         self._lock = threading.Lock()
-        self._items = {}                             # 아이디 → [연속 실패 수, 잠금이 풀리는 시각 (0 = 잠기지 않음)]
+        self._items = {}                 # 아이디 → [연속 실패 수, 잠금이 풀리는 시각 (0 = 잠기지 않음), 잇따라 잠긴 횟수]
 
     def _entry(self, id, now):
         e = self._items.get(id)
-        if e is not None and e[1] and e[1] <= now:   # 잠금이 풀렸다
-            del self._items[id]
-            e = None
+        if e is not None and e[1] and e[1] <= now:   # 잠금이 풀렸다 - 0 부터 다시 세되 잠긴 횟수는 남긴다 (다음 잠금이 길어진다)
+            e[0], e[1] = 0, 0
         return e
 
     def locked(self, id):
@@ -410,28 +424,102 @@ class Lockout:
             e = self._entry(id, self._clock())
             return bool(e and e[1])
 
+    def remaining(self, id):
+        """잠금이 풀릴 때까지 남은 초 (잠기지 않았으면 0)."""
+        with self._lock:
+            now = self._clock()
+            e = self._entry(id, now)
+            return max(0, e[1] - now) if e and e[1] else 0
+
     def fail(self, id):
         """실패 한 번 → 이번 실패로 잠겼으면 True."""
         with self._lock:
             now = self._clock()
             e = self._entry(id, now)
             if e is None:
-                if len(self._items) >= LOCK_TRACK_MAX:      # 잠기지 않은 것부터 비운다 (잠긴 것은 풀릴 때 지워진다)
-                    self._items = {k: v for k, v in self._items.items() if v[1] > now}
+                if len(self._items) >= LOCK_TRACK_MAX:      # 잠기지 않고 잠긴 적도 없는 것부터, 그다음 잠기지 않은 것 - 그래도 차면 비운다
+                    self._items = {k: v for k, v in self._items.items() if v[1] > now or v[2]}
+                    if len(self._items) >= LOCK_TRACK_MAX:
+                        self._items = {k: v for k, v in self._items.items() if v[1] > now}
                     if len(self._items) >= LOCK_TRACK_MAX:
                         self._items.clear()
-                e = self._items[id] = [0, 0]
+                e = self._items[id] = [0, 0, 0]
             if e[1]:
                 return False
             e[0] += 1
             if e[0] >= self.limit:
-                e[1] = now + self.lock_sec
+                e[1] = now + self.steps[min(e[2], len(self.steps) - 1)]
+                e[2] += 1
                 return True
             return False
 
     def ok(self, id):
         with self._lock:
             self._items.pop(id, None)
+
+
+class AddrLock:
+    """보낸 쪽 주소마다 window 초 안에 limit 번 틀리면 그 주소를 block 초 막는다 (사내 서버, 설계 6.6 '아이디와 주소 둘 다 센다').
+    여러 아이디를 돌아가며 찍는 시도를 막는다. 막힌 동안의 시도는 세지 않는다. 표는 LOCK_TRACK_MAX 개까지."""
+
+    def __init__(self, limit=ADDR_LIMIT, window=ADDR_WINDOW, block=ADDR_BLOCK, clock=time.time):
+        self.limit, self.window, self.block, self._clock = limit, window, block, clock
+        self._lock = threading.Lock()
+        self._items = {}                 # 주소 → [window 안의 실패 시각들, 막힘이 풀리는 시각 (0 = 막히지 않음)]
+
+    def _entry(self, ip, now):
+        e = self._items.get(ip)
+        if e is None:
+            return None
+        e[0] = [t for t in e[0] if now - t < self.window]
+        if e[1] and e[1] <= now:
+            e[1] = 0
+        if not e[0] and not e[1]:
+            del self._items[ip]
+            return None
+        return e
+
+    def blocked(self, ip):
+        with self._lock:
+            e = self._entry(ip, self._clock())
+            return bool(e and e[1])
+
+    def remaining(self, ip):
+        """막힘이 풀릴 때까지 남은 초 (막히지 않았으면 0)."""
+        with self._lock:
+            now = self._clock()
+            e = self._entry(ip, now)
+            return max(0, e[1] - now) if e and e[1] else 0
+
+    def fail(self, ip):
+        """실패 한 번 → 이번 실패로 막혔으면 True."""
+        with self._lock:
+            now = self._clock()
+            e = self._entry(ip, now)
+            if e is None:
+                if len(self._items) >= LOCK_TRACK_MAX:      # 막히지 않은 것부터 비운다, 그래도 차면 모두
+                    self._items = {k: v for k, v in self._items.items() if v[1] > now}
+                    if len(self._items) >= LOCK_TRACK_MAX:
+                        self._items.clear()
+                e = self._items[ip] = [[], 0]
+            if e[1]:
+                return False
+            e[0].append(now)
+            if len(e[0]) >= self.limit:
+                e[0], e[1] = [], now + self.block
+                return True
+            return False
+
+    def ok(self, ip):
+        """그 주소의 셈을 지운다. 로그인 성공에는 부르지 않는다 - 계정이 있는 사람이 자기 로그인 사이사이 남의 아이디를 찍어도
+        주소 셈이 이어지게 (_login 의 주석)."""
+        with self._lock:
+            self._items.pop(ip, None)
+
+
+def _minutes(sec):
+    """남은 초 → 안내 글의 분 (올림, 적어도 1)."""
+    return max(1, math.ceil(sec / 60 - 1e-9))
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -484,11 +572,12 @@ class Web:
         self.registry = registry
         self.public_url = None                       # make_server 가 적는다 (등록 글에 싣는 서버 주소)
         self.lan_ca_pem = None                       # 사내망: 우리 인증 기관 PEM 글 - 등록 글의 ca 로 싣는다 (lan_server.make_lan_servers 가 적는다)
-        self.cfg = None                              # 사내망 설정 lan_config.LanConfig (make_lan_servers 가 적는다, 단독은 None)
         self.web_dir = os.path.realpath(web_dir) if web_dir else None
         self.accounts = Accounts(os.path.join(folder, ACCOUNTS_NAME))
         self.sessions = Sessions(clock=clock)
         self.lockout = Lockout(clock=clock)
+        self.addr_lock = AddrLock(clock=clock)       # 사내 서버(cfg 있음)만 쓴다
+        self._cfg = None                             # 사내망 설정 - cfg 속성으로 적는다 (아래)
         self._clock = clock
         self._login_lock = threading.Lock()          # 비밀번호 확인은 한 번에 하나 - 잠금 확인과 실패 세기 사이에 다른 시도가 끼지 못한다
         self._streams, self._streams_lock = 0, threading.Lock()
@@ -513,6 +602,17 @@ class Web:
             ("pcs", True): {"POST": self._pc_edit, "DELETE": self._pc_remove},
         }
         self.phone = None
+
+    @property
+    def cfg(self):
+        """사내망 설정 lan_config.LanConfig (lan_server.make_lan_servers 가 적는다, 단독은 None)."""
+        return self._cfg
+
+    @cfg.setter
+    def cfg(self, value):
+        """적을 때 아이디 잠금 길이도 맞춘다 - 사내 서버는 LAN_LOCK_STEPS, 단독은 (LOCK_SEC,) 그대로."""
+        self._cfg = value
+        self.lockout.steps = LAN_LOCK_STEPS if value is not None else (self.lockout.lock_sec,)
 
     @property
     def max_streams(self):
@@ -552,8 +652,16 @@ class Web:
         if not api and method != "GET":
             return False
         try:
-            if not local_server.local_host(handler.headers, handler.server.server_port):
-                raise _Fail(403, "forbidden", "이 PC 의 주소(127.0.0.1)로 접속하여 주십시오.")     # 다른 이름으로 이 PC 를 가리킨 요청 (DNS 바꿔치기)
+            cfg = self._cfg
+            handler.web_ip = None
+            if cfg is not None and cfg.web_plain and getattr(handler.server, "side", None) == "web" and not self._via_proxy(handler):
+                raise _Fail(403, "forbidden", PROXY_MSG)         # 평문 웹 포트는 같은 장비의 프록시가 https 를 끝내고 넘긴 것만
+            # 다른 이름으로 이 서버를 가리킨 요청 (DNS 바꿔치기) - 단독은 127.0.0.1·localhost, 사내 서버는 설정의 웹 Host 목록
+            if not local_server.host_ok(handler.headers, handler.server):
+                raise _Fail(403, "forbidden", "이 PC 의 주소(127.0.0.1)로 접속하여 주십시오." if cfg is None
+                            else "서버 주소로 접속하여 주십시오.")
+            if cfg is not None:
+                handler.web_ip = handler.client_ip()             # 요청마다 한 번 읽어 둔다 (스트림의 세션 확인도 이 값)
             if api:
                 out = self._api(handler, method, path, query or {}, body)
                 if out is not _SENT:
@@ -575,10 +683,16 @@ class Web:
     def _api(self, h, method, path, query, body):
         # 다른 사이트의 화면이 이 PC 주소로 보낸 요청은 받지 않는다. 브라우저는 POST 와 다른 출처의 요청에 Origin 을 싣는다
         # (주소창에 친 GET 은 Origin 이 없다). 세션이 쿠키가 아니라 머리글이라 따라갈 로그인도 없지만 한 겹 더 막는다.
+        # 사내 서버는 https://<웹 Host 목록 하나> 만 (web_plain 이어도 브라우저는 프록시의 https 주소를 본다).
         port = h.server.server_port
         origin = h.headers.get("Origin")
-        if origin is not None and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
-            raise _Fail(403, "forbidden", "이 화면에서 보낸 요청이 아닙니다.")
+        if origin is not None:
+            if self._cfg is not None:
+                ok = origin.lower() in {"https://" + x for x in self._cfg.web_hosts()}
+            else:
+                ok = origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+            if not ok:
+                raise _Fail(403, "forbidden", "이 화면에서 보낸 요청이 아닙니다.")
         site = h.headers.get("Sec-Fetch-Site")
         if site is not None and site not in ("same-origin", "none"):
             raise _Fail(403, "forbidden", "이 화면에서 보낸 요청이 아닙니다.")
@@ -604,6 +718,8 @@ class Web:
         h.send_header("X-Content-Type-Options", "nosniff")
         h.send_header("X-Frame-Options", "DENY")
         h.send_header("Referrer-Policy", "no-referrer")
+        if self._cfg is not None:
+            h.send_header("Strict-Transport-Security", HSTS)
         h.end_headers()
         if body:
             h.wfile.write(body)
@@ -613,6 +729,45 @@ class Web:
 
     def _log(self, text):
         local_server.log(self.folder, text)
+
+    # --- 보낸 쪽 (사내 서버만) ---
+    def _via_proxy(self, h):
+        """평문 웹 포트(web_plain): 소켓 주소가 믿을 프록시이고 X-Forwarded-Proto 가 모두 https 인가 (설계 6.3 (ㄴ))."""
+        if not self._cfg.is_proxy(h.server.peer_ip(h.client_address)):
+            return False
+        protos = [p.strip().lower() for v in (h.headers.get_all("X-Forwarded-Proto") or []) for p in v.split(",")]
+        return bool(protos) and all(p == "https" for p in protos)
+
+    @staticmethod
+    def _ip(h):
+        """이 요청의 보낸 쪽 주소 (handle 이 한 번 읽어 둔 것). 단독은 None - 주소 잠금·세션 주소·기록의 주소를 쓰지 않는다."""
+        return getattr(h, "web_ip", None)
+
+    def _at(self, h):
+        """기록 줄 끝에 붙일 보낸 쪽 주소 (사내 서버만)."""
+        ip = self._ip(h)
+        return f"  주소={ip}" if ip else ""
+
+    def _addr_check(self, h):
+        """막힌 주소면 429 - 비밀번호를 계산하기 전에 부른다 (_login_lock 안에서)."""
+        ip = self._ip(h)
+        if ip is not None and self.addr_lock.blocked(ip):
+            raise _Fail(429, "auth/too-many-requests", "이 PC 에서 로그인 시도가 많아 잠시 막았습니다. "
+                        f"{_minutes(self.addr_lock.remaining(ip))}분 뒤 다시 시도하여 주십시오.")
+
+    def _addr_fail(self, h):
+        """틀린 비밀번호 한 번을 주소에도 센다 (사내 서버만). 이번에 막히면 기록에 한 줄."""
+        ip = self._ip(h)
+        if ip is not None and self.addr_lock.fail(ip):
+            self._log(f"웹 로그인 주소 잠금 - {self.addr_lock.window // 60}분에 {self.addr_lock.limit}번 틀려 "
+                      f"{self.addr_lock.block}초  주소={ip}")
+
+    def _id_fail(self, key, what, shown, h):
+        """틀린 비밀번호 한 번을 아이디에 센다 → 기록 한 줄 (잠기면 잠긴 초)."""
+        if self.lockout.fail(key):
+            self._log(f"{what} - {self.lockout.limit}번 틀려 {round(self.lockout.remaining(key))}초 잠금  아이디={shown}{self._at(h)}")
+        else:
+            self._log(f"{what}  아이디={shown}{self._at(h)}")
 
     # --- 요청에서 읽기 ---
     @staticmethod
@@ -638,10 +793,11 @@ class Web:
             raise _Fail(400, "invalid-argument", "주소가 올바르지 않습니다.")
         return value
 
-    def _account_of(self, token):
+    def _account_of(self, token, ip=None):
         """이 토큰의 세션이 살아 있고 그 계정이 지금도 쓸 수 있으면 계정, 아니면 None (세션을 닫는다).
-        계정이 없어졌거나 중지됐거나 로그인한 뒤 비밀번호가 다시 정해졌으면 (설정 창이 파일을 고친 경우 포함) 끝난 세션이다."""
-        sess = self.sessions.get(token) if token else None
+        계정이 없어졌거나 중지됐거나 로그인한 뒤 비밀번호가 다시 정해졌으면 (설정 창이 파일을 고친 경우 포함) 끝난 세션이다.
+        ip = 이 요청의 보낸 쪽 주소 - 주소에 묶인 세션을 다른 주소에서 쓰면 None (세션은 닫지 않는다)."""
+        sess = self.sessions.get(token, ip=ip) if token else None
         if sess is None:
             return None
         acct = self.accounts.get(sess["id"])
@@ -649,8 +805,10 @@ class Web:
             # 이 탭이 비밀번호를 바꾸는 중이면 파일은 이미 바뀌고 세션은 아직 옛 rev 다 (_password 가 _login_lock 안에서 둘을 차례로 고친다) -
             # 그 사이에 스트림의 1초 확인이 끼면 자기 세션을 닫아 버렸다 (2026-11-23 화면 시험의 흔들리는 401). 끝나기를 기다려 다시 본다
             with self._login_lock:
-                sess = self.sessions.get(token)
-                acct = self.accounts.get(sess["id"]) if sess is not None else None
+                sess = self.sessions.get(token, ip=ip)
+                if sess is None:
+                    return None                  # 끝났거나 (get 이 지웠다) 다른 주소 - 닫지 않는다
+                acct = self.accounts.get(sess["id"])
                 if sess is None or acct is None or acct["disabled"] or acct["rev"] != sess["rev"]:
                     self.sessions.close(token)
                     return None
@@ -663,7 +821,8 @@ class Web:
         raw = h.headers.get("Authorization") or ""
         token = raw[7:].strip() if raw.startswith("Bearer ") else ""
         token = token if TOKEN_RE.fullmatch(token) else None
-        acct = self._account_of(token)
+        ip = self._ip(h)
+        acct = self._account_of(token, ip)
         if acct is None:
             raise _Fail(401, "unauthenticated", "로그인이 필요합니다. 다시 로그인하여 주십시오.")
         if acct["must_change"] and not must_ok:
@@ -671,7 +830,7 @@ class Web:
         if admin and acct["role"] != "admin":
             raise _Fail(403, "PERMISSION_DENIED", "권한이 없습니다. 관리자 계정으로 로그인하여 주십시오.")
         if touch:
-            self.sessions.get(token, touch=True)
+            self.sessions.get(token, touch=True, ip=ip)
         return token, acct
 
     def _public(self, acct):
@@ -691,29 +850,30 @@ class Web:
             raise _Fail(400, "invalid-argument", "아이디와 비밀번호를 입력하여 주십시오.")
         uid = norm_id(raw_id)
         key = uid[:64]
+        ip = self._ip(h)
         with self._login_lock:
+            self._addr_check(h)                      # 사내 서버: 막힌 주소는 비밀번호를 계산하기 전에 돌려보낸다
             if self.lockout.locked(key):             # 맞는 비밀번호도 받지 않는다 - 없는 아이디도 똑같이 잠긴다
-                raise _Fail(429, "auth/too-many-requests", "로그인 시도가 많아 잠시 잠겼습니다. 1분 뒤 다시 시도하여 주십시오.")
+                raise _Fail(429, "auth/too-many-requests", "로그인 시도가 많아 잠시 잠겼습니다. "
+                            f"{_minutes(self.lockout.remaining(key))}분 뒤 다시 시도하여 주십시오.")
             acct = self.accounts.verify(uid, password)
             if acct is None:
-                shown = self._shown(uid)
-                if self.lockout.fail(key):
-                    self._log(f"웹 로그인 실패 - {self.lockout.limit}번 틀려 {self.lockout.lock_sec}초 잠금  아이디={shown}")
-                else:
-                    self._log(f"웹 로그인 실패  아이디={shown}")
+                self._id_fail(key, "웹 로그인 실패", self._shown(uid), h)
+                self._addr_fail(h)                   # 아이디와 주소 둘 다 센다 (여러 아이디를 돌아가며 찍는 시도)
                 raise _Fail(401, "auth/invalid-credential", "아이디 또는 비밀번호가 일치하지 않습니다.")
             if acct["disabled"]:                     # 비밀번호가 맞을 때만 알려 준다 (틀리면 위에서 그냥 '틀림')
-                self._log(f"웹 로그인 거절 - 사용 중지된 계정  아이디={uid}")
+                self._log(f"웹 로그인 거절 - 사용 중지된 계정  아이디={uid}{self._at(h)}")
                 raise _Fail(403, "auth/user-disabled", "사용이 중지된 계정입니다.")
+            # 주소 셈(addr_lock)은 성공해도 지우지 않는다 - 계정이 있는 사람이 자기 로그인 사이사이 남의 아이디를 찍어 셈을 되돌리지 못하게
             self.lockout.ok(key)
-            token = self.sessions.open(acct)
-        self._log(f"웹 로그인  아이디={uid}  권한={acct['role']}")
+            token = self.sessions.open(acct, ip=ip if self._cfg is not None and self._cfg.bind_session_ip else None)
+        self._log(f"웹 로그인  아이디={uid}  권한={acct['role']}{self._at(h)}")
         return {"token": token, "session": self._public(acct)}
 
     def _logout(self, h, query, body):
         token, acct = self._auth(h, must_ok=True)
         self.sessions.close(token)
-        self._log(f"웹 로그아웃  아이디={acct['id']}")
+        self._log(f"웹 로그아웃  아이디={acct['id']}{self._at(h)}")
         return {"ok": True}
 
     def _session_get(self, h, query, body):
@@ -728,22 +888,26 @@ class Web:
             raise _Fail(400, "invalid-argument", "현재 비밀번호와 새 비밀번호를 입력하여 주십시오.")
         uid = acct["id"]
         with self._login_lock:
+            self._addr_check(h)                      # 사내 서버: 로그인과 같은 주소 잠금 (비밀번호 계산 전에)
             if self.lockout.locked(uid):             # 열린 탭으로 현재 비밀번호를 찍어 맞히지 못하게 로그인과 같은 잠금을 쓴다
-                raise _Fail(429, "auth/too-many-requests", "시도가 많아 잠시 잠겼습니다. 1분 뒤 다시 시도하여 주십시오.")
+                raise _Fail(429, "auth/too-many-requests", "시도가 많아 잠시 잠겼습니다. "
+                            f"{_minutes(self.lockout.remaining(uid))}분 뒤 다시 시도하여 주십시오.")
             try:
                 fresh = self.accounts.change_password(uid, current, new)
             except WeakPassword as e:
                 raise _Fail(400, "auth/weak-password", str(e)) from None
             except WrongPassword as e:
                 if self.lockout.fail(uid):
-                    self._log(f"웹 비밀번호 변경 실패 - {self.lockout.limit}번 틀려 {self.lockout.lock_sec}초 잠금  아이디={uid}")
+                    self._log(f"웹 비밀번호 변경 실패 - {self.lockout.limit}번 틀려 {round(self.lockout.remaining(uid))}초 잠금  "
+                              f"아이디={uid}{self._at(h)}")
+                self._addr_fail(h)
                 raise _Fail(403, "auth/wrong-password", str(e)) from None      # 401 이 아니다 - 화면은 401 을 '세션 끝' 으로 본다
             except ValueError as e:
                 raise _Fail(400, "invalid-argument", str(e)) from None
             self.lockout.ok(uid)
             self.sessions.refresh(token, fresh)                  # 바꾼 탭은 그대로 두고
             self.sessions.close_account(uid, keep=token)         # 그 계정의 다른 세션은 닫는다
-        self._log(f"웹 비밀번호 변경  아이디={uid}")
+        self._log(f"웹 비밀번호 변경  아이디={uid}{self._at(h)}")
         return {"ok": True, "session": self._public(fresh)}
 
     def _company(self, h, query, body):
@@ -1061,6 +1225,7 @@ class Web:
             keep-alive= 조용할 때 KEEPALIVE_SEC 마다,  gone = 세션이 끝났다 (보내고 닫는다 - 화면은 로그인으로)
         이벤트에 서명은 없다 (브라우저용). 세션은 1초에 한 번쯤 다시 본다 - 미사용 시계는 되돌리지 않는다."""
         token, _ = self._auth(h, must_ok=True)
+        ip = self._ip(h)                                         # 1초마다 세션을 다시 볼 때도 붙을 때의 주소로 (세션 주소 묶기)
         pc = self._pc(query.get("pcId"))                         # 사내 서버는 고른 PC 하나의 현황·명령만 (사용 중지된 PC 도 본다)
         live_path, cmds_path = self._spot("live", pc), self._spot("commands", pc)
         with self._streams_lock:
@@ -1081,7 +1246,7 @@ class Web:
             while not srv.stopping.is_set():
                 if time.monotonic() - checked >= 1.0:            # 이벤트가 이어져도 1초에 한 번은 세션을 본다
                     checked = time.monotonic()
-                    if self._account_of(token) is None:
+                    if self._account_of(token, ip) is None:
                         send("gone", None)
                         return _SENT
                 try:
