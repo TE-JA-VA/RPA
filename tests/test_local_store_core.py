@@ -292,6 +292,34 @@ def test_data_dir(tmpdir):
     check("포트", local_server.PORT == 8781)
 
 
+def test_volatile_only_write_skips_file(tmpdir):
+    print("[Store] 현황·인증번호만 바뀐 쓰기는 파일을 다시 쓰지 않는다 (사내 서버 ① Task 1)")
+    path = os.path.join(tmpdir, "vol.json")
+    s = local_server.Store(path, volatile=("apps/otp", "apps/rpa/live"))
+    s.put("apps/rpa/commands/c1/p1/k1", {"state": "queued"})
+    n = s.saves
+    with open(path, encoding="utf-8") as f:
+        before = f.read()
+    s.patch("apps/rpa/live/c1/p1", {"heartbeat": 1})
+    s.put("apps/otp/requests/c1/ph/current", {"req_id": "x" * 8})
+    s.delete("apps/rpa/live/c1/p9")
+    with open(path, encoding="utf-8") as f:
+        after = f.read()
+    check("현황·인증번호만 바뀐 쓰기는 파일을 다시 쓰지 않는다", s.saves == n and after == before, f"{n} → {s.saves}")
+    check("메모리에는 들어 있다", s.get("apps/rpa/live/c1/p1/heartbeat") == 1)
+    q = s.subscribe("apps/rpa/live")
+    drain(q)
+    s.patch("apps/rpa/live/c1/p1", {"heartbeat": 2})
+    check("구독 알림은 그대로 간다", len(drain(q)) == 1)
+    s.unsubscribe(q)
+    s.patch("apps/rpa", {"live/c1/p2/heartbeat": 2, "commands/c1/p2/k9": {"state": "queued"}})
+    check("volatile 밖이 하나라도 섞이면 저장한다", s.saves == n + 1, f"{s.saves}")
+    s.put("apps/rpa", None)
+    check("volatile 의 윗자리 쓰기는 저장한다", s.saves == n + 2, f"{s.saves}")
+    s.patch("", {"apps/rpa/live/c1/p1/x": 1})
+    check("루트 patch 도 자리마다 본다 (현황뿐이면 건너뜀)", s.saves == n + 2, f"{s.saves}")
+
+
 def main():
     tmpdir = tempfile.mkdtemp(prefix="local_store_core_")
     try:
@@ -301,6 +329,7 @@ def main():
         test_concurrent(tmpdir)
         test_runs(tmpdir)
         test_data_dir(tmpdir)
+        test_volatile_only_write_skips_file(tmpdir)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     print()

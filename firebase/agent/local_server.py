@@ -124,6 +124,12 @@ class Store:
         self._lock = threading.Lock()
         self._subs = []
         self._data = self._load()
+        self.saves = 0                    # 파일을 실제로 쓴 횟수 (시험이 센다)
+
+    def _volatile_only(self, writes):
+        """이번 쓰기가 모두 메모리에만 두는 자리(volatile) 아래인가 - 그러면 파일 내용이 그대로라 다시 쓰지 않는다
+        (사내 서버 ① Task 1, 설계 2026-11-24 13절 2번 - 현황은 PC 수만큼 가장 자주 오는 쓰기). 윗자리(루트 포함) 쓰기는 아니다."""
+        return bool(writes) and all(any(len(parts) >= len(v) and parts[:len(v)] == v for v in self._volatile) for parts, _ in writes)
 
     # --- 파일 ---
     def _load(self):
@@ -217,7 +223,9 @@ class Store:
                     new = value or {}
                 else:
                     new = _set(new, parts, value) or {}
-            self._save(new)
+            if not self._volatile_only(writes):
+                self._save(new)
+                self.saves += 1
             self._data = new
             for sub in list(self._subs):
                 for ev in self._events(sub, kind, base, writes, raw, old, new):
@@ -413,7 +421,8 @@ def _read_text(path, tries=5):
 
 
 LOCKED_FILES = ("agent.key", "relay.key", "accounts.json",
-                "phone_key.pem", "phones.json")     # 휴대폰 포트의 인증서 개인 열쇠·짝지은 휴대폰의 서명 열쇠 (계획 ④ - local_cert·local_phone)
+                "phone_key.pem", "phones.json",     # 휴대폰 포트의 인증서 개인 열쇠·짝지은 휴대폰의 서명 열쇠 (계획 ④ - local_cert·local_phone)
+                "pcs.json")                         # 사내 서버의 PC 등록부 - PC 마다의 열쇠 (사내 서버 ① Task 2 - pc_registry)
 ADMIN_SIDS = ("*S-1-5-32-544", "*S-1-5-18")       # 관리자, SYSTEM
 
 

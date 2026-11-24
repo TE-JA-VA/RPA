@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+"""스탠드얼론 브랜치의 시험을 한꺼번에 돌린다 (종료 코드와 통과·실패 수).
+    .venv\\Scripts\\python.exe tests\\run_standalone_suite.py [all|sa|cloud]
+'sa' 는 스탠드얼론 시험만, 'cloud' 는 일반 버전 시험만. 없는 파일은 건너뛴다.
+화면 시험(에뮬레이터, scratchpad 의 run_check_web.sh)과 실제 ERPia 를 누르는 시험은 여기 없다."""
+import os
+import subprocess
+import sys
+
+sys.stdout.reconfigure(encoding="utf-8")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PY = sys.executable
+SA = ["tests/test_license.py", "tests/test_local_store_core.py", "tests/test_local_server_http.py", "tests/test_local_store_client.py",
+      "tests/test_agent_standalone.py", "tests/test_standalone_e2e.py", "tests/test_program_files_imports.py",
+      "tests/test_local_web_api.py", "tests/check_web_local.py",
+      # 계획 ③ (설치·빌드)
+      "tests/test_build_edition.py", "tests/test_standalone_offline.py", "tests/test_ap_guard.py", "tests/test_settings_standalone.py",
+      "tests/test_installer_edition.py", "tests/test_folder_split.py", "tests/test_sandbox_standalone.py", "tests/test_layout.py",
+      # 계획 ④ (휴대폰 창구)
+      "tests/test_phone_core.py", "tests/test_phone_gate.py", "tests/test_otp_fallback.py", "tests/check_phone_local.py",
+      # 사내 서버 ① (여러 PC)
+      "tests/test_pc_registry.py", "tests/test_lan_server.py", "tests/test_lan_web.py"]
+CLOUD = ["firebase/tests/test_agent.py", "tests/test_fb_backoff.py", "tests/test_cloud_scrub.py", "tests/test_dev_env.py",
+         "tests/test_background.py", "tests/test_rpa_update.py", "tests/test_otp_replay.py", "tests/test_build_release.py",
+         "tests/test_server_info.py", "tests/test_settings.py", "tests/test_update_helper.py", "tests/test_observer_notes.py",
+         "tests/test_module_build.py", "tests/test_encoding.py", "tests/test_ai_rescue.py"]
+
+
+def main():
+    which = sys.argv[1] if len(sys.argv) > 1 else "all"
+    files = (SA if which in ("sa", "all") else []) + (CLOUD if which in ("cloud", "all") else [])
+    bad = 0
+    for rel in files:
+        if not os.path.isfile(os.path.join(ROOT, *rel.split("/"))):
+            continue
+        r = subprocess.run([PY, rel], cwd=ROOT, capture_output=True, env=dict(os.environ, PYTHONUTF8="1"))
+        out = r.stdout.decode("utf-8", "replace")
+        failed = [ln.strip() for ln in out.splitlines() if "[실패]" in ln]
+        print(f"{'OK  ' if r.returncode == 0 else 'FAIL'} {rel}  (통과 표시 {out.count('통과]')}개)")
+        for ln in failed[:8]:
+            print("      " + ln[:300])
+        if r.returncode != 0:
+            bad += 1
+            for ln in (out + r.stderr.decode("utf-8", "replace")).strip().splitlines()[-6:]:
+                print("      | " + ln[:300])
+    try:
+        os.remove(os.path.join(ROOT, "ai.json"))      # 시험이 남긴 것 (읽지 않고 지운다)
+    except OSError:
+        pass
+    print("실패한 파일:", bad)
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
