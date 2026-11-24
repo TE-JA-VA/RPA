@@ -26,6 +26,7 @@ import time
 import urllib.parse
 
 import local_server      # log·local_host·KEEPALIVE_SEC·Refused (local_server 는 main() 안에서만 이 파일을 불러온다)
+import pc_registry       # 사내 서버 PC 등록부 (PC_RE·SeatsFull·encode_enrollment - 표준 라이브러리만)
 
 APP = "rpa"
 ROLES = ("admin", "viewer")                # 관리자 / 유저(보기만)
@@ -49,6 +50,7 @@ ARGS_DEPTH_MAX = 20
 API_BODY_MAX = 64 * 1024
 FILE_MAX = 16 * 1024 * 1024
 MAX_STREAMS = 16                           # 열어 둘 수 있는 웹 스트림 수 - 서버 연결 상한(local_server.MAX_CONN) 안에서 에이전트 몫을 남긴다
+LAN_STREAMS = 32                           # 사내 서버의 웹 스트림 수 (local_server.LAN.web_streams 와 같다)
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'")
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -471,10 +473,16 @@ class Web:
 
     미사용 시계(30분)를 되돌리는 요청 = **사람이 한 일**: 로그인, `GET /api/session?touch=1`(화면이 입력을 본 뒤 보낸다),
     명령 보내기, 비밀번호 바꾸기, 계정 창구(목록 포함). 되돌리지 않는 것 = 화면이 혼자 하는 읽기: 그냥 `GET /api/session`,
-    업체 정보, 명령 하나 읽기, 실행 기록, 스트림 - 탭을 열어만 둬도 세션이 이어지면 안 된다."""
+    업체 정보, 명령 하나 읽기, 실행 기록, 스트림 - 탭을 열어만 둬도 세션이 이어지면 안 된다.
 
-    def __init__(self, store, runs, lic, folder, web_dir, clock=time.time):
+    registry(pc_registry.Registry) 가 있으면 사내 서버(LAN, 계획 2026-11-24-lan-1 Task 6): 현황·명령·실행 기록 창구가 PC 번호(pcId)를
+    받고, /api/company 가 등록된 PC 들을 주고, /api/pcs 로 PC 를 추가·중지·삭제한다. make_server 에도 같은 등록부를 넘긴다.
+    없으면 단독(SINGLE) - 이 PC 하나, 지금 그대로."""
+
+    def __init__(self, store, runs, lic, folder, web_dir, clock=time.time, registry=None):
         self.store, self.runs, self.lic, self.folder = store, runs, lic, folder
+        self.registry = registry
+        self.public_url = None                       # make_server 가 적는다 (등록 글에 싣는 서버 주소)
         self.web_dir = os.path.realpath(web_dir) if web_dir else None
         self.accounts = Accounts(os.path.join(folder, ACCOUNTS_NAME))
         self.sessions = Sessions(clock=clock)
@@ -482,8 +490,6 @@ class Web:
         self._clock = clock
         self._login_lock = threading.Lock()          # 비밀번호 확인은 한 번에 하나 - 잠금 확인과 실패 세기 사이에 다른 시도가 끼지 못한다
         self._streams, self._streams_lock = 0, threading.Lock()
-        self._live = f"apps/{APP}/live/{lic['cid']}/{lic['pc_id']}"
-        self._cmds = f"apps/{APP}/commands/{lic['cid']}/{lic['pc_id']}"
         self._routes = {
             ("login", False): {"POST": self._login},
             ("logout", False): {"POST": self._logout},
@@ -500,8 +506,41 @@ class Web:
             ("phones", False): {"GET": self._phones_list},
             ("phones", True): {"POST": self._phone_edit, "DELETE": self._phone_remove},
             ("phone-pair", False): {"GET": self._pair_state, "POST": self._pair_start, "DELETE": self._pair_cancel},
+            # PC 등록부 (사내 서버만, 관리자만) - 단독은 404
+            ("pcs", False): {"GET": self._pcs_list, "POST": self._pc_add},
+            ("pcs", True): {"POST": self._pc_edit, "DELETE": self._pc_remove},
         }
         self.phone = None
+
+    @property
+    def max_streams(self):
+        """열어 둘 수 있는 웹 스트림 수 - 단독은 MAX_STREAMS (부를 때 읽는다 - 시험이 바꿔 끼운다), 사내 서버는 32."""
+        return MAX_STREAMS if self.registry is None else LAN_STREAMS
+
+    # --- PC 고르기 ---
+    def _spot(self, kind, pc):
+        """그 PC 의 현황(live)·명령(commands) 자리."""
+        return f"apps/{APP}/{kind}/{self.lic['cid']}/{pc}"
+
+    def _pc(self, raw, need_active=False, allow_removed=False):
+        """요청이 고른 PC 번호 → 그 번호. 단독: 없으면 이 PC, 다른 값이면 403 (지금과 같다).
+        사내 서버: 없으면 400, 꼴이 틀리면 400, 등록부에 없거나(대기 중 포함) 지운 PC 면 404 (allow_removed 면 지운 PC 도 된다),
+        need_active 인데 사용 중지된 PC 면 409."""
+        if self.registry is None:
+            mine = self.lic["pc_id"]
+            if raw is not None and raw != mine:
+                raise _Fail(403, "permission-denied", "권한이 없습니다.")     # 이 PC 것만 (다른 PC 값은 받지 않는다)
+            return mine
+        if raw is None or raw == "":
+            raise _Fail(400, "invalid-argument", "PC 를 골라 주십시오.")
+        if not isinstance(raw, str) or not pc_registry.PC_RE.fullmatch(raw):
+            raise _Fail(400, "invalid-argument", "PC 번호가 올바르지 않습니다.")
+        state = self.registry.state(raw)
+        if state is None or (state == "removed" and not allow_removed):
+            raise _Fail(404, "not-found", "없는 PC 입니다.")
+        if need_active and state == "disabled":
+            raise _Fail(409, "failed-precondition", "사용이 중지된 PC 입니다.")
+        return raw
 
     # --- 들어오는 길 ---
     def handle(self, handler, method, path, query, body=None):
@@ -708,14 +747,21 @@ class Web:
     def _company(self, h, query, body):
         self._auth(h, must_ok=True)
         lic = self.lic
-        return {"name": lic.get("company") or "", "stts": 0, "pcs": {lic["pc_id"]: {"label": socket.gethostname()}},
+        if self.registry is None:
+            pcs, pc_id = {lic["pc_id"]: {"label": socket.gethostname()}}, lic["pc_id"]
+        else:            # 사내 서버: 등록된 PC 들 (대기·지운 PC 는 빼고) - 화면이 둘 이상이면 PC 고르기를 보인다. 고른 PC 는 화면이 정한다
+            pcs = {p["pcId"]: {"label": p["label"], "state": p["state"], "lastSeen": p["lastSeen"]}
+                   for p in self.registry.list() if p["state"] in ("active", "disabled")}
+            pc_id = None
+        return {"name": lic.get("company") or "", "stts": 0, "pcs": pcs,
                 "apps": {APP: {"modules": lic.get("modules") or {}, "limits": lic.get("limits") or {}, "features": lic.get("features") or {}}},
-                "cid": lic["cid"], "pcId": lic["pc_id"]}
+                "cid": lic["cid"], "pcId": pc_id}
 
     # --- 명령 ---
     def _command_new(self, h, query, body):
         _, acct = self._auth(h, touch=True, admin=True)
         data = self._dict(body)
+        pc = self._pc(data.get("pcId"), need_active=True)
         kind, args = data.get("type"), data.get("args")
         if not isinstance(kind, str) or kind not in WEB_TYPES:
             raise _Fail(400, "invalid-argument", "보낼 수 없는 명령입니다.")
@@ -730,26 +776,37 @@ class Web:
         # by·시각·상태는 서버가 정한다 (보낸 쪽이 적은 값은 쓰지 않는다)
         cmd = {"type": kind, "args": args, "by": acct["id"], "created_at": int(now),
                "expires_at": int(now) + (QUICK_TTL if kind in QUICK_TYPES else COMMAND_TTL), "state": "queued"}
+        cmds = self._spot("commands", pc)
+        reg = self.registry
+
+        def free(get, path):
+            # 같은 키를 덮지 않는다. 사내 서버는 쓰는 순간에도 그 PC 가 쓸 수 있는지 본다 (확인과 쓰기 사이에 중지·삭제가 끼면 쓰지 않는다)
+            return get(path) is None and (reg is None or reg.state(pc) == "active")
+
         for _ in range(5):
             key = f"{int(now * 1000):013d}{secrets.token_hex(4)}"     # 만든 순서로 줄 선다
-            path = f"{self._cmds}/{key}"
+            path = f"{cmds}/{key}"
             try:
-                self.store.put(path, cmd, guard=lambda get, path=path: get(path) is None)     # 같은 키를 덮지 않는다
+                self.store.put(path, cmd, guard=lambda get, path=path: free(get, path))
             except local_server.Refused:
+                if reg is not None and reg.state(pc) != "active":
+                    self._pc(pc, need_active=True)               # 지금 상태로 다시 답한다 (404·409)
                 continue
             return {"key": key, "value": self.store.get(path)}
         raise _Fail(503, "unavailable", "명령을 보내지 못했습니다. 다시 시도하여 주십시오.")
 
     def _command_get(self, h, query, body, raw_key):
         self._auth(h)
-        return self.store.get(f"{self._cmds}/{self._arg(raw_key, KEY_RE)}")       # 없으면 null
+        pc = self._pc(query.get("pcId"))
+        return self.store.get(f"{self._spot('commands', pc)}/{self._arg(raw_key, KEY_RE)}")       # 없으면 null
 
     # --- 실행 기록 ---
     def _runs(self, h, query, body):
         self._auth(h)
         lic = self.lic
-        if query.get("pcId", lic["pc_id"]) != lic["pc_id"] or query.get("cid", lic["cid"]) != lic["cid"]:
-            raise _Fail(403, "permission-denied", "권한이 없습니다.")           # 이 PC 의 기록만 (다른 PC·업체 값은 받지 않는다)
+        if query.get("cid", lic["cid"]) != lic["cid"]:
+            raise _Fail(403, "permission-denied", "권한이 없습니다.")           # 이 업체의 기록만
+        pc = self._pc(query.get("pcId"), allow_removed=True)               # 단독은 이 PC 것만, 사내 서버는 지운 PC 의 기록도 본다
         date = query.get("date") or None
         if date is not None and not DATE_RE.fullmatch(date):
             raise _Fail(400, "invalid-argument", "날짜는 YYYY-MM-DD 로 입력하여 주십시오.")
@@ -757,7 +814,7 @@ class Web:
             limit = min(200, max(1, int(query.get("limit") or 100)))
         except ValueError:
             raise _Fail(400, "invalid-argument", "개수가 올바르지 않습니다.") from None
-        return {"runs": self.runs.query(f"runs/{lic['cid']}", "items", lic["pc_id"], date, limit)}
+        return {"runs": self.runs.query(f"runs/{lic['cid']}", "items", pc, date, limit)}
 
     # --- 계정 관리 (관리자) ---
     def _accounts_out(self):
@@ -920,6 +977,77 @@ class Web:
         self._log(f"휴대폰 삭제  번호={pid}  이름={rec.get('label') or ''}  처리={me['id']}")
         return self._phones_out(svc, gate)
 
+    # --- PC 등록부 (사내 서버만, 관리자, 계획 2026-11-24-lan-1 Task 6) ---
+    # 등록 토큰은 POST /api/pcs 응답의 등록 글(APE1.…) 안에만 한 번 나간다 - 기록·다른 응답·파일에 싣지 않는다.
+    def _registry(self, h):
+        _, me = self._auth(h, touch=True, admin=True)
+        if self.registry is None:
+            raise _Fail(404, "not-found", "사내 서버에서만 쓰는 주소입니다.")
+        return self.registry, me
+
+    @staticmethod
+    def _pcs_out(reg):
+        return {"pcs": reg.list(), "seats": reg.seats, "used": reg.used()}
+
+    def _pcs_list(self, h, query, body):
+        reg, _ = self._registry(h)
+        return self._pcs_out(reg)
+
+    def _pc_add(self, h, query, body):
+        reg, me = self._registry(h)
+        label = self._dict(body).get("label")
+        if not self.public_url:                                  # make_server 가 적기 전 (서버를 열지 않은 창구)
+            raise _Fail(503, "unavailable", "서버 주소를 아직 알 수 없습니다. 잠시 후 다시 시도하여 주십시오.")
+        try:
+            got = reg.start(label)
+        except pc_registry.SeatsFull:
+            raise _Fail(409, "seats-full", f"등록할 수 있는 PC 수({reg.seats}대)를 모두 썼습니다.") from None
+        except ValueError as e:
+            raise _Fail(400, "invalid-argument", str(e)) from None
+        text = pc_registry.encode_enrollment({"v": 1, "url": self.public_url, "pc": got["pc_id"], "token": got["token"],
+                                              "exp": got["expires_at"]})
+        self._log(f"PC 추가  번호={got['pc_id']}  이름={reg.label(got['pc_id']) or ''}  처리={me['id']}")
+        return {"pcId": got["pc_id"], "enrollment": text, "expiresAt": got["expires_at"]}
+
+    def _pc_edit(self, h, query, body, raw_id):
+        """{"label"} 이름 바꾸기, {"disabled": bool} 사용 중지·재개, {"cancel": true} 대기 중인 등록 취소 - 한 번에 하나만."""
+        reg, me = self._registry(h)
+        pc = self._arg(raw_id, pc_registry.PC_RE)
+        data = self._dict(body)
+        asked = [k for k in ("label", "disabled", "cancel") if data.get(k) is not None]
+        if len(asked) != 1 or ("disabled" in asked and not isinstance(data["disabled"], bool)) \
+                or ("cancel" in asked and data["cancel"] is not True):
+            raise _Fail(400, "invalid-argument", "바꿀 내용이 올바르지 않습니다.")
+        if asked == ["label"]:
+            try:
+                ok = reg.rename(pc, data["label"])
+            except ValueError as e:
+                raise _Fail(400, "invalid-argument", str(e)) from None
+            did = "이름 변경"
+        elif asked == ["disabled"]:
+            ok = reg.disable(pc, data["disabled"])
+            did = "사용 중지" if data["disabled"] else "사용 재개"
+        else:
+            ok = reg.cancel(pc)
+            did = "등록 취소"
+        if not ok:
+            raise _Fail(404, "not-found", "없는 PC 입니다.")
+        self._log(f"PC {did}  번호={pc}  처리={me['id']}")
+        return self._pcs_out(reg)
+
+    def _pc_remove(self, h, query, body, raw_id):
+        """PC 지우기 - 자리를 돌려주고 그 PC 의 현황·명령 자리를 지운다 (실행 기록은 남긴다). 대기 중인 등록이면 그 대기만 버린다."""
+        reg, me = self._registry(h)
+        pc = self._arg(raw_id, pc_registry.PC_RE)
+        enrolled = reg.state(pc) in ("active", "disabled")
+        if not reg.remove(pc):
+            raise _Fail(404, "not-found", "없는 PC 입니다.")
+        if enrolled:
+            self.store.delete(self._spot("live", pc))
+            self.store.delete(self._spot("commands", pc))
+        self._log(f"PC {'삭제' if enrolled else '등록 취소'}  번호={pc}  처리={me['id']}")
+        return self._pcs_out(reg)
+
     # --- 스트림 (SSE) ---
     def _stream(self, h, query, body):
         """현황·명령이 바뀔 때마다 민다 (Firebase onValue 자리). local_server.Handler._stream 과 같은 꼴 - 구독 큐를 0.5초씩 기다리며
@@ -929,12 +1057,14 @@ class Web:
             keep-alive= 조용할 때 KEEPALIVE_SEC 마다,  gone = 세션이 끝났다 (보내고 닫는다 - 화면은 로그인으로)
         이벤트에 서명은 없다 (브라우저용). 세션은 1초에 한 번쯤 다시 본다 - 미사용 시계는 되돌리지 않는다."""
         token, _ = self._auth(h, must_ok=True)
+        pc = self._pc(query.get("pcId"))                         # 사내 서버는 고른 PC 하나의 현황·명령만 (사용 중지된 PC 도 본다)
+        live_path, cmds_path = self._spot("live", pc), self._spot("commands", pc)
         with self._streams_lock:
-            if self._streams >= MAX_STREAMS:
+            if self._streams >= self.max_streams:
                 raise _Fail(503, "unavailable", "열어 둔 화면이 너무 많습니다. 쓰지 않는 탭을 닫아 주십시오.")
             self._streams += 1
         srv, q = h.server, None
-        live_at, cmds_at = self._live.split("/")[2:], self._cmds.split("/")[2:]      # 구독 자리(apps/rpa) 아래의 조각
+        live_at, cmds_at = live_path.split("/")[2:], cmds_path.split("/")[2:]      # 구독 자리(apps/rpa) 아래의 조각
 
         def send(event, data):
             h.wfile.write(f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8"))
@@ -975,9 +1105,9 @@ class Web:
                         if spot[:len(cmds_at)] == cmds_at and len(spot) > len(cmds_at) and spot[len(cmds_at)] not in keys:
                             keys.append(spot[len(cmds_at)])      # 명령 하나(나 그 안쪽 칸). 명령함 통째('/')는 건너뛴다
                 if live:
-                    send("live", self.store.get(self._live))
+                    send("live", self.store.get(live_path))
                 for key in keys:
-                    send("command", {"key": key, "value": self.store.get(f"{self._cmds}/{key}")})
+                    send("command", {"key": key, "value": self.store.get(f"{cmds_path}/{key}")})
                 if live or keys:
                     quiet = time.monotonic()
         finally:
