@@ -5,6 +5,7 @@
 표준 라이브러리만 쓴다.
 """
 import copy
+import dataclasses
 import hashlib
 import hmac
 import http.server
@@ -27,6 +28,7 @@ if RPA_DIR not in sys.path:
     sys.path.insert(0, RPA_DIR)          # rpa_status·license_check (agent.py 와 같은 규칙)
 
 import local_store  # noqa: E402  요청·응답 서명 (클라이언트와 같은 함수)
+import pc_registry  # noqa: E402  사내 서버 PC 등록부 (EnrollError·PC_RE - 표준 라이브러리만 쓴다)
 
 PORT = 8781
 
@@ -404,6 +406,26 @@ OTP_MAX_SENDERS = 20
 DENIED = {"error": "Permission denied"}     # fb.HttpError 본문을 보는 코드가 같은 글을 찾는다
 
 
+@dataclasses.dataclass(frozen=True)
+class Deploy:
+    """서버 배치 (사내 서버 ① Task 4, 설계 6.4·6.5). make_server 의 registry 가 있으면 LAN, 없으면 SINGLE (지금 그대로).
+    max_conn 동시 연결, web_streams 웹 구독, agent_streams 에이전트 구독 전체, per_pc_streams PC 하나의 에이전트 구독
+    (0 이면 세지 않는다), sign_window_ms 요청 시각 허용 차이."""
+    mode: str
+    max_conn: int
+    web_streams: int
+    agent_streams: int
+    per_pc_streams: int
+    sign_window_ms: int
+
+
+SINGLE = Deploy("single", MAX_CONN, 16, 0, 0, SIGN_WINDOW_MS)   # 단독(나) - 지금 상수 그대로
+LAN = Deploy("lan", 256, 32, 64, 4, 120000)                       # 사내 서버 - PC 여러 대, 닫힌 망이라 시계 차이를 넉넉히
+STATE_CHECK_SEC = 1.0                      # 사내 서버 구독 고리가 PC 상태(중지·지워짐)를 다시 보는 간격
+ENROLL_NONCE = re.compile(r"[A-Za-z0-9_-]{16,64}")
+ENROLL_FIELDS = ("pc", "rand", "guid", "host", "nonce", "proof")
+
+
 def _read_text(path, tries=5):
     """글 파일을 읽는다. 없으면 None. 잠깐 못 읽는 것(백신이 잡고 있음 등)은 몇 번 다시 - 끝내 못 읽으면 OSError."""
     for i in range(tries):
@@ -517,15 +539,17 @@ def classify(parts):
     return None, None, None, []
 
 
-def allowed(role, method, parts, lic):
-    """이 열쇠가 이 자리에 이 일을 해도 되는가 (자리와 방법까지). 내용은 command_patch_ok·command_delete_ok·otp_request_ok 가 본다."""
+def allowed(role, method, parts, lic, pc_id=None):
+    """이 열쇠가 이 자리에 이 일을 해도 되는가 (자리와 방법까지). 내용은 command_patch_ok·command_delete_ok·otp_request_ok 가 본다.
+    pc_id: 서명으로 확인한 PC 번호 (사내 서버). None 이면 라이선스의 PC 번호 (단독)."""
+    me = lic["pc_id"] if pc_id is None else pc_id
     kind, cid, pc, rest = classify(parts)
     if kind is None or cid != lic["cid"]:
         return False
     if kind == "live":
-        return role == "agent" and pc == lic["pc_id"]
+        return role == "agent" and pc == me
     if kind == "commands":
-        if role != "agent" or pc != lic["pc_id"]:
+        if role != "agent" or pc != me:
             return False
         return method == "GET" or (method == "PATCH" and len(rest) <= 1) or (method == "DELETE" and len(rest) == 1)
     if kind == "policy":
@@ -584,11 +608,12 @@ def command_delete_ok(get, path):
 OTP_REQ_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
 
 
-def otp_request_ok(body, lic, phone=None):
+def otp_request_ok(body, lic, phone=None, pc_id=None):
     """인증번호 요청의 모양 (규칙과 같은 뜻): 정해진 칸만, 이 PC 의 요청, req_id 는 [A-Za-z0-9_-] 8~64자, 사이트 이름 100자까지,
     발신번호는 숫자 글 → true 로 1~OTP_MAX_SENDERS 개. phone = 짝지은 휴대폰 (local_phone.Phones.get) - 없으면 False
     (짝짓지 않은 휴대폰으로는 요청을 못 연다). 그 휴대폰에 허용 발신번호가 있으면 요청의 발신번호가 모두 그 안이어야 한다
-    (PC 가 은행 번호를 넣어 직원 휴대폰의 다른 인증번호를 받아 가지 못하게 - 일반 버전 규칙과 같다)."""
+    (PC 가 은행 번호를 넣어 직원 휴대폰의 다른 인증번호를 받아 가지 못하게 - 일반 버전 규칙과 같다).
+    pc_id: 서명으로 확인한 PC 번호 (사내 서버) - 요청의 pcId 가 같아야 한다. None 이면 라이선스의 PC 번호 (단독)."""
     if not isinstance(phone, dict):
         return False
     if not isinstance(body, dict) or set(body) - set(OTP_KEYS):
@@ -597,7 +622,7 @@ def otp_request_ok(body, lic, phone=None):
         return False
     if not (isinstance(body.get("site"), str) and len(body["site"]) <= 100):
         return False
-    if body.get("pcId") != lic["pc_id"]:
+    if body.get("pcId") != (lic["pc_id"] if pc_id is None else pc_id):
         return False
     senders = body.get("senders")
     if not isinstance(senders, dict) or not 0 < len(senders) <= OTP_MAX_SENDERS:
@@ -626,6 +651,8 @@ class LocalServer(http.server.ThreadingHTTPServer):
     # listen 대기열. 기본 5 는 연결이 몰리면(화면 새로 고침·에이전트·구독이 한꺼번에) 윈도우가 차서 거절된 연결을 0.5초 뒤 다시 붙인다.
     # 넉넉히 두어도 동시 처리 수는 MAX_CONN 이 막는다 (계획 ③ 남은 일)
     request_queue_size = 64
+    deploy = SINGLE                  # make_server 가 정한다 (registry 가 있으면 LAN)
+    registry = None
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -635,7 +662,7 @@ class LocalServer(http.server.ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         with self.conn_lock:
-            if self.conns >= MAX_CONN:               # 연결을 쌓아 두는 프로그램이 있어도 스레드가 끝없이 늘지 않게 (검토 4번)
+            if self.conns >= self.deploy.max_conn:   # 연결을 쌓아 두는 프로그램이 있어도 스레드가 끝없이 늘지 않게 (검토 4번)
                 self.shutdown_request(request)
                 return
             self.conns += 1
@@ -648,15 +675,32 @@ class LocalServer(http.server.ThreadingHTTPServer):
             with self.conn_lock:
                 self.conns -= 1
 
-    def fresh_nonce(self, nonce, now):
-        """이 nonce 를 처음 보는가 (같은 요청을 다시 보내기 막기). 지난 것은 지운다."""
+    def fresh_nonce(self, nonce, now, keep=NONCE_KEEP_SEC):
+        """이 nonce 를 처음 보는가 (같은 요청을 다시 보내기 막기). 지난 것은 지운다.
+        keep: 기억하는 초 - 허용 시각 차이의 두 배보다 길어야 한다 (앞당겨 서명한 요청을 기억이 끝난 뒤 다시 보내지 못하게)."""
         with self.conn_lock:
             if len(self.nonces) > 5000:
                 for k in [k for k, t in self.nonces.items() if t < now]:
                     del self.nonces[k]
             if self.nonces.get(nonce, 0) >= now:
                 return False
-            self.nonces[nonce] = now + NONCE_KEEP_SEC
+            self.nonces[nonce] = now + keep
+            return True
+
+    def stream_slot(self, pc_id, on):
+        """사내 서버 에이전트 구독 자리 잡기(on=True)·돌려주기(False). 잡기는 전체·PC 하나 상한 안일 때만 True."""
+        d = self.deploy
+        with self.conn_lock:
+            if not on:
+                n = self.streams.get(pc_id, 0) - 1
+                if n > 0:
+                    self.streams[pc_id] = n
+                else:
+                    self.streams.pop(pc_id, None)
+                return True
+            if sum(self.streams.values()) >= d.agent_streams or self.streams.get(pc_id, 0) >= d.per_pc_streams:
+                return False
+            self.streams[pc_id] = self.streams.get(pc_id, 0) + 1
             return True
 
     def shutdown(self):
@@ -709,16 +753,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # --- 검사 ---
     def _role(self, method, digest):
-        """Host 와 요청 서명을 보고 'agent'·'relay'. 아니면 (서명 없는) 응답을 보내고 _Stop."""
+        """Host 와 요청 서명을 보고 (역할 'agent'·'relay', 서명으로 확인한 PC 번호). 아니면 응답을 보내고 _Stop.
+        단독(SINGLE): 지금 검사 그대로 (ap1), PC 번호는 라이선스의 것. PC 번호 머리글(X-AP-PC)이 있으면 401.
+        사내 서버(LAN): _role_lan."""
         srv = self.server
         if not local_host(self.headers, srv.server_port):
             self._reply(403, DENIED)                 # 다른 이름으로 이 PC 를 가리킨 요청 (DNS 바꿔치기)
             raise _Stop()
+        if srv.registry is not None:
+            return self._role_lan(method, digest)
         role = self.headers.get(local_store.H_ROLE) or ""
         ts, nonce = self.headers.get(local_store.H_TIME) or "", self.headers.get(local_store.H_NONCE) or ""
         sign = self.headers.get(local_store.H_SIGN) or ""
         now = time.time()
-        ok = role in local_store.ROLES and ts.isdigit() and 16 <= len(nonce) <= 64 and abs(now * 1000 - int(ts)) <= SIGN_WINDOW_MS
+        ok = (role in local_store.ROLES and ts.isdigit() and 16 <= len(nonce) <= 64 and abs(now * 1000 - int(ts)) <= SIGN_WINDOW_MS
+              and self.headers.get(local_store.H_PC) is None)
         if ok:
             key = srv.keys[local_store.ROLES.index(role)]
             want = local_store.request_mac(key, role, method, self.path, ts, nonce, b"", digest=digest)
@@ -727,7 +776,66 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._reply(401, {"error": "Unauthorized"})
             raise _Stop()
         self._auth = (key, nonce)
-        return role
+        return role, srv.lic["pc_id"]
+
+    def _role_lan(self, method, digest):
+        """사내 서버의 요청 서명 (ap2 - 서명 글에 PC 번호). 차례: PC 번호 머리글이 등록부에 있음 → 역할·시각 글자·nonce 길이 →
+        그 PC 열쇠의 서명 - 여기까지 틀리면 서명 없는 401 (무엇이 틀렸는지·서버 시각을 알려 주지 않는다).
+        서명이 맞은 뒤에만: 시각 차이가 크면 서명된 401 clock(서버 시각), 다시 보낸 nonce 는 401, 중지·지운 PC 는 서명된 403."""
+        srv = self.server
+        pc = self.headers.get(local_store.H_PC) or ""
+        role = self.headers.get(local_store.H_ROLE) or ""
+        ts, nonce = self.headers.get(local_store.H_TIME) or "", self.headers.get(local_store.H_NONCE) or ""
+        sign = self.headers.get(local_store.H_SIGN) or ""
+        keys = srv.registry.keys(pc) if pc_registry.PC_RE.fullmatch(pc) else None
+        ok = keys is not None and role in local_store.ROLES and ts.isdigit() and len(ts) <= 16 and 16 <= len(nonce) <= 64
+        if ok:
+            key = keys[local_store.ROLES.index(role)]
+            want = local_store.request_mac2(key, pc, role, method, self.path, ts, nonce, b"", digest=digest)
+            ok = hmac.compare_digest(sign, want)
+        if not ok:
+            self._reply(401, {"error": "Unauthorized"})
+            raise _Stop()
+        now = time.time()
+        window = srv.deploy.sign_window_ms
+        if abs(now * 1000 - int(ts)) > window:
+            self._auth = (key, nonce)                # 서명이 맞은 요청에만 서버 시각을 서명해 알려 준다 (한 번 다시 보내게)
+            self._reply(401, {"error": "clock", "server_ms": int(now * 1000)})
+            raise _Stop()
+        if not srv.fresh_nonce(f"{pc}\n{nonce}", now, keep=max(NONCE_KEEP_SEC, 2 * window // 1000 + 30)):
+            self._reply(401, {"error": "Unauthorized"})
+            raise _Stop()
+        self._auth = (key, nonce)
+        state = srv.registry.state(pc)
+        if state != "active":                        # 'disabled'·'removed' - 에이전트는 사람이 고쳐야 하는 멈춤으로 끝난다
+            self._reply(403, {"error": "pc_removed" if state == "removed" else "pc_disabled"})
+            raise _Stop()
+        srv.registry.seen(pc)
+        return role, pc
+
+    def _enroll(self, raw):
+        """POST /enroll (사내 서버만, 서명 머리글 없음 - 열쇠가 아직 없다). 본문 {"v": 1, pc, rand, guid, host, nonce, proof} →
+        registry.enroll → 200 {"pc"} 를 새 agent 열쇠와 본문 nonce 로 서명 (PC 는 서명이 맞아야 열쇠를 저장한다).
+        거절(EnrollError)은 서명 없는 403 {"error": code}, 꼴이 틀리면 400. 기록에 토큰·열쇠·증명을 싣지 않는다."""
+        srv = self.server
+        if srv.registry is None:
+            return self._reply(404, {"error": "Not found"})
+        if not local_host(self.headers, srv.server_port):
+            return self._reply(403, DENIED)
+        body = self._json_body(raw)
+        if not (isinstance(body, dict) and body.get("v") == 1 and not isinstance(body.get("v"), bool)
+                and all(isinstance(body.get(k), str) for k in ENROLL_FIELDS) and ENROLL_NONCE.fullmatch(body["nonce"])):
+            return self._reply(400, {"error": "Bad request"})
+        pc = body["pc"]
+        try:
+            agent_key, _ = srv.registry.enroll(pc, body["rand"], body["guid"], body["host"], body["proof"])
+        except pc_registry.EnrollError as e:
+            if pc_registry.PC_RE.fullmatch(pc):
+                log(srv.folder, f"PC 등록 거절  번호={pc}  까닭={e.code}")
+            return self._reply(403, {"error": e.code})
+        log(srv.folder, f"PC 등록  번호={pc}  컴퓨터={body['host']}")
+        self._auth = (agent_key, body["nonce"])
+        return self._reply(200, {"pc": pc})
 
     def _parts(self, raw):
         """주소의 자리 조각. 빈 조각·'.'·'..'·제어 글자, 풀었을 때 '/'·'\\' 가 든 조각(%2F - 깊이 검사를 속인다, 검토 3번)은 400."""
@@ -761,11 +869,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # Host 검사는 local_web 이 같은 local_host 로 한다. 처리하지 않은 것(False)만 아래 서명 확인으로 간다
                 if web.handle(self, method, url.path, query, raw):
                     return
-            role = self._role(method, digest)
+            if url.path == "/enroll" and method == "POST":     # 사내 서버 PC 등록 - 서명 확인 앞에서 (아직 열쇠가 없다). 단독은 404
+                return self._enroll(raw)
+            role, pc = self._role(method, digest)
             if url.path.startswith("/db/") and url.path.endswith(".json"):
-                return self._db(method, role, self._parts(url.path[4:-5]), query, raw)
+                return self._db(method, role, self._parts(url.path[4:-5]), query, raw, pc)
             if url.path.startswith("/fs/") and method in ("GET", "POST"):
-                return self._fs(method, role, self._parts(url.path[4:]), query, raw)
+                return self._fs(method, role, self._parts(url.path[4:]), query, raw, pc)
             if url.path == "/fs-sum" and method == "GET":
                 return self._fs_sum(role, query)
             self._reply(404, {"error": "Not found"})
@@ -796,9 +906,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._route("POST")
 
     # --- 자리 (RTDB 꼴) ---
-    def _db(self, method, role, parts, query, raw):
+    def _db(self, method, role, parts, query, raw, me=None):
+        """me: 서명으로 확인한 PC 번호 (_role) - 자리 검사는 이 번호로 한다 (단독은 라이선스의 PC 번호와 같다)."""
         srv, lic = self.server, self.server.lic
-        if method not in ("GET", "PUT", "PATCH", "DELETE") or not allowed(role, method, parts, lic):
+        if method not in ("GET", "PUT", "PATCH", "DELETE") or not allowed(role, method, parts, lic, me):
             return self._reply(403, DENIED)
         kind, cid, pc, rest = classify(parts)
         path = "/".join(parts)
@@ -813,7 +924,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._reply(200, phone.desk.read_code(rest[0]) if phone is not None else None)
             order_by, equal_to = _json_arg(query.get("orderBy")), _json_arg(query.get("equalTo"))
             if "text/event-stream" in (self.headers.get("Accept") or ""):
-                return self._stream(path, order_by, equal_to)
+                return self._stream(path, order_by, equal_to, me)
             value = srv.store.get(path, order_by, equal_to)
             if order_by is not None and isinstance(value, dict) and ("endAt" in query or "limitToFirst" in query):
                 value = _range(value, order_by, _json_arg(query.get("endAt")), query.get("limitToFirst"))
@@ -830,7 +941,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 srv.store.patch(path, body, guard=lambda get: command_patch_ok(get, parts[:5], rest, body))
             elif kind == "otp_requests":             # PUT 만 여기 온다 - 짝지은 휴대폰에만 (계획 ④)
                 phone = getattr(srv, "phone", None)
-                if not otp_request_ok(body, lic, phone.phones.get(rest[0]) if phone is not None else None):
+                if not otp_request_ok(body, lic, phone.phones.get(rest[0]) if phone is not None else None, me):
                     return self._reply(403, DENIED)
                 srv.store.put(path, dict(body, created_at=int(time.time() * 1000)))
             elif method == "PATCH":
@@ -845,10 +956,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._reply(204, empty=True)
         return self._reply(200, body)
 
-    def _stream(self, path, order_by, equal_to):
+    def _stream(self, path, order_by, equal_to, me=None):
+        """구독 (SSE). 사내 서버: 에이전트 구독을 전체·PC 하나 상한으로 세고 (넘으면 서명된 503), 고리가 1초마다 그 PC 가
+        아직 active 인지 본다 - 중지·지운 PC 가 열어 둔 구독은 곧 끝난다 (다시 붙으면 서명된 403 을 받는다)."""
+        srv = self.server
+        key, nonce = self._auth
+        lan = srv.registry is not None
+        if lan and not srv.stream_slot(me, True):
+            return self._reply(503, {"error": "Too many streams"})
+        try:
+            self._stream_loop(path, order_by, equal_to, me if lan else None)
+        finally:
+            if lan:
+                srv.stream_slot(me, False)
+
+    def _stream_loop(self, path, order_by, equal_to, lan_pc):
         srv = self.server
         key, nonce = self._auth
         q = srv.store.subscribe(path, order_by, equal_to)
+        checked = time.monotonic()
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -857,6 +983,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             quiet, seq = time.monotonic(), 0
             while not srv.stopping.is_set():
+                if lan_pc is not None and time.monotonic() - checked >= STATE_CHECK_SEC:
+                    if srv.registry.state(lan_pc) != "active":
+                        break
+                    checked = time.monotonic()
                 try:
                     event, data = q.get(timeout=0.5)
                 except queue.Empty:
@@ -875,8 +1005,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             srv.store.unsubscribe(q)
 
     # --- 실행 기록 (Firestore 꼴) ---
-    def _fs(self, method, role, parts, query, raw):
+    def _fs(self, method, role, parts, query, raw, me=None):
+        """사내 서버는 문서의 pcId 가 서명으로 확인한 PC 번호(me)와 같아야 올리고 읽는다 (남의 PC 기록을 꾸미거나 보지 못하게)."""
         srv, lic = self.server, self.server.lic
+        lan = srv.registry is not None
         ok = role == "agent" and parts[:2] == ["runs", lic["cid"]] and parts[2:3] == ["items"]
         if method == "POST":
             if not ok or len(parts) != 3:
@@ -884,12 +1016,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             doc, doc_id = self._json_body(raw), query.get("id") or ""
             if not isinstance(doc, dict) or not 0 < len(doc_id) <= 200:
                 return self._reply(400, {"error": "Bad request"})
+            if lan and doc.get("pcId") != me:
+                return self._reply(403, DENIED)
             if not srv.runs.create("/".join(parts[:2]), parts[2], doc_id, doc):
                 return self._reply(409, {"error": "Already exists"})
             return self._reply(200, {"id": doc_id})
         if not ok or len(parts) != 4:
             return self._reply(403, DENIED)
         doc = srv.runs.get("/".join(parts))
+        if doc is not None and lan and doc.get("pcId") != me:
+            return self._reply(403, DENIED)
         return self._reply(200, doc) if doc is not None else self._reply(404, {"error": "Not found"})
 
     def _fs_sum(self, role, query):
@@ -926,26 +1062,32 @@ def _range(children, order_by, end_at, limit):
     return {k: v for _, k, v in rows} or None
 
 
-def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None, web=None, phone=None):
+def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None, web=None, phone=None, registry=None):
     """로컬 서버를 만든다 (serve_forever 는 부르는 쪽이). 이 PC 주소에만 묶는다 - 포트가 쓰이는 중이면 OSError.
     web: 브라우저 창구 (local_web.Web). 없으면 에이전트 창구만 연다 (/api·웹 파일은 서명 없는 요청으로 거절된다).
     phone: 휴대폰 창구 (local_phone.Service) - 짝지은 휴대폰 표·인증번호 자리 규칙. 없으면 인증번호 요청을 열지 못한다.
-    사내망 휴대폰 포트는 이 서버와 따로 선다 (local_phone.Gate - 이 서버는 늘 127.0.0.1)."""
+    사내망 휴대폰 포트는 이 서버와 따로 선다 (local_phone.Gate - 이 서버는 늘 127.0.0.1).
+    registry: PC 등록부 (pc_registry.Registry) - 있으면 사내 서버 배치(LAN): PC 마다의 열쇠로 ap2 서명을 확인하고 keys 는 쓰지
+    않는다 (None 이어도 된다). 없으면 단독(SINGLE) - 지금 그대로."""
     if host not in LOCAL_HOSTS:
         raise ValueError("로컬 서버는 이 PC(127.0.0.1)에만 엽니다.")
     srv = LocalServer(("127.0.0.1", port), Handler, bind_and_activate=False)
-    srv.store, srv.runs, srv.lic, srv.keys = store, runs, lic, tuple(keys)
+    srv.store, srv.runs, srv.lic = store, runs, lic
+    srv.keys = tuple(keys) if keys is not None else ()
+    srv.deploy, srv.registry = (LAN, registry) if registry is not None else (SINGLE, None)
     srv.web = web
     srv.phone = phone
     srv.folder = folder or os.path.dirname(store.path or "") or "."
     srv.stopping = threading.Event()
-    srv.conn_lock, srv.conns, srv.nonces = threading.Lock(), 0, {}
+    srv.conn_lock, srv.conns, srv.nonces, srv.streams = threading.Lock(), 0, {}, {}
     try:
         srv.server_bind()
         srv.server_activate()
     except BaseException:
         srv.server_close()
         raise
+    if web is not None:
+        web.public_url = f"http://127.0.0.1:{srv.server_address[1]}"     # 등록 글에 싣는 서버 주소 (② 에서 사내 주소로)
     return srv
 
 
