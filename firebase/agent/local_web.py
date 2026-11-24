@@ -57,8 +57,7 @@ WEB_TYPES = ("launch", "stop_erpia", "stop_rpa", "set_modules", "set_schedule", 
 ARGS_DEPTH_MAX = 20
 API_BODY_MAX = 64 * 1024
 FILE_MAX = 16 * 1024 * 1024
-MAX_STREAMS = 16                           # 열어 둘 수 있는 웹 스트림 수 - 서버 연결 상한(local_server.MAX_CONN) 안에서 에이전트 몫을 남긴다
-LAN_STREAMS = 32                           # 사내 서버의 웹 스트림 수 (local_server.LAN.web_streams 와 같다)
+MAX_STREAMS = 16                           # 단독의 웹 스트림 수 - 서버 연결 상한(local_server.MAX_CONN) 안에서 에이전트 몫을 남긴다 (SINGLE.web_streams 와 같다)
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'")
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -571,6 +570,7 @@ class Web:
         self.store, self.runs, self.lic, self.folder = store, runs, lic, folder
         self.registry = registry
         self.public_url = None                       # make_server 가 적는다 (등록 글에 싣는 서버 주소)
+        self.server = None                           # 붙은 서버 - make_server·make_lan_servers 가 적는다 (웹 구독 상한 max_streams)
         self.lan_ca_pem = None                       # 사내망: 우리 인증 기관 PEM 글 - 등록 글의 ca 로 싣는다 (lan_server.make_lan_servers 가 적는다)
         self.web_dir = os.path.realpath(web_dir) if web_dir else None
         self.accounts = Accounts(os.path.join(folder, ACCOUNTS_NAME))
@@ -616,8 +616,13 @@ class Web:
 
     @property
     def max_streams(self):
-        """열어 둘 수 있는 웹 스트림 수 - 단독은 MAX_STREAMS (부를 때 읽는다 - 시험이 바꿔 끼운다), 사내 서버는 32."""
-        return MAX_STREAMS if self.registry is None else LAN_STREAMS
+        """열어 둘 수 있는 웹 스트림 수 - 붙은 서버(self.server)의 배치 deploy.web_streams 를 따른다 (검토 M-11).
+        단독 배치(SINGLE)는 MAX_STREAMS (부를 때 읽는다 - 시험이 바꿔 끼운다). 서버에 붙기 전에는 등록부로 가린다."""
+        srv = self.server
+        deploy = getattr(srv, "deploy", None) if srv is not None else None
+        if deploy is None:
+            deploy = local_server.SINGLE if self.registry is None else local_server.LAN
+        return MAX_STREAMS if deploy is local_server.SINGLE else deploy.web_streams
 
     # --- PC 고르기 ---
     def _spot(self, kind, pc):
@@ -1168,6 +1173,8 @@ class Web:
             got = reg.start(label)
         except pc_registry.SeatsFull:
             raise _Fail(409, "seats-full", f"등록할 수 있는 PC 수({reg.seats}대)를 모두 썼습니다.") from None
+        except pc_registry.NumbersFull as e:                     # 번호 상한 pc_9999 (검토 M-9) - 이름 오류(400)보다 먼저
+            raise _Fail(409, "failed-precondition", str(e)) from None
         except ValueError as e:
             raise _Fail(400, "invalid-argument", str(e)) from None
         info = {"v": 1, "url": self.public_url, "pc": got["pc_id"], "token": got["token"], "exp": got["expires_at"]}
@@ -1207,9 +1214,12 @@ class Web:
         """PC 지우기 - 자리를 돌려주고 그 PC 의 현황·명령 자리를 지운다 (실행 기록은 남긴다). 대기 중인 등록이면 그 대기만 버린다."""
         reg, me = self._registry(h)
         pc = self._arg(raw_id, pc_registry.PC_RE)
-        enrolled = reg.state(pc) in ("active", "disabled")
-        if not reg.remove(pc):
-            raise _Fail(404, "not-found", "없는 PC 입니다.")
+        with reg.lock:                                           # 상태 보기와 지우기를 등록부 잠금 하나로 - 그 사이에 등록이 끝나 자리가 남지 않게 (검토 M-11)
+            enrolled = reg.state(pc) in ("active", "disabled")
+            if not reg.remove(pc):
+                raise _Fail(404, "not-found", "없는 PC 입니다.")
+        # 자리 지우기는 등록부 잠금을 놓은 뒤에 (Registry → Store 차례). Store 잠금 안의 확인(현황 쓰기 guard·명령 만들기 free)이
+        # 등록부를 읽으므로 등록부 잠금을 쥔 채 Store 에 쓰면 서로 기다린다. 지운 뒤에는 그 확인들이 모두 거절해 자리가 다시 생기지 않는다
         if enrolled:
             self.store.delete(self._spot("live", pc))
             self.store.delete(self._spot("commands", pc))

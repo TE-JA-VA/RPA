@@ -189,6 +189,7 @@ try:
         def handle(self, h, method, path, query, raw):
             return False
     web = FakeWeb()
+    web.registry = reg             # make_server 는 웹 창구의 등록부가 같은 것인지 본다 (② Task 7, 검토 M-11)
     srv = local_server.make_server(store, runs, LIC, None, port=0, folder=TMP, registry=reg, web=web)
     PORT = srv.server_address[1]
     BASE = f"http://127.0.0.1:{PORT}"
@@ -338,7 +339,7 @@ try:
     check("pc_01 이 pcId pc_02 문서 POST → 403", call2("POST", "/fs/runs/c1/items?id=x2", doc2).status == 403 and runs.get("runs/c1/items/x2") is None)
     check("pcId 없는 문서 POST → 403", call2("POST", "/fs/runs/c1/items?id=x0", {"cost": 1}).status == 403)
     check("자기 문서 POST 200", call2("POST", "/fs/runs/c1/items?id=x1", doc1).status == 200)
-    check("pc_02 가 그 문서 GET → 403", call2("GET", "/fs/runs/c1/items/x1", pc="pc_02").status == 403)
+    check("pc_02 가 그 문서 GET → 404 (문서 키에 PC 번호, ② Task 7 검토 M-6)", call2("GET", "/fs/runs/c1/items/x1", pc="pc_02").status == 404)
     check("pc_01 은 자기 문서를 읽는다", call2("GET", "/fs/runs/c1/items/x1").json() == doc1)
     check("없는 문서 404", call2("GET", "/fs/runs/c1/items/none").status == 404)
     check("합 읽기", call2("GET", "/fs-sum?parent=runs/c1&collection=items&field=cost").json() == {"sum": 1})

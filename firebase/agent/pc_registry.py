@@ -21,6 +21,7 @@ import threading
 import time
 
 PC_RE = re.compile(r"pc_\d{2,4}")
+PC_MAX = 9999                    # 번호 상한 - PC_RE 가 받는 가장 큰 번호 (검토 M-9)
 ENROLL_SEC = 600                 # 등록 토큰 유효 시간
 REMOVED_KEEP_MS = 3 * 24 * 3600 * 1000   # 지운 PC 의 열쇠를 두는 시간 - 그동안만 '지워짐' 답에 서명한다. 지나면 열쇠만 지우고 번호·이름 기록은 남긴다 (사용자 2026-11-24 "3일 뒤에 지우자")
 LABEL_MAX = 40
@@ -36,6 +37,10 @@ STATES = ("active", "disabled", "removed")
 
 class SeatsFull(Exception):
     """등록할 수 있는 PC 수를 모두 썼다 (active + disabled + 살아 있는 대기)."""
+
+
+class NumbersFull(ValueError):
+    """PC 번호를 pc_9999 까지 모두 썼다 (번호는 다시 쓰지 않는다). 웹은 409."""
 
 
 class EnrollError(Exception):
@@ -178,6 +183,12 @@ class Registry:
                 self._save(self._next, pcs)
             return len(gone)
 
+    @property
+    def lock(self):
+        """등록부 잠금 (RLock) - 여러 부르기를 한 번에 묶을 때 (local_web._pc_remove 의 상태 보기 + 지우기).
+        쥔 채 Store 에 쓰지 않는다 - Store 잠금 안의 확인이 등록부를 읽는다 (Store → Registry 차례)."""
+        return self._lock
+
     # -- 파일 ----------------------------------------------------------------------------------------
 
     def _load(self):
@@ -265,10 +276,13 @@ class Registry:
 
     def start(self, label):
         """새 등록 대기 → {"pc_id", "token", "expires_at"(ms)}. 토큰은 메모리에만 (돌려준 뒤 등록 글로 한 번 보여 준다).
-        이름이 틀리면 ValueError, 자리가 없으면 SeatsFull. 번호는 바로 올려 저장한다 (대기만 했던 번호도 다시 쓰지 않는다)."""
+        이름이 틀리면 ValueError, 자리가 없으면 SeatsFull. 번호는 바로 올려 저장한다 (대기만 했던 번호도 다시 쓰지 않는다).
+        다음 번호가 PC_MAX 를 넘으면 NumbersFull(ValueError) - 번호를 올리지 않는다."""
         label = clean_label(label)
         with self._lock:
             self._tick()
+            if self._next > PC_MAX:
+                raise NumbersFull("더 이상 PC 번호를 만들 수 없습니다.")
             if self._used() >= self.seats:
                 raise SeatsFull(f"등록할 수 있는 PC 수({self.seats}대)를 모두 썼습니다.")
             pc_id = f"pc_{self._next:02d}"

@@ -324,15 +324,297 @@ try:
     check("단독 서버 → 서명 없는 401", st == 401 and sg is None and json.loads(raw or b"null") == {"error": "Unauthorized"}, f"{st} {raw!r}")
     check("… '요청 처리 오류' 기록이 없다", "요청 처리 오류" not in log_text(TMP1), log_text(TMP1)[-200:])
     check("단독은 맞는 서명이면 그대로 200", call1(BASE1, "GET", "/db/apps/rpa/live/c1/p1.json", AGENT1).status == 200)
+
+    # ==========================================================================================
+    # 사내 서버 ② Task 7 - ① 검토에서 넘긴 정리 (M-3·M-6·M-7·M-9·M-10·M-11·②-T3b)
+    # ==========================================================================================
+    def enroll_direct(r, label, i):
+        s = r.start(label)
+        keys = r.enroll(s["pc_id"], RANDS[i], GUIDS[i], f"OFFICE-{i}",
+                        pc_registry.enroll_proof(s["token"], s["pc_id"], RANDS[i], GUIDS[i], f"OFFICE-{i}"))
+        return s["pc_id"], keys
+
+    def api(base, method, path, body=None, token=None):
+        """웹 API 한 번 (서명 없음) → Got."""
+        data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        hs = {"Content-Type": "application/json"} if data is not None else {}
+        if token:
+            hs["Authorization"] = "Bearer " + token
+        req = urllib.request.Request(base + path, data=data, method=method, headers=hs)
+        try:
+            with NO_PROXY.open(req, timeout=10) as r:
+                got, status, rh = r.read(), r.status, r.headers
+        except urllib.error.HTTPError as e:
+            got, status, rh = e.read(), e.code, e.headers
+        return Got(status, got.decode("utf-8", "replace"), rh, False)
+
+    # ------------------------------------------------------------------------------------------
+    print("test_live_write_after_remove_refused - M-3: 검사를 통과한 뒤 지운·중지한 PC 의 현황 쓰기")
+    PC5, K5 = enroll_direct(reg, "5층 PC", 5)
+    PCS[PC5] = K5
+    LIVE5 = f"/db/apps/rpa/live/c1/{PC5}.json"
+    real_seen = reg.seen
+
+    def seen_then(action):
+        """서명·상태 검사를 통과한 바로 뒤(seen)에 관리자가 PC 를 중지·삭제한 모양."""
+        def hook(pc):
+            if pc == PC5:
+                action(pc)
+            return real_seen(pc)
+        return hook
+
+    reg.seen = seen_then(lambda pc: reg.disable(pc, True))
+    try:
+        r = call2("PUT", LIVE5, {"state": "idle", "pcId": PC5}, pc=PC5)
+    finally:
+        del reg.seen
+    check("중지된 직후의 현황 PUT → 서명된 403 pc_disabled", r.status == 403 and r.signed and r.json() == {"error": "pc_disabled"},
+          f"{r.status} {r.raw} signed={r.signed}")
+    check("… 현황 자리가 생기지 않았다", store.get(f"apps/rpa/live/c1/{PC5}") is None, repr(store.get(f"apps/rpa/live/c1/{PC5}")))
+    reg.disable(PC5, False)
+    check("다시 사용하면 현황 PUT 200", call2("PUT", LIVE5, {"state": "idle"}, pc=PC5).status == 200)
+    store.delete(f"apps/rpa/live/c1/{PC5}")
+    reg.seen = seen_then(reg.remove)
+    try:
+        r = call2("PATCH", LIVE5, {"state": "busy"}, pc=PC5)
+    finally:
+        del reg.seen
+    check("지운 직후의 현황 PATCH → 서명된 403 pc_removed", r.status == 403 and r.signed and r.json() == {"error": "pc_removed"},
+          f"{r.status} {r.raw} signed={r.signed}")
+    check("… 지운 PC 의 현황 자리가 다시 생기지 않았다", store.get(f"apps/rpa/live/c1/{PC5}") is None,
+          repr(store.get(f"apps/rpa/live/c1/{PC5}")))
+    check("살아 있는 PC 의 현황 쓰기는 그대로 200", call2("PATCH", "/db/apps/rpa/live/c1/pc_01.json", {"state": "idle"}).status == 200)
+
+    # ------------------------------------------------------------------------------------------
+    print("test_runs_doc_keys_per_pc - M-6: 실행 기록 문서 키에 PC 번호")
+    d1 = {"pcId": "pc_01", "date": "2026-11-24", "started_at": "2026-11-24T12:00:00", "count": 1}
+    d2 = {"pcId": "pc_02", "date": "2026-11-24", "started_at": "2026-11-24T12:00:00", "count": 2}
+    r1 = call2("POST", "/fs/runs/c1/items?id=same1", d1)
+    r2 = call2("POST", "/fs/runs/c1/items?id=same1", d2, pc="pc_02")
+    check("같은 id 를 두 PC 가 따로 만든다 (둘 다 200)", r1.status == 200 and r2.status == 200 and r2.json() == {"id": "same1"},
+          f"{r1.status} {r1.raw} / {r2.status} {r2.raw}")
+    g1, g2 = call2("GET", "/fs/runs/c1/items/same1"), call2("GET", "/fs/runs/c1/items/same1", pc="pc_02")
+    check("GET 은 각자 자기 문서", g1.status == 200 and (g1.json() or {}).get("count") == 1
+          and g2.status == 200 and (g2.json() or {}).get("count") == 2, f"{g1.raw} / {g2.raw}")
+    call2("POST", "/fs/runs/c1/items?id=only2", d2, pc="pc_02")
+    r = call2("GET", "/fs/runs/c1/items/only2")
+    check("남의 문서 GET → 404 (403 아님, 서명된 답)", r.status == 404 and r.signed, f"{r.status} {r.raw}")
+    r = call2("POST", "/fs/runs/c1/items?id=same1", d1)
+    check("자기 것 다시 만들기 → 409", r.status == 409, f"{r.status} {r.raw}")
+    r = call2("POST", "/fs/runs/c1/items?id=pc_02%3Aonly2", d1)
+    check("남의 키 모양 id 도 자기 칸 안 (200, 남의 문서는 그대로)", r.status == 200
+          and (call2("GET", "/fs/runs/c1/items/only2", pc="pc_02").json() or {}).get("pcId") == "pc_02", f"{r.status} {r.raw}")
+    check("합은 그대로 자기 것만", call2("GET", "/fs-sum?parent=runs%2Fc1&collection=items&field=count", pc="pc_02").json() == {"sum": 2 + 2 + 5},
+          call2("GET", "/fs-sum?parent=runs%2Fc1&collection=items&field=count", pc="pc_02").raw)
+    runs1.create("runs/c1", "items", "legacy1", {"pcId": "p1", "started_at": "2026-11-24T08:00:00", "count": 9})
+    r = call1(BASE1, "GET", "/fs/runs/c1/items/legacy1", AGENT1)
+    check("단독 - 옛 runs.db 문서를 그대로 읽는다", r.status == 200 and (r.json() or {}).get("count") == 9, f"{r.status} {r.raw}")
+    r = call1(BASE1, "POST", "/fs/runs/c1/items?id=legacy1", AGENT1, {"pcId": "p1"})
+    check("단독 - 같은 id 는 409 (그대로)", r.status == 409, f"{r.status} {r.raw}")
+
+    # ------------------------------------------------------------------------------------------
+    print("test_nonce_table_time_sweep - M-7: nonce 표는 10초마다 시간으로 정리, PC 별 분당 1200")
+    now = time.time()
+    with srv.conn_lock:
+        srv.nonces.clear()
+        for i in range(100):
+            srv.nonces[f"old{i}"] = now - 1
+    srv.fresh_nonce("new-a", now + 11)
+    check("표가 작아도 10초가 지나면 지난 nonce 를 지운다", set(srv.nonces) == {"new-a"}, f"{len(srv.nonces)}개")
+    srv.nonces["old-x"] = now - 1
+    srv.fresh_nonce("new-b", now + 12)
+    check("… 10초 안에는 요청마다 훑지 않는다", "old-x" in srv.nonces, f"{len(srv.nonces)}개")
+    srv.fresh_nonce("new-c", now + 22)
+    check("… 다음 10초에 지운다", "old-x" not in srv.nonces and "new-c" in srv.nonces, f"{sorted(srv.nonces)[:5]}")
+    check("다시 보낸 nonce 는 여전히 거절", srv.fresh_nonce("new-c", now + 22) is False)
+
+    LIMIT = getattr(local_server, "PC_REQ_MIN", 1200)
+    RC = [1000.0]
+    srv.rate_clock = lambda: RC[0]
+    srv.pc_reqs = {"pc_01": [RC[0], LIMIT - 1]}
+    r = call2("GET", "/db/apps/rpa/live/c1/pc_01.json")
+    check(f"분당 {LIMIT}번째 서명 요청은 200", r.status == 200, f"{r.status} {r.raw}")
+    r = call2("GET", "/db/apps/rpa/live/c1/pc_01.json")
+    check("그 다음은 서명된 429 Too many requests", r.status == 429 and r.signed and r.json() == {"error": "Too many requests"},
+          f"{r.status} {r.raw} signed={r.signed}")
+    check("… 다른 PC 는 그대로 200", call2("GET", "/db/apps/rpa/live/c1/pc_02.json", pc="pc_02").status == 200)
+    RC[0] += 61
+    check("1분이 지나면 다시 200", call2("GET", "/db/apps/rpa/live/c1/pc_01.json").status == 200)
+    check("상수 PC_REQ_MIN = 1200", getattr(local_server, "PC_REQ_MIN", None) == 1200)
+    r = call1(BASE1, "GET", "/db/apps/rpa/live/c1/p1.json", AGENT1)
+    check("단독은 세지 않는다 (200)", r.status == 200 and not getattr(srv1, "pc_reqs", {}), f"{r.status} {getattr(srv1, 'pc_reqs', None)}")
+
+    # ------------------------------------------------------------------------------------------
+    import dataclasses
+    import lan_server
+    import local_web
+    BOSS_PW = "pw-12345678"
+    WD = os.path.join(TMP, "web")
+    os.makedirs(WD)
+    with open(os.path.join(WD, "pcs.json"), "w", encoding="utf-8") as f:
+        json.dump({"v": 1, "next": 9996, "pcs": {}}, f)
+    storeW = local_server.Store(os.path.join(WD, "store.json"), volatile=local_server.VOLATILE)
+    runsW = local_server.Runs(os.path.join(WD, "runs.db"))
+    regW = pc_registry.Registry(os.path.join(WD, "pcs.json"), seats=20)
+    webW = local_web.Web(storeW, runsW, LIC, WD, None, registry=regW)
+    webW.accounts.set("boss", BOSS_PW, "admin")
+    srvW = local_server.make_server(storeW, runsW, LIC, None, port=0, folder=WD, web=webW, registry=regW)
+    BASEW = f"http://127.0.0.1:{srvW.server_address[1]}"
+    threading.Thread(target=srvW.serve_forever, daemon=True).start()
+    BOSSW = api(BASEW, "POST", "/api/login", {"id": "boss", "password": BOSS_PW}).json()["token"]
+
+    print("test_number_cap - M-9: 번호 상한 pc_9999")
+    capf = os.path.join(TMP, "cap.json")
+    with open(capf, "w", encoding="utf-8") as f:
+        json.dump({"v": 1, "next": 9999, "pcs": {}}, f)
+    rc = pc_registry.Registry(capf, seats=5)
+    check("pc_9999 까지는 만든다", rc.start("마지막")["pc_id"] == "pc_9999")
+    try:
+        rc.start("넘침")
+        err = None
+    except Exception as e:                       # noqa: BLE001
+        err = e
+    check("그 다음은 ValueError (SeatsFull 아님)", isinstance(err, ValueError) and not isinstance(err, pc_registry.SeatsFull)
+          and str(err) == "더 이상 PC 번호를 만들 수 없습니다.", repr(err))
+    check("… 번호를 올리지 않았다 (파일 next 그대로)", json.load(open(capf, encoding="utf-8"))["next"] == 10000)
+    PCW, KW = enroll_direct(regW, "웹 시험 PC", 6)            # pc_9996
+    got = [api(BASEW, "POST", "/api/pcs", {"label": f"추가 {i}"}, BOSSW) for i in range(4)]
+    check("웹 - pc_9997·pc_9998·pc_9999 까지 200", [g.status for g in got[:3]] == [200, 200, 200]
+          and [(g.json() or {}).get("pcId") for g in got[:3]] == ["pc_9997", "pc_9998", "pc_9999"], repr([(g.status, g.raw[:80]) for g in got]))
+    check("웹 - 그 다음 POST /api/pcs → 409", got[3].status == 409 and "더 이상 PC 번호" in got[3].raw, f"{got[3].status} {got[3].raw}")
+
+    print("test_pc_remove_concurrent_enroll - M-11: 지우기와 같은 때 끝난 등록이 자리를 남기지 않는다")
+    pend = "pc_9999"                             # 위에서 웹으로 만든 대기 (토큰은 등록 글 안에)
+    info = pc_registry.decode_enrollment(got[2].json()["enrollment"])
+    real_remove = regW.remove
+    side = {}
+
+    def racing_enroll():
+        try:
+            regW.enroll(pend, RANDS[7], GUIDS[7], "OFFICE-7",
+                        pc_registry.enroll_proof(info["token"], pend, RANDS[7], GUIDS[7], "OFFICE-7"))
+        except pc_registry.EnrollError as e:
+            side["enroll"] = e.code
+            return
+        side["enroll"] = "ok"
+        storeW.put(f"apps/rpa/live/c1/{pend}", {"state": "idle"})      # 등록을 마친 PC 의 첫 현황
+
+    def remove_with_race(pc):
+        t = threading.Thread(target=racing_enroll, daemon=True)
+        side["t"] = t
+        t.start()
+        t.join(0.5)                              # 등록부 잠금이 없으면 그 사이에 등록이 끝난다
+        return real_remove(pc)
+
+    regW.remove = remove_with_race
+    try:
+        r = api(BASEW, "DELETE", f"/api/pcs/{pend}", None, BOSSW)
+    finally:
+        del regW.remove
+    side["t"].join(5)
+    check("DELETE /api/pcs → 200", r.status == 200, f"{r.status} {r.raw}")
+    check("… 남은 현황 자리가 없다", storeW.get(f"apps/rpa/live/c1/{pend}") is None,
+          f"enroll={side.get('enroll')} live={storeW.get(f'apps/rpa/live/c1/{pend}')!r}")
+    check("… 그 번호는 active 가 아니다", regW.state(pend) != "active", repr(regW.state(pend)))
+
+    print("test_web_streams_from_deploy - M-11: 웹 구독 상한은 서버 배치를 따른다")
+    check("붙은 사내 서버 웹 창구 → LAN.web_streams", webW.max_streams == local_server.LAN.web_streams, repr(webW.max_streams))
+    srvW.deploy = dataclasses.replace(srvW.deploy, web_streams=0)
+    check("배치를 바꾸면 따라간다", webW.max_streams == 0, repr(webW.max_streams))
+    c = http.client.HTTPConnection("127.0.0.1", srvW.server_address[1], timeout=10)
+    try:                                         # 상태 줄만 본다 (열린 스트림은 끝나지 않는다)
+        c.request("GET", f"/api/stream?pcId={PCW}", headers={"Authorization": "Bearer " + BOSSW, "Host": "127.0.0.1"})
+        st = c.getresponse().status
+    finally:
+        c.close()
+    check("… 상한 0 이면 스트림 503", st == 503, repr(st))
+    srvW.deploy = local_server.LAN
+    check("붙지 않은 창구 - 사내 서버는 LAN.web_streams, 단독은 MAX_STREAMS",
+          local_web.Web(storeW, runsW, LIC, WD, None, registry=regW).max_streams == local_server.LAN.web_streams
+          and local_web.Web(store1, runs1, LIC1, TMP1, None).max_streams == local_web.MAX_STREAMS)
+
+    print("test_registry_same_object - M-11: 웹 창구의 등록부와 서버의 등록부가 같은 것")
+    other = pc_registry.Registry(os.path.join(TMP, "other.json"), seats=2)
+
+    def raises(fn):
+        try:
+            s = fn()
+        except ValueError:
+            return True
+        except Exception as e:                   # noqa: BLE001
+            return f"{type(e).__name__}: {e}"
+        try:
+            s.server_close()
+        except Exception:
+            pass
+        return False
+
+    w_none = local_web.Web(storeW, runsW, LIC, WD, None)
+    w_other = local_web.Web(storeW, runsW, LIC, WD, None, registry=other)
+    check("make_server(LAN) + 등록부 없는 웹 → ValueError", raises(lambda: local_server.make_server(
+        storeW, runsW, LIC, None, port=0, folder=WD, web=w_none, registry=regW)) is True)
+    check("make_server(LAN) + 다른 등록부 웹 → ValueError", raises(lambda: local_server.make_server(
+        storeW, runsW, LIC, None, port=0, folder=WD, web=w_other, registry=regW)) is True)
+    check("make_server(단독) + 등록부 있는 웹 → ValueError", raises(lambda: local_server.make_server(
+        store1, runs1, LIC1, (AGENT1, RELAY1), port=0, folder=TMP1, web=w_other)) is True)
+    res = raises(lambda: lan_server.make_lan_servers(storeW, runsW, LIC, regW, w_other, None, None, None, None))
+    check("make_lan_servers + 다른 등록부 웹 → ValueError (포트를 열기 전에)", res is True, repr(res))
+
+    # ------------------------------------------------------------------------------------------
+    print("test_single_needs_keys - M-10: 단독 make_server 는 열쇠가 꼭 있어야 한다")
+    res = raises(lambda: local_server.make_server(store1, runs1, LIC1, None, port=0, folder=TMP1))
+    check("단독 make_server(keys=None) → ValueError", res is True, repr(res))
+
+    print("test_single_other_pcid_403 - M-10: 단독 웹 API 에 다른 pcId 를 실으면 403 (그대로 둔다)")
+    SD = os.path.join(TMP, "single_web")
+    os.makedirs(SD)
+    webS = local_web.Web(store1, runs1, LIC1, SD, None)
+    webS.accounts.set("boss", BOSS_PW, "admin")
+    srvS = local_server.make_server(store1, runs1, LIC1, (AGENT1, RELAY1), port=0, folder=SD, web=webS)
+    BASES = f"http://127.0.0.1:{srvS.server_address[1]}"
+    threading.Thread(target=srvS.serve_forever, daemon=True).start()
+    BOSSS = api(BASES, "POST", "/api/login", {"id": "boss", "password": BOSS_PW}).json()["token"]
+    check("GET /api/runs?pcId=다른 PC → 403", api(BASES, "GET", "/api/runs?pcId=p9", None, BOSSS).status == 403)
+    check("POST /api/commands pcId=다른 PC → 403", api(BASES, "POST", "/api/commands", {"pcId": "p9", "type": "run"}, BOSSS).status == 403)
+    check("GET /api/stream?pcId=다른 PC → 403", api(BASES, "GET", "/api/stream?pcId=p9", None, BOSSS).status == 403)
+    check("자기 pcId 나 없으면 200", api(BASES, "GET", "/api/runs?pcId=p1", None, BOSSS).status == 200
+          and api(BASES, "GET", "/api/runs", None, BOSSS).status == 200)
+
+    # ------------------------------------------------------------------------------------------
+    print("test_single_thread_start_fail_releases - ②-T3b: 단독 서버가 스레드를 못 띄우면 센 연결을 돌려준다")
+    import socket
+    real_start = threading.Thread.start
+
+    def failing_start(self):
+        if getattr(self, "_target", None) == srvS.process_request_thread:
+            raise RuntimeError("스레드를 못 띄움 (시험)")
+        return real_start(self)
+
+    threading.Thread.start = failing_start
+    try:
+        c = socket.create_connection(("127.0.0.1", srvS.server_address[1]), timeout=5)
+        c.sendall(b"GET /api/session HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        try:
+            back = c.recv(100)
+        except OSError:
+            back = b""
+        c.close()
+        released = until(lambda: srvS.conns == 0, 3)
+    finally:
+        threading.Thread.start = real_start
+    check("스레드를 못 띄우면 답 없이 닫는다", back == b"", repr(back[:60]))
+    check("그때 센 연결을 돌려준다 (conns 0)", released, repr(srvS.conns))
+    check("그 뒤 정상 요청은 된다", api(BASES, "GET", "/api/runs", None, BOSSS).status == 200)
+    check("… 연결 수가 돌아온다", until(lambda: srvS.conns == 0, 3), repr(srvS.conns))
 finally:
-    for s in (srv, srv1):
+    for s in (srv, srv1, globals().get("srvW"), globals().get("srvS")):
         if s is not None:
             try:
                 s.shutdown()
                 s.server_close()
             except Exception:
                 pass
-    for r in (runs, runs1):
+    for r in (runs, runs1, globals().get("runsW")):
         try:
             r.close()
         except Exception:

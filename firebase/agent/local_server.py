@@ -320,24 +320,31 @@ class Runs:
     def _text(value):
         return None if value is None else str(value)
 
-    def create(self, parent, collection, doc_id, fields):
-        """기록 하나 만들기. 이미 있으면 False (덮어쓰지 않는다)."""
+    @staticmethod
+    def _key(doc_id, pc_id):
+        """표에 두는 문서 키. 사내 서버(pc_id 있음)는 '<PC 번호>:<id>' - 같은 id 를 PC 마다 따로 만들고, 남의 문서는 없는 것과 같다
+        (사내 서버 ② Task 7, 검토 M-6). 단독(pc_id 없음)은 id 그대로 - 옛 runs.db 를 그대로 읽는다."""
+        return doc_id if pc_id is None else f"{pc_id}:{doc_id}"
+
+    def create(self, parent, collection, doc_id, fields, pc_id=None):
+        """기록 하나 만들기. 이미 있으면 False (덮어쓰지 않는다). pc_id: 사내 서버의 PC 번호 (문서 키에 넣는다, _key)."""
         with self._lock, self._db:
             cur = self._db.execute(
                 "INSERT OR IGNORE INTO docs(parent, collection, id, pc_id, date, started_at, doc) VALUES(?,?,?,?,?,?,?)",
-                (parent, collection, doc_id, self._text(fields.get("pcId")), self._text(fields.get("date")),
+                (parent, collection, self._key(doc_id, pc_id), self._text(fields.get("pcId")), self._text(fields.get("date")),
                  self._text(fields.get("started_at")), json.dumps(fields, ensure_ascii=False)))
             return cur.rowcount == 1
 
-    def get(self, path):
-        """path = '<parent>/<collection>/<id>' (parent 에 '/' 가 들어 있어도 된다). 없으면 None."""
+    def get(self, path, pc_id=None):
+        """path = '<parent>/<collection>/<id>' (parent 에 '/' 가 들어 있어도 된다). 없으면 None.
+        pc_id: 사내 서버의 PC 번호 - 그 PC 가 만든 문서만 찾는다 (_key)."""
         parts = _split(path)
         if len(parts) < 3:
             return None
         parent, collection, doc_id = "/".join(parts[:-2]), parts[-2], parts[-1]
         with self._lock:
             row = self._db.execute("SELECT doc FROM docs WHERE parent=? AND collection=? AND id=?",
-                                   (parent, collection, doc_id)).fetchone()
+                                   (parent, collection, self._key(doc_id, pc_id))).fetchone()
         return json.loads(row[0]) if row else None
 
     def sum(self, parent, collection, field, since=None, pc_id=None):
@@ -397,6 +404,8 @@ READ_TIMEOUT = 15                          # 요청 줄·머리글·본문을 �
 KEEPALIVE_SEC = 30
 SIGN_WINDOW_MS = 60000                     # 요청 시각이 서버 시각과 이만큼 넘게 다르면 거절 (같은 PC 라 넉넉하다)
 NONCE_KEEP_SEC = 150
+NONCE_SWEEP_SEC = 10                       # nonce 표에서 지난 것을 지우는 간격 (표 크기가 아니라 시간으로 - 검토 M-7)
+PC_REQ_MIN = 1200                          # 사내 서버: PC 하나의 분당 서명 요청 - 넘으면 서명된 429 (검토 M-7)
 LOG_NAME = "로컬서버_기록.txt"
 LOG_MAX = 1024 * 1024
 REJECT_LOG_MAX, REJECT_LOG_SEC = 10, 60    # PC 등록 거절 기록은 서버 전체에서 60초에 10줄까지 (쓰레기 /enroll 로 기록을 채우지 못하게, 검토 I-3)
@@ -670,6 +679,7 @@ class LocalServer(http.server.ThreadingHTTPServer):
     registry = None
     side = "both"                    # 길 나누기 - 이 서버는 에이전트·웹 창구를 같이 연다 (사내망 lan_server.LanServer 는 "web"·"agent")
     cfg = None                       # 사내망 설정 lan_config.LanConfig - 이 서버(127.0.0.1)에는 없다
+    nonce_swept = 0.0                # nonce 표를 마지막으로 정리한 시각 (fresh_nonce)
 
     def note_bad(self, ip):
         """서명 틀림 한 번 - 이 서버(127.0.0.1)는 세지 않는다. 사내망 포트(lan_server.LanServer)가 주소 거절로 잇는다."""
@@ -686,7 +696,12 @@ class LocalServer(http.server.ThreadingHTTPServer):
                 self.shutdown_request(request)
                 return
             self.conns += 1
-        super().process_request(request, client_address)
+        try:
+            super().process_request(request, client_address)
+        except Exception:                            # 스레드를 못 띄웠다 - 센 연결을 돌려주고 닫는다 (② 검토 T3b, LanServer 와 같다)
+            with self.conn_lock:
+                self.conns -= 1
+            self.shutdown_request(request)
 
     def process_request_thread(self, request, client_address):
         try:
@@ -697,15 +712,28 @@ class LocalServer(http.server.ThreadingHTTPServer):
 
     def fresh_nonce(self, nonce, now, keep=NONCE_KEEP_SEC):
         """이 nonce 를 처음 보는가 (같은 요청을 다시 보내기 막기). 지난 것은 지운다.
-        keep: 기억하는 초 - 허용 시각 차이의 두 배보다 길어야 한다 (앞당겨 서명한 요청을 기억이 끝난 뒤 다시 보내지 못하게)."""
+        keep: 기억하는 초 - 허용 시각 차이의 두 배보다 길어야 한다 (앞당겨 서명한 요청을 기억이 끝난 뒤 다시 보내지 못하게).
+        지난 것 지우기는 NONCE_SWEEP_SEC 마다 한 번 (표가 커져도 요청마다 전체를 훑지 않는다, 검토 M-7)."""
         with self.conn_lock:
-            if len(self.nonces) > 5000:
+            if now - self.nonce_swept >= NONCE_SWEEP_SEC:
+                self.nonce_swept = now
                 for k in [k for k, t in self.nonces.items() if t < now]:
                     del self.nonces[k]
             if self.nonces.get(nonce, 0) >= now:
                 return False
             self.nonces[nonce] = now + keep
             return True
+
+    def pc_rate_ok(self, pc_id):
+        """사내 서버: 이 PC 의 서명 요청 한 번을 센다 → 분당 PC_REQ_MIN 안이면 True (검토 M-7). 표 = PC → [창 시작, 센 수].
+        PC 수는 등록부 자리 수로 막혀 있어 표가 커지지 않는다. 시계는 rate_clock (시험이 바꿔 끼운다)."""
+        now = self.rate_clock()
+        with self.conn_lock:
+            win = self.pc_reqs.get(pc_id)
+            if win is None or now - win[0] >= 60:
+                win = self.pc_reqs[pc_id] = [now, 0]
+            win[1] += 1
+            return win[1] <= PC_REQ_MIN
 
     def enroll_reject_log(self, text):
         """PC 등록 거절 한 줄 - REJECT_LOG_SEC 창마다 REJECT_LOG_MAX 줄까지만 쓰고 나머지는 센다. 창이 넘어간 뒤 첫 거절 때
@@ -871,6 +899,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if state != "active":                        # 'disabled'·'removed' - 에이전트는 사람이 고쳐야 하는 멈춤으로 끝난다
             self._reply(403, {"error": "pc_removed" if state == "removed" else "pc_disabled"})
             raise _Stop()
+        if not srv.pc_rate_ok(pc):                   # PC 하나의 분당 서명 요청 상한 (검토 M-7) - 서명된 429, 에이전트는 잠시 뒤 다시
+            self._reply(429, {"error": "Too many requests"})
+            raise _Stop()
         srv.registry.seen(pc)
         return role, pc
 
@@ -981,6 +1012,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._reply(403, DENIED)
         kind, cid, pc, rest = classify(parts)
         path = "/".join(parts)
+        reg = srv.registry
+        # 사내 서버의 현황 쓰기는 쓰는 순간(Store 잠금 안)에도 그 PC 가 active 인지 본다 - 서명 검사(_role_lan)를 통과한 뒤
+        # 관리자가 지운·중지한 PC 의 쓰기가 지운 자리를 다시 만들지 못하게 (검토 M-3). 거절은 _role_lan 의 403 과 같은 꼴
+        live_guard = (lambda get: reg.state(me) == "active") if reg is not None and kind == "live" else None
         if method == "GET":
             if kind == "policy":
                 tree = {"modules": lic.get("modules") or {}, "features": lic.get("features") or {}, "limits": lic.get("limits") or {}}
@@ -1028,10 +1063,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif method == "PATCH":
                 if not isinstance(body, dict):
                     return self._reply(400, {"error": "Bad request"})
-                srv.store.patch(path, body)
+                srv.store.patch(path, body, guard=live_guard)
             else:
-                srv.store.put(path, body)
+                srv.store.put(path, body, guard=live_guard)
         except Refused:
+            if live_guard is not None:
+                return self._reply(403, {"error": "pc_removed" if reg.state(me) == "removed" else "pc_disabled"})
             return self._reply(403, DENIED)
         if query.get("print") == "silent":
             return self._reply(204, empty=True)
@@ -1041,7 +1078,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """구독 (SSE). 사내 서버: 에이전트 구독을 전체·PC 하나 상한으로 세고 (넘으면 서명된 503), 고리가 1초마다 그 PC 가
         아직 active 인지 본다 - 중지·지운 PC 가 열어 둔 구독은 곧 끝난다 (다시 붙으면 서명된 403 을 받는다)."""
         srv = self.server
-        key, nonce = self._auth
         lan = srv.registry is not None
         if lan and not srv.stream_slot(me, True):
             return self._reply(503, {"error": "Too many streams"})
@@ -1087,9 +1123,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # --- 실행 기록 (Firestore 꼴) ---
     def _fs(self, method, role, parts, query, raw, me=None):
-        """사내 서버는 문서의 pcId 가 서명으로 확인한 PC 번호(me)와 같아야 올리고 읽는다 (남의 PC 기록을 꾸미거나 보지 못하게)."""
+        """사내 서버는 문서의 pcId 가 서명으로 확인한 PC 번호(me)와 같아야 올리고, 문서 키에 PC 번호를 넣는다 (Runs._key, 검토 M-6) -
+        같은 id 를 다른 PC 가 먼저 차지하지 못하고, 남의 문서는 없는 것과 같다 (404 - 있는지조차 알려 주지 않는다)."""
         srv, lic = self.server, self.server.lic
         lan = srv.registry is not None
+        owner = me if lan else None
         ok = role == "agent" and parts[:2] == ["runs", lic["cid"]] and parts[2:3] == ["items"]
         if method == "POST":
             if not ok or len(parts) != 3:
@@ -1099,14 +1137,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._reply(400, {"error": "Bad request"})
             if lan and doc.get("pcId") != me:
                 return self._reply(403, DENIED)
-            if not srv.runs.create("/".join(parts[:2]), parts[2], doc_id, doc):
+            if not srv.runs.create("/".join(parts[:2]), parts[2], doc_id, doc, pc_id=owner):
                 return self._reply(409, {"error": "Already exists"})
             return self._reply(200, {"id": doc_id})
         if not ok or len(parts) != 4:
             return self._reply(403, DENIED)
-        doc = srv.runs.get("/".join(parts))
+        doc = srv.runs.get("/".join(parts), pc_id=owner)
         if doc is not None and lan and doc.get("pcId") != me:
-            return self._reply(403, DENIED)
+            doc = None                               # 키로 이미 갈렸다 - 그래도 남의 pcId 면 없는 것으로
         return self._reply(200, doc) if doc is not None else self._reply(404, {"error": "Not found"})
 
     def _fs_sum(self, role, query, me=None):
@@ -1157,7 +1195,15 @@ def _prepare(srv, store, runs, lic, keys, registry, folder=None, web=None, phone
     srv.folder = folder or os.path.dirname(store.path or "") or "."
     srv.stopping = threading.Event()
     srv.conn_lock, srv.conns, srv.nonces, srv.streams = threading.Lock(), 0, {}, {}
+    srv.nonce_swept, srv.pc_reqs, srv.rate_clock = 0.0, {}, time.monotonic
     srv.log_clock, srv.reject_win = time.monotonic, [float("-inf"), 0, 0]
+
+
+def check_web(web, registry):
+    """웹 창구의 등록부가 서버에 넘긴 등록부와 같은 것인가 (검토 M-11) - 다르면 화면이 보는 PC 와 서명을 확인하는 PC 가 갈린다.
+    make_server·lan_server.make_lan_servers 가 포트를 열기 전에 부른다. 다르면 ValueError."""
+    if web is not None and getattr(web, "registry", None) is not registry:
+        raise ValueError("웹 창구의 PC 등록부가 서버의 등록부와 다릅니다.")
 
 
 def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None, web=None, phone=None, registry=None):
@@ -1166,9 +1212,13 @@ def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None
     phone: 휴대폰 창구 (local_phone.Service) - 짝지은 휴대폰 표·인증번호 자리 규칙. 없으면 인증번호 요청을 열지 못한다.
     사내망 휴대폰 포트는 이 서버와 따로 선다 (local_phone.Gate - 이 서버는 늘 127.0.0.1).
     registry: PC 등록부 (pc_registry.Registry) - 있으면 사내 서버 배치(LAN): PC 마다의 열쇠로 ap2 서명을 확인하고 keys 는 쓰지
-    않는다 (None 이어도 된다). 없으면 단독(SINGLE) - 지금 그대로."""
+    않는다 (None 이어도 된다). 없으면 단독(SINGLE) - 열쇠 둘(keys)이 꼭 있어야 한다 (없으면 ValueError, 검토 M-10).
+    web 의 등록부는 registry 와 같은 것이어야 한다 (check_web)."""
     if host not in LOCAL_HOSTS:
         raise ValueError("로컬 서버는 이 PC(127.0.0.1)에만 엽니다.")
+    if registry is None and keys is None:
+        raise ValueError("단독 서버는 에이전트·중계 열쇠가 있어야 엽니다.")
+    check_web(web, registry)
     srv = LocalServer(("127.0.0.1", port), Handler, bind_and_activate=False)
     _prepare(srv, store, runs, lic, keys, registry, folder=folder, web=web, phone=phone)
     try:
@@ -1179,6 +1229,7 @@ def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None
         raise
     if web is not None:
         web.public_url = f"http://127.0.0.1:{srv.server_address[1]}"     # 등록 글에 싣는 서버 주소 (② 에서 사내 주소로)
+        web.server = srv                             # 웹 구독 상한은 이 서버의 배치를 따른다 (Web.max_streams, 검토 M-11)
     return srv
 
 
