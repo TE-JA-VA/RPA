@@ -1424,11 +1424,12 @@ check("매출처리: 하단 줄을 세기 전에 ▼ 를 누를 수 있을 때�
       READY_CALLS[-1:] == [([("goto",)], "매출처리 ▼", "매출처리")], str(READY_CALLS))
 PRESSED[0] = (" → '정상매출' 누름", True)
 READY[0], tables_n = True, []
-_got = rr.get_onscreen_tables
+_got, _wt = rr.get_onscreen_tables, rr.wellife.wait_tables
+rr.wellife.wait_tables = lambda *a: None      # 화면 이동 뒤 표 기다림(11-24)은 따로 본다 - 여기서는 매출처리의 다시 찾기만 센다
 rr.get_onscreen_tables = lambda win: tables_n.append(1) or _got(win)
 sales_acts.clear()
 res = rr.module_sales(make_ctx())
-rr.get_onscreen_tables, READY[0] = _got, False
+rr.get_onscreen_tables, READY[0], rr.wellife.wait_tables = _got, False, _wt
 check("매출처리: 기다렸으면 그새 다시 그려졌을 수 있어 그리드를 다시 찾는다", len(tables_n) == 2, f"{tables_n} {res}")
 _saved_to = (rr.wait_async_then_confirm, rr.find_popup_ok_button, rr.handle_sales_popups, rr.probe_spinner)
 rr.wait_async_then_confirm = lambda app, hwnd, base, **k: "timeout"

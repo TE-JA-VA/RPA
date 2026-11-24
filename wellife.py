@@ -3718,9 +3718,34 @@ def goto_screen(rr, ctx, name, icon, original):
         clear_separate_popups(rr, ctx, f"'{name}' 화면 이동 전")
         before = getattr(ctx, "popups_closed", 0)
         r = _goto_screen_once(rr, ctx, name, icon, original)
+        if r == "ok":
+            wait_tables(rr, ctx, name)
         if r == "ok" or attempt == 2 or getattr(ctx, "popups_closed", 0) == before:
             return r
         rr.log(f"  '{name}' 화면 이동을 기다리는 동안 팝업 창을 닫아 한 번 더 이동합니다.")
+
+
+TABLE_WAIT_SECONDS = 15        # 화면 이동 뒤 표가 그려지기를 기다리는 최대 시간
+TABLE_STABLE_SECONDS = 1.0     # 표 수가 이만큼 그대로면 다 그려진 것으로 본다
+
+
+def wait_tables(rr, ctx, name):
+    """화면 이동 뒤 떠 있는 화면의 표가 다 그려질 때까지 - 표 수가 1개 이상이고 TABLE_STABLE_SECONDS 동안 그대로면 끝.
+    로그인 직후 첫 화면은 탭이 먼저 뜨고 표가 늦게 그려진다 (11-24 개발기 B2: 탭 확인 직후 표가 모자라 '그리드가 충분히 발견되지
+    않았습니다'). 예전 이동은 도착 확인이 느려(창 전체 훑기) 그새 그려졌다. 못 읽거나 시간이 지나면 그냥 돌아간다 - 표를 읽는 쪽이 판단한다."""
+    end, last, since = time.time() + TABLE_WAIT_SECONDS, None, None
+    while time.time() < end:
+        try:
+            n = len(rr.get_onscreen_tables(visible_page(ctx)))
+        except Exception:
+            return
+        if n and n == last:
+            if time.time() - since >= TABLE_STABLE_SECONDS:
+                return
+        else:
+            last, since = n, time.time()
+        time.sleep(0.3)
+    rr.log(f"  '{name}' 화면의 표가 {TABLE_WAIT_SECONDS}초 안에 다 그려지지 않았습니다. (보인 표 {last or 0}개)")
 
 
 def _goto_screen_once(rr, ctx, name, icon, original):

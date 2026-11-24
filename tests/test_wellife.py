@@ -3745,6 +3745,34 @@ def once(rr_, ctx_, name, icon, original):
 wellife._goto_screen_once = once
 res = wellife.goto_screen(sep_rr(), sctx, "주문매핑 매출처리", "lcg_OrderCollect", lambda: "ok")
 check("이동을 기다리는 동안 팝업을 닫았으면 화면 이동을 한 번 더 한다", res == "ok" and len(tries_sep) == 2, f"{res} {tries_sep}")
+# 로그인 직후 첫 화면은 탭이 먼저 뜨고 표가 늦게 그려진다 (11-24 개발기 B2: 탭 확인 직후 표가 모자라 '그리드가 충분히 발견되지 않았습니다')
+import time as _wt_time  # noqa: E402
+_saved_wt = (getattr(wellife, "TABLE_WAIT_SECONDS", None), getattr(wellife, "TABLE_STABLE_SECONDS", None))
+wellife.TABLE_WAIT_SECONDS, wellife.TABLE_STABLE_SECONDS = 3, 0.4
+WT_SEQ = [[], [], ["상단"], ["상단", "하단"]]
+WT_SEEN = []
+
+
+def _wt_tables(page):
+    WT_SEEN.append(len(WT_SEQ))
+    return WT_SEQ.pop(0) if len(WT_SEQ) > 1 else WT_SEQ[0]
+
+
+wt_rr = sep_rr(get_onscreen_tables=_wt_tables)
+wellife._goto_screen_once = lambda rr_, ctx_, name, icon, original: "ok"
+t0 = _wt_time.time()
+res = wellife.goto_screen(wt_rr, sctx, "주문매핑 매출처리", "lcg_OrderCollect", lambda: "ok")
+check("화면 이동이 되면 그 화면의 표 수가 1개 이상이고 잠깐 그대로일 때까지 기다린다 - 탭만 뜨고 표가 아직이면 바로 돌아가지 않는다",
+      res == "ok" and WT_SEQ == [["상단", "하단"]] and 0.4 <= _wt_time.time() - t0 < 3, f"{res} {WT_SEQ} {_wt_time.time() - t0:.1f}초")
+WT_SEQ[:] = [[]]
+t0 = _wt_time.time()
+res = wellife.goto_screen(wt_rr, sctx, "주문매핑 매출처리", "lcg_OrderCollect", lambda: "ok")
+check("표가 끝내 안 그려지면 정한 시간 뒤 그냥 돌아간다 (표를 읽는 쪽이 판단)", res == "ok" and 2.9 <= _wt_time.time() - t0 < 5, f"{_wt_time.time() - t0:.1f}초")
+WT_SEEN.clear()
+wellife._goto_screen_once = lambda rr_, ctx_, name, icon, original: "'주문매핑 매출처리' 화면으로 이동하지 못했습니다."
+wellife.goto_screen(wt_rr, sctx, "주문매핑 매출처리", "lcg_OrderCollect", lambda: "ok")
+check("이동이 실패면 표를 기다리지 않는다", not WT_SEEN, str(WT_SEEN))
+wellife.TABLE_WAIT_SECONDS, wellife.TABLE_STABLE_SECONDS = _saved_wt
 wellife.active_tab, wellife.goto_open_tab, wellife._goto_screen_once = _saved_sep
 _saved_obm = wellife._open_by_menu
 tries_sep.clear()
