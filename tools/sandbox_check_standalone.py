@@ -14,9 +14,20 @@ import json
 import sys
 import time
 
+import os
+
 HOST, PORT = "127.0.0.1", 8781
 SCHEDULE = {"enabled": True, "days": [0, 1, 2, 3, 4, 5, 6], "slots": [{"at": "03:17"}], "skip_holidays": False}
 OUT = None
+
+
+def expect():
+    """옆의 expect.json (sandbox_test.py 가 쓴다) - 없으면 시험용 빌드·샌드박스상사."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "expect.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"official": False, "company": "샌드박스상사", "cid": "c_sbx"}
 
 
 def _line(text):
@@ -113,9 +124,14 @@ def full(uid, pw1, pw2):
     status, head, raw, _ = call("GET", "/")
     say(status == 200 and b"<html" in raw.lower() and "default-src 'self'" in head.get("content-security-policy", ""),
         "업체 웹 첫 화면 200 · CSP 머리글", f"{status} {head.get('content-security-policy')}")
+    exp = expect()
     status, _, raw, _ = call("GET", "/edition.js")
-    say(status == 200 and b"standalone" in raw and b"TEST_BUILD = true" in raw, "edition.js = 스탠드얼론 · 시험용 빌드 표시",
-        raw[:200].decode("utf-8", "replace"))
+    if exp.get("official"):
+        say(status == 200 and b"standalone" in raw and b"TEST_BUILD = false" in raw and b"TEST_BUILD = true" not in raw,
+            "edition.js = 스탠드얼론 · 정식 빌드 (웹 맨 위 '시험용 빌드' 띠 없음)", raw[:200].decode("utf-8", "replace"))
+    else:
+        say(status == 200 and b"standalone" in raw and b"TEST_BUILD = true" in raw, "edition.js = 스탠드얼론 · 시험용 빌드 표시",
+            raw[:200].decode("utf-8", "replace"))
     status, _, _, _ = call("GET", "/firebase-config.js")
     say(status == 404, "firebase-config.js 는 내주지 않는다 (404)", str(status))
     status, token, sess = login(uid, pw1)
@@ -134,8 +150,8 @@ def full(uid, pw1, pw2):
     if not token:
         return
     status, _, _, js = call("GET", "/api/company", token=token)
-    say(status == 200 and (js or {}).get("name") == "샌드박스상사" and (js or {}).get("cid") == "c_sbx",
-        "업체 정보 = 라이선스의 업체 (샌드박스상사 · c_sbx)", f"{status} {js}")
+    say(status == 200 and (js or {}).get("name") == exp.get("company") and (js or {}).get("cid") == exp.get("cid"),
+        f"업체 정보 = 라이선스의 업체 ({exp.get('company')} · {exp.get('cid')})", f"{status} {js}")
     status, live = first_live(token)
     say(status == 200 and isinstance(live, dict), "스트림의 첫 live 에 heartbeat (에이전트가 로컬 서버에 현황을 올린다)", f"{status} {live}")
     status, _, _, js = call("POST", "/api/commands", {"type": "set_schedule", "args": SCHEDULE}, token=token)

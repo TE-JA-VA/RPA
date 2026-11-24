@@ -94,7 +94,11 @@ with tempfile.TemporaryDirectory() as tmp:
     plain = os.path.join(rel, "AUTOPILOT_Standalone_Setup_2099.01.01-1.exe")
     open(plain, "wb").write(b"MZ")
     code, out = quiet(sb.main, ["--standalone", plain])
-    check("이름에 TEST 가 없으면 2 · 안내", code == 2 and sb.TEST_ONLY in out)
+    check("정식 빌드 이름인데 --guid·--license·--license-other 가 없으면 2 · 안내", code == 2 and sb.OFFICIAL_NEEDS in out)
+    odd = os.path.join(rel, "다른이름_Setup_2099.01.01-1.exe")
+    open(odd, "wb").write(b"MZ")
+    code, out = quiet(sb.main, ["--standalone", odd])
+    check("스탠드얼론 설치 파일 이름이 아니면 2 · 안내", code == 2 and sb.TEST_ONLY in out)
     nokey = os.path.join(tmp, "AUTOPILOT_Standalone_TEST_Setup_2099.01.02-1.exe")
     open(nokey, "wb").write(b"MZ")
     code, out = quiet(sb.main, ["--standalone", nokey])
@@ -107,6 +111,64 @@ with tempfile.TemporaryDirectory() as tmp:
     check("prepare_standalone 도 열쇠가 없으면 ValueError", raised)
     code, out = quiet(sb.main, ["--standalone", "--cloud-setup", os.path.join(tmp, "없는.exe"), setup])
     check("--cloud-setup 파일이 없으면 2", code == 2)
+
+    print("=== 3-1. 정식 빌드 (미리 발급한 라이선스, 무작위 PC 번호 - 2026-11-24) ===")
+    import uuid
+    import make_license
+    real_secret, real_public = update_sign.keygen()            # '진짜' 열쇠 대신 - 실린 공개 열쇠를 잠깐 바꿔 끼운다
+    saved_pub = license_check.LICENSE_PUBLIC_KEY_HEX
+    license_check.LICENSE_PUBLIC_KEY_HEX = real_public.hex()
+    try:
+        g1, g2 = str(uuid.uuid4()), str(uuid.uuid4())
+        info = {"company": "시험상사", "cid": "c_test"}
+        lic1, lic2 = os.path.join(tmp, "l1.json"), os.path.join(tmp, "l2.json")
+        for path, g in ((lic1, g1), (lic2, g2)):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(license_check.sign_body(real_secret, make_license.build_body(g, info)), f, ensure_ascii=False)
+        tkey = os.path.join(tmp, "t.testkey.txt")
+        t_secret, t_public = update_sign.keygen()
+        open(tkey, "w", encoding="ascii").write(t_secret.hex() + "\n")
+        w = sb.prepare_official(plain, os.path.join(tmp, "wo"), g1, lic1, lic2, test_key=tkey, cloud_setup=cloud)
+        names = set(os.listdir(w))
+        check("정식: 작업 폴더에 라이선스 셋·expect.json·guid.txt, 열쇠 파일 없음",
+              {"setup.exe", "inner.ps1", "license.json", "license_other.json", "license_testkey.json", "expect.json", "guid.txt",
+               "cloud_setup.exe"} <= names and not any(n.endswith(".testkey.txt") or "key.txt" in n for n in names))
+        check("정식: guid.txt = 받은 무작위 번호", open(os.path.join(w, "guid.txt")).read().strip() == g1)
+        exp = json.load(open(os.path.join(w, "expect.json"), encoding="utf-8"))
+        check("정식: expect.json = official · 라이선스의 업체", exp == {"official": True, "company": "시험상사", "cid": "c_test"})
+        try:
+            license_check.load(path=os.path.join(w, "license_testkey.json"), guid=g1)
+            tl = ""
+        except license_check.LicenseError as e:
+            tl = str(e)
+        check("정식: 시험 열쇠로 같은 번호에 서명한 라이선스는 실린 열쇠로 '서명이 맞지 않습니다'", "서명이 맞지 않습니다" in tl)
+        body = license_check.load(path=os.path.join(w, "license_testkey.json"), guid=g1, public_key=t_public.hex())
+        check("정식: 그 라이선스는 시험 열쇠로는 맞다 (서명 말고는 같은 모양)", body["pc_id"] == g1)
+        for bad_g, why in ((sb.SANDBOX_GUID, "고정된 SANDBOX_GUID"), (g2, "license 와 다른 번호"), ("xyz", "모양이 틀린 번호")):
+            try:
+                sb.prepare_official(plain, os.path.join(tmp, "wbad"), bad_g, lic1, lic2)
+                ok = False
+            except ValueError:
+                ok = True
+            check(f"정식: {why} 는 ValueError", ok)
+        try:
+            sb.prepare_official(plain, os.path.join(tmp, "wsame"), g1, lic1, lic1)
+            ok = False
+        except ValueError:
+            ok = True
+        check("정식: --license-other 가 같은 번호면 ValueError", ok)
+        w2 = sb.prepare_official(plain, os.path.join(tmp, "wo2"), g1, lic1, lic2)
+        check("정식: --test-key 가 없으면 그 자리에서 만든 열쇠로 시험 라이선스", os.path.isfile(os.path.join(w2, "license_testkey.json")))
+    finally:
+        license_check.LICENSE_PUBLIC_KEY_HEX = saved_pub
+    w3 = sb.prepare_standalone(setup, os.path.join(tmp, "w_test_exp"))
+    check("시험용: expect.json = official 아님 · 샌드박스상사", json.load(open(os.path.join(w3, "expect.json"), encoding="utf-8"))
+          == {"official": False, "company": "샌드박스상사", "cid": "c_sbx"})
+    inner_src = open(os.path.join(ROOT, "tools", "sandbox_inner_standalone.ps1"), encoding="utf-8-sig").read()
+    check("안쪽 스크립트: 정식이면 앱 이름 '시험용' 없음·시험 라이선스 거절·test_build 표시 꺼짐을 본다",
+          '"오토파일럿 스탠드얼론" } else' in inner_src and "license_testkey.json" in inner_src and '"False False"' in inner_src)
+    chk_src = open(os.path.join(ROOT, "tools", "sandbox_check_standalone.py"), encoding="utf-8").read()
+    check("웹 확인: 정식이면 edition.js 에 TEST_BUILD = false", 'b"TEST_BUILD = false"' in chk_src)
 
     print("=== 4. 배포 폴더 찾기 (--update·--from) ===")
     near = os.path.join(rel, "배포_2099.01.01-1")

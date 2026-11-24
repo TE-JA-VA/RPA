@@ -40,6 +40,11 @@ $SaKey = "$Uninst\{7D2E9A61-3B4F-4C8D-A5E2-91F0C6B3D7A4}_is1"
 $CloudKey = "$Uninst\{C3F7A2B4-5E81-4D2A-9B6C-7A1E0F3D8B52}_is1"
 $Over = Test-Path "$T\over_cloud.exe"
 $Admin = "sbxadmin"; $Pw1 = "Sbx-First-2026"; $Pw2 = "Sbx-Second-2026"     # 샌드박스 안에서만 쓰는 시험 계정
+# 무엇을 기대하나 (sandbox_test.py 가 쓴다): 정식 빌드(고객용)면 '시험용' 표시가 없고 시험 열쇠의 라이선스는 거절돼야 한다 (2026-11-24)
+$Exp = Get-Content "$T\expect.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+$Official = ($Exp.official -eq $true)
+$Company = "$($Exp.company)"
+$AppName = if ($Official) { "오토파일럿 스탠드얼론" } else { "오토파일럿 스탠드얼론 (시험용)" }
 $X = "$O\exe"
 New-Item -ItemType Directory -Force $X | Out-Null
 
@@ -144,12 +149,21 @@ $bad = @(Get-ChildItem $App -Recurse -File -Force -ErrorAction SilentlyContinue 
 if (Test-Path "$App\lib\anthropic") { $bad += "\lib\anthropic" }
 Check "없어야 할 파일 (ai_rescue·lib\anthropic·update_helper.py·firebase-config.js·data-firebase.js·license_check.py·안내 문서·열쇠)" ($bad.Count -eq 0) ($bad -join ", ")
 $ed = Get-Content "$App\edition.json" -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-Check "edition.json = standalone · 시험용 빌드" (($ed.edition -eq "standalone") -and ($ed.test_build -eq $true)) "$ed"
+if ($Official) { Check "edition.json = standalone · 정식 빌드 (test_build 칸 없음)" (($ed.edition -eq "standalone") -and ($null -eq $ed.test_build)) "$ed" }
+else { Check "edition.json = standalone · 시험용 빌드" (($ed.edition -eq "standalone") -and ($ed.test_build -eq $true)) "$ed" }
+# '시험용' 표시: 설정 창 제목(rpa_settings._test_build)·웹 띠(edition.test_build → edition.js, check_standalone 이 본다)
+$tb = PyOut "import edition, rpa_settings as rs`n_out.write(str(edition.test_build()) + ' ' + str(rs._test_build()))" "testmark"
+if ($Official) { Check "정식 빌드: 설정 창 제목·웹 띠의 '시험용' 표시가 꺼져 있다 (edition.test_build·rpa_settings._test_build 모두 False)" ("$tb" -eq "False False") "$tb" }
+else { Check "시험용 빌드: 설정 창 제목·웹 띠의 '시험용' 표시가 켜져 있다" ("$tb" -eq "True True") "$tb" }
 $ci = PyOut "import rpa_status as st`nr = st.check_install(r'$App')`n_out.write(str(r['state']) + ' ' + str(r.get('version')))" "ci1"
 Check "설치 점검 ok" ("$ci" -like "ok *") "$ci"
 $un = Get-ItemProperty $SaKey -ErrorAction SilentlyContinue
 $wow = @(Get-ChildItem "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -like "{7D2E9A61*" })
-Check "앱 및 기능: '오토파일럿 스탠드얼론 (시험용)' (스탠드얼론 AppId, 64비트 보기의 제거 키 - WOW6432Node 아님)" (($null -ne $un) -and ($un.DisplayName -eq "오토파일럿 스탠드얼론 (시험용)") -and ($wow.Count -eq 0)) "이름 $($un.DisplayName) / WOW64 $($wow.Count)"
+Check "앱 및 기능: '$AppName' (스탠드얼론 AppId, 64비트 보기의 제거 키 - WOW6432Node 아님$(if ($Official) { ' - 정식 빌드: 설치 마법사의 시험용 이름·경고도 같은 TestBuild 표시로 꺼진다' }))" (($null -ne $un) -and ($un.DisplayName -eq $AppName) -and ($wow.Count -eq 0)) "이름 $($un.DisplayName) / WOW64 $($wow.Count)"
+if ($Official) {
+    $lg1 = if (Test-Path "$O\setup1.log") { Get-Content "$O\setup1.log" -Raw -Encoding UTF8 } else { "" }
+    Check "정식 빌드: 설치 기록·앱 이름에 '시험용' 글자가 없다" (($lg1 -notmatch "시험용") -and ("$($un.DisplayName)" -notmatch "시험용")) "기록 $($lg1.Length)자"
+}
 Check "일반 버전 제거 키는 없다" (-not (Test-Path $CloudKey))
 $url = Select-String -Path "$SM\오토파일럿 대시보드.url" -Pattern "^URL=(.*)$" -ErrorAction SilentlyContinue | ForEach-Object { $_.Matches[0].Groups[1].Value }
 Check "대시보드 바로 가기 주소 http://127.0.0.1:8781/ · 설정 바로 가기" (($url -eq "http://127.0.0.1:8781/") -and (Test-Path "$SM\오토파일럿 설정.lnk")) "url=$url"
@@ -180,9 +194,24 @@ $stt = StatusOf "prepare"
 Check "다른 PC 의 라이선스: Prepare_RPA.exe 2 · '이 PC 의 라이선스가 아닙니다'" (($r.Code -eq 2) -and ($stt -match "이 PC 의 라이선스가 아닙니다")) "코드 $($r.Code) / $(Tail $stt 200)"
 $r = RunExe "ERPia_RPA.exe" "--check" "otherlic_check"
 Check "다른 PC 의 라이선스: ERPia_RPA.exe --check 에 '이 PC 의 라이선스가 아닙니다'" ($r.Text.Contains("이 PC 의 라이선스가 아닙니다")) (Tail $r.Text)
+if ($Official) {
+    # 정식 빌드: 시험 열쇠로 이 PC 번호에 서명한 라이선스는 통하지 않는다 (2026-11-24)
+    Copy-Item "$T\license_testkey.json" "$PD\license.json" -Force
+    $r = RunExe "Prepare_RPA.exe" "" "testlic_run" 120
+    $stt = StatusOf "prepare"
+    Check "시험 열쇠의 라이선스(같은 PC 번호): Prepare_RPA.exe 2 · '라이선스 서명이 맞지 않습니다'" (($r.Code -eq 2) -and ($stt -match "라이선스 서명이 맞지 않습니다")) "코드 $($r.Code) / $(Tail $stt 200)"
+    foreach ($exe in "ERPia_RPA.exe", "Prepare_RPA.exe", "Prepare_Observer.exe") {
+        $r = RunExe $exe "--check" "testlic_check_$exe"
+        Check "시험 열쇠의 라이선스: $exe --check 에 '라이선스 서명이 맞지 않습니다'" ($r.Text.Contains("라이선스 서명이 맞지 않습니다") -and -not $r.Text.Contains("라이선스: 확인됨")) (Tail $r.Text)
+    }
+}
 Copy-Item "$T\license.json" "$PD\license.json" -Force
 $r = RunExe "ERPia_RPA.exe" "--check" "lic_check"
-Check "맞는 라이선스: --check 에 '라이선스: 확인됨 (샌드박스상사, PC 번호 $want)'" ($r.Text.Contains("라이선스: 확인됨 (샌드박스상사, PC 번호 $want)")) (Tail $r.Text)
+Check "맞는 라이선스: --check 에 '라이선스: 확인됨 ($Company, PC 번호 $want)'" ($r.Text.Contains("라이선스: 확인됨 ($Company, PC 번호 $want)")) (Tail $r.Text)
+foreach ($exe in "Prepare_RPA.exe", "Prepare_Observer.exe") {
+    $r = RunExe $exe "--check" "lic_check_$exe"
+    Check "맞는 라이선스: $exe --check 에 '라이선스: 확인됨 ($Company'" ($r.Text.Contains("라이선스: 확인됨 ($Company")) (Tail $r.Text)
+}
 # 가정 확인: 조각(.pyd)에서 불린 가드 모듈을 '컴파일됨' 으로 본다 (__compiled__ 또는 확장 모듈 자리) - 틀리면 설치본이 모두 막힌다
 $g = PyOut "import site`nsys.path.insert(0, os.path.join(r'$App', 'app'))`nsite.addsitedir(os.path.join(r'$App', 'lib'))`nimport ap_guard, license_check, rpa_status, update_sign, edition`n_out.write(repr([ap_guard.startup_problem(), ap_guard.loose_sources(r'$App'), [ap_guard._compiled(sys.modules[n]) for n in ap_guard.GUARD_PIECES], '__compiled__' in vars(ap_guard), rpa_status.shipped(), os.path.basename(ap_guard.__file__)]))" "guard"
 Check "가드 조각이 스스로를 컴파일된 것으로 본다 (loose 없음, 다섯 모두 compiled)" ("$g" -match "^\[[^\[]*, \[\], \[True, True, True, True, True\]") "$g"

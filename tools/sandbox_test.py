@@ -25,6 +25,12 @@ AFTER MARKET\\RPA Standalone 에 깔리고, 일반 폴더 AFTER MARKET\\RPA 는 
 시험용 빌드(--test-build)의 설치 파일만 받는다 (이름에 TEST, 옆에 배포_SA_TEST_<v>.testkey.txt). 그 열쇠로 샌드박스 PC 번호
 (SANDBOX_GUID)의 라이선스를 만들어 넣고 (열쇠 파일 자체는 넣지 않는다) tools\\sandbox_inner_standalone.ps1 이 설치·라이선스·
 로그인·명령·기록·변조·덮어 설치·제거와 막은 주소로의 연결 시도(덫)를 본다.
+정식 빌드(고객용, AUTOPILOT_Standalone_Setup_<v>.exe - 2026-11-24):
+    ... --standalone --guid <이번만 쓰는 무작위 PC 번호> --license <그 번호의 license.json>
+        --license-other <다른 무작위 번호의 license.json> [--test-key <시험용 빌드의 .testkey.txt>] <설치 파일>
+    라이선스는 make_license.py 로 미리 발급해 넘긴다 (이 도구는 진짜 라이선스 열쇠를 읽지 않는다). 고정된 SANDBOX_GUID 는 받지 않는다.
+    '시험용' 표시(앱 이름·설정 창 제목·웹 띠)가 없는지, 시험 열쇠로 같은 번호에 서명한 라이선스가 거절되는지도 본다.
+    끝나면 license*.json 이 든 작업 폴더를 지우는 것은 부르는 쪽 몫이다 (결과 폴더 위치를 찍는다).
 --cloud-setup: 스탠드얼론이 깔린 PC 에서 일반 설치 파일이 멈추는지도 본다.
 --over-cloud: 일반 버전을 먼저 깔고 스탠드얼론 설치 파일이 멈추는지만 본다.
 """
@@ -58,6 +64,10 @@ SBX_COMPANY = {"company": "샌드박스상사", "cid": "c_sbx", "limits": {"sche
 TRAP_IP = "127.0.0.2"
 TEST_ONLY = "시험용 빌드(--test-build)로 만든 설치 파일만 시험합니다"
 SA_SETUP_RE = re.compile(r"AUTOPILOT_Standalone_TEST_Setup_(.+)\.exe$")
+OFFICIAL_SETUP_RE = re.compile(r"AUTOPILOT_Standalone_Setup_(.+)\.exe$")    # 정식 빌드 (고객용, 2026-11-24)
+OFFICIAL_NEEDS = ("정식 빌드는 --guid <이번만 쓰는 무작위 PC 번호> --license <그 번호의 license.json> "
+                  "--license-other <다른 PC 번호의 license.json> 이 필요합니다 (make_license.py 로 발급)")
+OFFICIAL_GUID = "정식 빌드의 --guid 는 이번 실행만 쓰는 무작위 PC 번호여야 합니다 (고정된 샌드박스 번호는 안 됩니다)"
 SA_FILES = {"inner.ps1": "sandbox_inner_standalone.ps1", "trap.ps1": "sandbox_trap.ps1",
             "check_standalone.py": "sandbox_check_standalone.py"}     # 작업 폴더 이름 → tools\ 의 원본
 
@@ -104,9 +114,27 @@ def test_key_path(setup):
     return os.path.join(os.path.dirname(os.path.abspath(setup)), f"배포_SA_TEST_{m.group(1)}.testkey.txt")
 
 
+def _fill_work(setup, work, guid, expect, cloud_setup=None, over_cloud=None):
+    """두 빌드 종류가 함께 쓰는 작업 폴더 채우기: setup.exe·안쪽 스크립트 셋·hosts_block.txt·guid.txt·expect.json(무엇을 기대하나)."""
+    os.makedirs(work, exist_ok=True)
+    shutil.copy2(setup, os.path.join(work, "setup.exe"))
+    for dst, src in SA_FILES.items():
+        shutil.copy2(os.path.join(HERE, src), os.path.join(work, dst))
+    with open(os.path.join(work, "hosts_block.txt"), "w", encoding="ascii", newline="\r\n") as f:
+        f.write("".join(f"{TRAP_IP} {h}\n" for h in BLOCK_HOSTS()))
+    with open(os.path.join(work, "guid.txt"), "w", encoding="ascii") as f:
+        f.write(guid + "\n")
+    with open(os.path.join(work, "expect.json"), "w", encoding="utf-8") as f:
+        json.dump(expect, f, ensure_ascii=False)
+    for src, name in ((cloud_setup, "cloud_setup.exe"), (over_cloud, "over_cloud.exe")):
+        if src:
+            shutil.copy2(src, os.path.join(work, name))
+    return work
+
+
 def prepare_standalone(setup, work, cloud_setup=None, over_cloud=None):
     """스탠드얼론 샌드박스 작업 폴더를 채운다: setup.exe·inner.ps1·trap.ps1·check_standalone.py·license.json(샌드박스 PC 번호)·
-    license_other.json(다른 PC 번호)·hosts_block.txt·guid.txt, 주면 cloud_setup.exe / over_cloud.exe.
+    license_other.json(다른 PC 번호)·hosts_block.txt·guid.txt·expect.json, 주면 cloud_setup.exe / over_cloud.exe.
     시험용 빌드가 아니면 (이름에 TEST 가 없거나 옆에 열쇠 파일이 없으면) ValueError(TEST_ONLY). 열쇠 파일은 작업 폴더에 넣지 않는다."""
     key_file = test_key_path(setup)
     if not key_file or not os.path.isfile(key_file):
@@ -115,21 +143,44 @@ def prepare_standalone(setup, work, cloud_setup=None, over_cloud=None):
     import make_license
     with open(key_file, encoding="ascii") as f:
         secret = bytes.fromhex(f.read().strip())
-    os.makedirs(work, exist_ok=True)
-    shutil.copy2(setup, os.path.join(work, "setup.exe"))
-    for dst, src in SA_FILES.items():
-        shutil.copy2(os.path.join(HERE, src), os.path.join(work, dst))
+    _fill_work(setup, work, SANDBOX_GUID, {"official": False, "company": SBX_COMPANY["company"], "cid": SBX_COMPANY["cid"]},
+               cloud_setup, over_cloud)
     for name, guid in (("license.json", SANDBOX_GUID), ("license_other.json", OTHER_GUID)):
         doc = license_check.sign_body(secret, make_license.build_body(guid, SBX_COMPANY))
         with open(os.path.join(work, name), "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, indent=1)
-    with open(os.path.join(work, "hosts_block.txt"), "w", encoding="ascii", newline="\r\n") as f:
-        f.write("".join(f"{TRAP_IP} {h}\n" for h in BLOCK_HOSTS()))
-    with open(os.path.join(work, "guid.txt"), "w", encoding="ascii") as f:
-        f.write(SANDBOX_GUID + "\n")
-    for src, name in ((cloud_setup, "cloud_setup.exe"), (over_cloud, "over_cloud.exe")):
-        if src:
-            shutil.copy2(src, os.path.join(work, name))
+    return work
+
+
+def prepare_official(setup, work, guid, lic, lic_other, test_key=None, cloud_setup=None, over_cloud=None):
+    """정식 빌드(고객용)의 작업 폴더. 라이선스는 make_license.py 로 미리 발급한 파일을 받는다 - 이 도구는 진짜 라이선스 열쇠를 읽지 않는다.
+    guid 는 이번 실행만 쓰는 무작위 PC 번호여야 한다 (고정된 SANDBOX_GUID·OTHER_GUID 로 진짜 라이선스를 만들면 누구나 그 번호로
+    바꿔 쓸 수 있다). lic 은 guid 로, lic_other 는 다른 PC 번호로 실린 공개 열쇠에 통과해야 한다 - 아니면 ValueError.
+    license_testkey.json = 시험용 열쇠(test_key 파일, 없으면 그 자리에서 만든 열쇠)로 같은 guid 에 서명한 것 - 정식 빌드에서 거절돼야 한다."""
+    import license_check
+    import make_license
+    import update_sign
+    guid = str(guid or "").strip().lower()
+    if not make_license.PC_ID.match(guid) or guid in (SANDBOX_GUID, OTHER_GUID):
+        raise ValueError(OFFICIAL_GUID)
+    try:
+        body = license_check.load(path=lic, guid=guid)
+        other = license_check.load(path=lic_other, guid=json.load(open(lic_other, encoding="utf-8-sig"))["body"]["pc_id"])
+    except (license_check.LicenseError, OSError, ValueError, KeyError, TypeError) as e:
+        raise ValueError(f"라이선스 파일이 이 빌드의 공개 열쇠·PC 번호에 맞지 않습니다: {e}") from None
+    if str(other.get("pc_id")).lower() == guid:
+        raise ValueError("--license-other 는 다른 PC 번호의 라이선스여야 합니다")
+    if test_key:
+        with open(test_key, encoding="ascii") as f:
+            secret = bytes.fromhex(f.read().strip())
+    else:
+        secret = update_sign.keygen()[0]
+    _fill_work(setup, work, guid, {"official": True, "company": body["company"], "cid": body["cid"]}, cloud_setup, over_cloud)
+    shutil.copy2(lic, os.path.join(work, "license.json"))
+    shutil.copy2(lic_other, os.path.join(work, "license_other.json"))
+    with open(os.path.join(work, "license_testkey.json"), "w", encoding="utf-8") as f:
+        json.dump(license_check.sign_body(secret, make_license.build_body(guid, {"company": body["company"], "cid": body["cid"]})),
+                  f, ensure_ascii=False, indent=1)
     return work
 
 
@@ -165,10 +216,16 @@ def main_standalone(args, offline=False):
         if path is not None and not os.path.isfile(path):
             print(f"{label} 의 일반 설치 파일이 없습니다: {path}")
             return 2
+    guid, lic, lic_other, test_key = (_take(args, f) for f in ("--guid", "--license", "--license-other", "--test-key"))
     if len(args) != 1 or not os.path.isfile(args[0]):
         print(__doc__)
         return 2
-    if not SA_SETUP_RE.search(os.path.basename(args[0])) or not os.path.isfile(test_key_path(args[0])):
+    official = bool(OFFICIAL_SETUP_RE.search(os.path.basename(args[0])))
+    if official and not (guid and lic and lic_other and os.path.isfile(lic) and os.path.isfile(lic_other)
+                         and (test_key is None or os.path.isfile(test_key))):
+        print(OFFICIAL_NEEDS)
+        return 2
+    if not official and (not SA_SETUP_RE.search(os.path.basename(args[0])) or not os.path.isfile(test_key_path(args[0]))):
         print(TEST_ONLY)
         return 2
     if not os.path.isfile(SANDBOX):
@@ -176,9 +233,13 @@ def main_standalone(args, offline=False):
         return 2
     work = tempfile.mkdtemp(prefix="rpa_sbx_sa_")
     try:
-        prepare_standalone(args[0], work, cloud_setup=cloud, over_cloud=over)
+        if official:
+            prepare_official(args[0], work, guid, lic, lic_other, test_key=test_key, cloud_setup=cloud, over_cloud=over)
+        else:
+            prepare_standalone(args[0], work, cloud_setup=cloud, over_cloud=over)
     except ValueError as e:
         print(e)
+        shutil.rmtree(work, ignore_errors=True)
         return 2
     with open(os.path.join(work, "test.wsb"), "w", encoding="utf-8") as f:
         f.write(WSB.format(work=work, extra=OFFLINE if offline else ""))
