@@ -68,14 +68,34 @@ def derive_keys(token, rand_hex):
 # 등록 글 한 줄 (APE1.<base64url JSON>)
 # ----------------------------------------------------------------------------------------------------
 
+PEM_HEAD = "-----BEGIN CERTIFICATE-----"
+CA_MAX = 16 * 1024               # 등록 글의 인증 기관 글 상한 (우리 것은 1KB 안팎)
+
+
+def _check_ca(info):
+    """선택 칸 ca (사내 서버 ② Task 4 - 에이전트가 믿을 우리 인증 기관 PEM 글). url 이 https 면 꼭 있어야 한다.
+    있으면 인증서 PEM 글이어야 한다. 틀리면 ValueError."""
+    https = isinstance(info.get("url"), str) and info["url"].lower().startswith("https://")
+    if "ca" not in info:
+        if https:
+            raise ValueError("등록 글에 서버 인증 기관이 없습니다.")
+        return
+    ca = info["ca"]
+    if not (isinstance(ca, str) and PEM_HEAD in ca and len(ca) <= CA_MAX):
+        raise ValueError("등록 글의 서버 인증 기관 형식이 올바르지 않습니다.")
+
+
 def encode_enrollment(info):
-    """등록 정보 → 붙여 넣을 수 있는 한 줄 = PREFIX + base64url(JSON, 채움 없음)."""
+    """등록 정보 → 붙여 넣을 수 있는 한 줄 = PREFIX + base64url(JSON, 채움 없음).
+    url 이 https 면 ca(인증 기관 PEM 글)가 꼭 있어야 한다 (ValueError)."""
+    _check_ca(info)
     raw = json.dumps(info, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return PREFIX + base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
 def decode_enrollment(text):
-    """한 줄 → 등록 정보 dict (앞뒤 빈칸 무시). 꼴이 틀리거나 v(=1)·url·pc·token·exp 가 하나라도 없으면 ValueError."""
+    """한 줄 → 등록 정보 dict (앞뒤 빈칸 무시). 꼴이 틀리거나 v(=1)·url·pc·token·exp 가 하나라도 없으면 ValueError.
+    선택 칸 ca: url 이 https 면 꼭 있어야 하고, 있으면 인증서 PEM 글 (_check_ca)."""
     if not isinstance(text, str):
         raise ValueError("등록 글이 아닙니다.")
     text = text.strip()
@@ -96,6 +116,7 @@ def decode_enrollment(text):
         raise ValueError("등록 글의 형식이 올바르지 않습니다.")
     if not isinstance(info["exp"], (int, float)) or isinstance(info["exp"], bool):
         raise ValueError("등록 글의 형식이 올바르지 않습니다.")
+    _check_ca(info)
     return info
 
 

@@ -3,6 +3,7 @@
 번호 pc_01 꼴·한 번만 쓰는 10분 등록 토큰·PC 난수로 열쇠 만들기·자리 수·등록 글 한 줄. 포트는 열지 않는다. 시계는 가짜.
     D:/AX/RPA/.venv/Scripts/python.exe tests/test_pc_registry.py
 """
+import base64
 import json
 import os
 import shutil
@@ -313,6 +314,30 @@ def test_enrollment_text_roundtrip():
     check("JSON 이 아니면 ValueError", raises_value(lambda: pc_registry.decode_enrollment("APE1.YWJj")))  # "abc"
 
 
+def _raw_text(info):
+    """encode_enrollment 의 검사를 거치지 않은 등록 글 (decode 쪽 검사를 따로 본다)."""
+    raw = json.dumps(info, separators=(",", ":")).encode("utf-8")
+    return "APE1." + base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def test_enrollment_ca_field():
+    print("등록 글의 인증 기관 칸 ca (사내 서버 ② Task 4)")
+    pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    info = {"v": 1, "url": "https://192.168.1.230:8444", "pc": "pc_01", "token": "t" * 43, "exp": 1, "ca": pem}
+    t = pc_registry.encode_enrollment(info)
+    check("https + ca 는 다시 풀면 같다", pc_registry.decode_enrollment(t) == info)
+    no_ca = {k: v for k, v in info.items() if k != "ca"}
+    check("https 인데 ca 가 없으면 만들 때 ValueError", raises_value(lambda: pc_registry.encode_enrollment(no_ca)))
+    check("https 인데 ca 가 없으면 풀 때 ValueError", raises_value(lambda: pc_registry.decode_enrollment(_raw_text(no_ca))))
+    check("HTTPS 대문자도 https 로 본다", raises_value(lambda: pc_registry.decode_enrollment(_raw_text(dict(no_ca, url="HTTPS://10.0.0.5:8444")))))
+    for bad in ("", 5, None, "인증서 아님"):
+        check(f"ca 가 인증서 글이 아니면 ValueError ({bad!r})",
+              raises_value(lambda: pc_registry.decode_enrollment(_raw_text(dict(info, ca=bad)))))
+    http = {"v": 1, "url": "http://127.0.0.1:8781", "pc": "pc_01", "token": "t" * 43, "exp": 1}
+    check("http 는 ca 없이 된다 (① 그대로)", pc_registry.decode_enrollment(pc_registry.encode_enrollment(http)) == http)
+    check("http 에 ca 가 있어도 된다", pc_registry.decode_enrollment(pc_registry.encode_enrollment(dict(http, ca=pem)))["ca"] == pem)
+
+
 def test_reload_keeps_pcs():
     print("다시 읽기")
     reg = pc_registry.Registry(p("h.json"), seats=5, clock=clock)
@@ -348,6 +373,7 @@ try:
     test_disable_remove_keys()
     test_removed_keys_purged_after_3_days()
     test_enrollment_text_roundtrip()
+    test_enrollment_ca_field()
     test_reload_keeps_pcs()
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

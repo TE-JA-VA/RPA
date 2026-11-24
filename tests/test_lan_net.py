@@ -119,7 +119,8 @@ def get_status(port, path="/db/apps/rpa/live/c1/pc_01.json", timeout=5):
     """TLS 로 요청 하나 → 상태 번호 (서명 없는 요청이라 401 이 정상 답)."""
     c = http.client.HTTPSConnection("127.0.0.1", port, context=ctx(), timeout=timeout)
     try:
-        c.request("GET", path)
+        # Host 는 설정 목록(CFG.agent_hosts - 포트 8444)으로 본다 (Task 4) - 포트 0 으로 띄운 서버라 설정의 포트를 싣는다
+        c.request("GET", path, headers={"Host": f"127.0.0.1:{CFG.agent_port}"})
         r = c.getresponse()
         r.read()
         return r.status

@@ -645,6 +645,16 @@ def local_host(headers, port):
     return host[0] in LOCAL_HOSTS and (len(host) == 1 or host[1] == str(port))
 
 
+def host_ok(headers, server):
+    """Host 머리글이 이 서버를 가리키는가. 사내망 포트(server.cfg 가 있음)는 그 포트 쪽 목록 - 웹은 cfg.web_hosts(),
+    에이전트는 cfg.agent_hosts() - 에 있어야 한다 (소문자로 견준다, 사내 서버 ② Task 4). cfg 가 없으면 local_host 그대로."""
+    cfg = getattr(server, "cfg", None)
+    if cfg is None:
+        return local_host(headers, server.server_port)
+    hosts = cfg.agent_hosts() if server.side == "agent" else cfg.web_hosts()
+    return (headers.get("Host") or "").strip().lower() in hosts
+
+
 def _agent_path(path):
     """에이전트 창구의 주소인가 (/db·/fs·/fs-sum) - 여기는 늘 요청 서명을 본다 (웹 창구로 넘기지 않는다)."""
     return path in ("/db", "/fs", "/fs-sum") or path.startswith(("/db/", "/fs/"))
@@ -658,6 +668,11 @@ class LocalServer(http.server.ThreadingHTTPServer):
     request_queue_size = 64
     deploy = SINGLE                  # make_server 가 정한다 (registry 가 있으면 LAN)
     registry = None
+    side = "both"                    # 길 나누기 - 이 서버는 에이전트·웹 창구를 같이 연다 (사내망 lan_server.LanServer 는 "web"·"agent")
+    cfg = None                       # 사내망 설정 lan_config.LanConfig - 이 서버(127.0.0.1)에는 없다
+
+    def note_bad(self, ip):
+        """서명 틀림 한 번 - 이 서버(127.0.0.1)는 세지 않는다. 사내망 포트(lan_server.LanServer)가 주소 거절로 잇는다."""
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -744,7 +759,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # --- 응답 ---
     def _reply(self, status, value=None, empty=False):
         body = b"" if empty else json.dumps(value, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
+        if self._auth:
+            self.send_response(status)               # 서명된 답에는 Date - local_store.Client._seen 이 서버 시각을 읽는다
+        else:
+            # 서명 없는 답(401·403·404 등)에는 서버 시각을 싣지 않는다 - 열쇠 없는 쪽에 시각을 알려 주지 않게 (검토 2026-11-24 M-4)
+            self.send_response_only(status)
+            self.send_header("Server", self.version_string())
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -776,13 +796,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return (b"".join(chunks) if length <= MAX_BODY else None), h.hexdigest()
 
     # --- 검사 ---
+    def client_ip(self):
+        """보낸 쪽 주소를 읽는 한 곳 (사내 서버 ② Task 4). 사내망 포트(서버에 cfg)면 소켓 주소는 srv.peer_ip 로 읽고,
+        웹 쪽만 믿을 프록시의 X-Forwarded-For 를 본다 (lan_server.client_ip - 프록시가 아닌 곳에서 온 머리글은 버린다).
+        에이전트 쪽은 늘 소켓 주소 (프록시 뒤에 서지 않는다, 설계 6.3). cfg 가 없으면 소켓 주소."""
+        srv = self.server
+        cfg = getattr(srv, "cfg", None)
+        if cfg is None:
+            return str(self.client_address[0])
+        peer = srv.peer_ip(self.client_address)
+        if srv.side != "web":
+            return peer
+        import lan_server            # 지연 import - lan_server 가 이 파일을 불러온다 (단독은 여기 오지 않는다)
+        xff = ", ".join(self.headers.get_all("X-Forwarded-For") or []) or None     # 여러 줄이면 차례대로 이어 읽는다
+        return lan_server.client_ip(peer, xff, cfg)
+
     def _role(self, method, digest):
         """Host 와 요청 서명을 보고 (역할 'agent'·'relay', 서명으로 확인한 PC 번호). 아니면 응답을 보내고 _Stop.
         단독(SINGLE): 지금 검사 그대로 (ap1), PC 번호는 라이선스의 것. PC 번호 머리글(X-AP-PC)이 있으면 401.
         사내 서버(LAN): _role_lan."""
         srv = self.server
-        if not local_host(self.headers, srv.server_port):
-            self._reply(403, DENIED)                 # 다른 이름으로 이 PC 를 가리킨 요청 (DNS 바꿔치기)
+        if not host_ok(self.headers, srv):
+            self._reply(403, DENIED)                 # 다른 이름으로 이 서버를 가리킨 요청 (DNS 바꿔치기) - 서명 확인 전에
             raise _Stop()
         if srv.registry is not None:
             return self._role_lan(method, digest)
@@ -819,6 +854,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             want = local_store.request_mac2(key, pc, role, method, self.path, ts, nonce, b"", digest=digest)
             ok = sign.isascii() and hmac.compare_digest(sign, want)     # ASCII 가 아니면 틀린 서명 (검토 2026-11-24 M-5)
         if not ok:
+            srv.note_bad(self.client_ip())          # 사내망 포트: 60초에 20번이면 그 주소를 300초 거절 (lan_server) - 답보다 먼저 센다
             self._reply(401, {"error": "Unauthorized"})
             raise _Stop()
         now = time.time()
@@ -845,7 +881,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         srv = self.server
         if srv.registry is None:
             return self._reply(404, {"error": "Not found"})
-        if not local_host(self.headers, srv.server_port):
+        if not host_ok(self.headers, srv):
             return self._reply(403, DENIED)
         body = self._json_body(raw)
         if not (isinstance(body, dict) and body.get("v") == 1 and not isinstance(body.get("v"), bool)
@@ -855,6 +891,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             agent_key, _ = srv.registry.enroll(pc, body["rand"], body["guid"], body["host"], body["proof"])
         except pc_registry.EnrollError as e:
+            if e.code == "bad_proof":
+                srv.note_bad(self.client_ip())      # 틀린 증명은 틀린 서명과 같이 센다 (사내망 포트의 주소 거절로 이어진다)
             if pc_registry.PC_RE.fullmatch(pc):
                 srv.enroll_reject_log(f"PC 등록 거절  번호={pc}  까닭={e.code}")
             return self._reply(403, {"error": e.code})
@@ -889,11 +927,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             query = dict(urllib.parse.parse_qsl(url.query))
             raw, digest = self._read()
             web = getattr(self.server, "web", None)
-            if web is not None and not _agent_path(url.path) and (url.path.startswith("/api/") or method == "GET"):
+            side = self.server.side          # "both"(이 PC 의 127.0.0.1 서버) · "web"(사내망 8443) · "agent"(사내망 8444)
+            if side == "agent" and not (_agent_path(url.path) or url.path == "/enroll"):
+                return self._reply(404, {"error": "Not found"})     # 에이전트 포트에 /api·웹 파일 - 웹 창구를 부르지 않는다
+            if side != "agent" and web is not None and not _agent_path(url.path) and (url.path.startswith("/api/") or method == "GET"):
                 # 브라우저 창구 (/api/*·웹 파일) - 세션 토큰으로 확인하고 응답에 서명을 붙이지 않는다 (_auth 는 None 그대로).
-                # Host 검사는 local_web 이 같은 local_host 로 한다. 처리하지 않은 것(False)만 아래 서명 확인으로 간다
+                # Host 검사는 local_web 이 한다. 처리하지 않은 것(False)만 아래 서명 확인으로 간다
                 if web.handle(self, method, url.path, query, raw):
                     return
+            if side == "web":
+                return self._reply(404, {"error": "Not found"})     # 웹 포트에 /db·/fs·/fs-sum·/enroll 과 그 밖 - 서명 확인으로 가지 않는다
             if url.path == "/enroll" and method == "POST":     # 사내 서버 PC 등록 - 서명 확인 앞에서 (아직 열쇠가 없다). 단독은 404
                 return self._enroll(raw)
             role, pc = self._role(method, digest)
@@ -1103,6 +1146,20 @@ def _range(children, order_by, end_at, limit):
     return {k: v for _, k, v in rows} or None
 
 
+def _prepare(srv, store, runs, lic, keys, registry, folder=None, web=None, phone=None):
+    """만든(묶기 전) 서버에 저장소·라이선스·열쇠·배치·잠금·표를 단다 - make_server 와 사내망 lan_server.make_lan_servers 가
+    같이 쓴다 (사내 서버 ② Task 4). registry 가 있으면 사내 서버 배치(LAN, keys 는 쓰지 않는다), 없으면 단독(SINGLE)."""
+    srv.store, srv.runs, srv.lic = store, runs, lic
+    srv.keys = tuple(keys) if keys is not None else ()
+    srv.deploy, srv.registry = (LAN, registry) if registry is not None else (SINGLE, None)
+    srv.web = web
+    srv.phone = phone
+    srv.folder = folder or os.path.dirname(store.path or "") or "."
+    srv.stopping = threading.Event()
+    srv.conn_lock, srv.conns, srv.nonces, srv.streams = threading.Lock(), 0, {}, {}
+    srv.log_clock, srv.reject_win = time.monotonic, [float("-inf"), 0, 0]
+
+
 def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None, web=None, phone=None, registry=None):
     """로컬 서버를 만든다 (serve_forever 는 부르는 쪽이). 이 PC 주소에만 묶는다 - 포트가 쓰이는 중이면 OSError.
     web: 브라우저 창구 (local_web.Web). 없으면 에이전트 창구만 연다 (/api·웹 파일은 서명 없는 요청으로 거절된다).
@@ -1113,15 +1170,7 @@ def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None
     if host not in LOCAL_HOSTS:
         raise ValueError("로컬 서버는 이 PC(127.0.0.1)에만 엽니다.")
     srv = LocalServer(("127.0.0.1", port), Handler, bind_and_activate=False)
-    srv.store, srv.runs, srv.lic = store, runs, lic
-    srv.keys = tuple(keys) if keys is not None else ()
-    srv.deploy, srv.registry = (LAN, registry) if registry is not None else (SINGLE, None)
-    srv.web = web
-    srv.phone = phone
-    srv.folder = folder or os.path.dirname(store.path or "") or "."
-    srv.stopping = threading.Event()
-    srv.conn_lock, srv.conns, srv.nonces, srv.streams = threading.Lock(), 0, {}, {}
-    srv.log_clock, srv.reject_win = time.monotonic, [float("-inf"), 0, 0]
+    _prepare(srv, store, runs, lic, keys, registry, folder=folder, web=web, phone=phone)
     try:
         srv.server_bind()
         srv.server_activate()

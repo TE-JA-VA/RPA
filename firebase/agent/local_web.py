@@ -483,6 +483,8 @@ class Web:
         self.store, self.runs, self.lic, self.folder = store, runs, lic, folder
         self.registry = registry
         self.public_url = None                       # make_server 가 적는다 (등록 글에 싣는 서버 주소)
+        self.lan_ca_pem = None                       # 사내망: 우리 인증 기관 PEM 글 - 등록 글의 ca 로 싣는다 (lan_server.make_lan_servers 가 적는다)
+        self.cfg = None                              # 사내망 설정 lan_config.LanConfig (make_lan_servers 가 적는다, 단독은 None)
         self.web_dir = os.path.realpath(web_dir) if web_dir else None
         self.accounts = Accounts(os.path.join(folder, ACCOUNTS_NAME))
         self.sessions = Sessions(clock=clock)
@@ -1004,8 +1006,10 @@ class Web:
             raise _Fail(409, "seats-full", f"등록할 수 있는 PC 수({reg.seats}대)를 모두 썼습니다.") from None
         except ValueError as e:
             raise _Fail(400, "invalid-argument", str(e)) from None
-        text = pc_registry.encode_enrollment({"v": 1, "url": self.public_url, "pc": got["pc_id"], "token": got["token"],
-                                              "exp": got["expires_at"]})
+        info = {"v": 1, "url": self.public_url, "pc": got["pc_id"], "token": got["token"], "exp": got["expires_at"]}
+        if self.lan_ca_pem:
+            info["ca"] = self.lan_ca_pem             # 에이전트가 믿을 우리 인증 기관 (https 주소면 꼭 있어야 한다 - pc_registry)
+        text = pc_registry.encode_enrollment(info)
         self._log(f"PC 추가  번호={got['pc_id']}  이름={reg.label(got['pc_id']) or ''}  처리={me['id']}")
         return {"pcId": got["pc_id"], "enrollment": text, "expiresAt": got["expires_at"]}
 

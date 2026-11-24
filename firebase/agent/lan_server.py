@@ -12,7 +12,7 @@
 - 보낸 쪽 주소 client_ip: 믿을 프록시에서 온 연결만 X-Forwarded-For 를 오른쪽부터 읽는다 (설계 6.3 '그때만 믿기').
 기록에 열쇠·서명을 싣지 않는다. 이름 풀이(DNS)를 하지 않는다. 표준 라이브러리만.
 """
-import os
+import dataclasses
 import socket
 import ssl
 import threading
@@ -22,7 +22,9 @@ import lan_config
 import local_server
 
 PER_IP_CONN = 16          # 주소마다 동시 연결
-PER_IP_MIN = 600          # 주소마다 분당 연결 (받기 고리에서 센다 - 연결 하나에 요청 여럿은 Task 4 의 몫)
+# 주소마다 분당 요청. 받기 고리에서 연결을 센다 - 처리기(local_server.Handler)는 HTTP/1.0 이라 연결 하나에 요청 하나만
+# 받고 닫으므로 (keep-alive 없음) 분당 연결 수가 곧 분당 요청 수다. 처리기가 keep-alive 를 쓰게 되면 요청도 따로 세야 한다
+PER_IP_MIN = 600
 HANDSHAKE_SEC = 5         # TLS 악수
 BAD_LIMIT = 20            # 서명 틀림이 BAD_WINDOW 초 안에 이만큼이면
 BAD_WINDOW = 60
@@ -191,21 +193,10 @@ class LanServer(local_server.LocalServer):
             local_server.log(self.folder, f"주소 거절 시작  주소={ip}  까닭=서명 틀림 {BAD_LIMIT}번  {BAD_BLOCK}초")
 
 
-def _prepare(srv, store, runs, lic, registry, folder=None, web=None, phone=None):
-    """make_server 가 하던 준비 (사내 서버 배치 LAN). Task 4 가 local_server._prepare 로 빼내 같이 쓴다."""
-    srv.store, srv.runs, srv.lic = store, runs, lic
-    srv.keys = ()
-    srv.deploy, srv.registry = local_server.LAN, registry
-    srv.web, srv.phone = web, phone
-    srv.folder = folder or os.path.dirname(store.path or "") or "."
-    srv.stopping = threading.Event()
-    srv.conn_lock, srv.conns, srv.nonces, srv.streams = threading.Lock(), 0, {}, {}
-    srv.log_clock, srv.reject_win = time.monotonic, [float("-inf"), 0, 0]
-
-
 def _open(cfg, side, address, tls, store, runs, lic, registry, folder=None, web=None, phone=None):
-    """사내망 포트 하나를 만들어 묶는다 (serve_forever 는 부르는 쪽이). Task 4 의 make_lan_servers 가 부른다.
-    사설·루프백 주소에만 듣는다. 에이전트 쪽은 늘 TLS. 포트가 쓰이는 중이면 OSError."""
+    """사내망 포트 하나를 만들어 묶는다 (serve_forever 는 부르는 쪽이). make_lan_servers 가 부른다.
+    사설·루프백 주소에만 듣는다. 에이전트 쪽은 늘 TLS. 등록부가 꼭 있어야 한다 (사내 서버 배치 LAN). 포트가 쓰이는 중이면 OSError.
+    준비는 단독 make_server 와 같은 local_server._prepare 로."""
     if side not in SIDES:
         raise ValueError(f"side 는 web·agent 가운데 하나여야 합니다: {side!r}")
     if side == "agent" and tls is None:
@@ -213,8 +204,10 @@ def _open(cfg, side, address, tls, store, runs, lic, registry, folder=None, web=
     a = lan_config._ip(str(address[0]))
     if a is None or not lan_config._private_ip(a):
         raise ValueError(f"사내 서버는 사설·루프백 주소에만 듣습니다: {address[0]}")
+    if registry is None:
+        raise ValueError("사내망 포트는 PC 등록부가 있어야 엽니다.")
     srv = LanServer((str(a), address[1]), local_server.Handler, bind_and_activate=False)
-    _prepare(srv, store, runs, lic, registry, folder=folder, web=web, phone=phone)
+    local_server._prepare(srv, store, runs, lic, None, registry, folder=folder, web=web, phone=phone)
     srv.cfg, srv.tls, srv.side = cfg, tls, side
     try:
         srv.server_bind()
@@ -223,3 +216,29 @@ def _open(cfg, side, address, tls, store, runs, lic, registry, folder=None, web=
         srv.server_close()
         raise
     return srv
+
+
+def make_lan_servers(store, runs, lic, registry, web, cfg, cert, key, ca_pem, phone=None):
+    """사내망 두 포트 → (웹, 에이전트) LanServer (serve_forever 는 부르는 쪽이). 둘 다 같은 store·runs·registry 를 쓰고 길만 나눈다.
+    웹: cfg.web_listen:cfg.web_port, web_plain 이면 평문 (같은 장비의 프록시가 TLS 를 끝낸 모양 - 127.0.0.1 에서만), 아니면 TLS.
+    에이전트: cfg.listen:cfg.agent_port, 늘 TLS (우리 인증 기관의 서버 인증서 - 에이전트는 그 인증 기관만 믿는다).
+    웹 창구(web, local_web.Web)에 등록 글의 서버 주소 public_url(이름이 아니라 IP - 사내 PC 가 이름을 못 풀어도 붙고, 서버 인증서
+    SAN 에 늘 있다)·인증 기관 글 lan_ca_pem·설정 cfg 를 적는다. 포트 0(시험)이면 묶인 포트로 cfg 를 고쳐 두 서버·웹 창구가 같이 쓴다.
+    한쪽을 못 열면 다른 쪽도 닫고 OSError·ValueError 를 그대로 낸다."""
+    tls = tls_context(cert, key)
+    w = _open(cfg, "web", (cfg.web_listen, cfg.web_port), None if cfg.web_plain else tls, store, runs, lic, registry,
+              web=web, phone=phone)
+    try:
+        a = _open(cfg, "agent", (cfg.listen, cfg.agent_port), tls, store, runs, lic, registry, web=web, phone=phone)
+    except BaseException:
+        w.server_close()
+        raise
+    ports = (w.server_address[1], a.server_address[1])
+    if ports != (cfg.web_port, cfg.agent_port):
+        cfg = dataclasses.replace(cfg, web_port=ports[0], agent_port=ports[1])
+        w.cfg = a.cfg = cfg
+    if web is not None:
+        web.public_url = f"https://{lan_config._host(cfg.listen, cfg.agent_port)}"
+        web.lan_ca_pem = ca_pem
+        web.cfg = cfg
+    return w, a
