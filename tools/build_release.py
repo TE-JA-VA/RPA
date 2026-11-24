@@ -87,6 +87,7 @@ PROGRAM_FILES = [
     ("firebase/agent/local_web.py", "firebase/agent/local_web.py"),           # 로컬 서버의 웹 창구 - local_server.main 이 불러온다 (웹 파일 firebase/web 은 뒤 계획이 싣는다)
     ("firebase/agent/local_phone.py", "firebase/agent/local_phone.py"),       # 로컬 서버의 휴대폰 창구 (사내망 HTTPS 8782 - 쓸 때만 연다, 계획 ④)
     ("firebase/agent/local_cert.py", "firebase/agent/local_cert.py"),         # 휴대폰 포트의 자체 서명 인증서 - 내장 OpenSSL(libcrypto-3.dll)을 ctypes 로, 자식 프로세스에서
+    ("firebase/agent/pc_registry.py", "firebase/agent/pc_registry.py"),       # 사내 서버의 PC 등록부 - local_server·local_web 이 불러온다 (단독에서는 쓰지 않아도 실어야 켜진다, 사내 서버 ①)
     ("edition.py", "edition.py"),                                             # 버전 종류 (일반·스탠드얼론) - agent·secret·background 가 본다
     ("license_check.py", "license_check.py"),                                 # 스탠드얼론 라이선스 확인
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),
