@@ -5,14 +5,20 @@
 - 받기 고리에서 (TLS 악수 전에) 보낸 쪽 소켓 주소로 거른다: ① 허용 대역 (웹 쪽에 proxy_only 면 믿을 프록시만)
   ② 서버 전체 동시 연결 deploy.max_conn ③ 주소마다 동시 연결 PER_IP_CONN ④ 주소마다 분당 연결 PER_IP_MIN
   ⑤ 서명 틀림으로 거절 중인 주소 (blocked). 하나라도 걸리면 응답 없이 닫는다 - 사내망 밖 주소는 서버 인증서도 받지 못한다.
+  프록시 뒤의 보낸 사람 주소(X-Forwarded-For)는 여기서 볼 수 없다 - 허용 대역은 웹 처리기(local_web.Web._lan_gate)가 다시 본다.
 - 듣는 소켓은 TLS 로 감싸지 않는다. 악수는 연결마다 일하는 스레드에서 HANDSHAKE_SEC 안에 (local_phone.PhoneServer 와 같은 방식) -
   악수를 끄는 연결 하나가 받기 고리를 세우지 못하고, 한 바이트씩 보내 시간 제한을 늘리는 연결도 타이머가 끊는다.
 - 연결 수는 받을 때 한 번 세고 끝날 때 한 번 돌려준다 (_release) - 악수 실패·처리 중 예외·스레드를 못 띄운 경우 모두.
   LocalServer.process_request·process_request_thread 의 세기는 거치지 않는다 (두 번 세지 않게 여기서 함께 센다).
 - 보낸 쪽 주소 client_ip: 믿을 프록시에서 온 연결만 X-Forwarded-For 를 오른쪽부터 읽는다 (설계 6.3 '그때만 믿기').
+- 웹 쪽의 믿을 프록시 연결은 ③·④(주소마다 동시·분당)를 받기 고리에서 세지 않는다 - 회사 전체가 프록시 주소 하나로 묶이지 않게.
+  대신 처리기가 요청을 다 읽은 뒤 client_hold 로 보낸 사람(client_ip)마다 같은 숫자를 세고, 넘으면 429 (② 전체 검토 2).
+- 악수 끝부터 요청 머리글·본문을 다 읽을 때까지 REQUEST_DEADLINE 초 (악수 타이머처럼 감싼 소켓을 끊는다). 처리기가 다 읽으면
+  request_read 로 타이머를 거둔다 - 스트림처럼 답을 오래 보내는 연결은 끊지 않는다 (② 전체 검토 4).
 기록에 열쇠·서명을 싣지 않는다. 이름 풀이(DNS)를 하지 않는다. 표준 라이브러리만.
 """
 import dataclasses
+import re
 import socket
 import ssl
 import threading
@@ -26,6 +32,8 @@ PER_IP_CONN = 16          # 주소마다 동시 연결
 # 받고 닫으므로 (keep-alive 없음) 분당 연결 수가 곧 분당 요청 수다. 처리기가 keep-alive 를 쓰게 되면 요청도 따로 세야 한다
 PER_IP_MIN = 600
 HANDSHAKE_SEC = 5         # TLS 악수
+REQUEST_DEADLINE = 10     # 악수 끝부터 요청 머리글·본문을 다 읽을 때까지 (한 바이트씩 보내 연결을 붙잡는 것을 끊는다)
+_PORT_RE = re.compile(r":\d{1,5}")
 BAD_LIMIT = 20            # 서명 틀림이 BAD_WINDOW 초 안에 이만큼이면
 BAD_WINDOW = 60
 BAD_BLOCK = 300           # 그 주소를 이만큼 거절
@@ -43,21 +51,46 @@ def tls_context(cert, key):
     return ctx
 
 
-def client_ip(peer, xff, cfg):
-    """보낸 쪽 주소. peer(소켓 주소)가 믿을 프록시가 아니거나 X-Forwarded-For 가 없으면 peer.
-    믿을 프록시면 머리글을 쉼표로 나눠 오른쪽부터 읽어 믿을 프록시가 아닌 첫 주소 (모두 프록시면 가장 왼쪽).
-    읽다가 IP 글자가 아닌 것(빈 칸·이름·포트 붙은 것)을 만나면 peer - 지어 보낸 머리글을 믿지 않는다."""
+def _xff_ip(item):
+    """X-Forwarded-For 의 한 칸 → 주소 객체, IP 가 아니면 None. 'IPv4:포트' 와 '[IPv6]:포트' 는 포트를 뗀다
+    (프록시에 따라 포트를 붙여 넘긴다, ② 전체 검토 5). 괄호 없는 IPv6 는 그대로 읽고, 그 밖의 꼴은 버린다."""
+    item = item.strip()
+    if item.startswith("["):
+        end = item.find("]")
+        if end < 0 or not _PORT_RE.fullmatch(item[end + 1:]):
+            return None
+        a = lan_config._ip(item[1:end])
+        return a if a is not None and a.version == 6 else None
+    if item.count(":") == 1:
+        host, port = item.split(":")
+        if not _PORT_RE.fullmatch(":" + port):
+            return None
+        a = lan_config._ip(host)
+        return a if a is not None and a.version == 4 else None
+    return lan_config._ip(item)
+
+
+def forwarded_ip(peer, xff, cfg):
+    """믿을 프록시(peer)가 X-Forwarded-For 로 넘긴 보낸 쪽 주소. peer 가 믿을 프록시가 아니거나, 머리글이 없거나,
+    읽을 수 없으면(IP 가 아닌 칸을 만남) None. 머리글을 쉼표로 나눠 오른쪽부터 읽어 믿을 프록시가 아닌 첫 주소
+    (모두 프록시면 가장 왼쪽)."""
     if not xff or not cfg.is_proxy(peer):
-        return peer
+        return None
     last = None
     for item in reversed(xff.split(",")):
-        a = lan_config._ip(item.strip())
+        a = _xff_ip(item)
         if a is None:
-            return peer
+            return None
         last = str(a)
         if not cfg.is_proxy(last):
             return last
-    return last or peer
+    return last
+
+
+def client_ip(peer, xff, cfg):
+    """보낸 쪽 주소. peer(소켓 주소)가 믿을 프록시가 아니거나 X-Forwarded-For 가 없으면 peer.
+    믿을 프록시면 forwarded_ip - 읽다가 IP 글자가 아닌 것(빈 칸·이름)을 만나면 peer, 지어 보낸 머리글을 믿지 않는다."""
+    return forwarded_ip(peer, xff, cfg) or peer
 
 
 class LanServer(local_server.LocalServer):
@@ -70,6 +103,8 @@ class LanServer(local_server.LocalServer):
         self.cfg, self.tls, self.side = None, None, "agent"
         self.conn_lock, self.conns, self.nonces, self.streams = threading.Lock(), 0, {}, {}
         self.per_ip, self.minute, self.bad = {}, {}, {}
+        self.clients, self.client_minute = {}, {}       # 믿을 프록시 뒤의 보낸 사람(client_ip)마다 동시·분당 (client_hold)
+        self.reading = {}                               # 요청을 읽는 중인 연결 → 마감 타이머 (REQUEST_DEADLINE)
         self.stopping = threading.Event()
         self.clock = time.monotonic                     # 분당 연결·서명 틀림 거절의 시계 (시험이 바꿔 끼운다)
         super().__init__(server_address, RequestHandlerClass, bind_and_activate)
@@ -94,49 +129,61 @@ class LanServer(local_server.LocalServer):
             return False
         return not (self.side == "web" and cfg.proxy_only and not cfg.is_proxy(ip))
 
+    def _proxied(self, ip):
+        """웹 쪽의 믿을 프록시 연결인가 - 주소마다 동시·분당은 받기 고리가 아니라 처리기(client_hold)가 보낸 사람마다 센다.
+        에이전트 쪽은 X-Forwarded-For 를 읽지 않으므로 (TCP 넘기기) 늘 받기 고리에서 센다."""
+        return self.side == "web" and self.cfg is not None and self.cfg.is_proxy(ip)
+
     def process_request(self, request, client_address):
-        """받기 고리에서 부른다 - 걸리면 응답 없이 닫고, 통과하면 연결 수를 한 번 세고 일하는 스레드로."""
+        """받기 고리에서 부른다 - 걸리면 응답 없이 닫고, 통과하면 연결 수를 한 번 세고 일하는 스레드로.
+        웹 쪽 믿을 프록시 연결은 전체 상한·서명 틀림 거절만 보고 주소마다 동시·분당은 세지 않는다 (client_hold 가 센다)."""
         ip = self.peer_ip(client_address)
         ok = self._admit(ip)
+        key = None if self._proxied(ip) else ip     # per_ip 표의 열쇠 - 프록시 연결은 표에 넣지 않는다
         if ok:
             now = self.clock()
             with self.conn_lock:
-                minute = self.minute.get(ip)
-                if minute is None or now - minute[0] >= 60:
-                    minute = self.minute[ip] = [now, 0]
-                minute[1] += 1
-                self._trim(self.minute, lambda v: now - v[0] < 60)
                 e = self.bad.get(ip)
-                ok = (self.conns < self.deploy.max_conn and self.per_ip.get(ip, 0) < PER_IP_CONN
-                      and minute[1] <= PER_IP_MIN and not (e and e[2] > now))
+                ok = self.conns < self.deploy.max_conn and not (e and e[2] > now)
+                if key is not None:
+                    minute = self.minute.get(ip)
+                    if minute is None or now - minute[0] >= 60:
+                        minute = self.minute[ip] = [now, 0]
+                    minute[1] += 1
+                    self._trim(self.minute, lambda v: now - v[0] < 60)
+                    ok = ok and self.per_ip.get(ip, 0) < PER_IP_CONN and minute[1] <= PER_IP_MIN
                 if ok:
                     self.conns += 1
-                    self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+                    if key is not None:
+                        self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
         if not ok:
             self.shutdown_request(request)
             return
         try:
-            self._start(request, client_address, ip)
+            self._start(request, client_address, key)
         except Exception:
-            self._release(ip)
+            self._release(key)
             self.shutdown_request(request)
 
-    def _start(self, request, client_address, ip):
-        threading.Thread(target=self.process_request_thread, args=(request, client_address, ip), daemon=True).start()
+    def _start(self, request, client_address, key):
+        threading.Thread(target=self.process_request_thread, args=(request, client_address, key), daemon=True).start()
 
-    def _release(self, ip):
+    def _release(self, key):
+        """센 연결 하나를 돌려준다. key 는 per_ip 표의 열쇠 (프록시 연결은 None - 전체 수만)."""
         with self.conn_lock:
             self.conns -= 1
-            n = self.per_ip.get(ip, 1) - 1
+            if key is None:
+                return
+            n = self.per_ip.get(key, 1) - 1
             if n > 0:
-                self.per_ip[ip] = n
+                self.per_ip[key] = n
             else:
-                self.per_ip.pop(ip, None)
+                self.per_ip.pop(key, None)
 
-    def process_request_thread(self, request, client_address, ip=None):
-        """일하는 스레드: TLS 악수(HANDSHAKE_SEC) → 처리기. 끝나면 연결 수를 돌려주고 소켓을 닫는다."""
-        ip = ip if ip is not None else self.peer_ip(client_address)
-        conn = None
+    def process_request_thread(self, request, client_address, key=None):
+        """일하는 스레드: TLS 악수(HANDSHAKE_SEC) → 요청 마감(REQUEST_DEADLINE) 타이머를 걸고 처리기. 끝나면 연결 수를 돌려주고
+        소켓을 닫는다. key 는 process_request 가 정한 per_ip 열쇠 (프록시 연결은 None)."""
+        conn, deadline = None, None
         try:
             if self.tls is not None:
                 conn = self.tls.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
@@ -150,16 +197,62 @@ class LanServer(local_server.LocalServer):
                     timer.cancel()
             else:
                 conn = request
+            # 악수 끝부터 요청을 다 읽을 때까지 - 한 바이트씩 보내 recv 마다의 시간 제한(Handler.timeout)을 늘리는 연결을 끊는다.
+            # 처리기가 다 읽으면 request_read 가 거둔다 (스트림은 그 뒤 오래 열려 있어도 된다)
+            deadline = threading.Timer(REQUEST_DEADLINE, self._kill, args=(conn,))
+            deadline.daemon = True
+            with self.conn_lock:
+                self.reading[id(conn)] = deadline
+            deadline.start()
             self.finish_request(conn, client_address)
         except Exception:
             pass                     # 악수 실패(TLS 없이 온 HTTP·시간 넘김)·끊김 - 응답 없이 닫는다. 처리기 안의 오류는 처리기가 기록한다
         finally:
-            self._release(ip)
+            if deadline is not None:
+                deadline.cancel()
+                with self.conn_lock:
+                    self.reading.pop(id(conn), None)
+            self._release(key)
             self.shutdown_request(conn if conn is not None else request)   # 안에서 OSError 를 삼킨다
             try:
                 request.close()      # 감쌌으면 이미 떼어진 소켓 - 아무 일도 하지 않는다
             except OSError:
                 pass
+
+    def request_read(self, conn):
+        """처리기가 요청 머리글·본문을 다 읽었다 - 그 연결의 마감 타이머를 거둔다 (local_server.Handler._route 가 부른다)."""
+        with self.conn_lock:
+            timer = self.reading.pop(id(conn), None)
+        if timer is not None:
+            timer.cancel()
+
+    def client_hold(self, handler):
+        """요청 하나를 보낸 사람마다 센다 (처리기가 요청을 다 읽은 뒤 부른다) → (받는가, client_free 에 넘길 열쇠 또는 None).
+        웹 쪽 믿을 프록시 연결만 센다 - 보낸 사람(handler.client_ip(), X-Forwarded-For)마다 동시 PER_IP_CONN·분당 PER_IP_MIN.
+        그 밖의 연결은 받기 고리가 이미 셌다 → (True, None). 넘으면 (False, None) - 셈을 더하지 않는다 (분당 셈은 더한다)."""
+        if not self._proxied(self.peer_ip(handler.client_address)):
+            return True, None
+        ip = handler.client_ip()
+        now = self.clock()
+        with self.conn_lock:
+            minute = self.client_minute.get(ip)
+            if minute is None or now - minute[0] >= 60:
+                minute = self.client_minute[ip] = [now, 0]
+            minute[1] += 1
+            self._trim(self.client_minute, lambda v: now - v[0] < 60)
+            if self.clients.get(ip, 0) >= PER_IP_CONN or minute[1] > PER_IP_MIN:
+                return False, None
+            self.clients[ip] = self.clients.get(ip, 0) + 1
+        return True, ip
+
+    def client_free(self, ip):
+        """client_hold 로 센 요청 하나를 돌려준다 (처리가 끝날 때 - 예외·스트림 끝 포함)."""
+        with self.conn_lock:
+            n = self.clients.get(ip, 1) - 1
+            if n > 0:
+                self.clients[ip] = n
+            else:
+                self.clients.pop(ip, None)
 
     @staticmethod
     def _kill(sock):

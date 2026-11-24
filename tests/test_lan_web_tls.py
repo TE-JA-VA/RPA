@@ -283,30 +283,31 @@ def test_addr_lock():
 
 
 def test_id_lock_grows():
-    print("같은 아이디 잠금이 늘어난다 60 → 300 → 900, 성공하면 60 부터 (test_id_lock_grows)")
+    # ② 전체 검토 3 (2026-11-24): 아이디 잠금은 (아이디, 보낸 주소) 쌍에 건다 - 같은 주소에서 잇따라 잠길 때 늘어난다.
+    # 한 주소가 10분에 10번 틀리면 주소 잠금(600초)이 먼저 걸리므로, 잠금 사이에 10분 창이 지나게 시계를 넘긴다
+    print("같은 (아이디, 주소) 잠금이 늘어난다 60 → 300 → 900, 성공하면 60 부터 (test_id_lock_grows)")
     e = start()
     check("사내 서버 Web 의 steps (60, 300, 900)", e.ui.lockout.steps == (60, 300, 900), e.ui.lockout.steps)
-    ips = iter(f"10.1.0.{i}" for i in range(1, 50))
+    a = "10.1.0.1"
 
     def five_wrong():
-        ip = next(ips)
         for _ in range(5):
-            login(e, ip, "boss", "wrong-pw-000")
-        return ip
+            login(e, a, "boss", "wrong-pw-000")
 
     for want, minutes in ((60, 1), (300, 5), (900, 15)):
         five_wrong()
-        g = login(e, next(ips))
+        g = login(e, a)
         check(f"{want}초 잠금: 맞는 비밀번호도 429, 안내 글 '{minutes}분 뒤'",
               g.status == 429 and g.code == "auth/too-many-requests" and f"{minutes}분 뒤" in (g.message or ""), g)
-        check(f"  남은 시간 {want}초", round(e.ui.lockout.remaining("boss")) == want, e.ui.lockout.remaining("boss"))
+        check(f"  남은 시간 {want}초", round(e.ui.lockout.remaining(("boss", a))) == want, e.ui.lockout.remaining(("boss", a)))
         e.clock.go(want - 2)
-        check(f"  {want - 2}초 뒤에도 잠김", login(e, next(ips)).status == 429)
+        check(f"  {want - 2}초 뒤에도 잠김", login(e, a).status == 429)
         e.clock.go(3)
-    g = login(e, next(ips))
+        e.clock.go(max(0, local_web.ADDR_WINDOW - want))     # 주소 잠금의 10분 창이 지나게 (다음 다섯 번이 주소 잠금에 닿지 않게)
+    g = login(e, a)
     check("900초가 지나면 맞는 비밀번호로 로그인", g.status == 200, g)
     five_wrong()
-    check("성공한 뒤 다시 잠기면 60초부터", round(e.ui.lockout.remaining("boss")) == 60, e.ui.lockout.remaining("boss"))
+    check("성공한 뒤 다시 잠기면 60초부터", round(e.ui.lockout.remaining(("boss", a))) == 60, e.ui.lockout.remaining(("boss", a)))
     check("기록의 잠금 줄에 실제 초 (900초 잠금)", "900초 잠금" in log_text(e), log_text(e)[-800:])
 
 
@@ -466,12 +467,14 @@ def test_plain_proxy_mode():
     check("X-Forwarded-Proto 없음 → 403 '프록시를 거쳐…'", g.status == 403 and g.message == PROXY_MSG, g)
     g = req(e, "127.0.0.1", "GET", "/index.html", headers={"X-Forwarded-Proto": "http"})
     check("X-Forwarded-Proto http → 403", g.status == 403 and g.message == PROXY_MSG, g)
-    g = req(e, "127.0.0.1", "GET", "/index.html", headers={"X-Forwarded-Proto": "https"})
-    check("X-Forwarded-Proto https → 200", g.status == 200 and b"<title>" in g.raw, g)
+    # ② 전체 검토 5 (2026-11-24): 평문 모양은 프록시가 X-Forwarded-For 도 넘겨야 받는다 (없으면 403 - test_lan_review2)
+    fwd = {"X-Forwarded-Proto": "https", "X-Forwarded-For": "10.0.0.30"}
+    g = req(e, "127.0.0.1", "GET", "/index.html", headers=fwd)
+    check("X-Forwarded-Proto https (+ X-Forwarded-For) → 200", g.status == 200 and b"<title>" in g.raw, g)
     check("  HSTS 머리글이 있다", g.headers.get("Strict-Transport-Security") == "max-age=31536000", dict(g.headers))
     g = req(e, "10.0.0.7", "GET", "/index.html", headers={"X-Forwarded-Proto": "https"})
     check("소켓 주소가 믿을 프록시가 아니면 (https 머리글이 있어도) 403", g.status == 403 and g.message == PROXY_MSG, g)
-    g = req(e, "127.0.0.1", "POST", "/api/login", {"id": "boss", "password": BOSS_PW}, {"X-Forwarded-Proto": "https"})
+    g = req(e, "127.0.0.1", "POST", "/api/login", {"id": "boss", "password": BOSS_PW}, fwd)
     check("API 도 https 머리글이 있으면 로그인 200", g.status == 200, g)
     g = req(e, "127.0.0.1", "POST", "/api/login", {"id": "boss", "password": BOSS_PW})
     check("API 도 머리글 없으면 403", g.status == 403 and g.message == PROXY_MSG, g)

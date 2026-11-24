@@ -397,8 +397,10 @@ def test_client_ip():
     check("프록시 둘: '10.0.0.7, 10.0.0.8' → 10.0.0.7", lan_server.client_ip("10.0.0.9", "10.0.0.7, 10.0.0.8", two) == "10.0.0.7")
     check("글자가 IP 가 아니면 peer", lan_server.client_ip("10.0.0.9", "evil.example", one) == "10.0.0.9"
           and lan_server.client_ip("10.0.0.9", "1.2.3.4, nonsense", one) == "10.0.0.9"
-          and lan_server.client_ip("10.0.0.9", "10.0.0.7:5555", one) == "10.0.0.9"
+          and lan_server.client_ip("10.0.0.9", "10.0.0.7:abc", one) == "10.0.0.9"
           and lan_server.client_ip("10.0.0.9", "10.0.0.7,,", one) == "10.0.0.9")
+    # ② 전체 검토 5 (2026-11-24): 'IPv4:포트' 는 포트를 떼고 읽는다 (예전에는 peer 로 버렸다)
+    check("'IPv4:포트' 는 포트를 뗀다", lan_server.client_ip("10.0.0.9", "10.0.0.7:5555", one) == "10.0.0.7")
     check("오른쪽 비프록시에서 멈춘다 - 그 왼쪽의 글자는 보지 않는다",
           lan_server.client_ip("10.0.0.9", "junk, 10.0.0.7", one) == "10.0.0.7")
     check("모두 프록시면 가장 왼쪽", lan_server.client_ip("10.0.0.9", "10.0.0.8, 10.0.0.9", two) == "10.0.0.8")

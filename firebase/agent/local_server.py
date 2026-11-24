@@ -402,6 +402,7 @@ MAX_BODY = 4 * 1024 * 1024
 MAX_CONN = 64                              # 동시에 붙을 수 있는 연결 - 넘으면 바로 닫는다 (빈 연결로 스레드를 잡아 두지 못하게)
 READ_TIMEOUT = 15                          # 요청 줄·머리글·본문을 이 안에 못 읽으면 끊는다
 KEEPALIVE_SEC = 30
+TOO_MANY_MSG = "요청이 너무 많습니다. 잠시 후 다시 시도하여 주십시오."     # 사내망 웹 포트의 프록시 뒤 보낸 사람마다 상한 (lan_server.client_hold)
 SIGN_WINDOW_MS = 60000                     # 요청 시각이 서버 시각과 이만큼 넘게 다르면 거절 (같은 PC 라 넉넉하다)
 NONCE_KEEP_SEC = 150
 NONCE_SWEEP_SEC = 10                       # nonce 표에서 지난 것을 지우는 간격 (표 크기가 아니라 시간으로 - 검토 M-7)
@@ -684,6 +685,16 @@ class LocalServer(http.server.ThreadingHTTPServer):
     def note_bad(self, ip):
         """서명 틀림 한 번 - 이 서버(127.0.0.1)는 세지 않는다. 사내망 포트(lan_server.LanServer)가 주소 거절로 잇는다."""
 
+    def request_read(self, conn):
+        """처리기가 요청을 다 읽었다 - 이 서버(127.0.0.1)는 요청 마감이 없다 (사내망 포트 lan_server.LanServer 가 타이머를 거둔다)."""
+
+    def client_hold(self, handler):
+        """보낸 사람마다 요청 세기 - 이 서버는 세지 않는다 → (True, None). 사내망 웹 포트(LanServer)가 프록시 뒤 사람마다 센다."""
+        return True, None
+
+    def client_free(self, key):
+        """client_hold 로 센 것 돌려주기 - 이 서버는 할 일이 없다."""
+
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -835,9 +846,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         peer = srv.peer_ip(self.client_address)
         if srv.side != "web":
             return peer
+        return self.forwarded_ip() or peer
+
+    def forwarded_ip(self):
+        """웹 쪽 믿을 프록시가 X-Forwarded-For 로 넘긴 보낸 쪽 주소 (lan_server.forwarded_ip - 'IPv4:포트' 꼴은 포트를 뗀다).
+        사내망 웹 포트가 아니거나, 소켓 주소가 믿을 프록시가 아니거나, 머리글이 없거나 읽을 수 없으면 None."""
+        srv = self.server
+        cfg = getattr(srv, "cfg", None)
+        if cfg is None or srv.side != "web":
+            return None
         import lan_server            # 지연 import - lan_server 가 이 파일을 불러온다 (단독은 여기 오지 않는다)
         xff = ", ".join(self.headers.get_all("X-Forwarded-For") or []) or None     # 여러 줄이면 차례대로 이어 읽는다
-        return lan_server.client_ip(peer, xff, cfg)
+        return lan_server.forwarded_ip(srv.peer_ip(self.client_address), xff, cfg)
 
     def _role(self, method, digest):
         """Host 와 요청 서명을 보고 (역할 'agent'·'relay', 서명으로 확인한 PC 번호). 아니면 응답을 보내고 _Stop.
@@ -953,10 +973,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # --- 길 ---
     def _route(self, method):
+        held = None
         try:
             url = urllib.parse.urlsplit(self.path)
             query = dict(urllib.parse.parse_qsl(url.query))
             raw, digest = self._read()
+            self.server.request_read(self.request)  # 사내망 포트: 요청을 다 읽었다 - 마감 타이머를 거둔다 (lan_server.REQUEST_DEADLINE)
+            ok, held = self.server.client_hold(self)   # 사내망 웹 포트의 프록시 뒤: 보낸 사람마다 동시·분당 (lan_server)
+            if not ok:
+                return self._reply(429, {"code": "too-many-requests", "message": TOO_MANY_MSG})
             web = getattr(self.server, "web", None)
             side = self.server.side          # "both"(이 PC 의 127.0.0.1 서버) · "web"(사내망 8443) · "agent"(사내망 8444)
             if side == "agent" and not (_agent_path(url.path) or url.path == "/enroll"):
@@ -988,6 +1013,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._reply(500, {"error": "Server error"})
             except Exception:
                 pass
+        finally:
+            if held is not None:
+                self.server.client_free(held)    # 처리 끝 (스트림 끝·예외 포함) - 센 것을 꼭 돌려준다
 
     def do_GET(self):
         self._route("GET")

@@ -7,10 +7,12 @@ local_server.Handler 가 서명 확인 **앞에서** `/api/*` 와 웹 파일 GET
 
 - 계정(Accounts): `<자료 폴더>/accounts.json`. 비밀번호는 pbkdf2_hmac(sha256, 310000) + 계정마다 소금 16바이트. 기본 계정은 없다.
 - 세션(Sessions): 메모리에만 - 서버를 다시 켜면 모두 풀린다. 탭 단위 (쿠키를 쓰지 않는다 → 다른 사이트의 요청에 로그인이 따라가지 않는다).
-- 잠금(Lockout): 아이디마다 연속 5번 틀리면 60초. 사내 서버(cfg 있음)는 같은 아이디가 잇따라 잠기면 60·300·900초 (성공하면 처음으로),
+- 잠금(Lockout): 아이디마다 연속 5번 틀리면 60초. 사내 서버(cfg 있음)는 (아이디, 보낸 주소) 쌍마다 세고, 같은 쌍이 잇따라 잠기면
+  60·300·900초 (성공하면 처음으로). 아이디 전체는 따로 - 10분에 여러 주소 합쳐 30번이면 300초 (id_lock, ② 전체 검토 3).
   그리고 주소 잠금(AddrLock): 한 주소가 10분에 10번 틀리면 그 주소를 10분 막는다 - 비밀번호를 계산하기 **전에** 본다 (계획 ② Task 6).
 - 사내 서버만: 세션을 로그인한 주소에 묶고(cfg.bind_session_ip), Origin 은 https://<웹 Host 목록>, 평문 프록시 모양(web_plain)은
-  믿을 프록시에서 X-Forwarded-Proto: https 로 온 요청만, 응답에 HSTS, 기록의 로그인 줄에 보낸 쪽 주소.
+  믿을 프록시에서 X-Forwarded-Proto: https 와 읽을 수 있는 X-Forwarded-For 로 온 요청만, 응답에 HSTS, 기록의 로그인 줄에 보낸 쪽 주소.
+  보낸 쪽 주소(프록시 뒤면 X-Forwarded-For)가 허용 대역 밖이면 403 (② 전체 검토 1).
 - 웹 파일: firebase/web 을 그대로 내주되 스탠드얼론에 없어야 할 것(Firebase 설정·SDK 를 부르는 파일)은 내주지 않는다.
 비밀번호·세션 토큰·열쇠는 기록에 싣지 않고, 어느 응답에도 열쇠·라이선스 서명·해시·소금을 싣지 않는다.
 표준 라이브러리만 쓴다.
@@ -45,9 +47,17 @@ MAX_SEC = 43200                            # 로그인 뒤 12시간
 LOCK_LIMIT, LOCK_SEC = 5, 60
 LAN_LOCK_STEPS = (60, 300, 900)            # 사내 서버: 같은 아이디가 잇따라 잠길 때마다 다음 칸 (성공하면 처음으로)
 ADDR_LIMIT, ADDR_WINDOW, ADDR_BLOCK = 10, 600, 600     # 사내 서버: 한 주소가 10분에 10번 틀리면 그 주소를 10분 막는다
+# 사내 서버: 아이디 잠금(LOCK_LIMIT·LAN_LOCK_STEPS)은 (아이디, 보낸 주소) 쌍에 건다. 아이디 전체는 따로 - 같은 아이디가 10분 안에
+# 여러 주소에서 합쳐 30번 틀리면 그 아이디를 300초 (단계 없이). 한 주소는 주소 잠금(10번)에 먼저 걸리므로 세 주소 이상이어야 닿는다
+ID_ALL_LIMIT, ID_ALL_WINDOW, ID_ALL_BLOCK = 30, 600, 300
 LOCK_TRACK_MAX = 1000                      # 잠금 표에 기억하는 아이디·주소 수 (없는 아이디를 끝없이 넣어도 메모리가 늘지 않게)
 HSTS = "max-age=31536000"                  # 사내 서버 응답의 Strict-Transport-Security
 PROXY_MSG = "프록시를 거쳐 접속하여 주십시오."
+PROXY_XFF_MSG = ("프록시가 접속한 PC 의 주소(X-Forwarded-For)를 넘기지 않아 접속을 받지 않았습니다. "
+                 "서버 관리자에게 프록시 설정 확인을 요청하여 주십시오.")
+OUTSIDE_MSG = "허용된 사내 주소에서만 접속할 수 있습니다."
+OUTSIDE_LOG_MAX, OUTSIDE_LOG_SEC = 10, 60  # 허용 대역 밖 거절 기록은 60초에 10줄까지
+XFF_LOG_SEC = 60                           # 믿을 프록시가 X-Forwarded-For 없이 보낸 요청의 기록은 60초에 한 줄
 SESSIONS_MAX = 200
 QUICK_TTL = 90                             # 실행·중단 명령의 만료 (초) - 지금 RTDB 규칙과 같다
 COMMAND_TTL = 600
@@ -516,6 +526,32 @@ class AddrLock:
             self._items.pop(ip, None)
 
 
+class LogGate:
+    """기록 줄 줄이기 - window 초 창마다 limit 줄까지 쓰고 나머지는 센다 (local_server.LocalServer.enroll_reject_log 와 같은 꼴).
+    창이 넘어간 뒤 첫 줄 앞에 생략한 수를 한 줄로 (more 가 있을 때만)."""
+
+    def __init__(self, limit, window, clock=time.time):
+        self.limit, self.window, self._clock = limit, window, clock
+        self._lock = threading.Lock()
+        self._win = [float("-inf"), 0, 0]     # [창 시작, 이 창의 수, 생략한 수]
+
+    def lines(self, text, more=None):
+        """이번 일 하나 → 기록에 쓸 줄 목록 (없을 수도 있다). more 는 '{n}' 자리가 든 생략 줄 꼴."""
+        out = []
+        with self._lock:
+            now, win = self._clock(), self._win
+            if now - win[0] >= self.window:
+                if win[2] and more:
+                    out.append(more.format(n=win[2]))
+                win[:] = [now, 0, 0]
+            win[1] += 1
+            if win[1] <= self.limit:
+                out.append(text)
+            else:
+                win[2] += 1
+        return out
+
+
 def _minutes(sec):
     """남은 초 → 안내 글의 분 (올림, 적어도 1)."""
     return max(1, math.ceil(sec / 60 - 1e-9))
@@ -577,6 +613,10 @@ class Web:
         self.sessions = Sessions(clock=clock)
         self.lockout = Lockout(clock=clock)
         self.addr_lock = AddrLock(clock=clock)       # 사내 서버(cfg 있음)만 쓴다
+        # 아이디 전체 잠금 (사내 서버만) - 주소 잠금과 같은 창 세기를 아이디 열쇠로 쓴다
+        self.id_lock = AddrLock(limit=ID_ALL_LIMIT, window=ID_ALL_WINDOW, block=ID_ALL_BLOCK, clock=clock)
+        self._outside_log = LogGate(OUTSIDE_LOG_MAX, OUTSIDE_LOG_SEC, clock=clock)
+        self._xff_log = LogGate(1, XFF_LOG_SEC, clock=clock)
         self._cfg = None                             # 사내망 설정 - cfg 속성으로 적는다 (아래)
         self._clock = clock
         self._login_lock = threading.Lock()          # 비밀번호 확인은 한 번에 하나 - 잠금 확인과 실패 세기 사이에 다른 시도가 끼지 못한다
@@ -667,6 +707,7 @@ class Web:
                             else "서버 주소로 접속하여 주십시오.")
             if cfg is not None:
                 handler.web_ip = handler.client_ip()             # 요청마다 한 번 읽어 둔다 (스트림의 세션 확인도 이 값)
+                self._lan_gate(handler, cfg)
             if api:
                 out = self._api(handler, method, path, query or {}, body)
                 if out is not _SENT:
@@ -743,6 +784,29 @@ class Web:
         protos = [p.strip().lower() for v in (h.headers.get_all("X-Forwarded-Proto") or []) for p in v.split(",")]
         return bool(protos) and all(p == "https" for p in protos)
 
+    def _lan_gate(self, h, cfg):
+        """사내 서버: 보낸 쪽 주소(h.web_ip)를 읽은 뒤의 검사 (② 전체 검토 1·5).
+        - 웹 포트의 믿을 프록시가 읽을 수 있는 X-Forwarded-For 없이 보냈으면: 평문 모양(web_plain)은 403 - 모두가 프록시 주소
+          하나로 묶여 잠금·상한을 함께 받지 않게. TLS 웹 포트는 막지 않는다 (TCP 넘기기일 수 있다) - 60초에 한 줄 경고.
+        - 보낸 쪽 주소가 허용 대역 밖이면 403 - 받기 고리는 소켓 주소(프록시)만 보므로 프록시 뒤 주소는 여기서 본다.
+        기록은 줄여 쓴다 (LogGate)."""
+        ip, srv = h.web_ip, h.server
+        if getattr(srv, "side", None) == "web" and h.forwarded_ip() is None and cfg.is_proxy(srv.peer_ip(h.client_address)):
+            if cfg.web_plain:
+                self._log_gated(self._xff_log, f"웹 접속 거절 - 프록시가 X-Forwarded-For 를 넘기지 않았습니다. 프록시 설정을 "
+                                               f"확인하여 주십시오  프록시={ip}")
+                raise _Fail(403, "forbidden", PROXY_XFF_MSG)
+            self._log_gated(self._xff_log, f"웹 접속 경고 - 믿을 프록시가 X-Forwarded-For 없이 보내 프록시 주소로 셉니다. "
+                                           f"프록시 설정을 확인하여 주십시오  프록시={ip}")
+        if not cfg.allowed(ip):
+            self._log_gated(self._outside_log, f"웹 접속 거절 - 허용 대역 밖  주소={ip}",
+                            "웹 접속 거절 {n}건 더 (허용 대역 밖, 기록 생략)")
+            raise _Fail(403, "forbidden", OUTSIDE_MSG)
+
+    def _log_gated(self, gate, text, more=None):
+        for line in gate.lines(text, more):
+            self._log(line)
+
     @staticmethod
     def _ip(h):
         """이 요청의 보낸 쪽 주소 (handle 이 한 번 읽어 둔 것). 단독은 None - 주소 잠금·세션 주소·기록의 주소를 쓰지 않는다."""
@@ -767,8 +831,25 @@ class Web:
             self._log(f"웹 로그인 주소 잠금 - {self.addr_lock.window // 60}분에 {self.addr_lock.limit}번 틀려 "
                       f"{self.addr_lock.block}초  주소={ip}")
 
+    @staticmethod
+    def _pair(key, ip):
+        """아이디 잠금(lockout)의 열쇠 - 사내 서버는 (아이디, 보낸 주소) 쌍, 단독(ip 없음)은 아이디 그대로 (② 전체 검토 3).
+        한 주소에서 틀린 것이 다른 주소의 같은 아이디를 잠그지 않는다 - 아이디 전체는 id_lock 이 따로 센다."""
+        return key if ip is None else (key, ip)
+
+    def _id_all_check(self, key, ip, text):
+        """사내 서버: 아이디 전체 잠금(여러 주소 합쳐 ID_ALL_LIMIT 번) 중이면 429 - 비밀번호를 계산하기 전에."""
+        if ip is not None and self.id_lock.blocked(key):
+            raise _Fail(429, "auth/too-many-requests", f"{text} {_minutes(self.id_lock.remaining(key))}분 뒤 다시 시도하여 주십시오.")
+
+    def _id_all_fail(self, key, shown, h):
+        """사내 서버: 틀린 비밀번호 한 번을 아이디 전체에도 센다. 이번에 잠기면 기록에 한 줄."""
+        if self._ip(h) is not None and self.id_lock.fail(key):
+            self._log(f"웹 로그인 아이디 잠금 - 여러 주소에서 {self.id_lock.window // 60}분에 {self.id_lock.limit}번 틀려 "
+                      f"{self.id_lock.block}초  아이디={shown}{self._at(h)}")
+
     def _id_fail(self, key, what, shown, h):
-        """틀린 비밀번호 한 번을 아이디에 센다 → 기록 한 줄 (잠기면 잠긴 초)."""
+        """틀린 비밀번호 한 번을 아이디 잠금(key - _pair)에 센다 → 기록 한 줄 (잠기면 잠긴 초)."""
         if self.lockout.fail(key):
             self._log(f"{what} - {self.lockout.limit}번 틀려 {round(self.lockout.remaining(key))}초 잠금  아이디={shown}{self._at(h)}")
         else:
@@ -856,21 +937,25 @@ class Web:
         uid = norm_id(raw_id)
         key = uid[:64]
         ip = self._ip(h)
+        pair = self._pair(key, ip)
         with self._login_lock:
             self._addr_check(h)                      # 사내 서버: 막힌 주소는 비밀번호를 계산하기 전에 돌려보낸다
-            if self.lockout.locked(key):             # 맞는 비밀번호도 받지 않는다 - 없는 아이디도 똑같이 잠긴다
+            self._id_all_check(key, ip, "로그인 시도가 많아 잠시 잠겼습니다.")      # 사내 서버: 아이디 전체 잠금
+            if self.lockout.locked(pair):            # 맞는 비밀번호도 받지 않는다 - 없는 아이디도 똑같이 잠긴다
                 raise _Fail(429, "auth/too-many-requests", "로그인 시도가 많아 잠시 잠겼습니다. "
-                            f"{_minutes(self.lockout.remaining(key))}분 뒤 다시 시도하여 주십시오.")
+                            f"{_minutes(self.lockout.remaining(pair))}분 뒤 다시 시도하여 주십시오.")
             acct = self.accounts.verify(uid, password)
             if acct is None:
-                self._id_fail(key, "웹 로그인 실패", self._shown(uid), h)
+                self._id_fail(pair, "웹 로그인 실패", self._shown(uid), h)
+                self._id_all_fail(key, self._shown(uid), h)
                 self._addr_fail(h)                   # 아이디와 주소 둘 다 센다 (여러 아이디를 돌아가며 찍는 시도)
                 raise _Fail(401, "auth/invalid-credential", "아이디 또는 비밀번호가 일치하지 않습니다.")
             if acct["disabled"]:                     # 비밀번호가 맞을 때만 알려 준다 (틀리면 위에서 그냥 '틀림')
                 self._log(f"웹 로그인 거절 - 사용 중지된 계정  아이디={uid}{self._at(h)}")
                 raise _Fail(403, "auth/user-disabled", "사용이 중지된 계정입니다.")
-            # 주소 셈(addr_lock)은 성공해도 지우지 않는다 - 계정이 있는 사람이 자기 로그인 사이사이 남의 아이디를 찍어 셈을 되돌리지 못하게
-            self.lockout.ok(key)
+            # 주소 셈(addr_lock)·아이디 전체 셈(id_lock)은 성공해도 지우지 않는다 - 계정이 있는 사람이 자기 로그인 사이사이 남의
+            # 아이디를 찍어 셈을 되돌리지 못하게, 맞는 비밀번호를 아는 사람의 로그인이 여러 주소에서 찍는 시도의 셈을 지우지 않게
+            self.lockout.ok(pair)
             token = self.sessions.open(acct, ip=ip if self._cfg is not None and self._cfg.bind_session_ip else None)
         self._log(f"웹 로그인  아이디={uid}  권한={acct['role']}{self._at(h)}")
         return {"token": token, "session": self._public(acct)}
@@ -892,24 +977,28 @@ class Web:
         if not isinstance(current, str) or not isinstance(new, str):
             raise _Fail(400, "invalid-argument", "현재 비밀번호와 새 비밀번호를 입력하여 주십시오.")
         uid = acct["id"]
+        ip = self._ip(h)
+        pair = self._pair(uid, ip)                  # 로그인과 같은 열쇠 - 사내 서버는 (아이디, 주소) 쌍
         with self._login_lock:
             self._addr_check(h)                      # 사내 서버: 로그인과 같은 주소 잠금 (비밀번호 계산 전에)
-            if self.lockout.locked(uid):             # 열린 탭으로 현재 비밀번호를 찍어 맞히지 못하게 로그인과 같은 잠금을 쓴다
+            self._id_all_check(uid, ip, "시도가 많아 잠시 잠겼습니다.")          # 사내 서버: 아이디 전체 잠금
+            if self.lockout.locked(pair):            # 열린 탭으로 현재 비밀번호를 찍어 맞히지 못하게 로그인과 같은 잠금을 쓴다
                 raise _Fail(429, "auth/too-many-requests", "시도가 많아 잠시 잠겼습니다. "
-                            f"{_minutes(self.lockout.remaining(uid))}분 뒤 다시 시도하여 주십시오.")
+                            f"{_minutes(self.lockout.remaining(pair))}분 뒤 다시 시도하여 주십시오.")
             try:
                 fresh = self.accounts.change_password(uid, current, new)
             except WeakPassword as e:
                 raise _Fail(400, "auth/weak-password", str(e)) from None
             except WrongPassword as e:
-                if self.lockout.fail(uid):
-                    self._log(f"웹 비밀번호 변경 실패 - {self.lockout.limit}번 틀려 {round(self.lockout.remaining(uid))}초 잠금  "
+                if self.lockout.fail(pair):
+                    self._log(f"웹 비밀번호 변경 실패 - {self.lockout.limit}번 틀려 {round(self.lockout.remaining(pair))}초 잠금  "
                               f"아이디={uid}{self._at(h)}")
+                self._id_all_fail(uid, uid, h)
                 self._addr_fail(h)
                 raise _Fail(403, "auth/wrong-password", str(e)) from None      # 401 이 아니다 - 화면은 401 을 '세션 끝' 으로 본다
             except ValueError as e:
                 raise _Fail(400, "invalid-argument", str(e)) from None
-            self.lockout.ok(uid)
+            self.lockout.ok(pair)
             self.sessions.refresh(token, fresh)                  # 바꾼 탭은 그대로 두고
             self.sessions.close_account(uid, keep=token)         # 그 계정의 다른 세션은 닫는다
         self._log(f"웹 비밀번호 변경  아이디={uid}{self._at(h)}")
