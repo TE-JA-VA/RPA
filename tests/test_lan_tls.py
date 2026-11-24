@@ -73,8 +73,8 @@ with open(os.path.join(WEB_DIR, "index.html"), "w", encoding="utf-8") as f:
     f.write("<!doctype html><title>로그인</title>")
 
 
-def ctx():
-    return ssl.create_default_context(cadata=CA_PEM)
+def ctx(ca=None):
+    return ssl.create_default_context(cadata=ca or CA_PEM)
 
 
 class Got:
@@ -91,13 +91,14 @@ class Got:
         return f"<{self.status} {self.raw[:200]!r}>"
 
 
-def call(port, method, path, body=None, headers=None, tls=True):
-    """요청 하나 → Got. headers 에 Host 가 있으면 그것을 싣는다 (http.client 는 자기 Host 를 붙이지 않는다)."""
+def call(port, method, path, body=None, headers=None, tls=True, ca=None):
+    """요청 하나 → Got. headers 에 Host 가 있으면 그것을 싣는다 (http.client 는 자기 Host 를 붙이지 않는다).
+    ca 는 믿을 인증 기관 글 (없으면 우리 것 CA_PEM)."""
     data = None if body is None else (body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8"))
     hs = dict(headers or {})
     if data is not None:
         hs.setdefault("Content-Type", "application/json")
-    c = (http.client.HTTPSConnection("127.0.0.1", port, context=ctx(), timeout=10) if tls
+    c = (http.client.HTTPSConnection("127.0.0.1", port, context=ctx(ca), timeout=10) if tls
          else http.client.HTTPConnection("127.0.0.1", port, timeout=10))
     try:
         c.request(method, path, body=data, headers=hs)
@@ -165,7 +166,9 @@ def refused(port):
 SERVERS, RUNS = [], []
 
 
-def start(cfg_data=None, web_dir=WEB_DIR):
+def start(cfg_data=None, web_dir=WEB_DIR, cert=None, key=None, ca_pem=None):
+    """두 포트를 띄운다. cert·key·ca_pem 을 주면 그 인증서로 (다른 인증 기관 시험), 아니면 우리 것."""
+    cert, key, ca_pem = cert or CERT, key or KEY, ca_pem or CA_PEM
     folder = tempfile.mkdtemp(dir=TMP)
     store = local_server.Store(os.path.join(folder, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(":memory:")
@@ -175,23 +178,23 @@ def start(cfg_data=None, web_dir=WEB_DIR):
     web.accounts.set("boss", BOSS_PW, "admin")
     cfg = lan_config.parse(cfg_data or {"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8"]})
     cfg = dataclasses.replace(cfg, web_port=0, agent_port=0)      # 포트 0 - make_lan_servers 가 묶인 포트로 고쳐 쓴다
-    w, a = lan_server.make_lan_servers(store, runs, LIC, reg, web, cfg, CERT, KEY, CA_PEM)
+    w, a = lan_server.make_lan_servers(store, runs, LIC, reg, web, cfg, cert, key, ca_pem)
     for s in (w, a):
         threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
         SERVERS.append(s)
     return types.SimpleNamespace(web=w, agent=a, wp=w.server_address[1], ap=a.server_address[1], store=store, reg=reg, ui=web,
-                                 folder=folder)
+                                 folder=folder, ca=ca_pem)
 
 
-def login(port):
-    g = call(port, "POST", "/api/login", {"id": "boss", "password": BOSS_PW})
+def login(port, ca=None):
+    g = call(port, "POST", "/api/login", {"id": "boss", "password": BOSS_PW}, ca=ca)
     return (g.json() or {}).get("token")
 
 
 def add_pc(env, label):
     """관리자가 웹 포트의 /api/pcs 로 PC 를 추가 → (Got, 등록 글을 푼 dict)."""
-    tok = login(env.wp)
-    g = call(env.wp, "POST", "/api/pcs", {"label": label}, headers={"Authorization": "Bearer " + tok})
+    tok = login(env.wp, env.ca)
+    g = call(env.wp, "POST", "/api/pcs", {"label": label}, headers={"Authorization": "Bearer " + tok}, ca=env.ca)
     text = (g.json() or {}).get("enrollment")
     return g, (pc_registry.decode_enrollment(text) if text else None), text
 
@@ -351,19 +354,182 @@ def test_enroll_over_tls_with_ca():
 
     print("  에이전트 클라이언트 (local_store.enroll)")
     g, info2, text2 = add_pc(e, "클라이언트 시험")
-    try:
-        got = local_store.enroll(text2, GUIDS[3], "PC-C")
-    except ValueError as ex:
-        pending("local_store.enroll 로 https 등록 → 현황 PATCH 200", f"Task 5 (클라이언트가 아직 https 를 받지 않는다: {ex})")
-        return
+    got = local_store.enroll(text2, GUIDS[3], "PC-C")
     check("local_store.enroll 이 https 로 등록", got.get("pc_id") == info2["pc"], got)
+    check("등록 답에 인증 기관 글 (ca_pem)", got.get("ca_pem") == CA_PEM and got.get("server_url") == f"https://127.0.0.1:{e.ap}", got)
+    check("등록 답의 열쇠가 서버 등록부와 같다", (got.get("agent_key"), got.get("relay_key")) == e.reg.keys(got["pc_id"]))
+    cl = local_store.Client({"server_url": got["server_url"], "key": got["agent_key"], "lan": True, "pc_id": got["pc_id"],
+                             "ca_pem": got.get("ca_pem")})
+    cl.patch(f"apps/rpa/live/c1/{got['pc_id']}", {"state": "idle"})
+    check("그 클라이언트로 현황 PATCH", (e.store.get(f"apps/rpa/live/c1/{got['pc_id']}") or {}).get("state") == "idle")
+    check("그 클라이언트로 읽기 (서명된 응답·Date 로 시계)", cl.get(f"apps/rpa/live/c1/{got['pc_id']}") == {"state": "idle"}
+          and abs(cl.server_now() - time.time()) < 5)
     try:
-        cl = local_store.Client({"server_url": got["server_url"], "key": got["agent_key"], "lan": True, "pc_id": got["pc_id"],
-                                 "ca_pem": got.get("ca_pem")})
-        cl.patch(f"apps/rpa/live/c1/{got['pc_id']}", {"state": "idle"})
-        check("그 클라이언트로 현황 PATCH", (e.store.get(f"apps/rpa/live/c1/{got['pc_id']}") or {}).get("state") == "idle")
-    except ValueError as ex:
-        pending("local_store.Client 로 https 현황 PATCH", f"Task 5 ({ex})")
+        local_store.enroll(text2, GUIDS[3], "PC-C")
+        check("같은 글로 두 번째 등록은 거절", False, "예외 없음")
+    except local_store.fb.HttpError as ex:
+        check("같은 글로 두 번째 등록은 거절", ex.status == 403 and "unknown" in ex.body, repr(ex.body))
+
+
+def test_other_ca_refused():
+    print("다른 인증 기관으로 만든 서버에는 붙지 않는다")
+    ca2, out2 = os.path.join(TMP, "ca2"), os.path.join(TMP, "srv2")
+    lan_ca.make_ca(ca2, ["localhost"], ["127.0.0.1"])
+    cert2, key2 = lan_ca.issue_server(ca2, out2, ["localhost"], ["127.0.0.1"])
+    other = start(cert=cert2, key=key2, ca_pem=lan_ca.ca_pem(ca2))
+    try:
+        _, info, text = add_pc(other, "남의 서버")
+        check("남의 서버의 등록 글에는 그 서버의 인증 기관", info is not None and info.get("ca") == lan_ca.ca_pem(ca2) != CA_PEM)
+        # 우리 인증 기관을 실은 등록 글로 남의 서버에 등록하려 하면 (주소만 같다)
+        mine = pc_registry.encode_enrollment(dict(info, ca=CA_PEM))
+        try:
+            local_store.enroll(mine, GUIDS[8], "PC-X")
+            check("등록: 인증서 확인 실패 → AuthError(0, CERT_FAILED)", False, "예외 없음")
+        except local_store.fb.AuthError as ex:
+            check("등록: 인증서 확인 실패 → AuthError(0, CERT_FAILED)", ex.status == 0 and ex.code == local_store.CERT_FAILED, repr(ex))
+        check("남의 서버 등록부에 그 PC 는 아직 등록 전 (요청이 닿지 않았다)", other.reg.state(info["pc"]) != "active",
+              other.reg.state(info["pc"]))
+        cl = local_store.Client({"server_url": f"https://127.0.0.1:{other.ap}", "key": "k" * 64, "lan": True, "pc_id": "pc_01",
+                                 "ca_pem": CA_PEM})
+        for name, fn in (("GET", lambda: cl.get("apps/rpa/live/c1/pc_01")),
+                         ("PATCH", lambda: cl.patch("apps/rpa/live/c1/pc_01", {"state": "idle"})),
+                         ("구독", lambda: list(cl.stream("apps/rpa/commands/c1/pc_01", timeout=10)))):
+            try:
+                fn()
+                check(f"{name}: 인증서 확인 실패 → AuthError(0, CERT_FAILED)", False, "예외 없음")
+            except local_store.fb.AuthError as ex:
+                check(f"{name}: 인증서 확인 실패 → AuthError(0, CERT_FAILED)", ex.status == 0 and ex.code == local_store.CERT_FAILED,
+                      repr(ex))
+            except Exception as ex:
+                check(f"{name}: 인증서 확인 실패 → AuthError(0, CERT_FAILED)", False, f"{type(ex).__name__}: {ex}")
+        check("남의 서버 저장소에 아무것도 쓰이지 않았다", other.store.get("apps/rpa/live/c1/pc_01") is None)
+    finally:
+        stop(other)
+
+    print("  같은 인증 기관이라도 주소가 인증서에 없으면 (이름 확인은 켜져 있다)")
+    ca3, out3 = os.path.join(TMP, "ca3"), os.path.join(TMP, "srv3")
+    lan_ca.make_ca(ca3, ["localhost", "nt"], ["127.0.0.1"])
+    cert3, key3 = lan_ca.issue_server(ca3, out3, ["nt"], [])          # SAN 은 이름 nt 뿐 - 127.0.0.1 은 없다
+    pem3 = lan_ca.ca_pem(ca3)
+    named = start(cert=cert3, key=key3, ca_pem=pem3)
+    try:
+        cl = local_store.Client({"server_url": f"https://127.0.0.1:{named.ap}", "key": "k" * 64, "lan": True, "pc_id": "pc_01",
+                                 "ca_pem": pem3})
+        try:
+            cl.get("apps/rpa/live/c1/pc_01")
+            check("인증서에 없는 주소 → AuthError(0, CERT_FAILED)", False, "예외 없음")
+        except local_store.fb.AuthError as ex:
+            check("인증서에 없는 주소 → AuthError(0, CERT_FAILED)", ex.status == 0 and ex.code == local_store.CERT_FAILED, repr(ex))
+        except Exception as ex:
+            check("인증서에 없는 주소 → AuthError(0, CERT_FAILED)", False, f"{type(ex).__name__}: {ex}")
+    finally:
+        stop(named)
+
+
+class HeldOpener:
+    """Client 의 TLS opener 를 감싸 구독 응답을 잡아 둔다 (스레드의 제너레이터는 밖에서 닫지 못한다)."""
+
+    def __init__(self, client):
+        self.real, self.held, self.used = client._open, [], 0
+        client._open = self
+
+    def __call__(self, req, timeout=None):
+        self.used += 1
+        resp = self.real(req, timeout=timeout)
+        if (req.get_header("Accept") or "") == "text/event-stream":
+            self.held.append(resp)
+        return resp
+
+    def close(self):
+        for r in self.held:
+            try:
+                r.close()
+            except Exception:
+                pass
+
+
+class CmdStream:
+    """Client.stream(명령함, state==queued) 을 스레드에서 돌려 본 명령 키를 모은다 (test_lan_e2e 와 같은 꼴)."""
+
+    def __init__(self, client, pc):
+        self.client, self.pc = client, pc
+        self.events, self.keys, self.error = [], set(), None
+        self.ended = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            for event, data in self.client.stream(f"apps/rpa/commands/c1/{self.pc}",
+                                                  {"orderBy": '"state"', "equalTo": '"queued"'}, timeout=60):
+                self.events.append((event, data))
+                if event in ("put", "patch") and isinstance(data, dict):
+                    path, val = data.get("path") or "/", data.get("data")
+                    if path == "/":
+                        if isinstance(val, dict):
+                            self.keys.update(k for k, v in val.items() if v is not None)
+                    elif val is not None:
+                        self.keys.add(path.strip("/").split("/")[0])
+        except Exception as ex:
+            self.error = ex
+        self.ended.set()
+
+    def started(self):
+        return any(ev == "put" for ev, _ in list(self.events))
+
+
+def test_three_pcs_over_tls():
+    print("PC 셋 - TLS 두 포트로 등록·현황·구독, 한 PC 에만 명령 (① test_lan_e2e 1~3단계)")
+    env = start()
+    held, subs = [], {}
+    try:
+        clients = {}
+        for i in range(3):
+            g, info, text = add_pc(env, f"{i + 1}층")
+            pc = info["pc"] if info else None
+            check(f"PC 추가 → {pc} (https 등록 글·인증 기관)", g.status == 200 and info["url"] == f"https://127.0.0.1:{env.ap}"
+                  and info.get("ca") == CA_PEM, g)
+            got = local_store.enroll(text, GUIDS[i], f"OFFICE-{i + 1}")
+            check(f"{pc} 등록, 서버와 열쇠가 같다", got.get("pc_id") == pc and (got["agent_key"], got["relay_key"]) == env.reg.keys(pc)
+                  and env.reg.state(pc) == "active", sorted(got))
+            cl = local_store.Client({"standalone": True, "server_url": got["server_url"], "key": got["agent_key"], "role": "agent",
+                                     "lan": True, "pc_id": pc, "ca_pem": got["ca_pem"]})
+            held.append(HeldOpener(cl))
+            clients[pc] = cl
+        pcs = sorted(clients)
+        check("번호 셋", pcs == ["pc_01", "pc_02", "pc_03"], pcs)
+
+        for pc in pcs:
+            clients[pc].patch(f"apps/rpa/live/c1/{pc}", {"state": "idle", "who": pc})
+        check("셋이 각자 자기 현황을 썼다", all((env.store.get(f"apps/rpa/live/c1/{pc}") or {}).get("who") == pc for pc in pcs))
+        try:
+            clients["pc_01"].patch("apps/rpa/live/c1/pc_02", {"state": "evil"})
+            check("남의 현황은 쓰지 못한다", False, "예외 없음")
+        except local_store.fb.HttpError as ex:
+            check("남의 현황은 쓰지 못한다 (서명된 403)", ex.status == 403)
+        subs = {pc: CmdStream(clients[pc], pc) for pc in pcs}
+        check("셋의 구독이 TLS 로 열리고 첫 값(put)이 온다", until(lambda: all(s.started() for s in subs.values()), 5)
+              and not any(s.ended.is_set() for s in subs.values()), {pc: (s.events, s.error) for pc, s in subs.items()})
+        check("구독도 클라이언트의 TLS opener 로 (우리 인증 기관만 믿는 길)", all(len(h.held) == 1 for h in held))
+
+        tok = login(env.wp)
+        g = call(env.wp, "POST", "/api/commands", {"type": "launch", "pcId": "pc_02"}, headers={"Authorization": "Bearer " + tok})
+        k = (g.json() or {}).get("key")
+        check("관리자가 웹 포트로 pc_02 에 launch → 200", g.status == 200 and bool(k), g)
+        check("3초 안에 pc_02 구독에 그 명령이 온다", until(lambda: k in subs["pc_02"].keys, 3), subs["pc_02"].events)
+        marks = {}
+        for pc in ("pc_01", "pc_03"):
+            g = call(env.wp, "POST", "/api/commands", {"type": "launch", "pcId": pc}, headers={"Authorization": "Bearer " + tok})
+            marks[pc] = (g.json() or {}).get("key")
+        check("pc_01·pc_03 구독에는 자기 표시 명령만, pc_02 의 명령은 오지 않는다",
+              until(lambda: all(marks[pc] in subs[pc].keys for pc in marks), 3) and all(k not in subs[pc].keys for pc in marks),
+              {pc: subs[pc].keys for pc in marks})
+        check("pc_02 구독에는 남의 명령이 오지 않는다", not (set(marks.values()) & subs["pc_02"].keys), subs["pc_02"].keys)
+    finally:
+        for h in held:
+            h.close()
+        for s in subs.values():
+            s.ended.wait(3)
+        stop(env)
 
 
 def test_unsigned_reply_has_no_date():
@@ -468,6 +634,8 @@ try:
     test_https_only()
     test_host_checked()
     test_enroll_over_tls_with_ca()
+    test_other_ca_refused()
+    test_three_pcs_over_tls()
     test_unsigned_reply_has_no_date()
     test_bad_signature_blocks_ip()
     test_handler_client_ip()

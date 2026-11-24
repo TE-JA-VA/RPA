@@ -507,6 +507,109 @@ try:
     expect("난수·nonce 를 안 주면 새로 만든다", fb.HttpError, 403, lambda: local_store.enroll(ETEXT, GUID, HOST, opener=capture))
     check("만든 난수 64자·nonce 32자 hex", r and len(r[0]["rand"]) == 64 and len(r[0]["nonce"]) == 32
           and all(ch in "0123456789abcdef" for ch in r[0]["rand"] + r[0]["nonce"]))
+
+    # --- 사내 서버 ② Task 5: https 는 우리 인증 기관만 믿기, 사설 주소 규칙, 등록 글의 인증 기관 ---------
+    import ssl  # noqa: E402
+    import lan_ca  # noqa: E402
+    CA_DIR = os.path.join(TMP, "lan_ca")
+    lan_ca.make_ca(CA_DIR, ["nt"], ["10.1.2.3"])
+    CA = lan_ca.ca_pem(CA_DIR)
+    HTTPS_CFG = dict(LAN_CFG, server_url="https://10.1.2.3:8444", ca_pem=CA)
+
+    print("test_lan_https_needs_ca")
+    expect("lan https 인데 ca_pem 없음 → ValueError", ValueError, None,
+           lambda: local_store.Client({k: v for k, v in HTTPS_CFG.items() if k != "ca_pem"}))
+    expect("lan https 인데 ca_pem 이 빈 글 → ValueError", ValueError, None, lambda: local_store.Client(dict(HTTPS_CFG, ca_pem="")))
+    expect("lan https 인데 ca_pem 이 인증서가 아님 → ValueError", ValueError, None,
+           lambda: local_store.Client(dict(HTTPS_CFG, ca_pem="-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")))
+    expect("lan 없는 https 는 지금처럼 ValueError", ValueError, None, lambda: local_store.Client(dict(HTTPS_CFG, lan=False)))
+    expect("lan http 는 지금처럼 127.0.0.1 만 (사내 주소 → ValueError)", ValueError, None,
+           lambda: local_store.Client(dict(LAN_CFG, server_url="http://10.1.2.3:8444")))
+    hc = local_store.Client(HTTPS_CFG)
+    ctx = getattr(hc, "_ctx", None)
+    check("만든 컨텍스트는 이름 확인·인증서 확인을 켠다", isinstance(ctx, ssl.SSLContext) and ctx.check_hostname
+          and ctx.verify_mode == ssl.CERT_REQUIRED)
+    check("믿는 인증 기관은 우리 것 하나뿐 (윈도우 신뢰 저장소를 읽지 않는다)", ctx is not None and len(ctx.get_ca_certs()) == 1)
+    check("http 단독 Client 는 TLS 컨텍스트가 없다", getattr(local_store.Client(CFG), "_ctx", "없음") is None)
+
+    print("test_lan_public_ip_refused")
+    for u in ("https://8.8.8.8:8444", "https://0.0.0.0:8444", "https://169.254.1.1:8444", "https://[2001:4860::8888]:8444",
+              "https://[::ffff:8.8.8.8]:8444", "https://:8444", "ftp://10.1.2.3:8444"):
+        expect(f"{u} → ValueError", ValueError, None, lambda u=u: local_store.Client(dict(HTTPS_CFG, server_url=u)))
+    for u in ("https://10.1.2.3:8444", "https://192.168.1.230:8444", "https://172.16.0.9:8444", "https://127.0.0.1:8444",
+              "https://nt:8444", "https://ap.corp.local:8444", "https://[fd00::5]:8444", "https://[::1]:8444"):
+        try:
+            ok = isinstance(local_store.Client(dict(HTTPS_CFG, server_url=u)), local_store.Client)
+        except Exception as e:
+            ok = f"{type(e).__name__}: {e}"
+        check(f"{u} → 만들어짐", ok is True, ok)
+
+    print("인증서 확인 실패는 AuthError(0, CERT_FAILED), 다른 연결 오류는 그대로")
+    check("CERT_FAILED 상수", getattr(local_store, "CERT_FAILED", None) == "SERVER_CERT_FAILED")
+    bad_cert = ssl.SSLCertVerificationError(1, "certificate verify failed")
+    for name, exc in (("URLError 로 싼 인증서 오류", urllib.error.URLError(bad_cert)), ("인증서 오류 그대로", bad_cert)):
+        def cert_opener(req, timeout=30, exc=exc):
+            raise exc
+        try:
+            local_store.Client(HTTPS_CFG, opener=cert_opener).get("apps/x")
+            check(f"{name} → AuthError(0, CERT_FAILED)", False, "예외 없음")
+        except fb.AuthError as e:
+            check(f"{name} → AuthError(0, CERT_FAILED)", e.status == 0 and e.code == getattr(local_store, "CERT_FAILED", "?"), repr(e))
+        except Exception as e:
+            check(f"{name} → AuthError(0, CERT_FAILED)", False, f"{type(e).__name__}: {e}")
+        try:
+            list(local_store.Client(HTTPS_CFG, opener=cert_opener).stream("apps/rpa/commands/c1/pc_01"))
+            check(f"구독도 {name} → AuthError(0, CERT_FAILED)", False, "예외 없음")
+        except fb.AuthError as e:
+            check(f"구독도 {name} → AuthError(0, CERT_FAILED)", e.code == getattr(local_store, "CERT_FAILED", "?"), repr(e))
+        except Exception as e:
+            check(f"구독도 {name} → AuthError(0, CERT_FAILED)", False, f"{type(e).__name__}: {e}")
+
+    def refused_opener(req, timeout=30):
+        raise urllib.error.URLError(ConnectionRefusedError(10061, "refused"))
+    expect("연결 거절은 지금처럼 URLError (큐에 쌓는 쪽)", urllib.error.URLError, None,
+           lambda: local_store.Client(HTTPS_CFG, opener=refused_opener).get("apps/x"))
+    expect("다른 TLS 오류(인증서 확인이 아님)는 그대로", urllib.error.URLError, None,
+           lambda: local_store.Client(HTTPS_CFG, opener=lambda req, timeout=30: (_ for _ in ()).throw(
+               urllib.error.URLError(ssl.SSLError(1, "handshake failure")))).get("apps/x"))
+
+    print("https 등록 (enroll) - 등록 글의 인증 기관")
+    HTEXT = pc_registry.encode_enrollment({"v": 1, "url": "https://10.1.2.3:8444", "pc": "pc_01", "token": TOKEN, "exp": 1, "ca": CA})
+    hsent = []
+
+    def https_enroll(req, timeout=30):
+        hsent.append(req)
+        b = json.loads(req.data.decode("utf-8"))
+        raw = json.dumps({"pc": "pc_01"}).encode("utf-8")
+        return Resp(200, raw, msg(local_store.response_mac(WANT_AGENT, b["nonce"], 200, raw)))
+    try:
+        got = local_store.enroll(HTEXT, GUID, HOST, opener=https_enroll, rand_hex=RAND, nonce=NONCE)
+    except Exception as e:
+        got = f"{type(e).__name__}: {e}"
+    check("https 등록 - 돌려주는 dict 에 ca_pem", got == {"server_url": "https://10.1.2.3:8444", "pc_id": "pc_01", "agent_key": WANT_AGENT,
+                                                    "relay_key": WANT_RELAY, "ca_pem": CA}, repr(got))
+    check("https 등록 요청은 https 주소로", hsent and hsent[0].full_url == "https://10.1.2.3:8444/enroll")
+    check("받은 값으로 lan https Client 를 만들 수 있다", isinstance(got, dict) and isinstance(local_store.Client(
+        {"standalone": True, "lan": True, "server_url": got["server_url"], "key": got["agent_key"], "pc_id": got["pc_id"],
+         "ca_pem": got["ca_pem"]}), local_store.Client))
+    expect("https 등록 글에 ca 가 없으면 ValueError", ValueError, None, lambda: local_store.enroll(
+        "APE1." + __import__("base64").urlsafe_b64encode(json.dumps({"v": 1, "url": "https://10.1.2.3:8444", "pc": "pc_01",
+                                                                       "token": TOKEN, "exp": 1}).encode()).decode().rstrip("="),
+        GUID, HOST, opener=https_enroll))
+    PTEXT = pc_registry.encode_enrollment({"v": 1, "url": "https://8.8.8.8:8444", "pc": "pc_01", "token": TOKEN, "exp": 1, "ca": CA})
+    hsent.clear()
+    expect("https 등록 글의 주소가 공인 IP 면 ValueError (보내지 않는다)", ValueError, None,
+           lambda: local_store.enroll(PTEXT, GUID, HOST, opener=https_enroll))
+    check("공인 IP 등록 글은 아무것도 보내지 않았다", not hsent)
+    try:
+        local_store.enroll(HTEXT, GUID, HOST, opener=lambda req, timeout=30: (_ for _ in ()).throw(urllib.error.URLError(bad_cert)))
+        check("등록의 인증서 확인 실패 → AuthError(0, CERT_FAILED)", False, "예외 없음")
+    except fb.AuthError as e:
+        check("등록의 인증서 확인 실패 → AuthError(0, CERT_FAILED)", e.code == getattr(local_store, "CERT_FAILED", "?"), repr(e))
+    except Exception as e:
+        check("등록의 인증서 확인 실패 → AuthError(0, CERT_FAILED)", False, f"{type(e).__name__}: {e}")
+    check("http 등록 답에는 ca_pem 칸이 없다 (① 그대로)",
+          "ca_pem" not in local_store.enroll(ETEXT, GUID, HOST, opener=enroll_opener(WANT_AGENT), rand_hex=RAND, nonce=NONCE))
 finally:
     license_check.LICENSE_PUBLIC_KEY_HEX = saved_pub
     for k, v in saved_env.items():
