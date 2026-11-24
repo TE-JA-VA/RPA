@@ -285,6 +285,228 @@ try:
         check("꺼진 서버는 망 오류 (큐에 쌓는 쪽)", False, "AuthError")
     except OSError:
         check("꺼진 서버는 망 오류 (큐에 쌓는 쪽)", True)
+
+    # --- 사내 서버 ① Task 3: ap2 서명·시계 맞추기·중지/지워짐·등록 (서버 없이 opener 를 바꿔 끼운다) ---------
+    import email.message  # noqa: E402
+    import io  # noqa: E402
+    import urllib.error  # noqa: E402
+    import pc_registry  # noqa: E402
+
+    KEY2 = "k" * 64
+    LAN_CFG = {"standalone": True, "lan": True, "server_url": "http://127.0.0.1:8781", "key": KEY2, "cid": "c1", "pc_id": "pc_01"}
+
+    def hdr(req, name):
+        return req.get_header(name.capitalize())      # urllib.request.Request 는 머리글 이름을 capitalize 해 둔다
+
+    def msg(sign=None):
+        m = email.message.Message()
+        m["Content-Type"] = "application/json"
+        if sign:
+            m[local_store.H_SIGN] = sign
+        return m
+
+    class Resp:
+        def __init__(self, status, body, headers):
+            self.status, self._body, self.headers = status, body, headers
+
+        def read(self):
+            return self._body
+
+        def close(self):
+            pass
+
+    def reply(req, status, obj, key=KEY2, signed=True):
+        """가짜 서버의 답 - 2xx 는 응답, 그 밖은 HTTPError. signed 면 그 요청의 nonce 로 서명한다."""
+        raw = json.dumps(obj).encode("utf-8")
+        sign = local_store.response_mac(key, hdr(req, local_store.H_NONCE), status, raw) if signed else None
+        if 200 <= status < 300:
+            return Resp(status, raw, msg(sign))
+        raise urllib.error.HTTPError(req.full_url, status, "x", msg(sign), io.BytesIO(raw))
+
+    print("ap2 서명 머리글")
+    h = local_store.sign_headers("k" * 43, "agent", "GET", "/db/x.json", b"", now_ms=1000, nonce="n" * 32, pc_id="pc_01")
+    check("PC 번호 머리글", h[local_store.H_PC] == "pc_01")
+    check("ap2 서명", h[local_store.H_SIGN] == local_store.request_mac2("k" * 43, "pc_01", "agent", "GET", "/db/x.json", "1000", "n" * 32, b""))
+    check("ap2 서명은 ap1 과 다르다", h[local_store.H_SIGN] != local_store.request_mac("k" * 43, "agent", "GET", "/db/x.json", "1000", "n" * 32, b""))
+    h1 = local_store.sign_headers("k" * 43, "agent", "GET", "/db/x.json", b"", now_ms=1000, nonce="n" * 32)
+    check("pc_id 없으면 지금 ap1 그대로·머리글 없음", local_store.H_PC not in h1
+          and h1 == {local_store.H_ROLE: "agent", local_store.H_TIME: "1000", local_store.H_NONCE: "n" * 32,
+                     local_store.H_SIGN: local_store.request_mac("k" * 43, "agent", "GET", "/db/x.json", "1000", "n" * 32, b"")})
+
+    print("시계 차이 - 서명된 401 clock 이면 한 번만 다시 보낸다")
+    AHEAD = 300000
+    calls = []
+
+    def clock_opener(req, timeout=30):
+        calls.append(req)
+        ts = int(hdr(req, local_store.H_TIME))
+        mac = local_store.request_mac2(KEY2, "pc_01", "agent", req.get_method(), req.selector, hdr(req, local_store.H_TIME),
+                                       hdr(req, local_store.H_NONCE), req.data or b"")
+        if hdr(req, local_store.H_PC) != "pc_01" or hdr(req, local_store.H_SIGN) != mac:
+            return reply(req, 401, {"error": "Unauthorized"}, signed=False)
+        server_ms = int(time.time() * 1000) + AHEAD
+        if abs(server_ms - ts) > 120000:
+            return reply(req, 401, {"error": "clock", "server_ms": server_ms})
+        return reply(req, 200, {"state": "idle"})
+
+    lc = local_store.Client(LAN_CFG, opener=clock_opener)
+    check("처음 차이는 0", lc._skew_ms == 0)
+    try:
+        got = lc.get("apps/rpa/live/c1/pc_01")
+    except Exception as e:
+        got = f"{type(e).__name__}: {e}"
+    check("다시 보낸 요청이 성공한다", got == {"state": "idle"}, repr(got))
+    check("opener 는 정확히 2번", len(calls) == 2, len(calls))
+    check("다시 보낸 요청의 시각이 서버에 맞다", len(calls) == 2 and abs(int(hdr(calls[1], local_store.H_TIME)) - int(time.time() * 1000) - AHEAD) < 5000)
+    check("다시 보낸 요청은 새 nonce", len(calls) == 2 and hdr(calls[0], local_store.H_NONCE) != hdr(calls[1], local_store.H_NONCE))
+    check("차이를 기억한다 (다음 요청은 한 번에)", abs(lc._skew_ms - AHEAD) < 5000 and (calls.clear() or lc.get("apps/rpa/live/c1/pc_01")) == {"state": "idle"}
+          and len(calls) == 1)
+
+    calls.clear()
+
+    def always_clock(req, timeout=30):
+        calls.append(req)
+        return reply(req, 401, {"error": "clock", "server_ms": int(time.time() * 1000) + 10 ** 9})
+
+    expect("두 번째도 clock 이면 더 보내지 않고 HttpError 401", fb.HttpError, 401,
+           lambda: local_store.Client(LAN_CFG, opener=always_clock).get("apps/x"))
+    check("한 번만 다시 보냈다", len(calls) == 2, len(calls))
+
+    calls.clear()
+
+    def unsigned_clock(req, timeout=30):
+        calls.append(req)
+        return reply(req, 401, {"error": "clock", "server_ms": int(time.time() * 1000) + AHEAD}, signed=False)
+
+    try:
+        local_store.Client(LAN_CFG, opener=unsigned_clock).get("apps/x")
+        check("서명 없는 clock 은 AuthError(NOT_VERIFIED)", False)
+    except fb.AuthError as e:
+        check("서명 없는 clock 은 AuthError(NOT_VERIFIED)", e.status == 0 and e.code == local_store.NOT_VERIFIED)
+    check("서명 없는 clock 은 다시 보내지 않는다", len(calls) == 1, len(calls))
+
+    calls.clear()
+
+    def other_key_clock(req, timeout=30):
+        calls.append(req)
+        return reply(req, 401, {"error": "clock", "server_ms": int(time.time() * 1000) + AHEAD}, key="z" * 64)
+
+    expect("다른 열쇠로 서명한 clock 도 AuthError", fb.AuthError, 0, lambda: local_store.Client(LAN_CFG, opener=other_key_clock).get("apps/x"))
+    check("다른 열쇠 clock 도 다시 보내지 않는다", len(calls) == 1, len(calls))
+
+    calls.clear()
+    for bad_body in ({"error": "clock"}, {"error": "clock", "server_ms": "1"}, {"error": "clock", "server_ms": True}, {"error": "Unauthorized"}):
+        def odd_clock(req, timeout=30, body=bad_body):
+            calls.append(req)
+            return reply(req, 401, body)
+        expect(f"꼴이 틀린 서명된 401 은 HttpError 401 ({bad_body})", fb.HttpError, 401,
+               lambda: local_store.Client(LAN_CFG, opener=odd_clock).get("apps/x"))
+    check("꼴이 틀린 401 은 다시 보내지 않는다", len(calls) == 4, len(calls))
+
+    print("시계 차이 - 단독(나)은 다시 보내지 않는다")
+    calls.clear()
+    single = local_store.Client(dict(LAN_CFG, lan=False, pc_id="p1"), opener=always_clock)
+    expect("lan 없는 Client 는 서명된 401 clock 도 HttpError 401", fb.HttpError, 401, lambda: single.get("apps/x"))
+    check("단독은 한 번만 보냈고 차이를 바꾸지 않는다", len(calls) == 1 and single._skew_ms == 0, f"{len(calls)} {single._skew_ms}")
+    check("단독 요청에는 PC 번호 머리글이 없다 (ap1)", calls and hdr(calls[0], local_store.H_PC) is None
+          and hdr(calls[0], local_store.H_SIGN) == local_store.request_mac(KEY2, "agent", "GET", calls[0].selector, hdr(calls[0], local_store.H_TIME),
+                                                                           hdr(calls[0], local_store.H_NONCE), b""))
+
+    print("시계 차이 - 구독도 차이를 더해 서명하고, 열 때 clock 이면 한 번 다시 연다")
+    calls.clear()
+
+    class StreamResp(Resp):
+        def __iter__(self):
+            return iter([])
+
+    def stream_opener(req, timeout=30):
+        calls.append(req)
+        ts = int(hdr(req, local_store.H_TIME))
+        server_ms = int(time.time() * 1000) + AHEAD
+        if abs(server_ms - ts) > 120000:
+            return reply(req, 401, {"error": "clock", "server_ms": server_ms})
+        sign = local_store.response_mac(KEY2, hdr(req, local_store.H_NONCE), 200, b"")
+        return StreamResp(200, b"", msg(sign))
+
+    sc = local_store.Client(LAN_CFG, opener=stream_opener)
+    try:
+        got = list(sc.stream("apps/rpa/commands/c1/pc_01"))
+    except Exception as e:
+        got = f"{type(e).__name__}: {e}"
+    check("구독이 열린다 (두 번째에)", got == [] and len(calls) == 2, f"{got!r} {len(calls)}")
+    calls.clear()
+    list(sc.stream("apps/rpa/commands/c1/pc_01"))
+    check("다음 구독은 차이를 더해 한 번에", len(calls) == 1)
+
+    print("사용 중지·지워짐")
+    for body, code in (({"error": "pc_disabled"}, local_store.PC_DISABLED), ({"error": "pc_removed"}, local_store.PC_REMOVED)):
+        def st_opener(req, timeout=30, body=body):
+            return reply(req, 403, body)
+        try:
+            local_store.Client(LAN_CFG, opener=st_opener).put("apps/rpa/live/c1/pc_01", {"state": "idle"})
+            check(f"서명된 403 {body['error']} → AuthError", False)
+        except fb.AuthError as e:
+            check(f"서명된 403 {body['error']} → AuthError", e.status == 403 and e.code == code, f"{e.status} {e.code}")
+        except Exception as e:
+            check(f"서명된 403 {body['error']} → AuthError", False, f"{type(e).__name__}: {e}")
+    expect("그 밖의 서명된 403 은 지금처럼 HttpError", fb.HttpError, 403,
+           lambda: local_store.Client(LAN_CFG, opener=lambda req, timeout=30: reply(req, 403, {"error": "Permission denied"})).get("apps/x"))
+    expect("서명 없는 403 pc_disabled 는 AuthError(NOT_VERIFIED)", fb.AuthError, 0,
+           lambda: local_store.Client(LAN_CFG, opener=lambda req, timeout=30: reply(req, 403, {"error": "pc_disabled"}, signed=False)).get("apps/x"))
+
+    print("사내 서버 설정은 PC 번호가 있어야 한다")
+    expect("lan 인데 pc_id 없음 → ValueError", ValueError, None, lambda: local_store.Client({k: v for k, v in LAN_CFG.items() if k != "pc_id"}))
+    expect("lan 인데 pc_id 가 p1 → ValueError", ValueError, None, lambda: local_store.Client(dict(LAN_CFG, pc_id="p1")))
+    expect("lan 인데 pc_id 가 pc_1 → ValueError", ValueError, None, lambda: local_store.Client(dict(LAN_CFG, pc_id="pc_1")))
+    check("lan 없으면 pc_id 꼴을 보지 않는다", isinstance(local_store.Client(dict(LAN_CFG, lan=False, pc_id="p1")), local_store.Client))
+
+    print("등록 (enroll)")
+    TOKEN, RAND, GUID, HOST = "t" * 43, "cd" * 32, "12345678-1234-1234-1234-1234567890ab", "OFFICE-1"
+    NONCE = "e" * 32
+    ETEXT = pc_registry.encode_enrollment({"v": 1, "url": "http://127.0.0.1:8781", "pc": "pc_01", "token": TOKEN, "exp": 1})
+    WANT_AGENT, WANT_RELAY = pc_registry.derive_keys(TOKEN, RAND)
+    sent = []
+
+    def enroll_opener(sign_key):
+        def op(req, timeout=30):
+            sent.append(req)
+            b = json.loads(req.data.decode("utf-8"))
+            ok = (req.get_method() == "POST" and req.full_url == "http://127.0.0.1:8781/enroll"
+                  and b == {"v": 1, "pc": "pc_01", "rand": RAND, "guid": GUID, "host": HOST, "nonce": NONCE,
+                            "proof": pc_registry.enroll_proof(TOKEN, "pc_01", RAND, GUID, HOST)})
+            if not ok:
+                return reply(req, 403, {"error": "bad_proof"}, signed=False)
+            raw = json.dumps({"pc": "pc_01"}).encode("utf-8")
+            return Resp(200, raw, msg(local_store.response_mac(sign_key, b["nonce"], 200, raw)))
+        return op
+
+    try:
+        got = local_store.enroll("  " + ETEXT + "\n", GUID, HOST, opener=enroll_opener(WANT_AGENT), rand_hex=RAND, nonce=NONCE)
+    except Exception as e:
+        got = f"{type(e).__name__}: {e}"
+    check("등록 - 돌려준 열쇠가 derive_keys 와 같다", got == {"server_url": "http://127.0.0.1:8781", "pc_id": "pc_01",
+                                                         "agent_key": WANT_AGENT, "relay_key": WANT_RELAY}, repr(got))
+    check("등록 요청에 서명 머리글·토큰이 없다", sent and hdr(sent[0], local_store.H_SIGN) is None and TOKEN not in sent[0].data.decode("utf-8"))
+    try:
+        local_store.enroll(ETEXT, GUID, HOST, opener=enroll_opener("z" * 64), rand_hex=RAND, nonce=NONCE)
+        check("다른 열쇠로 서명한 등록 답은 AuthError(NOT_VERIFIED)", False)
+    except fb.AuthError as e:
+        check("다른 열쇠로 서명한 등록 답은 AuthError(NOT_VERIFIED)", e.status == 0 and e.code == local_store.NOT_VERIFIED)
+    try:
+        local_store.enroll(ETEXT, GUID, "OTHER", opener=enroll_opener(WANT_AGENT), rand_hex=RAND, nonce=NONCE)
+        check("서버 거절은 HttpError (본문의 error 코드 그대로)", False)
+    except fb.HttpError as e:
+        check("서버 거절은 HttpError (본문의 error 코드 그대로)", e.status == 403 and json.loads(e.body)["error"] == "bad_proof", e.body)
+    expect("등록 글 꼴이 틀리면 ValueError", ValueError, None, lambda: local_store.enroll("APE1.@@@", GUID, HOST, opener=enroll_opener(WANT_AGENT)))
+    r = []
+
+    def capture(req, timeout=30):
+        r.append(json.loads(req.data.decode("utf-8")))
+        return reply(req, 403, {"error": "unknown"}, signed=False)
+
+    expect("난수·nonce 를 안 주면 새로 만든다", fb.HttpError, 403, lambda: local_store.enroll(ETEXT, GUID, HOST, opener=capture))
+    check("만든 난수 64자·nonce 32자 hex", r and len(r[0]["rand"]) == 64 and len(r[0]["nonce"]) == 32
+          and all(ch in "0123456789abcdef" for ch in r[0]["rand"] + r[0]["nonce"]))
 finally:
     license_check.LICENSE_PUBLIC_KEY_HEX = saved_pub
     for k, v in saved_env.items():

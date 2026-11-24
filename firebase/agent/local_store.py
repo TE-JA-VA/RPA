@@ -24,7 +24,10 @@ LOCAL_HOSTS = ("127.0.0.1", "localhost")
 PORT = 8781                      # local_server.PORT 와 같다 (서버 모듈을 불러오지 않으려고 여기에도 둔다 - 시험이 같은지 본다)
 ROLES = ("agent", "relay")
 H_ROLE, H_TIME, H_NONCE, H_SIGN = "X-AP-Role", "X-AP-Time", "X-AP-Nonce", "X-AP-Sign"
+H_PC = "X-AP-PC"                         # 사내 서버(ap2): 서명한 PC 번호 - 서버가 이 번호로 등록부에서 열쇠를 찾는다
 NOT_VERIFIED = "SERVER_NOT_VERIFIED"     # 답한 쪽이 우리 로컬 서버가 아니다 (서명이 없거나 틀림) - 열쇠가 바뀐 경우도 여기로 온다
+PC_DISABLED = "PC_DISABLED"              # 사내 서버 관리자가 이 PC 를 사용 중지했다 (서명된 403)
+PC_REMOVED = "PC_REMOVED"                # 사내 서버 등록부에서 이 PC 를 지웠다 (서명된 403)
 
 
 def keys_dir():
@@ -49,6 +52,11 @@ def request_mac(key, role, method, target, ts, nonce, body, digest=None):
     return _mac(key, ["ap1", "req", role, method, target, str(ts), nonce, digest or _digest(body)])
 
 
+def request_mac2(key, pc_id, role, method, target, ts, nonce, body, digest=None):
+    """사내 서버(ap2) 요청 서명 - ap1 에 PC 번호가 더 묶인다 (열쇠가 PC 마다 다르다). 응답·이벤트 서명은 ap1 그대로."""
+    return _mac(key, ["ap2", "req", pc_id, role, method, target, str(ts), nonce, digest or _digest(body)])
+
+
 def response_mac(key, nonce, status, body):
     """응답 서명 - 그 요청의 nonce 에 묶인다 (다른 요청의 응답을 돌려쓰지 못한다)."""
     return _mac(key, ["ap1", "res", nonce, str(status), _digest(body)])
@@ -59,11 +67,33 @@ def event_mac(key, nonce, seq, event, raw):
     return _mac(key, ["ap1", "sse", nonce, str(seq), event, raw])
 
 
-def sign_headers(key, role, method, target, body=b"", now_ms=None, nonce=None):
-    """요청에 실을 머리글 {역할, 시각, nonce, 서명}. 열쇠는 들어가지 않는다."""
+def sign_headers(key, role, method, target, body=b"", now_ms=None, nonce=None, pc_id=None):
+    """요청에 실을 머리글 {역할, 시각, nonce, 서명}. 열쇠는 들어가지 않는다.
+    pc_id 가 있으면 사내 서버(ap2) - PC 번호 머리글을 싣고 request_mac2 로 서명한다. 없으면 단독(ap1) 그대로."""
     ts = str(int(time.time() * 1000) if now_ms is None else int(now_ms))
     nonce = nonce or secrets.token_hex(16)
-    return {H_ROLE: role, H_TIME: ts, H_NONCE: nonce, H_SIGN: request_mac(key, role, method, target, ts, nonce, body)}
+    if pc_id is None:
+        return {H_ROLE: role, H_TIME: ts, H_NONCE: nonce, H_SIGN: request_mac(key, role, method, target, ts, nonce, body)}
+    return {H_ROLE: role, H_PC: pc_id, H_TIME: ts, H_NONCE: nonce,
+            H_SIGN: request_mac2(key, pc_id, role, method, target, ts, nonce, body)}
+
+
+def _error_body(raw):
+    """거절 본문 JSON dict (아니면 None)."""
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _clock_ms(raw):
+    """서명된 401 본문이 {"error": "clock", "server_ms": <정수>} 이면 서버 시각(ms), 아니면 None."""
+    obj = _error_body(raw)
+    if obj is None or obj.get("error") != "clock":
+        return None
+    ms = obj.get("server_ms")
+    return ms if isinstance(ms, int) and not isinstance(ms, bool) else None
 
 
 class Client:
@@ -81,6 +111,15 @@ class Client:
         self._open = opener or urllib.request.build_opener(urllib.request.ProxyHandler({})).open
         self._now = clock
         self._offset = 0.0
+        # 사내 서버(lan): 모든 요청을 PC 번호로 서명(ap2)하고, 서명된 시계 답을 받으면 차이를 더한다. 단독은 둘 다 그대로 (pc None·차이 0).
+        self._pc = None
+        self._skew_ms = 0
+        if cfg.get("lan"):
+            import pc_registry               # 일반·단독 버전 경로는 불러오지 않는다
+            pc = cfg.get("pc_id")
+            if not isinstance(pc, str) or not pc_registry.PC_RE.fullmatch(pc):
+                raise ValueError("사내 서버에 등록한 PC 번호가 올바르지 않습니다.")
+            self._pc = pc
 
     # --- fb.Client 와 같은 겉모양 ----------------------------------------
     def server_now(self):
@@ -100,10 +139,12 @@ class Client:
         except Exception:
             pass
 
-    def _request(self, method, path, value=None, accept=None, timeout=30):
-        """서명한 요청을 보낸다 → (응답, nonce). path 는 '/db/…' 처럼 서버에 보내는 경로+질의."""
+    def _request(self, method, path, value=None, accept=None, timeout=30, retry=True):
+        """서명한 요청을 보낸다 → (응답, nonce). path 는 '/db/…' 처럼 서버에 보내는 경로+질의.
+        사내 서버: 서명된 401 clock 이면 서버 시각과의 차이를 기억하고 그 요청을 한 번만 다시 보낸다 (새 nonce).
+        서명된 403 pc_disabled·pc_removed 는 AuthError(403, PC_DISABLED·PC_REMOVED)."""
         body = b"" if value is None and method in ("GET", "DELETE") else json.dumps(value, ensure_ascii=False).encode("utf-8")
-        headers = sign_headers(self._key, self._role, method, path, body, now_ms=self._now() * 1000)
+        headers = sign_headers(self._key, self._role, method, path, body, now_ms=self._now() * 1000 + self._skew_ms, pc_id=self._pc)
         headers["Content-Type"] = "application/json"
         if accept:
             headers["Accept"] = accept
@@ -113,6 +154,17 @@ class Client:
         except urllib.error.HTTPError as e:
             raw = e.read()
             self._verify(e.headers, headers[H_NONCE], e.code, raw)     # 서명 없는 거절은 우리 서버의 답이 아니다
+            if self._pc is not None:
+                if e.code == 401 and retry:
+                    server_ms = _clock_ms(raw)
+                    if server_ms is not None:
+                        self._skew_ms = server_ms - int(self._now() * 1000)
+                        return self._request(method, path, value, accept, timeout, retry=False)
+                if e.code == 403:
+                    err = (_error_body(raw) or {}).get("error")
+                    code = {"pc_disabled": PC_DISABLED, "pc_removed": PC_REMOVED}.get(err) if isinstance(err, str) else None
+                    if code:
+                        raise fb.AuthError(403, code) from None
             raise fb.HttpError(e.code, raw.decode("utf-8", "replace")) from None
 
     def _verify(self, headers, nonce, status, raw):
@@ -203,6 +255,45 @@ class Client:
         if since:
             q["since"] = since
         return (self._json("GET", f"/fs-sum?{urllib.parse.urlencode(q)}") or {}).get("sum") or 0
+
+
+def enroll(text, guid, host, opener=None, rand_hex=None, nonce=None):
+    """사내 서버에 이 PC 를 등록한다 (설계 6.4) → {"server_url", "pc_id", "agent_key", "relay_key"}.
+    text 는 관리자가 준 등록 글(APE1.…). 토큰은 보내지 않고 증명(HMAC)만 보낸다 - 열쇠는 토큰과 이 PC 의 난수로 양쪽이 따로 만든다.
+    서버 답은 새 에이전트 열쇠와 이 요청의 nonce 로 서명되어 있어야 한다 (아니면 AuthError(0, NOT_VERIFIED)).
+    서버 거절(서명 없음)은 HttpError - 본문의 error 코드(unknown·expired·bad_proof·duplicate·seats) 그대로.
+    rand_hex·nonce 는 시험용 (없으면 새로 만든다). 등록 글 꼴이 틀리거나 주소가 이 PC 가 아니면 ValueError."""
+    import pc_registry                       # 일반·단독 버전 경로는 불러오지 않는다
+    info = pc_registry.decode_enrollment(text)
+    url = info["url"].rstrip("/")
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS:        # ① 은 이 PC 만 (사내 주소·https 는 ②)
+        raise ValueError("등록 글의 서버 주소가 이 PC(127.0.0.1)가 아닙니다.")
+    pc_id, token = info["pc"], info["token"]
+    if not pc_registry.PC_RE.fullmatch(pc_id):
+        raise ValueError("등록 글의 PC 번호가 올바르지 않습니다.")
+    rand_hex = rand_hex or secrets.token_hex(32)
+    nonce = nonce or secrets.token_hex(16)
+    proof = pc_registry.enroll_proof(token, pc_id, rand_hex, guid, host)
+    agent_key, relay_key = pc_registry.derive_keys(token, rand_hex)
+    body = json.dumps({"v": 1, "pc": pc_id, "rand": rand_hex, "guid": guid, "host": host, "nonce": nonce, "proof": proof},
+                      ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url + "/enroll", data=body, headers={"Content-Type": "application/json"}, method="POST")
+    open_ = opener or urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+    try:
+        resp = open_(req, timeout=30)
+    except urllib.error.HTTPError as e:
+        raise fb.HttpError(e.code, e.read().decode("utf-8", "replace")) from None
+    try:
+        raw = resp.read()
+        got = (resp.headers.get(H_SIGN) if resp.headers is not None else None) or ""
+        if resp.status != 200 or not hmac.compare_digest(got, response_mac(agent_key, nonce, resp.status, raw)):
+            raise fb.AuthError(0, NOT_VERIFIED)
+    finally:
+        close = getattr(resp, "close", None)
+        if close:
+            close()
+    return {"server_url": url, "pc_id": pc_id, "agent_key": agent_key, "relay_key": relay_key}
 
 
 def client_for(cfg):
