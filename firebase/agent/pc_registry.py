@@ -4,6 +4,7 @@
 - pcs.json = {"v": 1, "next": N, "pcs": {<pc_01>: {label, guid, host, agent_key, relay_key, state, created_at, enrolled_at, removed_at?}}}.
   agent_key·relay_key 는 저장한 이 값이 곧 열쇠다 - 그래서 파일은 관리자·SYSTEM 만 (local_server.LOCKED_FILES).
 - 등록 토큰은 디스크에 쓰지 않는다. 대기 중인 등록(번호·이름·토큰·만료·틀린 횟수)은 메모리에만 10분.
+  틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3).
 - PC 번호는 next 로 매기고 하나씩 올린다. 대기만 했던 번호·지운 번호도 다시 쓰지 않는다.
 - 열쇠는 토큰과 PC 가 만든 난수로 양쪽이 따로 만든다 (휴대폰 짝짓기와 같은 방식) - 등록 글만 주운 사람은 열쇠를 만들지 못한다.
 표준 라이브러리만. 기록(local_server.log)에 토큰·열쇠·증명을 싣지 않는다.
@@ -21,7 +22,7 @@ import time
 
 PC_RE = re.compile(r"pc_\d{2,4}")
 ENROLL_SEC = 600                 # 등록 토큰 유효 시간
-ENROLL_FAIL_MAX = 5              # 등록 증명이 이만큼 틀리면 그 등록을 취소한다
+REMOVED_KEEP_MS = 3 * 24 * 3600 * 1000   # 지운 PC 의 열쇠를 두는 시간 - 그동안만 '지워짐' 답에 서명한다. 지나면 열쇠만 지우고 번호·이름 기록은 남긴다 (사용자 2026-11-24 "3일 뒤에 지우자")
 LABEL_MAX = 40
 PREFIX = "APE1."                 # 등록 글(한 줄) 머리
 PCS_NAME = "pcs.json"
@@ -123,6 +124,7 @@ def _pc_num(pc_id):
 class Registry:
     """PC 등록부. 모든 읽기·쓰기는 잠금 하나 안에서. 쓸 때마다 임시 파일 → os.replace.
     깨진 파일은 .broken 으로 옮기고 빈 등록부 (+ 서버 기록). 대기 중인 등록·마지막 연결 시각은 메모리에만.
+    틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3) - 대기는 10분이 지나거나 관리자가 취소해야 끝난다.
     seats 는 바꿔 끼울 수 있다 (라이선스의 자리 수). on_save: 파일을 쓴 뒤 부른다 (설치본은 파일 권한을 다시 잠근다)."""
 
     def __init__(self, path, seats, clock=time.time, on_save=None):
@@ -131,9 +133,29 @@ class Registry:
         self.on_save = on_save
         self._clock = clock
         self._lock = threading.RLock()
-        self._pending = {}           # pc_id → {token, label, created_at(ms), expires_at(ms), fails}
+        self._pending = {}           # pc_id → {token, label, created_at(ms), expires_at(ms), fails(기록용 - 취소하지 않는다)}
         self._seen = {}              # pc_id → 마지막 연결 ms
         self._next, self._pcs = self._load()
+        self.purge()                 # 꺼져 있던 사이에 3일이 지난 열쇠
+
+    def _expired(self, rec, now_ms):
+        """지운 지 REMOVED_KEEP_MS 가 지났는데 열쇠가 남아 있는 기록인가."""
+        at = rec.get("removed_at")
+        return (rec["state"] == "removed" and rec.get("agent_key") is not None
+                and (not isinstance(at, int) or isinstance(at, bool) or now_ms - at >= REMOVED_KEEP_MS))
+
+    def purge(self):
+        """지운 지 3일 지난 PC 의 열쇠를 파일에서 지운다 → 지운 수. 번호·이름·지운 시각은 남긴다 (번호를 다시 쓰지 않고 실행 기록에 이름이 남게).
+        켤 때, 지운 PC 의 열쇠를 찾을 때 부른다. 서버가 오래 켜져 있으면 하루 한 번 부르는 것은 ④ 의 몫."""
+        with self._lock:
+            now = self._now_ms()
+            gone = [k for k, r in self._pcs.items() if self._expired(r, now)]
+            if gone:
+                pcs = dict(self._pcs)
+                for k in gone:
+                    pcs[k] = {n: v for n, v in pcs[k].items() if n not in ("agent_key", "relay_key")}
+                self._save(self._next, pcs)
+            return len(gone)
 
     # -- 파일 ----------------------------------------------------------------------------------------
 
@@ -158,8 +180,8 @@ class Registry:
                 pass
             return 1, {}
         pcs = {k: dict(v) for k, v in rows.items()
-               if isinstance(k, str) and PC_RE.fullmatch(k) and isinstance(v, dict)
-               and isinstance(v.get("agent_key"), str) and isinstance(v.get("relay_key"), str) and v.get("state") in STATES}
+               if isinstance(k, str) and PC_RE.fullmatch(k) and isinstance(v, dict) and v.get("state") in STATES
+               and (v["state"] == "removed" or (isinstance(v.get("agent_key"), str) and isinstance(v.get("relay_key"), str)))}   # 지운 PC 는 3일 뒤 열쇠가 없다
         nxt = raw.get("next")
         if not isinstance(nxt, int) or isinstance(nxt, bool) or nxt < 1:
             nxt = 1
@@ -211,11 +233,11 @@ class Registry:
         return sum(1 for r in self._pcs.values() if r["state"] in ("active", "disabled")) + len(self._pending)
 
     def _fail(self, pc_id):
+        """틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3) - 256비트 토큰의 HMAC 증명은 맞힐 수 없고, 취소하게 두면
+        PC 번호만 아는 누구나 쓰레기 요청 몇 번으로 남의 등록을 막는다. 센 수는 기록용."""
         cur = self._pending.get(pc_id)
         if cur is not None:
             cur["fails"] += 1
-            if cur["fails"] >= ENROLL_FAIL_MAX:
-                del self._pending[pc_id]
         return EnrollError("bad_proof")
 
     # -- 등록 ----------------------------------------------------------------------------------------
@@ -280,10 +302,16 @@ class Registry:
             return rec["state"] if rec is not None else None
 
     def keys(self, pc_id):
-        """(agent_key, relay_key) - 지운 PC 도 돌려준다 (서버가 '지워짐' 답에 서명해야 해서). 모르면 None. 서버 안에서만 쓴다."""
+        """(agent_key, relay_key) - 지운 PC 도 3일 동안은 돌려준다 (서버가 '지워짐' 답에 서명해야 해서). 3일이 지났으면 열쇠를 지우고 None.
+        모르면 None. 서버 안에서만 쓴다."""
         with self._lock:
             rec = self._pcs.get(pc_id) if isinstance(pc_id, str) else None
-            return (rec["agent_key"], rec["relay_key"]) if rec is not None else None
+            if rec is not None and self._expired(rec, self._now_ms()):
+                self.purge()
+                rec = self._pcs.get(pc_id)
+            if rec is None or rec.get("agent_key") is None:
+                return None
+            return rec["agent_key"], rec["relay_key"]
 
     def label(self, pc_id):
         with self._lock:

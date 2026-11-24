@@ -340,10 +340,14 @@ class Runs:
                                    (parent, collection, doc_id)).fetchone()
         return json.loads(row[0]) if row else None
 
-    def sum(self, parent, collection, field, since=None):
-        """field 칸의 합. since 가 있으면 started_at >= since 인 문서만. 칸이 없거나 숫자가 아닌 문서는 뺀다."""
+    def sum(self, parent, collection, field, since=None, pc_id=None):
+        """field 칸의 합. since 가 있으면 started_at >= since 인 문서만. 칸이 없거나 숫자가 아닌 문서는 뺀다.
+        pc_id 가 있으면 그 PC 의 문서만 (사내 서버 - 남의 PC 기록을 더해 보지 못하게, 검토 2026-11-24 I-2)."""
         sql = "SELECT doc FROM docs WHERE parent=? AND collection=?"
         args = [parent, collection]
+        if pc_id is not None:
+            sql += " AND pc_id=?"
+            args.append(str(pc_id))
         if since is not None:
             sql += " AND started_at >= ?"
             args.append(str(since))
@@ -395,6 +399,7 @@ SIGN_WINDOW_MS = 60000                     # 요청 시각이 서버 시각과 �
 NONCE_KEEP_SEC = 150
 LOG_NAME = "로컬서버_기록.txt"
 LOG_MAX = 1024 * 1024
+REJECT_LOG_MAX, REJECT_LOG_SEC = 10, 60    # PC 등록 거절 기록은 서버 전체에서 60초에 10줄까지 (쓰레기 /enroll 로 기록을 채우지 못하게, 검토 I-3)
 KEY_FILES = ("agent.key", "relay.key")
 VOLATILE = ("apps/otp", f"apps/{APP}/live")   # 인증번호와 현황은 메모리에만 (파일에 남기지 않는다 - 현황은 에이전트가 곧 다시 올린다)
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
@@ -687,6 +692,25 @@ class LocalServer(http.server.ThreadingHTTPServer):
             self.nonces[nonce] = now + keep
             return True
 
+    def enroll_reject_log(self, text):
+        """PC 등록 거절 한 줄 - REJECT_LOG_SEC 창마다 REJECT_LOG_MAX 줄까지만 쓰고 나머지는 센다. 창이 넘어간 뒤 첫 거절 때
+        생략한 수를 한 줄로 남긴다 (검토 2026-11-24 I-3). 창 = [시작, 이 창의 거절 수, 생략한 수], 시계는 log_clock."""
+        now = self.log_clock()
+        with self.conn_lock:
+            win = self.reject_win
+            skipped = 0
+            if now - win[0] >= REJECT_LOG_SEC:
+                skipped = win[2]
+                win[:] = [now, 0, 0]
+            win[1] += 1
+            write = win[1] <= REJECT_LOG_MAX
+            if not write:
+                win[2] += 1
+        if skipped:
+            log(self.folder, f"PC 등록 거절 {skipped}건 더 (기록 생략)")
+        if write:
+            log(self.folder, text)
+
     def stream_slot(self, pc_id, on):
         """사내 서버 에이전트 구독 자리 잡기(on=True)·돌려주기(False). 잡기는 전체·PC 하나 상한 안일 때만 True."""
         d = self.deploy
@@ -771,7 +795,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ok:
             key = srv.keys[local_store.ROLES.index(role)]
             want = local_store.request_mac(key, role, method, self.path, ts, nonce, b"", digest=digest)
-            ok = hmac.compare_digest(sign, want) and srv.fresh_nonce(nonce, now)
+            # ASCII 가 아닌 서명 글은 compare_digest 가 TypeError 를 낸다 - 틀린 서명으로 본다 (검토 2026-11-24 M-5)
+            ok = sign.isascii() and hmac.compare_digest(sign, want) and srv.fresh_nonce(nonce, now)
         if not ok:
             self._reply(401, {"error": "Unauthorized"})
             raise _Stop()
@@ -792,7 +817,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ok:
             key = keys[local_store.ROLES.index(role)]
             want = local_store.request_mac2(key, pc, role, method, self.path, ts, nonce, b"", digest=digest)
-            ok = hmac.compare_digest(sign, want)
+            ok = sign.isascii() and hmac.compare_digest(sign, want)     # ASCII 가 아니면 틀린 서명 (검토 2026-11-24 M-5)
         if not ok:
             self._reply(401, {"error": "Unauthorized"})
             raise _Stop()
@@ -831,7 +856,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             agent_key, _ = srv.registry.enroll(pc, body["rand"], body["guid"], body["host"], body["proof"])
         except pc_registry.EnrollError as e:
             if pc_registry.PC_RE.fullmatch(pc):
-                log(srv.folder, f"PC 등록 거절  번호={pc}  까닭={e.code}")
+                srv.enroll_reject_log(f"PC 등록 거절  번호={pc}  까닭={e.code}")
             return self._reply(403, {"error": e.code})
         log(srv.folder, f"PC 등록  번호={pc}  컴퓨터={body['host']}")
         self._auth = (agent_key, body["nonce"])
@@ -877,7 +902,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if url.path.startswith("/fs/") and method in ("GET", "POST"):
                 return self._fs(method, role, self._parts(url.path[4:]), query, raw, pc)
             if url.path == "/fs-sum" and method == "GET":
-                return self._fs_sum(role, query)
+                return self._fs_sum(role, query, pc)
             self._reply(404, {"error": "Not found"})
         except _Stop:
             pass
@@ -927,6 +952,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if "text/event-stream" in (self.headers.get("Accept") or ""):
                 return self._stream(path, order_by, equal_to, me)
             value = srv.store.get(path, order_by, equal_to)
+            if kind == "otp_requests" and isinstance(value, dict):
+                # 남의 요청은 누가·언제 열었는지만 (otp_relay.PhoneRelay._free 가 보는 두 칸). req_id·발신번호·사이트는 연 PC 만 본다
+                # - req_id 를 알아 둔 PC 가 만료 뒤 같은 번호로 다시 열지 못하게 (검토 2026-11-24 I-1)
+                pc_me = lic["pc_id"] if me is None else me
+                if value.get("pcId") != pc_me:
+                    value = {k: value[k] for k in ("pcId", "created_at") if k in value} or None
             if order_by is not None and isinstance(value, dict) and ("endAt" in query or "limitToFirst" in query):
                 value = _range(value, order_by, _json_arg(query.get("endAt")), query.get("limitToFirst"))
             return self._reply(200, value)
@@ -1035,11 +1066,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._reply(403, DENIED)
         return self._reply(200, doc) if doc is not None else self._reply(404, {"error": "Not found"})
 
-    def _fs_sum(self, role, query):
+    def _fs_sum(self, role, query, me=None):
+        """합 읽기. 사내 서버는 서명으로 확인한 PC(me)의 문서만 더한다 (검토 2026-11-24 I-2). 단독은 지금 그대로 업체 전체."""
         lic = self.server.lic
         if role != "agent" or query.get("parent") != f"runs/{lic['cid']}" or query.get("collection") != "items" or not query.get("field"):
             return self._reply(403, DENIED)
-        return self._reply(200, {"sum": self.server.runs.sum(query["parent"], "items", query["field"], query.get("since") or None)})
+        mine = me if self.server.registry is not None else None
+        return self._reply(200, {"sum": self.server.runs.sum(query["parent"], "items", query["field"], query.get("since") or None,
+                                                             pc_id=mine)})
 
 
 class _Stop(Exception):
@@ -1087,6 +1121,7 @@ def make_server(store, runs, lic, keys, host="127.0.0.1", port=PORT, folder=None
     srv.folder = folder or os.path.dirname(store.path or "") or "."
     srv.stopping = threading.Event()
     srv.conn_lock, srv.conns, srv.nonces, srv.streams = threading.Lock(), 0, {}, {}
+    srv.log_clock, srv.reject_win = time.monotonic, [float("-inf"), 0, 0]
     try:
         srv.server_bind()
         srv.server_activate()

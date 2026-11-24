@@ -150,7 +150,7 @@ try:
     req = store.get("apps/otp/requests/c1/ph1/current")
     check("요청이 열린다 (서버 시각)", isinstance(req, dict) and req["req_id"] == req_id and isinstance(req["created_at"], int)
           and req["senders"] == {"01012345678": True}, repr(req))
-    store.put("apps/otp/codes/c1/ph1/current", {"req_id": req_id, "code": "482913"})
+    store.put("apps/otp/codes/c1/ph1/current", {"req_id": req_id, "code": "482913", "written_at": int(time.time() * 1000)})     # 휴대폰 창구처럼 쓴 시각 (검토 I-1)
     check("번호를 받는다", relay.wait(req_id, 2, tick=time.sleep) == "482913")
     relay.close(req_id)
     check("끝나면 번호·요청을 지운다", store.get("apps/otp/codes/c1/ph1") is None and store.get("apps/otp/requests/c1/ph1") is None)

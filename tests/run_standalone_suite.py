@@ -19,7 +19,8 @@ SA = ["tests/test_license.py", "tests/test_local_store_core.py", "tests/test_loc
       # 계획 ④ (휴대폰 창구)
       "tests/test_phone_core.py", "tests/test_phone_gate.py", "tests/test_otp_fallback.py", "tests/check_phone_local.py",
       # 사내 서버 ① (여러 PC)
-      "tests/test_pc_registry.py", "tests/test_lan_server.py", "tests/test_lan_web.py", "tests/test_lan_e2e.py"]
+      "tests/test_pc_registry.py", "tests/test_lan_server.py", "tests/test_lan_web.py", "tests/test_lan_e2e.py",
+      "tests/test_lan_review_fixes.py"]
 CLOUD = ["firebase/tests/test_agent.py", "tests/test_fb_backoff.py", "tests/test_cloud_scrub.py", "tests/test_dev_env.py",
          "tests/test_background.py", "tests/test_rpa_update.py", "tests/test_otp_replay.py", "tests/test_build_release.py",
          "tests/test_server_info.py", "tests/test_settings.py", "tests/test_update_helper.py", "tests/test_observer_notes.py",

@@ -399,11 +399,14 @@ class Desk:
     def open(self, phone_id, body, pc_id):
         """요청 열기 (모양은 local_server.otp_request_ok 가 이미 봤다) → 열었으면 True. 시각은 이 창구의 시계.
         다른 PC 의 살아 있는 요청이 있으면 쓰지 않고 False - 뒤에 온 PC 는 비거나 2분이 지날 때까지 기다린다 (otp_relay.PhoneRelay.open).
-        같은 PC 는 덮어쓴다. 확인과 쓰기는 Store 잠금 하나 안에서 (거의 동시에 연 둘 가운데 하나만)."""
+        같은 PC 는 덮어쓴다. 확인과 쓰기는 Store 잠금 하나 안에서 (거의 동시에 연 둘 가운데 하나만).
+        새 요청을 쓰면서 그 휴대폰의 번호 자리를 같은 쓰기 한 번으로 지운다 - 만료된 요청의 req_id 를 아는 다른 PC 가 같은 req_id 로
+        다시 열어 앞 PC 의 번호를 읽지 못하게 (검토 2026-11-24 I-1)."""
         now_ms = _now_ms(self._clock)
         try:
-            self.store.put(self.req_path(phone_id), dict(body, created_at=now_ms),
-                           guard=lambda get: not self._others(get(self.req_path(phone_id)), pc_id, now_ms))
+            self.store.patch("apps/otp", {f"requests/{self.cid}/{phone_id}/current": dict(body, created_at=now_ms),
+                                          f"codes/{self.cid}/{phone_id}/current": None},
+                             guard=lambda get: not self._others(get(self.req_path(phone_id)), pc_id, now_ms))
         except local_server.Refused:
             return False
         return True
@@ -461,10 +464,14 @@ class Desk:
 
     def read_code(self, phone_id, pc_id=None):
         """번호 - 그 휴대폰의 요청이 열려 있고 req_id 가 같을 때만 (요청이 닫히면 아무도 못 읽는다).
-        pc_id 가 있으면 그 요청을 연 PC(pcId)일 때만 (사내 서버 ① Task 5 - 다른 PC 는 null)."""
+        pc_id 가 있으면 그 요청을 연 PC(pcId)일 때만 (사내 서버 ① Task 5 - 다른 PC 는 null).
+        번호는 그 요청이 열린 뒤에 쓴 것(written_at >= created_at)만 - 앞 요청 때 쓴 번호는 req_id 가 같아도 안 읽힌다 (검토 2026-11-24 I-1)."""
         req = self.open_request(phone_id)
         code = self.store.get(self.code_path(phone_id))
         if req is None or not isinstance(code, dict) or code.get("req_id") != req.get("req_id"):
+            return None
+        written = code.get("written_at")
+        if not isinstance(written, int) or isinstance(written, bool) or written < req["created_at"]:
             return None
         if pc_id is not None and req.get("pcId") != pc_id:
             return None

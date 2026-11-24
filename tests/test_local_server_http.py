@@ -214,8 +214,9 @@ try:
           and call("PATCH", "/db/apps/otp/requests/c1.json", {"": {"a": 1}}, key=RELAY).status == 403)
     check("요청 아래 다른 자리 403", call("PUT", "/db/apps/otp/requests/c1/ph1/other.json", OTP_REQ, key=RELAY).status == 403
           and call("PATCH", REQ, {"site": "y"}, key=RELAY).status == 403)
-    store.put("apps/otp/codes/c1/ph1/current", {"req_id": OTP_REQ["req_id"], "code": "123456"})
-    check("번호 읽기", call("GET", "/db/apps/otp/codes/c1/ph1/current.json", key=RELAY).json() == {"req_id": OTP_REQ["req_id"], "code": "123456"})
+    code_now = int(time.time() * 1000)          # 휴대폰 창구(Desk.submit)처럼 쓴 시각을 적는다 - 요청보다 먼저 쓴 번호는 읽히지 않는다 (사내 서버 ① 검토 I-1)
+    store.put("apps/otp/codes/c1/ph1/current", {"req_id": OTP_REQ["req_id"], "code": "123456", "written_at": code_now})
+    check("번호 읽기", call("GET", "/db/apps/otp/codes/c1/ph1/current.json", key=RELAY).json() == {"req_id": OTP_REQ["req_id"], "code": "123456", "written_at": code_now})
     check("짝짓지 않은 휴대폰으로 요청 403", call("PUT", "/db/apps/otp/requests/c1/ph9/current.json", OTP_REQ, key=RELAY).status == 403)
     saved = open(os.path.join(TMP, "store.json"), encoding="utf-8").read()
     check("인증번호·요청·현황은 파일에 남지 않는다", "123456" not in saved and "otp" not in saved and "live" not in saved and "commands" in saved)

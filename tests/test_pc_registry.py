@@ -117,15 +117,14 @@ def test_expired_and_bad_proof():
     check("만료된 대기는 자리를 쓰지 않는다", reg.used() == 0)
 
     s = reg.start("증명 PC")
-    good = pc_registry.enroll_proof(s["token"], s["pc_id"], RAND, GUID, "OFFICE-1")
-    bad = pc_registry.enroll_proof("x" * 43, s["pc_id"], RAND, GUID, "OFFICE-1")
-    for i in range(pc_registry.ENROLL_FAIL_MAX - 1):
-        check(f"틀린 증명 {i + 1}번째는 bad_proof", raises(lambda: reg.enroll(s["pc_id"], RAND, GUID, "OFFICE-1", bad), "bad_proof"))
-    check("4번 틀려도 아직 대기 중", any(x["pcId"] == s["pc_id"] for x in reg.list()))
-    check("5번째 틀림도 bad_proof", raises(lambda: reg.enroll(s["pc_id"], RAND, GUID, "OFFICE-1", bad), "bad_proof"))
-    check("5번 틀리면 대기가 취소되어 맞는 증명도 unknown",
-          raises(lambda: reg.enroll(s["pc_id"], RAND, GUID, "OFFICE-1", good), "unknown"))
-    check("취소된 대기는 목록에 없다", not any(x["pcId"] == s["pc_id"] for x in reg.list()))
+    bad =pc_registry.enroll_proof("x" * 43, s["pc_id"], RAND, GUID, "OFFICE-1")
+    # 틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3 - PC 번호만 아는 누구나 남의 등록을 막지 못하게)
+    check("틀린 증명 10번 모두 bad_proof", all(raises(lambda: reg.enroll(s["pc_id"], RAND, GUID2, "OFFICE-1", bad), "bad_proof")
+                                          for _ in range(10)))
+    check("10번 틀려도 아직 대기 중", any(x["pcId"] == s["pc_id"] and x["state"] == "pending" for x in reg.list()))
+    check("10번 틀린 뒤에도 맞는 증명이면 등록된다",
+          reg.enroll(s["pc_id"], RAND, GUID2, "OFFICE-1", pc_registry.enroll_proof(s["token"], s["pc_id"], RAND, GUID2, "OFFICE-1"))
+          == pc_registry.derive_keys(s["token"], RAND))
 
     s = reg.start("꼴 PC")
     tok = s["token"]
@@ -137,9 +136,10 @@ def test_expired_and_bad_proof():
     check("PC 난수 길이 틀림은 bad_proof", raises(try_with("ab" * 31, GUID, "OFFICE-1"), "bad_proof"))
     check("GUID 꼴 틀림은 bad_proof", raises(try_with(RAND, "not-a-guid", "OFFICE-1"), "bad_proof"))
     check("컴퓨터 이름 64자는 bad_proof", raises(try_with(RAND, GUID, "H" * 64), "bad_proof"))
-    check("꼴이 틀린 것도 같은 셈 - 5번째(한글 증명)에 취소",
+    check("꼴이 틀린 것도 같은 셈 - 5번째(한글 증명)에도 취소하지 않는다",
           raises(try_with(RAND, GUID, "OFFICE-1", proof="가나다"), "bad_proof")
-          and raises(try_with(RAND, GUID, "OFFICE-1"), "unknown"))
+          and any(x["pcId"] == s["pc_id"] and x["state"] == "pending" for x in reg.list()))
+    reg.cancel(s["pc_id"])
 
     s = reg.start("글 아닌 증명 PC")
     tok = s["token"]
@@ -262,6 +262,40 @@ def test_disable_remove_keys():
     check("대기 번호의 state·keys 는 None", (lambda s: reg.state(s["pc_id"]) is None and reg.keys(s["pc_id"]) is None)(reg.start("대기")))
 
 
+def test_removed_keys_purged_after_3_days():
+    print("지운 PC 의 열쇠는 3일 뒤에 지운다 (사용자 2026-11-24)")
+    T[0] = 1795100000.0
+    reg = pc_registry.Registry(p("purge.json"), seats=5, clock=clock)
+    a = reg.start("가")
+    keys = enroll(reg, a)
+    b = reg.start("나")
+    enroll(reg, b, guid=GUID2)
+    reg.remove(a["pc_id"])
+    check("3일 상수", pc_registry.REMOVED_KEEP_MS == 3 * 24 * 3600 * 1000)
+    T[0] += 3 * 24 * 3600 - 1
+    check("3일 안에는 열쇠가 있다 ('지워짐' 답에 서명)", reg.keys(a["pc_id"]) == keys)
+    T[0] += 2
+    check("3일이 지나면 keys None", reg.keys(a["pc_id"]) is None)
+    check("state 는 removed 그대로", reg.state(a["pc_id"]) == "removed")
+    text = open(p("purge.json"), encoding="utf-8").read()
+    check("파일에서도 열쇠가 지워졌다", keys[0] not in text and keys[1] not in text)
+    rec = json.loads(text)["pcs"][a["pc_id"]]
+    check("번호·이름·지운 시각은 남는다", rec["label"] == "가" and rec["state"] == "removed" and isinstance(rec.get("removed_at"), int), rec)
+    check("다른 PC 는 그대로", reg.state(b["pc_id"]) == "active" and reg.keys(b["pc_id"]) is not None)
+    reg2 = pc_registry.Registry(p("purge.json"), seats=5, clock=clock)
+    check("다시 읽어도 지운 PC 기록이 남고 번호를 다시 쓰지 않는다", reg2.state(a["pc_id"]) == "removed" and reg2.keys(a["pc_id"]) is None
+          and reg2.start("다")["pc_id"] == "pc_03")
+    # 서버가 꺼져 있다 켜진 경우 - 읽을 때 지난 것을 지운다
+    T[0] = 1795200000.0
+    reg3 = pc_registry.Registry(p("purge2.json"), seats=5, clock=clock)
+    c = reg3.start("라")
+    k3 = enroll(reg3, c)
+    reg3.remove(c["pc_id"])
+    T[0] += 4 * 24 * 3600
+    pc_registry.Registry(p("purge2.json"), seats=5, clock=clock)
+    check("켤 때 3일 지난 열쇠를 파일에서 지운다", k3[0] not in open(p("purge2.json"), encoding="utf-8").read())
+
+
 def test_enrollment_text_roundtrip():
     print("등록 글 한 줄")
     info = {"v": 1, "url": "http://127.0.0.1:8781", "pc": "pc_01", "token": "t" * 43, "exp": 1}
@@ -312,6 +346,7 @@ try:
     test_numbers_not_reused()
     test_list_has_no_secrets()
     test_disable_remove_keys()
+    test_removed_keys_purged_after_3_days()
     test_enrollment_text_roundtrip()
     test_reload_keeps_pcs()
 finally:

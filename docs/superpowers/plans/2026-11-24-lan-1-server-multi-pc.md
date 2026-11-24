@@ -18,7 +18,7 @@
 - 기록(`local_server.log`)에 열쇠, 등록 토큰, 서명, 인증번호를 싣지 않는다. 등록 토큰은 디스크에 쓰지 않는다 (메모리에만 10분).
 - 화면에 나가는 글은 한국어 업무 말투 ('~하여 주십시오'), '버전' (판 금지), '묶음' 금지.
 - 사내 서버 PC 번호 꼴 `pc_01` (정규식 `pc_\d{2,4}`), 지운 번호는 다시 쓰지 않는다.
-- 숫자: 등록 유효 600초, 등록 증명 틀림 5번이면 그 등록 취소, 사내 서버 서명 허용 차이 120000ms (단독은 지금 60000ms), 사내 서버 동시 연결 256, 웹 구독 32, 에이전트 구독 전체 64·PC 하나 4.
+- 숫자: 등록 유효 600초, 틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3), 사내 서버 서명 허용 차이 120000ms (단독은 지금 60000ms), 사내 서버 동시 연결 256, 웹 구독 32, 에이전트 구독 전체 64·PC 하나 4.
 - 커밋은 작업마다 `git commit -F <파일>` (메시지 파일은 Write 로 만들고 BOM 없이), 끝줄 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. push 하지 않는다. `--no-verify` 금지.
 - 끝나면 `graphify update .` (작업 폴더에서).
 
@@ -93,14 +93,14 @@ def test_volatile_only_write_skips_file():
 
 **Interfaces:**
 - Produces (모두 `pc_registry` 모듈):
-  - `PC_RE = re.compile(r"pc_\d{2,4}")`, `ENROLL_SEC = 600`, `ENROLL_FAIL_MAX = 5`, `LABEL_MAX = 40`, `PREFIX = "APE1."`
+  - `PC_RE = re.compile(r"pc_\d{2,4}")`, `ENROLL_SEC = 600`, `LABEL_MAX = 40`, `PREFIX = "APE1."`
   - `class SeatsFull(Exception)`, `class EnrollError(Exception)` - `.code` ∈ `"unknown" | "expired" | "bad_proof" | "duplicate" | "seats"`
   - `enroll_proof(token: str, pc_id: str, rand_hex: str, guid: str, host: str) -> str` = HMAC-SHA256(열쇠 token, 글 `"ap2 enroll\n{pc_id}\n{rand_hex}\n{guid}\n{host}"`) hex
   - `derive_keys(token: str, rand_hex: str) -> tuple[str, str]` = (HMAC-SHA256(token, `"ap2 pc agent\n" + rand_hex`) hex, HMAC-SHA256(token, `"ap2 pc relay\n" + rand_hex`) hex)
   - `encode_enrollment(info: dict) -> str` = `PREFIX + base64url(JSON, 패딩 없음)`; `decode_enrollment(text: str) -> dict` (앞뒤 빈칸 무시, 꼴이 틀리면 `ValueError`; 칸 `v`(=1)·`url`·`pc`·`token`·`exp` 가 모두 있어야 한다)
   - `class Registry(path, seats: int, clock=time.time)`:
     - `start(label: str) -> {"pc_id", "token", "expires_at"}` - 자리가 없으면 `SeatsFull`, 이름이 비었거나 `LABEL_MAX` 초과·제어 글자면 `ValueError`. 번호는 파일의 `next` 로 매기고 하나 올린다 (지운 번호를 다시 쓰지 않는다). 토큰 `secrets.token_urlsafe(32)` 는 메모리에만.
-    - `enroll(pc_id, rand_hex, guid, host, proof) -> (agent_key, relay_key)` - 대기 중 아님 `unknown`, 10분 지남 `expired`(대기도 지움), 증명 틀림 `bad_proof`(5번째에 대기 취소), 같은 `guid` 가 active·disabled 로 이미 있음 `duplicate`, 자리 없음 `seats`. `rand_hex` 는 64자 소문자 hex, `guid` 는 `[0-9A-Fa-f-]{36}`, `host` 는 1~63자 출력 글자 - 아니면 `bad_proof` 와 같은 셈. 성공하면 기록 `{label, guid, host, agent_key, relay_key, state: "active", created_at, enrolled_at}` 을 저장하고 대기를 지운다.
+    - `enroll(pc_id, rand_hex, guid, host, proof) -> (agent_key, relay_key)` - 대기 중 아님 `unknown`, 10분 지남 `expired`(대기도 지움), 증명 틀림 `bad_proof`(틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3)), 같은 `guid` 가 active·disabled 로 이미 있음 `duplicate`, 자리 없음 `seats`. `rand_hex` 는 64자 소문자 hex, `guid` 는 `[0-9A-Fa-f-]{36}`, `host` 는 1~63자 출력 글자 - 아니면 `bad_proof` 와 같은 셈. 성공하면 기록 `{label, guid, host, agent_key, relay_key, state: "active", created_at, enrolled_at}` 을 저장하고 대기를 지운다.
     - `cancel(pc_id) -> bool`, `state(pc_id) -> "active"|"disabled"|"removed"|None`, `keys(pc_id) -> (agent_key, relay_key) | None` (removed 도 돌려준다 - 서버가 '지워짐' 답에 서명해야 해서), `label(pc_id) -> str | None`
     - `list() -> list[dict]` - removed 는 뺀다. 칸: `pcId, label, host, state("pending"|"active"|"disabled"), enrolledAt, expiresAt, lastSeen` (열쇠·토큰·guid 없음)
     - `rename(pc_id, label)`, `disable(pc_id, on: bool)`, `remove(pc_id)` (state=removed, removed_at - 자리를 돌려준다), `seen(pc_id)` (메모리의 마지막 연결 ms)
@@ -123,7 +123,7 @@ def test_enroll_once():
     check("파일에 토큰이 없다", s["token"] not in open(p("a.json"), encoding="utf-8").read())
 
 def test_expired_and_bad_proof():
-    # 600초 지나면 expired, 틀린 증명 5번이면 대기가 취소되어 맞는 증명도 unknown
+    # 600초 지나면 expired, 틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3) - 10번 틀린 뒤에도 맞는 증명이면 등록
 def test_seats():
     # seats=2: start 두 번(대기 포함) 뒤 세 번째 start 는 SeatsFull, 하나 remove 하면 다시 start 가능
 def test_duplicate_guid():
