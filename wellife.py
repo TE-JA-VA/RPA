@@ -474,9 +474,12 @@ def excel_together(rr, ctx, import_live):
         if import_live:
             copy = open_order_copy(rr, ctx)
             switch_tab(rr, ctx, ORDER_TAB)
+            marks = rr.status.work_marks()
             end = import_collect(rr, ctx, True, wait=False)
             ctx.import_end = end if callable(end) else (lambda: end)    # 단추가 없어 건너뜀이면 그 결과를 그대로
-            ctx.import_pressed = callable(end)      # 눌러서 조회가 시작됐다 - 다음 자동 수집 모듈의 기다림은 처리 도중 (module_import)
+            # [가져오기] 를 실제로 눌렀다 - 다음 자동 수집 모듈의 기다림은 처리 도중 (module_import). 눌렀으나 '조회중' 을 못 봐 건너뜀이어도
+            # 누른 것은 누른 것이다 - 돌려준 값이 아니라 처리 시작 표시(press work=True)가 늘었는지로 본다 (Codex 리뷰 11-25)
+            ctx.import_pressed = callable(end) or rr.status.work_marks() != marks
             switch_tab(rr, ctx, copy)
             rr.status.step("wl_order_excel")     # import_collect 가 찍은 가져오기 단계에서 엑셀 단계로 되돌린다 (BugBuster L4)
         sites = site_grid(rr, ctx)
@@ -1617,9 +1620,7 @@ def _download(rr, ctx, h, pw, work=False):
     if rr.legacy_value(combo) != EXPORT_REASON:
         raise Stop("failed", f"엑셀 다운로드 사유를 '{EXPORT_REASON}'(으)로 고르지 못했습니다. (현재 {rr.legacy_value(combo)!r})")
     before = _menu_windows(rr, ctx)
-    if work:
-        rr.status.began_work()
-    _click_in(rr, h, _child(rr, h, "btn_ExportExcel", "[엑셀 다운로드]"), "[엑셀 다운로드]")
+    _click_in(rr, h, _child(rr, h, "btn_ExportExcel", "[엑셀 다운로드]"), "[엑셀 다운로드]", work=work)
     deadline = time.time() + EXPORT_WAIT_SECONDS
     while time.time() < deadline:
         dlg = rr.find_save_dialog(ctx.pid)
@@ -2431,9 +2432,10 @@ def _list_button(rr, grid, name):
     return None if vsb is None else next((c for c in vsb.descendants() if c.window_text() == name), None)
 
 
-def _click_in(rr, h, el, what):
+def _click_in(rr, h, el, what, work=False):
     """메인 창 밖에 따로 뜬 창 h 안의 el 을 누른다 - 누를 점의 맨 위 창이 h 일 때만 (clear_point 와 같은 까닭).
-    front() 는 쓰지 않는다 (메인 창을 앞으로 가져오면 따로 뜬 창이 닫히거나 가려질 수 있다)."""
+    front() 는 쓰지 않는다 (메인 창을 앞으로 가져오면 따로 뜬 창이 닫히거나 가려질 수 있다).
+    work: 확인(잠김·덮개)을 지나 누르기 바로 앞에 처리 시작을 적는다 (rpa_status.began_work - click·press 와 같다, 교차 검증 11-25)."""
     if rr.ec.screen_locked():
         raise Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
     r = el.rectangle()
@@ -2446,6 +2448,8 @@ def _click_in(rr, h, el, what):
         if time.time() > deadline:
             raise Stop("failed", f"{what}: 누를 자리를 다른 창이 덮고 있어 누르지 않고 중단하였습니다.")
         time.sleep(0.1)
+    if work:
+        rr.status.began_work()
     el.click_input(coords=pt, absolute=True)
 
 

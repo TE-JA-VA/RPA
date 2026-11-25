@@ -3025,6 +3025,7 @@ def tog_sleep(_s):
 
 tsteps = []    # 찍힌 단계 (BugBuster L4)
 pops = []      # 업로드 차례 사이에 볼 때마다 닫힌다고 돌려줄 창 문구 (비면 창 없음)
+TWM = [0]      # rpa_status.work_marks 흉내 - [가져오기] 를 실제로 눌렀는지 (wellife.excel_together, Codex 리뷰 11-25)
 trr = types.SimpleNamespace(
     log=lambda m: None, UPLOAD_NO_KEYS=False, UploadStop=rr.UploadStop, UploadGridHidden=rr.UploadGridHidden,
     find_popup_windows=lambda pid, hwnd: [], upload_popups=lambda pid, hwnd, before=(), label="": pops.pop(0) if pops else [],
@@ -3034,6 +3035,7 @@ trr = types.SimpleNamespace(
                                    SetWindowPos=lambda h, after, *a: tev.append(("topmost", after == _wc.HWND_TOPMOST))),
     status=types.SimpleNamespace(step=lambda s, *a, **k: tsteps.append(s), metric=lambda *a, **k: None,
                                  keep_record=lambda: tev.append(("keep record",)), began_work=lambda: tev.append(("began work",)),
+                                 work_marks=lambda: TWM[0],
                                  release_prepare=lambda rect=None: tev.append(("release", rect)),
                                  running_programs=lambda: ["prepare"] if prep["on"] else []))
 _saved_tog = {n: getattr(wellife, n) for n in ("import_collect", "open_order_copy", "close_order_copy", "site_grid", "switch_tab",
@@ -3070,6 +3072,19 @@ tev.clear()
 check("② 자동 수집 모듈은 걸어 둔 자동 수집이 끝나기를 기다린다 (다시 누르지 않는다) - 그 기다림은 처리 도중으로 적는다 (리뷰 2차 11-25)",
       wellife.module_import(trr, tctx, True) == ("done", "자동 수집 끝") and tctx.import_end is None and tev == [("began work",)], str(tev))
 check("걸어 둔 끝 기다리기는 가져오기 단계에 붙는다 (BugBuster L4)", tsteps[-1] == "wl_order_import", str(tsteps))
+# [가져오기] 를 눌렀으나 '조회중' 을 못 봐 건너뜀이어도 누른 것은 누른 것 - 다음 모듈의 기다림은 처리 도중 (Codex 리뷰 11-25)
+_saved_ic2 = wellife.import_collect
+wellife.import_collect = lambda rr_, ctx_, live, wait=True: (TWM.__setitem__(0, TWM[0] + 1) or ("skipped", "눌렀으나 조회가 시작되지 않아 건너뜀"))
+prep["on"] = False
+tctx2 = types.SimpleNamespace(app=None, pid=1, hwnd=2)
+wellife.excel_together(trr, tctx2, True)
+_p_pressed = tctx2.import_pressed
+wellife.import_collect = lambda rr_, ctx_, live, wait=True: ("skipped", "단추를 찾지 못해 건너뜀")     # 누르지도 못함
+tctx3 = types.SimpleNamespace(app=None, pid=1, hwnd=2)
+wellife.excel_together(trr, tctx3, True)
+check("함께 실행: [가져오기] 를 눌렀으나 조회 시작을 못 봐 건너뜀이어도 '눌렀다' 로 남긴다 - 다음 모듈이 기다리다 꺼지면 다시 누르지 않게. 못 눌렀으면 아니다",
+      _p_pressed is True and tctx3.import_pressed is False, f"{_p_pressed} {tctx3.import_pressed}")
+wellife.import_collect = _saved_ic2
 wellife.order_screen = _saved_os
 
 tev.clear()
@@ -3889,5 +3904,24 @@ check("운송장 엑셀 미리보기 0건이면 받지 않고, 처리 시작(beg
       wellife._download(_dl_rr, types.SimpleNamespace(pid=1), 5, "0000", True) is None and not _dl_rr.status.of("began_work"),
       str(_dl_rr.status.calls))
 (wellife._child, wellife._close_download, wellife.time) = _saved_dl
+# _click_in(work=True): 따로 뜬 창 단추도 잠김·덮개 확인을 지난 뒤 누르기 바로 앞에만 적는다 - 덮여 누르지 않으면 처리 전 (교차 검증 11-25)
+_saved_ci = (wellife._top_window, wellife.time)
+_ci_rr = types.SimpleNamespace(status=Rec(), log=lambda m: None, ec=types.SimpleNamespace(screen_locked=lambda: False))
+_ci_clicks = []
+_ci_el = types.SimpleNamespace(rectangle=lambda: Rect(10, 10, 50, 30), click_input=lambda **k: _ci_clicks.append(k))
+wellife.time = types.SimpleNamespace(sleep=lambda s: None, time=_time.time)
+wellife._top_window = lambda rr_, pt: 99          # 다른 창이 덮음
+try:
+    wellife._click_in(_ci_rr, 5, _ci_el, "[엑셀 다운로드]", work=True)
+    _ci_res = "누름"
+except wellife.Stop as e:
+    _ci_res = e.result
+_ci_cover = (_ci_res, list(_ci_rr.status.calls), list(_ci_clicks))
+wellife._top_window = lambda rr_, pt: 5
+wellife._click_in(_ci_rr, 5, _ci_el, "[엑셀 다운로드]", work=True)
+wellife._click_in(_ci_rr, 5, _ci_el, "[닫기]")
+check("_click_in(work=True): 덮여서 누르지 않으면 처리 시작을 적지 않고, 확인을 지나 누를 때만 적는다 (보통 누르기는 적지 않는다)",
+      _ci_cover == ("failed", [], []) and _ci_rr.status.of("began_work") == [()] and len(_ci_clicks) == 2, f"{_ci_cover} {_ci_rr.status.calls}")
+(wellife._top_window, wellife.time) = _saved_ci
 
 finish()

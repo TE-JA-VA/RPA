@@ -652,7 +652,7 @@ _unmarked = []
 for _name, _src, _needles in (       # 바로 앞 줄들에 began_work - 확인(덮개·잠김)을 지난 뒤 누르기 바로 앞 (Codex 검토 11-25)
         ("run_routine", _src_rr, ("upload_file_in_dialog(dlg, path, pid=pid)",
                                   "el.click_input(coords=pt, absolute=True, **kw)", "target.click_input(coords=pt, absolute=True)")),
-        ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "_click_in(rr, h, _child(rr, h, \"btn_ExportExcel\", \"[엑셀 다운로드]\"), \"[엑셀 다운로드]\")"))):
+        ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "el.click_input(coords=pt, absolute=True)"))):
     _lines = _src.splitlines()
     for _nd in _needles:
         _at = [i for i, l in enumerate(_lines) if _nd in l]
@@ -660,7 +660,8 @@ for _name, _src, _needles in (       # 바로 앞 줄들에 began_work - 확인(
             _unmarked.append(f"{_name}: {_nd}")
 # 데이터를 바꾸는 누르기는 work=True·DATA_MENU_ITEMS 로 - 화살표(완료처리·전송요청 포함)·저장·출력·배송보류·개별 배송·운송장 엑셀 받기
 _unmarked += [nd for nd in ("click(rr, ctx, arrow, what, work=True)", "click(rr, ctx, save, \"물류대기 '저장(S)'\", work=True)",
-                            "export_market(rr, ctx, t[\"market\"], pw, work=bool(live))") if nd not in _src_wl]
+                            "export_market(rr, ctx, t[\"market\"], pw, work=bool(live))", "saved = _download(rr, ctx, h, pw, work)",
+                            "\"[엑셀 다운로드]\"), \"[엑셀 다운로드]\", work=work)") if nd not in _src_wl]
 _unmarked += [nd for nd, n in (("click_toolbar_button(win, hwnd, \"저장(S)\", work=True)", 2), ("click_toolbar_button(win, hwnd, button, work=True)", 1), ("press(hwnd, imp, f\"'{IMPORT_BUTTON_NAME}' 단추\", work=True)", 1),
                                ("DATA_MENU_ITEMS = (\"배송보류\", \"개별 배송(B)\")", 1)) if _src_rr.count(nd) != n]
 check("데이터를 바꾸는 자리마다 바로 앞에 처리 시작 표시", not _unmarked, str(_unmarked))
