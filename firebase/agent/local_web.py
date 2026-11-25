@@ -38,7 +38,7 @@ import urllib.parse
 
 import local_server      # log·local_host·KEEPALIVE_SEC·Refused (local_server 는 main() 안에서만 이 파일을 불러온다)
 import login_log         # 사내 서버 로그인 이력 logins.db (사내 서버 계획 ③ Task 5 - 표준 라이브러리만)
-import pc_registry      # 사내 서버 PC 등록부 (PC_RE·SeatsFull·encode_enrollment - 표준 라이브러리만)
+import pc_registry       # 사내 서버 PC 등록부 (PC_RE·SeatsFull·encode_enrollment - 표준 라이브러리만)
 import totp              # 2단계 인증 번호 계산·복구 번호 (사내 서버 계획 ③ - 표준 라이브러리만)
 import web_security      # 사내 서버 '보안' 설정 security.json (사내 서버 계획 ③ - 표준 라이브러리만)
 
