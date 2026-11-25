@@ -714,6 +714,10 @@ class LocalServer(http.server.ThreadingHTTPServer):
     side = "both"                    # 길 나누기 - 이 서버는 에이전트·웹 창구를 같이 연다 (사내망 lan_server.LanServer 는 "web"·"agent")
     cfg = None                       # 사내망 설정 lan_config.LanConfig - 이 서버(127.0.0.1)에는 없다
     nonce_swept = 0.0                # nonce 표를 마지막으로 정리한 시각 (fresh_nonce)
+    # 사내 서버(리눅스): 자리 서명 비밀 값(seat.ensure_key)과 서버 라이선스 파일 원문({"body", "sig"}) - 서버 입구(server_main)가
+    # 적는다. 있으면 PC 등록 응답에 자리 증명서와 라이선스를 싣는다 (사내 서버 ④ Task 2). 없으면(단독·①~③ 시험) 응답은 지금 그대로
+    seat_secret = None
+    license_doc = None
 
     def note_bad(self, ip):
         """서명 틀림 한 번 - 이 서버(127.0.0.1)는 세지 않는다. 사내망 포트(lan_server.LanServer)가 주소 거절로 잇는다."""
@@ -981,8 +985,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 srv.enroll_reject_log(f"PC 등록 거절  번호={pc}  까닭={e.code}")
             return self._reply(403, {"error": e.code})
         log(srv.folder, f"PC 등록  번호={pc}  컴퓨터={body['host']}")
+        reply = {"pc": pc}
+        if srv.seat_secret is not None:              # 사내 서버 입구가 자리 열쇠를 단 서버 - 자리 증명서 (PC 쪽 확인은 ⑤)
+            import seat                              # 지연 import - 단독은 여기 오지 않는다
+            reply["seat"] = seat.issue(srv.seat_secret, (srv.lic or {}).get("cid"), pc, body["guid"], int(time.time() * 1000))
+        if srv.license_doc is not None:              # PC 가 seat_pub 을 믿을 근거 - 공급사 서명이 붙은 라이선스 원문
+            reply["server_license"] = srv.license_doc
         self._auth = (agent_key, body["nonce"])
-        return self._reply(200, {"pc": pc})
+        return self._reply(200, reply)
 
     def _parts(self, raw):
         """주소의 자리 조각. 빈 조각·'.'·'..'·제어 글자, 풀었을 때 '/'·'\\' 가 든 조각(%2F - 깊이 검사를 속인다, 검토 3번)은 400."""

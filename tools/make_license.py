@@ -9,6 +9,9 @@
         {"company": "○○상사", "cid": "c_abc", "modules": {"Hold": false}, "features": {"wellife": false},
          "limits": {"schedule": 2, "presets": null, "parallel": null}}
         modules 는 안 쓰는 모듈만 false 로. 없는 칸은 기본값 (모듈 다 씀, 웰라이프 아님, 자동 실행 2줄).
+    .venv\\Scripts\\python.exe tools\\make_license.py --server <server_request.json> <업체 정보.json> [--key 열쇠 파일] [-o license.json]
+        사내 서버(리눅스) 라이선스. 요청 파일은 서버에서 `autopilot-server request` 가 만든 것
+        ({"server_id", "seat_pub", "version"} - 비밀 값 없음). 업체 정보는 위 꼴에 "seats"(PC 자리 수, 1~9999)를 더한다.
 
 열쇠 파일의 내용은 화면에 찍지 않는다.
 """
@@ -49,6 +52,28 @@ def build_body(pc_id, info, today=None):
     pc_id = str(pc_id or "").strip().lower()
     if not PC_ID.match(pc_id):
         raise ValueError("PC 번호가 올바르지 않습니다. (MachineGuid - 숫자·a~f·- 로 8자 이상)")
+    return _policy(info, {"pc_id": pc_id}, today)
+
+
+def build_server_body(request, info, today=None):
+    """사내 서버 요청 파일 dict(server_id·seat_pub)와 업체 정보 dict(+ seats)를 서버 라이선스 body 로 (사내 서버 ④ Task 2).
+    모양이 틀리면 ValueError (사람 말). 만든 body 는 license_check.load_server 를 통과하는 꼴이다."""
+    if not isinstance(request, dict):
+        raise ValueError("요청 파일은 { } 꼴이어야 합니다.")
+    sid = str(request.get("server_id") or "").strip().lower()
+    if not license_check.SERVER_ID_RE.fullmatch(sid):
+        raise ValueError("요청 파일의 서버 번호(server_id)가 올바르지 않습니다. (32자 16진수)")
+    seat_pub = str(request.get("seat_pub") or "").strip().lower()
+    if not license_check.HEX64.fullmatch(seat_pub):
+        raise ValueError("요청 파일의 자리 서명 공개 열쇠(seat_pub)가 올바르지 않습니다. (64자 16진수)")
+    seats = info.get("seats") if isinstance(info, dict) else None
+    if not isinstance(seats, int) or isinstance(seats, bool) or not 1 <= seats <= license_check.SEATS_MAX:
+        raise ValueError(f"업체 정보의 PC 자리 수(seats)는 1~{license_check.SEATS_MAX} 의 정수여야 합니다.")
+    return _policy(info, {"kind": license_check.SERVER_KIND, "server_id": sid, "seat_pub": seat_pub, "seats": seats}, today)
+
+
+def _policy(info, who, today=None):
+    """업체 정보 dict 의 공통 칸(업체·모듈·기능·한도) + who(PC 번호 또는 서버 칸) → body. 모양이 틀리면 ValueError."""
     if not isinstance(info, dict):
         raise ValueError("업체 정보는 { } 꼴이어야 합니다.")
     company, cid = info.get("company"), info.get("cid")
@@ -69,7 +94,7 @@ def build_body(pc_id, info, today=None):
         v = limits.get(k)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 0):
             raise ValueError(f"limits.{k} 는 0 이상의 정수여야 합니다.")
-    return {"edition": license_check.EDITION, "company": company.strip(), "cid": cid, "pc_id": pc_id,
+    return {"edition": license_check.EDITION, "company": company.strip(), "cid": cid, **who,
             "issued": (today or datetime.date.today()).isoformat(),
             "modules": dict(modules),
             "features": {"wellife": features.get("wellife") is True},
@@ -87,14 +112,16 @@ def main(argv=None):
             return 1
         print("공개 열쇠 (license_check.LICENSE_PUBLIC_KEY_HEX 에 넣으십시오):", public)
         return 0
-    key_path, out = KEY_PATH, None
+    key_path, out, server = KEY_PATH, None, False
     rest = []
     it = iter(args)
     for a in it:
         if a == "--key":
             key_path = next(it, None)
-        elif a == "--out":
+        elif a in ("--out", "-o"):
             out = next(it, None)
+        elif a == "--server":
+            server = True
         else:
             rest.append(a)
     if len(rest) != 2 or not key_path:
@@ -103,19 +130,29 @@ def main(argv=None):
     try:
         with open(rest[1], encoding="utf-8-sig") as f:
             info = json.load(f)
-        body = build_body(rest[0], info)
+        if server:
+            with open(rest[0], encoding="utf-8-sig") as f:
+                request = json.load(f)
+            body = build_server_body(request, info)
+        else:
+            body = build_body(rest[0], info)
     except (OSError, ValueError) as e:
         print(f"발급하지 못했습니다: {e}")
         return 1
     if not os.path.isfile(key_path):
         print(f"서명 열쇠 파일이 없습니다: {key_path}  (처음이면 --keygen)")
         return 1
-    out = out or os.path.join(os.getcwd(), f"license_{body['cid']}_{body['pc_id'][-4:]}.json")
+    who = body["server_id"] if server else body["pc_id"]
+    out = out or os.path.join(os.getcwd(), f"license_{body['cid']}_{'server_' if server else ''}{who[-4:]}.json")
     doc = license_check.sign_body(_secret(key_path), body)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=1)
-    print(f"발급: {out}  업체 {body['company']} ({body['cid']})  PC 번호 {body['pc_id']}  발급일 {body['issued']}")
-    print(f"고객 PC 의 설정 폴더에 {license_check.FILE_NAME} 이름으로 넣습니다.")
+    if server:
+        print(f"발급: {out}  업체 {body['company']} ({body['cid']})  서버 번호 {who}  PC 자리 {body['seats']}  발급일 {body['issued']}")
+        print("업체 서버에서 install.sh activate <이 파일> 로 넣습니다.")
+    else:
+        print(f"발급: {out}  업체 {body['company']} ({body['cid']})  PC 번호 {body['pc_id']}  발급일 {body['issued']}")
+        print(f"고객 PC 의 설정 폴더에 {license_check.FILE_NAME} 이름으로 넣습니다.")
     return 0
 
 
