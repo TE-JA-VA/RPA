@@ -1023,7 +1023,8 @@ def round_failed(status):
 
 
 def stop_reason(status):
-    """멈춘 회차의 까닭 한 줄: '10:23 물류관리 '물류관리 저장' 실패로 반복을 멈췄습니다: <사유>' - 어느 모듈의 어느 단계인지."""
+    """멈춘 회차의 까닭 한 줄: '10:23 물류대기 관리 '조회 → 저장' 실패로 반복을 멈췄습니다: <사유>' - 어느 모듈의 어느 단계인지.
+    단계 이름이 모듈 이름으로 시작하면 단계 이름만 ('물류관리 저장' 실패로 - 검토 2026-11-25)."""
     bad = next((m for m in status.get("modules") or [] if m.get("state") in ("failed", "stopped")), None) or {}
     if status.get("reason") == STOPPED_TEXT:
         return f"{(status.get('finished_at') or '')[11:16]} {STOPPED_TEXT}. 반복 실행을 중단하였습니다.".strip()
@@ -1034,7 +1035,7 @@ def stop_reason(status):
     step = max((s for s in status.get("steps") or [] if isinstance(s, dict) and s.get("state") in ("failed", "stopped")
                 and s.get("key") in (bad.get("steps") or ())), key=lambda s: s.get("finished_at") or "", default=None)
     if step and step.get("label"):
-        who = f"{who} '{step['label']}'"
+        who = f"'{step['label']}'" if step["label"].startswith(who) else f"{who} '{step['label']}'"   # '매출' 과 '정상매출' 은 다르다
     return f"{(status.get('finished_at') or '')[11:16]} {who} {word}로 반복 실행을 중단하였습니다: {why}".strip()
 
 

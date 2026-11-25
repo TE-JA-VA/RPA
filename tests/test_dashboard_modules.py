@@ -329,7 +329,15 @@ st.module_done("sales", "failed", "정상매출 뒤 끝을 못 봄")
 st.finish("stopped", "정상매출 뒤 끝을 못 봄")
 check("처리 도중 실패는 반복을 멈춘다 (상태 파일에 worked 가 남는다)", d.round_failed(dict(st._state)) is False and st._state.get("worked") is True)
 why = d.stop_reason(dict(st._state, finished_at="2026-11-24T10:23:00"))
-check("반복 멈춤 까닭에 어느 모듈의 어느 단계인지", why.startswith("10:23 매출 '매출' 실패로") and why.endswith("정상매출 뒤 끝을 못 봄"), why)
+check("반복 멈춤 까닭에 어느 단계인지 - 모듈 이름이 단계 이름에 들어 있으면 한 번만 (검토 11-25)",
+      why.startswith("10:23 '매출' 실패로") and why.endswith("정상매출 뒤 끝을 못 봄"), why)
+_dup = {"state": "stopped", "reason": "저장 실패", "finished_at": "2026-11-24T10:23:00",
+        "modules": [{"key": "logistics", "label": "물류관리", "state": "failed", "steps": ["logistics_save"]}],
+        "steps": [{"key": "logistics_save", "label": "물류관리 저장", "state": "failed", "finished_at": "2026-11-24T10:22:59"}]}
+check("'물류관리 '물류관리 저장'' 처럼 겹치지 않게 '물류관리 저장' 만", d.stop_reason(_dup).startswith("10:23 '물류관리 저장' 실패로"), d.stop_reason(_dup))
+_dup["modules"][0]["label"], _dup["steps"][0]["label"] = "매출", "정상매출 뒤 기다림"
+check("  이름이 앞에서 겹칠 때만 줄인다 - 모듈 '매출' 과 단계 '정상매출 …' 은 둘 다 적는다 (교차 검증 2차)",
+      d.stop_reason(_dup).startswith("10:23 매출 '정상매출 뒤 기다림' 실패로"), d.stop_reason(_dup))
 _two = {"state": "stopped", "reason": "저장 실패", "finished_at": "2026-11-24T10:23:00",
         "modules": [{"key": "logistics", "label": "물류관리", "state": "failed", "steps": ["logistics_screen", "logistics", "logistics_save"]}],
         "steps": [{"key": "logistics", "label": "개별 배송", "state": "failed", "finished_at": "2026-11-24T10:10:00"},     # ERPia 가 꺼져 실패로 닫힌 단계

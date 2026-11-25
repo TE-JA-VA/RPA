@@ -213,7 +213,7 @@ _real_press = rr.press
 _real_wait_tab = rr.wait_for_active_main_tab     # 따로 뜬 팝업 시험에서 진짜를 쓴다 (앞 절이 바꿔 끼운다)
 _real_ok_button, _real_popup_buttons = rr.find_popup_ok_button, rr.find_popup_buttons    # 창 안 단추만 고르는지 끝 절에서 본다
 _real_print_preview = rr.run_print_preview       # 9절이 가짜로 바꾼다 - 미리보기 닫기 시험(끝 절)에서 진짜를 쓴다
-rr.press = lambda hwnd, el, what, coords=None, double=False, **kw: (el.double_click_input if double else el.click_input)(
+rr.press = lambda hwnd, el, what, coords=None, double=False, popup=False, work=False, **kw: (el.double_click_input if double else el.click_input)(
     **({"coords": coords} if coords is not None else {}), **kw)
 _real_handle_print_popups = rr.handle_print_popups   # 9절에서 진짜를 쓴다
 _real_run_print_step = rr.run_print_step             # 6절이 가짜로 바꾸므로 9절에서 되살린다
@@ -240,7 +240,8 @@ rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime
 rr.ec = types.SimpleNamespace(ensure_foreground=lambda *a, **k: True, find_erpia_pid=lambda: 4242,
                               process_elevated=lambda pid: False, pid_alive=lambda pid: True, erpia_pids=lambda: [],
                               erpia_pids_titled=lambda title: [4242])     # 설정 계정 제목의 ERPia (사용자 2026-11-16)
-rr.log = lambda msg="": None
+_real_log = rr.log     # 진짜 log - cloud=False 시험 (검토 11-25)
+rr.log = lambda msg="", **_k: None
 rr.win32gui = types.SimpleNamespace(IsWindow=lambda h: True, IsWindowVisible=lambda h: True,
                                     PostMessage=lambda h, m, w, l: None)
 
@@ -570,13 +571,13 @@ out, called, rec, ac = run(ALL_ON, {}, admin_off=("Hold",))
 check("관리자가 끈 모듈은 PC 설정에서 켜 있어도 [실행] 단추·'전체' 줄(모듈을 고르지 않은 실행)에서 돌지 않는다 (검토 2026-11-16)",
       "hold" not in called and "logistics" in called and "hold" in [r[0] for r in rec.of("module_off")], str(called))
 logged = []
-rr.log = lambda msg="": logged.append(msg)
+rr.log = lambda msg="", **_k: logged.append(msg)
 os.environ["RPA_RUN_MODULES"] = "Logistics,Output"
 try:
     out, called, rec, ac = run({**ALL_ON, "Sales": False, "Hold": False}, {})
 finally:
     os.environ.pop("RPA_RUN_MODULES", None)
-    rr.log = lambda msg="": None
+    rr.log = lambda msg="", **_k: None
 skipped = rec.of("skip")
 check("예약이 고른 실행이면 안 고른 모듈은 '이번 실행에서 안 고름' (설정과 상관없다)",
       len(skipped) == 8 and all(s[1] == "이번 실행에서 안 고름" for s in skipped)
@@ -600,13 +601,13 @@ out, called, rec, ac = run(ALL_ON, {"sales": ("stopped", "매출처리 실패: x
 check("stopped 도 멈춘다", called == ALL7[:4] and out[0] == "stopped")
 # 반복 회차: 처리를 시작하기 전에 멈추면 그 회차만 건너뛴다고 사유·로그에, 처리 도중이면 반복을 멈춘다고 로그에 (사용자 2026-11-24)
 logged = []
-rr.log = lambda msg="": logged.append(msg)
+rr.log = lambda msg="", **_k: logged.append(msg)
 os.environ["RPA_RUN_TRIGGER"] = "repeat"
 try:
     StatusRec.failed_before_work = lambda self: True        # 판정은 rpa_status.failed_before_work (test_dashboard_modules 가 본다)
     out, called, rec, ac = run(ALL_ON, {"import": ("failed", "조회가 끝나지 않음")})
     check("반복 회차가 처리 전에 멈추면 사유에 '이번 회차만 건너뛰고 다시 합니다'",
-          out[0] == "stopped" and out[1].startswith("조회가 끝나지 않음 (반복 회차: 처리 전 단계라 이번 회차만 건너뛰고")
+          out[0] == "stopped" and out[1].startswith("조회가 끝나지 않음 (반복 회차: ERPia 자료를 바꾸기 전에 멈춰서 이번 회차만 건너뛰고")
           and any("처리를 시작하기 전 단계에서 멈춰 이번 회차만 건너뜁니다" in m for m in logged), str(out))
     logged.clear()
     StatusRec.failed_before_work = lambda self: False   # 잠김은 처리 전이어도 반복을 멈춘다 (REPEAT_STOP_TEXTS - test_dashboard_modules)
@@ -632,7 +633,7 @@ finally:
     if "worked" in StatusRec.__dict__:
         del StatusRec.worked
     os.environ.pop("RPA_RUN_TRIGGER", None)
-    rr.log = lambda msg="": None
+    rr.log = lambda msg="", **_k: None
 out, called, rec, ac = run(ALL_ON, {"import": ("failed", "조회가 끝나지 않음")})
 check("반복이 아니면 사유를 바꾸지 않는다", out == ("stopped", "조회가 끝나지 않음"), str(out))
 check("택배사 설정이 비면 실제 사유 글이 '저절로 풀리지 않는 실패' 로 잡혀 반복을 멈춘다 - 쉬는 시간마다 같은 실패를 되풀이하지 않게 (Codex 검토 11-25)",
@@ -644,7 +645,7 @@ _src_rr = Path(_rr.__file__).read_text(encoding="utf-8")
 _src_wl = Path(_rr.wellife.__file__).read_text(encoding="utf-8")
 _unmarked = []
 for _name, _src, _needles in (       # 바로 앞 줄들에 began_work - 확인(덮개·잠김)을 지난 뒤 누르기 바로 앞 (Codex 검토 11-25)
-        ("run_routine", _src_rr, ("imp.click_input()", "upload_file_in_dialog(dlg, path, pid=pid)",
+        ("run_routine", _src_rr, ("upload_file_in_dialog(dlg, path, pid=pid)",
                                   "el.click_input(coords=pt, absolute=True, **kw)", "target.click_input(coords=pt, absolute=True)")),
         ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "saved = _download(rr, ctx, h, pw)"))):
     _lines = _src.splitlines()
@@ -655,7 +656,7 @@ for _name, _src, _needles in (       # 바로 앞 줄들에 began_work - 확인(
 # 데이터를 바꾸는 누르기는 work=True·DATA_MENU_ITEMS 로 - 화살표(완료처리·전송요청 포함)·저장·출력·배송보류·개별 배송·운송장 엑셀 받기
 _unmarked += [nd for nd in ("click(rr, ctx, arrow, what, work=True)", "click(rr, ctx, save, \"물류대기 '저장(S)'\", work=True)",
                             "export_market(rr, ctx, t[\"market\"], pw, work=bool(live))") if nd not in _src_wl]
-_unmarked += [nd for nd, n in (("click_toolbar_button(win, hwnd, \"저장(S)\", work=True)", 2), ("click_toolbar_button(win, hwnd, button, work=True)", 1),
+_unmarked += [nd for nd, n in (("click_toolbar_button(win, hwnd, \"저장(S)\", work=True)", 2), ("click_toolbar_button(win, hwnd, button, work=True)", 1), ("press(hwnd, imp, f\"'{IMPORT_BUTTON_NAME}' 단추\", work=True)", 1),
                                ("DATA_MENU_ITEMS = (\"배송보류\", \"개별 배송(B)\")", 1)) if _src_rr.count(nd) != n]
 check("데이터를 바꾸는 자리마다 바로 앞에 처리 시작 표시", not _unmarked, str(_unmarked))
 out, called, rec, ac = run(ALL_ON, {"hold": ("no_target", "행 없음")})
@@ -1233,6 +1234,8 @@ def raise_dying(ctx):
 
 
 rr.ec.pid_alive, rr.ERPIA_DYING_WAIT_SECONDS = alive_dying, 3
+_saved_isw = rr.win32gui.IsWindow
+rr.win32gui.IsWindow = lambda h: False      # 꺼지는 중 - 메인 창이 먼저 사라졌다 (run_routine.main_window_alive)
 try:
     out, called, rec = run_crash(raise_dying)
 except KeyError as e:
@@ -1252,6 +1255,34 @@ def fail_dying(ctx):
 out, called, rec = run_crash(fail_dying)
 check("예외를 '실패' 결과로 돌려주는 모듈(웰라이프 ui_error)도 꺼지는 중이면 기다려 보고 다시 띄워 잇는다 (웰라이프·일반 같은 동작, 사용자 11-19)",
       out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
+rr.win32gui.IsWindow = lambda h: True       # ERPia 가 멀쩡하다 - 메인 창이 그대로
+ALIVE[0] = True
+_t0 = _time.time()
+out, called, rec = run_crash(lambda ctx: ("failed", "조회가 끝나지 않음"))
+check("모듈이 실패해도 메인 창이 그대로면 꺼지는 중을 기다리지 않는다 - 실패마다 5초씩 늘던 것 (검토 11-25)",
+      out == ("stopped", "조회가 끝나지 않음") and _time.time() - _t0 < 1.5, f"{out} {_time.time() - _t0:.1f}초")
+seen.clear()
+out, called, rec = run_crash(raise_dying)
+check("예외면 메인 창이 아직 있어도 꺼지는 중인지 지금처럼 기다린다 - 닫히는 도중 창보다 UIA 예외가 먼저 날 수 있다 (교차 검증 11-25)",
+      out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
+seen.clear()
+out, called, rec = run_crash(fail_dying)
+check("웰라이프처럼 예외를 'UI 오류' 실패로 돌려줘도 메인 창이 아직 있으면 기다려 다시 띄운다 (교차 검증 2차 11-25)",
+      out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
+rr.win32gui.IsWindow = _saved_isw
+# 모듈 예외의 오류 추적은 PC 결과 파일에만 - 경로·창 글이 섞여 상태 최근 로그(log_tail)로 클라우드에 올라가지 않게 (검토 11-25)
+_saved_rl = (rr.RESULT_PATH, rr.status)
+rr.RESULT_PATH, rr.status = os.path.join(tempfile.mkdtemp(prefix="rpa_log_"), "result.txt"), StatusRec()
+_real_log("Traceback 흉내: 파일 경로 줄 1", cloud=False)
+_real_log("한 줄 사유")
+with open(rr.RESULT_PATH, encoding="utf-8") as _f:
+    _txt = _f.read()
+_tails = [c[0] for c in rr.status.of("log_line")]
+check("log(cloud=False): PC 결과 파일에는 남고 상태 최근 로그에는 안 간다 - 보통 로그는 둘 다",
+      "Traceback 흉내" in _txt and "한 줄 사유" in _txt and len(_tails) == 1 and "한 줄 사유" in _tails[0], f"{_tails}")
+check("모듈 예외의 오류 추적은 cloud=False 로 (한 줄 사유는 wellife.ui_error 가 남긴다)",
+      "error.__traceback__)).rstrip(), cloud=False)" in Path(_rr.__file__).read_text(encoding="utf-8"))
+rr.RESULT_PATH, rr.status = _saved_rl
 rr.ec.pid_alive, rr.ERPIA_DYING_WAIT_SECONDS = (lambda pid: ALIVE[0]), 0.5
 
 
@@ -1461,8 +1492,31 @@ _saved_i = (rr.find_by_text, rr.native_enabled, rr.handle_import_popups, rr.IMPO
 _btn = types.SimpleNamespace(click_input=lambda: None, element_info=types.SimpleNamespace(handle=None))
 rr.find_by_text, rr.native_enabled, rr.handle_import_popups = (lambda win, text, control_types=(): _btn), (lambda el: True), (lambda *a: None)
 rr.IMPORT_BUSY_WAIT_SECONDS, rr.ec.ensure_foreground, rr.status = 0.3, (lambda h: None), StatusRec()
+_clicks_i = []
+_btn.click_input = lambda **k: _clicks_i.append(k)
 check("[가져오기] 를 눌러도 '조회중' 이 안 되면(덮인 클릭 등) None - 누르지 못함과 같이 건너뜀 (웰라이프·일반 같게, 사용자 11-19)",
-      rr.run_import_step(None, 1, 2, None) is None and rr.run_import_step(None, 1, 2, None, wait=False) is None)
+      rr.run_import_step(None, 1, 2, None) is None and rr.run_import_step(None, 1, 2, None, wait=False) is None and len(_clicks_i) == 2,
+      str(_clicks_i))
+check("  건너뜀 사유는 '눌렀으나 조회가 시작되지 않아' 로 나눠 적는다 (검토 11-25)", "눌렀으나" in rr.import_miss() and "조회가 시작되지 않아" in rr.import_miss(),
+      rr.import_miss())
+rr.find_by_text = lambda win, text, control_types=(): None
+check("  단추가 없으면 '단추를 찾지 못해 누르지 않고'", rr.run_import_step(None, 1, 2, None) is None and "단추를 찾지 못해" in rr.import_miss(), rr.import_miss())
+rr.find_by_text = lambda win, text, control_types=(): _btn
+_saved_pr_i = rr.press
+
+
+def _press_boom(*a, **k):
+    raise RuntimeError("UIA 흉내")
+
+
+rr.press = _press_boom
+try:
+    rr.run_import_step(None, 1, 2, None)
+    res = "건너뜀"
+except RuntimeError as e:
+    res = str(e)
+check("  누르기 직전 확인·누르기에서 난 뜻밖의 오류는 건너뜀이 아니라 위로 올린다 - 모듈 실패로 멈춘다 (검토 11-25, 교차 검증)", res == "UIA 흉내", res)
+rr.press = _saved_pr_i
 (rr.find_by_text, rr.native_enabled, rr.handle_import_popups, rr.IMPORT_BUSY_WAIT_SECONDS, rr.ec.ensure_foreground, rr.status) = _saved_i
 rr.run_import_step = lambda *a: sales_acts.append(("import",)) or True
 # 매출처리: 하단이 0줄이면 전체선택도 정상매출도 하지 않고 건너뜀 (토큰 0 - 사용자 2026-11-02). 줄을 못 세면 예전처럼 진행 (위 시험)
@@ -2001,15 +2055,39 @@ check("우클릭 메뉴 항목: 화면이 잠겼으면 누르지 않고 멈춘�
 (rr.ec.screen_locked, rr.wellife._top_window, rr.wellife.COVER_WAIT_SECONDS, rr.wellife._window_who, rr.win32gui, rr.send_keys) = _saved_cm
 seen_p.clear()
 rr.wellife.clear_point = lambda rr_, ctx, el, what, pt=None, allow=(): seen_p.append(("clear", what, set(allow))) or (55, 66)
-_saved_fpw = rr.find_popup_windows
-rr.find_popup_windows = lambda pid, hwnd: [888]
+_saved_ow = (rr.owner_window, rr.ec.ensure_foreground, rr.ec.screen_locked)
+OWN = {"h": 888}
+rr.owner_window = lambda el: OWN["h"]
+rr.ec.ensure_foreground = lambda h: seen_p.append(("앞으로", h)) or True
+rr.ec.screen_locked = lambda: False
 rr.press(777, el_p, "팝업 단추", popup=True)
+OWN["h"] = 777          # 메인 창 안에 그려진 팝업의 단추 - 지금처럼 메인 창만
+rr.press(777, el_p, "메인 창 팝업 단추", popup=True)
 rr.press(777, el_p, "저장 단추")
-rr.find_popup_windows = _saved_fpw
-check("press(popup=True): 팝업 단추는 ERPia 가 따로 띄운 팝업 창이 맨 위여도 누른다 - 메인 창 UIA 훑기에 그 창 단추도 잡힌다 "
-      "(검토 11-23, wellife.confirm_popups 와 같은 판정). 다른 단추는 그대로 메인 창만",
-      [x for x in seen_p if x[0] == "clear"] == [("clear", "팝업 단추", {888}), ("clear", "저장 단추", set())]
-      and pressed_p == [("click", {"coords": (55, 66), "absolute": True})] * 2, f"{seen_p} {pressed_p}")
+check("press(popup=True): 따로 뜬 팝업 창의 단추는 그 창을 앞으로 하고 그 창 하나만 맨 위여도 누른다 - 메인 창을 앞으로 하지 않고(모달이 앞을 쥔다), "
+      "다른 ERPia 팝업이 덮으면 누르지 않는다 (검토 11-25 - 예전엔 따로 뜬 팝업 창 모두를 허용). 메인 창 안의 단추·다른 단추는 메인 창만",
+      [x for x in seen_p if x[0] in ("clear", "앞으로", "front")] ==
+      [("앞으로", 888), ("clear", "팝업 단추", {888}), ("front", 777, 4242, "메인 창 팝업 단추"), ("clear", "메인 창 팝업 단추", set()),
+       ("front", 777, 4242, "저장 단추"), ("clear", "저장 단추", set())]
+      and pressed_p == [("click", {"coords": (55, 66), "absolute": True})] * 3, f"{seen_p} {pressed_p}")
+pressed_p.clear()
+OWN["h"] = 888
+rr.ec.ensure_foreground = lambda h: False
+try:
+    rr.press(777, el_p, "팝업 단추", popup=True)
+    res = None
+except rr.wellife.Stop as e:
+    res = (e.result, str(e))
+check("press(popup=True): 따로 뜬 팝업 창을 앞으로 못 가져오면 누르지 않고 멈춘다 - wellife.front 와 같은 안전장치 (교차 검증 11-25)",
+      res and res[0] == "failed" and "앞으로 가져오지 못해" in res[1] and not pressed_p, f"{res} {pressed_p}")
+(rr.owner_window, rr.ec.ensure_foreground, rr.ec.screen_locked) = _saved_ow
+_saved_ga = rr.win32gui
+rr.win32gui = types.SimpleNamespace(GetAncestor=lambda h, f: {55: 888, 66: 777}.get(h, 0))
+_own_el = lambda h, top=None: types.SimpleNamespace(element_info=types.SimpleNamespace(handle=h),
+                                                    top_level_parent=lambda: types.SimpleNamespace(handle=top))
+check("owner_window: 단추 창의 최상위 창 (GA_ROOT), 창 핸들이 없는 단추는 그 최상위 부모로, 못 읽으면 None",
+      rr.owner_window(_own_el(55)) == 888 and rr.owner_window(_own_el(None, 66)) == 777 and rr.owner_window(object()) is None)
+rr.win32gui = _saved_ga
 _src_rr = Path(_rr.__file__).read_text(encoding="utf-8")
 check("팝업 단추 누르기는 popup=True 로 (이어 뜨는 팝업·배송보류 확인 팝업 둘)",
       'press(hwnd, btn, "팝업 단추", popup=True)' in _src_rr and _src_rr.count('"배송보류 확인 팝업 단추", popup=True)') == 2)
@@ -2199,7 +2277,12 @@ def run_sr(**kw):
               menu_fail=None, pressed=[], held=[])
     SR.update(kw)
     rr.click_subtab = lambda app, hwnd, name: SR["tab"]
-    rr.get_onscreen_tables = lambda win: [_g(10), _g(300)][:SR["tables"]]
+    def _tables(win):   # late: 탭을 연 직후 몇 번은 표가 1개만 보인다 (늦게 그려짐)
+        if SR.get("late"):
+            SR["late"] -= 1
+            return [_g(10)]
+        return [_g(10), _g(300)][:SR["tables"]]
+    rr.get_onscreen_tables = _tables
     rr.grid_overlay_count = lambda hwnd, grid: 0
     rr.click_toolbar_button = lambda win, hwnd, text, work=False: SR["query"]
     rr.wait_grid_spinner_gone = lambda *a, **k: True
@@ -2236,9 +2319,16 @@ check("재고검토: 상단 행의 상품코드를 못 읽으면 실패로 멈�
 res = run_sr(query=False)
 check("재고검토: 조회(F) 를 못 누르면 옛 화면으로 보류하지 않고 실패로 멈춘다", res[:2] == ("Stop", "failed") and "조회" in res[2]
       and not SR["pressed"], str(res))
+_saved_tw = rr.wellife.TABLE_WAIT_SECONDS
+rr.wellife.TABLE_WAIT_SECONDS = 0.3
 res = run_sr(tables=1)
-check("재고검토: 탭은 있는데 그리드를 못 찾으면 실패로 멈춘다 (일반 탭 조회·저장을 재고검토 탭에서 누르지 않게)",
-      res[:2] == ("Stop", "failed") and "그리드" in res[2], str(res))
+check("재고검토: 탭은 있는데 기다려도 그리드를 못 찾으면 실패로 멈춘다 (일반 탭 조회·저장을 재고검토 탭에서 누르지 않게)",
+      res[:2] == ("Stop", "failed") and "그리드" in res[2] and "기다림" in res[2], str(res))
+rr.wellife.TABLE_WAIT_SECONDS = 5
+res = run_sr(late=3)
+check("재고검토: 탭을 연 직후 표가 늦게 그려져도 기다렸다가 이어 간다 - 거짓 실패로 물류대기가 멈추지 않게 (검토 11-25)",
+      res == (2, 2) and SR["held"] == ["A", "B"], f"{res}")
+rr.wellife.TABLE_WAIT_SECONDS = _saved_tw
 res = run_sr(bottom=False)
 check("재고검토: 상단을 끝까지 못 훑었으면 보류를 하나도 하지 않고 실패로 멈춘다 (빠진 부족수량 건이 보류 없이 저장되지 않게)",
       res[:2] == ("Stop", "failed") and "끝까지" in res[2] and not SR["pressed"] and not SR["held"], str(res))

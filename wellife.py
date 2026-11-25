@@ -720,7 +720,7 @@ def import_collect(rr, ctx, live, wait=True):
     t0 = time.time()
     started = rr.run_import_step(ctx.app, ctx.pid, ctx.hwnd, page, wait=wait)
     if started is None:     # 누르지 못했거나 눌러도 조회가 시작되지 않았다 - 건너뜀(토큰 0), 보통 PROCESS 와 같게 (사용자 11-19)
-        return "skipped", f"[{mode_tag(live)}] 자동 수집: [{rr.IMPORT_BUTTON_NAME}]를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
+        return "skipped", f"[{mode_tag(live)}] 자동 수집: " + rr.import_miss()     # 어느 쪽인지 나눠 적는다 (검토 2026-11-25)
 
     def end(ok):
         if not ok:      # 조회는 시작됐는데 끝을 못 봤다 (보통 PROCESS 와 같게)
@@ -851,7 +851,7 @@ def normal_sales(rr, ctx, live):
     if not live:
         return head + hover_menu_item(rr, ctx, split, SALES_ITEM, what, checked) + " (정상매출은 누르지 않음)", False
     if not checked:     # 체크가 안 됐다 - 누르지 않고 그 단계에서 멈춘다 (사용자 11-23: 실패면 뒤 단계를 진행하지 않는다, 예전엔 건너뜀)
-        raise Stop("failed", f"{head} - 누르기 직전 다시 보니 체크가 되지 않아 정상매출을 누르지 않고 중단하였습니다. 확인하여 주십시오.")
+        raise Stop("failed", f"주문매핑 {head} - 누르기 직전 다시 보니 체크가 되지 않아 정상매출을 누르지 않고 중단하였습니다. 확인하여 주십시오.")
     baseline = rr.visible_child_windows(ctx.hwnd)      # 스피너 비교 기준 (원래 코드와 같이 누르기 전)
     # ▼·메뉴 못 찾음·'정상매출' 꺼짐은 실패로 멈춘다 (strict - 사용자 11-20·11-23). 돌아오면 누른 것이다
     note, _ = press_menu_item(rr, ctx, split, SALES_ITEM, what, confirm=False, strict=True)
@@ -2816,17 +2816,22 @@ def _keeps_blocking(rr, ctx, h):
 
 
 SEPARATE_CONFIRM = ("확인(O)", "확인")     # 따로 뜬 팝업을 닫는 단추 - [예] 는 넣지 않는다 (질문에 [예] 는 데이터를 바꿀 수 있다)
+SEPARATE_CANCEL = ("취소(C)", "취소")      # 질문 창은 [취소]·[아니오] 로 닫는다 - [확인] 이 같이 있어도 (검토 2026-11-25)
+TITLE_BAR_BUTTONS = ("닫기", "최소화", "최대화", "복원", "Close", "Minimize", "Maximize", "Restore")   # 창 제목 줄 단추 - 답 단추로 세지 않는다
 
 
 def close_separate_popup(rr, h):
-    """따로 뜬 팝업 창 h 를 닫는다 (사용자 2026-11-20: X 나 [확인] 으로 지운다). [확인] 이 있으면 [확인], 예/아니오 질문이면 [아니오],
-    그 밖에는 X(창 닫기). (누른 것, 닫혔는가). 창이 뒤에 깔려 있어도 되게 UI 자동화 Invoke·창 메시지로 누른다."""
+    """따로 뜬 팝업 창 h 를 닫는다 (사용자 2026-11-20: X 나 [확인] 으로 지운다). [취소]·[아니오] 가 있으면 그것 (질문에 답하지 않는다),
+    [확인] 은 답 단추가 그것 하나뿐인 안내 창에만, 판단이 안 서는 창은 X(창 닫기) (검토 2026-11-25 - 예전엔 [확인] 이 있으면 늘 [확인] 이라
+    앞 실행·사람이 남긴 '…하시겠습니까? [확인] [취소]' 에 다음 회차가 [확인] 으로 답할 수 있었다). (누른 것, 닫혔는가).
+    창이 뒤에 깔려 있어도 되게 UI 자동화 Invoke·창 메시지로 누른다."""
     try:
         buttons = [(b, b.window_text()) for b in rr.Desktop(backend="uia").window(handle=h).descendants(control_type="Button")]
     except Exception:
         buttons = []        # 그새 닫힌 창이면 아래 X 에서 닫힘을 본다
-    pick = (next((p for p in buttons if p[1] in SEPARATE_CONFIRM), None)
-            or next((p for p in buttons if p[1] in rr.NO_BUTTON_TEXTS), None))
+    answers = [p for p in buttons if p[1] not in TITLE_BAR_BUTTONS]
+    pick = (next((p for p in answers if p[1] in SEPARATE_CANCEL or p[1] in rr.NO_BUTTON_TEXTS), None)
+            or (answers[0] if len(answers) == 1 and answers[0][1] in SEPARATE_CONFIRM else None))
     how = f"[{pick[1]}]" if pick else "X(창 닫기)"
     try:
         if pick:
@@ -2853,14 +2858,14 @@ def clear_separate_popups(rr, ctx, after, ignore=()):
         h, text = found
         how, ok = close_separate_popup(rr, h)
         if not ok:
-            raise Stop("stopped", f"{after}: 따로 뜬 ERPia 팝업 창을 닫지 못해 중단하였습니다. ({text}, {how})")
-        rr.log(f"  {after}: 따로 뜬 ERPia 팝업 창을 {how} 로 닫고 이어갑니다. ({text})")
+            raise Stop("stopped", f"{after}: ERPia 메인 창 밖에 뜬 알림 창을 닫지 못해 중단하였습니다. ({text}, {how})")
+        rr.log(f"  {after}: ERPia 메인 창 밖에 뜬 알림 창을 {how} 로 닫고 이어갑니다. ({text})")
         closed += 1
         try:
             ctx.popups_closed = getattr(ctx, "popups_closed", 0) + 1
         except Exception:
             pass
-    raise Stop("stopped", f"{after}: 따로 뜬 ERPia 팝업 창이 {MAX_POPUPS}개 넘게 이어 떠서 중단하였습니다.")
+    raise Stop("stopped", f"{after}: ERPia 메인 창 밖에 뜬 알림 창이 {MAX_POPUPS}개 넘게 이어 떠서 중단하였습니다.")
 
 
 def close_excel_prompt(rr, ctx):
@@ -3178,6 +3183,8 @@ def _open_menu(rr, ctx, split, item_text, what, would_press):
     if item is None:
         rr.log(f"  {what}: 내림 메뉴에서 '{item_text}'을(를) 찾지 못했습니다. "
                f"확인하여 주십시오. (새로 나타난 창 {len(opened)}개: {_window_texts(rr, opened)})")
+        # 메뉴가 열린 채 팝업을 먼저 본다 - 팝업이 떠 있는데 ESC 를 보내면 그 팝업이 닫힌다 (문서 5.2 의 예외, 검토 2026-11-25:
+        # 메뉴 창에는 [확인] 이 없어 no_popup 이 메뉴를 팝업으로 잡지 않는다)
         no_popup(rr, ctx, f"{what} ▼를 누른 뒤")
         menus = {h for h in opened if _has_buttons(rr, h)}   # 툴팁 같은 창은 메뉴가 아니다 - ESC 를 보낼 까닭이 없다
         if not menus:

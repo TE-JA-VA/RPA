@@ -1201,6 +1201,7 @@ def order_rr(files):
                   find_site_upload_cell=lambda hwnd, grid, code: (El(f"업로드 {code}"), "1"),
                   select_all_and_verify=lambda name, hwnd, grid, cols: acts.append(("select", name, grid.name)) or 4,
                   run_import_step=lambda app, pid, hwnd, win, wait=True: acts.append(("click", "가져오기", getattr(win, "name", "창"))) or IMPORTED[0],
+                  import_miss=lambda: "'가져오기'를 눌렀으나 15초 안에 조회가 시작되지 않아 건너뛰었습니다.",
                   find_by_text=lambda win, text, control_types=(): FOUND[0] or next(
                       (e for e in win.descendants() if e.window_text() == text), None),
                   native_enabled=lambda el: acts.append(("enabled?",)) or (ENABLED.pop(0) if ENABLED else True),
@@ -3623,6 +3624,14 @@ check("[확인] 이 있는 따로 뜬 ERPia 팝업 창은 [확인] 으로 닫고
 SEP[34] = ("저장하시겠습니까", "WindowsForms10.Window.8", ["예(Y)", "아니오(N)"], False, True)
 res = sep_clear(sep_rr())
 check("예/아니오 질문 창은 [예] 를 누르지 않고 [아니오] 로 닫는다 (데이터를 바꿀 수 있다)", res == 1 and pressed_sep == [(34, "아니오(N)")], f"{res} {pressed_sep}")
+SEP[41] = ("변경 내용을 적용하시겠습니까", "WindowsForms10.Window.8", ["확인", "취소", "닫기"], False, True)
+res = sep_clear(sep_rr())
+check("[확인] [취소] 질문 창은 [확인] 으로 답하지 않고 [취소] 로 닫는다 - 앞 실행·사람이 남긴 질문에 다음 회차가 답하지 않게 (검토 11-25)",
+      res == 1 and pressed_sep == [(41, "취소")], f"{res} {pressed_sep}")
+SEP[42] = ("알 수 없는 창", "WindowsForms10.Window.8", ["확인", "다시 시도", "닫기"], False, True)
+res = sep_clear(sep_rr())
+check("답 단추가 [확인] 하나가 아니고 [취소]·[아니오] 도 없으면 누르지 않고 X(창 닫기)로 닫는다 (검토 11-25)",
+      res == 1 and pressed_sep == [(42, "X")], f"{res} {pressed_sep}")
 SEP_MAIN_ON[0] = False
 SEP[35] = ("", "WindowsForms10.Window.8", [], False, True)
 res = sep_clear(sep_rr())

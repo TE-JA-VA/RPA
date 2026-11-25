@@ -172,6 +172,12 @@ IMPORT_BUTTON_NAME = "가져오기"
 IMPORT_BUSY_WAIT_SECONDS = 15      # 클릭 뒤 '조회중'으로 바뀌기를 기다리는 시간
 IMPORT_POLL_SECONDS = 0.5
 IMPORT_SETTLE_SECONDS = 3          # 둘 다 돌아온 뒤 이만큼 유지되어야 완료로 본다
+IMPORT_MISS = None                 # run_import_step 이 None(건너뜀)을 돌려준 까닭 - 단추 없음·눌렀으나 조회 안 됨 (누르기 오류는 위로 올린다) (검토 2026-11-25)
+
+
+def import_miss():
+    """마지막 [가져오기] 건너뜀 사유 - 어느 쪽인지 나눠 적는다 (단추 없음·눌렀으나 조회가 시작되지 않음, 검토 2026-11-25)."""
+    return IMPORT_MISS or f"'{IMPORT_BUTTON_NAME}'를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
 # 많이 쓰는 업체도 1시간은 넘지 않는다고 해서 45분으로 잡았다 (실측 324초의 8배).
 # 여기에 걸리면 '완료를 확인하지 못했다'고 남기고 다음 단계로 넘어간다.
 IMPORT_MAX_WAIT_SECONDS = 2700
@@ -259,17 +265,20 @@ logs = []
 _log_started = False
 
 
-def log(msg):
+def log(msg, cloud=True):
     """화면에 찍고, 그때그때 파일에도 덧붙인다.
 
     예전에는 맨 끝에서 한 번에 썼다. 그러면 강제 종료했을 때 파일이 아예
     생기지 않아, 정작 원인을 알아야 하는 상황에서 볼 것이 없었다.
+    cloud=False 면 상태 파일의 최근 로그(log_tail - 클라우드로 올라간다)에는 넣지 않고 PC 결과 파일에만 (오류 추적처럼 경로·창 글이
+    섞인 긴 글 - 검토 2026-11-25).
     """
     global _log_started
     line = f"[{time.strftime('%H:%M:%S')}] {msg}" if msg.strip() else msg
     logs.append(line)
     print(line)
-    status.log_line(line)
+    if cloud:
+        status.log_line(line)
     try:
         mode = "a" if _log_started else "w"
         with open(RESULT_PATH, mode, encoding="utf-8") as f:
@@ -629,8 +638,8 @@ def press(hwnd, el, what, coords=None, popup=False, work=False, **kw):
     """ERPia 메인 창 안을 누른다 - 웰라이프 click 과 같은 안전장치 (사용자 2026-11-19): 화면이 잠겼거나·ERPia 를 앞으로 못 가져오거나·
     누를 자리가 창 밖이거나·다른 창이 덮고 있으면(5초까지 비켜나기를 기다림) 누르지 않고 wellife.Stop. 확인한 그 점을 누른다.
     coords: el 왼쪽 위 기준 (click_input 과 같다), 없으면 가운데. kw 는 click_input 에 그대로 (button·pressed·double).
-    popup: 팝업 단추 - ERPia 가 따로 띄운 팝업 창이 맨 위여도 누른다. 메인 창 UIA 훑기에는 그 창 단추도 잡힌다
-    (wellife.confirm_popups 와 같은 판정, 검토 2026-11-23).
+    popup: 팝업 단추 - 메인 창 UIA 훑기에는 ERPia 가 따로 띄운 팝업 창의 단추도 잡힌다 (검토 2026-11-23). 그 단추가 속한 창(owner_window)이
+    메인 창이 아니면 그 창을 앞으로 하고 그 창 하나만 맨 위여도 누른다 (검토 2026-11-25 - 다른 팝업이 덮으면 누르지 않는다).
     work: 데이터를 바꾸는 단추 - 확인을 지나 실제로 누르기 바로 앞에 처리 시작을 적는다 (rpa_status.began_work, wellife.click 과 같다 -
     덮여서 누르지 않은 반복 회차가 '처리 도중' 실패로 반복을 멈추지 않게, Codex 검토 2026-11-25)."""
     me = sys.modules[__name__]
@@ -640,12 +649,30 @@ def press(hwnd, el, what, coords=None, popup=False, work=False, **kw):
     if coords is not None:
         r = el.rectangle()
         pt = (r.left + coords[0], r.top + coords[1])
-    wellife.front(me, ctx, what)
-    pt = (wellife.clear_point(me, ctx, el, what, pt, allow=wellife.popup_windows(me, ctx)) if popup
-          else wellife.clear_point(me, ctx, el, what, pt))
+    own = owner_window(el) if popup else None
+    if own and own != hwnd:
+        # ERPia 가 따로 띄운 팝업 창의 단추 - 그 창을 앞으로 하고, 그 창 하나만 맨 위여도 된다 (검토 2026-11-25: 메인 창을 앞으로 하면
+        # 모달 팝업이 앞을 쥐어 '앞으로 못 가져옴' 으로 멈추고, 예전 allow 는 다른 ERPia 팝업이 덮어도 눌렀다)
+        if ec.screen_locked():
+            raise wellife.Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
+        if not ec.ensure_foreground(own):   # 앞으로 못 가져오면 멈춘다 - wellife.front 와 같은 안전장치 (교차 검증 2026-11-25)
+            raise wellife.Stop("failed", f"{what}: ERPia 팝업 창을 앞으로 가져오지 못해 누르지 않고 중단하였습니다.")
+        pt = wellife.clear_point(me, ctx, el, what, pt, allow=(own,))
+    else:
+        wellife.front(me, ctx, what)
+        pt = wellife.clear_point(me, ctx, el, what, pt)
     if work:
         status.began_work()
     el.click_input(coords=pt, absolute=True, **kw)
+
+
+def owner_window(el):
+    """요소가 속한 최상위 창 (GA_ROOT). 못 읽으면 None."""
+    try:
+        h = el.element_info.handle or el.top_level_parent().handle
+        return win32gui.GetAncestor(h, 2) if h else None
+    except Exception:
+        return None
 
 
 def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
@@ -3735,8 +3762,13 @@ def run_stock_review_step(app, pid, hwnd):
 
     win = app.window(handle=hwnd)
     tables = get_onscreen_tables(win)
+    end = time.time() + wellife.TABLE_WAIT_SECONDS
+    while len(tables) < 2 and time.time() < end:    # 탭을 연 직후 표가 늦게 그려지는 날 - 거짓 실패로 멈추지 않게 (검토 2026-11-25,
+        time.sleep(0.3)                             # 화면 이동 뒤 wellife.wait_tables 와 같은 까닭 - 11-24 실측)
+        win = app.window(handle=hwnd)
+        tables = get_onscreen_tables(win)
     if len(tables) < 2:
-        stop(f"화면의 그리드를 찾지 못했습니다 ({len(tables)}개, 2개 필요)")
+        stop(f"화면의 그리드를 찾지 못했습니다 ({len(tables)}개, 2개 필요 - {wellife.TABLE_WAIT_SECONDS}초 기다림)")
     top_grid = min(tables, key=lambda t: t.rectangle().top)
     bottom_grid = max(tables, key=lambda t: t.rectangle().top)
     log(f"  상단 그리드={top_grid.rectangle()} / 하단 그리드={bottom_grid.rectangle()}")
@@ -5605,12 +5637,16 @@ def run_import_step(app, pid, hwnd, win, wait=True):
     도중에 뜨는 안내 팝업은 규칙대로 닫는다. 팝업이 떠 있는 동안에는 메인 창이
     잠겨 버튼도 비활성으로 보이므로, 닫지 않으면 영영 기다리게 된다.
 
-    돌려주는 값: 끝남 True / 조회가 시작된 뒤 끝을 확인 못 함 False / 누르지 못함(단추 없음·클릭 실패)·눌러도 '조회중' 이 안 됨 None
+    돌려주는 값: 끝남 True / 조회가 시작된 뒤 끝을 확인 못 함 False / 단추 없음·눌러도 '조회중' 이 안 됨 None (까닭은 import_miss).
+    누르기 직전 확인·누르기의 오류는 None 이 아니라 위로 올린다 (wellife.Stop·예외 - 모듈 실패, 검토 2026-11-25)
     - 자동 수집 모듈이 None 을 건너뜀(토큰 0)으로 가른다 (사용자 2026-11-02, 조회 미시작은 2026-11-19).
     """
+    global IMPORT_MISS
+    IMPORT_MISS = None
     imp = find_by_text(win, IMPORT_BUTTON_NAME, control_types=("Button",))
     if imp is None:
         log(f"'{IMPORT_BUTTON_NAME}' 버튼을 찾지 못했습니다. 주문 가져오기를 건너뜁니다.")
+        IMPORT_MISS = f"'{IMPORT_BUTTON_NAME}' 단추를 찾지 못해 누르지 않고 건너뛰었습니다."
         return None
     sal = find_by_text(win, "매출처리", control_types=("SplitButton", "Button"))
     if sal is None:
@@ -5666,13 +5702,11 @@ def run_import_step(app, pid, hwnd, win, wait=True):
             waited += IMPORT_POLL_SECONDS
 
     log(f"'{IMPORT_BUTTON_NAME}' 클릭")
-    status.began_work()     # 여기부터 처리 - 반복 회차가 이 뒤에 실패하면 반복을 멈춰 알린다 (rpa_status.began_work, 사용자 2026-11-24)
-    ec.ensure_foreground(hwnd)
-    try:
-        imp.click_input()
-    except Exception as e:
-        log(f"  '{IMPORT_BUTTON_NAME}' 클릭 실패: {e}")
-        return None
+    # 누르기 직전에 잠김·앞 창·덮개를 다시 본다 - 앞의 확인(ready_to_import) 뒤 조회중 대기를 지났다 (검토 2026-11-25).
+    # 처리 시작은 확인을 지난 뒤 누르기 바로 앞 (press work=True, rpa_status.began_work)
+    # 확인·누르기에서 난 오류는 건너뜀이 아니라 위로 - 모듈 실패로 멈춘다 (교차 검증 2026-11-25: 예전엔 클릭 오류를 건너뜀으로 바꿔
+    # 뒤 매출처리가 이어 돌았다)
+    press(hwnd, imp, f"'{IMPORT_BUTTON_NAME}' 단추", work=True)
     t0 = time.time()
     status.note("주문 가져오는 중")
 
@@ -5695,6 +5729,8 @@ def run_import_step(app, pid, hwnd, win, wait=True):
         handle_import_popups(pid, hwnd, seen_popups)
         log(f"  경고: {IMPORT_BUSY_WAIT_SECONDS}초 안에 '조회중'으로 바뀌지 않았습니다."
             f" 가져올 주문이 없었거나 클릭이 먹지 않았을 수 있습니다.")
+        IMPORT_MISS = (f"'{IMPORT_BUTTON_NAME}'를 눌렀으나 {IMPORT_BUSY_WAIT_SECONDS}초 안에 조회가 시작되지 않아 건너뛰었습니다. "
+                       "(가져올 주문이 없었거나 누른 것이 먹지 않았을 수 있습니다)")
         return None     # 누르지 못함과 같이 건너뜀 - 덮인 클릭을 '완료' 로 남기지 않는다 (웰라이프·일반 같게, 사용자 2026-11-19)
 
     def finish():
@@ -6381,7 +6417,7 @@ def module_import(ctx):
         imp = wellife.onscreen_button(page, IMPORT_BUTTON_NAME)
         if imp is None:
             log(f"'{IMPORT_BUTTON_NAME}' 버튼을 찾지 못했습니다. 주문 가져오기를 건너뜁니다.")
-            return "skipped", f"'{IMPORT_BUTTON_NAME}'를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
+            return "skipped", f"'{IMPORT_BUTTON_NAME}' 단추를 찾지 못해 누르지 않고 건너뛰었습니다."
         log("\n=== 좌측 상단 그리드 전체선택 ===")
         n_top = wellife.select_sites(rr, ctx, imp, top_left, what)
         def reselect():     # 풀렸으면 그리드를 다시 잡고 다시 전체선택 (웰라이프와 같게, 사용자 2026-11-23)
@@ -6395,7 +6431,7 @@ def module_import(ctx):
         t0 = time.time()
         ok = run_import_step(ctx.app, ctx.pid, ctx.hwnd, page)
         if ok is None:      # 누르지 못했거나 조회가 시작되지 않았다 - 돈 것이 없으니 토큰을 쓰지 않는다 (사용자 2026-11-02·11-19)
-            return "skipped", f"'{IMPORT_BUTTON_NAME}'를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
+            return "skipped", import_miss()
         if not ok:          # 끝을 못 봤다 - 실패로 멈춘다, 수집이 끝나지 않은 채 매출처리로 가지 않게 (사용자 2026-11-23, 예전엔 완료로 이어감).
             waited = time.time() - t0     # 몇 초 기다렸는지 남긴다 - 웰라이프 import_collect 와 같게 (사용자 2026-11-23)
             log(f"주문 가져오기를 {waited:.0f}초 기다렸으나 끝을 확인하지 못해 중단합니다.")
@@ -6485,7 +6521,7 @@ def sales_flow(ctx, win, bottom):
         if wellife.recheck(rr, bottom, "주문매핑 하단", True):
             break
         if attempt == wellife.CHECK_TRIES:
-            return "failed", (f"하단 {n_bottom or 0}줄 전체선택 - {attempt}번 체크해도 누르기 직전 체크가 되지 않아 정상매출을 누르지 않고 "
+            return "failed", (f"주문매핑 하단 {n_bottom or 0}줄 전체선택 - {attempt}번 체크해도 누르기 직전 체크가 되지 않아 정상매출을 누르지 않고 "
                               "중단하였습니다. 확인하여 주십시오.")
         log(f"  주문매핑 하단 체크가 맞지 않아 그리드를 다시 잡고 다시 체크합니다 ({attempt}/{wellife.CHECK_TRIES - 1})")
         time.sleep(1.0)
@@ -6807,7 +6843,7 @@ def run_modules(selected, modules=None, funcs=None, section=None):
                 # (rpa_status.failed_before_work, 사용자 2026-11-24·25)
                 if status.failed_before_work():
                     log("반복 회차 - 처리를 시작하기 전 단계에서 멈춰 이번 회차만 건너뜁니다. 반복은 쉬는 시간 뒤 다음 회차에서 다시 합니다.")
-                    reason = f"{reason or '실패'} (반복 회차: 처리 전 단계라 이번 회차만 건너뛰고 쉬는 시간 뒤 다시 합니다)"
+                    reason = f"{reason or '실패'} (반복 회차: ERPia 자료를 바꾸기 전에 멈춰서 이번 회차만 건너뛰고 쉬는 시간 뒤 다시 합니다)"
                 else:
                     why = ("화면이 잠겨" if "화면이 잠겨" in (reason or "")
                            else "처리 도중 실패해" if status.worked() or [k for k in (status.done_modules() or []) if k != "login"]
@@ -6816,6 +6852,14 @@ def run_modules(selected, modules=None, funcs=None, section=None):
                         "화면을 확인한 뒤 [반복 다시 시작] 으로 이어 주십시오.")
             return "stopped", reason
     return "success", None
+
+
+def main_window_alive(hwnd):
+    """ERPia 메인 창이 아직 있나 - 꺼질 때는 창이 먼저 사라지고 프로세스가 늦게 끝난다 (ERPIA_DYING_WAIT_SECONDS). 못 읽으면 없는 것으로."""
+    try:
+        return bool(hwnd) and bool(win32gui.IsWindow(hwnd))
+    except Exception:
+        return False
 
 
 def run_module(ctx, key, label, funcs):
@@ -6841,13 +6885,18 @@ def run_module(ctx, key, label, funcs):
                 # 꺼지는 중이면 UI 예외가 먼저 나고 프로세스는 조금 뒤에 끝난다 - 그 순간만 보면 '떠 있음' 이라
                 # 다시 띄우지 않고 '프로그램 오류' 로 끝났다 (2026-11-19 개발기: 상단 전체선택 중 종료 → KeyError: None).
                 # 웰라이프 모듈은 예외를 '실패' 결과로 돌려준다(wellife.ui_error) - 같은 동작이게 실패 결과도 본다 (사용자 11-19)
+                # 예외 없이 '실패' 로 끝났고 메인 창이 그대로면 꺼지는 중이 아니다 - 기다리지 않는다 (실패마다 5초씩 늘던 것, 검토 2026-11-25).
+                # 예외면 지금처럼 기다린다 - 닫히는 도중 창보다 UIA 예외가 먼저 날 수 있다 (교차 검증 2026-11-25)
                 end = time.time() + ERPIA_DYING_WAIT_SECONDS
-                while ec.pid_alive(ctx.pid) and time.time() < end:
+                # 웰라이프 모듈은 예외를 'UI 오류: …' 실패 결과로 돌려준다(wellife.ui_error) - 그것도 예외로 본다 (교차 검증 2차)
+                raised = error is not None or str(reason or "").startswith("UI 오류")
+                while ec.pid_alive(ctx.pid) and time.time() < end and (raised or not main_window_alive(ctx.hwnd)):
                     time.sleep(0.2)
             if key == "login" or ctx.pid is None or ec.pid_alive(ctx.pid):
                 if error is not None and key != "login":
                     # 실행 전체를 '프로그램 오류' 로 끝내지 않고 이 모듈의 실패로 남긴다 - 웰라이프(ui_error)와 같게 (사용자 2026-11-19)
-                    log("".join(traceback.format_exception(type(error), error, error.__traceback__)).rstrip())
+                    # 오류 추적은 PC 결과 파일에만 - 상태·클라우드 로그에는 ui_error 의 한 줄 사유만 (검토 2026-11-25)
+                    log("".join(traceback.format_exception(type(error), error, error.__traceback__)).rstrip(), cloud=False)
                     return wellife.ui_error(sys.modules[__name__], error)
                 if error is not None:
                     raise error
