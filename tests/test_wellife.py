@@ -3907,7 +3907,8 @@ check("운송장 엑셀 미리보기 0건이면 받지 않고, 처리 시작(beg
 # _click_in(work=True): 따로 뜬 창 단추도 잠김·덮개 확인을 지난 뒤 누르기 바로 앞에만 적는다 - 덮여 누르지 않으면 처리 전 (교차 검증 11-25)
 _saved_ci = (wellife._top_window, wellife.time)
 _ci_rr = types.SimpleNamespace(status=Rec(), log=lambda m: None, ec=types.SimpleNamespace(screen_locked=lambda: False))
-_ci_clicks = []
+_ci_clicks = []          # 표시·클릭이 일어난 차례 ('표시' 는 처리 시작, k 는 클릭)
+_ci_rr.status.began_work = lambda: _ci_clicks.append("표시")
 _ci_el = types.SimpleNamespace(rectangle=lambda: Rect(10, 10, 50, 30), click_input=lambda **k: _ci_clicks.append(k))
 wellife.time = types.SimpleNamespace(sleep=lambda s: None, time=_time.time)
 wellife._top_window = lambda rr_, pt: 99          # 다른 창이 덮음
@@ -3920,8 +3921,8 @@ _ci_cover = (_ci_res, list(_ci_rr.status.calls), list(_ci_clicks))
 wellife._top_window = lambda rr_, pt: 5
 wellife._click_in(_ci_rr, 5, _ci_el, "[엑셀 다운로드]", work=True)
 wellife._click_in(_ci_rr, 5, _ci_el, "[닫기]")
-check("_click_in(work=True): 덮여서 누르지 않으면 처리 시작을 적지 않고, 확인을 지나 누를 때만 적는다 (보통 누르기는 적지 않는다)",
-      _ci_cover == ("failed", [], []) and _ci_rr.status.of("began_work") == [()] and len(_ci_clicks) == 2, f"{_ci_cover} {_ci_rr.status.calls}")
+check("_click_in(work=True): 덮여서 누르지 않으면 처리 시작을 적지 않고, 확인을 지나 누를 때만 클릭 바로 앞에 적는다 (보통 누르기는 적지 않는다)",
+      _ci_cover == ("failed", [], []) and [c if c == "표시" else "클릭" for c in _ci_clicks] == ["표시", "클릭", "클릭"], f"{_ci_cover} {_ci_clicks}")
 (wellife._top_window, wellife.time) = _saved_ci
 
 finish()
