@@ -156,6 +156,8 @@ def press(h):
     pressed.append(h)
     _cls, closes, known = wins[h]
     if not known:
+        if closes == "soon":         # 단추를 볼 때는 있었는데 곧 닫히는 창
+            wins.pop(h)
         return False, "처리할 수 있는 버튼이 없습니다.", ""
     if closes:
         wins.pop(h)
@@ -254,6 +256,13 @@ rr.upload_pw.update(code="013", at=0.0)
 texts = rr.upload_popups(0, 0)
 check("이 PC 에서 못 푸는 값이면 멈추지 않고 빈 칸으로 [확인] - 그 파일은 실패, 기록에 옵저버에서 다시 입력하라고 남긴다",
       typed == ["1234"] and pressed == [9] and bool(texts) and any("옵저버에서 다시 입력" in str(x) for x in logged), f"{typed} {pressed} {texts} {logged}")
+rr.status.excel_password = lambda code: {"013": "1234"}.get(code)
+pw_popup(9)
+wins[10] = ("popup", "soon", False)       # 비밀번호 창과 함께 떴다 같이 닫히는 제목 없는 창 (11-19 개발기 실측 408x165)
+rr.upload_pw.update(code="013", at=0.0)
+texts = []
+check("비밀번호 창과 함께 떴다 곧 닫히는 단추 없는 창은 멈추지 않고 넘어간다 (11-19 개발기: 3번 중 2번 엑셀 수집 중단)",
+      not stops(lambda: texts.extend(rr.upload_popups(0, 0))) and typed == ["1234", "1234"] and texts == [], f"{typed} {texts} {pressed}")
 rr.upload_pw.update(code=None, at=0.0)
 rr.log, rr.status.excel_password = real_log, real_pw
 titles.clear()

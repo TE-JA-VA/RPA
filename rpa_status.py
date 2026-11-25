@@ -2540,6 +2540,57 @@ def done_modules():
 
 
 @_safe
+def began_work():
+    """이번 실행이 데이터를 처리하기 시작했다 - 데이터를 바꾸는 단추(화살표·정상매출·저장·배송보류·완료처리·전송요청·가져오기)를
+    누르거나 엑셀을 받거나 올리거나 출력하기 바로 앞에서 부른다. 그 전(화면 이동·조회·대상 읽기·체크)에서 멈춘 반복 회차는
+    그 회차만 건너뛰고 반복을 잇고, 그 뒤의 실패는 반복을 멈춰 알린다 (rpa_dashboard.round_failed, 사용자 2026-11-24:
+    반복은 데이터가 언제 화면에 쌓일지 몰라 도는 것)."""
+    global _work_marks
+    with _lock:
+        _work_marks += 1
+        if _active() and not _state.get("worked"):
+            _state["worked"] = True
+            _touch_locked(immediate=True)
+
+
+_work_marks = 0
+
+
+def work_marks():
+    """began_work 가 불린 수 - 모듈 하나가 처리를 시작했는지 본다 (run_routine.run_module: 처리 뒤 ERPia 가 꺼지면 다시 돌지 않는다)."""
+    return _work_marks
+
+
+@_safe
+def worked():
+    """이번 실행이 데이터를 처리하기 시작했나 (began_work)."""
+    with _lock:
+        return bool(_state and _state.get("worked"))
+
+
+# 처리 전이어도 반복을 멈춰 알릴 실패 - 저절로 풀리지 않는다 (코드·UI 예외, 설정, ERPia 를 다시 못 띄움 - 검토 2026-11-24,
+# 화면 잠김 - 사람이 풀어야 한다, 사용자 2026-11-25)
+# 엑셀 업로드 중 뜻밖의 오류 - 'UI 오류' 와 같다 (wellife.upload_stopped, 리뷰 2차 2026-11-25)
+# ponytail: 모듈 사유 글로 가린다. 글을 바꾸면 여기도 - 늘면 상태 파일에 칸을 둘 것
+REPEAT_STOP_TEXTS = ("UI 오류", "설정 오류", "다시 띄우지 못했습니다", "번 꺼져 멈춥니다", "화면이 잠겨", "뜻밖의 오류")
+
+
+def failed_before_work(state=None):
+    """처리를 시작하기 전(화면 이동·조회·대상 읽기·체크)에 모듈이 멈춘 실행인가 - 반복 회차면 그 회차만 건너뛴다
+    (rpa_dashboard.round_failed·run_routine.run_modules 가 같이 쓴다, 사용자 2026-11-24). 로그인 모듈 실패, 처리를 시작한 뒤
+    (began_work·앞 모듈 완료), 저절로 풀리지 않는 실패(REPEAT_STOP_TEXTS), 모듈 밖 멈춤(실패 모듈 없음)은 아니다.
+    state: 상태 파일 내용 - 없으면 지금 실행."""
+    if state is None:
+        with _lock:
+            state = dict(_state or {})
+    mods = [m for m in state.get("modules") or [] if isinstance(m, dict)]
+    bad = next((m for m in mods if m.get("state") in ("failed", "stopped")), None)
+    return (bad is not None and bad.get("key") != "login" and not state.get("worked")
+            and not any(m.get("state") == "done" and m.get("key") != "login" for m in mods)
+            and not any(t in (bad.get("reason") or "") for t in REPEAT_STOP_TEXTS))
+
+
+@_safe
 def fail_exception(exc):
     """main() 밖으로 예외가 새어 나왔을 때 부른다."""
     if isinstance(exc, SystemExit):

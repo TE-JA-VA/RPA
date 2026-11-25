@@ -41,9 +41,10 @@ def iso(t):
     return t.isoformat(timespec="seconds")
 
 
-def put_status(program, state, started, finished=None, modules=(), reason=None, trigger="repeat"):
-    """상태 파일을 흉내 낸다 (running 이면 이 프로세스가 살아 있는 것으로 보인다). trigger 는 띄운 까닭 (사람이 누르면 None)."""
-    st.write_json_atomic(st.status_path(program), {
+def put_status(program, state, started, finished=None, modules=(), reason=None, trigger="repeat", worked=False):
+    """상태 파일을 흉내 낸다 (running 이면 이 프로세스가 살아 있는 것으로 보인다). trigger 는 띄운 까닭 (사람이 누르면 None).
+    worked: 회차가 데이터를 처리하기 시작했나 (rpa_status.began_work)."""
+    st.write_json_atomic(st.status_path(program), {"worked": worked,
         "schema": 2, "run_id": f"{program}_{started:%Y%m%d_%H%M%S}_{PID}", "program": program, "program_label": st.LABELS[program],
         "state": state, "reason": reason, "pid": PID, "pid_created": CREATED, "started_at": iso(started),
         "updated_at": iso(finished or started), "finished_at": iso(finished) if finished else None,
@@ -126,7 +127,8 @@ CLOCK[0] = at("11:06")
 sched.tick()
 check(len(d.LAUNCHED) == 3, "세 번째 회차")
 put_status("routine", "stopped", at("11:06", sec=5), at("11:10"),
-           [LOGIN, {"key": "logistics", "label": "물류관리", "state": "failed", "reason": "저장 실패"}], reason="저장 실패"); ended()
+           [LOGIN, {"key": "logistics", "label": "물류관리", "state": "failed", "reason": "저장 실패"}], reason="저장 실패",
+           worked=True); ended()     # 처리 도중 실패 - 처리 전에 멈춘 회차는 건너뛴다 (사용자 2026-11-24, 아래 절)
 CLOCK[0] = at("11:15")
 sched.tick()
 check((rep().get("stopped") or {}).get("reason") == "11:10 물류관리 실패로 반복 실행을 중단하였습니다: 저장 실패" and len(d.LAUNCHED) == 3,
@@ -343,7 +345,7 @@ CLOCK[0] = at("09:03", day=9); sched.tick()
 check(rep().get("runs") == 1 and rep().get("stopped") is None and rep().get("next_at") == iso(at("09:07", 9)),
       f"회차 결과는 프리페어 상태로 센다 - '시작하지 못함' 으로 멈추지 않는다 ({rep()})")
 
-print("\n=== 화면이 잠긴 회차는 그 회차만 건너뛴다 (사용자 2026-10-08) ===")
+print("\n=== 화면이 잠긴 회차는 반복을 멈춘다 - 사람이 풀어야 한다 (사용자 2026-11-25, 예전엔 그 회차만 건너뜀 - 10-08) ===")
 d.apply_schedule({"enabled": True, "days": ALL, "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5, "run": ["Wms"]}]})
 d.set_policy(5, ["Logistics", "Output"], wellife=True)
 ended(); put_status("prepare", "success", at("09:03", 9, 5), at("09:04", 9), [])   # 앞 절의 회차를 끝낸다
@@ -353,21 +355,40 @@ put_status("routine", "stopped", at("09:00", 10, 5), at("09:00", 10, 20), [LOGIN
            reason="윈도우 화면이 잠겨 있어 실행하지 않았습니다 (화면을 풀고 다시 실행)"); ended()
 CLOCK[0] = at("09:01", day=10); sched.tick()
 r = rep()
-check(r.get("stopped") is None and r.get("skipped") == 1 and r.get("runs") == 0 and r.get("next_at") == iso(at("09:05", 10, 20)),
-      f"잠긴 화면으로 멈춘 회차: 반복을 멈추지 않고 건너뜀 1, 쉬는 시간 뒤 다음 ({r})")
-CLOCK[0] = at("09:05", day=10, sec=30); sched.tick()
-check(len(d.LAUNCHED) == n + 2, "쉬는 시간 뒤 다음 회차")
-put_status("routine", "stopped", at("09:05", 10, 35), at("09:07", 10),
+check("화면이 잠겨" in (r.get("stopped") or {}).get("reason", "") and r.get("runs") == 0 and not r.get("skipped"),
+      f"실행 첫머리에 잠긴 회차: 건너뛰지 않고 반복을 멈추고 까닭을 남긴다 ({r})")
+d.resume_repeat()
+CLOCK[0] = at("09:02", day=10); sched.tick()
+check(len(d.LAUNCHED) == n + 2, "[반복 다시 시작] 뒤 회차")
+put_status("routine", "stopped", at("09:02", 10, 5), at("09:03", 10),
            [LOGIN, {"key": "wellife_wms", "label": "웰라이프 WMS 이관관리", "state": "stopped", "reason": "5-1 S/O매출: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤"}],
            reason="5-1 S/O매출: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤"); ended()
-CLOCK[0] = at("09:08", day=10); sched.tick()
-check(rep().get("stopped") is None and rep().get("skipped") == 2, f"도중에 잠겨 멈춘 회차도 건너뜀 ({rep()})")
+CLOCK[0] = at("09:04", day=10); sched.tick()
+check("화면이 잠겨" in (rep().get("stopped") or {}).get("reason", ""), f"처리 전에 모듈 안에서 잠겨 멈춘 회차도 반복을 멈춘다 ({rep().get('stopped')})")
+d.resume_repeat()
 CLOCK[0] = at("09:12", day=10, sec=30); sched.tick()
 check(len(d.LAUNCHED) == n + 3, "다음 회차")
 put_status("routine", "stopped", at("09:12", 10, 35), at("09:14", 10),
-           [LOGIN, {"key": "wellife_wms", "label": "웰라이프 WMS 이관관리", "state": "failed", "reason": "5-1 단추 없음"}], reason="5-1 단추 없음"); ended()
+           [LOGIN, {"key": "wellife_wms", "label": "웰라이프 WMS 이관관리", "state": "failed", "reason": "5-1 단추 없음"}], reason="5-1 단추 없음",
+           worked=True); ended()     # 처리 도중 실패 (처리 전에 멈춘 회차는 아래 절 - 사용자 2026-11-24)
 CLOCK[0] = at("09:15", day=10); sched.tick()
 check((rep().get("stopped") or {}).get("reason", "").endswith("5-1 단추 없음"), f"다른 까닭의 실패는 지금처럼 멈춘다 ({rep().get('stopped')})")
+
+print("\n=== 처리를 시작하기 전에 멈춘 회차는 그 회차만 건너뛰고 반복을 잇는다 (rpa_status.began_work, 사용자 2026-11-24) ===")
+d.resume_repeat()
+CLOCK[0] = at("09:16", day=10); n = len(d.LAUNCHED); sched.tick()
+check(len(d.LAUNCHED) == n + 1, "[반복 다시 시작] 뒤 회차")
+EARLY = {"key": "wellife_wms", "label": "웰라이프 WMS 이관관리", "state": "failed", "reason": "5-1 조회가 끝나지 않았습니다"}
+put_status("routine", "stopped", at("09:16", 10, 5), at("09:18", 10), [LOGIN, EARLY], reason=EARLY["reason"]); ended()
+CLOCK[0] = at("09:19", day=10); sched.tick()
+r = rep()
+check(r.get("stopped") is None and r.get("runs") == 1 and r.get("done") == 0 and r.get("next_at") == iso(at("09:23", 10)),
+      f"처리 전에 멈춘 회차: 반복을 멈추지 않고 회차 +1 (처리 0), 쉬는 시간 뒤 다음 ({r})")
+CLOCK[0] = at("09:23", day=10, sec=30); sched.tick()
+check(len(d.LAUNCHED) == n + 2, "쉬는 시간 뒤 다음 회차")
+put_status("routine", "crashed", at("09:23", 10, 35), at("09:24", 10), [LOGIN, EARLY], reason="프로그램 오류"); ended()
+CLOCK[0] = at("09:25", day=10); sched.tick()
+check(rep().get("stopped") is not None, f"프로그램 오류는 처리 전이어도 지금처럼 멈춘다 ({rep()})")
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n실패:", fails if fails else "없음")
 sys.exit(1 if fails else 0)
