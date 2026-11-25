@@ -351,9 +351,23 @@ def test_reload_keeps_pcs():
 
     with open(p("broken.json"), "w", encoding="utf-8") as f:
         f.write("{깨진 파일")
-    reg3 = pc_registry.Registry(p("broken.json"), seats=5, clock=clock)
-    check("깨진 파일은 .broken 으로 옮기고 빈 등록부", os.path.exists(p("broken.json.broken")) and reg3.list() == [] and reg3.used() == 0)
-    check("빈 등록부의 첫 번호는 pc_01", reg3.start("가")["pc_id"] == "pc_01")
+    # 깨진 등록부를 비우고 시작하면 PC 번호를 pc_01 부터 다시 매겨 옛 PC 의 번호와 겹친다 (사내 서버 ④ Task 3, M-8)
+    got = None
+    try:
+        pc_registry.Registry(p("broken.json"), seats=5, clock=clock)
+    except pc_registry.RegistryBroken as e:
+        got = e
+    check("깨진 파일은 RegistryBroken (비우고 시작하지 않는다)", got is not None)
+    check("깨진 파일은 그대로 두고 .broken 으로 옮기지 않는다", not os.path.exists(p("broken.json.broken"))
+          and open(p("broken.json"), encoding="utf-8").read() == "{깨진 파일")
+    with open(p("list.json"), "w", encoding="utf-8") as f:
+        f.write('{"v": 1, "next": 2, "pcs": []}')
+    got = None
+    try:
+        pc_registry.Registry(p("list.json"), seats=5, clock=clock)
+    except pc_registry.RegistryBroken as e:
+        got = e
+    check("pcs 칸 꼴이 틀려도 RegistryBroken", got is not None)
     with open(p("odd.json"), "w", encoding="utf-8") as f:
         json.dump({"v": 1, "next": 2, "pcs": {"pc_05": {"label": "x", "agent_key": "a", "relay_key": "r", "state": "active"},
                                               "nope": {"agent_key": "a", "relay_key": "r"}}}, f)

@@ -39,6 +39,11 @@ class SeatsFull(Exception):
     """등록할 수 있는 PC 수를 모두 썼다 (active + disabled + 살아 있는 대기)."""
 
 
+class RegistryBroken(Exception):
+    """pcs.json 이 있는데 읽을 수 없거나 꼴이 틀리다 (사내 서버 ④ Task 3, M-8). 비우고 시작하면 PC 번호를 pc_01 부터 다시 매겨
+    옛 PC 의 번호·실행 기록과 겹치므로 켜지 않는다 - 서버 입구(server_main run)는 종료 코드 4, 관리자가 백업에서 복구한다."""
+
+
 class NumbersFull(ValueError):
     """PC 번호를 pc_9999 까지 모두 썼다 (번호는 다시 쓰지 않는다). 웹은 409."""
 
@@ -149,7 +154,7 @@ def _pc_num(pc_id):
 
 class Registry:
     """PC 등록부. 모든 읽기·쓰기는 잠금 하나 안에서. 쓸 때마다 임시 파일 → os.replace.
-    깨진 파일은 .broken 으로 옮기고 빈 등록부 (+ 서버 기록). 대기 중인 등록·마지막 연결 시각은 메모리에만.
+    깨진 파일이면 RegistryBroken (파일은 그대로 - 비우고 시작하지 않는다, M-8). 대기 중인 등록·마지막 연결 시각은 메모리에만.
     틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3) - 대기는 10분이 지나거나 관리자가 취소해야 끝난다.
     seats 는 바꿔 끼울 수 있다 (라이선스의 자리 수). on_save: 파일을 쓴 뒤 부른다 (설치본은 파일 권한을 다시 잠근다)."""
 
@@ -201,16 +206,8 @@ class Registry:
         except FileNotFoundError:
             return 1, {}
         except (ValueError, UnicodeDecodeError):
-            try:
-                os.replace(self.path, self.path + ".broken")
-            except OSError:
-                pass
-            try:
-                import local_server
-                local_server.log(os.path.dirname(self.path), f"PC 등록부 파일이 깨져 비우고 시작합니다 (옛 파일은 {PCS_NAME}.broken).")
-            except Exception:
-                pass
-            return 1, {}
+            # 비우고 시작하지 않는다 - 번호를 pc_01 부터 다시 매기게 된다 (M-8). 파일은 그대로 두어 복구·조사에 쓴다
+            raise RegistryBroken(f"PC 등록부가 손상되었습니다. 백업에서 복구하여 주십시오. ({self.path})") from None
         pcs = {k: dict(v) for k, v in rows.items()
                if isinstance(k, str) and PC_RE.fullmatch(k) and isinstance(v, dict) and v.get("state") in STATES
                and (v["state"] == "removed" or (isinstance(v.get("agent_key"), str) and isinstance(v.get("relay_key"), str)))}   # 지운 PC 는 3일 뒤 열쇠가 없다

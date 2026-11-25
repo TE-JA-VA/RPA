@@ -368,6 +368,17 @@ class Runs:
                 total += v
         return total
 
+    def purge(self, before_ms):
+        """시작 시각(started_at - 'YYYY-MM-DDTHH:MM:SS' 꼴의 이 컴퓨터 시각)이 before_ms 보다 앞인 기록을 지운다 → 지운 수.
+        사내 서버 입구(server_main)의 하루 한 번 정비가 1년(365일) 지난 기록에 부른다 (사내 서버 ④ Task 3).
+        시작 시각이 없거나 그 꼴이 아닌 기록은 남긴다. 단독은 부르지 않는다."""
+        import datetime
+        cut = datetime.datetime.fromtimestamp(before_ms / 1000).isoformat(timespec="seconds")
+        with self._lock, self._db:
+            return self._db.execute(
+                "DELETE FROM docs WHERE started_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' AND started_at < ?",
+                (cut,)).rowcount
+
     def query(self, parent, collection, pc_id=None, date=None, limit=50):
         """started_at 내림차순(최근 먼저) 문서 목록."""
         sql = "SELECT doc FROM docs WHERE parent=? AND collection=?"
