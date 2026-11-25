@@ -93,6 +93,7 @@ PROGRAM_FILES = [
     ("firebase/agent/lan_server.py", "firebase/agent/lan_server.py"),         # 사내망 두 포트(웹 8443·에이전트 8444) TLS 창구 - local_server.Handler 가 보낸 쪽 주소를 읽을 때 불러온다 (사내 서버 ②)
     ("firebase/agent/totp.py", "firebase/agent/totp.py"),                     # 2단계 인증 번호 계산·복구 번호 - local_web 이 불러온다 (단독에서는 쓰지 않아도 실어야 켜진다, 사내 서버 ③)
     ("firebase/agent/web_security.py", "firebase/agent/web_security.py"),     # 사내 서버 '보안' 설정 security.json - local_web 이 불러온다 (단독에서는 쓰지 않아도 실어야 켜진다, 사내 서버 ③)
+    ("firebase/agent/login_log.py", "firebase/agent/login_log.py"),           # 사내 서버 로그인 이력 logins.db - local_web 이 불러온다 (단독에서는 쓰지 않아도 실어야 켜진다, 사내 서버 ③)
     ("edition.py", "edition.py"),                                             # 버전 종류 (일반·스탠드얼론) - agent·secret·background 가 본다
     ("license_check.py", "license_check.py"),                                 # 스탠드얼론 라이선스 확인
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),

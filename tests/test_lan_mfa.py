@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""사내 서버 ③ - 웹 2단계 인증 (계획 2026-11-25-lan-3-web-auth Task 3·4, 설계 6.6 '2단계 인증').
+"""사내 서버 ③ - 웹 2단계 인증·로그인 이력 (계획 2026-11-25-lan-3-web-auth Task 3·4·5, 설계 6.6 '2단계 인증'·'로그인 이력').
 비밀번호 뒤 5분 표 → 번호(앞뒤 한 칸, 쓴 칸 거절, 틀리면 잠금 셋에 셈)·복구 번호, 범위에 든 계정은 등록 전 다른 창구 거절
-(비밀번호 변경 다음), 관리자가 풀어 주기, 서버 시각 창구, '보안' 설정 창구. 단독은 그대로.
+(비밀번호 변경 다음), 관리자가 풀어 주기, 서버 시각 창구, '보안' 설정 창구, 로그인 이력(남기는 일·창구·마지막 로그인·
+비밀 값이 어디에도 새지 않음). 단독은 그대로.
 make_lan_servers 로 웹 포트를 127.0.0.1 평문(web_plain, 믿을 프록시 127.0.0.1)으로 띄우고, 보낸 쪽 주소는 X-Forwarded-For 로
 바꾼다 (test_lan_review2 와 같은 방식). 번호는 Web 에 넘긴 손 시계로 totp.code_at(비밀 값, step_of(clock())) 를 만든다.
 윈도우·리눅스(WSL) 둘 다 같은 파일로 돈다.
@@ -83,7 +84,7 @@ class Clock:
         self.t += sec
 
 
-SERVERS, RUNS = [], []
+SERVERS, RUNS, WEBS = [], [], []
 CFG = {"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8", "10.0.0.0/8"],
        "trusted_proxies": ["127.0.0.1"], "web_plain": True, "public_web": ["ap.corp.local"]}
 
@@ -114,12 +115,18 @@ def start(scope=None):
     st = reg.start("PC")
     rand = os.urandom(32).hex()
     reg.enroll(st["pc_id"], rand, GUIDS[0], "PC-A", pc_registry.enroll_proof(st["token"], st["pc_id"], rand, GUIDS[0], "PC-A"))
+    WEBS.append(web)
     return types.SimpleNamespace(wp=w.server_address[1], ui=web, folder=folder, clock=clock, pc=st["pc_id"], reg=reg)
+
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 "
+      "Edg/131.0.0.0")                       # 이력의 agent 칸은 'Edge · Windows' 만 (원문은 남지 않는다)
+SEEN = None                                  # test_no_secret_leaks 가 [] 로 두면 받은 응답을 모두 모은다 (경로, 응답)
 
 
 def api(env, ip, method, path, body=None, tok=None):
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-    hs = {"X-Forwarded-Proto": "https", "X-Forwarded-For": ip}
+    hs = {"X-Forwarded-Proto": "https", "X-Forwarded-For": ip, "User-Agent": UA}
     if data is not None:
         hs["Content-Type"] = "application/json"
     if tok:
@@ -128,7 +135,10 @@ def api(env, ip, method, path, body=None, tok=None):
     try:
         c.request(method, path, body=data, headers=hs)
         r = c.getresponse()
-        return Got(r.status, r.read().decode("utf-8", "replace"))
+        got = Got(r.status, r.read().decode("utf-8", "replace"))
+        if SEEN is not None:
+            SEEN.append((path, got))
+        return got
     finally:
         c.close()
 
@@ -541,9 +551,277 @@ def test_scope_raise_live_session():
     check("  관리자(등록함)는 그대로 /api/runs 200", runs_of(e, A, boss).status == 200)
 
 
+# ----------------------------------------------------------------------------------------------------
+# Task 5 - 로그인 이력
+# ----------------------------------------------------------------------------------------------------
+
+KIND = "Edge · Windows"
+
+
+def hist(env):
+    """이력 전체 - 오래된 것부터."""
+    return list(reversed(env.ui.login_log.query(limit=200)))
+
+
+def count(rows, result, uid="*", ip="*"):
+    return sum(1 for r in rows if r["result"] == result and (uid == "*" or r["uid"] == uid) and (ip == "*" or r["ip"] == ip))
+
+
+def test_history_events():
+    print("test_history_events")
+    e = start()
+    check("사내 서버는 logins.db 를 만든다", os.path.isfile(os.path.join(e.folder, "logins.db")))
+    boss = token(e, A)                                                  # ok boss A
+    secret, rec = enroll(e, A, boss)                                    # mfa_on boss A
+    login(e, B, "staff", "wrong-pass-01")                               # bad_password staff B
+    login(e, B, "ghost", "wrong-pass-01")                               # bad_password None B (없는 아이디)
+    for _ in range(5):
+        login(e, C, "staff", "wrong-pass-01")                           # bad_password staff C ×5, 다섯 번째에 locked staff C
+    n = len(hist(e))
+    rej = [login(e, C, "staff", STAFF_PW) for _ in range(3)]
+    check("잠긴 동안 거절 3번 (429)", all(g.status == 429 for g in rej), rej)
+    check("  잠긴 동안의 거절은 줄이 늘지 않음", len(hist(e)) == n, repr(hist(e)[n:]))
+    e.ui.accounts.set("gone", "gone-pw-0001", "viewer")
+    e.ui.accounts.disable("gone", True)
+    g = login(e, D, "gone", "gone-pw-0001")                             # disabled gone D
+    check("중지 계정 로그인 → 403", g.status == 403, g)
+    stok = token(e, D, "staff", STAFF_PW)                               # ok staff D
+    ssec, _ = enroll(e, D, stok)                                        # mfa_on staff D
+    g = api(e, D, "POST", "/api/mfa/disable", {"password": STAFF_PW, "code": code_now(e, ssec)}, stok)    # mfa_off staff D
+    check("유저 2단계 끔 → 200", g.status == 200, g)
+    e.clock.go(totp.STEP)
+    ssec, _ = enroll(e, D, stok)                                        # mfa_on staff D (두 번째)
+    g = api(e, A, "POST", "/api/accounts/staff", {"mfaReset": True}, boss)    # mfa_reset staff (처리한 관리자의 주소 A)
+    check("관리자가 유저 2단계 풂 → 200", g.status == 200, g)
+    t = (login(e, A).json() or {}).get("ticket")
+    g = api(e, A, "POST", "/api/login/mfa", {"ticket": t, "code": wrong_code(e, secret)})    # bad_code boss A
+    check("틀린 번호 → 401", g.status == 401, g)
+    g = api(e, A, "POST", "/api/login/mfa", {"ticket": t, "recovery": rec[0]})              # recovery boss A
+    check("복구 번호 로그인 → 200", g.status == 200 and (g.json() or {}).get("token"), g)
+    stok = token(e, D, "staff", STAFF_PW)                               # ok staff D (2단계 풀림 - 표 없이)
+    g = api(e, D, "POST", "/api/logout", {}, stok)                      # logout staff D
+    check("로그아웃 → 200", g.status == 200, g)
+    stok = token(e, D, "staff", STAFF_PW)                               # ok staff D
+    e.clock.go(1801)
+    g = api(e, D, "GET", "/api/session", tok=stok)                      # timeout staff D
+    check("1801초 뒤 세션 → 401", g.status == 401, g)
+    rows = hist(e)
+    want = [("ok", "boss", A, 1), ("ok", "staff", D, 3), ("mfa_on", "boss", A, 1), ("mfa_on", "staff", D, 2),
+            ("bad_password", "staff", B, 1), ("bad_password", None, B, 1), ("bad_password", "staff", C, 5),
+            ("locked", "staff", C, 1), ("disabled", "gone", D, 1), ("mfa_off", "staff", D, 1), ("mfa_reset", "staff", A, 1),
+            ("bad_code", "boss", A, 1), ("recovery", "boss", A, 1), ("logout", "staff", D, 1), ("timeout", "staff", D, 1)]
+    for res, uid, ip, n in want:
+        got = count(rows, res, uid, ip)
+        check(f"  {res} 아이디={uid} 주소={ip} → {n}줄", got == n, f"{got}줄")
+    check("  줄 수 합이 맞다 (다른 줄 없음)", len(rows) == sum(w[3] for w in want), repr([(r["result"], r["uid"], r["ip"]) for r in rows]))
+    check("  agent 는 브라우저 종류만 (Edge · Windows)", all(r["agent"] == KIND for r in rows), repr({r["agent"] for r in rows}))
+    check("  ghost 글자는 어디에도 없음", not any("ghost" in json.dumps(r, ensure_ascii=False) for r in rows))
+    check("  at 은 손 시계 ms", rows and rows[-1]["at"] == int(e.clock() * 1000), repr(rows[-1:]))
+    check("  timeout 줄은 맨 끝", rows and rows[-1]["result"] == "timeout")
+
+    # 잠금마다 한 줄 - 주소 잠금 (없는 아이디 열 개를 한 번씩), 아이디 전체 잠금 (여러 주소에서 네 번씩)
+    e2 = start("off")
+    for i in range(10):
+        login(e2, B, f"nobody{i}", "wrong-pass-01")
+    rows = hist(e2)
+    check("주소 잠금 - 10번째 실패에 locked 한 줄 (uid None)", count(rows, "bad_password", None, B) == 10
+          and count(rows, "locked", None, B) == 1 and len(rows) == 11, repr([(r["result"], r["uid"]) for r in rows]))
+    g = login(e2, B, "staff", STAFF_PW)
+    check("  막힌 주소의 다음 시도 429·줄 없음", g.status == 429 and len(hist(e2)) == 11, g)
+    ips = [f"10.0.1.{i}" for i in range(1, 9)]
+    for ip in ips:
+        for _ in range(4):
+            login(e2, ip, "staff", "wrong-pass-01")
+    rows = hist(e2)[11:]
+    check("아이디 전체 잠금 - 30번째 실패에 locked 한 줄 (그 뒤 두 번은 429, 줄 없음)",
+          count(rows, "bad_password", "staff") == 30 and count(rows, "locked", "staff", ips[-1]) == 1 and len(rows) == 31,
+          repr([(r["result"], r["uid"], r["ip"]) for r in rows]))
+
+
+def test_history_access():
+    print("test_history_access")
+    e = start("off")
+    t1 = e.clock()
+    r = login(e, A)
+    check("첫 로그인 응답 lastLogin None (칸은 있음)", r.status == 200 and "lastLogin" in (r.json() or {})
+          and (r.json() or {}).get("lastLogin") is None, r)
+    e.clock.go(60)
+    r = login(e, B)
+    boss = (r.json() or {}).get("token")
+    check("두 번째 로그인 lastLogin = 첫 로그인 시각·주소", (r.json() or {}).get("lastLogin") == {"at": int(t1 * 1000), "ip": A}, r)
+    stok = token(e, C, "staff", STAFF_PW)
+    g = api(e, C, "GET", "/api/logins", tok=stok)
+    check("유저 /api/logins → 403", g.status == 403, g)
+    g = api(e, C, "GET", "/api/logins/me", tok=stok)
+    items = (g.json() or {}).get("items")
+    check("유저 /api/logins/me → 자기 것만", g.status == 200 and items and all(x["uid"] == "staff" for x in items), g)
+    check("  칸 id·at·uid·ip·agent·result", items and set(items[0]) == {"id", "at", "uid", "ip", "agent", "result"}, repr(items))
+    g = api(e, B, "GET", "/api/logins/other", tok=boss)
+    check("/api/logins/<me 말고> → 404", g.status == 404, g)
+    g = api(e, B, "GET", "/api/logins", tok=boss)
+    items = (g.json() or {}).get("items") or []
+    check("관리자 /api/logins → 모든 계정 (ok 셋)", g.status == 200 and [x["uid"] for x in items] == ["staff", "boss", "boss"], g)
+    g = api(e, B, "GET", "/api/logins?id=staff", tok=boss)
+    check("  id=staff 거르기", g.status == 200 and [x["uid"] for x in (g.json() or {}).get("items", [])] == ["staff"], g)
+    g = api(e, B, "GET", "/api/logins?result=ok&limit=1", tok=boss)
+    first = (g.json() or {}).get("items") or []
+    check("  result=ok·limit=1", g.status == 200 and len(first) == 1 and first[0]["uid"] == "staff", g)
+    g = api(e, B, "GET", f"/api/logins?result=ok&limit=5&before={first[0]['id'] if first else 0}", tok=boss)
+    check("  before 로 다음 쪽", g.status == 200 and [x["uid"] for x in (g.json() or {}).get("items", [])] == ["boss", "boss"], g)
+    today = time.strftime("%Y-%m-%d", time.localtime(e.clock()))
+    g = api(e, B, "GET", f"/api/logins?from={today}&to={today}", tok=boss)
+    check("  from·to 오늘 → 셋", g.status == 200 and len((g.json() or {}).get("items", [])) == 3, g)
+    g = api(e, B, "GET", "/api/logins?from=2000-01-01&to=2000-01-02", tok=boss)
+    check("  지난 기간 → 없음", g.status == 200 and (g.json() or {}).get("items") == [], g)
+    for q in ("from=2026-13-40", "to=abc", "result=bogus", "id=Bad!!", "limit=x", "before=-x"):
+        g = api(e, B, "GET", f"/api/logins?{q}", tok=boss)
+        check(f"  틀린 값 {q} → 400", g.status == 400, g)
+    g = api(e, C, "GET", "/api/logins/me?limit=x", tok=stok)
+    check("  me 틀린 limit → 400", g.status == 400, g)
+    # 계정 목록에 2단계 켬 여부 (사내 서버만)
+    enroll(e, C, stok)
+    g = api(e, B, "GET", "/api/accounts", tok=boss)
+    accts = {a["id"]: a for a in (g.json() or {}).get("accounts", [])}
+    check("/api/accounts 계정마다 mfa (staff 참·boss 거짓)", g.status == 200 and accts.get("staff", {}).get("mfa") is True
+          and accts.get("boss", {}).get("mfa") is False, g)
+    stok = mfa_token = None
+    # 유저 이력 보이기 끄기
+    g = api(e, B, "POST", "/api/security", {"showOwnHistory": False}, boss)
+    check("관리자가 showOwnHistory 끔 → 200", g.status == 200, g)
+    stok = token(e, C, "staff", STAFF_PW)          # 2단계를 켰으니 표가 온다 - 그 표로 세션
+    if stok is None:
+        sec = e.ui.accounts.mfa_secret("staff")
+        mfa_token = mfa_login(e, C, "staff", STAFF_PW, sec)
+    g = api(e, C, "GET", "/api/logins/me", tok=stok or mfa_token)
+    check("  유저 me → 403", g.status == 403, g)
+    g = api(e, B, "GET", "/api/logins/me", tok=boss)
+    check("  관리자 me → 200 (자기 것만)", g.status == 200 and all(x["uid"] == "boss" for x in (g.json() or {}).get("items", [])), g)
+
+
+def test_no_secret_leaks():
+    print("test_no_secret_leaks")
+    global SEEN
+    SEEN = []
+    try:
+        e = start()
+        new_staff = "staff-pw-0777"
+        wrong = "wrong-pass-0999"
+        boss = token(e, A)
+        secret, rec = enroll(e, A, boss)
+        api(e, A, "POST", "/api/logout", {}, boss)
+        t = (login(e, A).json() or {}).get("ticket")
+        api(e, A, "POST", "/api/login/mfa", {"ticket": t, "code": wrong_code(e, secret)})
+        g = api(e, A, "POST", "/api/login/mfa", {"ticket": t, "recovery": rec[1]})
+        api(e, A, "POST", "/api/logout", {}, (g.json() or {}).get("token"))
+        boss = mfa_login(e, A, "boss", BOSS_PW, secret)
+        login(e, B, "staff", wrong)
+        stok = token(e, B, "staff", STAFF_PW)
+        api(e, B, "POST", "/api/password", {"current": wrong, "next": new_staff}, stok)
+        api(e, B, "POST", "/api/password", {"current": STAFF_PW, "next": new_staff}, stok)
+        api(e, A, "POST", "/api/security", {"totpScope": "off", "password": wrong, "code": code_now(e, secret)}, boss)
+        g = api(e, A, "POST", "/api/security", {"totpScope": "off", "password": BOSS_PW, "code": code_now(e, secret)}, boss)
+        check("범위 줄이기 → 200", g.status == 200, g)
+        for path in ("/api/logins", "/api/logins/me", "/api/accounts", "/api/session", "/api/security"):
+            api(e, A, "GET", path, tok=boss)
+        seen = list(SEEN)
+    finally:
+        SEEN = None
+    secrets_ = [secret, secret.lower()] + [x for c in rec for x in (c, c.upper(), c.replace("-", ""))]
+    passwords = [BOSS_PW, STAFF_PW, new_staff, wrong]
+    tickets, tokens = [], []
+    for _, g in seen:
+        j = g.json() if isinstance(g.json(), dict) else {}
+        if j.get("ticket"):
+            tickets.append(j["ticket"])
+        if j.get("token"):
+            tokens.append(j["token"])
+    check("시험 중 표·세션을 받았다", len(tickets) >= 2 and len(tokens) >= 3, f"{len(tickets)} {len(tokens)}")
+    shown = [(p, g.raw) for p, g in seen if p not in ("/api/mfa/setup", "/api/mfa/enable")]
+    leak = [p for p, raw in shown if any(s in raw for s in secrets_ + passwords)]
+    check("응답(등록 시작·완료 빼고)에 비밀 값·복구 번호·비밀번호 없음", not leak, repr(leak))
+    many = [t for t in tickets if sum(t in raw for _, raw in shown) != 1]
+    check("표는 그것을 준 로그인 응답 하나에만", not many, repr(many))
+    log = log_text(e)
+    db = os.path.join(e.folder, "logins.db")
+    con = __import__("sqlite3").connect(db)
+    try:
+        cells = "\n".join(str(v) for row in con.execute("SELECT * FROM logins") for v in row)
+    finally:
+        con.close()
+    with open(os.path.join(e.folder, "security.json"), encoding="utf-8") as f:
+        sec_text = f.read()
+    for name, text in (("서버 기록", log), ("logins.db", cells), ("security.json", sec_text)):
+        bad = [s for s in secrets_ + passwords + tickets + tokens if s in text]
+        check(f"{name} 에 비밀 값·복구 번호·비밀번호·표·세션 토큰 없음", not bad, repr(bad[:3]))
+    check("logins.db 에 User-Agent 원문 없음", "Mozilla" not in cells and "Edg/" not in cells)
+    check("logins.db 에 줄이 있다 (시험이 이력을 남겼다)", cells.count("\n") > 10, repr(cells[:200]))
+
+
+def test_history_write_failure():
+    print("test_history_write_failure")
+    e = start("off")
+    e.ui.login_log.close()                   # 이력 DB 가 쓰이지 않는 상태 (디스크 오류 자리)
+    r = login(e, A)
+    check("이력을 못 써도 로그인 200·lastLogin None", r.status == 200 and (r.json() or {}).get("token")
+          and (r.json() or {}).get("lastLogin") is None, r)
+    g = login(e, A, "staff", "wrong-pass-01")
+    check("  틀린 비밀번호는 그대로 401", g.status == 401, g)
+    g = api(e, A, "POST", "/api/logout", {}, (r.json() or {}).get("token"))
+    check("  로그아웃 200", g.status == 200, g)
+    text = log_text(e)
+    check("  서버 기록에 종류만 한 줄씩 ('로그인 이력 쓰기 오류: <종류>')",
+          "로그인 이력 쓰기 오류: ProgrammingError" in text and "로그인 이력 읽기 오류: ProgrammingError" in text, text[-400:])
+    boss = token(e, A)
+    g = api(e, A, "GET", "/api/logins", tok=boss)
+    check("  이력 창구는 503 (화면에 다시 시도)", g.status == 503 and g.code == "unavailable", g)
+    e.ui.login_log = None                    # 끝정리에서 두 번 닫지 않게
+
+
+def test_single_no_history():
+    print("test_single_no_history")
+    folder = tempfile.mkdtemp(dir=TMP)
+    store = local_server.Store(os.path.join(folder, "store.json"), volatile=local_server.VOLATILE)
+    runs = local_server.Runs(":memory:")
+    RUNS.append(runs)
+    keys = local_server.ensure_keys(folder)
+    web = local_web.Web(store, runs, dict(LIC, pc_id="p1"), folder, None)
+    web.accounts.set("boss", BOSS_PW, "admin")
+    srv = local_server.make_server(store, runs, dict(LIC, pc_id="p1"), keys, port=0, folder=folder, web=web)
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    SERVERS.append(srv)
+    port = srv.server_address[1]
+
+    def call(method, path, body=None, tok=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        hs = {"Content-Type": "application/json"} if data is not None else {}
+        if tok:
+            hs["Authorization"] = "Bearer " + tok
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+        try:
+            c.request(method, path, body=data, headers=hs)
+            r = c.getresponse()
+            return Got(r.status, r.read().decode("utf-8", "replace"))
+        finally:
+            c.close()
+
+    r = call("POST", "/api/login", {"id": "boss", "password": BOSS_PW})
+    tok = (r.json() or {}).get("token")
+    check("단독 로그인 응답에 lastLogin 없음", r.status == 200 and "lastLogin" not in (r.json() or {}), r)
+    for path in ("/api/logins", "/api/logins/me"):
+        g = call("GET", path, tok=tok)
+        check(f"단독 GET {path} → 404", g.status == 404 and g.code == "not-found", g)
+    g = call("GET", "/api/accounts", tok=tok)
+    check("단독 /api/accounts 계정 칸 그대로 (mfa 없음)", g.status == 200
+          and all(set(a) == {"id", "role", "disabled", "mustChange"} for a in (g.json() or {}).get("accounts", [])), g)
+    call("POST", "/api/logout", {}, tok)
+    check("자료 폴더에 logins.db 없음", not os.path.exists(os.path.join(folder, "logins.db")), os.listdir(folder))
+    check("Web.login_log None", getattr(web, "login_log", "x") is None)
+
+
 TESTS = [test_enroll_flow, test_must_change_first, test_two_step_login, test_ticket_rules, test_code_lockout,
          test_same_code_race, test_admin_reset_and_disable, test_setup_needs_password_when_on, test_single_unchanged,
-         test_security_get_set, test_scope_raise_live_session]
+         test_security_get_set, test_scope_raise_live_session,
+         test_history_events, test_history_access, test_no_secret_leaks, test_history_write_failure, test_single_no_history]
 
 if __name__ == "__main__":
     try:
@@ -561,6 +839,10 @@ if __name__ == "__main__":
                 pass
         for r in RUNS:
             r.close()
+        for w in WEBS:                       # logins.db 를 닫아야 윈도우에서 임시 폴더가 지워진다
+            log = getattr(w, "login_log", None)
+            if log is not None:
+                log.close()
         shutil.rmtree(TMP, ignore_errors=True)
     print(f"\n실패: {len(fails)}" + (" (" + ", ".join(fails) + ")" if fails else ""))
     sys.exit(1 if fails else 0)

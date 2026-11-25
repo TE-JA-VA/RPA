@@ -15,10 +15,13 @@ local_server.Handler 가 서명 확인 **앞에서** `/api/*` 와 웹 파일 GET
   보낸 쪽 주소(프록시 뒤면 X-Forwarded-For)가 허용 대역 밖이면 403 (② 전체 검토 1).
 - 사내 서버만 2단계 인증 (계획 ③, 설계 6.6): 켠 계정은 비밀번호 뒤 5분 표(로그인한 주소에 묶임)를 받고 번호까지 맞아야 세션.
   '보안' 범위(security.json - web_security)에 든 계정은 등록 전 다른 창구 거절 (비밀번호 변경이 먼저). 틀린 번호는 잠금 셋에 센다.
+- 사내 서버만 로그인 이력 (logins.db - login_log, 계획 ③ Task 5): 성공·틀림·잠금이 시작될 때·중지 계정·로그아웃·자동 로그아웃·
+  2단계 바꾼 일. 브라우저 종류만 적고 User-Agent 원문은 남기지 않는다. 이력 쓰기가 실패해도 로그인·요청은 막지 않는다 (서버 기록에 종류만).
 - 웹 파일: firebase/web 을 그대로 내주되 스탠드얼론에 없어야 할 것(Firebase 설정·SDK 를 부르는 파일)은 내주지 않는다.
 비밀번호·세션 토큰·열쇠는 기록에 싣지 않고, 어느 응답에도 열쇠·라이선스 서명·해시·소금을 싣지 않는다.
 표준 라이브러리만 쓴다.
 """
+import datetime
 import hashlib
 import hmac
 import json
@@ -34,7 +37,8 @@ import time
 import urllib.parse
 
 import local_server      # log·local_host·KEEPALIVE_SEC·Refused (local_server 는 main() 안에서만 이 파일을 불러온다)
-import pc_registry       # 사내 서버 PC 등록부 (PC_RE·SeatsFull·encode_enrollment - 표준 라이브러리만)
+import login_log         # 사내 서버 로그인 이력 logins.db (사내 서버 계획 ③ Task 5 - 표준 라이브러리만)
+import pc_registry      # 사내 서버 PC 등록부 (PC_RE·SeatsFull·encode_enrollment - 표준 라이브러리만)
 import totp              # 2단계 인증 번호 계산·복구 번호 (사내 서버 계획 ③ - 표준 라이브러리만)
 import web_security      # 사내 서버 '보안' 설정 security.json (사내 서버 계획 ③ - 표준 라이브러리만)
 
@@ -496,47 +500,68 @@ class Accounts:
 
 class Sessions:
     """로그인 세션 - 메모리에만 (서버를 다시 켜면 모두 풀린다). 토큰은 secrets.token_urlsafe(32), 그 글 그대로 표에서 찾는다.
-    미사용 idle_sec 또는 로그인 뒤 max_sec 가 지나면 끝난다. 토큰은 기록·파일에 남기지 않는다."""
+    미사용 idle_sec 또는 로그인 뒤 max_sec 가 지나면 끝난다. 토큰은 기록·파일에 남기지 않는다.
+    on_end(세션 사본, "timeout"): 끝난 세션을 get·open 이 지울 때 부른다 (사내 서버의 로그인 이력 '자동 로그아웃', 계획 ③ Task 5).
+    잠금 밖에서 부르고, 그 안의 예외는 삼킨다 (이력 쓰기가 실패해도 요청은 그대로)."""
 
-    def __init__(self, idle_sec=IDLE_SEC, max_sec=MAX_SEC, clock=time.time):
+    def __init__(self, idle_sec=IDLE_SEC, max_sec=MAX_SEC, clock=time.time, on_end=None):
         self.idle_sec, self.max_sec, self._clock = idle_sec, max_sec, clock
+        self._on_end = on_end
         self._lock = threading.Lock()
         self._items = {}
 
     def _dead(self, s, now):
         return now - s["seen"] > self.idle_sec or now - s["opened"] > self.max_sec
 
-    def open(self, account, ip=None):
-        """account({id, role, rev?})의 새 세션 → 토큰. ip 를 주면 그 주소에 묶는다 (사내 서버 cfg.bind_session_ip)."""
+    @staticmethod
+    def _copy(s):
+        out = dict(s)
+        out.pop("setup", None)                         # 대기 비밀 값은 setup_of 로만
+        return out
+
+    def _ended(self, gone):
+        if self._on_end is None:
+            return
+        for s in gone:
+            try:
+                self._on_end(s, "timeout")
+            except Exception:
+                pass
+
+    def open(self, account, ip=None, addr=None, agent=None):
+        """account({id, role, rev?})의 새 세션 → 토큰. ip 를 주면 그 주소에 묶는다 (사내 서버 cfg.bind_session_ip).
+        addr·agent = 로그인한 쪽 주소·브라우저 종류 - 묶기와 상관없이 적어 둔다 (자동 로그아웃 이력 줄에 쓴다)."""
         token = secrets.token_urlsafe(32)
         now = self._clock()
         with self._lock:
-            for t in [t for t, s in self._items.items() if self._dead(s, now)]:
-                del self._items[t]
+            dead = [t for t, s in self._items.items() if self._dead(s, now)]
+            gone = [self._copy(self._items.pop(t)) for t in dead]
             while len(self._items) >= SESSIONS_MAX:       # 가장 오래 안 쓴 세션부터 밀어낸다
                 del self._items[min(self._items, key=lambda t: self._items[t]["seen"])]
             self._items[token] = {"id": account["id"], "role": account.get("role"), "rev": account.get("rev"), "opened": now, "seen": now,
-                                  "ip": ip}
+                                  "ip": ip, "addr": addr, "agent": agent}
+        self._ended(gone)
         return token
 
     def get(self, token, touch=False, ip=None):
-        """세션 {id, role, rev, opened, seen, ip} 의 사본 - 없거나 끝났으면 (지우고) None. touch 면 미사용 시계를 다시 0 으로.
+        """세션 {id, role, rev, opened, seen, ip, addr, agent} 의 사본 - 없거나 끝났으면 (지우고) None. touch 면 미사용 시계를 다시 0 으로.
         주소에 묶인 세션을 다른 주소(ip)로 물으면 None - 세션은 지우지 않는다 (훔친 토큰으로 주인을 쫓아내지 못하게)."""
+        gone = None
         with self._lock:
             s = self._items.get(token) if isinstance(token, str) else None
             if s is None:
                 return None
             now = self._clock()
             if self._dead(s, now):
-                del self._items[token]
-                return None
-            if s.get("ip") is not None and ip != s["ip"]:
-                return None
-            if touch:
-                s["seen"] = now
-            out = dict(s)
-            out.pop("setup", None)                     # 대기 비밀 값은 setup_of 로만
-            return out
+                gone = self._copy(self._items.pop(token))
+            else:
+                if s.get("ip") is not None and ip != s["ip"]:
+                    return None
+                if touch:
+                    s["seen"] = now
+                return self._copy(s)
+        self._ended([gone])
+        return None
 
     # --- 2단계 등록 대기 (사내 서버) - 대기 비밀 값을 그 세션에 묶어 둔다. 세션이 닫히면 함께 사라진다 ---
     def set_setup(self, token, secret, until):
@@ -786,7 +811,9 @@ class Web:
         self.accounts = Accounts(os.path.join(folder, ACCOUNTS_NAME))
         if registry is not None:                     # 사내 서버: 관리자 비밀번호 10자 이상 (유저는 8자 그대로, 설계 6.6)
             self.accounts.admin_min = LAN_ADMIN_PASSWORD_MIN
-        self.sessions = Sessions(clock=clock)
+        # 사내 서버만: 로그인 이력 logins.db (계획 ③ Task 5). 단독은 None - 파일을 만들지 않는다
+        self.login_log = login_log.LoginLog(os.path.join(folder, login_log.LOGINS_NAME), clock=clock) if registry is not None else None
+        self.sessions = Sessions(clock=clock, on_end=self._session_end if registry is not None else None)
         self.lockout = Lockout(clock=clock)
         self.addr_lock = AddrLock(clock=clock)       # 사내 서버(cfg 있음)만 쓴다
         # 아이디 전체 잠금 (사내 서버만) - 주소 잠금과 같은 창 세기를 아이디 열쇠로 쓴다
@@ -826,6 +853,8 @@ class Web:
                 ("mfa", True): {"POST": self._mfa},
                 ("server-time", False): {"GET": self._server_time},
                 ("security", False): {"GET": self._security_get, "POST": self._security_set},
+                ("logins", False): {"GET": self._logins_all},
+                ("logins", True): {"GET": self._logins_me},
             })
         self.phone = None
 
@@ -1016,11 +1045,13 @@ class Web:
                         f"{_minutes(self.addr_lock.remaining(ip))}분 뒤 다시 시도하여 주십시오.")
 
     def _addr_fail(self, h):
-        """틀린 비밀번호 한 번을 주소에도 센다 (사내 서버만). 이번에 막히면 기록에 한 줄."""
+        """틀린 비밀번호 한 번을 주소에도 센다 (사내 서버만). 이번에 막히면 기록에 한 줄 → 이번에 막혔나."""
         ip = self._ip(h)
         if ip is not None and self.addr_lock.fail(ip):
             self._log(f"웹 로그인 주소 잠금 - {self.addr_lock.window // 60}분에 {self.addr_lock.limit}번 틀려 "
                       f"{self.addr_lock.block}초  주소={ip}")
+            return True
+        return False
 
     @staticmethod
     def _pair(key, ip):
@@ -1034,17 +1065,63 @@ class Web:
             raise _Fail(429, "auth/too-many-requests", f"{text} {_minutes(self.id_lock.remaining(key))}분 뒤 다시 시도하여 주십시오.")
 
     def _id_all_fail(self, key, shown, h):
-        """사내 서버: 틀린 비밀번호 한 번을 아이디 전체에도 센다. 이번에 잠기면 기록에 한 줄."""
+        """사내 서버: 틀린 비밀번호 한 번을 아이디 전체에도 센다. 이번에 잠기면 기록에 한 줄 → 이번에 잠겼나."""
         if self._ip(h) is not None and self.id_lock.fail(key):
             self._log(f"웹 로그인 아이디 잠금 - 여러 주소에서 {self.id_lock.window // 60}분에 {self.id_lock.limit}번 틀려 "
                       f"{self.id_lock.block}초  아이디={shown}{self._at(h)}")
+            return True
+        return False
 
     def _id_fail(self, key, what, shown, h):
-        """틀린 비밀번호 한 번을 아이디 잠금(key - _pair)에 센다 → 기록 한 줄 (잠기면 잠긴 초)."""
+        """틀린 비밀번호 한 번을 아이디 잠금(key - _pair)에 센다 → 기록 한 줄 (잠기면 잠긴 초) → 이번에 잠겼나."""
         if self.lockout.fail(key):
             self._log(f"{what} - {self.lockout.limit}번 틀려 {round(self.lockout.remaining(key))}초 잠금  아이디={shown}{self._at(h)}")
-        else:
-            self._log(f"{what}  아이디={shown}{self._at(h)}")
+            return True
+        self._log(f"{what}  아이디={shown}{self._at(h)}")
+        return False
+
+    # --- 로그인 이력 (사내 서버만, 계획 ③ Task 5) ---
+    def _history(self, result, uid, h=None, ip=None, agent=None):
+        """이력 한 줄. h 를 주면 그 요청의 보낸 쪽 주소·브라우저 종류. uid 는 등록된 아이디만 (아니면 None 으로).
+        단독은 아무것도 하지 않는다. 쓰기가 실패해도(디스크 등) 요청은 막지 않는다 - 서버 기록에 종류만 한 줄."""
+        log = self.login_log
+        if log is None:
+            return
+        try:
+            if h is not None:
+                ip, agent = self._ip(h), login_log.browser_kind(h.headers.get("User-Agent"))
+            log.add(result, self._known(uid), ip, agent)
+        except Exception as e:
+            self._log(f"로그인 이력 쓰기 오류: {type(e).__name__}")
+
+    def _known(self, uid):
+        """이력에 적을 아이디 - 등록된 아이디만 그대로, 아니면 None (_shown 과 같은 뜻)."""
+        if not isinstance(uid, str) or not ID_RE.fullmatch(uid):
+            return None
+        return uid if self.accounts.get(uid) is not None else None
+
+    def _history_fail(self, kind, uid, h, started):
+        """틀린 비밀번호·번호 한 줄(kind) + 이번 실패로 **시작된** 잠금마다 locked 한 줄 (아이디 쌍·아이디 전체·주소).
+        잠긴 동안의 거절은 여기까지 오지 않는다 (_lock_gate·잠금 확인이 먼저 429) - 줄이 늘지 않는다."""
+        self._history(kind, uid, h)
+        for _ in range(sum(1 for s in started if s)):
+            self._history("locked", uid, h)
+
+    def _history_login(self, result, uid, h):
+        """로그인 성공 줄(ok·recovery)을 남기고 → 그 바로 앞의 로그인 {at, ip} (없으면 None, 단독도 None)."""
+        last = None
+        if self.login_log is not None:
+            try:
+                prev = self.login_log.last_ok(uid)
+                last = {"at": prev["at"], "ip": prev["ip"]} if prev else None
+            except Exception as e:
+                self._log(f"로그인 이력 읽기 오류: {type(e).__name__}")
+        self._history(result, uid, h)
+        return last
+
+    def _session_end(self, sess, why):
+        """Sessions.on_end - 미사용·12시간으로 끝난 세션 → 이력 timeout (로그인한 쪽 주소·브라우저 종류로)."""
+        self._history(why, sess.get("id"), ip=sess.get("addr"), agent=sess.get("agent"))
 
     # --- 요청에서 읽기 ---
     @staticmethod
@@ -1152,12 +1229,14 @@ class Web:
                             f"{_minutes(self.lockout.remaining(pair))}분 뒤 다시 시도하여 주십시오.")
             acct = self.accounts.verify(uid, password)
             if acct is None:
-                self._id_fail(pair, "웹 로그인 실패", self._shown(uid), h)
-                self._id_all_fail(key, self._shown(uid), h)
-                self._addr_fail(h)                   # 아이디와 주소 둘 다 센다 (여러 아이디를 돌아가며 찍는 시도)
+                started = (self._id_fail(pair, "웹 로그인 실패", self._shown(uid), h),
+                           self._id_all_fail(key, self._shown(uid), h),
+                           self._addr_fail(h))       # 아이디와 주소 둘 다 센다 (여러 아이디를 돌아가며 찍는 시도)
+                self._history_fail("bad_password", uid, h, started)
                 raise _Fail(401, "auth/invalid-credential", "아이디 또는 비밀번호가 일치하지 않습니다.")
             if acct["disabled"]:                     # 비밀번호가 맞을 때만 알려 준다 (틀리면 위에서 그냥 '틀림')
                 self._log(f"웹 로그인 거절 - 사용 중지된 계정  아이디={uid}{self._at(h)}")
+                self._history("disabled", uid, h)
                 raise _Fail(403, "auth/user-disabled", "사용이 중지된 계정입니다.")
             if self.lan and acct["mfa"]:
                 # 사내 서버 2단계: 세션 대신 5분 표. 아이디 잠금(pair)은 번호까지 맞아야 지운다 - 비밀번호를 아는 사람이
@@ -1168,15 +1247,24 @@ class Web:
                 # 아이디를 찍어 셈을 되돌리지 못하게, 맞는 비밀번호를 아는 사람의 로그인이 여러 주소에서 찍는 시도의 셈을 지우지 않게
                 ticket = None
                 self.lockout.ok(pair)
-                token = self._session_open(acct, ip)
+                token = self._session_open(acct, h)
         if ticket is not None:
             self._log(f"웹 로그인 비밀번호 확인 (2단계 번호 기다림)  아이디={uid}{self._at(h)}")
-            return {"mfa": True, "ticket": ticket, "ttl": MFA_TICKET_SEC}
+            return {"mfa": True, "ticket": ticket, "ttl": MFA_TICKET_SEC}      # 이력 ok 는 번호까지 맞은 뒤 (_login_mfa)
         self._log(f"웹 로그인  아이디={uid}  권한={acct['role']}{self._at(h)}")
-        return {"token": token, "session": self._public(acct)}
+        return self._login_out(token, acct, self._history_login("ok", uid, h))
 
-    def _session_open(self, acct, ip):
-        return self.sessions.open(acct, ip=ip if self._cfg is not None and self._cfg.bind_session_ip else None)
+    def _login_out(self, token, acct, last):
+        """로그인 성공 응답 - 사내 서버만 lastLogin (이번 것 바로 앞의 로그인 {at, ip} 또는 None). 단독은 지금 그대로."""
+        out = {"token": token, "session": self._public(acct)}
+        if self.lan:
+            out["lastLogin"] = last
+        return out
+
+    def _session_open(self, acct, h):
+        ip = self._ip(h)
+        agent = login_log.browser_kind(h.headers.get("User-Agent")) if self.lan else None
+        return self.sessions.open(acct, ip=ip if self._cfg is not None and self._cfg.bind_session_ip else None, addr=ip, agent=agent)
 
     # --- 2단계 인증 (사내 서버만, 계획 ③ Task 3) ---
     # 비밀 값은 setup 응답에 한 번, 복구 번호 글은 enable 응답에 한 번만 나간다. 표·비밀 값·번호·복구 번호·비밀번호는 기록에 싣지 않는다.
@@ -1217,11 +1305,11 @@ class Web:
                         f"{_minutes(self.lockout.remaining(pair))}분 뒤 다시 시도하여 주십시오.")
         return pair
 
-    def _count_fail(self, h, uid, pair, what):
-        """틀린 번호·복구 번호·비밀번호 한 번을 아이디(쌍)·아이디 전체·주소에 센다 (틀린 비밀번호와 같이)."""
-        self._id_fail(pair, what, uid, h)
-        self._id_all_fail(uid, uid, h)
-        self._addr_fail(h)
+    def _count_fail(self, h, uid, pair, what, kind):
+        """틀린 번호·복구 번호·비밀번호 한 번을 아이디(쌍)·아이디 전체·주소에 센다 (틀린 비밀번호와 같이).
+        이력에 kind(bad_code·bad_password) 한 줄과 이번에 시작된 잠금마다 locked 한 줄."""
+        started = (self._id_fail(pair, what, uid, h), self._id_all_fail(uid, uid, h), self._addr_fail(h))
+        self._history_fail(kind, uid, h, started)
 
     def _login_mfa(self, h, query, body, sub):
         """POST /api/login/mfa {ticket, code} 또는 {ticket, recovery} → 세션 (복구 번호면 recoveryLeft 도)."""
@@ -1250,15 +1338,15 @@ class Web:
                 left = self.accounts.mfa_use_recovery(uid, recovery)
                 ok = left is not None
             if not ok:
-                self._count_fail(h, uid, pair, "웹 로그인 2단계 실패" if code is not None else "웹 로그인 복구 번호 실패")
+                self._count_fail(h, uid, pair, "웹 로그인 2단계 실패" if code is not None else "웹 로그인 복구 번호 실패", "bad_code")
                 raise _Fail(401, "auth/invalid-code", "인증 번호가 일치하지 않습니다." if code is not None
                             else "복구 번호가 일치하지 않습니다.")
             self._ticket_drop(ticket)
             self.lockout.ok(pair)
-            token = self._session_open(acct, ip)
+            token = self._session_open(acct, h)
         how = "2단계" if left is None else f"복구 번호, 남은 {left}개"
         self._log(f"웹 로그인 ({how})  아이디={uid}  권한={acct['role']}{self._at(h)}")
-        out = {"token": token, "session": self._public(acct)}
+        out = self._login_out(token, acct, self._history_login("ok" if left is None else "recovery", uid, h))
         if left is not None:
             out["recoveryLeft"] = left
         return out
@@ -1285,7 +1373,7 @@ class Web:
                 pair = self._lock_gate(h, uid)
                 if not isinstance(password, str) or self.accounts.verify(uid, password) is None:
                     if isinstance(password, str):
-                        self._count_fail(h, uid, pair, "웹 2단계 다시 등록 - 비밀번호 틀림")
+                        self._count_fail(h, uid, pair, "웹 2단계 다시 등록 - 비밀번호 틀림", "bad_password")
                     raise _Fail(403, "auth/wrong-password", "비밀번호가 일치하지 않습니다.")
                 self.lockout.ok(pair)
         secret = totp.new_secret()
@@ -1310,13 +1398,14 @@ class Web:
             except NoAccount:
                 raise _Fail(401, "unauthenticated", "로그인이 필요합니다. 다시 로그인하여 주십시오.") from None
             if codes is None:
-                self._count_fail(h, uid, pair, "웹 2단계 등록 - 번호 틀림")
+                self._count_fail(h, uid, pair, "웹 2단계 등록 - 번호 틀림", "bad_code")
                 raise _Fail(400, "auth/invalid-code", "인증 번호가 일치하지 않습니다.")
             self.lockout.ok(pair)
             self.sessions.clear_setup(token)
             self.sessions.close_account(uid, keep=token)          # 다른 탭·PC 의 세션은 다시 로그인하게
             self._tickets_drop_account(uid)
         self._log(f"웹 2단계 켬  아이디={uid}{self._at(h)}")
+        self._history("mfa_on", uid, h)
         fresh = self.accounts.get(uid) or acct
         return {"recovery": codes, "session": self._public(fresh)}
 
@@ -1335,15 +1424,16 @@ class Web:
         with self._login_lock:
             pair = self._lock_gate(h, uid)
             if self.accounts.verify(uid, password) is None:
-                self._count_fail(h, uid, pair, "웹 2단계 끄기 - 비밀번호 틀림")
+                self._count_fail(h, uid, pair, "웹 2단계 끄기 - 비밀번호 틀림", "bad_password")
                 raise _Fail(403, "auth/wrong-password", "비밀번호가 일치하지 않습니다.")
             if not self.accounts.mfa_check(uid, code, self._clock()):
-                self._count_fail(h, uid, pair, "웹 2단계 끄기 - 번호 틀림")
+                self._count_fail(h, uid, pair, "웹 2단계 끄기 - 번호 틀림", "bad_code")
                 raise _Fail(400, "auth/invalid-code", "인증 번호가 일치하지 않습니다.")
             self.lockout.ok(pair)
             self.accounts.mfa_clear(uid)
             self._tickets_drop_account(uid)
         self._log(f"웹 2단계 끔  아이디={uid}{self._at(h)}")
+        self._history("mfa_off", uid, h)
         return {"ok": True}
 
     # --- '보안' 설정 (사내 서버만, 관리자, 계획 ③ Task 4) ---
@@ -1374,13 +1464,13 @@ class Web:
                 password, code = data.get("password"), data.get("code")
                 if not isinstance(password, str) or self.accounts.verify(uid, password) is None:
                     if isinstance(password, str):
-                        self._count_fail(h, uid, pair, "웹 보안 설정 변경 - 비밀번호 틀림")
+                        self._count_fail(h, uid, pair, "웹 보안 설정 변경 - 비밀번호 틀림", "bad_password")
                     raise _Fail(403, "auth/wrong-password", "2단계 인증 범위를 줄이려면 비밀번호를 입력하여 주십시오."
                                 if password is None else "비밀번호가 일치하지 않습니다.")
                 if me["mfa"]:
                     if not isinstance(code, str) or not self.accounts.mfa_check(uid, code, self._clock()):
                         if isinstance(code, str):
-                            self._count_fail(h, uid, pair, "웹 보안 설정 변경 - 번호 틀림")
+                            self._count_fail(h, uid, pair, "웹 보안 설정 변경 - 번호 틀림", "bad_code")
                         raise _Fail(400, "auth/invalid-code", "인증 앱의 지금 번호를 입력하여 주십시오."
                                     if code is None else "인증 번호가 일치하지 않습니다.")
                 self.lockout.ok(pair)
@@ -1397,10 +1487,69 @@ class Web:
                   f"  처리={uid}{self._at(h)}")
         return self._security_out(new)
 
+    # --- 로그인 이력 창구 (사내 서버만, 계획 ③ Task 5) - 웹에서 지우는 창구는 없다. 화면이 혼자 읽는 것이라 미사용 시계는 그대로 ---
+    @staticmethod
+    def _page_args(query):
+        """limit·before (쪽 넘기기) → (limit, before_id). 틀린 값 400. limit 은 login_log 가 1~200 으로 맞춘다."""
+        try:
+            limit = int(query.get("limit") or login_log.LIMIT_DEFAULT)
+            before = query.get("before")
+            before = int(before) if before not in (None, "") else None
+        except ValueError:
+            raise _Fail(400, "invalid-argument", "개수 또는 쪽 번호가 올바르지 않습니다.") from None
+        return limit, before
+
+    @staticmethod
+    def _day_ms(text, end=False):
+        """YYYY-MM-DD → 서버 지역 시각으로 그날 0시(end 면 다음 날 0시)의 ms. 틀린 날짜 400."""
+        if not DATE_RE.fullmatch(text):
+            raise _Fail(400, "invalid-argument", "날짜는 YYYY-MM-DD 로 입력하여 주십시오.")
+        try:
+            day = datetime.datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            raise _Fail(400, "invalid-argument", "날짜가 올바르지 않습니다.") from None
+        if end:
+            day += datetime.timedelta(days=1)
+        return int(day.timestamp() * 1000)
+
+    def _logins_query(self, **kw):
+        try:
+            return {"items": self.login_log.query(**kw)}
+        except Exception as e:                       # 디스크 등 - 종류만 기록, 화면에는 잠시 뒤 다시
+            self._log(f"로그인 이력 읽기 오류: {type(e).__name__}")
+            raise _Fail(503, "unavailable", "로그인 이력을 읽지 못했습니다. 잠시 후 다시 시도하여 주십시오.") from None
+
+    def _logins_me(self, h, query, body, sub):
+        """GET /api/logins/me?limit=&before= → {items} 자기 것만. 유저는 '보안' 의 유저 이력 보이기가 꺼졌으면 403, 관리자는 늘 된다."""
+        if sub != "me":
+            raise _Fail(404, "not-found", "없는 주소입니다.")
+        _, acct = self._auth(h, must_ok=True)
+        if acct["role"] != "admin" and not self.security.get()["show_own_history"]:
+            raise _Fail(403, "permission-denied", "로그인 이력 보기가 꺼져 있습니다. 관리자에게 문의하여 주십시오.")
+        limit, before = self._page_args(query)
+        return self._logins_query(uid=acct["id"], limit=limit, before_id=before)
+
+    def _logins_all(self, h, query, body):
+        """GET /api/logins?id=&from=&to=&result=&limit=&before= (관리자) → {items}. 날짜는 서버 지역 시각 하루 단위 (to 그날까지)."""
+        self._auth(h, admin=True)
+        uid = query.get("id") or None
+        if uid is not None:
+            uid = norm_id(uid)
+            if not ID_RE.fullmatch(uid):
+                raise _Fail(400, "invalid-argument", "아이디가 올바르지 않습니다.")
+        result = query.get("result") or None
+        if result is not None and result not in login_log.RESULTS:
+            raise _Fail(400, "invalid-argument", "결과 값이 올바르지 않습니다.")
+        since = self._day_ms(query["from"]) if query.get("from") else None
+        until = self._day_ms(query["to"], end=True) if query.get("to") else None
+        limit, before = self._page_args(query)
+        return self._logins_query(uid=uid, since_ms=since, until_ms=until, result=result, limit=limit, before_id=before)
+
     def _logout(self, h, query, body):
         token, acct = self._auth(h, must_ok=True, mfa_ok=True)
         self.sessions.close(token)
         self._log(f"웹 로그아웃  아이디={acct['id']}{self._at(h)}")
+        self._history("logout", acct["id"], h)
         return {"ok": True}
 
     def _session_get(self, h, query, body):
@@ -1427,11 +1576,12 @@ class Web:
             except WeakPassword as e:
                 raise _Fail(400, "auth/weak-password", str(e)) from None
             except WrongPassword as e:
-                if self.lockout.fail(pair):
+                locked = self.lockout.fail(pair)
+                if locked:
                     self._log(f"웹 비밀번호 변경 실패 - {self.lockout.limit}번 틀려 {round(self.lockout.remaining(pair))}초 잠금  "
                               f"아이디={uid}{self._at(h)}")
-                self._id_all_fail(uid, uid, h)
-                self._addr_fail(h)
+                started = (locked, self._id_all_fail(uid, uid, h), self._addr_fail(h))
+                self._history_fail("bad_password", uid, h, started)      # 사내 서버만 (단독은 _history 가 아무것도 안 한다)
                 raise _Fail(403, "auth/wrong-password", str(e)) from None      # 401 이 아니다 - 화면은 401 을 '세션 끝' 으로 본다
             except ValueError as e:
                 raise _Fail(400, "invalid-argument", str(e)) from None
@@ -1515,8 +1665,14 @@ class Web:
 
     # --- 계정 관리 (관리자) ---
     def _accounts_out(self):
-        return {"accounts": [{"id": a["id"], "role": a["role"], "disabled": a["disabled"], "mustChange": a["must_change"]}
-                             for a in self.accounts.list()]}
+        """계정 목록. 사내 서버만 계정마다 mfa(2단계를 켰나) - 관리자 화면이 누구의 2단계를 풀어 줄지 본다. 단독은 칸이 지금 그대로."""
+        out = []
+        for a in self.accounts.list():
+            item = {"id": a["id"], "role": a["role"], "disabled": a["disabled"], "mustChange": a["must_change"]}
+            if self.lan:
+                item["mfa"] = bool(a.get("mfa"))
+            out.append(item)
+        return {"accounts": out}
 
     def _accounts_list(self, h, query, body):
         self._auth(h, touch=True, admin=True)
@@ -1573,6 +1729,8 @@ class Web:
         did += [] if disabled is None else ["사용 중지" if disabled else "다시 사용"]
         did += ["2단계 해제"] if reset else []
         self._log(f"웹 계정 변경 ({'·'.join(did)})  아이디={uid}  처리={me['id']}")
+        if reset:
+            self._history("mfa_reset", uid, h)        # 대상 계정 아이디로 (주소·브라우저는 풀어 준 관리자의 것)
         return self._accounts_out()
 
     def _account_remove(self, h, query, body, raw_id):
