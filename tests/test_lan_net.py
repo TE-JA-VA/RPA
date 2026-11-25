@@ -313,8 +313,8 @@ def test_per_ip_minute_cap():
     srv, port = start()
     clock = Clock()
     srv.clock = clock
-    old = lan_server.PER_IP_MIN
-    lan_server.PER_IP_MIN = 5
+    old = lan_server.PER_IP_MIN, lan_server.PER_IP_MIN_AGENT
+    lan_server.PER_IP_MIN = lan_server.PER_IP_MIN_AGENT = 5      # 이 서버는 에이전트 포트 - 사내 서버 ④ ②검-4 부터 PER_IP_MIN_AGENT
     try:
         oks = [accepted(port) for _ in range(5)]
         check("1분에 5번까지 된다 (시험용 상한 5)", all(oks), oks)
@@ -325,7 +325,7 @@ def test_per_ip_minute_cap():
         clock.t += 61
         check("1분이 지나면 다시 된다", accepted(port))
     finally:
-        lan_server.PER_IP_MIN = old
+        lan_server.PER_IP_MIN, lan_server.PER_IP_MIN_AGENT = old
     check("연결 수가 돌아온다", idle(srv), (srv.conns, srv.per_ip))
     srv.minute.clear()
     for i in range(lan_server.TRACK_MAX + 10):
@@ -405,7 +405,7 @@ def test_client_ip():
           lan_server.client_ip("10.0.0.9", "junk, 10.0.0.7", one) == "10.0.0.7")
     check("모두 프록시면 가장 왼쪽", lan_server.client_ip("10.0.0.9", "10.0.0.8, 10.0.0.9", two) == "10.0.0.8")
     check("대역으로 적은 프록시", lan_server.client_ip("10.1.0.3", "10.0.0.7",
-          lan_config.parse({"listen": "10.0.0.5", "trusted_proxies": ["10.1.0.0/16"]})) == "10.0.0.7")
+          lan_config.parse({"listen": "10.0.0.5", "allow": ["10.0.0.0/8"], "trusted_proxies": ["10.1.0.0/16"]})) == "10.0.0.7")
     check("IPv4 를 담은 IPv6 는 IPv4 글자로", lan_server.client_ip("10.0.0.9", "::ffff:10.0.0.7", one) == "10.0.0.7")
 
 

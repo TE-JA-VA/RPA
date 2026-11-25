@@ -35,10 +35,12 @@ class Security:
     def __init__(self, path):
         self.path = os.path.abspath(path)
         self._lock = threading.Lock()
+        self._last = DEFAULT                 # 마지막으로 읽은 값 (③검-9)
 
     def get(self):
         """{"totp_scope", "show_own_history"} 사본. 파일이 없으면 DEFAULT, 깨졌으면 .broken 으로 치우고 DEFAULT.
-        잠깐 못 읽으면 (권한·잠김) DEFAULT - 기본값이 더 막는 쪽('관리자만')이다."""
+        잠깐 못 읽으면 (권한·잠김 - OSError) 마지막으로 읽은 값 - 그 요청만 기본값('관리자만')으로 바뀌어 'all' 범위의 유저가
+        2단계 없이 들어오지 않게 (③검-9). 처음부터 못 읽으면 DEFAULT."""
         with self._lock:
             return dict(self._read())
 
@@ -47,20 +49,23 @@ class Security:
             with open(self.path, encoding="utf-8") as f:
                 raw = json.load(f)
         except FileNotFoundError:
+            self._last = DEFAULT
             return DEFAULT
         except (ValueError, UnicodeDecodeError, RecursionError):
             raw = None
         except OSError:
-            return DEFAULT
+            return self._last
         if not isinstance(raw, dict):
             try:
                 os.replace(self.path, self.path + ".broken")
             except OSError:
                 pass
+            self._last = DEFAULT
             return DEFAULT
         scope, show = raw.get("totp_scope"), raw.get("show_own_history")
-        return {"totp_scope": scope if scope in SCOPES else DEFAULT["totp_scope"],
-                "show_own_history": show if isinstance(show, bool) else DEFAULT["show_own_history"]}
+        self._last = {"totp_scope": scope if scope in SCOPES else DEFAULT["totp_scope"],
+                      "show_own_history": show if isinstance(show, bool) else DEFAULT["show_own_history"]}
+        return self._last
 
     def set(self, totp_scope=None, show_own_history=None):
         """바꿀 칸만 (None 은 그대로) → 바뀐 설정 사본. 틀린 값은 ValueError (사람 말)."""
@@ -75,6 +80,7 @@ class Security:
             if show_own_history is not None:
                 value["show_own_history"] = show_own_history
             self._save(value)
+            self._last = dict(value)
             return dict(value)
 
     def _save(self, value):

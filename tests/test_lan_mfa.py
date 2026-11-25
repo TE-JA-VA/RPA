@@ -85,8 +85,9 @@ class Clock:
 
 
 SERVERS, RUNS, WEBS = [], [], []
+PROXY_SECRET = "plain-proxy-secret-" + "p" * 32      # 평문 프록시 모양의 비밀 머리글 값 (사내 서버 ④ Codex 검토 13)
 CFG = {"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8", "10.0.0.0/8"],
-       "trusted_proxies": ["127.0.0.1"], "web_plain": True, "public_web": ["ap.corp.local"]}
+       "trusted_proxies": ["127.0.0.1"], "web_plain": True, "public_web": ["ap.corp.local"], "proxy_secret": PROXY_SECRET}
 
 
 def write_security(folder, scope, show=True):
@@ -126,7 +127,7 @@ SEEN = None                                  # test_no_secret_leaks 가 [] 로 �
 
 def api(env, ip, method, path, body=None, tok=None):
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-    hs = {"X-Forwarded-Proto": "https", "X-Forwarded-For": ip, "User-Agent": UA}
+    hs = {"X-Forwarded-Proto": "https", "X-Forwarded-For": ip, "User-Agent": UA, "X-Autopilot-Proxy": PROXY_SECRET}
     if data is not None:
         hs["Content-Type"] = "application/json"
     if tok:

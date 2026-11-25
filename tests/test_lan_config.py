@@ -45,12 +45,14 @@ def write(name, text):
 
 def test_minimal():
     print("[최소 설정]")
-    c = lan_config.parse({"listen": "192.168.1.230"})
+    # 사내 서버 ④ ②검-3: listen 이 루프백이 아니면 allow 를 꼭 적는다 (비우면 ConfigError - test_lan_polish)
+    c = lan_config.parse({"listen": "192.168.1.230", "allow": ["192.168.1.0/24"]})
     check("기본 포트", (c.web_port, c.agent_port, c.phone_port) == (8443, 8444, 8782))
     check("listen 은 names 에 들어간다", "192.168.1.230" in c.names)
     check("웹 Host 목록", c.web_hosts() == frozenset({"192.168.1.230:8443"}), c.web_hosts())
     check("에이전트 Host 목록", c.agent_hosts() == frozenset({"192.168.1.230:8444"}), c.agent_hosts())
-    check("허용 대역이 비면 루프백만", c.allowed("127.0.0.1") and not c.allowed("192.168.1.5"))
+    loop = lan_config.parse({"listen": "127.0.0.1"})
+    check("루프백 listen 은 허용 대역이 비어도 되고, 그러면 루프백만", loop.allowed("127.0.0.1") and not loop.allowed("192.168.1.5"))
     check("IPv6 루프백도 늘 허용", c.allowed("::1"))
     check("기본값 - 믿을 프록시 없음", c.trusted_proxies == () and not c.is_proxy("127.0.0.1"))
     check("기본값 - proxy_only·web_plain 꺼짐, 세션 주소 묶기 켜짐",
@@ -71,16 +73,16 @@ def raises_any(fn):
 
 def test_full():
     print("[모든 칸]")
-    c = lan_config.parse({"listen": "192.168.1.230", "names": ["NT", "nt.corp.local", "192.168.1.230"],
+    c = lan_config.parse({"listen": "192.168.1.230", "names": ["AP.Corp.Local", "nt.corp.local", "192.168.1.230"],
                           "ports": {"web": 9443, "agent": 9444, "phone": 9782},
                           "allow": ["192.168.1.0/24", "10.1.2.3/16"], "trusted_proxies": [], "proxy_only": False,
                           "web_plain": False, "public_web": [], "bind_session_ip": False})
     check("포트 바꾸기", (c.web_port, c.agent_port, c.phone_port) == (9443, 9444, 9782))
     check("listen 이 이미 있으면 한 번만", c.names.count("192.168.1.230") == 1, c.names)
     check("웹 Host 목록은 소문자·이름마다",
-          c.web_hosts() == frozenset({"nt:9443", "nt.corp.local:9443", "192.168.1.230:9443"}), c.web_hosts())
+          c.web_hosts() == frozenset({"ap.corp.local:9443", "nt.corp.local:9443", "192.168.1.230:9443"}), c.web_hosts())
     check("에이전트 Host 목록",
-          c.agent_hosts() == frozenset({"nt:9444", "nt.corp.local:9444", "192.168.1.230:9444"}), c.agent_hosts())
+          c.agent_hosts() == frozenset({"ap.corp.local:9444", "nt.corp.local:9444", "192.168.1.230:9444"}), c.agent_hosts())
     check("허용 대역 안", c.allowed("192.168.1.5") and c.allowed("10.1.200.7"))
     check("허용 대역 밖", not c.allowed("192.168.2.5") and not c.allowed("10.2.0.1") and not c.allowed("8.8.8.8"))
     check("strict=False - 10.1.2.3/16 은 10.1.0.0/16", str(c.allow[1]) == "10.1.0.0/16", c.allow)
@@ -96,21 +98,22 @@ def test_ipv6():
     check("IPv6 이름은 Host 에서 대괄호", c.web_hosts() == frozenset({"[fd12:3456::1]:8443"}), c.web_hosts())
     check("ULA 허용 대역", c.allowed("fd12:3456::99") and not c.allowed("fd12:3457::1"))
     check("::1 에 듣기", lan_config.parse({"listen": "::1"}).listen == "::1")
-    check("listen 은 줄인 꼴로", lan_config.parse({"listen": "FD12:3456:0:0::1"}).listen == "fd12:3456::1")
+    check("listen 은 줄인 꼴로", lan_config.parse({"listen": "FD12:3456:0:0::1", "allow": ["fd12:3456::/64"]}).listen == "fd12:3456::1")
 
 
 def test_rejects():
     print("[거절]")
+    A = {"listen": "192.168.1.2", "allow": ["192.168.1.0/24"]}       # 허용 대역은 늘 적는다 - 다른 까닭으로 거절되는지 본다
     for bad in ({"listen": "0.0.0.0"}, {"listen": "8.8.8.8"}, {"listen": "nt.local"}, {"listen": "192.168.1.2", "allow": ["0.0.0.0/0"]},
-                {"listen": "192.168.1.2", "ports": {"web": 443}}, {"listen": "192.168.1.2", "ports": {"web": 8444}},
-                {"listen": "192.168.1.2", "web_plain": True}, {"listen": "192.168.1.2", "proxy_only": True},
-                {"listen": "192.168.1.2", "lisen": 1}, {"listen": "192.168.1.2", "names": ["a b"]}):
+                dict(A, ports={"web": 443}), dict(A, ports={"web": 8444}),
+                dict(A, web_plain=True), dict(A, proxy_only=True),
+                dict(A, lisen=1), dict(A, names=["a b"]), {"listen": "192.168.1.2"}):
         check(f"거절 {bad}", raises_config(lambda: lan_config.parse(bad)))
 
 
 def test_rejects_more():
     print("[거절 - 더]")
-    L = {"listen": "192.168.1.2"}
+    L = {"listen": "192.168.1.2", "allow": ["192.168.1.0/24"]}       # 허용 대역은 늘 적는다 (사내 서버 ④ ②검-3)
     cases = [
         ("listen 없음", {}),
         ("dict 아님", ["listen"]),
@@ -173,7 +176,7 @@ def test_rejects_more():
 def test_private_ranges():
     print("[사설·루프백 대역]")
     for ok in ("10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.0.1", "127.0.0.1", "127.1.2.3", "fd00::1", "fc00::1", "::1"):
-        check(f"듣기 허용 {ok}", not raises_config(lambda: lan_config.parse({"listen": ok})))
+        check(f"듣기 허용 {ok}", not raises_config(lambda: lan_config.parse({"listen": ok, "allow": [ok]})))
     for bad in ("172.32.0.1", "172.15.255.255", "11.0.0.1", "192.169.0.1", "fe80::1", "2001:db8::1", "255.255.255.255"):
         check(f"듣기 거절 {bad}", raises_config(lambda: lan_config.parse({"listen": bad})))
     c = lan_config.parse({"listen": "127.0.0.1", "allow": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8",
@@ -189,12 +192,15 @@ def test_proxy_fields():
     check("공개 이름은 소문자로 웹 Host 목록에", "autopilot.corp.local" in c.web_hosts())
     check("공개 이름은 에이전트 Host 목록에 없다", not any(h.startswith("autopilot") for h in c.agent_hosts()))
     check("공개 이름 보관도 소문자", c.public_web == ("autopilot.corp.local",), c.public_web)
-    p = lan_config.parse({"listen": "10.0.0.5", "trusted_proxies": ["127.0.0.1"], "web_plain": True})
+    secret = "s" * 40                    # 평문 모양은 proxy_secret 이 있어야 한다 (사내 서버 ④ Codex 검토 13 - test_lan_polish)
+    p = lan_config.parse({"listen": "10.0.0.5", "allow": ["10.0.0.0/8"], "trusted_proxies": ["127.0.0.1"], "web_plain": True,
+                          "proxy_secret": secret})
     check("평문 모양이면 웹은 127.0.0.1 에서", p.web_listen == "127.0.0.1")
     check("평문 모양이어도 listen 은 그대로", p.listen == "10.0.0.5")
-    q = lan_config.parse({"listen": "10.0.0.5", "trusted_proxies": ["127.0.0.0/8"], "web_plain": True})
+    q = lan_config.parse({"listen": "10.0.0.5", "allow": ["10.0.0.0/8"], "trusted_proxies": ["127.0.0.0/8"], "web_plain": True,
+                          "proxy_secret": secret})
     check("127.0.0.0/8 대역도 127.0.0.1 을 품는다", q.web_plain and q.is_proxy("127.0.0.1"))
-    r = lan_config.parse({"listen": "10.0.0.5", "trusted_proxies": ["10.0.0.0/30"], "proxy_only": True,
+    r = lan_config.parse({"listen": "10.0.0.5", "allow": ["10.0.0.0/8"], "trusted_proxies": ["10.0.0.0/30"], "proxy_only": True,
                           "public_web": ["autopilot.corp.local:443"]})
     check("proxy_only 는 프록시가 있으면 켜진다", r.proxy_only and r.is_proxy("10.0.0.2"))
     check("공개 이름에 포트를 붙일 수 있다", "autopilot.corp.local:443" in r.web_hosts())
@@ -207,12 +213,12 @@ def test_load_file():
     check("JSON 이지만 dict 아님", raises_config(lambda: lan_config.load(write("list.json", "[1, 2]"))))
     check("UTF-8 아님", raises_config(lambda: lan_config.load(write_bytes("cp.json", b'{"listen": "\xb3\xaa"}'))))
     check("폴더를 주면", raises_config(lambda: lan_config.load(TMP)))
-    good = {"listen": "192.168.1.230", "names": ["nt"], "ports": {"web": 8443, "agent": 8444, "phone": 8782},
+    good = {"listen": "192.168.1.230", "names": ["nt.corp.local"], "ports": {"web": 8443, "agent": 8444, "phone": 8782},
             "allow": ["192.168.1.0/24"], "trusted_proxies": [], "proxy_only": False, "web_plain": False,
             "public_web": [], "bind_session_ip": True}
     c = lan_config.load(write("server.json", json.dumps(good, ensure_ascii=False, indent=2)))
     check("맞는 파일 → LanConfig", isinstance(c, lan_config.LanConfig))
-    check("파일 값", c.names == ("192.168.1.230", "nt") and c.allowed("192.168.1.77"), c.names)
+    check("파일 값", c.names == ("192.168.1.230", "nt.corp.local") and c.allowed("192.168.1.77"), c.names)
     c2 = lan_config.load(write_bytes("bom.json", b"\xef\xbb\xbf" + json.dumps(good).encode("utf-8")))
     check("BOM 붙은 파일도 읽는다", c2 == c)
     check("파일의 검사 실패도 ConfigError",

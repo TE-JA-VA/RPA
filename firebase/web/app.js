@@ -40,9 +40,11 @@ const idleOver = () => { const t = lastActive(); return t > 0 && Date.now() - t 
 let idleNote = null;       // 미사용으로 로그아웃했다 ("user" | "console") - onSession 콜백이 로그인 화면에 까닭을 적는다
 let justSignedIn = false;  // 방금 로그인에 성공했다 - onSession 콜백이 입력 시각을 지금으로 적는다. 로그인을 시도하기 전에 적으면
                            // 못 쓰는 열쇠(#t=)를 붙여 새로고침하는 것만으로 시간을 넘긴 로그인이 되살아났다 (검토 2026-11-19)
+// 관리 화면 [대시보드 보기] 계정인가 - 일반 버전에서만. 스탠드얼론은 같은 이름의 로컬 계정을 콘솔로 다루지 않는다 (전1-4, 서버도 그 아이디를 막는다)
+const isConsole = (uid) => !STANDALONE && uid === CONSOLE_UID;
 async function idleCheck() {
   if (!signedIn() || !idleOver()) return;
-  idleNote = sessionUid() === CONSOLE_UID ? "console" : "user";
+  idleNote = isConsole(sessionUid()) ? "console" : "user";
   await signOut();
 }
 let lastTouch = 0;
@@ -159,14 +161,14 @@ onSession(async (s) => {
     return;
   }
   if (justSignedIn) { justSignedIn = false; lastTouch = Date.now(); touch(); }
-  else if (idleOver()) { idleNote = sessionUid() === CONSOLE_UID ? "console" : "user"; await signOut(); return; }   // 새로고침으로 되살아난 로그인도 시간을 넘겼으면 끝낸다
+  else if (idleOver()) { idleNote = isConsole(sessionUid()) ? "console" : "user"; await signOut(); return; }   // 새로고침으로 되살아난 로그인도 시간을 넘겼으면 끝낸다
   else if (!lastActive()) touch();
   if (s.error) {   // 네트워크가 끊겨 토큰을 못 받으면 빈 화면에서 멈췄다 (BugBuster M4)
     show($("login"), true); show($("main"), false);
     $("login-alert").textContent = "네트워크 연결을 확인한 뒤 새로고침하여 주십시오."; show($("login-alert"), true);
     return;
   }
-  if (s.uid === CONSOLE_UID) {   // 관리 화면 [대시보드 보기] 로그인 - 로그인 1시간 뒤 로그아웃 (I15)
+  if (isConsole(s.uid)) {   // 관리 화면 [대시보드 보기] 로그인 - 로그인 1시간 뒤 로그아웃 (I15). 일반 버전만
     // 남은 시간은 서버 시각끼리 잰다 (consoleLeftMs - data 쪽이 방금 받은 토큰의 iat - 로그인 auth_time 으로) - 브라우저 시계가 틀려도 맞게
     const left = s.consoleLeftMs;
     const end = async () => {

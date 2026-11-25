@@ -39,6 +39,7 @@ TMP = tempfile.mkdtemp(prefix="rpa_lan_review2_")
 LIC = {"edition": "standalone", "company": "시험상사", "cid": "c1", "pc_id": "srv", "issued": "2026-11-24",
        "modules": {}, "features": {}, "limits": {}}
 BOSS_PW, STAFF_PW = "pw-12345678", "staff-pw-0001"
+PROXY_SECRET = "plain-proxy-secret-" + "p" * 32      # 평문 프록시 모양의 비밀 머리글 값 (사내 서버 ④ Codex 검토 13)
 GUIDS = ["11111111-2222-3333-4444-5555555555%02d" % i for i in range(10)]
 
 
@@ -155,7 +156,10 @@ def start(extra=None, plain=False):
     web = local_web.Web(store, runs, LIC, folder, WEB_DIR, clock=clock, registry=reg)
     web.accounts.set("boss", BOSS_PW, "admin")
     web.accounts.set("staff", STAFF_PW, "viewer")
-    cfg = lan_config.parse(dict(BASE, **(extra or {})))
+    data = dict(BASE, **(extra or {}))
+    if data.get("web_plain"):
+        data.setdefault("proxy_secret", PROXY_SECRET)     # 평문 모양은 프록시 비밀 값이 있어야 한다 (사내 서버 ④ Codex 검토 13)
+    cfg = lan_config.parse(data)
     cfg = dataclasses.replace(cfg, web_port=0, agent_port=0)
     w, a = lan_server.make_lan_servers(store, runs, LIC, reg, web, cfg, CERT, KEY, CA_PEM)
     peer = {"ip": "127.0.0.1"}
@@ -169,6 +173,8 @@ def start(extra=None, plain=False):
 
 def req(env, ip, method, path, body=None, headers=None):
     env.peer["ip"] = ip
+    if not env.tls:                                       # 평문 모양 - 같은 장비 프록시가 비밀 머리글을 싣는다
+        headers = dict({"X-Autopilot-Proxy": PROXY_SECRET}, **(headers or {}))
     return call(env.wp, method, path, body, headers, tls=env.tls)
 
 

@@ -26,6 +26,8 @@ AGENT_MAX = 40
 FIELD_MAX = 64                                # uid·ip 칸 길이 (아이디는 32자, 주소는 IPv6 도 들어간다)
 LIMIT_DEFAULT, LIMIT_MAX = 50, 200
 PURGE_EVERY = 86400                           # add 가 purge 를 부르는 간격 (초)
+JUMP_AHEAD_DAYS, JUMP_BACK_DAYS = 400, 30     # 마지막 정비보다 이만큼 뒤·앞이면 시계가 뛴 것 - 지우지 않는다 (③검-1)
+DB_TIMEOUT = 1                                # 이력 DB 가 잠겼을 때 기다리는 초 (③검-8 - 로그인을 오래 붙잡지 않게)
 _UA_SCAN = 1024                               # 브라우저 종류를 볼 때 User-Agent 앞쪽만 본다
 _COLS = ("id", "at", "uid", "ip", "agent", "result")
 
@@ -79,6 +81,7 @@ class LoginLog:
         self._lock = threading.Lock()
         self._purged = None                    # 마지막 purge 시각 (초) - add 가 하루 한 번 부른다
         self.moved_broken = False
+        self.note = None                       # 기록 한 줄 (local_web.Web 이 단다) - 시계가 뛰어 정비를 건너뛴 까닭
         if path != ":memory:":
             path = os.path.abspath(path)
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -94,7 +97,7 @@ class LoginLog:
     @staticmethod
     def _open(path):
         fresh = path != ":memory:" and not os.path.exists(path)
-        db = sqlite3.connect(path, check_same_thread=False, timeout=10)
+        db = sqlite3.connect(path, check_same_thread=False, timeout=DB_TIMEOUT)
         try:
             if fresh and os.name == "posix":   # 서비스 계정만 읽게 (설계 4절 - 자료 폴더의 파일은 600)
                 try:
@@ -106,6 +109,7 @@ class LoginLog:
                            " result TEXT)")
                 db.execute("CREATE INDEX IF NOT EXISTS logins_at ON logins(at)")
                 db.execute("CREATE INDEX IF NOT EXISTS logins_uid ON logins(uid, id)")
+                db.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER)")     # last_purge = 정상으로 끝난 마지막 정비 (ms)
         except BaseException:
             db.close()                         # 윈도우는 열린 파일을 옮기지 못한다
             raise
@@ -137,19 +141,25 @@ class LoginLog:
     def add(self, result, uid, ip, agent, at_ms=None):
         """한 줄 넣기. result 는 RESULTS 안만, uid 는 등록된 아이디 글 또는 None - 아니면 ValueError.
         at_ms = 그 일이 있었던 시각(ms) - 없으면 지금 (자동 로그아웃은 세션이 실제로 끝난 시각을 넘긴다, 전체 검토 3).
-        넣은 뒤 마지막 purge 에서 하루가 지났으면 purge 를 부른다."""
+        차례는 '정비 확인 → 넣기' (③검-1): 마지막 purge 에서 하루가 지났으면 넣기 **전에** 정비 (시계가 뛰었으면 정비가 건너뛴다).
+        정비와 넣기는 한 거래 - DB 가 잠겼으면 한 번(DB_TIMEOUT)만 기다리고 sqlite3.OperationalError (부르는 쪽이 기록 한 줄)."""
         if result not in RESULTS:
             raise ValueError(f"로그인 이력 결과가 올바르지 않습니다: {result!r}")
         if uid is not None and not isinstance(uid, str):
             raise ValueError("로그인 이력 아이디는 글이어야 합니다.")
         now = self._clock()
         at = int(now * 1000) if at_ms is None else int(at_ms)
+        due = self._purged is None or now - self._purged >= PURGE_EVERY
+        if due:
+            self._purged = now
+        jumped = None
         with self._persist(), self._lock, self._db:
+            if due:
+                _, jumped = self._purge_tx(now)
             self._db.execute("INSERT INTO logins(at, uid, ip, agent, result) VALUES(?,?,?,?,?)",
                              (at, _text(uid, FIELD_MAX), _text(ip, FIELD_MAX), _text(agent, AGENT_MAX), result))
-        if self._purged is None or now - self._purged >= PURGE_EVERY:
-            self._purged = now
-            self.purge()
+        if jumped is not None:
+            self._note_jump(now, jumped)
 
     @staticmethod
     def _row(row):
@@ -192,7 +202,33 @@ class LoginLog:
             return self._db.execute(sql, args).fetchone()[0]
 
     def purge(self):
-        """보관 기간(KEEP_DAYS)이 지난 줄을 지운다 → 지운 수."""
-        cut = int((self._clock() - KEEP_DAYS * 86400) * 1000)
+        """보관 기간(KEEP_DAYS)이 지난 줄을 지운다 → 지운 수. 정상으로 끝나면 그 시각을 meta 표(last_purge)에 둔다.
+        시계 보호 (③검-1): 지금이 마지막 정비보다 JUMP_AHEAD_DAYS 넘게 뒤거나 JUMP_BACK_DAYS 넘게 앞이면 시계가 뛴 것으로 보고
+        지우지 않는다 (0, note 로 기록 한 줄) - 시계가 몇 년 앞으로 틀린 동안 로그인 실패 한 번으로 이력이 모두 지워지지 않게."""
+        now = self._clock()
         with self._persist(), self._lock, self._db:
-            return self._db.execute("DELETE FROM logins WHERE at < ?", (cut,)).rowcount
+            n, jumped = self._purge_tx(now)
+        if jumped is not None:
+            self._note_jump(now, jumped)
+        return n
+
+    def _purge_tx(self, now):
+        """연결 잠금·거래 안에서: 정비 한 번 → (지운 수, 시계가 뛰었으면 마지막 정비 시각(초) 아니면 None)."""
+        row = self._db.execute("SELECT v FROM meta WHERE k = 'last_purge'").fetchone()
+        last = row[0] / 1000 if row and isinstance(row[0], (int, float)) else None
+        if last is not None and (now - last > JUMP_AHEAD_DAYS * 86400 or last - now > JUMP_BACK_DAYS * 86400):
+            return 0, last
+        cut = int((now - KEEP_DAYS * 86400) * 1000)
+        n = self._db.execute("DELETE FROM logins WHERE at < ?", (cut,)).rowcount
+        self._db.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('last_purge', ?)", (int(now * 1000),))
+        return n, None
+
+    def _note_jump(self, now, last):
+        if self.note is None:
+            return
+        try:
+            fmt = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))      # noqa: E731
+            self.note(f"로그인 이력 정리를 건너뛰었습니다 - 서버 시계({fmt(now)})가 마지막 정리({fmt(last)})와 너무 다릅니다. "
+                      "서버 시계를 확인하여 주십시오.")
+        except Exception:
+            pass

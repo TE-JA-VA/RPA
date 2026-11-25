@@ -26,11 +26,16 @@ import time
 
 import lan_config
 import local_server
+import local_web          # LogGate (기록 줄 줄이기) - 같은 꼴을 쓴다
 
 PER_IP_CONN = 16          # 주소마다 동시 연결
 # 주소마다 분당 요청. 받기 고리에서 연결을 센다 - 처리기(local_server.Handler)는 HTTP/1.0 이라 연결 하나에 요청 하나만
 # 받고 닫으므로 (keep-alive 없음) 분당 연결 수가 곧 분당 요청 수다. 처리기가 keep-alive 를 쓰게 되면 요청도 따로 세야 한다
 PER_IP_MIN = 600
+# 에이전트 포트는 따로 - PC 하나의 분당 서명 요청 상한(local_server.PC_REQ_MIN 1200)의 서명된 429 가 먼저 닿게 그보다 크게 (②검-4).
+# 웹 포트는 600 그대로
+PER_IP_MIN_AGENT = 2400
+REJECT_LOG_MAX, REJECT_LOG_SEC = 10, 60   # 받기 고리 거절 기록 - 까닭마다 60초에 10줄까지 (②검-3)
 HANDSHAKE_SEC = 5         # TLS 악수
 REQUEST_DEADLINE = 10     # 악수 끝부터 요청 머리글·본문을 다 읽을 때까지 (한 바이트씩 보내 연결을 붙잡는 것을 끊는다)
 _PORT_RE = re.compile(r":\d{1,5}")
@@ -107,6 +112,7 @@ class LanServer(local_server.LocalServer):
         self.reading = {}                               # 요청을 읽는 중인 연결 → 마감 타이머 (REQUEST_DEADLINE)
         self.stopping = threading.Event()
         self.clock = time.monotonic                     # 분당 연결·서명 틀림 거절의 시계 (시험이 바꿔 끼운다)
+        self.reject_gates, self.gate_lock = {}, threading.Lock()     # 받기 고리 거절 기록 - 까닭마다 LogGate (②검-3)
         super().__init__(server_address, RequestHandlerClass, bind_and_activate)
 
     def peer_ip(self, client_address):
@@ -134,30 +140,56 @@ class LanServer(local_server.LocalServer):
         에이전트 쪽은 X-Forwarded-For 를 읽지 않으므로 (TCP 넘기기) 늘 받기 고리에서 센다."""
         return self.side == "web" and self.cfg is not None and self.cfg.is_proxy(ip)
 
+    def _reject_log(self, ip, why):
+        """받기 고리 거절 한 줄 - 까닭마다 60초에 10줄까지, 넘은 수는 다음 창 첫 줄 앞에 한 줄로 (②검-3).
+        받기 고리에서 부르므로 파일 쓰기는 줄인 줄만 (예외를 내지 않는다)."""
+        with self.gate_lock:
+            gate = self.reject_gates.get(why)
+            if gate is None:
+                gate = self.reject_gates[why] = local_web.LogGate(REJECT_LOG_MAX, REJECT_LOG_SEC, clock=lambda: self.clock())
+        side = "웹" if self.side == "web" else "에이전트"
+        for line in gate.lines(f"연결 거절  포트={side}  주소={ip}  까닭={why}",
+                               f"연결 거절 {{n}}건 더  포트={side}  까닭={why}  (60초에 {REJECT_LOG_MAX}줄만 적음)"):
+            local_server.log(getattr(self, "folder", None) or ".", line)
+
     def process_request(self, request, client_address):
         """받기 고리에서 부른다 - 걸리면 응답 없이 닫고, 통과하면 연결 수를 한 번 세고 일하는 스레드로.
-        웹 쪽 믿을 프록시 연결은 전체 상한·서명 틀림 거절만 보고 주소마다 동시·분당은 세지 않는다 (client_hold 가 센다)."""
+        웹 쪽 믿을 프록시 연결은 전체 상한·서명 틀림 거절만 보고 주소마다 동시·분당은 세지 않는다 (client_hold 가 센다).
+        주소마다 분당은 에이전트 포트 PER_IP_MIN_AGENT, 웹 포트 PER_IP_MIN. 거절은 까닭과 함께 줄여 기록한다."""
         ip = self.peer_ip(client_address)
         ok = self._admit(ip)
+        why = None if ok else ("허용 대역 밖" if self.cfg is None or not self.cfg.allowed(ip) else "프록시만 받음(proxy_only)")
         key = None if self._proxied(ip) else ip     # per_ip 표의 열쇠 - 프록시 연결은 표에 넣지 않는다
+        limit = PER_IP_MIN_AGENT if self.side == "agent" else PER_IP_MIN
         if ok:
             now = self.clock()
             with self.conn_lock:
                 e = self.bad.get(ip)
-                ok = self.conns < self.deploy.max_conn and not (e and e[2] > now)
+                if e and e[2] > now:
+                    why = "서명 틀림으로 거절 중"
+                elif self.conns >= self.deploy.max_conn:
+                    why = "서버 전체 동시 연결 상한"
                 if key is not None:
                     minute = self.minute.get(ip)
                     if minute is None or now - minute[0] >= 60:
                         minute = self.minute[ip] = [now, 0]
                     minute[1] += 1
                     self._trim(self.minute, lambda v: now - v[0] < 60)
-                    ok = ok and self.per_ip.get(ip, 0) < PER_IP_CONN and minute[1] <= PER_IP_MIN
+                    if why is None and self.per_ip.get(ip, 0) >= PER_IP_CONN:
+                        why = f"주소별 동시 연결 {PER_IP_CONN}"
+                    elif why is None and minute[1] > limit:
+                        why = f"주소별 분당 {limit}"
+                ok = why is None
                 if ok:
                     self.conns += 1
                     if key is not None:
                         self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
         if not ok:
             self.shutdown_request(request)
+            try:
+                self._reject_log(ip, why)
+            except Exception:
+                pass
             return
         try:
             self._start(request, client_address, key)

@@ -39,7 +39,8 @@ TMP = tempfile.mkdtemp(prefix="rpa_lan_tls_")
 LIC = {"edition": "standalone", "company": "시험상사", "cid": "c1", "pc_id": "srv", "issued": "2026-11-24",
        "modules": {}, "features": {}, "limits": {}}
 BOSS_PW = "pw-12345678"
-GUIDS = ["11111111-2222-3333-4444-5555555555%02d" % i for i in range(10)]
+PROXY_SECRET = "plain-proxy-secret-" + "p" * 32      # 평문 프록시 모양의 비밀 머리글 값 (사내 서버 ④ Codex 검토 13)
+GUIDS =["11111111-2222-3333-4444-5555555555%02d" % i for i in range(10)]
 LIVE = "/db/apps/rpa/live/c1/{}.json"
 
 
@@ -258,10 +259,12 @@ def test_layout():
 
     print("  평문 프록시 모양 (web_plain) - 웹 포트만 평문·127.0.0.1, 에이전트는 늘 TLS")
     p = start({"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8"], "trusted_proxies": ["127.0.0.1"],
-               "web_plain": True})
+               "web_plain": True, "proxy_secret": PROXY_SECRET})
     check("웹 포트는 TLS 없음, 에이전트는 TLS", p.web.tls is None and isinstance(p.agent.tls, ssl.SSLContext))
-    # 믿을 프록시(127.0.0.1)가 https 를 끝내고 넘긴 모양 (Task 6) - 보낸 쪽 주소도 넘긴다 (없으면 403, ② 전체 검토 5)
-    g = call(p.wp, "GET", "/index.html", headers={"X-Forwarded-Proto": "https", "X-Forwarded-For": "127.0.0.2"}, tls=False)
+    # 믿을 프록시(127.0.0.1)가 https 를 끝내고 넘긴 모양 (Task 6) - 보낸 쪽 주소도 넘긴다 (없으면 403, ② 전체 검토 5).
+    # 사내 서버 ④ (Codex 검토 13): 평문 모양은 프록시 비밀 머리글도 있어야 받는다
+    g = call(p.wp, "GET", "/index.html", headers={"X-Forwarded-Proto": "https", "X-Forwarded-For": "127.0.0.2",
+                                                  "X-Autopilot-Proxy": PROXY_SECRET}, tls=False)
     check("웹 포트에 평문으로 로그인 화면 200", g.status == 200, g)
     check("에이전트 포트에 평문은 답 없이 끊긴다", closed_without_reply(p.ap))
     stop(p)
@@ -327,11 +330,13 @@ def test_host_checked():
     check("단독: 포트 없는 localhost", local_server.host_ok(msg, single) == local_server.local_host(msg, 8781) is True)
     msg.replace_header("Host", "192.168.1.5:8781")
     check("단독: 사내 주소는 안 된다", not local_server.host_ok(msg, single))
-    cfg = lan_config.parse({"listen": "192.168.1.230", "names": ["nt"], "public_web": ["ap.corp.local"]})
+    # 사내 서버 ④: 점 없는 이름(nt)은 받지 않고 허용 대역은 꼭 적는다 (②검-9·②검-3)
+    cfg = lan_config.parse({"listen": "192.168.1.230", "allow": ["192.168.1.0/24"], "names": ["nt.corp.local"],
+                            "public_web": ["ap.corp.local"]})
     web = types.SimpleNamespace(server_port=8443, cfg=cfg, side="web")
     agent = types.SimpleNamespace(server_port=8444, cfg=cfg, side="agent")
-    for h, w_ok, a_ok in (("192.168.1.230:8443", True, False), ("NT:8443", True, False), ("ap.corp.local", True, False),
-                          ("192.168.1.230:8444", False, True), ("nt:8444", False, True), ("127.0.0.1:8443", False, False),
+    for h, w_ok, a_ok in (("192.168.1.230:8443", True, False), ("NT.corp.local:8443", True, False), ("ap.corp.local", True, False),
+                          ("192.168.1.230:8444", False, True), ("nt.corp.local:8444", False, True), ("127.0.0.1:8443", False, False),
                           ("", False, False)):
         msg.replace_header("Host", h)
         check(f"사내: Host {h!r} 웹 {w_ok}·에이전트 {a_ok}", local_server.host_ok(msg, web) == w_ok and local_server.host_ok(msg, agent) == a_ok)

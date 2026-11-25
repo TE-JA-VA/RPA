@@ -141,6 +141,18 @@ class NoAccount(ValueError):
     """그 아이디의 계정이 없다."""
 
 
+class PasswordChanged(WrongPassword):
+    """현재 비밀번호를 확인한 뒤 저장하기 전에 다른 쪽(관리자 초기화 등)이 비밀번호를 바꾸었다 (전1-2) - 덮지 않는다."""
+
+
+class MfaChanged(ValueError):
+    """2단계 등록을 시작한 뒤 다른 곳에서 그 계정의 2단계가 바뀌었다 (전1-1) - 새 비밀 값으로 덮지 않는다."""
+
+
+RESERVED_IDS = ("admin-console",)              # 일반 버전 화면의 관리 화면 [대시보드 보기] 계정 이름 - 로컬 계정으로 쓰지 않는다 (전1-4)
+PROXY_HEADER = "X-Autopilot-Proxy"             # 같은 장비 평문 프록시의 비밀 머리글 (lan_config.PROXY_HEADER 와 같다, Codex 검토 13)
+
+
 def norm_id(raw):
     """아이디를 견주는 꼴로 (앞뒤 빈칸 없이 소문자). 글이 아니면 빈 글."""
     return raw.strip().lower() if isinstance(raw, str) else ""
@@ -181,7 +193,8 @@ class Accounts:
     밖으로 주는 계정 dict 는 {id, role, disabled, must_change, mfa(켜졌나 bool)} 뿐이다 (해시·소금·2단계 비밀 값·복구 번호 해시는 나가지 않는다).
     비밀번호를 바꾸거나 다시 정하거나 중지·다시 사용해도 mfa 칸은 새 기록으로 옮긴다 (설계 13절 12).
     admin_min: 관리자 계정 비밀번호의 최소 길이 - 단독은 PASSWORD_MIN(8) 그대로, 사내 서버 Web 이 LAN_ADMIN_PASSWORD_MIN(10) 으로 올린다.
-    persist_lock: 사내 서버의 같은 시점 백업 잠금 (server_backup.attach) - 파일 쓰기를 이 잠금 안에서. 단독은 None."""
+    persist_lock: 사내 서버의 같은 시점 백업 잠금 (server_backup.attach) - 파일 쓰기를 이 잠금 안에서. 단독은 None.
+    _pause: 시험 손잡이 - 확인과 저장 사이(잠금 앞)에서 부른다 (_pause("change_password"))."""
 
     persist_lock = None
 
@@ -190,6 +203,7 @@ class Accounts:
         self._lock = threading.RLock()
         self._stamp, self._data = None, {}
         self.admin_min = PASSWORD_MIN
+        self._pause = None
 
     # --- 파일 ---
     def _load(self):
@@ -269,14 +283,29 @@ class Accounts:
         uid = norm_id(raw)
         if not ID_RE.fullmatch(uid):
             raise ValueError("아이디는 영문 소문자·숫자·점(.)·밑줄(_)·빼기(-) 2~32자로 입력하여 주십시오.")
+        if uid in RESERVED_IDS:
+            raise ValueError("쓸 수 없는 아이디입니다. 다른 아이디를 입력하여 주십시오.")
         return uid
+
+    @staticmethod
+    def _rev(rec):
+        """비밀번호 기록의 표시 (_public 의 rev 와 같다)."""
+        return hashlib.sha256(f"{rec['salt']}:{rec['hash']}".encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _mark(rec):
+        """2단계 상태 표시 - 꺼짐 'off', 켜짐이면 비밀 값 지문 (등록 시작과 켜기 사이에 바뀌었나를 본다, 전1-1)."""
+        m = _mfa_of(rec)
+        if m is None:
+            return "broken" if isinstance(rec, dict) and "mfa" in rec else "off"
+        return "on:" + hashlib.sha256(m["secret"].encode("utf-8")).hexdigest()[:16]
 
     @staticmethod
     def _public(uid, rec, rev=False):
         out = {"id": uid, "role": rec["role"], "disabled": bool(rec.get("disabled")), "must_change": bool(rec.get("must_change")),
                "mfa": _mfa_of(rec) is not None}
         if rev:        # 비밀번호 기록이 바뀌면 달라지는 표시 - 세션이 '로그인한 뒤 비밀번호가 바뀌었나' 를 본다. 밖으로 내보내지 않는다
-            out["rev"] = hashlib.sha256(f"{rec['salt']}:{rec['hash']}".encode("utf-8")).hexdigest()[:16]
+            out["rev"] = Accounts._rev(rec)
         return out
 
     @staticmethod
@@ -397,7 +426,8 @@ class Accounts:
     def change_password(self, id, current, new):
         """자기 비밀번호 바꾸기 → 바뀐 계정 {id, role, disabled, must_change(False), rev}.
         새 비밀번호가 8자(사내 서버 관리자는 admin_min) 미만이거나 지금 것과 같으면 WeakPassword, 현재 비밀번호가 틀리면 WrongPassword.
-        2단계 칸은 그대로 남는다."""
+        확인(비밀번호 계산 - 잠금 밖)과 저장 사이에 다른 쪽이 비밀번호를 바꾸었으면 (관리자 초기화 등) PasswordChanged(WrongPassword) -
+        잠금 안에서 확인한 기록의 rev 와 지금 기록의 rev 를 견준다 (전1-2, 초기화를 덮지 않는다). 2단계 칸은 그대로 남는다."""
         _check_password(new)
         known = self.get(id)
         if known is not None:
@@ -407,11 +437,15 @@ class Accounts:
             raise WrongPassword("현재 비밀번호가 일치하지 않습니다.")
         if hmac.compare_digest(current.encode("utf-8"), new.encode("utf-8")):
             raise WeakPassword("현재 비밀번호와 다른 비밀번호를 입력하여 주십시오.")
+        if self._pause is not None:
+            self._pause("change_password")
         with self._lock:
             data = dict(self._load())
             old = data.get(acct["id"])
             if old is None:
                 raise NoAccount("없는 계정입니다.")
+            if self._rev(old) != acct["rev"]:
+                raise PasswordChanged("비밀번호가 방금 바뀌었습니다. 다시 로그인하여 주십시오.")
             self._check_for(new, old["role"])        # 확인하는 사이 권한이 바뀌었을 수 있다
             data[acct["id"]] = self._carry(self._record(new, old["role"], old.get("disabled"), False), old)
             self._save(data)
@@ -451,15 +485,24 @@ class Accounts:
             rec = self._load().get(norm_id(id))
         return isinstance(rec, dict) and "mfa" in rec and _mfa_of(rec) is None
 
-    def mfa_enable(self, id, secret, code, now):
+    def mfa_mark(self, id):
+        """그 계정의 2단계 상태 표시 (등록 시작 때 받아 두었다가 켤 때 mfa_enable(expect=) 로 넘긴다). 없는 계정은 None."""
+        with self._lock:
+            rec = self._load().get(norm_id(id))
+            return self._mark(rec) if rec is not None else None
+
+    def mfa_enable(self, id, secret, code, now, expect=None):
         """대기 비밀 값(secret)과 앱의 번호가 맞으면 2단계를 켠다 → 복구 번호 글 8개 (한 번만 - 파일에는 해시만).
-        번호가 틀리면 None, 없는 계정은 NoAccount. 이미 켜진 계정이면 새 비밀 값·새 복구 번호로 바꾼다."""
+        번호가 틀리면 None, 없는 계정은 NoAccount. 이미 켜진 계정이면 새 비밀 값·새 복구 번호로 바꾼다.
+        expect = 등록을 시작할 때의 2단계 표시 (mfa_mark) - 계정 잠금 안에서 지금 표시와 다르면 MfaChanged (전1-1)."""
         uid = norm_id(id)
         with self._lock:
             data = dict(self._load())
             rec = data.get(uid)
             if rec is None:
                 raise NoAccount("없는 계정입니다.")
+            if expect is not None and self._mark(rec) != expect:
+                raise MfaChanged("다른 곳에서 2단계 설정이 바뀌었습니다. 처음부터 다시 등록하여 주십시오.")
             if not isinstance(secret, str):
                 return None
             step = totp.match(secret, code, now, None)
@@ -591,15 +634,16 @@ class Sessions:
         return None
 
     # --- 2단계 등록 대기 (사내 서버) - 대기 비밀 값을 그 세션에 묶어 둔다. 세션이 닫히면 함께 사라진다 ---
-    def set_setup(self, token, secret, until):
+    def set_setup(self, token, secret, until, mark=None):
+        """mark = 등록을 시작할 때 그 계정의 2단계 상태 표시 (Accounts.mfa_mark - 켤 때 그대로인지 본다, 전1-1)."""
         with self._lock:
             s = self._items.get(token)
             if s is not None:
-                s["setup"] = (secret, until)
+                s["setup"] = (secret, until, mark)
             return s is not None
 
-    def setup_of(self, token):
-        """그 세션의 대기 비밀 값 - 없거나 시간이 지났으면 (지우고) None."""
+    def setup_of(self, token, with_mark=False):
+        """그 세션의 대기 비밀 값 - 없거나 시간이 지났으면 (지우고) None. with_mark 면 (비밀 값, 표시) 또는 None."""
         with self._lock:
             s = self._items.get(token)
             v = s.get("setup") if s is not None else None
@@ -608,7 +652,7 @@ class Sessions:
             if v[1] <= self._clock():
                 s.pop("setup", None)
                 return None
-            return v[0]
+            return (v[0], v[2]) if with_mark else v[0]
 
     def clear_setup(self, token):
         with self._lock:
@@ -859,6 +903,10 @@ class Web:
         self._cfg = None                             # 사내망 설정 - cfg 속성으로 적는다 (아래)
         self._clock = clock
         self._login_lock = threading.Lock()          # 비밀번호 확인은 한 번에 하나 - 잠금 확인과 실패 세기 사이에 다른 시도가 끼지 못한다
+        self._tl = threading.local()                 # 로그인 잠금 안에서 미룬 이력 줄 (_login_guard, ③검-8)
+        self._pause = None                           # 시험 손잡이 - 로그인 잠금 앞에서 _pause(단계) (전1-1)
+        if self.login_log is not None:
+            self.login_log.note = self._log          # 시계가 뛰어 이력 정리를 건너뛴 까닭 (③검-1)
         self._streams, self._streams_lock = 0, threading.Lock()
         self._routes = {
             ("login", False): {"POST": self._login},
@@ -1039,8 +1087,14 @@ class Web:
 
     # --- 보낸 쪽 (사내 서버만) ---
     def _via_proxy(self, h):
-        """평문 웹 포트(web_plain): 소켓 주소가 믿을 프록시이고 X-Forwarded-Proto 가 모두 https 인가 (설계 6.3 (ㄴ))."""
+        """평문 웹 포트(web_plain): 소켓 주소가 믿을 프록시이고, 프록시 비밀 머리글(X-Autopilot-Proxy)이 server.json 의 proxy_secret 과
+        같고 (같은 장비의 다른 리눅스 계정이 127.0.0.1 로 붙어 프록시 행세를 하지 못하게 - Codex 검토 13), X-Forwarded-Proto 가
+        모두 https 인가 (설계 6.3 (ㄴ))."""
         if not self._cfg.is_proxy(h.server.peer_ip(h.client_address)):
+            return False
+        want = self._cfg.proxy_secret
+        got = h.headers.get(PROXY_HEADER) or ""
+        if not want or not got.isascii() or not hmac.compare_digest(got.encode("ascii"), want.encode("ascii")):
             return False
         protos = [p.strip().lower() for v in (h.headers.get_all("X-Forwarded-Proto") or []) for p in v.split(",")]
         return bool(protos) and all(p == "https" for p in protos)
@@ -1121,13 +1175,38 @@ class Web:
         self._log(f"{what}  아이디={shown}{self._at(h)}")
         return False
 
+    # --- 로그인 잠금 (③검-8) ---
+    @contextlib.contextmanager
+    def _login_guard(self, stage=None):
+        """로그인 잠금(_login_lock)을 쥔다. 그 안에서 남기는 이력 줄은 모아 두었다가 잠금을 놓은 뒤에 쓴다 (예외로 끝나도) -
+        이력 DB 가 잠겨 기다리는 동안 다른 계정의 로그인이 이 잠금에 묶이지 않게 (③검-8). stage 가 있으면 잠금 앞에서
+        시험 손잡이 _pause(stage) 를 부른다 (전1-1 - 확인과 잠금 사이의 순서를 시험이 정한다)."""
+        if stage is not None and self._pause is not None:
+            self._pause(stage)
+        buf = []
+        self._tl.pending = buf
+        try:
+            with self._login_lock:
+                yield
+        finally:
+            self._tl.pending = None
+            for args, kw in buf:
+                self._history(*args, **kw)
+
     # --- 로그인 이력 (사내 서버만, 계획 ③ Task 5) ---
     def _history(self, result, uid, h=None, ip=None, agent=None, at_ms=None):
         """이력 한 줄. h 를 주면 그 요청의 보낸 쪽 주소·브라우저 종류. uid 는 등록된 아이디만 (아니면 None 으로).
         at_ms = 그 일이 있었던 시각 (없으면 지금). 단독·이력을 열지 못한 사내 서버는 아무것도 하지 않는다.
+        로그인 잠금(_login_guard) 안에서 부르면 잠금을 놓은 뒤에 쓴다 (③검-8).
         쓰기가 실패해도(디스크 등) 요청은 막지 않는다 - 서버 기록에 종류만 한 줄."""
         log = self.login_log
         if log is None:
+            return
+        pending = getattr(self._tl, "pending", None)
+        if pending is not None:
+            if at_ms is None:
+                at_ms = int(self._clock() * 1000)        # 시각은 일이 있었던 지금으로 (쓰기는 잠금을 놓은 뒤)
+            pending.append(((result, uid), {"h": h, "ip": ip, "agent": agent, "at_ms": at_ms}))
             return
         try:
             if h is not None:
@@ -1209,7 +1288,7 @@ class Web:
         if acct is None or acct["disabled"] or acct["rev"] != sess["rev"]:
             # 이 탭이 비밀번호를 바꾸는 중이면 파일은 이미 바뀌고 세션은 아직 옛 rev 다 (_password 가 _login_lock 안에서 둘을 차례로 고친다) -
             # 그 사이에 스트림의 1초 확인이 끼면 자기 세션을 닫아 버렸다 (2026-11-23 화면 시험의 흔들리는 401). 끝나기를 기다려 다시 본다
-            with self._login_lock:
+            with self._login_guard("account_of"):
                 sess = self.sessions.get(token, ip=ip)
                 if sess is None:
                     return None                  # 끝났거나 (get 이 지웠다) 다른 주소 - 닫지 않는다
@@ -1272,7 +1351,7 @@ class Web:
         key = uid[:64]
         ip = self._ip(h)
         pair = self._pair(key, ip)
-        with self._login_lock:
+        with self._login_guard("login"):
             self._addr_check(h)                      # 사내 서버: 막힌 주소는 비밀번호를 계산하기 전에 돌려보낸다
             self._id_all_check(key, ip, "로그인 시도가 많아 잠시 잠겼습니다.")      # 사내 서버: 아이디 전체 잠금
             if self.lockout.locked(pair):            # 맞는 비밀번호도 받지 않는다 - 없는 아이디도 똑같이 잠긴다
@@ -1431,7 +1510,7 @@ class Web:
             raise _Fail(400, "invalid-argument", "인증 번호 또는 복구 번호 가운데 하나를 입력하여 주십시오.")
         ip = self._ip(h)
         left = None
-        with self._login_lock:
+        with self._login_guard("login_mfa"):
             self._addr_check(h)
             t = self._ticket_get(ticket)
             acct = self.accounts.get(t["id"]) if t is not None else None
@@ -1482,7 +1561,7 @@ class Web:
             if (code is not None and recovery is not None) or (code is not None and not isinstance(code, str)) \
                     or (recovery is not None and not isinstance(recovery, str)):
                 raise _Fail(400, "invalid-argument", "인증 번호 또는 복구 번호 가운데 하나를 입력하여 주십시오.")
-            with self._login_lock:
+            with self._login_guard("mfa_setup"):
                 pair = self._lock_gate(h, uid)
                 self._mfa_gate(uid)
                 if not isinstance(password, str) or self.accounts.verify(uid, password) is None:
@@ -1498,7 +1577,8 @@ class Web:
                     left = self._recovery_check(h, uid, pair, recovery, "웹 2단계 다시 등록 - 복구 번호 틀림")
                 self.lockout.ok(pair)
         secret = totp.new_secret()
-        self.sessions.set_setup(token, secret, self._clock() + MFA_SETUP_SEC)
+        # 지금 2단계 상태 표시를 함께 둔다 - 켤 때 그 사이 다른 곳에서 바뀌었으면 덮지 않는다 (전1-1)
+        self.sessions.set_setup(token, secret, self._clock() + MFA_SETUP_SEC, mark=self.accounts.mfa_mark(uid))
         self._log(f"웹 2단계 등록 시작" + ("" if left is None else f" (복구 번호, 남은 {left}개)") + f"  아이디={uid}{self._at(h)}")
         out = {"secret": secret, "uri": totp.otpauth_uri(secret, uid)}
         if left is not None:
@@ -1506,22 +1586,30 @@ class Web:
         return out
 
     def _mfa_enable(self, h, body):
-        """POST /api/mfa/enable {code} → {recovery: [8개], session}. 켜면 그 계정의 다른 세션을 닫는다."""
+        """POST /api/mfa/enable {code} → {recovery: [8개], session}. 켜면 그 계정의 다른 세션을 닫는다.
+        확인과 저장 사이의 틈 (전1-1): 로그인 잠금 **안에서** 이 세션이 아직 살아 있고 대기 비밀 값이 그대로인지 다시 본다 - 다른 탭이
+        먼저 켜서 이 세션을 닫았으면 401. 등록 시작 뒤 다른 곳에서 그 계정의 2단계가 바뀌었으면 (계정 잠금 안의 표시 대조) 409."""
         token, acct = self._auth(h, touch=True, mfa_ok=True)
         code = self._dict(body).get("code")
         if not isinstance(code, str):
             raise _Fail(400, "invalid-argument", "인증 앱의 번호를 입력하여 주십시오.")
-        secret = self.sessions.setup_of(token)
-        if secret is None:
+        setup = self.sessions.setup_of(token, with_mark=True)
+        if setup is None:
             raise _Fail(409, "failed-precondition", "등록 시간이 지났습니다. 등록을 처음부터 다시 시작하여 주십시오.")
+        secret, mark = setup
         uid = acct["id"]
-        with self._login_lock:
+        with self._login_guard("mfa_enable"):
+            if self.sessions.get(token, ip=self._ip(h)) is None or self.sessions.setup_of(token, with_mark=True) != setup:
+                raise _Fail(401, "unauthenticated", "로그인이 필요합니다. 다시 로그인하여 주십시오.")
             pair = self._lock_gate(h, uid)
             self._mfa_gate(uid)
             try:
-                codes = self.accounts.mfa_enable(uid, secret, code, self._clock())
+                codes = self.accounts.mfa_enable(uid, secret, code, self._clock(), expect=mark)
             except NoAccount:
                 raise _Fail(401, "unauthenticated", "로그인이 필요합니다. 다시 로그인하여 주십시오.") from None
+            except MfaChanged as e:
+                self.sessions.clear_setup(token)
+                raise _Fail(409, "failed-precondition", str(e)) from None
             if codes is None:
                 self._count_fail(h, uid, pair, "웹 2단계 등록 - 번호 틀림", "bad_code")
                 raise _Fail(400, "auth/invalid-code", "인증 번호가 일치하지 않습니다.")
@@ -1547,7 +1635,7 @@ class Web:
         if web_security.needs_mfa(self.security.get()["totp_scope"], acct["role"]):
             raise _Fail(409, "failed-precondition", "이 계정은 2단계 인증을 꼭 써야 하여 끌 수 없습니다.")
         uid = acct["id"]
-        with self._login_lock:
+        with self._login_guard("mfa_disable"):
             pair = self._lock_gate(h, uid)
             self._mfa_gate(uid)
             if self.accounts.verify(uid, password) is None:
@@ -1582,7 +1670,7 @@ class Web:
                 or (show is not None and not isinstance(show, bool)):
             raise _Fail(400, "invalid-argument", "바꿀 내용이 올바르지 않습니다.")
         uid = me["id"]
-        with self._login_lock:                       # 확인과 쓰기 사이에 다른 변경이 끼지 않게 (비밀번호 확인도 이 잠금 안에서)
+        with self._login_guard("security_set"):                       # 확인과 쓰기 사이에 다른 변경이 끼지 않게 (비밀번호 확인도 이 잠금 안에서)
             old = self.security.get()
             if scope is not None and self._SCOPE_RANK[scope] < self._SCOPE_RANK[old["totp_scope"]]:
                 pair = self._lock_gate(h, uid)
@@ -1692,7 +1780,7 @@ class Web:
         uid = acct["id"]
         ip = self._ip(h)
         pair = self._pair(uid, ip)                  # 로그인과 같은 열쇠 - 사내 서버는 (아이디, 주소) 쌍
-        with self._login_lock:
+        with self._login_guard("password"):
             self._addr_check(h)                      # 사내 서버: 로그인과 같은 주소 잠금 (비밀번호 계산 전에)
             self._id_all_check(uid, ip, "시도가 많아 잠시 잠겼습니다.")          # 사내 서버: 아이디 전체 잠금
             if self.lockout.locked(pair):            # 열린 탭으로 현재 비밀번호를 찍어 맞히지 못하게 로그인과 같은 잠금을 쓴다
@@ -1702,6 +1790,10 @@ class Web:
                 fresh = self.accounts.change_password(uid, current, new)
             except WeakPassword as e:
                 raise _Fail(400, "auth/weak-password", str(e)) from None
+            except PasswordChanged as e:
+                # 확인과 저장 사이에 관리자가 다시 정했다 (전1-2) - 덮지 않고, 틀린 비밀번호로 세지도 않는다. 이 세션도 끝
+                self.sessions.close(token)
+                raise _Fail(401, "unauthenticated", str(e)) from None
             except WrongPassword as e:
                 locked = self.lockout.fail(pair)
                 if locked:

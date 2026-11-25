@@ -28,6 +28,11 @@ import update_sign  # noqa: E402
 
 KEY_PATH = os.path.join(REPO, "firebase", "admin", "license_signing_key.txt")
 SCHEDULE_DEFAULT = 2          # agent.SCHEDULE_LIMIT_DEFAULT 와 같다
+# 발급하는 한도의 범위 - PC 쪽이 받는 범위와 같다 (밖이면 PC 가 조용히 기본값으로 바꿔 업체가 산 것과 다르게 돈다, 전1-5).
+# 시험(test_lan_polish)이 PC 쪽 상수와 같은지 본다
+PRESETS_RANGE = (2, 50)       # rpa_status.PRESET_MIN, PRESET_MAX
+PARALLEL_RANGE = (1, 16)      # rpa_status.PARALLEL_MIN, PARALLEL_MAX
+SCHEDULE_RANGE = (0, 12)      # 0 ~ agent.SCHEDULE_LIMIT_MAX
 PC_ID = re.compile(r"^[0-9a-f-]{8,64}$")
 CID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -90,10 +95,10 @@ def _policy(info, who, today=None):
     limits = info.get("limits") or {}
     if not isinstance(limits, dict):
         raise ValueError("limits 는 { } 꼴이어야 합니다.")
-    for k in ("schedule", "presets", "parallel"):
+    for k, (lo, hi) in (("schedule", SCHEDULE_RANGE), ("presets", PRESETS_RANGE), ("parallel", PARALLEL_RANGE)):
         v = limits.get(k)
-        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 0):
-            raise ValueError(f"limits.{k} 는 0 이상의 정수여야 합니다.")
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
+            raise ValueError(f"limits.{k} 는 {lo}~{hi} 의 정수여야 합니다 (비우면 기본값).")
     return {"edition": license_check.EDITION, "company": company.strip(), "cid": cid, **who,
             "issued": (today or datetime.date.today()).isoformat(),
             "modules": dict(modules),

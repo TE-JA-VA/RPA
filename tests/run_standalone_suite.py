@@ -30,11 +30,11 @@ SA = ["tests/test_license.py", "tests/test_local_store_core.py", "tests/test_loc
       "tests/test_lan_mfa_review.py",
       # 사내 서버 ④ (리눅스에 싣기)
       "tests/test_server_log.py", "tests/test_server_license.py", "tests/test_seat.py", "tests/test_server_main.py",
-      "tests/test_server_admin.py", "tests/test_server_backup.py"]
+      "tests/test_server_admin.py", "tests/test_server_backup.py", "tests/test_lan_polish.py"]
 WSL_DIR = "/mnt/d/AX/RPA_StandAlone/tests/"
 # 'wsl' - 리눅스에서 사내 서버 한 번 (사내 서버 ② Task 8) + 리눅스에서만 도는 부분이 있는 ④ 시험
 WSL_TESTS = ["wsl_lan_smoke.py", "test_server_log.py", "test_server_license.py", "test_seat.py", "test_server_main.py",
-             "test_server_admin.py", "test_server_backup.py"]
+             "test_server_admin.py", "test_server_backup.py", "test_lan_polish.py"]
 CLOUD = ["firebase/tests/test_agent.py", "tests/test_fb_backoff.py", "tests/test_cloud_scrub.py", "tests/test_dev_env.py",
          "tests/test_background.py", "tests/test_rpa_update.py", "tests/test_otp_replay.py", "tests/test_build_release.py",
          "tests/test_server_info.py", "tests/test_settings.py", "tests/test_update_helper.py", "tests/test_observer_notes.py",

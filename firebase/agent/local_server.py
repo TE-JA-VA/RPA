@@ -862,6 +862,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):    # 요청마다 찍지 않는다 (창 없는 프로세스, 주소에 자리 이름이 든다)
         pass
 
+    def send_error(self, code, message=None, explain=None):
+        """http.server 가 직접 내는 오류 (모르는 방법 HEAD·OPTIONS 의 501, 틀린 요청 줄 400 등). 사내 서버 에이전트 포트에서는
+        _reply 처럼 Date 없이 답한다 - 열쇠 없는 쪽에 서버 시각을 알려 주지 않는다 (②검-5, 검토 M-4 와 같은 뜻).
+        단독(이 PC 의 127.0.0.1 서버)과 웹 포트는 http.server 그대로."""
+        if getattr(self.server, "side", None) != "agent":
+            return super().send_error(code, message, explain)
+        self.close_connection = True
+        self._auth = None
+        try:
+            phrase = http.HTTPStatus(code).phrase
+        except ValueError:
+            phrase = "Error"
+        if self.command == "HEAD" or code < 200 or code in (204, 304):
+            self._reply(code, empty=True)
+        else:
+            self._reply(code, {"error": phrase})
+
     # --- 응답 ---
     def _reply(self, status, value=None, empty=False):
         body = b"" if empty else json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -1040,7 +1057,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return None
         try:
             return json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):        # 깊게 겹친 JSON 도 400 (500·기록 줄 없이, ②검-6)
             self._reply(400, {"error": "Bad request"})
             raise _Stop() from None
 
