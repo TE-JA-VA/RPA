@@ -71,6 +71,9 @@ check("소스로 도는 파일이 불러오는 우리 모듈이 모두 배포 �
 check("스탠드얼론 파일 넷이 목록에 있다 (에이전트가 늘 불러오는 둘 포함)",
       {"edition.py", "license_check.py", "firebase/agent/local_store.py", "firebase/agent/local_server.py"} <= shipped)
 check("exe 가 인증번호 중계에 쓰는 모듈에 local_store", "--include-module=local_store" in br.AGENT_MODULES)
+check("local_store 가 부르는 서명 모듈 ap_sign 이 목록에 있고 exe·조각 재료에도 들어간다",
+      "firebase/agent/ap_sign.py" in shipped
+      and all(os.path.join(br.AGENT_DIR, "ap_sign.py") in br.exe_sources(exe) for exe in ("Prepare_RPA.exe", "Prepare_Observer.exe")))
 
 print(f"\n실패: {len(fails)}" + (f" ({', '.join(fails)})" if fails else ""))
 sys.exit(1 if fails else 0)

@@ -28,7 +28,7 @@ RPA_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)
 if RPA_DIR not in sys.path:
     sys.path.insert(0, RPA_DIR)          # rpa_status·license_check (agent.py 와 같은 규칙)
 
-import local_store  # noqa: E402  요청·응답 서명 (클라이언트와 같은 함수)
+import ap_sign  # noqa: E402  요청·응답·구독 서명 (클라이언트 local_store 와 같은 함수 - 서버는 PC 클라이언트를 불러오지 않는다)
 import pc_registry  # noqa: E402  사내 서버 PC 등록부 (EnrollError·PC_RE - 표준 라이브러리만 쓴다)
 import server_log  # noqa: E402  사내 서버(리눅스)의 server.log·audit.log - 정하지 않으면(단독) log 는 지금 그대로 (사내 서버 ④ Task 1)
 
@@ -422,7 +422,7 @@ class Runs:
 #   /db/<자리>.json        GET·PUT·PATCH·DELETE, Accept: text/event-stream 이면 구독 (SSE)
 #   /fs/<parent>/<collection>?id=<문서 id>   POST 실행 기록 만들기,  /fs/<문서 자리>  GET,  /fs-sum?parent=&collection=&field=&since=
 # 열쇠 둘: agent.key = 에이전트, relay.key = ACTOR 실행·옵저버의 인증번호 중계.
-# 열쇠는 주고받지 않는다 - 요청마다 열쇠로 만든 서명(local_store.request_mac)을 확인하고, 응답·구독 이벤트에도 서명을 붙인다.
+# 열쇠는 주고받지 않는다 - 요청마다 열쇠로 만든 서명(ap_sign.request_mac)을 확인하고, 응답·구독 이벤트에도 서명을 붙인다.
 # 그래서 포트를 먼저 잡은 다른 프로그램은 열쇠를 얻지 못하고, 에이전트는 그 프로그램의 답을 믿지 않는다 (검토 1번).
 # 검사는 지금 RTDB 규칙과 같은 뜻 - 에이전트는 자기 PC 자리만 쓰고, 명령은 만들지 못하고 상태만 옮긴다.
 # 브라우저 쪽(/api/*·웹 파일)은 local_web.py 가 맡는다 (계획 ② Task 2) - 서명이 아니라 로그인 세션 토큰으로 확인하고 응답에 서명이 없다.
@@ -893,7 +893,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         if self._auth:
-            self.send_header(local_store.H_SIGN, local_store.response_mac(self._auth[0], self._auth[1], status, body))
+            self.send_header(ap_sign.H_SIGN, ap_sign.response_mac(self._auth[0], self._auth[1], status, body))
         self.end_headers()
         if body:
             self.wfile.write(body)
@@ -953,15 +953,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise _Stop()
         if srv.registry is not None:
             return self._role_lan(method, digest)
-        role = self.headers.get(local_store.H_ROLE) or ""
-        ts, nonce = self.headers.get(local_store.H_TIME) or "", self.headers.get(local_store.H_NONCE) or ""
-        sign = self.headers.get(local_store.H_SIGN) or ""
+        role = self.headers.get(ap_sign.H_ROLE) or ""
+        ts, nonce = self.headers.get(ap_sign.H_TIME) or "", self.headers.get(ap_sign.H_NONCE) or ""
+        sign = self.headers.get(ap_sign.H_SIGN) or ""
         now = time.time()
-        ok = (role in local_store.ROLES and ts.isdigit() and 16 <= len(nonce) <= 64 and abs(now * 1000 - int(ts)) <= SIGN_WINDOW_MS
-              and self.headers.get(local_store.H_PC) is None)
+        ok = (role in ap_sign.ROLES and ts.isdigit() and 16 <= len(nonce) <= 64 and abs(now * 1000 - int(ts)) <= SIGN_WINDOW_MS
+              and self.headers.get(ap_sign.H_PC) is None)
         if ok:
-            key = srv.keys[local_store.ROLES.index(role)]
-            want = local_store.request_mac(key, role, method, self.path, ts, nonce, b"", digest=digest)
+            key = srv.keys[ap_sign.ROLES.index(role)]
+            want = ap_sign.request_mac(key, role, method, self.path, ts, nonce, b"", digest=digest)
             # ASCII 가 아닌 서명 글은 compare_digest 가 TypeError 를 낸다 - 틀린 서명으로 본다 (검토 2026-11-24 M-5)
             ok = sign.isascii() and hmac.compare_digest(sign, want) and srv.fresh_nonce(nonce, now)
         if not ok:
@@ -975,15 +975,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         그 PC 열쇠의 서명 - 여기까지 틀리면 서명 없는 401 (무엇이 틀렸는지·서버 시각을 알려 주지 않는다).
         서명이 맞은 뒤에만: 시각 차이가 크면 서명된 401 clock(서버 시각), 다시 보낸 nonce 는 401, 중지·지운 PC 는 서명된 403."""
         srv = self.server
-        pc = self.headers.get(local_store.H_PC) or ""
-        role = self.headers.get(local_store.H_ROLE) or ""
-        ts, nonce = self.headers.get(local_store.H_TIME) or "", self.headers.get(local_store.H_NONCE) or ""
-        sign = self.headers.get(local_store.H_SIGN) or ""
+        pc = self.headers.get(ap_sign.H_PC) or ""
+        role = self.headers.get(ap_sign.H_ROLE) or ""
+        ts, nonce = self.headers.get(ap_sign.H_TIME) or "", self.headers.get(ap_sign.H_NONCE) or ""
+        sign = self.headers.get(ap_sign.H_SIGN) or ""
         keys = srv.registry.keys(pc) if pc_registry.PC_RE.fullmatch(pc) else None
-        ok = keys is not None and role in local_store.ROLES and ts.isdigit() and len(ts) <= 16 and 16 <= len(nonce) <= 64
+        ok = keys is not None and role in ap_sign.ROLES and ts.isdigit() and len(ts) <= 16 and 16 <= len(nonce) <= 64
         if ok:
-            key = keys[local_store.ROLES.index(role)]
-            want = local_store.request_mac2(key, pc, role, method, self.path, ts, nonce, b"", digest=digest)
+            key = keys[ap_sign.ROLES.index(role)]
+            want = ap_sign.request_mac2(key, pc, role, method, self.path, ts, nonce, b"", digest=digest)
             ok = sign.isascii() and hmac.compare_digest(sign, want)     # ASCII 가 아니면 틀린 서명 (검토 2026-11-24 M-5)
         if not ok:
             srv.note_bad(self.client_ip())          # 사내망 포트: 60초에 20번이면 그 주소를 300초 거절 (lan_server) - 답보다 먼저 센다
@@ -1214,7 +1214,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
-            self.send_header(local_store.H_SIGN, local_store.response_mac(key, nonce, 200, b""))
+            self.send_header(ap_sign.H_SIGN, ap_sign.response_mac(key, nonce, 200, b""))
             self.end_headers()
             quiet, seq = time.monotonic(), 0
             while not srv.stopping.is_set():
@@ -1232,7 +1232,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     event, data = "keep-alive", None
                 seq += 1
                 text = json.dumps(data, ensure_ascii=False)
-                mac = local_store.event_mac(key, nonce, seq, event, text)
+                mac = ap_sign.event_mac(key, nonce, seq, event, text)
                 self.wfile.write(f"event: {event}\ndata: {text}\nmac: {mac}\n\n".encode("utf-8"))
                 self.wfile.flush()
                 quiet = time.monotonic()

@@ -13,7 +13,6 @@
 인증서 확인이 실패하면 AuthError(0, CERT_FAILED) - 에이전트가 '다른 서버' 로 본다. 단독(나)은 지금처럼 http·127.0.0.1 만.
 """
 import email.utils
-import hashlib
 import hmac
 import json
 import re
@@ -25,12 +24,12 @@ import urllib.parse
 import urllib.request
 
 import fb
+# 서명은 ap_sign 에 있다 (서버와 같이 쓴다 - 서버는 이 모듈을 불러오지 않는다). 같은 이름을 그대로 내보낸다.
+from ap_sign import (H_NONCE, H_PC, H_ROLE, H_SIGN, H_TIME, ROLES, _digest, _mac, event_mac,  # noqa: F401
+                     request_mac, request_mac2, response_mac)
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 PORT = 8781                      # local_server.PORT 와 같다 (서버 모듈을 불러오지 않으려고 여기에도 둔다 - 시험이 같은지 본다)
-ROLES = ("agent", "relay")
-H_ROLE, H_TIME, H_NONCE, H_SIGN = "X-AP-Role", "X-AP-Time", "X-AP-Nonce", "X-AP-Sign"
-H_PC = "X-AP-PC"                         # 사내 서버(ap2): 서명한 PC 번호 - 서버가 이 번호로 등록부에서 열쇠를 찾는다
 NOT_VERIFIED = "SERVER_NOT_VERIFIED"     # 답한 쪽이 우리 로컬 서버가 아니다 (서명이 없거나 틀림) - 열쇠가 바뀐 경우도 여기로 온다
 PC_DISABLED = "PC_DISABLED"              # 사내 서버 관리자가 이 PC 를 사용 중지했다 (서명된 403)
 PC_REMOVED = "PC_REMOVED"                # 사내 서버 등록부에서 이 PC 를 지웠다 (서명된 403)
@@ -45,36 +44,7 @@ def keys_dir():
     return os.path.join(rpa_status.install_root(), "standalone")
 
 
-# --- 서명 (서버와 같이 쓴다) ------------------------------------------------
-def _mac(key, parts):
-    return hmac.new(key.encode("utf-8"), "\n".join(parts).encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def _digest(body):
-    return hashlib.sha256(body or b"").hexdigest()
-
-
-def request_mac(key, role, method, target, ts, nonce, body, digest=None):
-    """요청 서명. target 은 보낸 그대로의 경로+질의, ts 는 보낸 시각(ms 글자), nonce 는 요청마다 새 값.
-    digest: 본문의 sha256 글을 이미 알면 (서버가 읽으며 계산) body 대신 준다."""
-    return _mac(key, ["ap1", "req", role, method, target, str(ts), nonce, digest or _digest(body)])
-
-
-def request_mac2(key, pc_id, role, method, target, ts, nonce, body, digest=None):
-    """사내 서버(ap2) 요청 서명 - ap1 에 PC 번호가 더 묶인다 (열쇠가 PC 마다 다르다). 응답·이벤트 서명은 ap1 그대로."""
-    return _mac(key, ["ap2", "req", pc_id, role, method, target, str(ts), nonce, digest or _digest(body)])
-
-
-def response_mac(key, nonce, status, body):
-    """응답 서명 - 그 요청의 nonce 에 묶인다 (다른 요청의 응답을 돌려쓰지 못한다)."""
-    return _mac(key, ["ap1", "res", nonce, str(status), _digest(body)])
-
-
-def event_mac(key, nonce, seq, event, raw):
-    """구독 이벤트 서명 - 그 구독의 nonce 와 차례(seq, 1부터)에 묶인다."""
-    return _mac(key, ["ap1", "sse", nonce, str(seq), event, raw])
-
-
+# --- 서명 머리글 (서명 함수는 ap_sign) ---------------------------------------
 def sign_headers(key, role, method, target, body=b"", now_ms=None, nonce=None, pc_id=None):
     """요청에 실을 머리글 {역할, 시각, nonce, 서명}. 열쇠는 들어가지 않는다.
     pc_id 가 있으면 사내 서버(ap2) - PC 번호 머리글을 싣고 request_mac2 로 서명한다. 없으면 단독(ap1) 그대로."""

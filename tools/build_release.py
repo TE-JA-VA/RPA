@@ -83,6 +83,7 @@ PROGRAM_FILES = [
     ("firebase/agent/agent.py", "firebase/agent/agent.py"),
     ("firebase/agent/fb.py", "firebase/agent/fb.py"),
     ("firebase/agent/local_store.py", "firebase/agent/local_store.py"),       # 스탠드얼론의 서버 연결 - agent.py 가 늘 불러온다 (일반 버전에도 실어야 켜진다)
+    ("firebase/agent/ap_sign.py", "firebase/agent/ap_sign.py"),               # 서버·클라이언트 서명 - local_store·local_server 가 맨 위에서 불러온다 (일반 버전에도 실어야 에이전트가 켜진다, 사내 서버 ④ Task 7)
     ("firebase/agent/local_server.py", "firebase/agent/local_server.py"),     # 스탠드얼론의 로컬 서버 (일반 버전에서는 돌지 않는다)
     ("firebase/agent/local_web.py", "firebase/agent/local_web.py"),           # 로컬 서버의 웹 창구 - local_server.main 이 불러온다 (웹 파일 firebase/web 은 뒤 계획이 싣는다)
     ("firebase/agent/local_phone.py", "firebase/agent/local_phone.py"),       # 로컬 서버의 휴대폰 창구 (사내망 HTTPS 8782 - 쓸 때만 연다, 계획 ④)
