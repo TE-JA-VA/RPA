@@ -33,6 +33,7 @@ import urllib.parse
 
 import local_server      # log·local_host·KEEPALIVE_SEC·Refused (local_server 는 main() 안에서만 이 파일을 불러온다)
 import pc_registry       # 사내 서버 PC 등록부 (PC_RE·SeatsFull·encode_enrollment - 표준 라이브러리만)
+import totp              # 2단계 인증 번호 계산·복구 번호 (사내 서버 계획 ③ - 표준 라이브러리만)
 
 APP = "rpa"
 ROLES = ("admin", "viewer")                # 관리자 / 유저(보기만)
@@ -40,7 +41,9 @@ ID_RE = re.compile(r"[a-z0-9_.-]{2,32}")   # 아이디 - 소문자로 바꿔 견
 PBKDF2_ITER = 310000
 SALT_BYTES = 16
 PASSWORD_MIN = 8
+LAN_ADMIN_PASSWORD_MIN = 10                # 사내 서버의 관리자 비밀번호 (유저는 PASSWORD_MIN 그대로, 설계 6.6)
 ACCOUNTS_NAME = "accounts.json"
+ACCOUNTS_VERSION = 2                       # 계정 파일 버전 - 2 부터 계정마다 2단계 칸(mfa). 1 도 그대로 읽는다
 ACCOUNTS_MAX = 50
 IDLE_SEC = 1800                            # 미사용 30분
 MAX_SEC = 43200                            # 로그인 뒤 12시간
@@ -129,21 +132,43 @@ def _hash(password, salt, rounds=PBKDF2_ITER):
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds)
 
 
-def _check_password(password):
-    if not isinstance(password, str) or len(password) < PASSWORD_MIN:
-        raise WeakPassword(f"비밀번호는 {PASSWORD_MIN}자 이상으로 입력하여 주십시오.")
+def _check_password(password, minimum=PASSWORD_MIN):
+    if not isinstance(password, str) or len(password) < minimum:
+        raise WeakPassword(f"비밀번호는 {minimum}자 이상으로 입력하여 주십시오.")
+
+
+def _mfa_of(rec):
+    """계정 기록의 2단계 칸 - 꼴이 맞으면 그 dict, 없거나 깨졌으면 None (켜지지 않은 것으로 본다)."""
+    m = rec.get("mfa") if isinstance(rec, dict) else None
+    if not isinstance(m, dict):
+        return None
+    step, salt, rec_list = m.get("last_step"), m.get("salt"), m.get("recovery")
+    if (not isinstance(m.get("secret"), str) or not m["secret"]
+            or not isinstance(step, int) or isinstance(step, bool)
+            or not isinstance(salt, str) or not isinstance(rec_list, list)):
+        return None
+    try:
+        bytes.fromhex(salt)
+    except ValueError:
+        return None
+    return m
 
 
 class Accounts:
-    """웹 계정 파일 accounts.json = {"version": 1, "accounts": {<아이디>: {role, salt, hash, iterations, disabled, must_change}}}.
+    """웹 계정 파일 accounts.json = {"version": 2, "accounts": {<아이디>: {role, salt, hash, iterations, disabled, must_change, mfa?}}}.
+    mfa(2단계, 사내 서버 계획 ③) = {secret, last_step, salt, recovery: [복구 번호 해시 …], enabled_at(ms)} - 켠 계정만.
+    버전 1 파일(mfa 칸 없음)도 그대로 읽고, 다음 저장 때 버전 2 로 쓴다.
     쓸 때마다 임시 파일 → os.replace (반쯤 쓰인 파일이 남지 않는다). 파일이 없으면 계정이 없는 것 - 기본 계정을 만들지 않는다.
     설치 마법사·설정 창(다른 프로세스)도 같은 파일을 이 클래스로 고친다 - 그래서 파일이 바뀌었으면 다시 읽는다.
-    밖으로 주는 계정 dict 는 {id, role, disabled, must_change} 뿐이다 (해시·소금은 나가지 않는다)."""
+    밖으로 주는 계정 dict 는 {id, role, disabled, must_change, mfa(켜졌나 bool)} 뿐이다 (해시·소금·2단계 비밀 값·복구 번호 해시는 나가지 않는다).
+    비밀번호를 바꾸거나 다시 정하거나 중지·다시 사용해도 mfa 칸은 새 기록으로 옮긴다 (설계 13절 12).
+    admin_min: 관리자 계정 비밀번호의 최소 길이 - 단독은 PASSWORD_MIN(8) 그대로, 사내 서버 Web 이 LAN_ADMIN_PASSWORD_MIN(10) 으로 올린다."""
 
     def __init__(self, path):
         self.path = os.path.abspath(path)
         self._lock = threading.RLock()
         self._stamp, self._data = None, {}
+        self.admin_min = PASSWORD_MIN
 
     # --- 파일 ---
     def _load(self):
@@ -194,7 +219,7 @@ class Accounts:
         fd, tmp = tempfile.mkstemp(dir=folder, prefix=os.path.basename(self.path) + ".", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"version": 1, "accounts": data}, f, ensure_ascii=False, indent=1)
+                json.dump({"version": ACCOUNTS_VERSION, "accounts": data}, f, ensure_ascii=False, indent=1)
                 f.flush()
                 os.fsync(f.fileno())
             for attempt in range(6):                  # 읽는 쪽·바이러스 검사가 잠깐 잡고 있으면 바꿔치기가 거절된다
@@ -223,7 +248,8 @@ class Accounts:
 
     @staticmethod
     def _public(uid, rec, rev=False):
-        out = {"id": uid, "role": rec["role"], "disabled": bool(rec.get("disabled")), "must_change": bool(rec.get("must_change"))}
+        out = {"id": uid, "role": rec["role"], "disabled": bool(rec.get("disabled")), "must_change": bool(rec.get("must_change")),
+               "mfa": _mfa_of(rec) is not None}
         if rev:        # 비밀번호 기록이 바뀌면 달라지는 표시 - 세션이 '로그인한 뒤 비밀번호가 바뀌었나' 를 본다. 밖으로 내보내지 않는다
             out["rev"] = hashlib.sha256(f"{rec['salt']}:{rec['hash']}".encode("utf-8")).hexdigest()[:16]
         return out
@@ -235,13 +261,30 @@ class Accounts:
                 "disabled": bool(disabled), "must_change": bool(must_change)}
 
     @staticmethod
+    def _carry(rec, old):
+        """새로 만든 기록(rec)에 옛 기록의 2단계 칸을 옮긴다 - 비밀번호를 바꿔도 2단계가 지워지지 않게 (설계 13절 12)."""
+        if isinstance(old, dict) and "mfa" in old:
+            rec["mfa"] = old["mfa"]
+        return rec
+
+    def _check_for(self, password, role):
+        """권한에 맞는 비밀번호 길이 - 관리자는 admin_min (사내 서버 10), 유저는 PASSWORD_MIN.
+        단독(admin_min 8)은 지금 글 그대로."""
+        if role == "admin" and self.admin_min > PASSWORD_MIN:
+            try:
+                _check_password(password, self.admin_min)
+            except WeakPassword:
+                raise WeakPassword(f"관리자 비밀번호는 {self.admin_min}자 이상으로 입력하여 주십시오.") from None
+        _check_password(password)
+
+    @staticmethod
     def _other_admin(data, uid):
         """uid 말고 쓸 수 있는(중지되지 않은) 관리자가 있나."""
         return any(k != uid and r["role"] == "admin" and not r.get("disabled") for k, r in data.items())
 
     def _put(self, raw_id, password, role, must_change, new):
         uid = self._id(raw_id)
-        _check_password(password)
+        self._check_for(password, role)
         if role not in ROLES:
             raise ValueError("권한은 관리자(admin)·유저(viewer) 가운데 하나여야 합니다.")
         with self._lock:
@@ -254,7 +297,7 @@ class Accounts:
             if (old is not None and old["role"] == "admin" and role != "admin" and not old.get("disabled")
                     and not self._other_admin(data, uid)):
                 raise ValueError("마지막 관리자는 유저로 바꿀 수 없습니다.")
-            data[uid] = self._record(password, role, bool(old and old.get("disabled")), must_change)
+            data[uid] = self._carry(self._record(password, role, bool(old and old.get("disabled")), must_change), old)
             self._save(data)
         return uid
 
@@ -328,8 +371,12 @@ class Accounts:
 
     def change_password(self, id, current, new):
         """자기 비밀번호 바꾸기 → 바뀐 계정 {id, role, disabled, must_change(False), rev}.
-        새 비밀번호가 8자 미만이거나 지금 것과 같으면 WeakPassword, 현재 비밀번호가 틀리면 WrongPassword."""
+        새 비밀번호가 8자(사내 서버 관리자는 admin_min) 미만이거나 지금 것과 같으면 WeakPassword, 현재 비밀번호가 틀리면 WrongPassword.
+        2단계 칸은 그대로 남는다."""
         _check_password(new)
+        known = self.get(id)
+        if known is not None:
+            self._check_for(new, known["role"])
         acct = self.verify(id, current)
         if acct is None or acct["disabled"]:
             raise WrongPassword("현재 비밀번호가 일치하지 않습니다.")
@@ -337,11 +384,105 @@ class Accounts:
             raise WeakPassword("현재 비밀번호와 다른 비밀번호를 입력하여 주십시오.")
         with self._lock:
             data = dict(self._load())
-            if acct["id"] not in data:
+            old = data.get(acct["id"])
+            if old is None:
                 raise NoAccount("없는 계정입니다.")
-            data[acct["id"]] = self._record(new, data[acct["id"]]["role"], data[acct["id"]].get("disabled"), False)
+            self._check_for(new, old["role"])        # 확인하는 사이 권한이 바뀌었을 수 있다
+            data[acct["id"]] = self._carry(self._record(new, old["role"], old.get("disabled"), False), old)
             self._save(data)
             return self._public(acct["id"], data[acct["id"]], rev=True)
+
+    # --- 2단계 인증 (사내 서버 계획 ③) - 읽고 쓰기를 계정 잠금 안에서 한 번에 ---
+    def mfa_secret(self, id):
+        """2단계 비밀 값 - 켜지지 않았거나 없는 계정은 None. 서버 안에서만 쓴다 (응답·기록에 싣지 않는다)."""
+        with self._lock:
+            m = _mfa_of(self._load().get(norm_id(id)))
+            return m["secret"] if m is not None else None
+
+    def mfa_check(self, id, code, now):
+        """번호가 맞으면 그 칸을 last_step 으로 저장하고 True. 틀렸거나 이미 쓴 칸(같은 칸 두 번째)이거나 2단계가 없으면 False."""
+        uid = norm_id(id)
+        with self._lock:
+            data = dict(self._load())
+            rec = data.get(uid)
+            m = _mfa_of(rec)
+            if m is None:
+                return False
+            step = totp.match(m["secret"], code, now, m["last_step"])
+            if step is None:
+                return False
+            data[uid] = dict(rec, mfa=dict(m, last_step=step))
+            self._save(data)
+            return True
+
+    def mfa_enable(self, id, secret, code, now):
+        """대기 비밀 값(secret)과 앱의 번호가 맞으면 2단계를 켠다 → 복구 번호 글 8개 (한 번만 - 파일에는 해시만).
+        번호가 틀리면 None, 없는 계정은 NoAccount. 이미 켜진 계정이면 새 비밀 값·새 복구 번호로 바꾼다."""
+        uid = norm_id(id)
+        with self._lock:
+            data = dict(self._load())
+            rec = data.get(uid)
+            if rec is None:
+                raise NoAccount("없는 계정입니다.")
+            if not isinstance(secret, str):
+                return None
+            step = totp.match(secret, code, now, None)
+            if step is None:
+                return None
+            codes = totp.new_recovery_codes()
+            salt = secrets.token_hex(SALT_BYTES)
+            data[uid] = dict(rec, mfa={"secret": secret, "last_step": step, "salt": salt,
+                                       "recovery": [totp.recovery_hash(salt, c) for c in codes],
+                                       "enabled_at": int(now * 1000)})
+            self._save(data)
+            return codes
+
+    def mfa_use_recovery(self, id, code):
+        """복구 번호가 맞으면 그 해시를 지우고 남은 개수, 아니면 None (한 번 쓴 번호는 다시 안 된다)."""
+        uid = norm_id(id)
+        with self._lock:
+            data = dict(self._load())
+            rec = data.get(uid)
+            m = _mfa_of(rec)
+            if m is None:
+                return None
+            want = totp.recovery_hash(m["salt"], code)
+            if not want:
+                return None
+            hit = None
+            for i, h in enumerate(m["recovery"]):     # 다 견준다 (맞은 자리에서 멈추지 않는다)
+                if isinstance(h, str) and hmac.compare_digest(h.encode("ascii", "replace"), want.encode("ascii")) and hit is None:
+                    hit = i
+            if hit is None:
+                return None
+            left = [h for i, h in enumerate(m["recovery"]) if i != hit]
+            data[uid] = dict(rec, mfa=dict(m, recovery=left))
+            self._save(data)
+            return len(left)
+
+    def mfa_clear(self, id):
+        """2단계 칸을 지운다 (관리자가 풀어 주기·본인이 끄기) → 지웠으면 True, 없었으면 False. 없는 계정은 NoAccount."""
+        uid = norm_id(id)
+        with self._lock:
+            data = dict(self._load())
+            rec = data.get(uid)
+            if rec is None:
+                raise NoAccount("없는 계정입니다.")
+            if "mfa" not in rec:
+                return False
+            data[uid] = {k: v for k, v in rec.items() if k != "mfa"}
+            self._save(data)
+            return True
+
+    def mfa_info(self, id):
+        """{enabled, enabled_at(ms 또는 None), recovery_left} - 비밀 값·해시는 싣지 않는다. 없는 계정은 꺼진 것으로."""
+        with self._lock:
+            m = _mfa_of(self._load().get(norm_id(id)))
+        if m is None:
+            return {"enabled": False, "enabled_at": None, "recovery_left": 0}
+        at = m.get("enabled_at")
+        return {"enabled": True, "enabled_at": at if isinstance(at, int) and not isinstance(at, bool) else None,
+                "recovery_left": len(m["recovery"])}
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -610,6 +751,8 @@ class Web:
         self.lan_ca_pem = None                       # 사내망: 우리 인증 기관 PEM 글 - 등록 글의 ca 로 싣는다 (lan_server.make_lan_servers 가 적는다)
         self.web_dir = os.path.realpath(web_dir) if web_dir else None
         self.accounts = Accounts(os.path.join(folder, ACCOUNTS_NAME))
+        if registry is not None:                     # 사내 서버: 관리자 비밀번호 10자 이상 (유저는 8자 그대로, 설계 6.6)
+            self.accounts.admin_min = LAN_ADMIN_PASSWORD_MIN
         self.sessions = Sessions(clock=clock)
         self.lockout = Lockout(clock=clock)
         self.addr_lock = AddrLock(clock=clock)       # 사내 서버(cfg 있음)만 쓴다

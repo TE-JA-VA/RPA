@@ -244,9 +244,9 @@ try:
     check("계정 파일이 없으면 로그인은 늘 틀림", login("boss", BOSS_PW).code == "auth/invalid-credential" and not os.path.exists(ACC))
     web.accounts.set("boss", BOSS_PW, "admin")
     web.accounts.set("staff", STAFF_PW, "viewer")
-    check("계정 목록 - 아이디·권한·중지·바꿔야 함 뿐", web.accounts.list() == [
-        {"id": "boss", "role": "admin", "disabled": False, "must_change": False},
-        {"id": "staff", "role": "viewer", "disabled": False, "must_change": False}], repr(web.accounts.list()))
+    check("계정 목록 - 아이디·권한·중지·바꿔야 함·2단계 켜짐 뿐", web.accounts.list() == [
+        {"id": "boss", "role": "admin", "disabled": False, "must_change": False, "mfa": False},
+        {"id": "staff", "role": "viewer", "disabled": False, "must_change": False, "mfa": False}], repr(web.accounts.list()))
     saved = json.load(open(ACC, encoding="utf-8"))
     rec = saved["accounts"]["boss"]
     check("비밀번호는 파일에 그대로 없다", BOSS_PW not in json.dumps(saved) and STAFF_PW not in json.dumps(saved))
@@ -266,7 +266,8 @@ try:
     check("마지막 관리자는 중지할 수 없다", raises(ValueError, web.accounts.disable, "boss", True))
     check("마지막 관리자는 지울 수 없다", raises(ValueError, web.accounts.remove, "boss"))
     check("마지막 관리자를 유저로 바꿀 수 없다", raises(ValueError, web.accounts.set, "boss", BOSS_PW, "viewer"))
-    check("그 뒤에도 관리자는 그대로", web.accounts.list()[0] == {"id": "boss", "role": "admin", "disabled": False, "must_change": False})
+    check("그 뒤에도 관리자는 그대로", web.accounts.list()[0] == {"id": "boss", "role": "admin", "disabled": False, "must_change": False,
+                                                          "mfa": False})
     other = local_web.Accounts(ACC)                  # 설정 창처럼 다른 곳에서 같은 파일을 고친다
     other.set("outside", "outside-pw-01", "viewer", must_change=True)
     PASSWORDS.add("outside-pw-01")
