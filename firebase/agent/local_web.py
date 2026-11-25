@@ -97,11 +97,28 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 EDITION_JS = b'export const EDITION = "standalone";\n'
 
 
+# 사내 서버 설치본의 버전 목록 (app/ 옆 manifest.json - tools/build_server.py, 시험 열쇠 묶음이면 test_build 참)
+SERVER_MANIFEST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "manifest.json")
+
+
+def _server_test_build():
+    """사내 서버 묶음(kind server)의 manifest.json 이 test_build 참이면 True. 없거나 읽지 못하면 False."""
+    try:
+        with open(SERVER_MANIFEST, encoding="utf-8") as f:
+            man = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(man, dict) and man.get("kind") == "server" and man.get("test_build") is True
+
+
 def edition_js():
-    """화면의 edition.js - 늘 스탠드얼론. 시험용 빌드(edition.test_build)면 TEST_BUILD = true (업체 웹 맨 위 띠 '시험용 빌드 - 고객 배포 금지')."""
+    """화면의 edition.js - 늘 스탠드얼론. 시험용 빌드(edition.test_build)면 TEST_BUILD = true (업체 웹 맨 위 띠 '시험용 빌드 - 고객 배포 금지').
+    사내 서버 묶음에는 edition 모듈이 없다 - 그때는 묶음 manifest.json 의 test_build 로 (사내 서버 ④ Task 8)."""
     try:
         import edition
         test = edition.test_build()
+    except ImportError:
+        test = _server_test_build()
     except Exception:
         test = False
     return EDITION_JS + f"export const TEST_BUILD = {'true' if test else 'false'};\n".encode("ascii")
@@ -1975,9 +1992,11 @@ class Web:
     # 짝 열쇠(QR 의 k)는 POST /api/phone-pair 응답에 한 번만 나간다 - 기록·저장 파일·다른 응답에 싣지 않는다.
     # GET /api/phone-pair·GET /api/phones 는 화면이 혼자 묻는 읽기라 미사용 시계를 되돌리지 않는다.
     def _phone_service(self, h, touch):
+        """휴대폰 창구 (관리자). 창구가 없으면 404 - 사내 서버는 휴대폰 창구를 ⑧ 에서 연다 (묶음에 local_phone 이 없다: 이 확인이
+        local_phone 을 부르는 것보다 먼저여야 500 이 나지 않는다, 사내 서버 ④ Task 8)."""
         _, me = self._auth(h, touch=touch, admin=True)
         if self.phone is None:
-            raise _Fail(404, "not-found", "없는 주소입니다.")
+            raise _Fail(404, "not-found", "이 서버에서는 휴대폰 페어링을 쓰지 않습니다." if self.registry is not None else "없는 주소입니다.")
         return self.phone, me
 
     def _phones_out(self, svc, gate=None):
@@ -2012,8 +2031,8 @@ class Web:
         return self._phones_out(svc)
 
     def _pair_start(self, h, query, body):
+        svc, me = self._phone_service(h, touch=True)          # 창구가 없으면 여기서 404 - local_phone 은 그 뒤에
         import local_phone
-        svc, me = self._phone_service(h, touch=True)
         fields = self._phone_fields(self._dict(body), need_label=True)
         if svc.phones.count() >= local_phone.PHONES_MAX:
             raise _Fail(400, "invalid-argument", f"휴대폰은 {local_phone.PHONES_MAX}대까지 등록할 수 있습니다.")

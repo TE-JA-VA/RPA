@@ -412,7 +412,24 @@ def test_upgrade_verifies_first():
         return
     server_main._euid = ROOT_EUID
     code, so, se = call(["upgrade", good])
-    check("서명이 맞으면 풀어 install.sh upgrade 를 실행한다", code == 0 and read(mark).strip() == "ran upgrade", (code, se, read(mark)))
+    check("서명이 맞으면 풀어 install.sh upgrade --verified-version <확인한 버전> 을 실행한다 (시험 자리 인자 없음)",
+          code == 0 and read(mark).strip() == "ran upgrade --verified-version 2026.11.25-7", (code, se, read(mark)))
+    # 시험 자리(install.sh --root 로 깐 서버의 실행 글이 AUTOPILOT_ROOT·AUTOPILOT_SERVICE_USER 를 싣는다) - 풀 자리도 그 아래
+    troot = os.path.join(TMP, "upgrade", "troot")
+    os.makedirs(os.path.join(troot, "opt", "autopilot"))
+    os.environ.update(AUTOPILOT_ROOT=troot, AUTOPILOT_SERVICE_USER="nobody", AUTOPILOT_NO_SYSTEMD="1")
+    server_main.UPGRADE_TMP = "/opt/autopilot"
+    try:
+        code, so, se = call(["upgrade", good])
+    finally:
+        for k in ("AUTOPILOT_ROOT", "AUTOPILOT_SERVICE_USER", "AUTOPILOT_NO_SYSTEMD"):
+            os.environ.pop(k, None)
+        server_main.UPGRADE_TMP = work
+    check("시험 자리면 --root·--service-user·--no-systemd 를 넘긴다",
+          code == 0 and read(mark).strip() == f"ran upgrade --verified-version 2026.11.25-7 --root {troot} --service-user nobody --no-systemd",
+          (code, se, read(mark)))
+    check("시험 자리면 <root>/opt/autopilot 아래에 풀고 지운다", os.listdir(os.path.join(troot, "opt", "autopilot")) == [],
+          os.listdir(os.path.join(troot, "opt", "autopilot")))
     check("끝나면 임시 자리를 지운다", os.listdir(work) == [], os.listdir(work))
     check("권한 내리기는 부르지 않는다 (root 로 설치)", not events, events)
 
@@ -475,6 +492,27 @@ def test_cert_renew_backdated():
     server_main._euid = SERVICE
     check("서비스 계정으로 renew 한 인증서로 서버가 켜진다", e.start(), (e.result, read(e.paths.server_log)[-300:]))
     e.stop()
+
+
+def test_cert_if_expiring():
+    """인증서 타이머 (autopilot-cert.service): --if-expiring N 은 남은 날이 N 일 넘으면 그대로 0, 아니면 새로 만들고 10
+    (10 일 때만 타이머가 systemctl try-restart autopilot)."""
+    e = Env("cert_expiring", tls=False)
+    fake_root()
+    code, so, se = call(["cert", "--renew", "--if-expiring", "30", "--owner", "autopilotd"])
+    check("인증서가 없으면 새로 만들고 10", code == server_main.EXIT_RENEWED == 10 and os.path.isfile(e.paths.tls_cert), (code, so, se))
+    first = read(e.paths.tls_cert)
+    code, so, se = call(["cert", "--renew", "--if-expiring", "30"])
+    check("397일 남은 인증서는 그대로 두고 0", code == 0 and read(e.paths.tls_cert) == first and "새로 만들지 않았습니다" in so, (code, so, se))
+    code, so, se = call(["cert", "--renew", "--days", "20"])
+    check("--if-expiring 없는 renew 는 0 (지금 그대로)", code == 0, (code, se))
+    second = read(e.paths.tls_cert)
+    code, so, se = call(["cert", "--renew", "--if-expiring", "30"])
+    check("20일 남은 인증서는 새로 만들고 10", code == 10 and read(e.paths.tls_cert) != second, (code, so, se))
+    check("--if-expiring 은 --renew 와만 (--show 와 함께면 1)", call(["cert", "--show", "--if-expiring", "30"])[0] == 1)
+    check("--if-expiring 음수는 1", call(["cert", "--renew", "--if-expiring", "-1"])[0] == 1)
+    server_main._euid = SERVICE
+    check("root 가 아니면 1 (10 이 아니다)", call(["cert", "--renew", "--if-expiring", "30"])[0] == 1)
 
 
 def tls_peer(port, cafile_pem):
@@ -549,7 +587,7 @@ try:
     print("관리 명령 (test_server_admin)")
     for t in (test_request_file, test_status_ok_and_problems, test_admin_reset_needs_stopped, test_admin_reset_owner,
               test_admin_reset, test_verify, test_upgrade_verifies_first, test_cert_root_only, test_cert_renew_backdated,
-              test_import_web_cert, test_replace_pair_atomic):
+              test_cert_if_expiring, test_import_web_cert, test_replace_pair_atomic):
         guard(t.__name__, t)
 finally:
     for k in ENV_KEYS + ("MARK",):

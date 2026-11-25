@@ -4,10 +4,11 @@
     autopilot-server run      서비스(systemd, 서비스 계정 autopilotd)가 부른다 - 두 포트(웹 8443·에이전트 8444)를 열고 돈다
     autopilot-server request [-o FILE]                 라이선스 요청 파일 (서버 번호·자리 서명 공개 열쇠 - 비밀 값 없음)
     autopilot-server status [--json]                   상태 (도는 프로세스의 버전, 문제가 있으면 1)
-    autopilot-server cert --show | --renew [--days N] [--owner U] | --import-web CERT KEY [--chain C]   (renew·import 는 root)
+    autopilot-server cert --show | --renew [--days N] [--owner U] [--if-expiring N] | --import-web CERT KEY [--chain C]
+                                                       (renew·import 는 root, --if-expiring 은 새로 만들었을 때만 종료 코드 10)
     autopilot-server admin-reset ID [--password-stdin] [--clear-2fa] [--create]                         (root, 서비스를 멈춘 뒤)
     autopilot-server verify FILE [--sig SIG]           서버 설치 파일의 서명 확인
-    autopilot-server upgrade FILE                      (root) 서명 확인 뒤 풀어 install.sh upgrade
+    autopilot-server upgrade FILE                      (root) 서명 확인 뒤 풀어 install.sh upgrade --verified-version <버전>
     autopilot-server backup                            자료 백업 (서비스가 돌면 SIGUSR1 로 서비스 안에서, 멈춰 있으면 잠금을 쥐고 직접)
     autopilot-server restore FILE [--force]            백업에서 복구 (서비스를 멈춘 뒤 - 복구 내내 서비스 잠금을 쥔다)
     autopilot-server backup-config                     (root) /etc/autopilot 을 /var/backups/autopilot/etc-YYYYMMDD.tar.gz 로
@@ -44,7 +45,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RPA_DIR = os.path.abspath(os.path.join(HERE, "..", ".."))
-for _p in (HERE, RPA_DIR):                 # 설치본은 app/ 하나에 모두 있다 - 저장소에서는 license_check·update_sign 이 위 폴더에
+# 저장소에서는 license_check·update_sign 이 두 폴더 위에 있다. 설치본은 app/ 하나에 모두 있으므로 위 폴더(= /opt/autopilot/releases)를
+# 검색 경로에 넣지 않는다 - 그 폴더의 이름(버전 폴더 등)이 모듈로 잡히지 않게 (사내 서버 ④ Task 8)
+for _p in ((HERE,) if os.path.isfile(os.path.join(HERE, "license_check.py")) else (HERE, RPA_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -72,6 +75,7 @@ FORMAT = 1                                 # 자료 형식 번호 - 이 코드�
 KEEP_RUNS_DAYS = 365                       # 실행 기록 보관 (1년)
 MAINT_SEC = 86400                          # 정비 간격
 EXIT_OK, EXIT_LICENSE, EXIT_PORT, EXIT_BROKEN = 0, 2, 3, 4
+EXIT_RENEWED = 10                          # cert --renew --if-expiring 이 실제로 새로 만들었다 (인증서 타이머가 그때만 서비스를 다시 켠다)
 
 SERVICE_USER = "autopilotd"                # 서비스 계정 (NT 의 사람 계정 autopilot 과 겹치지 않게 - Codex 검토 14)
 REQUEST_NAME = "server_request.json"
@@ -86,6 +90,13 @@ BACKUP_CHECK_SEC = 60                      # 하루 백업 때가 되었나 보�
 BACKUP_RETRY_SEC = 3600                    # 하루 백업이 실패하면 다시 해 보기까지
 BACKUP_WAIT = 60                           # backup 명령이 서비스의 백업을 기다리는 시간
 CONFIG_BACKUPS = "/var/backups/autopilot"  # root 설정 백업 자리 (시험 손잡이)
+# install.sh --root 로 깐 시험 자리 (WSL 시험) - 시험 자리의 실행 글만 이 환경 변수를 싣는다. 진짜 실행 글(server/autopilot-server)은
+# AUTOPILOT_* 를 지우고 시작하므로 설치본에서는 늘 비어 있다. 있으면 업그레이드 풀 자리·설정 백업 자리가 그 아래로, install.sh 에도 넘긴다.
+ROOT_ENV, SERVICE_USER_ENV, NO_SYSTEMD_ENV = "AUTOPILOT_ROOT", "AUTOPILOT_SERVICE_USER", "AUTOPILOT_NO_SYSTEMD"
+
+
+def _test_root():
+    return os.environ.get(ROOT_ENV) or ""
 
 # 시험 손잡이 - 서버 번호 파일, 라이선스 확인 공개 열쇠(None 이면 실린 것), 버전(None 이면 manifest.json),
 # 업데이트 서명 공개 열쇠(None 이면 update_sign 에 실린 것, bytes), 업그레이드 때 풀 자리
@@ -864,10 +875,14 @@ def _cert_import(args, paths, owner):
 
 
 def cmd_cert(args, paths):
+    if args.if_expiring is not None and not args.renew:
+        return _err("--if-expiring 은 --renew 와 함께만 씁니다.")
     if args.show:
         return _cert_show(paths)
     if not _need_root("cert --renew·--import-web"):
         return 1
+    if args.if_expiring is not None and args.if_expiring < 0:
+        return _err("--if-expiring 은 0 이상의 날 수입니다.")
     owner = None
     if args.owner:
         try:
@@ -875,7 +890,19 @@ def cmd_cert(args, paths):
         except KeyError:
             return _err(f"서비스 계정 {args.owner} 이(가) 없습니다.")
     if args.renew:
-        return _cert_renew(args, paths, owner)
+        if args.if_expiring is None:
+            return _cert_renew(args, paths, owner)
+        # 인증서 타이머 (autopilot-cert.service): 남은 날이 넉넉하면 그대로 0, 아니면(없거나 못 읽어도) 새로 만들고 EXIT_RENEWED
+        cert = _pair(paths.tls_cert)[0]
+        try:
+            left = lan_ca.days_left(cert) if os.path.isfile(cert) else None
+        except lan_ca.CaError:
+            left = None
+        if left is not None and left > args.if_expiring:
+            print(f"서버 인증서가 아직 {left}일 남아 새로 만들지 않았습니다 (기준 {args.if_expiring}일).")
+            return 0
+        code = _cert_renew(args, paths, owner)
+        return EXIT_RENEWED if code == 0 else code
     return _cert_import(args, paths, owner)
 
 
@@ -987,9 +1014,24 @@ def cmd_verify(args, paths):
     return 0
 
 
+def upgrade_argv(script, ver):
+    """install.sh upgrade 를 부를 인자 - 확인한 버전을 넘긴다 (install.sh 가 풀린 폴더의 버전과 견준다). 시험 자리(AUTOPILOT_ROOT)면
+    --root·--service-user·--no-systemd 도."""
+    argv = [SH, script, "upgrade", "--verified-version", ver]
+    root = _test_root()
+    if root:
+        argv += ["--root", root]
+        if os.environ.get(SERVICE_USER_ENV):
+            argv += ["--service-user", os.environ[SERVICE_USER_ENV]]
+        if os.environ.get(NO_SYSTEMD_ENV):
+            argv.append("--no-systemd")
+    return argv
+
+
 def cmd_upgrade(args, paths):
     """서버 업그레이드 (root): 지금 깔린 코드로 FILE 과 FILE.sig 를 먼저 확인하고(틀리면 아무것도 풀지 않음), 확인한 바이트를 임시
-    자리에 풀어 그 안의 install.sh upgrade 를 실행한다 (Codex 검토 1). 끝나면 임시 자리를 지운다."""
+    자리(/opt/autopilot/.upgrade-*, releases 와 같은 파일 시스템)에 풀어 그 안의 install.sh upgrade 를 실행한다 (Codex 검토 1).
+    끝나면 임시 자리를 지운다. 종료 코드는 install.sh 의 것."""
     if not _need_root("upgrade"):
         return 1
     try:
@@ -998,9 +1040,10 @@ def cmd_upgrade(args, paths):
         return _err(f"파일을 읽지 못했습니다 ({type(e).__name__}).")
     except ValueError as e:
         return _err(str(e))
+    base = _test_root() + UPGRADE_TMP if _test_root() else UPGRADE_TMP
     try:
-        os.makedirs(UPGRADE_TMP, exist_ok=True)
-        work = tempfile.mkdtemp(prefix=".upgrade-", dir=UPGRADE_TMP)          # 0700
+        os.makedirs(base, exist_ok=True)
+        work = tempfile.mkdtemp(prefix=".upgrade-", dir=base)                  # 0700
     except OSError as e:
         return _err(f"풀 자리를 만들지 못했습니다 ({type(e).__name__}).")
     try:
@@ -1012,7 +1055,7 @@ def cmd_upgrade(args, paths):
             return _err("설치 파일 안에 server/install.sh 가 없습니다.")
         print(f"서명 확인됨  버전={ver} - 업그레이드를 시작합니다.")
         sys.stdout.flush()
-        return subprocess.run([SH, script, "upgrade"], cwd=bundle).returncode
+        return subprocess.run(upgrade_argv(script, ver), cwd=bundle).returncode
     except (tarfile.TarError, OSError) as e:
         return _err(f"설치 파일을 풀지 못했습니다 ({type(e).__name__}).")
     finally:
@@ -1137,7 +1180,7 @@ def cmd_backup_config(args, paths):
     if not _need_root("backup-config"):
         return 1
     try:
-        made = server_backup.config_backup(paths.etc, CONFIG_BACKUPS)
+        made = server_backup.config_backup(paths.etc, _test_root() + CONFIG_BACKUPS if _test_root() else CONFIG_BACKUPS)
     except (OSError, ValueError) as e:
         return _err(str(e) if isinstance(e, ValueError) else f"설정 백업을 만들지 못했습니다 ({type(e).__name__}).")
     print(made)
@@ -1206,6 +1249,8 @@ def _parser():
     r.add_argument("--chain", help="업체 인증서의 중간 인증서 묶음 (--import-web)")
     r.add_argument("--days", type=int, default=lan_ca.SERVER_DAYS)
     r.add_argument("--owner", help="만든 인증서를 넘길 서비스 계정 (설치는 autopilotd)")
+    r.add_argument("--if-expiring", type=int, metavar="DAYS",
+                   help="(--renew 와) 남은 날이 DAYS 를 넘으면 그대로 0, 아니면 새로 만들고 종료 코드 10 (인증서 타이머)")
     r.set_defaults(func=cmd_cert)
     r = sub.add_parser("admin-reset", help="관리자 비밀번호·2단계 인증 다시 정하기 (root, 서비스를 멈춘 뒤)")
     r.add_argument("id")

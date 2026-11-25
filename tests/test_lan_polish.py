@@ -645,6 +645,54 @@ def test_reserved_admin_console():
           bool(uses) and all("isConsole(" in ln or "!STANDALONE" in ln for ln in uses), uses)
 
 
+def test_server_phone_pair_404():
+    """Task 8 넘김: 사내 서버 묶음에는 local_phone 이 없다 - 페어링 창구가 import 전에 휴대폰 창구가 없음을 보고 404 (500 이 아니다)."""
+    e = start()
+    tok = (login(e, "10.0.0.5").json() or {}).get("token")
+    saved = sys.modules.get("local_phone", "없음")
+    sys.modules["local_phone"] = None                      # import local_phone → ImportError (서버 묶음 흉내)
+    try:
+        for method, path, body in (("POST", "/api/phone-pair", {"label": "김 휴대폰"}), ("GET", "/api/phone-pair", None),
+                                   ("DELETE", "/api/phone-pair", None), ("GET", "/api/phones", None),
+                                   ("POST", "/api/phones/ab12", {"label": "x"}), ("DELETE", "/api/phones/ab12", None)):
+            g = req(e, "10.0.0.5", method, path, body, bearer(tok))
+            check(f"사내 서버 {method} {path} → 404 '이 서버에서는 휴대폰 페어링을 쓰지 않습니다'",
+                  g.status == 404 and "이 서버에서는 휴대폰 페어링을 쓰지 않습니다" in (g.message or ""), g)
+    finally:
+        if saved == "없음":
+            sys.modules.pop("local_phone", None)
+        else:
+            sys.modules["local_phone"] = saved
+
+
+def test_server_edition_test_build():
+    """Task 8 넘김: 사내 서버 묶음에는 edition 모듈이 없다 - edition.js 의 시험용 빌드 표시는 묶음 manifest.json 의 test_build 로."""
+    saved, old = sys.modules.get("edition", "없음"), getattr(local_web, "SERVER_MANIFEST", None)
+    sys.modules["edition"] = None
+    d = tempfile.mkdtemp(dir=TMP)
+    try:
+        check("local_web.SERVER_MANIFEST 는 app/ 옆의 manifest.json",
+              old == os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(local_web.__file__))), "manifest.json"), old)
+        for label, doc, want in (("kind server·test_build true", {"kind": "server", "test_build": True}, True),
+                                 ("kind server·test_build false", {"kind": "server", "test_build": False}, False),
+                                 ("kind 없음", {"test_build": True}, False), ("파일 없음", None, False),
+                                 ("깨진 파일", "{", False)):
+            p = os.path.join(d, label.replace(" ", "_").replace("·", "_") + ".json")
+            if doc is not None:
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(doc if isinstance(doc, str) else json.dumps(doc))
+            local_web.SERVER_MANIFEST = p
+            js = local_web.edition_js().decode("ascii")
+            check(f"edition 모듈 없음 + {label} → TEST_BUILD = {'true' if want else 'false'}",
+                  f"TEST_BUILD = {'true' if want else 'false'};" in js and 'EDITION = "standalone"' in js, js)
+    finally:
+        local_web.SERVER_MANIFEST = old
+        if saved == "없음":
+            sys.modules.pop("edition", None)
+        else:
+            sys.modules["edition"] = saved
+
+
 def test_make_license_limits_range():
     import make_license
     import rpa_status
@@ -682,7 +730,8 @@ try:
     for t in (test_allow_required, test_accept_reject_logged, test_agent_rate_vs_pc_429, test_head_no_date, test_deep_json_400,
               test_names_rules, test_proxy_outside_allow, test_purge_clock_jump, test_plain_proxy_secret, test_login_log_outside_lock,
               test_security_last_value, test_mfa_enable_after_session_closed, test_mfa_enable_changed_since_setup,
-              test_change_password_race_admin_reset, test_reserved_admin_console, test_make_license_limits_range):
+              test_change_password_race_admin_reset, test_reserved_admin_console, test_make_license_limits_range,
+              test_server_phone_pair_404, test_server_edition_test_build):
         guard(t)
 finally:
     for s in SERVERS:

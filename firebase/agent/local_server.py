@@ -25,8 +25,10 @@ import time
 import urllib.parse
 
 RPA_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if RPA_DIR not in sys.path:
-    sys.path.insert(0, RPA_DIR)          # rpa_status·license_check (agent.py 와 같은 규칙)
+# rpa_status·license_check (agent.py 와 같은 규칙). 사내 서버 설치본은 license_check 가 이 파일 옆(app/)에 있다 - 그때는 두 폴더 위
+# (/opt/autopilot/releases)를 검색 경로에 넣지 않는다 (사내 서버 ④ Task 8)
+if RPA_DIR not in sys.path and not os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "license_check.py")):
+    sys.path.insert(0, RPA_DIR)
 
 import ap_sign  # noqa: E402  요청·응답·구독 서명 (클라이언트 local_store 와 같은 함수 - 서버는 PC 클라이언트를 불러오지 않는다)
 import pc_registry  # noqa: E402  사내 서버 PC 등록부 (EnrollError·PC_RE - 표준 라이브러리만 쓴다)

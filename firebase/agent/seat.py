@@ -12,8 +12,9 @@ import sys
 import tempfile
 
 RPA_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-if RPA_DIR not in sys.path:
-    sys.path.insert(0, RPA_DIR)          # update_sign·license_check (local_server 와 같은 규칙)
+# update_sign·license_check (local_server 와 같은 규칙 - 사내 서버 설치본은 이 파일 옆 app/ 에 있어 위 폴더를 넣지 않는다)
+if RPA_DIR not in sys.path and not os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "license_check.py")):
+    sys.path.insert(0, RPA_DIR)
 
 import license_check  # noqa: E402
 import update_sign  # noqa: E402
