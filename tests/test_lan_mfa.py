@@ -274,7 +274,8 @@ def test_two_step_login():
     check("  세션 토큰으로 /api/runs 200", runs_of(e, A, gj.get("token")).status == 200)
     t2 = (login(e, A).json() or {}).get("ticket")
     g = api(e, A, "POST", "/api/login/mfa", {"ticket": t2, "code": c})
-    check("같은 번호로 새 표 → 401 auth/invalid-code (쓴 칸)", g.status == 401 and g.code == "auth/invalid-code", g)
+    check("같은 번호로 새 표 → 400 auth/code-used (쓴 칸 - 틀린 번호로 세지 않음, ③ 전체 검토 6)",
+          g.status == 400 and g.code == "auth/code-used", g)
     g = api(e, A, "POST", "/api/login/mfa", {"ticket": t2, "recovery": rec[0].upper().replace("-", "")})
     gj = g.json() or {}
     check("복구 번호 (같은 표 - 틀린 번호 뒤에도 표는 남음) → 세션·recoveryLeft 7",
@@ -370,8 +371,8 @@ def test_same_code_race():
     for x in th:
         x.join(20)
     got = sorted(g.status for g in out.values())
-    check("같은 번호 두 탭 동시에 → 200 하나·401 하나", got == [200, 401], repr(out))
-    check("  401 은 invalid-code", [g.code for g in out.values() if g.status == 401] == ["auth/invalid-code"], repr(out))
+    check("같은 번호 두 탭 동시에 → 200 하나·400 하나", got == [200, 400], repr(out))
+    check("  400 은 code-used (쓴 칸, ③ 전체 검토 6)", [g.code for g in out.values() if g.status == 400] == ["auth/code-used"], repr(out))
 
 
 def test_admin_reset_and_disable():
@@ -420,13 +421,14 @@ def test_setup_needs_password_when_on():
     print("test_setup_needs_password_when_on")
     e = start()
     boss = token(e, A)
-    enroll(e, A, boss)
+    secret, _ = enroll(e, A, boss)
     g = api(e, A, "POST", "/api/mfa/setup", {}, boss)
     check("이미 켜진 계정의 setup 비밀번호 없이 → 403 auth/wrong-password", g.status == 403 and g.code == "auth/wrong-password", g)
     g = api(e, A, "POST", "/api/mfa/setup", {"password": "wrong-pass-01"}, boss)
     check("  틀린 비밀번호 → 403 auth/wrong-password", g.status == 403 and g.code == "auth/wrong-password", g)
-    g = api(e, A, "POST", "/api/mfa/setup", {"password": BOSS_PW}, boss)
-    check("  맞는 비밀번호 → 200 새 비밀 값", g.status == 200 and len((g.json() or {}).get("secret") or "") == 32, g)
+    g = api(e, A, "POST", "/api/mfa/setup", {"password": BOSS_PW, "code": code_now(e, secret)}, boss)
+    check("  맞는 비밀번호 + 지금 번호 → 200 새 비밀 값 (번호도 요구 - ③ 전체 검토 5, test_lan_mfa_review)",
+          g.status == 200 and len((g.json() or {}).get("secret") or "") == 32, g)
 
 
 def test_single_unchanged():
@@ -602,6 +604,7 @@ def test_history_events():
     g = api(e, D, "POST", "/api/logout", {}, stok)                      # logout staff D
     check("로그아웃 → 200", g.status == 200, g)
     stok = token(e, D, "staff", STAFF_PW)                               # ok staff D
+    t_last = e.clock()
     e.clock.go(1801)
     g = api(e, D, "GET", "/api/session", tok=stok)                      # timeout staff D
     check("1801초 뒤 세션 → 401", g.status == 401, g)
@@ -616,7 +619,10 @@ def test_history_events():
     check("  줄 수 합이 맞다 (다른 줄 없음)", len(rows) == sum(w[3] for w in want), repr([(r["result"], r["uid"], r["ip"]) for r in rows]))
     check("  agent 는 브라우저 종류만 (Edge · Windows)", all(r["agent"] == KIND for r in rows), repr({r["agent"] for r in rows}))
     check("  ghost 글자는 어디에도 없음", not any("ghost" in json.dumps(r, ensure_ascii=False) for r in rows))
-    check("  at 은 손 시계 ms", rows and rows[-1]["at"] == int(e.clock() * 1000), repr(rows[-1:]))
+    check("  at 은 손 시계 ms (마지막 ok 줄 = 그때 시각)", len(rows) > 1 and rows[-2]["result"] == "ok"
+          and rows[-2]["at"] == int(t_last * 1000), repr(rows[-2:]))
+    check("  timeout 줄 at = 세션이 끝난 시각 (로그인 + 1800초, ③ 전체 검토 3)", rows and rows[-1]["at"] == int((t_last + 1800) * 1000),
+          repr(rows[-1:]))
     check("  timeout 줄은 맨 끝", rows and rows[-1]["result"] == "timeout")
 
     # 잠금마다 한 줄 - 주소 잠금 (없는 아이디 열 개를 한 번씩), 아이디 전체 잠금 (여러 주소에서 네 번씩)

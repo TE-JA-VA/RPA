@@ -69,41 +69,68 @@ class LoginLog:
     clock = 초 단위 시계 (시험이 손 시계를 넘긴다). path 가 ':memory:' 면 파일 없이."""
 
     def __init__(self, path, clock=time.time):
+        """열기(연결·표 만들기)에 실패하면 그 파일(보통 파일일 때만)을 logins.db.broken 으로 치우고(있으면 덮어씀) 한 번 더 새로 연다
+        (전체 검토 1 - 깨진 이력 때문에 웹이 켜지지 않으면 안 된다). moved_broken = 치웠나. 그래도 실패하면 예외 (부르는 쪽이 이력 없이 켠다)."""
         self._clock = clock
         self._lock = threading.Lock()
         self._purged = None                    # 마지막 purge 시각 (초) - add 가 하루 한 번 부른다
-        fresh = False
+        self.moved_broken = False
         if path != ":memory:":
             path = os.path.abspath(path)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fresh = not os.path.exists(path)
-        self._db = sqlite3.connect(path, check_same_thread=False, timeout=10)
-        if fresh and os.name == "posix":       # 서비스 계정만 읽게 (설계 4절 - 자료 폴더의 파일은 600)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
-        with self._lock, self._db:
-            self._db.execute("CREATE TABLE IF NOT EXISTS logins(id INTEGER PRIMARY KEY, at INTEGER, uid TEXT, ip TEXT, agent TEXT,"
-                             " result TEXT)")
-            self._db.execute("CREATE INDEX IF NOT EXISTS logins_at ON logins(at)")
-            self._db.execute("CREATE INDEX IF NOT EXISTS logins_uid ON logins(uid, id)")
+        try:
+            self._db = self._open(path)
+        except (sqlite3.Error, OSError):
+            if path == ":memory:" or not os.path.isfile(path):
+                raise                          # 폴더 같은 것은 건드리지 않는다
+            self._aside(path)
+            self.moved_broken = True
+            self._db = self._open(path)
+
+    @staticmethod
+    def _open(path):
+        fresh = path != ":memory:" and not os.path.exists(path)
+        db = sqlite3.connect(path, check_same_thread=False, timeout=10)
+        try:
+            if fresh and os.name == "posix":   # 서비스 계정만 읽게 (설계 4절 - 자료 폴더의 파일은 600)
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+            with db:
+                db.execute("CREATE TABLE IF NOT EXISTS logins(id INTEGER PRIMARY KEY, at INTEGER, uid TEXT, ip TEXT, agent TEXT,"
+                           " result TEXT)")
+                db.execute("CREATE INDEX IF NOT EXISTS logins_at ON logins(at)")
+                db.execute("CREATE INDEX IF NOT EXISTS logins_uid ON logins(uid, id)")
+        except BaseException:
+            db.close()                         # 윈도우는 열린 파일을 옮기지 못한다
+            raise
+        return db
+
+    @staticmethod
+    def _aside(path):
+        """깨진 파일과 곁 파일(-journal·-wal·-shm)을 .broken 이름으로 옮긴다 - 옛 곁 파일이 새 파일에 덮어 쓰이지 않게."""
+        for tail in ("", "-journal", "-wal", "-shm"):
+            if os.path.isfile(path + tail):
+                os.replace(path + tail, path + ".broken" + tail)
 
     def close(self):
         with self._lock:
             self._db.close()
 
-    def add(self, result, uid, ip, agent):
+    def add(self, result, uid, ip, agent, at_ms=None):
         """한 줄 넣기. result 는 RESULTS 안만, uid 는 등록된 아이디 글 또는 None - 아니면 ValueError.
+        at_ms = 그 일이 있었던 시각(ms) - 없으면 지금 (자동 로그아웃은 세션이 실제로 끝난 시각을 넘긴다, 전체 검토 3).
         넣은 뒤 마지막 purge 에서 하루가 지났으면 purge 를 부른다."""
         if result not in RESULTS:
             raise ValueError(f"로그인 이력 결과가 올바르지 않습니다: {result!r}")
         if uid is not None and not isinstance(uid, str):
             raise ValueError("로그인 이력 아이디는 글이어야 합니다.")
         now = self._clock()
+        at = int(now * 1000) if at_ms is None else int(at_ms)
         with self._lock, self._db:
             self._db.execute("INSERT INTO logins(at, uid, ip, agent, result) VALUES(?,?,?,?,?)",
-                             (int(now * 1000), _text(uid, FIELD_MAX), _text(ip, FIELD_MAX), _text(agent, AGENT_MAX), result))
+                             (at, _text(uid, FIELD_MAX), _text(ip, FIELD_MAX), _text(agent, AGENT_MAX), result))
         if self._purged is None or now - self._purged >= PURGE_EVERY:
             self._purged = now
             self.purge()
@@ -137,6 +164,16 @@ class LoginLog:
         with self._lock:
             row = self._db.execute(sql + " ORDER BY id DESC LIMIT 1", args).fetchone()
         return self._row(row) if row else None
+
+    def failed_count(self, uid, after_id=None):
+        """그 아이디의 틀린 비밀번호·번호 줄(bad_password·bad_code) 수 - after_id 를 주면 그보다 뒤의 것만 (로그인 응답 failedSince)."""
+        sql = "SELECT COUNT(*) FROM logins WHERE uid = ? AND result IN (?, ?)"
+        args = [uid, "bad_password", "bad_code"]
+        if after_id is not None:
+            sql += " AND id > ?"
+            args.append(after_id)
+        with self._lock:
+            return self._db.execute(sql, args).fetchone()[0]
 
     def purge(self):
         """보관 기간(KEEP_DAYS)이 지난 줄을 지운다 → 지운 수."""

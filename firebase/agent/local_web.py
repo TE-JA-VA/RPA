@@ -14,7 +14,9 @@ local_server.Handler 가 서명 확인 **앞에서** `/api/*` 와 웹 파일 GET
   믿을 프록시에서 X-Forwarded-Proto: https 와 읽을 수 있는 X-Forwarded-For 로 온 요청만, 응답에 HSTS, 기록의 로그인 줄에 보낸 쪽 주소.
   보낸 쪽 주소(프록시 뒤면 X-Forwarded-For)가 허용 대역 밖이면 403 (② 전체 검토 1).
 - 사내 서버만 2단계 인증 (계획 ③, 설계 6.6): 켠 계정은 비밀번호 뒤 5분 표(로그인한 주소에 묶임)를 받고 번호까지 맞아야 세션.
-  '보안' 범위(security.json - web_security)에 든 계정은 등록 전 다른 창구 거절 (비밀번호 변경이 먼저). 틀린 번호는 잠금 셋에 센다.
+  '보안' 범위(security.json - web_security)에 든 계정은 등록 전 다른 창구 거절 (비밀번호 변경이 먼저). 틀린 번호는 잠금 셋에 세고,
+  계정마다 연속 10번이면 그 계정의 번호 입력을 모든 주소에서 1시간 막는다. 이미 쓴 칸의 번호는 auth/code-used (세지 않음).
+  mfa 칸 꼴이 깨진 계정은 로그인 403 auth/mfa-broken (관리자 2단계 해제로만 풀림). 다시 등록은 비밀번호 + 지금 번호·복구 번호 (③ 전체 검토).
 - 사내 서버만 로그인 이력 (logins.db - login_log, 계획 ③ Task 5): 성공·틀림·잠금이 시작될 때·중지 계정·로그아웃·자동 로그아웃·
   2단계 바꾼 일. 브라우저 종류만 적고 User-Agent 원문은 남기지 않는다. 이력 쓰기가 실패해도 로그인·요청은 막지 않는다 (서버 기록에 종류만).
 - 웹 파일: firebase/web 을 그대로 내주되 스탠드얼론에 없어야 할 것(Firebase 설정·SDK 를 부르는 파일)은 내주지 않는다.
@@ -71,6 +73,12 @@ XFF_LOG_SEC = 60                           # 믿을 프록시가 X-Forwarded-For
 SESSIONS_MAX = 200
 MFA_TICKET_SEC = 300                       # 사내 서버 2단계: 비밀번호가 맞은 뒤 번호를 넣을 때까지의 표 (메모리에만, 최대 SESSIONS_MAX)
 MFA_SETUP_SEC = 600                        # 사내 서버 2단계: 등록 시작(setup) 뒤 번호를 넣어 켤 때까지 - 대기 비밀 값은 그 세션에만 (메모리)
+# 사내 서버 2단계: 계정마다 마지막 2단계 성공 뒤 연속 틀린 번호(복구 번호 포함)가 10번이면 그 계정의 번호 입력을 모든 주소에서 3600초
+# 막는다 (전체 검토 2 - 비밀번호를 아는 사람이 주소를 바꿔 가며 6자리를 찍지 못하게). 맞히면 0, 막힘이 끝나도 셈은 남아 다음 실패에 다시 막는다
+MFA_FAIL_LIMIT, MFA_FAIL_BLOCK = 10, 3600
+MFA_BLOCK_MSG = "2단계 인증 번호를 여러 번 틀려 1시간 동안 막았습니다. 관리자에게 알려 주십시오."
+CODE_USED_MSG = "방금 쓴 번호입니다. 인증 앱에 다음 번호가 나오면 그 번호를 넣어 주십시오."
+MFA_BROKEN_MSG = "2단계 인증 정보가 손상되었습니다. 관리자에게 2단계 해제를 요청하여 주십시오."
 QUICK_TTL = 90                             # 실행·중단 명령의 만료 (초) - 지금 RTDB 규칙과 같다
 COMMAND_TTL = 600
 QUICK_TYPES = ("launch", "stop_erpia", "stop_rpa")
@@ -410,19 +418,30 @@ class Accounts:
 
     def mfa_check(self, id, code, now):
         """번호가 맞으면 그 칸을 last_step 으로 저장하고 True. 틀렸거나 이미 쓴 칸(같은 칸 두 번째)이거나 2단계가 없으면 False."""
+        return self.mfa_check_detail(id, code, now) == "ok"
+
+    def mfa_check_detail(self, id, code, now):
+        """mfa_check 와 같되 → "ok"(맞음, last_step 저장) · "used"(맞는 칸이지만 이미 쓴 칸) · "bad"(틀림·2단계 없음)."""
         uid = norm_id(id)
         with self._lock:
             data = dict(self._load())
             rec = data.get(uid)
             m = _mfa_of(rec)
             if m is None:
-                return False
-            step = totp.match(m["secret"], code, now, m["last_step"])
+                return "bad"
+            step, used = totp.match_detail(m["secret"], code, now, m["last_step"])
             if step is None:
-                return False
+                return "used" if used else "bad"
             data[uid] = dict(rec, mfa=dict(m, last_step=step))
             self._save(data)
-            return True
+            return "ok"
+
+    def mfa_broken(self, id):
+        """계정 기록에 mfa 칸이 **있는데** 꼴이 틀렸나 (전체 검토 7). 없는 계정·mfa 칸이 없는 계정은 False.
+        mfa_info·_public 은 이런 계정을 '꺼짐' 으로 보지만, 사내 서버 로그인은 이것을 따로 보고 거절한다 (mfa_clear 로만 풀린다)."""
+        with self._lock:
+            rec = self._load().get(norm_id(id))
+        return isinstance(rec, dict) and "mfa" in rec and _mfa_of(rec) is None
 
     def mfa_enable(self, id, secret, code, now):
         """대기 비밀 값(secret)과 앱의 번호가 맞으면 2단계를 켠다 → 복구 번호 글 8개 (한 번만 - 파일에는 해시만).
@@ -811,8 +830,17 @@ class Web:
         self.accounts = Accounts(os.path.join(folder, ACCOUNTS_NAME))
         if registry is not None:                     # 사내 서버: 관리자 비밀번호 10자 이상 (유저는 8자 그대로, 설계 6.6)
             self.accounts.admin_min = LAN_ADMIN_PASSWORD_MIN
-        # 사내 서버만: 로그인 이력 logins.db (계획 ③ Task 5). 단독은 None - 파일을 만들지 않는다
-        self.login_log = login_log.LoginLog(os.path.join(folder, login_log.LOGINS_NAME), clock=clock) if registry is not None else None
+        # 사내 서버만: 로그인 이력 logins.db (계획 ③ Task 5). 단독은 None - 파일을 만들지 않는다.
+        # 깨진 파일은 LoginLog 가 .broken 으로 치우고 새로 연다. 그래도 못 열면 이력 없이 켠다 - 로그인은 되고 이력 창구는 503 (전체 검토 1)
+        self.login_log = None
+        if registry is not None:
+            try:
+                self.login_log = login_log.LoginLog(os.path.join(folder, login_log.LOGINS_NAME), clock=clock)
+                if self.login_log.moved_broken:
+                    self._log(f"로그인 이력 파일이 깨져 {login_log.LOGINS_NAME}.broken 으로 옮기고 새로 만들었습니다.")
+            except Exception as e:
+                self._log(f"로그인 이력을 열지 못했습니다: {type(e).__name__}")
+        self._mfa_fails, self._mfa_fails_lock = {}, threading.Lock()   # 사내 서버 2단계 연속 실패 {아이디: [수, 막힘이 풀리는 시각]}
         self.sessions = Sessions(clock=clock, on_end=self._session_end if registry is not None else None)
         self.lockout = Lockout(clock=clock)
         self.addr_lock = AddrLock(clock=clock)       # 사내 서버(cfg 있음)만 쓴다
@@ -1081,16 +1109,17 @@ class Web:
         return False
 
     # --- 로그인 이력 (사내 서버만, 계획 ③ Task 5) ---
-    def _history(self, result, uid, h=None, ip=None, agent=None):
+    def _history(self, result, uid, h=None, ip=None, agent=None, at_ms=None):
         """이력 한 줄. h 를 주면 그 요청의 보낸 쪽 주소·브라우저 종류. uid 는 등록된 아이디만 (아니면 None 으로).
-        단독은 아무것도 하지 않는다. 쓰기가 실패해도(디스크 등) 요청은 막지 않는다 - 서버 기록에 종류만 한 줄."""
+        at_ms = 그 일이 있었던 시각 (없으면 지금). 단독·이력을 열지 못한 사내 서버는 아무것도 하지 않는다.
+        쓰기가 실패해도(디스크 등) 요청은 막지 않는다 - 서버 기록에 종류만 한 줄."""
         log = self.login_log
         if log is None:
             return
         try:
             if h is not None:
                 ip, agent = self._ip(h), login_log.browser_kind(h.headers.get("User-Agent"))
-            log.add(result, self._known(uid), ip, agent)
+            log.add(result, self._known(uid), ip, agent, at_ms=at_ms)
         except Exception as e:
             self._log(f"로그인 이력 쓰기 오류: {type(e).__name__}")
 
@@ -1108,20 +1137,29 @@ class Web:
             self._history("locked", uid, h)
 
     def _history_login(self, result, uid, h):
-        """로그인 성공 줄(ok·recovery)을 남기고 → 그 바로 앞의 로그인 {at, ip} (없으면 None, 단독도 None)."""
-        last = None
+        """로그인 성공 줄(ok·recovery)을 남기고 → (그 바로 앞의 로그인 {at, ip} 또는 None, 그 뒤로 쌓인 틀린 비밀번호·번호 줄 수).
+        이력이 없거나 읽지 못하면 (None, 0). 단독도 (None, 0)."""
+        last, failed = None, 0
         if self.login_log is not None:
             try:
                 prev = self.login_log.last_ok(uid)
                 last = {"at": prev["at"], "ip": prev["ip"]} if prev else None
+                failed = self.login_log.failed_count(uid, prev["id"] if prev else None)
             except Exception as e:
+                last, failed = None, 0
                 self._log(f"로그인 이력 읽기 오류: {type(e).__name__}")
         self._history(result, uid, h)
-        return last
+        return last, failed
 
     def _session_end(self, sess, why):
-        """Sessions.on_end - 미사용·12시간으로 끝난 세션 → 이력 timeout (로그인한 쪽 주소·브라우저 종류로)."""
-        self._history(why, sess.get("id"), ip=sess.get("addr"), agent=sess.get("agent"))
+        """Sessions.on_end - 미사용·12시간으로 끝난 세션 → 이력 timeout (로그인한 쪽 주소·브라우저 종류로).
+        시각은 치운 때가 아니라 세션이 실제로 끝난 때 = min(마지막 사용 + 미사용 한도, 로그인 + 12시간) (전체 검토 3)."""
+        at_ms = None
+        try:
+            at_ms = int(min(sess["seen"] + self.sessions.idle_sec, sess["opened"] + self.sessions.max_sec) * 1000)
+        except (KeyError, TypeError):
+            pass
+        self._history(why, sess.get("id"), ip=sess.get("addr"), agent=sess.get("agent"), at_ms=at_ms)
 
     # --- 요청에서 읽기 ---
     @staticmethod
@@ -1238,6 +1276,11 @@ class Web:
                 self._log(f"웹 로그인 거절 - 사용 중지된 계정  아이디={uid}{self._at(h)}")
                 self._history("disabled", uid, h)
                 raise _Fail(403, "auth/user-disabled", "사용이 중지된 계정입니다.")
+            if self.lan and self.accounts.mfa_broken(uid):
+                # mfa 칸이 있는데 꼴이 틀리면 '꺼짐' 으로 보지 않는다 - 비밀번호만으로 들어와 새 휴대폰을 등록하지 못하게 (전체 검토 7).
+                # 관리자의 2단계 해제(mfaReset = mfa_clear)로만 풀린다
+                self._log(f"웹 로그인 거절 - 2단계 인증 정보 손상 (관리자의 2단계 해제 필요)  아이디={uid}{self._at(h)}")
+                raise _Fail(403, "auth/mfa-broken", MFA_BROKEN_MSG)
             if self.lan and acct["mfa"]:
                 # 사내 서버 2단계: 세션 대신 5분 표. 아이디 잠금(pair)은 번호까지 맞아야 지운다 - 비밀번호를 아는 사람이
                 # 다시 로그인해 번호 셈을 되돌리지 못하게
@@ -1254,11 +1297,12 @@ class Web:
         self._log(f"웹 로그인  아이디={uid}  권한={acct['role']}{self._at(h)}")
         return self._login_out(token, acct, self._history_login("ok", uid, h))
 
-    def _login_out(self, token, acct, last):
-        """로그인 성공 응답 - 사내 서버만 lastLogin (이번 것 바로 앞의 로그인 {at, ip} 또는 None). 단독은 지금 그대로."""
+    def _login_out(self, token, acct, hist):
+        """로그인 성공 응답 - 사내 서버만 lastLogin (이번 것 바로 앞의 로그인 {at, ip} 또는 None) 과
+        failedSince (그 앞 로그인 뒤로 이 계정에 쌓인 틀린 비밀번호·번호 줄 수, 이력이 없으면 0). 단독은 지금 그대로."""
         out = {"token": token, "session": self._public(acct)}
         if self.lan:
-            out["lastLogin"] = last
+            out["lastLogin"], out["failedSince"] = hist
         return out
 
     def _session_open(self, acct, h):
@@ -1307,9 +1351,61 @@ class Web:
 
     def _count_fail(self, h, uid, pair, what, kind):
         """틀린 번호·복구 번호·비밀번호 한 번을 아이디(쌍)·아이디 전체·주소에 센다 (틀린 비밀번호와 같이).
+        틀린 번호(bad_code)는 계정의 2단계 연속 실패(_mfa_fail)에도 센다.
         이력에 kind(bad_code·bad_password) 한 줄과 이번에 시작된 잠금마다 locked 한 줄."""
         started = (self._id_fail(pair, what, uid, h), self._id_all_fail(uid, uid, h), self._addr_fail(h))
+        if kind == "bad_code":
+            started += (self._mfa_fail(uid, h),)
         self._history_fail(kind, uid, h, started)
+
+    # --- 계정마다 2단계 연속 실패 (사내 서버만, 전체 검토 2) - 번호를 받는 모든 곳(로그인 표·복구 번호·다시 등록·켜기·끄기·범위 줄이기) ---
+    def _mfa_gate(self, uid):
+        """_login_lock 안에서 번호를 보기 전에: 그 계정의 번호 입력이 막혔으면 429 (모든 주소)."""
+        with self._mfa_fails_lock:
+            e = self._mfa_fails.get(uid)
+            blocked = bool(e and e[1] > self._clock())
+        if blocked:
+            raise _Fail(429, "auth/too-many-requests", MFA_BLOCK_MSG)
+
+    def _mfa_fail(self, uid, h):
+        """틀린 번호 한 번 → 연속 MFA_FAIL_LIMIT 번째부터 MFA_FAIL_BLOCK 초 막는다 (막힘이 끝난 뒤 또 틀리면 다시).
+        이번에 막혔으면 기록 한 줄 → True (이력 locked 한 줄은 _history_fail 이)."""
+        with self._mfa_fails_lock:
+            e = self._mfa_fails.setdefault(uid, [0, 0])
+            e[0] += 1
+            start = e[0] >= MFA_FAIL_LIMIT
+            if start:
+                e[1] = self._clock() + MFA_FAIL_BLOCK
+            n = e[0]
+        if start:
+            self._log(f"웹 2단계 번호 잠금 - 연속 {n}번 틀려 {MFA_FAIL_BLOCK}초 (모든 주소)  아이디={uid}{self._at(h)}")
+        return start
+
+    def _mfa_ok(self, uid):
+        """2단계 성공(번호·복구 번호) 또는 관리자의 2단계 해제 → 셈을 0 으로 (막힘도 풀린다)."""
+        with self._mfa_fails_lock:
+            self._mfa_fails.pop(uid, None)
+
+    def _code_check(self, h, uid, pair, code, what, status=400):
+        """_login_lock 안에서 (_lock_gate·_mfa_gate 뒤) 인증 앱의 번호 하나를 확인한다.
+        이미 쓴 칸이면 400 auth/code-used - 어느 잠금에도 세지 않고 이력에도 남기지 않는다 (전체 검토 6).
+        틀리면 잠금 넷에 세고 status auth/invalid-code. 맞으면 2단계 연속 실패 셈을 0 으로."""
+        result = self.accounts.mfa_check_detail(uid, code, self._clock())
+        if result == "used":
+            raise _Fail(400, "auth/code-used", CODE_USED_MSG)
+        if result != "ok":
+            self._count_fail(h, uid, pair, what, "bad_code")
+            raise _Fail(status, "auth/invalid-code", "인증 번호가 일치하지 않습니다.")
+        self._mfa_ok(uid)
+
+    def _recovery_check(self, h, uid, pair, recovery, what, status=400):
+        """복구 번호 하나를 쓴다 (맞으면 그 번호는 없어진다) → 남은 개수. 틀리면 잠금 넷에 세고 status auth/invalid-code."""
+        left = self.accounts.mfa_use_recovery(uid, recovery)
+        if left is None:
+            self._count_fail(h, uid, pair, what, "bad_code")
+            raise _Fail(status, "auth/invalid-code", "복구 번호가 일치하지 않습니다.")
+        self._mfa_ok(uid)
+        return left
 
     def _login_mfa(self, h, query, body, sub):
         """POST /api/login/mfa {ticket, code} 또는 {ticket, recovery} → 세션 (복구 번호면 recoveryLeft 도)."""
@@ -1332,15 +1428,11 @@ class Web:
                 raise _Fail(401, "auth/ticket-expired", "로그인 시간이 지났습니다. 처음부터 다시 로그인하여 주십시오.")
             uid = acct["id"]
             pair = self._lock_gate(h, uid)
-            if code is not None:
-                ok = self.accounts.mfa_check(uid, code, self._clock())
+            self._mfa_gate(uid)                      # 계정의 2단계 연속 실패 막힘 (모든 주소)
+            if code is not None:                     # 표는 틀려도·쓴 번호여도 남는다 (5분 안에 다시)
+                self._code_check(h, uid, pair, code, "웹 로그인 2단계 실패", status=401)
             else:
-                left = self.accounts.mfa_use_recovery(uid, recovery)
-                ok = left is not None
-            if not ok:
-                self._count_fail(h, uid, pair, "웹 로그인 2단계 실패" if code is not None else "웹 로그인 복구 번호 실패", "bad_code")
-                raise _Fail(401, "auth/invalid-code", "인증 번호가 일치하지 않습니다." if code is not None
-                            else "복구 번호가 일치하지 않습니다.")
+                left = self._recovery_check(h, uid, pair, recovery, "웹 로그인 복구 번호 실패", status=401)
             self._ticket_drop(ticket)
             self.lockout.ok(pair)
             token = self._session_open(acct, h)
@@ -1362,24 +1454,43 @@ class Web:
         return fn(h, body)
 
     def _mfa_setup(self, h, body):
-        """POST /api/mfa/setup {password?} → {secret, uri}. 대기 비밀 값은 그 세션에 10분 (메모리).
-        이미 켜진 계정(다시 등록)은 비밀번호가 맞아야 한다."""
+        """POST /api/mfa/setup {password?, code? | recovery?} → {secret, uri} (+ 복구 번호를 썼으면 recoveryLeft).
+        대기 비밀 값은 그 세션에 10분 (메모리).
+        이미 켜진 계정(다시 등록)은 비밀번호와 함께 인증 앱의 지금 번호(code) 또는 복구 번호 하나(recovery, 쓰면 없어진다)가
+        맞아야 한다 (전체 검토 5 - 세션+비밀번호만으로 새 휴대폰을 등록해 범위 줄이기의 '지금 번호' 를 건너뛰지 못하게).
+        휴대폰을 잃은 사람은 복구 번호로 로그인한 뒤 남은 복구 번호로 다시 등록하고, 그것도 없으면 관리자가 풀어 준다 (설계 6.6).
+        (아이디, 주소) 잠금 셈은 번호까지 맞아야 지운다 (전체 검토 4)."""
         token, acct = self._auth(h, touch=True, mfa_ok=True)
         data = self._dict(body) if body else {}
         uid = acct["id"]
+        left = None
         if acct["mfa"]:
-            password = data.get("password")
+            password, code, recovery = data.get("password"), data.get("code"), data.get("recovery")
+            if (code is not None and recovery is not None) or (code is not None and not isinstance(code, str)) \
+                    or (recovery is not None and not isinstance(recovery, str)):
+                raise _Fail(400, "invalid-argument", "인증 번호 또는 복구 번호 가운데 하나를 입력하여 주십시오.")
             with self._login_lock:
                 pair = self._lock_gate(h, uid)
+                self._mfa_gate(uid)
                 if not isinstance(password, str) or self.accounts.verify(uid, password) is None:
                     if isinstance(password, str):
                         self._count_fail(h, uid, pair, "웹 2단계 다시 등록 - 비밀번호 틀림", "bad_password")
                     raise _Fail(403, "auth/wrong-password", "비밀번호가 일치하지 않습니다.")
+                if code is None and recovery is None:
+                    raise _Fail(400, "auth/invalid-code", "2단계 인증을 다시 등록하려면 인증 앱의 지금 번호 또는 복구 번호를 "
+                                                          "입력하여 주십시오.")
+                if code is not None:
+                    self._code_check(h, uid, pair, code, "웹 2단계 다시 등록 - 번호 틀림")
+                else:
+                    left = self._recovery_check(h, uid, pair, recovery, "웹 2단계 다시 등록 - 복구 번호 틀림")
                 self.lockout.ok(pair)
         secret = totp.new_secret()
         self.sessions.set_setup(token, secret, self._clock() + MFA_SETUP_SEC)
-        self._log(f"웹 2단계 등록 시작  아이디={uid}{self._at(h)}")
-        return {"secret": secret, "uri": totp.otpauth_uri(secret, uid)}
+        self._log(f"웹 2단계 등록 시작" + ("" if left is None else f" (복구 번호, 남은 {left}개)") + f"  아이디={uid}{self._at(h)}")
+        out = {"secret": secret, "uri": totp.otpauth_uri(secret, uid)}
+        if left is not None:
+            out["recoveryLeft"] = left
+        return out
 
     def _mfa_enable(self, h, body):
         """POST /api/mfa/enable {code} → {recovery: [8개], session}. 켜면 그 계정의 다른 세션을 닫는다."""
@@ -1393,6 +1504,7 @@ class Web:
         uid = acct["id"]
         with self._login_lock:
             pair = self._lock_gate(h, uid)
+            self._mfa_gate(uid)
             try:
                 codes = self.accounts.mfa_enable(uid, secret, code, self._clock())
             except NoAccount:
@@ -1400,6 +1512,7 @@ class Web:
             if codes is None:
                 self._count_fail(h, uid, pair, "웹 2단계 등록 - 번호 틀림", "bad_code")
                 raise _Fail(400, "auth/invalid-code", "인증 번호가 일치하지 않습니다.")
+            self._mfa_ok(uid)
             self.lockout.ok(pair)
             self.sessions.clear_setup(token)
             self.sessions.close_account(uid, keep=token)          # 다른 탭·PC 의 세션은 다시 로그인하게
@@ -1423,12 +1536,11 @@ class Web:
         uid = acct["id"]
         with self._login_lock:
             pair = self._lock_gate(h, uid)
+            self._mfa_gate(uid)
             if self.accounts.verify(uid, password) is None:
                 self._count_fail(h, uid, pair, "웹 2단계 끄기 - 비밀번호 틀림", "bad_password")
                 raise _Fail(403, "auth/wrong-password", "비밀번호가 일치하지 않습니다.")
-            if not self.accounts.mfa_check(uid, code, self._clock()):
-                self._count_fail(h, uid, pair, "웹 2단계 끄기 - 번호 틀림", "bad_code")
-                raise _Fail(400, "auth/invalid-code", "인증 번호가 일치하지 않습니다.")
+            self._code_check(h, uid, pair, code, "웹 2단계 끄기 - 번호 틀림")
             self.lockout.ok(pair)
             self.accounts.mfa_clear(uid)
             self._tickets_drop_account(uid)
@@ -1461,6 +1573,8 @@ class Web:
             old = self.security.get()
             if scope is not None and self._SCOPE_RANK[scope] < self._SCOPE_RANK[old["totp_scope"]]:
                 pair = self._lock_gate(h, uid)
+                if me["mfa"]:
+                    self._mfa_gate(uid)              # 번호를 받는 곳 - 계정의 2단계 연속 실패 막힘
                 password, code = data.get("password"), data.get("code")
                 if not isinstance(password, str) or self.accounts.verify(uid, password) is None:
                     if isinstance(password, str):
@@ -1468,11 +1582,9 @@ class Web:
                     raise _Fail(403, "auth/wrong-password", "2단계 인증 범위를 줄이려면 비밀번호를 입력하여 주십시오."
                                 if password is None else "비밀번호가 일치하지 않습니다.")
                 if me["mfa"]:
-                    if not isinstance(code, str) or not self.accounts.mfa_check(uid, code, self._clock()):
-                        if isinstance(code, str):
-                            self._count_fail(h, uid, pair, "웹 보안 설정 변경 - 번호 틀림", "bad_code")
-                        raise _Fail(400, "auth/invalid-code", "인증 앱의 지금 번호를 입력하여 주십시오."
-                                    if code is None else "인증 번호가 일치하지 않습니다.")
+                    if not isinstance(code, str):
+                        raise _Fail(400, "auth/invalid-code", "인증 앱의 지금 번호를 입력하여 주십시오.")
+                    self._code_check(h, uid, pair, code, "웹 보안 설정 변경 - 번호 틀림")
                 self.lockout.ok(pair)
             try:
                 new = self.security.set(totp_scope=scope, show_own_history=show)
@@ -1513,6 +1625,8 @@ class Web:
         return int(day.timestamp() * 1000)
 
     def _logins_query(self, **kw):
+        if self.login_log is None:                   # 켤 때 logins.db 를 열지 못했다 (전체 검토 1 - 서버 기록에 까닭)
+            raise _Fail(503, "unavailable", "로그인 이력을 열지 못했습니다. 서버 관리자에게 알려 주십시오.")
         try:
             return {"items": self.login_log.query(**kw)}
         except Exception as e:                       # 디스크 등 - 종류만 기록, 화면에는 잠시 뒤 다시
@@ -1714,7 +1828,8 @@ class Web:
             if disabled is not None:
                 self.accounts.disable(uid, disabled)
             if reset:
-                self.accounts.mfa_clear(uid)         # 다음 로그인에 (범위에 들면) 다시 등록한다
+                self.accounts.mfa_clear(uid)         # 다음 로그인에 (범위에 들면) 다시 등록한다 - 꼴이 깨진 mfa 칸도 이것으로만 풀린다
+                self._mfa_ok(uid)                    # 2단계 연속 실패 막힘도 풀어 다시 등록할 수 있게
         except WeakPassword as e:
             raise _Fail(400, "auth/weak-password", str(e)) from None
         except NoAccount as e:
@@ -1745,6 +1860,7 @@ class Web:
         except ValueError as e:
             raise _Fail(400, "invalid-argument", str(e)) from None
         self.sessions.close_account(uid)
+        self._mfa_ok(uid)                            # 같은 아이디로 다시 만든 계정이 옛 막힘을 물려받지 않게
         self._log(f"웹 계정 삭제  아이디={uid}  처리={me['id']}")
         return self._accounts_out()
 

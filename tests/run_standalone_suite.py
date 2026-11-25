@@ -26,7 +26,8 @@ SA = ["tests/test_license.py", "tests/test_local_store_core.py", "tests/test_loc
       # 사내 서버 ② (사내망·TLS)
       "tests/test_lan_config.py", "tests/test_lan_ca.py", "tests/test_lan_net.py", "tests/test_lan_tls.py", "tests/test_lan_review2.py",
       # 사내 서버 ③ (웹 인증 - 2단계·보안 설정·로그인 이력)
-      "tests/test_totp.py", "tests/test_accounts_v2.py", "tests/test_lan_mfa.py", "tests/test_login_log.py"]
+      "tests/test_totp.py", "tests/test_accounts_v2.py", "tests/test_lan_mfa.py", "tests/test_login_log.py",
+      "tests/test_lan_mfa_review.py"]
 WSL_SMOKE = "/mnt/d/AX/RPA_StandAlone/tests/wsl_lan_smoke.py"      # 'wsl' - 리눅스에서 사내 서버 한 번 (사내 서버 ② Task 8)
 CLOUD = ["firebase/tests/test_agent.py", "tests/test_fb_backoff.py", "tests/test_cloud_scrub.py", "tests/test_dev_env.py",
          "tests/test_background.py", "tests/test_rpa_update.py", "tests/test_otp_replay.py", "tests/test_build_release.py",

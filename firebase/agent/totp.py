@@ -51,28 +51,35 @@ def code_at(secret, step, digits=DIGITS):
     return str(value % (10 ** digits)).zfill(digits)
 
 
-def match(secret, code, now, last_step):
-    """번호가 맞으면 맞은 칸 번호, 아니면 None.
-    공백을 뺀 6자리 숫자 글만 본다. step_of(now)-WINDOW .. +WINDOW 칸 가운데 맞는 칸이 last_step 이하면 None (한 번 쓴 칸)."""
+def match_detail(secret, code, now, last_step):
+    """→ (맞은 칸 번호 또는 None, used). used 는 번호가 맞는 칸이지만 모두 last_step 이하(한 번 쓴 칸)라 받지 않았을 때만 True
+    (전체 검토 6 - 쓴 번호를 '틀린 번호' 로 세지 않게). 공백을 뺀 6자리 숫자 글만 본다.
+    step_of(now)-WINDOW .. +WINDOW 칸 가운데 아직 쓰지 않은 맞는 칸이 있으면 그 가운데 앞 칸."""
     if not isinstance(code, str):
-        return None
+        return None, False
     code = re.sub(r"\s+", "", code)
     if not _CODE_RE.fullmatch(code):
-        return None
+        return None, False
     try:
         _key(secret)
     except (ValueError, TypeError, AttributeError):
-        return None
+        return None, False
     now_step = step_of(now)
-    found = None
+    fresh, used = None, False
     for step in range(now_step - WINDOW, now_step + WINDOW + 1):       # 칸마다 다 견준다 (맞은 칸에서 멈추지 않는다)
-        if hmac.compare_digest(code_at(secret, step).encode("ascii"), code.encode("ascii")) and found is None:
-            found = step
-    if found is None:
-        return None
-    if last_step is not None and found <= last_step:
-        return None
-    return found
+        if hmac.compare_digest(code_at(secret, step).encode("ascii"), code.encode("ascii")):
+            if last_step is not None and step <= last_step:
+                used = True
+            elif fresh is None:
+                fresh = step
+    if fresh is not None:
+        return fresh, False
+    return None, used
+
+
+def match(secret, code, now, last_step):
+    """번호가 맞으면 맞은 칸 번호, 아니면 None (틀렸거나 한 번 쓴 칸 - 둘을 가르려면 match_detail)."""
+    return match_detail(secret, code, now, last_step)[0]
 
 
 def otpauth_uri(secret, account, issuer=ISSUER):
