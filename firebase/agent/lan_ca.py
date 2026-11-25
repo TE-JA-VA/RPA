@@ -38,7 +38,11 @@ NO_DNS = "autopilot.invalid"           # 이름이 없을 때 허용하는 하�
 NO_IP = "0.0.0.0/255.255.255.255"      # 주소가 없을 때 허용하는 하나뿐인 주소
 WINDOWS_OPENSSL = (r"C:\Program Files\Git\usr\bin\openssl.exe", r"C:\Program Files\Git\mingw64\bin\openssl.exe")
 CREATE_NO_WINDOW = 0x08000000
+CURRENT = "current"                    # replace_pair 가 갈아 끼우는 쌍 폴더 (리눅스는 pair-* 를 가리키는 링크)
+PAIR_PREFIX = "pair-"
+FORCE_CA_STARTDATE = False             # 시험 손잡이 - openssl 이 x509 -not_before 를 모르는 척 (3.0 의 `ca -startdate` 길로)
 _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_NOT_BEFORE = {}                       # openssl 자리 → x509 -not_before 를 아는가 (한 번만 묻는다)
 
 
 class CaError(Exception):
@@ -69,6 +73,28 @@ def _run(openssl, args):
         tail = r.stderr.decode("utf-8", "replace").strip()[-300:]
         raise CaError(f"openssl {args[0]} 이 실패했습니다: {tail}")
     return r.stdout.decode("utf-8", "replace")
+
+
+def _x509_not_before(openssl):
+    """openssl x509 가 -not_before 를 아는가 (OpenSSL 3.4 부터 - NT 의 3.0·Git 의 3.2 는 모른다). `x509 -help` 의 글로 본다
+    (종료 코드는 판마다 달라 보지 않는다). 시험 손잡이 FORCE_CA_STARTDATE 면 모르는 것으로."""
+    if FORCE_CA_STARTDATE:
+        return False
+    exe = openssl or find_openssl()
+    if exe not in _NOT_BEFORE:
+        env = dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*")
+        try:
+            r = subprocess.run([exe, "x509", "-help"], capture_output=True, timeout=TIMEOUT, env=env, stdin=subprocess.DEVNULL,
+                               creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0)
+            _NOT_BEFORE[exe] = b"-not_before" in r.stdout + r.stderr
+        except (OSError, subprocess.SubprocessError):
+            _NOT_BEFORE[exe] = False
+    return _NOT_BEFORE[exe]
+
+
+def _asn1(t):
+    """초 → openssl 시각 글 YYYYMMDDHHMMSSZ (UTC)."""
+    return time.strftime("%Y%m%d%H%M%SZ", time.gmtime(t))
 
 
 def _ip(value):
@@ -175,9 +201,12 @@ def make_ca(ca_dir, names, ips, openssl=None):
     return ca_dir
 
 
-def issue_server(ca_dir, out_dir, names, ips, days=SERVER_DAYS, openssl=None):
+def issue_server(ca_dir, out_dir, names, ips, days=SERVER_DAYS, openssl=None, backdate_days=0):
     """인증 기관 열쇠로 서버 인증서를 발급해 out_dir 에 server_cert.pem·server_key.pem 으로 둔다 → (인증서 자리, 열쇠 자리).
-    새 P-256 열쇠, SAN = DNS 이름들 + IP 들, serverAuth, CA:FALSE. 이름 제한 밖이면 CaError (파일을 바꾸지 않는다)."""
+    새 P-256 열쇠, SAN = DNS 이름들 + IP 들, serverAuth, CA:FALSE. 이름 제한 밖이면 CaError (파일을 바꾸지 않는다).
+    backdate_days: 시작 시각(notBefore)을 그 날 수만큼 앞당긴다 - 시계가 조금 늦은 PC 가 막 만든 인증서를 '아직 유효하지 않음' 으로
+    거절하지 않게 (사내 서버 ④ Task 4, ②-T2). 끝(notAfter)은 지금부터 days. openssl 이 x509 -not_before 를 알면(3.4 부터) 그것으로,
+    모르면(3.0) `openssl ca -startdate` 길 (임시 ca 설정·index·serial 은 결과 폴더 안 임시 폴더에)."""
     if os.path.normcase(os.path.realpath(ca_dir)) == os.path.normcase(os.path.realpath(out_dir)):
         raise CaError("서버 인증서는 인증 기관 열쇠와 다른 폴더에 두어야 합니다.")
     ca_cert, ca_key = os.path.join(ca_dir, CA_CERT), os.path.join(ca_dir, CA_KEY)
@@ -186,6 +215,8 @@ def issue_server(ca_dir, out_dir, names, ips, days=SERVER_DAYS, openssl=None):
     dns, addrs = _split(names, ips)
     if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= SERVER_DAYS:
         raise CaError(f"서버 인증서 날 수는 1~{SERVER_DAYS} 이어야 합니다.")
+    if not isinstance(backdate_days, int) or isinstance(backdate_days, bool) or not 0 <= backdate_days <= 1:
+        raise CaError("서버 인증서를 앞당기는 날 수는 0 이나 1 이어야 합니다.")     # 전체 기간이 브라우저 상한 398일을 넘지 않게
     san = ",".join([f"DNS:{d}" for d in dns] + [f"IP:{a}" for a in addrs])
     # DNS 이름이 없으면 CN 을 이름 꼴이 아닌 글로 - openssl 은 DNS SAN 이 없을 때 이름 꼴 CN('127.0.0.1')을 DNS 제한에 견준다
     cn = dns[0] if dns else SERVER_CN
@@ -201,8 +232,17 @@ def issue_server(ca_dir, out_dir, names, ips, days=SERVER_DAYS, openssl=None):
         tmp_key, csr, tmp_cert = os.path.join(work, SERVER_KEY), os.path.join(work, "server.csr"), os.path.join(work, SERVER_CERT)
         _genkey(openssl, tmp_key)
         _run(openssl, ["req", "-new", "-config", cfg, "-key", tmp_key, "-sha256", "-out", csr])
-        _run(openssl, ["x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key, "-sha256", "-days", str(days),
-                       "-set_serial", str(secrets.randbits(63) or 1), "-extfile", ext, "-extensions", "v3_srv", "-out", tmp_cert])
+        now = time.time()
+        start, end = _asn1(now - backdate_days * 86400), _asn1(now + days * 86400)
+        if not backdate_days:
+            _run(openssl, ["x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key, "-sha256", "-days", str(days),
+                           "-set_serial", str(secrets.randbits(63) or 1), "-extfile", ext, "-extensions", "v3_srv", "-out", tmp_cert])
+        elif _x509_not_before(openssl):
+            _run(openssl, ["x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key, "-sha256", "-not_before", start,
+                           "-not_after", end, "-set_serial", str(secrets.randbits(63) or 1), "-extfile", ext, "-extensions", "v3_srv",
+                           "-out", tmp_cert])
+        else:
+            _ca_sign(openssl, work, csr, ca_cert, ca_key, ext, start, end, tmp_cert)
         try:
             _run(openssl, ["verify", "-x509_strict", "-purpose", "sslserver", "-no-CApath", "-no-CAstore",
                            "-CAfile", ca_cert, tmp_cert])
@@ -215,6 +255,85 @@ def issue_server(ca_dir, out_dir, names, ips, days=SERVER_DAYS, openssl=None):
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return cert_path, key_path
+
+
+def _cnf_path(path):
+    """openssl 설정 파일 안에 적는 경로 - 역슬래시는 설정 글에서 이스케이프라 / 로 (윈도우 시험)."""
+    return path.replace("\\", "/")
+
+
+def _ca_sign(openssl, work, csr, ca_cert, ca_key, ext, start, end, out):
+    """`openssl ca -startdate -enddate` 로 서명 (x509 -not_before 를 모르는 openssl 3.0 길). 임시 ca 설정·index·serial 은 work 안에."""
+    db = os.path.join(work, "index.txt")
+    _write(work, "index.txt", "")
+    _write(work, "serial", f"{secrets.randbits(63) or 1:016x}\n")
+    cnf = _write(work, "ca_sign.cnf", "\n".join([
+        "[ca]", "default_ca = srvca",
+        "[srvca]", f"database = {_cnf_path(db)}", f"new_certs_dir = {_cnf_path(work)}",
+        f"serial = {_cnf_path(os.path.join(work, 'serial'))}", "default_md = sha256", "policy = pol", "unique_subject = no",
+        "copy_extensions = none", "email_in_dn = no",
+        "[pol]", "commonName = supplied", ""]))
+    _run(openssl, ["ca", "-batch", "-notext", "-config", cnf, "-in", csr, "-out", out, "-cert", ca_cert, "-keyfile", ca_key,
+                   "-startdate", start, "-enddate", end, "-extfile", ext, "-extensions", "v3_srv", "-md", "sha256"])
+
+
+def _switch(folder, name):
+    """folder/current 가 folder/name 을 가리키게 한 번에 바꾼다. 리눅스: 임시 링크를 만들어 os.replace (원자적 - 읽는 쪽은 옛 쌍이나
+    새 쌍 하나만 본다). 윈도우(시험): 옛 폴더를 옆으로 옮기고 새 폴더 이름을 current 로."""
+    cur = os.path.join(folder, CURRENT)
+    if os.name == "posix":
+        if os.path.isdir(cur) and not os.path.islink(cur):         # 예전 꼴 (current 가 진짜 폴더) - 한 번만 옆으로
+            os.replace(cur, os.path.join(folder, PAIR_PREFIX + "legacy-" + secrets.token_hex(4)))
+        tmp = os.path.join(folder, f".{CURRENT}-{secrets.token_hex(4)}")
+        os.symlink(name, tmp)
+        try:
+            os.replace(tmp, cur)
+        except BaseException:
+            os.remove(tmp)
+            raise
+        return
+    old = None
+    if os.path.isdir(cur):
+        old = os.path.join(folder, PAIR_PREFIX + "old-" + secrets.token_hex(4))
+        os.replace(cur, old)
+    os.replace(os.path.join(folder, name), cur)
+    if old:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def replace_pair(folder, cert_text, key_text, owner=None):
+    """인증서·열쇠 쌍을 folder/current 에 갈아 끼운다 → folder/current (사내 서버 ④ Task 4, ②검-7).
+    두 파일을 같은 폴더의 새 하위 폴더(pair-*)에 다 쓰고(fsync, 열쇠 0600) 폴더 바꾸기 한 번으로 건다 - 어느 줄에서 끊겨도 읽는 쪽은
+    옛 쌍이나 새 쌍 하나를 온전히 본다 (인증서와 열쇠가 서로 다른 쌍이 되지 않는다). 읽는 쪽은 current 를 실제 자리로 풀어
+    (os.path.realpath) 그 안의 두 파일을 읽는다. owner = (uid, gid) 면 걸기 전에 새 폴더·파일의 소유자를 바꾼다 (root 의 renew 가
+    서비스 계정에 넘김). 끝나면 걸리지 않은 옛 쌍·반쯤 만든 쌍을 지운다. 열쇠 내용은 찍지 않는다."""
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    new = tempfile.mkdtemp(prefix=PAIR_PREFIX, dir=folder)          # 0700
+    try:
+        for name, text in ((SERVER_CERT, cert_text), (SERVER_KEY, key_text)):
+            fd = os.open(os.path.join(new, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+            with os.fdopen(fd, "w", encoding="ascii", newline="\n") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+        if owner is not None:
+            for p in (new, os.path.join(new, SERVER_CERT), os.path.join(new, SERVER_KEY)):
+                os.chown(p, *owner)
+        _switch(folder, os.path.basename(new))
+    except BaseException:
+        shutil.rmtree(new, ignore_errors=True)
+        raise
+    live = os.path.realpath(os.path.join(folder, CURRENT))
+    for n in os.listdir(folder):
+        p = os.path.join(folder, n)
+        if n.startswith(PAIR_PREFIX) and os.path.realpath(p) != live:
+            shutil.rmtree(p, ignore_errors=True)
+        elif n.startswith(f".{CURRENT}-") and os.path.islink(p):     # 걸지 못한 임시 링크
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    return os.path.join(folder, CURRENT)
 
 
 def ca_pem(ca_dir):

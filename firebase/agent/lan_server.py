@@ -311,17 +311,20 @@ def _open(cfg, side, address, tls, store, runs, lic, registry, folder=None, web=
     return srv
 
 
-def make_lan_servers(store, runs, lic, registry, web, cfg, cert, key, ca_pem, phone=None):
+def make_lan_servers(store, runs, lic, registry, web, cfg, cert, key, ca_pem, phone=None, web_cert=None, web_key=None):
     """사내망 두 포트 → (웹, 에이전트) LanServer (serve_forever 는 부르는 쪽이). 둘 다 같은 store·runs·registry 를 쓰고 길만 나눈다.
     웹: cfg.web_listen:cfg.web_port, web_plain 이면 평문 (같은 장비의 프록시가 TLS 를 끝낸 모양 - 127.0.0.1 에서만), 아니면 TLS.
     에이전트: cfg.listen:cfg.agent_port, 늘 TLS (우리 인증 기관의 서버 인증서 - 에이전트는 그 인증 기관만 믿는다).
     웹 창구(web, local_web.Web)에 등록 글의 서버 주소 public_url(이름이 아니라 IP - 사내 PC 가 이름을 못 풀어도 붙고, 서버 인증서
     SAN 에 늘 있다)·인증 기관 글 lan_ca_pem·설정 cfg 를 적는다. 포트 0(시험)이면 묶인 포트로 cfg 를 고쳐 두 서버·웹 창구가 같이 쓴다.
     한쪽을 못 열면 다른 쪽도 닫고 OSError·ValueError 를 그대로 낸다.
-    웹 창구의 등록부가 registry 와 다르면 포트를 열기 전에 ValueError (local_server.check_web, 검토 M-11)."""
+    웹 창구의 등록부가 registry 와 다르면 포트를 열기 전에 ValueError (local_server.check_web, 검토 M-11).
+    web_cert·web_key: 업체 웹 인증서 (사내 서버 ④ Task 4, ②보-2 - `autopilot-server cert --import-web`). 둘 다 있으면 웹 포트만 그것을
+    쓴다. 에이전트 포트는 늘 우리 인증 기관의 인증서 (에이전트는 그 인증 기관만 믿는다)."""
     local_server.check_web(web, registry)
     tls = tls_context(cert, key)
-    w = _open(cfg, "web", (cfg.web_listen, cfg.web_port), None if cfg.web_plain else tls, store, runs, lic, registry,
+    web_tls = tls_context(web_cert, web_key) if web_cert and web_key else tls
+    w = _open(cfg, "web", (cfg.web_listen, cfg.web_port), None if cfg.web_plain else web_tls, store, runs, lic, registry,
               web=web, phone=phone)
     try:
         a = _open(cfg, "agent", (cfg.listen, cfg.agent_port), tls, store, runs, lic, registry, web=web, phone=phone)
