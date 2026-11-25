@@ -1,27 +1,37 @@
 #!/bin/sh
 # install.sh - 오토파일럿 사내 서버(리눅스) 설치, 활성화, 업그레이드 (POSIX sh)
 #
-# 처음 설치 (root):
-#   1. 공급사가 다른 길(메일과 전화 등)로 알려 준 SHA-256 을 먼저 맞춘다:
+# 처음 설치 (root) - 받은 파일은 풀기 전에 지문부터 맞추고, root 만 쓸 수 있는 폴더에 푼다:
+#   1. 받은 tar.gz 를 풀기 전에, 공급사가 다른 길(메일과 전화 등)로 따로 알려 준 SHA-256 과 같은지 본다
+#      (다르면 풀지 말고 공급사에 연락한다):
 #        sha256sum AUTOPILOT_Server_<버전>_linux-x86_64.tar.gz
-#   2. tar -xzf AUTOPILOT_Server_<버전>_linux-x86_64.tar.gz        (같은 폴더에 autopilot-server-<버전>/ 이 생긴다)
-#   3. sh autopilot-server-<버전>/server/install.sh install --expect-sha256 <값> --listen <서버 사내 IP> --allow <PC 대역>[,<대역>]
-#           [--names <이름>[,<이름>]] [--bundle <tar.gz 자리>] [--apply-firewall] [--yes]
-#      라이선스 없이 끝난다. 화면에 나온 요청 파일(/var/lib/autopilot/server_request.json)을 공급사에 보낸다.
-#   4. sh autopilot-server-<버전>/server/install.sh activate <받은 라이선스 파일>
+#   2. root 만 쓸 수 있는 폴더를 만들어 그 안에 옮겨 푼다 (다른 계정이 풀린 파일을 바꾸어 두지 못하게):
+#        sudo install -d -m 0700 /root/autopilot-install
+#        sudo cp AUTOPILOT_Server_<버전>_linux-x86_64.tar.gz /root/autopilot-install/
+#        sudo tar -xzf /root/autopilot-install/AUTOPILOT_Server_<버전>_linux-x86_64.tar.gz -C /root/autopilot-install
+#   3. 그 폴더의 install.sh 를 root 로 돌린다:
+#        sudo sh /root/autopilot-install/autopilot-server-<버전>/server/install.sh install --expect-sha256 <값>
+#             --listen <서버 사내 IP> --allow <PC 대역>[,<대역>] [--names <이름>[,<이름>]] [--bundle <tar.gz 자리>]
+#             [--apply-firewall] [--yes]
+#      install.sh 는 tar.gz 를 root 전용 임시 폴더로 복사해 그 사본의 SHA-256 을 다시 맞추고, 그 사본을 풀어 버전 목록과
+#      대조한 것만 설치한다 (풀어 둔 폴더의 파이썬·도우미는 돌리지 않는다). 라이선스 없이 끝난다.
+#      화면에 나온 요청 파일(/var/lib/autopilot/server_request.json)을 공급사에 보낸다.
+#   4. sudo sh /root/autopilot-install/autopilot-server-<버전>/server/install.sh activate <받은 라이선스 파일>
 #      서비스를 켜고 실제로 도는 버전을 확인한다. 관리자 계정이 없으면 만드는 순서를 보여 준다.
 # 업그레이드 (root): autopilot-server upgrade <새 tar.gz>
 #      깔린 도구가 새 파일의 서명을 먼저 확인한 뒤 그 안의 이 파일을 'upgrade --verified-version <버전>' 으로 부른다.
 #
 # 어느 단계에서 끊겨도(오류, Ctrl+C, kill) 그 단계까지 한 일을 되돌린다 (trap). 업그레이드는 current 링크를 바꾼 뒤 끊기거나
-# 새 버전이 30초 안에 돌지 않으면 링크와 단위 파일을 되돌리고 옛 버전을 다시 켠다.
+# 새 버전이 30초 안에 돌지 않으면 링크와 단위 파일을 되돌리고 옛 버전을 다시 켠다. 링크를 되돌리지 못하면 지금 쓰는 버전과
+# 단위 파일 사본을 지우지 않고 손으로 할 일을 적는다.
 #
 # 시험 전용 (WSL, tests/wsl_install.py):
 #   --root <PREFIX>        모든 자리를 PREFIX 아래로. root 확인을 건너뛰고, systemctl·useradd·userdel·ufw·firewall-cmd 는
 #                          AP_FAKE_BIN 의 가짜에서만 찾는다 (이 장비의 진짜 명령을 부르지 않는다)
 #   --no-systemd           systemctl 을 부르지 않는다
 #   --service-user <계정>  서비스 계정 (--root 와 함께만)
-#   환경 변수 AP_START_WAIT(초, 기본 30), AP_MIN_FREE_MB(기본 2048), AP_TEST_DIE_AFTER_LINK=1(--root 에서만)
+#   환경 변수 AP_START_WAIT(초, 기본 30), AP_MIN_FREE_MB(기본 2048). --root 에서만: AP_TEST_DIE_AFTER_LINK=1,
+#   AP_TEST_DIE_IN_UNITS_BACKUP=1, AP_TEST_FAIL_RESTORE_LINK=1, AP_TEST_SWAP_TAR=<파일>(지문을 본 뒤 원래 tar.gz 를 바꿔치기)
 set -eu
 umask 022
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -38,8 +48,8 @@ SYSTEMD_MIN=235
 OPT_MIN_MB=500
 PYMAIN='import sys; sys.path.insert(0, sys.argv.pop(1)); import server_main; sys.exit(server_main.main(sys.argv[1:]))'
 
-usage() {
-    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+usage() {           # 머리 주석 (둘째 줄부터 set -eu 앞까지)
+    sed -n '2,/^set -eu$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
 HERE=$(cd "$(dirname "$0")" && pwd -P)
@@ -151,8 +161,12 @@ sysd() {        # systemctl (--no-systemd 면 부르지 않는다)
 need_root() {
     if [ -z "$ROOT" ] && [ "$(id -u)" != 0 ]; then die "root 로 실행하여 주십시오 (sudo sh $0 $CMD ...)."; fi
 }
-HX=$BUNDLE      # 도우미·파이썬을 꺼낼 버전 폴더 (설치 파일 → 풀어 놓은 새 버전 → 설치된 버전)
+# 도우미·파이썬을 꺼낼 버전 폴더. 처음 설치는 지문을 맞춘 root 전용 사본을 푼 자리(VSTAGE)만 - 사람이 풀어 둔 폴더(BUNDLE)의
+# 파이썬·도우미는 root 로 돌리지 않는다 (Codex 중간 검토 1). 업그레이드는 깔린 도구가 서명을 확인하고 root 전용 자리에 푼
+# BUNDLE, 활성화는 설치된 버전.
+HX=""
 H() {           # install_helper.py
+    if [ -z "$HX" ]; then die "내부 오류: 도우미를 꺼낼 확인된 버전 폴더가 없습니다."; fi
     "$HX/python/bin/python3" -I -B "$HX/server/install_helper.py" "$@"
 }
 ap_rel() {      # 버전 폴더의 server_main (current 링크 전) - 실행 글과 같은 줄
@@ -164,9 +178,11 @@ ap_rel() {      # 버전 폴더의 server_main (current 링크 전) - 실행 글
 # 되돌리기 (trap)
 # ----------------------------------------------------------------------------------------------------
 UNDO=""         # 이번에 새로 만든 자리 (줄마다 하나) - 실패하면 지운다
+KEEP=""         # 되돌리기가 지우지 않을 자리 (단위 파일을 다 되돌리지 못했을 때의 사본 등)
 MADE_USER=0
 LINK_PREV=""    # 업그레이드: 바꾸기 전 current 링크 (비면 링크를 바꾸지 않았다)
-UNITS_SAVED=""  # 업그레이드: 옛 단위 파일 사본 폴더
+UNITS_SAVED=""  # 업그레이드: 옛 단위 파일 사본 폴더 - 사본을 다 만든 뒤에만 채운다 (안의 had.list = 원래 있던 단위 이름)
+TMPD=""         # 처음 설치: tar.gz 사본을 확인하고 푸는 root 전용 임시 폴더 (끝나면 늘 지운다)
 DONE=0
 track() {
     for _p in "$@"; do
@@ -183,6 +199,12 @@ safe_rm() {     # 정해진 자리 안만 지운다
         *) err "되돌리기: 정해진 자리 밖이라 지우지 않습니다 ($1)" ;;
     esac
 }
+clean_tmp() {   # root 전용 임시 폴더 (처음 설치) - 이름 꼴이 맞을 때만
+    case "$TMPD" in
+        */.autopilot-install.*) rm -rf "$TMPD" ;;
+    esac
+    TMPD=""
+}
 write_launcher() {  # /usr/local/sbin/autopilot-server - 진짜는 current 의 실행 글에 링크, 시험(--root)은 자리를 바꾼 사본
     _tmp=$SBIN/.autopilot-server.new
     rm -f "$_tmp"
@@ -197,29 +219,53 @@ write_launcher() {  # /usr/local/sbin/autopilot-server - 진짜는 current 의 �
     mv -f "$_tmp" "$AP"
 }
 restore_link() {
+    if [ -n "$ROOT" ] && [ "${AP_TEST_FAIL_RESTORE_LINK:-}" = 1 ]; then return 1; fi      # 시험: inode 부족 등으로 실패
     rm -f "$OPT/.current.undo"
     ln -s "$LINK_PREV" "$OPT/.current.undo" && mv -T "$OPT/.current.undo" "$CUR"
 }
 undo() {
     set +e
     if [ -n "$LINK_PREV" ]; then
-        if restore_link; then say "  current 를 ${LINK_PREV#releases/} 로 되돌렸습니다."
-        else err "current 링크를 되돌리지 못했습니다 - $CUR 가 $LINK_PREV 를 가리키게 손으로 맞추어 주십시오."; fi
-        if [ -n "$ROOT" ]; then write_launcher >/dev/null 2>&1; fi
+        if restore_link; then
+            say "  current 를 ${LINK_PREV#releases/} 로 되돌렸습니다."
+            if [ -n "$ROOT" ]; then write_launcher >/dev/null 2>&1; fi
+        else
+            # current 가 새 버전을 가리킨 채다 - 그 폴더·단위 사본을 지우면 current 가 끊어진다 (Codex 중간 검토 7). 아무것도 더 바꾸지 않는다
+            _now=$(readlink "$CUR" 2>/dev/null)
+            err "current 링크를 옛 버전($LINK_PREV)으로 되돌리지 못했습니다. 지금 current 가 가리키는 ${_now:-?} 와"
+            err "  단위 파일 사본은 지우지 않았고, 서비스도 다시 켜지 않았습니다. 디스크 공간을 확인한 뒤 손으로 맞추어 주십시오:"
+            err "    ln -s $LINK_PREV $OPT/.current.fix && mv -T $OPT/.current.fix $CUR"
+            if [ -n "$UNITS_SAVED" ]; then
+                err "    단위 파일: $UNITS_SAVED 의 사본을 $UNITDIR 에 복사 (had.list 에 없는 autopilot 단위는 지움), systemctl daemon-reload"
+            fi
+            err "    systemctl restart autopilot  →  autopilot-server status 로 도는 버전 확인"
+            err "    다 맞춘 뒤 ${_now:-새 버전 폴더} 와 ${UNITS_SAVED:-단위 사본} 은 지워도 됩니다."
+            return 0
+        fi
     fi
-    if [ -n "$UNITS_SAVED" ] && [ -d "$UNITS_SAVED" ]; then
+    if [ -n "$UNITS_SAVED" ] && [ -f "$UNITS_SAVED/had.list" ]; then
+        _ubad=0
         for _u in $UNITS; do
-            if [ -f "$UNITS_SAVED/$_u" ]; then cp -p "$UNITS_SAVED/$_u" "$UNITDIR/$_u"; else rm -f "$UNITDIR/$_u"; fi
+            if grep -qxF "$_u" "$UNITS_SAVED/had.list"; then
+                cp -p "$UNITS_SAVED/$_u" "$UNITDIR/$_u" || _ubad=1
+            else
+                rm -f "$UNITDIR/$_u"                    # 원래 없던 단위 (이번에 새로 생긴 것)
+            fi
         done
         sysd daemon-reload >/dev/null 2>&1
-        say "  systemd 단위 파일을 되돌렸습니다."
+        if [ "$_ubad" = 0 ]; then
+            say "  systemd 단위 파일을 되돌렸습니다."
+        else
+            KEEP="$UNITS_SAVED"
+            err "단위 파일 일부를 되돌리지 못했습니다 - $UNITS_SAVED 의 사본을 $UNITDIR 에 손으로 복사한 뒤 systemctl daemon-reload 하여 주십시오."
+        fi
     fi
     if [ -n "$LINK_PREV" ] && [ "$NOSD" != 1 ]; then
         if sysd restart autopilot.service; then say "  옛 버전(${LINK_PREV#releases/})으로 서비스를 다시 켰습니다."
         else err "서비스를 다시 켜지 못했습니다: systemctl status autopilot"; fi
     fi
     printf '%s\n' "$UNDO" | while IFS= read -r _p; do
-        if [ -n "$_p" ]; then safe_rm "$_p"; fi
+        if [ -n "$_p" ] && [ "$_p" != "$KEEP" ]; then safe_rm "$_p"; fi
     done
     if [ "$MADE_USER" = 1 ]; then
         _d=$(tool userdel)
@@ -234,6 +280,7 @@ on_exit() {
         err "멈췄습니다. 이 단계까지 한 일을 되돌립니다."
         undo
     fi
+    clean_tmp
     exit "$_rc"
 }
 trap on_exit EXIT
@@ -244,7 +291,7 @@ trap 'exit 129' HUP
 # ----------------------------------------------------------------------------------------------------
 # 단계
 # ----------------------------------------------------------------------------------------------------
-check_sha() {
+stage_verified() {  # 처음 설치: 받은 tar.gz → root 전용 임시 폴더(0700)의 사본 → 사본의 SHA-256 → 사본을 풀어 버전 목록과 대조 (VSTAGE)
     _f=${BUNDLE_FILE:-$(dirname "$BUNDLE")/AUTOPILOT_Server_${V}_linux-x86_64.tar.gz}
     if [ ! -f "$_f" ]; then
         die "설치 파일을 찾지 못했습니다 ($_f) - 아무것도 하지 않았습니다. 받은 tar.gz 의 자리를 --bundle <파일> 로 알려 주십시오."
@@ -254,12 +301,29 @@ check_sha() {
         *[!0-9a-f]*|"") die "--expect-sha256 은 64자리 16진수입니다 - 아무것도 하지 않았습니다." ;;
     esac
     if [ "${#_want}" -ne 64 ]; then die "--expect-sha256 은 64자리 16진수입니다 - 아무것도 하지 않았습니다."; fi
-    _got=$(sha256sum "$_f" | cut -d' ' -f1)
+    if [ -n "$ROOT" ]; then _tb=$ROOT; else _tb=/var/tmp; fi
+    TMPD=$(mktemp -d "$_tb/.autopilot-install.XXXXXX") || die "root 전용 임시 폴더를 만들지 못했습니다 ($_tb) - 아무것도 하지 않았습니다."
+    chmod 0700 "$TMPD"
+    # 확인한 바이트를 그대로 푼다 - 원래 파일은 이 사본을 뜬 뒤 다시 열지 않는다 (확인과 풀기 사이에 바뀌어도 상관없게)
+    cp "$_f" "$TMPD/bundle.tar.gz" || die "설치 파일을 root 전용 임시 폴더로 복사하지 못했습니다 - 아무것도 하지 않았습니다."
+    _got=$(sha256sum "$TMPD/bundle.tar.gz" | cut -d' ' -f1)
     if [ "$_got" != "$_want" ]; then
         die "설치 파일의 SHA-256 이 알려 준 값과 다릅니다 - 아무것도 하지 않았습니다. 파일을 다시 받고 공급사에 값을 다시 확인하여 주십시오. (이 파일: $_got)"
     fi
-    BUNDLE_TAR=$_f
-    say "설치 파일의 SHA-256 이 알려 준 값과 같습니다."
+    if [ -n "$ROOT" ] && [ -n "${AP_TEST_SWAP_TAR:-}" ]; then cp "$AP_TEST_SWAP_TAR" "$_f"; fi     # 시험: 확인 뒤 바꿔치기
+    say "설치 파일의 SHA-256 이 알려 준 값과 같습니다 (root 전용 사본으로 확인)."
+    VSTAGE=$TMPD/b
+    mkdir -m 0755 "$VSTAGE"
+    tar -xzf "$TMPD/bundle.tar.gz" -C "$VSTAGE" --strip-components=1 --no-same-owner \
+        || die "설치 파일을 풀지 못했습니다 - 아무것도 하지 않았습니다."
+    rm -f "$TMPD/bundle.tar.gz"
+    # 여기서부터 파이썬은 지문을 맞춘 사본을 푼 것만 (사람이 풀어 둔 폴더의 것은 돌리지 않는다)
+    if ! "$VSTAGE/python/bin/python3" -I -B -c pass >/dev/null 2>&1; then
+        die "설치 전 점검에서 멈췄습니다 - 아무것도 하지 않았습니다.
+  - 내장 파이썬이 이 서버에서 돌지 않습니다 (glibc 2.17 이상, x86-64 CPU 가 필요합니다)."
+    fi
+    HX=$VSTAGE
+    H verify-tree "$VSTAGE" "$V" || die "설치 파일 안의 파일이 버전 목록과 맞지 않습니다 - 아무것도 하지 않았습니다."
 }
 
 free_mb() {     # 자리(없으면 있는 위 폴더)의 남은 공간 MB
@@ -268,13 +332,11 @@ free_mb() {     # 자리(없으면 있는 위 폴더)의 남은 공간 MB
     df -Pk "$_d" | awk 'NR == 2 { print int($4 / 1024) }'
 }
 
-preflight() {   # 설치 전 점검 - 하나라도 안 되면 무엇이 모자란지 모두 적고 멈춘다
+preflight() {   # 설치 전 점검 (파이썬 말고) - 하나라도 안 되면 무엇이 모자란지 모두 적고 멈춘다
     _bad=""
     _a=$(uname -m)
     if [ "$_a" != x86_64 ]; then _bad="$_bad
   - CPU 종류가 x86_64 가 아닙니다 ($_a)."; fi
-    if ! "$HX/python/bin/python3" -I -B -c pass >/dev/null 2>&1; then _bad="$_bad
-  - 내장 파이썬이 이 서버에서 돌지 않습니다 (glibc 2.17 이상, x86-64 CPU 가 필요합니다)."; fi
     _o=$(tool_ro openssl)
     if [ -z "$_o" ] || ! "$_o" version >/dev/null 2>&1; then _bad="$_bad
   - openssl 명령이 없거나 돌지 않습니다 (배포판 설치 매체로 openssl 을 깔아 주십시오)."; fi
@@ -295,6 +357,21 @@ preflight() {   # 설치 전 점검 - 하나라도 안 되면 무엇이 모자�
         fi
     fi
     if [ -n "$_bad" ]; then die "설치 전 점검에서 멈췄습니다 - 아무것도 하지 않았습니다.$_bad"; fi
+}
+py_check() {    # 업그레이드: 깔린 도구가 서명을 확인해 푼 새 버전의 내장 파이썬이 도는지
+    if ! "$HX/python/bin/python3" -I -B -c pass >/dev/null 2>&1; then
+        die "설치 전 점검에서 멈췄습니다 - 아무것도 바꾸지 않았습니다.
+  - 새 버전의 내장 파이썬이 이 서버에서 돌지 않습니다 (glibc 2.17 이상, x86-64 CPU 가 필요합니다)."
+    fi
+}
+bundle_notice() {   # 처음 설치: 풀어 둔 폴더를 root 가 아닌 계정이 바꿀 수 있으면 알린다 (이 파일 자체가 그 폴더에서 돈다)
+    if [ -n "$ROOT" ]; then return 0; fi
+    _w=$(find "$BUNDLE" "$(dirname "$BUNDLE")" -maxdepth 0 \( ! -user 0 -o -perm -0002 \) 2>/dev/null || true)
+    if [ -n "$_w" ]; then
+        say "알림: 설치 파일을 푼 폴더를 root 가 아닌 계정도 바꿀 수 있습니다 ($_w)."
+        say "      root 전용 폴더에 다시 푸는 것을 추천합니다: sudo install -d -m 0700 /root/autopilot-install (sh install.sh --help)"
+    fi
+    return 0
 }
 
 CFG_JSON=""
@@ -397,6 +474,28 @@ install_units() {   # $1 = 새 버전의 server/ - @ALLOW@ 는 server.json 의 a
         chmod 0644 "$UNITDIR/.$_u.new"
         mv -f "$UNITDIR/.$_u.new" "$UNITDIR/$_u"
     done
+}
+
+save_units() {      # 업그레이드: 옛 단위 파일 사본 - 임시 폴더에 다 만든 뒤 이름 바꾸기 한 번으로 UNITS_SAVED 가 된다 (Codex 중간 검토 6)
+    _us=$OPT/.units-before-$V
+    _ut=$_us.tmp
+    rm -rf "$_ut" "$_us"
+    track "$_ut"
+    mkdir -m 0700 "$_ut"
+    : > "$_ut/had.list"                     # 원래 있던 단위 이름 - undo 는 여기 있는 것만 되살리고, 없는 것만 지운다
+    for _u in $UNITS; do
+        if [ -f "$UNITDIR/$_u" ]; then
+            cp -p "$UNITDIR/$_u" "$_ut/$_u" || die "단위 파일 사본을 만들지 못했습니다 - 아무것도 바꾸지 않았습니다."
+            printf '%s\n' "$_u" >> "$_ut/had.list" || die "단위 파일 목록을 적지 못했습니다 - 아무것도 바꾸지 않았습니다."
+        fi
+        if [ -n "$ROOT" ] && [ "${AP_TEST_DIE_IN_UNITS_BACKUP:-}" = 1 ]; then
+            kill -TERM $$                   # 시험: 사본을 만드는 도중 끊김
+            sleep 2
+        fi
+    done
+    track "$_us"
+    mv "$_ut" "$_us" || die "단위 파일 사본을 만들지 못했습니다 - 아무것도 바꾸지 않았습니다."
+    UNITS_SAVED=$_us                        # 이 줄부터 undo 가 단위 파일을 사본대로 되돌린다
 }
 
 running_version() {     # 실제로 도는 프로세스가 알리는 버전 (run.json + 서비스 잠금 - autopilot-server status --json)
@@ -510,12 +609,12 @@ prune_releases() {  # 최근 KEEP_RELEASES 개만 (current 와 바로 전 버전
 cmd_install() {
     need_root
     if [ -z "$EXPECT" ]; then die "--expect-sha256 <공급사가 다른 길로 알려 준 SHA-256> 이 필요합니다 - 아무것도 하지 않았습니다."; fi
-    check_sha
     if [ -e "$CUR" ] || [ -L "$CUR" ]; then
         die "이미 설치되어 있습니다 ($CUR). 업그레이드는 autopilot-server upgrade <새 설치 파일> 로 하여 주십시오."
     fi
-    HX=$BUNDLE
+    bundle_notice
     preflight
+    stage_verified                          # 여기서부터 HX = 지문을 맞춘 사본을 푼 자리
     check_config
     ensure_account
 
@@ -534,8 +633,8 @@ cmd_install() {
     say "프로그램을 풉니다 ($NEW)."
     rm -rf "$STAGE"
     track "$STAGE"
-    mkdir -m 0755 "$STAGE"
-    tar -xzf "$BUNDLE_TAR" -C "$STAGE" --strip-components=1 --no-same-owner
+    mv "$VSTAGE" "$STAGE" || die "프로그램 파일을 옮기지 못했습니다."
+    HX=$STAGE
     finish_stage
 
     write_config
@@ -565,8 +664,10 @@ cmd_install() {
     say ""
     say "라이선스 요청 파일: $_req"
     say "  공급사에 이 파일을 보내 라이선스를 받은 뒤 install.sh activate 를 실행하여 주십시오:"
-    say "    sh $HERE/install.sh activate <받은 라이선스 파일>"
+    say "    sudo sh $HERE/install.sh activate <받은 라이선스 파일>"
     say "  (요청 파일에는 서버 번호와 자리 서명 공개 열쇠만 들어 있습니다 - 비밀 값은 없습니다. root 로 복사하여 보내 주십시오.)"
+    say "  다음 버전도 같은 순서입니다: 받은 tar.gz 를 풀기 전에 sha256sum 으로 공급사 값과 맞추고, root 전용 폴더에 풉니다"
+    say "  (업그레이드는 autopilot-server upgrade <새 tar.gz> 가 서명을 먼저 확인합니다)."
 }
 
 # ----------------------------------------------------------------------------------------------------
@@ -626,7 +727,7 @@ cmd_upgrade() {
     _oldv=${_prev##*/}
     if [ "$_oldv" = "$V" ]; then die "이미 이 버전($V)이 설치되어 있습니다 - 아무것도 바꾸지 않았습니다."; fi
     need_account
-    HX=$BUNDLE
+    HX=$BUNDLE                              # 깔린 도구가 서명을 확인하고 root 전용 자리(/opt/autopilot/.upgrade-*)에 푼 것
     _nf=$(H format) || die "새 버전의 자료 형식 번호를 읽지 못했습니다 - 아무것도 바꾸지 않았습니다."
     _df=1
     if [ -f "$DATA/FORMAT" ]; then _df=$(tr -d ' \r\n' < "$DATA/FORMAT"); fi
@@ -637,13 +738,14 @@ cmd_upgrade() {
         die "자료 형식 번호($_df)가 새 버전($V)이 아는 것($_nf)보다 큽니다. 형식 번호가 낮은 옛 버전으로는 되돌릴 수 없습니다 - 아무것도 바꾸지 않았습니다."
     fi
     preflight
+    py_check
 
     say "자료를 백업합니다 (업그레이드 전)."
     "$AP" backup --user "$SVC" || die "백업을 만들지 못해 업그레이드를 멈췄습니다 - 아무것도 바꾸지 않았습니다."
 
     NEW=$REL/$V
     STAGE=$REL/.new-$V
-    if [ -e "$NEW" ]; then rm -rf "$NEW"; fi          # 전에 실패하고 남은 것 (current 가 아니다)
+    if [ -e "$NEW" ]; then rm -rf "$NEW"; fi          # 전에 실패하고 남은 것 (current 가 아니다 - 위에서 확인)
     say "새 버전을 풉니다 ($NEW)."
     rm -rf "$STAGE"
     track "$STAGE"
@@ -652,13 +754,7 @@ cmd_upgrade() {
     finish_stage
 
     say "systemd 단위 파일을 바꿉니다."
-    UNITS_SAVED=$OPT/.units-before-$V
-    rm -rf "$UNITS_SAVED"
-    track "$UNITS_SAVED"
-    mkdir -m 0700 "$UNITS_SAVED"
-    for _u in $UNITS; do
-        if [ -f "$UNITDIR/$_u" ]; then cp -p "$UNITDIR/$_u" "$UNITS_SAVED/$_u"; fi
-    done
+    save_units
     install_units "$NEW/server"
     sysd daemon-reload
 

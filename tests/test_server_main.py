@@ -434,6 +434,60 @@ def test_broken_registry_refuses():
     check("pc_registry.Registry 는 RegistryBroken 을 낸다", raised is not None)
 
 
+def test_broken_pc_row_refuses():
+    """번호 꼴(pc_NN)이 맞는 행이 깨졌으면 조용히 버리지 않고 RegistryBroken (Codex 중간 검토 9 - 버리면 번호를 다시 쓸 수 있다)."""
+    e = Env("badrow")
+    good = {"label": "a", "agent_key": "k" * 64, "relay_key": "r" * 64, "state": "active"}
+    cases = (("행이 null", None), ("state 가 없음", {"label": "b", "agent_key": "k", "relay_key": "r"}),
+             ("state 가 모르는 값", dict(good, state="weird")), ("지우지 않은 PC 인데 열쇠 없음", {"label": "c", "state": "active"}),
+             ("relay_key 만 없음", {"label": "d", "agent_key": "k", "state": "disabled"}), ("행이 글", "pc"))
+    for label, row in cases:
+        text = json.dumps({"v": 1, "next": 4, "pcs": {"pc_01": good, "pc_03": row}})
+        with open(e.paths.pcs, "w", encoding="utf-8") as f:
+            f.write(text)
+        raised = False
+        try:
+            pc_registry.Registry(e.paths.pcs, seats=5)
+        except pc_registry.RegistryBroken:
+            raised = True
+        check(f"깨진 PC 행({label}) → RegistryBroken", raised)
+    check("서비스 run 은 4 (깨진 PC 행)", e.run_once() == 4)
+    check("등록부 파일은 그대로", read(e.paths.pcs) == text)
+    # 번호 꼴이 아닌 키는 지금처럼 무시한다 (손으로 적은 메모 같은 것)
+    with open(e.paths.pcs, "w", encoding="utf-8") as f:
+        json.dump({"v": 1, "next": 2, "pcs": {"pc_01": good, "memo": None, "PC_02": {"x": 1}}}, f)
+    reg = pc_registry.Registry(e.paths.pcs, seats=5)
+    check("번호 꼴이 아닌 키는 무시하고 켜진다 (pc_01 하나)", len(reg.list()) == 1, reg.list())
+    removed = {"label": "x", "state": "removed", "removed_at": 1}
+    with open(e.paths.pcs, "w", encoding="utf-8") as f:
+        json.dump({"v": 1, "next": 2, "pcs": {"pc_01": removed}}, f)
+    ok = True
+    try:
+        pc_registry.Registry(e.paths.pcs, seats=5)
+    except pc_registry.RegistryBroken:
+        ok = False
+    check("지운 PC(removed)는 열쇠가 없어도 된다", ok)
+
+
+def test_restore_mark_refuses():
+    """복구가 중간에 끊겨 '복구 중' 표시(.restore-in-progress)가 남았으면 run 은 4 (Codex 중간 검토 8)."""
+    e = Env("restmark")
+    mark = os.path.join(e.data, ".restore-in-progress")
+    with open(mark, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"started": "2026-11-25T10:00:00", "aside": "before-restore-20261125-100000"}))
+    check("복구 중 표시가 남아 있으면 4", e.run_once() == 4)
+    log = read(e.paths.server_log)
+    check("기록에 '복구가 중간에 끊겼습니다' 와 restore 다시·옮겨 둔 폴더 이름", "복구가 중간에 끊겼습니다" in log
+          and "autopilot-server restore" in log and "before-restore-20261125-100000" in log, log[-400:])
+    check("표시 파일은 그대로", os.path.isfile(mark))
+    os.remove(mark)
+    e.start()
+    try:
+        check("표시를 지우면 켜진다", os.path.isfile(e.paths.run_json), e.result)
+    finally:
+        e.stop()
+
+
 def test_store_broken_4():
     e = Env("badstore")
     with open(e.paths.store, "w", encoding="utf-8") as f:
@@ -507,7 +561,8 @@ try:
     print("서버 입구 server_main run (test_server_main)")
     for t in (test_paths, test_run_serves, test_license_missing_2, test_license_other_server_2, test_seat_key_mismatch_2,
               test_seat_key_lost_with_pcs_4, test_config_broken_4, test_tls_missing_4, test_port_busy_3, test_lock_held_4,
-              test_format_newer_4, test_refuses_root, test_broken_registry_refuses, test_store_broken_4,
+              test_format_newer_4, test_refuses_root, test_broken_registry_refuses, test_broken_pc_row_refuses,
+              test_restore_mark_refuses, test_store_broken_4,
               test_seats_from_license, test_runs_purge, test_logs_go_to_files):
         guard(t.__name__, t)
 finally:

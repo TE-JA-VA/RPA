@@ -432,6 +432,7 @@ def license_for(b, server_id=None, seat_pub=None, seats=5):
 # ---------------------------------------------------------------------------------------------
 V1, V2, V3, V4, V5, V6, V7 = ("2026.11.25-81", "2026.11.25-82", "2026.11.25-83", "2026.11.25-84", "2026.11.25-85",
                               "2026.11.25-86", "2026.11.25-87")
+V8 = "2026.11.25-88"
 MAIN = {}
 
 
@@ -497,6 +498,61 @@ def test_account_rules():
           len(ua) == 1 and all(w in ua[0].split() for w in ("--system", "--no-create-home", "--user-group", "autopilotd"))
           and "nologin" in ua[0], log)
     check("계정을 못 만들면 멈추고 아무것도 없다", code != 0 and tree(b.p) == [], (code, se, tree(b.p)))
+
+
+def unpacked_copy(name, ver):
+    """사람이 받은 tar.gz 를 새 폴더에 복사해 그 옆에 푼 것 → (tar.gz 사본, 푼 폴더, 지문)."""
+    path, digest, _ = bundle(ver)
+    d = os.path.join(T, name)
+    os.makedirs(d)
+    tar = os.path.join(d, os.path.basename(path))
+    shutil.copyfile(path, tar)
+    with tarfile.open(tar, "r:gz") as tf:
+        tf.extractall(d, filter="data")
+    return tar, os.path.join(d, f"autopilot-server-{ver}"), digest
+
+
+def test_install_uses_verified_copy():
+    """처음 설치는 지문을 맞춘 tar.gz 의 root 전용 사본만 쓴다 - 사람이 풀어 둔 폴더의 python3·install_helper.py 는 root 로 돌리지
+    않고, 지문을 본 뒤 원래 tar.gz 를 바꿔치기해도 사본으로 푼다 (Codex 중간 검토 1)."""
+    tar, bdir, digest = unpacked_copy("trust1", V1)
+    other = bundle(V2)[0]
+    mark_py, mark_helper = os.path.join(T, "trust1_python_ran"), os.path.join(T, "trust1_helper_ran")
+    py = os.path.join(bdir, "python", "bin", "python3")
+    os.remove(py)
+    with open(py, "w", encoding="utf-8", newline="\n") as f:      # 돌면 표시를 남기고 원래 tar.gz 를 다른 버전으로 바꾼다
+        f.write(f'#!/bin/sh\n: > "{mark_py}"\ncp "{other}" "{tar}"\nexec "$(dirname "$0")/python3.14" "$@"\n')
+    os.chmod(py, 0o755)
+    helper = os.path.join(bdir, "server", "install_helper.py")
+    text = read(helper)
+    with open(helper, "w", encoding="utf-8", newline="\n") as f:
+        f.write(f"open({mark_helper!r}, 'w').close()\n" + text)
+    b = box("trust1")
+    args = ["install", "--expect-sha256", digest, "--listen", "127.0.0.1", "--allow", "127.0.0.0/8", "--root", b.p,
+            "--service-user", "nobody", "--no-systemd"]
+    code, so, se = b.sh(bdir, args)
+    check("풀어 둔 폴더의 python3 를 바꿔 두어도 설치 0", code == 0, (code, so[-800:], se[-1200:]))
+    check("풀어 둔 폴더의 python3 은 한 번도 돌지 않았다", not os.path.exists(mark_py))
+    check("풀어 둔 폴더의 install_helper.py 도 돌지 않았다", not os.path.exists(mark_helper))
+    man = os.path.join(b.rel, V1, "manifest.json")
+    check("설치된 것은 지문을 맞춘 버전", b.current() == f"releases/{V1}" and json.loads(read(man) or "{}").get("version") == V1,
+          (b.current(), read(man)[:200]))
+    check("root 전용 임시 자리는 남기지 않는다", not [n for n in os.listdir(b.p) if n.startswith(".")], os.listdir(b.p))
+    # 지문을 본 직후 원래 tar.gz 를 바꿔치기 (시험 손잡이) - 확인한 사본으로 풀어야 한다
+    tar2, bdir2, digest2 = unpacked_copy("trust2", V1)
+    b2 = box("trust2")
+    args2 = ["install", "--expect-sha256", digest2, "--listen", "127.0.0.1", "--allow", "127.0.0.0/8", "--root", b2.p,
+             "--service-user", "nobody", "--no-systemd"]
+    code, so, se = b2.sh(bdir2, args2, env=b2.env(AP_TEST_SWAP_TAR=other))
+    check("지문을 본 뒤 원래 tar.gz 를 바꿔치기해도 설치 0 (확인한 사본으로 푼다)", code == 0
+          and json.loads(read(os.path.join(b2.rel, V1, "manifest.json")) or "{}").get("version") == V1, (code, se[-1200:]))
+    check("바꿔치기는 실제로 일어났다 (시험 확인)", read(tar2, True) == read(other, True))
+    # 업체 안내 순서 (머리 주석·끝 안내)
+    head = read(os.path.join(ROOT, "server", "install.sh"))[:3000]
+    check("머리 주석: 풀기 전에 sha256sum → root 전용 폴더(install -d -m 0700)에 풀기 → install.sh",
+          "sha256sum" in head and "install -d -m 0700" in head and head.index("sha256sum") < head.index("install -d -m 0700"), head[:1500])
+    code, so, se = b2.sh(bdir2, ["--help", "--root", b2.p])
+    check("도움말에도 같은 순서", "install -d -m 0700" in so and "sha256sum" in so, so[:1500])
 
 
 def test_fresh_install_layout():
@@ -755,6 +811,35 @@ def test_activate():
     MAIN["active"] = True
 
 
+def test_cert_default_owner():
+    """root 로 cert --renew·--import-web 을 --owner 없이 쳐도 서비스 계정(nobody) 소유 - 서비스(진짜 nobody)가 다시 켜진다
+    (Codex 중간 검토 5, 서로 다른 UID)."""
+    b = MAIN.get("b")
+    if not MAIN.get("active"):
+        check("인증서 기본 소유자 (활성화 실패로 건너뜀)", False)
+        return
+    code, so, se = b.ap_run(["cert", "--renew"])
+    check("root 로 cert --renew (--owner 없음) 0", code == 0, (code, se))
+    key = os.path.realpath(os.path.join(b.data, "tls", "current", "server_key.pem"))
+    check("새 서버 열쇠·인증 기관 사본은 서비스 계정 소유", owner(key)[0] == SVC_UID
+          and owner(os.path.join(b.data, "tls", "ca_cert.pem"))[0] == SVC_UID, (owner(key), key))
+    b.systemctl("restart", "autopilot.service")
+    check("새 인증서로 서비스가 다시 켜진다 (서비스 계정이 읽는다)", b.wait_running(V1), read(os.path.join(b.state, "service.out"))[-600:])
+    sys.path.insert(0, os.path.join(ROOT, "firebase", "agent"))
+    import lan_ca
+    co_ca, co_out = os.path.join(T, "co_ca"), os.path.join(T, "co_out")
+    lan_ca.make_ca(co_ca, [], ["127.0.0.1"])
+    cert, ckey = lan_ca.issue_server(co_ca, co_out, [], ["127.0.0.1"])
+    code, so, se = b.ap_run(["cert", "--import-web", cert, ckey])
+    wkey = os.path.realpath(os.path.join(b.data, "tls-web", "current", "server_key.pem"))
+    check("root 로 cert --import-web (--owner 없음) 0, 서비스 계정 소유", code == 0 and os.path.isfile(wkey) and owner(wkey)[0] == SVC_UID,
+          (code, se))
+    b.systemctl("restart", "autopilot.service")
+    check("업체 인증서를 넣은 뒤에도 서비스가 켜진다", b.wait_running(V1), read(os.path.join(b.state, "service.out"))[-600:])
+    code, so, se = b.ap_run(["status", "--json"])
+    check("웹 인증서는 업체 것", (json.loads(so or "{}").get("certs") or {}).get("web", {}).get("source") == "imported", so[-400:])
+
+
 def upgrade(b, ver, env=None):
     path = bundle(ver)[0] if ver in BUNDLES else None
     t0 = time.time()
@@ -838,6 +923,52 @@ def test_interrupt_after_link():
     check("실행 글도 옛 버전을 가리킨다", f"releases/{V5}" not in read(b.ap) and b.ap_run(["--help"])[0] == 0)
 
 
+def test_interrupt_in_units_backup():
+    """단위 파일 사본을 만드는 도중에 끊기면 원래 단위 파일을 하나도 지우지 않는다 (Codex 중간 검토 6)."""
+    b = MAIN.get("b")
+    if not MAIN.get("active"):
+        check("단위 사본 중 끊김 (활성화 실패로 건너뜀)", False)
+        return
+    bundle(V8)
+    before = snapshot(b)
+    code, so, se = upgrade(b, V8, env=b.env(AP_TEST_DIE_IN_UNITS_BACKUP=1))
+    check("단위 파일 사본을 만드는 도중 끊기면 실패로 끝난다", code != 0, (code, se[-600:]))
+    now = snapshot(b)
+    check("원래 단위 파일이 모두 그대로 (지운 것 없음)", now["units"] == before["units"],
+          [u for u in UNITS if now["units"][u] != before["units"][u]])
+    check("current·releases·서비스 그대로", now["current"] == before["current"] and now["releases"] == before["releases"]
+          and now["running"] == before["running"], (now["current"], now["releases"], now["running"]))
+    check("반쯤 만든 사본 자리가 남지 않는다", not [n for n in os.listdir(b.opt) if n.startswith(".")], os.listdir(b.opt))
+
+
+def test_restore_link_fails():
+    """링크를 되돌리지 못하면 current 가 가리키는 새 버전 폴더와 단위 사본을 지우지 않고 손으로 할 일을 적는다 (Codex 중간 검토 7)."""
+    b = MAIN.get("b")
+    if not MAIN.get("active"):
+        check("링크 되돌리기 실패 (활성화 실패로 건너뜀)", False)
+        return
+    bundle(V8)
+    before = snapshot(b)
+    code, so, se = upgrade(b, V8, env=b.env(AP_TEST_DIE_AFTER_LINK=1, AP_TEST_FAIL_RESTORE_LINK=1))
+    saved = os.path.join(b.opt, f".units-before-{V8}")
+    check("링크 뒤 끊김 + 되돌리기 실패 → 실패로 끝난다", code != 0, (code, se[-600:]))
+    check("current 는 새 버전을 가리킨 채 끊어지지 않았다 (가리키는 폴더를 지우지 않음)", b.current() == f"releases/{V8}"
+          and os.path.isdir(b.cur), (b.current(), b.releases()))
+    check("단위 파일 사본(복구 자료)을 지우지 않는다", os.path.isdir(saved) and all(
+        read(os.path.join(saved, u), True) == before["units"][u] for u in UNITS), os.listdir(b.opt))
+    check("손으로 할 일을 적는다 (current 를 옛 버전으로·단위 사본 자리)", "손으로" in se and before["current"] in se and saved in se,
+          se[-1200:])
+    # 시험 자리를 손으로 되돌린다 (안내대로)
+    tmp = os.path.join(b.opt, ".fix")
+    os.symlink(before["current"], tmp)
+    os.replace(tmp, b.cur)
+    for u in UNITS:
+        shutil.copyfile(os.path.join(saved, u), os.path.join(b.units, u))
+    shutil.rmtree(saved)
+    shutil.rmtree(os.path.join(b.rel, V8), ignore_errors=True)
+    check("손으로 되돌린 뒤 옛 버전이 돈다", b.wait_running(V2) and snapshot(b)["units"] == before["units"], b.running())
+
+
 def test_upgrade_rollback():
     b = MAIN.get("b")
     if not MAIN.get("active"):
@@ -913,13 +1044,18 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == "--real-runtime":
         REAL_RUNTIME = sys.argv[2]
         print(f"진짜 내장 파이썬 묶음: {os.path.basename(REAL_RUNTIME)}")
-        tests = [test_fresh_install_layout, test_launcher_imports, test_activate, test_upgrade_keeps_config_and_restarts,
-                 test_upgrade_rollback, test_interrupt_after_link]
+        tests = [test_install_uses_verified_copy, test_fresh_install_layout, test_launcher_imports, test_activate,
+                 test_cert_default_owner, test_upgrade_keeps_config_and_restarts, test_upgrade_rollback, test_interrupt_after_link]
     else:
         print("install.sh 와 systemd 단위 (wsl_install, 가짜 런타임)")
-        tests = [test_expect_sha256, test_preflight, test_account_rules, test_fresh_install_layout, test_unit_files,
-                 test_launcher_imports, test_activate, test_upgrade_keeps_config_and_restarts, test_install_fails_clean,
-                 test_interrupt_after_link, test_upgrade_rollback, test_refuse_format_downgrade, test_prune_releases, test_firewall]
+        tests = [test_expect_sha256, test_preflight, test_account_rules, test_install_uses_verified_copy, test_fresh_install_layout,
+                 test_unit_files, test_launcher_imports, test_activate, test_cert_default_owner,
+                 test_upgrade_keeps_config_and_restarts, test_install_fails_clean, test_interrupt_after_link,
+                 test_interrupt_in_units_backup, test_restore_link_fails, test_upgrade_rollback, test_refuse_format_downgrade,
+                 test_prune_releases, test_firewall]
+    only = [n for n in os.environ.get("WSL_INSTALL_ONLY", "").split(",") if n]      # 고르기 (고치기 전 확인 등)
+    if only:
+        tests = [t for t in tests if t.__name__ in only]
     try:
         for t in tests:
             print(t.__name__)

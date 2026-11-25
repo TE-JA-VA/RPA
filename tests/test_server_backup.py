@@ -765,11 +765,170 @@ def test_backup_config_root_only():
     check("설정 백업도 압축 안 이름이 틀리면 1", code == 1 and not os.path.exists(os.path.join(e.base, "evil")), (code, se))
 
 
+REAL_ROOT = POSIX and os.geteuid() == 0                     # WSL 은 root - 진짜로 권한을 내려 보는 시험
+AGENT_DIR = os.path.join(ROOT, "firebase", "agent")
+SKIP = ("backups", ".service.lock", "before-restore-", ".restore-in-progress")
+
+
+def test_backup_signal_drops_first():
+    """서비스가 돌 때 root 의 backup 은 SIGUSR1 을 보내기 전에 서비스 계정으로 권한을 내린다 - run.json 의 pid 를 다른 사용자의
+    프로세스로 바꿔 두어도 그 프로세스는 신호를 받지 않는다 (Codex 중간 검토 4). 진짜 root(WSL)에서 자식 프로세스로 확인한다."""
+    if not REAL_ROOT:
+        print("  [건너뜀] 진짜 권한 내리기는 리눅스 root(WSL)에서만")
+        return
+    import pwd
+    import signal as sg
+    import subprocess
+    nob = pwd.getpwnam("nobody")
+    base = tempfile.mkdtemp(prefix="sigpid_", dir="/tmp")
+    os.chmod(base, 0o755)
+    data, etc, logs = (os.path.join(base, n) for n in ("data", "etc", "logs"))
+    for d in (data, etc, logs):
+        os.makedirs(d, mode=0o700)
+        os.chown(d, nob.pw_uid, nob.pw_gid)
+    lock_path = os.path.join(data, ".service.lock")
+    victim = subprocess.Popen(["sleep", "60"])                       # root 의 다른 프로세스 (SIGUSR1 을 받으면 죽는다)
+    holder = open(lock_path, "w")                                    # 서비스가 잠금을 쥐고 있는 흉내 (이 프로세스가 flock)
+    os.chown(lock_path, nob.pw_uid, nob.pw_gid)
+    import fcntl
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    run_json = os.path.join(data, "run.json")
+    with open(run_json, "w", encoding="utf-8") as f:
+        json.dump({"version": "x", "pid": victim.pid, "started": "2026-11-25T00:00:00", "format": 1}, f)
+    os.chown(run_json, nob.pw_uid, nob.pw_gid)
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import server_main; server_main.BACKUP_WAIT = 2; "
+            "sys.exit(server_main.main(['backup', '--user', 'nobody']))")
+    env = dict(os.environ, AUTOPILOT_DATA=data, AUTOPILOT_ETC=etc, AUTOPILOT_LOGS=logs)
+    try:
+        r = subprocess.run([sys.executable, "-c", code, AGENT_DIR], capture_output=True, timeout=60, env=env, cwd="/")
+        time.sleep(0.5)
+        alive = victim.poll() is None
+        err = r.stderr.decode("utf-8", "replace")
+        check("run.json 의 pid 가 root 의 다른 프로세스면 그 프로세스는 SIGUSR1 을 받지 않는다 (살아 있음)", alive,
+              (victim.returncode, r.returncode, err[-400:]))
+        check("backup 은 1 (서비스에 알리지 못함)", r.returncode == 1 and "알리지 못했습니다" in err, (r.returncode, err[-400:]))
+    finally:
+        holder.close()
+        if victim.poll() is None:
+            victim.send_signal(sg.SIGKILL)
+        victim.wait(10)
+        shutil.rmtree(base, ignore_errors=True)
+    # 차례 (모든 posix): 권한 내리기가 신호보다 먼저
+    e = Env("sigorder")
+    held = server_main.ServiceLock(e.paths.lock)
+    held.try_hold()
+    try:
+        with open(e.paths.run_json, "w", encoding="utf-8") as f:
+            json.dump({"version": "x", "pid": os.getpid(), "started": "2026-11-25T00:00:00", "format": 1}, f)
+        events = fake_root()
+        real_kill = os.kill
+
+        def kill(pid, sig):
+            if sig:
+                events.append(("kill", sig))
+                return None
+            return real_kill(pid, sig)
+        server_main.BACKUP_WAIT = 0.3
+        os.kill = kill
+        try:
+            call(["backup"])
+        finally:
+            os.kill = real_kill
+            server_main.BACKUP_WAIT = 60
+    finally:
+        held.release()
+    check("root 의 backup: 권한 내리기 → 신호 차례", [x[0] for x in events] == ["drop", "kill"], events)
+
+
+CHILD_RESTORE = r'''
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+import server_backup, server_main
+flag, path = sys.argv[2], sys.argv[3]
+def pause(name):
+    if not os.path.exists(flag):
+        with open(flag, "w") as f:
+            f.write(name)
+        time.sleep(40)
+server_backup._TEST_SWAP_PAUSE = pause
+try:
+    server_backup.restore(server_main.Paths(), path, force=True)
+    print("done", flush=True)
+except BaseException as e:
+    print("raised", type(e).__name__, e, flush=True)
+    sys.exit(3)
+'''
+
+
+def test_restore_interrupted():
+    """복구 교체 중 SIGTERM·SIGHUP 을 받으면 되돌리고, 막을 수 없는 끊김(SIGKILL)이면 '복구 중' 표시가 남아 run 이 4 (Codex 중간 검토 8)."""
+    if not POSIX:
+        print("  [건너뜀] 신호 시험은 리눅스(WSL)에서만 (표시가 남은 채 run → 4 는 test_server_main)")
+        return
+    import signal as sg
+    import subprocess
+    e = Env("interrupt")
+    e.fill()
+    path = server_backup.snapshot(None, e.paths)
+    acc = local_web.Accounts(e.accounts)                             # 백업 뒤에 자료가 바뀐다
+    acc.admin_min = 10
+    acc.set("boss", "changed-password-1", "admin")
+    before = logical(e.data, skip=SKIP)
+    mark = os.path.join(e.data, ".restore-in-progress")
+    for sig, label in ((sg.SIGTERM, "SIGTERM"), (sg.SIGHUP, "SIGHUP (SSH 끊김)")):
+        flag = os.path.join(e.base, f"flag_{label[:7]}")
+        p = subprocess.Popen([sys.executable, "-c", CHILD_RESTORE, AGENT_DIR, flag, path], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, cwd="/")
+        reached = until(lambda: os.path.exists(flag), 30)
+        check(f"[{label}] 교체 구간에 들어갔다 (옮기기 하나 뒤)", reached)
+        p.send_signal(sig)
+        out = p.communicate(timeout=60)[0].decode("utf-8", "replace")
+        check(f"[{label}] 자료는 복구 전 그대로 (되돌림)", logical(e.data, skip=SKIP) == before,
+              (out[-300:], set(logical(e.data, skip=SKIP)) ^ set(before)))
+        check(f"[{label}] 되돌린 뒤 '복구 중' 표시는 지운다", not os.path.lexists(mark), out[-300:])
+        check(f"[{label}] 되돌렸다는 예외로 끝난다", "raised" in out and "되돌" in out, out[-300:])
+        check(f"[{label}] 빈 옮겨 둘 폴더는 남기지 않는다", not [n for n in os.listdir(e.data) if n.startswith("before-restore-")
+                                                   and not os.listdir(os.path.join(e.data, n))], os.listdir(e.data))
+    # 막을 수 없는 끊김 - 표시가 남고 서비스가 켜지지 않는다, 다시 복구하면 된다
+    flag = os.path.join(e.base, "flag_kill")
+    p = subprocess.Popen([sys.executable, "-c", CHILD_RESTORE, AGENT_DIR, flag, path], stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, cwd="/")
+    until(lambda: os.path.exists(flag), 30)
+    p.send_signal(sg.SIGKILL)
+    p.communicate(timeout=60)
+    check("SIGKILL 이면 '복구 중' 표시(.restore-in-progress, 0600)가 남는다", os.path.isfile(mark) and mode(mark) == 0o600,
+          os.listdir(e.data))
+    info = json.loads(read(mark) or "{}")
+    check("표시 안에 시각과 옮겨 둔 폴더 이름", str(info.get("aside", "")).startswith("before-restore-") and info.get("started"), info)
+    box = []
+    t = threading.Thread(target=lambda: box.append(call(["run"])), daemon=True)
+    t.start()
+    t.join(20)
+    if t.is_alive():                                                 # 켜져 버렸다 - 끄고 실패로
+        server_main.stop()
+        t.join(20)
+    code, so, se = box[0] if box else (None, "", "")
+    check("표시가 남은 채 run → 4, '복구가 중간에 끊겼습니다'", code == 4 and "복구가 중간에 끊겼습니다" in se and info.get("aside", "?") in se,
+          (code, se[-300:]))
+    code, so, se = call(["restore", path, "--force"])
+    check("restore 를 다시 하면 0, 표시가 지워진다", code == 0 and not os.path.lexists(mark), (code, se))
+    check("다시 복구한 자료는 백업 때 것 (옛 비밀번호)", local_web.Accounts(e.accounts).verify("boss", BOSS_PW) is not None)
+    # 표시 자리가 링크여도 따라가지 않는다
+    victim = os.path.join(e.base, "mark_victim")
+    with open(victim, "w") as f:
+        f.write("keep")
+    os.symlink(victim, mark)
+    code, so, se = call(["restore", path, "--force"])
+    check("표시 자리에 링크가 있어도 대상 파일은 그대로", read(victim) == "keep", (code, se))
+    check("링크가 있던 자리도 끝나면 비어 있다", not os.path.lexists(mark), (code, se))
+
+
 try:
     print("백업과 복구 (test_server_backup)")
     for t in (test_backup_contents, test_keep_7, test_backup_consistent_snapshot, test_backup_signal_path, test_backup_schedule,
               test_restore_roundtrip, test_restore_holds_lock, test_restore_refuses_running, test_restore_rejects_bad_names,
-              test_restore_other_server, test_restore_newer_format, test_backup_config_root_only):
+              test_restore_other_server, test_restore_newer_format, test_backup_config_root_only, test_backup_signal_drops_first,
+              test_restore_interrupted):
         guard(t.__name__, t)
 finally:
     for k in ENV_KEYS:

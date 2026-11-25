@@ -21,6 +21,7 @@ import re
 import secrets
 import shutil
 import ssl
+import stat
 import subprocess
 import tempfile
 import time
@@ -277,10 +278,104 @@ def _ca_sign(openssl, work, csr, ca_cert, ca_key, ext, start, end, out):
                    "-startdate", start, "-enddate", end, "-extfile", ext, "-extensions", "v3_srv", "-md", "sha256"])
 
 
-def _switch(folder, name):
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+_NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+
+
+def open_dir(folder, owner=None):
+    """(리눅스) 자료 폴더 안의 인증서 폴더(tls·tls-web)를 링크를 따라가지 않고 연다 → 폴더 fd (닫는 것은 부르는 쪽).
+    root 의 cert 명령이 서비스 계정이 바꿀 수 있는 자리를 따라가 다른 폴더를 고치지 않게 (사내 서버 ④ Task 8.5, Codex 중간 검토 3):
+    부모 폴더(자료 폴더)도 링크면 거절, 폴더가 없으면 0700 으로 만든다(만드는 사이 끼어든 링크는 mkdir 이 거절), 링크·보통 파일이면
+    아무것도 바꾸지 않고 CaError. 소유자는 root 나 서비스 계정(owner, 없으면 지금 계정)이어야 한다 - 아니면 CaError. owner 를 주면
+    폴더를 그 계정 소유·0700 으로 맞춘다 (연 fd 로 - 이름을 다시 따라가지 않는다)."""
+    parent, name = os.path.split(os.path.abspath(folder))
+    bad = CaError(f"인증서 폴더({folder})가 링크이거나 폴더가 아닙니다 - 아무것도 바꾸지 않았습니다. 그 자리를 확인하여 주십시오.")
+    try:
+        pfd = os.open(parent, _DIR_FLAGS)
+    except OSError:
+        raise CaError(f"자료 폴더({parent})를 열지 못했습니다 (링크이거나 없음) - 아무것도 바꾸지 않았습니다.") from None
+    try:
+        try:
+            os.mkdir(name, 0o700, dir_fd=pfd)
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(name, _DIR_FLAGS, dir_fd=pfd)
+        except OSError:
+            raise bad from None
+    finally:
+        os.close(pfd)
+    try:
+        st = os.fstat(fd)
+        allowed = {0, owner[0]} if owner is not None else {0, os.geteuid()}
+        if st.st_uid not in allowed:
+            raise CaError(f"인증서 폴더({folder})의 소유자가 root 나 서비스 계정이 아닙니다 (uid {st.st_uid}) - 아무것도 바꾸지 않았습니다.")
+        if owner is not None and (st.st_uid, st.st_gid) != tuple(owner):
+            os.fchown(fd, *owner)
+        os.fchmod(fd, 0o700)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _write_at(dfd, name, text, owner):
+    """폴더 fd 안에 새 파일 하나 (O_EXCL|O_NOFOLLOW, 0600, fsync, owner 면 fd 로 소유자)."""
+    fd = os.open(name, _NEW_FILE, 0o600, dir_fd=dfd)
+    with os.fdopen(fd, "w", encoding="ascii", newline="\n") as f:
+        f.write(text)
+        f.flush()
+        if owner is not None:
+            os.fchown(f.fileno(), *owner)
+        os.fchmod(f.fileno(), 0o600)
+        os.fsync(f.fileno())
+
+
+def put_file(folder, name, text, owner=None):
+    """인증서 폴더에 파일 하나를 0600 으로 갈아 넣는다 (임시 이름 → os.replace). 리눅스는 open_dir 로 연 폴더 안에서만 - 링크를 따라가지
+    않는다. 윈도우(시험)는 보통 경로."""
+    if os.name != "posix":
+        os.makedirs(folder, exist_ok=True)
+        tmp = os.path.join(folder, f".{name}.{secrets.token_hex(4)}.tmp")
+        with open(tmp, "w", encoding="ascii", newline="\n") as f:
+            f.write(text)
+        os.replace(tmp, os.path.join(folder, name))
+        return
+    dfd = open_dir(folder, owner)
+    try:
+        tmp = f".{name}.{secrets.token_hex(4)}.tmp"
+        try:
+            _write_at(dfd, tmp, text, owner)
+            os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dfd)
+
+
+def _switch(folder, name, dir_fd=None):
     """folder/current 가 folder/name 을 가리키게 한 번에 바꾼다. 리눅스: 임시 링크를 만들어 os.replace (원자적 - 읽는 쪽은 옛 쌍이나
-    새 쌍 하나만 본다). 윈도우(시험): 옛 폴더를 옆으로 옮기고 새 폴더 이름을 current 로."""
+    새 쌍 하나만 본다) - dir_fd 를 주면 그 폴더 fd 안에서만. 윈도우(시험): 옛 폴더를 옆으로 옮기고 새 폴더 이름을 current 로."""
     cur = os.path.join(folder, CURRENT)
+    if os.name == "posix" and dir_fd is not None:
+        try:
+            st = os.stat(CURRENT, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None and stat.S_ISDIR(st.st_mode):              # 예전 꼴 (current 가 진짜 폴더) - 한 번만 옆으로
+            os.replace(CURRENT, PAIR_PREFIX + "legacy-" + secrets.token_hex(4), src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp = f".{CURRENT}-{secrets.token_hex(4)}"
+        os.symlink(name, tmp, dir_fd=dir_fd)
+        try:
+            os.replace(tmp, CURRENT, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            os.unlink(tmp, dir_fd=dir_fd)
+            raise
+        return
     if os.name == "posix":
         if os.path.isdir(cur) and not os.path.islink(cur):         # 예전 꼴 (current 가 진짜 폴더) - 한 번만 옆으로
             os.replace(cur, os.path.join(folder, PAIR_PREFIX + "legacy-" + secrets.token_hex(4)))
@@ -306,7 +401,10 @@ def replace_pair(folder, cert_text, key_text, owner=None):
     두 파일을 같은 폴더의 새 하위 폴더(pair-*)에 다 쓰고(fsync, 열쇠 0600) 폴더 바꾸기 한 번으로 건다 - 어느 줄에서 끊겨도 읽는 쪽은
     옛 쌍이나 새 쌍 하나를 온전히 본다 (인증서와 열쇠가 서로 다른 쌍이 되지 않는다). 읽는 쪽은 current 를 실제 자리로 풀어
     (os.path.realpath) 그 안의 두 파일을 읽는다. owner = (uid, gid) 면 걸기 전에 새 폴더·파일의 소유자를 바꾼다 (root 의 renew 가
-    서비스 계정에 넘김). 끝나면 걸리지 않은 옛 쌍·반쯤 만든 쌍을 지운다. 열쇠 내용은 찍지 않는다."""
+    서비스 계정에 넘김). 끝나면 걸리지 않은 옛 쌍·반쯤 만든 쌍을 지운다. 열쇠 내용은 찍지 않는다.
+    리눅스는 open_dir 로 연 폴더 fd 안에서만 쓰고 지운다 - folder 나 그 안의 이름이 링크로 바뀌어 있어도 따라가지 않는다 (Task 8.5)."""
+    if os.name == "posix":
+        return _replace_pair_fd(folder, cert_text, key_text, owner)
     os.makedirs(folder, mode=0o700, exist_ok=True)
     new = tempfile.mkdtemp(prefix=PAIR_PREFIX, dir=folder)          # 0700
     try:
@@ -333,6 +431,49 @@ def replace_pair(folder, cert_text, key_text, owner=None):
                 os.remove(p)
             except OSError:
                 pass
+    return os.path.join(folder, CURRENT)
+
+
+def _remove_at(dfd, name):
+    """폴더 fd 안의 이름 하나를 지운다 - 진짜 폴더면 fd 로 통째로(링크를 따라가지 않는 rmtree), 그 밖(링크 포함)은 그 이름만."""
+    try:
+        st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        if stat.S_ISDIR(st.st_mode):
+            shutil.rmtree(name, dir_fd=dfd)
+        else:
+            os.unlink(name, dir_fd=dfd)
+    except OSError:
+        pass
+
+
+def _replace_pair_fd(folder, cert_text, key_text, owner):
+    dfd = open_dir(folder, owner)
+    try:
+        name = PAIR_PREFIX + secrets.token_hex(6)
+        os.mkdir(name, 0o700, dir_fd=dfd)
+        try:
+            pfd = os.open(name, _DIR_FLAGS, dir_fd=dfd)
+            try:
+                for fname, text in ((SERVER_CERT, cert_text), (SERVER_KEY, key_text)):
+                    _write_at(pfd, fname, text, owner)
+                if owner is not None:
+                    os.fchown(pfd, *owner)
+                os.fsync(pfd)
+            finally:
+                os.close(pfd)
+            _switch(folder, name, dir_fd=dfd)
+        except BaseException:
+            _remove_at(dfd, name)
+            raise
+        try:
+            live = os.readlink(CURRENT, dir_fd=dfd)
+        except OSError:
+            live = None
+        for n in os.listdir(dfd):
+            if (n.startswith(PAIR_PREFIX) and n != live) or n.startswith(f".{CURRENT}-"):
+                _remove_at(dfd, n)                   # 걸리지 않은 옛 쌍·반쯤 만든 쌍·걸지 못한 임시 링크
+    finally:
+        os.close(dfd)
     return os.path.join(folder, CURRENT)
 
 

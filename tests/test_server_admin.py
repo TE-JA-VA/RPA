@@ -556,7 +556,7 @@ def test_replace_pair_atomic():
         check("열쇠 0600", mode(os.path.join(cur, lan_ca.SERVER_KEY)) == 0o600)
     real = lan_ca._switch
 
-    def die(folder, name):
+    def die(folder, name, **kw):
         raise KeyboardInterrupt("갈아 끼우는 중 죽음 흉내")
     lan_ca._switch = die
     try:
@@ -583,11 +583,174 @@ def test_replace_pair_atomic():
     check("current 가 진짜 폴더였어도 갈아 끼운다", read(os.path.join(d2, lan_ca.SERVER_CERT)) == "CERT-N\n")
 
 
+REAL_ROOT = POSIX and os.geteuid() == 0                     # WSL 은 root - 진짜 소유자 바꾸기·링크로 확인한다
+
+
+def victim_file(name):
+    """root 소유 '남의 파일' 흉내 (/etc/shadow 대신) → 경로."""
+    p = os.path.join(TMP, name)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("secret\n")
+    os.chmod(p, 0o600)
+    return p
+
+
+def same_file(p, st):
+    now = os.stat(p)
+    return (now.st_uid, now.st_gid, stat.S_IMODE(now.st_mode)) == (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) and read(p) == "secret\n"
+
+
+def test_lock_no_follow():
+    """잠금 파일(.service.lock)이 링크·하드링크면 root 명령이 그 대상을 서비스 계정 소유로 바꾸지 않는다 (Codex 중간 검토 2)."""
+    if not REAL_ROOT:
+        print("  [건너뜀] 링크·소유자 확인은 리눅스 root(WSL)에서만")
+        return
+    e = Env("lock_link")
+    victim = victim_file("lock_victim")
+    st = os.stat(victim)
+    os.symlink(victim, e.paths.lock)
+    lock = server_main.ServiceLock(e.paths.lock)
+    try:
+        got = lock.try_hold(owner=(1000, 1000))
+        lock.release()
+        err = None
+    except OSError as ex:
+        got, err = None, str(ex)
+    check("잠금 파일이 다른 파일로 가는 링크면 try_hold 가 OSError (알아듣는 글)", got is None and bool(err) and "잠금" in err, (got, err))
+    check("링크 대상 파일의 소유자·모드·내용 그대로", same_file(victim, st), os.stat(victim))
+    check("held() 도 링크를 따라가지 않는다 (None)", server_main.ServiceLock.held(e.paths.lock) is None)
+    fake_root()
+    code, so, se = call(["admin-reset", "boss", "--password-stdin"], stdin="new-password-123\n")
+    check("admin-reset 도 1, 대상 그대로", code == 1 and same_file(victim, st), (code, se, os.stat(victim)))
+    code, so, se = call(["backup"])
+    check("backup 도 1, 대상 그대로", code == 1 and same_file(victim, st), (code, se, os.stat(victim)))
+    os.remove(e.paths.lock)
+    os.link(victim, e.paths.lock)                                     # 하드링크 (nlink 2)
+    try:
+        server_main.ServiceLock(e.paths.lock).try_hold(owner=(1000, 1000))
+        err = None
+    except OSError as ex:
+        err = str(ex)
+    check("하드링크(nlink 2) 잠금 파일도 거절", bool(err), err)
+    check("하드링크 대상 그대로", same_file(victim, st), os.stat(victim))
+    os.remove(e.paths.lock)
+    os.mkdir(e.paths.lock)
+    try:
+        server_main.ServiceLock(e.paths.lock).try_hold()
+        err = None
+    except OSError as ex:
+        err = str(ex)
+    check("잠금 자리가 폴더면 거절", bool(err), err)
+    os.rmdir(e.paths.lock)
+    lock = server_main.ServiceLock(e.paths.lock)
+    check("보통 잠금 파일은 그대로 잡힌다 (root 가 만들면 서비스 계정 소유로)", lock.try_hold(owner=(1000, 1000))
+          and os.stat(e.paths.lock).st_uid == 1000)
+    lock.release()
+
+
+def test_cert_no_follow():
+    """인증서 갱신·업체 인증서 넣기가 자료 폴더의 tls·tls-web 링크를 따라가지 않는다 (Codex 중간 검토 3)."""
+    if not REAL_ROOT:
+        print("  [건너뜀] 링크·소유자 확인은 리눅스 root(WSL)에서만")
+        return
+    e = Env("cert_link", tls=False)
+    fake_root()
+    victim = os.path.join(TMP, "cert_victim")                       # /etc/autopilot/ca 같은 root 전용 폴더 흉내
+    os.makedirs(victim, mode=0o700)
+    with open(os.path.join(victim, "ca_key.pem"), "w") as f:
+        f.write("KEY")
+    vst = os.stat(victim)
+    os.symlink(victim, e.paths.tls_dir)
+    code, so, se = call(["cert", "--renew", "--owner", "autopilotd"])
+    check("data/tls 가 다른 폴더로 가는 링크면 cert --renew 는 1", code == 1, (code, so, se))
+    check("링크 대상 폴더의 소유자·모드·내용 그대로", os.stat(victim).st_uid == vst.st_uid and stat.S_IMODE(os.stat(victim).st_mode) == 0o700
+          and sorted(os.listdir(victim)) == ["ca_key.pem"], (os.stat(victim), os.listdir(victim)))
+    code, so, se = call(["cert", "--renew"])
+    check("--owner 없이도 1, 대상 그대로", code == 1 and sorted(os.listdir(victim)) == ["ca_key.pem"]
+          and os.stat(victim).st_uid == vst.st_uid, (code, se))
+    os.remove(e.paths.tls_dir)
+    with open(e.paths.tls_dir, "w") as f:
+        f.write("x")
+    code, so, se = call(["cert", "--renew"])
+    check("data/tls 가 보통 파일이면 1 (바꾸지 않음)", code == 1 and read(e.paths.tls_dir) == "x", (code, se))
+    os.remove(e.paths.tls_dir)
+    # 업체 웹 인증서 자리
+    os.symlink(victim, e.paths.web_tls_dir)
+    code, so, se = call(["cert", "--import-web", CERT, KEY])
+    check("data/tls-web 이 링크면 --import-web 은 1, 대상 그대로", code == 1 and sorted(os.listdir(victim)) == ["ca_key.pem"]
+          and os.stat(victim).st_uid == vst.st_uid, (code, se))
+    os.remove(e.paths.web_tls_dir)
+    # 발급은 자료 폴더 밖 root 전용 자리에서
+    seen, real_issue = [], lan_ca.issue_server
+    lan_ca.issue_server = lambda ca_dir, out_dir, *a, **k: (seen.append((out_dir, stat.S_IMODE(os.stat(out_dir).st_mode)
+                                                                         if os.path.isdir(out_dir) else None,
+                                                                         stat.S_IMODE(os.stat(os.path.dirname(out_dir)).st_mode))),
+                                                            real_issue(ca_dir, out_dir, *a, **k))[1]
+    try:
+        code, so, se = call(["cert", "--renew"])
+    finally:
+        lan_ca.issue_server = real_issue
+    data_real = os.path.realpath(e.data)
+    check("링크가 없으면 renew 0", code == 0, (code, se))
+    check("발급 작업 자리는 자료 폴더 밖, root 전용(0700) 임시 폴더 안", len(seen) == 1
+          and not os.path.realpath(seen[0][0]).startswith(data_real + os.sep) and seen[0][1] == 0o700, seen)
+    check("자료 폴더에 발급 임시 폴더가 남지 않는다", not [n for n in os.listdir(e.paths.tls_dir) if n.startswith(".")], os.listdir(e.paths.tls_dir))
+    check("tls 폴더·쌍·인증 기관 사본은 서비스 계정 소유", os.stat(e.paths.tls_dir).st_uid == 1000
+          and os.stat(os.path.realpath(e.paths.tls_key)).st_uid == 1000 and os.stat(e.paths.tls_ca).st_uid == 1000
+          and mode(e.paths.tls_ca) == 0o600)
+    # tls 폴더가 남(다른 계정) 소유면 거절
+    os.chown(e.paths.tls_dir, 4242, 4242)
+    code, so, se = call(["cert", "--renew"])
+    check("tls 폴더가 서비스 계정·root 가 아닌 계정 소유면 1", code == 1, (code, se))
+
+
+def test_cert_default_owner():
+    """root 로 cert --renew·--import-web 을 --owner 없이 치면 서비스 계정 소유 (Codex 중간 검토 5 - 같은 UID 시험의 빈틈)."""
+    e = Env("cert_owner", tls=False)
+    fake_root()
+    asked = []
+    server_main._service_ids = lambda user: (asked.append(user), (1000, 1000) if POSIX else None)[1]
+    code, so, se = call(["cert", "--renew"])
+    check("--owner 없이 root 로 renew 0", code == 0, (code, se))
+    check("기본 서비스 계정 autopilotd 를 찾는다", asked == ["autopilotd"], asked)
+    if REAL_ROOT:
+        check("--owner 없어도 서버 열쇠·인증서·인증 기관 사본이 서비스 계정 소유 (root 가 아님)",
+              os.stat(os.path.realpath(e.paths.tls_key)).st_uid == 1000 and os.stat(os.path.realpath(e.paths.tls_cert)).st_uid == 1000
+              and os.stat(e.paths.tls_ca).st_uid == 1000, os.stat(os.path.realpath(e.paths.tls_key)))
+    co_ca, co_out = os.path.join(TMP, "owner_co_ca"), os.path.join(TMP, "owner_co_cert")
+    lan_ca.make_ca(co_ca, [], ["127.0.0.1"])
+    co_cert, co_key = lan_ca.issue_server(co_ca, co_out, [], ["127.0.0.1"])
+    del asked[:]
+    code, so, se = call(["cert", "--import-web", co_cert, co_key])
+    check("--owner 없이 root 로 --import-web 0, 기본 서비스 계정", code == 0 and asked == ["autopilotd"], (code, se, asked))
+    if REAL_ROOT:
+        check("업체 웹 인증서 쌍도 서비스 계정 소유", os.stat(os.path.realpath(e.paths.web_key)).st_uid == 1000
+              and os.stat(e.paths.web_tls_dir).st_uid == 1000)
+    # 시험 자리(install.sh --root)의 실행 글은 AUTOPILOT_SERVICE_USER 를 싣는다
+    os.environ.update(AUTOPILOT_ROOT=os.path.join(TMP, "owner_root"), AUTOPILOT_SERVICE_USER="nobody")
+    del asked[:]
+    try:
+        code, so, se = call(["cert", "--renew"])
+    finally:
+        for k in ("AUTOPILOT_ROOT", "AUTOPILOT_SERVICE_USER"):
+            os.environ.pop(k, None)
+    check("시험 자리면 AUTOPILOT_SERVICE_USER 의 계정", code == 0 and asked == ["nobody"], (code, se, asked))
+
+    def missing(user):
+        raise KeyError(user)
+    server_main._service_ids = missing
+    code, so, se = call(["cert", "--renew"])
+    check("서비스 계정이 없으면 1 (root 전용 인증서를 만들지 않는다)", code == 1 and "autopilotd" in se, (code, se))
+    code, so, se = call(["cert", "--renew", "--help"])
+    check("도움말에 --owner 의 기본값(autopilotd)", code == 0 and "autopilotd" in so, so[-400:])
+
+
 try:
     print("관리 명령 (test_server_admin)")
     for t in (test_request_file, test_status_ok_and_problems, test_admin_reset_needs_stopped, test_admin_reset_owner,
               test_admin_reset, test_verify, test_upgrade_verifies_first, test_cert_root_only, test_cert_renew_backdated,
-              test_cert_if_expiring, test_import_web_cert, test_replace_pair_atomic):
+              test_cert_if_expiring, test_import_web_cert, test_replace_pair_atomic, test_lock_no_follow, test_cert_no_follow,
+              test_cert_default_owner):
         guard(t.__name__, t)
 finally:
     for k in ENV_KEYS + ("MARK",):

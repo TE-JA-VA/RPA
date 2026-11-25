@@ -28,6 +28,7 @@ backup_hour, 기본 3시) 서비스 안 백업을 뜨고, SIGUSR1 을 받으면 
 """
 import argparse
 import datetime
+import errno
 import getpass
 import io
 import json
@@ -36,6 +37,7 @@ import re
 import shutil
 import signal
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
@@ -98,6 +100,11 @@ ROOT_ENV, SERVICE_USER_ENV, NO_SYSTEMD_ENV = "AUTOPILOT_ROOT", "AUTOPILOT_SERVIC
 def _test_root():
     return os.environ.get(ROOT_ENV) or ""
 
+
+def _default_user():
+    """기본 서비스 계정 - autopilotd. 시험 자리(install.sh --root 의 실행 글)는 AUTOPILOT_SERVICE_USER (설치본 실행 글은 지운다)."""
+    return (os.environ.get(SERVICE_USER_ENV) if _test_root() else None) or SERVICE_USER
+
 # 시험 손잡이 - 서버 번호 파일, 라이선스 확인 공개 열쇠(None 이면 실린 것), 버전(None 이면 manifest.json),
 # 업데이트 서명 공개 열쇠(None 이면 update_sign 에 실린 것, bytes), 업그레이드 때 풀 자리
 MACHINE_ID = license_check.MACHINE_ID
@@ -139,6 +146,7 @@ class Paths:
         self.format_file = j(self.data, "FORMAT")
         self.run_json = j(self.data, "run.json")
         self.seat_key = j(self.data, seat.SEAT_KEY)
+        self.restore_mark = j(self.data, server_backup.RESTORE_MARK)    # 복구 중 표시 - 남아 있으면 run 은 4 (Task 8.5)
 
     # 인증서 쌍은 tls_dir/current/ (lan_ca.replace_pair 가 한 번에 갈아 끼운다 - 읽는 쪽은 current 를 실제 자리로 풀어 두 파일을 읽는다)
     @property
@@ -168,6 +176,22 @@ def _pair(cert_path):
     return os.path.join(d, lan_ca.SERVER_CERT), os.path.join(d, lan_ca.SERVER_KEY)
 
 
+class UnsafeLock(OSError):
+    """서비스 잠금 파일이 보통 파일이 아니다 (링크·하드링크·폴더) - 그 대상을 열거나 소유자를 바꾸지 않는다."""
+
+    def __init__(self, path):
+        super().__init__(errno.EPERM, f"서비스 잠금 파일({path})이 보통 파일이 아닙니다 (링크·하드링크·폴더). 그 대상은 건드리지 "
+                                      f"않았습니다 - 무엇인지 확인한 뒤 그 이름만 지우고 다시 하여 주십시오.")
+
+    def __str__(self):
+        return self.strerror
+
+
+def _lock_err(e):
+    """잠금 파일을 열지 못한 까닭 한 줄."""
+    return str(e) if isinstance(e, UnsafeLock) else f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__})."
+
+
 class ServiceLock:
     """자료 폴더의 서비스 잠금 (.service.lock). 서비스는 켜져 있는 동안 쥐고, 복구·admin-reset 은 이것을 잡아 서비스가 멈췄는지
     본다 (포트 연결 여부로 판단하지 않는다 - Codex 검토 6·10). 리눅스 fcntl.flock(LOCK_EX|LOCK_NB), 윈도우(시험)는 msvcrt.locking.
@@ -177,13 +201,34 @@ class ServiceLock:
         self.path = path
         self.fd = None
 
+    @staticmethod
+    def _open(path, create):
+        """잠금 파일을 링크를 따라가지 않고 연다 → fd. 자료 폴더는 서비스 계정이 쓸 수 있으므로 .service.lock 이 다른 파일로 가는
+        링크·하드링크로 바뀌어 있을 수 있다 - 보통 파일이고 이름이 하나(nlink 1)일 때만 받는다, 아니면 UnsafeLock (Codex 중간 검토 2)."""
+        flags = (os.O_RDWR | os.O_CREAT) if create else os.O_RDONLY
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0)
+        try:
+            fd = os.open(path, flags, 0o600)
+        except OSError as e:
+            if e.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR) or isinstance(e, (IsADirectoryError, NotADirectoryError)):
+                raise UnsafeLock(path) from None
+            raise
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise UnsafeLock(path)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
     def try_hold(self, owner=None):
-        """비차단으로 잡는다 → 잡았으면 True (이미 쥐고 있어도 True), 다른 쪽이 쥐고 있으면 False.
-        owner = (uid, gid): root 가 잡을 때 잠금 파일을 서비스 계정 소유로 둔다 - root 가 새로 만든 0600 파일이면 서비스가 다시 열지
-        못해 켜지지 않는다."""
+        """비차단으로 잡는다 → 잡았으면 True (이미 쥐고 있어도 True), 다른 쪽이 쥐고 있으면 False. 잠금 파일이 링크·하드링크·폴더면
+        UnsafeLock (OSError). owner = (uid, gid): root 가 잡을 때 잠금 파일을 서비스 계정 소유로 둔다 - root 가 새로 만든 0600 파일이면
+        서비스가 다시 열지 못해 켜지지 않는다. 소유자는 확인을 지난 fd 로만 바꾼다 (이름을 다시 따라가지 않는다)."""
         if self.fd is not None:
             return True
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+        fd = self._open(self.path, create=True)
         try:
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -204,9 +249,9 @@ class ServiceLock:
     @staticmethod
     def held(path):
         """다른 쪽이 이 잠금을 쥐고 있나 → True·False, 열 권한이 없으면 None. 파일을 만들지 않는다 (status 가 root 로 불러도
-        root 소유 잠금 파일이 생기지 않게)."""
+        root 소유 잠금 파일이 생기지 않게). 링크·하드링크·폴더면 None (따라가지 않는다)."""
         try:
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+            fd = ServiceLock._open(path, create=False)
         except FileNotFoundError:
             return False
         except OSError:
@@ -431,7 +476,7 @@ def cmd_run(args, paths):
         try:
             held = lock.try_hold()
         except OSError as e:
-            return _fail(paths.data, EXIT_BROKEN, f"서비스 잠금 파일을 열지 못했습니다 ({paths.lock}, {type(e).__name__}).")
+            return _fail(paths.data, EXIT_BROKEN, _lock_err(e))
         if not held:
             return _fail(paths.data, EXIT_BROKEN, "다른 작업(복구 또는 계정 초기화)이 자료를 쓰고 있습니다. 끝난 뒤 다시 켜 주십시오.")
         try:
@@ -444,6 +489,11 @@ def cmd_run(args, paths):
 
 def _serve(paths):
     folder = paths.data
+    mark = server_backup.read_mark(paths.data)       # 복구가 교체 중에 끊겼다 (SIGKILL·전원) - 자료가 섞였을 수 있다
+    if mark is not None:
+        aside = os.path.join(paths.data, mark["aside"]) if mark.get("aside") else os.path.join(paths.data, server_backup.ASIDE_PREFIX + "<시각>")
+        return _fail(folder, EXIT_BROKEN, f"복구가 중간에 끊겼습니다. autopilot-server restore 를 다시 하거나 {aside} 에서 손으로 "
+                                          f"되돌려 주십시오. (표시 파일 {paths.restore_mark} - 다 맞춘 뒤 지웁니다)")
     try:
         bad = check_format(paths)
     except OSError as e:
@@ -761,14 +811,6 @@ def cmd_status(args, paths):
     return 1 if st["problems"] else 0
 
 
-def _copy_public(src, dst, owner):
-    with open(src, encoding="ascii") as f:
-        text = f.read()
-    _write_private(dst, text)
-    if owner is not None:
-        os.chown(dst, *owner)
-
-
 def _cert_show(paths):
     rows = [("에이전트(8444)", _pair(paths.tls_cert)[0], "우리 인증 기관")]
     wcert = _pair(paths.web_cert)[0]
@@ -793,6 +835,12 @@ def _cert_show(paths):
     return code
 
 
+def _root_work(paths):
+    """root 전용 임시 폴더 (0700) - 설정 폴더(/etc/autopilot, root 소유) 안, 없으면 기본 임시 자리. 서비스 계정이 쓸 수 있는 자료
+    폴더 밖에서 발급·검사한다 (Codex 중간 검토 3). 지우는 것은 부르는 쪽."""
+    return tempfile.mkdtemp(prefix=".cert-", dir=paths.etc if os.path.isdir(paths.etc) else None)
+
+
 def _cert_renew(args, paths, owner):
     try:
         cfg = lan_config.load(paths.server_json)
@@ -806,21 +854,21 @@ def _cert_renew(args, paths, owner):
         lan_ca.make_ca(paths.ca_dir, names, [])      # 있으면 그대로 (다시 만들면 PC 를 모두 다시 등록해야 한다)
         if os.name == "posix":
             os.chmod(paths.ca_dir, 0o700)
-        os.makedirs(paths.tls_dir, mode=0o700, exist_ok=True)
-        if owner is not None:
-            os.chown(paths.tls_dir, *owner)
-        work = tempfile.mkdtemp(prefix=".issue-", dir=paths.tls_dir)
+        work = _root_work(paths)
         try:
             c, k = lan_ca.issue_server(paths.ca_dir, work, names, [], days=days, backdate_days=1)
             with open(c, encoding="ascii") as f:
                 cert_text = f.read()
             with open(k, encoding="ascii") as f:
                 key_text = f.read()
+            left = lan_ca.days_left(c)
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        _copy_public(os.path.join(paths.ca_dir, lan_ca.CA_CERT), paths.tls_ca, owner)    # 공개 인증서만 서비스 쪽으로
+        with open(os.path.join(paths.ca_dir, lan_ca.CA_CERT), encoding="ascii") as f:
+            ca_text = f.read()
+        # 서비스 쪽(자료 폴더 tls/)에는 링크를 따라가지 않고 넣는다 - 공개 인증서 사본과 서버 쌍
+        lan_ca.put_file(paths.tls_dir, lan_ca.CA_CERT, ca_text, owner=owner)
         lan_ca.replace_pair(paths.tls_dir, cert_text, key_text, owner=owner)
-        left = lan_ca.days_left(paths.tls_cert)
     except lan_ca.CaError as e:
         return _err(str(e))
     except OSError as e:
@@ -843,8 +891,10 @@ def _cert_import(args, paths, owner):
     except (OSError, UnicodeDecodeError) as e:
         return _err(f"인증서 파일을 읽지 못했습니다 ({type(e).__name__}).")
     full = cert_text.rstrip("\n") + "\n" + (chain_text.rstrip("\n") + "\n" if chain_text.strip() else "")
-    os.makedirs(paths.data, mode=0o700, exist_ok=True)
-    work = tempfile.mkdtemp(prefix=".import-", dir=paths.data)
+    try:
+        work = _root_work(paths)                     # 열쇠 검사는 자료 폴더 밖 root 전용 자리에서 (Codex 중간 검토 3)
+    except OSError as e:
+        return _err(f"임시 자리를 만들지 못했습니다 ({type(e).__name__}).")
     try:
         c, k = os.path.join(work, lan_ca.SERVER_CERT), os.path.join(work, lan_ca.SERVER_KEY)
         for p, text in ((c, full), (k, key_text)):
@@ -863,9 +913,9 @@ def _cert_import(args, paths, owner):
     finally:
         shutil.rmtree(work, ignore_errors=True)
     try:
-        lan_ca.replace_pair(paths.web_tls_dir, full, key_text, owner=owner)
-        if owner is not None:
-            os.chown(paths.web_tls_dir, *owner)
+        lan_ca.replace_pair(paths.web_tls_dir, full, key_text, owner=owner)     # 폴더 소유자도 연 fd 로 맞춘다
+    except lan_ca.CaError as e:
+        return _err(str(e))
     except OSError as e:
         return _err(f"업체 웹 인증서를 넣지 못했습니다 ({type(e).__name__}).")
     warn = f" 30일 안에 끝나므로 새 인증서를 곧 넣어 주십시오." if days < WEB_CERT_WARN_DAYS else ""
@@ -883,12 +933,13 @@ def cmd_cert(args, paths):
         return 1
     if args.if_expiring is not None and args.if_expiring < 0:
         return _err("--if-expiring 은 0 이상의 날 수입니다.")
-    owner = None
-    if args.owner:
-        try:
-            owner = _service_ids(args.owner)
-        except KeyError:
-            return _err(f"서비스 계정 {args.owner} 이(가) 없습니다.")
+    # root 가 만든 인증서·열쇠는 늘 서비스 계정 소유로 - --owner 가 없어도 기본 서비스 계정 (root 전용 0600 이면 서비스가 못 읽는다,
+    # Codex 중간 검토 5). 계정이 없으면 만들지 않는다.
+    user = args.owner or _default_user()
+    try:
+        owner = _service_ids(user)
+    except KeyError:
+        return _err(f"서비스 계정 {user} 이(가) 없습니다 - 인증서를 서비스가 읽을 수 있게 넘길 계정이 필요합니다 (--owner <계정>).")
     if args.renew:
         if args.if_expiring is None:
             return _cert_renew(args, paths, owner)
@@ -929,7 +980,7 @@ def cmd_admin_reset(args, paths):
     try:
         held = lock.try_hold(owner=owner)
     except OSError as e:
-        return _err(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).")
+        return _err(_lock_err(e))
     if not held:
         return _err("서비스가 돌고 있습니다. systemctl stop autopilot 뒤 다시 실행하여 주십시오.")
     try:
@@ -1083,12 +1134,21 @@ def _owner_or_err(user):
 def cmd_backup(args, paths):
     """자료 백업. 서비스가 돌면(잠금이 잡혀 있고 run.json 의 pid 가 살아 있음) 그 pid 에 SIGUSR1 을 보내 서비스가 같은 시점 백업을
     뜨게 하고 새 파일을 BACKUP_WAIT 초 기다린다. 멈춰 있으면 잠금을 쥔 채 직접 뜬다 (root 면 서비스 계정으로 권한을 내린 뒤 -
-    백업 파일이 서비스 계정 소유)."""
+    백업 파일이 서비스 계정 소유). 서비스가 돌 때도 root 면 run.json 을 읽고 신호를 보내기 전에 서비스 계정으로 권한을 내린다 -
+    run.json 은 서비스가 쓸 수 있으므로 그 pid 가 다른 사용자의 프로세스일 수 있다 (Codex 중간 검토 4, 업그레이드 전 백업도 이 길)."""
     held = ServiceLock.held(paths.lock)
     if held is None:
-        return _err("서비스 잠금 파일을 열 수 없습니다 - root 나 서비스 계정으로 실행하여 주십시오.")
-    pid = _run_info(paths).get("pid")
+        return _err("서비스 잠금 파일을 열 수 없습니다 - root 나 서비스 계정으로 실행하여 주십시오 (잠금 파일이 링크·하드링크면 "
+                    "그 이름만 지우고 다시 하여 주십시오).")
     if held:
+        if _euid() == 0:
+            try:
+                _drop_privileges(_service_ids(args.user))
+            except KeyError:
+                return _err(f"서비스 계정 {args.user} 이(가) 없습니다.")
+            except OSError as e:
+                return _err(str(e))
+        pid = _run_info(paths).get("pid")
         if not _pid_alive(pid):
             return _err("다른 작업(복구 또는 계정 초기화)이 자료를 쓰고 있거나 서비스가 켜지는 중입니다. 잠시 뒤 다시 실행하여 주십시오.")
         if not hasattr(signal, "SIGUSR1"):
@@ -1096,6 +1156,9 @@ def cmd_backup(args, paths):
         before = set(server_backup.backup_names(paths.backups))
         try:
             os.kill(pid, signal.SIGUSR1)
+        except PermissionError:
+            return _err(f"서비스에 백업을 알리지 못했습니다 - {paths.run_json} 의 pid({pid})가 서비스 계정의 프로세스가 아닙니다. "
+                        "systemctl status autopilot 으로 확인하여 주십시오.")
         except OSError as e:
             return _err(f"서비스에 백업을 알리지 못했습니다 ({type(e).__name__}) - root 나 서비스 계정으로 실행하여 주십시오.")
         end = time.time() + BACKUP_WAIT
@@ -1118,7 +1181,7 @@ def cmd_backup(args, paths):
         if not lock.try_hold(owner=owner):
             return _err("다른 작업(복구 또는 계정 초기화)이 자료를 쓰고 있거나 서비스가 켜지는 중입니다. 잠시 뒤 다시 실행하여 주십시오.")
     except OSError as e:
-        return _err(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).")
+        return _err(_lock_err(e))
     try:
         if _euid() == 0:
             _drop_privileges(owner)
@@ -1150,7 +1213,7 @@ def cmd_restore(args, paths):
         if not lock.try_hold(owner=owner):
             return _err(server_backup.STOP_FIRST)
     except OSError as e:
-        return _err(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).")
+        return _err(_lock_err(e))
     try:
         if _euid() == 0:
             try:
@@ -1202,7 +1265,7 @@ def cmd_restore_config(args, paths):
         if not lock.try_hold(owner=owner):
             return _err(server_backup.STOP_FIRST)
     except OSError as e:
-        return _err(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).")
+        return _err(_lock_err(e))
     try:
         aside = server_backup.restore_config(paths.etc, args.file)
     except ValueError as e:
@@ -1248,7 +1311,8 @@ def _parser():
     g.add_argument("--import-web", nargs=2, metavar=("CERT", "KEY"))
     r.add_argument("--chain", help="업체 인증서의 중간 인증서 묶음 (--import-web)")
     r.add_argument("--days", type=int, default=lan_ca.SERVER_DAYS)
-    r.add_argument("--owner", help="만든 인증서를 넘길 서비스 계정 (설치는 autopilotd)")
+    r.add_argument("--owner", help="만든 인증서를 넘길 서비스 계정 (주지 않으면 기본 서비스 계정 autopilotd - root 가 만든 인증서도 "
+                                    "늘 서비스가 읽는다)")
     r.add_argument("--if-expiring", type=int, metavar="DAYS",
                    help="(--renew 와) 남은 날이 DAYS 를 넘으면 그대로 0, 아니면 새로 만들고 종료 코드 10 (인증서 타이머)")
     r.set_defaults(func=cmd_cert)

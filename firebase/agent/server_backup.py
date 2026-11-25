@@ -16,11 +16,14 @@ keep(7) 를 넘는 옛 백업을 지운다.
 복구 (Codex 검토 10): 서비스 잠금(.service.lock)을 잡지 못하면 RuntimeError. 복구 내내 쥐고 있어 그 사이 서비스가 켜지면 잠금을 못 잡아
 종료 코드 4 로 끝난다. 압축 안 이름은 정해진 꼴만 (절대 경로·'..'·역슬래시·점으로 시작하는 이름·링크·특수 파일 거절), 지문 확인,
 형식 번호가 이 코드보다 크면 거절, 다른 서버의 백업은 force 없이 거절. 먼저 임시 폴더에 다 풀고 나서 지금 자료를
-<자료>/before-restore-<시각>/ 으로 옮기고 푼 것을 넣는다 (.service.lock·backups/·uploads/ 는 그대로).
+<자료>/before-restore-<시각>/ 으로 옮기고 푼 것을 넣는다 (.service.lock·backups/·uploads/ 는 그대로). 교체 구간은 자료 폴더의
+'복구 중' 표시(.restore-in-progress, 0600, 시각과 옮겨 둔 폴더 이름)로 감싸고, 그 사이 SIGTERM·SIGHUP 은 예외로 바꿔 되돌린다.
+SIGKILL·전원처럼 막을 수 없는 끊김이면 표시가 남아 서비스 run 이 종료 코드 4 로 멈춘다 (사내 서버 ④ Task 8.5).
 
 설정 백업 (Codex 검토 8, root): /etc/autopilot 전체(설정·라이선스·ca/)를 /var/backups/autopilot/etc-YYYYMMDD.tar.gz (0600) 로, 7개.
 표준 라이브러리만. 기록에 열쇠·비밀번호를 싣지 않는다 (백업 파일 안에는 열쇠·계정 해시·2단계 비밀 값이 있어 서비스 계정만 읽는다).
 """
+import contextlib
 import datetime
 import hashlib
 import io
@@ -28,6 +31,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import tarfile
 import tempfile
@@ -42,8 +46,10 @@ PREFIX, SUFFIX = "autopilot-backup-", ".tar.gz"
 MANIFEST = "backup.json"
 KEEP = 7
 SKIP_TOP = ("backups", "uploads", ".service.lock", "run.json", MANIFEST)
-KEEP_ON_RESTORE = (".service.lock", "backups", "uploads")      # 복구가 옮기지 않는 것 (잠금은 쥐고 있는 그 파일이어야 한다)
+RESTORE_MARK = ".restore-in-progress"                           # 복구 교체 중 표시 - 남아 있으면 서비스 run 은 4 (Task 8.5)
+KEEP_ON_RESTORE = (".service.lock", "backups", "uploads", RESTORE_MARK)   # 복구가 옮기지 않는 것 (잠금은 쥐고 있는 그 파일이어야 한다)
 ASIDE_PREFIX = "before-restore-"
+ASIDE_RE = re.compile(r"before-restore-\d{8}-\d{6}(?:-\d+)?")
 DB_TAILS = ("-journal", "-wal", "-shm")
 DB_OWNERS = {"runs.db": "runs", "logins.db": "login_log"}       # 서비스가 연결을 가진 DB - 그 연결로 뜬다
 FIRST = ("pcs.json", "accounts.json", "store.json")             # 이 차례로 읽는다 (잠금 안이라 차례는 뜻이 없지만 시험이 끼어들 자리)
@@ -58,6 +64,7 @@ STOP_FIRST = "서비스를 먼저 멈추어 주십시오: systemctl stop autopil
 # 시험 손잡이 - snapshot 이 잠금 안에서 파일 하나를 읽을 때마다 _TEST_PAUSE(이름), restore 가 다 풀고 옮기기 직전에 _TEST_RESTORE_PAUSE()
 _TEST_PAUSE = None
 _TEST_RESTORE_PAUSE = None
+_TEST_SWAP_PAUSE = None
 
 
 def attach(*objs):
@@ -316,6 +323,79 @@ def _free_dir(base):
     return path
 
 
+class RestoreInterrupted(RuntimeError):
+    """복구 교체 중 SIGTERM·SIGHUP 을 받아 되돌렸다 (사람 말)."""
+
+
+def _mark_path(data):
+    return os.path.join(data, RESTORE_MARK)
+
+
+def _mark_write(data, aside, now):
+    """'복구 중' 표시를 새로 쓴다 (0600, 링크를 따라가지 않음, O_EXCL). 지난번에 끊긴 복구의 표시는 이름만 지운다 (링크면 링크만)."""
+    p = _mark_path(data)
+    try:
+        os.unlink(p)
+    except FileNotFoundError:
+        pass
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"started": datetime.datetime.fromtimestamp(now).isoformat(timespec="seconds"),
+                            "aside": os.path.basename(aside)}, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _mark_clear(data):
+    try:
+        os.unlink(_mark_path(data))
+    except FileNotFoundError:
+        pass
+
+
+def read_mark(data):
+    """'복구 중' 표시가 있으면 {"started", "aside"} (읽지 못하면 빈 dict), 없으면 None. 링크를 따라가지 않는다 - 링크여도 '있음'."""
+    p = _mark_path(data)
+    if not os.path.lexists(p):
+        return None
+    try:
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+        with os.fdopen(fd, "rb") as f:
+            info = json.loads(f.read(4096).decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(info, dict):
+        return {}
+    aside = info.get("aside")
+    return {"started": str(info.get("started") or ""), "aside": aside if isinstance(aside, str) and ASIDE_RE.fullmatch(aside) else ""}
+
+
+@contextlib.contextmanager
+def _signals_raise():
+    """교체 구간: SIGTERM·SIGHUP(SSH 끊김)을 RestoreInterrupted 로 바꿔 되돌리기를 타게 한다 (한 번만 - 되돌리는 동안 오는 신호는
+    무시). 주 스레드에서만 (신호 처리기는 주 스레드만 건다). box["quiet"] = True 면 그 뒤 신호는 무시 (다 넣은 뒤)."""
+    box = {"got": None, "quiet": False}
+    if threading.current_thread() is not threading.main_thread():
+        yield box
+        return
+
+    def handler(signum, frame):
+        if box["got"] is not None or box["quiet"]:
+            return
+        box["got"] = signum
+        raise RestoreInterrupted(signum)
+    old = {}
+    try:
+        for name in ("SIGTERM", "SIGHUP"):
+            sig = getattr(signal, name, None)
+            if sig is not None:
+                old[sig] = signal.signal(sig, handler)
+        yield box
+    finally:
+        for sig, h in old.items():
+            signal.signal(sig, h)
+
+
 def restore(paths, file, force=False, lock=None, now=None):
     """백업 파일(경로 또는 바이트)로 자료 폴더를 되살린다 → 전의 자료를 옮겨 둔 폴더. lock = 이미 쥔 server_main.ServiceLock
     (root 가 권한을 내리기 전에 잡은 것) - 없으면 여기서 비차단으로 잡고 못 잡으면 RuntimeError(STOP_FIRST). 백업이 틀리면 ValueError."""
@@ -326,7 +406,7 @@ def restore(paths, file, force=False, lock=None, now=None):
         try:
             held = lock.try_hold()
         except OSError as e:
-            raise RuntimeError(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).") from None
+            raise RuntimeError(server_main._lock_err(e)) from None
         if not held:
             raise RuntimeError(STOP_FIRST)
     try:
@@ -355,28 +435,50 @@ def _restore(paths, raw, force, now):
         aside = _free_dir(os.path.join(data, ASIDE_PREFIX + datetime.datetime.fromtimestamp(now).strftime("%Y%m%d-%H%M%S")))
         os.mkdir(aside, 0o700)
         moved, placed = [], []
-        try:
-            for n in sorted(os.listdir(data)):
-                p = os.path.join(data, n)
-                if n in KEEP_ON_RESTORE or n.startswith(ASIDE_PREFIX) or p == stage or p == aside:
-                    continue
-                os.replace(p, os.path.join(aside, n))
-                moved.append(n)
-            for n in sorted(os.listdir(stage)):
-                os.replace(os.path.join(stage, n), os.path.join(data, n))
-                placed.append(n)
-        except BaseException:
-            for n in placed:                             # 되돌리기 - 넣은 것을 임시 폴더로, 옮긴 것을 제자리로
-                try:
-                    os.replace(os.path.join(data, n), os.path.join(stage, n))
-                except OSError:
-                    pass
-            for n in moved:
-                try:
-                    os.replace(os.path.join(aside, n), os.path.join(data, n))
-                except OSError:
-                    pass
-            raise
+        # 교체 구간 (Codex 중간 검토 8): '복구 중' 표시를 먼저 쓰고, SIGTERM·SIGHUP 은 예외로 바꿔 되돌린다. 막을 수 없는 끊김(SIGKILL·
+        # 전원)이면 표시가 남아 서비스 run 이 4 로 멈춘다 - restore 를 다시 하거나 aside 에서 손으로 되돌린다
+        with _signals_raise() as box:
+            try:
+                _mark_write(data, aside, now)
+                for n in sorted(os.listdir(data)):
+                    p = os.path.join(data, n)
+                    if n in KEEP_ON_RESTORE or n.startswith(ASIDE_PREFIX) or p == stage or p == aside:
+                        continue
+                    os.replace(p, os.path.join(aside, n))
+                    moved.append(n)
+                    if _TEST_SWAP_PAUSE is not None:
+                        _TEST_SWAP_PAUSE(n)
+                for n in sorted(os.listdir(stage)):
+                    os.replace(os.path.join(stage, n), os.path.join(data, n))
+                    placed.append(n)
+                box["quiet"] = True                      # 다 넣었다 - 이 뒤 신호로 되돌리지 않는다
+                _mark_clear(data)
+            except BaseException as e:
+                box["quiet"] = True
+                failed = []
+                for n in placed:                         # 되돌리기 - 넣은 것을 임시 폴더로, 옮긴 것을 제자리로
+                    try:
+                        os.replace(os.path.join(data, n), os.path.join(stage, n))
+                    except OSError:
+                        failed.append(n)
+                for n in moved:
+                    try:
+                        os.replace(os.path.join(aside, n), os.path.join(data, n))
+                    except OSError:
+                        failed.append(n)
+                if not failed:                           # 다 되돌렸으면 표시와 빈 옮겨 둘 폴더를 지운다 (못 되돌렸으면 표시를 남긴다)
+                    _mark_clear(data)
+                    try:
+                        os.rmdir(aside)
+                    except OSError:
+                        pass
+                if isinstance(e, RestoreInterrupted):
+                    name = {getattr(signal, "SIGTERM", -1): "SIGTERM", getattr(signal, "SIGHUP", -2): "SIGHUP"}.get(box["got"], "신호")
+                    if failed:
+                        raise RestoreInterrupted(f"복구 중 멈추라는 신호({name})를 받아 되돌렸지만 다 되돌리지 못했습니다 "
+                                                 f"({', '.join(failed[:5])}). {aside} 에서 손으로 되돌리거나 restore 를 다시 하여 주십시오.") from None
+                    raise RestoreInterrupted(f"복구 중 멈추라는 신호({name})를 받아 되돌렸습니다. 자료는 복구 전 그대로입니다.") from None
+                raise
         return aside
     finally:
         shutil.rmtree(stage, ignore_errors=True)

@@ -212,9 +212,16 @@ class Registry:
         except (ValueError, UnicodeDecodeError):
             # 비우고 시작하지 않는다 - 번호를 pc_01 부터 다시 매기게 된다 (M-8). 파일은 그대로 두어 복구·조사에 쓴다
             raise RegistryBroken(f"PC 등록부가 손상되었습니다. 백업에서 복구하여 주십시오. ({self.path})") from None
-        pcs = {k: dict(v) for k, v in rows.items()
-               if isinstance(k, str) and PC_RE.fullmatch(k) and isinstance(v, dict) and v.get("state") in STATES
-               and (v["state"] == "removed" or (isinstance(v.get("agent_key"), str) and isinstance(v.get("relay_key"), str)))}   # 지운 PC 는 3일 뒤 열쇠가 없다
+        pcs = {}
+        for k, v in rows.items():
+            if not (isinstance(k, str) and PC_RE.fullmatch(k)):
+                continue                                  # 번호 꼴이 아닌 키 (손으로 적은 것 등) 는 무시한다
+            ok = (isinstance(v, dict) and v.get("state") in STATES
+                  and (v["state"] == "removed" or (isinstance(v.get("agent_key"), str) and isinstance(v.get("relay_key"), str))))
+            if not ok:
+                # 번호는 맞는데 행이 깨졌다 - 버리면 그 PC 가 사라지고 번호를 다시 쓸 수 있다 (Codex 중간 검토 9). 지운 PC 는 3일 뒤 열쇠가 없다
+                raise RegistryBroken(f"PC 등록부의 {k} 행이 손상되었습니다. 백업에서 복구하여 주십시오. ({self.path})")
+            pcs[k] = dict(v)
         nxt = raw.get("next")
         if not isinstance(nxt, int) or isinstance(nxt, bool) or nxt < 1:
             nxt = 1
