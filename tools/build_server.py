@@ -338,7 +338,10 @@ def build(version, runtime, sign_key, out_dir, test_key=False, pin=None, server_
         print("  알림: server/ 에 install.sh 가 없습니다 - 설치할 수 없는 묶음입니다 (Task 8 전 시험용)")
     for name, path in sfiles:
         with open(path, "rb") as f:
-            items.append(("server/" + name, "file", 0o755 if name in EXEC_SCRIPTS else 0o644, f.read()))
+            data = f.read()
+        if b"\r" in data:                # CRLF 면 리눅스 sh·systemd 가 깨진다 (.gitattributes 의 server/** eol=lf - Task 8)
+            raise BuildError(f"server/{name} 에 CR(윈도우 줄바꿈)이 있습니다 - LF 로 바꾼 뒤 다시 만드십시오")
+        items.append(("server/" + name, "file", 0o755 if name in EXEC_SCRIPTS else 0o644, data))
 
     files, links = {}, {}
     for rel, kind, mode, data in items:
@@ -363,9 +366,9 @@ def build(version, runtime, sign_key, out_dir, test_key=False, pin=None, server_
     top = BUNDLE_PREFIX + version
     mtime = int(made.timestamp())
 
-    def info(rel, kind, mode, size=0, link=""):
+    def info(rel, kind, mode, size=0, link="", when=None):
         ti = tarfile.TarInfo(f"{top}/{rel}" if rel else top)
-        ti.mode, ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = mode, mtime, 0, 0, "root", "root"
+        ti.mode, ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = mode, mtime if when is None else when, 0, 0, "root", "root"
         if kind == "dir":
             ti.type = tarfile.DIRTYPE
         elif kind == "link":
@@ -398,13 +401,15 @@ def build(version, runtime, sign_key, out_dir, test_key=False, pin=None, server_
                     if got is None:
                         raise BuildError(f"내장 파이썬 파일이 읽는 사이 바뀌었습니다: {name}")
                     kind, mode, size, val = got
+                    # 런타임 파일은 원래 시각 그대로 - 실린 .pyc 머리의 원본 시각과 .py 의 시각이 맞아야 파이썬이 .pyc 를 쓴다
+                    # (빌드 시각으로 바꾸면 모든 .pyc 가 낡은 것으로 보여 켤 때마다 다시 컴파일하고, -B 없이 돌면 다시 쓴다 - Task 8)
                     if kind == "link":
-                        out.addfile(info(name, "link", 0o755, link=val))
+                        out.addfile(info(name, "link", 0o755, link=val, when=int(m.mtime)))
                         continue
                     data = src.extractfile(m).read()
                     if hashlib.sha256(data).hexdigest() != val:
                         raise BuildError(f"내장 파이썬 파일이 읽는 사이 바뀌었습니다: {name}")
-                    out.addfile(info(name, "file", mode, len(data)), io.BytesIO(data))
+                    out.addfile(info(name, "file", mode, len(data), when=int(m.mtime)), io.BytesIO(data))
             if want:
                 raise BuildError("내장 파이썬 파일이 읽는 사이 바뀌었습니다")
         with open(part, "rb") as f:

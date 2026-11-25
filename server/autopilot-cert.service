@@ -1,0 +1,10 @@
+# 오토파일럿 사내 서버 - 서버 인증서 갈아 끼우기 (root, autopilot-cert.timer 가 주 1회)
+# 남은 날이 30일 이하일 때만 새로 만들고(종료 코드 10), 그때만 서비스를 다시 켠다. 30일 넘게 남았으면 0 으로 그냥 끝난다.
+# ExecStart 안의 $$ 는 systemd 가 $ 하나로 넘긴다 (sh 의 변수).
+[Unit]
+Description=AUTOPILOT server certificate renewal
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/local/sbin/autopilot-server cert --renew --if-expiring 30 --owner autopilotd; rc=$$?; if [ "$$rc" -eq 10 ]; then exec systemctl try-restart autopilot.service; fi; exit "$$rc"'

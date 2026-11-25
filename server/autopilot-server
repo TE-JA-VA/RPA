@@ -1,0 +1,12 @@
+#!/bin/sh
+# autopilot-server - 오토파일럿 사내 서버 관리 명령 (install.sh 가 /usr/local/sbin/autopilot-server 로 이 파일에 링크한다).
+#   -I  사용자 site·PYTHON* 환경 변수·현재 폴더를 보지 않는다. 스크립트 폴더도 검색 경로에서 빠지므로 app/ 를 직접 넣는다 (Codex 검토 2).
+#   -B  root 로 도는 명령이 프로그램 폴더에 __pycache__ 를 쓰지 않는다 (install.sh 가 풀 때 미리 컴파일해 둔다).
+# current 링크는 여기서 한 번 실제 자리로 푼다 - 업그레이드가 링크를 바꾸어도 도는 프로세스가 새 버전 파일을 섞어 읽지 않는다.
+# 설치본은 늘 정해진 자리(/etc/autopilot, /var/lib/autopilot, /var/log/autopilot)를 쓴다 - 시험용 환경 변수는 지운다.
+unset AUTOPILOT_ROOT AUTOPILOT_ETC AUTOPILOT_DATA AUTOPILOT_LOGS AUTOPILOT_NO_SYSTEMD AUTOPILOT_SERVICE_USER
+AP_HOME=$(cd /opt/autopilot/current 2>/dev/null && pwd -P) || {
+    echo "autopilot-server: 설치된 프로그램을 찾지 못했습니다 (/opt/autopilot/current)." >&2
+    exit 1
+}
+exec "$AP_HOME/python/bin/python3" -I -B -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); import server_main; sys.exit(server_main.main(sys.argv[1:]))' "$AP_HOME/app" "$@"

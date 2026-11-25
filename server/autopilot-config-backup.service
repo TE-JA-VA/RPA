@@ -1,0 +1,9 @@
+# 오토파일럿 사내 서버 - 설정 폴더(/etc/autopilot: server.json, license.json, ca/) 백업 (root, autopilot-config-backup.timer 가 주 1회)
+# 결과는 /var/backups/autopilot/etc-YYYYMMDD.tar.gz (root 0600), 7개 유지. 자료 백업은 서비스 안에서 하루 한 번 따로 뜬다.
+[Unit]
+Description=AUTOPILOT server configuration backup
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/local/sbin/autopilot-server backup-config

@@ -1,0 +1,11 @@
+# 오토파일럿 사내 서버 - 서버 인증서 확인 (주 1회, 꺼져 있던 동안 놓친 것은 켜진 뒤 한 번)
+[Unit]
+Description=AUTOPILOT server certificate renewal (weekly)
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

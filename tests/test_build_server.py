@@ -62,6 +62,9 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+RT_MTIME = 1700000000                                      # 가짜 런타임 파일의 시각 - 묶음에서도 그대로여야 한다
+
+
 def fake_runtime(folder, broken=False):
     """가짜 내장 파이썬 tar.gz (python/ 아래 실행 글·링크·글 파일) 와 그 고정 값 {file, sha256, url}."""
     os.makedirs(folder, exist_ok=True)
@@ -69,7 +72,7 @@ def fake_runtime(folder, broken=False):
     with tarfile.open(path, "w:gz") as tf:
         def put(name, data, mode=0o644):
             ti = tarfile.TarInfo(name)
-            ti.size, ti.mode = len(data), mode
+            ti.size, ti.mode, ti.mtime = len(data), mode, RT_MTIME
             tf.addfile(ti, io.BytesIO(data))
         put("python/bin/python3.14", b"#!/bin/sh\necho fake-python\n", 0o755)
         ln = tarfile.TarInfo("python/bin/python3")
@@ -197,6 +200,11 @@ def test_layout():
            modes.get("app/server_main.py")) == (0o755, 0o755, 0o644, 0o644),
           str([oct(modes.get(k) or 0) for k in ("server/install.sh", "server/autopilot-server", "server/autopilot.service", "app/server_main.py")]))
     check("런타임 실행 파일 모드 0755 유지", modes.get("python/bin/python3.14") == 0o755, oct(modes.get("python/bin/python3.14") or 0))
+    times = {n[len(TOP) + 1:]: m.mtime for n, (m, _) in got.items()}
+    check("런타임 파일은 원래 시각 그대로 (실린 .pyc 가 낡은 것으로 보이지 않게)",
+          times.get("python/bin/python3.14") == RT_MTIME and times.get("python/lib/python3.14/os.py") == RT_MTIME
+          and times.get("app/server_main.py") != RT_MTIME,
+          (times.get("python/bin/python3.14"), times.get("python/lib/python3.14/os.py"), times.get("app/server_main.py")))
     check("폴더 항목은 0755", all(stat.S_IMODE(m.mode) == 0o755 for m, _ in got.values() if m.isdir()))
     check("manifest.sig 가 있고 files 에는 없다", f"{TOP}/manifest.sig" in got and "manifest.sig" not in listed)
 
@@ -354,6 +362,39 @@ def test_server_dir_missing():
     check("install.sh 가 없다고 알린다", "install.sh" in buf.getvalue(), buf.getvalue()[-300:])
 
 
+def test_server_dir_crlf_stops():
+    """Task 8: server/ 의 글(install.sh·실행 글·단위 파일)에 CR 이 있으면 리눅스 sh·systemd 가 깨진다 - 만들기를 멈춘다.
+    저장소 server/ 의 파일은 모두 LF (.gitattributes 로 고정)."""
+    d = fake_server_dir(os.path.join(TMP, "server_crlf"))
+    with open(os.path.join(d, "install.sh"), "wb") as f:
+        f.write(b"#!/bin/sh\r\necho crlf\r\n")
+    out = os.path.join(TMP, "out_crlf")
+    try:
+        make("crlf", server_dir=d, out_dir=out)
+        check("server/ 글에 CR 이 있으면 멈춤", False, "만들어짐")
+    except RuntimeError as e:
+        check("server/ 글에 CR 이 있으면 멈춤 (파일 이름과 함께)", "install.sh" in str(e) and "CR" in str(e), str(e))
+    check("멈추면 결과 파일이 없다", not os.path.isdir(out) or not os.listdir(out))
+    repo_server = os.path.join(ROOT, "server")
+    names = sorted(os.listdir(repo_server)) if os.path.isdir(repo_server) else []
+    check("저장소 server/ 에 Task 8 파일이 모두 있다",
+          set(names) >= {"install.sh", "autopilot-server", "autopilot.service", "autopilot-cert.service", "autopilot-cert.timer",
+                         "autopilot-config-backup.service", "autopilot-config-backup.timer", "nginx-example.conf"}, names)
+    crlf = []
+    for n in names:
+        with open(os.path.join(repo_server, n), "rb") as f:
+            if b"\r" in f.read():
+                crlf.append(n)
+    check("저장소 server/ 의 파일은 모두 LF", not crlf, crlf)
+    try:
+        with open(os.path.join(ROOT, ".gitattributes"), encoding="utf-8") as f:
+            attrs = f.read()
+    except OSError:
+        attrs = ""
+    check(".gitattributes 가 server/ 를 eol=lf 로 고정", any(ln.split()[:1] == ["server/**"] and "eol=lf" in ln for ln in attrs.splitlines()),
+          attrs)
+
+
 def _extract(path, dest):
     with tarfile.open(path, "r:gz") as tf:
         tf.extractall(dest, filter="data")
@@ -429,7 +470,7 @@ def main():
         return 1 if fails else 0
     tests = [test_runtime_pin, test_layout, test_bad_inputs, test_runtime_hash_mismatch_stops, test_real_key_mismatch_stops,
              test_signature, test_server_main_verify, test_server_files_closure, test_no_client_code, test_server_dir_missing,
-             test_server_imports_closed]
+             test_server_dir_crlf_stops, test_server_imports_closed]
     try:
         for t in tests:
             print(t.__name__)
