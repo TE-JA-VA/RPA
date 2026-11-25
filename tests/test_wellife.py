@@ -3033,7 +3033,7 @@ trr = types.SimpleNamespace(
     win32gui=types.SimpleNamespace(GetWindowRect=lambda h: (0, 0, 1920, 1032),
                                    SetWindowPos=lambda h, after, *a: tev.append(("topmost", after == _wc.HWND_TOPMOST))),
     status=types.SimpleNamespace(step=lambda s, *a, **k: tsteps.append(s), metric=lambda *a, **k: None,
-                                 keep_record=lambda: tev.append(("keep record",)),
+                                 keep_record=lambda: tev.append(("keep record",)), began_work=lambda: tev.append(("began work",)),
                                  release_prepare=lambda rect=None: tev.append(("release", rect)),
                                  running_programs=lambda: ["prepare"] if prep["on"] else []))
 _saved_tog = {n: getattr(wellife, n) for n in ("import_collect", "open_order_copy", "close_order_copy", "site_grid", "switch_tab",
@@ -3066,8 +3066,9 @@ check("함께 실행: 가져오기를 걸어 둔 뒤 엑셀 단계로 되돌려 
       tsteps == ["wl_order_excel", "wl_order_import", "wl_order_excel"], str(tsteps))
 _saved_os = wellife.order_screen
 wellife.order_screen = lambda rr_, ctx_, step, body: body()
-check("② 자동 수집 모듈은 걸어 둔 자동 수집이 끝나기를 기다린다 (다시 누르지 않는다)",
-      wellife.module_import(trr, tctx, True) == ("done", "자동 수집 끝") and tctx.import_end is None)
+tev.clear()
+check("② 자동 수집 모듈은 걸어 둔 자동 수집이 끝나기를 기다린다 (다시 누르지 않는다) - 그 기다림은 처리 도중으로 적는다 (리뷰 2차 11-25)",
+      wellife.module_import(trr, tctx, True) == ("done", "자동 수집 끝") and tctx.import_end is None and tev == [("began work",)], str(tev))
 check("걸어 둔 끝 기다리기는 가져오기 단계에 붙는다 (BugBuster L4)", tsteps[-1] == "wl_order_import", str(tsteps))
 wellife.order_screen = _saved_os
 
@@ -3579,7 +3580,11 @@ def sep_rr(**kw):
             pressed_sep.append((h, n))
             if SEP[h][4]:
                 SEP.pop(h)
-        return [types.SimpleNamespace(window_text=lambda n=n: n, invoke=lambda n=n: invoke(n)) for n in SEP[h][2]]
+        def button(n):      # 제목 줄 단추(닫기·최소화·최대화)는 UIA 부모가 TitleBar - ("닫기", "본문") 처럼 주면 본문 단추 (리뷰 2차 11-25)
+            name, where = n if isinstance(n, tuple) else (n, "TitleBar" if n in ("닫기", "최소화", "최대화") else "Pane")
+            return types.SimpleNamespace(window_text=lambda: name, invoke=lambda: invoke(name),
+                                         parent=lambda: types.SimpleNamespace(element_info=types.SimpleNamespace(control_type=where)))
+        return [button(n) for n in SEP[h][2]]
 
     def post(h, msg, a, b):
         pressed_sep.append((h, "X"))
@@ -3632,6 +3637,10 @@ SEP[42] = ("알 수 없는 창", "WindowsForms10.Window.8", ["확인", "다시 �
 res = sep_clear(sep_rr())
 check("답 단추가 [확인] 하나가 아니고 [취소]·[아니오] 도 없으면 누르지 않고 X(창 닫기)로 닫는다 (검토 11-25)",
       res == 1 and pressed_sep == [(42, "X")], f"{res} {pressed_sep}")
+SEP[43] = ("확인 요청", "WindowsForms10.Window.8", ["확인", ("닫기", "본문"), "닫기"], False, True)
+res = sep_clear(sep_rr())
+check("본문에 [확인][닫기] 가 있으면 [확인] 을 누르지 않고 X 로 닫는다 - 제목 줄 단추는 이름이 아니라 UIA 부모(TitleBar)로 가린다 (리뷰 2차 11-25)",
+      res == 1 and pressed_sep == [(43, "X")], f"{res} {pressed_sep}")
 SEP_MAIN_ON[0] = False
 SEP[35] = ("", "WindowsForms10.Window.8", [], False, True)
 res = sep_clear(sep_rr())
@@ -3829,5 +3838,56 @@ check("메뉴 검색 이동(SAP·WMS)도 기다리는 동안 팝업을 닫았으
 wellife._open_by_menu = _saved_obm
 SEP.clear()
 wellife.SEPARATE_BLOCK_SECONDS, wellife.TAB_AFTER_POPUP_SECONDS = _saved_block
+
+# ---------------------------------------------------------------------------
+print("=== 함께 실행: 앞 엑셀 모듈이 건 자동 수집을 기다리는 중 ERPia 가 꺼지면 [가져오기] 를 다시 누르지 않는다 (리뷰 2차 11-25) ===")
+WM2 = {"marks": 0, "presses": 0, "alive": True}
+_saved_im = (wellife.order_screen, wellife.import_collect, rr.status, rr.ec.pid_alive, rr.ERPIA_DYING_WAIT_SECONDS, rr.log)
+_st2 = Rec()
+_st2.began_work = lambda: WM2.__setitem__("marks", WM2["marks"] + 1)
+_st2.work_marks = lambda: WM2["marks"]
+rr.status = _st2
+rr.ec.pid_alive = lambda pid: WM2["alive"]
+rr.ERPIA_DYING_WAIT_SECONDS = 0.1
+rr.log = lambda msg="", **k: None
+wellife.order_screen = lambda rr_, ctx_, step, body: body()
+wellife.import_collect = lambda rr_, ctx_, live, wait=True: WM2.__setitem__("presses", WM2["presses"] + 1) or ("done", "가져오기 누름")
+
+
+def _end_dies():        # 엑셀 모듈이 걸어 둔 수집의 끝을 기다리는 중 ERPia 가 꺼짐
+    WM2["alive"] = False
+    return "failed", "UI 오류: KeyError (None)"
+
+
+def _login(ctx_):
+    ctx_.pid, WM2["alive"] = 2, True
+    return "done", None
+
+
+_ctx2 = rr.RoutineContext()
+_ctx2.pid, _ctx2.hwnd = 1, None
+_ctx2.import_end, _ctx2.import_pressed = _end_dies, True      # wellife.excel_together 가 남기는 것
+_res2 = rr.run_module(_ctx2, "wellife_import", "웰라이프 자동 수집",
+                      {"login": _login, "wellife_import": lambda c: wellife.module_import(rr, c, True)})
+check("앞 모듈이 [가져오기] 를 눌러 둔 수집을 기다리다 ERPia 가 꺼지면 다시 돌지 않고 '결과 미확인' - [가져오기] 를 두 번 누르지 않는다",
+      _res2[0] == "failed" and "결과 미확인" in _res2[1] and WM2["presses"] == 0, f"{_res2} {WM2}")
+WM2.update(marks=0, presses=0, alive=True)
+_ctx3 = rr.RoutineContext()
+_ctx3.pid, _ctx3.hwnd = 1, None
+_ctx3.import_end, _ctx3.import_pressed = (lambda: ("skipped", "단추 없음")), False     # 누르지 못해 건너뜀이었던 것
+wellife.module_import(rr, _ctx3, True)
+check("  눌러 둔 수집이 없었으면(단추 없음 건너뜀) 처리 시작으로 치지 않는다", WM2["marks"] == 0, str(WM2))
+(wellife.order_screen, wellife.import_collect, rr.status, rr.ec.pid_alive, rr.ERPIA_DYING_WAIT_SECONDS, rr.log) = _saved_im
+
+# 운송장 엑셀: 미리보기 0건이라 받지 않으면 처리 시작으로 치지 않는다 - 표시는 [엑셀 다운로드] 누르기 바로 앞 (교차 검증 11-25, rpa-wellife-ac)
+_saved_dl = (wellife._child, wellife._close_download, wellife.time)
+_dl_rr = types.SimpleNamespace(status=Rec(), log=lambda m: None, grid_rows=lambda g: [])
+wellife._child = lambda rr_, h, aid, what: types.SimpleNamespace(descendants=lambda **k: [])
+wellife._close_download = lambda rr_, ctx_, h: None
+wellife.time = types.SimpleNamespace(sleep=lambda s: None, time=_time.time)
+check("운송장 엑셀 미리보기 0건이면 받지 않고, 처리 시작(began_work)도 적지 않는다",
+      wellife._download(_dl_rr, types.SimpleNamespace(pid=1), 5, "0000", True) is None and not _dl_rr.status.of("began_work"),
+      str(_dl_rr.status.calls))
+(wellife._child, wellife._close_download, wellife.time) = _saved_dl
 
 finish()

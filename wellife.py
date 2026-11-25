@@ -400,6 +400,12 @@ def module_import(rr, ctx, live=False):
     end = getattr(ctx, "import_end", None)
     if end is not None:
         ctx.import_end = None
+        if getattr(ctx, "import_pressed", False):
+            # 앞 엑셀 모듈이 이미 [가져오기] 를 눌렀다 - 그 끝을 기다리는 것도 처리 도중이다. 기다리는 사이 ERPia 가 꺼지면 다시 돌지 않고
+            # '결과 미확인' 으로 멈춘다 (run_routine.run_module 의 work_marks) - 다시 돌면 import_end 가 비어 [가져오기] 를 한 번 더 누른다
+            # (리뷰 2차 2026-11-25)
+            ctx.import_pressed = False
+            rr.status.began_work()
 
         def wait_end():
             rr.status.step("wl_order_import")    # 끝 기다리기도 가져오기 단계에 붙인다 (BugBuster L4)
@@ -470,6 +476,7 @@ def excel_together(rr, ctx, import_live):
             switch_tab(rr, ctx, ORDER_TAB)
             end = import_collect(rr, ctx, True, wait=False)
             ctx.import_end = end if callable(end) else (lambda: end)    # 단추가 없어 건너뜀이면 그 결과를 그대로
+            ctx.import_pressed = callable(end)      # 눌러서 조회가 시작됐다 - 다음 자동 수집 모듈의 기다림은 처리 도중 (module_import)
             switch_tab(rr, ctx, copy)
             rr.status.step("wl_order_excel")     # import_collect 가 찍은 가져오기 단계에서 엑셀 단계로 되돌린다 (BugBuster L4)
         sites = site_grid(rr, ctx)
@@ -1538,7 +1545,8 @@ def _fail_saved(rr, ctx, code, why, live):
 def export_market(rr, ctx, market, pw, work=False):
     """[마켓업로드용 엑셀출력] → '송장양식' 에서 market → [엑셀출력] → 내려받기 → '송장양식' [닫기(X)]. 저장한 경로,
     미리보기가 0건이면 받지 않고 None. 목록에 그 마켓이 없거나 '조회에 실패했습니다.' 면 Stop(failed). 멈출 때 남은 창을 닫는다 (다음 클릭을 덮지 않게).
-    work: 내려받기 창이 뜬 뒤, 받기 바로 앞에 처리 시작을 적는다 (rpa_status.began_work - 양식 고르기·조회 실패는 처리 전, Codex 검토 2026-11-25)."""
+    work: [엑셀 다운로드] 를 누르기 바로 앞에 처리 시작을 적는다 (_download, rpa_status.began_work - 양식 고르기·조회 실패·미리보기 0건은 처리 전,
+    Codex 검토 2026-11-25·교차 검증 rpa-wellife-ac)."""
     ctl = controls(rr, ctx, INVOICE_FORM)
     btn = ctl.get("customCtrlBtnGrp2")
     if btn is None:
@@ -1554,9 +1562,7 @@ def export_market(rr, ctx, market, pw, work=False):
         h = _wait_window(rr, ctx, before, (EXPORT_DL_TITLE, "마켓업로드용 양식 조회 실패"), "송장양식 [엑셀출력]")
         if rr.win32gui.GetWindowText(h) != EXPORT_DL_TITLE:      # '조회에 실패했습니다.' - [확인] 만 있다 (11-05 힙합퍼)
             raise Stop("failed", f"송장양식 '{market}': {_message_ok(rr, h, '마켓업로드용 양식 조회 실패')}")
-        if work:
-            rr.status.began_work()
-        saved = _download(rr, ctx, h, pw)
+        saved = _download(rr, ctx, h, pw, work)
         _click_in(rr, form, _child(rr, form, "customCtrlBtnGrp4", "송장양식 [닫기(X)]"), "송장양식 [닫기(X)]")
         _wait_gone(rr, form, "송장양식")
         return saved
@@ -1586,9 +1592,10 @@ def export_password(rr):
     return pw.strip() or EXPORT_PW_DEFAULT
 
 
-def _download(rr, ctx, h, pw):
+def _download(rr, ctx, h, pw, work=False):
     """'엑셀 다운로드 받기' (PopupFrmExportExcel): 미리보기(gridCtrl_01)에 줄이 없으면 [닫기(X)]·[예] 로 닫고 None (데이터가 있을
-    때만 받는다, 사용자 2026-11-09 - 0건이면 머리글만 있는 파일이 나온다). 있으면 비밀번호 → 사유 → [엑셀 다운로드] → 저장 창 → [아니오]. 저장한 경로."""
+    때만 받는다, 사용자 2026-11-09 - 0건이면 머리글만 있는 파일이 나온다). 있으면 비밀번호 → 사유 → [엑셀 다운로드] → 저장 창 → [아니오]. 저장한 경로.
+    work: [엑셀 다운로드] 를 누르기 바로 앞에 처리 시작을 적는다 - 미리보기 0건이라 받지 않으면 처리 전 (교차 검증 11-25, rpa-wellife-ac)."""
     grid = _child(rr, h, "gridCtrl_01", "엑셀 미리보기 그리드")
     for _ in range(6):                  # 줄이 창보다 늦게 그려질 수 있어 3초까지 기다린다
         rows = rr.grid_rows(grid)
@@ -1610,6 +1617,8 @@ def _download(rr, ctx, h, pw):
     if rr.legacy_value(combo) != EXPORT_REASON:
         raise Stop("failed", f"엑셀 다운로드 사유를 '{EXPORT_REASON}'(으)로 고르지 못했습니다. (현재 {rr.legacy_value(combo)!r})")
     before = _menu_windows(rr, ctx)
+    if work:
+        rr.status.began_work()
     _click_in(rr, h, _child(rr, h, "btn_ExportExcel", "[엑셀 다운로드]"), "[엑셀 다운로드]")
     deadline = time.time() + EXPORT_WAIT_SECONDS
     while time.time() < deadline:
@@ -2817,7 +2826,15 @@ def _keeps_blocking(rr, ctx, h):
 
 SEPARATE_CONFIRM = ("확인(O)", "확인")     # 따로 뜬 팝업을 닫는 단추 - [예] 는 넣지 않는다 (질문에 [예] 는 데이터를 바꿀 수 있다)
 SEPARATE_CANCEL = ("취소(C)", "취소")      # 질문 창은 [취소]·[아니오] 로 닫는다 - [확인] 이 같이 있어도 (검토 2026-11-25)
-TITLE_BAR_BUTTONS = ("닫기", "최소화", "최대화", "복원", "Close", "Minimize", "Maximize", "Restore")   # 창 제목 줄 단추 - 답 단추로 세지 않는다
+
+
+def _in_title_bar(b):
+    """창 제목 줄(UIA TitleBar) 안의 단추인가 - 답 단추로 세지 않는다. 이름이 아니라 부모로 가린다 - 본문의 [닫기] 는 답 단추다
+    (리뷰 2차 2026-11-25). 못 읽으면 본문 단추로 (답 단추가 늘면 [확인] 하나뿐이 아니게 되어 X 로 닫는 쪽)."""
+    try:
+        return str(b.parent().element_info.control_type) == "TitleBar"
+    except Exception:
+        return False
 
 
 def close_separate_popup(rr, h):
@@ -2829,7 +2846,7 @@ def close_separate_popup(rr, h):
         buttons = [(b, b.window_text()) for b in rr.Desktop(backend="uia").window(handle=h).descendants(control_type="Button")]
     except Exception:
         buttons = []        # 그새 닫힌 창이면 아래 X 에서 닫힘을 본다
-    answers = [p for p in buttons if p[1] not in TITLE_BAR_BUTTONS]
+    answers = [p for p in buttons if not _in_title_bar(p[0])]
     pick = (next((p for p in answers if p[1] in SEPARATE_CANCEL or p[1] in rr.NO_BUTTON_TEXTS), None)
             or (answers[0] if len(answers) == 1 and answers[0][1] in SEPARATE_CONFIRM else None))
     how = f"[{pick[1]}]" if pick else "X(창 닫기)"
@@ -3275,10 +3292,12 @@ def click(rr, ctx, el, what, work=False):
     el.click_input(coords=pt, absolute=True)   # 확인한 그 점을 누른다 (사각형을 다시 읽어 다른 점을 누르지 않게)
 
 
-def clear_point(rr, ctx, el, what, pt=None, allow=()):
-    """누를 점(pt, 없으면 가운데). 창 안에 보이고 그 점의 맨 위 창이 ERPia 메인 창일 때만 돌려주고, 아니면 멈춘다 - 빈 사각형이면
+def clear_point(rr, ctx, el, what, pt=None, allow=(), esc=True):
+    """누를 점(pt, 없으면 가운데). 창 안에 보이고 그 점의 맨 위 창이 ctx.hwnd(보통 ERPia 메인 창)일 때만 돌려주고, 아니면 멈춘다 - 빈 사각형이면
     (0,0) 이, 열린 내림 메뉴나 다른 프로그램 창이 덮고 있으면 그것이 눌린다. 마우스를 그 점으로 먼저 옮긴다 (툴팁 치우기).
-    보통 PROCESS 도 run_routine.press 로 같이 쓴다 (사용자 11-19). allow: 맨 위여도 되는 창 - 팝업 단추면 ERPia 가 따로 띄운 팝업 창."""
+    보통 PROCESS 도 run_routine.press 로 같이 쓴다 (사용자 11-19). allow: 맨 위여도 되는 다른 창.
+    esc=False 면 덮은 작은 창에 ESC 를 보내지 않는다 - 따로 뜬 팝업 창 단추(run_routine.press popup)는 그 팝업을 앞으로 가져왔으니 ESC 가
+    그 팝업을 닫는다 (리뷰 2차 2026-11-25)."""
     r = el.rectangle()
     pt = pt or ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
     wr = ctx.window().rectangle()
@@ -3291,7 +3310,7 @@ def clear_point(rr, ctx, el, what, pt=None, allow=()):
     while top != ctx.hwnd and top not in allow:
         # ERPia 자신의 제목 없는 작은 창(남은 내림 목록·풍선 도움말)이면 ESC 로 한 번만 닫아 본다. 제목 있는 ERPia 창(안내·확인)과
         # 다른 프로그램 창은 건드리지 않는다 - 함부로 닫으면 안 된다 (triif 2026-11-13 10:40 처음, 사용자 승인)
-        if (not escaped and top and _window_pid(rr, top) == ctx.pid and not _title(rr, top)
+        if (esc and not escaped and top and _window_pid(rr, top) == ctx.pid and not _title(rr, top)
                 and _window_pid(rr, _foreground(rr)) == ctx.pid):    # ESC 는 맨 앞 창으로 간다 - ERPia 가 맨 앞일 때만
             escaped = True
             rr.log(f"  {what}: 누를 자리를 ERPia 의 작은 창이 덮고 있어 ESC 로 닫습니다. ({_window_who(rr, top)})")

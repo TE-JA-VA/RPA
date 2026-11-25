@@ -237,6 +237,9 @@ check("ERPia 프로세스는 이 세션 것만 (세션을 못 읽으면 이름�
 print()
 print("=== 3. 모듈 표 / 컨텍스트 / 화면 진입 ===")
 rr.time = types.SimpleNamespace(sleep=lambda *_: None, time=_time.time, strftime=_time.strftime)
+# 화면 이동 뒤 표 기다림(wellife.wait_tables)은 진짜 시계로 돈다 - 이 파일은 표를 가짜로 주므로 표 수가 안 맞으면 화면 이동마다 15초,
+# 맞아도 1초씩 기다렸다 (11-25 실측: 246초 중 180초). 기다림 자체는 test_wellife 가 본다 - 여기서는 짧게만 (확인하는 것은 그대로)
+rr.wellife.TABLE_WAIT_SECONDS, rr.wellife.TABLE_STABLE_SECONDS = 0.3, 0.05
 rr.ec = types.SimpleNamespace(ensure_foreground=lambda *a, **k: True, find_erpia_pid=lambda: 4242,
                               process_elevated=lambda pid: False, pid_alive=lambda pid: True, erpia_pids=lambda: [],
                               erpia_pids_titled=lambda title: [4242])     # 설정 계정 제목의 ERPia (사용자 2026-11-16)
@@ -603,6 +606,7 @@ check("stopped 도 멈춘다", called == ALL7[:4] and out[0] == "stopped")
 logged = []
 rr.log = lambda msg="", **_k: logged.append(msg)
 os.environ["RPA_RUN_TRIGGER"] = "repeat"
+_saved_dw, rr.ERPIA_DYING_WAIT_SECONDS = rr.ERPIA_DYING_WAIT_SECONDS, 0.1   # 'UI 오류' 실패는 꺼지는 중을 기다린다 - 여기서는 짧게 (11-25 실측 5초)
 try:
     StatusRec.failed_before_work = lambda self: True        # 판정은 rpa_status.failed_before_work (test_dashboard_modules 가 본다)
     out, called, rec, ac = run(ALL_ON, {"import": ("failed", "조회가 끝나지 않음")})
@@ -630,6 +634,7 @@ try:
     check("로그인 실패는 손대지 않는다", out == ("stopped", "로그인 실패") and not any("반복 회차" in m for m in logged), str(out))
 finally:
     del StatusRec.failed_before_work
+    rr.ERPIA_DYING_WAIT_SECONDS = _saved_dw
     if "worked" in StatusRec.__dict__:
         del StatusRec.worked
     os.environ.pop("RPA_RUN_TRIGGER", None)
@@ -647,7 +652,7 @@ _unmarked = []
 for _name, _src, _needles in (       # 바로 앞 줄들에 began_work - 확인(덮개·잠김)을 지난 뒤 누르기 바로 앞 (Codex 검토 11-25)
         ("run_routine", _src_rr, ("upload_file_in_dialog(dlg, path, pid=pid)",
                                   "el.click_input(coords=pt, absolute=True, **kw)", "target.click_input(coords=pt, absolute=True)")),
-        ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "saved = _download(rr, ctx, h, pw)"))):
+        ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "_click_in(rr, h, _child(rr, h, \"btn_ExportExcel\", \"[엑셀 다운로드]\"), \"[엑셀 다운로드]\")"))):
     _lines = _src.splitlines()
     for _nd in _needles:
         _at = [i for i, l in enumerate(_lines) if _nd in l]
@@ -2054,7 +2059,7 @@ except rr.wellife.Stop as e:
 check("우클릭 메뉴 항목: 화면이 잠겼으면 누르지 않고 멈춘다", res and res[0] == "stopped" and "화면이 잠겨" in res[1] and not cm_clicks, f"{res}")
 (rr.ec.screen_locked, rr.wellife._top_window, rr.wellife.COVER_WAIT_SECONDS, rr.wellife._window_who, rr.win32gui, rr.send_keys) = _saved_cm
 seen_p.clear()
-rr.wellife.clear_point = lambda rr_, ctx, el, what, pt=None, allow=(): seen_p.append(("clear", what, set(allow))) or (55, 66)
+rr.wellife.clear_point = lambda rr_, ctx, el, what, pt=None, allow=(), esc=True: seen_p.append(("clear", what, ctx.hwnd, set(allow), esc)) or (55, 66)
 _saved_ow = (rr.owner_window, rr.ec.ensure_foreground, rr.ec.screen_locked)
 OWN = {"h": 888}
 rr.owner_window = lambda el: OWN["h"]
@@ -2064,11 +2069,11 @@ rr.press(777, el_p, "팝업 단추", popup=True)
 OWN["h"] = 777          # 메인 창 안에 그려진 팝업의 단추 - 지금처럼 메인 창만
 rr.press(777, el_p, "메인 창 팝업 단추", popup=True)
 rr.press(777, el_p, "저장 단추")
-check("press(popup=True): 따로 뜬 팝업 창의 단추는 그 창을 앞으로 하고 그 창 하나만 맨 위여도 누른다 - 메인 창을 앞으로 하지 않고(모달이 앞을 쥔다), "
-      "다른 ERPia 팝업이 덮으면 누르지 않는다 (검토 11-25 - 예전엔 따로 뜬 팝업 창 모두를 허용). 메인 창 안의 단추·다른 단추는 메인 창만",
+check("press(popup=True): 따로 뜬 팝업 창의 단추는 그 창을 앞으로 하고 그 창을 기준으로(맨 위·창 안) 덮개를 보며 ESC 는 보내지 않는다 - "
+      "메인 창을 앞으로 하지 않는다(모달이 앞을 쥔다) (검토 11-25, 리뷰 2차). 메인 창 안의 단추·다른 단추는 메인 창 기준 그대로",
       [x for x in seen_p if x[0] in ("clear", "앞으로", "front")] ==
-      [("앞으로", 888), ("clear", "팝업 단추", {888}), ("front", 777, 4242, "메인 창 팝업 단추"), ("clear", "메인 창 팝업 단추", set()),
-       ("front", 777, 4242, "저장 단추"), ("clear", "저장 단추", set())]
+      [("앞으로", 888), ("clear", "팝업 단추", 888, set(), False), ("front", 777, 4242, "메인 창 팝업 단추"),
+       ("clear", "메인 창 팝업 단추", 777, set(), True), ("front", 777, 4242, "저장 단추"), ("clear", "저장 단추", 777, set(), True)]
       and pressed_p == [("click", {"coords": (55, 66), "absolute": True})] * 3, f"{seen_p} {pressed_p}")
 pressed_p.clear()
 OWN["h"] = 888
@@ -2080,6 +2085,60 @@ except rr.wellife.Stop as e:
     res = (e.result, str(e))
 check("press(popup=True): 따로 뜬 팝업 창을 앞으로 못 가져오면 누르지 않고 멈춘다 - wellife.front 와 같은 안전장치 (교차 검증 11-25)",
       res and res[0] == "failed" and "앞으로 가져오지 못해" in res[1] and not pressed_p, f"{res} {pressed_p}")
+# 팝업 갈래를 진짜 clear_point 로: 맨 위가 그 팝업일 때만 누르고, 메인 창이 맨 위이거나 작은 창이 덮으면 누르지 않으며 ESC 도 보내지 않고,
+# 누를 자리가 그 팝업 사각형 밖이면 누르지 않는다 (리뷰 2차 11-25 - 예전엔 메인 창 기준이라 메인 창이 맨 위여도 눌렀다)
+
+
+class _R:
+    def __init__(self, left, top, right, bottom):
+        self.left, self.top, self.right, self.bottom = left, top, right, bottom
+
+    def width(self):
+        return self.right - self.left
+
+    def height(self):
+        return self.bottom - self.top
+
+
+_w = rr.wellife
+_saved_cp = (_w.clear_point, _w._top_window, _w.mouse, _w.COVER_WAIT_SECONDS, _w._window_pid, _w._title, _w._foreground, _w._window_who,
+             rr.send_keys, rr.Desktop)
+_w.clear_point = _saved_p[1]       # 진짜
+TOPQ, keys_q = {"h": 888}, []
+_w._top_window = lambda rr_, pt: TOPQ["h"]
+_w.mouse = types.SimpleNamespace(move=lambda coords: None)
+_w.COVER_WAIT_SECONDS = 0.2
+_w._window_pid, _w._title, _w._foreground = (lambda rr_, h: 4242), (lambda rr_, h: ""), (lambda rr_: 5)   # 제목 없는 ERPia 작은 창, ERPia 가 맨 앞
+_w._window_who = lambda rr_, h: f"창{h}"
+rr.send_keys = keys_q.append
+rr.Desktop = lambda backend=None: types.SimpleNamespace(window=lambda handle: types.SimpleNamespace(
+    rectangle=lambda: _R(100, 100, 400, 300) if handle == 888 else _R(0, 0, 1000, 800)))
+rr.ec.ensure_foreground, rr.ec.screen_locked = (lambda h: True), (lambda: False)
+el_q = types.SimpleNamespace(rectangle=lambda: _R(200, 150, 260, 170), click_input=lambda **k: pressed_p.append(("click", k)))
+pressed_p.clear()
+rr.press(777, el_q, "팝업 단추", popup=True)
+ok_top = pressed_p == [("click", {"coords": (230, 160), "absolute": True})]
+res_q = []
+for _top in (777, 999):          # 메인 창이 맨 위 / 제목 없는 ERPia 작은 창이 덮음
+    TOPQ["h"] = _top
+    pressed_p.clear()
+    try:
+        rr.press(777, el_q, "팝업 단추", popup=True)
+        res_q.append("누름")
+    except rr.wellife.Stop as e:
+        res_q.append(e.result)
+check("press(popup=True) 진짜 덮개 확인: 맨 위가 그 팝업이면 누르고, 메인 창이 맨 위이거나 작은 창이 덮으면 누르지 않으며 ESC 도 보내지 않는다 (리뷰 2차 11-25)",
+      ok_top and res_q == ["failed", "failed"] and not pressed_p and keys_q == [], f"{ok_top} {res_q} {keys_q}")
+TOPQ["h"] = 888
+el_far = types.SimpleNamespace(rectangle=lambda: _R(500, 500, 560, 520), click_input=lambda **k: pressed_p.append(("click", k)))
+try:
+    rr.press(777, el_far, "팝업 단추", popup=True)
+    res = "누름"
+except rr.wellife.Stop as e:
+    res = str(e)
+check("  누를 자리가 그 팝업 사각형 밖이면(메인 창 안이어도) 누르지 않는다", "창 안에 보이지 않아" in res and not pressed_p, res)
+(_w.clear_point, _w._top_window, _w.mouse, _w.COVER_WAIT_SECONDS, _w._window_pid, _w._title, _w._foreground, _w._window_who,
+ rr.send_keys, rr.Desktop) = _saved_cp
 (rr.owner_window, rr.ec.ensure_foreground, rr.ec.screen_locked) = _saved_ow
 _saved_ga = rr.win32gui
 rr.win32gui = types.SimpleNamespace(GetAncestor=lambda h, f: {55: 888, 66: 777}.get(h, 0))
@@ -2486,7 +2545,7 @@ _left_os = [n for n in ("order_module", "module_hold", "module_logistics", "modu
 check("주문매핑·물류대기·물류관리·출력 화면 이동은 모두 open_screen 으로", not _left_os, _left_os)
 print("=== 체크를 확실히 - 머리글을 누른 뒤 반영될 때까지 지켜보고, 못 읽으면 누르지 않는다 (사용자 2026-11-23) ===")
 _saved_hc = tuple(getattr(rr, n, None) for n in ("CHECK_READ_WAIT_SECONDS", "CHECK_SETTLE_SECONDS", "CHECK_STABLE_SECONDS", "CHECK_POLL_SECONDS"))
-rr.CHECK_READ_WAIT_SECONDS, rr.CHECK_SETTLE_SECONDS, rr.CHECK_STABLE_SECONDS, rr.CHECK_POLL_SECONDS = 0.2, 2.0, 0.15, 0.01
+rr.CHECK_READ_WAIT_SECONDS, rr.CHECK_SETTLE_SECONDS, rr.CHECK_STABLE_SECONDS, rr.CHECK_POLL_SECONDS = 0.2, 0.8, 0.15, 0.01   # 안 바뀌는 것 확인은 짧게 (11-25)
 rr.time = __import__("time")
 HC = {"clicks": 0, "seq": []}
 
@@ -2516,7 +2575,7 @@ check("누른 뒤 반영이 늦어도(바뀌는 중) 다시 누르지 않고 끝
       res == (5, 0) and clicks == 1, f"{res} {clicks}")
 res, clicks = hc_run([(0, 5)], [(0, 5)], [(5, 0)])
 check("눌러도 상태가 전혀 안 바뀌고 멈춰 있으면(클릭이 안 먹음) 다시 누른다", res == (5, 0) and clicks == 2, f"{res} {clicks}")
-res, clicks = hc_run([(0, 5)], [(0, 5)] * 40 + [(5, 0)])
+res, clicks = hc_run([(0, 5)], [(0, 5)] * 25 + [(5, 0)])     # 25번 읽는 동안(0.25초+) 그대로 - CHECK_STABLE 보다 길고 SETTLE 보다 짧다
 check("누른 뒤 한동안 그대로였다가 한꺼번에 반영되면 다시 누르지 않는다 - 첫 변화 전에는 '그대로' 로 끝내지 않는다 (Codex 검토 11-25, 실측 17줄 2.5초)",
       res == (5, 0) and clicks == 1, f"{res} {clicks}")
 res, clicks = hc_run([(2, 3)], [(0, 5)], [(5, 0)])

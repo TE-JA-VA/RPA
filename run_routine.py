@@ -657,7 +657,10 @@ def press(hwnd, el, what, coords=None, popup=False, work=False, **kw):
             raise wellife.Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
         if not ec.ensure_foreground(own):   # 앞으로 못 가져오면 멈춘다 - wellife.front 와 같은 안전장치 (교차 검증 2026-11-25)
             raise wellife.Stop("failed", f"{what}: ERPia 팝업 창을 앞으로 가져오지 못해 누르지 않고 중단하였습니다.")
-        pt = wellife.clear_point(me, ctx, el, what, pt, allow=(own,))
+        # 맨 위 창이 그 팝업일 때만, 누를 자리도 그 팝업 사각형 안이어야 - 메인 창이 맨 위면 누르지 않는다. 덮은 작은 창에 ESC 를 보내지
+        # 않는다 - 방금 앞으로 가져온 팝업이 ESC 로 닫히면 드러난 메인 창 화면을 누르게 된다 (리뷰 2차 2026-11-25)
+        pctx = types.SimpleNamespace(hwnd=own, pid=ctx.pid, window=lambda: Desktop(backend="uia").window(handle=own))
+        pt = wellife.clear_point(me, pctx, el, what, pt, esc=False)
     else:
         wellife.front(me, ctx, what)
         pt = wellife.clear_point(me, ctx, el, what, pt)
