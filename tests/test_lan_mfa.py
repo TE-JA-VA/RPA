@@ -465,8 +465,85 @@ def test_single_unchanged():
     check("Web.security None·lan 거짓", getattr(web, "security", "x") is None and getattr(web, "lan", None) is False)
 
 
+
+# ----------------------------------------------------------------------------------------------------
+# Task 4 - '보안' 설정 창구
+# ----------------------------------------------------------------------------------------------------
+
+def test_security_get_set():
+    print("test_security_get_set")
+    e = start()
+    stok = token(e, C, "staff", STAFF_PW)
+    g = api(e, C, "GET", "/api/security", tok=stok)
+    check("유저 GET /api/security → 403", g.status == 403, g)
+    g = api(e, C, "POST", "/api/security", {"totpScope": "off"}, stok)
+    check("유저 POST /api/security → 403", g.status == 403, g)
+    boss = token(e, A)
+    g = api(e, A, "GET", "/api/security", tok=boss)
+    check("등록 전 관리자도 403 must-enroll-mfa", g.status == 403 and g.code == "auth/must-enroll-mfa", g)
+    secret, _ = enroll(e, A, boss)
+    g = api(e, A, "GET", "/api/security", tok=boss)
+    j = g.json() or {}
+    check("기본 → totpScope admin·showOwnHistory 참·nowMs", g.status == 200 and j.get("totpScope") == "admin"
+          and j.get("showOwnHistory") is True and abs(j.get("nowMs", 0) - int(e.clock() * 1000)) <= 1, g)
+    g = api(e, A, "POST", "/api/security", {"totpScope": "all"}, boss)
+    check("all 로 올리기 - 비밀번호 없이 200", g.status == 200 and (g.json() or {}).get("totpScope") == "all", g)
+    g = api(e, A, "POST", "/api/security", {"totpScope": "off"}, boss)
+    check("off 로 줄이기 비밀번호 없이 → 403 auth/wrong-password", g.status == 403 and g.code == "auth/wrong-password", g)
+    g = api(e, A, "POST", "/api/security", {"totpScope": "off", "password": "wrong-pass-01"}, boss)
+    check("  틀린 비밀번호 → 403 auth/wrong-password", g.status == 403 and g.code == "auth/wrong-password", g)
+    g = api(e, A, "POST", "/api/security", {"totpScope": "off", "password": BOSS_PW}, boss)
+    check("  비밀번호만 (관리자 2단계 켜짐) → 400 auth/invalid-code", g.status == 400 and g.code == "auth/invalid-code", g)
+    g = api(e, A, "POST", "/api/security", {"totpScope": "off", "password": BOSS_PW, "code": wrong_code(e, secret)}, boss)
+    check("  틀린 번호 → 400 auth/invalid-code", g.status == 400 and g.code == "auth/invalid-code", g)
+    check("  거절된 동안 범위 그대로 all", e.ui.security.get()["totp_scope"] == "all")
+    before = [ln for ln in log_text(e).splitlines() if "웹 보안 설정 변경" in ln]
+    g = api(e, A, "POST", "/api/security", {"totpScope": "off", "password": BOSS_PW, "code": code_now(e, secret)}, boss)
+    check("  비밀번호·번호 둘 다 맞음 → 200 off", g.status == 200 and (g.json() or {}).get("totpScope") == "off", g)
+    after = [ln for ln in log_text(e).splitlines() if "웹 보안 설정 변경" in ln]
+    new = after[len(before):]
+    check("  기록 줄 하나 (범위 all→off·처리·주소)", len(new) == 1 and "2단계 범위=all→off" in new[0] and "유저 이력 보이기=" in new[0]
+          and "처리=boss" in new[0] and f"주소={A}" in new[0], repr(new))
+    check("  비밀번호·번호는 기록에 없음", BOSS_PW not in log_text(e) and code_now(e, secret) not in "\n".join(new))
+    g = api(e, A, "POST", "/api/security", {"totpScope": "some"}, boss)
+    check("틀린 값 some → 400", g.status == 400, g)
+    g = api(e, A, "POST", "/api/security", {"showOwnHistory": "no"}, boss)
+    check("showOwnHistory 참·거짓 아님 → 400", g.status == 400, g)
+    g = api(e, A, "POST", "/api/security", {}, boss)
+    check("바꿀 것 없음 → 400", g.status == 400, g)
+    g = api(e, A, "POST", "/api/security", {"showOwnHistory": False}, boss)
+    check("showOwnHistory 끄기는 줄이는 변경이 아님 - 비밀번호 없이 200",
+          g.status == 200 and (g.json() or {}).get("showOwnHistory") is False, g)
+    with open(os.path.join(e.folder, "security.json"), encoding="utf-8") as f:
+        saved = json.load(f)
+    check("security.json = version 1·off·false", saved == {"version": 1, "totp_scope": "off", "show_own_history": False}, repr(saved))
+    g = api(e, A, "POST", "/api/security", {"totpScope": "admin"}, boss)
+    check("다시 admin 으로 올리기 → 200", g.status == 200 and (g.json() or {}).get("totpScope") == "admin", g)
+    e.ui.accounts.set("boss3", "boss3-pw-0001", "admin")
+    b3 = token(e, D, "boss3", "boss3-pw-0001")
+    g = api(e, D, "POST", "/api/security", {"totpScope": "off", "password": "boss3-pw-0001"}, b3)
+    check("등록 전 관리자는 범위를 못 바꾼다 (403 must-enroll-mfa)", g.status == 403 and g.code == "auth/must-enroll-mfa", g)
+
+
+def test_scope_raise_live_session():
+    print("test_scope_raise_live_session")
+    e = start()
+    boss = token(e, A)
+    enroll(e, A, boss)
+    stok = token(e, C, "staff", STAFF_PW)
+    check("범위 admin - 유저는 등록 없이 /api/runs 200", runs_of(e, C, stok).status == 200)
+    g = api(e, A, "POST", "/api/security", {"totpScope": "all"}, boss)
+    check("관리자가 all 로 올림 → 200", g.status == 200, g)
+    g = runs_of(e, C, stok)
+    check("같은 유저 세션의 다음 /api/runs → 403 must-enroll-mfa", g.status == 403 and g.code == "auth/must-enroll-mfa", g)
+    g = api(e, C, "GET", "/api/session", tok=stok)
+    check("  /api/session 200·mustEnroll 참", g.status == 200 and (g.json() or {}).get("session", {}).get("mustEnroll") is True, g)
+    check("  관리자(등록함)는 그대로 /api/runs 200", runs_of(e, A, boss).status == 200)
+
+
 TESTS = [test_enroll_flow, test_must_change_first, test_two_step_login, test_ticket_rules, test_code_lockout,
-         test_same_code_race, test_admin_reset_and_disable, test_setup_needs_password_when_on, test_single_unchanged]
+         test_same_code_race, test_admin_reset_and_disable, test_setup_needs_password_when_on, test_single_unchanged,
+         test_security_get_set, test_scope_raise_live_session]
 
 if __name__ == "__main__":
     try:

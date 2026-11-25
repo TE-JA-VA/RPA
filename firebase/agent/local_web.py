@@ -825,6 +825,7 @@ class Web:
                 ("login", True): {"POST": self._login_mfa},
                 ("mfa", True): {"POST": self._mfa},
                 ("server-time", False): {"GET": self._server_time},
+                ("security", False): {"GET": self._security_get, "POST": self._security_set},
             })
         self.phone = None
 
@@ -1344,6 +1345,57 @@ class Web:
             self._tickets_drop_account(uid)
         self._log(f"웹 2단계 끔  아이디={uid}{self._at(h)}")
         return {"ok": True}
+
+    # --- '보안' 설정 (사내 서버만, 관리자, 계획 ③ Task 4) ---
+    _SCOPE_RANK = {"off": 0, "admin": 1, "all": 2}
+
+    def _security_out(self, value):
+        return {"totpScope": value["totp_scope"], "showOwnHistory": value["show_own_history"], "nowMs": int(self._clock() * 1000)}
+
+    def _security_get(self, h, query, body):
+        self._auth(h, admin=True)                    # 화면이 혼자 읽는 것 - 미사용 시계는 되돌리지 않는다
+        return self._security_out(self.security.get())
+
+    def _security_set(self, h, query, body):
+        """POST /api/security {totpScope?, showOwnHistory?, password?, code?} → 바뀐 설정.
+        2단계 범위를 줄이는 변경(all→admin·all→off·admin→off)은 비밀번호가 맞고, 부른 관리자가 2단계를 켰으면 지금 번호도 맞아야 한다
+        (설계 6.6 - 틀리면 잠금 셋에 센다). 올리는 변경과 유저 이력 보이기는 세션만으로."""
+        _, me = self._auth(h, touch=True, admin=True)
+        data = self._dict(body)
+        scope, show = data.get("totpScope"), data.get("showOwnHistory")
+        if (scope is None and show is None) or (scope is not None and scope not in web_security.SCOPES) \
+                or (show is not None and not isinstance(show, bool)):
+            raise _Fail(400, "invalid-argument", "바꿀 내용이 올바르지 않습니다.")
+        uid = me["id"]
+        with self._login_lock:                       # 확인과 쓰기 사이에 다른 변경이 끼지 않게 (비밀번호 확인도 이 잠금 안에서)
+            old = self.security.get()
+            if scope is not None and self._SCOPE_RANK[scope] < self._SCOPE_RANK[old["totp_scope"]]:
+                pair = self._lock_gate(h, uid)
+                password, code = data.get("password"), data.get("code")
+                if not isinstance(password, str) or self.accounts.verify(uid, password) is None:
+                    if isinstance(password, str):
+                        self._count_fail(h, uid, pair, "웹 보안 설정 변경 - 비밀번호 틀림")
+                    raise _Fail(403, "auth/wrong-password", "2단계 인증 범위를 줄이려면 비밀번호를 입력하여 주십시오."
+                                if password is None else "비밀번호가 일치하지 않습니다.")
+                if me["mfa"]:
+                    if not isinstance(code, str) or not self.accounts.mfa_check(uid, code, self._clock()):
+                        if isinstance(code, str):
+                            self._count_fail(h, uid, pair, "웹 보안 설정 변경 - 번호 틀림")
+                        raise _Fail(400, "auth/invalid-code", "인증 앱의 지금 번호를 입력하여 주십시오."
+                                    if code is None else "인증 번호가 일치하지 않습니다.")
+                self.lockout.ok(pair)
+            try:
+                new = self.security.set(totp_scope=scope, show_own_history=show)
+            except ValueError as e:
+                raise _Fail(400, "invalid-argument", str(e)) from None
+
+        def shown(key, fmt):
+            a, b = fmt(old[key]), fmt(new[key])
+            return b if a == b else f"{a}→{b}"
+        onoff = lambda v: "켬" if v else "끔"      # noqa: E731
+        self._log(f"웹 보안 설정 변경  2단계 범위={shown('totp_scope', str)}  유저 이력 보이기={shown('show_own_history', onoff)}"
+                  f"  처리={uid}{self._at(h)}")
+        return self._security_out(new)
 
     def _logout(self, h, query, body):
         token, acct = self._auth(h, must_ok=True, mfa_ok=True)
