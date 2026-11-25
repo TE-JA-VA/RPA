@@ -10,6 +10,7 @@
 표준 라이브러리만. 기록(local_server.log)에 토큰·열쇠·증명을 싣지 않는다.
 """
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -156,7 +157,10 @@ class Registry:
     """PC 등록부. 모든 읽기·쓰기는 잠금 하나 안에서. 쓸 때마다 임시 파일 → os.replace.
     깨진 파일이면 RegistryBroken (파일은 그대로 - 비우고 시작하지 않는다, M-8). 대기 중인 등록·마지막 연결 시각은 메모리에만.
     틀린 증명은 세기만 하고 대기를 취소하지 않는다 (검토 I-3) - 대기는 10분이 지나거나 관리자가 취소해야 끝난다.
-    seats 는 바꿔 끼울 수 있다 (라이선스의 자리 수). on_save: 파일을 쓴 뒤 부른다 (설치본은 파일 권한을 다시 잠근다)."""
+    seats 는 바꿔 끼울 수 있다 (라이선스의 자리 수). on_save: 파일을 쓴 뒤 부른다 (설치본은 파일 권한을 다시 잠근다).
+    persist_lock: 사내 서버의 같은 시점 백업 잠금 (server_backup.attach) - 파일 쓰기와 on_save 를 이 잠금 안에서. 없으면 None."""
+
+    persist_lock = None
 
     def __init__(self, path, seats, clock=time.time, on_save=None):
         self.path = os.path.abspath(path)
@@ -218,6 +222,10 @@ class Registry:
         return nxt, pcs
 
     def _save(self, nxt, pcs):
+        with self.persist_lock or contextlib.nullcontext():
+            self._save_file(nxt, pcs)
+
+    def _save_file(self, nxt, pcs):
         folder = os.path.dirname(self.path)
         os.makedirs(folder, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=folder, prefix=PCS_NAME + ".", suffix=".tmp")

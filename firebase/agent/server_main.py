@@ -8,6 +8,10 @@
     autopilot-server admin-reset ID [--password-stdin] [--clear-2fa] [--create]                         (root, 서비스를 멈춘 뒤)
     autopilot-server verify FILE [--sig SIG]           서버 설치 파일의 서명 확인
     autopilot-server upgrade FILE                      (root) 서명 확인 뒤 풀어 install.sh upgrade
+    autopilot-server backup                            자료 백업 (서비스가 돌면 SIGUSR1 로 서비스 안에서, 멈춰 있으면 잠금을 쥐고 직접)
+    autopilot-server restore FILE [--force]            백업에서 복구 (서비스를 멈춘 뒤 - 복구 내내 서비스 잠금을 쥔다)
+    autopilot-server backup-config                     (root) /etc/autopilot 을 /var/backups/autopilot/etc-YYYYMMDD.tar.gz 로
+    autopilot-server restore-config FILE               (root, 서비스를 멈춘 뒤) /etc/autopilot 되살리기
 
 경로 (설계 6.2): 설정 /etc/autopilot (server.json·license.json·ca/), 자료 /var/lib/autopilot (서비스 계정만 - 폴더 700·파일 600),
 기록 /var/log/autopilot (server.log·audit.log). 환경 변수 AUTOPILOT_ETC·AUTOPILOT_DATA·AUTOPILOT_LOGS 가 있으면 그것 (시험·WSL 용).
@@ -16,7 +20,8 @@ run 의 차례: root 거절 → 기록 자리 → 서비스 잠금(.service.lock
 서버 라이선스 → PC 등록부(깨졌으면 켜지 않음, M-8) → 자리 서명 열쇠(라이선스의 seat_pub 과 대조) → TLS 파일 셋 → 저장소(깨졌으면
 켜지 않음) → 실행 기록 DB → 웹 창구 → 두 포트 → run.json → SIGTERM·SIGINT(또는 시험 손잡이 stop()) 까지 돈다.
 종료 코드: 0 정상, 2 라이선스 (systemd 가 다시 켜지 않음), 3 포트를 못 엶, 4 설정·자료가 깨짐·잠금을 못 잡음·root (다시 켜지 않음).
-하루 한 번 정비: 1년(365일) 지난 실행 기록 지우기, 지운 지 3일 지난 PC 열쇠 지우기 (백업은 ④ Task 5 에서 여기에 붙는다).
+하루 한 번 정비: 1년(365일) 지난 실행 기록 지우기, 지운 지 3일 지난 PC 열쇠 지우기. 같은 스레드가 하루 한 번(server.json 의
+backup_hour, 기본 3시) 서비스 안 백업을 뜨고, SIGUSR1 을 받으면 곧바로 뜬다 (server_backup.snapshot - 같은 시점 백업, Task 5).
 
 기록·응답에 열쇠·비밀번호·세션 토큰·인증번호·2단계 비밀 값·자리 서명 열쇠를 싣지 않는다. 표준 라이브러리만, 바깥 연결을 열지 않는다.
 """
@@ -51,6 +56,7 @@ import local_server  # noqa: E402
 import local_web  # noqa: E402
 import pc_registry  # noqa: E402
 import seat  # noqa: E402
+import server_backup  # noqa: E402
 import server_log  # noqa: E402
 import update_sign  # noqa: E402
 
@@ -75,6 +81,11 @@ OWN_CERT_WARN_DAYS = 14                    # 우리 서버 인증서 - 타이머
 WEB_CERT_WARN_DAYS = 30                    # 업체 웹 인증서 - 사람이 새로 넣어야 한다
 DISK_WARN_MB = 1024
 SH = "/bin/sh"
+TICK = 1.0                                 # 정비 스레드가 백업 요청(SIGUSR1)·멈춤을 보는 간격
+BACKUP_CHECK_SEC = 60                      # 하루 백업 때가 되었나 보는 간격
+BACKUP_RETRY_SEC = 3600                    # 하루 백업이 실패하면 다시 해 보기까지
+BACKUP_WAIT = 60                           # backup 명령이 서비스의 백업을 기다리는 시간
+CONFIG_BACKUPS = "/var/backups/autopilot"  # root 설정 백업 자리 (시험 손잡이)
 
 # 시험 손잡이 - 서버 번호 파일, 라이선스 확인 공개 열쇠(None 이면 실린 것), 버전(None 이면 manifest.json),
 # 업데이트 서명 공개 열쇠(None 이면 update_sign 에 실린 것, bytes), 업그레이드 때 풀 자리
@@ -85,6 +96,7 @@ UPDATE_PUBLIC_KEY = None
 UPGRADE_TMP = "/opt/autopilot"
 
 _stop = threading.Event()
+_backup_now = threading.Event()            # SIGUSR1 - 정비 스레드가 곧바로 백업을 뜬다
 
 
 class Paths:
@@ -324,15 +336,52 @@ def maintain(runs, registry, now=None):
     return gone
 
 
-def _maint_loop(runs, registry, folder):
-    while True:
-        try:
-            n = maintain(runs, registry)
-            if n:
-                local_server.log(folder, f"정비  1년 지난 실행 기록 {n}건을 지웠습니다.")
-        except Exception as e:                       # 정비 때문에 서버가 멈추지 않는다
-            local_server.log(folder, f"정비 오류: {type(e).__name__}")
-        if _stop.wait(MAINT_SEC):
+def backup_due(newest, hour, now):
+    """하루 백업을 뜰 때인가. newest = 가장 새 백업 파일의 시각(초, 없으면 None), hour = backup_hour, now = 지금(초).
+    가장 최근에 지난 '그날 hour 시' 보다 앞선 백업밖에 없으면 뜬다 (서비스가 그 시각에 꺼져 있었으면 켜진 뒤 곧바로)."""
+    t = datetime.datetime.fromtimestamp(now)
+    sched = t.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if sched > t:
+        sched -= datetime.timedelta(days=1)
+    return newest is None or newest < sched.timestamp()
+
+
+def _newest_backup(paths):
+    names = server_backup.backup_names(paths.backups)
+    try:
+        return max(os.path.getmtime(os.path.join(paths.backups, n)) for n in names) if names else None
+    except OSError:
+        return None
+
+
+def _maint_loop(runs, registry, folder, backup=None):
+    """정비 스레드. backup = (state, paths, backup_hour) 면 하루 한 번(backup_due)과 SIGUSR1(_backup_now) 때 서비스 안 백업도."""
+    last = next_check = retry_at = 0.0
+    while not _stop.is_set():
+        now = time.time()
+        if not last or now - last >= MAINT_SEC:
+            last = now
+            try:
+                n = maintain(runs, registry)
+                if n:
+                    local_server.log(folder, f"정비  1년 지난 실행 기록 {n}건을 지웠습니다.")
+            except Exception as e:                   # 정비 때문에 서버가 멈추지 않는다
+                local_server.log(folder, f"정비 오류: {type(e).__name__}")
+        if backup is not None:
+            state, paths, hour = backup
+            asked = _backup_now.is_set()
+            _backup_now.clear()
+            if asked or (now >= next_check and now >= retry_at):
+                next_check = now + BACKUP_CHECK_SEC
+                if asked or backup_due(_newest_backup(paths), hour, now):
+                    try:
+                        made = server_backup.snapshot(state, paths)
+                        local_server.log(folder, f"백업을 만들었습니다  {os.path.basename(made)}" + ("  (backup 명령)" if asked else ""))
+                    except Exception as e:           # 디스크 부족 등 - 서버는 계속 돈다, 하루 백업은 한 시간 뒤 다시
+                        local_server.log(folder, f"백업 오류: {type(e).__name__} {getattr(e, 'strerror', '') or ''}".rstrip())
+                        if not asked:
+                            retry_at = now + BACKUP_RETRY_SEC
+        if _stop.wait(TICK):
             return
 
 
@@ -445,6 +494,9 @@ def _serve(paths):
     servers = []
     try:
         web = local_web.Web(store, runs, lic, folder, web_dir(), registry=registry)
+        # 같은 시점 백업 - 다섯 저장소의 파일 쓰기가 영속 잠금을 같이 잡는다 (요청을 받기 전에)
+        server_backup.attach(store, registry, web.accounts, runs, web.login_log)
+        state = {"store": store, "registry": registry, "accounts": web.accounts, "runs": runs, "login_log": web.login_log}
         try:
             servers = list(lan_server.make_lan_servers(store, runs, lic, registry, web, cfg, cert, key, ca_pem,
                                                        web_cert=web_cert, web_key=web_key))
@@ -468,10 +520,14 @@ def _serve(paths):
         local_server.log(folder, f"사내 서버 시작  버전={version()}  업체={lic.get('cid')}  서버 번호={sid}  자리={lic['seats']}  "
                                  f"웹={cfg.web_listen}:{w.server_address[1]}  에이전트={cfg.listen}:{a.server_address[1]}")
         old = {}
+        _backup_now.clear()
         if threading.current_thread() is threading.main_thread():
             for sig in (signal.SIGTERM, signal.SIGINT):
                 old[sig] = signal.signal(sig, lambda *_: _stop.set())
-        maint = threading.Thread(target=_maint_loop, args=(runs, registry, folder), daemon=True)
+            if hasattr(signal, "SIGUSR1"):           # autopilot-server backup - 서비스 안에서 같은 시점 백업
+                old[signal.SIGUSR1] = signal.signal(signal.SIGUSR1, lambda *_: _backup_now.set())
+        maint = threading.Thread(target=_maint_loop, args=(runs, registry, folder, (state, paths, cfg.backup_hour)),
+                                 daemon=True)
         maint.start()
         try:
             while not _stop.wait(1.0):
@@ -964,6 +1020,160 @@ def cmd_upgrade(args, paths):
 
 
 # ----------------------------------------------------------------------------------------------------
+# 백업과 복구 (계획 Task 5)
+# ----------------------------------------------------------------------------------------------------
+
+def _run_info(paths):
+    try:
+        with open(paths.run_json, encoding="utf-8") as f:
+            info = json.load(f)
+        return info if isinstance(info, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _owner_or_err(user):
+    """root 면 서비스 계정 (uid, gid) (리눅스가 아니면 None), root 가 아니면 None. 계정이 없으면 KeyError."""
+    return _service_ids(user) if _euid() == 0 else None
+
+
+def cmd_backup(args, paths):
+    """자료 백업. 서비스가 돌면(잠금이 잡혀 있고 run.json 의 pid 가 살아 있음) 그 pid 에 SIGUSR1 을 보내 서비스가 같은 시점 백업을
+    뜨게 하고 새 파일을 BACKUP_WAIT 초 기다린다. 멈춰 있으면 잠금을 쥔 채 직접 뜬다 (root 면 서비스 계정으로 권한을 내린 뒤 -
+    백업 파일이 서비스 계정 소유)."""
+    held = ServiceLock.held(paths.lock)
+    if held is None:
+        return _err("서비스 잠금 파일을 열 수 없습니다 - root 나 서비스 계정으로 실행하여 주십시오.")
+    pid = _run_info(paths).get("pid")
+    if held:
+        if not _pid_alive(pid):
+            return _err("다른 작업(복구 또는 계정 초기화)이 자료를 쓰고 있거나 서비스가 켜지는 중입니다. 잠시 뒤 다시 실행하여 주십시오.")
+        if not hasattr(signal, "SIGUSR1"):
+            return _err("이 운영체제에서는 도는 서비스에 백업을 시킬 수 없습니다.")
+        before = set(server_backup.backup_names(paths.backups))
+        try:
+            os.kill(pid, signal.SIGUSR1)
+        except OSError as e:
+            return _err(f"서비스에 백업을 알리지 못했습니다 ({type(e).__name__}) - root 나 서비스 계정으로 실행하여 주십시오.")
+        end = time.time() + BACKUP_WAIT
+        while True:
+            new = sorted(set(server_backup.backup_names(paths.backups)) - before)
+            if new:
+                print(os.path.join(paths.backups, new[-1]))
+                return 0
+            if time.time() >= end:
+                return _err(f"서비스가 {BACKUP_WAIT}초 안에 백업을 만들지 못했습니다. {paths.server_log} 를 보아 주십시오.")
+            time.sleep(0.2)
+    try:
+        owner = _owner_or_err(args.user)
+    except KeyError:
+        return _err(f"서비스 계정 {args.user} 이(가) 없습니다.")
+    if not os.path.isdir(paths.data):
+        return _err(f"자료 폴더가 없습니다 ({paths.data}).")
+    lock = ServiceLock(paths.lock)
+    try:
+        if not lock.try_hold(owner=owner):
+            return _err("다른 작업(복구 또는 계정 초기화)이 자료를 쓰고 있거나 서비스가 켜지는 중입니다. 잠시 뒤 다시 실행하여 주십시오.")
+    except OSError as e:
+        return _err(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).")
+    try:
+        if _euid() == 0:
+            _drop_privileges(owner)
+        made = server_backup.snapshot(None, paths)
+    except Exception as e:                           # OSError·sqlite3.Error
+        return _err(f"백업을 만들지 못했습니다 ({type(e).__name__} {getattr(e, 'strerror', '') or ''}".rstrip() + ").")
+    finally:
+        lock.release()
+    print(made)
+    return 0
+
+
+def cmd_restore(args, paths):
+    """백업에서 복구 (서비스를 멈춘 뒤). 차례: 백업 파일 읽기(root 만 읽는 자리여도 되게 권한을 내리기 전에) → 서비스 잠금(못 잡으면 1)
+    → root 면 서비스 계정으로 권한 내리기 → server_backup.restore(잠금을 쥔 채) → audit.log. 복구한 파일은 서비스 계정 소유."""
+    try:
+        owner = _owner_or_err(args.user)
+    except KeyError:
+        return _err(f"서비스 계정 {args.user} 이(가) 없습니다.")
+    try:
+        with open(args.file, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        return _err(f"백업 파일을 읽지 못했습니다 ({type(e).__name__}).")
+    if not os.path.isdir(paths.data):
+        return _err(f"자료 폴더가 없습니다 ({paths.data}).")
+    lock = ServiceLock(paths.lock)
+    try:
+        if not lock.try_hold(owner=owner):
+            return _err(server_backup.STOP_FIRST)
+    except OSError as e:
+        return _err(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).")
+    try:
+        if _euid() == 0:
+            try:
+                _drop_privileges(owner)
+            except OSError as e:
+                return _err(str(e))
+        try:
+            aside = server_backup.restore(paths, raw, force=args.force, lock=lock)
+        except (ValueError, RuntimeError) as e:
+            return _err(str(e))
+        except OSError as e:
+            return _err(f"복구하지 못했습니다 ({type(e).__name__}). 자료는 복구 전 그대로입니다.")
+        server_log.configure(paths.server_log, paths.audit_log)
+        try:
+            local_server.audit(paths.data, f"백업에서 복구  파일={os.path.basename(args.file)}"
+                                           + ("  (다른 서버의 백업, --force)" if args.force else ""))
+        finally:
+            server_log.configure(None, None)
+    finally:
+        lock.release()
+    print(f"복구했습니다. 전의 자료는 {aside} 에 옮겨 두었습니다. systemctl start autopilot 으로 서비스를 켜 주십시오.")
+    return 0
+
+
+def cmd_backup_config(args, paths):
+    """(root) 설정 폴더 백업 - CONFIG_BACKUPS/etc-YYYYMMDD.tar.gz, 7개. 기록 파일에는 쓰지 않는다 (root 소유 기록 파일이 생기지 않게)."""
+    if not _need_root("backup-config"):
+        return 1
+    try:
+        made = server_backup.config_backup(paths.etc, CONFIG_BACKUPS)
+    except (OSError, ValueError) as e:
+        return _err(str(e) if isinstance(e, ValueError) else f"설정 백업을 만들지 못했습니다 ({type(e).__name__}).")
+    print(made)
+    return 0
+
+
+def cmd_restore_config(args, paths):
+    """(root, 서비스를 멈춘 뒤) 설정 백업으로 /etc/autopilot 되살리기. 서비스 잠금을 쥔 채."""
+    if not _need_root("restore-config"):
+        return 1
+    try:
+        owner = _service_ids(args.user)
+    except KeyError:
+        return _err(f"서비스 계정 {args.user} 이(가) 없습니다.")
+    if not os.path.isdir(paths.data):
+        return _err(f"자료 폴더가 없습니다 ({paths.data}).")
+    lock = ServiceLock(paths.lock)
+    try:
+        if not lock.try_hold(owner=owner):
+            return _err(server_backup.STOP_FIRST)
+    except OSError as e:
+        return _err(f"서비스 잠금 파일을 열지 못했습니다 ({type(e).__name__}).")
+    try:
+        aside = server_backup.restore_config(paths.etc, args.file)
+    except ValueError as e:
+        return _err(str(e))
+    except OSError as e:
+        return _err(f"설정을 되살리지 못했습니다 ({type(e).__name__}).")
+    finally:
+        lock.release()
+    print("설정을 되살렸습니다." + (f" 전의 설정은 {aside} 에 옮겨 두었습니다." if aside else "")
+          + " systemctl start autopilot 으로 서비스를 켜 주십시오.")
+    return 0
+
+
+# ----------------------------------------------------------------------------------------------------
 # 명령 줄
 # ----------------------------------------------------------------------------------------------------
 
@@ -1011,6 +1221,20 @@ def _parser():
     r = sub.add_parser("upgrade", help="서버 업그레이드 (root - 서명을 먼저 확인한 뒤 풀어 install.sh upgrade)")
     r.add_argument("file")
     r.set_defaults(func=cmd_upgrade)
+    r = sub.add_parser("backup", help="자료 백업 (서비스가 돌면 서비스 안에서)")
+    r.add_argument("--user", default=SERVICE_USER, help="root 로 부를 때 권한을 내릴 서비스 계정")
+    r.set_defaults(func=cmd_backup)
+    r = sub.add_parser("restore", help="백업에서 복구 (서비스를 멈춘 뒤)")
+    r.add_argument("file")
+    r.add_argument("--force", action="store_true", help="다른 서버의 백업이어도 복구 (라이선스를 다시 받아야 한다)")
+    r.add_argument("--user", default=SERVICE_USER, help="root 로 부를 때 권한을 내릴 서비스 계정")
+    r.set_defaults(func=cmd_restore)
+    r = sub.add_parser("backup-config", help="(root) 설정 폴더 백업")
+    r.set_defaults(func=cmd_backup_config)
+    r = sub.add_parser("restore-config", help="(root, 서비스를 멈춘 뒤) 설정 폴더 되살리기")
+    r.add_argument("file")
+    r.add_argument("--user", default=SERVICE_USER, help="서비스 계정 (잠금 파일 소유자)")
+    r.set_defaults(func=cmd_restore_config)
     return p
 
 

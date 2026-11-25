@@ -23,6 +23,7 @@ local_server.Handler 가 서명 확인 **앞에서** `/api/*` 와 웹 파일 GET
 비밀번호·세션 토큰·열쇠는 기록에 싣지 않고, 어느 응답에도 열쇠·라이선스 서명·해시·소금을 싣지 않는다.
 표준 라이브러리만 쓴다.
 """
+import contextlib
 import datetime
 import hashlib
 import hmac
@@ -179,7 +180,10 @@ class Accounts:
     설치 마법사·설정 창(다른 프로세스)도 같은 파일을 이 클래스로 고친다 - 그래서 파일이 바뀌었으면 다시 읽는다.
     밖으로 주는 계정 dict 는 {id, role, disabled, must_change, mfa(켜졌나 bool)} 뿐이다 (해시·소금·2단계 비밀 값·복구 번호 해시는 나가지 않는다).
     비밀번호를 바꾸거나 다시 정하거나 중지·다시 사용해도 mfa 칸은 새 기록으로 옮긴다 (설계 13절 12).
-    admin_min: 관리자 계정 비밀번호의 최소 길이 - 단독은 PASSWORD_MIN(8) 그대로, 사내 서버 Web 이 LAN_ADMIN_PASSWORD_MIN(10) 으로 올린다."""
+    admin_min: 관리자 계정 비밀번호의 최소 길이 - 단독은 PASSWORD_MIN(8) 그대로, 사내 서버 Web 이 LAN_ADMIN_PASSWORD_MIN(10) 으로 올린다.
+    persist_lock: 사내 서버의 같은 시점 백업 잠금 (server_backup.attach) - 파일 쓰기를 이 잠금 안에서. 단독은 None."""
+
+    persist_lock = None
 
     def __init__(self, path):
         self.path = os.path.abspath(path)
@@ -231,6 +235,10 @@ class Accounts:
         return data
 
     def _save(self, data):
+        with self.persist_lock or contextlib.nullcontext():
+            self._save_file(data)
+
+    def _save_file(self, data):
         folder = os.path.dirname(self.path)
         os.makedirs(folder, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=folder, prefix=os.path.basename(self.path) + ".", suffix=".tmp")

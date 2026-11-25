@@ -3,7 +3,7 @@
 
 - server.json 꼴: {"listen": "192.168.1.230", "names": ["nt"], "ports": {"web": 8443, "agent": 8444, "phone": 8782},
   "allow": ["192.168.1.0/24"], "trusted_proxies": [], "proxy_only": false, "web_plain": false,
-  "public_web": [], "bind_session_ip": true}. listen 만 꼭 있어야 하고 나머지는 이 기본값.
+  "public_web": [], "bind_session_ip": true, "backup_hour": 3}. listen 만 꼭 있어야 하고 나머지는 이 기본값.
 - 서버는 사설·루프백 주소에만 듣는다. 사설은 Python 의 is_private 에 맡기지 않고 아래 PRIVATE_NETS 로 못박는다
   (is_private 는 0.0.0.0/8·문서용 대역까지 참이라 '사설' 의 뜻과 다르다). 링크 로컬은 듣기·대역 모두 안 된다.
 - 허용 대역 밖 연결은 서버가 TLS 악수 전에 닫는다 (Task 3). 루프백은 늘 허용.
@@ -20,7 +20,9 @@ from dataclasses import dataclass
 DEFAULT_PORTS = {"web": 8443, "agent": 8444, "phone": 8782}
 PORT_MIN = 1024                  # 1024 아래 포트는 특권이 필요하다 - 쓰지 않는다
 PORT_MAX = 65535
-KEYS = ("listen", "names", "ports", "allow", "trusted_proxies", "proxy_only", "web_plain", "public_web", "bind_session_ip")
+KEYS = ("listen", "names", "ports", "allow", "trusted_proxies", "proxy_only", "web_plain", "public_web", "bind_session_ip",
+        "backup_hour")
+BACKUP_HOUR = 3                  # 하루 한 번 서비스 안 백업을 뜨는 시 (서버 시각, 사내 서버 ④ Task 5)
 NAME_RE = re.compile(r"[A-Za-z0-9.-]{1,253}")
 PUBLIC_RE = re.compile(r"[A-Za-z0-9.-]{1,253}(:\d{1,5})?")   # 프록시가 내건 이름 (포트 붙여도 됨)
 
@@ -74,6 +76,7 @@ class LanConfig:
     web_plain: bool
     public_web: tuple
     bind_session_ip: bool
+    backup_hour: int = BACKUP_HOUR
 
     @property
     def web_listen(self):
@@ -211,9 +214,12 @@ def parse(data):
     web_plain = _bool(data, "web_plain", False)
     bind = _bool(data, "bind_session_ip", True)
     public = _public(_list(data, "public_web"))
+    hour = data.get("backup_hour", BACKUP_HOUR)
+    if type(hour) is not int or not 0 <= hour <= 23:
+        raise ConfigError(f"backup_hour 는 0~23 사이 숫자여야 합니다 (하루 한 번 백업을 뜨는 시): {hour!r}")
     c = LanConfig(listen=listen, names=names, web_port=ports["web"], agent_port=ports["agent"], phone_port=ports["phone"],
                   allow=allow, trusted_proxies=proxies, proxy_only=proxy_only, web_plain=web_plain,
-                  public_web=public, bind_session_ip=bind)
+                  public_web=public, bind_session_ip=bind, backup_hour=hour)
     if proxy_only and not proxies:
         raise ConfigError("proxy_only 를 켜려면 trusted_proxies 에 프록시 주소를 적어야 합니다")
     if web_plain and not c.is_proxy("127.0.0.1"):

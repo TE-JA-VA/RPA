@@ -11,6 +11,7 @@
 웹에서 지우는 길은 없다. 보관 기간(KEEP_DAYS)이 지난 줄은 add 가 하루 한 번 purge 로 지운다 (설계 12절 7).
 사내 서버(local_web.Web 에 registry 가 있을 때)만 쓴다 - 단독은 이 파일을 만들지 않는다. 표준 라이브러리만 쓴다.
 """
+import contextlib
 import os
 import sqlite3
 import threading
@@ -66,7 +67,10 @@ def _text(value, limit):
 
 class LoginLog:
     """logins.db 한 개. HTTP 서버가 스레드마다 부르므로 연결 하나를 잠금으로 감싼다 (local_server.Runs 와 같은 꼴).
-    clock = 초 단위 시계 (시험이 손 시계를 넘긴다). path 가 ':memory:' 면 파일 없이."""
+    clock = 초 단위 시계 (시험이 손 시계를 넘긴다). path 가 ':memory:' 면 파일 없이.
+    persist_lock: 사내 서버(리눅스)의 같은 시점 백업 잠금 (server_backup.attach) - 쓰기는 이 잠금 → 연결 잠금 차례."""
+
+    persist_lock = None
 
     def __init__(self, path, clock=time.time):
         """열기(연결·표 만들기)에 실패하면 그 파일(보통 파일일 때만)을 logins.db.broken 으로 치우고(있으면 덮어씀) 한 번 더 새로 연다
@@ -118,6 +122,18 @@ class LoginLog:
         with self._lock:
             self._db.close()
 
+    def _persist(self):
+        return self.persist_lock or contextlib.nullcontext()
+
+    def backup_to(self, path):
+        """SQLite 백업 기능으로 path 에 사본을 뜬다 (server_backup.snapshot 이 영속 잠금을 쥔 채 부른다)."""
+        with self._lock:
+            dst = sqlite3.connect(path)
+            try:
+                self._db.backup(dst)
+            finally:
+                dst.close()
+
     def add(self, result, uid, ip, agent, at_ms=None):
         """한 줄 넣기. result 는 RESULTS 안만, uid 는 등록된 아이디 글 또는 None - 아니면 ValueError.
         at_ms = 그 일이 있었던 시각(ms) - 없으면 지금 (자동 로그아웃은 세션이 실제로 끝난 시각을 넘긴다, 전체 검토 3).
@@ -128,7 +144,7 @@ class LoginLog:
             raise ValueError("로그인 이력 아이디는 글이어야 합니다.")
         now = self._clock()
         at = int(now * 1000) if at_ms is None else int(at_ms)
-        with self._lock, self._db:
+        with self._persist(), self._lock, self._db:
             self._db.execute("INSERT INTO logins(at, uid, ip, agent, result) VALUES(?,?,?,?,?)",
                              (at, _text(uid, FIELD_MAX), _text(ip, FIELD_MAX), _text(agent, AGENT_MAX), result))
         if self._purged is None or now - self._purged >= PURGE_EVERY:
@@ -178,5 +194,5 @@ class LoginLog:
     def purge(self):
         """보관 기간(KEEP_DAYS)이 지난 줄을 지운다 → 지운 수."""
         cut = int((self._clock() - KEEP_DAYS * 86400) * 1000)
-        with self._lock, self._db:
+        with self._persist(), self._lock, self._db:
             return self._db.execute("DELETE FROM logins WHERE at < ?", (cut,)).rowcount

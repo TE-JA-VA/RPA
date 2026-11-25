@@ -4,6 +4,7 @@
 둘 다 HTTP 를 모른다 - 창구(서버·인증·검사)는 이 파일 뒤쪽에 따로 붙는다.
 표준 라이브러리만 쓴다.
 """
+import contextlib
 import copy
 import dataclasses
 import hashlib
@@ -112,13 +113,18 @@ class Refused(Exception):
 
 
 SUB_QUEUE_MAX = 2000      # 구독 하나에 밀려도 되는 이벤트 수 - 넘으면 그 구독을 끊는다 (읽지 않는 연결이 메모리를 잡지 못하게)
+_NOLOCK = contextlib.nullcontext()   # 영속 쓰기 잠금이 없을 때 (단독 - 지금 그대로)
 
 
 class Store:
     """JSON 나무 하나를 파일에 둔 저장소 (RTDB 자리 흉내). 쓸 때마다 파일에 원자적으로 저장한다.
     - 값이 None 이거나 비어 있으면 지운 것 - 빈 가지는 없앤다 (get 은 None).
     - 쓰기는 나무를 복사해 고친 뒤 저장이 끝나야 바꿔 끼운다 (저장이 실패하면 메모리도 그대로).
-    - 읽기는 잠금 없이 (바꿔 끼운 나무는 다시 고치지 않는다). 쓰기와 구독 알림은 잠금 하나로 묶는다."""
+    - 읽기는 잠금 없이 (바꿔 끼운 나무는 다시 고치지 않는다). 쓰기와 구독 알림은 잠금 하나로 묶는다.
+    persist_lock: 사내 서버(리눅스)의 같은 시점 백업 잠금 (server_backup.attach 가 단다) - 파일 쓰기를 이 잠금 안에서 한다.
+    단독은 None (지금 그대로)."""
+
+    persist_lock = None
 
     def __init__(self, path, volatile=()):
         """volatile: 파일에 남기지 않는 자리들 (예 "apps/otp" - 인증번호). 메모리에는 있고 구독도 되지만 다시 켜면 비어 있다."""
@@ -227,7 +233,8 @@ class Store:
                 else:
                     new = _set(new, parts, value) or {}
             if not self._volatile_only(writes):
-                self._save(new)
+                with self.persist_lock or _NOLOCK:
+                    self._save(new)
                 self.saves += 1
             self._data = new
             for sub in list(self._subs):
@@ -301,7 +308,10 @@ class Store:
 
 class Runs:
     """실행 기록. 문서 하나 = (parent, collection, id) 한 줄, 칸은 JSON 으로 doc 에 둔다 (pc_id·date·started_at 은 거르기용 사본).
-    HTTP 서버가 스레드마다 부르므로 연결 하나를 잠금으로 감싼다."""
+    HTTP 서버가 스레드마다 부르므로 연결 하나를 잠금으로 감싼다.
+    persist_lock: 사내 서버의 같은 시점 백업 잠금 (server_backup.attach) - 쓰기는 이 잠금 → 연결 잠금 차례로 잡는다."""
+
+    persist_lock = None
 
     def __init__(self, db_path):
         if db_path != ":memory:":
@@ -317,6 +327,15 @@ class Runs:
         with self._lock:
             self._db.close()
 
+    def backup_to(self, path):
+        """SQLite 백업 기능으로 path 에 사본을 뜬다 (사내 서버 백업 - server_backup.snapshot 이 영속 잠금을 쥔 채 부른다)."""
+        with self._lock:
+            dst = sqlite3.connect(path)
+            try:
+                self._db.backup(dst)
+            finally:
+                dst.close()
+
     @staticmethod
     def _text(value):
         return None if value is None else str(value)
@@ -329,7 +348,7 @@ class Runs:
 
     def create(self, parent, collection, doc_id, fields, pc_id=None):
         """기록 하나 만들기. 이미 있으면 False (덮어쓰지 않는다). pc_id: 사내 서버의 PC 번호 (문서 키에 넣는다, _key)."""
-        with self._lock, self._db:
+        with self.persist_lock or _NOLOCK, self._lock, self._db:
             cur = self._db.execute(
                 "INSERT OR IGNORE INTO docs(parent, collection, id, pc_id, date, started_at, doc) VALUES(?,?,?,?,?,?,?)",
                 (parent, collection, self._key(doc_id, pc_id), self._text(fields.get("pcId")), self._text(fields.get("date")),
@@ -374,7 +393,7 @@ class Runs:
         시작 시각이 없거나 그 꼴이 아닌 기록은 남긴다. 단독은 부르지 않는다."""
         import datetime
         cut = datetime.datetime.fromtimestamp(before_ms / 1000).isoformat(timespec="seconds")
-        with self._lock, self._db:
+        with self.persist_lock or _NOLOCK, self._lock, self._db:
             return self._db.execute(
                 "DELETE FROM docs WHERE started_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' AND started_at < ?",
                 (cut,)).rowcount
