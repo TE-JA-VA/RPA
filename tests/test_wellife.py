@@ -581,7 +581,7 @@ def drop_rr(found=True, closes=True, popup=None, fg_pid=1):
         return [El("예")] if popup == "before" or (popup == "after" and WIN["open"]) else []
 
     return types.SimpleNamespace(
-        log=lambda m: None, send_keys=esc, find_popup_buttons=popups, collect_popup_text=lambda b: "질문",
+        log=lambda m: None, status=Rec(), send_keys=esc, find_popup_buttons=popups, collect_popup_text=lambda b: "질문",
         _find_menu_item=lambda pid, hwnd, text: (item, 7) if found and 7 in WIN["open"] and text == item.name
         else (None, None),
         find_popup_windows=lambda pid, hwnd: [], grid_overlay_count=lambda h, g: 0,
@@ -1086,9 +1086,35 @@ check("리허설은 skipped, 사유 앞에 [리허설]", r[0] == "skipped" and r
 _saved_top = wellife._top_window
 wellife._top_window = lambda rr_, pt: 7 if pt == (130, 40) else actx.hwnd
 acts.clear(); moves.clear(); WIN["open"].clear()
-note, pressed = wellife.press_menu_item(drop_rr(), actx, Split([El("지정"), Arrow()]), wellife.SELECTED_ONLY, "4-1 [지정▼]")
+_drr = drop_rr()
+note, pressed = wellife.press_menu_item(_drr, actx, Split([El("지정"), Arrow()]), wellife.SELECTED_ONLY, "4-1 [지정▼]")
 check("실행: ▼ 를 누르고 '선택 항목만' 을 누른다 (ESC 는 보내지 않는다)",
       pressed and acts == [("click", "오픈"), ("click", wellife.SELECTED_ONLY)], f"{note} {acts}")
+check("  누르기 전에 처리 시작을 적는다 - 반복 회차가 이 뒤에 실패하면 반복을 멈춘다 (rpa_status.began_work, 사용자 11-24)",
+      _drr.status.of("began_work") == [()], str(_drr.status.calls))
+# click(work=True) - 화살표·물류대기 저장: 덮개 확인을 지난 뒤 누르기 바로 앞에만 적는다 (덮여 안 누른 회차가 '처리 도중' 으로 반복을 멈추지 않게, 검토 11-24)
+_saved_wc = (wellife.front, wellife.clear_point)
+_wc_rr = types.SimpleNamespace(status=Rec())
+_wc_el = types.SimpleNamespace(click_input=lambda **k: _wc_rr.status.calls.append(("click_input", ())))
+wellife.front = lambda rr_, ctx_, what: None
+
+
+def _wc_cover(rr_, ctx_, el, what, pt=None, allow=()):
+    raise wellife.Stop("failed", f"{what}: 누를 자리를 다른 창이 덮고 있어 누르지 않고 중단하였습니다.")
+
+
+wellife.clear_point = _wc_cover
+try:
+    wellife.click(_wc_rr, actx, _wc_el, "5-1 화살표", work=True)
+except wellife.Stop:
+    pass
+check("click(work=True): 덮여서 누르지 않으면 처리 시작을 적지 않는다", _wc_rr.status.calls == [], str(_wc_rr.status.calls))
+wellife.clear_point = lambda rr_, ctx_, el, what, pt=None, allow=(): (1, 2)
+wellife.click(_wc_rr, actx, _wc_el, "5-1 화살표", work=True)
+wellife.click(_wc_rr, actx, _wc_el, "체크 칸")
+check("click(work=True): 누르기 바로 앞에 적고, 보통 누르기(체크 칸 등)는 적지 않는다",
+      [c[0] for c in _wc_rr.status.calls] == ["began_work", "click_input", "click_input"], str(_wc_rr.status.calls))
+wellife.front, wellife.clear_point = _saved_wc
 wellife._top_window = lambda rr_, pt: 99 if pt == (130, 40) else actx.hwnd
 acts.clear(); WIN["open"].clear()
 try:

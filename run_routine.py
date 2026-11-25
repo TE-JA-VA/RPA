@@ -1666,6 +1666,7 @@ def run_hold_save(app, pid, hwnd):
     baseline_children = visible_child_windows(hwnd)
 
     log("'저장(S)' 클릭")
+    status.began_work()
     win = app.window(handle=hwnd)
     if not click_toolbar_button(win, hwnd, "저장(S)"):
         return "failed"
@@ -1910,6 +1911,7 @@ def run_logistics_step(app, pid, hwnd, options=None):
 
     # 3) 우클릭 -> 개별 배송(B)
     log("하단 그리드 우클릭 -> '개별 배송(B)'")
+    status.began_work()
     top_overlays_before = grid_overlay_count(hwnd, top_grid)
     if not right_click_grid_cell_and_select(pid, hwnd, bottom_grid, "개별 배송(B)"):
         return "failed"
@@ -3617,6 +3619,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
             break
 
         upload_pw["code"] = code
+        status.began_work()
         if not upload_file_in_dialog(dlg, path, pid=pid):
             log("    파일을 전달하지 못했습니다. 창을 닫고 파일은 그대로 둡니다.")
             close_upload_dialog(pid, dlg)
@@ -3791,6 +3794,7 @@ def run_stock_review_step(app, pid, hwnd):
         # (자식 창 세기는 win32 호출이라 사실상 공짜다)
         children_before = len(visible_child_windows(hwnd))
 
+        status.began_work()
         if not right_click_element_and_select(pid, hwnd, anchor, "배송보류"):
             item_stop("우클릭 '배송보류' 를 실행하지 못했습니다 (그 건에 걸린 체크가 남아 있을 수 있습니다)")
         time.sleep(1.2)
@@ -4480,6 +4484,7 @@ def run_logistics_save_step(app, hwnd):
     baseline_children = visible_child_windows(hwnd)
 
     win = app.window(handle=hwnd)
+    status.began_work()
     if not click_toolbar_button(win, hwnd, "저장(S)"):
         return False, "저장(S) 버튼을 찾지 못했습니다."
 
@@ -5140,6 +5145,7 @@ def run_print_step(app, pid, hwnd, options=None, already_printed="continue"):
         return "failed"
 
     win = app.window(handle=hwnd)
+    status.began_work()
     if not click_toolbar_button(win, hwnd, button):
         log(f"'{button}' 버튼을 찾지 못했습니다. 모드 설정이 잘못됐을 수 있습니다.")
         return "failed"
@@ -5336,6 +5342,7 @@ def run_hold_logistics_step(app, pid, hwnd, save_only=False):
                     log(f"  앵커: '{cand[1]}' {cand[2].rectangle()}")
                     anchor = cand[2]
 
+            status.began_work()
             if anchor is None:
                 ok = right_click_grid_and_select(pid, hwnd, grid, "배송보류")
             else:
@@ -5624,6 +5631,7 @@ def run_import_step(app, pid, hwnd, win, wait=True):
             waited += IMPORT_POLL_SECONDS
 
     log(f"'{IMPORT_BUTTON_NAME}' 클릭")
+    status.began_work()     # 여기부터 처리 - 반복 회차가 이 뒤에 실패하면 반복을 멈춰 알린다 (rpa_status.began_work, 사용자 2026-11-24)
     ec.ensure_foreground(hwnd)
     try:
         imp.click_input()
@@ -6750,6 +6758,18 @@ def run_modules(selected, modules=None, funcs=None, section=None):
         log(f"=== [{label}] {MODULE_RESULT_LABEL.get(result, result)}"
             f"{' - ' + reason if reason else ''} ===")
         if result in ("failed", "stopped"):
+            # 화면이 잠겨 멈춘 회차는 대시보드가 따로 건너뛴다 (rpa_dashboard.locked_round, 사용자 2026-10-08) - 여기서 말을 보태지 않는다
+            if key != "login" and os.environ.get("RPA_RUN_TRIGGER") == "repeat" and "화면이 잠겨" not in (reason or ""):
+                # 반복은 데이터가 언제 쌓일지 몰라 돈다 - 처리 전(화면 이동·조회·대상 읽기·체크)에서 멈춘 회차는 그 회차만 건너뛰고,
+                # 처리 도중·마지막 단계의 실패와 저절로 풀리지 않는 실패는 반복을 멈춰 알린다 (rpa_status.failed_before_work, 사용자 2026-11-24)
+                if status.failed_before_work():
+                    log("반복 회차 - 처리를 시작하기 전 단계에서 멈춰 이번 회차만 건너뜁니다. 반복은 쉬는 시간 뒤 다음 회차에서 다시 합니다.")
+                    reason = f"{reason or '실패'} (반복 회차: 처리 전 단계라 이번 회차만 건너뛰고 쉬는 시간 뒤 다시 합니다)"
+                else:
+                    why = ("처리 도중 실패해" if status.worked() or [k for k in (status.done_modules() or []) if k != "login"]
+                           else "저절로 풀리지 않는 실패라")
+                    log(f"반복 회차 - [{label}] {why} 반복을 멈춥니다. 앞에서 처리한 것은 그대로입니다. "
+                        "화면을 확인한 뒤 [반복 다시 시작] 으로 이어 주십시오.")
             return "stopped", reason
     return "success", None
 

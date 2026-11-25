@@ -1004,7 +1004,7 @@ def hold_save(rr, ctx, live):
         return "skipped", f"[{tag}] 물류대기 조회 → 전체선택 (저장은 누르지 않음)" + ("" if again else RECHECK_NOTE)
     before = popup_windows(rr, ctx)
     rr.log("  [실행] 물류대기 '저장(S)'을 누릅니다.")
-    click(rr, ctx, save, "물류대기 '저장(S)'")
+    click(rr, ctx, save, "물류대기 '저장(S)'", work=True)
     texts = confirm_popups(rr, ctx, "물류대기 저장", grid, idle, before)
     return "done", f"[{tag}] 물류대기 조회 → {'첫 줄만 체크' if live == ONE else '전체선택'} → 저장" + popup_note(texts)
 
@@ -1188,7 +1188,7 @@ def press_arrow(rr, ctx, ctl, arrow_id, what, want, count, live):
     no_popup(rr, ctx, f"{what} 누르기 전")
     before = popup_windows(rr, ctx)
     rr.log(f"  [실행] {what}: 누릅니다. ({count}건)")
-    click(rr, ctx, arrow, what)
+    click(rr, ctx, arrow, what, work=True)
     texts = confirm_popups(rr, ctx, what, grid, idle, before)
     return " → 누름" + popup_note(texts), True
 
@@ -1370,6 +1370,8 @@ def invoice_excel(rr, ctx, live):
             if not count:
                 empty.append(label)
                 continue
+            if live:        # 받아서 완료처리하는 것부터 처리 - 그 뒤 실패는 반복을 멈춰 알린다 (사용자 2026-11-24: 미전송 완료처리 단계 실패)
+                rr.status.began_work()
             saved = export_market(rr, ctx, t["market"], pw)                           # 2. 그 마켓 양식 엑셀
             if saved is None:
                 empty.append(f"{label} (조회 {count}건, 양식 미리보기 0건)")
@@ -3105,6 +3107,7 @@ def press_menu_item(rr, ctx, split, item_text, what, grid=None, confirm=True, st
     idle = rr.grid_overlay_count(ctx.hwnd, grid) if grid is not None else 0
     before = popup_windows(rr, ctx) - {menu}
     rr.log(f"  [실행] {what}: '{item.window_text()}'을(를) 누릅니다.")
+    rr.status.began_work()      # 여기부터 처리 - 반복 회차가 이 뒤에 실패하면 반복을 멈춰 알린다 (rpa_status.began_work, 사용자 2026-11-24)
     item.click_input(coords=pt, absolute=True)
     deadline = time.time() + DROPDOWN_WAIT_SECONDS
     while _shown(rr, menu):
@@ -3235,12 +3238,16 @@ def _window_texts(rr, handles, limit=20):
     return out
 
 
-def click(rr, ctx, el, what):
+def click(rr, ctx, el, what, work=False):
     """누르기 (단계 단추·체크 칸·▼·메뉴 검색). front() 뒤, 누를 자리의 맨 위 창이 ERPia 메인 창일 때만 누른다 -
     좌표 클릭이라 열린 내림 메뉴나 다른 프로그램 창이 그 자리를 덮고 있으면 그것이 눌린다.
-    (메인 창 안에 그려지는 ERPia 팝업은 여기서 못 가린다 - no_popup 으로 본다)"""
+    (메인 창 안에 그려지는 ERPia 팝업은 여기서 못 가린다 - no_popup 으로 본다)
+    work: 데이터를 바꾸는 단추 - 확인을 지나 실제로 누르기 바로 앞에 처리 시작을 적는다 (rpa_status.began_work -
+    덮여서 누르지 않은 반복 회차가 '처리 도중' 실패로 반복을 멈추지 않게, 검토 2026-11-24)"""
     front(rr, ctx, what)
     pt = clear_point(rr, ctx, el, what)
+    if work:
+        rr.status.began_work()
     el.click_input(coords=pt, absolute=True)   # 확인한 그 점을 누른다 (사각형을 다시 읽어 다른 점을 누르지 않게)
 
 

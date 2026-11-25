@@ -598,6 +598,61 @@ out, called, rec, ac = run(ALL_ON, {"hold": ("failed", "그리드 없음")})
 check("failed 면 뒤 모듈 안 돌고 stopped", called == ALL7[:5] and out == ("stopped", "그리드 없음"), str((called, out)))
 out, called, rec, ac = run(ALL_ON, {"sales": ("stopped", "매출처리 실패: x")})
 check("stopped 도 멈춘다", called == ALL7[:4] and out[0] == "stopped")
+# 반복 회차: 처리를 시작하기 전에 멈추면 그 회차만 건너뛴다고 사유·로그에, 처리 도중이면 반복을 멈춘다고 로그에 (사용자 2026-11-24)
+logged = []
+rr.log = lambda msg="": logged.append(msg)
+os.environ["RPA_RUN_TRIGGER"] = "repeat"
+try:
+    StatusRec.failed_before_work = lambda self: True        # 판정은 rpa_status.failed_before_work (test_dashboard_modules 가 본다)
+    out, called, rec, ac = run(ALL_ON, {"import": ("failed", "조회가 끝나지 않음")})
+    check("반복 회차가 처리 전에 멈추면 사유에 '이번 회차만 건너뛰고 다시 합니다'",
+          out[0] == "stopped" and out[1].startswith("조회가 끝나지 않음 (반복 회차: 처리 전 단계라 이번 회차만 건너뛰고")
+          and any("처리를 시작하기 전 단계에서 멈춰 이번 회차만 건너뜁니다" in m for m in logged), str(out))
+    logged.clear()
+    out, called, rec, ac = run(ALL_ON, {"import": ("stopped", "5-1: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")})
+    check("화면이 잠겨 멈춘 회차는 말을 보태지 않는다 (대시보드 locked_round 가 건너뛴다)",
+          out == ("stopped", "5-1: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.") and not any("반복 회차" in m for m in logged), str(out))
+    logged.clear()
+    StatusRec.failed_before_work = lambda self: False
+    StatusRec.worked = lambda self: True
+    out, called, rec, ac = run(ALL_ON, {"import": ("failed", "가져오기 끝을 못 봄")})
+    check("처리 도중이면 사유는 그대로, 로그에 '처리 도중 실패해 반복을 멈춥니다'",
+          out == ("stopped", "가져오기 끝을 못 봄") and any("[자동 수집] 처리 도중 실패해 반복을 멈춥니다" in m for m in logged), str(out))
+    logged.clear()
+    del StatusRec.worked
+    out, called, rec, ac = run(ALL_ON, {"import": ("failed", "UI 오류: KeyError")})
+    check("처리 전이어도 저절로 풀리지 않는 실패면 '저절로 풀리지 않는 실패라 반복을 멈춥니다'",
+          out == ("stopped", "UI 오류: KeyError") and any("저절로 풀리지 않는 실패라 반복을 멈춥니다" in m for m in logged), str(out))
+    logged.clear()
+    out, called, rec, ac = run(ALL_ON, {"login": ("failed", "로그인 실패")})
+    check("로그인 실패는 손대지 않는다", out == ("stopped", "로그인 실패") and not any("반복 회차" in m for m in logged), str(out))
+finally:
+    del StatusRec.failed_before_work
+    if "worked" in StatusRec.__dict__:
+        del StatusRec.worked
+    os.environ.pop("RPA_RUN_TRIGGER", None)
+    rr.log = lambda msg="": None
+out, called, rec, ac = run(ALL_ON, {"import": ("failed", "조회가 끝나지 않음")})
+check("반복이 아니면 사유를 바꾸지 않는다", out == ("stopped", "조회가 끝나지 않음"), str(out))
+
+# 데이터를 바꾸는 단추·엑셀 받기/올리기·출력 바로 앞에서 처리 시작을 적는다 (rpa_status.began_work) - 그 전의 실패만 반복 회차를 건너뛴다
+_src_rr = Path(_rr.__file__).read_text(encoding="utf-8")
+_src_wl = Path(_rr.wellife.__file__).read_text(encoding="utf-8")
+_unmarked = []
+for _name, _src, _needles in (
+        ("run_routine", _src_rr, ("imp.click_input()", "right_click_grid_cell_and_select(pid, hwnd, bottom_grid, \"개별 배송(B)\")",
+                                  "right_click_element_and_select(pid, hwnd, anchor, \"배송보류\"):", "ok = right_click_grid_and_select(pid, hwnd, grid, \"배송보류\")",
+                                  "click_toolbar_button(win, hwnd, \"저장(S)\")", "click_toolbar_button(win, hwnd, button)",
+                                  "upload_file_in_dialog(dlg, path, pid=pid)")),
+        ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "saved = export_market(rr, ctx, t[\"market\"], pw)"))):
+    _lines = _src.splitlines()
+    for _nd in _needles:
+        _at = [i for i, l in enumerate(_lines) if _nd in l]
+        if not _at or not all(any("began_work()" in _lines[j] for j in range(max(0, i - 3), i)) for i in _at):
+            _unmarked.append(f"{_name}: {_nd}")
+# 화살표(완료처리·전송요청 포함)·물류대기 저장은 click(work=True) - 덮개 확인을 지난 뒤 누르기 바로 앞에 적는다 (test_wellife 가 동작을 본다)
+_unmarked += [nd for nd in ("click(rr, ctx, arrow, what, work=True)", "click(rr, ctx, save, \"물류대기 '저장(S)'\", work=True)") if nd not in _src_wl]
+check("데이터를 바꾸는 자리마다 바로 앞에 처리 시작 표시", not _unmarked, str(_unmarked))
 out, called, rec, ac = run(ALL_ON, {"hold": ("no_target", "행 없음")})
 check("no_target 은 계속 간다", called == ALL7 and out[0] == "success")
 out, called, rec, ac = run(ALL_ON, {"hold": ("skipped", "메뉴 없음")})

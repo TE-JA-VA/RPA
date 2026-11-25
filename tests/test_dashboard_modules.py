@@ -299,6 +299,42 @@ stats = d.history_stats([rec_alloff, rec_partial, rec_full, rec_old])
 check("평균 소요는 모듈을 끈 실행을 뺀다 (600, 500 -> 550)", stats["avg_success_sec"].get("routine") == 550, str(stats))
 check("run_summary: 로그인만 켠 실행은 1/1", d.run_summary(rec_partial)["steps_total"] == 1 and d.run_summary(rec_partial)["steps_done"] == 1)
 check("run_summary: 전부 끔은 0/0", d.run_summary(rec_alloff)["steps_total"] == 0)
+
+# 반복 회차: 처리를 시작하기 전에 멈춘 회차만 건너뛰고, 처리 도중 실패는 반복을 멈춘다 (rpa_status.began_work, 사용자 2026-11-24)
+st.start("routine", [("login", "로그인"), ("sales", "매출")])
+st.set_modules([("login", "로그인", ("login",), 1), ("sales", "매출", ("sales",), 2)])
+st.module_start("login"); st.module_done("login", "done")
+st.module_start("sales"); st.step("sales")
+check("처리 시작 전: worked 아님", not st.worked())
+st.module_done("sales", "failed", "조회가 끝나지 않음")
+st.finish("stopped", "조회가 끝나지 않음")
+before = dict(st._state)
+check("처리 전 단계에서 멈춘 회차는 그 회차만 건너뛴다 (round_failed)", d.round_failed(before) is True)
+check("  프로그램 오류(crashed)는 아니다", d.round_failed(dict(before, state="crashed")) is False)
+check("  대시보드에서 멈춘 것은 아니다", d.round_failed(dict(before, reason=d.STOPPED_TEXT)) is False)
+check("  사이트 수집(프리페어)은 아니다", d.round_failed(dict(before, program="prepare")) is False)
+check("  로그인 실패는 아니다", d.round_failed(dict(before, modules=[{"key": "login", "state": "failed"}])) is False)
+check("  모듈 밖에서 멈춘 것(설정·'1건' 모드)은 아니다", d.round_failed(dict(before, modules=[{"key": "sales", "state": "pending"}])) is False)
+check("  앞 모듈이 처리했으면(완료) 처리 도중이다", d.round_failed(dict(before, modules=[{"key": "excel", "state": "done"}, {"key": "sales", "state": "failed"}])) is False)
+for _why in ("UI 오류: KeyError: None", "[실행] 운송장 - 설정 오류: 값이 없음", "꺼진 ERPia 를 다시 띄우지 못했습니다: 로그인 실패",
+             "ERPia 가 실행 도중 3번 꺼져 멈춥니다"):
+    check(f"  처리 전이어도 저절로 풀리지 않는 실패는 반복을 멈춘다 ({_why[:12]}…)",
+          d.round_failed(dict(before, modules=[{"key": "sales", "state": "failed", "reason": _why}])) is False)
+check("  지금 실행의 판정도 같은 함수 (run_routine.run_modules 가 부른다)", st.failed_before_work(before) is True)
+st.start("routine", [("login", "로그인"), ("sales", "매출")])
+st.set_modules([("login", "로그인", ("login",), 1), ("sales", "매출", ("sales",), 2)])
+st.module_start("sales"); st.step("sales"); st.began_work()
+check("데이터를 바꾸는 단추 앞에서 began_work → worked", st.worked() is True)
+st.module_done("sales", "failed", "정상매출 뒤 끝을 못 봄")
+st.finish("stopped", "정상매출 뒤 끝을 못 봄")
+check("처리 도중 실패는 반복을 멈춘다 (상태 파일에 worked 가 남는다)", d.round_failed(dict(st._state)) is False and st._state.get("worked") is True)
+why = d.stop_reason(dict(st._state, finished_at="2026-11-24T10:23:00"))
+check("반복 멈춤 까닭에 어느 모듈의 어느 단계인지", why.startswith("10:23 매출 '매출' 실패로") and why.endswith("정상매출 뒤 끝을 못 봄"), why)
+_two = {"state": "stopped", "reason": "저장 실패", "finished_at": "2026-11-24T10:23:00",
+        "modules": [{"key": "logistics", "label": "물류관리", "state": "failed", "steps": ["logistics_screen", "logistics", "logistics_save"]}],
+        "steps": [{"key": "logistics", "label": "개별 배송", "state": "failed", "finished_at": "2026-11-24T10:10:00"},     # ERPia 가 꺼져 실패로 닫힌 단계
+                  {"key": "logistics_save", "label": "저장", "state": "failed", "finished_at": "2026-11-24T10:22:59"}]}
+check("ERPia 가 꺼져 다시 돈 모듈은 가장 늦게 실패한 단계를 적는다", "물류관리 '저장' 실패로" in d.stop_reason(_two), d.stop_reason(_two))
 del os.environ["RPA_CRED_FILE"]
 
 # ---------------------------------------------------------------------------
