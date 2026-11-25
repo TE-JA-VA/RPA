@@ -29,6 +29,7 @@ if RPA_DIR not in sys.path:
 
 import local_store  # noqa: E402  요청·응답 서명 (클라이언트와 같은 함수)
 import pc_registry  # noqa: E402  사내 서버 PC 등록부 (EnrollError·PC_RE - 표준 라이브러리만 쓴다)
+import server_log  # noqa: E402  사내 서버(리눅스)의 server.log·audit.log - 정하지 않으면(단독) log 는 지금 그대로 (사내 서버 ④ Task 1)
 
 PORT = 8781
 
@@ -467,7 +468,26 @@ def lock_key_files(folder, readers=(), run=None):
     """열쇠·계정 파일(LOCKED_FILES)에 따로 붙은 권한을 지우고 관리자·SYSTEM 만 남긴다 (계획 ③ Task 4). readers(윈도우 계정 이름)가
     있으면 relay.key 에만 읽기를 더한다 - 기본은 없다 (옵저버·ACTOR 도 관리자 권한으로 돈다). 설정 폴더의 권한 다시 잠그기
     (rpa_settings.lock_data_acl 의 /reset /T)가 지운 뒤에도 같은 상태가 되게 서버가 켤 때마다·설치 마무리가 부른다.
-    icacls 종료 코드 목록. 예외를 내지 않는다 - 실패해도 서버는 켜진다. run 은 시험용 (args, timeout) → (코드, 출력)."""
+    icacls 종료 코드 목록. 예외를 내지 않는다 - 실패해도 서버는 켜진다. run 은 시험용 (args, timeout) → (코드, 출력).
+    posix(사내 서버 리눅스, 사내 서버 ④ Task 1 - ②-T8): icacls 를 부르지 않고 있는 파일을 0600, 폴더를 0700 으로 (readers 는 쓰지
+    않는다 - 서비스 계정 하나만 읽는다). 목록은 파일마다 0(됨)·-1(못 함), 끝에 폴더 하나."""
+    if os.name == "posix":
+        codes = []
+        for name in LOCKED_FILES:
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                os.chmod(path, 0o600)
+                codes.append(0)
+            except OSError:
+                codes.append(-1)
+        try:
+            os.chmod(folder, 0o700)
+            codes.append(0)
+        except OSError:
+            codes.append(-1)
+        return codes
     import subprocess
 
     def default(args, timeout=60):
@@ -517,7 +537,10 @@ def ensure_keys(folder, lock=None):
 
 
 def log(folder, text):
-    """서버 기록 한 줄. 열쇠·인증번호는 싣지 않는다. 1MB 를 넘으면 .1 로 넘긴다. 예외를 내지 않는다."""
+    """서버 기록 한 줄. 열쇠·인증번호는 싣지 않는다. 1MB 를 넘으면 .1 로 넘긴다. 예외를 내지 않는다.
+    사내 서버(리눅스)가 server_log.configure 로 자리를 정했으면 server.log 로 (10MB 다섯 개) - 단독은 지금 그대로 folder 에."""
+    if server_log.write_server(text):
+        return
     try:
         path = os.path.join(folder, LOG_NAME)
         try:
@@ -529,6 +552,13 @@ def log(folder, text):
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}\n")
     except OSError:
         pass
+
+
+def audit(folder, text):
+    """감사 기록 한 줄 - 누가 계정·보안 설정·PC·명령을 바꾸었나 (사내 서버 ④ Task 1, ③-1). 사내 서버가 server_log 자리를
+    정했으면 audit.log 로, 아니면 log 와 같다 (단독 그대로). 비밀번호·열쇠·토큰은 싣지 않는다. 예외를 내지 않는다."""
+    if not server_log.write_audit(text):
+        log(folder, text)
 
 
 def _server_values(value, now_ms):
@@ -672,7 +702,10 @@ def _agent_path(path):
 
 class LocalServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False      # 윈도우에서 켜면 같은 포트에 두 번째 서버가 조용히 뜬다 (rpa_dashboard.DashboardServer 와 같다)
+    # 윈도우에서 켜면 같은 포트에 두 번째 서버가 조용히 뜬다 (rpa_dashboard.DashboardServer 와 같다) - 윈도우는 False 그대로.
+    # 리눅스의 SO_REUSEADDR 은 남은 TIME_WAIT 만 넘는다 (다른 프로세스가 듣는 포트는 여전히 거절) - 서비스를 다시 켤 때 1분 동안
+    # 포트를 못 여는 일이 없게 켠다 (사내 서버 ④ Task 1, ②보-1)
+    allow_reuse_address = os.name != "nt"
     # listen 대기열. 기본 5 는 연결이 몰리면(화면 새로 고침·에이전트·구독이 한꺼번에) 윈도우가 차서 거절된 연결을 0.5초 뒤 다시 붙인다.
     # 넉넉히 두어도 동시 처리 수는 MAX_CONN 이 막는다 (계획 ③ 남은 일)
     request_queue_size = 64

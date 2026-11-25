@@ -94,6 +94,7 @@ PROGRAM_FILES = [
     ("firebase/agent/totp.py", "firebase/agent/totp.py"),                     # 2단계 인증 번호 계산·복구 번호 - local_web 이 불러온다 (단독에서는 쓰지 않아도 실어야 켜진다, 사내 서버 ③)
     ("firebase/agent/web_security.py", "firebase/agent/web_security.py"),     # 사내 서버 '보안' 설정 security.json - local_web 이 불러온다 (단독에서는 쓰지 않아도 실어야 켜진다, 사내 서버 ③)
     ("firebase/agent/login_log.py", "firebase/agent/login_log.py"),           # 사내 서버 로그인 이력 logins.db - local_web 이 불러온다 (단독에서는 쓰지 않아도 실어야 켜진다, 사내 서버 ③)
+    ("firebase/agent/server_log.py", "firebase/agent/server_log.py"),         # 사내 서버(리눅스) server.log·audit.log - local_server 가 불러온다 (단독은 자리를 정하지 않아 지금 그대로, 사내 서버 ④)
     ("edition.py", "edition.py"),                                             # 버전 종류 (일반·스탠드얼론) - agent·secret·background 가 본다
     ("license_check.py", "license_check.py"),                                 # 스탠드얼론 라이선스 확인
     ("firebase/agent/secret.py", "firebase/agent/secret.py"),

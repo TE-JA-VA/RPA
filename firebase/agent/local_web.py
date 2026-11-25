@@ -1024,6 +1024,11 @@ class Web:
     def _log(self, text):
         local_server.log(self.folder, text)
 
+    def _audit(self, text):
+        """감사 줄 (계정 추가·변경·삭제와 2단계 풀기, 보안 설정, PC 추가·변경·삭제, 명령) - 사내 서버(리눅스)면 audit.log,
+        아니면 _log 와 같다 (사내 서버 ④ Task 1, ③-1)."""
+        local_server.audit(self.folder, text)
+
     # --- 보낸 쪽 (사내 서버만) ---
     def _via_proxy(self, h):
         """평문 웹 포트(web_plain): 소켓 주소가 믿을 프록시이고 X-Forwarded-Proto 가 모두 https 인가 (설계 6.3 (ㄴ))."""
@@ -1595,7 +1600,7 @@ class Web:
             a, b = fmt(old[key]), fmt(new[key])
             return b if a == b else f"{a}→{b}"
         onoff = lambda v: "켬" if v else "끔"      # noqa: E731
-        self._log(f"웹 보안 설정 변경  2단계 범위={shown('totp_scope', str)}  유저 이력 보이기={shown('show_own_history', onoff)}"
+        self._audit(f"웹 보안 설정 변경  2단계 범위={shown('totp_scope', str)}  유저 이력 보이기={shown('show_own_history', onoff)}"
                   f"  처리={uid}{self._at(h)}")
         return self._security_out(new)
 
@@ -1753,6 +1758,8 @@ class Web:
                 if reg is not None and reg.state(pc) != "active":
                     self._pc(pc, need_active=True)               # 지금 상태로 다시 답한다 (404·409)
                 continue
+            if reg is not None:                      # 사내 서버만 감사 줄 (단독의 기록 파일은 지금 그대로). 인자는 싣지 않는다
+                self._audit(f"명령 보냄  종류={kind}  PC={pc}  키={key}  처리={acct['id']}{self._at(h)}")
             return {"key": key, "value": self.store.get(path)}
         raise _Fail(503, "unavailable", "명령을 보내지 못했습니다. 다시 시도하여 주십시오.")
 
@@ -1804,7 +1811,7 @@ class Web:
             raise _Fail(400, "auth/weak-password", str(e)) from None
         except ValueError as e:
             raise _Fail(400, "invalid-argument", str(e)) from None
-        self._log(f"웹 계정 추가  아이디={uid}  권한={role}  처리={me['id']}")
+        self._audit(f"웹 계정 추가  아이디={uid}  권한={role}  처리={me['id']}")
         return self._accounts_out()
 
     def _account_edit(self, h, query, body, raw_id):
@@ -1843,7 +1850,7 @@ class Web:
         did = [] if password is None else ["비밀번호 다시 정함"]
         did += [] if disabled is None else ["사용 중지" if disabled else "다시 사용"]
         did += ["2단계 해제"] if reset else []
-        self._log(f"웹 계정 변경 ({'·'.join(did)})  아이디={uid}  처리={me['id']}")
+        self._audit(f"웹 계정 변경 ({'·'.join(did)})  아이디={uid}  처리={me['id']}")
         if reset:
             self._history("mfa_reset", uid, h)        # 대상 계정 아이디로 (주소·브라우저는 풀어 준 관리자의 것)
         return self._accounts_out()
@@ -1861,7 +1868,7 @@ class Web:
             raise _Fail(400, "invalid-argument", str(e)) from None
         self.sessions.close_account(uid)
         self._mfa_ok(uid)                            # 같은 아이디로 다시 만든 계정이 옛 막힘을 물려받지 않게
-        self._log(f"웹 계정 삭제  아이디={uid}  처리={me['id']}")
+        self._audit(f"웹 계정 삭제  아이디={uid}  처리={me['id']}")
         return self._accounts_out()
 
     # --- 휴대폰 (관리자, 계획 ④ Task 3) ---
@@ -1987,7 +1994,7 @@ class Web:
         if self.lan_ca_pem:
             info["ca"] = self.lan_ca_pem             # 에이전트가 믿을 우리 인증 기관 (https 주소면 꼭 있어야 한다 - pc_registry)
         text = pc_registry.encode_enrollment(info)
-        self._log(f"PC 추가  번호={got['pc_id']}  이름={reg.label(got['pc_id']) or ''}  처리={me['id']}")
+        self._audit(f"PC 추가  번호={got['pc_id']}  이름={reg.label(got['pc_id']) or ''}  처리={me['id']}")
         return {"pcId": got["pc_id"], "enrollment": text, "expiresAt": got["expires_at"]}
 
     def _pc_edit(self, h, query, body, raw_id):
@@ -2013,7 +2020,7 @@ class Web:
             did = "등록 취소"
         if not ok:
             raise _Fail(404, "not-found", "없는 PC 입니다.")
-        self._log(f"PC {did}  번호={pc}  처리={me['id']}")
+        self._audit(f"PC {did}  번호={pc}  처리={me['id']}")
         return self._pcs_out(reg)
 
     def _pc_remove(self, h, query, body, raw_id):
@@ -2029,7 +2036,7 @@ class Web:
         if enrolled:
             self.store.delete(self._spot("live", pc))
             self.store.delete(self._spot("commands", pc))
-        self._log(f"PC {'삭제' if enrolled else '등록 취소'}  번호={pc}  처리={me['id']}")
+        self._audit(f"PC {'삭제' if enrolled else '등록 취소'}  번호={pc}  처리={me['id']}")
         return self._pcs_out(reg)
 
     # --- 스트림 (SSE) ---
