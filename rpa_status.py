@@ -2545,10 +2545,20 @@ def began_work():
     누르거나 엑셀을 받거나 올리거나 출력하기 바로 앞에서 부른다. 그 전(화면 이동·조회·대상 읽기·체크)에서 멈춘 반복 회차는
     그 회차만 건너뛰고 반복을 잇고, 그 뒤의 실패는 반복을 멈춰 알린다 (rpa_dashboard.round_failed, 사용자 2026-11-24:
     반복은 데이터가 언제 화면에 쌓일지 몰라 도는 것)."""
+    global _work_marks
     with _lock:
+        _work_marks += 1
         if _active() and not _state.get("worked"):
             _state["worked"] = True
             _touch_locked(immediate=True)
+
+
+_work_marks = 0
+
+
+def work_marks():
+    """began_work 가 불린 수 - 모듈 하나가 처리를 시작했는지 본다 (run_routine.run_module: 처리 뒤 ERPia 가 꺼지면 다시 돌지 않는다)."""
+    return _work_marks
 
 
 @_safe
@@ -2558,9 +2568,10 @@ def worked():
         return bool(_state and _state.get("worked"))
 
 
-# 처리 전이어도 반복을 멈춰 알릴 실패 - 저절로 풀리지 않는다 (코드·UI 예외, 설정, ERPia 를 다시 못 띄움. 검토 2026-11-24)
-# ponytail: 모듈 사유 글로 가린다 (locked_round 와 같다). 글을 바꾸면 여기도 - 늘면 상태 파일에 칸을 둘 것
-REPEAT_STOP_TEXTS = ("UI 오류", "설정 오류", "다시 띄우지 못했습니다", "번 꺼져 멈춥니다")
+# 처리 전이어도 반복을 멈춰 알릴 실패 - 저절로 풀리지 않는다 (코드·UI 예외, 설정, ERPia 를 다시 못 띄움 - 검토 2026-11-24,
+# 화면 잠김 - 사람이 풀어야 한다, 사용자 2026-11-25)
+# ponytail: 모듈 사유 글로 가린다. 글을 바꾸면 여기도 - 늘면 상태 파일에 칸을 둘 것
+REPEAT_STOP_TEXTS = ("UI 오류", "설정 오류", "다시 띄우지 못했습니다", "번 꺼져 멈춥니다", "화면이 잠겨")
 
 
 def failed_before_work(state=None):

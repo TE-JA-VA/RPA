@@ -1013,21 +1013,11 @@ def processed(status):
     return any(m.get("state") == "done" and m.get("key") != "login" for m in status.get("modules") or [])
 
 
-LOCKED_TEXT = "화면이 잠겨"   # 웰라이프가 잠긴 화면에서 멈출 때 쓰는 말 (wellife.run_main·Stop)
-
-
-def locked_round(status):
-    """화면이 잠겨 멈춘 회차인가 - 그 회차만 건너뛰고 반복은 잇는다 (사용자 2026-10-08).
-    ponytail: 까닭 글로 가린다. 글을 바꾸면 여기도 - 늘면 상태 파일에 칸을 둘 것"""
-    texts = [status.get("reason") or ""] + [m.get("reason") or "" for m in status.get("modules") or [] if isinstance(m, dict)]
-    return status.get("state") != "success" and any(LOCKED_TEXT in t for t in texts)
-
-
 def round_failed(status):
     """처리를 시작하기 전(화면 이동·조회·대상 읽기·체크)에 모듈이 멈춘 PROCESS 회차인가 - 그 회차만 건너뛰고 반복은 잇는다.
     반복은 데이터가 언제 화면에 쌓일지 몰라 돈다 - 처리 도중·마지막 단계의 실패는 반복을 멈춰 알린다 (사용자 2026-11-24).
     처리 시작은 루틴이 적는다 (rpa_status.began_work → worked, 앞 모듈이 완료면 처리한 것). 로그인 실패·프로그램 오류(crashed·
-    모듈 안 UI 오류)·설정 오류·대시보드에서 멈춘 것·모듈 밖에서 멈춘 것(설정·'1건' 모드)은 아니다 - 지금처럼 멈춘다 (rpa_status.failed_before_work)."""
+    모듈 안 UI 오류)·설정 오류·화면 잠김·대시보드에서 멈춘 것·모듈 밖에서 멈춘 것(설정·'1건' 모드·실행 첫머리 잠김)은 아니다 - 지금처럼 멈춘다 (rpa_status.failed_before_work)."""
     return (status.get("program") == "routine" and status.get("state") == "stopped" and status.get("reason") != STOPPED_TEXT
             and st.failed_before_work(status))
 
@@ -1422,7 +1412,7 @@ class Scheduler(threading.Thread):
 
     def check_repeat_result(self, now):
         """띄운 반복 회차가 끝났으면 센다. 성공 → 회차 +1 (처리했으면 처리 +1), 실패·중단·오류 → 그 시간대 반복 멈춤 + 까닭.
-        화면 잠김·처리를 시작하기 전에 멈춘 회차(round_failed)는 멈추지 않고 쉬는 시간 뒤 다음 회차."""
+        처리를 시작하기 전에 멈춘 회차(round_failed)는 멈추지 않고 쉬는 시간 뒤 다음 회차. 화면 잠김은 멈춘다 (사용자 2026-11-25)."""
         since = st.parse_iso((st.read_settings()["schedule"].get("repeat") or {}).get("pending"))
         if since is None or launch_state() is not None:
             return
@@ -1455,12 +1445,11 @@ class Scheduler(threading.Thread):
                 rep["stopped"] = {"at": stamp, "reason": f"{now:%H:%M} 반복 회차를 시작하지 못했습니다."}
             elif v.get("trigger") != "repeat":
                 pass                             # 다른 실행(사람이 누른 단추 등)이 상태를 덮었다 - 회차 결과를 모르니 세지도 멈추지도 않는다
-            elif v.get("state") == "success" or locked_round(v) or round_failed(v):
-                if locked_round(v):              # 화면이 잠긴 회차는 세지 않고 건너뛴다 - 쉬는 시간 뒤 다음 회차 (사용자 2026-10-08)
-                    rep["skipped"] = int(rep.get("skipped") or 0) + 1
-                else:                            # 처리 전에 멈춘 회차도 회차로 센다 - 실패는 이력에 남는다 (사용자 2026-11-24)
-                    rep["runs"] = int(rep.get("runs") or 0) + 1
-                    rep["done"] = int(rep.get("done") or 0) + (1 if processed(v) else 0)
+            elif v.get("state") == "success" or round_failed(v):
+                # 처리 전에 멈춘 회차도 회차로 센다 - 실패는 이력에 남는다 (사용자 2026-11-24). 화면이 잠긴 회차는 사람이 풀어야 해서
+                # 반복을 멈춘다 (사용자 2026-11-25 - 예전엔 그 회차만 건너뛰었다, 10-08)
+                rep["runs"] = int(rep.get("runs") or 0) + 1
+                rep["done"] = int(rep.get("done") or 0) + (1 if processed(v) else 0)
                 rest = (window_at(sch, rep.get("at"), now) or {}).get("rest_min", REST_MIN_DEFAULT)
                 end = st.parse_iso(v.get("finished_at")) or now
                 rep["next_at"] = (end + datetime.timedelta(minutes=rest)).isoformat(timespec="seconds")

@@ -317,7 +317,7 @@ check("  로그인 실패는 아니다", d.round_failed(dict(before, modules=[{"
 check("  모듈 밖에서 멈춘 것(설정·'1건' 모드)은 아니다", d.round_failed(dict(before, modules=[{"key": "sales", "state": "pending"}])) is False)
 check("  앞 모듈이 처리했으면(완료) 처리 도중이다", d.round_failed(dict(before, modules=[{"key": "excel", "state": "done"}, {"key": "sales", "state": "failed"}])) is False)
 for _why in ("UI 오류: KeyError: None", "[실행] 운송장 - 설정 오류: 값이 없음", "꺼진 ERPia 를 다시 띄우지 못했습니다: 로그인 실패",
-             "ERPia 가 실행 도중 3번 꺼져 멈춥니다"):
+             "ERPia 가 실행 도중 3번 꺼져 멈춥니다", "5-1: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다."):
     check(f"  처리 전이어도 저절로 풀리지 않는 실패는 반복을 멈춘다 ({_why[:12]}…)",
           d.round_failed(dict(before, modules=[{"key": "sales", "state": "failed", "reason": _why}])) is False)
 check("  지금 실행의 판정도 같은 함수 (run_routine.run_modules 가 부른다)", st.failed_before_work(before) is True)

@@ -345,7 +345,7 @@ CLOCK[0] = at("09:03", day=9); sched.tick()
 check(rep().get("runs") == 1 and rep().get("stopped") is None and rep().get("next_at") == iso(at("09:07", 9)),
       f"회차 결과는 프리페어 상태로 센다 - '시작하지 못함' 으로 멈추지 않는다 ({rep()})")
 
-print("\n=== 화면이 잠긴 회차는 그 회차만 건너뛴다 (사용자 2026-10-08) ===")
+print("\n=== 화면이 잠긴 회차는 반복을 멈춘다 - 사람이 풀어야 한다 (사용자 2026-11-25, 예전엔 그 회차만 건너뜀 - 10-08) ===")
 d.apply_schedule({"enabled": True, "days": ALL, "slots": [{"at": "09:00", "until": "10:00", "rest_min": 5, "run": ["Wms"]}]})
 d.set_policy(5, ["Logistics", "Output"], wellife=True)
 ended(); put_status("prepare", "success", at("09:03", 9, 5), at("09:04", 9), [])   # 앞 절의 회차를 끝낸다
@@ -355,15 +355,17 @@ put_status("routine", "stopped", at("09:00", 10, 5), at("09:00", 10, 20), [LOGIN
            reason="윈도우 화면이 잠겨 있어 실행하지 않았습니다 (화면을 풀고 다시 실행)"); ended()
 CLOCK[0] = at("09:01", day=10); sched.tick()
 r = rep()
-check(r.get("stopped") is None and r.get("skipped") == 1 and r.get("runs") == 0 and r.get("next_at") == iso(at("09:05", 10, 20)),
-      f"잠긴 화면으로 멈춘 회차: 반복을 멈추지 않고 건너뜀 1, 쉬는 시간 뒤 다음 ({r})")
-CLOCK[0] = at("09:05", day=10, sec=30); sched.tick()
-check(len(d.LAUNCHED) == n + 2, "쉬는 시간 뒤 다음 회차")
-put_status("routine", "stopped", at("09:05", 10, 35), at("09:07", 10),
+check("화면이 잠겨" in (r.get("stopped") or {}).get("reason", "") and r.get("runs") == 0 and not r.get("skipped"),
+      f"실행 첫머리에 잠긴 회차: 건너뛰지 않고 반복을 멈추고 까닭을 남긴다 ({r})")
+d.resume_repeat()
+CLOCK[0] = at("09:02", day=10); sched.tick()
+check(len(d.LAUNCHED) == n + 2, "[반복 다시 시작] 뒤 회차")
+put_status("routine", "stopped", at("09:02", 10, 5), at("09:03", 10),
            [LOGIN, {"key": "wellife_wms", "label": "웰라이프 WMS 이관관리", "state": "stopped", "reason": "5-1 S/O매출: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤"}],
            reason="5-1 S/O매출: 윈도우 화면이 잠겨 있어 누르지 않고 멈춤"); ended()
-CLOCK[0] = at("09:08", day=10); sched.tick()
-check(rep().get("stopped") is None and rep().get("skipped") == 2, f"도중에 잠겨 멈춘 회차도 건너뜀 ({rep()})")
+CLOCK[0] = at("09:04", day=10); sched.tick()
+check("화면이 잠겨" in (rep().get("stopped") or {}).get("reason", ""), f"처리 전에 모듈 안에서 잠겨 멈춘 회차도 반복을 멈춘다 ({rep().get('stopped')})")
+d.resume_repeat()
 CLOCK[0] = at("09:12", day=10, sec=30); sched.tick()
 check(len(d.LAUNCHED) == n + 3, "다음 회차")
 put_status("routine", "stopped", at("09:12", 10, 35), at("09:14", 10),

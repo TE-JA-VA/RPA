@@ -609,11 +609,12 @@ try:
           out[0] == "stopped" and out[1].startswith("조회가 끝나지 않음 (반복 회차: 처리 전 단계라 이번 회차만 건너뛰고")
           and any("처리를 시작하기 전 단계에서 멈춰 이번 회차만 건너뜁니다" in m for m in logged), str(out))
     logged.clear()
+    StatusRec.failed_before_work = lambda self: False   # 잠김은 처리 전이어도 반복을 멈춘다 (REPEAT_STOP_TEXTS - test_dashboard_modules)
     out, called, rec, ac = run(ALL_ON, {"import": ("stopped", "5-1: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")})
-    check("화면이 잠겨 멈춘 회차는 말을 보태지 않는다 (대시보드 locked_round 가 건너뛴다)",
-          out == ("stopped", "5-1: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.") and not any("반복 회차" in m for m in logged), str(out))
+    check("화면이 잠겨 멈춘 회차는 반복을 멈춘다고 로그에 (사용자 11-25 - 예전엔 그 회차만 건너뜀)",
+          out == ("stopped", "5-1: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
+          and any("[자동 수집] 화면이 잠겨 반복을 멈춥니다" in m for m in logged), str(out))
     logged.clear()
-    StatusRec.failed_before_work = lambda self: False
     StatusRec.worked = lambda self: True
     out, called, rec, ac = run(ALL_ON, {"import": ("failed", "가져오기 끝을 못 봄")})
     check("처리 도중이면 사유는 그대로, 로그에 '처리 도중 실패해 반복을 멈춥니다'",
@@ -634,24 +635,28 @@ finally:
     rr.log = lambda msg="": None
 out, called, rec, ac = run(ALL_ON, {"import": ("failed", "조회가 끝나지 않음")})
 check("반복이 아니면 사유를 바꾸지 않는다", out == ("stopped", "조회가 끝나지 않음"), str(out))
+check("택배사 설정이 비면 실제 사유 글이 '저절로 풀리지 않는 실패' 로 잡혀 반복을 멈춘다 - 쉬는 시간마다 같은 실패를 되풀이하지 않게 (Codex 검토 11-25)",
+      _st.failed_before_work({"modules": [{"key": "output", "state": "failed", "reason": f"{rr.SETUP_ERROR_CBOTAG} 중단합니다."}]}) is False
+      and _st.failed_before_work({"modules": [{"key": "output", "state": "failed", "reason": "출력 전 조회 실패"}]}) is True)
 
 # 데이터를 바꾸는 단추·엑셀 받기/올리기·출력 바로 앞에서 처리 시작을 적는다 (rpa_status.began_work) - 그 전의 실패만 반복 회차를 건너뛴다
 _src_rr = Path(_rr.__file__).read_text(encoding="utf-8")
 _src_wl = Path(_rr.wellife.__file__).read_text(encoding="utf-8")
 _unmarked = []
-for _name, _src, _needles in (
-        ("run_routine", _src_rr, ("imp.click_input()", "right_click_grid_cell_and_select(pid, hwnd, bottom_grid, \"개별 배송(B)\")",
-                                  "right_click_element_and_select(pid, hwnd, anchor, \"배송보류\"):", "ok = right_click_grid_and_select(pid, hwnd, grid, \"배송보류\")",
-                                  "click_toolbar_button(win, hwnd, \"저장(S)\")", "click_toolbar_button(win, hwnd, button)",
-                                  "upload_file_in_dialog(dlg, path, pid=pid)")),
-        ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "saved = export_market(rr, ctx, t[\"market\"], pw)"))):
+for _name, _src, _needles in (       # 바로 앞 줄들에 began_work - 확인(덮개·잠김)을 지난 뒤 누르기 바로 앞 (Codex 검토 11-25)
+        ("run_routine", _src_rr, ("imp.click_input()", "upload_file_in_dialog(dlg, path, pid=pid)",
+                                  "el.click_input(coords=pt, absolute=True, **kw)", "target.click_input(coords=pt, absolute=True)")),
+        ("wellife", _src_wl, ("item.click_input(coords=pt, absolute=True)", "saved = _download(rr, ctx, h, pw)"))):
     _lines = _src.splitlines()
     for _nd in _needles:
         _at = [i for i, l in enumerate(_lines) if _nd in l]
         if not _at or not all(any("began_work()" in _lines[j] for j in range(max(0, i - 3), i)) for i in _at):
             _unmarked.append(f"{_name}: {_nd}")
-# 화살표(완료처리·전송요청 포함)·물류대기 저장은 click(work=True) - 덮개 확인을 지난 뒤 누르기 바로 앞에 적는다 (test_wellife 가 동작을 본다)
-_unmarked += [nd for nd in ("click(rr, ctx, arrow, what, work=True)", "click(rr, ctx, save, \"물류대기 '저장(S)'\", work=True)") if nd not in _src_wl]
+# 데이터를 바꾸는 누르기는 work=True·DATA_MENU_ITEMS 로 - 화살표(완료처리·전송요청 포함)·저장·출력·배송보류·개별 배송·운송장 엑셀 받기
+_unmarked += [nd for nd in ("click(rr, ctx, arrow, what, work=True)", "click(rr, ctx, save, \"물류대기 '저장(S)'\", work=True)",
+                            "export_market(rr, ctx, t[\"market\"], pw, work=bool(live))") if nd not in _src_wl]
+_unmarked += [nd for nd, n in (("click_toolbar_button(win, hwnd, \"저장(S)\", work=True)", 2), ("click_toolbar_button(win, hwnd, button, work=True)", 1),
+                               ("DATA_MENU_ITEMS = (\"배송보류\", \"개별 배송(B)\")", 1)) if _src_rr.count(nd) != n]
 check("데이터를 바꾸는 자리마다 바로 앞에 처리 시작 표시", not _unmarked, str(_unmarked))
 out, called, rec, ac = run(ALL_ON, {"hold": ("no_target", "행 없음")})
 check("no_target 은 계속 간다", called == ALL7 and out[0] == "success")
@@ -834,7 +839,7 @@ _saved_h = {n: getattr(rr, n) for n in ("get_onscreen_tables", "select_all_by_he
 rr.get_onscreen_tables = lambda win: [Grid([object()])]
 rr.select_all_by_header_checkbox = lambda hwnd, grid: True
 rr.visible_child_windows = lambda hwnd: {}
-rr.click_toolbar_button = lambda win, hwnd, text: True
+rr.click_toolbar_button = lambda win, hwnd, text, work=False: True
 rr.probe_spinner = lambda hwnd, base: None
 asked = []
 for res_async, popups, want, why in (("timeout", [], "failed", "저장 끝을 확인 못 하면 failed"),
@@ -905,7 +910,7 @@ _saved_q = {n: getattr(rr, n) for n in ("click_subtab", "grid_overlay_count", "c
 rr.click_subtab = lambda app, hwnd, name: True
 rr.collect_shortage_rows = lambda hwnd, grid: ([], True)
 rr.grid_overlay_count = lambda hwnd, grid: 0
-rr.click_toolbar_button = lambda win, hwnd, text: True
+rr.click_toolbar_button = lambda win, hwnd, text, work=False: True
 check("run_stock_review_step: 재고검토 조회가 끝나지 않으면 None (부족수량을 덜 읽은 채 보류하지 않는다)",
       rr.run_stock_review_step(make_ctx().app, 4242, 777) is None)
 qbtn = types.SimpleNamespace(window_text=lambda: "조회(F)", click_input=lambda **k: None,
@@ -972,7 +977,7 @@ _twin = types.SimpleNamespace(rectangle=lambda: types.SimpleNamespace(left=-1920
 check("M17 툴바 단추: 창이 음수 좌표 모니터에 있어도 창 안 단추를 누른다 (창 밖 단추는 안 누름)",
       rr.click_toolbar_button(_twin, 1, "출력") and _in.clicked and not _out.clicked)
 rr.ec = _ec
-rr.click_toolbar_button = lambda win, hwnd, text: True
+rr.click_toolbar_button = lambda win, hwnd, text, work=False: True
 rr.pick_carrier = lambda pid, carrier, timeout=None: True
 rr.run_print_preview = lambda app, pid, hwnd, printer, timeout=None: True
 for nth, want in ((1, "already_printed"), (2, "already_printed"), (1, "stuck"), (2, "stuck")):
@@ -1054,7 +1059,7 @@ rr.main()
 sm = rec.of("set_modules")
 check("정상이면 set_modules 에 (키, 이름, 단계, 비트) 8개", bool(sm) and [m[3] for m in sm[0][0]] == [1, 2048, 1024, 2, 4, 8, 16, 512], str(sm))
 check("정상이면 run_modules 로 간다 + finish(success)", ran and rec.of("finish")[-1] == ("success", None), str(rec.of("finish")))
-for trigger, record in ((None, True), ("repeat", False)):
+for trigger, record in ((None, True), ("repeat", True)):     # 반복 회차도 실패로 남긴다 (사용자 11-25 - 예전엔 안 남김, 10-08)
     ran.clear()
     rec = StatusRec(); rr.status = rec
     rr.ec.screen_locked = lambda: True
@@ -1186,6 +1191,23 @@ def one_crash(ctx):
 out, called, rec = run_crash(one_crash)
 check("'1건' 모드 모듈은 ERPia 가 꺼져도 다시 돌지 않고 멈춘다 (1건이 2건이 되지 않게, 리뷰 10-14)",
       out[0] == "stopped" and "1건" in out[1] and called == ["login", "sales"], f"{out} {called}")
+WM = [0]
+
+
+def worked_crash(ctx):     # 데이터를 바꾸는 단추를 누른 뒤(rpa_status.began_work) ERPia 가 꺼짐
+    seen.append(ctx.resume)
+    WM[0] += 1
+    ALIVE[0] = False
+    return "done", None
+
+
+StatusRec.work_marks = lambda self: WM[0]
+try:
+    out, called, rec = run_crash(worked_crash)
+finally:
+    del StatusRec.work_marks
+check("처리를 시작한 뒤 ERPia 가 꺼지면 다시 돌지 않고 '결과 미확인' 으로 멈춘다 - 같은 처리가 두 번 되지 않게 (사용자 11-25, Codex 검토)",
+      out[0] == "stopped" and "결과 미확인" in out[1] and called == ["login", "sales"], f"{out} {called}")
 
 out, called, rec = run_crash(raise_dead)
 check("꺼지면서 난 UI 예외도 다시 띄워 잇는다", out == ("success", None) and seen == [None, "sales"], f"{out} {seen}")
@@ -1400,14 +1422,24 @@ check("매출처리 모듈은 하단 선택 단계부터 찍는다", rr.status.o
 _saved_up = rr.wellife.upload_paths
 rr.wellife.upload_paths = lambda r: set()      # 진짜 바탕화면 폴더를 읽지 않게 (R2 의 남은 파일 수)
 for ret, want, why in (((0, 0), "skipped", "올릴 엑셀이 없으면 건너뜀 (토큰 0)"), ((0, 2), "skipped", "올린 게 없고 오류 폴더로만 가면 건너뜀 + 사유에 오류 수"),
-                       ((3, 1), "done", "올린 게 있으면 완료 + 사유에 수"), (RuntimeError("흉내"), "skipped", "오류가 나도 뒤 모듈은 이어간다 (예전 엑셀업로드와 같다)")):
+                       ((3, 1), "done", "올린 게 있으면 완료 + 사유에 수"),
+                       (RuntimeError("흉내"), "failed", "더 올릴 수 없게 막히면 실패로 멈추고 뒤 모듈은 돌리지 않는다 (사용자 11-25, 예전엔 건너뜀으로 이어 감)")):
     EXCEL_RET[0] = ret
     res = rr.module_excel(make_ctx())
     check(f"엑셀 수집 {ret!r}: {why}", res[0] == want and (not isinstance(ret, tuple) or not ret[1] or f"{ret[1]}개" in res[1]), str(res))
+_us = rr.UploadStop("눌러도 닫히지 않는 팝업: 시험 창 글")
+_us.uploaded, _us.errors = 2, 1
+EXCEL_RET[0] = _us
+rr.wellife.upload_paths = lambda r: {"(101)a.xlsx", "(102)b.xlsx"}
+res = rr.module_excel(make_ctx())
+check("엑셀 업로드가 막히면 실패 - 사유에 막은 창의 글·올린 수·오류 폴더 수·남은 파일 수·뒤 단계 안 함 (사용자 11-25: 사유를 자세히)",
+      res[0] == "failed" and all(w in res[1] for w in ("시험 창 글", "2건 업로드", "오류 폴더로 1건", "남은 파일 2건", "뒤 단계는 진행하지 않았습니다")),
+      str(res))
+rr.wellife.upload_paths = lambda r: set()
 # R2 (2026-11-03): 하나도 못 올렸는데 파일이 있었으면 '올릴 엑셀 없음' 과 가르고 반복 회차라도 기록에 남긴다 (토큰은 그대로 0)
 for ret, left, keep, word in (((0, 0), set(), False, "올릴 엑셀 없음"), ((0, 2), set(), True, "하나도 올리지 못했습니다"),
                               ((0, 0), {"a.xlsx"}, True, "남은 파일 1개"), ((3, 0), {"a.xlsx"}, False, "3개 업로드"),
-                              (RuntimeError("흉내"), set(), True, "오류로 건너뜀")):
+                              (RuntimeError("흉내"), set(), False, "엑셀 업로드를 멈추었습니다")):     # 실패는 원래 이력에 남는다
     EXCEL_RET[0] = ret
     rr.wellife.upload_paths = lambda r, s=left: set(s)
     rr.status = StatusRec()
@@ -1511,7 +1543,7 @@ rr.get_onscreen_tables = lambda win: [Tbl(10), Tbl(300)]
 _saved_t = {n: getattr(rr, n) for n in ("excel_upload_together", "sales_flow", "find_popup_windows", "upload_popups",
                                          "excel_upload_dir", "time")}
 _saved_w = rr.wellife.on_top, rr.wellife.wait_prepare
-rr.excel_upload_together = lambda ctx, grid: sales_acts.append(("together",)) or (1, 0)
+rr.excel_upload_together = lambda ctx, grid: sales_acts.append(("together",)) or (1, 0, None)
 tops, prep = [], [["prepare"], ["prepare"], []]
 rr.wellife.on_top = lambda rr_, hwnd, on: tops.append(on)
 rr.status = StatusRec()
@@ -1918,6 +1950,55 @@ try:
 except rr.wellife.Stop as e:
     res = (e.result, str(e))
 check("press: 누를 자리를 다른 창이 덮으면 누르지 않고 Stop", res and res[0] == "failed" and "시험 덮개" in res[1] and not pressed_p, f"{res} {pressed_p}")
+# 처리 시작 표시(rpa_status.began_work)는 확인을 지난 뒤 누르기 바로 앞에만 - 덮여서 안 누른 반복 회차가 '처리 도중' 으로 반복을 멈추지 않게 (Codex 검토 11-25)
+rr.status = StatusRec()
+try:
+    rr.press(777, el_p, "저장 단추", work=True)
+except rr.wellife.Stop:
+    pass
+check("press(work=True): 덮여서 누르지 않으면 처리 시작을 적지 않는다", rr.status.of("began_work") == [] and not pressed_p, str(rr.status.calls))
+rr.wellife.clear_point = lambda rr_, ctx, el, what, pt=None, allow=(): (55, 66)
+rr.press(777, el_p, "저장 단추", work=True)
+rr.press(777, el_p, "체크 칸")
+check("press(work=True): 누르기 바로 앞에 적고, 보통 누르기(체크 칸 등)는 적지 않는다",
+      rr.status.of("began_work") == [()] and len(pressed_p) == 2, f"{rr.status.calls} {pressed_p}")
+pressed_p.clear()
+# 우클릭 메뉴 항목도 웰라이프 press_menu_item 처럼 잠김·덮개를 보고 누른다 (Codex 검토 11-25 - 예전엔 찾자마자 눌렀다)
+_saved_cm = (rr.ec.screen_locked, rr.wellife._top_window, rr.wellife.COVER_WAIT_SECONDS, rr.wellife._window_who, rr.win32gui, rr.send_keys)
+cm_keys, cm_clicks, CM = [], [], {"top": 9, "locked": False}
+rr.ec.screen_locked = lambda: CM["locked"]
+rr.wellife._top_window = lambda rr_, pt: CM["top"]
+rr.wellife.COVER_WAIT_SECONDS = 0.2
+rr.wellife._window_who = lambda rr_, h: f"창{h}"
+rr.win32gui = types.SimpleNamespace(GetForegroundWindow=lambda: 5)
+rr.send_keys = cm_keys.append
+cm_item = types.SimpleNamespace(rectangle=lambda: types.SimpleNamespace(left=100, top=200, right=140, bottom=220),
+                                click_input=lambda **k: cm_clicks.append(k))
+rr.status = StatusRec()
+rr.press_context_menu_item(4242, cm_item, 9, "배송보류")
+rr.press_context_menu_item(4242, cm_item, 9, "선택영역 체크")
+check("우클릭 메뉴 항목: 맨 위 창이 그 메뉴면 확인한 점을 누르고, 데이터를 바꾸는 항목('배송보류')만 처리 시작을 적는다",
+      cm_clicks == [{"coords": (120, 210), "absolute": True}] * 2 and rr.status.of("began_work") == [()], f"{cm_clicks} {rr.status.calls}")
+cm_clicks.clear()
+rr.status = StatusRec()
+CM["top"] = 77
+try:
+    rr.press_context_menu_item(4242, cm_item, 9, "배송보류")
+    res = None
+except rr.wellife.Stop as e:
+    res = (e.result, str(e))
+check("우클릭 메뉴 항목: 다른 창이 덮으면 누르지 않고 멈추고, 맨 앞이 ERPia 면 ESC 로 메뉴를 닫는다 (처리 시작도 안 적는다)",
+      res and res[0] == "failed" and "창77" in res[1] and not cm_clicks and cm_keys == ["{ESC}"] and not rr.status.of("began_work"),
+      f"{res} {cm_clicks} {cm_keys}")
+cm_keys.clear()
+CM.update(top=9, locked=True)
+try:
+    rr.press_context_menu_item(4242, cm_item, 9, "개별 배송(B)")
+    res = None
+except rr.wellife.Stop as e:
+    res = (e.result, str(e))
+check("우클릭 메뉴 항목: 화면이 잠겼으면 누르지 않고 멈춘다", res and res[0] == "stopped" and "화면이 잠겨" in res[1] and not cm_clicks, f"{res}")
+(rr.ec.screen_locked, rr.wellife._top_window, rr.wellife.COVER_WAIT_SECONDS, rr.wellife._window_who, rr.win32gui, rr.send_keys) = _saved_cm
 seen_p.clear()
 rr.wellife.clear_point = lambda rr_, ctx, el, what, pt=None, allow=(): seen_p.append(("clear", what, set(allow))) or (55, 66)
 _saved_fpw = rr.find_popup_windows
@@ -2120,7 +2201,7 @@ def run_sr(**kw):
     rr.click_subtab = lambda app, hwnd, name: SR["tab"]
     rr.get_onscreen_tables = lambda win: [_g(10), _g(300)][:SR["tables"]]
     rr.grid_overlay_count = lambda hwnd, grid: 0
-    rr.click_toolbar_button = lambda win, hwnd, text: SR["query"]
+    rr.click_toolbar_button = lambda win, hwnd, text, work=False: SR["query"]
     rr.wait_grid_spinner_gone = lambda *a, **k: True
     rr.collect_shortage_rows = lambda hwnd, grid: (SR["targets"], SR["bottom"])
     rr._column_scan_geometry = lambda grid, col: (1, 2)
@@ -2345,6 +2426,9 @@ check("누른 뒤 반영이 늦어도(바뀌는 중) 다시 누르지 않고 끝
       res == (5, 0) and clicks == 1, f"{res} {clicks}")
 res, clicks = hc_run([(0, 5)], [(0, 5)], [(5, 0)])
 check("눌러도 상태가 전혀 안 바뀌고 멈춰 있으면(클릭이 안 먹음) 다시 누른다", res == (5, 0) and clicks == 2, f"{res} {clicks}")
+res, clicks = hc_run([(0, 5)], [(0, 5)] * 40 + [(5, 0)])
+check("누른 뒤 한동안 그대로였다가 한꺼번에 반영되면 다시 누르지 않는다 - 첫 변화 전에는 '그대로' 로 끝내지 않는다 (Codex 검토 11-25, 실측 17줄 2.5초)",
+      res == (5, 0) and clicks == 1, f"{res} {clicks}")
 res, clicks = hc_run([(2, 3)], [(0, 5)], [(5, 0)])
 check("일부만 체크돼 있다가 눌러 모두 풀렸으면 한 번 더 눌러 모두 체크한다", res == (5, 0) and clicks == 2, f"{res} {clicks}")
 res, clicks = hc_run([(0, 5)], [(0, 5)], [(0, 5)])
