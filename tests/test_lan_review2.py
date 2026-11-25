@@ -145,6 +145,8 @@ BASE = {"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8", 
 def start(extra=None, plain=False):
     """사내 서버 두 포트 (웹 서버의 peer_ip 는 env.peer["ip"] 를 돌려준다 - 여러 주소 흉내)."""
     folder = tempfile.mkdtemp(dir=TMP)
+    with open(os.path.join(folder, "security.json"), "w", encoding="utf-8") as f:     # 2단계 범위 끔 (2단계는 test_lan_mfa, 계획 ③)
+        f.write('{"version":1,"totp_scope":"off","show_own_history":true}')
     store = local_server.Store(os.path.join(folder, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(":memory:")
     RUNS.append(runs)

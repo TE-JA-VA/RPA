@@ -150,6 +150,8 @@ try:
     os.makedirs(WEB_DIR)
     with open(os.path.join(WEB_DIR, "index.html"), "w", encoding="utf-8") as f:
         f.write("<!doctype html><title>로그인</title>")
+    with open(os.path.join(DATA, "security.json"), "w", encoding="utf-8") as f:     # 2단계 범위 끔 (2단계는 test_lan_mfa, 계획 ③)
+        f.write('{"version":1,"totp_scope":"off","show_own_history":true}')
     store = local_server.Store(os.path.join(DATA, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(os.path.join(DATA, "runs.db"))
     RUNS.append(runs)

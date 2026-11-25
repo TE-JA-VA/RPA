@@ -453,6 +453,8 @@ try:
     os.makedirs(WD)
     with open(os.path.join(WD, "pcs.json"), "w", encoding="utf-8") as f:
         json.dump({"v": 1, "next": 9996, "pcs": {}}, f)
+    with open(os.path.join(WD, "security.json"), "w", encoding="utf-8") as f:     # 2단계 범위 끔 (2단계는 test_lan_mfa, 계획 ③)
+        f.write('{"version":1,"totp_scope":"off","show_own_history":true}')
     storeW = local_server.Store(os.path.join(WD, "store.json"), volatile=local_server.VOLATILE)
     runsW = local_server.Runs(os.path.join(WD, "runs.db"))
     regW = pc_registry.Registry(os.path.join(WD, "pcs.json"), seats=20)

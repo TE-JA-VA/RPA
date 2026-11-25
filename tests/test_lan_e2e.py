@@ -135,6 +135,8 @@ openers, streams = [], []
 try:
     DATA = os.path.join(TMP, "lan")
     os.makedirs(DATA)
+    with open(os.path.join(DATA, "security.json"), "w", encoding="utf-8") as f:     # 2단계 범위 끔 (2단계는 test_lan_mfa, 계획 ③)
+        f.write('{"version":1,"totp_scope":"off","show_own_history":true}')
     store = local_server.Store(os.path.join(DATA, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(os.path.join(DATA, "runs.db"))
     reg = pc_registry.Registry(os.path.join(DATA, "pcs.json"), seats=5)

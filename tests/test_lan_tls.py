@@ -170,6 +170,8 @@ def start(cfg_data=None, web_dir=WEB_DIR, cert=None, key=None, ca_pem=None):
     """두 포트를 띄운다. cert·key·ca_pem 을 주면 그 인증서로 (다른 인증 기관 시험), 아니면 우리 것."""
     cert, key, ca_pem = cert or CERT, key or KEY, ca_pem or CA_PEM
     folder = tempfile.mkdtemp(dir=TMP)
+    with open(os.path.join(folder, "security.json"), "w", encoding="utf-8") as f:     # 2단계 범위 끔 (2단계는 test_lan_mfa, 계획 ③)
+        f.write('{"version":1,"totp_scope":"off","show_own_history":true}')
     store = local_server.Store(os.path.join(folder, "store.json"), volatile=local_server.VOLATILE)
     runs = local_server.Runs(":memory:")
     RUNS.append(runs)
