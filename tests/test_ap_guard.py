@@ -375,9 +375,11 @@ try:
                    "seat_pub": seat_public.hex(), "seats": 5, "modules": {}, "features": {}, "limits": {}}
 
     def put_link(guid="pc-1"):
+        ca_text = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
         out = {"server_url": "https://192.168.1.230:8444", "pc_id": "pc_01", "agent_key": "a" * 64, "relay_key": "b" * 64,
-               "ca_pem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}
-        doc = license_check.link_doc(out, seat.issue(seat_secret, "c1", "pc_01", guid, 1764100000000),
+               "ca_pem": ca_text}
+        doc = license_check.link_doc(out, seat.issue(seat_secret, "c1", "pc_01", guid, 1764100000000,
+                                                     ca=license_check.ca_fingerprint(ca_text)),
                                      license_check.sign_body(lic_secret, SERVER_BODY))
         with open(LINK, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False)

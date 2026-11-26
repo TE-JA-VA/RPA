@@ -310,6 +310,9 @@ def enroll(text, guid, host, opener=None, rand_hex=None, nonce=None):
     if parts.scheme == "https":                                             # ② 사내 주소 - 등록 글의 인증 기관만 믿는다
         if not info.get("ca"):
             raise ValueError("등록 글에 사내 서버의 인증 기관 정보가 없습니다.")
+        import license_check                 # 사내 서버 ⑤ (Codex 계획 검토 3): 이름은 풀이 결과가 바뀔 수 있다 - 사설 IP 글자만
+        if not license_check.lan_host(url):
+            raise ValueError("등록 글의 서버 주소가 사내 IP 주소가 아닙니다. 업체 웹에서 받은 등록 글을 그대로 넣어 주십시오.")
         ctx = _lan_tls(url, info["ca"])
     elif parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS:      # http 는 이 PC 만
         raise ValueError("등록 글의 서버 주소가 이 PC(127.0.0.1)가 아닙니다.")
@@ -352,8 +355,9 @@ def enroll(text, guid, host, opener=None, rand_hex=None, nonce=None):
         if not isinstance(reply, dict) or not isinstance(reply.get("seat"), dict) or not isinstance(reply.get("server_license"), dict):
             raise fb.AuthError(0, NOT_VERIFIED)
         out["seat"], out["server_license"] = reply["seat"], reply["server_license"]
-        if isinstance(info.get("web"), str) and info["web"]:
-            out["web"] = info["web"]             # 업체 웹 주소 (서버가 프록시 뒤면 싣지 않는다 - ⑤ Task 4)
+        web = license_check.same_host_web(info.get("web"), url)
+        if web:
+            out["web"] = web                     # 업체 웹 주소 - https·같은 서버 IP 일 때만 (Codex 4 - 바꿔치기 주소를 바로 가기에 쓰지 않는다)
     return out
 
 

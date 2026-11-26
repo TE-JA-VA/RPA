@@ -141,9 +141,12 @@ def _ensure_key_fd(folder, path, owner):
         os.close(dfd)
 
 
-def issue(secret, cid, pc_id, guid, issued_ms):
-    """자리 증명서 {"body": {"kind": "seat", cid, pc_id, guid, issued}, "sig": hex} (license_check.canonical(body) 에 Ed25519)."""
+def issue(secret, cid, pc_id, guid, issued_ms, ca=None):
+    """자리 증명서 {"body": {"kind": "seat", cid, pc_id, guid, issued[, ca]}, "sig": hex} (license_check.canonical(body) 에 Ed25519).
+    ca = 서버 인증 기관 지문 (license_check.ca_fingerprint) - PC 가 등록 글의 인증 기관과 견준다 (사내 서버 ⑤, Codex 계획 검토 1)."""
     body = {"kind": KIND, "cid": cid, "pc_id": pc_id, "guid": guid, "issued": int(issued_ms)}
+    if ca:
+        body["ca"] = ca
     return {"body": body, "sig": update_sign.sign(secret, license_check.canonical(body)).hex()}
 
 

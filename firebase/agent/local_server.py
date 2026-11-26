@@ -1036,8 +1036,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         log(srv.folder, f"PC 등록  번호={pc}  컴퓨터={body['host']}")
         reply = {"pc": pc}
         if srv.seat_secret is not None:              # 사내 서버 입구가 자리 열쇠를 단 서버 - 자리 증명서 (PC 쪽 확인은 ⑤)
+            import license_check
             import seat                              # 지연 import - 단독은 여기 오지 않는다
-            reply["seat"] = seat.issue(srv.seat_secret, (srv.lic or {}).get("cid"), pc, body["guid"], int(time.time() * 1000))
+            ca_pem = getattr(getattr(srv, "web", None), "lan_ca_pem", None)
+            ca = license_check.ca_fingerprint(ca_pem) if ca_pem else None    # PC 가 등록 글의 인증 기관과 견준다 (⑤ Codex 1)
+            reply["seat"] = seat.issue(srv.seat_secret, (srv.lic or {}).get("cid"), pc, body["guid"], int(time.time() * 1000), ca=ca)
         if srv.license_doc is not None:              # PC 가 seat_pub 을 믿을 근거 - 공급사 서명이 붙은 라이선스 원문
             reply["server_license"] = srv.license_doc
         self._auth = (agent_key, body["nonce"])

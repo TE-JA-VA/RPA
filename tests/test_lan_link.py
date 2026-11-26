@@ -51,8 +51,13 @@ def server_license(**kw):
     return license_check.sign_body(lic_secret, dict(SERVER_BODY, **kw))
 
 
-def seat_cert(guid="g-1", cid="c1", pc_id="pc_01", secret=None):
-    return seat.issue(secret or seat_secret, cid, pc_id, guid, 1764100000000)
+_DEFAULT = object()
+
+
+def seat_cert(guid="g-1", cid="c1", pc_id="pc_01", secret=None, ca=_DEFAULT):
+    """자리 증명서 - ca 를 안 주면 연결 파일의 인증 기관(CA) 지문 (Codex 1), None 이면 ca 칸 없이."""
+    ca = license_check.ca_fingerprint(CA) if ca is _DEFAULT else ca
+    return seat.issue(secret or seat_secret, cid, pc_id, guid, 1764100000000, ca=ca)
 
 
 def out_of(pc_id="pc_01", url="https://192.168.1.230:8444", ca=CA, agent_key=AGENT_KEY, relay_key=RELAY_KEY):
@@ -129,6 +134,26 @@ try:
     check("dict 가 아닌 파일 거절", raises(license_check.load_link, "읽지 못했습니다"))
     make_link(ca_sha1="ab" * 20)
     check("모르는 칸(ca_sha1)은 막지 않는다", license_check.load_link()["pc_id"] == "pc_01")
+
+    print("Task 4b - Codex 계획 검토 1·3·4")
+    make_link(seat_doc=seat_cert(ca=None))
+    check("자리 증명서에 인증 기관 지문이 없으면 거절", raises(license_check.load_link, "인증 기관"))
+    make_link(seat_doc=seat_cert(ca="0" * 64))
+    check("자리 증명서의 인증 기관 지문 ≠ 연결 파일의 인증 기관 → 거절 (가짜 서버 중계)", raises(license_check.load_link, "인증 기관"))
+    make_link(out=out_of(url="https://nt.example:8444"))
+    check("서버 주소가 이름이면 거절 (사설 IP 글자만)", raises(license_check.load_link, "주소"))
+    make_link(out=out_of(url="https://8.8.8.8:8444"))
+    check("공인 IP 거절", raises(license_check.load_link, "주소"))
+    make_link(web="https://evil.example/login")
+    check("web 이 다른 호스트면 버린다 (None)", license_check.load_link()["web"] is None)
+    make_link(web="http://192.168.1.230:8443")
+    check("web 이 http 면 버린다", license_check.load_link()["web"] is None)
+    make_link(web="https://192.168.1.230:8443")
+    check("같은 IP 의 https web 은 쓴다", license_check.load_link()["web"] == "https://192.168.1.230:8443")
+    check("ca_fingerprint 는 DER 의 SHA-256 소문자 hex 64자", len(license_check.ca_fingerprint(CA)) == 64)
+    import lan_config  # noqa: E402
+    check("LAN_PRIVATE_NETS 는 lan_config.PRIVATE_NETS 와 같다",
+          tuple(str(n) for n in lan_config.PRIVATE_NETS) == license_check.LAN_PRIVATE_NETS)
     check("오류 글에 열쇠 값이 없다", errors and all(AGENT_KEY not in str(e) and RELAY_KEY not in str(e) for e in errors),
           len(errors))
 
@@ -164,7 +189,7 @@ try:
     RAND = "c" * 64
     NONCE = "d" * 32
     AK, _RK = pc_registry.derive_keys(TOKEN, RAND)
-    SEAT, LIC = seat_cert(), server_license()
+    SEAT, LIC = seat_cert(ca=license_check.ca_fingerprint(REAL_CA)), server_license()
 
     def enroll_text(**extra):
         return pc_registry.encode_enrollment(dict({"v": 1, "url": "https://192.168.1.230:8444", "pc": "pc_01", "token": TOKEN,
@@ -206,6 +231,16 @@ try:
     check("등록 글의 web 칸은 결과에 그대로", got.get("web") == "https://192.168.1.230:8443", got.get("web"))
     got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC})
     check("web 칸이 없으면 결과에도 없다", "web" not in got)
+    got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC}, web="https://evil.example/login")
+    check("등록 글의 web 이 다른 호스트면 버린다 (Codex 4)", "web" not in got, got.get("web"))
+    called = []
+    try:
+        local_store.enroll(enroll_text(url="https://nt.example:8444"), "g-1", "PC-1",
+                           opener=lambda req, timeout=30: called.append(1), rand_hex=RAND, nonce=NONCE)
+        named = False
+    except ValueError:
+        named = True
+    check("등록 글 주소가 이름이면 연결하기 전에 ValueError (Codex 3)", named and not called)
     doc = license_check.link_doc(got, got["seat"], got["server_license"], web=got.get("web"))
     write(doc)
     check("enroll 결과로 만든 연결 파일이 load_link 를 통과", license_check.load_link(guid="g-1")["pc_id"] == "pc_01")

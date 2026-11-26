@@ -383,6 +383,9 @@ def test_enroll_over_tls_with_ca():
     check("local_store.enroll 이 https 로 등록", got.get("pc_id") == info2["pc"], got)
     check("등록 답에 인증 기관 글 (ca_pem)", got.get("ca_pem") == CA_PEM and got.get("server_url") == f"https://127.0.0.1:{e.ap}", got)
     check("등록 답의 열쇠가 서버 등록부와 같다", (got.get("agent_key"), got.get("relay_key")) == e.reg.keys(got["pc_id"]))
+    import license_check
+    check("자리 증명서에 서버 인증 기관 지문 ca (사내 서버 ⑤ Codex 1 - 등록 글의 인증 기관을 바꿔 중계하면 PC 가 거절)",
+          ((got.get("seat") or {}).get("body") or {}).get("ca") == license_check.ca_fingerprint(CA_PEM), got.get("seat"))
     cl = local_store.Client({"server_url": got["server_url"], "key": got["agent_key"], "lan": True, "pc_id": got["pc_id"],
                              "ca_pem": got.get("ca_pem")})
     cl.patch(f"apps/rpa/live/c1/{got['pc_id']}", {"state": "idle"})

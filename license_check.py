@@ -156,6 +156,49 @@ _HEX128 = re.compile(r"[0-9a-f]{128}")
 _CERT_HEAD = "-----BEGIN CERTIFICATE-----"
 SEAT_KIND = "seat"
 AGAIN = " '오토파일럿 설정'에서 사내 서버에 다시 등록하여 주십시오."
+# 사설 대역 - firebase/agent/lan_config.PRIVATE_NETS 와 같다 (시험이 같은지 본다). PC 는 사내 서버 주소로 사설 IP 글자만 받는다 (Codex 계획 검토 3 -
+# 이름은 풀이 결과가 바뀔 수 있다. 서버가 싣는 주소는 늘 IP 다 - lan_server.make_lan_servers 의 public_url)
+LAN_PRIVATE_NETS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "fc00::/7", "::1/128")
+
+
+def lan_host(url):
+    """사내 서버 주소 글 → 그 호스트 (https 이고 사설 IP 글자일 때), 아니면 None."""
+    import ipaddress
+    import urllib.parse
+    try:
+        parts = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+        host = parts.hostname if parts and parts.scheme == "https" else None
+        parts and parts.port
+        addr = ipaddress.ip_address(host) if host else None
+    except ValueError:
+        return None
+    if addr is None:
+        return None
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    nets = (ipaddress.ip_network(n) for n in LAN_PRIVATE_NETS)
+    return host if any(addr.version == n.version and addr in n for n in nets) else None
+
+
+def same_host_web(web, server_url):
+    """업체 웹 주소 web 을 쓸 수 있으면 그 글, 아니면 None - https 이고 호스트가 server_url 과 같은 사설 IP 일 때만 (Codex 계획 검토 4)."""
+    host = lan_host(server_url)
+    return web if host and isinstance(web, str) and lan_host(web) == host else None
+
+
+def ca_fingerprint(pem):
+    """인증 기관 PEM 글의 첫 인증서 DER 의 SHA-256 소문자 hex. 꼴이 틀리면 ValueError.
+    서버는 자리 증명서에 이 값(ca)을 싣고, PC 는 연결 파일의 ca_pem 과 견준다 (Codex 계획 검토 1 - 등록 글의 인증 기관을 바꿔 중계하면 다르다)."""
+    import ssl
+    if not isinstance(pem, str) or _CERT_HEAD not in pem:
+        raise ValueError("인증서 글이 아닙니다.")
+    start = pem.index(_CERT_HEAD)
+    end = pem.find("-----END CERTIFICATE-----", start)
+    if end < 0:
+        raise ValueError("인증서 글이 아닙니다.")
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem[start:end + len("-----END CERTIFICATE-----")])).hexdigest()
+
+
 BOTH_TEXT = ("이 PC 에 단독 라이선스(license.json)와 사내 서버 등록이 함께 있습니다. 둘 중 하나만 있어야 켜집니다. "
              "공급사에 문의하여 주십시오.")
 
@@ -202,7 +245,6 @@ def load_link(path=None, guid=None, public_key=None):
     """연결 파일을 읽어 맞으면 {"license", "seat", "server_url", "pc_id", "ca_pem", "agent_key", "relay_key", "web"} 를 돌려준다.
     아니면 LicenseError (사람 말, 열쇠 값은 싣지 않는다). 정해진 칸만 보고 모르는 칸(ca_sha1 등)은 막지 않는다.
     서버 번호는 PC 가 모르므로 보지 않는다 - 서버 라이선스의 서명·종류와 그 seat_pub 으로 확인되는 자리 증명서가 근거다."""
-    import urllib.parse
     path = path or link_path()
     guid = (guid or machine_guid()).strip().lower()
     key = LICENSE_PUBLIC_KEY_HEX if public_key is None else public_key
@@ -228,17 +270,21 @@ def load_link(path=None, guid=None, public_key=None):
     if seat.get("cid") != lic.get("cid"):
         raise _bad("자리 증명서의 업체가 서버 라이선스와 맞지 않습니다.")
     url = doc.get("server_url")
-    parts = urllib.parse.urlsplit(url) if isinstance(url, str) else None
-    if parts is None or parts.scheme != "https" or not parts.hostname:
-        raise _bad("사내 서버 연결 파일의 서버 주소가 올바르지 않습니다.")
+    if not lan_host(url):
+        raise _bad("사내 서버 연결 파일의 서버 주소가 올바르지 않습니다. (https 와 사내 IP 주소만)")
     ca = doc.get("ca_pem")
     if not isinstance(ca, str) or _CERT_HEAD not in ca:
         raise _bad("사내 서버 연결 파일에 서버 인증 기관이 없습니다.")
+    try:
+        fp = ca_fingerprint(ca)
+    except ValueError:
+        raise _bad("사내 서버 연결 파일의 서버 인증 기관을 읽지 못했습니다.") from None
+    if not isinstance(seat.get("ca"), str) or seat["ca"].lower() != fp:
+        raise _bad("서버 인증 기관이 자리 증명서와 맞지 않습니다. 등록 글이 바뀌었을 수 있습니다.")
     if not all(isinstance(doc.get(k), str) and HEX64.fullmatch(doc[k]) for k in ("agent_key", "relay_key")):
         raise _bad("사내 서버 연결 파일의 열쇠가 올바르지 않습니다.")
-    web = doc.get("web")
     return {"license": lic, "seat": seat, "server_url": url, "pc_id": pc_id, "ca_pem": ca,
-            "agent_key": doc["agent_key"], "relay_key": doc["relay_key"], "web": web if isinstance(web, str) else None}
+            "agent_key": doc["agent_key"], "relay_key": doc["relay_key"], "web": same_host_web(doc.get("web"), url)}
 
 
 def mode():
