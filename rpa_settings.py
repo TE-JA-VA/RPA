@@ -1862,7 +1862,7 @@ def main(argv=None):
         return _main(args)
     except Exception as e:
         path = crash_log(e)
-        if not ({"--no-window", "--stop", "--remove-task", "--check-rpa"} & set(args)):
+        if not ({"--no-window", "--stop", "--remove-task", "--check-rpa", "--uninstall-cleanup"} & set(args)):
             show_error_box(f"설정 창에 예기치 않은 문제가 발생하였습니다. ({type(e).__name__}: {e})\n"
                            f"자세한 내용: {path or '(기록하지 못함)'}")
         return 1
@@ -1871,6 +1871,10 @@ def main(argv=None):
 def _main(args):
     if "--check-rpa" in args:
         return check_rpa()
+    if "--uninstall-cleanup" in args:      # 제거 (installer.iss [UninstallRun], 사내 서버 ⑤): 우리가 넣은 사내 서버 인증 기관만 지운다
+        if _standalone():
+            forget_ca(default_paths())
+        return 0
     if "--stop" in args:
         return stop_agent()
     if "--remove-task" in args:

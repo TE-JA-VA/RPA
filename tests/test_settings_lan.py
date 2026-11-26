@@ -232,6 +232,18 @@ try:
     check("단독 라이선스가 있는 PC 는 등록 거절, enroll 을 부르지 않음", e and "단독 라이선스" in e and not fake.calls, e)
     check("link_state: 라이선스만이면 alone", rs.link_state(q)["mode"] == "alone")
 
+    rec_file = os.path.join(PD, "standalone", rs.CA_RECORD_NAME)
+    with open(rec_file, "w", encoding="utf-8") as f:
+        json.dump({"sha1": "c" * 40}, f)
+    seen = []
+    real_run = rs.run_quiet
+    rs.run_quiet = lambda args, timeout=60: seen.append(list(args)) or (0, "")
+    try:
+        code = rs.main(["--uninstall-cleanup"])
+    finally:
+        rs.run_quiet = real_run
+    check("--uninstall-cleanup (제거 - Task 7): 기록된 지문만 -delstore, 창 없이 0", code == 0 and len(seen) == 1
+          and seen[0][1:4] == ["-delstore", "Root", "c" * 40] and not os.path.exists(rec_file), seen)
     check("연결 파일은 잠그는 열쇠 파일 목록에 (관리자·SYSTEM 만), 등록 뒤 그 폴더를 잠근다",
           license_check.LINK_NAME in local_server.LOCKED_FILES and os.path.dirname(p["link"]) in LOCKED, LOCKED)
     check("한 일·오류 글에 열쇠·등록 글이 없다", texts and all(AK not in t and RK not in t and TEXT not in t for t in texts), texts)

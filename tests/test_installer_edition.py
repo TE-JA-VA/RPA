@@ -136,6 +136,12 @@ for rel, src in br.other_files("standalone"):
 fw_line = 'Filename: "{sys}\\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""AUTOPILOT Phone OTP"""'
 check("스탠드얼론 제거 때 휴대폰 방화벽 규칙을 지운다 ([UninstallRun] netsh, 일반 버전엔 없음)",
       "[UninstallRun]" in sa and fw_line in sa and fw_line not in cloud and "[UninstallRun]" not in cloud)
+# 사내 서버 ⑤ Task 7: 제거 때 설정 창이 우리가 신뢰 저장소에 넣은 사내 서버 인증 기관만 지운다 (rpa_settings --uninstall-cleanup)
+ca_line = re.search(r'^Filename: "\{app\}\\python\\python\.exe"; Parameters: "-E -s ""\{app\}\\rpa_settings\.py"" --uninstall-cleanup";.*$',
+                    sa, re.M)
+check("스탠드얼론 제거 때 --uninstall-cleanup (창 없이·기다림·한 번만), 일반 버전엔 없음",
+      ca_line is not None and "runhidden" in ca_line.group(0) and "waituntilterminated" in ca_line.group(0)
+      and "RunOnceId:" in ca_line.group(0) and "--uninstall-cleanup" not in cloud, ca_line.group(0) if ca_line else None)
 inst_del = sa[sa.find("[InstallDelete]"):sa.find("[Files]")]
 check("덮어 설치가 standalone 폴더를 지우지 않는다 (InstallDelete·UninstallDelete 에 없음, 폴더는 uninsneveruninstall)",
       "standalone" not in inst_del and "standalone" not in sa[sa.find("[UninstallDelete]"):sa.find("[Code]")] and dir_line in sa_x)

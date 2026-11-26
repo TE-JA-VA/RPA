@@ -143,6 +143,8 @@ Filename: "{app}\python\python.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"
 ; 휴대폰 포트의 방화벽 규칙 (로컬 서버가 [휴대폰 추가] 때 만든다 - local_phone.RULE_NAME, 계획 ④). 규칙이 없으면 netsh 가 1 로 끝난다 (그대로 둔다).
 ; 덮어 설치는 규칙·standalone 폴더(인증서·짝지은 휴대폰)를 그대로 둔다 - 지우면 모든 휴대폰을 다시 짝지어야 한다
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""AUTOPILOT Phone OTP"""; Flags: runhidden waituntilterminated; RunOnceId: "PhoneFirewallRule"
+; 사내 서버 등록 때 설정 창이 신뢰 저장소(Root)에 새로 넣은 사내 서버 인증 기관만 지운다 (standalone\lan_ca.json 의 지문 - 업체 IT 가 미리 넣은 것은 그대로, 사내 서버 ⑤)
+Filename: "{app}\python\python.exe"; Parameters: "-E -s ""{app}\rpa_settings.py"" --uninstall-cleanup"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "ForgetLanCA"
 #endif
 
 [UninstallDelete]

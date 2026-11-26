@@ -74,6 +74,11 @@ check("exe 가 인증번호 중계에 쓰는 모듈에 local_store", "--include-
 check("local_store 가 부르는 서명 모듈 ap_sign 이 목록에 있고 exe·조각 재료에도 들어간다",
       "firebase/agent/ap_sign.py" in shipped
       and all(os.path.join(br.AGENT_DIR, "ap_sign.py") in br.exe_sources(exe) for exe in ("Prepare_RPA.exe", "Prepare_Observer.exe")))
+# 사내 서버 ⑤: 사내 서버 연결이면 exe 의 인증번호 중계가 lan Client 를 만든다 - pc_registry(PC 번호 꼴)·lan_config(사설 대역)·license_check(연결 파일)
+lan_mods = [os.path.join(br.AGENT_DIR, "pc_registry.py"), os.path.join(br.AGENT_DIR, "lan_config.py"), os.path.join(br.REPO, "license_check.py")]
+check("사내 서버 연결에 쓰는 모듈이 exe·조각 재료에 들어간다 (pc_registry·lan_config·license_check)",
+      all(m in br.exe_sources(exe) for m in lan_mods for exe in ("Prepare_RPA.exe", "Prepare_Observer.exe")),
+      [os.path.basename(m) for m in lan_mods if m not in br.exe_sources("Prepare_RPA.exe")])
 
 print(f"\n실패: {len(fails)}" + (f" ({', '.join(fails)})" if fails else ""))
 sys.exit(1 if fails else 0)
