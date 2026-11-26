@@ -25,7 +25,6 @@ import update_sign  # noqa: E402
 SEAT_KEY = "seat.key"
 KIND = "seat"
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-_HEX128 = re.compile(r"[0-9a-f]{128}")
 
 
 _READ = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) \
@@ -150,18 +149,5 @@ def issue(secret, cid, pc_id, guid, issued_ms):
 
 def verify(pub_hex, cert, guid):
     """자리 증명서를 확인해 body 를 돌려준다 - 서명이 pub_hex 로 맞고, kind 가 seat 이고, guid 가 이 PC 의 것(대소문자 무시).
-    아니면 ValueError."""
-    if not isinstance(pub_hex, str) or not _HEX64.fullmatch(pub_hex.lower()):
-        raise ValueError("자리 서명 공개 열쇠가 올바르지 않습니다.")
-    if not isinstance(cert, dict) or not isinstance(cert.get("body"), dict) or not isinstance(cert.get("sig"), str) \
-            or not _HEX128.fullmatch(cert["sig"].lower()):
-        raise ValueError("자리 증명서의 꼴이 올바르지 않습니다.")
-    body = cert["body"]
-    if not update_sign.verify(bytes.fromhex(pub_hex), license_check.canonical(body), bytes.fromhex(cert["sig"])):
-        raise ValueError("자리 증명서의 서명이 맞지 않습니다.")
-    if body.get("kind") != KIND:
-        raise ValueError("자리 증명서가 아닙니다.")
-    mine = str(guid or "").strip().lower()
-    if not mine or str(body.get("guid") or "").strip().lower() != mine:
-        raise ValueError("이 PC 의 자리 증명서가 아닙니다.")
-    return body
+    아니면 ValueError (license_check.LicenseError). 검사는 PC 쪽(⑤ ap_guard)과 같은 license_check.verify_seat 하나다."""
+    return license_check.verify_seat(pub_hex, cert, guid)
