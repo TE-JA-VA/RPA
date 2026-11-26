@@ -322,7 +322,9 @@ os.makedirs(os.path.join(sa, "config"))
 os.makedirs(os.path.join(sa, "standalone"))
 sa_paths = dict(paths, config_dir=os.path.join(sa, "config"), user_config=os.path.join(sa, "config", st.USER_CONFIG_NAME),
                 agent_config=os.path.join(sa, "config", rs.AGENT_CONFIG_NAME), license=os.path.join(sa, "license.json"),
-                accounts=os.path.join(sa, "standalone", local_web.ACCOUNTS_NAME))
+                accounts=os.path.join(sa, "standalone", local_web.ACCOUNTS_NAME),
+                link=os.path.join(sa, "standalone", license_check.LINK_NAME), lan_ca=os.path.join(sa, "standalone", rs.CA_RECORD_NAME),
+                shortcut=os.path.join(sa, "없는 바로 가기.url"))
 picked = os.path.join(TMP, "받은 license.json")
 with open(picked, "w", encoding="utf-8") as f:
     json.dump(license_check.sign_body(lic_secret, {"edition": "standalone", "company": "샌드박스상사", "cid": "c_sbx",
@@ -362,14 +364,15 @@ win = rs.SettingsWindow(root, sa_paths, login=lambda *a: (_ for _ in ()).throw(A
                         running=lambda: False, procs=lambda: [], printers=["사무실 프린터"], dialogs=dlg)
 root.update()
 texts = [str(w.cget("text")) for w in all_widgets(root) if w.winfo_class() in ("TLabel", "TLabelframe", "Label", "TButton")]
-check("대시보드 연결 칸이 없고 라이선스·업체 웹 관리자 계정 칸이 맨 위", "대시보드 연결" not in texts and "라이선스" in texts
-      and "업체 웹 관리자 계정" in texts and "cid" not in win.entries and "agent_pw" not in win.hints, texts[:8])
-check("라이선스 없음: 붉은 안내·PC 번호·[PC 번호 복사]·[라이선스 파일 선택]",
-      win.lic_msg.cget("text") == rs.LICENSE_MISSING and win.lic_msg.cget("fg") == rs.RED
+check("대시보드 연결 칸이 없고 라이선스·사내 서버·업체 웹 관리자 계정 칸이 맨 위", "대시보드 연결" not in texts
+      and "라이선스 · 사내 서버" in texts and "업체 웹 관리자 계정" in texts and "cid" not in win.entries and "agent_pw" not in win.hints,
+      texts[:8])
+check("라이선스 없음: 붉은 안내(+ 사내 서버 안내)·PC 번호·[PC 번호 복사]·[라이선스 파일 선택]·[사내 서버 등록]",
+      win.lic_msg.cget("text") == rs.LICENSE_MISSING + "\n" + rs.LAN_CHOICE and win.lic_msg.cget("fg") == rs.RED
       and win.lic_pc.cget("text") == f"PC 번호 {os.environ['RPA_MACHINE_GUID']}" and win.copy_btn.winfo_ismapped()
-      and win.lic_btn.winfo_ismapped(), (win.lic_msg.cget("text"), win.lic_pc.cget("text")))
-check("관리자 계정이 없으면 아이디·비밀번호·확인 칸과 안내", win.admin_new.winfo_ismapped() and not win.admin_have.winfo_ismapped()
-      and rs.ADMIN_NOTE in texts)
+      and win.lic_btn.winfo_ismapped() and win.enroll_btn.winfo_ismapped() and not win.unlink_btn.winfo_ismapped(),
+      (win.lic_msg.cget("text"), win.lic_pc.cget("text")))
+check("라이선스도 등록도 없으면 관리자 계정 칸은 숨김 (단독을 고르면 나온다 - 사내 서버 ⑤)", not win.adm_frame.winfo_ismapped())
 check("창 제목 (시험용 빌드 아님)", root.title() == "오토파일럿 설정", root.title())
 check(f"창 폭 {root.winfo_width()} ≤ 600 (PC 번호 줄)", root.winfo_width() <= 600)
 check(f"창 높이 {root.winfo_height()} ≤ 690 (768 높이 노트북 - 라이선스 없음·관리자 없음이 가장 길다)", root.winfo_height() <= 690)
@@ -387,6 +390,10 @@ win.on_license()
 root.update()
 check("라이선스 파일 선택 → 업체 · 발급일, 복사 단추는 숨김", win.lic_msg.cget("text") == "업체 샌드박스상사 · 발급일 2026-11-24"
       and not win.copy_btn.winfo_ismapped() and os.path.isfile(sa_paths["license"]), win.lic_msg.cget("text"))
+check("라이선스를 넣으면 관리자 계정이 없을 때의 아이디·비밀번호·확인 칸과 안내", win.adm_frame.winfo_ismapped()
+      and win.admin_new.winfo_ismapped() and not win.admin_have.winfo_ismapped()
+      and rs.ADMIN_NOTE in [str(w.cget("text")) for w in all_widgets(root) if w.winfo_class() == "TLabel"])
+check(f"창 높이 {root.winfo_height()} ≤ 690 (라이선스 있음·관리자 없음)", root.winfo_height() <= 690)
 win.on_save()
 wait_idle()
 check("관리자 칸이 비면 저장 거절", "업체 웹 관리자 계정을 만들어 주십시오." in win.msg.get(), win.msg.get())
@@ -417,6 +424,39 @@ try:
           acc and acc["must_change"] and ("info", rs.ADMIN_RESET_DONE) in dlg.said and dlg.said[-2] == ("reset", ["admin"]), dlg.said[-2:])
 finally:
     rs.is_admin = real_is_admin
+check("라이선스를 넣으면 [사내 서버 등록] 은 숨김", not win.enroll_btn.winfo_ismapped() and not win.unlink_btn.winfo_ismapped())
+root.destroy()
+
+# 사내 서버에 등록된 PC (사내 서버 ⑤ Task 6) - 서버·PC 번호, [사내 서버 등록 해제], 관리자 계정 칸 숨김
+import seat  # noqa: E402
+lan = os.path.join(TMP, "lan")
+os.makedirs(os.path.join(lan, "config"))
+os.makedirs(os.path.join(lan, "standalone"))
+lan_paths = dict(sa_paths, config_dir=os.path.join(lan, "config"), user_config=os.path.join(lan, "config", st.USER_CONFIG_NAME),
+                 agent_config=os.path.join(lan, "config", rs.AGENT_CONFIG_NAME), license=os.path.join(lan, "license.json"),
+                 accounts=os.path.join(lan, "standalone", local_web.ACCOUNTS_NAME),
+                 link=os.path.join(lan, "standalone", license_check.LINK_NAME), lan_ca=os.path.join(lan, "standalone", rs.CA_RECORD_NAME))
+seat_secret, seat_public = update_sign.keygen()
+ca_text = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+srv = {"edition": "standalone", "kind": "server", "company": "사내상사", "cid": "c_lan", "server_id": "0" * 32,
+       "seat_pub": seat_public.hex(), "seats": 5, "modules": {}, "features": {}, "limits": {}}
+with open(lan_paths["link"], "w", encoding="utf-8") as f:
+    json.dump(license_check.link_doc(
+        {"server_url": "https://192.168.1.230:8444", "pc_id": "pc_03", "agent_key": "a" * 64, "relay_key": "b" * 64, "ca_pem": ca_text},
+        seat.issue(seat_secret, "c_lan", "pc_03", os.environ["RPA_MACHINE_GUID"], 1, ca=license_check.ca_fingerprint(ca_text)),
+        license_check.sign_body(lic_secret, srv)), f, ensure_ascii=False)
+root = tk.Tk()
+win = rs.SettingsWindow(root, lan_paths, login=lambda *a: (_ for _ in ()).throw(AssertionError("로그인")), run=fake_run,
+                        running=lambda: False, procs=lambda: [], printers=["사무실 프린터"], dialogs=SaDialogs())
+root.update()
+check("사내 서버 PC: '사내 서버 192.168.1.230 · PC pc_03 · 업체 사내상사', 단추는 [사내 서버 등록 해제] 만",
+      win.lic_msg.cget("text") == "사내 서버 192.168.1.230 · PC pc_03 · 업체 사내상사" and win.unlink_btn.winfo_ismapped()
+      and not win.lic_btn.winfo_ismapped() and not win.enroll_btn.winfo_ismapped() and not win.copy_btn.winfo_ismapped(),
+      win.lic_msg.cget("text"))
+check("사내 서버 PC: 업체 웹 관리자 계정 칸을 숨긴다 (계정은 서버에)", not win.adm_frame.winfo_ismapped())
+check(f"창 폭 {root.winfo_width()} ≤ 600 (사내 서버)", root.winfo_width() <= 600)
+p3 = shot("standalone_lan")
+check(f"화면 사진 (사내 서버) {p3[0]} ({p3[1]}x{p3[2]})", os.path.isfile(p3[0]))
 root.destroy()
 os.environ.pop("RPA_EDITION", None)
 if len(sys.argv) > 1:

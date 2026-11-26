@@ -24,6 +24,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from xml.sax.saxutils import escape
@@ -90,7 +91,9 @@ def default_paths():
             "backup_dir": os.path.dirname(st.preset_backup_path(1)),     # 업체를 바꿀 때 같이 옮긴다 (BugBuster M21)
             "session_dir": os.path.dirname(st.session_path("PRESET1")),
             # 스탠드얼론 (계획 ③ Task 4): 라이선스 파일, 업체 웹 계정 파일 (local_web.ACCOUNTS_NAME)
-            "license": license_check.license_path(), "accounts": os.path.join(local_store.keys_dir(), "accounts.json")}
+            "license": license_check.license_path(), "accounts": os.path.join(local_store.keys_dir(), "accounts.json"),
+            # 사내 서버 (⑤ Task 6): 연결 파일, 우리가 넣은 인증 기관 기록 (바로 가기 자리는 _shortcut 기본값)
+            "link": license_check.link_path(), "lan_ca": os.path.join(local_store.keys_dir(), CA_RECORD_NAME)}
 
 
 def _standalone():
@@ -156,6 +159,8 @@ def install_license(src, paths):
     """고른 라이선스 파일을 확인해 라이선스 자리로 옮긴다 (임시 파일 → os.replace). 맞지 않으면 LicenseError 가 그대로 나가고
     있던 라이선스는 남는다. 라이선스 본문을 돌려준다."""
     import license_check
+    if os.path.isfile(_link_path(paths)):          # 사내 서버에 등록된 PC - 단독 라이선스와 함께 두지 않는다 (설계 6.1, 사내 서버 ⑤)
+        raise license_check.LicenseError(license_check.BOTH_TEXT)
     body = license_check.load(path=src)
     dst = _license_path(paths)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -167,6 +172,242 @@ def install_license(src, paths):
         if os.path.exists(tmp):
             os.remove(tmp)
     return body
+
+
+# ---------------------------------------------------------------------------
+# 사내 서버 등록 (사내 서버 ⑤ Task 6, 설계 6.1·6.3 ②·6.4, Codex 계획 검토 6·7·8·10)
+#   연결 파일(standalone\server_link.json)을 쓰는 곳은 여기뿐이다. 확인은 license_check.load_link 하나.
+# ---------------------------------------------------------------------------
+CA_RECORD_NAME = "lan_ca.json"                  # 우리가 신뢰 저장소에 새로 넣은 인증 기관 지문 - 이것만 지운다 (Codex 10)
+SHORTCUT_NAME = "오토파일럿 대시보드.url"        # installer.iss [INI] 와 같은 이름
+STANDALONE_GROUP = "오토파일럿 스탠드얼론"       # installer.iss GroupName (시험용 빌드도 같다)
+ENROLL_TEXT = {
+    "expired": "등록 글의 유효 시간(10분)이 지났습니다. 업체 웹에서 PC 를 다시 추가하여 새 등록 글을 받아 주십시오.",
+    "unknown": "이미 쓴 등록 글이거나 취소된 등록입니다. 업체 웹에서 새 등록 글을 받아 주십시오.",
+    "duplicate": "이 PC 는 이미 사내 서버에 등록되어 있습니다. 업체 웹의 PC 목록을 확인하여 주십시오.",
+    "seats": "사내 서버에 등록할 수 있는 PC 수를 모두 썼습니다. 업체 웹에서 쓰지 않는 PC 를 지우거나 공급사에 문의하여 주십시오.",
+    "bad_proof": "등록 글이 올바르지 않습니다. 업체 웹에서 받은 글을 고치지 말고 그대로 넣어 주십시오.",
+}
+LOST_TEXT = " 업체 웹의 PC 목록에 이 PC 가 보이면 그 PC 를 지운 뒤 새 등록 글을 받아 다시 등록하여 주십시오."   # 서버만 등록하고 응답을 잃은 경우 (Codex 7)
+CERT_TEXT = ("등록 글의 인증 기관으로 서버를 확인하지 못했습니다. 업체 웹 주소와 등록 글이 같은 서버의 것인지 확인하여 주십시오.")
+ALONE_TEXT = ("이 PC 는 단독 라이선스로 쓰는 PC 입니다. 사내 서버에 연결하려면 새 PC 에 새로 설치하여 등록하여 주십시오.")
+LINKED_TEXT = "이미 사내 서버에 등록된 PC 입니다. 다시 등록하려면 먼저 [사내 서버 등록 해제] 를 눌러 주십시오."
+CA_WARN = "브라우저가 믿을 인증 기관을 넣지 못했습니다 - 업체 IT 가 인증 기관 파일을 이 PC 에 넣어 주어야 업체 웹에 경고가 뜨지 않습니다."
+
+
+def _link_path(paths):
+    import license_check
+    return paths.get("link") or license_check.link_path()
+
+
+def _ca_record(paths):
+    return paths.get("lan_ca") or os.path.join(os.path.dirname(_link_path(paths)), CA_RECORD_NAME)
+
+
+def _shortcut(paths):
+    return paths.get("shortcut") or os.path.join(os.environ.get("ProgramData") or r"C:\ProgramData", "Microsoft", "Windows",
+                                                 "Start Menu", "Programs", STANDALONE_GROUP, SHORTCUT_NAME)
+
+
+def _certutil():
+    return os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "certutil.exe")
+
+
+def link_state(paths):
+    """연결 방식 {ok, text, mode, server, pc_id, company, web} - mode 는 'lan'(연결 파일 있음)·'alone'(라이선스만)·'none'.
+    lan 인데 라이선스도 있으면 ok False·BOTH_TEXT. alone 의 ok·text 는 license_state 가 본다 (여기서는 mode 만)."""
+    import license_check
+    out = {"ok": False, "text": "", "mode": "none", "server": None, "pc_id": None, "company": None, "web": None}
+    link, lic = _link_path(paths), _license_path(paths)
+    if not os.path.isfile(link):
+        if os.path.isfile(lic):
+            out["mode"] = "alone"
+        return out
+    out["mode"] = "lan"
+    if os.path.isfile(lic):
+        out["text"] = license_check.BOTH_TEXT
+        return out
+    try:
+        got = license_check.load_link(path=link)
+    except license_check.LicenseError as e:
+        out["text"] = str(e)
+        return out
+    out.update(ok=True, server=license_check.lan_host(got["server_url"]), pc_id=got["pc_id"],
+               company=got["license"].get("company"), web=got["web"])
+    return out
+
+
+def _ca_sha1(ca_pem):
+    import hashlib
+    import ssl
+    import license_check
+    license_check.ca_fingerprint(ca_pem)            # 꼴 확인 (틀리면 ValueError)
+    start = ca_pem.index("-----BEGIN CERTIFICATE-----")
+    end = ca_pem.index("-----END CERTIFICATE-----", start) + len("-----END CERTIFICATE-----")
+    return hashlib.sha1(ssl.PEM_cert_to_DER_cert(ca_pem[start:end])).hexdigest()
+
+
+def trust_ca(paths, ca_pem, run=None):
+    """사내 서버 인증 기관을 이 PC 의 신뢰 저장소(Root)에 넣는다 (설계 6.3 ② - 브라우저가 업체 웹을 믿게). 이름 제한이 걸린 인증 기관이다.
+    이미 있으면 (업체 IT 가 넣었거나 앞서 넣음) 넣지도 적지도 않는다. 새로 넣었을 때만 지문을 lan_ca.json 에 적는다 (Codex 10 - 제거 때
+    우리 것만 지운다). 문제가 있으면 사람에게 보일 안내 문장, 됐으면 None. 등록은 이것과 상관없이 남는다."""
+    run = run or run_quiet
+    try:
+        sha1 = _ca_sha1(ca_pem)
+    except ValueError:
+        return CA_WARN
+    code, _ = run([_certutil(), "-store", "Root", sha1])
+    if code == 0:
+        return None
+    fd, tmp = tempfile.mkstemp(suffix=".cer")
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(ca_pem)
+        code, _ = run([_certutil(), "-addstore", "-f", "Root", tmp])
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if code != 0:
+        return CA_WARN
+    with open(_ca_record(paths), "w", encoding="utf-8") as f:
+        json.dump({"sha1": sha1}, f)
+    return None
+
+
+def forget_ca(paths, run=None):
+    """우리가 넣은 인증 기관(lan_ca.json 의 지문)을 신뢰 저장소에서 지우고 기록도 지운다. 기록이 없으면 0, 아무것도 안 한다.
+    certutil 종료 코드를 돌려준다 (제거 마무리·등록 해제가 부른다)."""
+    run = run or run_quiet
+    rec = _ca_record(paths)
+    try:
+        with open(rec, encoding="utf-8") as f:
+            sha1 = str(json.load(f).get("sha1") or "")
+    except (OSError, ValueError, AttributeError):
+        return 0
+    if not re.fullmatch(r"[0-9a-f]{40}", sha1):
+        return 0
+    code, _ = run([_certutil(), "-delstore", "Root", sha1])
+    try:
+        os.remove(rec)
+    except OSError:
+        pass
+    return code
+
+
+def set_dashboard_url(url, paths):
+    """시작 메뉴의 대시보드 바로 가기(.url)의 URL= 줄만 바꾼다. 바로 가기가 없으면 False."""
+    path = _shortcut(paths)
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return False
+    new = re.sub(rb"(?m)^URL=[^\r\n]*", b"URL=" + url.encode("ascii"), raw, count=1)
+    with open(path, "wb") as f:
+        f.write(new)
+    return True
+
+
+def _enroll_error(e):
+    """등록 실패 예외 → 사람에게 보일 글 (install_link 가 ValueError 로 낸다). 열쇠·등록 글은 싣지 않는다."""
+    import urllib.error
+    import fb
+    import local_store
+    if isinstance(e, fb.HttpError):                   # 서버 거절 (서명 없음) - 403 본문의 error 코드
+        try:
+            code = json.loads(e.body).get("error")
+        except (ValueError, AttributeError, TypeError):
+            code = None
+        if e.status == 403:
+            return ENROLL_TEXT.get(code) or f"사내 서버가 등록을 거절했습니다. ({code or '?'})"
+        return f"사내 서버가 등록 요청을 받지 않았습니다. (HTTP {e.status})" + LOST_TEXT
+    if isinstance(e, fb.AuthError):
+        if e.code == local_store.CERT_FAILED:
+            return CERT_TEXT
+        return "사내 서버의 응답을 확인하지 못했습니다." + LOST_TEXT
+    if isinstance(e, (urllib.error.URLError, OSError)):
+        why = getattr(e, "reason", None) or e
+        return f"사내 서버에 연결하지 못했습니다. ({type(why).__name__}) 서버 주소와 사내망 연결을 확인하여 주십시오." + LOST_TEXT
+    return f"사내 서버에 등록하지 못했습니다. ({type(e).__name__})"
+
+
+def install_link(text, paths, enroll=None, guid=None, host=None, run=None):
+    """사내 서버에 이 PC 를 등록하고 연결 파일을 쓴다 → {"pc_id", "server", "done": [한 일 문장]}.
+    단독 라이선스가 있거나 이미 등록돼 있으면, 또는 등록이 안 되면 ValueError (사람 말, 아무 파일도 쓰지 않는다).
+    등록 결과는 임시 파일에 쓰고 load_link 로 확인한 뒤에만 자리에 건다 - 틀리면 그 LicenseError 그대로.
+    그 뒤 열쇠 파일 권한 잠그기, 인증 기관 신뢰(trust_ca), 대시보드 바로 가기(업체 웹 주소가 있을 때)."""
+    import license_check
+    import local_store
+    run = run or run_quiet
+    if os.path.isfile(_license_path(paths)):
+        raise ValueError(ALONE_TEXT)
+    link = _link_path(paths)
+    if os.path.isfile(link):
+        raise ValueError(LINKED_TEXT)
+    enroll = enroll or local_store.enroll
+    guid = guid or license_check.machine_guid()
+    host = host or os.environ.get("COMPUTERNAME") or "PC"
+    try:
+        out = enroll(str(text or "").strip(), guid, host)
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(_enroll_error(e)) from None
+    doc = license_check.link_doc(out, out.get("seat"), out.get("server_license"), web=out.get("web"))
+    folder = os.path.dirname(link)
+    os.makedirs(folder, exist_ok=True)
+    tmp = f"{link}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False)
+        got = license_check.load_link(path=tmp, guid=guid)
+        os.replace(tmp, link)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    server = license_check.lan_host(got["server_url"])
+    done = [f"사내 서버({server})에 이 PC 를 {got['pc_id']} 번으로 등록하였습니다."]
+    try:
+        import local_server
+        local_server.lock_key_files(folder)
+    except Exception:
+        pass
+    warn = trust_ca(paths, got["ca_pem"], run)
+    if warn:
+        done.append(warn)
+    if got["web"] and set_dashboard_url(got["web"], paths):
+        done.append("시작 메뉴의 대시보드 바로 가기를 업체 웹 주소로 바꾸었습니다.")
+    elif not got["web"]:
+        done.append("업체 웹 주소는 업체 IT 에 확인하여 주십시오.")
+    return {"pc_id": got["pc_id"], "server": server, "done": done}
+
+
+def unlink(paths, run=None):
+    """사내 서버 등록 해제 (Codex 6 - 서버에서 지운 PC 가 오래 꺼져 있었으면 '지워짐' 답을 못 받는다. 사람이 고르는 복구 길).
+    우리가 넣은 인증 기관을 지우고 연결 파일을 지운다. 한 일 문장 목록. 에이전트 멈추기는 창이 한다."""
+    done = []
+    forget_ca(paths, run)
+    try:
+        os.remove(_link_path(paths))
+        done.append("사내 서버 등록을 해제하였습니다. 다시 쓰려면 업체 웹에서 새 등록 글을 받아 등록하여 주십시오.")
+    except FileNotFoundError:
+        done.append("사내 서버 등록이 없습니다.")
+    return done
+
+
+def reapply_lan(paths, run=None):
+    """덮어 설치 마무리 (Codex 8): 사내 서버에 등록된 PC 면 대시보드 바로 가기와 인증 기관을 다시 적용한다 (설치 파일이 바로 가기를
+    로컬 주소로 다시 쓴다). 등록이 없거나 맞지 않으면 아무것도 안 한다."""
+    import license_check
+    s = link_state(paths)
+    if s["mode"] != "lan" or not s["ok"]:
+        return
+    got = license_check.load_link(path=_link_path(paths))
+    trust_ca(paths, got["ca_pem"], run)
+    if got["web"]:
+        set_dashboard_url(got["web"], paths)
 
 
 def admin_exists(paths):
@@ -682,11 +923,16 @@ def save(form, paths, login=agent_login, run=run_quiet, running=None, user=None,
     if problems:
         raise ValueError("\n".join(problems))
     if standalone:
-        lic = license_state(paths)
-        if not lic["ok"]:
-            raise ValueError(lic["text"])
-        if not admin_exists(paths):
-            raise ValueError("업체 웹 관리자 계정을 만들어 주십시오.")
+        link = link_state(paths)
+        if link["mode"] == "lan":                     # 사내 서버 (⑤): 계정은 서버에 있다 - PC 에 관리자 계정을 만들지 않는다
+            if not link["ok"]:
+                raise ValueError(link["text"])
+        else:
+            lic = license_state(paths)
+            if not lic["ok"]:
+                raise ValueError(lic["text"])
+            if not admin_exists(paths):
+                raise ValueError("업체 웹 관리자 계정을 만들어 주십시오.")
     base_path = paths["user_config"] if os.path.isfile(paths["user_config"]) else paths["template"]
     if state["broken"] and base_path == paths["user_config"]:   # 깨진 설정은 .broken 으로 남기고 빈 틀에서 새로 쓴다 (BugBuster L2)
         shutil.copyfile(base_path, base_path + ".broken")
@@ -736,6 +982,9 @@ def configured(paths, updating=False):
             st.read_user_config(paths["user_config"])
         except Exception:
             return False
+        link = link_state(paths)
+        if link["mode"] == "lan":                     # 사내 서버 (⑤): 사용자 설정 + 맞는 연결 파일
+            return link["ok"]
         return license_state(paths)["ok"] and admin_exists(paths)
     if not os.path.isfile(paths["user_config"]) or (not updating and (read_stop(paths.get("stop_file")) or {}).get("code") == 3):
         return False
@@ -949,6 +1198,12 @@ MISSING_PRINTER = "이 PC에 없는 프린터입니다. 다시 선택하여 주�
 LICENSE_MISSING = ("라이선스 파일이 없습니다. 아래 PC 번호를 공급사에 보내 라이선스 파일(license.json)을 받은 뒤 "
                    "[라이선스 파일 선택]을 눌러 주십시오.")
 ADMIN_NOTE = "업체 웹에 로그인할 관리자 계정입니다. 처음 로그인하면 비밀번호를 바꾸게 됩니다."
+# 사내 서버 (⑤ Task 6)
+LAN_CHOICE = "사내 서버에 붙이는 PC 는 라이선스 파일 대신 [사내 서버 등록] 을 눌러 업체 웹에서 받은 등록 글을 넣어 주십시오."
+ENROLL_NOTE = ("업체 웹 환경설정의 'PC' 에서 [PC 추가] 를 눌러 받은 등록 글(APE1. 로 시작)을 붙여 넣거나 [파일에서 읽기] 를 눌러 주십시오. "
+               "등록 글은 10분 동안 한 번만 쓸 수 있습니다.")
+UNLINK_ASK = ("사내 서버 등록을 해제하면 이 PC 의 오토파일럿이 멈추고, 다시 쓰려면 업체 웹에서 새 등록 글을 받아 등록해야 합니다. "
+              "서버에서 이 PC 를 지운 경우에만 해제하여 주십시오. 해제할까요?")
 ADMIN_RESET_DONE = "관리자 비밀번호를 다시 정하였습니다. 다음 로그인 때 새 비밀번호로 바꾸게 됩니다."
 WRAP_SA = "400p"                                   # 스탠드얼론 칸의 줄바꿈 - PC 번호 줄 때문에 창이 넓어 안내를 한 줄 더 길게
 WRAP_STATUS, WRAP_MSG = "230p", "330p"            # 긴 글이 창을 넓히지 않게 줄바꿈 (포인트라 화면 배율을 따른다)
@@ -1041,6 +1296,46 @@ class Dialogs:
         top.wait_window()
         return out[0] if out else None
 
+    def enrollment(self):
+        """사내 서버 등록 글 받기 (⑤ Task 6) - 붙여 넣는 칸 + [파일에서 읽기]. 글 또는 None (취소)."""
+        import tkinter as tk
+        from tkinter import ttk
+        top = tk.Toplevel(self._p)
+        top.title("사내 서버 등록")
+        top.transient(self._p)
+        top.resizable(False, False)
+        f = ttk.Frame(top, padding=14)
+        f.grid()
+        ttk.Label(f, text=ENROLL_NOTE, wraplength=WRAP_SA, justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        box = tk.Text(f, width=56, height=6, wrap="char")
+        box.grid(row=1, column=0, columnspan=2, sticky="ew")
+        out = []
+
+        def from_file():
+            path = self._f.askopenfilename(title="업체 웹에서 받은 등록 파일을 선택하여 주십시오.",
+                                           filetypes=[("등록 파일", "*.txt"), ("모든 파일", "*.*")], parent=top)
+            if path:
+                try:
+                    with open(path, encoding="utf-8-sig") as fh:
+                        text = fh.read(64 * 1024)
+                except (OSError, UnicodeDecodeError):
+                    return self.error("등록 파일을 읽지 못했습니다.")
+                box.delete("1.0", "end")
+                box.insert("1.0", text.strip())
+
+        def ok():
+            out.append(box.get("1.0", "end").strip())
+            top.destroy()
+        b = ttk.Frame(f)
+        b.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Button(b, text="파일에서 읽기", command=from_file).pack(side="left")
+        ttk.Button(b, text="취소", command=top.destroy).pack(side="right")
+        ttk.Button(b, text="등록", command=ok).pack(side="right", padx=(0, 6))
+        box.focus_set()
+        top.grab_set()
+        top.wait_window()
+        return out[0] if out and out[0] else None
+
 
 class SettingsWindow:
     """설정 창 (설계 4절). 시험은 login·run·running·procs·printers·dialogs 를 가짜로 넣는다."""
@@ -1132,21 +1427,26 @@ class SettingsWindow:
         """맨 위 '라이선스' 칸과 '업체 웹 관리자 계정' 칸을 frame 의 1·2 줄에 만든다. 차지한 줄 수(2)를 돌려준다."""
         import tkinter as tk
         from tkinter import ttk
-        lic = ttk.LabelFrame(frame, text="라이선스", padding=(10, 2, 10, 4))
+        lic = ttk.LabelFrame(frame, text="라이선스 · 사내 서버", padding=(10, 2, 10, 4))
         lic.grid(row=1, column=0, sticky="ew", pady=3)
         self.lic_msg = tk.Label(lic, text="", wraplength=WRAP_SA, justify="left", anchor="w")
         self.lic_msg.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
         self.lic_fg = self.lic_msg.cget("fg")
         self.lic_pc = ttk.Label(lic, text="")
-        self.lic_pc.grid(row=1, column=0, sticky="w", pady=2)
-        btns = ttk.Frame(lic)
-        btns.grid(row=1, column=1, sticky="e", padx=(8, 0))
+        self.lic_pc.grid(row=1, column=0, columnspan=2, sticky="w")
+        btns = ttk.Frame(lic)                     # 단추는 PC 번호 아래 줄 (사내 서버 ⑤ - 단추 셋이 한 줄이면 창이 600 을 넘는다)
+        btns.grid(row=2, column=0, columnspan=2, sticky="w")
         self.copy_btn = ttk.Button(btns, text="PC 번호 복사", command=self.on_copy_pc)
         self.copy_btn.grid(row=0, column=0, padx=(0, 4))
         self.lic_btn = ttk.Button(btns, text="라이선스 파일 선택", command=self.on_license)
         self.lic_btn.grid(row=0, column=1)
+        # 사내 서버 (⑤ Task 6): 등록 / 등록 해제 - refresh_standalone 이 연결 방식에 맞게 보이고 숨긴다
+        self.enroll_btn = ttk.Button(btns, text="사내 서버 등록", command=self.on_enroll)
+        self.enroll_btn.grid(row=0, column=2, padx=(4, 0))
+        self.unlink_btn = ttk.Button(btns, text="사내 서버 등록 해제", command=self.on_unlink)
+        self.unlink_btn.grid(row=0, column=3, padx=(4, 0))
         lic.columnconfigure(0, weight=1)
-        adm = ttk.LabelFrame(frame, text="업체 웹 관리자 계정", padding=(10, 2, 10, 4))
+        adm = self.adm_frame = ttk.LabelFrame(frame, text="업체 웹 관리자 계정", padding=(10, 2, 10, 4))
         adm.grid(row=2, column=0, sticky="ew", pady=3)
         self.admin_vars = {k: tk.StringVar(master=self.root) for k in ("id", "pw", "pw2")}
         self.admin_new = ttk.Frame(adm)
@@ -1173,15 +1473,39 @@ class SettingsWindow:
         return 2
 
     def refresh_standalone(self):
-        """라이선스·관리자 계정 칸을 지금 파일대로 (처음·저장·라이선스 넣기·비밀번호 다시 정하기 뒤)."""
+        """라이선스·관리자 계정 칸을 지금 파일대로 (처음·저장·라이선스 넣기·비밀번호 다시 정하기 뒤).
+        사내 서버에 등록된 PC (⑤) 면 서버·PC 번호를 보이고 관리자 계정 칸을 숨긴다 (계정은 서버에 있다)."""
+        link = self.link_state = link_state(self.paths)
+        if link["mode"] == "lan":
+            self.lic_state = {"ok": link["ok"], "pc_id": None}
+            if link["ok"]:
+                self.lic_msg.configure(text=f"사내 서버 {link['server']} · PC {link['pc_id']} · 업체 {link['company'] or '?'}",
+                                       fg=self.lic_fg)
+            else:
+                self.lic_msg.configure(text=link["text"], fg=RED)
+            for w in (self.lic_pc, self.copy_btn, self.lic_btn, self.enroll_btn):
+                w.grid_remove()
+            self.unlink_btn.grid()
+            self.adm_frame.grid_remove()
+            return
+        self.unlink_btn.grid_remove()
+        self.lic_pc.grid()
+        self.lic_btn.grid()
+        self.adm_frame.grid()
         s = self.lic_state = license_state(self.paths)
         if s["ok"]:
+            self.enroll_btn.grid_remove()
             self.lic_msg.configure(text=f"업체 {s['company'] or '?'} · 발급일 {s['issued'] or '?'}", fg=self.lic_fg)
             self.copy_btn.grid_remove()
         else:
             missing = s["text"].startswith("라이선스 파일이 없습니다")
-            self.lic_msg.configure(text=LICENSE_MISSING if missing else s["text"], fg=RED)
+            self.lic_msg.configure(text=(LICENSE_MISSING + "\n" + LAN_CHOICE) if missing else s["text"], fg=RED)
             self.copy_btn.grid()
+            if missing:
+                self.enroll_btn.grid()                # 아무것도 없는 PC - 단독 또는 사내 서버 (설계 6.1, 설치 마법사가 이 창을 띄운다)
+                self.adm_frame.grid_remove()          # 관리자 계정은 단독일 때만 - 라이선스를 넣으면 나온다 (창 높이 690 안)
+            else:
+                self.enroll_btn.grid_remove()
         self.lic_pc.configure(text=f"PC 번호 {s['pc_id'] or '(읽지 못함)'}")
         try:
             admins = [a["id"] for a in _accounts(self.paths).list() if a["role"] == "admin" and not a["disabled"]]
@@ -1226,6 +1550,38 @@ class SettingsWindow:
             return self.say(f"라이선스 파일을 넣지 못했습니다. ({e.strerror or e})")
         self.refresh_standalone()
         self.say("라이선스 파일을 넣었습니다.", GREEN)
+
+    def on_enroll(self):
+        """[사내 서버 등록] (⑤ Task 6) - 등록 글을 받아 install_link. 서버에 닿는 동안(최대 30초) 창이 잠깐 멈춘다."""
+        import license_check
+        text = self.dialogs.enrollment()
+        if not text:
+            return
+        self.say("사내 서버에 등록하는 중입니다...", GRAY)
+        self.root.update_idletasks()
+        try:
+            got = install_link(text, self.paths)
+        except (ValueError, license_check.LicenseError) as e:
+            self.refresh_standalone()
+            return self.say(str(e))
+        except OSError as e:
+            self.refresh_standalone()
+            return self.say(f"사내 서버 연결 파일을 쓰지 못했습니다. ({e.strerror or type(e).__name__})")
+        self.refresh_standalone()
+        self.say(" ".join(got["done"]), GREEN)
+        self.dialogs.info("\n".join(got["done"] + ["아래 칸을 확인한 뒤 [저장] 을 눌러 주십시오."]))
+
+    def on_unlink(self):
+        """[사내 서버 등록 해제] (⑤, Codex 6) - 확인 뒤 에이전트를 멈추고 연결 파일·우리가 넣은 인증 기관을 지운다."""
+        if not self.dialogs.yesno(UNLINK_ASK):
+            return
+        try:
+            stop_agent()
+        except Exception as e:
+            crash_log(e)
+        done = unlink(self.paths)
+        self.refresh_standalone()
+        self.say(" ".join(done), GREEN)
 
     def on_reset_admin(self):
         try:
@@ -1552,6 +1908,11 @@ def _main(args):
                 local_server.lock_key_files(local_store.keys_dir())
         except Exception as e:
             crash_log(e)
+        if _standalone():
+            try:
+                reapply_lan(paths)             # 사내 서버 PC: 덮어 설치가 되돌린 대시보드 바로 가기·인증 기관 (⑤, Codex 8)
+            except Exception as e:
+                crash_log(e)
         try:
             finish_upgrade(paths)
         except RuntimeError as e:

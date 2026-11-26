@@ -492,7 +492,8 @@ def _read_text(path, tries=5):
 
 LOCKED_FILES = ("agent.key", "relay.key", "accounts.json",
                 "phone_key.pem", "phones.json",     # 휴대폰 포트의 인증서 개인 열쇠·짝지은 휴대폰의 서명 열쇠 (계획 ④ - local_cert·local_phone)
-                "pcs.json")                         # 사내 서버의 PC 등록부 - PC 마다의 열쇠 (사내 서버 ① Task 2 - pc_registry)
+                "pcs.json",                         # 사내 서버의 PC 등록부 - PC 마다의 열쇠 (사내 서버 ① Task 2 - pc_registry)
+                "server_link.json")                 # 사내 서버에 붙은 PC 의 연결 파일 - 열쇠 둘 (사내 서버 ⑤ - license_check.LINK_NAME)
 ADMIN_SIDS = ("*S-1-5-32-544", "*S-1-5-18")       # 관리자, SYSTEM
 
 
