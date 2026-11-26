@@ -152,6 +152,63 @@ try:
     check("seat.verify 는 그대로 동작", seat.verify(SEAT_PUB, cert, "G-1")["pc_id"] == "pc_01")
     check("verify_seat 은 LicenseError (ValueError 의 하나)",
           raises(lambda: license_check.verify_seat(SEAT_PUB, cert, "g-2"), "이 PC") and isinstance(errors[-1], ValueError))
+
+    print("Task 3 - 등록 결과에 자리 증명서·서버 라이선스 사본")
+    import fb  # noqa: E402
+    import lan_ca  # noqa: E402
+    import local_store  # noqa: E402
+    ca_dir = os.path.join(TMP, "ca")
+    lan_ca.make_ca(ca_dir, ["nt"], ["192.168.1.230"])
+    REAL_CA = lan_ca.ca_pem(ca_dir)
+    TOKEN = "t" * 43
+    RAND = "c" * 64
+    NONCE = "d" * 32
+    AK, _RK = pc_registry.derive_keys(TOKEN, RAND)
+    SEAT, LIC = seat_cert(), server_license()
+
+    def enroll_text(**extra):
+        return pc_registry.encode_enrollment(dict({"v": 1, "url": "https://192.168.1.230:8444", "pc": "pc_01", "token": TOKEN,
+                                                   "exp": 1764100000000, "ca": REAL_CA}, **extra))
+
+    class Resp:
+        def __init__(self, raw, sign=True, status=200):
+            self.status, self._raw = status, raw
+            self.headers = {local_store.H_SIGN: local_store.response_mac(AK, NONCE, status, raw) if sign else "x"}
+
+        def read(self):
+            return self._raw
+
+    def opener_for(reply, sign=True):
+        raw = reply if isinstance(reply, bytes) else json.dumps(reply).encode("utf-8")
+        return lambda req, timeout=30: Resp(raw, sign)
+
+    def enroll_with(reply, sign=True, **extra):
+        return local_store.enroll(enroll_text(**extra), "g-1", "PC-1", opener=opener_for(reply, sign), rand_hex=RAND, nonce=NONCE)
+
+    def auth_code(fn):
+        try:
+            fn()
+        except fb.AuthError as e:
+            return e.code
+        return None
+
+    got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC})
+    check("응답의 seat·server_license 를 그대로 돌려준다", got.get("seat") == SEAT and got.get("server_license") == LIC)
+    check("열쇠·주소·인증 기관은 지금처럼", got["agent_key"] == AK and got["ca_pem"] == REAL_CA and got["pc_id"] == "pc_01")
+    check("seat 가 빠진 https 응답은 NOT_VERIFIED (서명은 맞아도)",
+          auth_code(lambda: enroll_with({"pc": "pc_01", "server_license": LIC})) == local_store.NOT_VERIFIED)
+    check("server_license 가 빠져도 NOT_VERIFIED",
+          auth_code(lambda: enroll_with({"pc": "pc_01", "seat": SEAT})) == local_store.NOT_VERIFIED)
+    check("서명이 틀린 응답은 NOT_VERIFIED",
+          auth_code(lambda: enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC}, sign=False)) == local_store.NOT_VERIFIED)
+    check("JSON 이 아닌 본문 → NOT_VERIFIED", auth_code(lambda: enroll_with(b"not json")) == local_store.NOT_VERIFIED)
+    got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC}, web="https://192.168.1.230:8443")
+    check("등록 글의 web 칸은 결과에 그대로", got.get("web") == "https://192.168.1.230:8443", got.get("web"))
+    got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC})
+    check("web 칸이 없으면 결과에도 없다", "web" not in got)
+    doc = license_check.link_doc(got, got["seat"], got["server_license"], web=got.get("web"))
+    write(doc)
+    check("enroll 결과로 만든 연결 파일이 load_link 를 통과", license_check.load_link(guid="g-1")["pc_id"] == "pc_01")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

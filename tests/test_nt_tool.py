@@ -258,7 +258,11 @@ def test_check_live():
     cfg = lan_config.parse({"listen": "127.0.0.1", "allow": ["127.0.0.0/8"]})
     cfg = dataclasses.replace(cfg, web_port=0, agent_port=0)
     w, a = lan_server.make_lan_servers(store, runs, lic, reg, web, cfg, cert, key, ca_pem)
+    import update_sign
+    seat_secret = update_sign.keygen()[0]
     for s in (w, a):
+        # 실제 서버 입구처럼 자리 열쇠·라이선스 원문 (PC 등록은 자리 증명서가 있어야 믿는다 - 사내 서버 ⑤ Task 3)
+        s.seat_secret, s.license_doc = seat_secret, {"body": dict(lic, kind="server"), "sig": "0" * 128}
         threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     wp, ap = w.server_address[1], a.server_address[1]
     sk = socket.socket()

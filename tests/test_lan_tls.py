@@ -182,7 +182,11 @@ def start(cfg_data=None, web_dir=WEB_DIR, cert=None, key=None, ca_pem=None):
     cfg = lan_config.parse(cfg_data or {"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8"]})
     cfg = dataclasses.replace(cfg, web_port=0, agent_port=0)      # 포트 0 - make_lan_servers 가 묶인 포트로 고쳐 쓴다
     w, a = lan_server.make_lan_servers(store, runs, LIC, reg, web, cfg, cert, key, ca_pem)
+    import update_sign
+    seat_secret = update_sign.keygen()[0]
     for s in (w, a):
+        # 실제 서버 입구(server_main)처럼 자리 열쇠·서버 라이선스 원문을 단다 - PC 등록은 자리 증명서가 있어야 믿는다 (사내 서버 ⑤ Task 3)
+        s.seat_secret, s.license_doc = seat_secret, {"body": dict(LIC, kind="server"), "sig": "0" * 128}
         threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
         SERVERS.append(s)
     return types.SimpleNamespace(web=w, agent=a, wp=w.server_address[1], ap=a.server_address[1], store=store, reg=reg, ui=web,

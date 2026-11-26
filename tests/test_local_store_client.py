@@ -580,14 +580,16 @@ try:
     def https_enroll(req, timeout=30):
         hsent.append(req)
         b = json.loads(req.data.decode("utf-8"))
-        raw = json.dumps({"pc": "pc_01"}).encode("utf-8")
+        raw = json.dumps({"pc": "pc_01", "seat": SEAT_DOC, "server_license": LIC_DOC}).encode("utf-8")
         return Resp(200, raw, msg(local_store.response_mac(WANT_AGENT, b["nonce"], 200, raw)))
+    SEAT_DOC, LIC_DOC = {"body": {"kind": "seat"}, "sig": "1" * 128}, {"body": {"kind": "server"}, "sig": "2" * 128}   # 꼴 확인은 license_check.load_link (⑤)
     try:
         got = local_store.enroll(HTEXT, GUID, HOST, opener=https_enroll, rand_hex=RAND, nonce=NONCE)
     except Exception as e:
         got = f"{type(e).__name__}: {e}"
-    check("https 등록 - 돌려주는 dict 에 ca_pem", got == {"server_url": "https://10.1.2.3:8444", "pc_id": "pc_01", "agent_key": WANT_AGENT,
-                                                    "relay_key": WANT_RELAY, "ca_pem": CA}, repr(got))
+    check("https 등록 - 돌려주는 dict 에 ca_pem·자리 증명서·서버 라이선스 사본 (⑤)",
+          got == {"server_url": "https://10.1.2.3:8444", "pc_id": "pc_01", "agent_key": WANT_AGENT, "relay_key": WANT_RELAY,
+                  "ca_pem": CA, "seat": SEAT_DOC, "server_license": LIC_DOC}, repr(got))
     check("https 등록 요청은 https 주소로", hsent and hsent[0].full_url == "https://10.1.2.3:8444/enroll")
     check("받은 값으로 lan https Client 를 만들 수 있다", isinstance(got, dict) and isinstance(local_store.Client(
         {"standalone": True, "lan": True, "server_url": got["server_url"], "key": got["agent_key"], "pc_id": got["pc_id"],

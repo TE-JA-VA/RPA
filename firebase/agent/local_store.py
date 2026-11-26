@@ -344,6 +344,16 @@ def enroll(text, guid, host, opener=None, rand_hex=None, nonce=None):
     out = {"server_url": url, "pc_id": pc_id, "agent_key": agent_key, "relay_key": relay_key}
     if ctx is not None:
         out["ca_pem"] = info["ca"]               # 사내 서버(https): 설정에 두고 Client 가 이 인증 기관만 믿는다
+        # 사내 서버 ⑤: 자리 증명서와 서버 라이선스 사본 - PC 가 켤 때 이것으로 확인한다 (license_check.load_link). 빠지면 믿지 않는다
+        try:
+            reply = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            reply = None
+        if not isinstance(reply, dict) or not isinstance(reply.get("seat"), dict) or not isinstance(reply.get("server_license"), dict):
+            raise fb.AuthError(0, NOT_VERIFIED)
+        out["seat"], out["server_license"] = reply["seat"], reply["server_license"]
+        if isinstance(info.get("web"), str) and info["web"]:
+            out["web"] = info["web"]             # 업체 웹 주소 (서버가 프록시 뒤면 싣지 않는다 - ⑤ Task 4)
     return out
 
 
