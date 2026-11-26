@@ -704,6 +704,110 @@ def test_cert_no_follow():
     check("tls 폴더가 서비스 계정·root 가 아닌 계정 소유면 1", code == 1, (code, se))
 
 
+def test_request_no_follow():
+    """root 의 request (install.sh 가 --user 로 부른다) 가 자료 폴더의 seat.key·요청 파일을 경로로 따라가 소유자·모드를 바꾸거나
+    링크 너머의 열쇠를 읽지 않는다 (Task 8.6). 서비스 계정은 자료 폴더 안 이름을 아무 때나 링크·하드링크로 바꿔 둘 수 있다 -
+    만든 직후 바꿔치기(경쟁)는 seat.ensure_key·_write_private 를 감싸 흉내 낸다."""
+    if not REAL_ROOT:
+        print("  [건너뜀] 링크·소유자 확인은 리눅스 root(WSL)에서만")
+        return
+    e = Env("request_link")
+    sk = os.path.join(e.data, seat.SEAT_KEY)
+    req = os.path.join(e.data, server_main.REQUEST_NAME)
+    os.remove(sk)
+    fake_root()
+    # 1) 자리 열쇠를 만든 직후 서비스 계정이 seat.key 를 남의 파일로 가는 링크로 바꿔 둔다
+    victim = victim_file("seat_race_victim")
+    st = os.stat(victim)
+    seen, real_ensure = {}, seat.ensure_key
+
+    def ensure_then_swap(*a, **k):
+        got = real_ensure(*a, **k)
+        s = os.stat(sk, follow_symlinks=False)
+        seen["made"] = (s.st_uid, stat.S_IMODE(s.st_mode))
+        os.remove(sk)
+        os.symlink(victim, sk)
+        return got
+    seat.ensure_key = ensure_then_swap
+    try:
+        code, so, se = call(["request", "--user", "autopilotd"])
+    finally:
+        seat.ensure_key = real_ensure
+    check("root 가 만든 seat.key 는 처음부터 서비스 계정 소유 0600 (만든 뒤 경로로 바꾸지 않는다)", seen.get("made") == (1000, 0o600), seen)
+    check("만든 직후 seat.key 가 링크로 바뀌어도 그 대상의 소유자·모드·내용 그대로", same_file(victim, st), os.stat(victim))
+    os.remove(sk)
+    # 2) 요청 파일을 쓴 직후 링크로 바꿔 둔다
+    victim2 = victim_file("req_race_victim")
+    st2 = os.stat(victim2)
+    real_write = server_main._write_private
+
+    def write_then_swap(path, *a, **k):
+        real_write(path, *a, **k)
+        if os.path.abspath(path) == os.path.abspath(req):
+            s = os.stat(req, follow_symlinks=False)
+            seen["req"] = (s.st_uid, stat.S_IMODE(s.st_mode))
+            os.remove(req)
+            os.symlink(victim2, req)
+    server_main._write_private = write_then_swap
+    try:
+        code, so, se = call(["request", "--user", "autopilotd"])
+    finally:
+        server_main._write_private = real_write
+    check("요청 파일도 처음부터 서비스 계정 소유 0600", seen.get("req") == (1000, 0o600), seen)
+    check("쓴 직후 요청 파일이 링크로 바뀌어도 그 대상의 소유자·모드·내용 그대로", same_file(victim2, st2), os.stat(victim2))
+    os.remove(req)
+    check("보통 길: seat.key·요청 파일이 서비스 계정 소유", call(["request", "--user", "autopilotd"])[0] == 0
+          and os.stat(sk).st_uid == 1000 and os.stat(req).st_uid == 1000, (os.stat(sk), os.stat(req)))
+    # 3) seat.key 가 처음부터 root 전용 열쇠 파일로 가는 링크·하드링크 - 그 열쇠를 읽어 공개 열쇠를 내지 않는다
+    other_secret = secrets.token_bytes(32)
+    other_pub = update_sign.secret_to_public(other_secret).hex()
+    victim3 = os.path.join(TMP, "seat_link_victim")
+    with open(victim3, "w", encoding="ascii") as f:
+        f.write(other_secret.hex() + "\n")
+    os.chmod(victim3, 0o600)
+    st3 = os.stat(victim3)
+    before = read(req)
+    for kind in ("symlink", "hardlink"):
+        os.remove(sk)
+        (os.symlink if kind == "symlink" else os.link)(victim3, sk)
+        code, so, se = call(["request", "--user", "autopilotd"])
+        now = os.stat(victim3)
+        check(f"seat.key 가 남의 열쇠 파일로 가는 {kind} 면 request 1 (알아듣는 글)", code == 1 and "seat.key" in se, (code, so, se))
+        check(f"{kind}: 링크 너머 열쇠의 공개 열쇠를 내지 않고 요청 파일도 그대로", other_pub not in so and other_pub not in read(req)
+              and read(req) == before, (so, read(req)[:200]))
+        check(f"{kind}: 대상의 소유자·모드 그대로", (now.st_uid, stat.S_IMODE(now.st_mode)) == (st3.st_uid, stat.S_IMODE(st3.st_mode)))
+    os.remove(sk)
+    os.symlink(os.path.join(TMP, "seat_dangling_target"), sk)        # 끊어진 링크 - 그 너머에 새 파일을 만들지 않는다
+    code, so, se = call(["request", "--user", "autopilotd"])
+    check("seat.key 가 끊어진 링크면 1, 링크 너머에 파일을 만들지 않는다", code == 1 and not os.path.exists(os.path.join(TMP, "seat_dangling_target")),
+          (code, se))
+    os.remove(sk)
+    os.mkfifo(sk)                                                    # 특수 파일 - 열다가 멈추지 않는다
+    t = threading.Thread(target=lambda: seen.update(fifo=call(["request", "--user", "autopilotd"])), daemon=True)
+    t.start()
+    t.join(10)
+    hung = t.is_alive()
+    if hung:                                                         # 멈춘 읽기를 풀어 준다 (표준 출력 바꿔치기가 남지 않게)
+        os.close(os.open(sk, os.O_WRONLY | os.O_NONBLOCK))
+        t.join(10)
+    check("seat.key 가 FIFO 면 멈추지 않고 1", not hung and seen.get("fifo", (None,))[0] == 1, seen.get("fifo"))
+    os.remove(sk)
+    # 서비스(root 아님)가 읽을 때도 링크를 따라가지 않는다 - run 은 4
+    os.symlink(victim3, sk)
+    try:
+        seat.ensure_key(e.data)
+        err = None
+    except ValueError as ex:
+        err = str(ex)
+    check("서비스의 seat.ensure_key 도 링크면 ValueError", bool(err) and "seat.key" in err, err)
+    try:
+        seat._read_secret(sk)
+        err = None
+    except ValueError as ex:
+        err = str(ex)
+    check("seat._read_secret(install_helper license 가 root 로 쓴다)도 링크를 따라가지 않는다", bool(err), err)
+
+
 def test_cert_default_owner():
     """root 로 cert --renew·--import-web 을 --owner 없이 치면 서비스 계정 소유 (Codex 중간 검토 5 - 같은 UID 시험의 빈틈)."""
     e = Env("cert_owner", tls=False)
@@ -750,7 +854,7 @@ try:
     for t in (test_request_file, test_status_ok_and_problems, test_admin_reset_needs_stopped, test_admin_reset_owner,
               test_admin_reset, test_verify, test_upgrade_verifies_first, test_cert_root_only, test_cert_renew_backdated,
               test_cert_if_expiring, test_import_web_cert, test_replace_pair_atomic, test_lock_no_follow, test_cert_no_follow,
-              test_cert_default_owner):
+              test_request_no_follow, test_cert_default_owner):
         guard(t.__name__, t)
 finally:
     for k in ENV_KEYS + ("MARK",):

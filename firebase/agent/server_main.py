@@ -336,14 +336,17 @@ def stop():
     _stop.set()
 
 
-def _write_private(path, text):
-    """글 파일을 0600 으로 원자적으로 쓴다 (임시 파일 → os.replace)."""
+def _write_private(path, text, owner=None):
+    """글 파일을 0600 으로 원자적으로 쓴다 (임시 파일 → os.replace). owner = (uid, gid) 면 걸기 전에 임시 파일의 fd 로 소유자를
+    바꾼다 - 건 뒤 경로로 chown 하지 않는다 (자료 폴더 안 이름은 서비스 계정이 그사이 링크로 바꿀 수 있다, Task 8.6)."""
     folder = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=folder, prefix=os.path.basename(path) + ".", suffix=".tmp")   # mkstemp 는 0600
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=os.path.basename(path) + ".", suffix=".tmp")   # mkstemp 는 0600, O_EXCL
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
             f.flush()
+            if owner is not None:
+                os.fchown(f.fileno(), *owner)
             os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
@@ -681,8 +684,9 @@ def _pid_alive(pid):
 
 def cmd_request(args, paths):
     """서버 번호·자리 서명 공개 열쇠가 든 라이선스 요청 파일 (비밀 값 없음). 자리 열쇠가 없으면 만든다 - 단 등록된 PC 가 있으면
-    새로 만들지 않는다 (run 의 종료 코드 4 와 같은 규칙 - 있던 자리 증명서가 모두 쓸모없어진다). root 로 부르면 만든 열쇠를
-    서비스 계정 소유로 둔다."""
+    새로 만들지 않는다 (run 의 종료 코드 4 와 같은 규칙 - 있던 자리 증명서가 모두 쓸모없어진다). root 로 부르면 만든 열쇠와
+    자료 폴더 안의 요청 파일을 서비스 계정 소유로 둔다 - 걸기 전에 fd 로 (경로로 chown 하지 않는다), seat.key 가 링크·하드링크면
+    따라가지 않고 1 (자료 폴더 안 이름은 서비스 계정이 바꿔 둘 수 있다 - Task 8.6)."""
     owner = None
     if _euid() == 0:
         try:
@@ -693,8 +697,7 @@ def cmd_request(args, paths):
         sid = license_check.server_id(MACHINE_ID)
     except license_check.LicenseError as e:
         return _err(str(e))
-    created = not os.path.exists(paths.seat_key)
-    if created:
+    if not os.path.lexists(paths.seat_key):          # 끊어진 링크는 '없음' 이 아니다 (ensure_key 가 거절)
         try:
             n = _pc_count(paths)
         except ValueError as e:
@@ -703,19 +706,17 @@ def cmd_request(args, paths):
             return _err("자리 서명 열쇠(seat.key)가 없습니다. 등록된 PC 가 있어 새로 만들지 않습니다 - 백업에서 복구하여 주십시오.")
     try:
         os.makedirs(paths.data, mode=0o700, exist_ok=True)
-        _, pub = seat.ensure_key(paths.data)
-        if created and owner is not None:
-            os.chown(paths.seat_key, *owner)
+        _, pub = seat.ensure_key(paths.data, owner=owner)
     except ValueError as e:
         return _err(str(e))
     except OSError as e:
         return _err(f"자리 서명 열쇠를 만들지 못했습니다 ({type(e).__name__}).")
     out = os.path.abspath(args.output or os.path.join(paths.data, REQUEST_NAME))
     doc = {"server_id": sid, "seat_pub": pub, "version": version(), "made": datetime.datetime.now().isoformat(timespec="seconds")}
+    in_data = owner is not None and os.path.dirname(out) == os.path.abspath(paths.data)
     try:
-        _write_private(out, json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
-        if owner is not None and os.path.dirname(out) == os.path.abspath(paths.data):
-            os.chown(out, *owner)                    # 자료 폴더 안의 파일은 서비스 계정 소유 (백업이 읽는다)
+        # 자료 폴더 안의 파일은 서비스 계정 소유 (백업이 읽는다)
+        _write_private(out, json.dumps(doc, ensure_ascii=False, indent=1) + "\n", owner=owner if in_data else None)
     except OSError as e:
         return _err(f"요청 파일을 쓰지 못했습니다 ({out}, {type(e).__name__}).")
     print(out)

@@ -155,7 +155,8 @@ def cmd_license(path, data):
     except license_check.LicenseError as e:
         fail(str(e))
     try:
-        secret = seat._read_secret(os.path.join(data, seat.SEAT_KEY))
+        # root 로 돈다 - 자료 폴더의 seat.key 가 링크·하드링크면 따라가 읽지 않는다 (Task 8.6)
+        secret = seat._read_secret(os.path.join(data, seat.SEAT_KEY), strict=True)
     except (ValueError, OSError) as e:
         fail(str(e))
     if secret is None:

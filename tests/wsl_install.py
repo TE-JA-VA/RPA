@@ -840,6 +840,41 @@ def test_cert_default_owner():
     check("웹 인증서는 업체 것", (json.loads(so or "{}").get("certs") or {}).get("web", {}).get("source") == "imported", so[-400:])
 
 
+def test_request_no_follow():
+    """설치된 실행 글로 root 가 request 를 칠 때 자료 폴더의 seat.key 가 root 전용 열쇠 파일로 가는 링크·하드링크면 그 열쇠를 읽지
+    않고 대상의 소유자·모드를 바꾸지 않는다 (Task 8.6 - 서비스 계정은 자료 폴더 안 이름을 바꿔 둘 수 있다)."""
+    b = MAIN.get("b")
+    if not b:
+        check("request 링크 (설치 실패로 건너뜀)", False)
+        return
+    sk = os.path.join(b.data, "seat.key")
+    req = os.path.join(b.data, "server_request.json")
+    aside = sk + ".keep"
+    victim = os.path.join(T, "request_victim.key")
+    other = os.urandom(32).hex()
+    with open(victim, "w", encoding="ascii") as f:
+        f.write(other + "\n")
+    os.chmod(victim, 0o600)
+    before, vst = read(req), os.stat(victim)
+    os.rename(sk, aside)
+    try:
+        for kind in ("symlink", "hardlink"):
+            (os.symlink if kind == "symlink" else os.link)(victim, sk)
+            try:
+                code, so, se = b.ap_run(["request", "--user", "nobody"])
+            finally:
+                os.remove(sk)
+            now = os.stat(victim)
+            check(f"seat.key 가 root 열쇠 파일로 가는 {kind} 면 request 1, 요청 파일 그대로", code == 1 and read(req) == before
+                  and "seat.key" in se, (code, so, se))
+            check(f"{kind}: 대상은 root 0600 그대로", (now.st_uid, stat.S_IMODE(now.st_mode)) == (vst.st_uid, 0o600), now)
+    finally:
+        os.rename(aside, sk)
+    code, so, se = b.ap_run(["request", "--user", "nobody"])
+    check("제자리 seat.key 면 request 0, seat.key·요청 파일은 서비스 계정 0600", code == 0 and owner(sk)[0] == SVC_UID
+          and owner(req)[0] == SVC_UID and mode(req) == 0o600 and mode(sk) == 0o600, (code, se, owner(sk), owner(req)))
+
+
 def upgrade(b, ver, env=None):
     path = bundle(ver)[0] if ver in BUNDLES else None
     t0 = time.time()
@@ -1045,11 +1080,12 @@ def main():
         REAL_RUNTIME = sys.argv[2]
         print(f"진짜 내장 파이썬 묶음: {os.path.basename(REAL_RUNTIME)}")
         tests = [test_install_uses_verified_copy, test_fresh_install_layout, test_launcher_imports, test_activate,
-                 test_cert_default_owner, test_upgrade_keeps_config_and_restarts, test_upgrade_rollback, test_interrupt_after_link]
+                 test_cert_default_owner, test_request_no_follow, test_upgrade_keeps_config_and_restarts, test_upgrade_rollback,
+                 test_interrupt_after_link]
     else:
         print("install.sh 와 systemd 단위 (wsl_install, 가짜 런타임)")
         tests = [test_expect_sha256, test_preflight, test_account_rules, test_install_uses_verified_copy, test_fresh_install_layout,
-                 test_unit_files, test_launcher_imports, test_activate, test_cert_default_owner,
+                 test_unit_files, test_launcher_imports, test_activate, test_cert_default_owner, test_request_no_follow,
                  test_upgrade_keeps_config_and_restarts, test_install_fails_clean, test_interrupt_after_link,
                  test_interrupt_in_units_backup, test_restore_link_fails, test_upgrade_rollback, test_refuse_format_downgrade,
                  test_prune_releases, test_firewall]
