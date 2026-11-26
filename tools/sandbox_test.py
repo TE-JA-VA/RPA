@@ -29,6 +29,10 @@ AFTER MARKET\\RPA Standalone 에 깔리고, 일반 폴더 AFTER MARKET\\RPA 는 
     ... --standalone --guid <이번만 쓰는 무작위 PC 번호> --license <그 번호의 license.json>
         --license-other <다른 무작위 번호의 license.json> [--test-key <시험용 빌드의 .testkey.txt>] <설치 파일>
     라이선스는 make_license.py 로 미리 발급해 넘긴다 (이 도구는 진짜 라이선스 열쇠를 읽지 않는다). 고정된 SANDBOX_GUID 는 받지 않는다.
+사내 서버 등록 (사내 서버 ⑤ Task 8 - 시험용 빌드, NT 가 같은 시험 열쇠 서버 빌드):
+    ... --standalone --lan-enroll <업체 웹 [PC 추가] 의 등록 글을 담은 파일> <시험용 설치 파일>
+    tools\\sandbox_inner_lan.ps1 이 설치 → 등록·저장 → 에이전트가 붙는지까지 보고 out\\ready.txt 를 쓴 뒤 켜 둔다 (업체 웹에서 실행·사용 중지·
+    지우기를 해 보는 동안 out\\status.json). 작업 폴더에 end.txt 를 만들면 끝낸다. 등록 글은 파일로만 넘기고 샌드박스 안에서 쓰고 지운다.
     '시험용' 표시(앱 이름·설정 창 제목·웹 띠)가 없는지, 시험 열쇠로 같은 번호에 서명한 라이선스가 거절되는지도 본다.
     끝나면 license*.json 이 든 작업 폴더를 지우는 것은 부르는 쪽 몫이다 (결과 폴더 위치를 찍는다).
 --cloud-setup: 스탠드얼론이 깔린 PC 에서 일반 설치 파일이 멈추는지도 본다.
@@ -184,6 +188,40 @@ def prepare_official(setup, work, guid, lic, lic_other, test_key=None, cloud_set
     return work
 
 
+def prepare_lan(setup, work, enroll_file):
+    """사내 서버 등록 샌드박스 (사내 서버 ⑤ Task 8): setup.exe·inner.ps1(sandbox_inner_lan.ps1)·enroll.txt(받은 등록 글 그대로).
+    라이선스·열쇠 파일은 넣지 않는다. 시험용 빌드가 아니면 ValueError(TEST_ONLY) - 사내 서버도 시험 열쇠 빌드(NT)다.
+    등록 글은 파일로만 넘긴다 (.wsb·명령 줄에 싣지 않는다). 글은 10분·한 번짜리이고, 끝나면 부르는 쪽이 작업 폴더를 지운다."""
+    if not SA_SETUP_RE.search(os.path.basename(setup)) or not os.path.isfile(test_key_path(setup)):
+        raise ValueError(TEST_ONLY)
+    os.makedirs(work, exist_ok=True)
+    shutil.copy2(setup, os.path.join(work, "setup.exe"))
+    shutil.copy2(os.path.join(HERE, "sandbox_inner_lan.ps1"), os.path.join(work, "inner.ps1"))
+    shutil.copy2(enroll_file, os.path.join(work, "enroll.txt"))
+    return work
+
+
+def write_wsb(work, offline=False):
+    with open(os.path.join(work, "test.wsb"), "w", encoding="utf-8") as f:
+        f.write(WSB.format(work=work, extra=OFFLINE if offline else ""))
+
+
+def wait_lan(work, minutes=20):
+    """사내 서버 샌드박스: 첫 확인(설치·등록·저장·에이전트가 붙음)이 끝나 out\\ready.txt 가 생기기를 기다려 결과를 찍는다 → 종료 코드.
+    샌드박스는 켜 둔다 - 업체 웹에서 실행·사용 중지·지우기를 해 보는 동안 out\\status.json 이 5초마다 바뀐다.
+    끝내려면 작업 폴더에 end.txt 를 만든다 (안쪽이 마지막 결과를 쓰고 샌드박스를 끈다)."""
+    print(f"샌드박스를 띄웁니다 (사내 서버 등록). 결과 폴더: {work}\\out")
+    subprocess.Popen([SANDBOX, os.path.join(work, "test.wsb")])
+    ready, results = os.path.join(work, "out", "ready.txt"), os.path.join(work, "out", "results.txt")
+    until = time.time() + minutes * 60
+    while time.time() < until and not os.path.exists(ready):
+        time.sleep(5)
+    text = open(results, encoding="utf-8-sig").read() if os.path.exists(results) else "(결과 없음)"
+    print(text)
+    print(f"샌드박스는 켜 둡니다. 상태: {work}\\out\\status.json  끝내기: {work}\\end.txt 를 만드십시오.")
+    return 0 if os.path.exists(ready) and "실패  " not in text else 1
+
+
 def _take(args, flag):
     """args 에서 '<flag> <값>' 을 빼 값을 돌려준다 (없으면 None, 값이 없으면 "")."""
     if flag not in args:
@@ -217,9 +255,27 @@ def main_standalone(args, offline=False):
             print(f"{label} 의 일반 설치 파일이 없습니다: {path}")
             return 2
     guid, lic, lic_other, test_key = (_take(args, f) for f in ("--guid", "--license", "--license-other", "--test-key"))
+    lan = _take(args, "--lan-enroll")         # 사내 서버 등록 (⑤ Task 8): 업체 웹에서 받은 등록 글 파일
     if len(args) != 1 or not os.path.isfile(args[0]):
         print(__doc__)
         return 2
+    if lan is not None:
+        if not lan or not os.path.isfile(lan):
+            print(f"--lan-enroll 의 등록 글 파일이 없습니다: {lan}")
+            return 2
+        if not os.path.isfile(SANDBOX):
+            print("윈도우 샌드박스가 꺼져 있습니다 (위 설명의 명령으로 켜고 재부팅)")
+            return 2
+        work = tempfile.mkdtemp(prefix="rpa_sbx_lan_")
+        try:
+            prepare_lan(args[0], work, lan)
+        except ValueError as e:
+            print(e)
+            shutil.rmtree(work, ignore_errors=True)
+            return 2
+        write_wsb(work, offline)
+        print(f"사내 서버 등록 시험: {os.path.basename(args[0])}")
+        return wait_lan(work)
     official = bool(OFFICIAL_SETUP_RE.search(os.path.basename(args[0])))
     if official and not (guid and lic and lic_other and os.path.isfile(lic) and os.path.isfile(lic_other)
                          and (test_key is None or os.path.isfile(test_key))):

@@ -213,5 +213,42 @@ check("sandbox_test 의 기본 결과 자리 = build_release 의 버전 종류�
       sb.OUT_ROOTS == {"배포_": br.default_out_root("cloud"), "배포_SA_": br.default_out_root("standalone"),
                        "배포_SA_TEST_": br.default_out_root("standalone")})
 
+print("=== 사내 서버 등록 샌드박스 (사내 서버 ⑤ Task 8) ===")
+with tempfile.TemporaryDirectory() as tmp:
+    rel = os.path.join(tmp, "rel")
+    os.makedirs(rel)
+    setup = os.path.join(rel, "AUTOPILOT_Standalone_TEST_Setup_2099.01.01-1.exe")
+    open(setup, "wb").write(b"MZ fake")
+    with open(os.path.join(rel, "배포_SA_TEST_2099.01.01-1.testkey.txt"), "w", encoding="ascii") as f:
+        f.write(update_sign.keygen()[0].hex() + "\n")
+    enroll = os.path.join(tmp, "등록글.txt")
+    TEXT = "APE1.시험용등록글_샌드박스"
+    with open(enroll, "w", encoding="utf-8") as f:
+        f.write(TEXT + "\n")
+    work = sb.prepare_lan(setup, os.path.join(tmp, "lan"), enroll)
+    names = set(os.listdir(work))
+    check("사내 서버 작업 폴더: setup·inner(사내 서버용)·enroll.txt, 라이선스·열쇠 파일 없음",
+          {"setup.exe", "inner.ps1", "enroll.txt"} <= names and not any("license" in n or "key" in n.lower() for n in names))
+    check("inner.ps1 은 sandbox_inner_lan.ps1", open(os.path.join(work, "inner.ps1"), "rb").read()
+          == open(os.path.join(ROOT, "tools", "sandbox_inner_lan.ps1"), "rb").read())
+    check("enroll.txt 는 받은 글 그대로 (파일로만 넘긴다)", open(os.path.join(work, "enroll.txt"), encoding="utf-8").read().strip() == TEXT)
+    sb.write_wsb(work)
+    wsb = open(os.path.join(work, "test.wsb"), encoding="utf-8").read()
+    check("샌드박스 설정(.wsb)에 등록 글이 실리지 않는다", TEXT not in wsb and "inner.ps1" in wsb)
+    code, out = quiet(sb.main, ["--standalone", setup, "--lan-enroll", os.path.join(tmp, "없음.txt")])
+    check("--lan-enroll 파일이 없으면 2", code == 2)
+    try:
+        sb.prepare_lan(os.path.join(rel, "AUTOPILOT_Setup_2099.01.01-1.exe"), os.path.join(tmp, "lan2"), enroll)
+        raised = False
+    except ValueError as e:
+        raised = str(e) == sb.TEST_ONLY
+    check("사내 서버 샌드박스도 시험용 빌드만 (TEST_ONLY)", raised)
+lan_inner = open(os.path.join(ROOT, "tools", "sandbox_inner_lan.ps1"), encoding="utf-8-sig").read()
+check("사내 서버 inner: 라이선스를 넣지 않고 install_link·save, 로컬 서버(8781)가 듣지 않는지, end.txt 를 기다린다",
+      "license.json" not in lan_inner and "install_link" in lan_inner and "rs.save" in lan_inner and "8781" in lan_inner
+      and "end.txt" in lan_inner and "ready.txt" in lan_inner)
+check("사내 서버 inner 는 BOM 있는 UTF-8 (PowerShell 5.1)", open(os.path.join(ROOT, "tools", "sandbox_inner_lan.ps1"), "rb").read(3)
+      == b"\xef\xbb\xbf")
+
 print(f"\n실패: {fails}")
 sys.exit(1 if fails else 0)
