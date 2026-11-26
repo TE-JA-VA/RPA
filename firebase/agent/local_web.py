@@ -893,6 +893,7 @@ class Web:
         self.store, self.runs, self.lic, self.folder = store, runs, lic, folder
         self.registry = registry
         self.public_url = None                       # make_server 가 적는다 (등록 글에 싣는 서버 주소)
+        self.public_web_url = None                   # 사내망: 업체 웹 주소 - 등록 글의 web 칸 (프록시 뒤면 None, 사내 서버 ⑤ Task 4)
         self.server = None                           # 붙은 서버 - make_server·make_lan_servers 가 적는다 (웹 구독 상한 max_streams)
         self.lan_ca_pem = None                       # 사내망: 우리 인증 기관 PEM 글 - 등록 글의 ca 로 싣는다 (lan_server.make_lan_servers 가 적는다)
         self.web_dir = os.path.realpath(web_dir) if web_dir else None
@@ -2112,6 +2113,8 @@ class Web:
         info = {"v": 1, "url": self.public_url, "pc": got["pc_id"], "token": got["token"], "exp": got["expires_at"]}
         if self.lan_ca_pem:
             info["ca"] = self.lan_ca_pem             # 에이전트가 믿을 우리 인증 기관 (https 주소면 꼭 있어야 한다 - pc_registry)
+        if self.public_web_url:
+            info["web"] = self.public_web_url        # 업체 웹 주소 - PC 설정 창의 대시보드 바로 가기 (⑤ Task 4)
         text = pc_registry.encode_enrollment(info)
         self._audit(f"PC 추가  번호={got['pc_id']}  이름={reg.label(got['pc_id']) or ''}  처리={me['id']}")
         return {"pcId": got["pc_id"], "enrollment": text, "expiresAt": got["expires_at"]}

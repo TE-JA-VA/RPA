@@ -369,6 +369,10 @@ def make_lan_servers(store, runs, lic, registry, web, cfg, cert, key, ca_pem, ph
         w.cfg = a.cfg = cfg
     if web is not None:
         web.public_url = f"https://{lan_config._host(cfg.listen, cfg.agent_port)}"
+        # 업체 웹 주소 (PC 설정 창이 대시보드 바로 가기에 쓴다, 사내 서버 ⑤ Task 4). 프록시가 TLS 를 끝내거나(web_plain) 프록시로만 받으면
+        # (proxy_only) 브라우저가 쓰는 주소를 서버가 모른다 - 싣지 않는다
+        web.public_web_url = (None if cfg.web_plain or cfg.proxy_only
+                              else f"https://{lan_config._host(cfg.listen, cfg.web_port)}")
         web.lan_ca_pem = ca_pem
         web.cfg = cfg
         web.server = w                               # 웹 구독 상한은 웹 포트 서버의 배치를 따른다 (Web.max_streams)

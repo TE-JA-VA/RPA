@@ -229,6 +229,18 @@ def test_layout():
           and e.web.cfg.agent_port == e.ap, (e.web.cfg.web_port, e.web.cfg.agent_port, e.wp, e.ap))
     check("등록 글의 서버 주소는 에이전트 포트의 IP (https)", e.ui.public_url == f"https://127.0.0.1:{e.ap}", e.ui.public_url)
     check("웹 창구에 인증 기관 글·설정", e.ui.lan_ca_pem == CA_PEM and e.ui.cfg is e.web.cfg)
+    check("웹 창구에 업체 웹 주소 (웹 포트의 IP, https) - 사내 서버 ⑤ Task 4",
+          getattr(e.ui, "public_web_url", None) == f"https://127.0.0.1:{e.wp}", getattr(e.ui, "public_web_url", None))
+    q = start()
+    _, info, _ = add_pc(q, "웹주소")
+    check("등록 글에 web 칸 (설정 창이 대시보드 바로 가기를 이 주소로)", (info or {}).get("web") == f"https://127.0.0.1:{q.wp}", info)
+    stop(q)
+    q = start({"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8"], "trusted_proxies": ["127.0.0.1"],
+               "proxy_only": True})
+    _, info, _ = add_pc(q, "프록시뒤")
+    check("proxy_only 면 업체 웹 주소를 모른다 - web 칸 없음", getattr(q.ui, "public_web_url", "x") is None and "web" not in (info or {}),
+          (getattr(q.ui, "public_web_url", "x"), info))
+    stop(q)
     check("웹 창구가 없는 처리기 (lan_ca_pem·cfg 는 None 으로 시작)",
           local_web.Web(e.store, None, LIC, e.folder, None).lan_ca_pem is None
           and local_web.Web(e.store, None, LIC, e.folder, None).cfg is None)
@@ -265,6 +277,7 @@ def test_layout():
     p = start({"listen": "127.0.0.1", "names": ["localhost"], "allow": ["127.0.0.0/8"], "trusted_proxies": ["127.0.0.1"],
                "web_plain": True, "proxy_secret": PROXY_SECRET})
     check("웹 포트는 TLS 없음, 에이전트는 TLS", p.web.tls is None and isinstance(p.agent.tls, ssl.SSLContext))
+    check("web_plain 이면 업체 웹 주소를 모른다 (public_web_url None)", getattr(p.ui, "public_web_url", "x") is None)
     # 믿을 프록시(127.0.0.1)가 https 를 끝내고 넘긴 모양 (Task 6) - 보낸 쪽 주소도 넘긴다 (없으면 403, ② 전체 검토 5).
     # 사내 서버 ④ (Codex 검토 13): 평문 모양은 프록시 비밀 머리글도 있어야 받는다
     g = call(p.wp, "GET", "/index.html", headers={"X-Forwarded-Proto": "https", "X-Forwarded-For": "127.0.0.2",
