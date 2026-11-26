@@ -102,6 +102,8 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
+import types
 
 import ctypes.wintypes
 
@@ -131,6 +133,7 @@ PROCESS_WAIT_SECONDS = 30
 ERPIA_EXIT_WAIT_SECONDS = 30   # 관리자 권한 ERPia 를 끈 뒤 프로세스가 사라지기를 기다리는 최대 시간
 ERPIA_ELEVATED_NOTE = "ERPia가 관리자 권한으로 실행되어 있어 일반 권한 RPA가 다룰 수 없습니다."
 ERPIA_RESTARTS = 2             # 실행 한 번에 도중에 꺼진 ERPia 를 다시 띄우는 최대 횟수 (계속 꺼지면 멈춘다)
+ERPIA_DYING_WAIT_SECONDS = 5   # 모듈 예외 뒤 ERPia 프로세스가 끝나는지 지켜보는 시간 - 꺼질 때 창이 먼저 사라지고 프로세스는 늦게 끝난다
 LOGIN_WINDOW_WAIT_SECONDS = 30
 # 로그인 후 메인 화면(좌측 메뉴 포함)이 완전히 뜰 때까지 기다리는 최대 시간
 MAIN_WINDOW_READY_TIMEOUT = 90
@@ -172,6 +175,12 @@ IMPORT_BUTTON_NAME = "가져오기"
 IMPORT_BUSY_WAIT_SECONDS = 15      # 클릭 뒤 '조회중'으로 바뀌기를 기다리는 시간
 IMPORT_POLL_SECONDS = 0.5
 IMPORT_SETTLE_SECONDS = 3          # 둘 다 돌아온 뒤 이만큼 유지되어야 완료로 본다
+IMPORT_MISS = None                 # run_import_step 이 None(건너뜀)을 돌려준 까닭 - 단추 없음·눌렀으나 조회 안 됨 (누르기 오류는 위로 올린다) (검토 2026-11-25)
+
+
+def import_miss():
+    """마지막 [가져오기] 건너뜀 사유 - 어느 쪽인지 나눠 적는다 (단추 없음·눌렀으나 조회가 시작되지 않음, 검토 2026-11-25)."""
+    return IMPORT_MISS or f"'{IMPORT_BUTTON_NAME}'를 누르지 못했거나 눌러도 조회가 시작되지 않아 건너뛰었습니다."
 # 많이 쓰는 업체도 1시간은 넘지 않는다고 해서 45분으로 잡았다 (실측 324초의 8배).
 # 여기에 걸리면 '완료를 확인하지 못했다'고 남기고 다음 단계로 넘어간다.
 IMPORT_MAX_WAIT_SECONDS = 2700
@@ -259,17 +268,20 @@ logs = []
 _log_started = False
 
 
-def log(msg):
+def log(msg, cloud=True):
     """화면에 찍고, 그때그때 파일에도 덧붙인다.
 
     예전에는 맨 끝에서 한 번에 썼다. 그러면 강제 종료했을 때 파일이 아예
     생기지 않아, 정작 원인을 알아야 하는 상황에서 볼 것이 없었다.
+    cloud=False 면 상태 파일의 최근 로그(log_tail - 클라우드로 올라간다)에는 넣지 않고 PC 결과 파일에만 (오류 추적처럼 경로·창 글이
+    섞인 긴 글 - 검토 2026-11-25).
     """
     global _log_started
     line = f"[{time.strftime('%H:%M:%S')}] {msg}" if msg.strip() else msg
     logs.append(line)
     print(line)
-    status.log_line(line)
+    if cloud:
+        status.log_line(line)
     try:
         mode = "a" if _log_started else "w"
         with open(RESULT_PATH, mode, encoding="utf-8") as f:
@@ -616,9 +628,57 @@ def wait_for_active_main_tab(app, hwnd, keyword, timeout=20, interval=1.0, ctx=N
                 if ctx is not None:
                     ctx.hwnd, ctx.app, ctx.pid = new_hwnd, new_app, new_pid   # 호출자도 새 창을 쓰게 한다
                 log(f"  메인 창 다시 확보: hwnd={hwnd}")
+        # 따로 뜬 ERPia 팝업 창이 막고 있으면 탭이 안 바뀐다 (사용자 2026-11-20). 닫았으면 잠깐만 더 보고(화면이 열리며 뜬 안내였으면 그새
+        # 바뀐다) 안 바뀌면 돌아가 다시 누르게 한다 - 또 닫아도 늘리지 않는다. 죽은 핸들은 위에서 먼저 다시 잡는다 (새 메인 창을 팝업으로 보지 않게, 검토 11-20)
+        if ctx is not None and wellife.clear_separate_popups(sys.modules[__name__], ctx, f"화면 이동('{keyword}')"):
+            timeout = min(timeout, waited + wellife.TAB_AFTER_POPUP_SECONDS)
         time.sleep(interval)
         waited += interval
     return False, last
+
+
+def press(hwnd, el, what, coords=None, popup=False, work=False, **kw):
+    """ERPia 메인 창 안을 누른다 - 웰라이프 click 과 같은 안전장치 (사용자 2026-11-19): 화면이 잠겼거나·ERPia 를 앞으로 못 가져오거나·
+    누를 자리가 창 밖이거나·다른 창이 덮고 있으면(5초까지 비켜나기를 기다림) 누르지 않고 wellife.Stop. 확인한 그 점을 누른다.
+    coords: el 왼쪽 위 기준 (click_input 과 같다), 없으면 가운데. kw 는 click_input 에 그대로 (button·pressed·double).
+    popup: 팝업 단추 - 메인 창 UIA 훑기에는 ERPia 가 따로 띄운 팝업 창의 단추도 잡힌다 (검토 2026-11-23). 그 단추가 속한 창(owner_window)이
+    메인 창이 아니면 그 창을 앞으로 하고 그 창 하나만 맨 위여도 누른다 (검토 2026-11-25 - 다른 팝업이 덮으면 누르지 않는다).
+    work: 데이터를 바꾸는 단추 - 확인을 지나 실제로 누르기 바로 앞에 처리 시작을 적는다 (rpa_status.began_work, wellife.click 과 같다 -
+    덮여서 누르지 않은 반복 회차가 '처리 도중' 실패로 반복을 멈추지 않게, Codex 검토 2026-11-25)."""
+    me = sys.modules[__name__]
+    ctx = types.SimpleNamespace(hwnd=hwnd, pid=win32process.GetWindowThreadProcessId(hwnd)[1],
+                                window=lambda: Desktop(backend="uia").window(handle=hwnd))
+    pt = None
+    if coords is not None:
+        r = el.rectangle()
+        pt = (r.left + coords[0], r.top + coords[1])
+    own = owner_window(el) if popup else None
+    if own and own != hwnd:
+        # ERPia 가 따로 띄운 팝업 창의 단추 - 그 창을 앞으로 하고, 그 창 하나만 맨 위여도 된다 (검토 2026-11-25: 메인 창을 앞으로 하면
+        # 모달 팝업이 앞을 쥐어 '앞으로 못 가져옴' 으로 멈추고, 예전 allow 는 다른 ERPia 팝업이 덮어도 눌렀다)
+        if ec.screen_locked():
+            raise wellife.Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다.")
+        if not ec.ensure_foreground(own):   # 앞으로 못 가져오면 멈춘다 - wellife.front 와 같은 안전장치 (교차 검증 2026-11-25)
+            raise wellife.Stop("failed", f"{what}: ERPia 팝업 창을 앞으로 가져오지 못해 누르지 않고 중단하였습니다.")
+        # 맨 위 창이 그 팝업일 때만, 누를 자리도 그 팝업 사각형 안이어야 - 메인 창이 맨 위면 누르지 않는다. 덮은 작은 창에 ESC 를 보내지
+        # 않는다 - 방금 앞으로 가져온 팝업이 ESC 로 닫히면 드러난 메인 창 화면을 누르게 된다 (리뷰 2차 2026-11-25)
+        pctx = types.SimpleNamespace(hwnd=own, pid=ctx.pid, window=lambda: Desktop(backend="uia").window(handle=own))
+        pt = wellife.clear_point(me, pctx, el, what, pt, esc=False)
+    else:
+        wellife.front(me, ctx, what)
+        pt = wellife.clear_point(me, ctx, el, what, pt)
+    if work:
+        status.began_work()
+    el.click_input(coords=pt, absolute=True, **kw)
+
+
+def owner_window(el):
+    """요소가 속한 최상위 창 (GA_ROOT). 못 읽으면 None."""
+    try:
+        h = el.element_info.handle or el.top_level_parent().handle
+        return win32gui.GetAncestor(h, 2) if h else None
+    except Exception:
+        return None
 
 
 def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
@@ -680,24 +740,23 @@ def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
         return "absent"
 
     log(f"'{label}'({key}) 아이콘 클릭: rect={target.rectangle()}")
-    ec.ensure_foreground(ctx.hwnd)
-    try:
-        target.click_input()
-    except Exception as e:
-        # 찾은 뒤 누르기 전에 창이 다시 만들어진 경우
-        log(f"  '{label}' 아이콘 클릭 중 오류 -> 메인 창을 다시 잡고 재시도: {type(e).__name__}")
-        if not ctx.refresh():
-            return "failed"
-        target = find_by_text(ctx.window(), key, control_types=("Pane",))
-        if target is None:
-            log(f"'{label}'({key}) 아이콘을 다시 찾지 못했습니다.")
-            return "failed"
-        ec.ensure_foreground(ctx.hwnd)
-        target.click_input()
+    wellife.clear_separate_popups(sys.modules[__name__], ctx, f"'{label}' 화면 이동 전")     # 따로 뜬 팝업 창은 닫는다 - 있으면 클릭이 먹지 않는다
+    if not _press_icon(ctx, key, label, target):
+        return "failed"
 
     # 탭이 미리 열려 있을 수 있으므로 '존재'가 아니라 '활성 탭'으로 확인한다.
     # 화면이 만들어지는 데 시간이 걸리므로 나타날 때까지 기다린다.
+    before = getattr(ctx, "popups_closed", 0)
     ok, active = wait_for_active_main_tab(ctx.app, ctx.hwnd, tab_keyword, ctx=ctx)
+    if not ok and getattr(ctx, "popups_closed", 0) != before:     # 기다리는 동안 팝업 창을 닫았다 - 그 클릭은 먹지 않았다 (11-20)
+        log(f"  '{label}' 화면 이동을 기다리는 동안 팝업 창을 닫아 아이콘을 다시 찾아 한 번 더 누릅니다.")
+        target = find_by_text(ctx.window(), key, control_types=("Pane",))    # 옛 아이콘이 아니라 - 그새 창이 다시 만들어졌을 수 있다 (검토 11-20)
+        if target is None:
+            log(f"'{label}'({key}) 아이콘을 다시 찾지 못했습니다.")
+            return "failed"
+        if not _press_icon(ctx, key, label, target):
+            return "failed"
+        ok, active = wait_for_active_main_tab(ctx.app, ctx.hwnd, tab_keyword, ctx=ctx)
     if ok:
         log(f"'{label}' 화면 이동 확인됨 (활성 메인탭='{active}')")
         return "ok"
@@ -709,6 +768,32 @@ def goto_screen_by_icon(ctx, key, label, tab_keyword, wait_seconds=30):
     return "failed"
 
 
+def _press_icon(ctx, key, label, target):
+    """화면 이동 아이콘 target 을 누른다 (눌렀으면 True). 찾은 뒤 누르기 전에 메인 창이 다시 만들어졌으면 - 죽은 창이면 press 가 '앞으로
+    못 가져옴' 으로 멈추거나 UI 오류가 난다 - 메인 창을 다시 잡고 아이콘을 다시 찾아 누른다 (못 하면 False). 살아 있는 창에서 멈춘 것
+    (덮개·잠김 - wellife.Stop)은 그대로 올린다 (검토 2026-11-20)."""
+    try:
+        if win32gui.IsWindow(ctx.hwnd):
+            press(ctx.hwnd, target, f"'{label}' 아이콘")
+            return True
+        why = "메인 창 핸들 무효"
+    except wellife.Stop:
+        if win32gui.IsWindow(ctx.hwnd):
+            raise
+        why = "메인 창 핸들 무효"
+    except Exception as e:
+        why = type(e).__name__
+    log(f"  '{label}' 아이콘을 누르지 못함({why}) -> 메인 창을 다시 잡고 재시도")
+    if not ctx.refresh():
+        return False
+    target = find_by_text(ctx.window(), key, control_types=("Pane",))
+    if target is None:
+        log(f"'{label}'({key}) 아이콘을 다시 찾지 못했습니다.")
+        return False
+    press(ctx.hwnd, target, f"'{label}' 아이콘")
+    return True
+
+
 def goto_hold_screen(ctx):
     """좌측 '물류대기'(lcg_HoldLogistics) 아이콘 -> '물류대기 관리' 탭."""
     return goto_screen_by_icon(ctx, "lcg_HoldLogistics", "물류대기", "물류대기")
@@ -716,7 +801,25 @@ def goto_hold_screen(ctx):
 
 def goto_logistics_screen(ctx):
     """좌측 '물류처리'(lcg_Logistics) 아이콘 -> '물류 관리' 탭. (아이콘 이름과 탭 이름이 다르다)"""
-    return goto_screen_by_icon(ctx, "lcg_Logistics", "물류처리", "물류 관리")
+    return goto_screen_by_icon(ctx, LOGISTICS_ICON, "물류처리", LOGISTICS_TAB)
+
+
+LOGISTICS_TAB, LOGISTICS_ICON = "물류 관리", "lcg_Logistics"
+
+
+def open_screen(ctx, tab, icon, original):
+    """화면 이동 - 웰라이프와 같은 wellife.goto_screen 으로 (사용자 2026-11-23: 탭이 열려 있어서 이동에 실패한 것은 명백한 버그).
+    이미 열린 화면은 그 탭을 누르고, 아이콘·탭은 자식을 따라 찾아 빨리 확인한다. 창 전체를 훑는 옛 방식(original - goto_screen_by_icon)은
+    그 길로 아이콘을 못 찾았을 때만 쓴다 - 화면이 많이 열려 있거나 번호 붙은 화면이 있으면 옛 방식은 떠 있는 탭을 못 읽어 2분 헛기다리고
+    아이콘을 빠뜨렸다 (11-23 회차5 B6·B7, 11-09·10-14 실측). 'ok' / 'absent'(아이콘이 정말 없음) / 실패 사유 글.
+    번호 붙은 같은 화면이 있을 때의 absent 는 실패 사유로 바꾼다 - '메뉴 없는 업체' 로 건너뛰지 않게 (R7, 2026-11-03)."""
+    r = wellife.goto_screen(sys.modules[__name__], ctx, tab, icon, original)
+    if r == "ok":
+        return r
+    dup = wellife.dup_note(ctx)
+    if r == "absent":
+        return f"'{tab}' 아이콘({icon})을 찾지 못했습니다." + dup if dup else r
+    return r if not dup or dup in r else r + dup
 
 
 def get_horizontal_scrollbar(grid):
@@ -943,8 +1046,7 @@ def sort_grid_by_status_desc(hwnd, grid, status_col="상품상태",
         while state != "desc" and clicks < max_clicks:
             clicks += 1
             log(f"  '{status_col}' 헤더 클릭 {clicks}회 (현재: {state})")
-            ec.ensure_foreground(hwnd)
-            header.click_input()
+            press(hwnd, header, f"'{status_col}' 머리글")
             time.sleep(3)
             state = header_sort_state(header)
         if state != "desc":
@@ -971,8 +1073,7 @@ def sort_grid_by_status_desc(hwnd, grid, status_col="상품상태",
     all_abnormal = 0
     for i in range(1, max_clicks + 1):
         log(f"  '{status_col}' 헤더 클릭 {i}회 (내림차순 확정)")
-        ec.ensure_foreground(hwnd)
-        header.click_input()
+        press(hwnd, header, f"'{status_col}' 머리글")
         time.sleep(3)
 
         vals = snapshot()
@@ -1037,14 +1138,15 @@ def grid_jump_to_bottom(hwnd, grid, allow_keys=True, max_pages=400):
         try:
             cell = pick_grid_cell(grid)
             if cell is not None:
-                ec.ensure_foreground(hwnd)
-                cell.click_input()
+                press(hwnd, cell, "그리드 맨 아래 칸")
                 time.sleep(0.3)
                 send_keys("^{END}")
                 time.sleep(1.0)
                 if grid_at_bottom(grid):
                     log("    맨 아래로 이동 (Ctrl+End)")
                     return True
+        except wellife.Stop:
+            raise
         except Exception:
             pass
 
@@ -1185,7 +1287,9 @@ def right_click_element_and_select(pid, hwnd, element, menu_text, wait=1.5):
 
     ec.ensure_foreground(hwnd)
     try:
-        element.click_input(button="right")
+        press(hwnd, element, "우클릭할 자리", button="right")
+    except wellife.Stop:
+        raise
     except Exception as e:
         log(f"  우클릭 실패: {e}")
         return False
@@ -1223,8 +1327,40 @@ def right_click_element_and_select(pid, hwnd, element, menu_text, wait=1.5):
 
     log(f"  컨텍스트 메뉴 '{menu_text}' 클릭: {target.rectangle()} (enabled={enabled})")
     _CONTEXT_MENU_HWND = found_hwnd
-    target.click_input()
+    press_context_menu_item(pid, target, found_hwnd, menu_text)
     return True
+
+
+DATA_MENU_ITEMS = ("배송보류", "개별 배송(B)")     # 데이터를 바꾸는 우클릭 메뉴 항목 - 누르기 바로 앞에 처리 시작을 적는다 ('선택영역 체크' 는 아니다)
+
+
+def press_context_menu_item(pid, target, menu_hwnd, menu_text):
+    """열린 우클릭 메뉴의 항목을 누른다 - 웰라이프 press_menu_item 과 같은 확인 (Codex 검토 2026-11-25, 예전엔 바로 눌렀다):
+    화면이 잠겼거나 그 자리의 맨 위 창이 메뉴 창(menu_hwnd)이 아니면(COVER_WAIT_SECONDS 까지 비켜나기를 기다림) 누르지 않고 wellife.Stop.
+    메뉴는 ESC 로 닫되 맨 앞 창이 ERPia 일 때만 보낸다 (다른 프로그램으로 키가 가지 않게). 확인한 그 점을 누른다.
+    DATA_MENU_ITEMS 면 누르기 바로 앞에 처리 시작을 적는다 (rpa_status.began_work)."""
+    me = sys.modules[__name__]
+    r = target.rectangle()
+    pt = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    what = f"우클릭 메뉴 '{menu_text}'"
+    if ec.screen_locked():
+        raise wellife.Stop("stopped", f"{what}: 윈도우 화면이 잠겨 있어 누르지 않고 중단하였습니다. (메뉴가 열려 있을 수 있음)")
+    deadline = time.time() + wellife.COVER_WAIT_SECONDS
+    top = wellife._top_window(me, pt)
+    while top != menu_hwnd and time.time() < deadline:
+        time.sleep(0.1)
+        top = wellife._top_window(me, pt)
+    if top != menu_hwnd:
+        try:
+            if win32process.GetWindowThreadProcessId(win32gui.GetForegroundWindow())[1] == pid:
+                send_keys("{ESC}")
+        except Exception:
+            pass
+        raise wellife.Stop("failed", f"{what}: 그 자리를 다른 창({wellife._window_who(me, top)})이 덮고 있어 누르지 않고 중단하였습니다. "
+                                     "(메뉴가 열려 있을 수 있음)")
+    if menu_text in DATA_MENU_ITEMS:
+        status.began_work()
+    target.click_input(coords=pt, absolute=True)
 
 
 def select_abnormal_range_and_check(pid, hwnd, grid, status_col="상품상태",
@@ -1257,7 +1393,9 @@ def select_abnormal_range_and_check(pid, hwnd, grid, status_col="상품상태",
 
     # 1) 맨 아래로 가서 마지막 행을 앵커로 잡는다.
     log("  맨 아래로 이동합니다")
-    grid_jump_to_bottom(hwnd, grid, allow_keys=True)
+    if not grid_jump_to_bottom(hwnd, grid, allow_keys=True):    # 못 가면 화면의 마지막 행이 '정상' 이어서 '대상 없음' 으로 잘못 본다 (검토 11-23)
+        log("  그리드 맨 아래로 가지 못했습니다. 비정상 구간을 판별하지 않습니다.")
+        return "error"
 
     # Ctrl+End 는 맨 아래-맨 오른쪽 셀로 가서 '가로 위치'까지 바꿀 수 있다. 상품상태가
     # 맨 오른쪽 컬럼이 아니면 화면 밖으로 밀려, 앞서 잡아둔 x 가 엉뚱한 컬럼을 가리킨다.
@@ -1286,8 +1424,7 @@ def select_abnormal_range_and_check(pid, hwnd, grid, status_col="상품상태",
         return "none"
 
     log(f"  마지막 행 클릭(앵커): '{last_val}' {last_el.rectangle()}")
-    ec.ensure_foreground(hwnd)
-    last_el.click_input()
+    press(hwnd, last_el, "마지막 행 (앵커)")
     time.sleep(0.5)
 
     # 2) 위로 거슬러 올라가며 '정상'이 나오는 지점을 찾는다.
@@ -1343,8 +1480,7 @@ def select_abnormal_range_and_check(pid, hwnd, grid, status_col="상품상태",
 
     # 3) 경계 행을 Shift+클릭해 앵커(마지막 행)까지 한 번에 선택한다.
     log(f"  경계 행 Shift+클릭: '{boundary_val}' {boundary_el.rectangle()}")
-    ec.ensure_foreground(hwnd)
-    boundary_el.click_input(pressed="shift")
+    press(hwnd, boundary_el, "경계 행 (Shift+클릭)", pressed="shift")
     time.sleep(1.0)
 
     if right_click_element_and_select(pid, hwnd, boundary_el, "선택영역 체크"):
@@ -1365,7 +1501,7 @@ def right_click_grid_and_select(pid, hwnd, grid, menu_text, wait=1.5):
 
     ec.ensure_foreground(hwnd)
     log(f"  그리드 우클릭(대체 좌표): ({cx}, {cy})")
-    grid.click_input(button="right", coords=(cx - r.left, cy - r.top))
+    press(hwnd, grid, "그리드 우클릭 자리", button="right", coords=(cx - r.left, cy - r.top))
     time.sleep(wait)
 
     # 컨텍스트 메뉴는 별도 최상위 창일 수도, 메인 창 내부일 수도 있다
@@ -1383,7 +1519,7 @@ def right_click_grid_and_select(pid, hwnd, grid, menu_text, wait=1.5):
         if cands:
             target = cands[0]
             log(f"  컨텍스트 메뉴에서 '{menu_text}' 클릭 (창 handle={w.handle}, rect={target.rectangle()})")
-            target.click_input()
+            press_context_menu_item(pid, target, w.handle, menu_text)
             return True
 
     log(f"  컨텍스트 메뉴에서 '{menu_text}'를 찾지 못했습니다.")
@@ -1422,26 +1558,67 @@ def select_all_by_header_checkbox(hwnd, grid, max_clicks=2):
             y += rh
         return states
 
-    for attempt in range(1, max_clicks + 1):
-        states = read_states()
-        real = [s for s in states if s in ("선택", "선택안됨")]
-        checked = [s for s in real if s == "선택"]
-        if real and len(checked) == len(real):
-            log(f"  전체선택 확인됨 (샘플 {len(real)}행 모두 체크)"
-                f"{' - 이미 선택되어 있어 누르지 않음' if attempt == 1 else ''}")
-            return True
+    def read():     # 위 10줄 표본 (체크, 미체크)
+        real = [s for s in read_states() if s in ("선택", "선택안됨")]
+        checked = sum(1 for s in real if s == "선택")
+        return checked, len(real) - checked
 
-        log(f"  헤더 체크박스 클릭(전체선택) 시도 {attempt} "
-            f"(샘플 {len(real)}행 중 체크 {len(checked)}행)")
-        ec.ensure_foreground(hwnd)
-        header.click_input()
-        time.sleep(1.0)
+    checked, unchecked = header_check_all("  전체선택(표본)", hwnd, header, read, max_clicks)
+    return bool(checked) and not unchecked
 
-    states = read_states()
-    real = [s for s in states if s in ("선택", "선택안됨")]
-    ok = bool(real) and all(s == "선택" for s in real)
-    log(f"  전체선택 결과: {'성공' if ok else '실패'} (샘플 {real})")
-    return ok
+
+CHECK_READ_WAIT_SECONDS = 5     # 체크 상태를 하나도 못 읽으면 이만큼까지 다시 읽는다 - 그래도 못 읽으면 머리글을 누르지 않는다
+CHECK_SETTLE_SECONDS = 10       # 머리글을 누른 뒤 체크가 반영되기를 지켜보는 최대 시간 - 아무것도 바뀌지 않으면 이만큼 기다린 뒤 다시 누른다
+CHECK_STABLE_SECONDS = 1.5      # 한 번 바뀐 뒤 상태가 이만큼 그대로면 반영이 멈춘 것으로 본다
+CHECK_POLL_SECONDS = 0.3
+
+
+def header_check_all(label, hwnd, header, read, max_clicks=2):
+    """머리글 체크 칸(row Check Box)으로 전체선택 - select_all_and_verify·select_all_by_header_checkbox 가 함께 쓴다
+    (사용자 2026-11-23: 체크를 확실히 누르게). read() -> (체크 수, 미체크 수). (체크 수, 미체크 수) - 마지막으로 본 상태.
+    - 머리글은 토글이라 이미 모두 체크면 누르지 않고, 상태를 못 읽으면(CHECK_READ_WAIT_SECONDS 다시 읽어도) 누르지 않는다.
+    - 누른 뒤 상태가 멈출 때까지(CHECK_STABLE_SECONDS 그대로, 최대 CHECK_SETTLE_SECONDS) 지켜보고, 모두 체크가 아닌 채 멈췄을 때만
+      다시 누른다 - 예전엔 1초 뒤 바로 다시 눌러, 반영이 늦으면 두 번째 클릭이 체크를 도로 풀었다.
+    - 일부만 체크된 채 누르면 모두 풀릴 수 있다 - 그때도 멈춘 뒤 다시 누른다."""
+    def read_wait():
+        end = time.time() + CHECK_READ_WAIT_SECONDS
+        while True:
+            c, u = read()
+            if c or u or time.time() >= end:
+                return c, u
+            time.sleep(CHECK_POLL_SECONDS)
+
+    checked, unchecked = read_wait()
+    for attempt in range(max_clicks + 1):
+        if not checked and not unchecked and attempt:   # 누른 뒤 다시 그려지는 중이면 잠깐 못 읽는다
+            checked, unchecked = read_wait()
+        if checked and not unchecked:
+            log(f"{label}: 체크됨 {checked} / 미체크 0 -> " + ("이미 전체선택 상태 (토글이라 누르지 않음)" if not attempt else "클릭 반영 확인됨"))
+            return checked, unchecked
+        if not checked and not unchecked:
+            log(f"{label}: 체크 상태를 {CHECK_READ_WAIT_SECONDS}초 동안 읽지 못해 머리글을 누르지 않습니다. (토글이라 모르고 누르면 풀 수 있다)")
+            return checked, unchecked
+        if attempt == max_clicks:
+            break
+        log(f"{label}: 체크됨 {checked} / 미체크 {unchecked} -> 머리글 클릭(전체선택) 시도 {attempt + 1}")
+        press(hwnd, header, f"{label.strip()} 머리글 체크 칸")
+        t0 = time.time()
+        changed = None      # 처음 바뀐 때 - 그 전에는 '그대로' 로 끝내지 않는다 (반영이 한꺼번에 늦으면 두 번째 클릭이 풀어 버린다, Codex 검토 2026-11-25)
+        last = (checked, unchecked)
+        while time.time() - t0 < CHECK_SETTLE_SECONDS:
+            time.sleep(CHECK_POLL_SECONDS)
+            now = read()
+            if now[0] and not now[1]:   # 모두 체크 - 바로 다음 단계로
+                last = now
+                break
+            if now != last:
+                last, changed = now, time.time()
+            elif changed is not None and time.time() - changed >= CHECK_STABLE_SECONDS:
+                break
+        checked, unchecked = last
+        log(f"{label}:   누른 뒤 {time.time() - t0:.1f}초 - 체크됨 {checked} / 미체크 {unchecked}")
+    log(f"{label}: 경고: 전체선택 실패 - 머리글을 {max_clicks}번 눌러도 모두 체크되지 않았습니다 (체크됨 {checked} / 미체크 {unchecked})")
+    return checked, unchecked
 
 
 def get_active_main_tab(app, hwnd):
@@ -1504,8 +1681,8 @@ def _get_active_main_tab_raw(app, hwnd):
     return None
 
 
-def click_toolbar_button(win, hwnd, text):
-    """화면 안에 보이는 툴바 버튼을 클릭한다 (다른 탭의 동명 버튼은 화면 밖 좌표라 제외)."""
+def click_toolbar_button(win, hwnd, text, work=False):
+    """화면 안에 보이는 툴바 버튼을 클릭한다 (다른 탭의 동명 버튼은 화면 밖 좌표라 제외). work: press 와 같다 (데이터를 바꾸는 단추)."""
     wr = win.rectangle()
     for b in win.descendants(control_type="Button"):
         if b.window_text() != text:
@@ -1514,8 +1691,7 @@ def click_toolbar_button(win, hwnd, text):
         # 화면 0 이 아니라 창 기준 - 창이 음수 좌표 모니터에 있어도 찾게 (BugBuster M17)
         if r.left >= wr.left and r.top >= wr.top and r.right <= wr.right and r.bottom <= wr.bottom:
             log(f"  '{text}' 클릭: {r}")
-            ec.ensure_foreground(hwnd)
-            b.click_input()
+            press(hwnd, b, f"'{text}' 단추", work=work)
             return True
     log(f"  '{text}' 버튼을 화면에서 찾지 못했습니다.")
     return False
@@ -1561,7 +1737,7 @@ def run_hold_save(app, pid, hwnd):
 
     log("'저장(S)' 클릭")
     win = app.window(handle=hwnd)
-    if not click_toolbar_button(win, hwnd, "저장(S)"):
+    if not click_toolbar_button(win, hwnd, "저장(S)", work=True):
         return "failed"
     time.sleep(1.5)
 
@@ -1574,20 +1750,31 @@ def run_hold_save(app, pid, hwnd):
         return "failed"
 
     # 연속으로 뜨는 팝업이 더 있으면 처리 - 글에 실패·오류가 있으면 닫고 멈춘다 (사용자 2026-11-02)
-    for _ in range(3):
-        time.sleep(1.5)
-        win = app.window(handle=hwnd)
-        btn = find_popup_ok_button(win)
-        if btn is None:
-            break
-        said = popup_says(btn, HOLD_FAIL_WORDS)
-        log(f"  추가 팝업 -> '{btn.window_text()}' 클릭" + (f" ({said})" if said else ""))
-        ec.ensure_foreground(hwnd)
-        btn.click_input()
-        if said:
-            log("저장 뒤 실패 팝업이 떠 중단합니다.")
-            return "failed"
+    why = close_follow_up_popups(app, hwnd, "물류대기 저장")
+    if why:
+        log(f"{why} 중단합니다.")
+        return "failed"
     return "done"
+
+
+def close_follow_up_popups(app, hwnd, what, rounds=3, wait=1.5):
+    """누른 뒤 이어 뜨는 메인 창 안 팝업을 [예]/[확인] 으로 닫는다 (모르는 팝업은 누르고 이어간다 - 원래 규칙, 사용자 11-23 그대로).
+    글에 실패·오류가 있으면 닫고 멈출 사유를 (사용자 2026-11-02 물류대기 저장), rounds 번 닫아도 또 뜨면 그 사유를 돌려준다
+    (사용자 2026-11-23: 실패면 그 단계에서 멈춤 - 예전엔 3번 누르고 넘어갔다). 괜찮으면 None. 물류대기 저장·물류관리 [개별 배송] 이 함께 쓴다."""
+    for _ in range(rounds):
+        time.sleep(wait)
+        btn = find_popup_ok_button(app.window(handle=hwnd))
+        if btn is None:
+            return None
+        said = popup_says(btn, HOLD_FAIL_WORDS)
+        log(f"  {what} 뒤 팝업 -> '{btn.window_text()}' 클릭" + (f" ({said})" if said else ""))
+        press(hwnd, btn, "팝업 단추", popup=True)
+        if said:
+            return f"{what} 뒤 실패 팝업이 떴습니다: {said}"
+    time.sleep(wait)
+    if find_popup_ok_button(app.window(handle=hwnd)) is not None:
+        return f"{what} 뒤 팝업이 {rounds}번 넘게 이어져 떠 있습니다."
+    return None
 
 
 def grid_overlay_count(hwnd, grid, tol=40):
@@ -1669,10 +1856,32 @@ def wait_grid_spinner_gone(hwnd, grid, base_count, label="그리드",
 def pick_grid_cell(grid):
     """그리드 첫 데이터 행에서 클릭 가능한 셀 하나를 찾아 반환한다.
 
-    고정 픽셀 오프셋 대신 그리드 폭의 비율로 여러 지점을 시도하고,
-    실제로 DataItem이 잡히는지 검증한다.
+    먼저 grid_rows 로 찾은 맨 위 줄의 칸(체크 칸은 빼고 - 누르면 체크가 바뀐다) 중 그리드 안에 있고, 가운데 점에서 실제로
+    데이터 칸(DataItem)이 잡히는 것을 고른다. 예전엔 '가장 아래 머리글 + 반 줄' 자리를 짚었는데, ERPia 가 머리글을 두 겹으로
+    알려(737~758·758~779) 그 자리가 둘째 줄이었다 - 대상이 1줄이면 빈 곳을 짚어 물류관리가 '우클릭할 데이터 셀을 찾지 못했습니다' 로
+    실패했다 (2026-11-23 회차8 B6, 사용자 '고쳐줘'. 여러 줄일 때는 둘째 줄을 눌러 통했다).
+    줄을 못 읽는 그리드는 예전처럼 그리드 폭의 비율로 여러 지점을 짚어 본다.
     """
     g = grid.rectangle()
+    rows = grid_rows(grid)
+    for n in sorted(rows):
+        for name, cell in rows[n].items():
+            if name == "row Check Box":
+                continue
+            try:
+                r = cell.rectangle()
+                if not (r.width() > 0 and r.height() > 0 and g.left <= r.left and r.right <= g.right
+                        and g.top <= r.top and r.bottom <= g.bottom):
+                    continue
+                hit = element_at_point((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+                # 고정된 체크 칸 아래 깔린 칸이면 그 점은 체크 칸이다 - 누르면 체크가 바뀐다 (검토 2026-11-23)
+                if str(hit.element_info.control_type) == "DataItem" and not hit.window_text().startswith("row Check Box"):
+                    return cell
+            except Exception:
+                continue
+        if rows[n]:
+            break       # 맨 위 줄에서 못 찾았으면 짚어 보기로 (아래 줄로 내려가며 훑지 않는다)
+
     rh = get_row_height(grid)
     headers = grid.descendants(control_type="Header")
     hdr_bottom = max((h.rectangle().bottom for h in headers), default=g.top + rh)
@@ -1782,16 +1991,11 @@ def run_logistics_step(app, pid, hwnd, options=None):
         log("상단 그리드 처리가 끝나지 않아 저장하지 않고 중단합니다.")
         return "failed"
 
-    # 팝업이 떴으면 처리
-    for _ in range(3):
-        win = app.window(handle=hwnd)
-        btn = find_popup_ok_button(win)
-        if btn is None:
-            break
-        log(f"  팝업 -> '{btn.window_text()}' 클릭")
-        ec.ensure_foreground(hwnd)
-        btn.click_input()
-        time.sleep(1.5)
+    # 팝업이 떴으면 처리 - 글에 실패·오류가 있거나 계속 뜨면 멈춘다 (물류대기 저장과 같게, 사용자 2026-11-23)
+    why = close_follow_up_popups(app, hwnd, "개별 배송")
+    if why:
+        log(f"{why} 저장하지 않고 중단합니다.")
+        return "failed"
 
     win = app.window(handle=hwnd)
     tables = get_onscreen_tables(win)
@@ -1899,10 +2103,9 @@ def click_subtab(app, hwnd, name, wait=2.5):
             return None
         return r
 
-    def press(el, r):
+    def hit(el, r):
         log(f"  서브탭 '{name}' 클릭: {r}")
-        ec.ensure_foreground(hwnd)
-        el.click_input()
+        press(hwnd, el, f"서브탭 '{name}'")
         time.sleep(wait)
         return True
 
@@ -1910,7 +2113,7 @@ def click_subtab(app, hwnd, name, wait=2.5):
     if cached is not None:
         r = onscreen(cached)
         if r is not None:
-            return press(cached, r)
+            return hit(cached, r)
         _SUBTAB_CACHE.pop((hwnd, key), None)
 
     found = None
@@ -1928,7 +2131,7 @@ def click_subtab(app, hwnd, name, wait=2.5):
             found, found_rect = t, r
 
     if found is not None:
-        return press(found, found_rect)
+        return hit(found, found_rect)
 
     log(f"  서브탭 '{name}'을 화면에서 찾지 못했습니다.")
     return False
@@ -2381,7 +2584,9 @@ def sort_grid_ascending_by(hwnd, grid, col_name, geo, max_clicks=3):
         log(f"    '{col_name}' 헤더 클릭(정렬) {attempt + 1}회 (현재: {desc})")
         ec.ensure_foreground(hwnd)
         try:
-            header.click_input()
+            press(hwnd, header, f"'{col_name}' 머리글")
+        except wellife.Stop:
+            raise
         except Exception as e:
             log(f"    헤더 클릭 실패: {e}")
             return False
@@ -2437,7 +2642,9 @@ def open_find_dialog(pid, hwnd, geo):
             return existing
         ec.ensure_foreground(hwnd)
         try:
-            element_at_point(x, top_y).click_input()   # 그리드에 물리 클릭 -> ERPia 활성
+            press(hwnd, element_at_point(x, top_y), "그리드 (활성화 클릭)")   # 그리드에 물리 클릭 -> ERPia 활성
+        except wellife.Stop:
+            raise
         except Exception:
             pass
         time.sleep(0.2)
@@ -2581,8 +2788,7 @@ def select_code_range_and_check(pid, hwnd, grid, code_col, code, geo):
         if hits:
             if not first_clicked:
                 log(f"    첫 일치 행 클릭: {hits[0].rectangle()}")
-                ec.ensure_foreground(hwnd)
-                hits[0].click_input()
+                press(hwnd, hits[0], "첫 일치 행")
                 time.sleep(0.4)
                 first_clicked = True
             last_el = hits[-1]
@@ -2607,7 +2813,9 @@ def select_code_range_and_check(pid, hwnd, grid, code_col, code, geo):
     log(f"    마지막 일치 행 Shift+클릭: {last_el.rectangle()} (덩어리 {pages}화면)")
     ec.ensure_foreground(hwnd)
     try:
-        last_el.click_input(pressed="shift")
+        press(hwnd, last_el, "마지막 일치 행 (Shift+클릭)", pressed="shift")
+    except wellife.Stop:
+        raise
     except Exception as e:
         log(f"    Shift+클릭 실패: {e}")
         return False, None
@@ -2936,6 +3144,10 @@ def upload_popups(pid, hwnd, before=(), label=""):
             log(f"    {label}팝업: {why}")
         else:
             ok, why, msg = invoke_popup_window(h)
+            if not ok and dialog_gone(h, settle=1.0):
+                # '비밀번호 입력' 과 함께 떴다 같이 닫히는 제목 없는 창(단추 없음) - 남아 있을 때 보면 멈췄다 (2026-11-19 개발기 3번 중 2번)
+                log(f"    {label}팝업: 곧 닫힌 창이라 넘어갑니다 ({why})")
+                continue
             log(f"    {label}팝업: {why}")
             if not ok:
                 raise UploadStop(why)
@@ -3475,6 +3687,7 @@ def run_excel_upload_step(app, pid, hwnd, grid, move_files=True, skip=()):
             break
 
         upload_pw["code"] = code
+        status.began_work()
         if not upload_file_in_dialog(dlg, path, pid=pid):
             log("    파일을 전달하지 못했습니다. 창을 닫고 파일은 그대로 둡니다.")
             close_upload_dialog(pid, dlg)
@@ -3543,15 +3756,25 @@ def run_stock_review_step(app, pid, hwnd):
     누르기 전에 확인한다.
 
     반환: (처리건수, 전체대상건수). 조회가 끝나지 않았으면 None (사용자 2026-11-02 - 부른 쪽이 물류대기를 멈춘다)
+    실패하면 넘어가지 않고 그 자리에서 멈춘다 (wellife.Stop failed, 사용자 2026-11-23: 실패면 뒤 단계를 진행하지 않는다) - 조회(F)를 못 누름,
+    그리드를 못 찾음, 상단을 끝까지 못 훑음, 건마다 행·상품코드·하단 줄·배송보류 메뉴를 못 함. 앞서 보류한 건은 이미 저장된 채다.
+    탭 자체가 없으면 지금처럼 (0, 0) - 탭이 원래 없는 업체인지 확인 중.
     """
+    def stop(why):
+        raise wellife.Stop("failed", f"상품별 재고검토: {why} - 중단하였습니다. (일반 탭 조회·저장은 하지 않았습니다. 확인하여 주십시오)")
+
     if not click_subtab(app, hwnd, STOCK_TAB_NAME):
         return 0, 0
 
     win = app.window(handle=hwnd)
     tables = get_onscreen_tables(win)
+    end = time.time() + wellife.TABLE_WAIT_SECONDS
+    while len(tables) < 2 and time.time() < end:    # 탭을 연 직후 표가 늦게 그려지는 날 - 거짓 실패로 멈추지 않게 (검토 2026-11-25,
+        time.sleep(0.3)                             # 화면 이동 뒤 wellife.wait_tables 와 같은 까닭 - 11-24 실측)
+        win = app.window(handle=hwnd)
+        tables = get_onscreen_tables(win)
     if len(tables) < 2:
-        log("  상품별 재고검토 화면의 그리드를 찾지 못했습니다. (2개 필요)")
-        return 0, 0
+        stop(f"화면의 그리드를 찾지 못했습니다 ({len(tables)}개, 2개 필요 - {wellife.TABLE_WAIT_SECONDS}초 기다림)")
     top_grid = min(tables, key=lambda t: t.rectangle().top)
     bottom_grid = max(tables, key=lambda t: t.rectangle().top)
     log(f"  상단 그리드={top_grid.rectangle()} / 하단 그리드={bottom_grid.rectangle()}")
@@ -3560,7 +3783,8 @@ def run_stock_review_step(app, pid, hwnd):
     base_overlays = grid_overlay_count(hwnd, top_grid)
 
     log("  '조회(F)' 클릭 (상품별 재고검토)")
-    click_toolbar_button(win, hwnd, "조회(F)")
+    if not click_toolbar_button(win, hwnd, "조회(F)"):     # 못 누르면 옛 화면의 부족수량으로 보류하게 된다
+        stop("'조회(F)' 단추를 누르지 못했습니다")
     time.sleep(2)
     if not wait_grid_spinner_gone(hwnd, top_grid, base_overlays, label="재고검토 상단", max_wait=QUERY_DONE_MAX_WAIT_SECONDS):
         log("  재고검토 조회가 끝나지 않아 중단합니다.")
@@ -3570,8 +3794,8 @@ def run_stock_review_step(app, pid, hwnd):
     log(f"  부족수량이 있는 행 {len(targets)}건 "
         f"(상단 그리드 마지막 행까지 확인: {'완료' if reached_bottom else '미완료'}): "
         f"{[(k[0], q) for k, q in targets]}")
-    if not reached_bottom:
-        log("  경고: 상단 그리드를 끝까지 훑지 못했습니다. 누락된 부족수량 건이 있을 수 있습니다.")
+    if not reached_bottom:      # 빠진 부족수량 건이 보류 없이 저장되지 않게 하나도 보류하지 않고 멈춘다
+        stop(f"상단 그리드를 끝까지 훑지 못했습니다 (모은 부족수량 {len(targets)}건, 빠진 건이 있을 수 있어 하나도 보류하지 않았습니다)")
     if not targets:
         log("  부족수량이 있는 행이 없습니다. 배송보류할 대상이 없습니다.")
         status.metric("stock_hold", "재고검토 보류", 0, 0, note="대상 없음")
@@ -3596,14 +3820,18 @@ def run_stock_review_step(app, pid, hwnd):
     done = 0
     status.metric("stock_hold", "재고검토 보류", 0, len(targets))
     status.progress(0, len(targets))
+
+    def item_stop(why):     # 그 건에서 멈춘다 - 사유에 몇째 건·상품코드·앞서 보류해 이미 저장된 수
+        stop(f"[{idx}/{len(targets)}] 상품코드 {code or '(읽지 못함)'} 부족수량 {qty}: {why} "
+             f"(앞서 배송보류한 {done}건은 이미 저장되었습니다)")
+
     for idx, (key, qty) in enumerate(targets, 1):
         code = (key[0] or "").strip()
         log(f"  [{idx}/{len(targets)}] 상품코드={code} 부족수량={qty}")
         status.note(f"{idx}/{len(targets)}건째 · 상품코드 {code}")
         status.progress(idx - 1, len(targets), f"상품코드 {code}")
         if not code:
-            log("    상단 행의 상품코드를 읽지 못해 건너뜁니다.")
-            continue
+            item_stop("상단 행의 상품코드를 읽지 못했습니다")
         if code in STOCK_EXCLUDED_CODES:
             log("    제외 상품코드여서 배송보류하지 않고 넘어갑니다.")
             continue
@@ -3615,8 +3843,7 @@ def run_stock_review_step(app, pid, hwnd):
             # 스크롤로 화면 밖에 있거나 좌표를 못 잡은 경우 (스크롤하며 찾는다)
             cell = find_row_cell_by_key(hwnd, top_grid, key, STOCK_SHORTAGE_COL)
         if cell is None:
-            log("    해당 행을 다시 찾지 못해 건너뜁니다.")
-            continue
+            item_stop("상단에서 그 행을 다시 찾지 못했습니다")
 
         # 스크롤로 행이 화면 안으로 올라오면 좌표만으로는 어느 행을 눌렀는지 알 수 없으므로,
         # 클릭 직전에 그 셀의 값을 다시 읽어 수집 당시 값과 같은지 로그로 남긴다.
@@ -3624,8 +3851,7 @@ def run_stock_review_step(app, pid, hwnd):
         log(f"    부족수량 셀 클릭: {cell.rectangle()} (셀 값={actual})")
         if actual != qty:
             log(f"    경고: 수집 당시 부족수량({qty})과 클릭 대상 값({actual})이 다릅니다.")
-        ec.ensure_foreground(hwnd)
-        cell.click_input()
+        press(hwnd, cell, "부족수량 칸")
         time.sleep(0.6)
 
         # 오름차순 정렬 -> 일치 구간 범위선택 -> '선택영역 체크' 까지 끝낸 뒤 우클릭할 셀을 받는다.
@@ -3633,8 +3859,8 @@ def run_stock_review_step(app, pid, hwnd):
         # 우클릭은 반드시 그 선택 구간 안의 셀 위에서 한다 (prepare_bottom_checks 가 그 셀을 준다).
         anchor, _used_fast = prepare_bottom_checks(
             pid, hwnd, bottom_grid, code, code_col, geo, cb_x)
-        if anchor is None:
-            continue
+        if anchor is None:      # 까닭(정렬·찾기·범위선택)은 prepare_bottom_checks 가 앞 줄에 남겼다
+            item_stop("하단에서 그 상품코드 줄을 골라 체크하지 못했습니다 (앞 로그 참고)")
 
         # 팝업 조회(find_popup_ok_button)는 창 전체를 훑어 회당 5초쯤 걸린다.
         # 이 앱의 팝업은 자식 창으로 뜨므로, 자식 창 수가 늘었을 때만 조회한다.
@@ -3642,8 +3868,7 @@ def run_stock_review_step(app, pid, hwnd):
         children_before = len(visible_child_windows(hwnd))
 
         if not right_click_element_and_select(pid, hwnd, anchor, "배송보류"):
-            log("    '배송보류' 실행에 실패하여 건너뜁니다.")
-            continue
+            item_stop("우클릭 '배송보류' 를 실행하지 못했습니다 (그 건에 걸린 체크가 남아 있을 수 있습니다)")
         time.sleep(1.2)
 
         # 확인 팝업이 뜨면 처리
@@ -3655,8 +3880,7 @@ def run_stock_review_step(app, pid, hwnd):
             if btn is None:
                 break
             log(f"    배송보류 확인 팝업 -> '{btn.window_text()}' 클릭")
-            ec.ensure_foreground(hwnd)
-            btn.click_input()
+            press(hwnd, btn, "배송보류 확인 팝업 단추", popup=True)
             time.sleep(1.5)
 
         # 배송보류 클릭 후에는 따로 검증하지 않고 바로 다음 부족수량 셀로 넘어간다.
@@ -4049,8 +4273,7 @@ def click_button_by_auto_id(app, hwnd, auto_id, label=""):
         log(f"  '{label}' 버튼({auto_id})을 찾지 못했습니다.")
         return False
     log(f"  '{label}' 적용 클릭: {btn.rectangle()}")
-    ec.ensure_foreground(hwnd)
-    btn.click_input()
+    press(hwnd, btn, f"'{label}' 단추")
     time.sleep(1.0)
     return True
 
@@ -4333,7 +4556,7 @@ def run_logistics_save_step(app, hwnd):
     baseline_children = visible_child_windows(hwnd)
 
     win = app.window(handle=hwnd)
-    if not click_toolbar_button(win, hwnd, "저장(S)"):
+    if not click_toolbar_button(win, hwnd, "저장(S)", work=True):
         return False, "저장(S) 버튼을 찾지 못했습니다."
 
     # 저장이 정상이면 완료 팝업이 없다. 대신 '현재 저장중' 스피너가 돌므로
@@ -4701,7 +4924,9 @@ def run_print_dialog(pid, printer_name, timeout=DIALOG_WAIT_SECONDS):
     if save_hwnd is not None:
         log("  파일로 출력하는 프린터입니다. 저장 위치를 지정합니다.")
         # 자동 출력에서 PDF 프린터를 쓰는 경우는 임시 저장이므로 우리가 이름을 정한다
-        save_dialog_to_jobs(save_hwnd, ext=".pdf", prefix="WAYBILL", keep_name=False)
+        if not save_dialog_to_jobs(save_hwnd, ext=".pdf", prefix="WAYBILL", keep_name=False):   # 예전엔 결과를 버렸다 (검토 11-23)
+            log("  파일 프린터의 저장 창에서 저장하지 못했습니다. 출력을 완료로 보지 않고 중단합니다.")
+            return False
     time.sleep(1.5)
     return True
 
@@ -4731,19 +4956,28 @@ def run_print_preview(app, pid, hwnd, printer_name, timeout=DIALOG_WAIT_SECONDS)
     if not run_print_dialog(pid, printer_name):
         return False
 
-    # 출력 후 미리보기 창은 닫아둔다 (다음 실행 때 걸리적거리지 않도록)
+    # 출력 후 미리보기 창은 닫아둔다 (다음 실행 때 걸리적거리지 않도록). 못 닫으면 실패로 멈춘다 - 인쇄는 끝났다는 것을 남긴다
+    # (사용자 2026-11-23: 실패면 그 단계에서 멈춤, 예전엔 무시하고 완료)
     if find_top_hwnds_by_title(pid, PRINT_PREVIEW_TITLE):
+        why = None
         try:
             prev = connect_dialog(prev_hwnd)
             close_btn = next((b for b in prev.descendants(control_type="Button")
                               if b.window_text() == "인쇄 미리 보기 닫기"), None)
-            if close_btn is not None:
+            if close_btn is None:
+                why = "닫기 단추를 찾지 못함"
+            else:
                 log("  미리보기 창 닫기")
                 ec.ensure_foreground(prev_hwnd)
                 close_btn.click_input()
                 time.sleep(1.5)
         except Exception as e:
-            log(f"  미리보기 창을 닫지 못했습니다(무시): {e}")
+            why = f"{type(e).__name__}: {e}"
+        if why is None and find_top_hwnds_by_title(pid, PRINT_PREVIEW_TITLE):
+            why = "닫기를 눌렀으나 창이 남아 있음"
+        if why:
+            log(f"  인쇄는 끝났으나 미리보기 창을 닫지 못해 중단합니다. ({why})")
+            return False
     return True
 
 
@@ -4956,6 +5190,9 @@ def run_save_dialog(pid, ext=".xlsx", prefix="WAYBILL", keep_name=True,
     return save_dialog_to_jobs(dlg_hwnd, ext=ext, prefix=prefix, keep_name=keep_name)
 
 
+SETUP_ERROR_CBOTAG = "설정 오류: 'cboTag'(택배사) 값이 없습니다."
+
+
 def run_print_step(app, pid, hwnd, options=None, already_printed="continue"):
     """물류 관리: 자동이면 '운송장출력', 수동이면 '엑셀파일생성'을 눌러 끝까지 진행한다.
 
@@ -4978,11 +5215,12 @@ def run_print_step(app, pid, hwnd, options=None, already_printed="continue"):
         f"택배사='{carrier}' / 프린터='{printer or '(설정 없음 - 기본 프린터)'}'")
 
     if not carrier:
-        log("설정에 'cboTag'(택배사) 값이 없습니다. 중단합니다.")
+        # '설정 오류' - 모듈 사유가 되어 반복 회차도 멈춘다 (rpa_status.REPEAT_STOP_TEXTS, 저절로 풀리지 않는다 - Codex 검토 2026-11-25)
+        log(f"{SETUP_ERROR_CBOTAG} 중단합니다.")
         return "failed"
 
     win = app.window(handle=hwnd)
-    if not click_toolbar_button(win, hwnd, button):
+    if not click_toolbar_button(win, hwnd, button, work=True):
         log(f"'{button}' 버튼을 찾지 못했습니다. 모드 설정이 잘못됐을 수 있습니다.")
         return "failed"
 
@@ -5007,11 +5245,13 @@ def run_print_step(app, pid, hwnd, options=None, already_printed="continue"):
         return "done" if run_print_preview(app, pid, hwnd, printer) else "failed"
 
     saved = run_save_dialog(pid)
+    if not saved:
+        return "failed"
 
     # 저장 후 '생성한 엑셀파일을 여시겠습니까?' 가 뜰 수 있다.
     # 엑셀을 열 이유가 없으므로 버튼을 누르지 않고 그대로 둔 채 루틴을 끝낸다.
-    check_excel_open_prompt(app, hwnd)
-    return "done" if saved else "failed"
+    # 그 밖의 팝업이 남았거나 '파일 경로' 안내를 닫지 못했으면 실패 - 다음 모듈이 그 위에서 시작하지 않게 (사용자 2026-11-23)
+    return "done" if check_excel_open_prompt(app, hwnd) else "failed"
 
 
 def click_popup_ok(app, hwnd, retries=3):
@@ -5042,6 +5282,7 @@ def check_excel_open_prompt(app, hwnd, rounds=3, wait=1.5):
     - '생성된 파일 경로는 다음과 같습니다...' : 확인을 눌러 닫는다.
     - '생성한 엑셀파일을 여시겠습니까?' : 엑셀을 열 이유가 없으므로
       누르지 않고 그대로 둔 채 루틴을 끝낸다.
+    돌려주는 값: 괜찮으면 True. '파일 경로' 안내를 닫지 못했거나 모르는 팝업이 남았으면 False (사용자 2026-11-23: 실패면 멈춤).
     """
     for _ in range(rounds):
         time.sleep(wait)
@@ -5066,9 +5307,9 @@ def check_excel_open_prompt(app, hwnd, rounds=3, wait=1.5):
                 return False
             continue
 
-        log(f"  저장 후 팝업 감지 (버튼: {[b.window_text() for b in buttons]})")
+        log(f"  엑셀 저장 뒤 모르는 팝업이 남아 있어 중단합니다. (버튼: {[b.window_text() for b in buttons]})")   # 예전엔 남긴 채 완료 (검토 11-23)
         log(f"      내용: {text}")
-        return True
+        return False
     return True
 
 
@@ -5094,19 +5335,17 @@ def run_hold_logistics_step(app, pid, hwnd, save_only=False):
             return "failed"
     else:
         # 먼저 '상품별 재고검토' 탭에서 부족수량 건들을 배송보류 처리한다.
-        # (탭이 없거나 대상이 없어도 이어지는 '일반' 탭 루틴은 계속 진행한다)
+        # (탭이 없거나 대상이 없으면 이어지는 '일반' 탭 루틴은 계속 진행한다. 실패·뜻밖의 오류는 일반 탭·저장으로 가지 않고 멈춘다 -
+        #  run_stock_review_step 의 wellife.Stop, 오류는 run_module 이 UI 오류로 남긴다. 사용자 2026-11-23, 예전엔 경고 뒤 진행)
         status.step("stock_review")
         log("\n=== 물류대기: 상품별 재고검토 (부족수량 건 배송보류) ===")
-        try:
-            got = run_stock_review_step(app, pid, hwnd)
-            if got is None:         # 재고검토 조회가 끝나지 않았다 - 일반 탭·저장으로 가지 않는다 (사용자 2026-11-02)
-                return "failed"
-            done, total = got
-            if total and done < total:
-                log(f"경고: 상품별 재고검토 {total}건 중 {total - done}건을 처리하지 못했습니다.")
-        except Exception as e:
-            log(f"경고: 상품별 재고검토 처리 중 오류가 발생해 건너뜁니다: {e}")
-            click_subtab(app, hwnd, STOCK_GENERAL_TAB_NAME)
+        got = run_stock_review_step(app, pid, hwnd)
+        if got is None:         # 재고검토 조회가 끝나지 않았다 - 일반 탭·저장으로 가지 않는다 (사용자 2026-11-02)
+            return "failed"
+        done, total = got
+        if total and done < total:
+            raise wellife.Stop("failed", f"상품별 재고검토 {total}건 중 {done}건만 처리되어 일반 탭 조회·저장을 하지 않고 중단하였습니다. "
+                                         "확인하여 주십시오.")
 
         status.step("abnormal_hold")
         log("\n=== 물류대기: 일반 탭 처리 ===")
@@ -5140,8 +5379,7 @@ def run_hold_logistics_step(app, pid, hwnd, save_only=False):
     base_overlays = grid_overlay_count(hwnd, grid)
 
     log(f"'조회(F)' 클릭: {query_btn.rectangle()}")
-    ec.ensure_foreground(hwnd)
-    query_btn.click_input()
+    press(hwnd, query_btn, "'조회(F)' 단추")
     time.sleep(2)
     if not wait_grid_spinner_gone(hwnd, grid, base_overlays, label="일반 탭", max_wait=QUERY_DONE_MAX_WAIT_SECONDS):
         log("일반 탭 조회가 끝나지 않아 중단합니다.")
@@ -5189,8 +5427,7 @@ def run_hold_logistics_step(app, pid, hwnd, save_only=False):
                 btn = find_popup_ok_button(win2)
                 if btn is not None:
                     log(f"  배송보류 확인 팝업 -> '{btn.window_text()}' 클릭")
-                    ec.ensure_foreground(hwnd)
-                    btn.click_input()
+                    press(hwnd, btn, "배송보류 확인 팝업 단추", popup=True)
             else:
                 log("  배송보류 실행에 실패하여 전체 저장으로 진행합니다.")
 
@@ -5406,12 +5643,16 @@ def run_import_step(app, pid, hwnd, win, wait=True):
     도중에 뜨는 안내 팝업은 규칙대로 닫는다. 팝업이 떠 있는 동안에는 메인 창이
     잠겨 버튼도 비활성으로 보이므로, 닫지 않으면 영영 기다리게 된다.
 
-    돌려주는 값: 끝남 True / 눌렀지만 끝을 확인 못 함 False / 누르지 못함(단추 없음·클릭 실패) None
-    - 자동 수집 모듈이 누르지 못한 것만 건너뜀(토큰 0)으로 가른다 (사용자 2026-11-02).
+    돌려주는 값: 끝남 True / 조회가 시작된 뒤 끝을 확인 못 함 False / 단추 없음·눌러도 '조회중' 이 안 됨 None (까닭은 import_miss).
+    누르기 직전 확인·누르기의 오류는 None 이 아니라 위로 올린다 (wellife.Stop·예외 - 모듈 실패, 검토 2026-11-25)
+    - 자동 수집 모듈이 None 을 건너뜀(토큰 0)으로 가른다 (사용자 2026-11-02, 조회 미시작은 2026-11-19).
     """
+    global IMPORT_MISS
+    IMPORT_MISS = None
     imp = find_by_text(win, IMPORT_BUTTON_NAME, control_types=("Button",))
     if imp is None:
         log(f"'{IMPORT_BUTTON_NAME}' 버튼을 찾지 못했습니다. 주문 가져오기를 건너뜁니다.")
+        IMPORT_MISS = f"'{IMPORT_BUTTON_NAME}' 단추를 찾지 못해 누르지 않고 건너뛰었습니다."
         return None
     sal = find_by_text(win, "매출처리", control_types=("SplitButton", "Button"))
     if sal is None:
@@ -5467,12 +5708,11 @@ def run_import_step(app, pid, hwnd, win, wait=True):
             waited += IMPORT_POLL_SECONDS
 
     log(f"'{IMPORT_BUTTON_NAME}' 클릭")
-    ec.ensure_foreground(hwnd)
-    try:
-        imp.click_input()
-    except Exception as e:
-        log(f"  '{IMPORT_BUTTON_NAME}' 클릭 실패: {e}")
-        return None
+    # 누르기 직전에 잠김·앞 창·덮개를 다시 본다 - 앞의 확인(ready_to_import) 뒤 조회중 대기를 지났다 (검토 2026-11-25).
+    # 처리 시작은 확인을 지난 뒤 누르기 바로 앞 (press work=True, rpa_status.began_work)
+    # 확인·누르기에서 난 오류는 건너뜀이 아니라 위로 - 모듈 실패로 멈춘다 (교차 검증 2026-11-25: 예전엔 클릭 오류를 건너뜀으로 바꿔
+    # 뒤 매출처리가 이어 돌았다)
+    press(hwnd, imp, f"'{IMPORT_BUTTON_NAME}' 단추", work=True)
     t0 = time.time()
     status.note("주문 가져오는 중")
 
@@ -5495,7 +5735,9 @@ def run_import_step(app, pid, hwnd, win, wait=True):
         handle_import_popups(pid, hwnd, seen_popups)
         log(f"  경고: {IMPORT_BUSY_WAIT_SECONDS}초 안에 '조회중'으로 바뀌지 않았습니다."
             f" 가져올 주문이 없었거나 클릭이 먹지 않았을 수 있습니다.")
-        return False
+        IMPORT_MISS = (f"'{IMPORT_BUTTON_NAME}'를 눌렀으나 {IMPORT_BUSY_WAIT_SECONDS}초 안에 조회가 시작되지 않아 건너뛰었습니다. "
+                       "(가져올 주문이 없었거나 누른 것이 먹지 않았을 수 있습니다)")
+        return None     # 누르지 못함과 같이 건너뜀 - 덮인 클릭을 '완료' 로 남기지 않는다 (웰라이프·일반 같게, 사용자 2026-11-19)
 
     def finish():
         """2) 둘 다 활성으로 돌아오고, 잠깐 유지되면 완료 (True). wait=False 면 이 함수를 돌려준다 - 부르는 쪽이 다른 일을
@@ -5534,13 +5776,10 @@ def run_import_step(app, pid, hwnd, win, wait=True):
 
 
 def find_popup_ok_button(win):
-    """메인 창 내부에 떠 있는 팝업의 '예/확인' 버튼을 찾는다.
+    """메인 창 내부에 떠 있는 팝업의 '예/확인' 버튼을 찾는다 - 창 안에 보이는 것만 (find_popup_buttons). 숨은 화면의 [확인] 을 고르면
+    press 가 '창 안에 보이지 않아' 로 멈춘다 (예전엔 창 밖을 헛눌렀다 - 검토 2026-11-20).
     (이 앱의 팝업은 별도 창이 아니라 메인 창 내부 오버레이로 렌더링된다)"""
-    try:
-        buttons = win.descendants(control_type="Button")
-    except Exception:
-        return None
-    return next((b for b in buttons if b.window_text() in OK_BUTTON_TEXTS), None)
+    return next((b for b in find_popup_buttons(win) if b.window_text() in OK_BUTTON_TEXTS), None)
 
 
 def match_sales_failure(text, keywords=SALES_FAIL_KEYWORDS):
@@ -5827,30 +6066,12 @@ def select_all_and_verify(grid_name, hwnd, grid, id_columns, max_clicks=2):
         log(f"[{grid_name}] 헤더 'row Check Box'를 찾지 못했습니다. 건너뜁니다.")
         return
 
-    for attempt in range(1, max_clicks + 1):
-        view = scan_current_view(grid, id_columns)
-        v_checked, v_unchecked, v_null = summarize(view)
+    def read():
+        v_checked, v_unchecked, _null = summarize(scan_current_view(grid, id_columns))
+        return len(v_checked), len(v_unchecked)
 
-        if v_checked and not v_unchecked:
-            reason = "이미 전체선택 상태 (토글이라 누르지 않음)" if attempt == 1 else "클릭 반영 확인됨"
-            log(f"[{grid_name}] 체크 상태 확인: 체크됨 {len(v_checked)} / 미체크 0 / null(정상) {len(v_null)}"
-                f" -> {reason}")
-            return len(v_checked)
-
-        log(f"[{grid_name}] 체크 상태 확인: 체크됨 {len(v_checked)} / 미체크 {len(v_unchecked)}"
-            f" -> 헤더 클릭(전체선택) 시도 {attempt}")
-        ec.ensure_foreground(hwnd)
-        header.click_input()
-        time.sleep(1.0)
-
-    # 마지막 클릭 후 상태 확인
-    view = scan_current_view(grid, id_columns)
-    v_checked, v_unchecked, v_null = summarize(view)
-    if v_unchecked or not v_checked:
-        log(f"[{grid_name}] 경고: 전체선택 실패 (체크됨 {len(v_checked)} / 미체크 {len(v_unchecked)})")
-    else:
-        log(f"[{grid_name}] 전체선택 확인됨 (체크됨 {len(v_checked)} / null(정상) {len(v_null)})")
-    return len(v_checked)
+    # 누른 뒤 반영될 때까지 지켜보고, 못 읽으면 누르지 않는다 (header_check_all, 사용자 2026-11-23). 체크된 줄 수 - 다 안 됐으면 부른 쪽 다시 보기가 멈춘다
+    return header_check_all(f"[{grid_name}]", hwnd, header, read, max_clicks)[0]
 
     # --- 아래는 '스크롤하며 전 행 검증' 절차 (기획 변경으로 현재 미사용) ---
     # scroll_grid_to_top(hwnd, grid)
@@ -6117,12 +6338,13 @@ def excel_upload_together(ctx, grid):
     """함께 실행: 사이트 수집(프리페어)이 넘기는 엑셀을 수집이 끝날 때까지 받는 대로 올린다 (웰라이프 wellife.excel_together 와 같은 규칙).
     파일 창·팝업은 키보드·마우스 없이(UPLOAD_NO_KEYS). 차례 사이에 새로 뜬 ERPia 창은 다음 차례 앞과 끝에서 닫고 그 수를 알린다 - 결과
     대기 뒤 늦게 뜬 실패 팝업이면 그 파일은 이미 완료 폴더에 있다. 앞 차례에 못 올려 남은 파일은 다시 누르지 않는다 (다음 실행에).
-    오류가 나도 매출처리는 이어간다 (예전 엑셀업로드와 같다) - 남은 파일은 업로드 폴더에 그대로. (올린 수, 오류 폴더로 간 수)."""
+    더 올릴 수 없게 막히면 멈춘다 - 남은 파일은 업로드 폴더에 그대로 (다음 실행에), 부른 쪽이 실패로 끝낸다 (사용자 2026-11-25).
+    (올린 수, 오류 폴더로 간 수, 막혔으면 실패 사유 - 아니면 None)."""
     global UPLOAD_NO_KEYS
     rr = sys.modules[__name__]
     log("\n=== 엑셀업로드 (사이트 수집과 함께 - 받는 대로) ===")
     base = set(find_popup_windows(ctx.pid, ctx.hwnd))
-    tried, uploaded, errors, late = set(), 0, 0, 0
+    tried, uploaded, errors, late, stop = set(), 0, 0, 0, None
 
     def between(label):
         try:
@@ -6150,8 +6372,10 @@ def excel_upload_together(ctx, grid):
             elif not wellife.upload_paths(rr) - tried:  # 수집이 끝났다 - 끝나기 직전에 넘긴 파일이 없으면 끝 (있으면 한 번 더)
                 break
         late += between("업로드 끝 ")
-    except Exception as e:
-        log(f"경고: 엑셀업로드 처리 중 오류가 발생해 멈춥니다 (남은 파일은 업로드 폴더에 그대로 - 다음 실행에): {e}")
+    except wellife.Stop:
+        raise
+    except Exception as e:      # 더 올릴 수 없다 - 실패로 멈춘다 (사용자 11-25, 예전엔 경고만 남기고 매출처리로 이어 감)
+        stop = e
     finally:
         UPLOAD_NO_KEYS = False
     left = len(wellife.upload_paths(rr))
@@ -6160,7 +6384,10 @@ def excel_upload_together(ctx, grid):
     status.metric("excel_upload", "엑셀 업로드", uploaded, len(tried), unit="개", note=", ".join(n for n in notes if n) or None)
     log(f"  엑셀 업로드 (사이트 수집과 함께): {len(tried)}건 중 {uploaded}건, 오류 폴더 {errors}건, 남은 파일 {left}건, "
         f"업로드 사이에 닫은 팝업 {late}개" + (f" ({wellife.LEFT_NOTE})" if left else ""))
-    return uploaded, errors
+    if stop is None:
+        return uploaded, errors, None
+    return uploaded, errors, wellife.upload_stopped(rr, "(사이트 수집과 함께) ", stop, len(tried), uploaded, errors) + (
+        f" 업로드 사이에 ERPia 팝업 {late}개를 닫았습니다 (앞서 완료 폴더로 옮긴 파일이 실패였을 수 있습니다)." if late else "")
 
 
 def order_module(ctx, step, body):
@@ -6174,9 +6401,9 @@ def order_module(ctx, step, body):
     try:
         status.step(step)
         log("\n=== 주문매핑 매출처리 화면 이동 ===")
-        ok, reason = goto_order_screen(ctx)
-        if not ok:
-            return "failed", reason
+        r = open_screen(ctx, wellife.ORDER_TAB, wellife.ORDER_ICON, lambda: wellife._ok_or_reason(goto_order_screen(ctx)))
+        if r != "ok":
+            return "failed", (f"'{wellife.ORDER_ICON}' 아이콘을 찾지 못했습니다." if r == "absent" else r)
         win = ctx.window()
         onscreen_tables = get_onscreen_tables(win)
         if len(onscreen_tables) < 2:
@@ -6190,40 +6417,58 @@ def order_module(ctx, step, body):
 
 
 def module_import(ctx):
-    """자동 수집: 상단 전체선택 -> [가져오기]."""
-    def body(win, top_left, _bottom):
+    """자동 수집: 상단 전체선택 -> [가져오기]. 누르기 전 안전장치는 웰라이프 import_collect 와 같다 (사용자 2026-11-19) - 팝업이
+    떠 있거나·화면이 잠겼거나·전체선택을 못 했거나·체크가 풀렸거나·누를 자리가 덮였으면 누르지 않고 멈춘다 (wellife.Stop)."""
+    def body(_win, top_left, _bottom):
+        rr, what = sys.modules[__name__], f"자동 수집 [{IMPORT_BUTTON_NAME}]"
         status.step("top_select")
+        page = wellife.visible_page(ctx)        # 떠 있는 화면 안만 - 숨은 화면의 같은 이름 단추를 누르지 않게
+        imp = wellife.onscreen_button(page, IMPORT_BUTTON_NAME)
+        if imp is None:
+            log(f"'{IMPORT_BUTTON_NAME}' 버튼을 찾지 못했습니다. 주문 가져오기를 건너뜁니다.")
+            return "skipped", f"'{IMPORT_BUTTON_NAME}' 단추를 찾지 못해 누르지 않고 건너뛰었습니다."
         log("\n=== 좌측 상단 그리드 전체선택 ===")
-        n_top = select_all_and_verify("좌측상단", ctx.hwnd, top_left, ["아이디"])
+        n_top = wellife.select_sites(rr, ctx, imp, top_left, what)
+        def reselect():     # 풀렸으면 그리드를 다시 잡고 다시 전체선택 (웰라이프와 같게, 사용자 2026-11-23)
+            tables = get_onscreen_tables(page)
+            grid = min(tables, key=lambda t: (t.rectangle().top, t.rectangle().left)) if tables else top_left
+            return grid, wellife.select_sites(rr, ctx, imp, grid, what)
+        n_top = wellife.ready_to_import(rr, ctx, page, imp, top_left, n_top, what, reselect)   # 다시 전체선택했으면 다시 센 수
         if n_top is not None:
             status.metric("top_selected", "상단 선택", n_top, note="화면에 보이는 행 기준")
         log("\n=== 주문 가져오기 ===")
-        ok = run_import_step(ctx.app, ctx.pid, ctx.hwnd, win)
-        if ok is None:      # 누르지 못했다 - 돈 것이 없으니 토큰을 쓰지 않는다 (사용자 2026-11-02, 엑셀 수집의 '올릴 엑셀 없음' 과 같이)
-            return "skipped", f"'{IMPORT_BUTTON_NAME}'를 누르지 못해 건너뛰었습니다."
-        if not ok:
-            log("경고: 주문 가져오기를 끝까지 확인하지 못했습니다. 이어서 진행합니다.")
+        t0 = time.time()
+        ok = run_import_step(ctx.app, ctx.pid, ctx.hwnd, page)
+        if ok is None:      # 누르지 못했거나 조회가 시작되지 않았다 - 돈 것이 없으니 토큰을 쓰지 않는다 (사용자 2026-11-02·11-19)
+            return "skipped", import_miss()
+        if not ok:          # 끝을 못 봤다 - 실패로 멈춘다, 수집이 끝나지 않은 채 매출처리로 가지 않게 (사용자 2026-11-23, 예전엔 완료로 이어감).
+            waited = time.time() - t0     # 몇 초 기다렸는지 남긴다 - 웰라이프 import_collect 와 같게 (사용자 2026-11-23)
+            log(f"주문 가져오기를 {waited:.0f}초 기다렸으나 끝을 확인하지 못해 중단합니다.")
+            return "failed", (f"'{IMPORT_BUTTON_NAME}'를 눌러 조회가 시작되었으나 {waited:.0f}초 기다려도 완료를 확인하지 못해 중단하였습니다. "
+                              "(주문 수집이 아직 진행 중일 수 있습니다. 확인하여 주십시오)")
         return "done", None
     return order_module(ctx, "order_screen", body)
 
 
 def module_excel(ctx):
     """엑셀 수집: 바탕화면 ERPIA_AI_EXCEL 폴더에 파일이 있을 때만 올린다. 올린 게 없으면 건너뜀 (토큰 0).
-    오류가 나도 뒤 모듈은 이어간다 (예전 엑셀업로드와 같다). 함께 실행이면 사이트 수집이 넘기는 대로 (excel_upload_together) 올리고,
+    파일 하나의 실패는 그 파일만 오류 폴더로 옮기고 이어 올린다. 더 올릴 수 없게 막히면 실패로 멈추고 뒤 모듈은 돌리지 않는다
+    (사용자 2026-11-25, wellife.upload_stopped - 예전엔 이어 갔다). 함께 실행이면 사이트 수집이 넘기는 대로 (excel_upload_together) 올리고,
     사이트 수집이 끝나기를 기다린 뒤 다음 모듈로 간다 (뒤 모듈이 Edge 창과 겹치지 않게 - 예전 차례와 같다)."""
     def body(_win, top_left, _bottom):
         if TOGETHER_MODE:
-            uploaded, errors = excel_upload_together(ctx, top_left)
+            uploaded, errors, stopped = excel_upload_together(ctx, top_left)
+            if stopped:
+                return "failed", stopped
         else:
             log("\n=== 엑셀업로드 ===")
             try:
                 uploaded, errors = run_excel_upload_step(ctx.app, ctx.pid, ctx.hwnd, top_left)
-            except Exception as e:
-                log(f"경고: 엑셀업로드 처리 중 오류가 발생해 중단합니다: {e}")
-                status.keep_record()      # 반복 회차라도 기록에 남긴다 - 못 올린 파일은 폴더에 그대로 (R2, 2026-11-03)
-                if getattr(e, "uploaded", 0):   # 멈추기 전에 올린 파일이 있다 - 완료 폴더로 갔다 (UploadStop·UploadGridHidden, 검토 2026-11-16)
-                    return "done", f"엑셀 {e.uploaded}개 업로드 뒤 오류로 중단: {e}"
-                return "skipped", f"엑셀업로드 오류로 건너뜀: {e}"
+            except wellife.Stop:
+                raise
+            except Exception as e:      # UploadStop·UploadGridHidden 은 멈추기 전에 올린 수·오류 수를 들고 온다 (검토 2026-11-16)
+                return "failed", wellife.upload_stopped(sys.modules[__name__], "", e, None,
+                                                        getattr(e, "uploaded", 0), getattr(e, "errors", 0))
         note = f", 오류 폴더로 {errors}개 (확인할 것)" if errors else ""
         if uploaded:
             return "done", f"엑셀 {uploaded}개 업로드{note}"
@@ -6253,6 +6498,15 @@ def sales_flow(ctx, win, bottom):
     """하단 전체선택 -> 정상매출. 하단이 0줄이면 누르지 않고 건너뛴다 (토큰 0 - 사용자 2026-11-02, 예전엔 0건이어도 눌렀다.
     웰라이프 normal_sales 와 같은 판단)."""
     app, pid, hwnd = ctx.app, ctx.pid, ctx.hwnd
+    rr = sys.modules[__name__]
+    # 주문 수집 중이면 매출처리 ▼ 가 꺼져 있다 - 켜질 때까지 기다린 뒤 줄을 센다 (수집이 끝나며 줄이 늘고 다시 그려진다).
+    # 매출처리만 돌릴 때도 같다 - 웰라이프 normal_sales 와 같게 (사용자 2026-11-23)
+    if wellife.wait_sales_ready(rr, ctx, lambda: find_by_text(wellife.visible_page(ctx), "매출처리", control_types=("SplitButton",)),
+                                "매출처리 ▼"):
+        tables = get_onscreen_tables(ctx.window())
+        if len(tables) < 2:
+            return "failed", "그리드가 충분히 발견되지 않았습니다."
+        bottom = max(tables, key=lambda t: t.rectangle().top)
     # 줄 수는 run_hold_save 와 같이 센다 - 0줄이면 다시 그려지는 중일 수 있어 한 번 더 보고, 못 세면 예전처럼 진행
     try:
         rows = len(bottom.descendants(control_type="DataItem"))
@@ -6265,50 +6519,36 @@ def sales_flow(ctx, win, bottom):
     if rows == 0:
         log("\n주문매핑 하단이 0줄이어서 매출처리하지 않았습니다.")
         return "skipped", "하단 0줄 (매출처리하지 않음)"
-    # 8. 하단 전체선택 (단계는 order_module 이 찍었다)
+    # 8. 하단 전체선택 (단계는 order_module 이 찍었다) - 누르기 전 안전장치는 웰라이프 normal_sales 와 같다 (사용자 2026-11-19)
     log("\n=== 하단 그리드 전체선택 ===")
-    n_bottom = select_all_and_verify("하단", hwnd, bottom, ["주문번호", "마켓 상품명", "주문시간"])
-    if n_bottom is not None:
-        status.metric("bottom_selected", "하단 선택", n_bottom, note="화면에 보이는 행 기준")
+    # 누르기 직전 풀렸으면(늦게 끝난 조회가 다시 그림) 그리드를 다시 잡고 다시 체크한다, 그래도 안 되면 그 단계에서 멈춘다
+    # (사용자 2026-11-23: 체크를 확실히·실패면 멈춤 - 예전엔 한 번에 건너뜀). 웰라이프 normal_sales 와 같다
+    for attempt in range(1, wellife.CHECK_TRIES + 1):
+        n_bottom = wellife.select_bottom(rr, ctx, bottom)
+        if n_bottom is not None:
+            status.metric("bottom_selected", "하단 선택", n_bottom, note="화면에 보이는 행 기준")
+        if wellife.recheck(rr, bottom, "주문매핑 하단", True):
+            break
+        if attempt == wellife.CHECK_TRIES:
+            return "failed", (f"주문매핑 하단 {n_bottom or 0}줄 전체선택 - {attempt}번 체크해도 누르기 직전 체크가 되지 않아 정상매출을 누르지 않고 "
+                              "중단하였습니다. 확인하여 주십시오.")
+        log(f"  주문매핑 하단 체크가 맞지 않아 그리드를 다시 잡고 다시 체크합니다 ({attempt}/{wellife.CHECK_TRIES - 1})")
+        time.sleep(1.0)
+        tables = get_onscreen_tables(ctx.window())
+        if len(tables) >= 2:
+            bottom = max(tables, key=lambda t: t.rectangle().top)
 
-    # 9. 매출처리 ▼ -> 정상매출
+    # 9. 매출처리 ▼ -> 정상매출 - ▼ 자리·새로 뜬 메뉴 창·꺼진 항목·누를 자리 덮개를 보고 누른다 (웰라이프 press_menu_item)
     status.step("sales")
     log("\n=== 매출처리 드롭다운 -> 정상매출 ===")
-    # '매출처리'는 SplitButton 이다 (Button 으로 찾으면 못 찾고 전체 순회로 떨어져 더 느리다)
-    split_btn = find_by_text(win, "매출처리", control_types=("SplitButton",))
+    # '매출처리'는 SplitButton 이다 (Button 으로 찾으면 못 찾고 전체 순회로 떨어져 더 느리다). 떠 있는 화면 안만 본다
+    split_btn = find_by_text(wellife.visible_page(ctx), "매출처리", control_types=("SplitButton",))
     if split_btn is None:
         return "failed", "'매출처리' 버튼을 찾지 못했습니다."
-    dropdown_btn = next((c for c in split_btn.descendants(control_type="Button")), None)
-    if dropdown_btn is None:
-        return "failed", "드롭다운(▼) 버튼을 찾지 못했습니다."
-    ec.ensure_foreground(hwnd)
-    dropdown_btn.click_input()
-    time.sleep(1.0)
-
-    menu_win = None
-    for w in Desktop(backend="uia").windows():
-        try:
-            _, wpid = win32process.GetWindowThreadProcessId(w.handle)
-        except Exception:
-            continue
-        if wpid != pid:
-            continue
-        try:
-            buttons = [b.window_text() for b in w.descendants(control_type="Button")]
-        except Exception:
-            continue
-        if "정상매출" in buttons:
-            menu_win = w
-            break
-
-    if menu_win is None:
-        return "failed", "드롭다운 메뉴(선택매출/정상매출)를 찾지 못했습니다."
-
     # 스피너 비교용 기준선(정상매출 클릭 전 상태) 확보
     baseline_children = visible_child_windows(hwnd)
-
-    normal_btn = next(b for b in menu_win.descendants(control_type="Button") if b.window_text() == "정상매출")
-    normal_btn.click_input()
+    # ▼·메뉴 못 찾음·'정상매출' 꺼짐은 실패로 멈춘다(Stop) - 웰라이프와 같게 (strict, 사용자 2026-11-20·11-23). 돌아오면 누른 것이다
+    wellife.press_menu_item(rr, ctx, split_btn, "정상매출", "매출처리 ▼", confirm=False, strict=True)
     time.sleep(1.5)
     log("'정상매출' 클릭 완료")
 
@@ -6346,8 +6586,10 @@ def sales_flow(ctx, win, bottom):
         log("완료 팝업의 '예/확인'을 눌렀습니다.")
     elif result == "no_popup":
         log("스피너도 팝업도 없어 처리가 끝난 것으로 판단합니다.")
-    else:
-        log(f"경고: 최대 대기시간({ASYNC_MAX_WAIT_SECONDS}초)을 초과했습니다.")
+    else:       # 끝을 못 봤다 - 실패로 멈춘다, 웰라이프 after_normal_sales 와 같게 (사용자 2026-11-23, 예전엔 사유 없이 완료로 이어 감)
+        log(f"정상매출을 누른 뒤 {ASYNC_MAX_WAIT_SECONDS}초 안에 끝을 확인하지 못해 중단합니다.")
+        return "failed", (f"정상매출을 누른 뒤 {ASYNC_MAX_WAIT_SECONDS}초 기다려도 처리가 끝난 것을 확인하지 못해 중단하였습니다. "
+                          "(매출처리가 아직 진행 중일 수 있습니다. 화면에서 확인하여 주십시오)")
 
     # 혹시 연속으로 뜨는 팝업이 더 있으면 한 번 더 확인 (별도 창 먼저)
     time.sleep(2)
@@ -6379,14 +6621,14 @@ def module_hold(ctx):
         return "failed", f"설정 오류: {e}"
     status.step("hold_screen")
     log("\n=== 물류대기 화면 이동 ===")
-    r = goto_hold_screen(ctx)
+    r = open_screen(ctx, wellife.HOLD_TAB, wellife.HOLD_ICON, lambda: goto_hold_screen(ctx))
     if r == "absent":
         # 물류대기 메뉴가 없는 업체. 물류 관리는 항상 있으므로 다음 모듈로 넘어가면 된다.
         for key in ("stock_review", "abnormal_hold", "hold_save"):
             status.skip(key, "물류대기 메뉴가 없는 업체")
         return "skipped", "물류대기 메뉴가 없는 업체"
     if r != "ok":
-        return "failed", "물류대기 화면으로 이동하지 못했습니다." + wellife.dup_note(ctx)
+        return "failed", r
 
     log("\n=== 물류대기 처리 ===")
     result = (run_hold_logistics_step(ctx.app, ctx.pid, ctx.hwnd, save_only=True) if save_only
@@ -6407,11 +6649,11 @@ def module_logistics(ctx):
     """
     status.step("logistics_screen")
     log("\n=== 물류 관리 화면 이동 ===")
-    r = goto_logistics_screen(ctx)
+    r = open_screen(ctx, LOGISTICS_TAB, LOGISTICS_ICON, lambda: goto_logistics_screen(ctx))
     if r == "absent":
         return "failed", "'물류처리' 아이콘을 찾지 못했습니다."
     if r != "ok":
-        return "failed", "물류 관리 화면으로 이동하지 못했습니다." + wellife.dup_note(ctx)
+        return "failed", r
 
     options = ctx.logistic_options()
     log(f"\n물류 관리 설정값: {options}")
@@ -6461,6 +6703,8 @@ def query_print_targets(ctx):
             return None
         top = min(get_onscreen_tables(ctx.window()), key=lambda t: t.rectangle().top)
         return len(top.descendants(control_type="DataItem"))
+    except wellife.Stop:
+        raise
     except Exception as e:
         log(f"  출력 전 조회 실패: {type(e).__name__}: {e}")
         return None
@@ -6498,10 +6742,9 @@ def module_output(ctx):
 
     if logistics_result is None or again:
         log("\n=== 물류 관리 화면 이동 (출력 단독 실행) ===")
-        r = goto_logistics_screen(ctx)
+        r = open_screen(ctx, LOGISTICS_TAB, LOGISTICS_ICON, lambda: goto_logistics_screen(ctx))
         if r != "ok":
-            return "failed", ("'물류처리' 아이콘을 찾지 못했습니다." if r == "absent"
-                              else "물류 관리 화면으로 이동하지 못했습니다." + wellife.dup_note(ctx))
+            return "failed", ("'물류처리' 아이콘을 찾지 못했습니다." if r == "absent" else r)
         prefetch_auto_ids(ctx.window(), [AUTO_MODE_COMBO])
         log("자동/수동 모드 설정")
         _, mode_ok = apply_auto_mode(ctx.app, ctx.hwnd, ctx.logistic_options())
@@ -6603,23 +6846,67 @@ def run_modules(selected, modules=None, funcs=None, section=None):
         log(f"=== [{label}] {MODULE_RESULT_LABEL.get(result, result)}"
             f"{' - ' + reason if reason else ''} ===")
         if result in ("failed", "stopped"):
+            if key != "login" and os.environ.get("RPA_RUN_TRIGGER") == "repeat":
+                # 반복은 데이터가 언제 쌓일지 몰라 돈다 - 처리 전(화면 이동·조회·대상 읽기·체크)에서 멈춘 회차는 그 회차만 건너뛰고,
+                # 처리 도중·마지막 단계의 실패와 저절로 풀리지 않는 실패(화면 잠김 포함)는 반복을 멈춰 알린다
+                # (rpa_status.failed_before_work, 사용자 2026-11-24·25)
+                if status.failed_before_work():
+                    log("반복 회차 - 처리를 시작하기 전 단계에서 멈춰 이번 회차만 건너뜁니다. 반복은 쉬는 시간 뒤 다음 회차에서 다시 합니다.")
+                    reason = f"{reason or '실패'} (반복 회차: ERPia 자료를 바꾸기 전에 멈춰서 이번 회차만 건너뛰고 쉬는 시간 뒤 다시 합니다)"
+                else:
+                    why = ("화면이 잠겨" if "화면이 잠겨" in (reason or "")
+                           else "처리 도중 실패해" if status.worked() or [k for k in (status.done_modules() or []) if k != "login"]
+                           else "저절로 풀리지 않는 실패라")
+                    log(f"반복 회차 - [{label}] {why} 반복을 멈춥니다. 앞에서 처리한 것은 그대로입니다. "
+                        "화면을 확인한 뒤 [반복 다시 시작] 으로 이어 주십시오.")
             return "stopped", reason
     return "success", None
+
+
+def main_window_alive(hwnd):
+    """ERPia 메인 창이 아직 있나 - 꺼질 때는 창이 먼저 사라지고 프로세스가 늦게 끝난다 (ERPIA_DYING_WAIT_SECONDS). 못 읽으면 없는 것으로."""
+    try:
+        return bool(hwnd) and bool(win32gui.IsWindow(hwnd))
+    except Exception:
+        return False
 
 
 def run_module(ctx, key, label, funcs):
     """모듈 하나를 돌린다. (결과, 사유). 도중에 ERPia 가 꺼졌으면(프로세스가 사라짐) 다시 띄워 로그인하고 그 모듈을
     다시 돌린다 (실행 한 번에 ERPIA_RESTARTS 번까지). 끝난 모듈은 다시 돌지 않는다 - 꺼진 모듈부터 잇는다.
+    그 모듈이 처리를 시작한 뒤(rpa_status.began_work) 꺼졌으면 다시 돌지 않고 '결과 미확인' 실패로 멈춘다 (사용자 2026-11-25).
     다시 돌 때 ctx.resume = 그 모듈 키.
-    ERPia 가 떠 있는데 난 예외는 예전처럼 그대로 올린다."""
+    ERPia 가 떠 있는데 난 예외는 그 모듈의 실패와 사유로 돌려준다 (웰라이프 ui_error 와 같게, 로그인 모듈만 그대로 올린다).
+    웰라이프 안전장치의 멈춤(wellife.Stop)은 그 결과·사유로 돌려준다."""
     try:
         while True:
+            marks = status.work_marks()     # 이 모듈이 처리를 시작했는지 (rpa_status.began_work 수가 늘었나)
             try:
+                if key != "login" and ctx.hwnd is not None:    # 앞 모듈·앞 실행이 남긴, 또는 그새 뜬 따로 뜬 ERPia 팝업 창은 닫고 시작 (사용자 2026-11-20)
+                    wellife.clear_separate_popups(sys.modules[__name__], ctx, f"[{label}] 시작 전")
                 result, reason = funcs[key](ctx)
                 error = None
+            except wellife.Stop as e:     # 웰라이프 안전장치(front·clear_point·no_popup 등)가 누르지 않고 멈췄다 - 그 결과·사유 그대로
+                result, reason, error = e.result, str(e), None
             except Exception as e:
                 result, reason, error = "failed", f"{type(e).__name__}: {e}", e
+            if (error is not None or result == "failed") and key != "login" and ctx.pid is not None:
+                # 꺼지는 중이면 UI 예외가 먼저 나고 프로세스는 조금 뒤에 끝난다 - 그 순간만 보면 '떠 있음' 이라
+                # 다시 띄우지 않고 '프로그램 오류' 로 끝났다 (2026-11-19 개발기: 상단 전체선택 중 종료 → KeyError: None).
+                # 웰라이프 모듈은 예외를 '실패' 결과로 돌려준다(wellife.ui_error) - 같은 동작이게 실패 결과도 본다 (사용자 11-19)
+                # 예외 없이 '실패' 로 끝났고 메인 창이 그대로면 꺼지는 중이 아니다 - 기다리지 않는다 (실패마다 5초씩 늘던 것, 검토 2026-11-25).
+                # 예외면 지금처럼 기다린다 - 닫히는 도중 창보다 UIA 예외가 먼저 날 수 있다 (교차 검증 2026-11-25)
+                end = time.time() + ERPIA_DYING_WAIT_SECONDS
+                # 웰라이프 모듈은 예외를 'UI 오류: …' 실패 결과로 돌려준다(wellife.ui_error) - 그것도 예외로 본다 (교차 검증 2차)
+                raised = error is not None or str(reason or "").startswith("UI 오류")
+                while ec.pid_alive(ctx.pid) and time.time() < end and (raised or not main_window_alive(ctx.hwnd)):
+                    time.sleep(0.2)
             if key == "login" or ctx.pid is None or ec.pid_alive(ctx.pid):
+                if error is not None and key != "login":
+                    # 실행 전체를 '프로그램 오류' 로 끝내지 않고 이 모듈의 실패로 남긴다 - 웰라이프(ui_error)와 같게 (사용자 2026-11-19)
+                    # 오류 추적은 PC 결과 파일에만 - 상태·클라우드 로그에는 ui_error 의 한 줄 사유만 (검토 2026-11-25)
+                    log("".join(traceback.format_exception(type(error), error, error.__traceback__)).rstrip(), cloud=False)
+                    return wellife.ui_error(sys.modules[__name__], error)
                 if error is not None:
                     raise error
                 return result, reason
@@ -6627,6 +6914,11 @@ def run_module(ctx, key, label, funcs):
                 f"{' - ' + reason if reason else ''})")
             if key in ctx.no_rerun:
                 return "failed", "ERPia 가 꺼졌습니다 - '1건' 모드라 다시 돌지 않고 멈춥니다 (몇 건 처리됐는지 확인할 것)"
+            if status.work_marks() != marks:
+                # 처리를 시작한 뒤 꺼졌다 - 다시 돌면 같은 처리(업로드·저장·전송)가 두 번 될 수 있다. 처리 전이면 지금처럼 다시 돈다
+                # (사용자 2026-11-25, Codex 검토)
+                return "failed", ("처리 도중 ERPia 가 꺼져 결과를 확인하지 못했습니다 (결과 미확인). 같은 처리가 두 번 되지 않게 "
+                                  "다시 돌지 않고 멈춥니다. ERPia 에서 처리됐는지 확인한 뒤 다시 실행하여 주십시오.")
             if ctx.restarts >= ERPIA_RESTARTS:
                 return "failed", f"ERPia 가 실행 도중 {ERPIA_RESTARTS + 1}번 꺼져 멈춥니다"
             # 다른 ERPia 가 떠 있어도 쓰거나 끄지 않고 우리 것을 새로 띄운다 - module_login(ensure_erpia_running) 이 설정 계정의 ERPia 만 고른다
@@ -6744,6 +7036,12 @@ def main():
     else:
         log("실행할 모듈: " + " / ".join(
             f"{label} {'켬' if selected[cfg] else '끔'}" for _, cfg, label, _, _ in ROUTINE_MODULES))
+    if ec.screen_locked():   # 잠긴 화면에서는 클릭이 헛돌아 엉뚱한 실패가 난다 - 웰라이프 run_main 과 같게 (사용자 2026-11-19)
+        log("윈도우 화면이 잠겨 있어 실행하지 않았습니다.")
+        # 반복 회차도 실패로 남기고 반복을 멈춘다 - 사람이 풀어야 한다 (사용자 2026-11-25, 예전엔 그 회차만 건너뛰고 이력에 안 남겼다 - 10-08)
+        status.finish("stopped", "윈도우 화면이 잠겨 있어 실행하지 않았습니다. (화면 잠금을 해제한 뒤 다시 실행하여 주십시오)")
+        log(f"=== PROCESS 종료 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+        return
     together_setup(rr, selected)
 
     result, reason = run_modules(selected)
