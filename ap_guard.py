@@ -72,7 +72,7 @@ def startup_problem():
         return None
     import license_check
     try:
-        license_check.load()
+        license_check.load_any()          # 단독 = PC 번호 라이선스, 사내 서버 = 연결 파일의 자리 증명서 (사내 서버 ⑤ - 서버에 묻지 않는다)
     except license_check.LicenseError as e:
         return str(e)
     import rpa_status as st
@@ -127,12 +127,17 @@ def import_guard():
 
 
 def check_line():
-    """--check 에 찍는 줄: '라이선스: 확인됨 (<업체 이름>, PC 번호 <…>)' 또는 '라이선스: <문제 글>'. 일반 버전은 "" (찍지 않는다)."""
+    """--check 에 찍는 줄: '라이선스: 확인됨 (<업체 이름>, PC 번호 <…>)' 또는 '라이선스: <문제 글>'. 일반 버전은 "" (찍지 않는다).
+    사내 서버 연결이면 '라이선스: 확인됨 (<업체 이름>, 사내 서버 <호스트>, PC <pc_01 꼴>)' (사내 서버 ⑤)."""
     if not edition.is_standalone():
         return ""
     import license_check
     try:
-        body = license_check.load()
+        mode, body = license_check.load_any()
     except license_check.LicenseError as e:
         return f"라이선스: {e}"
+    if mode == license_check.MODE_LAN:
+        import urllib.parse
+        host = urllib.parse.urlsplit(body["server_url"]).hostname
+        return f"라이선스: 확인됨 ({body['license'].get('company') or '?'}, 사내 서버 {host}, PC {body['pc_id']})"
     return f"라이선스: 확인됨 ({body.get('company') or '?'}, PC 번호 {license_check.machine_guid()})"

@@ -360,6 +360,43 @@ try:
         except Touched:
             went = True
     check("옵저버 main 도 원래 흐름으로 (시작 확인까지 간다)", went)
+
+    # -----------------------------------------------------------------------------------------
+    print("사내 서버 연결 (사내 서버 ⑤ Task 2)")
+    os.environ["RPA_EDITION"] = "standalone"
+    import seat  # noqa: E402
+    LINK = license_check.link_path()
+    for _p in (LIC, LINK):
+        if os.path.exists(_p):
+            os.remove(_p)
+    os.makedirs(os.path.dirname(LINK), exist_ok=True)
+    seat_secret, seat_public = update_sign.keygen()
+    SERVER_BODY = {"edition": "standalone", "kind": "server", "company": "시험상사", "cid": "c1", "server_id": "0" * 32,
+                   "seat_pub": seat_public.hex(), "seats": 5, "modules": {}, "features": {}, "limits": {}}
+
+    def put_link(guid="pc-1"):
+        out = {"server_url": "https://192.168.1.230:8444", "pc_id": "pc_01", "agent_key": "a" * 64, "relay_key": "b" * 64,
+               "ca_pem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}
+        doc = license_check.link_doc(out, seat.issue(seat_secret, "c1", "pc_01", guid, 1764100000000),
+                                     license_check.sign_body(lic_secret, SERVER_BODY))
+        with open(LINK, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False)
+
+    put_link()
+    check("연결 파일만 있으면 startup_problem None (서버에 묻지 않는다 - 서버 주소는 닿지 않는 곳)",
+          ap_guard.startup_problem() is None, ap_guard.startup_problem())
+    check("check_line 은 사내 서버 줄",
+          ap_guard.check_line() == "라이선스: 확인됨 (시험상사, 사내 서버 192.168.1.230, PC pc_01)", ap_guard.check_line())
+    put_link(guid="pc-2")
+    check("다른 PC 의 연결 파일 → 그 까닭으로 막힘", "이 PC" in (ap_guard.startup_problem() or ""), ap_guard.startup_problem())
+    put_link()
+    put_license()
+    check("라이선스 + 연결 파일 → BOTH_TEXT", ap_guard.startup_problem() == license_check.BOTH_TEXT, ap_guard.startup_problem())
+    check("--check 줄도 BOTH_TEXT", ap_guard.check_line() == f"라이선스: {license_check.BOTH_TEXT}", ap_guard.check_line())
+    os.remove(LINK)
+    check("라이선스만 → 지금 단독 동작 그대로 (None, 지금 줄)",
+          ap_guard.startup_problem() is None and ap_guard.check_line() == "라이선스: 확인됨 (시험상사, PC 번호 pc-1)",
+          (ap_guard.startup_problem(), ap_guard.check_line()))
 except Exception:
     import traceback
     traceback.print_exc()
