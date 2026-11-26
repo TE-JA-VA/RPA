@@ -797,7 +797,7 @@ def test_activate():
           and "autopilot-cert.timer" in log and "autopilot-config-backup.timer" in log, log)
     ver, pid = b.running()
     check("도는 서비스가 알리는 버전이 설치된 버전", ver == V1, (ver, read(os.path.join(b.state, "service.out"))[-800:]))
-    check("관리자 계정이 없으면 멈춘 뒤 admin-reset --create 안내", "sudo autopilot-server admin-reset admin --create" in so and "sudo systemctl stop autopilot" in so, so[-800:])
+    check("관리자 계정이 없으면 멈춘 뒤 admin-reset --create 안내", "sudo /usr/local/sbin/autopilot-server admin-reset admin --create" in so and "sudo systemctl stop autopilot" in so, so[-800:])
     run_json = os.path.join(b.data, "run.json")
     check("run.json 은 서비스 계정 0600", os.path.isfile(run_json) and owner(run_json)[0] == SVC_UID and mode(run_json) == 0o600)
     # 관리자 계정 - 서비스를 멈춘 뒤 root 로 admin-reset (권한을 내려 쓰므로 계정 파일은 서비스 계정 소유)

@@ -432,6 +432,33 @@ def test_upgrade_verifies_first():
           os.listdir(os.path.join(troot, "opt", "autopilot")))
     check("끝나면 임시 자리를 지운다", os.listdir(work) == [], os.listdir(work))
     check("권한 내리기는 부르지 않는다 (root 로 설치)", not events, events)
+    # 끝 검토 (Fable 2): root 의 umask 가 077 이어도 풀린 폴더는 0755 - 아니면 서비스 계정이 새 버전을 못 열어 늘 되돌려진다
+    um = make_bundle(os.path.join(TMP, "upgrade", "u"), "2026.11.25-8",
+                     install_sh="#!/bin/sh\necho \"$(stat -c %a \"$(dirname \"$0\")\") $(umask)\" > \"$MARK\"\n")
+    old = os.umask(0o077)
+    try:
+        code, so, se = call(["upgrade", um])
+    finally:
+        os.umask(old)
+    check("umask 077 에서 업그레이드해도 풀린 폴더 0755·install.sh 는 umask 0022 로", code == 0 and read(mark).split() == ["755", "0022"],
+          (code, se, read(mark)))
+    # 끝 검토 (Fable 1): 터미널 Ctrl+C 는 파이썬과 install.sh 둘 다에 간다. 파이썬은 install.sh 가 되돌리기를 끝낼 때까지 기다려야 한다
+    # (subprocess.run 은 KeyboardInterrupt 에 0.25초 뒤 자식을 죽인다). 여기서는 파이썬에만 SIGINT 를 보내 기다리는지 본다
+    import signal
+    slow = make_bundle(os.path.join(TMP, "upgrade", "s"), "2026.11.25-9",
+                       install_sh="#!/bin/sh\ntrap '' INT\nsleep 2\necho undone > \"$MARK\"\nexit 7\n")
+    with open(mark, "w") as f:
+        f.write("")
+    timer = threading.Timer(0.8, lambda: os.kill(os.getpid(), signal.SIGINT))
+    timer.start()
+    try:
+        code, so, se = call(["upgrade", slow])
+    except KeyboardInterrupt:
+        code, so, se = "KeyboardInterrupt", "", ""
+    finally:
+        timer.cancel()
+    check("업그레이드 중 Ctrl+C 를 받아도 install.sh 가 끝날 때까지 기다리고 그 종료 코드를 돌려준다",
+          code == 7 and read(mark).strip() == "undone", (code, se, read(mark)))
 
 
 def test_cert_root_only():
@@ -492,6 +519,25 @@ def test_cert_renew_backdated():
     server_main._euid = SERVICE
     check("서비스 계정으로 renew 한 인증서로 서버가 켜진다", e.start(), (e.result, read(e.paths.server_log)[-300:]))
     e.stop()
+
+
+def test_cert_renew_refuses_broken_ca():
+    """끝 검토 Codex 5: 운영 중 인증 기관이 망가지거나 사라졌으면 cert --renew 가 새 인증 기관을 조용히 만들지 않는다
+    (만들면 등록한 PC 가 모두 끊긴다). 처음(인증 기관도 tls/ 사본도 없음)에만 만든다."""
+    e = renew_and_check("cert_broken", False)
+    ca_cert = os.path.join(e.paths.ca_dir, lan_ca.CA_CERT)
+    ca_key = os.path.join(e.paths.ca_dir, lan_ca.CA_KEY)
+    first = read(ca_cert)
+    with open(ca_key, "w", encoding="ascii") as f:
+        f.write("-----BEGIN PRIVATE KEY-----\nbroken\n-----END PRIVATE KEY-----\n")
+    code, so, se = call(["cert", "--renew"])
+    check("인증 기관 열쇠가 망가졌으면 renew 는 1, 인증 기관 인증서 그대로", code == 1 and read(ca_cert) == first and "restore-config" in se,
+          (code, se))
+    os.remove(ca_key)
+    os.remove(ca_cert)
+    code, so, se = call(["cert", "--renew"])
+    check("인증 기관이 사라졌어도 tls/ 에 옛 공개 인증서가 있으면 renew 는 1, 새로 만들지 않는다",
+          code == 1 and not os.path.exists(ca_cert) and read(e.paths.tls_ca) == first, (code, se))
 
 
 def test_cert_if_expiring():
@@ -852,7 +898,7 @@ def test_cert_default_owner():
 try:
     print("관리 명령 (test_server_admin)")
     for t in (test_request_file, test_status_ok_and_problems, test_admin_reset_needs_stopped, test_admin_reset_owner,
-              test_admin_reset, test_verify, test_upgrade_verifies_first, test_cert_root_only, test_cert_renew_backdated,
+              test_admin_reset, test_verify, test_upgrade_verifies_first, test_cert_root_only, test_cert_renew_backdated, test_cert_renew_refuses_broken_ca,
               test_cert_if_expiring, test_import_web_cert, test_replace_pair_atomic, test_lock_no_follow, test_cert_no_follow,
               test_request_no_follow, test_cert_default_owner):
         guard(t.__name__, t)

@@ -495,7 +495,7 @@ def config_names(folder):
         return []
 
 
-def config_backup(etc, dest, keep=KEEP, now=None):
+def config_backup(etc, dest, keep=KEEP, now=None, skipped=None):
     """설정 폴더(/etc/autopilot) 전체를 dest/etc-YYYYMMDD.tar.gz (0600, 폴더 0700) 로 → 경로. 같은 날은 새로 덮는다. 링크는 담지 않는다.
     폴더·파일의 권한과 소유자를 담는다 (되살릴 때 그대로 - 서비스가 읽는 설정, root 만 읽는 ca/)."""
     now = time.time() if now is None else now
@@ -508,9 +508,13 @@ def config_backup(etc, dest, keep=KEEP, now=None):
         with os.fdopen(fd, "wb") as raw:
             with tarfile.open(fileobj=raw, mode="w:gz") as tf:
                 for d, dirs, names in os.walk(etc):
-                    dirs[:] = sorted(x for x in dirs if not os.path.islink(os.path.join(d, x)))
                     rel_d = os.path.relpath(d, etc).replace("\\", "/")
-                    for n in sorted(dirs) + sorted(names):
+                    # 복구(_open_tar)가 받는 이름만 담는다 - 편집기 사본·숨김 임시(.cert-*, .server.json.new)는 빼고 알린다 (끝 검토)
+                    for x in [x for x in dirs + names if not PART_RE.fullmatch(x)]:
+                        if skipped is not None:
+                            skipped.append(x if rel_d == "." else f"{rel_d}/{x}")
+                    dirs[:] = sorted(x for x in dirs if not os.path.islink(os.path.join(d, x)) and PART_RE.fullmatch(x))
+                    for n in sorted(dirs) + sorted(x for x in names if PART_RE.fullmatch(x)):
                         p = os.path.join(d, n)
                         rel = n if rel_d == "." else f"{rel_d}/{n}"
                         if os.path.islink(p) or not (os.path.isdir(p) or os.path.isfile(p)):
@@ -535,10 +539,13 @@ def config_backup(etc, dest, keep=KEEP, now=None):
     return final
 
 
-def restore_config(etc, file, now=None):
+def restore_config(etc, file, now=None, svc_gid=None):
     """설정 백업으로 설정 폴더를 되살린다 → 전의 설정을 옮겨 둔 폴더 (<etc>.before-restore-<시각>). 서비스 잠금은 부르는 쪽이 쥔다.
     이름·종류 검사는 백업과 같다. 같은 부모 폴더의 임시 폴더에 다 푼 뒤 이름 바꾸기 두 번 (실패하면 전 설정을 제자리로)."""
     entries = _open_tar(_raw(file))
+    names = {m.name for m, _ in entries}
+    if "backup.json" in names or "server.json" not in names:   # 자료 백업을 잘못 넘김·설정이 아닌 압축 (끝 검토 Fable 5)
+        raise ValueError("설정 백업(etc-YYYYMMDD.tar.gz)이 아닙니다 - server.json 이 있고 backup.json 이 없어야 합니다. 설정은 그대로입니다.")
     now = time.time() if now is None else now
     parent = os.path.dirname(os.path.abspath(etc))
     stage = tempfile.mkdtemp(prefix=".autopilot-restore-", dir=parent)
@@ -557,8 +564,8 @@ def restore_config(etc, file, now=None):
                     os.fsync(f.fileno())
             if os.name == "posix":
                 os.chmod(dst, (m.mode & 0o777) | (0o700 if m.isdir() else 0))
-                if root:
-                    os.chown(dst, m.uid, m.gid)
+                if root:   # root 가 아닌 그룹은 지금 서비스 계정 그룹 (다른 장비의 백업이면 gid 가 다르다 - 끝 검토 Fable 5)
+                    os.chown(dst, m.uid, m.gid if m.gid == 0 or svc_gid is None else svc_gid)
         try:
             st = os.stat(etc)
             if os.name == "posix":

@@ -765,6 +765,61 @@ def test_backup_config_root_only():
     check("설정 백업도 압축 안 이름이 틀리면 1", code == 1 and not os.path.exists(os.path.join(e.base, "evil")), (code, se))
 
 
+def test_config_backup_odd_names_and_kind():
+    """끝 검토 (Fable 4·5, Codex 9): 설정 폴더에 편집기 사본·숨김 임시·띄어쓰기 이름이 있어도 설정 백업은 복구 규칙에 맞는 이름만 담아
+    restore-config 가 받는다. 자료 백업(backup.json)이나 server.json 이 없는 압축은 설정 복구가 거절한다 (설정 폴더 그대로)."""
+    e = Env("config_odd")
+    dest = os.path.join(e.base, "var-backups")
+    server_main.CONFIG_BACKUPS = dest
+    os.makedirs(e.paths.ca_dir)
+    with open(os.path.join(e.paths.ca_dir, lan_ca.CA_KEY), "w") as f:
+        f.write("CA-KEY")
+    for n in ("server.json~", ".server.json.swp", "license (1).json", ".server.json.new"):
+        with open(os.path.join(e.paths.etc, n), "w") as f:
+            f.write("x")
+    os.makedirs(os.path.join(e.paths.etc, ".cert-abc"))
+    with open(os.path.join(e.paths.etc, ".cert-abc", "server_key.pem"), "w") as f:
+        f.write("half")
+    fake_root()
+    code, so, se = call(["backup-config"])
+    files = sorted(os.listdir(dest)) if os.path.isdir(dest) else []
+    check("이상한 이름이 있어도 backup-config 0", code == 0 and len(files) == 1, (code, se, files))
+    if not files:
+        return
+    path = os.path.join(dest, files[0])
+    names = set(members(path))
+    check("복구 규칙에 안 맞는 이름은 담지 않는다", not any(x in names for x in ("server.json~", ".server.json.swp", "license (1).json",
+                                                                   ".server.json.new", ".cert-abc", ".cert-abc/server_key.pem")), names)
+    check("빠진 이름을 알린다", "server.json~" in se and ".cert-abc" in se, se)
+    check("설정·인증 기관은 그대로 담는다", {"server.json", f"ca/{lan_ca.CA_KEY}"} <= names, names)
+    want = read(e.paths.server_json)
+    with open(e.paths.server_json, "w", encoding="utf-8") as f:
+        f.write("{broken")
+    code, so, se = call(["restore-config", path])
+    check("그 백업을 restore-config 가 받는다 (왕복)", code == 0 and read(e.paths.server_json) == want, (code, se))
+    data_like = os.path.join(e.base, "data_like.tar.gz")
+    write_tar(data_like, [("backup.json", b"{}"), ("accounts.json", b"{}"), ("server.json", b"{}")])
+    before = read(e.paths.server_json)
+    code, so, se = call(["restore-config", data_like])
+    check("자료 백업(backup.json 이 든 것)은 설정 복구가 거절, 설정 그대로", code == 1 and read(e.paths.server_json) == before, (code, se))
+    no_cfg = os.path.join(e.base, "no_cfg.tar.gz")
+    write_tar(no_cfg, [("license.json", b"{}")])
+    code, so, se = call(["restore-config", no_cfg])
+    check("server.json 이 없는 압축은 설정 복구가 거절", code == 1 and read(e.paths.server_json) == before, (code, se))
+    if not REAL_ROOT:
+        print("  [건너뜀] 그룹 맞추기는 진짜 root(WSL)에서만")
+        return
+    # 끝 검토 Fable 5: 다른 장비의 설정 백업이면 서비스 계정 gid 가 다르다 - root 가 아닌 그룹은 지금 서비스 계정 그룹으로
+    other = os.path.join(e.base, "other_gid.tar.gz")
+    ti = tarfile.TarInfo("server.json")
+    ti.size, ti.mode, ti.uid, ti.gid = len(want.encode()), 0o640, 0, 4242
+    write_tar(other, [(ti, want.encode())])
+    code, so, se = call(["restore-config", other])
+    st = os.stat(e.paths.server_json)
+    check("다른 장비 백업의 서비스 그룹(4242)은 지금 서비스 계정 그룹(1000)으로, root 소유·0640 그대로",
+          code == 0 and (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) == (0, 1000, 0o640), (code, se, st.st_uid, st.st_gid))
+
+
 REAL_ROOT = POSIX and os.geteuid() == 0                     # WSL 은 root - 진짜로 권한을 내려 보는 시험
 AGENT_DIR = os.path.join(ROOT, "firebase", "agent")
 SKIP = ("backups", ".service.lock", "before-restore-", ".restore-in-progress")
@@ -927,7 +982,8 @@ try:
     print("백업과 복구 (test_server_backup)")
     for t in (test_backup_contents, test_keep_7, test_backup_consistent_snapshot, test_backup_signal_path, test_backup_schedule,
               test_restore_roundtrip, test_restore_holds_lock, test_restore_refuses_running, test_restore_rejects_bad_names,
-              test_restore_other_server, test_restore_newer_format, test_backup_config_root_only, test_backup_signal_drops_first,
+              test_restore_other_server, test_restore_newer_format, test_backup_config_root_only,
+              test_config_backup_odd_names_and_kind, test_backup_signal_drops_first,
               test_restore_interrupted):
         guard(t.__name__, t)
 finally:

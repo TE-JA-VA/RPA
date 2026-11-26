@@ -47,9 +47,19 @@ body = SH[SH.index("set -eu"):]
 check("설치 끝 안내가 요청 파일을 꺼내는 명령을 보여 준다 (발견 7)",
       re.search(r'say ".*sudo install -m 0644 -o .*server_request', body) is not None, "")
 check("헷갈리던 '다음 버전도 같은 순서' 를 없앰 (발견 8)", "다음 버전도 같은 순서" not in SH)
-check("다음 버전 안내는 풀지 않고 sudo autopilot-server upgrade", re.search(r'say "[^\n]*풀지 않고[^\n]*\n[^\n]*say "[^\n]*sudo autopilot-server upgrade', body) is not None, "")
+check("다음 버전 안내는 풀지 않고 sudo autopilot-server upgrade", re.search(r'say "[^\n]*풀지 않고[^\n]*\n[^\n]*say "[^\n]*sudo /usr/local/sbin/autopilot-server upgrade', body) is not None, "")
 hint = body[body.index("admin_hint() {"):body.index("tz_notice() {")]
-for c in ("sudo systemctl stop autopilot", "sudo autopilot-server admin-reset admin --create", "sudo systemctl start autopilot"):
+for c in ("sudo systemctl stop autopilot", "sudo /usr/local/sbin/autopilot-server admin-reset admin --create", "sudo systemctl start autopilot"):
     check(f"관리자 안내 '{c}' (발견 9)", f'"  {c}' in hint, c)
+# 끝 검토 Fable 6: RHEL 계열 sudo secure_path 에 /usr/local/sbin 이 없다 → sudo 로 안내하는 autopilot-server 는 전체 경로
+bare = [ln.strip() for ln in SH.split("\n") if re.search(r"sudo autopilot-server", ln)]
+check("sudo 안내의 autopilot-server 는 모두 /usr/local/sbin/ 전체 경로", not bare, bare)
+check("--help 업그레이드도 전체 경로", "sudo /usr/local/sbin/autopilot-server upgrade" in H, "")
+# 끝 검토 Codex 2: activate 는 라이선스를 root 전용 사본으로 옮긴 뒤 그 사본을 검사하고 그 사본을 넣는다 (검사 뒤 바꿔치기 막기)
+act = body[body.index("cmd_activate() {"):]
+act = act[:act.index("\n}\n")]
+check("activate 는 받은 경로를 검사·복사에 다시 쓰지 않는다 (H license \"$LICENSE\" 없음)", 'H license "$LICENSE"' not in act and 'cp "$LICENSE" "$ETC' not in act, "")
+check("activate 는 사본을 먼저 만든 뒤 그 사본을 검사한다",
+      re.search(r'cp "\$LICENSE" "\$_lic"[\s\S]*H license "\$_lic"', act) is not None, "")
 print("실패:", len(fails) or 0)
 sys.exit(1 if fails else 0)

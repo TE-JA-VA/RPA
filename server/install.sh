@@ -30,7 +30,7 @@
 #   4. sudo sh /root/autopilot-install/autopilot-server-<버전>/server/install.sh activate <받은 라이선스 파일>
 #      서비스를 켜고 실제로 도는 버전을 확인한다. 관리자 계정이 없으면 만드는 순서를 보여 준다.
 # 업그레이드 (root): 새 tar.gz 를 sha256sum 으로 공급사 값과 맞춘 뒤, 풀지 않고 .sig 와 같은 폴더에 두고
-#        sudo autopilot-server upgrade <새 tar.gz>
+#        sudo /usr/local/sbin/autopilot-server upgrade <새 tar.gz>
 #      깔린 도구가 새 파일의 서명을 먼저 확인한 뒤 그 안의 이 파일을 'upgrade --verified-version <버전>' 으로 부른다.
 #
 # 어느 단계에서 끊겨도(오류, Ctrl+C, kill) 그 단계까지 한 일을 되돌린다 (trap). 업그레이드는 current 링크를 바꾼 뒤 끊기거나
@@ -528,7 +528,7 @@ admin_hint() {
         say ""
         say "관리자 계정이 아직 없습니다. 서비스를 멈춘 뒤 만들고 다시 켜 주십시오 (계정 파일은 서비스가 멈춘 동안에만 고칩니다):"
         say "  sudo systemctl stop autopilot"
-        say "  sudo autopilot-server admin-reset admin --create        (새 비밀번호를 두 번 묻습니다 - 10자 이상)"
+        say "  sudo /usr/local/sbin/autopilot-server admin-reset admin --create        (새 비밀번호를 두 번 묻습니다 - 10자 이상)"
         say "  sudo systemctl start autopilot"
     fi
     return 0
@@ -681,7 +681,7 @@ cmd_install() {
     say "  요청 파일은 서비스 계정만 읽는 폴더에 있습니다. 보낼 계정의 지금 폴더로 꺼내려면:"
     say "    sudo install -m 0644 -o ${SUDO_USER:-<내 계정>} $_req ./server_request.json"
     say "  다음 버전: 받은 tar.gz 를 sha256sum 으로 공급사 값과 맞춘 뒤, 풀지 않고 같은 이름의 .sig 와 한 폴더에 두고"
-    say "    sudo autopilot-server upgrade <새 tar.gz>        (서명을 먼저 확인합니다)"
+    say "    sudo /usr/local/sbin/autopilot-server upgrade <새 tar.gz>        (서명을 먼저 확인합니다)"
 }
 
 # ----------------------------------------------------------------------------------------------------
@@ -695,9 +695,13 @@ cmd_activate() {
     HX=$(cd "$CUR" && pwd -P)
     _iv=${HX##*/}
     need_account
-    _info=$(H license "$LICENSE" "$DATA") || die "라이선스를 넣지 않았습니다."
-    track "$ETC/.license.json.new"
-    cp "$LICENSE" "$ETC/.license.json.new"
+    # 받은 파일을 root 만 쓰는 설정 폴더의 사본으로 먼저 옮기고, 그 사본을 검사해 그 사본을 넣는다 - 검사 뒤 받은 자리의 파일을
+    # 바꿔치기해도 검사하지 않은 내용이 들어가지 않는다 (끝 검토 Codex 2)
+    _lic="$ETC/.license.json.new"
+    track "$_lic"
+    rm -f "$_lic"
+    ( umask 077 && cp "$LICENSE" "$_lic" ) || die "라이선스 파일을 읽지 못했습니다 ($LICENSE)."
+    _info=$(H license "$_lic" "$DATA") || die "라이선스를 넣지 않았습니다."
     chmod 0640 "$ETC/.license.json.new"
     chown "0:$SVC_GID" "$ETC/.license.json.new"
     if [ -f "$ETC/license.json" ]; then cp -p "$ETC/license.json" "$ETC/license.json.prev"; fi

@@ -851,8 +851,14 @@ def _cert_renew(args, paths, owner):
     if not 1 <= days <= lan_ca.SERVER_DAYS:
         return _err(f"--days 는 1~{lan_ca.SERVER_DAYS} 이어야 합니다.")
     names = list(cfg.names)                          # listen 주소 + 이름들 (IP 글자는 lan_ca 가 주소로 옮긴다)
+    ca_files = [os.path.join(paths.ca_dir, n) for n in (lan_ca.CA_CERT, lan_ca.CA_KEY)]
+    had_ca = any(os.path.lexists(p) for p in ca_files) or os.path.lexists(paths.tls_ca)
+    if had_ca and not lan_ca._usable(*ca_files):
+        # 운영 중 인증 기관이 망가지거나 사라졌다 - 새로 만들면 등록한 PC 가 모두 끊긴다 (끝 검토 Codex 5). 처음 설치만 만든다
+        return _err(f"인증 기관({paths.ca_dir})이 없거나 망가졌습니다. 새로 만들지 않았습니다 - 설정 백업으로 되살려 주십시오 "
+                    "(autopilot-server restore-config <설정 백업>).")
     try:
-        lan_ca.make_ca(paths.ca_dir, names, [])      # 있으면 그대로 (다시 만들면 PC 를 모두 다시 등록해야 한다)
+        lan_ca.make_ca(paths.ca_dir, names, [])      # 처음에만 만든다 (있으면 그대로)
         if os.name == "posix":
             os.chmod(paths.ca_dir, 0o700)
         work = _root_work(paths)
@@ -1093,6 +1099,9 @@ def cmd_upgrade(args, paths):
     except ValueError as e:
         return _err(str(e))
     base = _test_root() + UPGRADE_TMP if _test_root() else UPGRADE_TMP
+    # root 의 umask 가 027·077 이어도 풀린 폴더는 0755 여야 서비스 계정이 새 버전을 연다 (tarfile data 필터는 폴더 모드를 umask 로,
+    # install.sh 의 cp -p 가 그대로 옮긴다 - 끝 검토 Fable 2). 이 명령은 업그레이드 하나만 하고 끝나므로 되돌리지 않는다
+    os.umask(0o022)
     try:
         os.makedirs(base, exist_ok=True)
         work = tempfile.mkdtemp(prefix=".upgrade-", dir=base)                  # 0700
@@ -1107,7 +1116,14 @@ def cmd_upgrade(args, paths):
             return _err("설치 파일 안에 server/install.sh 가 없습니다.")
         print(f"서명 확인됨  버전={ver} - 업그레이드를 시작합니다.")
         sys.stdout.flush()
-        return subprocess.run(upgrade_argv(script, ver), cwd=bundle).returncode
+        # 터미널 Ctrl+C 는 install.sh 에도 간다 - install.sh 가 trap 으로 되돌리기를 끝낼 때까지 기다린다 (subprocess.run 은
+        # KeyboardInterrupt 에 0.25초 뒤 자식을 죽여 되돌리기 도중에 끊는다 - 끝 검토 Fable 1)
+        proc = subprocess.Popen(upgrade_argv(script, ver), cwd=bundle)
+        while True:
+            try:
+                return proc.wait()
+            except KeyboardInterrupt:
+                print("중단 요청을 받았습니다 - install.sh 가 되돌리기를 끝낼 때까지 기다립니다.", file=sys.stderr)
     except (tarfile.TarError, OSError) as e:
         return _err(f"설치 파일을 풀지 못했습니다 ({type(e).__name__}).")
     finally:
@@ -1243,10 +1259,14 @@ def cmd_backup_config(args, paths):
     """(root) 설정 폴더 백업 - CONFIG_BACKUPS/etc-YYYYMMDD.tar.gz, 7개. 기록 파일에는 쓰지 않는다 (root 소유 기록 파일이 생기지 않게)."""
     if not _need_root("backup-config"):
         return 1
+    skipped = []
     try:
-        made = server_backup.config_backup(paths.etc, _test_root() + CONFIG_BACKUPS if _test_root() else CONFIG_BACKUPS)
+        made = server_backup.config_backup(paths.etc, _test_root() + CONFIG_BACKUPS if _test_root() else CONFIG_BACKUPS,
+                                           skipped=skipped)
     except (OSError, ValueError) as e:
         return _err(str(e) if isinstance(e, ValueError) else f"설정 백업을 만들지 못했습니다 ({type(e).__name__}).")
+    if skipped:
+        print("알림: 복구할 수 없는 이름이라 백업에서 뺐습니다 - " + ", ".join(skipped[:20]), file=sys.stderr)
     print(made)
     return 0
 
@@ -1268,7 +1288,7 @@ def cmd_restore_config(args, paths):
     except OSError as e:
         return _err(_lock_err(e))
     try:
-        aside = server_backup.restore_config(paths.etc, args.file)
+        aside = server_backup.restore_config(paths.etc, args.file, svc_gid=owner[1] if owner else None)
     except ValueError as e:
         return _err(str(e))
     except OSError as e:
