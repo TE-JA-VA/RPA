@@ -31,7 +31,7 @@ SA = ["tests/test_license.py", "tests/test_local_store_core.py", "tests/test_loc
       # 사내 서버 ④ (리눅스에 싣기)
       "tests/test_server_log.py", "tests/test_server_license.py", "tests/test_seat.py", "tests/test_server_main.py",
       "tests/test_server_admin.py", "tests/test_server_backup.py", "tests/test_lan_polish.py",
-      "tests/test_build_server.py", "tests/test_server_offline.py", "tests/test_nt_tool.py"]
+      "tests/test_build_server.py", "tests/test_server_offline.py", "tests/test_nt_tool.py", "tests/test_install_guide.py"]
 WSL_DIR = "/mnt/d/AX/RPA_StandAlone/tests/"
 # 'wsl' - 리눅스에서 사내 서버 한 번 (사내 서버 ② Task 8) + 리눅스에서만 도는 부분이 있는 ④ 시험 + install.sh (④ Task 8)
 WSL_TESTS = ["wsl_lan_smoke.py", "test_server_log.py", "test_server_license.py", "test_seat.py", "test_server_main.py",

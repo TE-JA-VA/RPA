@@ -553,6 +553,8 @@ def test_install_uses_verified_copy():
           "sha256sum" in head and "install -d -m 0700" in head and head.index("sha256sum") < head.index("install -d -m 0700"), head[:1500])
     code, so, se = b2.sh(bdir2, ["--help", "--root", b2.p])
     check("도움말에도 같은 순서", "install -d -m 0700" in so and "sha256sum" in so, so[:1500])
+    check("도움말에 시험 전용 옵션·환경 변수가 보이지 않는다 (NT 깨끗한 설치 발견 4)",
+          code == 0 and "AP_TEST" not in so and "--root" not in so and "--names" in so, so[-600:])
 
 
 def test_fresh_install_layout():
@@ -795,7 +797,7 @@ def test_activate():
           and "autopilot-cert.timer" in log and "autopilot-config-backup.timer" in log, log)
     ver, pid = b.running()
     check("도는 서비스가 알리는 버전이 설치된 버전", ver == V1, (ver, read(os.path.join(b.state, "service.out"))[-800:]))
-    check("관리자 계정이 없으면 멈춘 뒤 admin-reset --create 안내", "admin-reset admin --create" in so and "systemctl stop autopilot" in so, so[-800:])
+    check("관리자 계정이 없으면 멈춘 뒤 admin-reset --create 안내", "sudo autopilot-server admin-reset admin --create" in so and "sudo systemctl stop autopilot" in so, so[-800:])
     run_json = os.path.join(b.data, "run.json")
     check("run.json 은 서비스 계정 0600", os.path.isfile(run_json) and owner(run_json)[0] == SVC_UID and mode(run_json) == 0o600)
     # 관리자 계정 - 서비스를 멈춘 뒤 root 로 admin-reset (권한을 내려 쓰므로 계정 파일은 서비스 계정 소유)

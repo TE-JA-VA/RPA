@@ -1,6 +1,10 @@
 #!/bin/sh
 # install.sh - 오토파일럿 사내 서버(리눅스) 설치, 활성화, 업그레이드 (POSIX sh)
 #
+# 받는 것: AUTOPILOT_Server_<버전>_linux-x86_64.tar.gz 와 같은 이름의 .sig (서명 파일). SHA-256 값은 공급사가 다른 길로 따로 알린다.
+#   처음 설치는 따로 받은 SHA-256 으로 확인한다. .sig 는 tar.gz 옆에 두기만 하면 되고, 업그레이드 때
+#   autopilot-server upgrade 가 그 서명을 확인한다.
+#
 # 처음 설치 (root) - 받은 파일은 풀기 전에 지문부터 맞추고, root 만 쓸 수 있는 폴더에 푼다:
 #   1. 받은 tar.gz 를 풀기 전에, 공급사가 다른 길(메일과 전화 등)로 따로 알려 준 SHA-256 과 같은지 본다
 #      (다르면 풀지 말고 공급사에 연락한다):
@@ -10,21 +14,29 @@
 #        sudo cp AUTOPILOT_Server_<버전>_linux-x86_64.tar.gz /root/autopilot-install/
 #        sudo tar -xzf /root/autopilot-install/AUTOPILOT_Server_<버전>_linux-x86_64.tar.gz -C /root/autopilot-install
 #   3. 그 폴더의 install.sh 를 root 로 돌린다:
-#        sudo sh /root/autopilot-install/autopilot-server-<버전>/server/install.sh install --expect-sha256 <값>
-#             --listen <서버 사내 IP> --allow <PC 대역>[,<대역>] [--names <이름>[,<이름>]] [--bundle <tar.gz 자리>]
+#        sudo sh /root/autopilot-install/autopilot-server-<버전>/server/install.sh install --expect-sha256 <값> \
+#             --listen <서버 사내 IP> --allow <PC 대역>[,<대역>] [--names <이름>[,<이름>]] [--bundle <tar.gz 자리>] \
 #             [--apply-firewall] [--yes]
+#        --listen          서버가 들을 이 장비의 사내 IP (예 192.168.1.230). PC 들이 이 주소로 붙는다.
+#        --allow           붙을 수 있는 PC 대역 (예 192.168.1.0/24). 여럿이면 쉼표로.
+#        --names           서버 인증서에 넣을 DNS 이름 (예 autopilot.corp.local). 설치 때만 정해지고 나중에 바꿀 수 없다 -
+#                          nginx 같은 프록시를 다른 장비에 두고 이름으로 확인하려면 이때 넣는다. IP 로만 쓰면 빼도 된다.
+#        --bundle          tar.gz 가 위 폴더(풀어 둔 폴더의 바로 위)에 없을 때 그 자리.
+#        --apply-firewall  안내하는 방화벽 규칙(ufw·firewalld)을 바로 넣는다. 빼면 명령만 보여 주고 사람이 넣는다.
+#        --yes             --apply-firewall 과 같다 (묻는 질문은 없다).
 #      install.sh 는 tar.gz 를 root 전용 임시 폴더로 복사해 그 사본의 SHA-256 을 다시 맞추고, 그 사본을 풀어 버전 목록과
 #      대조한 것만 설치한다 (풀어 둔 폴더의 파이썬·도우미는 돌리지 않는다). 라이선스 없이 끝난다.
-#      화면에 나온 요청 파일(/var/lib/autopilot/server_request.json)을 공급사에 보낸다.
+#      화면에 나온 요청 파일(/var/lib/autopilot/server_request.json)을 화면의 명령으로 꺼내 공급사에 보낸다.
 #   4. sudo sh /root/autopilot-install/autopilot-server-<버전>/server/install.sh activate <받은 라이선스 파일>
 #      서비스를 켜고 실제로 도는 버전을 확인한다. 관리자 계정이 없으면 만드는 순서를 보여 준다.
-# 업그레이드 (root): autopilot-server upgrade <새 tar.gz>
+# 업그레이드 (root): 새 tar.gz 를 sha256sum 으로 공급사 값과 맞춘 뒤, 풀지 않고 .sig 와 같은 폴더에 두고
+#        sudo autopilot-server upgrade <새 tar.gz>
 #      깔린 도구가 새 파일의 서명을 먼저 확인한 뒤 그 안의 이 파일을 'upgrade --verified-version <버전>' 으로 부른다.
 #
 # 어느 단계에서 끊겨도(오류, Ctrl+C, kill) 그 단계까지 한 일을 되돌린다 (trap). 업그레이드는 current 링크를 바꾼 뒤 끊기거나
 # 새 버전이 30초 안에 돌지 않으면 링크와 단위 파일을 되돌리고 옛 버전을 다시 켠다. 링크를 되돌리지 못하면 지금 쓰는 버전과
 # 단위 파일 사본을 지우지 않고 손으로 할 일을 적는다.
-#
+# --- 여기부터는 --help 에 보이지 않는다 (개발용 메모) ---
 # 시험 전용 (WSL, tests/wsl_install.py):
 #   --root <PREFIX>        모든 자리를 PREFIX 아래로. root 확인을 건너뛰고, systemctl·useradd·userdel·ufw·firewall-cmd 는
 #                          AP_FAKE_BIN 의 가짜에서만 찾는다 (이 장비의 진짜 명령을 부르지 않는다)
@@ -48,8 +60,8 @@ SYSTEMD_MIN=235
 OPT_MIN_MB=500
 PYMAIN='import sys; sys.path.insert(0, sys.argv.pop(1)); import server_main; sys.exit(server_main.main(sys.argv[1:]))'
 
-usage() {           # 머리 주석 (둘째 줄부터 set -eu 앞까지)
-    sed -n '2,/^set -eu$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+usage() {           # 머리 주석 (둘째 줄부터 '# ---' 표시 줄 앞까지 - 시험 전용 메모는 고객에게 보이지 않게)
+    sed -n '2,/^# ---/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
 HERE=$(cd "$(dirname "$0")" && pwd -P)
@@ -515,9 +527,9 @@ admin_hint() {
     if H admin-missing "$DATA/accounts.json"; then
         say ""
         say "관리자 계정이 아직 없습니다. 서비스를 멈춘 뒤 만들고 다시 켜 주십시오 (계정 파일은 서비스가 멈춘 동안에만 고칩니다):"
-        say "  systemctl stop autopilot"
-        say "  autopilot-server admin-reset admin --create        (새 비밀번호를 두 번 묻습니다 - 10자 이상)"
-        say "  systemctl start autopilot"
+        say "  sudo systemctl stop autopilot"
+        say "  sudo autopilot-server admin-reset admin --create        (새 비밀번호를 두 번 묻습니다 - 10자 이상)"
+        say "  sudo systemctl start autopilot"
     fi
     return 0
 }
@@ -665,9 +677,11 @@ cmd_install() {
     say "라이선스 요청 파일: $_req"
     say "  공급사에 이 파일을 보내 라이선스를 받은 뒤 install.sh activate 를 실행하여 주십시오:"
     say "    sudo sh $HERE/install.sh activate <받은 라이선스 파일>"
-    say "  (요청 파일에는 서버 번호와 자리 서명 공개 열쇠만 들어 있습니다 - 비밀 값은 없습니다. root 로 복사하여 보내 주십시오.)"
-    say "  다음 버전도 같은 순서입니다: 받은 tar.gz 를 풀기 전에 sha256sum 으로 공급사 값과 맞추고, root 전용 폴더에 풉니다"
-    say "  (업그레이드는 autopilot-server upgrade <새 tar.gz> 가 서명을 먼저 확인합니다)."
+    say "  (요청 파일에는 서버 번호와 자리 서명 공개 열쇠만 들어 있습니다 - 비밀 값은 없습니다.)"
+    say "  요청 파일은 서비스 계정만 읽는 폴더에 있습니다. 보낼 계정의 지금 폴더로 꺼내려면:"
+    say "    sudo install -m 0644 -o ${SUDO_USER:-<내 계정>} $_req ./server_request.json"
+    say "  다음 버전: 받은 tar.gz 를 sha256sum 으로 공급사 값과 맞춘 뒤, 풀지 않고 같은 이름의 .sig 와 한 폴더에 두고"
+    say "    sudo autopilot-server upgrade <새 tar.gz>        (서명을 먼저 확인합니다)"
 }
 
 # ----------------------------------------------------------------------------------------------------
