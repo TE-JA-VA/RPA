@@ -25,6 +25,9 @@ STOP_CODES = {
     2: "설정이 없거나 깨졌습니다. '오토파일럿 설정' 에서 설정을 마치세요",
     3: "로그인이 막혔습니다 (에이전트 계정 비밀번호가 바뀌었거나 계정이 사용중지됨). '오토파일럿 설정' 에서 비밀번호를 다시 넣으세요",
     4: "이 PC 에서 에이전트가 이미 돌고 있습니다",
+    # 사내 서버 (사내 서버 ⑤ - agent.LAN_DISABLED_CODE·LAN_REMOVED_CODE)
+    6: "사내 서버 관리자가 이 PC 를 사용 중지했습니다. 다시 사용하려면 업체 웹에서 사용을 재개한 뒤 '오토파일럿 설정' 에서 [저장] 을 눌러 주십시오",
+    7: "사내 서버에서 이 PC 를 지웠습니다. '오토파일럿 설정' 에서 사내 서버에 다시 등록하여 주십시오",
 }
 BACKOFF = (10, 30, 60, 120, 300)     # 다시 켜기 전 기다림(초). 잇따라 죽을수록 길게
 RETRY_LATER_CODE = 5                  # 로그인 일시 차단 (agent.RETRY_LATER_CODE) - 차단이 풀리게 오래 기다렸다 다시 켠다 (BugBuster M2)
@@ -191,6 +194,18 @@ def _standalone():
         return False
 
 
+def _lan():
+    """스탠드얼론이고 사내 서버 연결인가 (연결 파일만 있다 - license_check.mode). 그러면 로컬 서버를 띄우지 않고 에이전트만 지킨다
+    (설계 6.1, 사내 서버 ⑤). 판정이 예외를 내면 (둘 다 있음 등) 거짓 - 지금 길 (로컬 서버가 라이선스 문제로 2 로 끝난다)."""
+    if not _standalone():
+        return False
+    try:
+        import license_check
+        return license_check.mode() == license_check.MODE_LAN
+    except Exception:
+        return False
+
+
 def run():
     """작업이 띄울 때: 인증서를 채우고 감독을 시작한다. 스탠드얼론은 Google·업데이트 주소에 닿지 않으므로 채우지 않는다."""
     if not _standalone():
@@ -266,7 +281,7 @@ def main(cmd=None, backoff=BACKOFF, healthy_sec=HEALTHY_SEC, sleep=time.sleep, l
          server_cmd=None, server_backoff=SERVER_BACKOFF, keys_wait=KEYS_WAIT_SEC):
     """감독. 일반 버전은 에이전트만, 스탠드얼론은 로컬 서버를 먼저 띄워 함께 지킨다 (서버가 죽으면 다시 켠다).
     에이전트가 다시 켜지 않는 코드로 끝나 감독이 끝나면 서버도 끝낸다. server_cmd·server_backoff·keys_wait 는 시험용."""
-    if not _standalone():
+    if not _standalone() or _lan():           # 일반 버전·사내 서버 연결: 에이전트만 (사내 서버는 서버 쪽에 있다)
         return supervise(cmd, backoff, healthy_sec, sleep, later_sec)
     import threading
     folder = log_dir()

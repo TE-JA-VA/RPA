@@ -98,7 +98,13 @@ def _standalone_config(role):
     열쇠 파일이 아직 없으면 FileNotFoundError (로컬 서버가 처음 켜질 때 만든다). 열쇠는 로그에 싣지 않는다."""
     import license_check
     import local_store
-    lic = license_check.load()
+    mode, lic = license_check.load_any()
+    if mode == license_check.MODE_LAN:
+        # 사내 서버 (사내 서버 ⑤): 연결 파일의 주소·인증 기관·PC 번호·열쇠. 정책은 서버 라이선스 body (LicensePolicy 가 그대로 쓴다)
+        key = lic["relay_key"] if role == "relay" else lic["agent_key"]
+        return {"standalone": True, "lan": True, "server_url": lic["server_url"], "ca_pem": lic["ca_pem"], "key": key,
+                "role": "relay" if role == "relay" else "agent", "cid": lic["license"]["cid"], "pc_id": lic["pc_id"],
+                "license": dict(lic["license"], pc_id=lic["pc_id"])}
     name = "relay.key" if role == "relay" else "agent.key"
     with open(os.path.join(local_store.keys_dir(), name), encoding="ascii") as f:
         key = f.read().strip()

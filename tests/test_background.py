@@ -187,7 +187,7 @@ finally:
             pass
 
 print("=== 6. 약속 ===")
-check("다시 켜지 않는 코드 = 0·2·3·4", set(bg.STOP_CODES) == {0, 2, 3, 4})
+check("다시 켜지 않는 코드 = 0·2·3·4 + 사내 서버 6·7 (⑤)", set(bg.STOP_CODES) == {0, 2, 3, 4, 6, 7})
 src = (ROOT / "firebase" / "agent" / "agent.py").read_text(encoding="utf-8")
 check("agent.main 이 그 코드들을 쓴다", all(f"return {c}" in src for c in (2, 3, 4)))
 cmd = bg.agent_command()

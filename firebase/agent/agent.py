@@ -1496,6 +1496,32 @@ def single_instance(name=None):
 
 
 
+LAN_DISABLED_CODE = 6                 # 사내 서버 관리자가 이 PC 를 사용 중지 (background.STOP_CODES[6])
+LAN_REMOVED_CODE = 7                  # 사내 서버에서 이 PC 를 지움 - 연결 파일을 지웠다 (background.STOP_CODES[7])
+
+
+def lan_dead(dead):
+    """사내 서버 연결에서 run() 이 돌려준 AuthError → 종료 코드 (사내 서버 ⑤ Task 5).
+    서명된 '중지됨' 은 6, 서명된 '지워짐' 은 연결 파일을 지우고 7 (설계 6.4 - 자기 자리 증명서를 지운다).
+    그 밖(서명 없는 답·인증서 확인 실패 등)은 1 - 감독이 잠시 뒤 다시 켠다. 서명 없는 답만으로는 아무것도 지우지 않는다."""
+    import license_check
+    code = getattr(dead, "code", None)
+    if code == local_store.PC_DISABLED:
+        log("사내 서버 관리자가 이 PC 를 사용 중지했습니다. 업체 웹에서 사용을 재개한 뒤 '오토파일럿 설정' 에서 [저장] 을 눌러 주십시오")
+        return LAN_DISABLED_CODE
+    if code == local_store.PC_REMOVED:
+        try:
+            os.remove(license_check.link_path())
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log(f"사내 서버 연결 파일을 지우지 못했습니다 ({type(e).__name__})")
+        log("사내 서버에서 이 PC 를 지웠습니다. '오토파일럿 설정' 에서 사내 서버에 다시 등록하여 주십시오")
+        return LAN_REMOVED_CODE
+    log(f"사내 서버를 확인하지 못했습니다 ({code}). 잠시 뒤 다시 시도합니다.")
+    return 1
+
+
 def main():
     """감독자. 설정을 읽거나 처음 물어 만들고 run() 을 돈다. 인증이 죽어 run() 이 멈추면 이유를 찍고 (창이 있으면)
     비밀번호를 다시 물어 다시 돈다. 종료 코드: 0 정상, 2 설정 문제, 3 인증이 죽었는데 창이 없어 다시 물을 수 없음,
@@ -1529,6 +1555,8 @@ def main():
         dead = run(cfg)
         if dead is None:
             return 0
+        if cfg.get("lan"):                    # 사내 서버 (사내 서버 ⑤): 서명된 '중지됨'·'지워짐' 만 멈춘다
+            return lan_dead(dead)
         if cfg.get("standalone"):             # 열쇠가 바뀌었다 (서버 자료 폴더를 새로 만든 경우 등) - 다시 켜면 새 열쇠를 읽는다
             log("로컬 서버가 이 에이전트의 열쇠를 받아들이지 않았습니다. 잠시 뒤 다시 시도합니다.")
             return 1

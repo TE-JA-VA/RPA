@@ -142,6 +142,51 @@ try:
             check("서버가 열쇠를 거절 → 1 (묻지 않고 다시)", code == 1 and not any("k" * 43 in x for x in logs), f"{code} {logs}")
             agent.run = lambda cfg: None
             check("정상 끝 → 0", agent.main() == 0)
+
+            print("사내 서버 연결 (사내 서버 ⑤ Task 5)")
+            import local_store
+            import secret
+            import seat
+            seat_secret, seat_public = update_sign.keygen()
+            import lan_ca
+            lan_ca.make_ca(os.path.join(TMP, "ca"), ["nt"], ["192.168.1.230"])
+            ca_text = lan_ca.ca_pem(os.path.join(TMP, "ca"))          # Client 가 TLS 컨텍스트로 읽을 수 있는 진짜 인증 기관
+            srv_body = {"edition": "standalone", "kind": "server", "company": "시험상사", "cid": "c1", "server_id": "0" * 32,
+                        "seat_pub": seat_public.hex(), "seats": 5, "modules": {"Hold": False}, "features": {}, "limits": {"schedule": 3}}
+            out = {"server_url": "https://192.168.1.230:8444", "pc_id": "pc_01", "agent_key": "a" * 64, "relay_key": "b" * 64,
+                   "ca_pem": ca_text}
+            link = license_check.link_path()
+
+            def put_link():
+                doc = license_check.link_doc(out, seat.issue(seat_secret, "c1", "pc_01", "p1", 1,
+                                                             ca=license_check.ca_fingerprint(ca_text)),
+                                             license_check.sign_body(lic_secret, srv_body))
+                with open(link, "w", encoding="utf-8") as f:
+                    json.dump(doc, f, ensure_ascii=False)
+            os.remove(os.path.join(PD, "license.json"))
+            put_link()
+            cfg = secret.load_config()
+            check("연결 파일만 → lan 설정 (https 주소·pc_01·agent 열쇠·인증 기관)",
+                  cfg.get("lan") is True and cfg["standalone"] and cfg["server_url"] == out["server_url"] and cfg["pc_id"] == "pc_01"
+                  and cfg["key"] == "a" * 64 and cfg["ca_pem"] == ca_text and cfg["cid"] == "c1" and cfg["role"] == "agent", cfg)
+            check("정책은 서버 라이선스 body (pc_id 덧붙임)", cfg["license"]["limits"] == {"schedule": 3} and cfg["license"]["pc_id"] == "pc_01")
+            check("relay 역할은 relay 열쇠", secret.load_config(role="relay")["key"] == "b" * 64)
+            check("이 설정으로 lan Client 를 만들 수 있다", isinstance(local_store.client_for(cfg), local_store.Client))
+            agent.run = lambda cfg: fb.AuthError(403, local_store.PC_DISABLED)
+            del logs[:]
+            check("사용 중지 → 6 (다시 켜지 않는다), 연결 파일은 남는다", agent.main() == agent.LAN_DISABLED_CODE == 6 and os.path.isfile(link))
+            agent.run = lambda cfg: fb.AuthError(0, local_store.NOT_VERIFIED)
+            del logs[:]
+            check("서버를 확인하지 못함 → 1 (다시), 파일 남음, 기록에 까닭·열쇠 없음",
+                  agent.main() == 1 and os.path.isfile(link) and any("사내 서버를 확인하지 못했습니다" in x for x in logs)
+                  and not any("a" * 64 in x for x in logs), repr(logs))
+            agent.run = lambda cfg: fb.AuthError(403, local_store.PC_REMOVED)
+            check("지워짐 → 7, 연결 파일을 지운다", agent.main() == agent.LAN_REMOVED_CODE == 7 and not os.path.exists(link))
+            check("감독의 멈춤 까닭 6·7", "사용 중지" in bg.STOP_CODES.get(6, "") and "다시 등록" in bg.STOP_CODES.get(7, ""))
+            with open(os.path.join(PD, "license.json"), "w", encoding="utf-8") as f:
+                json.dump(license_check.sign_body(lic_secret, body), f, ensure_ascii=False)
+            agent.run = lambda cfg: fb.AuthError(403, local_store.PC_DISABLED)
+            check("단독 설정에 같은 오류면 지금처럼 1", agent.main() == 1)
         finally:
             license_check.LICENSE_PUBLIC_KEY_HEX = saved_pub
     finally:
@@ -228,6 +273,28 @@ try:
         check("포트를 못 열어도 계속 다시 켜 본다", got.count("server") >= 6 and "agent" in got, repr(got))
         check("까닭(포트를 다른 프로그램이 씀)을 기록에", any("포트를 다른 프로그램이 쓰고 있습니다" in x for x in lines), repr(lines[:2]))
         check("같은 까닭은 가끔만 기록 (끝없이 쌓이지 않는다)", 1 <= len(lines) <= got.count("server") // 2, f"{len(lines)}줄 / {got.count('server')}번")
+
+        print("감독 - 사내 서버 연결이면 로컬 서버를 띄우지 않는다 (사내 서버 ⑤ Task 5)")
+        import license_check
+        os.remove(marks)
+        lic_file = os.path.join(PD, "license.json")
+        if os.path.exists(lic_file):
+            os.remove(lic_file)
+        os.makedirs(os.path.dirname(license_check.link_path()), exist_ok=True)
+        with open(license_check.link_path(), "w", encoding="utf-8") as f:
+            f.write("{}")                                  # 감독은 파일이 있는지만 본다 (확인은 에이전트·exe 가)
+        check("_lan(): 연결 파일만 있으면 참", bg._lan() is True)
+        lan_agent = f"import sys,time; open(r'{marks}','a').write('agent\\n'); time.sleep(0.3); sys.exit(6)"
+        server_mark = f"import sys; open(r'{marks}','a').write('server\\n'); sys.exit(1)"
+        code = bg.main(cmd=[PY, "-c", lan_agent], backoff=(0.01,), sleep=lambda s: None,
+                       server_cmd=[PY, "-c", server_mark], server_backoff=(0.05,), keys_wait=0.3)
+        time.sleep(0.5)
+        got = open(marks, encoding="utf-8").read().split()
+        check("로컬 서버 명령을 부르지 않고 에이전트만", got == ["agent"], repr(got))
+        stop = json.load(open(os.path.join(bg.log_dir(), bg.STOP_NAME), encoding="utf-8"))
+        check("에이전트가 6 으로 끝나면 감독도 끝, 멈춤 까닭은 STOP_CODES[6]", code == 6 and stop.get("reason") == bg.STOP_CODES[6], stop)
+        os.remove(license_check.link_path())
+        check("_lan(): 연결 파일이 없으면 거짓 (지금 길)", bg._lan() is False)
         box = []
         bg.main = lambda *a, **k: box.append("main") or 0
         bg.run()
