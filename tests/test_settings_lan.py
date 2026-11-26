@@ -10,6 +10,7 @@
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import urllib.error
@@ -157,7 +158,7 @@ try:
           and cert.calls[1][2:4] == ["-f", "Root"], cert.calls)
     rec = json.load(open(p["lan_ca"], encoding="utf-8"))
     check("우리가 넣은 인증 기관만 따로 적는다 (sha1 40자)", len(rec.get("sha1", "")) == 40 and cert.calls[0][3] == rec["sha1"], rec)
-    check("대시보드 바로 가기 URL 이 업체 웹 주소로 (다른 줄 그대로)", shortcut_url(p) == ["URL=https://192.168.1.230:8443"]
+    check("대시보드 바로 가기 URL 이 업체 웹 주소로 (다른 줄 그대로)", shortcut_url(p) == ["URL=https://192.168.1.230:8443/"]
           and "IconFile=C:\\x\\AFTER_MARKET.ico" in open(p["shortcut"], encoding="ascii").read())
     check("이미 등록된 PC 는 다시 등록하지 않는다 (해제 안내)",
           "등록 해제" in (err_of(lambda: rs.install_link(TEXT, p, enroll=FakeEnroll(enroll_out()), run=Cert())) or ""))
@@ -177,7 +178,7 @@ try:
         f.write(SHORTCUT_TEXT)
     cert = Cert(present=False)
     rs.reapply_lan(p, run=cert)
-    check("바로 가기를 업체 웹 주소로 다시 쓰고 인증 기관을 다시 넣는다", shortcut_url(p) == ["URL=https://192.168.1.230:8443"]
+    check("바로 가기를 업체 웹 주소로 다시 쓰고 인증 기관을 다시 넣는다", shortcut_url(p) == ["URL=https://192.168.1.230:8443/"]
           and "-addstore" in cert.verbs(), (shortcut_url(p), cert.calls))
 
     print("등록 해제 (Codex 6) · 인증 기관 지우기 (Codex 10)")
@@ -203,6 +204,50 @@ try:
     check("등록은 남고 안내 문장", os.path.isfile(p3["link"]) and any("인증 기관" in x for x in got["done"]), got["done"])
     check("web 이 없으면 바로 가기를 건드리지 않고 업체 IT 안내", shortcut_url(p3) == ["URL=http://127.0.0.1:8781/"]
           and any("업체 IT" in x for x in got["done"]), got["done"])
+
+    print("끝 검토 고침 - web 줄바꿈 (Opus 2), 연결 파일을 건 뒤의 오류 (Opus 3)")
+    p4 = paths_in("inj")
+    rs.install_link(TEXT, p4, enroll=FakeEnroll(enroll_out(web="https://192.168.1.230:8443/\r\nIconFile=\\\\192.168.1.66\\s\\a.ico")),
+                    run=Cert())
+    body = open(p4["shortcut"], encoding="ascii").read()
+    check("web 에 줄바꿈을 끼우면 바로 가기를 건드리지 않는다 (다른 서버 아이콘 줄 없음)",
+          shortcut_url(p4) == ["URL=http://127.0.0.1:8781/"] and "192.168.1.66" not in body, body)
+
+    def no_certutil(args, timeout=60):
+        raise FileNotFoundError("certutil")
+    p5 = paths_in("nocert")
+    try:
+        got = rs.install_link(TEXT, p5, enroll=FakeEnroll(enroll_out()), run=no_certutil)
+        e5 = None
+    except ValueError as e:
+        got, e5 = None, str(e)
+    check("certutil 이 없어(OSError) 도 등록 성공으로 돌려주고 안내 문장", e5 is None and os.path.isfile(p5["link"])
+          and any("인증 기관" in x for x in got["done"]), e5 or got)
+    p6 = paths_in("roshort")
+    os.chmod(p6["shortcut"], stat.S_IREAD)
+    try:
+        got = rs.install_link(TEXT, p6, enroll=FakeEnroll(enroll_out()), run=Cert())
+        e6 = None
+    except ValueError as e:
+        got, e6 = None, str(e)
+    finally:
+        os.chmod(p6["shortcut"], stat.S_IREAD | stat.S_IWRITE)
+    check("바로 가기를 못 써도 등록 성공으로 돌려주고 안내 문장", e6 is None and os.path.isfile(p6["link"])
+          and any("바로 가기" in x for x in got["done"]), e6 or got)
+
+    print("등록 해제는 에이전트를 멈춘 뒤에만 (Codex 끝 검토 3)")
+    p7 = paths_in("unlink_busy")
+    rs.install_link(TEXT, p7, enroll=FakeEnroll(enroll_out()), run=Cert())
+    for name, stop in (("RPA 실행 중(5)", lambda: rs.EXIT_RPA_RUNNING), ("멈추지 못함(6)", lambda: rs.EXIT_STOP_FAILED),
+                       ("멈추다 예외", lambda: (_ for _ in ()).throw(RuntimeError("x")))):
+        cert = Cert()
+        e = err_of(lambda: rs.unlink(p7, run=cert, stop=stop))
+        texts.append(e or "")
+        check(f"해제 거절 - {name}: 안내 글, 연결 파일·인증 기관 기록 그대로, certutil 안 부름",
+              e and "해제하지 않았습니다" in e and os.path.isfile(p7["link"]) and os.path.isfile(p7["lan_ca"]) and not cert.calls, e)
+    cert = Cert()
+    rs.unlink(p7, run=cert, stop=lambda: 0)
+    check("멈춤 0 이면 해제", not os.path.exists(p7["link"]) and cert.verbs() == ["-delstore"], cert.calls)
 
     print("거절·실패 - 아무 파일도 쓰지 않는다")
     for code, word in (("expired", "10분"), ("unknown", "이미 쓴"), ("duplicate", "이미 사내 서버에 등록"), ("seats", "PC 수"),

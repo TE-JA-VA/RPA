@@ -30,7 +30,9 @@ AFTER MARKET\\RPA Standalone 에 깔리고, 일반 폴더 AFTER MARKET\\RPA 는 
         --license-other <다른 무작위 번호의 license.json> [--test-key <시험용 빌드의 .testkey.txt>] <설치 파일>
     라이선스는 make_license.py 로 미리 발급해 넘긴다 (이 도구는 진짜 라이선스 열쇠를 읽지 않는다). 고정된 SANDBOX_GUID 는 받지 않는다.
 사내 서버 등록 (사내 서버 ⑤ Task 8 - 시험용 빌드, NT 가 같은 시험 열쇠 서버 빌드):
-    ... --standalone --lan-enroll <업체 웹 [PC 추가] 의 등록 글을 담은 파일> <시험용 설치 파일>
+    ... --standalone [--test-key <NT 시험 열쇠 파일>] --lan-enroll <업체 웹 [PC 추가] 의 등록 글을 담은 파일> <시험용 설치 파일>
+    PC 시험 빌드는 build_release --test-build --license-key <NT 시험 열쇠 파일> 로 만든다 (서버 라이선스와 같은 열쇠 - 옆에 .testkey.txt
+    가 없으므로 단독 회귀 시험에도 --test-key 로 같은 파일을 준다)
     tools\\sandbox_inner_lan.ps1 이 설치 → 등록·저장 → 에이전트가 붙는지까지 보고 out\\ready.txt 를 쓴 뒤 켜 둔다 (업체 웹에서 실행·사용 중지·
     지우기를 해 보는 동안 out\\status.json). 작업 폴더에 end.txt 를 만들면 끝낸다. 등록 글은 파일로만 넘기고 샌드박스 안에서 쓰고 지운다.
     '시험용' 표시(앱 이름·설정 창 제목·웹 띠)가 없는지, 시험 열쇠로 같은 번호에 서명한 라이선스가 거절되는지도 본다.
@@ -136,11 +138,12 @@ def _fill_work(setup, work, guid, expect, cloud_setup=None, over_cloud=None):
     return work
 
 
-def prepare_standalone(setup, work, cloud_setup=None, over_cloud=None):
+def prepare_standalone(setup, work, cloud_setup=None, over_cloud=None, key_file=None):
     """스탠드얼론 샌드박스 작업 폴더를 채운다: setup.exe·inner.ps1·trap.ps1·check_standalone.py·license.json(샌드박스 PC 번호)·
     license_other.json(다른 PC 번호)·hosts_block.txt·guid.txt·expect.json, 주면 cloud_setup.exe / over_cloud.exe.
-    시험용 빌드가 아니면 (이름에 TEST 가 없거나 옆에 열쇠 파일이 없으면) ValueError(TEST_ONLY). 열쇠 파일은 작업 폴더에 넣지 않는다."""
-    key_file = test_key_path(setup)
+    시험용 빌드가 아니면 (이름에 TEST 가 없거나 옆에 열쇠 파일이 없으면) ValueError(TEST_ONLY). 열쇠 파일은 작업 폴더에 넣지 않는다.
+    key_file 을 주면 옆 열쇠 대신 그것 (build_release --license-key 로 만든 빌드 - 끝 검토 Codex 4)."""
+    key_file = key_file or test_key_path(setup)
     if not key_file or not os.path.isfile(key_file):
         raise ValueError(TEST_ONLY)
     import license_check
@@ -188,11 +191,12 @@ def prepare_official(setup, work, guid, lic, lic_other, test_key=None, cloud_set
     return work
 
 
-def prepare_lan(setup, work, enroll_file):
+def prepare_lan(setup, work, enroll_file, key_file=None):
     """사내 서버 등록 샌드박스 (사내 서버 ⑤ Task 8): setup.exe·inner.ps1(sandbox_inner_lan.ps1)·enroll.txt(받은 등록 글 그대로).
     라이선스·열쇠 파일은 넣지 않는다. 시험용 빌드가 아니면 ValueError(TEST_ONLY) - 사내 서버도 시험 열쇠 빌드(NT)다.
+    key_file(--test-key) 를 주면 옆 열쇠 대신 그 파일이 있는지 본다 (build_release --license-key 빌드).
     등록 글은 파일로만 넘긴다 (.wsb·명령 줄에 싣지 않는다). 글은 10분·한 번짜리이고, 끝나면 부르는 쪽이 작업 폴더를 지운다."""
-    if not SA_SETUP_RE.search(os.path.basename(setup)) or not os.path.isfile(test_key_path(setup)):
+    if not SA_SETUP_RE.search(os.path.basename(setup)) or not os.path.isfile(key_file or test_key_path(setup)):
         raise ValueError(TEST_ONLY)
     os.makedirs(work, exist_ok=True)
     shutil.copy2(setup, os.path.join(work, "setup.exe"))
@@ -268,7 +272,7 @@ def main_standalone(args, offline=False):
             return 2
         work = tempfile.mkdtemp(prefix="rpa_sbx_lan_")
         try:
-            prepare_lan(args[0], work, lan)
+            prepare_lan(args[0], work, lan, key_file=test_key)
         except ValueError as e:
             print(e)
             shutil.rmtree(work, ignore_errors=True)
@@ -281,7 +285,7 @@ def main_standalone(args, offline=False):
                          and (test_key is None or os.path.isfile(test_key))):
         print(OFFICIAL_NEEDS)
         return 2
-    if not official and (not SA_SETUP_RE.search(os.path.basename(args[0])) or not os.path.isfile(test_key_path(args[0]))):
+    if not official and (not SA_SETUP_RE.search(os.path.basename(args[0])) or not os.path.isfile(test_key or test_key_path(args[0]))):
         print(TEST_ONLY)
         return 2
     if not os.path.isfile(SANDBOX):
@@ -292,7 +296,7 @@ def main_standalone(args, offline=False):
         if official:
             prepare_official(args[0], work, guid, lic, lic_other, test_key=test_key, cloud_setup=cloud, over_cloud=over)
         else:
-            prepare_standalone(args[0], work, cloud_setup=cloud, over_cloud=over)
+            prepare_standalone(args[0], work, cloud_setup=cloud, over_cloud=over, key_file=test_key)
     except ValueError as e:
         print(e)
         shutil.rmtree(work, ignore_errors=True)

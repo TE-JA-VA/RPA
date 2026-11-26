@@ -103,7 +103,7 @@ try:
           got["pc_id"] == "pc_01" and got["license"]["cid"] == "c1" and got["seat"]["guid"] == "g-1", got.get("pc_id"))
     check("주소·인증 기관·열쇠 둘·web 을 돌려준다",
           (got["server_url"], got["ca_pem"], got["agent_key"], got["relay_key"], got["web"])
-          == ("https://192.168.1.230:8444", CA, AGENT_KEY, RELAY_KEY, "https://192.168.1.230:8443"))
+          == ("https://192.168.1.230:8444", CA, AGENT_KEY, RELAY_KEY, "https://192.168.1.230:8443/"))
     check("다른 PC(guid) 의 파일은 거절", raises(lambda: license_check.load_link(p, guid="g-2"), "이 PC"))
 
     bad = server_license()
@@ -149,7 +149,7 @@ try:
     make_link(web="http://192.168.1.230:8443")
     check("web 이 http 면 버린다", license_check.load_link()["web"] is None)
     make_link(web="https://192.168.1.230:8443")
-    check("같은 IP 의 https web 은 쓴다", license_check.load_link()["web"] == "https://192.168.1.230:8443")
+    check("같은 IP 의 https web 은 쓴다", license_check.load_link()["web"] == "https://192.168.1.230:8443/")
     check("ca_fingerprint 는 DER 의 SHA-256 소문자 hex 64자", len(license_check.ca_fingerprint(CA)) == 64)
     import lan_config  # noqa: E402
     check("LAN_PRIVATE_NETS 는 lan_config.PRIVATE_NETS 와 같다",
@@ -228,7 +228,7 @@ try:
           auth_code(lambda: enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC}, sign=False)) == local_store.NOT_VERIFIED)
     check("JSON 이 아닌 본문 → NOT_VERIFIED", auth_code(lambda: enroll_with(b"not json")) == local_store.NOT_VERIFIED)
     got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC}, web="https://192.168.1.230:8443")
-    check("등록 글의 web 칸은 결과에 그대로", got.get("web") == "https://192.168.1.230:8443", got.get("web"))
+    check("등록 글의 web 칸은 https://IP:포트/ 로", got.get("web") == "https://192.168.1.230:8443/", got.get("web"))
     got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC})
     check("web 칸이 없으면 결과에도 없다", "web" not in got)
     got = enroll_with({"pc": "pc_01", "seat": SEAT, "server_license": LIC}, web="https://evil.example/login")
@@ -244,6 +244,45 @@ try:
     doc = license_check.link_doc(got, got["seat"], got["server_license"], web=got.get("web"))
     write(doc)
     check("enroll 결과로 만든 연결 파일이 load_link 를 통과", license_check.load_link(guid="g-1")["pc_id"] == "pc_01")
+
+    print("끝 검토 고침 - 인증서 둘 이은 PEM (Opus 1), web 의 줄바꿈 (Opus 2)")
+    CA2 = "-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----\n"
+    for name, pem in (("인증서 둘", CA + CA2), ("뒤에 TRUSTED CERTIFICATE", CA + CA2.replace("CERTIFICATE", "TRUSTED CERTIFICATE"))):
+        try:
+            license_check.ca_fingerprint(pem)
+            bad_fp = False
+        except ValueError:
+            bad_fp = True
+        check(f"ca_fingerprint: {name} 이은 PEM 은 ValueError", bad_fp)
+        make_link(out=out_of(ca=pem))                       # 자리 증명서의 ca = 첫 인증서 지문 (진짜 서버를 중계한 모양)
+        check(f"load_link: {name} 이은 인증 기관은 거절 (첫 인증서 지문이 맞아도)", raises(license_check.load_link, "인증 기관"))
+    ca_dir2 = os.path.join(TMP, "ca2")
+    lan_ca.make_ca(ca_dir2, ["evil"], ["192.168.1.66"])
+    called = []
+    try:
+        local_store.enroll(enroll_text(ca=REAL_CA + lan_ca.ca_pem(ca_dir2)), "g-1", "PC-1",
+                           opener=lambda req, timeout=30: called.append(1), rand_hex=RAND, nonce=NONCE)
+        two = False
+    except ValueError:
+        two = True
+    check("등록 글의 인증 기관이 둘이면 연결하기 전에 ValueError", two and not called)
+    inj = "https://192.168.1.230:8443/\r\nIconFile=\\\\192.168.1.66\\s\\a.ico"
+    check("same_host_web: 줄바꿈이 든 주소는 버린다", license_check.same_host_web(inj, "https://192.168.1.230:8444") is None)
+    bs = "https://evil.example\\@192.168.1.230:8443/"          # 파이썬은 사설 IP, 브라우저는 evil.example 로 읽는다 (Codex 끝 검토 2)
+    check("lan_host: 역슬래시·@ 가 든 주소는 None", license_check.lan_host(bs) is None
+          and license_check.lan_host("https://u@192.168.1.230:8444") is None)
+    check("same_host_web: 역슬래시 주소는 버린다", license_check.same_host_web(bs, "https://192.168.1.230:8444") is None)
+    check("lan_host: 빈칸·제어 문자가 든 주소는 None", license_check.lan_host("https://192.168.1.230:8444/\t") is None)
+    got_web = license_check.same_host_web("https://192.168.1.230:8443/dash?x=1#y", "https://192.168.1.230:8444")
+    check("same_host_web: 경로·물음은 버리고 https://IP:포트/ 로 새로 만든다", got_web == "https://192.168.1.230:8443/", repr(got_web))
+    check("same_host_web: 포트 없으면 https://IP/",
+          license_check.same_host_web("https://192.168.1.230/x?y", "https://192.168.1.230:8444") == "https://192.168.1.230/")
+    check("same_host_web: IPv6 는 [] 로", license_check.same_host_web("https://[fd00::1]:8443", "https://[fd00::1]:8444")
+          == "https://[fd00::1]:8443/")
+    make_link(web=inj)
+    check("load_link: 줄바꿈이 든 web 은 None", license_check.load_link()["web"] is None)
+    make_link(web="https://192.168.1.230:8443/dash")
+    check("load_link: web 은 새로 만든 주소", license_check.load_link()["web"] == "https://192.168.1.230:8443/")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

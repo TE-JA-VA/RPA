@@ -397,6 +397,24 @@ try:
     check("진짜 스탠드얼론: 업데이트 서명 열쇠 파일이 없으면 빌드 전에 1",
           code == 1 and not launched and "업데이트 서명 열쇠 파일이 없습니다" in out.getvalue(), out.getvalue()[-300:])
     check("license_key_problem: 시험용이면 없음", br.license_key_problem(True) is None and br.license_key_problem(False) is None)
+
+    # 끝 검토 Codex 4 - 사내 서버 실기: PC 시험 빌드의 라이선스 열쇠를 서버 시험 빌드(build_server --test-key)와 맞춘다
+    import update_sign  # noqa: E402
+    s1, p1 = br.test_license_keys()
+    s2, _ = br.test_license_keys()
+    check("test_license_keys(): 열쇠 파일이 없으면 새 열쇠 (부를 때마다 다르다)", len(s1) == 32 and len(p1) == 32 and s1 != s2)
+    ks, _ = update_sign.keygen()
+    kf = os.path.join(tmp, "nt_test_key.txt")
+    with open(kf, "w", encoding="ascii") as f:
+        f.write(ks.hex() + "\n")
+    s3, p3 = br.test_license_keys(kf)
+    check("test_license_keys(파일): 그 시험 열쇠와 그 공개 열쇠", s3 == ks and p3 == update_sign.secret_to_public(ks))
+    launched.clear()
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = br.main(["--edition", "standalone", "--license-key", kf, "--out-root", os.path.join(tmp, "o4"), "--no-setup"])
+    check("--license-key 는 --test-build 없이 쓰면 빌드 전에 1", code == 1 and not launched and "--license-key" in out.getvalue(),
+          out.getvalue()[-300:])
 finally:
     br.build_launchers = real_launchers
     license_check.LICENSE_PUBLIC_KEY_HEX = real_hex

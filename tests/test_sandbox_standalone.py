@@ -109,6 +109,20 @@ with tempfile.TemporaryDirectory() as tmp:
     except ValueError as e:
         raised = str(e) == sb.TEST_ONLY
     check("prepare_standalone 도 열쇠가 없으면 ValueError", raised)
+    kf = os.path.join(tmp, "nt_test_key.txt")                # build_release --license-key 로 만든 빌드 - 옆에 .testkey.txt 가 없다
+    ks, kp = update_sign.keygen()
+    with open(kf, "w", encoding="ascii") as f:
+        f.write(ks.hex() + "\n")
+    w4 = sb.prepare_standalone(nokey, os.path.join(tmp, "w4"), key_file=kf)
+    check("prepare_standalone(key_file=): 옆에 열쇠가 없어도 그 열쇠로 license.json (끝 검토 Codex 4)",
+          license_check.load(path=os.path.join(w4, "license.json"), guid=sb.SANDBOX_GUID, public_key=kp.hex())["cid"] == "c_sbx")
+    real_sbx, sb.SANDBOX = sb.SANDBOX, os.path.join(tmp, "없는_샌드박스.exe")     # 진짜 샌드박스를 띄우지 않게
+    try:
+        code, out = quiet(sb.main, ["--standalone", "--test-key", kf, nokey])
+    finally:
+        sb.SANDBOX = real_sbx
+    check("main: 시험용 빌드에 --test-key 를 주면 옆 열쇠를 찾지 않는다 (샌드박스 확인까지 간다)",
+          code == 2 and sb.TEST_ONLY not in out and "샌드박스가 꺼져" in out)
     code, out = quiet(sb.main, ["--standalone", "--cloud-setup", os.path.join(tmp, "없는.exe"), setup])
     check("--cloud-setup 파일이 없으면 2", code == 2)
 
@@ -243,6 +257,13 @@ with tempfile.TemporaryDirectory() as tmp:
     except ValueError as e:
         raised = str(e) == sb.TEST_ONLY
     check("사내 서버 샌드박스도 시험용 빌드만 (TEST_ONLY)", raised)
+    os.remove(os.path.join(rel, "배포_SA_TEST_2099.01.01-1.testkey.txt"))
+    kf = os.path.join(tmp, "nt_test_key.txt")
+    with open(kf, "w", encoding="ascii") as f:
+        f.write(update_sign.keygen()[0].hex() + "\n")
+    w5 = sb.prepare_lan(setup, os.path.join(tmp, "lan3"), enroll, key_file=kf)
+    check("prepare_lan(key_file=): --license-key 빌드(옆 열쇠 없음)도 받고, 열쇠는 작업 폴더에 넣지 않는다",
+          "enroll.txt" in os.listdir(w5) and not any("key" in n.lower() for n in os.listdir(w5)))
 lan_inner = open(os.path.join(ROOT, "tools", "sandbox_inner_lan.ps1"), encoding="utf-8-sig").read()
 check("사내 서버 inner: 라이선스를 넣지 않고 install_link·save, 로컬 서버(8781)가 듣지 않는지, end.txt 를 기다린다",
       "license.json" not in lan_inner and "install_link" in lan_inner and "rs.save" in lan_inner and "8781" in lan_inner

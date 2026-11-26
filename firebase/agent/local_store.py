@@ -313,6 +313,10 @@ def enroll(text, guid, host, opener=None, rand_hex=None, nonce=None):
         import license_check                 # 사내 서버 ⑤ (Codex 계획 검토 3): 이름은 풀이 결과가 바뀔 수 있다 - 사설 IP 글자만
         if not license_check.lan_host(url):
             raise ValueError("등록 글의 서버 주소가 사내 IP 주소가 아닙니다. 업체 웹에서 받은 등록 글을 그대로 넣어 주십시오.")
+        try:
+            license_check.ca_fingerprint(info["ca"])     # 인증서 정확히 하나 - 덧붙인 인증 기관으로 중계하지 못하게 (끝 검토 Opus 1)
+        except ValueError:
+            raise ValueError("등록 글의 인증 기관 정보가 올바르지 않습니다. 업체 웹에서 받은 등록 글을 그대로 넣어 주십시오.") from None
         ctx = _lan_tls(url, info["ca"])
     elif parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS:      # http 는 이 PC 만
         raise ValueError("등록 글의 서버 주소가 이 PC(127.0.0.1)가 아닙니다.")

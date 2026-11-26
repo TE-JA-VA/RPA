@@ -162,9 +162,12 @@ LAN_PRIVATE_NETS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/
 
 
 def lan_host(url):
-    """사내 서버 주소 글 → 그 호스트 (https 이고 사설 IP 글자일 때), 아니면 None."""
+    """사내 서버 주소 글 → 그 호스트 (https 이고 사설 IP 글자일 때), 아니면 None.
+    역슬래시·@(사용자 정보)·빈칸·제어 문자·ASCII 밖 글자가 있으면 None - 파이썬(urlsplit)과 브라우저가 호스트를 다르게 읽는다 (Codex 끝 검토 2)."""
     import ipaddress
     import urllib.parse
+    if isinstance(url, str) and any(c in "\\@" or not " " < c < "\x7f" for c in url):
+        return None
     try:
         parts = urllib.parse.urlsplit(url) if isinstance(url, str) else None
         host = parts.hostname if parts and parts.scheme == "https" else None
@@ -181,16 +184,24 @@ def lan_host(url):
 
 
 def same_host_web(web, server_url):
-    """업체 웹 주소 web 을 쓸 수 있으면 그 글, 아니면 None - https 이고 호스트가 server_url 과 같은 사설 IP 일 때만 (Codex 계획 검토 4)."""
+    """업체 웹 주소 web 을 쓸 수 있으면 https://IP[:포트]/ 로 새로 만든 글, 아니면 None - https 이고 호스트가 server_url 과
+    같은 사설 IP 일 때만 (Codex 계획 검토 4). 받은 글을 그대로 돌려주지 않는다 - urlsplit 은 판정할 때 줄바꿈을 지우므로
+    그 뒤 글이 바로 가기(.url)의 다른 줄이 될 수 있다 (끝 검토 Opus 2). 경로·물음은 버린다."""
+    import urllib.parse
     host = lan_host(server_url)
-    return web if host and isinstance(web, str) and lan_host(web) == host else None
+    if not (host and isinstance(web, str) and lan_host(web) == host):
+        return None
+    port = urllib.parse.urlsplit(web).port
+    name = f"[{host}]" if ":" in host else host
+    return f"https://{name}:{port}/" if port else f"https://{name}/"
 
 
 def ca_fingerprint(pem):
-    """인증 기관 PEM 글의 첫 인증서 DER 의 SHA-256 소문자 hex. 꼴이 틀리면 ValueError.
-    서버는 자리 증명서에 이 값(ca)을 싣고, PC 는 연결 파일의 ca_pem 과 견준다 (Codex 계획 검토 1 - 등록 글의 인증 기관을 바꿔 중계하면 다르다)."""
+    """인증 기관 PEM 글(인증서 정확히 하나)의 DER SHA-256 소문자 hex. 꼴이 틀리거나 PEM 덩이가 둘 이상이면 ValueError.
+    서버는 자리 증명서에 이 값(ca)을 싣고, PC 는 연결 파일의 ca_pem 과 견준다 (Codex 계획 검토 1 - 등록 글의 인증 기관을 바꿔 중계하면 다르다).
+    덩이가 하나여야 한다 - 진짜 인증 기관 뒤에 다른 것을 이으면 첫 지문은 맞아도 TLS(cadata)는 둘 다 믿는다 (끝 검토 Opus 1)."""
     import ssl
-    if not isinstance(pem, str) or _CERT_HEAD not in pem:
+    if not isinstance(pem, str) or _CERT_HEAD not in pem or pem.count("-----BEGIN") != 1 or pem.count("-----END") != 1:
         raise ValueError("인증서 글이 아닙니다.")
     start = pem.index(_CERT_HEAD)
     end = pem.find("-----END CERTIFICATE-----", start)

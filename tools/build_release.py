@@ -1057,6 +1057,16 @@ def license_key_problem(test):
     return None
 
 
+def test_license_keys(key_file=None):
+    """시험용 빌드의 라이선스 열쇠 (비밀 32바이트, 공개 32바이트). key_file 을 주면 그 시험 열쇠(16진수 한 줄) - 사내 서버 실기에서
+    PC 가 서버 라이선스 사본을 확인하려면 서버 시험 빌드(build_server --test-key)와 같은 열쇠여야 한다 (끝 검토 Codex 4). 없으면 새로."""
+    if not key_file:
+        return update_sign.keygen()
+    with open(key_file, encoding="ascii") as f:
+        secret = bytes.fromhex(f.read().strip())
+    return secret, update_sign.secret_to_public(secret)
+
+
 def sign_manifest(out_dir, secret):
     """out_dir\\manifest.json 바이트에 서명해 out_dir\\manifest.sig (16진수 한 줄)를 쓰고 그 16진수를 돌려준다.
     스탠드얼론은 업데이트 사이트가 없어 설치 파일이 서명을 싣는다 (ap_guard·rpa_update.ensure_installed_sig 가 본다).
@@ -1086,8 +1096,14 @@ def main(argv=None):
                     help="스탠드얼론 시험용 빌드: 그 자리에서 만든 열쇠를 쓴다 (이름에 TEST, 고객 배포 금지)")
     ap.add_argument("--sign-key", metavar="파일", default=None,
                     help="진짜 스탠드얼론 빌드가 버전 목록을 서명하는 업데이트 비밀 열쇠 (기본 publish_release.KEY_PATH)")
+    ap.add_argument("--license-key", metavar="파일", default=None,
+                    help="시험용 빌드의 라이선스 열쇠를 이 시험 열쇠(hex 한 줄)로 - 사내 서버 실기에서 서버 시험 빌드(build_server --test-key)와 "
+                         "맞춘다. 이때 .testkey.txt 는 쓰지 않는다 (샌드박스에는 --test-key 로 같은 파일을 준다)")
     args = ap.parse_args(argv)
     edition, test = args.edition, args.test_build
+    if args.license_key and not test:
+        print("  문제: --license-key 는 --test-build 와 함께만 씁니다 (진짜 빌드의 라이선스 열쇠는 license_check 에 실린 것)")
+        return 1
     if edition == "standalone" and (args.onefile or args.exes_from or args.to_dist):
         print("  문제: 스탠드얼론은 조각 방식으로만 만듭니다 (--onefile·--exes-from·--to-dist 와 함께 쓸 수 없습니다)")
         return 1
@@ -1108,7 +1124,7 @@ def main(argv=None):
     if edition == "standalone":
         if test:            # 그 자리에서 열쇠 두 쌍 - 진짜 열쇠 파일은 열지 않는다. 진짜 라이선스는 이 빌드에서 통하지 않는다
             sign_secret, sign_public = update_sign.keygen()
-            lic_secret, lic_public = update_sign.keygen()
+            lic_secret, lic_public = test_license_keys(args.license_key)
             test_keys = {"update": sign_public.hex(), "license": lic_public.hex()}
             replace["update_sign.py"] = swap_key(_repo_text("update_sign.py"), "PUBLIC_KEY_HEX", test_keys["update"])
         else:
@@ -1143,7 +1159,9 @@ def main(argv=None):
         with open(os.path.join(out_dir, st.MANIFEST_NAME), "rb") as f:
             if not (sign_public and update_sign.verify(sign_public, f.read(), bytes.fromhex(sig))):   # 열쇠 짝이 틀리면 설치본이 모두 막힌다
                 sig_problem.append("업데이트 서명 열쇠가 update_sign.PUBLIC_KEY_HEX 와 짝이 아닙니다 - 설치하면 exe 셋이 켜지지 않습니다")
-        if test:            # make_license.py --key 가 읽는 꼴 (16진수 한 줄). 배포 폴더·압축 밖에 둔다
+        if test and args.license_key:      # 주어진 시험 열쇠는 옮겨 적지 않는다 - 샌드박스·make_license 에는 그 파일을 그대로 준다
+            print(f"  시험용 라이선스 열쇠: {args.license_key} 의 것 (따로 적지 않는다)")
+        elif test:            # make_license.py --key 가 읽는 꼴 (16진수 한 줄). 배포 폴더·압축 밖에 둔다
             with open(os.path.join(out_root, f"{prefix}{version}.testkey.txt"), "w", encoding="ascii") as f:
                 f.write(lic_secret.hex() + "\n")
             print(f"  시험용 라이선스 열쇠: {os.path.join(out_root, f'{prefix}{version}.testkey.txt')} (고객에게 보내지 않는다)")

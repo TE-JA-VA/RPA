@@ -304,7 +304,8 @@ def set_dashboard_url(url, paths):
             raw = f.read()
     except OSError:
         return False
-    new = re.sub(rb"(?m)^URL=[^\r\n]*", b"URL=" + url.encode("ascii"), raw, count=1)
+    line = b"URL=" + url.encode("ascii")
+    new = re.sub(rb"(?m)^URL=[^\r\n]*", lambda _m: line, raw, count=1)       # 바꿀 글을 \g<0> 등으로 읽지 않게 함수로
     with open(path, "wb") as f:
         f.write(new)
     return True
@@ -374,19 +375,41 @@ def install_link(text, paths, enroll=None, guid=None, host=None, run=None):
         local_server.lock_key_files(folder)
     except Exception:
         pass
-    warn = trust_ca(paths, got["ca_pem"], run)
+    # 여기부터는 연결 파일이 이미 걸렸다 - 오류가 나도 '등록 실패' 로 올리지 않고 안내만 더한다 (끝 검토 Opus 3)
+    try:
+        warn = trust_ca(paths, got["ca_pem"], run)
+    except (OSError, ValueError):
+        warn = CA_WARN
     if warn:
         done.append(warn)
-    if got["web"] and set_dashboard_url(got["web"], paths):
-        done.append("시작 메뉴의 대시보드 바로 가기를 업체 웹 주소로 바꾸었습니다.")
-    elif not got["web"]:
+    if got["web"]:
+        try:
+            ok = set_dashboard_url(got["web"], paths)
+        except (OSError, ValueError):
+            ok = False
+        done.append("시작 메뉴의 대시보드 바로 가기를 업체 웹 주소로 바꾸었습니다." if ok else
+                    f"시작 메뉴의 대시보드 바로 가기를 바꾸지 못했습니다. 업체 웹은 {got['web']} 으로 여십시오.")
+    else:
         done.append("업체 웹 주소는 업체 IT 에 확인하여 주십시오.")
     return {"pc_id": got["pc_id"], "server": server, "done": done}
 
 
-def unlink(paths, run=None):
+def unlink(paths, run=None, stop=None):
     """사내 서버 등록 해제 (Codex 6 - 서버에서 지운 PC 가 오래 꺼져 있었으면 '지워짐' 답을 못 받는다. 사람이 고르는 복구 길).
-    우리가 넣은 인증 기관을 지우고 연결 파일을 지운다. 한 일 문장 목록. 에이전트 멈추기는 창이 한다."""
+    stop(창은 stop_agent)이 0 을 돌려줄 때만 우리가 넣은 인증 기관을 지우고 연결 파일을 지운다 - 에이전트가 남아 있으면 메모리의 열쇠로
+    계속 통신하고, 다시 등록한 뒤 옛 에이전트가 새 연결 파일을 지울 수 있다 (Codex 끝 검토 3). 못 멈추면 ValueError (아무것도 안 지움).
+    한 일 문장 목록."""
+    if stop is not None:
+        try:
+            code = stop()
+        except Exception as e:
+            crash_log(e)
+            code = None
+        if code == EXIT_RPA_RUNNING:
+            raise ValueError("RPA 가 실행 중이라 사내 서버 등록을 해제하지 않았습니다. 실행이 끝난 뒤 다시 눌러 주십시오.")
+        if code != 0:
+            raise ValueError("에이전트를 멈추지 못해 사내 서버 등록을 해제하지 않았습니다. "
+                             "에이전트 창(에이전트_시작.bat)이 열려 있으면 닫은 뒤 다시 눌러 주십시오.")
     done = []
     forget_ca(paths, run)
     try:
@@ -1576,10 +1599,9 @@ class SettingsWindow:
         if not self.dialogs.yesno(UNLINK_ASK):
             return
         try:
-            stop_agent()
-        except Exception as e:
-            crash_log(e)
-        done = unlink(self.paths)
+            done = unlink(self.paths, stop=stop_agent)
+        except ValueError as e:
+            return self.say(str(e))
         self.refresh_standalone()
         self.say(" ".join(done), GREEN)
 
