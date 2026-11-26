@@ -804,6 +804,73 @@ cmd_upgrade() {
     tz_notice
 }
 
+# ----------------------------------------------------------------------------------------------------
+# 시작 배너 - 사람이 터미널에서 돌릴 때만 (기록 파일·파이프·시험에는 싣지 않는다). 색은 터미널이 되는 만큼:
+# 1,600만 색(COLORTERM=truecolor·24bit) → 256색(TERM=*256color) → 기본 8색, NO_COLOR 나 TERM=dumb 면 색 없이.
+# UTF-8 이 아니거나 폭이 77칸보다 좁으면 # 로 그린 작은 글자, 56칸보다 좁으면 싣지 않는다.
+# 색은 오토파일럿 로고의 파랑 세 단계 (tools/make_icon.py BLUE: #22C3E6 → #2F7BF0 → #2A35C8, 겹침 #16207F)
+# ----------------------------------------------------------------------------------------------------
+banner_fg() {   # $1 1,600만 색 R;G;B  $2 256색 번호  $3 기본 색 번호
+    case "$BN_DEPTH" in
+        24) printf '%s[38;2;%sm' "$BN_ESC" "$1" ;;
+        256) printf '%s[38;5;%sm' "$BN_ESC" "$2" ;;
+        8) printf '%s[%sm' "$BN_ESC" "$3" ;;
+    esac
+}
+banner_line() { # $1 글 한 줄, $2 $3 $4 = banner_fg 의 세 값 (█ 와 # 의 색). 그림자 선(╔╗╚╝═║)은 짙은 남색
+    if [ "$BN_DEPTH" = 0 ]; then printf '%s\n' "$1"; return 0; fi
+    _c=$(banner_fg "$2" "$3" "$4")
+    _e=$(banner_fg "22;32;127" 18 34)
+    printf '%s\n' "$1" | sed -e "s/\(█\)\{1,\}/${_c}&/g" -e "s/#\{1,\}/${_c}&/g" -e "s/\(╔\)\{1,\}/${_e}&/g" \
+        -e "s/\(╗\)\{1,\}/${_e}&/g" -e "s/\(╚\)\{1,\}/${_e}&/g" -e "s/\(╝\)\{1,\}/${_e}&/g" -e "s/\(═\)\{1,\}/${_e}&/g" \
+        -e "s/\(║\)\{1,\}/${_e}&/g" -e "s/\$/${BN_ESC}[0m/"
+}
+banner() {
+    [ -t 1 ] || return 0
+    case "$CMD" in
+        install) _what="사내 서버 설치" ;;
+        activate) _what="사내 서버 활성화" ;;
+        upgrade) _what="사내 서버 업그레이드" ;;
+        *) return 0 ;;
+    esac
+    BN_ESC=$(printf '\033')
+    _cols=$(stty size 2>/dev/null | cut -d' ' -f2) || _cols=""
+    case "$_cols" in ''|0|*[!0-9]*) _cols=80 ;; esac
+    if [ "$_cols" -lt 56 ]; then return 0; fi
+    if [ -n "${NO_COLOR:-}" ] || [ "${TERM:-dumb}" = dumb ]; then BN_DEPTH=0
+    else
+        case "${COLORTERM:-}" in
+            truecolor|24bit) BN_DEPTH=24 ;;
+            *) case "${TERM:-}" in *256color*) BN_DEPTH=256 ;; *) BN_DEPTH=8 ;; esac ;;
+        esac
+    fi
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) _utf=1 ;;
+        *) _utf=0 ;;
+    esac
+    say ""
+    if [ "$_utf" = 1 ] && [ "$_cols" -ge 77 ]; then
+        banner_line ' █████╗ ██╗   ██╗████████╗ ██████╗     ██████╗ ██╗██╗      ██████╗ ████████╗' "34;195;230" 38 96
+        banner_line '██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗    ██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝' "39;166;234" 39 96
+        banner_line '███████║██║   ██║   ██║   ██║   ██║    ██████╔╝██║██║     ██║   ██║   ██║' "44;137;238" 33 94
+        banner_line '██╔══██║██║   ██║   ██║   ██║   ██║    ██╔═══╝ ██║██║     ██║   ██║   ██║' "46;109;232" 27 94
+        banner_line '██║  ██║╚██████╔╝   ██║   ╚██████╔╝    ██║     ██║███████╗╚██████╔╝   ██║' "44;81;216" 26 34
+        banner_line '╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝     ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝' "42;53;200" 20 34
+        _pad="                    "
+    else
+        banner_line ' ###  #   # #####  ###      ####  ### #      ###  #####' "34;195;230" 38 96
+        banner_line '#   # #   #   #   #   #     #   #  #  #     #   #   #' "40;159;235" 39 96
+        banner_line '##### #   #   #   #   #     ####   #  #     #   #   #' "47;123;240" 33 94
+        banner_line '#   # #   #   #   #   #     #      #  #     #   #   #' "44;88;220" 26 34
+        banner_line '#   #  ###    #    ###      #     ### #####  ###    #' "42;53;200" 20 34
+        _pad="          "
+    fi
+    if [ "$BN_DEPTH" = 0 ]; then say "${_pad}${_what}  ${V}"
+    else say "${_pad}$(banner_fg "150;150;150" 246 37)${_what}  ${V}${BN_ESC}[0m"; fi
+    say ""
+}
+
+banner
 case "$CMD" in
     install) cmd_install ;;
     activate) cmd_activate ;;

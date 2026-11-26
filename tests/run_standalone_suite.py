@@ -38,7 +38,8 @@ WSL_DIR = "/mnt/d/AX/RPA_StandAlone/tests/"
 # 'wsl' - 리눅스에서 사내 서버 한 번 (사내 서버 ② Task 8) + 리눅스에서만 도는 부분이 있는 ④ 시험 + install.sh (④ Task 8)
 WSL_TESTS = ["wsl_lan_smoke.py", "test_server_log.py", "test_server_license.py", "test_seat.py", "test_server_main.py",
              "test_server_admin.py", "test_server_backup.py", "test_lan_polish.py", "test_build_server.py", "test_server_offline.py",
-             "wsl_install.py"]      # install.sh·systemd 단위 (④ Task 8 - --root 시험 자리만, 가짜 systemctl 이 nobody 로 서비스를 켠다)
+             "wsl_install.py",      # install.sh·systemd 단위 (④ Task 8 - --root 시험 자리만, 가짜 systemctl 이 nobody 로 서비스를 켠다)
+             "wsl_banner.py"]       # install.sh 시작 배너 (가짜 터미널 script - 색·UTF-8·폭, 터미널이 아니면 싣지 않음)
 CLOUD = ["firebase/tests/test_agent.py", "tests/test_fb_backoff.py", "tests/test_cloud_scrub.py", "tests/test_dev_env.py",
          "tests/test_background.py", "tests/test_rpa_update.py", "tests/test_otp_replay.py", "tests/test_build_release.py",
          "tests/test_server_info.py", "tests/test_settings.py", "tests/test_update_helper.py", "tests/test_observer_notes.py",
